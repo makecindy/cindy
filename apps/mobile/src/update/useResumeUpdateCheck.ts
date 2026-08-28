@@ -19,6 +19,7 @@ import { fetchLatestRelease } from './fetchLatestRelease';
 import { createResumeUpdateChecker } from './resumeUpdateCheck';
 import { promptBundleUpdate } from './useBundleUpdatePrompt';
 import { resolveUpdateChannelForDevice } from './canaryChannelStore';
+import { hasPrivacyConsent } from './updateConsentGate';
 import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
 
 export function useResumeUpdateCheck(
@@ -37,6 +38,7 @@ export function useResumeUpdateCheck(
     let current = true;
     const checker = createResumeUpdateChecker({
       otaEnabled: IS_OTA_SELFHOST && !__DEV__ && Updates.isEnabled,
+      isConsented: hasPrivacyConsent,
       checkForUpdateAsync: () => Updates.checkForUpdateAsync(),
       fetchUpdateAsync: () => Updates.fetchUpdateAsync(),
       bundleCheckEnabled,

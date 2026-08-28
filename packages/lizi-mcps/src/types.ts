@@ -450,6 +450,9 @@ export type SessionSearchFn = (
 // 'cindy_slack'(与老 lizi_slack_bot 无关)2026-07-19 上线: Slack 网关工具,
 // 经 hook 通道由 slack-hook-server 以托管 user token 调 Slack 官方 MCP,
 // 接替退役的 cindy-slack 意识。
+// 'cindy_docs'(文档工坊)2026-08-19 上线: PDF / Word / Excel / PPT 的生成与
+// 检查原语。**零系统依赖**——不走任何需要用户先装 LibreOffice / Office 的路径,
+// 对应宿主内置能力开关 id 'docs'(不是需要安装的外置 .cindy 插件)。
 export type LiziMcpId =
   | 'android'
   | 'ios_simulator'
@@ -464,6 +467,7 @@ export type LiziMcpId =
   | 'cindy_contacts'
   | 'cindy_helper'
   | 'cindy_orca'
+  | 'cindy_docs'
   | 'cindy_lsp';
 
 // ── Host-callback Result pattern ────────────────────────────────────────────

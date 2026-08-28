@@ -293,7 +293,8 @@ describe('LoginPage captcha 前置闸(providers 主动触发)', () => {
     const duplicate = gate!();
     await expect(duplicate).resolves.toBeNull();
     await screen.findByTestId('login-captcha-overlay');
-    expect(document.querySelectorAll('webview')).toHaveLength(1);
+    // overlay 先提交，WebView 再由 effect 插入；Windows CI 上两步可能跨 tick。
+    await waitFor(() => expect(document.querySelectorAll('webview')).toHaveLength(1));
 
     await emitCaptchaResult('cindy-captcha=ok.single-flight-token');
     await expect(first).resolves.toBe('single-flight-token');

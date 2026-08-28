@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
@@ -69,6 +70,15 @@ const VALID_V4_RESPONSE: ListModelsResponse = {
   schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
 };
 
+const VALID_V5_RESPONSE: ListModelsResponse = {
+  schemaVersion: MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
+  accountTier: 'free',
+  models: VALID_V4_RESPONSE.models.map((model) => ({
+    ...model,
+    availability: 'requires_payment',
+  })),
+};
+
 const VALID_REGISTRY: ModelRegistry = {
   schemaVersion: MODEL_REGISTRY_SCHEMA_VERSION,
   updatedAt: '2026-07-31T00:00:00.000Z',
@@ -121,6 +131,21 @@ describe('model access catalog contract', () => {
     const result = parseListModelsResponse(wire);
     expect(result).toEqual({ ok: true, value: VALID_RESPONSE });
     expect(MODEL_ACCESS_MODELS_PATH).toBe('/api/model-access/models');
+  });
+
+  it('parses strict v5 availability and account tier fields', () => {
+    expect(parseListModelsResponse(VALID_V5_RESPONSE)).toEqual({
+      ok: true,
+      value: VALID_V5_RESPONSE,
+    });
+    expectReject({ ...VALID_V5_RESPONSE, accountTier: 'vip' }, 'response.accountTier');
+    expectReject(
+      {
+        ...VALID_V5_RESPONSE,
+        models: [{ ...VALID_V5_RESPONSE.models[0]!, availability: 'unavailable' }],
+      },
+      'response.models[0].availability',
+    );
   });
 
   it('continues to parse v1 responses, while v1 rejects the v2-only default field', () => {
@@ -369,7 +394,7 @@ describe('model access catalog contract', () => {
   });
 
   it('rejects unsupported schema versions and malformed nested pricing', () => {
-    expectReject({ ...VALID_RESPONSE, schemaVersion: 5 }, 'response.schemaVersion');
+    expectReject({ ...VALID_RESPONSE, schemaVersion: 6 }, 'response.schemaVersion');
     expectReject(
       {
         ...VALID_RESPONSE,

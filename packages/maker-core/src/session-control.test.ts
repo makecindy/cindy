@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { Session } from './session.js';
-import type { AgentSessionHandle } from './agents/base-agent.js';
+import { TurnDispatchRejectedError, type AgentSessionHandle } from './agents/base-agent.js';
 import type {
   AgentEvent,
   InteractionDecision,
   InteractionRequest,
   InteractionResolver,
+  SendOrigin,
 } from './types/events.js';
 
 function createLogger() {
@@ -84,10 +85,13 @@ function createHandle(opts?: {
   };
 }
 
-function createSession(stub: ReturnType<typeof createHandle>): Session {
+function createSession(
+  stub: ReturnType<typeof createHandle>,
+  agentKind: Session['agentKind'] = 'claude-code',
+): Session {
   return new Session({
     id: 'session-control',
-    agentKind: 'claude-code',
+    agentKind,
     workDir: '/repo',
     handle: stub.handle,
     capabilities: {} as never,
@@ -537,5 +541,768 @@ describe('Session graceful-stop control state', () => {
     stub.push({ type: 'done', data: {} });
     await vi.waitFor(() => expect(session.getTurnControlSnapshot().active).toBe(false));
     expect(stub.requestGracefulStop).not.toHaveBeenCalled();
+  });
+});
+
+describe('Session current-generation terminal observation', () => {
+  it('reports done until the next reservation, and keeps error ahead of a paired done tail', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const firstDone = waitForSessionEvent(session, 'done');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({ type: 'done', data: {} });
+    await firstDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
+
+    const secondSend = session.send('second');
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+    const secondError = waitForSessionEvent(session, 'error');
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'Authorization: Bearer secret-token',
+        isTerminal: true,
+        reason: 'empty-response',
+        sdkError: 'server_error',
+        errorStatus: 529,
+      },
+    });
+    await secondError;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 2,
+      message: 'Authorization: [REDACTED]',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
+    });
+    stub.push({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 2,
+      message: 'Authorization: [REDACTED]',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
+    });
+  });
+
+  it('ignores background terminals when recording foreground evidence', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({ type: 'done', data: {}, turnScope: 'background' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    const firstDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await firstDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
+  });
+
+  it('restores terminal evidence when a later send is rejected before dispatch', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    const firstDone = waitForSessionEvent(session, 'done');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({ type: 'done', data: {} });
+    await firstDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
+
+    stub.handle.send = vi.fn(async () => {
+      throw new TurnDispatchRejectedError('provider rejected before acceptance');
+    });
+    await expect(session.send('second')).resolves.toEqual({
+      accepted: false,
+      reason: 'provider-rejected-before-dispatch',
+    });
+    expect(session.getTurnGeneration()).toBe(1);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
+  });
+
+  it('promotes a prior-generation terminal that arrives while a later send is rejected', async () => {
+    const cases: Array<{
+      event: AgentEvent;
+      expected: ReturnType<Session['getObservedCurrentTurnTerminal']>;
+    }> = [
+      {
+        event: { type: 'done', data: {} },
+        expected: { kind: 'done', generation: 1 },
+      },
+      {
+        event: {
+          type: 'error',
+          data: {
+            message: 'Authorization: Bearer secret-token',
+            isTerminal: true,
+            reason: 'empty-response',
+            sdkError: 'server_error',
+            errorStatus: 529,
+          },
+        },
+        expected: {
+          kind: 'error',
+          generation: 1,
+          message: 'Authorization: [REDACTED]',
+          reason: 'empty-response',
+          sdkError: 'server_error',
+          errorStatus: 529,
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const stub = createHandle();
+      const session = createSession(stub);
+      await expect(session.send('first')).resolves.toEqual({ accepted: true });
+      expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+      stub.handle.isTurnRunning = () => false;
+      stub.handle.send = vi.fn(async () => {
+        throw new TurnDispatchRejectedError('provider rejected before acceptance');
+      });
+
+      await expect(
+        session.send('second', {
+          afterTurnReserved: async () => {
+            expect(session.getTurnGeneration()).toBe(2);
+            expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+            stub.push(testCase.event);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+          },
+        }),
+      ).resolves.toEqual({
+        accepted: false,
+        reason: 'provider-rejected-before-dispatch',
+      });
+      expect(session.getTurnGeneration()).toBe(1);
+      expect(session.getObservedCurrentTurnTerminal()).toEqual(testCase.expected);
+    }
+  });
+
+  it('promotes a prior-generation error that arrives during a rejected handle.send', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.handle.isTurnRunning = () => false;
+
+    let rejectSend!: (error: Error) => void;
+    const pendingSend = new Promise<void>((_, reject) => {
+      rejectSend = reject;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+
+    const secondSend = session.send('second');
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'Authorization: Bearer secret-token',
+        isTerminal: true,
+        reason: 'empty-response',
+        sdkError: 'server_error',
+        errorStatus: 529,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    rejectSend(new TurnDispatchRejectedError('provider rejected before acceptance'));
+    await expect(secondSend).resolves.toEqual({
+      accepted: false,
+      reason: 'provider-rejected-before-dispatch',
+    });
+    expect(session.getTurnGeneration()).toBe(1);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'Authorization: [REDACTED]',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
+    });
+    await expect(session.send('third')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'Authorization: [REDACTED]',
+      reason: 'empty-response',
+      sdkError: 'server_error',
+      errorStatus: 529,
+    });
+
+    stub.handle.send = vi.fn(async () => undefined);
+    await expect(session.send('third')).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+  });
+
+  it('does not adopt a late paired done while the next handle.send is still pending', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'turn failed',
+      reason: 'empty-response',
+    });
+
+    let releaseSend!: () => void;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+
+    const secondSend = session.send('second');
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    releaseSend();
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    stub.push({ type: 'status', data: { isRunning: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+  });
+
+  it('does not adopt a late paired done after handle.send flips running and releases reservation', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'turn failed',
+      reason: 'empty-response',
+    });
+
+    let releaseSend!: () => void;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+
+    const secondSend = session.send('second');
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    stub.handle.isTurnRunning = () => true;
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    releaseSend();
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const secondError = waitForSessionEvent(session, 'error');
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'n+1 failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await secondError;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 2,
+      message: 'n+1 failed',
+      reason: 'empty-response',
+    });
+  });
+
+  it('does not let a leftover error rewrite an accepted later success after reservation release', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+
+    let releaseSend!: () => void;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+    const secondSend = session.send('second');
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    stub.handle.isTurnRunning = () => true;
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    releaseSend();
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'late prior error',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+  });
+
+  it('does not fan-out a late leftover error after the current generation recorded done', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push({ ...event });
+    });
+    const onTerminal = vi.fn();
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal,
+    });
+
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+
+    stub.handle.send = vi.fn(async () => undefined);
+    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+    const terminalsAfterDone = onTerminal.mock.calls.length;
+    const seenAfterDone = seen.length;
+
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'late prior error',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+    expect(seen.slice(seenAfterDone).some((event) => event.type === 'error')).toBe(false);
+    expect(onTerminal.mock.calls.length).toBe(terminalsAfterDone);
+    expect(
+      onTerminal.mock.calls.some((call) => call[0]?.event?.type === 'error'
+        && (call[0]?.event?.data as { message?: string } | undefined)?.message === 'late prior error'),
+    ).toBe(false);
+  });
+
+  it('still fans out a current-generation terminal error when no done snapshot exists', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push({ ...event });
+    });
+    const onTerminal = vi.fn();
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal,
+    });
+
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'current turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'current turn failed',
+      reason: 'empty-response',
+    });
+    expect(seen.some((event) => event.type === 'error')).toBe(true);
+    expect(onTerminal).toHaveBeenCalledWith(expect.objectContaining({
+      turnGeneration: 1,
+      isCurrentGeneration: true,
+      event: expect.objectContaining({ type: 'error' }),
+    }));
+  });
+
+  it('does not fan-out a reservation-window leftover error as the next generation', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push({ ...event });
+    });
+    const onTerminal = vi.fn();
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onUndispatched() {},
+      onTerminal,
+    });
+
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'turn failed',
+      reason: 'empty-response',
+    });
+
+    let releaseSend!: () => void;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+    const secondSend = session.send('second');
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    const seenAfterReserve = seen.length;
+    const terminalsAfterReserve = onTerminal.mock.calls.length;
+
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'late prior error',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // In-flight error after N already observed error is N+1 start-failure.
+    // Leftover fence only applies to terminals attributed to a prior generation.
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({
+      kind: 'error',
+      generation: 2,
+      message: 'late prior error',
+    });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(seen.slice(seenAfterReserve).some((event) => event.type === 'error')).toBe(true);
+    expect(onTerminal.mock.calls.length).toBeGreaterThan(terminalsAfterReserve);
+    expect(
+      seen.some((event) =>
+        event.type === 'error' &&
+        event.sessionTurnGeneration === 2 &&
+        (event.data as { message?: string }).message === 'late prior error'),
+    ).toBe(true);
+
+    releaseSend();
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({
+      kind: 'error',
+      generation: 2,
+    });
+  });
+
+  it('keeps N+1 origin and attempt token after a leftover paired done in the reservation window', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push({ ...event });
+    });
+    const firstOrigin: SendOrigin = { kind: 'scheduler', scheduleId: 'n', scheduleName: 'n' };
+    const nextOrigin: SendOrigin = { kind: 'scheduler', scheduleId: 'n1', scheduleName: 'n1' };
+
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first', { origin: firstOrigin })).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+
+    let releaseSend!: () => void;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    stub.handle.send = vi.fn(() => pendingSend);
+    const secondSend = session.send('second', {
+      origin: nextOrigin,
+      turnAttemptToken: 7,
+    });
+    await vi.waitFor(() => expect(stub.handle.send).toHaveBeenCalled());
+    expect(session.getTurnGeneration()).toBe(2);
+
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    expect(
+      seen.some((event) => event.type === 'done' && event.sessionTurnGeneration === 2),
+    ).toBe(false);
+
+    releaseSend();
+    await expect(secondSend).resolves.toEqual({ accepted: true });
+    const secondText = waitForSessionEvent(session, 'text');
+    stub.push({ type: 'text', data: { text: 'n+1', isFinal: false } });
+    await secondText;
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+
+    const n1Events = seen.filter((event) => event.sessionTurnGeneration === 2);
+    expect(n1Events.some((event) => event.type === 'text')).toBe(true);
+    expect(n1Events.some((event) => event.type === 'done')).toBe(true);
+    expect(n1Events.every((event) => event.turnOrigin)).toEqual(true);
+    expect(n1Events.map((event) => event.turnOrigin)).toEqual(
+      n1Events.map(() => nextOrigin),
+    );
+    expect(n1Events.every((event) => event.turnAttemptToken === 7)).toBe(true);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+  });
+
+  it('binds an accepted result-only done when the prior paired done was lost', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'turn failed',
+      reason: 'empty-response',
+    });
+
+    stub.handle.send = vi.fn(async () => undefined);
+    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'late prior error',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+  });
+
+  it('binds an accepted result-only done after the prior error tail is already attributed', async () => {
+    const stub = createHandle();
+    const session = createSession(stub, 'codex');
+    const firstError = waitForSessionEvent(session, 'error');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'turn failed',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await firstError;
+    stub.push({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.push({ type: 'status', data: { isRunning: false } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stub.handle.isTurnRunning = () => false;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'turn failed',
+      reason: 'empty-response',
+    });
+
+    stub.handle.send = vi.fn(async () => undefined);
+    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+
+    stub.push({
+      type: 'error',
+      data: {
+        message: 'late prior error',
+        isTerminal: true,
+        reason: 'empty-response',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
+  });
+
+  it('does not inherit a reservation-window terminal after a later send is accepted', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.handle.isTurnRunning = () => false;
+    stub.handle.send = vi.fn(async () => undefined);
+
+    await expect(
+      session.send('second', {
+        afterTurnReserved: async () => {
+          stub.push({ type: 'done', data: {} });
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+        },
+      }),
+    ).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+  });
+
+  it('does not treat a late prior-generation error as the next reserved turn terminal', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    const firstDone = waitForSessionEvent(session, 'done');
+    await expect(session.send('first')).resolves.toEqual({ accepted: true });
+    stub.push({ type: 'done', data: {} });
+    await firstDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
+
+    stub.handle.isTurnRunning = () => false;
+    stub.handle.send = vi.fn(async () => undefined);
+    await expect(
+      session.send('second', {
+        afterTurnReserved: async () => {
+          expect(session.getTurnGeneration()).toBe(2);
+          expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+          stub.push({
+            type: 'error',
+            data: {
+              message: 'late prior error',
+              isTerminal: true,
+              reason: 'empty-response',
+            },
+          });
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+        },
+      }),
+    ).resolves.toEqual({ accepted: true });
+    expect(session.getTurnGeneration()).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+
+    const secondDone = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await secondDone;
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 });

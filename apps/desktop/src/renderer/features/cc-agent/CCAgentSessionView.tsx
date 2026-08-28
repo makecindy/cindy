@@ -31,6 +31,7 @@ import {
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
 import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
+import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
   Activity,
@@ -65,13 +66,21 @@ import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
 import { GhostGrantConfirmCard } from './GhostGrantConfirmCard';
+import { RemoteDesktopConfirmationNotice } from './RemoteDesktopConfirmationNotice';
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
-import { MessageStream } from '@/components/chat/MessageStream';
-import { measureComposerStackTopOffset } from '@/components/chat/messageStreamIndicatorPosition';
+import { MessageStream, type InlinePlanVisibility } from '@/components/chat/MessageStream';
+import {
+  readSendFollowCancelGeneration,
+  tryRequestFollowLatest,
+} from '@/components/chat/autoFollowIntent';
+import {
+  getMessageStreamIndicatorResizeTargets,
+  measureMessageStreamIndicatorClearanceOffset,
+} from '@/components/chat/messageStreamIndicatorPosition';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -81,9 +90,13 @@ import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
+  UnreadFailedScheduleBanner,
 } from '@/components/chat/InterruptedTurnBanner';
+import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
+import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
+import { workflowAgentVisualState } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import {
   APP_EXIT_INTERRUPTED_REASON,
@@ -97,6 +110,7 @@ import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
 import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
 import { Tip } from '@/components/ui/tooltip';
+import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
@@ -140,7 +154,6 @@ import {
   useComposerCollapsed,
   useControlledBy,
 } from '@/features/remote-device/ControlledBanner';
-import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import {
   loadAllCommands,
   dispatchCommand,
@@ -166,6 +179,8 @@ import {
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
+import { isCurrentSubagentRunsChange } from '@/features/right-sidebar/plugins/subagents/subagentChangeFence';
+import { startSubagentTabDiscovery } from './subagentTabDiscovery';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -195,7 +210,7 @@ import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions'
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
-import { formatRunningTokenCount } from './lib/runningTokenUsage';
+import { formatRunningTokenCount, resolveRunningUsageMeta } from './lib/runningTokenUsage';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -463,22 +478,28 @@ function RightSidebarAvailabilityRegistration({
  */
 function RightSidebarSessionIdRegistration({
   sessionId,
+  subagentsAvailable,
   initialCollapsed,
   writeInitialCollapsedRecord = false,
   declare,
 }: {
   sessionId: string;
+  subagentsAvailable?: boolean;
   initialCollapsed?: boolean;
   writeInitialCollapsedRecord?: boolean;
   declare: (
     sessionId: string | null,
-    opts?: { initialCollapsed?: boolean; writeInitialCollapsedRecord?: boolean },
+    opts?: {
+      initialCollapsed?: boolean;
+      writeInitialCollapsedRecord?: boolean;
+      subagentsAvailable?: boolean;
+    },
   ) => void;
 }) {
   useLayoutEffect(() => {
-    declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord });
+    declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord, subagentsAvailable });
     return () => declare(null);
-  }, [sessionId, initialCollapsed, writeInitialCollapsedRecord, declare]);
+  }, [sessionId, subagentsAvailable, initialCollapsed, writeInitialCollapsedRecord, declare]);
   return null;
 }
 
@@ -536,6 +557,36 @@ function findLatestWorkflowTask(
   return latest;
 }
 
+function summarizeRunningWorkflow(taskUpdates: ReadonlyMap<string, AgentTaskUpdate>): {
+  done: number;
+  total: number;
+} | null {
+  let workflow: AgentTaskUpdate | undefined;
+  let latestTs = Number.NEGATIVE_INFINITY;
+  const seen = new Set<AgentTaskUpdate>();
+  for (const update of taskUpdates.values()) {
+    if (update.taskType !== 'local_workflow' || update.status !== 'running' || seen.has(update)) continue;
+    seen.add(update);
+    const timestamp = Date.parse(update.updatedAt ?? update.createdAt ?? '');
+    if ((Number.isFinite(timestamp) ? timestamp : 0) >= latestTs) {
+      workflow = update;
+      latestTs = Number.isFinite(timestamp) ? timestamp : 0;
+    }
+  }
+  if (!workflow) return null;
+  const agents = (workflow.workflowProgress ?? []).filter((entry) => entry.type === 'workflow_agent');
+  if (agents.length === 0) return { done: 0, total: 0 };
+  return {
+    done: agents.filter((entry) => {
+      const visual = workflowAgentVisualState(entry.state);
+      return visual === 'done' || visual === 'failed';
+    }).length,
+    total: agents.length,
+  };
+}
+
+const EMPTY_UNREAD_FAILED_RUN_IDS: string[] = [];
+
 export function CCAgentSessionView({
   sessionIdProp,
   routeOwner,
@@ -580,43 +631,6 @@ export function CCAgentSessionView({
     });
   }, [navigate, sessionId, viewVisible]);
 
-  // A task that has Subagents owns one durable Subagent tab. Both on history
-  // mount and on the first live child we only ensure the tab exists — never
-  // stealing OS focus, replacing an already-active tab, or opening the sidebar.
-  useEffect(() => {
-    if (!ownsWindowRoute || !viewVisible || !sessionId) return;
-    let disposed = false;
-    const requestOwner = getDataOwnerGeneration();
-    void window.electronAPI.localDb.subagentRuns
-      .list({ sessionId })
-      .then((response) => {
-        if (
-          disposed ||
-          !isDataOwnerGenerationCurrent(requestOwner) ||
-          !response.supported ||
-          response.runs.length === 0
-        ) {
-          return;
-        }
-        return openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY);
-      })
-      .catch(() => undefined);
-    const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged((payload, ownerStamp) => {
-      if (
-        disposed ||
-        !isDataOwnerPushCurrent(ownerStamp) ||
-        payload.runId === null ||
-        payload.sessionId !== sessionId
-      ) {
-        return;
-      }
-      void openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY).catch(() => undefined);
-    });
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  }, [ownsWindowRoute, sessionId, viewVisible]);
   // MainLayout 经 Outlet context 下发右栏相关能力(二级路由由 CCAgentFeatureLayout
   // 透传,否则这里会断链拿不到):
   //   - rightSidebarCollapsed:折叠态,用于 useProportionalWidth 的 compact 判定;
@@ -727,14 +741,19 @@ export function CCAgentSessionView({
   // 历史 caveat(已不再适用):早期尝试过按 `rightSidebarCollapsed` 布尔即时切 compact,
   // 右栏 250ms transition 期间 parent 还是 stale 宽度,messageWidth 先扩出去顶过
   // parent → mx-auto 失效 → padding 被压成 0 → 视觉上消息"先顶到最左再缩回来"。
-  // 现在的方案由 hook 内 ResizeObserver 回调驱动 compact 切换,只在父宽**已经收敛**
-  // 的那一帧切, 该跳变彻底没有触发面。所以这里继续只传 isCompactRail,不要再叠
+  // 现在的方案由 hook 内 ResizeObserver 直接更新继承 CSS 宽度变量；React 只在
+  // compact 阈值跨越时切换一次。这里继续只传 isCompactRail,不要再叠
   // rightSidebarCollapsed 进来。
-  const { containerRef, messageWidth, inputWidth, inputPad, isCompact } = useProportionalWidth(
-    914,
-    { compact: isCompactRail },
-  );
-  const controlledBannerMaxWidth = getControlledBannerMaxWidth(inputWidth);
+  const {
+    containerRef,
+    messageWidth,
+    inputWidth,
+    inputPad,
+    inputHalfWidth,
+    isCompact,
+    getMessageWidth,
+  } = useProportionalWidth(914, { compact: isCompactRail });
+  const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;
   const { sessions: allSessions, refreshSessions, patchLocal: patchLocalSession } = useCCSessions();
   // /ctr 接管态: attached=true 时把 ChatInput 替换为 TakeoverMask, 防止 desktop
   // 用户跟 IM 端 race; permission/ask/plan 三个 prompt 不替换 — 它们是 SDK 反向触
@@ -858,6 +877,65 @@ export function CCAgentSessionView({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+
+  /**
+   * Does this task own durable Pi Subagent runs?
+   *
+   * The entry used to be decided by the parent's *current* harness, which is
+   * not what owns the children. Switching a Pi task to Claude Code or Codex
+   * leaves its detached runners going — they hold credentials and write the
+   * workspace, and `stopAgentTaskHandler` keeps a path to stop them — while the
+   * sidebar tab that monitors them and offers the per-child stop disappeared
+   * the moment the harness changed.
+   */
+  const [sessionOwningDurablePiRuns, setSessionOwningDurablePiRuns] = useState<string | null>(null);
+  // Keyed by the session it was observed for, so navigating to another task
+  // cannot inherit the previous one's answer while its own read is still out.
+  const durablePiRunsPresent = Boolean(sessionId) && sessionOwningDurablePiRuns === sessionId;
+
+  // A task that has Subagents owns one durable Subagent tab. Both on history
+  // mount and on the first live child we only ensure the tab exists — never
+  // stealing OS focus, replacing an already-active tab, or opening the sidebar.
+  //
+  // Not gated on `agentKind`: discovery decides by what is actually on disk. It
+  // registers nothing for a task with no Pi runs, so widening the gate costs a
+  // non-Pi task one list read (plus a session-filtered change subscription) and
+  // opens no tab.
+  //
+  // The durable truth lives on the data-owning device, so a device-link task
+  // must discover through `deviceLink.invoke`: the controller's own DB has no
+  // row for it and answers `unsupported`, which used to leave the tab
+  // unregistered forever even though the panel itself already reads remotely.
+  // This effect sits below `remoteDeviceId` because it depends on it.
+  useEffect(() => {
+    if (!ownsWindowRoute || !viewVisible || !sessionId) return;
+    const requestOwner = getDataOwnerGeneration();
+    return startSubagentTabDiscovery({
+      sessionId,
+      deviceId: remoteDeviceId ?? null,
+      listLocal: () => window.electronAPI.localDb.subagentRuns.list({ sessionId }),
+      listRemote: async (deviceId) =>
+        (await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:subagent-runs:list', [
+          { sessionId },
+        ])) as SubagentRunsListResponse,
+      // The same predicate the panel uses, and deliberately not a local copy of
+      // it. This one used to drop `runId === null`, which is exactly the
+      // *whole-session invalidation* a `/clear` or a rewind past the Subagent's
+      // start emits: the records go away and nothing here noticed, so a task
+      // that switched to Claude Code or Codex kept declaring an entry whose
+      // runs no longer existed. `sessionId` is always a real id on that
+      // payload — only `runId` is nullable — so the scoping is unchanged.
+      subscribeLocalChanges: (onChanged) =>
+        window.electronAPI.localDb.subagentRuns.onChanged((payload, ownerStamp) => {
+          if (!isCurrentSubagentRunsChange(payload, ownerStamp, sessionId)) return;
+          onChanged();
+        }),
+      registerTab: () => openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY),
+      isRequestOwnerCurrent: () => isDataOwnerGenerationCurrent(requestOwner),
+      onPresenceChange: (present) => setSessionOwningDurablePiRuns(present ? sessionId : null),
+    });
+  }, [ownsWindowRoute, remoteDeviceId, sessionId, viewVisible]);
+
   // device-link 远程会话:重 topic 订阅(含 WS 重连 / 被控端回在线时重建)+ 消息对账触发
   // (重连 / presence / turn 结束 / 窗口聚焦 / 手动)。修「控制端丢消息」—— 以被控端为准重新同步。
   // 本机会话(remoteDeviceId 为 undefined)整体 no-op。resync 供连接 banner 的「重新同步」按钮用。
@@ -943,6 +1021,7 @@ export function CCAgentSessionView({
               : {}),
             ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
             ...(patch.fast !== undefined ? { fast: patch.fast } : {}),
+            ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
           },
         ])
         .catch(() => {
@@ -1203,25 +1282,68 @@ export function CCAgentSessionView({
     setOverlayEl(node);
   }, []);
   const [overlayHeight, setOverlayHeight] = useState(200);
-  const [composerStackTopOffset, setComposerStackTopOffset] = useState<number | undefined>(
-    undefined,
+  const [bottomCenterClearanceOffset, setBottomCenterClearanceOffset] = useState<
+    number | undefined
+  >(undefined);
+  const [inlinePlanVisibilityState, setInlinePlanVisibilityState] = useState<{
+    sessionId: string | undefined;
+    value: InlinePlanVisibility | null;
+  }>({ sessionId, value: null });
+  const inlinePlanVisibility =
+    inlinePlanVisibilityState.sessionId === sessionId ? inlinePlanVisibilityState.value : null;
+  const handleInlinePlanVisibilityChange = useCallback(
+    (value: InlinePlanVisibility | null) => {
+      setInlinePlanVisibilityState((current) => {
+        if (
+          current.sessionId === sessionId &&
+          current.value?.key === value?.key &&
+          current.value?.visible === value?.visible
+        ) {
+          return current;
+        }
+        if (current.sessionId === sessionId && current.value === null && value === null) {
+          return current;
+        }
+        return { sessionId, value };
+      });
+    },
+    [sessionId],
   );
 
   useEffect(() => {
     if (!overlayEl) return;
     const measureOverlay = () => {
-      // 状态行会动态出现 / 收起，overlay 总高度不等于 composer 栈顶边。
-      // 直接量完整 composer 栈（含计划模式提示）到 overlay 底边的距离，
-      // 让消息流悬浮按钮不受状态行或输入框内部状态高度影响。
+      // 状态行会动态出现 / 收起，overlay 总高度不等于底部中央控件的避让边界。
+      // 空中央行仍以 composer 栈为锚；步骤 / 接管胶囊在场时改取中央组顶边，
+      // 让消息流悬浮按钮与它们纵向成栈，而不是共享同一块 32px 区域。
       setOverlayHeight(overlayEl.offsetHeight);
-      setComposerStackTopOffset(measureComposerStackTopOffset(overlayEl));
+      setBottomCenterClearanceOffset(measureMessageStreamIndicatorClearanceOffset(overlayEl));
     };
-    // Seed with the current height so the first paint after remount uses the
-    // real value (not the stale state from the previous mount).
-    measureOverlay();
     const ro = new ResizeObserver(measureOverlay);
-    ro.observe(overlayEl);
-    return () => ro.disconnect();
+    let observedTargets = new Set<HTMLElement>();
+    const syncResizeTargetsAndMeasure = () => {
+      const nextTargets = new Set(getMessageStreamIndicatorResizeTargets(overlayEl));
+      for (const target of observedTargets) {
+        if (!nextTargets.has(target)) ro.unobserve(target);
+      }
+      for (const target of nextTargets) {
+        if (!observedTargets.has(target)) ro.observe(target);
+      }
+      observedTargets = nextTargets;
+      measureOverlay();
+    };
+
+    // Seed with the current geometry so the first paint after remount does not
+    // reuse stale state. The plan flyout is absolutely positioned and mounts
+    // only on hover/click, so its insertion does not resize the center group;
+    // resync observed targets whenever that subtree changes.
+    syncResizeTargetsAndMeasure();
+    const mutationObserver = new MutationObserver(syncResizeTargetsAndMeasure);
+    mutationObserver.observe(overlayEl, { childList: true, subtree: true });
+    return () => {
+      mutationObserver.disconnect();
+      ro.disconnect();
+    };
   }, [overlayEl]);
 
   // F-FP-5: 点击 workingDir → 在系统文件管理器里直接打开目录(复用 shell:open-path IPC)。
@@ -1268,6 +1390,18 @@ export function CCAgentSessionView({
     (clientId: string) =>
       sessionId ? makerChatStore.isLocalSentUserMessage(sessionId, clientId) : false,
     [sessionId],
+  );
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  const requestFollowLatest = useCallback(
+    (sourceSessionId: string | null | undefined, startGeneration: number) => {
+      tryRequestFollowLatest({
+        sourceSessionId,
+        currentSessionId: sessionIdRef.current,
+        startGeneration,
+      });
+    },
+    [],
   );
 
   const handleOpenForkOrigin = useCallback(() => {
@@ -1454,6 +1588,7 @@ export function CCAgentSessionView({
     pendingRenameSessionsConfirm,
     respondToRenameSessionsConfirm,
     pendingGhostGrantConfirm,
+    pendingRemoteDesktopConfirmation,
     respondToGhostGrantConfirm,
     lastExpandedPlanViewerState,
     updatePlanContent,
@@ -1498,7 +1633,10 @@ export function CCAgentSessionView({
     return subscribeWorkLouderCodexAction((action) => {
       if (action.type !== 'command') return false;
       if (!sessionId || !ownsHardwareTaskActions) return false;
-      if (action.commandId === 'approval.approve') {
+      if (
+        action.commandId === 'approval.approve' ||
+        action.commandId === 'composer.submit'
+      ) {
         if (pendingPermission) {
           respondToPermission({ behavior: 'allow' });
           return true;
@@ -1509,7 +1647,10 @@ export function CCAgentSessionView({
         }
         return false;
       }
-      if (action.commandId === 'approval.decline') {
+      if (
+        action.commandId === 'approval.decline' ||
+        action.commandId === 'navigateBack'
+      ) {
         if (pendingPermission) {
           respondToPermission({
             behavior: 'deny',
@@ -1522,6 +1663,7 @@ export function CCAgentSessionView({
           cancelPlanReview(pendingPlanReview.requestId);
           return true;
         }
+        return false;
       }
       if (action.commandId === 'forkTask') {
         if (!canNavigateSession) return false;
@@ -1649,6 +1791,17 @@ export function CCAgentSessionView({
     !agentStatus.isRunning &&
     !isStreaming &&
     Boolean(sessionId);
+  // SSH 与 device-link 镜像的 task 终态都可能在断连窗口丢失，不能用本地事件永久撑住状态栏。
+  const runningWorkflow = useMemo(
+    () => (isRemoteSession || remoteDeviceId ? null : summarizeRunningWorkflow(taskUpdates)),
+    [isRemoteSession, remoteDeviceId, taskUpdates],
+  );
+  const composerStatus =
+    runningWorkflow
+      ? runningWorkflow.total > 0
+        ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
+        : t('ccAgent.agentStatus.waitingWorkflow')
+      : agentStatus.status;
 
   // error-tail-banner:会话尾部停在未忽略的 role='error' 行 → 输入框上方显示
   // 可操作红条(与 live ErrorBanner 同风格;2026-07-05 产品决策统一——所有尾部
@@ -1658,6 +1811,25 @@ export function CCAgentSessionView({
   //     →「重试/关闭」
   // 后面有新消息 = 任务已被推进,判定自然不命中。此时消息流内不重复渲染该行
   // (MessageStream 对尾部未忽略 error 行返回 null,由本条独家承载)。
+  const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
+  const unreadFailedScheduleRunIds =
+    scheduleSessionInfo?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
+  const currentUnreadFailedRunId =
+    scheduleSessionInfo?.latestUnreadFailedRunId ?? unreadFailedScheduleRunIds[0];
+  const markCurrentUnreadFailedScheduleRun = useCallback(async (): Promise<boolean> => {
+    if (!currentUnreadFailedRunId) return true;
+    const { failed, firstError } = await markScheduleRunsReadAndSync([currentUnreadFailedRunId]);
+    if (failed.length === 0) return true;
+    toast.error(
+      t('ccAgent.layout.markAllReadFailed', {
+        error: firstError ?? failed[0],
+      }),
+    );
+    return false;
+  }, [currentUnreadFailedRunId, t]);
+  const handleUnreadFailedScheduleDismiss = useCallback(() => {
+    void markCurrentUnreadFailedScheduleRun();
+  }, [markCurrentUnreadFailedScheduleRun]);
   const errorTailMsg = useMemo(() => {
     const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
     return last && last.role === 'error' && !last.errorDismissed ? last : null;
@@ -1752,30 +1924,41 @@ export function CCAgentSessionView({
       // 本机会话才清:远程会话的红点靠隧道回执清被控端,而本机库里没有它的行,
       // 重算恢复不了 —— 那条腿延后到 pending 落回 false 且横幅确实消失后再 ack。
       if (!remoteDeviceId) ackErrorAlertHandled(sessionId);
+      // 只清当前这次失败 run。整组历史仍走组菜单。
+      await markCurrentUnreadFailedScheduleRun();
     } catch (err) {
       setErrorTailBannerHiddenFor(null);
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [errorTailKind, errorTailMsg, rebuildClaudeSubscriptionSessionBeforeRetry, sessionId]);
+  }, [
+    errorTailKind,
+    errorTailMsg,
+    markCurrentUnreadFailedScheduleRun,
+    rebuildClaudeSubscriptionSessionBeforeRetry,
+    sessionId,
+  ]);
   const handleErrorTailDismiss = useCallback(() => {
     if (!sessionId || !errorTailMsg) return;
-    // store 乐观置 errorDismissed(banner 即刻熄灭、切会话回来不复现)+ 持久化
-    // (main 侧 merge dismissed:true,不丢 sdkError 等原字段)。落库失败会回滚乐观态。
-    // 必须**等落库完成**再重算:dismiss 落库无广播,而告警查询是纯 DB 读,
-    // 抢在写入前读会仍判定告警存在 —— 横幅已熄灭、红点却卡住。
-    void makerChatStore
-      .dismissErrorTailMessage(sessionId, errorTailMsg.clientId)
-      .then((persisted) => {
-        // device-link 远程会话:dismiss 经隧道写到**被控端** DB,控制端本机库里没有
-        // 这个会话的行,派生腿查不到、也从未认领它 —— 必须显式 ack(explicit 清本机
-        // 角标 + 隧道回执清被控端未读)。删掉展示型 ack 后这是唯一的清除路径。
-        // **只在落库成功时 ack**:隧道写失败时 store 已回滚乐观态、横幅重新出现,
-        // 此时清红点会再造成「横幅在、红点没」(PR #879 review P1)。
-        // 本机会话由下面的重算收敛,不重复 ack。
-        if (persisted && remoteDeviceId) ackErrorAlertHandled(sessionId);
-        return refreshPendingAlerts();
-      });
-  }, [errorTailMsg, remoteDeviceId, sessionId]);
+    void markCurrentUnreadFailedScheduleRun().then((marked) => {
+      if (!marked) return;
+      // store 乐观置 errorDismissed(banner 即刻熄灭、切会话回来不复现)+ 持久化
+      // (main 侧 merge dismissed:true,不丢 sdkError 等原字段)。落库失败会回滚乐观态。
+      // 必须**等落库完成**再重算:dismiss 落库无广播,而告警查询是纯 DB 读,
+      // 抢在写入前读会仍判定告警存在 —— 横幅已熄灭、红点却卡住。
+      return makerChatStore.dismissErrorTailMessage(sessionId, errorTailMsg.clientId).then(
+        (persisted) => {
+          // device-link 远程会话:dismiss 经隧道写到**被控端** DB,控制端本机库里没有
+          // 这个会话的行,派生腿查不到、也从未认领它 —— 必须显式 ack(explicit 清本机
+          // 角标 + 隧道回执清被控端未读)。删掉展示型 ack 后这是唯一的清除路径。
+          // **只在落库成功时 ack**:隧道写失败时 store 已回滚乐观态、横幅重新出现,
+          // 此时清红点会再造成「横幅在、红点没」(PR #879 review P1)。
+          // 本机会话由下面的重算收敛,不重复 ack。
+          if (persisted && remoteDeviceId) ackErrorAlertHandled(sessionId);
+          return refreshPendingAlerts();
+        },
+      );
+    });
+  }, [errorTailMsg, markCurrentUnreadFailedScheduleRun, remoteDeviceId, sessionId]);
   // interrupted-turn-resume(简化版):「疑似中断」由 session 行的双时间戳驱动
   // (startedAt > endedAt 且未被 /clear 越过,见 sessionActiveTurn.ts 文件头),
   // 不再依赖持久化中断消息行。判定是打开会话时的一次性快照:本窗口 turn 一旦
@@ -1866,29 +2049,33 @@ export function CCAgentSessionView({
       // dispatch 成功,而横幅已隐藏 —— 先临时清点保持一致,排队被取消时由 pending
       // 落回 false 的 effect 重算恢复。远程会话同样延后(见那里的说明)。
       if (!remoteDeviceId) ackErrorAlertHandled(sessionId);
+      await markCurrentUnreadFailedScheduleRun();
     } catch (err) {
       setSessionInterruptAcked(false);
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [sessionId]);
+  }, [markCurrentUnreadFailedScheduleRun, remoteDeviceId, sessionId]);
   const handleSessionInterruptDismiss = useCallback(() => {
     if (!sessionId) return;
-    setSessionInterruptAcked(true);
-    void ackInterruptedTurnFor(sessionId)
-      .then(() => {
-        // 远程会话同 handleErrorTailDismiss:ack 落的是被控端 DB,控制端本机库里没有
-        // 这个会话,派生腿管不到它的红点 —— 显式 ack。本机会话靠 ended 落库广播的
-        // sessions:patched(lastTurnEndedAt)收敛,不重复 ack。
-        if (remoteDeviceId) ackErrorAlertHandled(sessionId);
-      })
-      .catch((err) => {
-        // 落库失败(典型:device-link 断连时忽略远程中断)必须复位闩锁 —— 否则横幅
-        // 永久隐藏而中断并未被确认,红点还挂着,用户不离开再重进就没法重试
-        // (PR #879 review P1)。与 handleSessionInterruptContinue 的失败处理一致。
-        setSessionInterruptAcked(false);
-        toast.error(err instanceof Error ? err.message : String(err));
-      });
-  }, [remoteDeviceId, sessionId]);
+    void markCurrentUnreadFailedScheduleRun().then((marked) => {
+      if (!marked) return;
+      setSessionInterruptAcked(true);
+      return ackInterruptedTurnFor(sessionId)
+        .then(() => {
+          // 远程会话同 handleErrorTailDismiss:ack 落的是被控端 DB,控制端本机库里没有
+          // 这个会话,派生腿管不到它的红点 —— 显式 ack。本机会话靠 ended 落库广播的
+          // sessions:patched(lastTurnEndedAt)收敛,不重复 ack。
+          if (remoteDeviceId) ackErrorAlertHandled(sessionId);
+        })
+        .catch((err) => {
+          // 落库失败(典型:device-link 断连时忽略远程中断)必须复位闩锁 —— 否则横幅
+          // 永久隐藏而中断并未被确认,红点还挂着,用户不离开再重进就没法重试
+          // (PR #879 review P1)。与 handleSessionInterruptContinue 的失败处理一致。
+          setSessionInterruptAcked(false);
+          toast.error(err instanceof Error ? err.message : String(err));
+        });
+    });
+  }, [markCurrentUnreadFailedScheduleRun, remoteDeviceId, sessionId]);
   // device-link 远程会话首屏:历史/元数据经隧道往返(网络),慢网下 historyLoaded=false
   // 期间消息区空白。仅远程 + 延迟防闪后给「正在从被控端加载」提示(本机会话恒 false)。
   // 冷缓存已经把最近一页画出来时(messages 非空)不再显示覆盖层 —— 它会盖住可读内容。
@@ -2568,7 +2755,7 @@ export function CCAgentSessionView({
           await sessionService.update(sessionId, { extraDirs: next });
         } catch (err) {
           log.warn('extraDirs DB update failed', err);
-          toast.error('附加目录保存失败');
+          toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
           return;
         }
       }
@@ -2580,7 +2767,7 @@ export function CCAgentSessionView({
       }
       await refreshServerSession();
     },
-    [sessionId, refreshServerSession],
+    [sessionId, refreshServerSession, t],
   );
 
   // /issue 命令的 composer 附件不随命令 payload 走 main IPC 往返 —— AttachedFile 是
@@ -2769,6 +2956,10 @@ export function CCAgentSessionView({
               pending.onDeferredAccepted?.();
               const resumedSessionId = sessionId;
               if (resumedSessionId) {
+                requestFollowLatest(
+                  resumedSessionId,
+                  readSendFollowCancelGeneration(resumedSessionId),
+                );
                 void dispatchDeferredUiAssignment(resumedSessionId, undefined, {
                   waitForLeadHistory: false,
                 }).catch((err) => {
@@ -2803,6 +2994,8 @@ export function CCAgentSessionView({
                 )
               : undefined;
           const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
+          const followStartGeneration = readSendFollowCancelGeneration(sessionId);
+          requestFollowLatest(sessionId, followStartGeneration);
           const accepted = await dispatch(
             slashDispatch.message,
             pending.model,
@@ -2864,6 +3057,7 @@ export function CCAgentSessionView({
       session?.agentKind,
       session?.orcaRole,
       sessionId,
+      requestFollowLatest,
       sendMessage,
       steerMessage,
     ],
@@ -2984,13 +3178,20 @@ export function CCAgentSessionView({
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
             });
       if (slashDispatch.handled) {
-        if (slashDispatch.accepted && sessionId) {
-          void dispatchDeferredUiAssignment(sessionId, undefined, {
-            waitForLeadHistory: false,
-          }).catch((err) => {
-            log.error('recover deferred Worker assignment after slash command failed', err);
-            toast.error(t('newChat.collaboration.assignmentFailed'));
-          });
+        if (slashDispatch.accepted) {
+          // Desktop commands can wait in Main long enough for draft hydration to
+          // restore the click-time command. Re-consume only that snapshot after
+          // acceptance; the callback preserves anything typed in the meantime.
+          opts?.onDeferredAccepted?.();
+          if (sessionId) {
+            requestFollowLatest(sessionId, readSendFollowCancelGeneration(sessionId));
+            void dispatchDeferredUiAssignment(sessionId, undefined, {
+              waitForLeadHistory: false,
+            }).catch((err) => {
+              log.error('recover deferred Worker assignment after slash command failed', err);
+              toast.error(t('newChat.collaboration.assignmentFailed'));
+            });
+          }
         }
         return slashDispatch.accepted;
       }
@@ -3117,6 +3318,8 @@ export function CCAgentSessionView({
         ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
       };
       if (deliveryMode === 'steer') {
+        const followStartGeneration = readSendFollowCancelGeneration(sessionId);
+        if (sessionId) requestFollowLatest(sessionId, followStartGeneration);
         const accepted = await steerMessage(
           message,
           model,
@@ -3135,6 +3338,8 @@ export function CCAgentSessionView({
         }
         return accepted;
       }
+      const followStartGeneration = readSendFollowCancelGeneration(sessionId);
+      if (sessionId) requestFollowLatest(sessionId, followStartGeneration);
       const accepted = await sendMessage(
         message,
         model,
@@ -3164,6 +3369,7 @@ export function CCAgentSessionView({
       patchLocalSession,
       sendMessage,
       steerMessage,
+      requestFollowLatest,
       navigate,
       session,
       sessionId,
@@ -3524,9 +3730,10 @@ export function CCAgentSessionView({
     [sessionId, t],
   );
 
-  // delayed-create:从 NewMakerDraftRoute 经 navigate 进来的首条消息,在 session
-  // 完全 hydrate(historyLoaded + workingDir 就位)后自动 sendMessage。
-  // 一次性消费 + ref guard,防 StrictMode 双 mount / 重渲染时重复发送。
+  // delayed-create:device-link / 远程草稿,以及本机斜杠命令首条(含 Pi 空白前缀),把内容登记在
+  // pending 里,等 session 完全 hydrate 后再由 maybeDispatchDesktopSlashCommand /
+  // sendMessage 消费。本机普通文本已在草稿路由发出。一次性消费 + ref guard,防
+  // StrictMode 双 mount / 重渲染时重复发送。
   const pendingConsumedRef = useRef(false);
   useEffect(() => {
     if (!sessionId || !historyLoaded || !session) return;
@@ -3636,6 +3843,8 @@ export function CCAgentSessionView({
             : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
+        const followStartGeneration = readSendFollowCancelGeneration(sessionId);
+        requestFollowLatest(sessionId, followStartGeneration);
         const delivered = await deliverRecoverableHandoff(sessionId, () =>
           sendMessage(
             pendingText,
@@ -3682,6 +3891,7 @@ export function CCAgentSessionView({
     historyLoaded,
     maybeDispatchDesktopSlashCommand,
     restoreRecoverableHandoff,
+    requestFollowLatest,
     sendMessage,
     session,
     sessionId,
@@ -3887,7 +4097,8 @@ export function CCAgentSessionView({
       pendingPluginSetup ||
       pendingIssueConfirm ||
       pendingRenameSessionsConfirm ||
-      pendingGhostGrantConfirm,
+      pendingGhostGrantConfirm ||
+      pendingRemoteDesktopConfirmation,
     );
   useEffect(() => {
     if (shareSelectionActive && shareSelectionBlocked) shareSelectionStore.exit();
@@ -3915,6 +4126,7 @@ export function CCAgentSessionView({
       workingDir={session?.workingDir ?? ''}
       messages={messages}
       historyLoaded={historyLoaded}
+      historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
       isSessionStreaming={isStreaming}
       continuationTurnClientId={continuationTurnClientId}
@@ -3922,15 +4134,18 @@ export function CCAgentSessionView({
       onLoadMore={loadOlderMessages}
       isLoadingMore={isLoadingMore}
       hasMoreMessages={hasMoreMessages}
+      historyWindowHasIsland={historyWindowHasIsland}
       bottomPadding={overlayHeight}
-      composerStackTopOffset={composerStackTopOffset}
+      bottomCenterClearanceOffset={bottomCenterClearanceOffset}
       contentWidth={messageWidth}
+      getContentWidth={getMessageWidth}
       focusMessageClientId={focusedMessageTarget?.clientId ?? null}
       focusMessageRequestId={focusedMessageTarget?.requestId ?? 0}
       forkOrigin={forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
       isLocalUserSend={isLocalUserSend}
       ownsHardwareScrollActions={ownsHardwareTaskActions}
+      onInlinePlanVisibilityChange={handleInlinePlanVisibilityChange}
     />
   );
 
@@ -3957,6 +4172,33 @@ export function CCAgentSessionView({
       {ownsRoute && sessionId && setRightSidebarSessionId && (
         <RightSidebarSessionIdRegistration
           sessionId={sessionId}
+          // A local Pi task always offers the tab, as before. A task that is no
+          // longer on Pi keeps offering it for exactly as long as its durable
+          // runs exist — terminal ones included, matching what a Pi task shows
+          // — and stops once cleanup has removed them. `undefined` while the
+          // session is unresolved stays untouched: the shell reads that as
+          // "not known yet", not as "unavailable".
+          //
+          // `remoteHostId` mirrors the capability gate rather than adding one:
+          // `agents/pi` computes `remote` as `Boolean(opts.remoteHostId)` and
+          // skips installing the durable Subagent extension and runner for such
+          // a session, so an SSH-hosted Pi task can never produce a run. Without
+          // this the harness alone opened a tab that stays empty forever and
+          // whose controls address the *local* filesystem, not the remote host.
+          // This is not SSH-hosted Subagent support — that needs the wire
+          // protocol to own the run files end-to-end and is out of scope here;
+          // this only stops advertising an entry the capability gate disabled.
+          //
+          // `durablePiRunsPresent` is deliberately left ungated: device-link is
+          // a supported path and discovers through `listRemote`, while an SSH
+          // task has no deviceId (`remoteHostId` and `deviceLinkDeviceId` are
+          // separate fields) so its local list is always empty and presence
+          // always false — it cannot leak back in through this branch.
+          subagentsAvailable={
+            session
+              ? (session.agentKind === 'pi' && !session.remoteHostId) || durablePiRunsPresent
+              : undefined
+          }
           initialCollapsed={shouldFirstFrameRevealOrcaWorkers ? false : undefined}
           writeInitialCollapsedRecord={shouldFirstFrameRevealOrcaWorkers}
           declare={setRightSidebarSessionId}
@@ -4156,13 +4398,20 @@ export function CCAgentSessionView({
               {(!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed)) && (
                 <RunningStatusBar
                   key={sessionId}
-                  status={agentStatus.status}
+                  status={composerStatus}
                   tokenUsage={agentStatus.tokenUsage}
+                  outputTokens={agentStatus.outputTokens ?? 0}
+                  generationDurationMs={agentStatus.generationDurationMs ?? 0}
+                  generationReliable={agentStatus.generationReliable ?? true}
                   startedAt={agentStatus.startedAt}
-                  visible={!pendingPlanReview && (agentStatus.isRunning || backgroundTasksActive)}
+                  visible={
+                    !pendingPlanReview &&
+                    (agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null)
+                  }
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                   backgroundTasksRunning={backgroundTasksActive}
+                  workflowStatus={runningWorkflow ? composerStatus : undefined}
                   // 仅后台 Bash 在跑(无模型调用)时换专属文案 + 温和停止语义:
                   // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
                   // (关子进程止损,bash 任务随之终止,无需再逐个停)。
@@ -4197,6 +4446,7 @@ export function CCAgentSessionView({
                   animated={isStreaming}
                   streaming={isStreaming}
                   width={inputWidth}
+                  inlinePlanVisibility={inlinePlanVisibility}
                   taskHistoryMayBeIncomplete={
                     !historyLoaded || hasMoreMessages || historyWindowHasIsland
                   }
@@ -4208,7 +4458,8 @@ export function CCAgentSessionView({
                       pendingPluginSetup ||
                       pendingIssueConfirm ||
                       pendingRenameSessionsConfirm ||
-                      pendingGhostGrantConfirm
+                      pendingGhostGrantConfirm ||
+                      pendingRemoteDesktopConfirmation
                     )
                   }
                   className="mb-0"
@@ -4311,6 +4562,22 @@ export function CCAgentSessionView({
                 />
               )}
 
+            {!errorTailMsg &&
+              !interruptedFromSession &&
+              unreadFailedScheduleRunIds.length > 0 &&
+              !syntheticContinuationPending &&
+              !error &&
+              !credentialSwitchWait &&
+              !isStreaming &&
+              !agentStatus.isRunning &&
+              sessionId && (
+                <UnreadFailedScheduleBanner
+                  onDismiss={handleUnreadFailedScheduleDismiss}
+                  style={{ width: inputWidth }}
+                  className="py-1"
+                />
+              )}
+
             {error && (
               <ErrorBanner
                 error={error}
@@ -4397,7 +4664,8 @@ export function CCAgentSessionView({
                     pendingPluginSetup ||
                     pendingIssueConfirm ||
                     pendingRenameSessionsConfirm ||
-                    pendingGhostGrantConfirm
+                    pendingGhostGrantConfirm ||
+                    pendingRemoteDesktopConfirmation
                   )
                 }
                 placeholder={
@@ -4464,13 +4732,17 @@ export function CCAgentSessionView({
                     pending={pendingGhostGrantConfirm}
                     onRespond={respondToGhostGrantConfirm}
                   />
+                ) : pendingRemoteDesktopConfirmation ? (
+                  <RemoteDesktopConfirmationNotice
+                    key={pendingRemoteDesktopConfirmation.requestId}
+                  />
                 ) : null}
               </InteractionPromptHost>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               <GoalIndicator sessionId={sessionId} />
-              {/* 互斥:有任意 pending interaction 时,下方 takeover/overlay/ChatInput
-                 全部静默 — 跟改造前 ternary 链 (Plan ? : Perm ? : Ask ? :
-                 Takeover ? : ChatInput) 的语义一致。
+              {/* 互斥:控制端能终结的 pending interaction 会接管 composer；
+                 Desktop-only 只读确认只能提示等待，必须保留 ChatInput，避免控制端
+                 既处理不了确认又无法继续发送或排队消息。
                  优先级 (高 → 低):
                    1. attached (远程接管中)  → TakeoverMask  (90px)
                    2. worktreePreparing      → WorktreeCreatingOverlay (90px, 视觉同款)
@@ -4496,8 +4768,8 @@ export function CCAgentSessionView({
               ) : shareSelectionActive && sessionId ? (
                 <ShareSelectionBar
                   sessionId={sessionId}
-                  contentWidth={messageWidth}
                   barWidth={inputWidth}
+                  getContentWidth={getMessageWidth}
                 />
               ) : (
                 <ChatInput
@@ -4895,24 +5167,19 @@ function HandoffSourcePill({
 
 const STATUS_BAR_FADE_MS = 400;
 const CONTROLLED_BANNER_MAX_WIDTH = 420;
-const CONTROLLED_BANNER_WIDTH_RATIO = 0.5;
-
-function getControlledBannerMaxWidth(inputWidth?: number): number {
-  if (inputWidth == null) return CONTROLLED_BANNER_MAX_WIDTH;
-  return Math.max(
-    0,
-    Math.min((inputWidth - 16) * CONTROLLED_BANNER_WIDTH_RATIO, CONTROLLED_BANNER_MAX_WIDTH),
-  );
-}
 
 function RunningStatusBar({
   status,
   tokenUsage,
+  outputTokens = 0,
+  generationDurationMs = 0,
+  generationReliable = true,
   startedAt,
   visible,
   inputWidth,
   sideTaskRunning = false,
   backgroundTasksRunning = false,
+  workflowStatus,
   backgroundBashOnlyCount = 0,
   backgroundStopping = false,
   onStopBackgroundTasks,
@@ -4922,12 +5189,15 @@ function RunningStatusBar({
 }: {
   status: string;
   tokenUsage: number;
+  outputTokens?: number;
+  generationDurationMs?: number;
+  generationReliable?: boolean;
   startedAt: number | null;
   visible: boolean;
-  inputWidth?: number;
+  inputWidth?: CSSProperties['width'];
   /**
    * 当前是否处于 side-task (mivo MJ 按钮等不走 LLM 的后台任务) 运行态。
-   * true 时隐藏右侧的 elapsed · ↓ tokens 行 —— mivo 不消耗 token, 显示上一轮
+   * true 时隐藏右侧的 elapsed · rate 行 —— mivo 不消耗 token, 显示上一轮
    * 残留数字会误导用户。"Done" check icon 也不显示 (sideTaskRunning 期间永远
    * 把 status 当成进行中, 即便 status 文案恰好是 "Done")。
    */
@@ -4939,6 +5209,8 @@ function RunningStatusBar({
    * 计数在此语义下都是误导信息。替代原独立横幅(2026-07-13 假停止治理)。
    */
   backgroundTasksRunning?: boolean;
+  /** 本机 Workflow 在运行时的专属状态文案；保留后台停止语义，但优先解释等待进度。 */
+  workflowStatus?: string;
   /**
    * 后台模式细分:>0 表示当前只有后台 Bash 任务在跑(无模型调用)。左段换
    * 「后台任务运行中(N 个)」文案,「全部停止」tooltip 换成逐任务停止语义
@@ -4997,6 +5269,7 @@ function RunningStatusBar({
   }, [startedAt]);
 
   const isHidden = suppressContent || (!showContent && !visible);
+  const workflowWaiting = workflowStatus !== undefined;
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
@@ -5004,11 +5277,11 @@ function RunningStatusBar({
   // 后台子任务模式的左段文案:上一轮残留的 status(多半是 "Done")在此语义下是
   // 误导信息,整体替换为后台运行提示。仅后台 Bash 时用带数量的专属文案 ——
   // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
-  const displayStatus = backgroundTasksRunning
+  const displayStatus = workflowStatus ?? (backgroundTasksRunning
     ? backgroundBashOnlyCount > 0
       ? t('chat.backgroundActivity.bashStatus', { count: backgroundBashOnlyCount })
       : t('chat.backgroundActivity.status')
-    : localizeAgentStatus(status, t);
+    : localizeAgentStatus(status, t));
   // F-COMPACT-1: when SDK is auto-summarizing the conversation, give the
   // status bar a distinct icon so the user can tell "Compacting..." apart
   // from "Thinking..." — both share the shimmer animation by design, but
@@ -5052,16 +5325,26 @@ function RunningStatusBar({
     }
     shimmerPlayingRef.current = true;
     setShimmerCycle((n) => n + 1);
-  }, [visible, suppressContent, reducedMotion, status, tokenUsage]);
+  }, [visible, suppressContent, reducedMotion, status, tokenUsage, outputTokens, generationDurationMs]);
 
-  // Animate the token counter so live mid-turn updates (from message_delta in
-  // agentManager) feel like a smoothly-incrementing number, the same way claude
-  // code's CLI status line ticks. The hook re-anchors from the displayed value
-  // on every target change, so rapid updates blend without snap-back.
+  // Animate the token counter so live mid-turn updates feel like a smoothly-
+  // incrementing number. Rate does not use this: locally ticking the
+  // denominator would make a paused model look like decaying speed.
   const animatedTokens = useAnimatedNumber(tokenUsage, 400);
-  const tokenText = t('chat.messageActionBar.turnTokens', {
-    tokens: formatRunningTokenCount(animatedTokens, visible),
+  const usageMeta = resolveRunningUsageMeta({
+    outputTokens,
+    generationDurationMs,
+    generationReliable,
+    tokenUsage,
   });
+  const tokenCountText = t('chat.runningStatus.tokenCount', {
+    tokens: formatRunningTokenCount(animatedTokens),
+  });
+  const tokenCountTipText = t('chat.messageActionBar.turnTokens', {
+    tokens: formatRunningTokenCount(animatedTokens),
+  });
+  const rateText =
+    usageMeta.kind === 'rate' ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate }) : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
@@ -5163,20 +5446,36 @@ function RunningStatusBar({
                   ? t('chat.backgroundActivity.stopping')
                   : t('chat.backgroundActivity.stopAll')}
               </button>
-            ) : (
+            ) : workflowWaiting ? null : (
               <>
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}
                 </span>
-                {!sideTaskRunning && (
+                {!sideTaskRunning && usageMeta.kind !== 'none' && (
                   <>
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                       &middot;
                     </span>
-                    <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
-                    <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                      {tokenText}
-                    </span>
+                    {rateText ? (
+                      tokenUsage > 0 ? (
+                        <Tip text={tokenCountTipText} side="top">
+                          <span className="text-13 font-medium text-[var(--status-bar-meta)]">
+                            {rateText}
+                          </span>
+                        </Tip>
+                      ) : (
+                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
+                          {rateText}
+                        </span>
+                      )
+                    ) : (
+                      <>
+                        <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
+                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
+                          {tokenCountText}
+                        </span>
+                      </>
+                    )}
                   </>
                 )}
               </>

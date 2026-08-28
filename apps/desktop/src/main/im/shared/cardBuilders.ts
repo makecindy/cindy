@@ -16,6 +16,7 @@
  */
 
 import type {
+  AskUserQuestionItem,
   InteractionRequest,
   AgentKind,
   Effort,
@@ -29,9 +30,12 @@ import { autoReviewUnavailablePromptLine } from './autoReviewUnavailablePrompt';
 import type { ImUiTextPack } from './types';
 import {
   composeInteractionModel,
+  needsAskMultiCard,
   truncateBlock,
+  truncateInline,
   BTN_LABEL_MAX,
   IM_PERMISSION_INPUT_PREVIEW_MAX,
+  MAX_OPTIONS,
   MAX_PLAN_LEN,
 } from './interactionCardModel';
 import type { ControlProject, ControlSession, RecentControlSession } from './controlProjects';
@@ -55,6 +59,15 @@ export interface ImCardBuilders {
   buildAskUserCard(
     req: Extract<InteractionRequest, { kind: 'ask_user_question' }>,
   ): InteractiveCardSpec | null;
+  /**
+   * 多题/多选打勾卡(仅提供 ui.cards.ask.multi 的渠道): 按当前勾选态重建整卡。
+   * 首发与每次 ask:multi 按键后的原地 patch 共用, 保证两处渲染永不漂移。
+   */
+  buildAskMultiCard(args: {
+    requestId: string;
+    questions: AskUserQuestionItem[];
+    selections: ReadonlyMap<number, ReadonlySet<number>>;
+  }): InteractiveCardSpec;
   buildPlanReviewCard(
     req: Extract<InteractionRequest, { kind: 'plan_review' }>,
   ): InteractiveCardSpec;
@@ -123,6 +136,63 @@ export function createCardBuilders(
   ui: ImUiTextPack,
   getDefaultEffortFor: (modelId: string, agentKind?: AgentKind) => Effort,
 ): ImCardBuilders {
+  /**
+   * 多题/多选打勾卡: 逐问渲染问题正文, 每个选项一枚切换按钮(题号锚定到
+   * 正文的问题序号, 勾选态用 selectedMark 前缀反馈), 末尾一枚提交按钮一次性
+   * 上交全部已答问题。按钮 id/payload 与 cardActionHandler 的 ask:multi /
+   * ask:multi-submit 分支对应; 按键后的原地 patch 复用同一函数重建整卡。
+   */
+  function askMultiCard(args: {
+    requestId: string;
+    questions: AskUserQuestionItem[];
+    selections: ReadonlyMap<number, ReadonlySet<number>>;
+  }): InteractiveCardSpec {
+    const m = ui.cards.ask.multi!;
+    const bodyLines: string[] = [];
+    const buttons: InteractiveCardSpec['buttons'] = [];
+    // 单独一道多选题沿用单问卡标题观感; 多道题才用「确认几件事」总标题。
+    const title =
+      args.questions.length === 1
+        ? ui.cards.ask.title(args.questions[0].header || args.questions[0].question)
+        : m.title;
+    args.questions.forEach((question, qi) => {
+      const headerText = question.header || question.question;
+      const hint = question.multiSelect ? m.multiSelectHint : '';
+      bodyLines.push(`**${qi + 1}. ${headerText}**${hint}`);
+      if (question.header && question.header !== question.question) {
+        bodyLines.push(question.question);
+      }
+      const options = (question.options ?? []).slice(0, MAX_OPTIONS);
+      if (options.length === 0) {
+        // 自由文本问题无法在打勾卡里给输入框: 正文已在上面渲染, 不出按钮;
+        // 提交时该问按未答省略, agent 会追问。不要写 noOptionsHint —— 那句
+        // 「直接发文字」在打勾卡里没有对应输入路径。
+        return;
+      }
+      const selected = args.selections.get(qi);
+      options.forEach((opt, oi) => {
+        // 勾选前缀也占按钮文案预算; 按钮是单行, 用单行省略号截断
+        // (块级截断的换行后缀会掉进按钮文案)。
+        // 飞书 v1 单 action 模块最多 5 个按钮, 由 @cindy/im 的
+        // buildInteractiveCardV1 按模块拆分, 这里不截断选项。
+        const prefix = `${selected?.has(oi) === true ? m.selectedMark : ''}${qi + 1}·`;
+        buttons.push({
+          id: 'ask:multi',
+          label: prefix + truncateInline(opt.label, BTN_LABEL_MAX - prefix.length - 1),
+          type: 'default',
+          payload: { requestId: args.requestId, q: qi, o: oi },
+        });
+      });
+    });
+    buttons.push({
+      id: 'ask:multi-submit',
+      label: m.submitLabel,
+      type: 'primary',
+      payload: { requestId: args.requestId },
+    });
+    return { title, body: bodyLines.join('\n\n'), buttons };
+  }
+
   return {
     // ── permission ──────────────────────────────────────────────────────────
 
@@ -161,10 +231,19 @@ export function createCardBuilders(
     // ── ask_user_question ───────────────────────────────────────────────────
     // v1 简化(只渲染第一问 / 至多 6 个选项 / multiSelect 降级单选)已收进
     // interactionCardModel.composeInteractionModel — 这里只做渲染。
+    // 例外: 渠道提供了 ui.cards.ask.multi(卡片可原地更新)且请求命中
+    // needsAskMultiCard(多题 / 含多选)时, 改发打勾卡。
 
     buildAskUserCard(req) {
       const model = composeInteractionModel(req);
       if (!model) return null;
+      if (model.kind === 'ask_user_question' && ui.cards.ask.multi && needsAskMultiCard(req)) {
+        return askMultiCard({
+          requestId: req.requestId,
+          questions: req.questions,
+          selections: new Map(),
+        });
+      }
 
       const { headerText, question } = model;
       const bodyExtra = model.questionBody ? `\n${model.questionBody}` : '';
@@ -210,6 +289,8 @@ export function createCardBuilders(
         })),
       };
     },
+
+    buildAskMultiCard: askMultiCard,
 
     // ── plan_review ─────────────────────────────────────────────────────────
 

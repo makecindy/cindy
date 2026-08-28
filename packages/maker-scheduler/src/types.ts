@@ -107,6 +107,8 @@ export interface ScriptExecutionConfig {
   capabilities: ScriptCapability[];
 }
 /**
+ * 'aborted': 用户暂停/删除计划，或调度器 stop（切账号/退出）主动中断。
+ * 视为终态；落库时自带 readAt（不是用户要处理的失败，不产生未读红点）。
  * 'interrupted': app 关闭/崩溃时残留为 'running' 的 run，下次启动时由
  * Scheduler.start() 统一改写为本状态，区别于用户主动 abort。视为终态。
  * 'skipped': 前置检查脚本（preRunHook）exit 2 拦截，本轮未启动 agent。
@@ -280,6 +282,8 @@ export interface ScheduleRun {
   costMoney?: ScheduleRunMoney;
   /** 新版区域订阅价值估算；不代表实际账单。 */
   estimatedValueMoney?: ScheduleRunMoney;
+  /** 本次 run 关联 assistant 消息的 Token 用量总和，供无法可靠计价时展示。 */
+  totalTokens?: number;
   /**
    * exact = 已确认费用（可能是实际账单，也可能是 estimate-only）；direct = 费用仅来自
    * 无法挂载消息的直接账本；mixed = 快照同时包含直接账本和消息账本；zero = 已确认零费用；

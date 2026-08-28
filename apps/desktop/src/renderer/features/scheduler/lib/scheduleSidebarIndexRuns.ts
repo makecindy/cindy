@@ -13,6 +13,7 @@ export interface ScheduleSidebarIndexRun {
   sessionId?: string;
   status: ScheduleRun['status'];
   readAt?: number;
+  firedAt?: number;
 }
 
 /**
@@ -26,6 +27,30 @@ export interface ScheduleSidebarIndexRun {
 export interface ScheduleSidebarIndexSnapshot {
   runs: ScheduleSidebarIndexRun[];
   inflightRunIds: string[];
+}
+
+/**
+ * 同一 session 可能同时返回最新映射和更早的未读 run。需要 Automation 归属的入口
+ * 必须按 projection 的 (firedAt, runId) 规则取最新一条，不能依赖数组顺序或 find()。
+ */
+export function findLatestSidebarIndexRunForSession(
+  runs: readonly ScheduleSidebarIndexRun[],
+  sessionId: string,
+): ScheduleSidebarIndexRun | undefined {
+  let latest: ScheduleSidebarIndexRun | undefined;
+  for (const run of runs) {
+    if (run.sessionId !== sessionId) continue;
+    const firedAt = run.firedAt ?? Number.NEGATIVE_INFINITY;
+    const latestFiredAt = latest?.firedAt ?? Number.NEGATIVE_INFINITY;
+    if (
+      latest === undefined ||
+      firedAt > latestFiredAt ||
+      (firedAt === latestFiredAt && run.runId > latest.runId)
+    ) {
+      latest = run;
+    }
+  }
+  return latest;
 }
 
 export async function loadScheduleSidebarIndexSnapshot(): Promise<ScheduleSidebarIndexSnapshot> {

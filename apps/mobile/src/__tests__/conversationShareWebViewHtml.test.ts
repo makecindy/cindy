@@ -149,7 +149,7 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(html).toContain(`alt="${i18n.t('message.renderer.imageFallbackTitle')}"`);
   });
 
-  it('限制原生与降级 renderer 的完整源尺寸，并安全保留已分享 PNG', () => {
+  it('完整回退原生增强，并安全保留已分享 PNG', () => {
     const nativeSource = readFileSync(
       resolve(
         process.cwd(),
@@ -164,20 +164,9 @@ describe('buildConversationShareHtml 富内容导出', () => {
     const sessionSource = readFileSync(
       resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
       'utf8',
-    ).replace(/\r\n/g, '\n');
+    );
 
     expect(nativeSource).toContain('conversationShareMaxSourcePixels');
-    expect(nativeSource).toContain('UIWindow(windowScene: windowScene)');
-    expect(nativeSource).toContain('hostingWindow.rootViewController = viewController');
-    expect(nativeSource).toContain('hostingWindow?.isHidden = true');
-    expect(nativeSource).toContain('no active window scene');
-    expect(nativeSource).toContain('UIWindow.Level.normal.rawValue + 1');
-    expect(nativeSource).toContain('hostingWindow.alpha = 0.01');
-    expect(nativeSource).toContain('waitForWebContentPaint(webView)');
-    expect(nativeSource).toContain('requestAnimationFrame(resolve)');
-    expect(nativeSource).toContain('merged.hasVisibleVariation');
-    expect(nativeSource).toContain('Conversation share PNG is blank.');
-    expect(nativeSource).toContain('format.scale = 1');
     expect(nativeSource).toContain(
       'captureWidth * captureHeight <= conversationShareMaxSourcePixels',
     );
@@ -190,29 +179,23 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(webViewSource).toContain(
       'files.slice(SHARE_PNG_RETAIN_COUNT, SHARE_PNG_RETAIN_COUNT + SHARE_PNG_CLEANUP_BATCH)',
     );
-    expect(sessionSource).toContain('deleteConversationSharePngTemp');
     expect(sessionSource).toContain('cleanupConversationSharePngTemps');
     expect(sessionSource).toContain('cache 目录交给下一次有界清理');
     expect(sessionSource).toContain('if (!shareCompleted && localUri)');
     expect(sessionSource).toContain('<ConversationShareSvg');
-    expect(sessionSource).toContain(
-      "nativeConversationShareAvailable = Platform.OS === 'ios'",
+    expect(sessionSource).not.toContain('nativeConversationShareAvailable');
+    expect(sessionSource).not.toContain('renderConversationShareHtmlToPng({');
+    const shareAsyncIndex = sessionSource.indexOf(
+      "await sharing.shareAsync(localUri, { mimeType: 'image/png' });",
     );
-    expect(sessionSource).toContain(
-      'if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;',
+    const shareCompletedIndex = sessionSource.indexOf('shareCompleted = true;', shareAsyncIndex);
+    const postShareActiveCheckIndex = sessionSource.indexOf(
+      'if (!isShareOperationActive()) return;',
+      shareAsyncIndex,
     );
-    expect(sessionSource).toContain(
-      '!nativeConversationShareAvailable\n      || !shareSelectionActive',
-    );
-    expect(sessionSource).toContain(
-      'nativeConversationShareAvailable\n      && shareCharacterSrc',
-    );
-    expect(sessionSource).toContain('renderConversationShareHtmlToPng({');
-    expect(sessionSource).toContain('nativeShareAssetsReady');
-    expect(sessionSource).toContain('native webview export succeeded');
-    expect(sessionSource).toContain('falling back to svg');
-    expect(sessionSource).not.toContain('OTA webview export failed; falling back to svg');
-    expect(sessionSource).toContain('return svg.exportPng();');
+    expect(shareAsyncIndex).toBeGreaterThanOrEqual(0);
+    expect(shareCompletedIndex).toBeGreaterThan(shareAsyncIndex);
+    expect(shareCompletedIndex).toBeLessThan(postShareActiveCheckIndex);
   });
 
   it('使用 Mobile 获批的克制页脚尺寸', () => {
@@ -260,6 +243,23 @@ describe('buildConversationShareHtml 富内容导出', () => {
       resolve(process.cwd(), 'src/session/ShareSelectionBar.tsx'),
       'utf8',
     );
+    const selectAllSource = readFileSync(
+      resolve(process.cwd(), 'src/session/ShareSelectAllButton.tsx'),
+      'utf8',
+    );
+
+    const messageCheckboxSource = readFileSync(
+      resolve(process.cwd(), 'src/session/ShareMessageCheckbox.tsx'),
+      'utf8',
+    );
+    const messageRendererSource = readFileSync(
+      resolve(process.cwd(), 'src/session/MessageRenderer.tsx'),
+      'utf8',
+    );
+    const sessionSource = readFileSync(
+      resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
+      'utf8',
+    );
 
     expect(html).toContain('<div class="share-gap" aria-hidden="true">⋯</div>');
     expect(html).toMatch(
@@ -267,11 +267,51 @@ describe('buildConversationShareHtml 富内容导出', () => {
     );
     expect(shareBarSource).toContain('height: 44,');
     expect(shareBarSource).toContain('minHeight: 44,');
-    expect(shareBarSource).toContain(
+    expect(shareBarSource).toContain('minWidth: 112,');
+    expect(shareBarSource).toContain('fontSize: typeScale.body,');
+    expect(selectAllSource).toContain(
       'shareableIds.filter((clientId) =>',
     );
-    expect(shareBarSource).toContain(
+    expect(selectAllSource).toContain(
       'selectionBeforeSelectAllRef.current?.includes(clientId)',
+    );
+    expect(selectAllSource).toContain('<ShareCheckboxMark checked={allSelected} />');
+    expect(selectAllSource).not.toContain('backgroundColor: colors.surfaceChip');
+    expect(messageCheckboxSource).toContain('onStartShouldSetResponder={() => !disabled}');
+    expect(messageCheckboxSource).toContain('onResponderTerminationRequest={() => true}');
+    expect(messageCheckboxSource).toContain('shouldCommitShareSelectionTap({');
+    expect(messageCheckboxSource).toContain('<ShareSelectionRowInteractionContext.Provider');
+    expect(messageCheckboxSource).toContain('if (!gesture.consumed) toggle();');
+    expect(messageCheckboxSource).not.toContain('fill ? styles.rowButton : styles.button');
+    expect(messageRendererSource).toContain('<View style={styles.shareSelectionContent}>');
+    expect(messageRendererSource).not.toContain(
+      'pointerEvents="none" style={styles.shareSelectionContent}',
+    );
+    expect(messageRendererSource).toContain('useCancelShareSelectionRowTap()');
+    expect(messageRendererSource).toContain('fill');
+    expect(messageRendererSource).toContain(
+      'testID="message.shareStickyCheck"',
+    );
+    expect(messageRendererSource).toContain(
+      'const shareableViews = Array.from(shareableMessageViewsRef.current.entries())',
+    );
+    expect(messageRendererSource).toContain(
+      'candidates.sort((a, b) => (a.frame?.y ?? Number.POSITIVE_INFINITY)',
+    );
+    expect(messageRendererSource).toContain(
+      'const pinned = candidates.find(({ frame }) => frame',
+    );
+    expect(messageRendererSource).toContain(
+      'frame.y + frame.height > dockY + SHARE_STICKY_CHECK_HEIGHT',
+    );
+    expect(messageRendererSource).toContain('pointerEvents="box-none"');
+    expect(messageRendererSource).toContain('marginLeft: wideContentInset + spacing.lg');
+    expect(messageRendererSource).not.toContain('styles.stickyShareSpacer');
+    expect(sessionSource).toContain(
+      'shareSelectionLeadingInset={nativeShellLayout.wideViewport',
+    );
+    expect(sessionSource).toContain(
+      '{ paddingLeft: shareSelectionLeadingInset + spacing.sm }',
     );
     expect(webViewSource).toContain(
       'onShouldStartLoadWithRequest={interceptNavigation}',

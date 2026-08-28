@@ -36,12 +36,16 @@ import {
 	DESKTOP_DEV_VERDICT_PREFIX,
 	ISOLATED_RESTART_NEXT,
 	WORKTREE_ISOLATED_ARG,
+	SHARED_USERDATA_ARG,
+	DEFAULT_ISOLATED_ARG,
 	buildDesktopDevVerdictFromFailure,
 	buildDesktopDevVerdictFromWhoami,
+	desktopRestartArgvConflictMessage,
 	formatDesktopDevVerdict,
 	inferDesktopDevFailureCode,
 	isolationNameFromWorktree,
 	isolatedRestartNextCommand,
+	normalizeDesktopRestartArgv,
 	resolveIsolatedArg,
 	restartContextFromArgv,
 	shouldSuggestIsolatedNext,
@@ -151,6 +155,26 @@ test("desktop restart recognizes dev processes from sibling repository worktrees
 	}, worktrees, 999), false);
 });
 
+test("desktop restart preserves durable PI Subagent runners", () => {
+	const checkoutRoot = path.resolve("/repo/cindy-feature");
+	const electron = path.join(checkoutRoot, "node_modules/electron/dist/Electron");
+	const runner = path.resolve(
+		"/user-data/owners/owner/runtime/pi-subagent-runs/session/run/runner.cjs",
+	);
+	const config = path.resolve(
+		"/user-data/owners/owner/runtime/pi-subagent-runs/session/run/config.json",
+	);
+
+	assert.equal(isRepositoryDesktopDevProcess({
+		pid: 44,
+		command: `${electron} ${runner} ${config}`,
+	}, [checkoutRoot], 999), false);
+	assert.equal(isRepositoryDesktopDevProcess({
+		pid: 45,
+		command: `${electron} .`,
+	}, [checkoutRoot], 999), true);
+});
+
 test("restart kill scope only targets the checkout that runs the script", () => {
 	const ownRoot = path.resolve("/repo/cindy-feature");
 	const otherRoot = path.resolve("/repo/cindy-pi-sandbox");
@@ -218,6 +242,40 @@ test("hasIsolationIntent sees argv and ambient XDT_ISOLATED=1", () => {
 	assert.equal(hasIsolationIntent(["--isolated=review"]), true);
 	assert.equal(hasIsolationIntent([], { XDT_ISOLATED: "1" }), true);
 	assert.equal(hasIsolationIntent([], { XDT_ISOLATED: "0" }), false);
+});
+
+test("normalizeDesktopRestartArgv defaults to one stable sandbox across worktrees", () => {
+	assert.deepEqual(normalizeDesktopRestartArgv(["--wait-ready"], {}), [
+		"--wait-ready",
+		DEFAULT_ISOLATED_ARG,
+	]);
+	assert.deepEqual(
+		normalizeDesktopRestartArgv(["--wait-ready", "--isolated=review"], {}),
+		["--wait-ready", "--isolated=review"],
+	);
+	assert.deepEqual(normalizeDesktopRestartArgv(["--wait-ready"], { XDT_ISOLATED: "1" }), [
+		"--wait-ready",
+	]);
+	assert.deepEqual(normalizeDesktopRestartArgv(["--wait-ready", SHARED_USERDATA_ARG], {}), [
+		"--wait-ready",
+		SHARED_USERDATA_ARG,
+	]);
+	assert.deepEqual(
+		normalizeDesktopRestartArgv(["--wait-ready", "--preserve-running"], {}),
+		["--wait-ready", "--preserve-running"],
+	);
+});
+
+test("--shared conflicts with explicit or ambient isolation", () => {
+	assert.equal(
+		desktopRestartArgvConflictMessage(["--shared", "--isolated"], {}),
+		"--shared cannot be combined with --isolated or XDT_ISOLATED=1",
+	);
+	assert.equal(
+		desktopRestartArgvConflictMessage(["--shared"], { XDT_ISOLATED: "1" }),
+		"--shared cannot be combined with --isolated or XDT_ISOLATED=1",
+	);
+	assert.equal(desktopRestartArgvConflictMessage(["--shared"], {}), null);
 });
 
 test("isOfficialProductionUserDataDir matches every official region profile", () => {
@@ -418,7 +476,7 @@ test("desktop restart process-control phase does not initialize startup configur
 	});
 });
 
-test("desktop restart rejects an unmerged migration before the kill step", () => {
+test("desktop restart rejects an unmerged migration before the kill step when --shared is explicit", () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-restart-policy-"));
 	const calls = [];
 	try {
@@ -439,13 +497,23 @@ test("desktop restart rejects an unmerged migration before the kill step", () =>
 		fs.writeFileSync(path.join(repo, "apps", "desktop", "drizzle", "0001_feature.sql"), "SELECT 1;\n");
 
 		assert.throws(
-			() => runDesktopRestart(["--wait-ready"], repo, (step) => calls.push(step)),
+			() => runDesktopRestart(["--wait-ready", "--", "--shared"], repo, (step) => calls.push(step)),
 			/Shared Cindy userData cannot run migration artifacts/,
 		);
 		assert.deepEqual(calls, []);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
+});
+
+test("desktop restart defaults to the stable dev sandbox without the shared migration gate", () => {
+	const steps = [];
+	runDesktopRestart(["--wait-ready"], "/repo/cindy", (step) => steps.push(step));
+	assert.equal(steps.length, 4);
+	assert.ok(steps[0].args.includes(DEFAULT_ISOLATED_ARG));
+	assert.equal(steps[0].args.at(-1), "--kill-only");
+	assert.ok(steps.at(-1).args.includes(DEFAULT_ISOLATED_ARG));
+	assert.equal(steps.at(-1).args.at(-1), "--wait-ready");
 });
 
 test("preserve-running skips every kill stage and reaches the readiness start", () => {
@@ -797,10 +865,10 @@ test("isolationNameFromWorktree strips cindy-, adds a path digest, and stays wit
 });
 
 test("resolveIsolatedArg expands @worktree to a named sandbox", () => {
-	assert.match(
-		resolveIsolatedArg(WORKTREE_ISOLATED_ARG, "/repo/cindy-local-ollama-models"),
-		/^--isolated=local-ollama-models-[0-9a-f]{6}$/,
-	);
+	const root = "/repo/cindy-local-ollama-models";
+	const expanded = resolveIsolatedArg(WORKTREE_ISOLATED_ARG, root);
+	assert.match(expanded, /^--isolated=local-ollama-models-[0-9a-f]{6}$/);
+	assert.equal(expanded, resolveIsolatedArg(WORKTREE_ISOLATED_ARG, root));
 	assert.equal(resolveIsolatedArg("--isolated=feature-a", "/repo/x"), "--isolated=feature-a");
 	assert.equal(resolveIsolatedArg("--isolated", "/repo/x"), "--isolated");
 });

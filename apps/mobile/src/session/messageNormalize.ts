@@ -1,6 +1,7 @@
 import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import { contentToPreview } from '@/utils/contentPreview';
+import { i18n } from '@/i18n';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import {
   buildMessageToolResultPairing,
@@ -10,7 +11,16 @@ import {
   type MessageNormalizeToolUse,
   type MessageToolResultPairing,
 } from '@cindy/maker-shared/message-normalize';
+import { collectMobileMarkdownImages } from '@/session/messageMarkdown';
+import {
+  normalizeAgentTaskTerminalStatus,
+  type AgentTaskTerminalStatus,
+} from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
+import {
+  formatToolResultCompactionBytes,
+  parseToolResultCompactionMarker,
+} from '@cindy/maker-shared/tool-result-compaction';
 import {
   buildPayloadToolDiff,
   extractPayloadToolResultMedia,
@@ -94,6 +104,8 @@ export interface NormalizedRemoteMessage {
   orcaCard?: OrcaCollabCard;
   /** tool 消息专用:tool_result 是否已到达(含被隐藏的 orca 空结果),驱动工具行 running/done 状态。 */
   toolSettled?: boolean;
+  /** Durable Agent/Task terminal lifecycle restored from tool_use metadata. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
   /** assistant 专用:是否本轮收尾正文(操作行只挂在收尾正文上,对齐桌面 #456);由 messageRenderModel 标注。 */
   isTurnFinalAssistant?: boolean;
   /** user 专用:scheduler 注入的消息来源(agentMeta.origin);驱动更紧的收起阈值与来源标签。 */
@@ -166,7 +178,9 @@ interface ToolUsePayload extends MessageNormalizeToolUse {
 
 export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): NormalizedRemoteMessage[] {
   const sorted = sortMessagesByCreatedAt(messages);
-  const toolResultPairing = buildMessageToolResultPairing(sorted);
+  const toolResultPairing = buildMessageToolResultPairing(sorted, {
+    contentToPreview: toolResultContentToPreview,
+  });
 
   const result: NormalizedRemoteMessage[] = [];
   for (const message of sorted) {
@@ -174,6 +188,9 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
 
     if (message.role === 'tool_use') {
       const tool = parseToolUse(message);
+      const agentTaskStatus = normalizeAgentTaskTerminalStatus(
+        message.agentMeta?.agentTaskStatus,
+      );
       if (tool.toolName === 'AskUserQuestion' || tool.toolName === 'ExitPlanMode') continue;
       // Lead 派活(create_worker / send_to_worker)→ 渲染成 dispatch 卡片(kind:'system' 使其成为
       // 独立卡片而非折叠进 tool_group),其余 tool 照常走下面的 tool 渲染。
@@ -208,6 +225,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         // 结束时刻(配对 tool_result 落库时间)驱动渲染层的历史空洞判定,详见共享类型上的说明。
         settledAt: toolResultPairing.resultCreatedAtFor(message, tool),
         toolSettled: toolResultPairing.hasResultFor(message, tool),
+        ...(agentTaskStatus ? { agentTaskStatus } : {}),
       });
       continue;
     }
@@ -399,7 +417,54 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     });
   }
 
+  dedupeToolImagesAgainstAssistantMarkdown(result);
   return result;
+}
+
+/**
+ * 与 Desktop 同口径：Agent 正文内联同一 URL 时由正文负责排版；否则保留
+ * tool_result 图片作为可靠兜底。只在同一真实 user turn 内去重。
+ */
+function dedupeToolImagesAgainstAssistantMarkdown(
+  messages: NormalizedRemoteMessage[],
+): void {
+  const dedupeTurn = (lo: number, hi: number): void => {
+    if (hi <= lo) return;
+    const inlineUrls = new Set<string>();
+    for (const message of messages.slice(lo, hi)) {
+      if (message.kind !== 'assistant') continue;
+      for (const image of collectMobileMarkdownImages(message.body)) inlineUrls.add(image.url);
+    }
+    if (inlineUrls.size === 0) return;
+    for (const message of messages.slice(lo, hi)) {
+      if (message.kind !== 'tool' || !message.media?.length) continue;
+      message.media = message.media.filter(
+        (item) => item.kind !== 'image' || !inlineUrls.has(item.url),
+      );
+    }
+  };
+
+  let turnStart = 0;
+  for (let index = 0; index <= messages.length; index += 1) {
+    const message = messages[index];
+    const isBoundary =
+      message?.kind === 'user' &&
+      !message.isSyntheticTrigger &&
+      message.source.agentMeta?.delivery !== 'steer';
+    if (isBoundary && index > turnStart) {
+      dedupeTurn(turnStart, index);
+      turnStart = index;
+    }
+    if (index === messages.length) dedupeTurn(turnStart, index);
+  }
+}
+
+function toolResultContentToPreview(content: unknown): string {
+  const compacted = parseToolResultCompactionMarker(content);
+  if (!compacted) return contentToPreview(content);
+  return i18n.t('message.renderer.toolResultCompacted', {
+    size: formatToolResultCompactionBytes(compacted.originalBytes),
+  });
 }
 
 function toolResultContentFor(

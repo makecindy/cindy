@@ -17,8 +17,20 @@ vi.mock('@/features/learn/LearnStatusCard', () => ({
 }));
 
 vi.mock('@/components/chat/MarkdownRenderer', () => ({
-  MarkdownRenderer: ({ content, workingDir }: { content: string; workingDir: string }) => (
-    <div data-testid="review-markdown" data-working-dir={workingDir}>
+  MarkdownRenderer: ({
+    content,
+    workingDir,
+    allowPrivilegedLinks,
+  }: {
+    content: string;
+    workingDir: string;
+    allowPrivilegedLinks?: boolean;
+  }) => (
+    <div
+      data-testid="review-markdown"
+      data-working-dir={workingDir}
+      data-allow-privileged-links={String(allowPrivilegedLinks)}
+    >
       {content}
     </div>
   ),
@@ -59,9 +71,71 @@ describe('SystemCard Review', () => {
     const markdown = screen.getByTestId('review-markdown');
     expect(markdown.textContent).toContain('src/auth.ts:42');
     expect(markdown.getAttribute('data-working-dir')).toBe('/project');
+    expect(markdown.getAttribute('data-allow-privileged-links')).toBe('true');
 
     fireEvent.click(screen.getByText('chat.systemCard.review.openTask'));
     expect(screen.getByTestId('location').textContent).toBe('/cc-agent/review-task');
+  });
+
+  it('renders a completed stale result with its rerun reason', () => {
+    renderCard({
+      status: 'failed',
+      reviewerSessionId: 'review-task',
+      failureCode: 'source-conversation-changed',
+      result: 'P2: finding from the reviewed snapshot',
+    });
+
+    expect(screen.getByText('chat.systemCard.review.stale')).toBeTruthy();
+    expect(
+      screen.getByText('chat.systemCard.review.failure.sourceConversationChanged'),
+    ).toBeTruthy();
+    const markdown = screen.getByTestId('review-markdown');
+    expect(markdown.textContent).toContain('reviewed snapshot');
+    expect(markdown.getAttribute('data-allow-privileged-links')).toBe('false');
+    expect(screen.getByText('chat.systemCard.review.openTask')).toBeTruthy();
+  });
+
+  it.each(['source-workspace-changed', 'source-files-changed', 'artifact-changed'])(
+    'does not resolve stale findings for %s against current files',
+    (failureCode) => {
+      renderCard({
+        status: 'failed',
+        reviewerSessionId: 'review-task',
+        failureCode,
+        result: 'P1: src/auth.ts:42 belongs to the reviewed snapshot',
+      });
+
+      const markdown = screen.getByTestId('review-markdown');
+      expect(markdown.textContent).toContain('src/auth.ts:42');
+      expect(markdown.getAttribute('data-working-dir')).toBe('/project');
+      expect(markdown.getAttribute('data-allow-privileged-links')).toBe('false');
+    },
+  );
+
+  it('renders a linked legacy stale failure as out of date without inventing result content', () => {
+    renderCard({
+      status: 'failed',
+      reviewerSessionId: 'legacy-review-task',
+      failureCode: 'source-conversation-changed',
+      result: '',
+    });
+
+    expect(screen.getByText('chat.systemCard.review.stale')).toBeTruthy();
+    expect(screen.queryByText('chat.systemCard.review.failed')).toBeNull();
+    expect(screen.queryByTestId('review-markdown')).toBeNull();
+    expect(screen.getByText('chat.systemCard.review.openTask')).toBeTruthy();
+  });
+
+  it('keeps a pre-start freshness failure as failed when no Reviewer task exists', () => {
+    renderCard({
+      status: 'failed',
+      failureCode: 'artifact-changed',
+      result: '',
+    });
+
+    expect(screen.getByText('chat.systemCard.review.failed')).toBeTruthy();
+    expect(screen.queryByText('chat.systemCard.review.stale')).toBeNull();
+    expect(screen.queryByText('chat.systemCard.review.openTask')).toBeNull();
   });
 
   it('translates a stable persisted failure code ahead of internal diagnostic text', () => {

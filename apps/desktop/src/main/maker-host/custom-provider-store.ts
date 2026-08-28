@@ -48,6 +48,28 @@ const VALID_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
 
+/**
+ * SQLite's INTEGER affinity still permits legacy text values in a non-STRICT
+ * table. Keep the write boundary numeric so a malformed stored timestamp cannot
+ * turn `updatedAt + 1` into NaN and poison the NOT NULL column.
+ */
+function nextUpdatedAt(now: number, stored: unknown): number {
+  const current = Number.isSafeInteger(now) ? now : Date.now();
+  const previous =
+    typeof stored === 'number'
+      ? stored
+      : typeof stored === 'string' && stored.trim().length > 0
+        ? Number(stored)
+        : Number.NaN;
+  if (!Number.isSafeInteger(previous)) return current;
+  // CAS contract: every successful write must produce a strictly different
+  // updated_at. When previous is at MAX_SAFE_INTEGER, incrementing is
+  // impossible; return current (a real timestamp) which is guaranteed to
+  // differ from the stale MAX_SAFE_INTEGER snapshot.
+  if (previous >= Number.MAX_SAFE_INTEGER) return current;
+  return Math.max(current, previous + 1);
+}
+
 /** 验证结果：ok 或带 code + message（供 handler 映射成 throwIpcError）。 */
 export type ValidationResult =
   { ok: true } | { ok: false; code: 'INVALID_PARAMS'; message: string };
@@ -56,22 +78,29 @@ function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
 }
 
+const CINDY_RUNTIME_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
 function isPiReasoningEffort(value: unknown): value is PiReasoningEffort {
   return typeof value === 'string' && (PI_REASONING_EFFORTS as readonly string[]).includes(value);
+}
+
+function isReasoningEffortForAgent(agent: string, value: unknown): boolean {
+  if (agent === 'pi') return isPiReasoningEffort(value);
+  return typeof value === 'string' && (CINDY_RUNTIME_REASONING_EFFORTS as readonly string[]).includes(value);
 }
 
 function isPiModelApi(value: unknown): value is PiModelApi {
   return typeof value === 'string' && (PI_MODEL_APIS as readonly string[]).includes(value);
 }
 
-function parseStoredPiReasoningCapability(
+function parseStoredReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): Partial<ProviderRuntimeModelConfig> {
-  if (agent !== 'pi' || model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
+  if (model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
     return {};
   }
-  const efforts = model.reasoningEfforts.filter(isPiReasoningEffort);
+  const efforts = model.reasoningEfforts.filter((item) => isReasoningEffortForAgent(agent, item));
   if (
     efforts.length === 0 ||
     efforts.length !== model.reasoningEfforts.length ||
@@ -80,13 +109,13 @@ function parseStoredPiReasoningCapability(
     return {};
   }
   const defaultEffort =
-    isPiReasoningEffort(model.reasoningDefaultEffort) &&
-    efforts.includes(model.reasoningDefaultEffort)
-      ? model.reasoningDefaultEffort
+    isReasoningEffortForAgent(agent, model.reasoningDefaultEffort) &&
+    efforts.includes(model.reasoningDefaultEffort as string)
+      ? (model.reasoningDefaultEffort as ProviderRuntimeModelConfig['reasoningDefaultEffort'])
       : undefined;
   return {
     reasoning: true,
-    reasoningEfforts: efforts,
+    reasoningEfforts: efforts as NonNullable<ProviderRuntimeModelConfig['reasoningEfforts']>,
     ...(defaultEffort ? { reasoningDefaultEffort: defaultEffort } : {}),
   };
 }
@@ -241,13 +270,6 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
         return invalid(`runtime '${agent}' model.route.requestPath invalid`);
       }
     }
-    const hasReasoningCapability =
-      mm.reasoning !== undefined ||
-      mm.reasoningEfforts !== undefined ||
-      mm.reasoningDefaultEffort !== undefined;
-    if (hasReasoningCapability && agent !== 'pi') {
-      return invalid(`runtime '${agent}' reasoning capability is only supported for pi models`);
-    }
     if (mm.reasoning !== undefined && typeof mm.reasoning !== 'boolean') {
       return invalid(`runtime '${agent}' model.reasoning must be a boolean`);
     }
@@ -256,14 +278,14 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
         return invalid(`runtime '${agent}' model.reasoningEfforts must be a non-empty array`);
       }
       if (
-        mm.reasoningEfforts.some((effort) => !isPiReasoningEffort(effort)) ||
+        mm.reasoningEfforts.some((effort) => !isReasoningEffortForAgent(agent, effort)) ||
         new Set(mm.reasoningEfforts).size !== mm.reasoningEfforts.length
       ) {
         return invalid(`runtime '${agent}' model.reasoningEfforts invalid`);
       }
       if (
         mm.reasoningDefaultEffort !== undefined &&
-        (!isPiReasoningEffort(mm.reasoningDefaultEffort) ||
+        (!isReasoningEffortForAgent(agent, mm.reasoningDefaultEffort) ||
           !mm.reasoningEfforts.includes(mm.reasoningDefaultEffort))
       ) {
         return invalid(`runtime '${agent}' model.reasoningDefaultEffort invalid`);
@@ -502,7 +524,7 @@ function normalizeRuntime(
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-      ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
+      ...(m.reasoning === true && m.reasoningEfforts?.length
         ? {
             reasoning: true,
             reasoningEfforts: [...m.reasoningEfforts],
@@ -510,7 +532,10 @@ function normalizeRuntime(
               ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
               : {}),
           }
-        : {}),
+        : m.reasoning === false
+          ? { reasoning: false }
+          : {}),
+      ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
     }))
     .filter((m) => {
       if (!m.id || !m.name || seen.has(m.id)) return false;
@@ -655,6 +680,13 @@ function parseAuth(raw: string | null): CustomProviderConfig['auth'] {
   return undefined;
 }
 
+/**
+ * 计算写回的 `updatedAt`：既要严格大于库里的旧值（`updateCustomProviderIfUnchanged` 依赖它
+ * 做乐观锁），也要不早于当前时刻。
+ *
+ * 必须先转数值再 +1：`updated_at` 列声明为 INTEGER，但 SQLite 非 STRICT 表允许存入文本，
+ * 而 `rowToConfig` 只读 id/name/runtimes/auth、不校验该列。一旦某行存的是字符串，
+ * `existing.updatedAt + 1` 会退化成字符串拼接，`Math.max` 得到 NaN，写入 NOT NULL 整数列
 /** 安全解析 runtimes JSON（坏数据兜底为 {}，逐字段防御）。 */
 function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRuntimeConfig>> {
   let v: unknown;
@@ -691,7 +723,8 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
                 : {}),
               ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-              ...parseStoredPiReasoningCapability(agent, m),
+              ...parseStoredReasoningCapability(agent, m),
+              ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
             };
           })
       : [];
@@ -812,7 +845,7 @@ export async function updateCustomProvider(
       name: c.name,
       runtimes: JSON.stringify(c.runtimes),
       auth: c.auth ? JSON.stringify(c.auth) : null,
-      updatedAt: Math.max(now, existing.updatedAt + 1),
+      updatedAt: nextUpdatedAt(now, existing.updatedAt),
     })
     .where(eq(customProviders.id, id));
   return c;
@@ -850,7 +883,7 @@ export async function updateCustomProviderIfUnchanged(
       name: nextConfig.name,
       runtimes: JSON.stringify(nextConfig.runtimes),
       auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
-      updatedAt: Math.max(now, existing.updatedAt + 1),
+      updatedAt: nextUpdatedAt(now, existing.updatedAt),
     })
     .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)));
   return result.changes === 1;

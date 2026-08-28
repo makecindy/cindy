@@ -23,11 +23,27 @@ export interface AutomationScheduleSessionInfo {
   unreadRunIds: string[];
   hasUnreadRun: boolean;
   /**
-   * unreadRunIds 里是否至少有一个非成功结局(`failed` / `aborted` / `interrupted`)
-   * 的 run —— 侧栏右侧状态指示器据此把 failed schedule 涂成红点(urgent),
-   * 而不是和成功完成一样涂绿。
+   * unreadRunIds 里未成功结局(`failed` / `interrupted`)的子集。
+   * `aborted` 生而已读,不算未读失败。
+   */
+  unreadFailedRunIds: string[];
+  /**
+   * 该 session 上最近一次未读失败/中断 run。会话内横幅只清这一条;
+   * 清整组仍走组菜单。
+   */
+  latestUnreadFailedRunId?: string;
+  /**
+   * 是否至少有一个未读失败 run —— 侧栏右侧据此涂红,而不是和成功完成一样涂绿。
    */
   hasUnreadFailedRun: boolean;
+}
+
+export function unreadSuccessScheduleRunIds(
+  info: Pick<AutomationScheduleSessionInfo, 'unreadRunIds' | 'unreadFailedRunIds'>,
+): string[] {
+  if (info.unreadFailedRunIds.length === 0) return info.unreadRunIds;
+  const failed = new Set(info.unreadFailedRunIds);
+  return info.unreadRunIds.filter((id) => !failed.has(id));
 }
 
 export interface AutomationSessionGroup {
@@ -58,7 +74,7 @@ export function getEntryActivityMs(entry: SidebarSessionEntry): number {
   return entry.group.sessions.reduce((max, s) => Math.max(max, sessionActivityMs(s)), 0);
 }
 
-export type AutomationScheduleAction = 'run' | 'edit' | 'toggle-pause' | 'delete';
+export type AutomationScheduleAction = 'run' | 'edit' | 'toggle-pause' | 'delete' | 'mark-read';
 
 interface ScopedAutomationGroupKey {
   key: string;
@@ -193,6 +209,14 @@ export interface AutomationGroupChildViewOptions {
   nowMs?: number;
   /** 收起态默认展示条数,默认 5(和普通对话一致)。 */
   minVisibleCount?: number;
+  /** 轴 1(文件夹开/关)的收起态。收起时只渲染 alertSessionIds 命中的运行,见下方 ⚠️。 */
+  collapsed?: boolean;
+  /**
+   * 收起态仍要保留可见的**未处理告警**运行 id,来源是
+   * `sidebar/projectCollapsedAttention.ts` 的 `resolveCollapsedAttention().errorSessionIds`
+   * —— 与组头红点、项目折叠头红点同一份判据。
+   */
+  alertSessionIds?: ReadonlySet<string>;
 }
 
 /**
@@ -204,6 +228,15 @@ export interface AutomationGroupChildViewOptions {
  * 展开。**全部运行(含被组头代表的最新一条)都参与折叠并各自成行**,让最新未读也单独可见,
  * 与「显示全部」一致;组头点击打开哪条由组件单独算(getAutomationGroupPrimarySession),
  * 与列表行是"两个入口指向同一 session",不互斥。
+ *
+ * ⚠️ 收起态(options.collapsed)**不是空列表**:组内带未处理告警的运行会被提上来单独
+ * 成行。原因是「组头只代表最新一条」+「收起时子行整片不渲染」叠起来会藏掉告警 ——
+ * 项目折叠头按全部子任务汇总出红点,用户展开项目却在任何一行上都看不到它
+ * (实测:一条被 App 重启打断、turn 从未收尾的定时任务运行)。告警行与组头红点同源
+ * (alertSessionIds ← resolveCollapsedAttention),所以不可能出现「汇总说有、列表没有」。
+ * 这也是折叠上限里「需关注的条目始终显示」那条不变量本来就该覆盖的路径。
+ * 收起态刻意不套 24h / active 豁免:此时列表的语义是"只列要你处理的",
+ * 把非告警运行放进来会让收起形同失效。
  */
 export function getAutomationGroupChildView(
   group: AutomationSessionGroup,
@@ -216,6 +249,26 @@ export function getAutomationGroupChildView(
     totalCount: allRuns.length,
     hiddenCount: 0,
   });
+
+  // 收起:只提告警行。必须排在 frozen 之前 —— 冻结快照是展开态"前 N 条"防跳动用的,
+  // 收起态套上去会把非告警运行一起带回来。也必须排在下方的 showAll 短路之前:
+  // showAll 是两套列表共用的轴 2 状态,漏排会让收起态点过的「显示全部」把展开态
+  // 直接渲染成整组历史(见 AutomationSessionGroupItem 切折叠时的复位注释)。
+  if (options.collapsed) {
+    const alertIds = options.alertSessionIds;
+    const alertRuns = alertIds?.size ? allRuns.filter((session) => alertIds.has(session.id)) : [];
+    const limit = options.showAll
+      ? alertRuns.length
+      : Math.max(0, options.minVisibleCount ?? SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT);
+    const visibleSessions = alertRuns.slice(0, limit);
+    return {
+      visibleSessions,
+      isOverflowing: alertRuns.length > visibleSessions.length,
+      // 收起态的「显示全部 N 个」N = 告警行总数(此时列表语义就是告警,不是整组)。
+      totalCount: alertRuns.length,
+      hiddenCount: alertRuns.length - visibleSessions.length,
+    };
+  }
 
   // 展开:全量子运行。
   if (options.showAll) return withoutOverflow(allRuns);

@@ -35,6 +35,15 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(worktreeCreate).toBeGreaterThan(navigate);
   });
 
+  it('clears starting when the first-message draft is restored after a send-before-start failure', () => {
+    const restore = source.indexOf('const restoreFirstMessageDraft = () => {');
+    const clearStarting = source.indexOf('clearSessionStarting(newSession.id)', restore);
+    const restoreEnd = source.indexOf('};', source.indexOf('emitAutoTitlePreviewCleared(newSession.id)', restore));
+    expect(restore).toBeGreaterThan(-1);
+    expect(clearStarting).toBeGreaterThan(restore);
+    expect(clearStarting).toBeLessThan(restoreEnd);
+  });
+
   it('never silently downgrades an explicit worktree request to a normal session', () => {
     const selected = source.indexOf('const selectedWorktree = { ...wtRef.current };');
     const guard = source.indexOf(
@@ -80,6 +89,15 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(restoreHelper).toBeGreaterThan(-1);
     expect(saveDraft).toBeGreaterThan(failedCard);
     expect(restoreText).toBeGreaterThan(restoreHelper);
+    expect(source.slice(restoreHelper, restoreHelper + 500)).toContain(
+      'browserComments: rehomedComments',
+    );
+    expect(source.slice(restoreHelper, failedCard)).toContain(
+      'rewriteBrowserCommentsFromRehomedFiles(',
+    );
+    expect(source.slice(restoreHelper, failedCard)).toContain(
+      'excludeCommentScreenshots(rehomedFiles, rehomedComments)',
+    );
   });
 
   it('does not make the new worktree path the next New Maker default project', () => {

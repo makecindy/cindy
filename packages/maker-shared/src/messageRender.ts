@@ -1,4 +1,5 @@
 import {
+  type AgentTaskTerminalStatus,
   type AgentTaskUpdate,
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
@@ -97,6 +98,8 @@ export interface MessageRenderNormalizedMessage<
    * `createdAt`。
    */
   settledAt?: string;
+  /** Durable terminal lifecycle for an Agent/Task tool call. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
   /** Host 在 SDK done 边界写入；每个 true 都是一条不应折入工作过程的正式回复。 */
   turnCompleted?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
@@ -227,6 +230,8 @@ export type MessageRenderTodoSource = 'todo' | 'codex' | 'task';
 export interface MessageRenderTodoInsertion {
   key: string;
   todos: MessageRenderTodoItem[];
+  /** 组成同一计划 session 的全部工具行，用于历史 prepend 后恢复旧滚动锚点。 */
+  sourceClientIds: string[];
   createdAt?: string;
   updatedAtMs?: number;
   source: MessageRenderTodoSource;
@@ -240,7 +245,8 @@ export interface MessageRenderTodoInsertion {
   sealedAtMs?: number;
   /**
    * host 在中断/失败 turn 给该计划行盖的 `turnCompleted: false`(见
-   * `persistCodexPlanOnDone`):任务还活着,常驻面板不得按"全勾完"兜底退场。
+   * `persistCodexPlanOnDone`):在下一个真实 user turn 取代它前,常驻面板不得按
+   * "全勾完"兜底退场。
    */
   turnFailed?: boolean;
 }
@@ -497,6 +503,16 @@ function isSyntheticUserRow(message: MessageRenderSourceMessageLike): boolean {
   );
 }
 
+/**
+ * 会为计划开启新所有权 turn 的真实 user 行。
+ *
+ * 计划分组、失败回扫与置顶计划退场必须共用同一判据，避免一个界面已经把
+ * 输入视为新 turn，另一个界面却继续展示上一轮计划。
+ */
+export function isPlanUserBoundary(message: MessageRenderSourceMessageLike): boolean {
+  return message.role === 'user' && !isSyntheticUserRow(message);
+}
+
 function isHookUserRow(message: MessageRenderSourceMessageLike): boolean {
   const hookSource =
     (message as Record<string, unknown>).hookSource ??
@@ -577,6 +593,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   const resultByToolUseId = buildToolResultLookup(messages);
   const sessions: Array<{
     todos: MessageRenderTodoItem[];
+    sourceClientIds: string[];
     firstIndex: number;
     lastIndex: number;
     source: MessageRenderTodoSource;
@@ -590,7 +607,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (message.role === 'user') {
-      if (!isSyntheticUserRow(message)) lastUserIndex = index;
+      if (isPlanUserBoundary(message)) lastUserIndex = index;
       continue;
     }
     const source = agentPlanSource(toolNameOf(message));
@@ -645,10 +662,12 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
 
     if (!startsNewSession && previous) {
       previous.todos = parsed;
+      previous.sourceClientIds.push(sourceClientId(message));
       previous.lastIndex = index;
     } else {
       const session = {
         todos: parsed,
+        sourceClientIds: [sourceClientId(message)],
         firstIndex: index,
         lastIndex: index,
         source,
@@ -667,6 +686,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     out.set(session.lastIndex, {
       key: `${keyPrefix}-${sourceClientId(first)}`,
       todos: session.todos,
+      sourceClientIds: session.sourceClientIds,
       createdAt: lastRow?.createdAt,
       updatedAtMs: lastRow?.planUpdatedAtMs,
       source: session.source,
@@ -905,7 +925,7 @@ export function markCodexPlanTurnFailed<TMessage extends MessageRenderSourceMess
 ): { messages: readonly TMessage[]; changed: boolean; toolUseId: string | null } {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.role === 'user' && !isSyntheticUserRow(message)) break;
+    if (isPlanUserBoundary(message)) break;
     if (message.role !== 'tool_use' || toolNameOf(message) !== 'update_plan') continue;
     if (planRowSealOf(message).sealed || planRowTurnFailed(message)) {
       return { messages, changed: false, toolUseId: null };
@@ -1059,11 +1079,18 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
   let previousTaskTodos: MessageRenderTodoItem[] | null = null;
   let sawTaskEvent = false;
   let currentSessionBoundaryKnown = !hasEarlierMessages;
+  let lastUserBoundaryIndex = -1;
+  let currentSessionUserBoundaryIndex = -1;
 
   for (let index = 0; index <= latestPlanIndex; index += 1) {
     const message = messages[index];
+    if (isPlanUserBoundary(message)) {
+      lastUserBoundaryIndex = index;
+      continue;
+    }
     if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
 
+    const toolName = toolNameOf(message);
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const resultTasks = taskRecordsFromResult(resultText);
     const input = readRecord(toolInputOf(message)) ?? {};
@@ -1076,22 +1103,40 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
       [...unresolvedTaskStatuses.values()].every(
         (status) => status === 'completed' || status === 'deleted',
       );
+    const targetsExistingTask = taskToolTargetsExistingTask(message, resultText, taskState);
     const continuesCompletedTaskSession =
       previousAllDone &&
-      (taskToolTargetsExistingTask(message, resultText, taskState) ||
+      (targetsExistingTask ||
         Boolean(targetTaskId && unresolvedTaskStatuses.has(targetTaskId)));
+    // 与 findMessageTodoInsertions 保持同一条所有权边界：真实 user turn 后的
+    // 新 TaskCreate / 新清单不能继承前一轮的孤儿状态；显式更新当前已知 Task
+    // 仍允许跨 turn 续写，且不移动 session 的原始所有权锚点。
+    const crossesUserBoundary =
+      sawTaskEvent &&
+      lastUserBoundaryIndex > currentSessionUserBoundaryIndex &&
+      !targetsExistingTask;
     const startsNewSession =
       !sawTaskEvent ||
+      crossesUserBoundary ||
       (previousAllDone && !continuesCompletedTaskSession);
     if (startsNewSession) {
+      const startsAfterCompletedSession =
+        sawTaskEvent && previousAllDone && !continuesCompletedTaskSession;
+      const startsWithTaskCreateAfterVisibleUser =
+        toolName === 'TaskCreate' &&
+        lastUserBoundaryIndex >= 0 &&
+        (!sawTaskEvent || crossesUserBoundary);
       taskState.clear();
       unresolvedTaskStatuses.clear();
       previousTaskTodos = null;
-      if (sawTaskEvent) currentSessionBoundaryKnown = true;
+      currentSessionBoundaryKnown =
+        !hasEarlierMessages ||
+        startsAfterCompletedSession ||
+        startsWithTaskCreateAfterVisibleUser;
+      currentSessionUserBoundaryIndex = lastUserBoundaryIndex;
     }
     sawTaskEvent = true;
 
-    const toolName = toolNameOf(message);
     if (toolName === 'TaskList') {
       if (taskListResultIsAuthoritative(resultText)) {
         currentSessionBoundaryKnown = true;
@@ -1720,6 +1765,7 @@ function isRunningAgentTaskItem<
 >(item: MessageRenderItem<TMessage>): boolean {
   if (item.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody, {
+    persistedStatus: item.toolCall?.agentTaskStatus,
     resultIsLaunchReceipt:
       item.toolCall !== undefined &&
       (subagentSpawnReceiptName(

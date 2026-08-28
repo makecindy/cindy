@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -6,9 +8,11 @@ import {
   useState,
   type CSSProperties,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { X } from 'lucide-react';
 import type {
   AccountDeletionStatus,
   CaptchaConfig,
@@ -21,6 +25,7 @@ import { cn } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
 import { setLoginEmailCaptchaGate } from '@/lib/loginCaptchaGate';
 import { WindowControls } from '@/components/title-bar/WindowControls';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { useLogin } from '@/hooks/useLogin';
 import { endLoginFirstLaunchLightGate, loginFirstLaunchLightActive } from '@/hooks/useTheme';
 import { LOGIN_HANDOFF_TIMINGS, useLoginHandoff } from '@/contexts/LoginHandoffContext';
@@ -49,8 +54,10 @@ import {
   LoginSkipEntry,
   LoginSocialButton,
   LoginSocialRow,
+  LoginSsoOrgHistoryList,
   LoginTextLink,
   LoginTitleBlock,
+  ssoOrgHistoryOptionId,
 } from './LoginControls';
 import { useResendCountdown } from './useResendCountdown';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
@@ -67,6 +74,7 @@ import {
 } from './loginDesignTokens';
 import { PANEL_FIXED_SCALE } from './loginScale';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
+import { getSsoOrgHistory } from '@/state/ssoOrgHistory';
 
 /**
  * 标题旁区域徽标的 i18n key(2026-07-27 拍板)。
@@ -97,6 +105,11 @@ const REGION_PILL_KEY: Partial<Record<typeof CURRENT_CINDY_REGION, string>> = {
 };
 
 const log = createLogger('LoginPage');
+const AccountSwitcherDialog = lazy(() =>
+  import('@/components/sidebar/AccountSwitcherDialog').then((module) => ({
+    default: module.AccountSwitcherDialog,
+  })),
+);
 
 /**
  * LoginPage — 桌面登录(wave4 白底体系 + figma §4 组件库)。
@@ -108,7 +121,13 @@ const log = createLogger('LoginPage');
  * 协议同意链路(radio + 拦截弹窗)与面板内「跳过登录」入口。倒计时契约、
  * Text_link 全态、错误码映射均已落地(历史施工批次见 git log,不再在注释中引用)。
  */
-export function LoginPage() {
+export function LoginPage({
+  intent = 'sign-in',
+  onClose,
+}: {
+  intent?: 'sign-in' | 'add-account';
+  onClose?: () => void;
+}) {
   const {
     isLoading,
     errorCode,
@@ -116,12 +135,36 @@ export function LoginPage() {
     hasAccountDeletionReceipt = false,
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
+    listAccounts,
     dispatch,
     dispatchWithResult,
     clearError,
+    enterLocalMode,
   } = useLogin();
   const { t } = useTranslation();
   const handoff = useLoginHandoff();
+  const isAddAccount = intent === 'add-account';
+  const accountSwitcherTriggerRef = useRef<HTMLButtonElement>(null);
+  const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
+  const [hasSavedAccounts, setHasSavedAccounts] = useState(false);
+
+  useEffect(() => {
+    if (isAddAccount || !listAccounts) {
+      setHasSavedAccounts(false);
+      return;
+    }
+    let active = true;
+    void listAccounts()
+      .then((snapshot) => {
+        if (active) setHasSavedAccounts(snapshot.accounts.length > 0);
+      })
+      .catch(() => {
+        if (active) setHasSavedAccounts(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isAddAccount, listAccounts]);
 
   // 主题跟随(DESIGN.md §16.5):首次打开 Cindy → 亮色登录界面(默认);第二次起
   // → 跟随用户上一次使用的主题。首启亮色门在 bootstrap 已生效(品牌舞台首帧即
@@ -154,17 +197,19 @@ export function LoginPage() {
    * 在会话切过去之后落,不能由 requireConsent 提前落(竞态原因见那里的注释)。
    */
   const openLocalMode = async () => {
-    if (isLoading || localModePendingRef.current || !window.electronAPI?.authEnterLocal) return;
+    if (isLoading || localModePendingRef.current || !enterLocalMode) return;
     markLocalModeTransition(true);
     try {
-      await window.electronAPI.authEnterLocal();
+      // 必须走 AuthContext.enterLocalMode():它调同一条 IPC,并用返回值立刻改
+      // mode / canEnterApp。登录页自己调 authEnterLocal 只改主进程会话,界面
+      // 仍当自己没进来;广播一旦没赶上,再点一次也不会重播,登录页就钉死。
+      // GuestRoute 看到 mode === 'local' 后自己切走,不要在这里改 hash——
+      // canEnterApp 还是 false 时冲进受保护路由会被踢回 /login。
+      await enterLocalMode();
       // 顺序是硬要求:先 enter-local(main 侧 isLocalMode() 转真)再落同意,这样
       // acceptPrivacyConsent 广播出来的 allowed 恒为 false,TapDB 不会被拉起来发
       // device_login。反过来会开出一个真实的上报窗口(codex 审查 P1,#907)。
       persistPrivacyConsent();
-      // The auth state event normally redirects through GuestRoute. Keep the
-      // transition deterministic when the IPC response wins that race.
-      window.location.hash = '#/';
     } catch (error) {
       // 两个调用点都是 requireConsent(() => void openLocalMode()):抛出去没人接,
       // 会变成 unhandled rejection。IPC 失败(main 未就绪/通道异常)时停在登录页
@@ -299,7 +344,7 @@ export function LoginPage() {
   }, [reportLoginPanelMounted, reportLoginPanelUnmounted]);
   // 「跳过登录」常驻入口在面板内(identifier 视图 SKIP_ENTRY 文字链);footer 仅保留
   // error 步的逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
-  const showLocalModeFooter = loginState?.step === 'error';
+  const showLocalModeFooter = !isAddAccount && loginState?.step === 'error';
   // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
   // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
   // 与迁移前 main 口径一致(该两步由品牌 overlay/跳转态接管)。
@@ -339,7 +384,10 @@ export function LoginPage() {
   // (规则 9:能代码化的格式校验不甩给 server 往返);与 server errorCode 互斥展示
   // (本地错误优先),输入变更即清除。null = 无本地格式错误。
   const [identifierFormatError, setIdentifierFormatError] = useState<VerificationKind | null>(null);
-  const [ssoOrg, setSsoOrg] = useState('');
+  const [ssoOrgHistory, setSsoOrgHistory] = useState(() => getSsoOrgHistory());
+  const [ssoOrg, setSsoOrg] = useState(() => ssoOrgHistory[0] ?? '');
+  const [ssoOrgHistoryOpen, setSsoOrgHistoryOpen] = useState(false);
+  const [ssoOrgHistoryActiveIndex, setSsoOrgHistoryActiveIndex] = useState(-1);
   const [verificationCode, setVerificationCode] = useState('');
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
   const [bindingContact, setBindingContact] = useState('');
@@ -353,7 +401,12 @@ export function LoginPage() {
   );
 
   useEffect(() => {
-    if (!hasAccountDeletionReceipt || !getAccountDeletionStatus || !clearAccountDeletionReceipt) {
+    if (
+      isAddAccount ||
+      !hasAccountDeletionReceipt ||
+      !getAccountDeletionStatus ||
+      !clearAccountDeletionReceipt
+    ) {
       setAccountDeletionStatus(null);
       return;
     }
@@ -405,7 +458,12 @@ export function LoginPage() {
       disposed = true;
       if (timer) clearTimeout(timer);
     };
-  }, [clearAccountDeletionReceipt, getAccountDeletionStatus, hasAccountDeletionReceipt]);
+  }, [
+    clearAccountDeletionReceipt,
+    getAccountDeletionStatus,
+    hasAccountDeletionReceipt,
+    isAddAccount,
+  ]);
 
   useEffect(() => {
     if (loginState?.step !== 'identifier') return;
@@ -599,9 +657,51 @@ export function LoginPage() {
     if (localModePendingRef.current) return;
     const value = ssoOrg.trim();
     if (!value) return;
+    setSsoOrgHistoryOpen(false);
+    setSsoOrgHistoryActiveIndex(-1);
     // 组织区域先静默发现；仅当结果与安装包区域不一致时，main 状态机进入
     // realm-confirmation，由下方弹窗在继续 SSO 前向用户确认。
-    void dispatch({ type: 'discover-sso-org', org: value });
+    void dispatch({ type: 'discover-sso-org', org: value }).finally(() => {
+      setSsoOrgHistory(getSsoOrgHistory());
+    });
+  };
+
+  const openSsoOrgHistory = () => {
+    if (ssoOrgHistory.length <= 1) return;
+    setSsoOrgHistoryOpen(true);
+    setSsoOrgHistoryActiveIndex(-1);
+  };
+
+  const selectSsoOrgHistory = (entry: string) => {
+    setSsoOrg(entry);
+    setSsoOrgHistoryOpen(false);
+    setSsoOrgHistoryActiveIndex(-1);
+    clearError();
+  };
+
+  const handleSsoOrgHistoryKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (ssoOrgHistory.length <= 1) return;
+    if (event.key === 'Escape') {
+      setSsoOrgHistoryOpen(false);
+      setSsoOrgHistoryActiveIndex(-1);
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setSsoOrgHistoryOpen(true);
+      setSsoOrgHistoryActiveIndex((current) => {
+        if (event.key === 'ArrowDown') {
+          return current < ssoOrgHistory.length - 1 ? current + 1 : 0;
+        }
+        return current > 0 ? current - 1 : ssoOrgHistory.length - 1;
+      });
+      return;
+    }
+    if (event.key === 'Enter' && ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0) {
+      event.preventDefault();
+      const selected = ssoOrgHistory[ssoOrgHistoryActiveIndex];
+      if (selected) selectSsoOrgHistory(selected);
+    }
   };
 
   /* ── identifier 主视图(680×620 组:面板 680×500 + 第三方圆钮行) ── */
@@ -663,15 +763,17 @@ export function LoginPage() {
               圆钮;LoginSkipEntry ≠ LoginTextLink,见该组件注释):接既有 local mode
               链路,过协议门(2026-07-29 拍板)。槽位在 error_text(380..430)之下、
               与其首尾相接,两者同时可见互不重叠;error 出现不推移本入口(均 absolute)。 */}
-          <LoginSkipEntry
-            testId="login-skip-entry"
-            disabled={isLoading || localModePending}
-            onClick={() =>
-              requireConsent(() => void openLocalMode(), { deferConsentPersist: true })
-            }
-          >
-            {t('login.localModeEntry')}
-          </LoginSkipEntry>
+          {!isAddAccount ? (
+            <LoginSkipEntry
+              testId="login-skip-entry"
+              disabled={isLoading || localModePending}
+              onClick={() =>
+                requireConsent(() => void openLocalMode(), { deferConsentPersist: true })
+              }
+            >
+              {t('login.localModeEntry')}
+            </LoginSkipEntry>
+          ) : null}
         </LoginPanel>
         <LoginSocialRow count={providers.social.length + 1}>
           {providers.social.map((provider) => (
@@ -712,6 +814,11 @@ export function LoginPage() {
               // 期间要自己挡:那道 guard 在 requireConsent 里,这条路径绕过了它。
               if (isLoading || localModePendingRef.current) return;
               clearError();
+              const nextHistory = getSsoOrgHistory();
+              setSsoOrgHistory(nextHistory);
+              if (!ssoOrg.trim()) setSsoOrg(nextHistory[0] ?? '');
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
               setSsoOrgMode(true);
             }}
           >
@@ -733,54 +840,86 @@ export function LoginPage() {
 
   /* ── 企业 SSO 入口子视图(sso-org empty/filled;面板 680×500,无跳过入口) ── */
   const renderSsoOrg = () => (
-    <LoginPanel testId="login-panel-sso-org">
-      <form onSubmit={submitSsoOrg} noValidate>
-        <LoginBackButton
-          disabled={isLoading}
-          label={t('login.back')}
-          onClick={() => {
-            clearError();
-            setSsoOrgMode(false);
-          }}
-        />
-        <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
-        <LoginInput
-          autoFocus
-          disabled={isLoading}
-          maxLength={253}
-          autoComplete="off"
+    <>
+      <LoginPanel testId="login-panel-sso-org">
+        <form onSubmit={submitSsoOrg} noValidate>
+          <LoginBackButton
+            disabled={isLoading}
+            label={t('login.back')}
+            onClick={() => {
+              clearError();
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+              setSsoOrgMode(false);
+            }}
+          />
+          <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
+          <LoginInput
+            autoFocus={ssoOrgHistory.length <= 1}
+            disabled={isLoading}
+            maxLength={253}
+            autoComplete="off"
+            value={ssoOrg}
+            onChange={(value) => {
+              setSsoOrg(value);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onFocus={openSsoOrgHistory}
+            onClick={openSsoOrgHistory}
+            onBlur={() => {
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onKeyDown={handleSsoOrgHistoryKeyDown}
+            role="combobox"
+            ariaControls="login-sso-org-history-list"
+            ariaExpanded={ssoOrgHistoryOpen}
+            ariaActiveDescendant={
+              ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0
+                ? ssoOrgHistoryOptionId(ssoOrgHistoryActiveIndex)
+                : undefined
+            }
+            placeholder={t('login.ssoOrgPlaceholder')}
+            error={!!errorCode}
+            testId="login-sso-org-input"
+          />
+          {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
+          <span
+            className="absolute line-clamp-2 text-center"
+            style={{
+              left: SSO_ORG_HINT.x,
+              top: SSO_ORG_HINT.y,
+              width: SSO_ORG_HINT.width,
+              height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
+              lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
+              fontSize: SSO_ORG_HINT.fontSize,
+              color: LOGIN_COLORS.secondaryText,
+            }}
+          >
+            {t('login.ssoOrgHint')}
+          </span>
+          <LoginPrimaryButton
+            type="submit"
+            disabled={!ssoOrg.trim()}
+            loading={isLoading}
+            testId="login-sso-org-continue"
+          >
+            {isLoading ? t('login.working') : t('login.continue')}
+          </LoginPrimaryButton>
+          {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
+        </form>
+      </LoginPanel>
+      {ssoOrgHistoryOpen && ssoOrgHistory.length > 1 && (
+        <LoginSsoOrgHistoryList
+          entries={ssoOrgHistory}
           value={ssoOrg}
-          onChange={setSsoOrg}
-          placeholder={t('login.ssoOrgPlaceholder')}
-          error={!!errorCode}
-          testId="login-sso-org-input"
+          activeIndex={ssoOrgHistoryActiveIndex}
+          onActiveIndexChange={setSsoOrgHistoryActiveIndex}
+          onSelect={selectSsoOrgHistory}
+          listId="login-sso-org-history-list"
         />
-        {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
-        <span
-          className="absolute line-clamp-2 text-center"
-          style={{
-            left: SSO_ORG_HINT.x,
-            top: SSO_ORG_HINT.y,
-            width: SSO_ORG_HINT.width,
-            height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
-            lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
-            fontSize: SSO_ORG_HINT.fontSize,
-            color: LOGIN_COLORS.secondaryText,
-          }}
-        >
-          {t('login.ssoOrgHint')}
-        </span>
-        <LoginPrimaryButton
-          type="submit"
-          disabled={!ssoOrg.trim()}
-          loading={isLoading}
-          testId="login-sso-org-continue"
-        >
-          {isLoading ? t('login.working') : t('login.continue')}
-        </LoginPrimaryButton>
-        {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
-      </form>
-    </LoginPanel>
+      )}
+    </>
   );
 
   /* ── method-choice(含 sso-org-list 来源变体) ── */
@@ -1171,29 +1310,52 @@ export function LoginPage() {
       ? `opacity ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}, transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
       : undefined,
   };
-  const localModeFooter = showLocalModeFooter ? (
-    <>
+  const accountSwitcherEntry =
+    !isAddAccount && hasSavedAccounts && loginState?.step !== 'browser-redirect' ? (
       <button
-        data-testid="login-local-mode"
+        ref={accountSwitcherTriggerRef}
+        data-testid="login-account-switcher"
         type="button"
-        disabled={localModePending || isLoading}
-        // error 步逃生入口与面板内文字按钮同口径:过协议门(2026-07-29 拍板)
-        onClick={() => requireConsent(() => void openLocalMode(), { deferConsentPersist: true })}
-        aria-describedby="login-local-mode-description"
-        className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+        onClick={() => setAccountSwitcherOpen(true)}
+        className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
         style={{ minHeight: 40 }}
       >
-        {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
+        {t('sidebar.accountSwitcher.title')}
       </button>
-      <span
-        id="login-local-mode-description"
-        className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
-        style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
-      >
-        {t('login.localModeDescription')}
-      </span>
-    </>
-  ) : null;
+    ) : null;
+  const loginFooter =
+    showLocalModeFooter || accountSwitcherEntry ? (
+      <>
+        <div className="flex items-center justify-center gap-3">
+          {accountSwitcherEntry}
+          {showLocalModeFooter ? (
+            <button
+              data-testid="login-local-mode"
+              type="button"
+              disabled={localModePending || isLoading}
+              // error 步逃生入口与面板内文字按钮同口径:过协议门(2026-07-29 拍板)
+              onClick={() =>
+                requireConsent(() => void openLocalMode(), { deferConsentPersist: true })
+              }
+              aria-describedby="login-local-mode-description"
+              className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+              style={{ minHeight: 40 }}
+            >
+              {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
+            </button>
+          ) : null}
+        </div>
+        {showLocalModeFooter ? (
+          <span
+            id="login-local-mode-description"
+            className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
+            style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
+          >
+            {t('login.localModeDescription')}
+          </span>
+        ) : null}
+      </>
+    ) : null;
 
   return (
     // 根级 z-[9990] 建立 LoginPage 自己的 stacking context:整体压过品牌 overlay
@@ -1203,16 +1365,29 @@ export function LoginPage() {
       <LoginStage
         ssoOrgGroupY={ssoOrgGroupY}
         groupStyle={groupStyle}
-        footer={localModeFooter}
+        footer={loginFooter}
         bottomReserve={panelBottomReserve}
       >
         {node}
       </LoginStage>
+      {accountSwitcherOpen ? (
+        <Suspense fallback={null}>
+          <AccountSwitcherDialog
+            open
+            onOpenChange={setAccountSwitcherOpen}
+            onAddAccount={() => {
+              setAccountSwitcherOpen(false);
+              reset();
+            }}
+            triggerRef={accountSwitcherTriggerRef}
+          />
+        </Suspense>
+      ) : null}
       {/* 注销状态提示气泡(figma 678:1075「注销状态」组件集):浮层——不占文档流、
           不推挤下方内容,z-30 盖过 stage 全部内容(低于拖拽条 z-40 与协议弹窗 z-50);
           窗口顶 72px 恒定、水平窗口居中、宽 670 恒定,均不随 loginScale 缩放。
           显隐与面板入场同节奏(只淡入,不参与位移)。 */}
-      {accountDeletionStatus && (
+      {!isAddAccount && accountDeletionStatus && (
         <AccountDeletionStatusPanel
           status={accountDeletionStatus}
           onDismiss={
@@ -1240,11 +1415,26 @@ export function LoginPage() {
         className="absolute left-0 top-0 z-40 flex w-full items-center justify-end"
         style={{ height: DRAG_BAR_HEIGHT, WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        {!isMac && (
-          <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-            <WindowControls />
+        {(isAddAccount && onClose) || !isMac ? (
+          <div
+            className="flex h-full items-center"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          >
+            {isAddAccount && onClose ? (
+              <ChromeIconButton
+                data-testid="add-account-close"
+                className={isMac ? 'mr-2' : 'mr-1'}
+                aria-label={t('sidebar.accountSwitcher.close')}
+                tooltip={t('sidebar.accountSwitcher.close')}
+                tooltipSide="bottom"
+                onClick={onClose}
+              >
+                <X size={14} aria-hidden="true" />
+              </ChromeIconButton>
+            ) : null}
+            {!isMac ? <WindowControls /> : null}
           </div>
-        )}
+        ) : null}
       </div>
       {/* 服务条款和隐私协议确认弹窗(figma 602:822/602:1249):个人登录链路在
           radio 未勾选时统一拦截;同意=勾选并续接,不同意=留在登录页。

@@ -159,26 +159,28 @@ describe('isAgentSwitchResponseFresh（远程意图读回的新鲜度守卫）',
   };
 
   it('在途期间无人改动 → 应用读回结果', async () => {
-    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    const { isAgentSwitchResponseFresh } =
+      await import('@/components/new-chat/agentSwitchConfirmation');
     expect(isAgentSwitchResponseFresh(base)).toBe(true);
   });
 
   it('effect 已清理(切走会话)→ 丢弃', async () => {
-    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    const { isAgentSwitchResponseFresh } =
+      await import('@/components/new-chat/agentSwitchConfirmation');
     expect(isAgentSwitchResponseFresh({ ...base, cancelled: true })).toBe(false);
   });
 
   it('本端 ABA:点选登记后又撤销 → 写序号已变,丢弃', async () => {
-    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    const { isAgentSwitchResponseFresh } =
+      await import('@/components/new-chat/agentSwitchConfirmation');
     expect(isAgentSwitchResponseFresh({ ...base, writeSeqNow: 5 })).toBe(false);
   });
 
   it('外部 ABA:另一窗口 / 被控端把意图改成非空又清回 null → 修订号已变,丢弃', async () => {
-    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    const { isAgentSwitchResponseFresh } =
+      await import('@/components/new-chat/agentSwitchConfirmation');
     // 外部回流不经本端点选,writeSeq 不动;值也回到发起时的 null —— 只有修订号能识别。
-    expect(
-      isAgentSwitchResponseFresh({ ...base, writeSeqNow: 3, intentRevNow: 9 }),
-    ).toBe(false);
+    expect(isAgentSwitchResponseFresh({ ...base, writeSeqNow: 3, intentRevNow: 9 })).toBe(false);
   });
 });
 
@@ -481,7 +483,7 @@ describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件�
     mod.__resetAgentSwitchCoordinatorForTests();
     return mod;
   };
-  const deferred = <T,>() => {
+  const deferred = <T>() => {
     let resolve!: (v: T) => void;
     const promise = new Promise<T>((r) => {
       resolve = r;
@@ -654,11 +656,8 @@ describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件�
   });
 
   it('发送检查与登记原子化:切换在途时拒绝,外层准备 token 与共享发送边界可嵌套', async () => {
-    const {
-      beginAgentSwitchOperation,
-      hasPendingAgentSendDispatch,
-      tryBeginAgentSendDispatch,
-    } = await load();
+    const { beginAgentSwitchOperation, hasPendingAgentSendDispatch, tryBeginAgentSendDispatch } =
+      await load();
     const finishSwitch = beginAgentSwitchOperation('s1');
     expect(tryBeginAgentSendDispatch('s1')).toBeNull();
     expect(hasPendingAgentSendDispatch('s1')).toBe(false);
@@ -762,9 +761,12 @@ describe('makerChatStore 共享发送边界', () => {
     const coordinator = await import('@/lib/agentSwitchCoordinator');
     coordinator.__resetAgentSwitchCoordinatorForTests();
     let rejectRetry!: (reason: Error) => void;
-    const retryLastError = vi.fn(() => new Promise<never>((_resolve, reject) => {
-      rejectRetry = reject;
-    }));
+    const retryLastError = vi.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectRetry = reject;
+        }),
+    );
     vi.stubGlobal('window', {
       electronAPI: { maker: { input: { retryLastError } } },
     });
@@ -785,9 +787,12 @@ describe('makerChatStore 共享发送边界', () => {
     const coordinator = await import('@/lib/agentSwitchCoordinator');
     coordinator.__resetAgentSwitchCoordinatorForTests();
     let rejectCompact!: (reason: Error) => void;
-    const compact = vi.fn(() => new Promise<never>((_resolve, reject) => {
-      rejectCompact = reject;
-    }));
+    const compact = vi.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectCompact = reject;
+        }),
+    );
     vi.stubGlobal('window', { electronAPI: { maker: { input: { compact } } } });
     const { makerChatStore } = await import('@/lib/makerChatStore');
 
@@ -990,10 +995,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
       compactSession,
     );
     const resumeQueue = storeSource.indexOf('function resumeQueue(');
-    const resumeBegin = storeSource.indexOf(
-      'runAgentDispatchProjectionOperation(',
-      resumeQueue,
-    );
+    const resumeBegin = storeSource.indexOf('runAgentDispatchProjectionOperation(', resumeQueue);
     const steerMessage = storeSource.indexOf('function steerMessage(');
     const steerBegin = storeSource.indexOf('return withAgentSendDispatch(', steerMessage);
     const steerQueuedMessage = storeSource.indexOf('function steerQueuedMessage(');
@@ -1095,7 +1097,10 @@ describe('ChatInput 的入口门控与调用路由', () => {
   it('切换事务返回真实结果:失败 / 被拒返 false,登记成功才返 true', () => {
     const start = source.indexOf('const performAgentSwitch = useCallback(');
     expect(start).toBeGreaterThan(-1);
-    const body = source.slice(start, source.indexOf('const performAgentSwitchRef = useRef(', start));
+    const body = source.slice(
+      start,
+      source.indexOf('const performAgentSwitchRef = useRef(', start),
+    );
     // 签名显式声明 Promise<boolean> —— 返回值是契约的一部分,不靠推断。
     expect(body).toContain('): Promise<boolean> => {');
     // 「没落地」的四个出口:无会话 / pending send 拒绝 / 会话已切走 / ack 被超车。
@@ -1122,10 +1127,10 @@ describe('ChatInput 的入口门控与调用路由', () => {
     const start = source.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf('}, [', start));
-    // 取消确认 = false(现状,不变)。**有意变更**(Chris 2026-08-19):确认门现在收目标
-    // 引擎 —— 「已确认过就不再问」的判据是「已有指向**该目标**的意图」,不传目标会让确认框
-    // 在任何残留意图之后永久静默(见 agentSwitchConfirmation.hasSwitchIntent)。
+    // 取消确认 = false(现状,不变)。**有意变更**(Chris 2026-08-20):确认只认任务真实引擎,
+    // 挂着的意图不算已经确认过 —— Claude 任务点了 Pi 收藏再点另一条,仍要弹框。
     expect(body).toContain('if (!(await confirmAgentBrowseSwitch(targetAgent))) return false;');
+    expect(body).toContain('runtimeAgent: runtimeAgentKind ?? undefined,');
     // 真实结果原样交出去;绝不再出现 fire-and-forget + 提前 true。
     expect(body).toContain('const applied = await performAgentSwitchRef.current(');
     expect(body).toContain('return applied;');
@@ -1156,9 +1161,15 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // ★ 偏好同步同族(2026-08-19 review P2):回声已匹配时 syncSessionDraftModelPrefs 也必须
     // 用权威快照的 effort/fastMode/providerId —— 覆盖 effort-only / Fast-only / 两者均改 /
     // provider 归一化四种场景;权威快照缺某字段时该维不写,不回落本端旧值。
-    expect(source).toContain('const authoritative = registeredIntentMatchesCurrent ? registeredIntent : null;');
-    expect(source).toContain('const syncedEffort = authoritative ? authoritative.effort : newEffort;');
-    expect(source).toContain('const syncedFast = authoritative ? authoritative.fastMode : targetFast;');
+    expect(source).toContain(
+      'const authoritative = registeredIntentMatchesCurrent ? registeredIntent : null;',
+    );
+    expect(source).toContain(
+      'const syncedEffort = authoritative ? authoritative.effort : newEffort;',
+    );
+    expect(source).toContain(
+      'const syncedFast = authoritative ? authoritative.fastMode : targetFast;',
+    );
     expect(source).toContain(
       'const syncedProviderId = authoritative ? authoritative.providerId : providerId;',
     );
@@ -1169,25 +1180,72 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // 1d:意图期改选模型 / 来源必须 await 并把结果交回去,不能 fire-and-forget 返回
     // undefined 让上游读成「已应用」。
     expect(source).not.toContain('void performAgentSwitch(');
-    expect(source).toContain('return await performAgentSwitch(intent.target, newModelId, null);');
+    expect(source).toContain(
+      'return await performAgentSwitch(intent.target, newModelId, null, {',
+    );
+    expect(source).toContain('intent.effort ? { effort: intent.effort as Effort }');
+    // 意图期改选带来的 Fast override 必须过目标能力门,不能把旧 Fast 写进不支持的模型。
+    expect(source).toContain('overrides.fastMode && fastCapable');
   });
 
   /**
-   * Chris 2026-08-19 实测「面板原地刷新一下」的根因锁:切换事务一开始就把 disabled 拉高
-   * (agentSwitchInFlight),`(open || keepOpen) && !disabled` 会连保命锁一起压掉 —— 面板当场
-   * 收合,收尾时 setOpenWithoutAutoRefresh(true) 又把它弹回来。保命锁的意义就是「这段时间
-   * 别关」,disabled 不该有权否决它;in-flight 期间由 interactionDisabled 置灰即可。
+   * Chris 2026-08-19「面板原地刷新」+ 2026-08-20「改思维闪关菜单」:
+   * disabled 不得参与 popover 开关。`(open && !disabled) || keepOpen` 只保住确认框那条路,
+   * 改思维走 performAgentSwitch 时 keepOpen 是 false,选单照关。
    */
   it('ModelSelector 的保命锁不被 disabled 压穿(两个 popover 分支同一表达式)', () => {
     const selectorSource = readFileSync(
       resolve(process.cwd(), 'src/renderer/components/new-chat/ModelSelector.tsx'),
       'utf8',
     ).replace(/\r\n/g, '\n');
-    const matches =
-      selectorSource.match(/open=\{\(open && !disabled\) \|\| keepOpenForAgentConfirmation\}/g) ??
-      [];
+    const matches = selectorSource.match(/open=\{open \|\| keepOpenForAgentConfirmation\}/g) ?? [];
     expect(matches).toHaveLength(2);
     expect(selectorSource).not.toContain('(open || keepOpenForAgentConfirmation) && !disabled');
+    expect(selectorSource).not.toContain('(open && !disabled) || keepOpenForAgentConfirmation');
+    // 切引擎成功也不收选单:applied=true 曾经会 setOpen(false),一点胶囊窗口就没了。
+    expect(selectorSource).toContain('setOpenWithoutAutoRefresh(true);');
+    expect(selectorSource).not.toContain('setOpenWithoutAutoRefresh(applied === false)');
+  });
+
+  it('换引擎确认只认任务真实引擎,不认挂着的意图', () => {
+    expect(source).toMatch(/runtimeAgentKind != null\s*&&\s*runtimeAgentKind === targetAgent/);
+    expect(source).not.toContain(
+      'makerChatStore.getAgentSwitchIntent(sessionId)?.target === targetAgent',
+    );
+  });
+
+  it('会话收藏锚点只认 uid,不拿正在跑的模型/引擎去对副本', () => {
+    expect(source).toContain('sessionFavoriteAnchor?.uid ?? null');
+    expect(source).not.toContain('sessionFavoriteAnchor.wireModelId === activeModel');
+  });
+
+  it('跨引擎选中拿任务真实引擎比,不拿意图目标', () => {
+    const actions = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/useUnifiedRowActions.ts'),
+      'utf8',
+    );
+    expect(actions).toContain('const runtimeAgent = sessionEngineFilter?.runtimeAgent;');
+    expect(actions).not.toContain(
+      'const runtimeAgent = sessionEngineFilter?.runtimeAgent ?? sessionAgent;',
+    );
+    expect(actions).toContain('if (runtimeAgent === undefined) return true;');
+    expect(actions).toContain('shouldCrossEngine(config.agent)');
+    expect(actions).toContain('pendingSwitch');
+    expect(actions).toContain('favoriteCopyIsLive');
+    expect(actions).not.toContain('config.agent !== sessionAgent');
+  });
+
+  it('打开选单只滚动选中行,不把焦点从搜索框抢走', () => {
+    const panel = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/UnifiedModelPanel.tsx'),
+      'utf8',
+    );
+    const ensure = panel.slice(
+      panel.indexOf('const ensureSelectedVisible = useCallback'),
+      panel.indexOf('}, [pickerLayout]);'),
+    );
+    expect(ensure).not.toContain('row.focus');
+    expect(ensure).toContain('computeSelectedRowScrollTop');
   });
 });
 

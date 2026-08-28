@@ -42,8 +42,10 @@ import {
   broadcast,
   deviceLinkApiBase,
   applyControllerDisplayNameListSnapshot,
+  applyControllerPresenceListSnapshot,
   beginControllerDisplayNameDirectoryRefresh,
   captureControllerDisplayNameRequestEpoch,
+  captureControllerPresenceRequestEpoch,
   isLatestControllerDisplayNameDirectoryRefresh,
   readControllerDisplayNameFreshnessSince,
   waitForNewerControllerDisplayNameDirectoryRefresh,
@@ -119,10 +121,15 @@ export interface DeviceLinkIpcDeps {
     devices: readonly DeviceLinkServerDeviceView[],
     requestEpoch: number,
   ): void;
+  applyControllerPresenceListSnapshot(
+    devices: readonly DeviceLinkServerDeviceView[],
+    requestEpoch: number,
+  ): void;
   beginControllerDisplayNameDirectoryRefresh(): number;
   isLatestControllerDisplayNameDirectoryRefresh(sequence: number): boolean;
   waitForNewerControllerDisplayNameDirectoryRefresh(sequence: number): Promise<void>;
   captureControllerDisplayNameRequestEpoch(): number;
+  captureControllerPresenceRequestEpoch(): number;
   readControllerDisplayNameFreshnessSince(
     deviceId: string,
     requestEpoch: number,
@@ -173,8 +180,10 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     rememberLastKnownDeviceName,
     forgetLastKnownDeviceName,
     applyControllerDisplayNameListSnapshot,
+    applyControllerPresenceListSnapshot,
     beginControllerDisplayNameDirectoryRefresh,
     captureControllerDisplayNameRequestEpoch,
+    captureControllerPresenceRequestEpoch,
     isLatestControllerDisplayNameDirectoryRefresh,
     readControllerDisplayNameFreshnessSince,
     waitForNewerControllerDisplayNameDirectoryRefresh,
@@ -333,6 +342,7 @@ export function handleListDevices(
   const sequence = ++deviceListRequestSequence;
   const directoryRequestSequence = deps.beginControllerDisplayNameDirectoryRefresh();
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
+  const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
   let request!: Promise<DeviceListResult>;
   request = deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
     '/api/device-link/devices',
@@ -345,6 +355,7 @@ export function handleListDevices(
       );
       if (isLatestDirectorySnapshot) {
         deps.applyControllerDisplayNameListSnapshot(result.devices, requestEpoch);
+        deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch);
       } else {
         await deps.waitForNewerControllerDisplayNameDirectoryRefresh(directoryRequestSequence);
         latest = latestDeviceListRequest;

@@ -26,11 +26,11 @@ import { getResolvedMainLocale } from '../i18n.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import type { TitleOneShotResult } from '../maker-host/title-one-shot.js';
 import {
-  generateTitleViaProvider,
-  generateTitleViaProviderResult,
-  type TitleOneShotResult,
-} from '../maker-host/title-one-shot.js';
+  generateTitleWithAuxiliaryModel,
+  generateTitleWithAuxiliaryModelResult,
+} from '../maker-host/auxiliary-title-one-shot.js';
 import { validateTitleOutput } from '../maker-host/title-output-validation.js';
 import {
   regenerateTitleMaterial,
@@ -51,6 +51,7 @@ import {
   type SessionAutoTitleResult,
 } from './sessionAutoTitle.js';
 import { generatePromptPrediction } from './promptPrediction.js';
+import { wasPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 
 const log = createLogger('maker-ipc/title');
 
@@ -110,7 +111,7 @@ export async function generateMakerSessionTitle(
   // "请提供用户消息内容"式回复当标题返回。直接放弃,调用方保留默认名。
   const trimmed = message.trim();
   if (!trimmed) return null;
-  return generateTitleViaProvider(
+  return generateTitleWithAuxiliaryModel(
     {
       sessionId: sessionId ?? '',
       agentKind,
@@ -158,7 +159,7 @@ const defaultRegenerateDeps: RegenerateTitleDeps = {
   readSessionAgentKind: readSessionAgentKindFromDb,
   collectMaterial: regenerateTitleMaterial,
   generateTitle: (sessionId, agentKind, prompt) =>
-    generateTitleViaProviderResult(
+    generateTitleWithAuxiliaryModelResult(
       { sessionId, agentKind, prompt },
       {
         readSessionProviderId: readSessionProviderIdFromDb,
@@ -345,27 +346,30 @@ function parseAutoTitleRequest(raw: unknown): SessionAutoTitleRequest {
 /** 预测素材窗口:从 DB 读最近几条 user/assistant 消息(与 promptPrediction 的最近 3 轮配对对齐)。 */
 const PREDICTION_RECENT_MESSAGE_LIMIT = 6;
 
-/** 预测请求:仅 sessionId + agentKind + turnGen。素材(messages / workingDir)一律由 main 从 DB 读取,
- * 不信任 renderer 上报内容——受信 renderer 或 stale UI 可能携带其它会话转写 / 伪造 workdir,
- * 把非本会话内容送到本地 provider 触发付费调用。turnGen 仅用于 renderer 端结果校验
- * (丢弃旧轮过期结果),主进程级去重改用 DB 的 session.updatedAt(跨窗口一致)。 */
+/** 预测请求:素材(messages / workingDir)一律由 main 从 DB 读取，不信任 renderer 上报内容。
+ * completionRevision 来自本次运行期真实收到的 lastTurnEndedAt push，main 再与 DB 权威值
+ * 复核并作为跨窗口幂等键；turnGen 仅保留 renderer 侧请求代次。 */
 interface PredictPromptRequest {
   sessionId: string;
   agentKind: AgentKind;
   turnGen: number;
+  completionRevision: number;
 }
 
-/** 主进程级去重:同一 session 同一去重键同时只能有一笔预测在途,
- * 避免多窗口重复付费调用。使用 DB session.updatedAt + renderer turnGen 联合去重:
- * updatedAt 排队场景下相邻轮次可能相同,但 turnGen 逐轮递增,联合后可区分真重复与
- * 不同轮次。Map<sessionId, {updatedAt, turnGen}>——新轮会替换旧条目,不阻塞新轮预测。 */
-const _predictingPromptSessions = new Map<string, { updatedAt: number; turnGen: number }>();
+interface PromptPredictionCacheEntry {
+  revision: number;
+  workingDir: string | null;
+  promise: Promise<string | null>;
+}
+
+/** 每个 session 只保留最新完成轮的一笔 Promise/结果，进程重启自然清空。 */
+const _promptPredictionCache = new Map<string, PromptPredictionCacheEntry>();
 
 function parsePredictPromptRequest(raw: unknown): PredictPromptRequest {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throwIpcError('INVALID_PARAMS', 'predict-prompt request must be a non-null object');
   }
-  const { sessionId, agentKind, turnGen } = raw as Record<string, unknown>;
+  const { sessionId, agentKind, turnGen, completionRevision } = raw as Record<string, unknown>;
   if (typeof sessionId !== 'string' || !sessionId || sessionId.length > SESSION_ID_MAX) {
     throwIpcError('INVALID_PARAMS', 'invalid or missing sessionId for predict-prompt');
   }
@@ -373,14 +377,186 @@ function parsePredictPromptRequest(raw: unknown): PredictPromptRequest {
     throwIpcError('INVALID_PARAMS', `invalid agentKind for predict-prompt: ${String(agentKind)}`);
   }
   if (typeof turnGen !== 'number' || !Number.isFinite(turnGen) || turnGen < 0) {
-    throwIpcError('INVALID_PARAMS', `invalid or missing turnGen for predict-prompt: ${String(turnGen)}`);
+    throwIpcError(
+      'INVALID_PARAMS',
+      `invalid or missing turnGen for predict-prompt: ${String(turnGen)}`,
+    );
   }
-  return { sessionId, agentKind: agentKind as AgentKind, turnGen };
+  if (
+    typeof completionRevision !== 'number' ||
+    !Number.isFinite(completionRevision) ||
+    !Number.isInteger(completionRevision) ||
+    completionRevision <= 0
+  ) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      `invalid or missing completionRevision for predict-prompt: ${String(completionRevision)}`,
+    );
+  }
+  return {
+    sessionId,
+    agentKind: agentKind as AgentKind,
+    turnGen,
+    completionRevision,
+  };
+}
+
+/** Test-only reset: settled Promise 会跨 register 调用保留，单测需显式清理。 */
+export function _resetPromptPredictionCacheForTests(): void {
+  _promptPredictionCache.clear();
 }
 
 export interface RegisterMakerTitleIpcOptions {
   /** True from turn dispatch until terminal delivery, including status:false → done. */
   isSessionTurnPendingCompletion?: (sessionId: string) => boolean;
+}
+
+async function predictPromptForCompletedRevision(
+  request: PredictPromptRequest,
+  options: RegisterMakerTitleIpcOptions,
+): Promise<string | null> {
+  const { sessionId, agentKind, completionRevision } = request;
+  // 防御纵深：身份、来源、完成轮次都以 DB 为准。activeTurnStartedAt 不早于完成
+  // revision 表示下一轮已经启动（含同毫秒），即使命中缓存也不能返回上一轮推荐。
+  const [sessionRow] = await getDbClient()
+    .drizzle.select({
+      remoteHostId: sessions.remoteHostId,
+      source: sessions.source,
+      agentKind: sessions.agentKind,
+      workingDir: sessions.workingDir,
+      status: sessions.status,
+      updatedAt: sessions.updatedAt,
+      activeTurnStartedAt: sessions.activeTurnStartedAt,
+      lastTurnEndedAt: sessions.lastTurnEndedAt,
+    })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId));
+  if (
+    !sessionRow ||
+    sessionRow.remoteHostId ||
+    sessionRow.source === 'review' ||
+    sessionRow.status === 'deleted' ||
+    sessionRow.lastTurnEndedAt !== completionRevision ||
+    (sessionRow.activeTurnStartedAt != null &&
+      sessionRow.activeTurnStartedAt >= completionRevision) ||
+    wasPromptPredictionSessionStopped(sessionId) ||
+    options.isSessionTurnPendingCompletion?.(sessionId) === true
+  ) {
+    return null;
+  }
+
+  const dbAgentKind = dbToMakerAgentKind(sessionRow.agentKind);
+  if (dbAgentKind !== agentKind) {
+    log.warn('predict-prompt agentKind mismatch — rejecting', {
+      sessionId,
+      rendererAgentKind: agentKind,
+      dbAgentKind,
+    });
+    return null;
+  }
+
+  const cached = _promptPredictionCache.get(sessionId);
+  if (cached?.revision === completionRevision) {
+    // workingDir 会进入模型 prompt；同轮改过目录后不能复用旧目录上下文的结果。
+    if (cached.workingDir !== (sessionRow.workingDir ?? null)) return null;
+    return cached.promise;
+  }
+  if (cached && cached.revision > completionRevision) {
+    return null;
+  }
+  if (cached) {
+    log.debug('predict-prompt replacing cached older completion', {
+      sessionId,
+      oldRevision: cached.revision,
+      newRevision: completionRevision,
+    });
+  }
+
+  const predictionPromise = (async () => {
+    // 先排空落盘队列，确保完成轮的终末 Assistant 已 durable；等待两侧都复查
+    // pending completion，避免下一轮已启动却把上一轮缓存成当前推荐。
+    const pendingCompletionBeforeDrain =
+      options.isSessionTurnPendingCompletion?.(sessionId) === true;
+    await drainPersistQueue();
+    let pendingCompletionObserved = pendingCompletionBeforeDrain;
+    const latestTurnIsPendingCompletion = (): boolean => {
+      if (!pendingCompletionObserved) {
+        pendingCompletionObserved = options.isSessionTurnPendingCompletion?.(sessionId) === true;
+      }
+      return pendingCompletionObserved;
+    };
+    if (latestTurnIsPendingCompletion()) return null;
+
+    const [latestSessionRow] = await getDbClient()
+      .drizzle.select({
+        remoteHostId: sessions.remoteHostId,
+        source: sessions.source,
+        status: sessions.status,
+        agentKind: sessions.agentKind,
+        workingDir: sessions.workingDir,
+        updatedAt: sessions.updatedAt,
+        activeTurnStartedAt: sessions.activeTurnStartedAt,
+        lastTurnEndedAt: sessions.lastTurnEndedAt,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId));
+    if (
+      !latestSessionRow ||
+      latestSessionRow.remoteHostId ||
+      latestSessionRow.source === 'review' ||
+      latestSessionRow.status === 'deleted' ||
+      latestSessionRow.lastTurnEndedAt !== completionRevision ||
+      (latestSessionRow.activeTurnStartedAt != null &&
+        latestSessionRow.activeTurnStartedAt >= completionRevision) ||
+      wasPromptPredictionSessionStopped(sessionId)
+    ) {
+      return null;
+    }
+    if (latestSessionRow.updatedAt !== sessionRow.updatedAt) {
+      log.debug('predict-prompt session updated during drain — rejecting', { sessionId });
+      return null;
+    }
+    const latestDbAgentKind = dbToMakerAgentKind(latestSessionRow.agentKind);
+    if (latestDbAgentKind !== agentKind) {
+      log.warn('predict-prompt agentKind changed after drain — rejecting', {
+        sessionId,
+        rendererAgentKind: agentKind,
+        dbAgentKind: latestDbAgentKind,
+      });
+      return null;
+    }
+
+    const material = await regenerateTitleMaterial(
+      sessionId,
+      PREDICTION_RECENT_MESSAGE_LIMIT,
+      latestTurnIsPendingCompletion,
+    );
+    const messages = material.recent.map((message) => ({
+      role: message.role,
+      content: message.text,
+    }));
+    return generatePromptPrediction({
+      sessionId,
+      agentKind,
+      messages,
+      ...(latestSessionRow.workingDir ? { workingDir: latestSessionRow.workingDir } : {}),
+      materialDrainUpdatedAt: latestSessionRow.updatedAt,
+      completionRevision,
+    });
+  })().catch((error: unknown) => {
+    const current = _promptPredictionCache.get(sessionId);
+    if (current?.revision === completionRevision) {
+      _promptPredictionCache.delete(sessionId);
+    }
+    throw error;
+  });
+
+  _promptPredictionCache.set(sessionId, {
+    revision: completionRevision,
+    workingDir: sessionRow.workingDir ?? null,
+    promise: predictionPromise,
+  });
+  return predictionPromise;
 }
 
 export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}): void {
@@ -458,139 +634,16 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
       request: unknown,
     ): Promise<{ prompt: string | null }> => {
       assertTrustedAppRendererEvent(event);
-      const { sessionId, agentKind, turnGen } = parsePredictPromptRequest(request);
+      const parsed = parsePredictPromptRequest(request);
       try {
-      // 防御纵深:即使 renderer 有 UI 守卫,main 侧也需从 DB 确认 session 真实存在且非远程
-      // (SSH / device-link),避免受信 renderer 绕过 UI 守卫携带远程会话内容触发付费调用。
-      // 同时拒绝 review session:reviewer 会话的 composer 被禁用(disabled),不可编辑也不可发送,
-      // 对其做预测是浪费付费调用。也拒绝 soft-deleted session:删除态会话的消息仍保留在 DB,
-      // 但已从用户会话列表移除,对其做预测会外发已删除转写并产生付费调用。
-      const [sessionRow] = await getDbClient()
-        .drizzle.select({ remoteHostId: sessions.remoteHostId, source: sessions.source, agentKind: sessions.agentKind, workingDir: sessions.workingDir, status: sessions.status, updatedAt: sessions.updatedAt })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId));
-      if (!sessionRow || sessionRow.remoteHostId || sessionRow.source === 'review' || sessionRow.status === 'deleted') {
-        return { prompt: null };
-      }
-      // 防御纵深:校验 renderer 上报的 agentKind 与 DB 记录一致,避免受信 renderer 绕过
-      // UI 守卫或 stale UI 状态将 Claude session 的对话内容发送给 Codex provider(反之亦然)。
-      const dbAgentKind = dbToMakerAgentKind(sessionRow.agentKind);
-      if (dbAgentKind !== agentKind) {
-        log.warn('predict-prompt agentKind mismatch — rejecting', {
-          sessionId,
-          rendererAgentKind: agentKind,
-          dbAgentKind,
-        });
-        return { prompt: null };
-      }
-      // 多窗口去重:同一 session 同一 DB 轮次只能有一笔预测在途。
-      // updatedAt 是 DB 权威轮次标识:相同时拒绝(同一真实轮次,跨窗口 turnGen 不同
-      // 也不放行,避免重复付费调用);不同时替换旧条目放行(新轮已开始)。
-      // 注意:排队发送场景下相邻轮次可能共享 updatedAt(入队消息提前推进),此时后一轮
-      // 预测会被拒绝。这是可接受的 tradeoff:避免重复付费调用优先于排队轮次的即时预测。
-      if (_predictingPromptSessions.has(sessionId)) {
-        const existing = _predictingPromptSessions.get(sessionId)!;
-        if (existing.updatedAt === sessionRow.updatedAt) {
-          return { prompt: null };
-        }
-        // 旧轮预测仍在途但新轮已开始,旧结果注定被 renderer 丢弃,放行新请求。
-        log.debug('predict-prompt replacing stale in-flight prediction', {
-          sessionId,
-          oldUpdatedAt: existing.updatedAt,
-          newUpdatedAt: sessionRow.updatedAt,
-        });
-      }
-      _predictingPromptSessions.set(sessionId, { updatedAt: sessionRow.updatedAt, turnGen });
-      try {
-        // 素材只从 DB 读取,不信任 renderer 上报的 messages / workingDir:受信 renderer 或
-        // stale UI 可能携带其它会话转写或伪造 workdir,把非本会话内容送到本地 provider 触发
-        // 付费调用。先排空落盘队列,确保刚结束 turn 的最终回复已持久化,再读最近消息。
-        // 与 REGENERATE_TITLE 对齐:在 drain 前后各拍一次 isSessionTurnPendingCompletion,
-        // 捕获 drain 期间封存的终末消息——避免在 terminal delivery 短窗口内把施工中的
-        // Assistant 行当作完整回复,预测基于不完整上下文落地后 renderer 不会再重试。
-        const pendingCompletionBeforeDrain =
-          options.isSessionTurnPendingCompletion?.(sessionId) === true;
-        await drainPersistQueue();
-        let pendingCompletionObserved = pendingCompletionBeforeDrain;
-        const latestTurnIsPendingCompletion = (): boolean => {
-          if (!pendingCompletionObserved) {
-            pendingCompletionObserved =
-              options.isSessionTurnPendingCompletion?.(sessionId) === true;
-          }
-          return pendingCompletionObserved;
-        };
-        latestTurnIsPendingCompletion();
-        // drainPersistQueue 等待期间 session 可能被软删除或转为远程/review，
-        // 或用户发起新 turn（session.updatedAt 变化）。上方基于 status / source /
-        // remoteHostId 的防御纵深检查会过期（TOCTOU）。此处再从 DB 读取同一行
-        // 的资格字段，并比对 updatedAt：若 session 在 drain 期间被修改（新 turn
-        // 启动），中止预测，避免用旧上下文发起付费调用。
-        const [latestSessionRow] = await getDbClient()
-          .drizzle.select({
-            remoteHostId: sessions.remoteHostId,
-            source: sessions.source,
-            status: sessions.status,
-            agentKind: sessions.agentKind,
-            workingDir: sessions.workingDir,
-            updatedAt: sessions.updatedAt,
-          })
-          .from(sessions)
-          .where(eq(sessions.id, sessionId));
-        if (
-          !latestSessionRow ||
-          latestSessionRow.remoteHostId ||
-          latestSessionRow.source === 'review' ||
-          latestSessionRow.status === 'deleted'
-        ) {
-          return { prompt: null };
-        }
-        // drain 期间 session 被修改（新 turn 启动 / 消息落盘等），中止预测。
-        if (latestSessionRow.updatedAt !== sessionRow.updatedAt) {
-          log.debug('predict-prompt session updated during drain — rejecting', {
-            sessionId,
-          });
-          return { prompt: null };
-        }
-        // drain 期间 session 可能被切换 agent(sessionAgentSwitchHandler 会提交 agentKind 变更):
-        // 上方 drain 前的 agentKind 校验已过期,这里用 drain 后的 DB agentKind 复核,与 renderer
-        // 上报不一致时拒绝,避免把转写路由到切换前的 provider/账号触发付费调用。
-        const latestDbAgentKind = dbToMakerAgentKind(latestSessionRow.agentKind);
-        if (latestDbAgentKind !== agentKind) {
-          log.warn('predict-prompt agentKind changed after drain — rejecting', {
-            sessionId,
-            rendererAgentKind: agentKind,
-            dbAgentKind: latestDbAgentKind,
-          });
-          return { prompt: null };
-        }
-        const material = await regenerateTitleMaterial(
-          sessionId,
-          PREDICTION_RECENT_MESSAGE_LIMIT,
-          latestTurnIsPendingCompletion,
-        );
-        const messages = material.recent.map((m) => ({ role: m.role, content: m.text }));
         return {
-          prompt: await generatePromptPrediction({
-            sessionId,
-            agentKind,
-            messages,
-            ...(latestSessionRow.workingDir ? { workingDir: latestSessionRow.workingDir } : {}),
-            materialDrainUpdatedAt: latestSessionRow.updatedAt,
-          }),
+          prompt: await predictPromptForCompletedRevision(parsed, options),
         };
-      } finally {
-        // 同 session 的预测在上一笔在途时会被拒绝,正常情况下条目始终为请求时刻的
-        // updatedAt + turnGen。此处保留相等性校验作为防御性编程。
-        const current = _predictingPromptSessions.get(sessionId);
-        if (current && current.updatedAt === sessionRow.updatedAt && current.turnGen === turnGen) {
-          _predictingPromptSessions.delete(sessionId);
-        }
-      }
       } catch (error: unknown) {
         // 将数据库不可用、查询失败等意外错误编码为 IPC error，避免 Electron
         // 将原始 Drizzle/SQLite 异常序列化到 Renderer 侧泄露内部细节。
         if (isIpcError(error)) throw error;
-        log.error('predict-prompt handler failed', { sessionId, error });
+        log.error('predict-prompt handler failed', { sessionId: parsed.sessionId, error });
         throwIpcError('INTERNAL', 'Prompt prediction failed');
       }
     },

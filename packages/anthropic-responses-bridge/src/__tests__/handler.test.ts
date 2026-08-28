@@ -104,6 +104,7 @@ describe('createResponsesHandler', () => {
     expect(r.status).toBe(200);
     expect(r.text).toContain('message_start');
     expect(r.text).toContain('"chatgpt/gpt-5.5"'); // message_start 回显带前缀 model(记账判据)
+    expect(r.text).toContain('"service_tier":"priority"');
     expect(r.text).toContain('message_stop');
     expect(seen).toHaveLength(1);
     expect(seen[0].url).toBe('https://upstream.example/responses');
@@ -113,8 +114,9 @@ describe('createResponsesHandler', () => {
 
     // fast=false / provider 无 fastServiceTier → 不发 service_tier。
     seen.length = 0;
-    await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], stream: true }, { prefs: { fast: false } });
+    const standard = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], stream: true }, { prefs: { fast: false } });
     expect(seen[0].body.service_tier).toBeUndefined();
+    expect(standard.text).toContain('"service_tier":"default"');
   });
 
   it('上游 200 但整流零事件(非 SSE 正文)→ 合成带正文前缀的 error 事件而非空 200,并留 warn(#941)', async () => {

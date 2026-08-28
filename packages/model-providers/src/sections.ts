@@ -37,6 +37,7 @@ export interface SectionModel {
   defaultEffort: Effort | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
+  thinkingToggle?: boolean;
   /** 区域门控后的新对话默认标记；仅由可信的模型访问响应投影。 */
   newSessionDefault?: CatalogModel['newSessionDefault'];
   /** 模型级 Codex bridge 协议；Provider 级协议仍从 section.provider.routing 读取。 */
@@ -44,6 +45,7 @@ export interface SectionModel {
   contextWindow: number;
   /** 展示图标 id(AI Gateway / 目录设定,见 CatalogModel.icon);缺省回落来源供应商标。 */
   icon?: string;
+  availability?: CatalogModel['availability'];
 }
 
 export interface ProviderSection {
@@ -142,6 +144,7 @@ export function buildProviderSections(args: {
   selectedProviderId?: string | null;
   isVisible: (providerId: string, modelId: string) => boolean;
   query?: string;
+  includePaymentRequired?: boolean;
 }): ProviderSection[] {
   // 薄壳: 标准分段派生(modelList.ts)+ SectionModel 字段投影。历史语义逐项保持:
   //   - providerScope 'as-given': 本函数从不收窄供应商(调用方已自行收窄),薄壳不得
@@ -165,6 +168,7 @@ export function buildProviderSections(args: {
       ? { keepSelected: { providerId: args.selectedProviderId, modelId: args.selectedModelId } }
       : {}),
     ...(args.query !== undefined ? { query: args.query } : {}),
+    includePaymentRequired: args.includePaymentRequired === true,
   });
   return sections.map(({ provider, models }) => ({
     provider,
@@ -179,11 +183,13 @@ export function buildProviderSections(args: {
       if (m.description !== undefined) sm.description = m.description;
       if (m.effortDisplayNames !== undefined) sm.effortDisplayNames = m.effortDisplayNames;
       if (m.supportsFastMode !== undefined) sm.supportsFastMode = m.supportsFastMode;
+      if (m.thinkingToggle !== undefined) sm.thinkingToggle = m.thinkingToggle;
       if (m.newSessionDefault !== undefined) sm.newSessionDefault = m.newSessionDefault;
       if (m.codexCompatibilityWireProtocol !== undefined) {
         sm.codexCompatibilityWireProtocol = m.codexCompatibilityWireProtocol;
       }
       if (m.icon !== undefined) sm.icon = m.icon;
+      if (m.availability !== undefined) sm.availability = m.availability;
       return sm;
     }),
   }));

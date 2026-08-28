@@ -652,6 +652,48 @@
       "when": 1786696564943,
       "tag": "0092_fixed_zeigeist",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "6",
+      "when": 1787333855020,
+      "tag": "0093_parched_switch",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "6",
+      "when": 1787387261372,
+      "tag": "0094_repair_custom_provider_timestamps",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "6",
+      "when": 1787644558248,
+      "tag": "0095_scope_messages_fts_update_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "6",
+      "when": 1787721235534,
+      "tag": "0096_stabilize_messages_fts_rows",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "6",
+      "when": 1787739425748,
+      "tag": "0097_fresh_stryfe",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "6",
+      "when": 1787833091152,
+      "tag": "0098_bright_baron_zemo",
+      "breakpoints": true
     }
   ]
 }

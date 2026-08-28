@@ -30,7 +30,7 @@ describe('AuthContext auth-state races', () => {
   });
 
   it('repartitions every owner-scoped renderer store at the same boundary', () => {
-    // 统一模型选择器新增的两根轴(引擎 override / 收藏副本)与 newMakerDraft 同待遇:
+    // 模型选择器持久轴(模型预设 / 引擎 override / 收藏副本)与 newMakerDraft 同待遇:
     // 同一处、同一个 state.dataOwnerId(登出快照里就是 null)。漏接任一个 = 多账号串号 ——
     // 这正是 providerModelMemory 不分账号踩过的坑,不能在新 store 上重演。
     const applyStart = source.indexOf('const applyIncomingState = useCallback');
@@ -38,6 +38,7 @@ describe('AuthContext auth-state races', () => {
     const applyBlock = source.slice(applyStart, source.indexOf('[applyIncomingUser]', applyStart));
     for (const call of [
       'setNewMakerDraftOwner(state.dataOwnerId);',
+      'setProviderModelMemoryOwner(state.dataOwnerId);',
       'setModelEnginePrefsOwner(state.dataOwnerId);',
       'setModelFavoritesOwner(state.dataOwnerId);',
     ]) {
@@ -45,16 +46,16 @@ describe('AuthContext auth-state races', () => {
     }
   });
 
-  it('repartitions the unified-picker stores on local-mode boundaries too', () => {
-    // 本地模式进出同样是一次 dataOwnerId 切换,而它们不经 applyIncomingState ——
-    // 漏接两个新 setter 会让本地模式读写上一个身份的收藏 / 引擎 override(2026-08-17
-    // review 第五轮 M5)。行为断言在 authContextSessionBoundary.test.tsx。
+  it('applies the complete owner transition on local-mode boundaries', () => {
+    // 本地模式进出同样是一次 dataOwnerId 切换。自己拼半套 setter 会漏草稿 /
+    // prompt / 模型可见性 / 记忆分区(2026-08-21 #3201 Codex P1)。行为断言在
+    // authContextSessionBoundary.test.tsx。
     for (const entry of ['const enterLocalMode = useCallback', 'const exitLocalMode = useCallback']) {
       const start = source.indexOf(entry);
       expect(start).toBeGreaterThan(-1);
-      const block = source.slice(start, source.indexOf('[runDataOwnerBoundary]', start));
-      expect(block).toContain('setModelEnginePrefsOwner(state.dataOwnerId);');
-      expect(block).toContain('setModelFavoritesOwner(state.dataOwnerId);');
+      const block = source.slice(start, source.indexOf('[applyIncomingState, runDataOwnerBoundary]', start));
+      expect(block).toContain('applyIncomingState(state);');
+      expect(block).not.toContain('setModelEnginePrefsOwner(state.dataOwnerId);');
     }
   });
 
@@ -84,18 +85,8 @@ describe('AuthContext auth-state races', () => {
     );
     const enterLocal = source.indexOf('const enterLocalMode = useCallback');
     const exitLocal = source.indexOf('const exitLocalMode = useCallback');
-    expect(
-      source.indexOf(
-        'publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);',
-        enterLocal,
-      ),
-    ).toBeLessThan(exitLocal);
-    expect(
-      source.indexOf(
-        'publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);',
-        exitLocal,
-      ),
-    ).toBeGreaterThan(exitLocal);
+    expect(source.indexOf('applyIncomingState(state);', enterLocal)).toBeLessThan(exitLocal);
+    expect(source.indexOf('applyIncomingState(state);', exitLocal)).toBeGreaterThan(exitLocal);
     expect(source).toContain('activeDataOwnerGenerationRef.current');
     expect(source).toContain('setDataOwnerRecoveryEpoch((epoch) => epoch + 1);');
     expect(appSource).toContain("`${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`");

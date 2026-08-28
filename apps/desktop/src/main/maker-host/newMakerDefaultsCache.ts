@@ -61,7 +61,11 @@ let workerCreationPrefsCache: WorkerCreationPrefsSnapshot | null = null;
  */
 export type ProviderModelMemorySnapshot = Record<
   string,
-  { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
+  {
+    effortByModel: Record<string, string>;
+    fastByModel: Record<string, boolean>;
+    thinkingByModel?: Record<string, boolean>;
+  }
 >;
 let providerMemoryCache: ProviderModelMemorySnapshot | null = null;
 
@@ -92,6 +96,19 @@ export interface WorkerDefaultsFromNewMaker {
   effort?: string;
   fastMode?: boolean;
   providerId?: string | null;
+}
+
+/**
+ * 读某 (agent, provider, model) 在 providerModelMemory 镜像里的思考开关。
+ * 未推送 / 未记录 → undefined，调用方保持模型默认（开）。
+ */
+export function getThinkingEnabledFromMemory(
+  agentKind: 'claude-code' | 'codex' | 'pi',
+  providerId: string | null | undefined,
+  model: string | undefined,
+): boolean | undefined {
+  if (!providerMemoryCache || !providerId || !model) return undefined;
+  return providerMemoryCache[`${agentKind}:${providerId}`]?.thinkingByModel?.[model];
 }
 
 /**
@@ -142,10 +159,7 @@ export interface RemoteNewMakerDefaults {
    * device-link 草稿列表行(非选中模型)的真实权威读源:控制端据此镜像被控端每个模型的
    * effort/fast。跨 agent 隔离(key 带 agent 前缀);旧版被控端不回 → undefined → 回落默认。
    */
-  providerModelMemory?: Record<
-    string,
-    { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
-  >;
+  providerModelMemory?: ProviderModelMemorySnapshot;
   /**
    * 「新建会话默认启用 worktree」勾选记忆(vendor 无关)。控制端 / 手机远程新建草稿据此
    * 播种 worktree 开关默认态。旧版被控端不回 → undefined → 控制端按未勾选兜底。

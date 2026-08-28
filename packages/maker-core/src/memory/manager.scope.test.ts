@@ -409,6 +409,8 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     manager.dispose();
   });
 
+  // Windows runner 上 SQLite 文件关闭后，Defender 仍可能短暂占用目录；这个用例
+  // 覆盖真实磁盘删除与重建，采用独立的 I/O 预算，避免拖宽整个 suite 的默认超时。
   it('resetAll 清空目录并重建 store (review Greptile 16th)', async () => {
     const sqlite = trackingSqlite();
     const manager = new MakerMemoryManager({
@@ -435,7 +437,7 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     expect(storeB).not.toBe(storeA);
     expect(existsSync(memoryDirFor(rootA))).toBe(true);
     manager.dispose();
-  });
+  }, 20_000);
 
   it('resetAll 后旧 store 任何操作抛 not-ready, 不碰已关 db (review Greptile 20th P1)', async () => {
     const sqlite = trackingSqlite();

@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
 import { type AgentKind, type Maker } from '@cindy/maker-core';
-import { appendProviderRequestPath, storedCustomProviderId } from '@cindy/model-providers';
+import {
+  appendProviderRequestPath,
+  isModelSelectableForNewRoute,
+  storedCustomProviderId,
+} from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -13,7 +17,10 @@ import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.j
 // undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
 import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
-import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import {
+  getActiveCatalog,
+  isXdGatewayPaymentRequiredRoute,
+} from '../maker-host/active-catalog.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
@@ -31,6 +38,34 @@ import type {
 
 const log = createLogger('utility-model:one-shot');
 
+const XD_UTILITY_ROUTE_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+
+/**
+ * Utility profiles call the XD chat-completions endpoint directly and therefore
+ * have no Session agent rail. A v5 paid deny on any advertised rail is enough
+ * to block the same gateway model id here; availability is account/model scoped.
+ */
+function isXdUtilityModelPaymentRequired(model: string): boolean {
+  return XD_UTILITY_ROUTE_AGENTS.some((agent) =>
+    isXdGatewayPaymentRequiredRoute(model, agent),
+  );
+}
+
+/**
+ * Shared live entitlement predicate for direct utility consumers. Only XD
+ * LiteLLM routes use the Cindy account catalog; Codex and custom BYOK routes
+ * keep their own credential plane. Organization catalogs are not subject to
+ * personal free/paid gating and arrive as not_applicable with every visible
+ * model available, so they never create this deny state.
+ */
+export function isUtilityRoutePaymentRequired(profile: {
+  transport?: string;
+  model: string;
+}): boolean {
+  return profile.transport === 'litellm-chat-completions'
+    && isXdUtilityModelPaymentRequired(profile.model);
+}
+
 /**
  * 实现了 `Agent.oneShot` 的 agent 集合(当前 claude-code / codex)。PiAgent 继承 BaseAgent
  * 的 not-implemented,选中它调 oneShot 会抛错;help 兜底与任务摘要兜底都据此跳过 Pi,避免
@@ -45,6 +80,12 @@ export type UtilityTextCapability = {
   transports: readonly UtilityModelTransport[];
 };
 
+export interface UtilityTextDispatchRoute {
+  providerId: string;
+  agentKind: AgentKind;
+  model: string;
+}
+
 export type UtilityTextCandidate = {
   providerId: string;
   model: string;
@@ -58,8 +99,20 @@ export type UtilityTextRequestOptions = {
   timeoutMs?: number;
   /** Optional lightweight reasoning hint for short internal classifiers. */
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  /**
+   * Disable provider-native thinking for strict short-output budgets. Messages
+   * and chat routes send `thinking.type=disabled`; Responses routes use the
+   * lowest supported effort because that protocol has no off value.
+   */
+  disableReasoning?: boolean;
   /** Abort an in-flight direct HTTP request when the owning workflow ends. */
   signal?: AbortSignal;
+  /** Provider-native system/instructions text, kept separate from reference data. */
+  systemPrompt?: string;
+  /** Additional output-shape instruction (mainly for Responses-compatible routes). */
+  responseInstructions?: string;
+  /** Final ownership/config guard immediately before an explicit HTTP dispatch. */
+  beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
   providerId?: string;
   agentKind?: AgentKind;
@@ -205,6 +258,15 @@ async function resolveUtilityTextCandidates(
       attempts.push(skippedAttempt(profile, 'model_unavailable'));
       continue;
     }
+    if (isUtilityRoutePaymentRequired(profile)) {
+      log.debug('utility text candidate skipped: paid XD route unavailable', {
+        providerId: routeProviderId,
+        profileId: profile.id,
+        model: profile.model,
+      });
+      attempts.push(skippedAttempt(profile, 'model_unavailable'));
+      continue;
+    }
     if (!capability.transports.includes(profile.transport)) {
       log.debug('utility text candidate skipped: unsupported transport', {
         providerId: profile.id,
@@ -272,6 +334,33 @@ export async function requestUtilityText(
   }
 
   return requestDefaultUtilityText(maker, prompt, opts);
+}
+
+/** Execute one exact catalog route; failures never enter the default chain. */
+export async function requestExplicitUtilityText(
+  prompt: string,
+  opts: UtilityTextRequestOptions & { providerId: string },
+): Promise<UtilityTextResult> {
+  const providerId = opts.providerId.trim();
+  const explicitModel = opts.model?.trim();
+  if (!providerId) return { ok: false, reason: 'no_candidate', attempts: [] };
+
+  const disableOverrides = readModelDisableOverrides();
+  if (
+    isProviderDisabled(disableOverrides, providerId) ||
+    (explicitModel && isModelDisabled(disableOverrides, providerId, explicitModel))
+  ) {
+    log.warn('utility text route disabled in settings', {
+      providerId,
+      model: explicitModel ?? null,
+    });
+    return { ok: false, reason: 'no_candidate', attempts: [] };
+  }
+  return requestExplicitProviderText(prompt, {
+    ...opts,
+    providerId,
+    ...(explicitModel === undefined ? {} : { model: explicitModel }),
+  });
 }
 
 const DEDICATED_AUTO_REVIEW_MAX_TOKENS = 384;
@@ -453,6 +542,12 @@ async function requestDefaultUtilityText(
         attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
         continue;
       }
+      // 前一个 fallback 候选可能运行数十秒；在每个 XD 候选真正执行前重读
+      // owner-scoped v5 deny，避免订阅状态/模型目录刚变化后继续向网关下单。
+      if (isUtilityRoutePaymentRequired(candidate.profile)) {
+        attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+        continue;
+      }
     try {
       const text = (await candidate.execute(prompt, opts)).trim();
       if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
@@ -480,6 +575,22 @@ async function requestDefaultUtilityText(
   return { ok: false, reason, attempts };
 }
 
+function stableSnapshot(value: unknown): string {
+  const normalize = (entry: unknown): unknown => {
+    if (Array.isArray(entry)) return entry.map(normalize);
+    if (entry && typeof entry === 'object') {
+      return Object.keys(entry as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((result, key) => {
+          result[key] = normalize((entry as Record<string, unknown>)[key]);
+          return result;
+        }, {});
+    }
+    return entry;
+  };
+  return JSON.stringify(normalize(value));
+}
+
 /**
  * Explicit task provider path. A selected custom provider is a single route,
  * not another entry in the XD fallback pool: a failed request must not leak
@@ -496,7 +607,8 @@ async function requestExplicitProviderText(
   // Model resolution is scoped to the selected agent. Never use provider.titleModel
   // here: that legacy field may belong to another runtime (for example Codex),
   // which would silently turn a Claude request into a Codex request.
-  const model = requestedModel || configuredModels[0]?.id || '';
+  const model = requestedModel || configuredModels.find((item) =>
+    isModelSelectableForNewRoute(item, { userProvider: provider?.source === 'user' }))?.id || '';
   const selectedRouting = agentKind ? provider?.routing[agentKind] : undefined;
   const transport: UtilityModelTransport =
     agentKind === 'codex' && selectedRouting?.wireProtocol !== 'openai-chat'
@@ -542,7 +654,9 @@ async function requestExplicitProviderText(
       }],
     };
   }
-  if (requestedModel && !configuredModels.some((item) => item.id === requestedModel)) {
+  if (requestedModel && !configuredModels.some((item) =>
+    item.id === requestedModel
+    && isModelSelectableForNewRoute(item, { userProvider: provider.source === 'user' }))) {
     return {
       ok: false,
       reason: 'no_candidate',
@@ -558,6 +672,28 @@ async function requestExplicitProviderText(
 
   // 自定义供应商目录钉同样钳制到模型声明的输出上限(与 builtin 分支同口径,
   // 见 requestBuiltinProviderText 开头)。Codex 2026-08-06。
+  const routeSnapshot = stableSnapshot({
+    routing: selectedRouting,
+    auth: provider.auth,
+    source: provider.source,
+  });
+  const routeStillCurrent = (): boolean => {
+    if (isProviderRouteMutationInProgress(provider.id)) return false;
+    if (isProviderModelRouteDisabled(provider.id, model)) return false;
+    const currentProvider = getActiveCatalog().providers.find((item) => item.id === provider.id);
+    if (!currentProvider || !currentProvider.agents.includes(agentKind)) return false;
+    const currentModel = currentProvider.models[agentKind]?.find((item) => item.id === model);
+    if (
+      !currentModel ||
+      !isModelSelectableForNewRoute(currentModel, { userProvider: currentProvider.source === 'user' })
+    ) return false;
+    return stableSnapshot({
+      routing: currentProvider.routing[agentKind],
+      auth: currentProvider.auth,
+      source: currentProvider.source,
+    }) === routeSnapshot;
+  };
+
   const catalogModel = provider.models[agentKind]?.find((m) => m.id === model);
   if (opts.maxTokens !== undefined && catalogModel?.maxOutput !== undefined) {
     opts = { ...opts, maxTokens: Math.min(opts.maxTokens, catalogModel.maxOutput) };
@@ -572,6 +708,12 @@ async function requestExplicitProviderText(
       maxTokens: opts.maxTokens,
       timeoutMs: opts.timeoutMs,
       reasoningEffort: opts.reasoningEffort,
+      disableReasoning: opts.disableReasoning,
+      signal: opts.signal,
+      systemPrompt: opts.systemPrompt,
+      responseInstructions: opts.responseInstructions,
+      beforeDispatch: opts.beforeDispatch,
+      routeStillCurrent,
     });
   }
 
@@ -665,7 +807,26 @@ async function requestExplicitProviderText(
       maxTokens: requestOpts?.maxTokens,
       timeoutMs: requestOpts?.timeoutMs,
       reasoningEffort: requestOpts?.reasoningEffort,
+      disableReasoning: requestOpts?.disableReasoning,
       signal: requestOpts?.signal,
+      systemPrompt: requestOpts?.systemPrompt,
+      responseInstructions: requestOpts?.responseInstructions,
+      beforeDispatch: requestOpts?.beforeDispatch
+        ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
+        : undefined,
+      credentialStillCurrent: requestOpts?.beforeDispatch
+        ? () => {
+            if (noAuth) return true;
+            if (isOAuth) {
+              return readCachedGenericOAuthAccessToken(
+                storedCustomProviderId(provider.id),
+                provider.auth.oauth,
+              ) === credential;
+            }
+            return readCustomProviderKey(provider.id, agentKind) === credential;
+          }
+        : undefined,
+      routeStillCurrent: requestOpts?.beforeDispatch ? routeStillCurrent : undefined,
     }),
   };
   return executeCandidates([candidate], prompt, [], opts);
@@ -711,7 +872,12 @@ async function requestBuiltinProviderText(
     maxTokens?: number;
     timeoutMs?: number;
     reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+    disableReasoning?: boolean;
     signal?: AbortSignal;
+    systemPrompt?: string;
+    responseInstructions?: string;
+    beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
+    routeStillCurrent?: () => boolean;
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -760,7 +926,21 @@ async function requestBuiltinProviderText(
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
         signal: requestOpts?.signal ?? input.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({
+              providerId: input.provider.id,
+              agentKind: input.agentKind,
+              model: input.model,
+            })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch
+          ? () => readClaudeApiKey() === apiKey && effectiveXdGatewayBaseUrl().trim() === baseUrl
+          : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
       }),
     }], prompt, [], input);
   }
@@ -793,7 +973,21 @@ async function requestBuiltinProviderText(
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens ?? catalogModel?.maxOutput ?? 81_920,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
         signal: requestOpts?.signal ?? input.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({
+              providerId: input.provider.id,
+              agentKind: input.agentKind,
+              model: input.model,
+            })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch
+          ? async () => (await getValidClaudeAiOAuth())?.accessToken === oauth.accessToken
+          : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
       }),
     }], prompt, [], input);
   }
@@ -831,11 +1025,32 @@ async function requestBuiltinProviderText(
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
         // ChatGPT's private Codex Responses endpoint rejects this public API
         // parameter with HTTP 400. The Auto reviewer enforces its own compact
         // output ceiling after the response instead.
         supportsMaxOutputTokens: false,
         signal: requestOpts?.signal ?? input.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({
+              providerId: input.provider.id,
+              agentKind: input.agentKind,
+              model: input.model,
+            })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch
+          ? async () => {
+              try {
+                const current = await getChatgptBridgeAuth();
+                return current.accountId === accountId && current.accessToken === creds.accessToken;
+              } catch {
+                return false;
+              }
+            }
+          : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
       }),
     }], prompt, [], input);
   }
@@ -862,8 +1077,28 @@ async function requestBuiltinProviderText(
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
         supportsReasoning: supportsXaiReasoning(input.model),
         signal: requestOpts?.signal ?? input.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({
+              providerId: input.provider.id,
+              agentKind: input.agentKind,
+              model: input.model,
+            })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch
+          ? async () => {
+              try {
+                return (await getGrokAccessToken()) === accessToken;
+              } catch {
+                return false;
+              }
+            }
+          : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
       }),
     }], prompt, [], input);
   }
@@ -980,6 +1215,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         timeoutMs: opts?.timeoutMs,
         reasoningEffort: opts?.reasoningEffort,
         signal: opts?.signal,
+        routeStillAllowed: () => !isUtilityRoutePaymentRequired(profile),
       }),
     },
   };
@@ -994,6 +1230,8 @@ async function requestLiteLlmText(input: {
   timeoutMs?: number;
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   signal?: AbortSignal;
+  /** Synchronous owner entitlement fence immediately before the HTTP request. */
+  routeStillAllowed?: () => boolean;
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 20_000;
@@ -1002,6 +1240,9 @@ async function requestLiteLlmText(input: {
   else input.signal?.addEventListener('abort', abortFromParent, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    if (input.routeStillAllowed && !input.routeStillAllowed()) {
+      throw new UtilityTextExecutionError({ reason: 'request_failed' });
+    }
     const response = await undiciFetch(joinProxyPath(input.baseUrl, '/v1/chat/completions'), {
       method: 'POST',
       signal: controller.signal,
@@ -1120,6 +1361,7 @@ async function requestProviderHttpText(input: {
   maxTokens?: number;
   timeoutMs?: number;
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  disableReasoning?: boolean;
   /** Some coding-specialized models reject their wire's reasoning field. */
   supportsReasoning?: boolean;
   /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
@@ -1128,6 +1370,16 @@ async function requestProviderHttpText(input: {
   supportsMaxOutputTokens?: boolean;
   /** Owning workflow cancellation; linked with the candidate timeout below. */
   signal?: AbortSignal;
+  /** Provider-native system text, never concatenated with untrusted reference data. */
+  systemPrompt?: string;
+  /** Additional output-shape instructions. */
+  responseInstructions?: string;
+  /** Session/owner/config guard, evaluated immediately before each HTTP dispatch. */
+  beforeDispatch?: () => Promise<boolean>;
+  /** Re-read the credential captured by the request closure after the async guard. */
+  credentialStillCurrent?: () => boolean | Promise<boolean>;
+  /** Synchronous catalog/override snapshot guard. */
+  routeStillCurrent?: () => boolean;
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 90_000;
@@ -1136,18 +1388,26 @@ async function requestProviderHttpText(input: {
   else input.signal?.addEventListener('abort', abortFromParent, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const instructions = [input.systemPrompt, input.responseInstructions]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n');
+    const reasoningEffort = input.disableReasoning
+      ? 'minimal'
+      : input.reasoningEffort;
     const supportsRequestedReasoning = Boolean(
       input.wire !== 'anthropic-messages'
-      && input.reasoningEffort
+      && reasoningEffort
       && input.supportsReasoning !== false,
     );
     const hasOptionalRequestFields = input.wire === 'responses'
       || input.maxTokens !== undefined
+      || input.disableReasoning === true
       || supportsRequestedReasoning;
     const buildBody = (minimal: boolean) => input.wire === 'responses'
       ? {
         model: input.model,
         input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
+        ...(instructions ? { instructions } : {}),
         ...(!minimal ? {
           store: false,
           stream: true,
@@ -1156,7 +1416,7 @@ async function requestProviderHttpText(input: {
           ? { max_output_tokens: input.maxTokens }
           : {}),
         ...(!minimal && supportsRequestedReasoning
-          ? { reasoning: { effort: input.reasoningEffort } }
+          ? { reasoning: { effort: reasoningEffort } }
           : {}),
       }
       : input.wire === 'anthropic-messages'
@@ -1166,25 +1426,44 @@ async function requestProviderHttpText(input: {
           // maxOutput 兜底(模型自身输出能力);81920 只是模型不在目录时的最后
           // 回退,不是宿主承诺的输出上限。
           max_tokens: input.maxTokens ?? 81_920,
+          ...(instructions ? { system: instructions } : {}),
+          ...(!minimal && input.disableReasoning ? { thinking: { type: 'disabled' } } : {}),
           messages: [{ role: 'user', content: input.prompt }],
         }
         : {
           model: input.model,
           ...(!minimal && input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+          ...(!minimal && input.disableReasoning ? { thinking: { type: 'disabled' } } : {}),
           ...(!minimal && supportsRequestedReasoning
-            ? { reasoning_effort: input.reasoningEffort }
+            ? { reasoning_effort: reasoningEffort }
             : {}),
-          messages: [{ role: 'user', content: input.prompt }],
+          messages: [
+            ...(instructions ? [{ role: 'system', content: instructions }] : []),
+            { role: 'user', content: input.prompt },
+          ],
         };
-    const send = (minimal: boolean) => undiciFetch(input.endpoint, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        ...(input.headers ?? {}),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(buildBody(minimal)),
-    });
+    const canDispatch = async (): Promise<boolean> => {
+      if (input.routeStillCurrent && !input.routeStillCurrent()) return false;
+      if (input.beforeDispatch && !(await input.beforeDispatch())) return false;
+      if (input.credentialStillCurrent && !(await input.credentialStillCurrent())) return false;
+      if (input.routeStillCurrent && !input.routeStillCurrent()) return false;
+      if (input.beforeDispatch && !(await input.beforeDispatch())) return false;
+      return !input.routeStillCurrent || input.routeStillCurrent();
+    };
+    const send = async (minimal: boolean) => {
+      if (!(await canDispatch())) {
+        throw new UtilityTextExecutionError({ reason: 'request_failed' });
+      }
+      return undiciFetch(input.endpoint, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          ...(input.headers ?? {}),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(buildBody(minimal)),
+      });
+    };
     let response = await send(false);
     if (
       !response.ok
@@ -1310,7 +1589,13 @@ async function requestCustomProviderText(input: {
   maxTokens?: number;
   timeoutMs?: number;
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  disableReasoning?: boolean;
   signal?: AbortSignal;
+  systemPrompt?: string;
+  responseInstructions?: string;
+  beforeDispatch?: () => Promise<boolean>;
+  credentialStillCurrent?: () => boolean | Promise<boolean>;
+  routeStillCurrent?: () => boolean;
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
@@ -1356,8 +1641,14 @@ async function requestCustomProviderText(input: {
     maxTokens: input.maxTokens,
     timeoutMs: input.timeoutMs,
     reasoningEffort: input.reasoningEffort,
+    disableReasoning: input.disableReasoning,
     retryWithMinimalBodyOnInvalidRequest: true,
     signal: input.signal,
+    systemPrompt: input.systemPrompt,
+    responseInstructions: input.responseInstructions,
+    beforeDispatch: input.beforeDispatch,
+    credentialStillCurrent: input.credentialStillCurrent,
+    routeStillCurrent: input.routeStillCurrent,
   });
 }
 

@@ -312,12 +312,12 @@ describe('payloadSummary', () => {
 
     expect(formatMediaActionNotice(media)).toBe([
       '桌面端为这个媒体提供了后续操作。',
-      '可用操作: U1 / V2',
-      '手机版 V1 只安全展示这些操作,暂不远程触发。请回到电脑端点击。',
+      '可用操作：U1 / V2',
+      '手机版 V1 只安全展示这些操作，暂不远程触发。请回到电脑端点击。',
     ].join('\n'));
 
     const payload = buildMediaPayload(media, 'a.png');
-    expect(payload.body).toContain('可用操作: U1 / V2');
+    expect(payload.body).toContain('可用操作：U1 / V2');
     expect(summarizeMessagePayload(payload)).toEqual({
       kind: 'media',
       kindLabel: 'IMAGE',

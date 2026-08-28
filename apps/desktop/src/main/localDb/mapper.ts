@@ -63,6 +63,13 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
+type SessionRuntimeProjector = (session: Session) => Partial<Session>;
+let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
+
+export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
+  sessionRuntimeProjector = projector;
+}
+
 /**
  * SessionRow + 同 session 下 messages 总条数。IPC handler 必须通过 LEFT JOIN + GROUP BY
  * 或子查询同时带出 messageCount，再交给 `sessionToCamel`。
@@ -79,11 +86,14 @@ type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 export type SessionRowWithCount = SessionRow & {
   messageCount: number;
   latestMessageContent?: string | null;
+  latestMessageExtract?: string | null;
   latestMessageRole?: string | null;
 };
 
 /** preview 最大长度（字符）。渲染端 3 行 line-clamp 之外的兜底硬上限。 */
 const PREVIEW_MAX_CHARS = 140;
+/** Bound serialized content before JSON.parse so oversized rows stay valid JSON. */
+const PREVIEW_CONTENT_BOUND_CHARS = 4096;
 
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
@@ -92,6 +102,22 @@ const PREVIEW_MAX_CHARS = 140;
  *  - 解析失败 / 空文本 → null（渲染端隐藏预览行）
  * 换行折叠成空格——卡片预览是流式 3 行 clamp，不保留消息内排版。
  */
+export function finalizePlainPreview(
+  text: string | null | undefined,
+  role: string | null | undefined,
+): string | null {
+  if (!text) return null;
+  let next = text;
+  // 合成 UI 指令行(隐藏续跑 / 图片按钮)不进 sidebar 预览(review P2):它是
+  // role='user' 的正常落库行,但对用户不可见 —— 预览显示隐藏英文指令会暴露
+  // 实现细节。返回 null 与"无预览"同渲染语义。
+  if (isSyntheticTriggerText(next)) return null;
+  if (role === 'assistant') next = stripInternalWebCitations(next);
+  const collapsed = next.replace(/\s+/g, ' ').trim();
+  if (!collapsed) return null;
+  return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
+}
+
 export function extractMessagePreview(
   raw: string | null | undefined,
   role: string | null | undefined,
@@ -110,15 +136,37 @@ export function extractMessagePreview(
     // 极端情况 content 不是合法 JSON（旧手工写入）——按纯文本兜底
     text = raw;
   }
-  if (!text) return null;
-  // 合成 UI 指令行(隐藏续跑 / 图片按钮)不进 sidebar 预览(review P2):它是
-  // role='user' 的正常落库行,但对用户不可见 —— 预览显示隐藏英文指令会暴露
-  // 实现细节。返回 null 与"无预览"同渲染语义。
-  if (isSyntheticTriggerText(text)) return null;
-  if (role === 'assistant') text = stripInternalWebCitations(text);
-  const collapsed = text.replace(/\s+/g, ' ').trim();
-  if (!collapsed) return null;
-  return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
+  return finalizePlainPreview(text, role);
+}
+
+/**
+ * Bound oversized serialized message bodies before they enter the mapper.
+ * Truncate the extracted text, then re-encode, so JSON objects stay valid and
+ * `extractMessagePreview` still sees `.text` instead of a cut-off document.
+ */
+export function boundSerializedMessageContent(
+  raw: string | null | undefined,
+  maxChars = PREVIEW_CONTENT_BOUND_CHARS,
+): string | null | undefined {
+  if (raw == null || raw.length <= maxChars) return raw;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === 'string') {
+      return JSON.stringify(parsed.slice(0, maxChars));
+    }
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as { text?: unknown };
+      if (typeof record.text === 'string') {
+        return JSON.stringify({
+          ...record,
+          text: record.text.length > maxChars ? record.text.slice(0, maxChars) : record.text,
+        });
+      }
+    }
+    return raw;
+  } catch {
+    return raw.slice(0, maxChars);
+  }
 }
 
 /**
@@ -151,7 +199,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
   const legacyUsdProjection =
     row.totalCostUsd +
     (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
-  return {
+  const base: Session = {
     id: row.id,
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
@@ -189,9 +237,18 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
     _count: { messages: row.messageCount },
-    preview: extractMessagePreview(row.latestMessageContent, row.latestMessageRole),
+    preview:
+      row.listPreview != null
+        ? finalizePlainPreview(row.listPreview, row.listPreviewRole)
+        : row.latestMessageExtract != null
+          ? finalizePlainPreview(row.latestMessageExtract, row.latestMessageRole)
+          : extractMessagePreview(
+              boundSerializedMessageContent(row.latestMessageContent),
+              row.latestMessageRole,
+            ),
     summary: row.summary ?? null,
   };
+  return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
 }
 
 export function messageToCamel(row: MessageRow): Message {

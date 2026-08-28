@@ -1,8 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { promises as fs } from 'node:fs';
+import {
+  mkdtempSync,
+  promises as fs,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+
+// Windows 未开启 Developer Mode / 无 Create Symbolic Link 权限时，文件 symlink
+// 会返回 EPERM；目录 junction 不受此限制，但本文件的竞态用例必须替换单个文件。
+// 探测真实 OS 能力，避免把权限差异误报成产品回归。
+function canCreateFileSymlink(): boolean {
+  const probeRoot = mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-package-file-link-probe-'));
+  const link = path.join(probeRoot, 'link');
+  try {
+    symlinkSync(path.join(probeRoot, 'target'), link, 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probeRoot, { recursive: true, force: true });
+  }
+}
+
+const canLinkFile = canCreateFileSymlink();
 
 const runtime = vi.hoisted(() => ({
   userData: '',
@@ -439,7 +462,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.mutatePiPackage(request, fresh)).rejects.toThrow(/invalid or expired/i);
   });
 
-  it('holds Extension packages disabled until explicit approval and revokes approval on update', async () => {
+  it('holds Extension packages disabled until explicit approval and re-enables them after a confirmed update', async () => {
     const { root, source } = await createPackage();
     await fs.mkdir(path.join(root, 'skills', 'sample'), { recursive: true });
     await fs.writeFile(
@@ -502,15 +525,188 @@ describe('Pi package executable-code boundary', () => {
     const updated = await mutateAuthorized(store, { action: 'update', source });
     expect(updated.affectedPackage).toMatchObject({
       source,
-      enabled: false,
-      requiresExtensionApproval: true,
+      enabled: true,
     });
+    expect(updated.affectedPackage?.requiresExtensionApproval).toBeUndefined();
     await fs.rm(root, { recursive: true, force: true });
     await expect(Promise.all([
       fs.readFile(snapshotExtension, 'utf8'),
       fs.readFile(snapshotSkill, 'utf8'),
       fs.readFile(snapshotPrompt, 'utf8'),
     ])).resolves.toEqual(frozenResources);
+  });
+
+  it('enables an Extension package from the same confirmed install', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+
+    const installed = await mutateAuthorized(store, { action: 'install', source });
+
+    expect(installed.affectedPackage).toMatchObject({
+      source,
+      enabled: true,
+    });
+    expect(installed.affectedPackage?.requiresExtensionApproval).toBeUndefined();
+    expect(installed.packages).toMatchObject([{ source, enabled: true }]);
+  });
+
+  it('keeps an explicitly disabled Extension package disabled after a confirmed update', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: false });
+
+    const updated = await mutateAuthorized(store, { action: 'update', source });
+
+    expect(updated.affectedPackage).toMatchObject({
+      source,
+      enabled: false,
+      requiresExtensionApproval: true,
+    });
+  });
+
+  it('does not disable an already-enabled npm Extension when another package is installed', async () => {
+    const firstSource = 'npm:first-shared-extension';
+    const secondSource = 'npm:second-shared-extension';
+    const npmRoot = path.join(runtime.userData, 'pi-package-home', 'npm');
+    const nodeModulesRoot = path.join(npmRoot, 'node_modules');
+    const firstRoot = path.join(nodeModulesRoot, 'first-shared-extension');
+    const secondRoot = path.join(nodeModulesRoot, 'second-shared-extension');
+    const writeExtension = async (packageRoot: string, name: string) => {
+      await fs.mkdir(path.join(packageRoot, 'extensions'), { recursive: true });
+      await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
+        name,
+        version: '1.0.0',
+        pi: { extensions: ['./extensions/index.js'] },
+      }));
+      await fs.writeFile(
+        path.join(packageRoot, 'extensions', 'index.js'),
+        `module.exports = function setup${name.replace(/\W/g, '')}() {};\n`,
+      );
+    };
+    await writeExtension(firstRoot, 'first-shared-extension');
+    runtime.listOutput = `User packages:\n  ${firstSource}\n    ${firstRoot}\n`;
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: firstSource,
+      enabled: true,
+    });
+
+    runtime.holdMutationCommand = true;
+    const installing = mutateAuthorized(store, {
+      action: 'install',
+      source: secondSource,
+    });
+    await vi.waitFor(() => {
+      expect(runtime.spawns.at(-1)?.args).toEqual(
+        expect.arrayContaining(['install', secondSource]),
+      );
+    });
+    await writeExtension(secondRoot, 'second-shared-extension');
+    runtime.listOutput = [
+      'User packages:',
+      `  ${firstSource}`,
+      `    ${firstRoot}`,
+      `  ${secondSource}`,
+      `    ${secondRoot}`,
+      '',
+    ].join('\n');
+    runtime.holdMutationCommand = false;
+    runtime.pendingClose?.(0);
+    const installed = await installing;
+
+    expect(installed.packages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: firstSource, enabled: true }),
+      expect.objectContaining({ source: secondSource, enabled: true }),
+    ]));
+    expect(installed.packages.every((pkg) => pkg.requiresExtensionApproval !== true)).toBe(true);
+  });
+
+  it('does not reapprove a sibling whose scoped hoisted dependency changes during install', async () => {
+    const firstSource = 'npm:@scope/stale-shared-extension';
+    const secondSource = 'npm:new-shared-extension';
+    const npmRoot = path.join(runtime.userData, 'pi-package-home', 'npm');
+    const nodeModulesRoot = path.join(npmRoot, 'node_modules');
+    const firstRoot = path.join(nodeModulesRoot, '@scope', 'stale-shared-extension');
+    const secondRoot = path.join(nodeModulesRoot, 'new-shared-extension');
+    const dependencyRoot = path.join(nodeModulesRoot, '@scope', 'node_modules', 'shared-runtime-dependency');
+    const writeExtension = async (packageRoot: string, name: string) => {
+      await fs.mkdir(path.join(packageRoot, 'extensions'), { recursive: true });
+      await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
+        name,
+        version: '1.0.0',
+        pi: { extensions: ['./extensions/index.js'] },
+      }));
+      await fs.writeFile(
+        path.join(packageRoot, 'extensions', 'index.js'),
+        `module.exports = function setup${name.replace(/\W/g, '')}() {};\n`,
+      );
+    };
+    await writeExtension(firstRoot, 'stale-shared-extension');
+    await fs.writeFile(path.join(firstRoot, 'package.json'), JSON.stringify({
+      name: '@scope/stale-shared-extension', version: '1.0.0',
+      dependencies: { 'shared-runtime-dependency': '^1.0.0' },
+      pi: { extensions: ['./extensions/index.js'] },
+    }));
+    await fs.writeFile(
+      path.join(firstRoot, 'extensions', 'index.js'),
+      "require('shared-runtime-dependency');\nmodule.exports = function setupStale() {};\n",
+    );
+    await fs.mkdir(dependencyRoot, { recursive: true });
+    await fs.writeFile(path.join(dependencyRoot, 'package.json'), JSON.stringify({ name: 'shared-runtime-dependency', version: '1.0.0', main: './index.js' }));
+    await fs.writeFile(path.join(dependencyRoot, 'index.js'), 'module.exports = "approved";\n');
+    runtime.listOutput = `User packages:\n  ${firstSource}\n    ${firstRoot}\n`;
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: firstSource,
+      enabled: true,
+    });
+    runtime.holdMutationCommand = true;
+    const installing = mutateAuthorized(store, {
+      action: 'install',
+      source: secondSource,
+    });
+    await vi.waitFor(() => {
+      expect(runtime.spawns.at(-1)?.args).toEqual(
+        expect.arrayContaining(['install', secondSource]),
+      );
+    });
+    await fs.writeFile(
+      path.join(dependencyRoot, 'index.js'),
+      'module.exports = "changed-during-sibling-install";\n',
+    );
+    await writeExtension(secondRoot, 'new-shared-extension');
+    runtime.listOutput = [
+      'User packages:',
+      `  ${firstSource}`,
+      `    ${firstRoot}`,
+      `  ${secondSource}`,
+      `    ${secondRoot}`,
+      '',
+    ].join('\n');
+    runtime.holdMutationCommand = false;
+    runtime.pendingClose?.(0);
+    const installed = await installing;
+
+    expect(installed.packages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: firstSource,
+        enabled: false,
+        requiresExtensionApproval: true,
+      }),
+      expect.objectContaining({ source: secondSource, enabled: true }),
+    ]));
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as {
+      approvedExtensionSources: string[];
+      approvedExtensionFingerprints: Record<string, string>;
+    };
+    expect(state.approvedExtensionSources).toEqual([secondSource]);
+    expect(Object.keys(state.approvedExtensionFingerprints)).toEqual([secondSource]);
   });
 
   it.skipIf(process.platform === 'win32')(
@@ -940,7 +1136,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(fs.readdir(snapshotRoot)).resolves.toEqual([]);
   });
 
-  it('rejects a direct file snapshot whose package root is replaced by a symlink', async () => {
+  it.skipIf(!canLinkFile)('rejects a direct file snapshot whose package root is replaced by a symlink', async () => {
     const packageFile = path.join(runtime.userData, 'snapshot-direct-extension.ts');
     const outsideFile = path.join(runtime.userData, 'snapshot-host-private.ts');
     await fs.writeFile(packageFile, 'export default function approved() {}\n');
@@ -1925,7 +2121,7 @@ describe('Pi package executable-code boundary', () => {
 
     await vi.waitFor(() => expect(listener).toHaveBeenCalled(), { timeout: 2_000 });
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
     unsubscribe();
   });
@@ -2023,15 +2219,14 @@ describe('Pi package executable-code boundary', () => {
     await mutateAuthorized(secondStore, { action: 'update', source });
 
     const snapshotRoot = path.join(runtime.userData, 'cross-process-session', 'managed-packages');
-    await expect(firstStore.resolveManagedPiPackageResources({ snapshotRoot })).resolves.toEqual({
-      extensions: [],
-      skills: [],
-      promptTemplates: [],
-      packageRoots: [],
+    const snapshotExtension = path.join(snapshotRoot, '0', 'extensions', 'index.ts');
+    await expect(firstStore.resolveManagedPiPackageResources({ snapshotRoot })).resolves.toMatchObject({
+      extensions: [snapshotExtension],
+      packageRoots: [path.join(snapshotRoot, '0')],
     });
-    await expect(fs.readdir(snapshotRoot)).resolves.toEqual([]);
+    await expect(fs.readFile(snapshotExtension, 'utf8')).resolves.toContain('replacedAfterApproval');
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -2118,9 +2313,9 @@ describe('Pi package executable-code boundary', () => {
 
     expect(reinstalled.affectedPackage).toMatchObject({
       source: normalizedSource,
-      enabled: false,
-      requiresExtensionApproval: true,
+      enabled: true,
     });
+    expect(reinstalled.affectedPackage?.requiresExtensionApproval).toBeUndefined();
 
     await mutateAuthorized(store, { action: 'update', source: normalizedSource });
     await mutateAuthorized(store, { action: 'remove', source: normalizedSource });

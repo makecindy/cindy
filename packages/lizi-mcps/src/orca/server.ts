@@ -3,9 +3,10 @@
  * ---------------------------------------------------------------------------
  * In-process MCP server (`cindy_orca`) 暴露多 worker 协同(Orca team)控制工具。
  *
- * 暴露 13 个 team 工具(直接 server.tool() 注册到顶层,不走 list_tools/call_tool 入口):
- *   start_team / create_worker / create_workers / send_to_worker / list_worker_queue /
- *   update_queued_message / cancel_queued_message / list_workers / switch_focus /
+ * 暴露 15 个 team 工具(直接 server.tool() 注册到顶层,不走 list_tools/call_tool 入口):
+ *   start_team / create_worker / create_workers / send_to_worker / interrupt_worker /
+ *   get_worker_queue_status / update_queued_message / cancel_queued_message /
+ *   merge_queued_messages / list_workers / switch_focus /
  *   idle_worker / end_team / archive_worker / list_available_models
  *
  * 为什么直接注册而非走入口:协同工具藏在 list_tools/call_tool 后面时, 模型在用户
@@ -36,7 +37,7 @@ import {
   type XdtHelperToolCategory,
   type XdtHelperToolHandler,
 } from '../lizi_xdtHelperToolRegistry.js';
-// 13 个 team 工具的注册函数留在 xdt-helper/ 目录(register 是 registry-agnostic,
+// 15 个 team 工具的注册函数留在 xdt-helper/ 目录(register 是 registry-agnostic,
 // 物理搬迁收益低)。本 server 通过 DirectToolSink 把它们直接注册到 McpServer。
 import {
   registerStartTeamTool,
@@ -45,9 +46,10 @@ import {
   registerListWorkersTool,
   registerSwitchFocusTool,
   registerSendToWorkerTool,
-  registerListWorkerQueueTool,
+  registerGetWorkerQueueStatusTool,
   registerUpdateQueuedMessageTool,
   registerCancelQueuedMessageTool,
+  registerMergeQueuedMessagesTool,
   registerIdleWorkerTool,
   registerEndTeamTool,
   registerArchiveWorkerTool,
@@ -64,7 +66,7 @@ import { errorPayload, okPayload } from '../xdt-helper/_payload.js';
 // ── Host deps ──────────────────────────────────────────────────────────────
 
 /**
- * 协同(team)控制类工具的 host 回调集合。注入即注册 cindy_orca 的 13 个 team 工具
+ * 协同(team)控制类工具的 host 回调集合。注入即注册 cindy_orca 的 15 个 team 工具
  * (per-session 闭包绑定 ctx)。
  *
  * 回调返 Result 而非抛 Promise<T>: 让 host 能用 `HOST_NOT_READY` errorCode 表达
@@ -131,6 +133,24 @@ export interface OrcaMcpDeps {
       'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS'
     >
   >;
+  /** 原子预留替换输入并请求优雅停止当前 worker turn。 */
+  interruptWorker: (params: {
+    callerLeadSessionId: string;
+    targetSessionId: string;
+    message: string;
+  }) => Promise<
+    ControlResult<{
+      agentKind: ControlWorkerAgent;
+      queuedMessageId: string;
+      stopOutcome:
+        | 'requested'
+        | 'waiting-for-safe-point'
+        | 'no-active-turn'
+        | 'unconfirmed'
+        | 'unsupported';
+      queuePaused: boolean;
+    }>
+  >;
   /** 列出 worker 输入队列中排队的消息(lead 自己的条目含正文)。 */
   listWorkerQueuedMessages: (params: {
     callerLeadSessionId: string;
@@ -140,6 +160,10 @@ export interface OrcaMcpDeps {
       {
         workerId: string;
         workerSessionId: string;
+        status: string;
+        isWorking: boolean;
+        willQueue: boolean;
+        queuePaused: boolean;
         messages: WorkerQueuedMessageEntry[];
       },
       'WORKER_NOT_FOUND'
@@ -161,6 +185,22 @@ export interface OrcaMcpDeps {
     queuedMessageId: string;
   }) => Promise<
     ControlResult<{ workerId: string; queuedMessageId: string }, QueuedMessageControlErrorCode>
+  >;
+  /** 原子合并连续的 lead-owned 排队消息。 */
+  mergeWorkerQueuedMessages: (params: {
+    callerLeadSessionId: string;
+    workerRef: string;
+    queuedMessageIds: string[];
+    message: string;
+  }) => Promise<
+    ControlResult<
+      {
+        workerId: string;
+        queuedMessageId: string;
+        messages: WorkerQueuedMessageEntry[];
+      },
+      QueuedMessageControlErrorCode | 'QUEUE_CHANGED'
+    > & { messages?: WorkerQueuedMessageEntry[] }
   >;
   /** 主动将 worker 设为 idle。 */
   idleWorker: (params: { callerLeadSessionId: string; workerId: string }) => Promise<
@@ -209,6 +249,10 @@ export interface OrcaWorkspaceInfo {
     session_status: string;
     idle_ms: number | null;
     restored_from_storage: boolean;
+    is_working: boolean;
+    will_queue: boolean;
+    queued_count: number;
+    queue_paused: boolean;
     label: string | null;
     role: string;
     agent_kind: ControlWorkerAgent;
@@ -251,7 +295,7 @@ export interface OrcaMcpSessionCtx {
  * DirectToolSink —— 把 team 工具直接 server.tool() 注册的适配器。
  *
  * 复用既有 register*Tool(registry, deps) 的签名: 本类继承 XdtHelperToolRegistry 但
- * override register() —— 不入内部 Map, 而是转调 server.tool()。这样 13 个工具文件
+ * override register() —— 不入内部 Map, 而是转调 server.tool()。这样 15 个工具文件
  * 一行不改即可顶层直接注册。direct 注册下 category 字段无意义(忽略); list()/
  * call() 等继承方法不会被用到(cindy_orca 不暴露 list_tools/call_tool 入口)。
  */
@@ -308,7 +352,8 @@ function registerOrcaDiagnosticTools(
   sink.register({
     name: 'get_workspace_info',
     category: 'control',
-    description: 'List the current Orca workflow and worker sessions.',
+    description:
+      'List the current Orca workflow and worker sessions, including whether each worker queue is paused.',
     inputShape: {},
     handler: async () => {
       const ctx = resolveLeadSessionContext(getSessionContext);
@@ -383,7 +428,7 @@ export function createOrcaMcpServer(
     version: '1.0.0',
   });
 
-  // 13 个 team 工具经 DirectToolSink 直接注册到顶层。handler 闭包绑定 ctx
+  // 15 个 team 工具经 DirectToolSink 直接注册到顶层。handler 闭包绑定 ctx
   // (sessionId / vendorOptions), 调用时把请求路由回 host。
   const sink = new DirectToolSink(server);
   const getSessionContext = () => resolveLiziMcpSessionContext(ctx);
@@ -416,8 +461,9 @@ export function createOrcaMcpServer(
   registerSendToWorkerTool(sink, {
     getSessionContext,
     sendToWorker: deps.sendToWorker,
+    interruptWorker: deps.interruptWorker,
   });
-  registerListWorkerQueueTool(sink, {
+  registerGetWorkerQueueStatusTool(sink, {
     getSessionContext,
     listWorkerQueuedMessages: deps.listWorkerQueuedMessages,
   });
@@ -428,6 +474,10 @@ export function createOrcaMcpServer(
   registerCancelQueuedMessageTool(sink, {
     getSessionContext,
     cancelWorkerQueuedMessage: deps.cancelWorkerQueuedMessage,
+  });
+  registerMergeQueuedMessagesTool(sink, {
+    getSessionContext,
+    mergeWorkerQueuedMessages: deps.mergeWorkerQueuedMessages,
   });
   registerIdleWorkerTool(sink, {
     getSessionContext,

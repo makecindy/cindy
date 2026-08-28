@@ -3,26 +3,19 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-/**
- * Clicking install/update must open the catalog permission card immediately.
- * The post-download Host card is only for permissions the preview missed.
- */
-describe('market install confirmation', () => {
+describe('market install flow', () => {
   const pageSource = readFileSync(
     resolve(__dirname, '../GhostPluginPage.tsx'),
     'utf8',
   ).replace(/\r\n/g, '\n');
 
-  it('shows an immediate catalog permission card before download', () => {
-    expect(pageSource).toContain('<GhostUpdateReview');
-    expect(pageSource).toContain('manualCount={next.manifest.manual?.items.length ?? 0}');
+  it('starts a compatible install without a capability confirmation card', () => {
+    expect(pageSource).not.toContain('<GhostUpdateReview');
+    expect(pageSource).not.toContain('<GhostManualSummary');
+    expect(pageSource).not.toContain('<GhostPermissionList');
+    expect(pageSource).toContain('installMarketPackage');
     expect(pageSource).toContain(
-      'manualCount={marketDetail.manifest.manual?.items.length ?? 0}',
-    );
-    expect(pageSource).toContain('<GhostManualSummary');
-    expect(pageSource).toContain('<GhostPermissionList');
-    expect(pageSource).toContain(
-      '下载真实包;权限卡已在页面确认,Host 只在真实包超出已审清单时再弹',
+      '目录详情用于发现与能力展示；点击更新后由 Main 下载并校验真实包后直接落位',
     );
   });
 

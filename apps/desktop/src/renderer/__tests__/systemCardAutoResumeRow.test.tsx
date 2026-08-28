@@ -163,9 +163,22 @@ describe('SystemCard auto-resume 行', () => {
       />,
     );
     const button = screen.getByRole('button');
+    expect(button.className.split(/\s+/)).toContain('group');
     expect(button.getAttribute('aria-label')).toBeNull();
     // 可见文本 = 结论 + 摘要,读屏据此拼出无障碍名。
     expect(button.textContent).toContain('chat.systemCard.autoResume.label');
     expect(button.textContent).toContain('502 upstream unreachable');
+  });
+
+  it('仅有 outcome 时仍保留 18px 三角槽,不画三角,也不挂 group', () => {
+    render(<SystemCard cardType="auto-resume" data={{ outcome: 'succeeded' }} />);
+    const button = screen.getByRole('button');
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.className.split(/\s+/)).not.toContain('group');
+    const slot = button.lastElementChild;
+    expect(slot?.className).toContain('w-[18px]');
+    expect(slot?.className).toContain('h-[18px]');
+    expect(slot?.className).toContain('ml-auto');
+    expect(slot?.querySelector('svg')).toBeNull();
   });
 });

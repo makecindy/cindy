@@ -25,6 +25,8 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   CodexResumePreparationBlockedError,
   finalizeCodexCitationText,
+  isOversizedLiveTailStats,
+  measureRolloutLiveTailStats,
 } from '@cindy/maker-core';
 
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
@@ -3518,6 +3520,23 @@ function dropUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
     if (v !== undefined) out[k as keyof T] = v as T[keyof T];
   }
   return out;
+}
+
+export type CodexHistoryOversizedClass = 'oversized' | 'healthy' | 'unknown';
+
+/** 只读测量本地 Codex rollout 活尾巴。找不到文件或读失败归 unknown，不得当成健康。 */
+export async function classifyCodexHistoryOversized(
+  threadId: string,
+): Promise<CodexHistoryOversizedClass> {
+  if (!threadId) return 'unknown';
+  const rolloutPath = resolveRolloutPath(threadId);
+  if (!rolloutPath) return 'unknown';
+  try {
+    const stats = await measureRolloutLiveTailStats(rolloutPath);
+    return isOversizedLiveTailStats(stats) ? 'oversized' : 'healthy';
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**

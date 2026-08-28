@@ -5,6 +5,7 @@ import {
   accountDeletionChallengeSchema,
   accountDeletionStatusSchema,
   accountMembershipSchema,
+  accountTokenPairSchema,
   authRegionSchema,
   desktopAuthorizationPollSchema,
   loginMethodSchema,
@@ -18,6 +19,7 @@ import {
   type AccountDeletionChallenge,
   type AccountDeletionStatus,
   type AccountMembership,
+  type AccountTokenPair,
   type AuthMe,
   type AuthTokenPair,
   type AuthRegion,
@@ -317,6 +319,24 @@ export class CindyAuthClient {
       "/api/auth/account/exchange",
       tokenPairSchema,
       { membershipId },
+      { token: accountToken },
+    );
+  }
+
+  refreshAccount(accountRefreshToken: string): Promise<AccountTokenPair> {
+    return this.request(
+      "/api/auth/account/refresh",
+      accountTokenPairSchema,
+      { accountRefreshToken, deviceId: this.options.deviceId },
+      { timeoutMs: 0 },
+    );
+  }
+
+  async logoutAccount(accountToken: string): Promise<void> {
+    await this.request(
+      "/api/auth/account/logout",
+      z.object({ status: z.literal("ok") }),
+      {},
       { token: accountToken },
     );
   }

@@ -123,6 +123,33 @@ describe('xAI account model discovery', () => {
     expect(applySnapshot).toHaveBeenCalledWith([]);
   });
 
+  it('skips discovery cleanly when no access token is available (not logged in)', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-xai-models-'));
+    tempDirs.push(dir);
+    const cacheFile = path.join(dir, 'xai-models.json');
+    const applySnapshot = vi.fn();
+    const fetchImpl = vi.fn();
+    const deps = {
+      fetchImpl: fetchImpl as typeof fetch,
+      getAccessToken: async () => {
+        throw new Error('xAI 未登录:请先在「设置 → 模型供应商」登录 xAI(SuperGrok)');
+      },
+      peekAccessToken: () => null,
+      hasLogin: () => false,
+      getConnectionSource: () => 'explicit-provider-oauth' as const,
+      getScopeKey: () => 'owner-a:1',
+      cacheFilePath: () => cacheFile,
+      applySnapshot,
+      invalidateAuth: vi.fn(),
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+
+    await expect(refreshXaiModelsFromHttp(deps)).resolves.toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(applySnapshot).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the current snapshot on temporary failure and never applies late account results', async () => {
     const applySnapshot = vi.fn();
     await expect(
@@ -373,4 +400,48 @@ describe('xAI account model discovery', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(applySnapshot).not.toHaveBeenCalled();
   });
+
+  it('warns and returns false when token refresh after invalidateAuth fails', async () => {
+    let token = 'token-old';
+    let getAccessTokenCalls = 0;
+    const applySnapshot = vi.fn();
+    const invalidateAuth = vi.fn(async () => 'refreshed' as const);
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get('authorization');
+      if (auth === 'Bearer token-old') {
+        return jsonResponse(
+          { code: 'unauthenticated:bad-credentials', error: 'bad creds' },
+          403,
+        );
+      }
+      // Should never reach here because second getAccessToken fails
+      throw new Error('unexpected fetch after token failure');
+    });
+    const warn = vi.fn();
+    await expect(
+      refreshXaiModelsFromHttp({
+        fetchImpl: fetchImpl as typeof fetch,
+        getAccessToken: async () => {
+          getAccessTokenCalls += 1;
+          if (getAccessTokenCalls === 1) return token;
+          throw new Error('token refresh failed after invalidate');
+        },
+        peekAccessToken: () => token,
+        hasLogin: () => true,
+        getConnectionSource: () => 'explicit-provider-oauth' as const,
+        getScopeKey: () => 'owner-a:1',
+        cacheFilePath: () => '/unused',
+        applySnapshot,
+        invalidateAuth,
+        log: { info: vi.fn(), warn },
+      }),
+    ).resolves.toBe(false);
+    expect(invalidateAuth).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      'xAI account model discovery: token refresh after invalidate failed',
+      expect.objectContaining({ error: 'token refresh failed after invalidate' }),
+    );
+    expect(applySnapshot).not.toHaveBeenCalled();
+  });
+
 });

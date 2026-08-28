@@ -53,8 +53,12 @@
 - `cindy-media://` 的 scheme privilege 和 handler 只在现有集中入口注册。不要为单一功能
   新增媒体协议；确需改变协议能力时，同时按 Electron 安全规则审查 CSP、fetch、Range、
   路径校验和 Renderer 暴露面。
-- 不把媒体仓绝对路径直接暴露给 Renderer、插件或远端。跨边界传递使用托管 URL、受控
-  grant／deposit／ledger，或已有上传与远程媒体服务。
+- 默认不把媒体仓绝对路径直接暴露给 Renderer、插件或远端。跨边界传递使用托管 URL、
+  受控 grant／deposit／ledger，或已有上传与远程媒体服务。
+- 唯一的路径揭示例外是：用户明确询问某个受管媒体地址在本机的存储位置时，Host 先用
+  安全解析器核验为现存普通文件，再通过 Host-owned 确认卡展示精确单文件路径；只有用户
+  点击允许后，路径才可返回当前 Agent 并进入会话记录（因此也可能同步到用户的配对设备）。
+  提示词或 Agent 自报“用户已同意”不能替代该确认，也不能借此给插件或远端开放文件读取。
 - `xdt-image://`、`xdt-video://`、`xdt-model://` 和 `userData/cc-agent/` 是冻结的历史兼容层。
   可以读取已有地址，不得新增写入路径、扩展生命周期或把新功能接回旧仓。
 - 删除或清理历史目录必须走已有的显式名单、复验和用户确认流程；不得新增任意
@@ -74,7 +78,7 @@
 以下缺口在触及相关链路时必须一并修复，或在 PR 中保留明确的正式跟踪，不得静默丢弃：
 
 - 插件持久引用的 per-插件 字节配额只覆盖 **寄存**（`ghost-deposit`，cindy 槽
-  `deposit_media`）：上限 `GHOST_CINDY_DEPOSIT_QUOTA_BYTES`，安装确认框逐项展示该上限，
+  `deposit_media`）：上限 `GHOST_CINDY_DEPOSIT_QUOTA_BYTES`，插件详情逐项展示该上限，
   释放口是 `release_media`，卸载插件时按 refKind 清理。**画廊（`ghost-gallery`：模型
   代办产物与 network `as:'media'` 下载）仍无字节配额、仍不随卸载回收** —— 这两条是
   存量语义，改动它们属于产品决策，触及时另行拍板，不得当作已完成。

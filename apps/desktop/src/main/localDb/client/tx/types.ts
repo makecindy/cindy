@@ -19,7 +19,13 @@ export type DbTxName =
   | 'orca.reconcileInactiveTeamWorkersForLead'
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
+  | 'toolResults.compactSession'
   | 'session.agentSwitchFallback'
+  | 'context.rebuild'
+  | 'message.insert'
+  | 'message.updateContent'
+  | 'message.leaseMutate'
+  | 'message.rewindUserAfterClear'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -260,12 +266,14 @@ export interface OrcaCancelStaleTeamsArgs {
 /** Archive every still-active worker session linked to one team. */
 export interface OrcaArchiveWorkersByTeamArgs {
   teamId: string;
+  sessionIds: string[];
   now: number;
 }
 
 /** Repair active worker sessions left behind under a lead's inactive teams. */
 export interface OrcaReconcileInactiveTeamWorkersForLeadArgs {
   leadSessionId: string;
+  sessionIds: string[];
   now: number;
 }
 
@@ -299,6 +307,54 @@ export interface SessionAgentSwitchFallbackArgs {
   boundaryClientId: string;
   boundaryContent: string;
   updatedAt: number;
+}
+
+/** 上下文超限后同一任务换干净原生会话：清 sdk 绑定并追加隐藏 context_rebuild。 */
+export interface ContextRebuildArgs {
+  sessionId: string;
+  markerId: string;
+  markerClientId: string;
+  markerContent: string;
+  markerCreatedAt: number;
+  updatedAt: number;
+  /** 读历史时看到的 sessions.cleared_at；提交时必须仍相同，否则 /clear 竞态整单回滚。 */
+  expectedClearedAt?: number | null;
+}
+
+export interface MessageInsertArgs {
+  id: string;
+  clientId: string;
+  sessionId: string;
+  role: string;
+  content: string;
+  toolUseId: string | null;
+  agentMeta: string | null;
+  agentKind: string | null;
+  createdAt: number;
+  guarded: boolean;
+  expectedClearBoundaryMs?: number | null;
+}
+
+export interface MessageUpdateContentArgs {
+  sessionId: string;
+  clientId: string;
+  content: string;
+}
+
+export interface MessageLeaseMutateArgs {
+  op: 'insert' | 'deleteByContent' | 'deleteById';
+  sessionId: string;
+  clientId: string;
+  id?: string;
+  content?: string;
+  agentMeta?: string | null;
+  createdAt?: number;
+}
+
+export interface MessageRewindUserAfterClearArgs {
+  sessionId: string;
+  clientId: string;
+  rewoundAt: number;
 }
 
 /**
@@ -342,6 +398,16 @@ export interface SessionsSetStatusResultItem {
   workingDir: string | null;
   workspaceKind: string | null;
   status: 'active' | 'archived';
+}
+
+export interface CompactSessionToolResultsArgs {
+  sessionId: string;
+  now: number;
+}
+
+export interface CompactSessionToolResultsResult {
+  compactedRows: number;
+  originalBytes: number;
 }
 
 /** session.importShare 的单条 session 行(lead 与协同 Worker 共用形状)。 */
@@ -757,7 +823,13 @@ export type DbTxArgsByName = {
   'orca.reconcileInactiveTeamWorkersForLead': OrcaReconcileInactiveTeamWorkersForLeadArgs;
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
+  'toolResults.compactSession': CompactSessionToolResultsArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
+  'context.rebuild': ContextRebuildArgs;
+  'message.insert': MessageInsertArgs;
+  'message.updateContent': MessageUpdateContentArgs;
+  'message.leaseMutate': MessageLeaseMutateArgs;
+  'message.rewindUserAfterClear': MessageRewindUserAfterClearArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -802,7 +874,13 @@ export type DbTxResultByName = {
   'orca.reconcileInactiveTeamWorkersForLead': string[];
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
+  'toolResults.compactSession': CompactSessionToolResultsResult;
   'session.agentSwitchFallback': undefined;
+  'context.rebuild': undefined;
+  'message.insert': { changes: number };
+  'message.updateContent': { changes: number };
+  'message.leaseMutate': { changes: number };
+  'message.rewindUserAfterClear': { changes: number };
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;

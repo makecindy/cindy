@@ -24,6 +24,7 @@ import { app } from 'electron';
 
 import {
   PiAgent,
+  PiNativeProviderProxyNotReadyError,
   type AgentDeps,
   type AuthAdapter,
   type AuthState,
@@ -55,8 +56,18 @@ import type {
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { t } from '../i18n.js';
+import { spawnPiSubagentRunner } from '../cindy-brain/piSubagentRunnerHost.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
+import {
+  MANAGED_OLLAMA_PROVIDER_ID,
+  matchesManagedOllamaFingerprint,
+} from '../../shared/localModelRuntime.js';
+import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
+import {
+  applyQwen38NativeOverlay,
+  shouldApplyQwen38Overlay,
+} from '../local-model-runtime/qwenProfile.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import {
   desktopClaudeAuthAdapter,
@@ -73,19 +84,20 @@ import hostSystemPrompt from './host-system-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
+import { readPiCompactionPct } from './compaction-settings-store.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { derivePiProxySessionToken } from './pi-proxy-session-token.js';
 import {
   getDesktopMcpToolApprovalPolicy,
   getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
-import { readCompactionPct } from './compaction-settings-store.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import {
   getActiveCatalog,
   getLocalCatalogOverridesSnapshot,
   resolveXdPiGatewayWireProtocol,
 } from './active-catalog.js';
+import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
 import { resolveManagedPiPackageResources } from './pi-package-store.js';
 import { mutateAuthorizedPiManagedPackage } from './pi-managed-package-mutation.js';
@@ -150,7 +162,13 @@ function piOpenaiProxyPlaceholderJwt(): string {
 }
 
 function appendEndpointPath(endpoint: string, suffix: string): string {
-  return `${endpoint.replace(/\/+$/, '')}/${suffix.replace(/^\/+/, '')}`;
+  const url = new URL(endpoint);
+  const normalizedSuffix = `/${suffix.replace(/^\/+/, '').replace(/\/+$/, '')}`;
+  const pathname = url.pathname.replace(/\/+$/, '');
+  if (!pathname.endsWith(normalizedSuffix)) {
+    url.pathname = `${pathname}${normalizedSuffix}`;
+  }
+  return url.toString().replace(/\/$/, '');
 }
 
 function piSubscriptionHeaders(providerId: string): Record<string, string> {
@@ -649,14 +667,14 @@ export function buildPiSubscriptionNativeProviders(
             ? { catalogAddition: true }
             : {}),
           ...(isXaiCatalogAddition
-            ? { api: model.piApi ?? 'openai-responses' }
-            : capabilityCorrection
-              ? { api: capabilityCorrection.api }
+            ? { api: model.piApi ?? officialModel?.api ?? bundledModel?.api ?? 'openai-responses' }
             : sourceProviderId !== 'openai' &&
                 model.piApi &&
                 (isAnnotatedAddition || isProtocolCorrection)
               ? { api: model.piApi }
-              : {}),
+              : capabilityCorrection
+                ? { api: capabilityCorrection.api }
+                : {}),
           name: isContextProfileAddition ? model.name : (preserved?.name ?? model.name),
           contextWindow: isContextProfileAddition
             ? model.contextWindow
@@ -817,7 +835,11 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     managedExecutablePaths: { ripgrep: ripgrepPath },
     userDataPath: app.getPath('userData'),
   };
-  // 网关 endpoint 随 model-access 凭据同步就绪,用 getter 惰性读(与 claude remoteEndpoint 同理)。
+  Object.defineProperty(config, 'piAutoCompactThresholdPct', {
+    get: () => readPiCompactionPct(),
+    enumerable: true,
+    configurable: false,
+  });
   Object.defineProperty(config, 'endpoint', {
     get: () => getClaudeEndpoint(),
     enumerable: true,
@@ -840,11 +862,6 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     },
     makerMemoryEnabled: {
       get: () => readMemorySettings().maker,
-      enumerable: true,
-    },
-    // 与 Claude Code 共用 compaction-settings.json；Codex 不读。
-    autoCompactThresholdPct: {
-      get: () => readCompactionPct(),
       enumerable: true,
     },
   });
@@ -1170,6 +1187,11 @@ export function buildPiNativeProvidersFromConfigs(
       onSkip?.(cfg.id, 'oauth not supported for pi native');
       continue;
     }
+    const managedOllama = matchesManagedOllamaFingerprint({
+      id: cfg.id,
+      authMethod,
+      runtimes: cfg.runtimes,
+    });
     const runtimeApi =
       rt.wireProtocol === undefined ? undefined : wireProtocolToPiApi(rt.wireProtocol);
     // Protocol authority, in order: per-model override, explicit endpoint default,
@@ -1256,7 +1278,7 @@ export function buildPiNativeProvidersFromConfigs(
             : bundledModel?.api === modelApi
               ? bundledModel.baseUrl
               : undefined;
-        return {
+        const spec = {
           id: m.id,
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
@@ -1293,6 +1315,9 @@ export function buildPiNativeProvidersFromConfigs(
             ? { samplingParams: structuredClone(bundledModel.samplingParams) }
             : {}),
         };
+        return managedOllama && shouldApplyQwen38Overlay(m.id)
+          ? applyQwen38NativeOverlay(spec)
+          : spec;
       }),
     });
   }
@@ -1372,9 +1397,10 @@ export async function buildXaiPiNativeProvider(
         ),
       })),
     id: `xai/${catalogModel.id}`,
-    // Keep the xai/ prefix on the wire so the existing compat proxy selects its Responses
-    // bridge, which refreshes OAuth per request, recovers 401/403, and injects x_search.
-    api: 'anthropic-messages' as const,
+    wireId: catalogModel.id,
+    // Keep the exact API from Pi's catalog. The host forwarder authenticates and forwards both
+    // native shapes without sending the request through the Claude Messages bridge.
+    api: catalogModel.piApi ?? officialById.get(catalogModel.id)?.api ?? 'openai-responses',
   }));
   const aliases = Object.fromEntries(
     catalogModels.flatMap((candidate) => [
@@ -1390,7 +1416,12 @@ export async function buildXaiPiNativeProvider(
       }
       // Resume compatibility only: preserve the historical id and route it through the same
       // proxy without asserting unverified vision/reasoning capabilities or publishing it.
-      models.push({ id: namespacedModel, name: namespacedModel, api: 'anthropic-messages' });
+      models.push({
+        id: namespacedModel,
+        wireId: piNativeModelId('xai', namespacedModel),
+        name: namespacedModel,
+        api: 'openai-responses',
+      });
       aliases[model] = namespacedModel;
       aliases[piNativeModelId('xai', model)] = namespacedModel;
     }
@@ -1405,10 +1436,10 @@ export async function buildXaiPiNativeProvider(
               const endpoint = new URL(getClaudeEndpoint());
               endpoint.hostname = '127.0.0.1';
               endpoint.port = String(PI_XAI_COMPAT_FORWARD_PORT);
-              return endpoint.toString().replace(/\/$/, '');
+              return appendEndpointPath(endpoint.toString(), 'v1');
             })()
-          : getClaudeEndpoint(),
-        api: 'anthropic-messages',
+          : appendEndpointPath(getClaudeEndpoint(), 'v1'),
+        api: 'openai-responses',
         apiKeyEnvVar: PI_XAI_PROXY_API_KEY_ENV,
         headers: {
           'x-cindy-pi-session-id': `$${PI_SESSION_ID_ENV}`,
@@ -1452,10 +1483,21 @@ export async function resolvePiNativeProviders(ctx: {
     // before the process snapshots its global skills. Remote Pi has a different HOME/root.
     await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
   }
+  const compatProxyReady = isAnthropicCompatProxyHandleReady();
+  const selectedOfficialXai =
+    ctx.providerId === 'xai' || (ctx.providerId == null && isExclusiveXaiModelId(ctx.model));
+  if (selectedOfficialXai && !compatProxyReady) {
+    log.error('resolvePiNativeProviders: SuperGrok requires the local compat proxy', {
+      providerId: ctx.providerId ?? null,
+      model: ctx.model,
+      remoteHostId: ctx.remoteHostId ?? null,
+    });
+    throw new PiNativeProviderProxyNotReadyError();
+  }
   const piBinaryPath = resolvePiBinaryPath();
   const bundledModels = piBinaryPath ? await readPiBundledModels(piBinaryPath) : null;
   let subscriptions: PiNativeProvidersResult = { providers: [], env: {} };
-  if (!ctx?.remoteHostId && isAnthropicCompatProxyHandleReady()) {
+  if (!ctx?.remoteHostId && compatProxyReady) {
     const retainedOpenAiModel =
       ctx.resumeSessionId && ctx.providerId === 'openai'
         ? resolvePiRuntimeModelDescriptor(getActiveCatalog(), 'openai', ctx.model, {
@@ -1482,6 +1524,13 @@ export async function resolvePiNativeProviders(ctx: {
     );
   }
   const isRemote = Boolean(ctx.remoteHostId);
+  if (!isRemote && ctx.providerId === MANAGED_OLLAMA_PROVIDER_ID) {
+    await ensureManagedOllamaReadyForSession({
+      providerId: ctx.providerId,
+      remoteHostId: ctx.remoteHostId ?? null,
+      userDataDir: app.getPath('userData'),
+    });
+  }
   // 远端会话:本地 loopback 端点(本机 Ollama/vLLM)远端够不到。
   // 轮 42 P2(codex-connector):**不再 pre-filter 掉** —— 让 PiAgent 的
   // [REMOTE_LOCAL_ONLY_PROVIDER] guard 显式拒绝, 用户才能拿到带行动指引的
@@ -1511,9 +1560,10 @@ export async function resolvePiNativeProviders(ctx: {
   // SuperGrok provenance/forwarding path there; locally the version-matched PI
   // native provider above remains the protocol authority.
   // inheritModels xai 现在带占位 apiKey,Pi getAvailable() 才能看见 grok-4.6。
-  // 不要再塞一份 overlay xai:reserved id 会被改名成 cindy-byom-xai,Messages
-  // 请求打到 PI native handler 会 404 Unsupported PI subscription endpoint。
+  // 不要再塞一份 overlay xai:reserved id 会被改名成 cindy-byom-xai；
+  // 请求打到 PI native handler 会走错误的 provider 身份并返回 404。
   if (
+    compatProxyReady &&
     !subscriptions.providers.some((provider) => provider.id === 'xai') &&
     (ctx.providerId === 'xai' || hasGrokOAuthLogin())
   ) {
@@ -1579,6 +1629,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     logger: opts.logger,
     turnChangeCapture: opts.turnChangeCapture,
     registerLocalAgentProcess: opts.registerLocalAgentProcess,
+    spawnPiSubagentRunner,
     derivePiProxySessionToken,
     capabilityAdditions: opts.capabilityAdditions,
     reviewAutoPermissionAction: opts.reviewAutoPermissionAction,

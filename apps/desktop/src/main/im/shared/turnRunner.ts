@@ -154,6 +154,18 @@ import {
   changeSessionPermissionMode,
   type PermissionModeChangeResult,
 } from './permissionModeControl';
+import { enqueueAskCardPatch } from './askCardPatchQueue';
+import { needsAskMultiCard } from './interactionCardModel';
+
+/**
+ * ask 多题/多选打勾卡的登记附加项: 原始问题 + 空勾选态。cardActionHandler 的
+ * ask:multi 按键按问题下标改写勾选态并原地重建卡片, 提交时据此合成 answers。
+ * v1 单问卡不登记(卡上没有 ask:multi 按钮, 附加项无人消费)。
+ */
+function askMultiExtras(req: InteractionRequest) {
+  if (req.kind !== 'ask_user_question' || !needsAskMultiCard(req)) return undefined;
+  return { askQuestions: req.questions, askSelections: new Map<number, Set<number>>() };
+}
 
 const PRE_DISPATCH_ACK_CLEANUP_TIMEOUT_MS = 1500;
 /** SESSION_RUNNING 竞态 / desktop turn 仍在跑时的兜底重试间隔。 */
@@ -1766,7 +1778,7 @@ export function createTurnRunner(
               toolName: req.toolName,
               permissionCard: { title: spec.title ?? '', body: spec.body },
             }
-          : undefined,
+          : askMultiExtras(req),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2140,9 +2152,8 @@ export function createTurnRunner(
    * 投递给 streaming handle, 让 finalize 时跟文本里的 markdown 图一起
    * upload + 拼到卡片上。
    *
-   * 这是 IM 端"画了图却看不到"的修复入口 — art image_generate 工具按设计
-   * 不让模型在文本里嵌 xdt-image markdown (避免 desktop 渲染重复), 所以 IM
-   * 端拿不到图的唯一通路就是从这里 sidechannel 把图 URL 接走。
+   * 这是媒体工具结果的可靠兜底。Agent 最终回复若也用 markdown 引用了同一张图，
+   * materializeTurnLocalImages 会按真实路径去重并清理正文引用，渠道最终只发一份。
    */
   function handleToolResultFullEvent(turn: TurnState, event: AgentEvent): void {
     const data = event.data as { fullText?: unknown } | null;
@@ -2445,12 +2456,16 @@ export function createTurnRunner(
     if (!cancelled) return false;
     const notice = adapter.interactionExpiredNotice;
     if (!notice || !richIm) return true;
-    void richIm
-      .updateInteractiveCard(cancelled.messageId, cards.buildResolvedCard(notice))
-      .catch((err: unknown) => {
+    const messageId = cancelled.messageId;
+    const im = richIm;
+    void enqueueAskCardPatch(requestId, async () => {
+      try {
+        await im.updateInteractiveCard(messageId, cards.buildResolvedCard(notice));
+      } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`dropped interaction card cleanup failed (non-fatal): ${msg}`);
-      });
+      }
+    });
     return true;
   }
 
@@ -3214,7 +3229,7 @@ export function createTurnRunner(
                 toolName: req.toolName,
                 permissionCard: { title: spec.title ?? '', body: spec.body },
               }
-            : undefined,
+            : askMultiExtras(req),
         );
         return decision;
       } catch (err) {

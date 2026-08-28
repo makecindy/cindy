@@ -26,6 +26,10 @@ describe('passive shared-userData instance auth isolation', () => {
     resolve(process.cwd(), 'src/main/authManager.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const bootstrapSource = readFileSync(
+    resolve(process.cwd(), 'src/main/bootstrap-electron.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   const sliceBody = (startAnchor: string, endAnchor: string): string => {
     const start = authSource.indexOf(startAnchor);
@@ -152,6 +156,70 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(authSource).toContain('passiveLocalSignOut = false;');
   });
 
+  it('稳定登录的 passive initialize 不修复或消费本机 owner 预留', () => {
+    const start = authSource.indexOf('// This owner is already durably authenticated.');
+    const end = authSource.indexOf(
+      'migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);',
+      start,
+    );
+    const body = authSource.slice(start, end);
+
+    const passiveGuard = body.indexOf('if (!isPassiveSharedUserDataInstance()) {');
+    const repair = body.indexOf('repairStableCloudOwnerDataReservations(currentUser.id);');
+    expect(passiveGuard).toBeGreaterThan(-1);
+    expect(repair).toBeGreaterThan(passiveGuard);
+    expect(body.indexOf('commitCloudAppSession(currentUser.id);')).toBeGreaterThan(repair);
+
+    const migrationHelper = sliceBody(
+      'async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Promise<void> {',
+      '\n}\n',
+    );
+    expect(migrationHelper).toContain('if (isPassiveSharedUserDataInstance()) return;');
+
+    const beforeEnsureReadyStart = bootstrapSource.indexOf('beforeEnsureReady: async (userId) => {');
+    const beforeEnsureReadyEnd = bootstrapSource.indexOf('\n    },\n    onReady:', beforeEnsureReadyStart);
+    const beforeEnsureReady = bootstrapSource.slice(beforeEnsureReadyStart, beforeEnsureReadyEnd);
+    const dbPassiveGuard = beforeEnsureReady.indexOf(
+      'if (authManager.isPassiveSharedUserDataInstance()) {',
+    );
+    expect(dbPassiveGuard).toBeGreaterThan(-1);
+    const passivePreflight = beforeEnsureReady.indexOf(
+      'inspectPassiveLocalProfileAdoption(',
+      dbPassiveGuard,
+    );
+    expect(passivePreflight).toBeGreaterThan(dbPassiveGuard);
+    const passiveDepsEnd = beforeEnsureReady.indexOf('\n          ),', passivePreflight);
+    const passiveDeps = beforeEnsureReady.slice(passivePreflight, passiveDepsEnd);
+    expect(passiveDeps).toContain('() => hasExclusiveSharedLegacyUserDataAccess()');
+    expect(
+      beforeEnsureReady.indexOf("if (passivePreflight.status === 'required')", passivePreflight),
+    ).toBeGreaterThan(passivePreflight);
+    expect(beforeEnsureReady.indexOf('throw new Error(', passivePreflight)).toBeGreaterThan(
+      passivePreflight,
+    );
+    const exclusiveAdoptionGate = beforeEnsureReady.lastIndexOf(
+      '() => hasExclusiveSharedLegacyUserDataAccess()',
+    );
+    expect(exclusiveAdoptionGate).toBeGreaterThan(dbPassiveGuard);
+    expect(beforeEnsureReady.indexOf('runLegacyUserDataMigrationForUser(user.id)')).toBeGreaterThan(
+      dbPassiveGuard,
+    );
+    expect(beforeEnsureReady.indexOf('adoptLocalProfileDatabase(')).toBeGreaterThan(
+      dbPassiveGuard,
+    );
+    expect(exclusiveAdoptionGate).toBeGreaterThan(
+      beforeEnsureReady.indexOf('adoptLocalProfileDatabase('),
+    );
+    const adoptionFailure = beforeEnsureReady.indexOf(
+      "if (localProfileMigration.status === 'failed') {",
+    );
+    expect(adoptionFailure).toBeGreaterThan(dbPassiveGuard);
+    expect(beforeEnsureReady.indexOf('throw new Error(', adoptionFailure)).toBeGreaterThan(
+      adoptionFailure,
+    );
+    expect(beforeEnsureReady).not.toContain('continuing with cloud database');
+  });
+
   it('relogin marker:passive 不消费整机一份的 marker,也不删 primary 的 token', () => {
     const start = authSource.indexOf('const reloginFlag = readReloginFlag();');
     const end = authSource.indexOf('// Old Feishu-auth refresh tokens', start);
@@ -233,11 +301,8 @@ describe('passive shared-userData instance auth isolation', () => {
     const acceptStart = authSource.indexOf('async function acceptLoginOutcome(');
     const acceptEnd = authSource.indexOf('\n}\n\nasync function runLoginAction', acceptStart);
     const acceptBody = authSource.slice(acceptStart, acceptEnd);
-    const acceptGuard = acceptBody.indexOf('if (!isPassiveSharedUserDataInstance()) {');
-    expect(acceptGuard).toBeGreaterThan(-1);
-    expect(acceptBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
-      acceptGuard,
-    );
+    expect(acceptBody).not.toContain('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);');
+    expect(acceptBody).not.toContain('commitWithClearedAccountDeletionReceipt(');
 
     const completeStart = authSource.indexOf('async function completeLogin(');
     const completeEnd = authSource.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
@@ -247,10 +312,16 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(completeBody.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(
       completeGuard,
     );
-    expect(completeBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
-      completeGuard,
-    );
+    expect(completeBody).toContain('commitWithClearedAccountDeletionReceipt(() => {');
     expect(completeBody.indexOf('clearReloginFlag();')).toBeGreaterThan(completeGuard);
+
+    const receiptCommit = sliceBody(
+      'function commitWithClearedAccountDeletionReceipt(commit: () => void): void {',
+      '\n}\n',
+    );
+    expect(receiptCommit).toContain(
+      'if (isPassiveSharedUserDataInstance()) return commit();',
+    );
   });
 
   it('冷启动确定性失效:passive 不删盘,非 passive 也只做 compare-and-delete', () => {

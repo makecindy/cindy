@@ -202,6 +202,7 @@ export function useVoiceInputSettings(): {
   addDictionaryEntry: (text: string) => Promise<boolean>;
   importDictionaryEntries: (texts: string[]) => Promise<boolean>;
   renameDictionaryEntry: (entryId: string, text: string) => Promise<boolean>;
+  editDictionaryEntry: (entryId: string, text: string, aliases: string[]) => Promise<boolean>;
   deleteDictionaryEntry: (entryId: string) => Promise<boolean>;
   recordDictionaryLearningActions: (actions: DictationDictionaryLearningAction[]) => void;
   setShortcut: (shortcut: VoiceInputShortcut | null) => Promise<VoiceInputShortcutUpdateResult>;
@@ -309,6 +310,14 @@ export function useVoiceInputSettings(): {
     [runDictionaryMutation],
   );
 
+  const editDictionaryEntry = useCallback(
+    (entryId: string, text: string, aliases: string[]) =>
+      runDictionaryMutation(() =>
+        window.electronAPI.voiceInput.editDictionaryEntry(entryId, text, aliases),
+      ),
+    [runDictionaryMutation],
+  );
+
   const deleteDictionaryEntry = useCallback(
     (entryId: string) =>
       runDictionaryMutation(() => window.electronAPI.voiceInput.deleteDictionaryEntries([entryId])),
@@ -368,6 +377,7 @@ export function useVoiceInputSettings(): {
     addDictionaryEntry,
     importDictionaryEntries,
     renameDictionaryEntry,
+    editDictionaryEntry,
     deleteDictionaryEntry,
     recordDictionaryLearningActions,
     setShortcut,

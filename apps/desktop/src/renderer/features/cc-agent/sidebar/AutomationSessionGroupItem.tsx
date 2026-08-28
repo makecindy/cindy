@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, EllipsisVertical, Play } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -29,13 +29,23 @@ import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBindi
 import { hasSessionSelectionModifier, SessionItem } from './SessionItem';
 import type { SessionClickHandler } from './SessionItem';
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from './menuStyles';
-import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
-import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import {
+  useSessionAttentionUrgency,
+  useSessionsAttentionUrgencyIdSet,
+} from '../contexts/SessionAttentionUrgencyContext';
+import { useSessionAttentionKind, useSessionsAttentionKindMap } from '@/lib/sessionAttentionStore';
+import { useRemoteSessionsPhaseMap } from '@/features/device-link/remoteSessionActivityStore';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import {
   projectSidebarSessionActivity,
   resolveSidebarRightStatus,
+  type SidebarRightStatusKind,
 } from './sidebarRightStatus';
+import {
+  resolveCollapsedAttention,
+  resolveCollapsedGroupHeaderSessionId,
+  resolveCollapsedGroupRightStatus,
+} from './projectCollapsedAttention';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SessionCard } from './SessionCard';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
@@ -122,8 +132,15 @@ export function AutomationSessionGroupItem({
     }
     toggleStoredCollapsed();
   }, [collapsed, onCollapsedChange, toggleStoredCollapsed]);
-  // 轴 2:展开后运行列表内部的「前 5 条 / 显示全部」临时态,离开自动收回。
+  // 轴 2:运行列表内部的「前 5 条 / 显示全部」临时态,离开自动收回。
+  // 收起告警列表和展开历史列表共用这一份状态,所以切折叠必须复位 —— 否则
+  // 收起态点过「显示全部」再展开会一次摊开整组历史(Codex #3184),对称地,
+  // 展开态点过「显示全部」再收起也会把整组历史带进告警列表。复位挂在
+  // collapsed 变化上,覆盖 chevron 与父层「收起所有分组」,不只一条点击路径。
   const [showAll, setShowAll] = useState(false);
+  useLayoutEffect(() => {
+    setShowAll(false);
+  }, [collapsed]);
   const [frozen, setFrozen] = useState<FrozenGroupState | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [rowTooltipOpen, setRowTooltipOpen] = useState(false);
@@ -133,6 +150,46 @@ export function AutomationSessionGroupItem({
   // 变化才变,天然稳定,无需再靠 frozen 快照固定"代表会话"。
   const latestSession = useMemo(() => getAutomationGroupLatestSession(group), [group]);
   const latestSessionId = latestSession?.id;
+  // ── 收起态的整组汇总 ────────────────────────────────────────────────────────
+  // 组头收起时代表的是**整组**,不能只反映最新一条:组内任意一条运行留下未处理告警
+  // (典型是被 App 重启打断、turn 从未收尾的运行)时,项目折叠头会按全部子任务汇总出
+  // 红点,而此前组头只看最新一条、收起态子行又整片不渲染 —— 于是「项目行有红点、
+  // 展开后哪一行都没有」。判据复用项目折叠头那一份(resolveCollapsedAttention),
+  // 红点与被提上来的告警行同源,两者不可能再打架。
+  // 三个 hook 都是"一组 id"的 primitive 快照订阅(组外会话变化、组内不改变本组结果的
+  // 变化都不唤醒本组件),不要退回整表 / 整集订阅 —— 每个项目下都有若干组头在挂载。
+  const groupSessionIds = useMemo(
+    () => group.sessions.map((session) => session.id),
+    [group.sessions],
+  );
+  const groupAttentionKinds = useSessionsAttentionKindMap(groupSessionIds);
+  const groupUrgentSessionIds = useSessionsAttentionUrgencyIdSet(groupSessionIds);
+  const groupRemotePhases = useRemoteSessionsPhaseMap(groupSessionIds);
+  const collapsedAttention = useMemo(
+    () =>
+      resolveCollapsedAttention({
+        sessions: group.sessions,
+        runningSessionIds,
+        notifications,
+        attentionKinds: groupAttentionKinds,
+        urgentSessionIds: groupUrgentSessionIds,
+        remotePhaseOf: (sessionId) => groupRemotePhases.get(sessionId),
+      }),
+    [
+      group.sessions,
+      groupAttentionKinds,
+      groupRemotePhases,
+      groupUrgentSessionIds,
+      notifications,
+      runningSessionIds,
+    ],
+  );
+  const alertSessionIds = useMemo(
+    () => new Set(collapsedAttention.errorSessionIds),
+    [collapsedAttention],
+  );
+  // 与组头红/绿未读点同源:没有未读就不提供「标为已读」,避免空操作占菜单。
+  const canMarkRead = collapsedAttention.tone != null;
   // childView 的 24h 豁免依赖实时 now,必须每次渲染直接算,不能进 useMemo —— 否则依赖项
   // 不变时时间窗口会被冻结,跨过 24h 阈值的运行不会及时移出豁免。与普通对话列表
   // SessionEntryList 一致(它也是 render 内直接算 getSessionListCollapseView、不 memo);
@@ -145,20 +202,24 @@ export function AutomationSessionGroupItem({
     frozenVisibleSessionIds: frozen?.visibleSessionIds ?? null,
     // 实时 now:启用「最近 24h 内有活动不折叠」豁免,和普通对话列表一致。
     nowMs: Date.now(),
+    collapsed,
+    alertSessionIds,
   });
-  // 轴 1 收起时藏掉全部子运行(只留组头);展开时才交给轴 2 的「前 5 / 显示全部」。
-  const visibleSessions = collapsed ? [] : childView.visibleSessions;
-  const attentionCount = group.attentionSessionIds.filter((id) => notifications.has(id)).length;
-  // 组头右侧状态图标来源(全端统一 5 档色表:error 红 > awaiting TapTap 蓝 >
+  // 轴 1 收起时只留组头 + 被提上来的告警行;展开时交给轴 2 的「前 5 / 显示全部」。
+  // 两种形态都由 getAutomationGroupChildView 一处决定(见该函数的 ⚠️)。
+  const visibleSessions = childView.visibleSessions;
+  // 组头右侧状态图标的**基线**来源(全端统一 5 档色表:error 红 > awaiting TapTap 蓝 >
   // running spinner > 完成未读绿 > time),两路信号都只看「最新一条」运行:
   //   1. SessionAttentionUrgencyContext:该 run 是失败 schedule run(attentionKind 缺失
   //      但语义等同 error)→ 红
   //   2. sessionAttentionStore kind:该 run 有 chat 侧 urgent attention
   //      (错误终止 → 红;pending ask-user / 权限 → 蓝)
-  // 组头状态 = 组内「最新一条」运行的状态(不再跨组聚合):折叠态下组头只代表最新那条,
-  // 点击也打开它,状态/loading 与其保持一致。两个 hook 都按 latestSessionId 精准订阅
-  // (boolean / kind primitive 快照),只有最新那条的 attention/urgency 翻转才唤醒本组件
-  // (性能不变量,别退回整组 / 整张表订阅)。
+  // 组头是「最新一条运行的代理」:点击打开它,loading / vendor 呼吸与其一致。展开态右侧
+  // 状态就到此为止;**收起态**再叠一层整组汇总(上方 collapsedAttention +
+  // resolveCollapsedGroupRightStatus)—— 此时组头代表整组,组内任何一条的未处理告警都必须
+  // 露出来,否则会重演「项目折叠头有红点、展开却哪一行都没有」。
+  // 这两个 hook 仍按 latestSessionId 精准订阅(boolean / kind primitive 快照),整组那三个
+  // 也都是"一组 id"的 primitive 快照 —— 别退回整组对象 / 整张表订阅(性能不变量)。
   const latestUrgentFromSchedule = useSessionAttentionUrgency(latestSessionId ?? '');
   const latestChatKind = useSessionAttentionKind(latestSessionId ?? '');
   const latestLiveActivity = useAgentIslandActivity(latestSessionId ?? '');
@@ -185,6 +246,8 @@ export function AutomationSessionGroupItem({
   // 组头右侧状态槽复用 SessionItem 的 5 档色表(error 红 / awaiting 蓝 / running spinner /
   // done 绿 / time 文字):四个 input 全部取「最新一条」运行,送进同一 resolveSidebarRightStatus,
   // 于是组头右侧状态与最新 session 子行像素级一致(色号 / 图标尺寸 / 判定完全同源)。
+  // 收起态在这个基线之上叠整组汇总,见下方 groupRightStatusKind —— 色表与图标不变,
+  // 只是档位改由整组决定。
   const latestHasNotification = latestSessionId != null && notifications.has(latestSessionId);
   const groupActivity = projectSidebarSessionActivity({
     sessionId: latestSessionId ?? '',
@@ -196,7 +259,14 @@ export function AutomationSessionGroupItem({
     isRunning,
     hasAttentionNotification: latestHasNotification,
   });
-  const groupRightStatusKind = resolveSidebarRightStatus(groupActivity);
+  // 收起态按整组汇总补足组头(展开态仍严格只看最新一条),判据见
+  // resolveCollapsedGroupRightStatus。isRunning 与 vendor / Timer 呼吸不受影响,仍跟
+  // 最新一条 —— 保住「loading 与最新 session 一致」那条既有裁决。
+  const groupRightStatusKind: SidebarRightStatusKind = resolveCollapsedGroupRightStatus({
+    collapsed,
+    latestKind: resolveSidebarRightStatus(groupActivity),
+    tone: collapsedAttention.tone,
+  });
   const showRightStatus = groupRightStatusKind !== 'time';
   const actionButtonToneClassName = hasActiveHidden
     ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
@@ -219,9 +289,13 @@ export function AutomationSessionGroupItem({
   freezeCurrentLayoutRef.current = freezeCurrentLayout;
   const showAllRef = useRef(showAll);
   showAllRef.current = showAll;
+  // 收起态点告警行不冻结:冻结快照会把"当时可见的行"锁成布局,而收起态可见的只有
+  // 告警行 —— 之后用户展开这个组会看到被锁住的两三条告警行而不是正常的前 5 条运行。
+  const collapsedRef = useRef(collapsed);
+  collapsedRef.current = collapsed;
   const handleChildSessionClick = useCallback<SessionClickHandler>(
     (id, modifiers) => {
-      if (!showAllRef.current && !hasSessionSelectionModifier(modifiers)) {
+      if (!collapsedRef.current && !showAllRef.current && !hasSessionSelectionModifier(modifiers)) {
         freezeCurrentLayoutRef.current(id);
       }
       onSessionClick(id, modifiers);
@@ -330,14 +404,18 @@ export function AutomationSessionGroupItem({
     [countdownText, runCountText, stoppedText],
   );
 
-  // 点击空白行区域 = 点击标题,统一打开组内「最新一条」运行(需求:「点击这条自动化
-  // 折叠也打开最新的 session」)。行内可交互控件(chevron toggle / Timer logo / Run /
-  // More)在自己的 handler 里 stopPropagation,不会误触发。
+  // 点击空白行区域 = 点击标题。展开态打开最新一条;收起且整组是红时打开
+  // 贡献红点的那条。行内控件各自 stopPropagation,不会误触发。
   const openLatestSession = () => {
-    if (!latestSession) return;
+    const targetId = resolveCollapsedGroupHeaderSessionId({
+      collapsed,
+      latestSessionId,
+      attention: collapsedAttention,
+    });
+    if (!targetId) return;
     // 仅在展开 + 前 5 条态下冻结当前布局;收起态无子项可冻结。
-    if (!collapsed && !showAll) freezeCurrentLayout(latestSession.id);
-    onSessionClick(latestSession.id);
+    if (!collapsed && !showAll) freezeCurrentLayout(targetId);
+    onSessionClick(targetId);
   };
 
   return (
@@ -362,6 +440,14 @@ export function AutomationSessionGroupItem({
             标题 <button>(Tab focus + Enter/Space)天然提供。 */}
         <div
           onClick={openLatestSession}
+          onContextMenu={(event) => {
+            // 整行右键 = 打开「更多操作」同一份菜单(不再另做一份隐形锚点菜单)。
+            event.preventDefault();
+            event.stopPropagation();
+            if (!scheduleId) return;
+            setRowTooltipOpen(false);
+            setMenuOpen(true);
+          }}
           onPointerOver={(event) => {
             setRowTooltipOpen(!isAutomationGroupInlineAction(event.target));
           }}
@@ -461,8 +547,6 @@ export function AutomationSessionGroupItem({
                 // 阻止冒泡到行级 onClick(否则一次点击既切展开又打开会话)。
                 event.stopPropagation();
                 setFrozen(null);
-                // 收起文件夹时顺手复位轴 2,下次展开从「前 5 条」开始,而不是停在「显示全部」。
-                if (!collapsed) setShowAll(false);
                 toggleCollapsed();
               }}
               aria-expanded={!collapsed}
@@ -652,6 +736,14 @@ export function AutomationSessionGroupItem({
                         onClick={(event) => event.stopPropagation()}
                         className={cn(MENU_CONTENT_CLASS, 'min-w-36 overflow-hidden')}
                       >
+                        {canMarkRead && (
+                          <DropdownMenuItem
+                            onSelect={() => onScheduleAction(group, 'mark-read')}
+                            className={MENU_ITEM_CLASS}
+                          >
+                            {t('ccAgent.sidebar.automationGroup.menu.markAllAsRead')}
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
                           onSelect={() => onScheduleAction(group, 'edit')}
                           className={MENU_ITEM_CLASS}

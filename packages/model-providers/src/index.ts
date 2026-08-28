@@ -131,6 +131,7 @@ export type {
 export {
   modelDisableKey,
   isModelDisabled,
+  isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
 } from './disableOverrides.js';
 export type { ModelDisableOverrides } from './disableOverrides.js';
@@ -140,6 +141,8 @@ export type { SectionModel, ProviderSection, ModelIconKind } from './sections.js
 
 export {
   resolveEffort,
+  resolveRequestedEffort,
+  resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
   clampEffortToSupported,
   EFFORT_VALUES,

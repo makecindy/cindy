@@ -89,9 +89,9 @@ export const sessions = sqliteTable(
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
     /**
-     * 任务现状一句话摘要（sidebar-card-mode 卡片/rail flyout 展示）。
-     * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束时经 oneShot 生成,
-     * NULL = 尚未生成（非置顶会话不生成）。
+     * 任务现状一句话摘要（仅置顶段卡片模式展示/生成）。
+     * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束或置顶时经 oneShot 生成,
+     * 取消置顶时清空。NULL = 尚未生成或非卡片置顶。
      */
     summary: text('summary'),
     /**
@@ -219,6 +219,17 @@ export const sessions = sqliteTable(
      * sessionActiveTurn.ts 文件头。
      */
     lastTurnEndedAt: integer('last_turn_ended_at'),
+    /**
+     * 侧栏列表投影：已提炼的 preview 纯文本（最多 140 字）。NULL = 尚未回填，
+     * sessions:list 回落到 messages 相关子查询。不在 migration 里扫历史库。
+     */
+    listPreview: text('list_preview'),
+    listPreviewRole: text('list_preview_role'),
+    /**
+     * 侧栏「N 条消息」缓存。口径与历史 count(*) 相同（不过滤 role/rewind/clear）。
+     * 存精确总数；UI 把 ≥1001 显示成 1000+。NULL = 尚未回填。
+     */
+    listMessageCount: integer('list_message_count'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -393,6 +404,27 @@ export const messages = sqliteTable(
     // 游标分页先用 createdAt 过滤；同毫秒次序在 IPC 层用 SQLite rowid 保持写入顺序。
     idxCreatedAtId: index('idx_messages_created_at').on(t.createdAt, t.id),
     idxRewindAt: index('idx_messages_rewind_at').on(t.rewindAt),
+    idxActiveErrorTail: index('idx_messages_active_error_tail')
+      .on(t.sessionId, t.createdAt)
+      .where(sql`${t.role} = 'error' AND ${t.rewindAt} IS NULL`),
+  }),
+);
+
+/**
+ * messages_fts 的稳定整数行号映射。
+ *
+ * messages 使用 TEXT 主键，其隐藏 rowid 可能在 VACUUM 后变化，不能直接作为 FTS 的
+ * 持久关联键。这里为曾进入全文索引的消息分配独立整数键，让触发器可以通过普通 B-tree
+ * 按 message_id 找到 FTS rowid，再做定点更新或删除。
+ */
+export const messagesFtsRows = sqliteTable(
+  'messages_fts_rows',
+  {
+    ftsRowid: integer('fts_rowid').primaryKey({ autoIncrement: true }),
+    messageId: text('message_id').notNull(),
+  },
+  (t) => ({
+    byMessageId: uniqueIndex('messages_fts_rows_message_id_idx').on(t.messageId),
   }),
 );
 
@@ -432,11 +464,16 @@ export const subagentRuns = sqliteTable(
     title: text('title'),
     description: text('description'),
     summary: text('summary'),
+    /** Complete bounded terminal return; kept separate from the short summary. */
+    returnedResult: text('returned_result'),
+    returnedResultEmpty: integer('returned_result_empty'),
+    returnedResultTruncated: integer('returned_result_truncated'),
     model: text('model'),
     reasoningEffort: text('reasoning_effort'),
     totalTokens: integer('total_tokens'),
     toolUses: integer('tool_uses'),
     durationMs: integer('duration_ms'),
+    costUsd: real('cost_usd'),
     /** JSON SubagentCapabilities; optional fields are fail-closed by readers. */
     capabilities: text('capabilities').notNull().default('{}'),
     /** JSON SubagentActivityEntry[]; writer enforces count/text bounds. */
@@ -539,6 +576,7 @@ export const sessionPrRefs = sqliteTable(
  *   - schema_version                       (string，"0" / "1" / ...)
  *   - codex_history_has_product_prompt_initialized_v1 ('done')
  *   - codex_history_cindy_memory_prompt_reset_v2 ('done')
+ *   - codex_history_product_prompt_revision (current explicit revision)
  *
  * 历史 keys（只读遗留，不再写入）：cloud_migration_*——chat-data 云端迁移已随
  * 主 server 退役（2026-07），存量库里可能残留这组键，无消费方。
@@ -1060,6 +1098,39 @@ export const scheduleRuns = sqliteTable(
   },
   (t) => ({
     idxBySchedule: index('idx_schedule_runs_schedule').on(t.scheduleId, t.firedAt),
+    idxRunningSchedule: index('idx_schedule_runs_running_schedule')
+      .on(t.scheduleId)
+      .where(sql`${t.status} = 'running'`),
+    idxRunningHeartbeat: index('idx_schedule_runs_running_heartbeat')
+      .on(t.heartbeatAt)
+      .where(sql`${t.status} = 'running' AND ${t.heartbeatAt} IS NOT NULL`),
+    idxRunningLegacy: index('idx_schedule_runs_running_legacy')
+      .on(t.firedAt)
+      .where(sql`${t.status} = 'running' AND ${t.heartbeatAt} IS NULL`),
+    idxUnreadTerminal: index('idx_schedule_runs_unread_terminal')
+      .on(t.scheduleId, t.status, t.firedAt)
+      .where(
+        sql`${t.readAt} IS NULL AND ${t.status} IN ('success', 'failed', 'aborted', 'interrupted')`,
+      ),
+    idxSessionLatest: index('idx_schedule_runs_session_latest')
+      .on(t.sessionId, t.firedAt, t.id)
+      .where(sql`${t.sessionId} IS NOT NULL`),
+  }),
+);
+
+export const scheduleSessionLatestRuns = sqliteTable(
+  'schedule_session_latest_runs',
+  {
+    sessionId: text('session_id')
+      .primaryKey()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    runId: text('run_id')
+      .notNull()
+      .references(() => scheduleRuns.id, { onDelete: 'cascade' }),
+    firedAt: integer('fired_at').notNull(),
+  },
+  (t) => ({
+    idxRun: uniqueIndex('idx_schedule_session_latest_runs_run').on(t.runId),
   }),
 );
 

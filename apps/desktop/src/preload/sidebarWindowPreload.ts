@@ -310,6 +310,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workdir: string | null;
       remoteHostId: string | null;
       deviceLinkDeviceId?: string | null;
+      subagentsAvailable?: boolean;
       available: boolean;
     } | null> => ipcRenderer.invoke('maker:rsb-window:get-context'),
     /** 瀛橀噺灏辩华鎻℃墜 鈫?鏄犲皠鍒?renderer-ready(renderer shell 宸叉寕杞?銆?*/
@@ -329,6 +330,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         workdir: string | null;
         remoteHostId: string | null;
         deviceLinkDeviceId?: string | null;
+        subagentsAvailable?: boolean;
         available: boolean;
       }) => void,
     ): (() => void) => onPayload('maker:push:rsb-window:context-changed', cb),
@@ -411,8 +413,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // shared makerChatStore. Do not expose the primary window's full DB API.
     sessions: {
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get', id),
-      list: (limit?: number, status?: string): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:sessions:list', limit, status),
+      list: (limit?: number, status?: string, options?: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:sessions:list', limit, status, options),
       resolveReferences: (sessionIds: string[]): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:resolve-references', sessionIds),
       ackInterrupted: (id: string): Promise<void> =>
@@ -454,6 +456,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     subagentRuns: {
       list: (input: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:subagent-runs:list', input),
       detail: (input: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:subagent-runs:detail', input),
+      transcript: (input: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:subagent-runs:transcript', input),
       onChanged: (cb: (payload: unknown, ownerStamp?: unknown) => void): (() => void) => onPayloadWithMetadata('local-db:subagent-runs:changed', cb),
     },
     orcaWorkflows: {
@@ -533,6 +536,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:session-background-tasks:list', sessionId),
     stopAgentTask: (sessionId: string, taskId: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:agent-task:stop', sessionId, taskId),
+    controlPiSubagent: (input: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('maker:pi-subagent:control', input),
     getPendingInteractions: (sessionId: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-pending-interactions', sessionId),
     iosSimulator: {
