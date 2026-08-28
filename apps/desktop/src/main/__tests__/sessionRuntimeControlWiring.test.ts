@@ -157,6 +157,8 @@ describe('session runtime control wiring', () => {
     expect(grantUpdate).toContain('persist: (patch) => persistSessionFields(sessionId, patch)');
     expect(grantUpdate).toContain('terminate: () => maker.closeSession(sessionId)');
     expect(grantUpdate).toContain('markRemoteSettingPersistedInsideHandler(result.dirs)');
+    expect(grantUpdate).toContain('options.remote || route?.remoteHostId');
+    expect(grantUpdate).toContain('isPersistedDirectoryGrantSubset(accepted, previousDirs)');
     expect(extraDirs).toContain("applyDirectoryGrants('extraDirs'");
     expect(writableDirs).toContain("applyDirectoryGrants('writableDirs'");
     expect(writableDirs).toContain('senderId: event.sender.id');

@@ -20,6 +20,15 @@ export interface RemoteDirectoryGrantUpdateResult {
   rejectedCount: number;
 }
 
+/** Remote executors have no native picker on the controller; only retain/revoke exact grants. */
+export function isPersistedDirectoryGrantSubset(
+  requested: readonly string[],
+  persisted: readonly string[],
+): boolean {
+  const allowed = new Set(persisted);
+  return requested.every((directory) => allowed.has(directory));
+}
+
 /**
  * Apply one directory-grant axis while the caller holds the session route lock.
  * Both persisted axes are read inside that lock, so a concurrent controller validates

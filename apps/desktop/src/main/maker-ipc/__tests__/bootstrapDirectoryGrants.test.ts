@@ -48,7 +48,10 @@ describe('prepareDirectoryGrantsForBootstrap', () => {
     const opts = createOpts(workspace, [specs], [shared, output]);
     const persistExistingSession = vi.fn(async () => {});
 
-    await prepareDirectoryGrantsForBootstrap(opts, { persistExistingSession });
+    await prepareDirectoryGrantsForBootstrap(opts, {
+      readPersistedWritableDirs: async () => [shared, output],
+      persistExistingSession,
+    });
 
     expect(opts.extraDirs).toEqual([specs]);
     expect(opts.writableDirs).toEqual([output]);
@@ -58,7 +61,7 @@ describe('prepareDirectoryGrantsForBootstrap', () => {
     });
   });
 
-  it('filters a symlink alias before a new session runtime starts even when no row exists yet', async () => {
+  it('drops caller-supplied writable roots when no persisted session grant exists', async () => {
     const { root, workspace, shared, specs, output } = makeGrantTree();
     const sharedAlias = path.join(root, 'shared-alias');
     symlinkSync(shared, sharedAlias, 'dir');
@@ -67,10 +70,27 @@ describe('prepareDirectoryGrantsForBootstrap', () => {
       // Direct maker:create-session has no SQLite row until maker-core creates it.
     });
 
-    await prepareDirectoryGrantsForBootstrap(opts, { persistExistingSession });
+    await prepareDirectoryGrantsForBootstrap(opts, {
+      readPersistedWritableDirs: async () => [],
+      persistExistingSession,
+    });
 
-    expect(opts).toMatchObject({ extraDirs: [specs], writableDirs: [output] });
-    expect(persistExistingSession).toHaveBeenCalledOnce();
+    expect(opts).toMatchObject({ extraDirs: [specs], writableDirs: [] });
+    expect(persistExistingSession).not.toHaveBeenCalled();
+  });
+
+  it('replaces a caller-supplied writable root with the persisted grant before bootstrap', async () => {
+    const { workspace, output } = makeGrantTree();
+    const opts = createOpts(workspace, [], [workspace]);
+    const persistExistingSession = vi.fn(async () => {});
+
+    await prepareDirectoryGrantsForBootstrap(opts, {
+      readPersistedWritableDirs: async () => [output],
+      persistExistingSession,
+    });
+
+    expect(opts.writableDirs).toEqual([output]);
+    expect(persistExistingSession).not.toHaveBeenCalled();
   });
 
   it('fails closed before runtime creation when narrowing the persisted grants fails', async () => {
@@ -79,6 +99,7 @@ describe('prepareDirectoryGrantsForBootstrap', () => {
 
     await expect(
       prepareDirectoryGrantsForBootstrap(opts, {
+        readPersistedWritableDirs: async () => [shared],
         persistExistingSession: vi.fn(async () => {
           throw new Error('sqlite unavailable');
         }),
@@ -95,12 +116,14 @@ describe('prepareDirectoryGrantsForBootstrap', () => {
     const firstBoot = createOpts(workspace, stored.extraDirs, stored.writableDirs);
 
     await prepareDirectoryGrantsForBootstrap(firstBoot, {
+      readPersistedWritableDirs: async () => stored.writableDirs,
       persistExistingSession: firstPersist,
     });
 
     const restartPersist = vi.fn(async () => {});
     const restarted = createOpts(workspace, stored.extraDirs, stored.writableDirs);
     await prepareDirectoryGrantsForBootstrap(restarted, {
+      readPersistedWritableDirs: async () => stored.writableDirs,
       persistExistingSession: restartPersist,
     });
 
@@ -118,7 +141,10 @@ describe('prepareDirectoryGrantsForBootstrap', () => {
     };
     const persistExistingSession = vi.fn(async () => {});
 
-    await prepareDirectoryGrantsForBootstrap(opts, { persistExistingSession });
+    await prepareDirectoryGrantsForBootstrap(opts, {
+      readPersistedWritableDirs: async () => [shared],
+      persistExistingSession,
+    });
 
     expect(opts.writableDirs).toEqual([]);
     expect(persistExistingSession).not.toHaveBeenCalled();
@@ -140,5 +166,6 @@ describe('bootstrap directory-grant wiring', () => {
       bootstrap.indexOf('await maker.createSession(o)'),
     );
     expect(bootstrap).toContain('if (existing) await persistSessionFields(sessionId, patch);');
+    expect(bootstrap).toContain('readPersistedWritableDirs: readSessionWritableDirsFromDb');
   });
 });

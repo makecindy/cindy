@@ -613,7 +613,10 @@ import {
   excludeDirectoryGrantConflicts,
   validateExtraDirs,
 } from './extraDirsValidator.js';
-import { applyRemoteDirectoryGrantUpdate } from './remoteDirectoryGrantUpdate.js';
+import {
+  applyRemoteDirectoryGrantUpdate,
+  isPersistedDirectoryGrantSubset,
+} from './remoteDirectoryGrantUpdate.js';
 import { consumeWritableDirectoryPickerGrants } from './writableDirectoryPickerGrant.js';
 import {
   prepareHandoffWorktree,
@@ -7574,6 +7577,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       o.reviewMode === true ? false : await applyProjectContextInjection(o);
 
     await prepareDirectoryGrantsForBootstrap(o, {
+      readPersistedWritableDirs: readSessionWritableDirsFromDb,
       persistExistingSession: async (sessionId, patch) => {
         const [existing] = await getDbClient()
           .drizzle.select({ id: sessions.id })
@@ -16179,13 +16183,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       readWritableDirs: () => readSessionWritableDirsFromDb(sessionId),
       excludeConflicts: async (candidates, blocked) => {
         const accepted = await excludeDirectoryGrantConflicts(candidates, blocked);
-        if (axis === 'writableDirs' && !options.remote) {
+        if (axis === 'writableDirs') {
+          const previousDirs = await readSessionWritableDirsFromDb(sessionId);
           const [route] = await getDbClient()
             .drizzle.select({ remoteHostId: sessions.remoteHostId })
             .from(sessions)
             .where(eq(sessions.id, sessionId))
             .limit(1);
-          if (!route?.remoteHostId) {
+          if (options.remote || route?.remoteHostId) {
+            // The picker lives on the controller filesystem, so device-link and SSH may only
+            // retain/revoke roots that were already persisted on the execution side.
+            if (!isPersistedDirectoryGrantSubset(accepted, previousDirs)) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'remote writable directories can only retain or revoke existing grants',
+              );
+            }
+            return accepted;
+          } else {
             if (options.senderId === undefined) {
               throwIpcError('PRECONDITION_FAILED', 'Writable directory picker owner unavailable');
             }
@@ -16194,7 +16209,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 scopeId: sessionId,
                 senderId: options.senderId,
                 requestedDirs: accepted,
-                previousDirs: await readSessionWritableDirsFromDb(sessionId),
+                previousDirs,
               });
             } catch (error) {
               throwIpcError(

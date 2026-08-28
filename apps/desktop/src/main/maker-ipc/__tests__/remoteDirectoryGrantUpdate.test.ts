@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { excludeDirectoryGrantConflicts } from '../extraDirsValidator.js';
 import {
   applyRemoteDirectoryGrantUpdate,
+  isPersistedDirectoryGrantSubset,
   type RemoteDirectoryGrantAxis,
 } from '../remoteDirectoryGrantUpdate.js';
 
@@ -38,6 +39,16 @@ function createSessionSerializer() {
 }
 
 describe('remote directory grant atomic update', () => {
+  it('accepts exact remote retention/revocation subsets and rejects additions', () => {
+    expect(isPersistedDirectoryGrantSubset([], ['/shared', '/output'])).toBe(true);
+    expect(isPersistedDirectoryGrantSubset(['/shared'], ['/shared', '/output'])).toBe(true);
+    expect(isPersistedDirectoryGrantSubset(
+      ['/shared', '/outside'],
+      ['/shared', '/output'],
+    )).toBe(false);
+    expect(isPersistedDirectoryGrantSubset(['/outside'], [])).toBe(false);
+  });
+
   it('restores runtime and persisted mirror when persistence fails', async () => {
     const state = createState(['/old-read'], ['/old-write']);
     let failNext = true;

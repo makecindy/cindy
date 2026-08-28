@@ -31,6 +31,7 @@ import type { MakerSessionCreateOpts } from './sessionRequest.js';
 type CreateOpts = MakerSessionCreateOpts;
 
 export interface BootstrapDirectoryGrantDeps {
+  readPersistedWritableDirs(sessionId: string): Promise<string[]>;
   persistExistingSession(
     sessionId: string,
     patch: { extraDirs: string[]; writableDirs: string[] },
@@ -51,7 +52,12 @@ export async function prepareDirectoryGrantsForBootstrap(
   deps: BootstrapDirectoryGrantDeps,
 ): Promise<void> {
   const requestedExtraDirs = opts.extraDirs ?? [];
-  const requestedWritableDirs = opts.writableDirs ?? [];
+  // Writable roots are a Main-owned persisted grant. CREATE_SESSION and lazy SEND payloads are
+  // renderer/device-link controlled, so bootstrap must replace them with SQLite truth.
+  const requestedWritableDirs =
+    typeof opts.id === 'string' && opts.id
+      ? await deps.readPersistedWritableDirs(opts.id)
+      : [];
   const extraValidation = await validateExtraDirs(requestedExtraDirs, opts.workingDir);
   const writableValidation = await validateExtraDirs(requestedWritableDirs, opts.workingDir);
   const extraDirs = extraValidation.valid;

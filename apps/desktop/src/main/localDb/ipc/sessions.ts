@@ -1171,7 +1171,14 @@ export function registerSessionIpc(
       || !requestedWritableDirs.every((dir) => typeof dir === 'string')) {
       throwIpcError('INVALID_PARAMS', 'writableDirs must be string[]');
     }
-    if (!normalizeRemoteHostId(createBody?.remoteHostId) && requestedWritableDirs.length > 0) {
+    const requestedRemoteHostId = normalizeRemoteHostId(createBody?.remoteHostId);
+    if (requestedRemoteHostId && requestedWritableDirs.length > 0) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'remote writable directories can only be revoked from an existing task',
+      );
+    }
+    if (!requestedRemoteHostId && requestedWritableDirs.length > 0) {
       try {
         await consumeWritableDirectoryPickerGrants({
           scopeId: id,
