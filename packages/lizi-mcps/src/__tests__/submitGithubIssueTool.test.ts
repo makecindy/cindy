@@ -70,7 +70,8 @@ describe('submit_github_issue tool', () => {
     expect(tool?.description).toContain('不要套固定问卷或章节清单');
     expect(tool?.description).toContain('普通建议不必按缺陷来问');
     expect(tool?.description).toContain('和环境无关不必追问 Harness');
-    expect(tool?.description).toContain('系统自动附加的 Harness / Model ID 是当前任务的');
+    expect(tool?.description).toContain('系统自动附加的 Harness / Model ID 是当前任务的快照');
+    expect(tool?.description).toContain('不一定是出问题的那个');
     expect(tool?.description).toContain('提交时的任务环境');
     expect(tool?.description).toContain('本工具不能把对话里的图片传到 GitHub');
     expect(tool?.description).toContain('禁止写「已提供截图」');

@@ -9719,7 +9719,7 @@
       "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
       "anonymous": "익명",
       "useAnonymous": "익명 서명 사용",
-      "envLine": "제출 시점의 세션 환경: 클라이언트 {{appVersion}} · {{platform}} {{arch}}({{osVersion}}) · 표시 언어 {{uiLanguage}}",
+      "envLine": "제출 클라이언트 환경: 클라이언트 {{appVersion}} · {{platform}} {{arch}}({{osVersion}}) · 표시 언어 {{uiLanguage}}",
       "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (지금 이 세션)",
       "regionLine": "지역: {{region}}",
       "regionCodeCn": "CN",

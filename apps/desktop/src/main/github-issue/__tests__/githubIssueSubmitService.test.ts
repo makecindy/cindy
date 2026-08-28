@@ -103,7 +103,7 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(posted.description).toContain('用户改过的正文');
     expect(posted.description).toContain('## 提交时的任务环境');
     expect(posted.description).toContain(
-      '当前任务快照,不是出问题的那个运行时。OS 来自提交客户端本机,不含 SSH 远端主机;Harness / 模型来自当前任务。与运行环境无关的反馈可忽略本段。',
+      '仅代表提交时快照,不一定是故障环境。OS 来自提交客户端本机,不含 SSH 远端主机;Harness / 模型来自当前任务。与运行环境无关的反馈可忽略本段。',
     );
     expect(posted.description).toContain('**版本区域**: CN');
     expect(posted.description).toContain('**OS**: darwin arm64 (25.5.0)');

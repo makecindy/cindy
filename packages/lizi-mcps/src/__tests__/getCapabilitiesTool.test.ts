@@ -89,7 +89,7 @@ describe('capabilities data source', () => {
     expect(entry!.detail).toContain('提交时的任务环境');
     expect(entry!.detail).toContain('不要声称截图已附');
     expect(entry!.detail).toContain('不写源码级方案');
-    expect(entry!.detail).toContain('不是出问题的那个');
+    expect(entry!.detail).toContain('不一定是出问题的那个');
     expect(entry!.detail).toContain('实际故障环境按需写进正文');
   });
 

@@ -9735,7 +9735,7 @@
       "publicNameHint": "This attribution will appear publicly in the Issue body",
       "anonymous": "Anonymous",
       "useAnonymous": "Use Anonymous Attribution",
-      "envLine": "Current task environment: client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
+      "envLine": "Submitting client environment: client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
       "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (this task)",
       "regionLine": "Build region: {{region}}",
       "regionCodeCn": "CN",

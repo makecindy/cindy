@@ -198,7 +198,7 @@ export async function submitGithubIssueWithConfirm(
     '---',
     '## 提交时的任务环境',
     '',
-    '当前任务快照,不是出问题的那个运行时。OS 来自提交客户端本机,不含 SSH 远端主机;Harness / 模型来自当前任务。与运行环境无关的反馈可忽略本段。',
+    '仅代表提交时快照,不一定是故障环境。OS 来自提交客户端本机,不含 SSH 远端主机;Harness / 模型来自当前任务。与运行环境无关的反馈可忽略本段。',
     // global 不写这一行 —— 缺失即默认区域,理由见 CINDY_REGION_CODE(与确认卡片同源)。
     ...(regionCode ? [`**版本区域**: ${regionCode}`] : []),
     `**OS**: ${env.platform} ${env.arch} (${env.osVersion})`,
