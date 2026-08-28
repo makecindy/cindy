@@ -53,8 +53,13 @@ export function fuseRRF(
 }
 
 const FTS_TOKEN_CAP = 32;
-/** 单个 token 码点数上限。连续汉字会被收成一条 phrase，不限制就会把整段 query 扩成 MATCH。 */
-const FTS_TOKEN_CHAR_CAP = 64;
+/**
+ * 单个 token 码点数上限，与 MCP schema 的 query 上限（256）对齐。连续汉字在
+ * 口径内整段保留才能整段精确召回——截成前缀会让只含前缀的消息假阳性命中
+ * （messages_fts 按字 phrase 与群历史整段 token 两条路径都是）。帽只防御
+ * 绕过 schema 的超长侧栏输入。
+ */
+const FTS_TOKEN_CHAR_CAP = 256;
 /** 最终 MATCH 表达式字符上限，挡住超长 CJK phrase 在进 SQLite 前就把 heap 打爆。 */
 const FTS_MATCH_CHAR_CAP = 2_048;
 /**
@@ -74,9 +79,9 @@ export function extractMessagesFtsTokens(query: string): string[] {
   const capped = tokens
     .map((token) => {
       const chars = [...token];
-      // 只有会按字展开的汉字 token 才截长度；Latin / 数字整段是一个 FTS token，
-      // 截断后 quoted MATCH 不再是精确命中（例如 128 位 hex）。
-      if (chars.length <= FTS_TOKEN_CHAR_CAP || !chars.some((ch) => /\p{Script=Han}/u.test(ch))) {
+      // 超长 token 截到上限防御病态输入；Latin / 数字整段保留（截断后 quoted
+      // MATCH 不再是精确命中，例如 128 位 hex）。汉字 run 在 schema 口径内整段保留。
+      if (chars.length <= FTS_TOKEN_CHAR_CAP) {
         return token;
       }
       return chars.slice(0, FTS_TOKEN_CHAR_CAP).join('');

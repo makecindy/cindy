@@ -118,6 +118,18 @@ describe('buildFtsMatch', () => {
     expect(out.startsWith('"边 ')).toBe(true);
   });
 
+  it('65~256 字连续汉字整段保留，不截成 64 字前缀', () => {
+    const query = '边'.repeat(200) + '界';
+    // messages_fts：cjk_seg 后 201 个单字相邻 phrase，整段精确召回。
+    expect(buildMessagesFtsMatch(query)).toBe(`"${'边 '.repeat(200)}界"`);
+    // 群历史整段 token：完整段 quoted 精确匹配，前缀假阳性不再出现。
+    expect(buildFtsMatch(query)).toBe(`"${query}"`);
+  });
+
+  it('超过 256 字的汉字 run 截到上限，只防御绕过 schema 的输入', () => {
+    expect(buildMessagesFtsMatch('边'.repeat(300))).toBe(`"${'边 '.repeat(255)}边"`);
+  });
+
   it('超长 Latin / 数字 token 不截断，quoted MATCH 仍是精确命中', () => {
     const hex = 'a'.repeat(128);
     expect(buildMessagesFtsMatch(hex)).toBe(`"${hex}"`);
