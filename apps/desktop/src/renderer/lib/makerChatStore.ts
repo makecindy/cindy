@@ -4233,6 +4233,11 @@ function applyInputProjection(
       : projection.error === s.error
         ? s.usageLimitRecovery
         : extractUsageLimitRecoveryHint({ message: projection.error });
+    const projectionErrorReason =
+      projection.error && typeof projection.errorReason === 'string' && projection.errorReason.length > 0
+        ? projection.errorReason
+        : null;
+    const projectionToolLoop = parseToolLoopErrorDetails(projection.toolLoop) ?? null;
     return {
       ...s,
       messages,
@@ -4246,9 +4251,10 @@ function applyInputProjection(
       error: projection.error,
       usageLimitRecovery,
       // projection 覆盖 error(dispatch 失败等,无 reason 语义)→ reason 一并清,
-      // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。
-      errorReason: null,
-      toolLoop: null,
+      // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。结构化字段同样
+      // 只在 error 仍存在时保留，并经过 parser 进行远端边界校验。
+      errorReason: projectionErrorReason,
+      toolLoop: projectionToolLoop,
       // 进入凭证切换等待态时同步清 stale recoverableError:等待中的消息永不 dispatch,
       // 没有 stream/turn-done 事件替它清 —— 残留会让视图的 error(=recoverableError
       // 回落)遮住等待横幅,复现"静默排队"(review P2 2026-07-04)。

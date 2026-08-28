@@ -69,6 +69,7 @@ import {
   deriveAutoTitleSeed,
   getAgentFacingText,
   normalizeAgentInputClearBoundaryMs,
+  parseAgentInputToolLoopDetails,
   serializeSessionReferencePayload,
   type AgentInputClearBoundaryOpts,
   type AgentInputCreateOpts,
@@ -4306,9 +4307,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const errData =
           attributedEvent.type === 'error'
             ? (attributedEvent.data as
-                | { message?: unknown; reason?: unknown; sdkError?: unknown; errorStatus?: unknown }
+                | {
+                    message?: unknown;
+                    reason?: unknown;
+                    sdkError?: unknown;
+                    errorStatus?: unknown;
+                    toolLoop?: unknown;
+                  }
                 | undefined)
             : undefined;
+        // Terminal error details cross the coordinator/device-link boundary as untrusted data.
+        // Keep only the bounded tool-loop shape; never let a provider-controlled object become
+        // live projection state or renderer interpolation.
+        const toolLoop = parseAgentInputToolLoopDetails(errData?.toolLoop);
         // 计划内 cc-mgr 升级窗口的 daemon 关闭(reason='remote_daemon_closed')是
         // 预期噪音: renderer 事件路径按同语义静默 banner, 这里同样不给 coordinator
         // 记 error —— 否则 paired-done 保留会让升级后的 projection 复现
@@ -4346,6 +4357,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               ...(typeof errData?.errorStatus === 'number'
                 ? { errorStatus: errData.errorStatus }
                 : {}),
+              ...(toolLoop ? { toolLoop } : {}),
             },
             {
               sessionTurnGeneration: event.sessionTurnGeneration,
