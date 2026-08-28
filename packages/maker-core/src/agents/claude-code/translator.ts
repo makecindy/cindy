@@ -241,13 +241,11 @@ function mainActiveSegmentHasOutput(ctx: TranslateContext): boolean {
 
 function applySubagentLiveReliability(ctx: TranslateContext): void {
   if (!ctx.rt.generation.sawSubagent) return;
-  // Live status cannot compare against result.usage yet. Parent tok/s stays
-  // reliable only while parent streamed output is present and no parent
-  // request closed without a usage frame.
-  if (
-    ctx.rt.generation.parentStreamedOutputIncomplete ||
-    mainTurnOutputTokens(ctx.tracker) <= 0
-  ) {
+  // Live status cannot compare against result.usage yet. A parent request that
+  // already closed without usage is unrecoverable. Parent output may still be
+  // in flight when a child stream arrives first — do not fail closed on 0
+  // streamed output here, or the later parent message_delta cannot restore tok/s.
+  if (ctx.rt.generation.parentStreamedOutputIncomplete) {
     markClaudeGenerationUnreliable(ctx.rt.generation);
   }
 }
@@ -1366,7 +1364,7 @@ function handleAssistant(
   // 子代理完整 assistant 没有 message_delta 时，result.usage 仍含其子输出，
   // 而父级 Agent 工具区间已从分母排除。记 sawSubagent，live tok/s 只用父级
   // streamed output，不再把整轮计时打成不可靠。
-  if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
+  if (parentToolUseId) observeClaudeSubagentStream(ctx, parentToolUseId);
   else if (!mainActiveSegmentHasOutput(ctx)) {
     noteClaudeParentStreamedOutputIncomplete(ctx.rt.generation);
   }
@@ -1516,6 +1514,21 @@ function pauseClaudeGenerationForKnownTools(ctx: TranslateContext): void {
   for (const toolUseId of ctx.rt.toolUseIdToName.keys()) {
     pauseClaudeGenerationForToolUse(ctx, toolUseId);
   }
+}
+
+/**
+ * 子代理事件到达时：父级生成时钟必须已经因对应 Agent 工具停表。
+ * 若 child 先于父级 tool_use / message_delta，用 parent_tool_use_id 作为既有
+ * pause 边界关掉父级区间，避免分母吞进子代理时间、分子却只有父级 output。
+ * 父级从未开始生成时 pause 会 fail closed（与无 message_start 的 tool_use 同款）。
+ */
+function observeClaudeSubagentStream(
+  ctx: TranslateContext,
+  parentToolUseId: string,
+): void {
+  noteClaudeSubagent(ctx.rt.generation);
+  if (ctx.rt.generation.pendingToolIds.has(parentToolUseId)) return;
+  pauseClaudeGeneration(ctx.rt.generation, parentToolUseId);
 }
 
 // ── stream_event 子分支(content_block_delta / message_delta / message_start) ──
@@ -1745,8 +1758,9 @@ function handleStreamEvent(
 
     // 不清 tracker —— message_start 在 turn 中可能出现多次(工具循环每次 API call 都会触发),
     // 老链路 agentManager.ts:2400-2407 这里也是带 currentTurn 累计, 不重置。
-    // 子代理 stream 不占用父级生成时钟；父级在 Agent 工具区间已经停表。
-    if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
+    // 子代理 stream 不占用父级生成时钟。若对应 Agent 工具尚未停表，在此用
+    // parent_tool_use_id 补上既有 pause 边界，避免分母吞进子代理时间。
+    if (parentToolUseId) observeClaudeSubagentStream(ctx, parentToolUseId);
     else beginClaudeGeneration(ctx.rt.generation);
     queue.push({
       type: 'status',

@@ -562,9 +562,155 @@ describe('claude generation pause boundaries', () => {
     );
     expect(ctx.rt.generation.reliable).toBe(true);
     expect(ctx.rt.generation.sawSubagent).toBe(true);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent')).toBe(true);
     resetClaudeGenerationTiming(ctx.rt.generation);
     queue.end();
     vi.useRealTimers();
+  });
+
+  it('closes parent generation when a child stream arrives before the parent tool pause', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    vi.setSystemTime(1_500);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent')).toBe(true);
+    expect(ctx.rt.generation.durationMs).toBe(500);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(5_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 80 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.durationMs).toBe(500);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 500 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent', content: 'child done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(5_400);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 15, output_tokens: 580 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+
+    const generating = events.filter(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
+    );
+    expect(generating.at(-1)?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: true,
+    });
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: true,
+      generationActive: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('fails closed when a child stream arrives with no parent generation interval', () => {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(false);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
   });
 
   it('excludes subagent output from parent live tok/s', async () => {
