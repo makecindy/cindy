@@ -1518,12 +1518,24 @@ export function createTurnRunner(
     mirror: IMFinalReplyMirror | undefined,
     text: string,
   ): Promise<void> {
+    await mirrorTurnFinalReply(mirror, text);
+  }
+
+  async function mirrorTurnFinalReply(
+    mirror: IMFinalReplyMirror | undefined,
+    text: string,
+    opts?: { mediaAbsPaths?: string[] },
+  ): Promise<void> {
     if (!mirror || output.kind !== 'rich-card') return;
     try {
-      await output.im.mirrorFinalReply?.(mirror, text);
+      if (opts) {
+        await output.im.mirrorFinalReply?.(mirror, text, opts);
+      } else {
+        await output.im.mirrorFinalReply?.(mirror, text);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`early-reject terminal mirror failed (non-fatal): ${msg}`);
+      log.warn(`terminal mirror failed (non-fatal): ${msg}`);
     }
   }
 
@@ -2776,6 +2788,10 @@ export function createTurnRunner(
     // 创建失败集中在此捕获并 resolve null(#2164):调用点全部是 fire-and-forget
     // 的 .then(...),各自补 rejection handler 必然遗漏;失败留下脱敏日志与
     // streamingStartFailed 标记,已生成正文由收口分支一次性降级发送。
+    // Dual-delivery parent-chat copies are armed only at true turn completion.
+    // Passing the mirror onto every streaming handle would copy pre-interaction
+    // fragments (permission / ask / plan review) with the same *-card UUID and
+    // then drop the real terminal result.
     turn.streamingHandlePromise = (async () => {
       try {
         const handle =
@@ -2785,7 +2801,6 @@ export function createTurnRunner(
               ? patchedCardHandle(turn.outputCardMessageId)
               : await output.im.startStreamingText(turn.userId, undefined, {
                   threadTs: turn.scopeKey,
-                  ...(turn.finalReplyMirror ? { finalReplyMirror: turn.finalReplyMirror } : {}),
                 });
         turn.streamingHandle = handle;
         return handle;
@@ -2898,8 +2913,8 @@ export function createTurnRunner(
       }
     }
     if (turn.streamingHandle) {
+      const finalView = composeStreamingView(turn) || '_(空回复)_';
       try {
-        const finalView = composeStreamingView(turn) || '_(空回复)_';
         await turn.streamingHandle.finalize(finalView);
       } catch (err) {
         if (output.kind === 'chunked-text') {
@@ -2910,6 +2925,11 @@ export function createTurnRunner(
           `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+      await mirrorTurnFinalReply(
+        turn.finalReplyMirror,
+        finalView,
+        turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
+      );
     } else if (turn.presenter.wholeText().length === 0) {
       // No streamed text at all — send a one-shot text so the user knows the
       // turn ended. (Rare; normally agents emit at least one text block.)
@@ -2936,21 +2956,11 @@ export function createTurnRunner(
           if (!consumed) {
             await sendTextClaimingOpener(userId, '✅ (本轮无文本输出)', state.scopeKey);
           }
-          if (turn.finalReplyMirror) {
-            try {
-              await output.im.mirrorFinalReply?.(
-                turn.finalReplyMirror,
-                '✅ (本轮无文本输出)',
-                turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-              );
-            } catch (err) {
-              log.warn(
-                `terminal mirror failed (non-fatal): ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              );
-            }
-          }
+          await mirrorTurnFinalReply(
+            turn.finalReplyMirror,
+            '✅ (本轮无文本输出)',
+            turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
+          );
         }
       } catch {
         /* swallow */
@@ -2972,21 +2982,11 @@ export function createTurnRunner(
           });
         } else {
           await output.im.sendText(userId, fallbackText, { threadTs: state.scopeKey });
-          if (turn.finalReplyMirror) {
-            try {
-              await output.im.mirrorFinalReply?.(
-                turn.finalReplyMirror,
-                fallbackText,
-                turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-              );
-            } catch (err) {
-              log.warn(
-                `terminal mirror failed (non-fatal): ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              );
-            }
-          }
+          await mirrorTurnFinalReply(
+            turn.finalReplyMirror,
+            fallbackText,
+            turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
+          );
         }
         log.info(`[${channel}/turn] streaming surface unavailable — final text delivered via plain send`);
       } catch (err) {
@@ -3050,13 +3050,18 @@ export function createTurnRunner(
       }
     }
     if (turn?.streamingHandle) {
+      const view = composeStreamingView(turn);
+      const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       try {
-        const view = composeStreamingView(turn);
-        const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
         await turn.streamingHandle.finalize(body);
       } catch {
         /* swallow */
       }
+      await mirrorTurnFinalReply(
+        turn.finalReplyMirror,
+        body,
+        turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
+      );
     } else {
       try {
         if (output.kind === 'chunked-text') {
@@ -3079,21 +3084,11 @@ export function createTurnRunner(
           if (!consumed) {
             await sendTextClaimingOpener(userId, errorText, state.scopeKey);
           }
-          if (turn?.finalReplyMirror) {
-            try {
-              await output.im.mirrorFinalReply?.(
-                turn.finalReplyMirror,
-                errorText,
-                turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-              );
-            } catch (err) {
-              log.warn(
-                `terminal mirror failed (non-fatal): ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              );
-            }
-          }
+          await mirrorTurnFinalReply(
+            turn?.finalReplyMirror,
+            errorText,
+            turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
+          );
         }
       } catch {
         /* swallow */

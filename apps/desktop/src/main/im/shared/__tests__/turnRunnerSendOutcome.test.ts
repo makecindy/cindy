@@ -2683,6 +2683,122 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(mirror, expected);
   });
 
+  it('does not arm streaming cards with the parent-chat mirror and copies only the terminal view', async () => {
+    const handle = {
+      messageId: 'stream-terminal',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-stream-done',
+    };
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({ type: 'text', data: { text: 'final answer', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledWith('ou_user', undefined, {
+      threadTs: undefined,
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.feishuIm.mirrorFinalReply.mock.calls[0][0]).toEqual({
+      ...mirror,
+      allowedFileRoots: ['F:\\XDMaker'],
+    });
+    expect(String(mocks.feishuIm.mirrorFinalReply.mock.calls[0][1])).toContain('final answer');
+  });
+
+  it('defers parent-chat mirroring across an in-turn permission card until the turn completes', async () => {
+    const firstHandle = {
+      messageId: 'stream-pre',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    const secondHandle = {
+      messageId: 'stream-post',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText
+      .mockResolvedValueOnce(firstHandle)
+      .mockResolvedValueOnce(secondHandle);
+    mocks.buildPermissionCard.mockReturnValue({
+      title: 'allow bash?',
+      body: 'run bash',
+      buttons: [{ id: 'allow', label: 'Allow' }],
+    });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'perm-card' });
+    const permissionGate = deferred<InteractionDecision>();
+    mocks.registerPending.mockReturnValue(permissionGate.promise);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-interact',
+    };
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({ type: 'text', data: { text: 'I will run bash', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledWith('ou_user', undefined, {
+      threadTs: undefined,
+    });
+
+    const interactionPromise = h.dispatchInteraction({
+      kind: 'permission',
+      requestId: 'req-perm',
+      toolName: 'bash',
+      input: { command: 'ls' },
+    });
+    await waitForAssertion(() => {
+      expect(firstHandle.finalize).toHaveBeenCalled();
+      expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalled();
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+
+    permissionGate.resolve({ kind: 'permission', behavior: 'allow' });
+    await expect(interactionPromise).resolves.toEqual({
+      kind: 'permission',
+      behavior: 'allow',
+    });
+
+    h.emit({ type: 'text', data: { text: 'command finished: ok', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(2);
+    });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(secondHandle.finalize).toHaveBeenCalled();
+      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
+    });
+    const mirroredText = String(mocks.feishuIm.mirrorFinalReply.mock.calls[0][1]);
+    expect(mirroredText).toContain('command finished: ok');
+    expect(mirroredText).not.toContain('I will run bash');
+  });
+
   it('does not report route resolution before auth passes on an existing route', async () => {
     // 群窗口游标的 commit 挂在 onRouteResolved 上(prepareAgentTurnText 契约):
     // 受理前鉴权失败若先触发它, 这批群上下文会被游标永久跳过。
