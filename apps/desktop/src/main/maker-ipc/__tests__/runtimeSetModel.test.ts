@@ -375,6 +375,15 @@ describe('applyRuntimeSetModelChange', () => {
       sessionId,
       model: 'codex/gpt-5.5',
       providerId: 'xd',
+      persistedSession: {
+        agentKind: 'codex',
+        remoteHostId: null,
+        sdkSessionId: 'thread-openai',
+        model: 'gpt-5.4',
+        providerId: 'openai',
+        effort: 'high',
+        fastMode: false,
+      },
       registerPendingCredentialSwitch,
     });
 
@@ -383,6 +392,15 @@ describe('applyRuntimeSetModelChange', () => {
       model: 'codex/gpt-5.5',
       providerId: 'xd',
       rebuildCodexThread: true,
+      sourcePersistedSession: {
+        agentKind: 'codex',
+        remoteHostId: null,
+        sdkSessionId: 'thread-openai',
+        model: 'gpt-5.4',
+        providerId: 'openai',
+        effort: 'high',
+        fastMode: false,
+      },
     });
     expect(closeSession).not.toHaveBeenCalled();
     expect(setModel).not.toHaveBeenCalled();

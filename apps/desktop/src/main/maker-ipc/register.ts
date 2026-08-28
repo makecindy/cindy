@@ -881,6 +881,7 @@ import {
 import {
   applyRuntimeSetModelChange,
   isRemoteModelSwitchRouteChangeError,
+  type RuntimeSetModelPersistedSession,
 } from './runtimeSetModel.js';
 import {
   commitCodexProviderThreadRelinkWithBoundaryGuard,
@@ -3073,6 +3074,7 @@ export async function registerPendingCredentialSwitchForSession(
       effort?: string;
       fastMode?: boolean;
     };
+    sourcePersistedSession?: RuntimeSetModelPersistedSession;
     restoreStaleOwnerRoute?: () => Promise<boolean>;
   },
 ): Promise<void> {
@@ -3091,12 +3093,14 @@ export async function registerPendingCredentialSwitchForSession(
   // PR #744 review 第七轮);读不到(会话行缺失)则登记不带 agentKind = 收口不裁决。
   const dbAgentKind = getSessionDbAgentKind(sessionId);
   // 捕获切换前的运行路由:model 用 live handle(热切过未落库时比 DB 权威),来源用
-  // provider store;effort / fast 无 live getter,从 DB 行读 —— renderer 在收到
-  // deferred 结果**之后**才落盘请求值,本函数在 IPC 回包之前执行,此刻行里仍是
-  // 切换前值,无竞态。目标在等待期间被全停且目录无启用兜底时,收口按整套
-  // previousRoute 回滚(model/provider/effort/fast 一致成对,第十六、十八轮)。
+  // provider store;effort / fast 无 live getter,从写前快照或 DB 行读。renderer 在
+  // deferred 回包后才落盘,可安全回读 DB；IM model:pick 则先落盘目标再调用这里，
+  // 必须由 runtimeSetModel 把 input.persistedSession 原样带成 sourcePersistedSession。
+  // 目标在等待期间被全停且目录无启用兜底时,收口按整套 previousRoute 回滚
+  // (model/provider/effort/fast 一致成对,第十六、十八轮)。
   // deferred 场景会话正在跑 turn,live handle 必在;取不到就不带 = 无从回滚。
   const live = getMaker().getSession(sessionId);
+  const sourcePersistedSession = target.sourcePersistedSession;
   let prevRow: {
     model: string | null;
     effort: string | null;
@@ -3104,25 +3108,38 @@ export async function registerPendingCredentialSwitchForSession(
     providerId: string | null;
     sdkSessionId: string | null;
   } | null = null;
-  try {
-    if (dbSnapshot) {
-      const [row] = await dbSnapshot.client.drizzle
-        .select({
-          model: sessions.model,
-          effort: sessions.effort,
-          fastMode: sessions.fastMode,
-          providerId: sessions.providerId,
-          sdkSessionId: sessions.sdkSessionId,
-        })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      prevRow = row ?? null;
+  if (
+    sourcePersistedSession?.effort !== undefined &&
+    sourcePersistedSession.fastMode !== undefined
+  ) {
+    prevRow = {
+      model: sourcePersistedSession.model,
+      effort: sourcePersistedSession.effort,
+      fastMode: sourcePersistedSession.fastMode,
+      providerId: sourcePersistedSession.providerId,
+      sdkSessionId: sourcePersistedSession.sdkSessionId,
+    };
+  } else {
+    try {
+      if (dbSnapshot) {
+        const [row] = await dbSnapshot.client.drizzle
+          .select({
+            model: sessions.model,
+            effort: sessions.effort,
+            fastMode: sessions.fastMode,
+            providerId: sessions.providerId,
+            sdkSessionId: sessions.sdkSessionId,
+          })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        prevRow = row ?? null;
+      }
+    } catch {
+      prevRow = null;
     }
-  } catch {
-    prevRow = null;
   }
-  const prevModel = live?.model ?? prevRow?.model ?? null;
+  const prevModel = sourcePersistedSession?.model ?? live?.model ?? prevRow?.model ?? null;
   let restoreCapturedProfileRoute: (() => Promise<boolean>) | undefined;
   if (dbSnapshot && prevRow?.model && prevRow.effort && prevRow.fastMode !== null) {
     const capturedPrevRow = {
@@ -3196,7 +3213,11 @@ export async function registerPendingCredentialSwitchForSession(
       ? {
           previousRoute: {
             model: prevModel,
-            providerId: getSessionProvider(sessionId) ?? prevRow?.providerId ?? null,
+            providerId:
+              sourcePersistedSession?.providerId ??
+              getSessionProvider(sessionId) ??
+              prevRow?.providerId ??
+              null,
             ...(prevRow?.effort ? { effort: prevRow.effort } : {}),
             ...(prevRow?.fastMode != null ? { fastMode: prevRow.fastMode } : {}),
           },
@@ -15673,6 +15694,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 sdkSessionId: runtimeStatus.sdkSessionId,
                 model: runtimeStatus.model,
                 providerId: runtimeStatus.providerId ?? null,
+                effort: runtimeStatus.effort,
+                fastMode: runtimeStatus.fastMode,
               },
               ...(atomicSelection?.effort
                 ? {

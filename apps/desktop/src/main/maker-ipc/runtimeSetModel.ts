@@ -54,6 +54,8 @@ export interface RuntimeSetModelPersistedSession {
   model: string;
   providerId: string | null;
   sdkSessionId: string | null;
+  effort?: Effort;
+  fastMode?: boolean;
 }
 
 export interface ApplyRuntimeSetModelChangeInput {
@@ -93,6 +95,7 @@ export interface ApplyRuntimeSetModelChangeInput {
         effort?: string;
         fastMode?: boolean;
       };
+      sourcePersistedSession?: RuntimeSetModelPersistedSession;
       restoreStaleOwnerRoute?: () => Promise<boolean>;
     },
   ) => void | Promise<void>;
@@ -263,6 +266,9 @@ export async function applyRuntimeSetModelChange(
         model,
         providerId: nextProviderId,
         ...(shouldRelinkCodexThread ? { rebuildCodexThread: true } : {}),
+        ...(input.persistedSession
+          ? { sourcePersistedSession: input.persistedSession }
+          : {}),
       });
       logger?.info('set-model: Codex provider route switch deferred until turn end', {
         sessionId,
@@ -285,6 +291,9 @@ export async function applyRuntimeSetModelChange(
         model,
         providerId: nextProviderId,
         ...(shouldRelinkCodexThread ? { rebuildCodexThread: true } : {}),
+        ...(input.persistedSession
+          ? { sourcePersistedSession: input.persistedSession }
+          : {}),
       });
       logger?.info('set-model: credential switch deferred until turn end', {
         sessionId,
@@ -345,6 +354,9 @@ export async function applyRuntimeSetModelChange(
           model,
           providerId: nextProviderId,
           ...(shouldRelinkCodexThread ? { rebuildCodexThread: true } : {}),
+          ...(input.persistedSession
+            ? { sourcePersistedSession: input.persistedSession }
+            : {}),
         });
         logger?.info('set-model: credential switch deferred after busy race', {
           sessionId,

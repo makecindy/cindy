@@ -75,6 +75,7 @@ export interface SessionModelRouteSnapshot {
   sdkSessionId: string | null;
   model: string;
   effort: Effort;
+  fastMode: boolean;
   providerId: string | null;
 }
 
@@ -593,6 +594,7 @@ export async function readModelRouteSnapshot(
       sdkSessionId: sessions.sdkSessionId,
       model: sessions.model,
       effort: sessions.effort,
+      fastMode: sessions.fastMode,
       providerId: sessions.providerId,
     })
     .from(sessions)
@@ -606,6 +608,7 @@ export async function readModelRouteSnapshot(
     sdkSessionId: row.sdkSessionId ?? null,
     model: row.model,
     effort: row.effort as Effort,
+    fastMode: row.fastMode,
     providerId: row.providerId ?? null,
   };
 }

@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
       sdkSessionId: string | null;
       model: string;
       effort: string;
+      fastMode?: boolean;
       providerId: string | null;
     } | null> => null,
   ),
@@ -655,6 +656,16 @@ describe('model:pick 持久化失败', () => {
   });
 
   it('busy provider 切换注入 pending hooks，并在 deferred 时不 mid-turn 改 effort', async () => {
+    const sourceSnapshot = {
+      agentKind: 'codex' as const,
+      remoteHostId: null,
+      sdkSessionId: 'thread-xd',
+      model: 'gpt-5.4',
+      effort: 'high',
+      fastMode: false,
+      providerId: 'xd',
+    };
+    mocks.readModelRouteSnapshot.mockResolvedValueOnce(sourceSnapshot);
     const live = {
       agentKind: 'codex',
       remoteHostId: null,
@@ -667,12 +678,18 @@ describe('model:pick 持久化失败', () => {
       const hooks = input as {
         registerPendingCredentialSwitch?: (
           sessionId: string,
-          target: { model: string; providerId: string | null },
+          target: {
+            model: string;
+            providerId: string | null;
+            sourcePersistedSession?: unknown;
+          },
         ) => void;
+        persistedSession?: unknown;
       };
       hooks.registerPendingCredentialSwitch?.('sess-target', {
         model: 'claude-opus-4-7',
         providerId: 'anthropic',
+        sourcePersistedSession: hooks.persistedSession,
       });
       return { status: 'deferred' as const };
     });
@@ -688,10 +705,14 @@ describe('model:pick 持久化失败', () => {
         getPendingCredentialSwitch: mocks.getPendingCredentialSwitchTarget,
       }),
     );
-    expect(mocks.registerPendingCredentialSwitchForSession).toHaveBeenCalledWith('sess-target', {
-      model: 'claude-opus-4-7',
-      providerId: 'anthropic',
-    });
+    expect(mocks.registerPendingCredentialSwitchForSession).toHaveBeenCalledWith(
+      'sess-target',
+      expect.objectContaining({
+        model: 'claude-opus-4-7',
+        providerId: 'anthropic',
+        sourcePersistedSession: sourceSnapshot,
+      }),
+    );
     expect(live.setEffort).not.toHaveBeenCalled();
     expect(im.updateInteractiveCard).toHaveBeenCalledWith(
       'model-card',
