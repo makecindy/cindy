@@ -738,6 +738,59 @@ const POWERSHELL_DIRECT_FILE_READ_COMMANDS = new Set(['get-content', 'gc', 'cat'
 const POWERSHELL_GET_CONTENT_SWITCHES = new Set(['-raw', '-wait', '-force', '-asbytestream']);
 
 type PowerShellDirectArguments = { words: string[]; unresolved: boolean };
+type PowerShellDirectStatements = { statements: string[]; unresolved: boolean };
+
+function powershellDirectStatements(command: string): PowerShellDirectStatements {
+  const statements: string[] = [];
+  let current = '';
+  let quote: "'" | '"' | null = null;
+  const flush = () => {
+    const statement = current.trim();
+    if (statement) statements.push(statement);
+    current = '';
+  };
+  for (let cursor = 0; cursor < command.length; cursor += 1) {
+    const character = command[cursor];
+    if (quote) {
+      current += character;
+      if (character === quote) {
+        if (quote === "'" && command[cursor + 1] === "'") {
+          current += command[cursor + 1];
+          cursor += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      current += character;
+      continue;
+    }
+    if (character === String.fromCharCode(96) || /[|&(){}<>]/.test(character)) {
+      return { statements, unresolved: true };
+    }
+    const startsComment = character === '#'
+      && (current.length === 0 || /\s/.test(current[current.length - 1]));
+    if (startsComment) {
+      while (cursor + 1 < command.length && command[cursor + 1] !== '\n') cursor += 1;
+      flush();
+      continue;
+    }
+    if (character === '\u2028' || character === '\u2029') {
+      return { statements, unresolved: true };
+    }
+    if (character === ';' || character === '\n' || character === '\r') {
+      flush();
+      continue;
+    }
+    current += character;
+  }
+  if (quote) return { statements, unresolved: true };
+  flush();
+  return { statements, unresolved: false };
+}
 
 function powershellDirectArguments(command: string, start: number): PowerShellDirectArguments {
   const words: string[] = [];
@@ -804,10 +857,7 @@ function powershellStaticReadTarget(word: string, literal: boolean): string | nu
   return path.isAbsolute(word) ? path.normalize(word) : path.resolve(process.cwd(), word);
 }
 
-function powershellInputReadEvidence(input: unknown): BashInputReadEvidence {
-  if (!input || typeof input !== 'object') return { targets: [], unresolved: false };
-  const command = (input as Record<string, unknown>).command;
-  if (typeof command !== 'string' || !command) return { targets: [], unresolved: false };
+function powershellDirectReadEvidence(command: string): BashInputReadEvidence {
   const direct = /^\s*(?:[A-Za-z][A-Za-z0-9.-]*\\)?([A-Za-z][A-Za-z0-9-]*)(?=\s|$)/.exec(command);
   if (!direct || !POWERSHELL_DIRECT_FILE_READ_COMMANDS.has(direct[1].toLowerCase())) {
     // Invoke-Expression, the call operator, variable command names and other indirect forms
@@ -834,6 +884,22 @@ function powershellInputReadEvidence(input: unknown): BashInputReadEvidence {
   }
   const target = targetWord === null ? null : powershellStaticReadTarget(targetWord, literal);
   return target ? { targets: [target], unresolved: false } : { targets: [], unresolved: true };
+}
+
+function powershellInputReadEvidence(input: unknown): BashInputReadEvidence {
+  if (!input || typeof input !== 'object') return { targets: [], unresolved: false };
+  const command = (input as Record<string, unknown>).command;
+  if (typeof command !== 'string' || !command) return { targets: [], unresolved: false };
+  const payload = powershellDirectStatements(command);
+  if (payload.unresolved) return { targets: [], unresolved: true };
+  const targets: string[] = [];
+  let unresolved = false;
+  for (const statement of payload.statements) {
+    const evidence = powershellDirectReadEvidence(statement);
+    targets.push(...evidence.targets);
+    unresolved ||= evidence.unresolved;
+  }
+  return { targets: [...new Set(targets)], unresolved };
 }
 
 function bashInputReadEvidence(input: unknown): BashInputReadEvidence {

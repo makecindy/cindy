@@ -371,6 +371,11 @@ describe('cindy-bridge extension source', () => {
           .map((commandName) => commandName + ' ' + operand),
         'Get-Content -Path ' + operand,
         "Get-Content -LiteralPath '" + operand + "' -Raw",
+        'Write-Output ok; Get-Content ' + operand,
+        'Write-Output "ok; still"; Get-Content ' + operand,
+        'Write-Output ok\nGet-Content ' + operand,
+        'Write-Output ok\rGet-Content ' + operand,
+        '# harmless preface\nGet-Content ' + operand,
       ];
       for (const command of commands) {
         const result = evidence({ command });
@@ -395,6 +400,12 @@ describe('cindy-bridge extension source', () => {
       'Get-Content ./safe*.txt',
       'Get-Content -Encoding utf8 ./safe.txt',
       'Get-Content\u00a0./safe.txt',
+      'Write-Output ok; Get-Content $target',
+      'Write-Output ok; Get-Content (Join-Path . id_rsa)',
+      'Write-Output ok | Get-Content ./safe.txt',
+      'Write-Output ok && Get-Content ./safe.txt',
+      'Write-Output ok\u2028Get-Content ./safe.txt',
+      "Write-Output ok; Get-Content './unterminated",
     ]) {
       expect(evidence({ command }), command).toEqual({ targets: [], unresolved: true });
     }
