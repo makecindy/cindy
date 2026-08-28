@@ -302,7 +302,7 @@ describe('session runtime control wiring', () => {
     );
   });
 
-  it('compensates ordinary renderer runtime state when a post-relink metadata read fails', () => {
+  it('cancels a deferred runtime selection when a later metadata read fails', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -320,9 +320,32 @@ describe('session runtime control wiring', () => {
       'const restored = await rollbackAppliedCodexThreadRelink();',
       captureRelink,
     );
+    const deferredRecoveryGuard = setModel.indexOf(
+      'if (hadRelink || appliedRuntimeSelectionWasDeferred) {',
+      rollbackRelink,
+    );
     const runtimeRecovery = setModel.indexOf(
       'await recoverRuntimeAfterSelectionRollback({',
-      rollbackRelink,
+      deferredRecoveryGuard,
+    );
+    const recoveryDefinition = setModel.indexOf(
+      'const recoverRuntimeAfterSelectionRollback = async (',
+    );
+    const clearDeferredTarget = setModel.indexOf(
+      'pendingCredentialSwitchHolder?.clear(sessionId);',
+      recoveryDefinition,
+    );
+    const restoreControlStores = setModel.indexOf(
+      'restoreControlStores();',
+      clearDeferredTarget,
+    );
+    const restorePreviousPending = setModel.indexOf(
+      'if (previousRuntime.pendingCredentialSwitch) {',
+      restoreControlStores,
+    );
+    const wakeWithoutPreviousPending = setModel.indexOf(
+      'wakeSessionInputAfterCredentialSwitch(sessionId);',
+      restorePreviousPending,
     );
     const projectionRead = setModel.indexOf(
       'const projectionMeta = await maker.getSessionMeta(sessionId);',
@@ -336,7 +359,12 @@ describe('session runtime control wiring', () => {
     expect(noPersistedRoute).toBeGreaterThan(rollback);
     expect(captureRelink).toBeGreaterThan(noPersistedRoute);
     expect(rollbackRelink).toBeGreaterThan(captureRelink);
-    expect(runtimeRecovery).toBeGreaterThan(rollbackRelink);
+    expect(deferredRecoveryGuard).toBeGreaterThan(rollbackRelink);
+    expect(runtimeRecovery).toBeGreaterThan(deferredRecoveryGuard);
+    expect(clearDeferredTarget).toBeGreaterThan(recoveryDefinition);
+    expect(restoreControlStores).toBeGreaterThan(clearDeferredTarget);
+    expect(restorePreviousPending).toBeGreaterThan(restoreControlStores);
+    expect(wakeWithoutPreviousPending).toBeGreaterThan(restorePreviousPending);
     expect(setModel.slice(runtimeRecovery, runtimeRecovery + 500)).toContain(
       'sdkSessionId: runtimeStatus.sdkSessionId',
     );

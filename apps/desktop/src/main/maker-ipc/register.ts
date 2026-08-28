@@ -15763,7 +15763,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const hadRelink = appliedCodexThreadRelink !== undefined;
           const restored = await rollbackAppliedCodexThreadRelink();
           if (!restored) return false;
-          if (hadRelink) {
+          if (hadRelink || appliedRuntimeSelectionWasDeferred) {
             await recoverRuntimeAfterSelectionRollback({
               sdkSessionId: runtimeStatus.sdkSessionId,
               model: runtimeStatus.model,
