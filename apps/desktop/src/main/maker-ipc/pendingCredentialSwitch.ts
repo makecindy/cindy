@@ -172,7 +172,7 @@ export class PendingCredentialSwitchService {
 
   constructor(private readonly deps: PendingCredentialSwitchDeps) {}
 
-  register(
+  async register(
     sessionId: string,
     target: {
       model: string;
@@ -192,7 +192,7 @@ export class PendingCredentialSwitchService {
         persistedRoute?: PendingCredentialSwitchPersistedRoute,
       ) => Promise<boolean>;
     },
-  ): void {
+  ): Promise<boolean> {
     const pending: PendingCredentialSwitch = {
       model: target.model,
       providerId: target.providerId,
@@ -214,10 +214,13 @@ export class PendingCredentialSwitchService {
       if (existing && !this.ownerScopeCurrent(existing)) {
         this.discardIfOwnerStale(sessionId, existing);
       }
+      // This target never enters the map, so discardIfOwnerStale cannot compensate it later.
+      // Finish its captured old-Profile restore before the caller receives registration failure.
+      await this.compensateStaleOwnerRoute(sessionId, pending);
       this.deps.logger?.info('stale pending credential switch discarded at registration', {
         sessionId,
       });
-      return;
+      return false;
     }
     this.pending.set(sessionId, pending);
     this.scheduleRetry(sessionId);
@@ -226,6 +229,7 @@ export class PendingCredentialSwitchService {
       model: target.model,
       providerId: target.providerId,
     });
+    return true;
   }
 
   has(sessionId: string): boolean {
@@ -722,6 +726,29 @@ export class PendingCredentialSwitchService {
     return this.pending.get(sessionId) === target && this.ownerScopeCurrent(target);
   }
 
+  private async compensateStaleOwnerRoute(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+    persistedRoute?: PendingCredentialSwitchPersistedRoute,
+  ): Promise<void> {
+    try {
+      if (target.restoreStaleOwnerRoute) {
+        const restored = await target.restoreStaleOwnerRoute(persistedRoute);
+        if (!restored) {
+          this.deps.logger?.warn(
+            'stale pending credential switch route compensation was superseded',
+            { sessionId },
+          );
+        }
+      }
+    } catch (error) {
+      this.deps.logger?.error?.('stale pending credential switch route compensation failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private discardIfOwnerStale(
     sessionId: string,
     target: PendingCredentialSwitch,
@@ -735,23 +762,9 @@ export class PendingCredentialSwitchService {
       this.clearRetry(sessionId);
       if (this.staleDiscards.has(target)) return true;
       this.staleDiscards.add(target);
-      const restore = target.restoreStaleOwnerRoute;
       void (async () => {
         try {
-          if (restore) {
-            const restored = await restore(persistedRoute);
-            if (!restored) {
-              this.deps.logger?.warn(
-                'stale pending credential switch route compensation was superseded',
-                { sessionId },
-              );
-            }
-          }
-        } catch (error) {
-          this.deps.logger?.error?.('stale pending credential switch route compensation failed', {
-            sessionId,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          await this.compensateStaleOwnerRoute(sessionId, target, persistedRoute);
         } finally {
           this.staleDiscards.delete(target);
           if (this.pending.get(sessionId) === target) {

@@ -378,7 +378,19 @@ describe('session runtime control wiring', () => {
     expect(registration).toContain(
       'Codex pending credential switch requires an old-profile rollback snapshot',
     );
+    const registrationAttempt = registration.indexOf('const registered = await service.register(');
+    const registrationFailure = registration.indexOf('if (!registered) {', registrationAttempt);
+    const failureReturn = registration.indexOf(
+      "throw new Error('Pending credential switch owner changed during registration')",
+      registrationFailure,
+    );
+    expect(registrationAttempt).toBeGreaterThan(-1);
+    expect(registrationFailure).toBeGreaterThan(registrationAttempt);
+    expect(failureReturn).toBeGreaterThan(registrationFailure);
     expect(pendingCredentialSwitchSource).toContain('restoreStaleOwnerRoute');
+    expect(pendingCredentialSwitchSource).toContain(
+      'await this.compensateStaleOwnerRoute(sessionId, pending);',
+    );
     expect(pendingCredentialSwitchSource).toContain('this.staleDiscards.has(target)');
     expect(service).toContain('!isAppSessionBoundaryPending()');
     expect(service).toContain('activeOwnerScopeKey() === scope.ownerScopeKey');

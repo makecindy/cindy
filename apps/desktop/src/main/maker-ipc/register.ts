@@ -3222,7 +3222,7 @@ export async function registerPendingCredentialSwitchForSession(
   ) {
     throw new Error('Codex pending credential switch requires an old-profile rollback snapshot');
   }
-  service.register(sessionId, {
+  const registered = await service.register(sessionId, {
     ...target,
     ownerScope,
     ...(target.restoreStaleOwnerRoute
@@ -3249,6 +3249,9 @@ export async function registerPendingCredentialSwitchForSession(
         }
       : {}),
   });
+  if (!registered) {
+    throw new Error('Pending credential switch owner changed during registration');
+  }
 }
 
 /**
@@ -15688,7 +15691,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           if (recoveryErrors.length === 0) {
             if (previousRuntime.pendingCredentialSwitch) {
-              pendingCredentialSwitchHolder?.register(
+              await pendingCredentialSwitchHolder?.register(
                 sessionId,
                 previousRuntime.pendingCredentialSwitch,
               );
@@ -15873,7 +15876,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               }
             }
             if (previousRuntime.pendingCredentialSwitch) {
-              pendingCredentialSwitchHolder?.register(
+              await pendingCredentialSwitchHolder?.register(
                 sessionId,
                 previousRuntime.pendingCredentialSwitch,
               );
