@@ -4376,7 +4376,10 @@ export function ChatInput({
         },
       });
     }
-    if (onWritableDirsChange) {
+    // 远端已有授权仍通过 onWritableDirsChange 展示并可撤销；但这里调用的是控制端
+    // 原生目录选择器，只能在已确认本机会话中提供，不能把本机绝对路径发给 SSH/
+    // device-link 被控端。undefined 表示归属尚未解析，同样 fail closed。
+    if (onWritableDirsChange && !remoteHostId && deviceLinkDeviceId === null) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
       const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
@@ -4416,8 +4419,10 @@ export function ChatInput({
     onWritableDirsChange,
     onNewGoal,
     planModeEntry,
+    remoteHostId,
     runNewGoalAction,
     t,
+    deviceLinkDeviceId,
     writableDirs,
     workingDir,
   ]);

@@ -1517,17 +1517,28 @@ describe('Shared create project picker', () => {
 
   // Writable-directory selection uses the controller's native picker. SSH and device-link
   // workspaces both execute on another filesystem, so a local absolute path must never be
-  // offered as a remote writable root. Local drafts and sessions retain the callback.
-  it('hides the local writable-directory picker on remote drafts and active sessions', () => {
+  // offered as a remote writable root. Existing remote grants remain visible/removable when
+  // the executing side explicitly supports the setter.
+  it('hides remote add while preserving capability-gated writable grant revocation', () => {
     expect(newMakerDraftRouteSource).toContain(
       'isDeviceLinkDraft || isRemoteProjectDraft\n                        ? undefined\n                        : handleWritableDirsChange',
     );
     expect(agentCapabilitiesHookSource).toContain('writableDirs?: CapabilityStatus;');
     expect(ccAgentSessionViewSource).toContain(
-      'const writableDirsChangeSupported = canExposeWritableDirsChange({',
+      'canExposeWritableDirsChange({\n      capabilities: sessionCaps,',
     );
     expect(ccAgentSessionViewSource).toContain(
       'writableDirsChangeSupported ? handleWritableDirsChange : undefined',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true',
+    );
+    expect(chatInputSource).toContain(
+      'if (onWritableDirsChange && !remoteHostId && deviceLinkDeviceId === null) {',
+    );
+    expect(chatInputSource).toContain('!settingsLocked && onWritableDirsChange');
+    expect(chatInputSource).toContain(
+      'void onWritableDirsChange(\n                          (writableDirs ?? []).filter((item) => item !== path),',
     );
     expect(ccAgentSessionViewSource).toContain(
       'const isRemoteWorktreeSession = Boolean(session?.deviceLinkDeviceId || session?.remoteHostId)',

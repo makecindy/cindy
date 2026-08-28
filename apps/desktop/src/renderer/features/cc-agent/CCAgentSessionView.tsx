@@ -1804,13 +1804,16 @@ export function CCAgentSessionView({
   );
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
-  // SSH 仍没有远端目录选择器；device-link 只有被控端明确声明 writableDirs 后才暴露
-  // 新 channel。能力尚未返回、旧端缺字段或返回不支持时一律隐藏，避免用户选完才失败。
-  const writableDirsChangeSupported = canExposeWritableDirsChange({
-    capabilities: sessionCaps,
-    deviceId: remoteDeviceId,
-    remoteHostId: session?.remoteHostId,
-  });
+  // callback 同时承载已有授权的展示/撤销，不能因远端没有安全 picker 就整块隐藏。
+  // device-link 与 SSH 都只在实际执行端明确声明 setter 能力后开放；ChatInput 另行按
+  // 文件系统来源关闭远端“新增”，因此这里开放的远端 callback 只会用于撤销。
+  const writableDirsChangeSupported =
+    canExposeWritableDirsChange({
+      capabilities: sessionCaps,
+      deviceId: remoteDeviceId,
+      remoteHostId: session?.remoteHostId,
+    }) ||
+    (session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true);
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
   // 2026-07 统一后展示不再产生已读 —— 横幅还在就说明告警未处理,红点必须留着。
   // 红角标现在只由用户处置横幅(handleRetry / handleSilentStopContinue /
