@@ -17,6 +17,8 @@ export interface OverrideSettingsState<T> {
 export interface OverrideSettingsFile<T> {
   read(): T;
   readState(): OverrideSettingsState<T>;
+  /** 读取最近一次磁盘快照的状态,供安全敏感的消费方区分默认态与不可读态。 */
+  getReadStatus(): 'missing' | 'readable' | 'unreadable';
   writePatch(patch: Partial<T>, options?: { preserveDefaults?: boolean }): void;
   /** 跨进程锁内强制现读盘上 overrides，再合并 patch 并原子替换文件。 */
   writePatchAtomic(patch: Partial<T>, options?: { preserveDefaults?: boolean }): Promise<void>;
@@ -325,6 +327,10 @@ export function createOverrideSettingsFile<T>(options: {
   return {
     read: () => readState().value,
     readState,
+    getReadStatus: () => {
+      readState();
+      return cached?.readStatus ?? 'missing';
+    },
     writePatch,
     writePatchAtomic,
     updateAtomic,

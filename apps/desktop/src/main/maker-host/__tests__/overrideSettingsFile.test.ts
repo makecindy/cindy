@@ -139,6 +139,7 @@ describe('createOverrideSettingsFile', () => {
     try {
       fs.writeFileSync(file, malformed, 'utf-8');
       expect(store.read()).toEqual(DEFAULTS);
+      expect(store.getReadStatus()).toBe('unreadable');
 
       expect(() => store.writePatch({ enabled: false })).toThrow(/unreadable/);
       await expect(store.writePatchAtomic({ limit: 8 })).rejects.toThrow(/unreadable/);
@@ -148,6 +149,7 @@ describe('createOverrideSettingsFile', () => {
 
       fs.writeFileSync(file, JSON.stringify({ enabled: false }), 'utf-8');
       await expect(store.writePatchAtomic({ limit: 8 })).resolves.toBeUndefined();
+      expect(store.getReadStatus()).toBe('readable');
       expect(JSON.parse(fs.readFileSync(file, 'utf-8'))).toEqual({
         enabled: false,
         limit: 8,

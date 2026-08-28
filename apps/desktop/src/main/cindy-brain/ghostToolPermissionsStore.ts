@@ -112,6 +112,10 @@ const store = createOverrideSettingsFile<GhostToolPermissionsData>({
   normalize,
   log,
   label: 'ghost-tool-permissions',
+  // 权限文件不可读时必须保留原文件,并让 resolveToolApprovalMode 把
+  // unreadable 状态交给执行收口 fail closed,不能把用户的 blocked 静默
+  // 降级成默认 needs-approval 后继续派发。
+  preserveUnreadableFile: true,
 });
 
 /** 读取指定插件的工具粒度授权配置。 */
@@ -186,7 +190,11 @@ function resolveModeFromConfig(
  * 当场生效,不需要重开会话。
  */
 export function resolveToolApprovalMode(ghostId: string, toolName: string): ToolApprovalMode {
-  return resolveModeFromConfig(readGhostToolPermissions(ghostId), toolName);
+  const config = readGhostToolPermissions(ghostId);
+  if (store.getReadStatus() === 'unreadable') {
+    throw new Error('ghost-tool-permissions settings file is unreadable');
+  }
+  return resolveModeFromConfig(config, toolName);
 }
 
 /**
