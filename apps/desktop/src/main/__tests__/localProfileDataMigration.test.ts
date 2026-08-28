@@ -758,6 +758,28 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('partial');
   });
 
+  it('restores a pending-copy backup before passive target classification', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    const pending = `${target}.local-profile-copy-pending`;
+    await fs.writeFile(target, 'partial');
+    await fs.writeFile(
+      `${pending}.bak`,
+      JSON.stringify({ version: 1, attemptId: 'interrupted-windows-swap', phase: 'copying' }),
+    );
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'failed',
+      error: 'target database copy is incomplete',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('partial');
+    await expect(fs.readFile(pending, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      attemptId: 'interrupted-windows-swap',
+      phase: 'copying',
+    });
+    await expect(fs.access(`${pending}.bak`)).rejects.toThrow();
+  });
+
   it('blocks passive initialization when target ownership is unproven', async () => {
     const { root, deps } = await fixture();
     const target = path.join(root, 'cindy-owner-a.db');

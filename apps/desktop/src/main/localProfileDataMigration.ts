@@ -869,10 +869,9 @@ export async function inspectPassiveLocalProfileAdoption(
       };
     }
     if (targetState.mainExists) {
-      try {
-        const pending = parsePendingDatabaseCopyMarker(
-          await deps.fs.readFile(`${targetDb}${DB_COPY_PENDING_SUFFIX}`),
-        );
+      const pendingRaw = readAtomicFileSync(`${targetDb}${DB_COPY_PENDING_SUFFIX}`);
+      if (pendingRaw !== null) {
+        const pending = parsePendingDatabaseCopyMarker(pendingRaw);
         if (!pending) {
           return { status: 'failed', error: 'database copy pending marker is malformed' };
         }
@@ -885,8 +884,6 @@ export async function inspectPassiveLocalProfileAdoption(
         if (pending.phase === 'copying') {
           return { status: 'failed', error: 'target database copy is incomplete' };
         }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
       }
       return { status: 'not-required', reason: 'target-exists' };
     }
