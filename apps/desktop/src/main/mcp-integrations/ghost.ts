@@ -1892,6 +1892,18 @@ export function getCindyGhostsMcpDeps(
       let pendingAttachmentRevoke: (() => Promise<void>) | null = null;
       const attachmentUrls = [...new Set(attachments ?? [])];
       if (attachmentUrls.length > 0) {
+        // grantAttachmentUrls also protects its own async preparation, but its
+        // baseline would otherwise be captured after the setup wait above. If
+        // the account changed during setup, stop before any normal attachment
+        // grant can create durable ledger refs under the new owner.
+        if (activeOwnerScopeKey() !== ownerScopeKeyAtHandoffStart) {
+          log.warn('ghost tool call denied: owner scope changed before attachment grant', { ghostId });
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: '账号状态已变化，为了安全未执行该工具，请重试。',
+          };
+        }
         const grant = await grantAttachmentUrls({
           ghostId,
           urls: attachmentUrls,
