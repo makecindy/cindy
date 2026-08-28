@@ -17,9 +17,11 @@ import {
   applyIncomingServerWorkspacePrefs,
   getWorkspacePref,
   importWorkspacePrefsIfNeeded,
+  isWorkspacePrefsMirrorCandidateCurrent,
   isWorkspacePrefsMigrated,
   listWorkspacePrefs,
   markWorkspacePrefMirrored,
+  reconcileWorkspacePrefsForMirror,
   replaceChannelWorkspacePrefs,
   resolveWorkspacePrefOverrides,
   setWorkspacePref,
@@ -49,15 +51,68 @@ describe('workspacePrefsStore', () => {
   });
 
   it('新建 team 专属行时从 null 兜底继承未改字段', () => {
-    setWorkspacePref('slack', null, 'repo', { model: 'sonnet', agentKind: 'claude-code' });
-    setWorkspacePref('slack', 'T1', 'repo', { model: 'opus' });
+    setWorkspacePref('slack', null, 'repo', {
+      model: 'sonnet',
+      effort: 'high',
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
+    const written = setWorkspacePref('slack', 'T1', 'repo', { model: 'opus' });
     expect(getWorkspacePref('slack', 'T1', 'repo')).toMatchObject({
       model: 'opus',
+      effort: 'high',
       agentKind: 'claude-code',
+      permissionMode: 'ask',
     });
     expect(getWorkspacePref('slack', null, 'repo')).toMatchObject({
       model: 'sonnet',
+      effort: 'high',
       agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
+    expect(written.row).toEqual({
+      workspace: 'repo',
+      model: 'opus',
+      effort: 'high',
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+      teamId: 'T1',
+    });
+  });
+
+  it('新建 team 行继承 dirty null 兜底尚未镜像的本地字段', () => {
+    reconcileWorkspacePrefsForMirror('slack', []);
+    setWorkspacePref('slack', null, 'repo', { effort: 'high' });
+    setWorkspacePref('slack', 'T1', 'repo', { model: 'team-model' });
+
+    const candidates = reconcileWorkspacePrefsForMirror('slack', [
+      {
+        workspace: 'repo',
+        model: 'fallback-model',
+        effort: 'low',
+        agentKind: 'claude-code',
+        permissionMode: 'ask',
+        teamId: null,
+      },
+      {
+        workspace: 'repo',
+        model: 'old-team-model',
+        effort: 'low',
+        agentKind: 'codex',
+        permissionMode: 'full',
+        teamId: 'T1',
+      },
+    ]);
+
+    expect(candidates.find((candidate) => candidate.prefs.teamId === 'T1')).toMatchObject({
+      prefs: {
+        workspace: 'repo',
+        model: 'team-model',
+        effort: 'high',
+        agentKind: 'codex',
+        permissionMode: 'full',
+        teamId: 'T1',
+      },
     });
   });
 
@@ -114,6 +169,111 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('telegram', null, 'chat').model).toBe('local-first');
     expect(getWorkspacePref('telegram', null, 'repo').model).toBe('server-repo');
     expect(isWorkspacePrefsMigrated('telegram')).toBe(true);
+  });
+
+  it('迁移完成后重连仍导入 /model 在远端新增的目录偏好，供 /new 使用', () => {
+    reconcileWorkspacePrefsForMirror('slack', []);
+    expect(isWorkspacePrefsMigrated('slack')).toBe(true);
+
+    const candidates = reconcileWorkspacePrefsForMirror('slack', [
+      {
+        workspace: 'repo',
+        model: 'from-model-command',
+        effort: 'high',
+        agentKind: 'claude-code',
+        permissionMode: 'ask',
+        teamId: 'T1',
+      },
+    ]);
+
+    const local = getWorkspacePref('slack', 'T1', 'repo');
+    expect(local.model).toBe('from-model-command');
+    expect(
+      resolveWorkspacePrefOverrides(
+        local,
+        {
+          agentKind: null,
+          model: null,
+          effort: null,
+          permissionMode: null,
+        },
+        true,
+      ),
+    ).toEqual({
+      agentKind: 'claude-code',
+      model: 'from-model-command',
+      effort: 'high',
+      permissionMode: 'ask',
+    });
+    expect(candidates).toEqual([]);
+  });
+
+  it('首次迁移只回写既有本地正本，不回写刚导入的 server clean 行', () => {
+    const localWrite = setWorkspacePref('slack', null, 'chat', {
+      model: 'local-model',
+      agentKind: 'claude-code',
+    });
+
+    const candidates = reconcileWorkspacePrefsForMirror('slack', [
+      {
+        workspace: 'chat',
+        model: 'stale-server-model',
+        effort: null,
+        agentKind: 'codex',
+        permissionMode: null,
+      },
+      {
+        workspace: 'repo',
+        model: 'server-only-model',
+        effort: 'high',
+        agentKind: 'codex',
+        permissionMode: 'ask',
+      },
+    ]);
+
+    expect(candidates).toEqual([
+      {
+        prefs: {
+          workspace: 'chat',
+          model: 'local-model',
+          effort: null,
+          agentKind: 'claude-code',
+          permissionMode: null,
+          teamId: null,
+        },
+        rev: localWrite.rev,
+      },
+    ]);
+    expect(getWorkspacePref('slack', null, 'repo').model).toBe('server-only-model');
+    expect(isWorkspacePrefsMirrorCandidateCurrent('slack', candidates[0]!)).toBe(true);
+
+    markWorkspacePrefMirrored('slack', null, 'chat', localWrite.rev);
+    expect(isWorkspacePrefsMirrorCandidateCurrent('slack', candidates[0]!)).toBe(false);
+  });
+
+  it('首次迁移导入 server 的 team 清空行，继续遮住 null-team 兜底', () => {
+    const candidates = reconcileWorkspacePrefsForMirror('slack', [
+      {
+        workspace: 'repo',
+        model: 'fallback-model',
+        effort: 'high',
+        agentKind: 'claude-code',
+        permissionMode: 'ask',
+        teamId: null,
+      },
+      {
+        workspace: 'repo',
+        model: null,
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+        teamId: 'T1',
+      },
+    ]);
+
+    expect(getWorkspacePref('slack', 'T1', 'repo').model).toBeNull();
+    expect(getWorkspacePref('slack', 'T2', 'repo').model).toBe('fallback-model');
+    expect(candidates).toEqual([]);
   });
 
   it('server 全量快照不复活本机墓碑，也不丢掉未镜像的本机实值', () => {
@@ -191,8 +351,83 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('slack', null, 'repo').model).toBe('from-card');
   });
 
-  it('快照已无该键时也丢掉墓碑（删除已在 server 落地）', () => {
+  it('team 清空镜像成功后仍保留墓碑，避免重新继承 null 兜底', () => {
     setWorkspacePref('slack', null, 'repo', {
+      model: 'sonnet',
+      effort: 'high',
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
+    const cleared = setWorkspacePref('slack', 'T1', 'repo', {
+      model: null,
+      effort: null,
+      agentKind: null,
+      permissionMode: null,
+    });
+
+    markWorkspacePrefMirrored('slack', 'T1', 'repo', cleared.rev);
+
+    expect(getWorkspacePref('slack', 'T1', 'repo')).toMatchObject({
+      model: null,
+      effort: null,
+      agentKind: null,
+      permissionMode: null,
+    });
+    expect(getWorkspacePref('slack', 'T2', 'repo')).toMatchObject({
+      model: 'sonnet',
+      effort: 'high',
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
+  });
+
+  it('server 快照省略已清空的 team 键时仍保留墓碑，直到 null 兜底消失', () => {
+    reconcileWorkspacePrefsForMirror('slack', []);
+    const fallback = setWorkspacePref('slack', null, 'repo', {
+      model: 'sonnet',
+      agentKind: 'claude-code',
+    });
+    markWorkspacePrefMirrored('slack', null, 'repo', fallback.rev);
+    const cleared = setWorkspacePref('slack', 'T1', 'repo', {
+      model: null,
+      effort: null,
+      agentKind: null,
+      permissionMode: null,
+    });
+    markWorkspacePrefMirrored('slack', 'T1', 'repo', cleared.rev);
+
+    applyIncomingServerWorkspacePrefs('slack', [
+      {
+        workspace: 'repo',
+        model: 'sonnet',
+        effort: null,
+        agentKind: 'claude-code',
+        permissionMode: null,
+        teamId: null,
+      },
+    ]);
+
+    expect(getWorkspacePref('slack', 'T1', 'repo').model).toBeNull();
+    expect(getWorkspacePref('slack', 'T2', 'repo').model).toBe('sonnet');
+    expect(
+      reconcileWorkspacePrefsForMirror('slack', [
+        {
+          workspace: 'repo',
+          model: 'sonnet',
+          effort: null,
+          agentKind: 'claude-code',
+          permissionMode: null,
+          teamId: null,
+        },
+      ]),
+    ).toEqual([]);
+
+    applyIncomingServerWorkspacePrefs('slack', []);
+    expect(listWorkspacePrefs('slack')).toEqual([]);
+  });
+
+  it('dirty 墓碑不因快照省略而丢失，直到镜像回执确认', () => {
+    const cleared = setWorkspacePref('slack', null, 'repo', {
       model: null,
       effort: null,
       agentKind: null,
@@ -208,7 +443,16 @@ describe('workspacePrefsStore', () => {
         permissionMode: null,
       },
     ]);
+    expect(
+      listWorkspacePrefs('slack')
+        .map((e) => e.workspace)
+        .sort(),
+    ).toEqual(['chat', 'repo']);
+    expect(getWorkspacePref('slack', null, 'repo').model).toBeNull();
+
+    markWorkspacePrefMirrored('slack', null, 'repo', cleared.rev);
     expect(listWorkspacePrefs('slack').map((e) => e.workspace)).toEqual(['chat']);
+
     applyIncomingServerWorkspacePrefs('slack', [
       {
         workspace: 'repo',
@@ -266,6 +510,74 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('slack', null, 'repo').model).toBeNull();
     expect(listWorkspacePrefs('slack').map((e) => e.workspace).sort()).toEqual(['chat', 'other']);
     expect(getWorkspacePref('slack', null, 'chat').model).toBe('dirty-local');
+  });
+
+  it('远端删除行后 partial patch 只复写本地实际修改的字段', () => {
+    reconcileWorkspacePrefsForMirror('slack', [
+      {
+        workspace: 'repo',
+        model: 'old-model',
+        effort: 'high',
+        agentKind: 'claude-code',
+        permissionMode: 'ask',
+      },
+    ]);
+    setWorkspacePref('slack', null, 'repo', { model: 'new-local-model' });
+
+    const candidates = reconcileWorkspacePrefsForMirror('slack', []);
+
+    expect(candidates).toEqual([
+      {
+        prefs: {
+          workspace: 'repo',
+          model: 'new-local-model',
+          effort: null,
+          agentKind: null,
+          permissionMode: null,
+          teamId: null,
+        },
+        rev: 1,
+      },
+    ]);
+  });
+
+  it('远端省略 team 行但仍有 null-team 兜底时保留兜底的未改字段', () => {
+    reconcileWorkspacePrefsForMirror('slack', [
+      {
+        workspace: 'repo',
+        model: 'old-team-model',
+        effort: 'low',
+        agentKind: 'codex',
+        permissionMode: 'ask',
+        teamId: 'T1',
+      },
+    ]);
+    setWorkspacePref('slack', 'T1', 'repo', { model: 'new-team-model' });
+
+    const candidates = reconcileWorkspacePrefsForMirror('slack', [
+      {
+        workspace: 'repo',
+        model: 'fallback-model',
+        effort: 'high',
+        agentKind: 'claude-code',
+        permissionMode: 'full',
+        teamId: null,
+      },
+    ]);
+
+    expect(candidates).toEqual([
+      {
+        prefs: {
+          workspace: 'repo',
+          model: 'new-team-model',
+          effort: 'high',
+          agentKind: 'claude-code',
+          permissionMode: 'full',
+          teamId: 'T1',
+        },
+        rev: 1,
+      },
+    ]);
   });
 
   it('replaceChannel 只替换该渠道，并丢掉空白/非法别名', () => {

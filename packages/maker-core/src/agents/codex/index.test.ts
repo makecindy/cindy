@@ -433,6 +433,7 @@ function installFakeHost(
     codexBrowserUseVersion?: string;
     codexBrowserMcpToolAvailable?: boolean;
     remoteCompactionProviderId?: string;
+    cindyRemoteCompactionProviderId?: string;
     subagentModelFallback?: string;
     subagentRoute?: {
       providerId: string;
@@ -507,6 +508,9 @@ function installFakeHost(
     opts.codexBrowserMcpToolAvailable ?? opts.codexBrowserUseAvailable === true
   ));
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
+  const getCindyRemoteCompactionProviderId = vi.fn(
+    () => opts.cindyRemoteCompactionProviderId ?? null,
+  );
   const getSessionMcpConfig = vi.fn((sessionInstanceId?: string) =>
     opts.buildSessionMcpConfig?.(sessionInstanceId) ?? {},
   );
@@ -526,6 +530,7 @@ function installFakeHost(
     getCodexBrowserUseVersion,
     waitForMcpTool,
     getRemoteCompactionProviderId,
+    getCindyRemoteCompactionProviderId,
     getSessionMcpConfig,
     getSubagentModelFallback,
     getSubagentRoute,
@@ -3700,11 +3705,12 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await handle.close();
   });
 
-  it('passes the OpenAI compaction provider to thread/start only for oauth-family sessions', async () => {
+  it('selects remote compaction identities only for ChatGPT and Cindy codex routes', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, undefined, {
       codexProxyActive: true,
       remoteCompactionProviderId: 'cindy_openai',
+      cindyRemoteCompactionProviderId: 'cindy_codex',
     });
 
     // 显式 openai 来源(ChatGPT 订阅直连)→ thread 选 OpenAI 身份 provider(远端压缩)。
@@ -3720,7 +3726,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(oauthParams.modelProvider).toBe('cindy_openai');
     await oauthHandle.close();
 
-    // 折扣 codex/(gateway-key 家族)→ 保持默认 provider(本地压缩)。
+    // Cindy Provider codex/* → 同一 app-server 内选择固定 HTTP 的远程压缩 identity。
     host.request.mock.calls.length = 0;
     const gatewayHandle = await agent.startSession({
       sessionId: 'session-gateway',
@@ -3731,8 +3737,35 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const gatewayParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       modelProvider?: string;
     };
-    expect(gatewayParams.modelProvider).toBeUndefined();
+    expect(gatewayParams.modelProvider).toBe('cindy_codex');
     await gatewayHandle.close();
+
+    // 旧会话未写 providerId 时，codex/* 仍属于 Cindy Provider。
+    host.request.mock.calls.length = 0;
+    const implicitGatewayHandle = await agent.startSession({
+      sessionId: 'session-gateway-implicit',
+      model: 'codex/gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    const implicitGatewayParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { modelProvider?: string };
+    expect(implicitGatewayParams.modelProvider).toBe('cindy_codex');
+    await implicitGatewayHandle.close();
+
+    // Cindy Provider 的非 codex/* 模型不误开远程压缩。
+    host.request.mock.calls.length = 0;
+    const plainGatewayHandle = await agent.startSession({
+      sessionId: 'session-gateway-plain',
+      model: 'deepseek/deepseek-v4-pro',
+      providerId: 'xd',
+      workingDir: '/repo',
+    });
+    const plainGatewayParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { modelProvider?: string };
+    expect(plainGatewayParams.modelProvider).toBeUndefined();
+    await plainGatewayHandle.close();
 
     // xAI(provider-oauth 家族)→ 保持默认 provider。
     host.request.mock.calls.length = 0;
@@ -3747,6 +3780,33 @@ describe('CodexAgent.startSession developerInstructions', () => {
     };
     expect(xaiParams.modelProvider).toBeUndefined();
     await xaiHandle.close();
+  });
+
+  it('keeps Cindy codex root compaction local when an independent subagent uses another backend', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      cindyRemoteCompactionProviderId: 'cindy_codex',
+      subagentRoute: {
+        providerId: 'xai',
+        catalogModel: 'xai/grok-4.3',
+        reasoningEffort: 'high',
+      },
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-cindy-codex-with-xai-subagent',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { modelProvider?: string };
+
+    expect(params.modelProvider).toBeUndefined();
+    expect(handle.codexCindyRemoteCompactionCompatible).toBe(false);
+    await handle.close();
   });
 
   it('passes the OpenAI compaction provider for implicit-source sessions on an oauth-effective host', async () => {

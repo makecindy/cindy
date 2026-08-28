@@ -25,8 +25,11 @@ import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import { usePrStatuses } from '@/contexts/PrRefsContext';
 import { PR_STATUS_COLOR, PR_STATUS_ICON } from '../gitContextPrVisuals';
 import { formatSidebarFutureTime } from '../lib/formatSidebarTime';
-import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
-import type { ScheduleSidebarIndexRun } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import {
+  findLatestSidebarIndexRunForSession,
+  loadScheduleSidebarIndexRuns,
+  type ScheduleSidebarIndexRun,
+} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 
 const CONTENT_SURFACE_CLASS = cn(
   'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
@@ -44,7 +47,7 @@ export interface SessionTooltipProps {
   sourceLabel?: string;
   /**
    * 单独渲染的 automation-generated 会话(未被 AutomationSessionGroupItem 吸走)
-   * 需要展示「下次运行倒计时 + 累计运行次数」浮层,和分组头 rowTooltip 语义一致。
+   * 需要展示下次运行或停止状态浮层。
    * 优先级:PR > automation > sourceLabel(PR 承载工程上下文最重,automation 承载
    * 计划信息次之,sourceLabel 只是「来自哪个项目」的静态标签)。
    */
@@ -143,10 +146,8 @@ function PrTooltip({
 }
 
 /**
- * 单独 automation-generated 会话行的 hover 浮层 —— 显示「下次运行剩余时间 + 累计运行
- * 次数」,和 AutomationSessionGroupItem 的 rowTooltip 语义一致。数据源和 Timer chip
- * 点击复用同一套 loadScheduleSidebarIndexRuns:runs 里每条自带 nextFireAt /
- * scheduleStatus,同 scheduleId 的条数即为总运行次数。tooltip 打开时才发起一次拉取
+ * 单独 automation-generated 会话行的 hover 浮层 —— 显示下次运行剩余时间或停止状态。
+ * 数据源和 Timer chip 点击复用同一套 loadScheduleSidebarIndexRuns；tooltip 打开时才发起一次拉取
  * (与 PrTooltip 的 fetchStatusesForSession 同风格,不在密集渲染路径上常驻拉数据);
  * 拉到的 nextFireAt 用一次性 formatSidebarFutureTime 转成 "N 分钟后运行",不做秒级 tick
  * (tooltip 通常只停留几秒,静态文案够用)。
@@ -179,17 +180,14 @@ function AutomationTooltip({
     };
   }, [effectiveOpen, runs]);
 
-  const hit = runs?.find((r) => r.sessionId === sessionId) ?? null;
+  const hit = runs ? (findLatestSidebarIndexRunForSession(runs, sessionId) ?? null) : null;
   const countdownText =
     hit && hit.scheduleStatus === 'active' && typeof hit.nextFireAt === 'number'
       ? formatSidebarFutureTime(hit.nextFireAt, t)
       : '';
   const isStopped = hit?.scheduleStatus === 'paused' || hit?.scheduleStatus === 'expired';
   const stoppedText = isStopped ? t('ccAgent.sidebar.automationGroup.stopped') : '';
-  const runCount = hit ? runs!.filter((r) => r.scheduleId === hit.scheduleId).length : 0;
-  const runCountText =
-    runCount > 0 ? t('ccAgent.sidebar.automationGroup.runCount', { count: runCount }) : '';
-  const hasContent = countdownText || stoppedText || runCountText;
+  const hasContent = countdownText || stoppedText;
 
   return (
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
@@ -202,7 +200,6 @@ function AutomationTooltip({
             <div className="flex flex-col gap-0.5">
               {countdownText && <span>{countdownText}</span>}
               {stoppedText && <span>{stoppedText}</span>}
-              {runCountText && <span>{runCountText}</span>}
             </div>
           </Tooltip.Content>
         )}

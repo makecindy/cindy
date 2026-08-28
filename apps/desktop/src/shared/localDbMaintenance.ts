@@ -9,13 +9,17 @@ export type DbSlimmingBackupLocation = 'database-directory' | 'custom-directory'
 export interface DbSlimmingScanInput {
   /** Legacy wire key retained so existing numeric month requests stay readable. */
   archiveAgeMonths: DbSlimmingArchiveAge;
+  /** Explicit opt-in: active tasks are excluded from cleanup by default. */
+  includeActiveTasks?: boolean;
 }
 
 export interface DbSlimmingScanResult {
   scanId: string;
   archiveAgeMonths: DbSlimmingArchiveAge;
+  includeActiveTasks: boolean;
   scannedAt: number;
   archivedBeforeMs: number;
+  activeTaskCount: number;
   deletedTaskCount: number;
   archivedTaskCount: number;
   messageCount: number;
@@ -84,6 +88,8 @@ export type DbSlimmingResult =
       status: 'completed';
       finishedAt: number;
       archiveAgeMonths: DbSlimmingArchiveAge;
+      /** Missing on results written before active-task cleanup was introduced. */
+      activeTaskCount?: number;
       deletedTaskCount: number;
       archivedTaskCount: number;
       messageCount: number;

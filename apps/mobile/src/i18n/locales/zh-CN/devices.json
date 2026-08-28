@@ -98,9 +98,12 @@
       "time": {
         "unknown": "最近活动时间未知",
         "justNow": "刚刚",
-        "minutesAgo": "{{count}} 分钟前",
-        "hoursAgo": "{{count}} 小时前",
-        "daysAgo": "{{count}} 天前",
+        "minutesAgo_one": "{{count}} 分钟前",
+        "minutesAgo_other": "{{count}} 分钟前",
+        "hoursAgo_one": "{{count}} 小时前",
+        "hoursAgo_other": "{{count}} 小时前",
+        "daysAgo_one": "{{count}} 天前",
+        "daysAgo_other": "{{count}} 天前",
         "minutes": "{{count}} 分钟",
         "hours": "{{count}} 小时",
         "days": "{{count}} 天",
@@ -184,6 +187,14 @@
       "running": "运行中",
       "close": "关闭",
       "cancelRename": "取消重命名"
+    },
+    "accounts": {
+      "title": "切换账号",
+      "add": "登录更多账号",
+      "syncFailed": "账号信息暂时无法更新",
+      "runningTitle": "切换账号？",
+      "runningMessage": "仍有任务正在运行。切换后任务会继续在电脑上运行，但此手机将停止接收和控制这些任务。",
+      "switchConfirm": "继续切换"
     },
     "menu": {
       "groupByProject": "按项目分组",

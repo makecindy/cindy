@@ -33,7 +33,7 @@ describe('database slimming IPC security wiring', () => {
     }
   });
 
-  it('keeps unexpected maintenance details in Main and requires native no-backup consent', () => {
+  it('keeps unexpected maintenance details in Main and requires native destructive consent', () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, '..', 'bootstrap-electron.ts'),
       'utf8',
@@ -46,6 +46,8 @@ describe('database slimming IPC security wiring', () => {
     expect(sanitizer).toContain('if (isIpcError(error)) throw error;');
     expect(sanitizer).toContain("throwIpcError('INTERNAL', 'database maintenance request failed')");
     expect(source).toContain('confirmWithoutBackup: async () =>');
+    expect(source).toContain('confirmActiveTaskCleanup: async ({ backupEnabled }) =>');
+    expect(source).toContain('dbSlimmingIncludeActiveConfirmDescription');
     expect(source).toContain('await dialog.showMessageBox');
   });
 });

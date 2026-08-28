@@ -101,6 +101,8 @@ const D_MEDIA = [
   "媒体生成必须由当前 Agent 通过本工具发起；插件面板和插件沙箱代码不得直接提交生成请求。",
   "插件已返回用户配置的 model_id/provider_id 时必须原样传给 prepare，再按目标 capability 走 prepare → request；provider_id 用于区分不同 Provider 下的同名模型。没有已配置模型时，先用 list_models 查询。Gateway 模型的 prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
   "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
+  "Core 图片完成结果由当前 Agent 控制呈现：在最终回复中用返回的受管地址只嵌入展示一次，不要同时重复口播或再次附同一图片。",
+  "展示、改图和附件交接都直接使用 cindy-media:// / xdt-image:// / xdt-video:// 受管地址，不需要本地路径。仅当用户明确询问文件存储位置或本地路径时，才调用 resolve_local_path 并原样传入 url；Host 会要求用户点击确认后才返回路径。不要猜路径或扫描磁盘。",
   "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
   "Guide 缺失、能力不匹配或当前客户端不支持协议时，结果会带稳定 errorCode、retryable、outcomeKnown 和 allowedActions；可按 allowedActions 换模型、改用其它已授权工具或仍存在的旧链路，不要把 INTERNAL 当成协议能力结论。",
   "prepare 返回的 invocation_id 是一次性付费提交令牌；request 超时或返回 SUBMISSION_OUTCOME_UNKNOWN 时不要自动重提，以免重复扣费。",
@@ -546,8 +548,9 @@ const MEDIA_CAPABILITIES = new Set<CindyMediaCapability>([
 export async function handleMedia(
   deps: CindyGhostsMcpDeps,
   input: {
-    action: "list_models" | "prepare" | "request" | "poll";
+    action: "list_models" | "resolve_local_path" | "prepare" | "request" | "poll";
     capability?: CindyMediaCapability;
+    url?: string;
     provider_id?: string;
     model_id?: string;
     invocation_id?: string;
@@ -576,6 +579,21 @@ export async function handleMedia(
       result = await deps.callMedia({
         action: "list_models",
         ...(input.capability ? { capability: input.capability } : {}),
+      });
+    } else if (input.action === "resolve_local_path") {
+      if (!input.url) {
+        return textResult(
+          {
+            ok: false,
+            errorCode: "INVALID_INPUT",
+            message: "resolve_local_path 必须提供 url。",
+          },
+          true,
+        );
+      }
+      result = await deps.callMedia({
+        action: "resolve_local_path",
+        url: input.url,
       });
     } else if (input.action === "prepare") {
       if (!input.model_id || !input.capability) {
@@ -1259,7 +1277,7 @@ export function createCindyGhostsMcpServer(
     D_MEDIA,
     {
       action: z
-        .enum(["list_models", "prepare", "request", "poll"])
+        .enum(["list_models", "resolve_local_path", "prepare", "request", "poll"])
         .describe("要执行的媒体调用阶段"),
       capability: z
         .enum([
@@ -1280,6 +1298,11 @@ export function createCindyGhostsMcpServer(
         .max(128)
         .optional()
         .describe("prepare 时可选；插件或 list_models 返回 provider_id 时必须原样传入，以区分同名模型的执行来源"),
+      url: z
+        .string()
+        .max(4096)
+        .optional()
+        .describe("resolve_local_path 时必填；原样传入 cindy-media://、xdt-image:// 或 xdt-video:// 受管地址。仅在用户明确询问本地存储路径时使用，Host 会要求用户点击确认"),
       invocation_id: z
         .string()
         .max(128)

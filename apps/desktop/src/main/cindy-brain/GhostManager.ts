@@ -1037,6 +1037,19 @@ export class GhostManager {
   }
 
   /**
+   * 自动接管只能把一份成功读取且仍为 approved 的 receipt 当作来源证据。
+   * 与授权链的宽松投影不同，这里任何缺失、损坏或 I/O 异常都必须上抛。
+   */
+  readApprovedInstallOriginStrict(id: string): 'manual' | 'agent-forge' {
+    this.ensureCurrentOwnerContextSync();
+    const approval = this.readApproval(id);
+    if (approval.state !== 'approved') {
+      throw new Error(`approved Plugin receipt is unavailable: ${approval.state}`);
+    }
+    return effectiveInstallOrigin(approval.receipt);
+  }
+
+  /**
    * Host-owned evidence for reconnecting an installation to retained source metadata.
    * A pending package mutation or an invalid approval fails closed. Legacy provenance
    * is accepted only from the completed one-time migration's explicit id list.

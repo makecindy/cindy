@@ -323,7 +323,7 @@ import {
 import { mobileAgentLabel, mobileAgentVendor } from '@/session/sessionAgentSwitch';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { draftModelMemoryFor, hydrateDraftModelMemory } from '@/session/draftModelMemory';
-import { rowFastEditable } from '@/session/modelPickerRows';
+import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -395,7 +395,7 @@ interface WorktreeCreateIntentSnapshot {
 export default function NewRemoteSessionScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   // Dev-only:把构建信息从全局浮层挪到这里的顶部展示(试 Fast Refresh)。
   const buildLabel = __DEV__
     ? formatMobileBuildLabel(normalizeBuildInfo({
@@ -1059,7 +1059,8 @@ export default function NewRemoteSessionScreen() {
   );
   const runtimeSummary = useMemo(
     () => buildDraftRuntimeSummary(draft, runtimeOptions),
-    [draft, runtimeOptions],
+    // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
+    [draft, runtimeOptions, i18nInstance.language],
   );
   // 权限按钮 / 权限下拉不体现 plan(对齐桌面 PR#494 / Cursor):计划模式激活时展示
   // 进入前的底层权限档(无记录时回退首个非 plan 档),激活态由 composer 的 PlanModeChip 表达。
@@ -6102,7 +6103,7 @@ function buildDraftRuntimeSummary(
   runtime: MobileSessionRuntimeOptions,
 ): { modelSummary: string; permissionLabel: string } {
   const modelLabel = runtime.currentModel?.label ?? draft.model;
-  const effortLabel = choiceLabel(runtime.effortOptions, draft.effort);
+  const effortLabel = effortLabelFromRuntime(runtime, draft.effort);
   return {
     modelSummary: [modelLabel, effortLabel].filter(Boolean).join(' · '),
     permissionLabel: choiceLabel(runtime.permissionOptions, draft.permissionMode),

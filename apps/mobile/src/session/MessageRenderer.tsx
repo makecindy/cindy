@@ -328,6 +328,8 @@ import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTrans
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { i18n } from '@/i18n';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
+import { mobileToolRowWording } from '@/i18n/toolWording';
 
 const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };
 const MESSAGE_CONTROL_TOUCH_SIZE = 44;
@@ -2721,10 +2723,15 @@ function ToolGroupCard({
   actions: MessageActions & { firstUserMessageClientId?: string };
 }) {
   const { colors } = useTheme();
+  const { i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const rowOptions = useMemo(
-    () => ({ isSessionStreaming: actions.isSessionStreaming === true }),
-    [actions.isSessionStreaming],
+    () => ({
+      isSessionStreaming: actions.isSessionStreaming === true,
+      wording: mobileToolRowWording,
+      localizer: mobilePresentationLocalizer,
+    }),
+    [actions.isSessionStreaming, i18n.language],
   );
   const presentation = summarizeToolGroupPresentation(item, rowOptions);
   const header = presentation.header;
@@ -3137,9 +3144,12 @@ function WorkGroupCard({
   actions: MessageActions & { firstUserMessageClientId?: string };
 }) {
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const presentation = summarizeWorkGroupPresentation(item);
+  const presentation = useMemo(
+    () => summarizeWorkGroupPresentation(item, mobilePresentationLocalizer),
+    [i18n.language, item],
+  );
   const header = presentation.header;
   const isStreaming = item.isStreaming === true;
   const [expanded, toggleExpanded] = useFoldableExpandedState(item.key, false);
@@ -3257,12 +3267,14 @@ function WorkToolActivityRow({
   activity: MobileProjectedToolActivity;
   contentLayout: MessageContentLayout;
 }) {
+  const { i18n } = useTranslation();
   const tool = activity.message.normalized;
   const row = useMemo(() => summarizeToolRowPresentation(tool, {
     isSessionStreaming: actions.isSessionStreaming === true,
     intentOverride: activity.intentOverride,
     statusOverride: activity.status,
-  }), [actions.isSessionStreaming, activity.intentOverride, activity.status, tool]);
+    wording: mobileToolRowWording,
+  }), [actions.isSessionStreaming, activity.intentOverride, activity.status, i18n.language, tool]);
   return (
     <ToolActionRow
       actions={actions}

@@ -85,7 +85,7 @@ describe('remote agent installer', () => {
           exitCode: 0,
           stdout: [
             'INSTALL_DIR /home/u/.xdt-server/v1',
-            'READY 0.83.0',
+            `READY ${PINNED_PI_VERSION}`,
           ].join('\n'),
           stderr: '',
         };
@@ -94,7 +94,7 @@ describe('remote agent installer', () => {
 
     const probe = await probeRemoteAgent(host, 'pi');
     expect(probe.installed).toBe(true);
-    expect(probe.installedVersion).toBe('0.83.0');
+    expect(probe.installedVersion).toBe(PINNED_PI_VERSION);
     expect(probe.binaryPath).toBe('/home/u/.xdt-server/v1/pi/pi');
     expect(calls[0].command).toContain(`'${PINNED_PI_VERSION}'`);
   });
@@ -111,7 +111,7 @@ describe('remote agent installer', () => {
             'INSTALL_START pi',
             'INSTALL_LOG sha256 ok',
             'INSTALL_DONE',
-            'READY 0.83.0',
+            `READY ${PINNED_PI_VERSION}`,
           ].join('\n'),
           stderr: '',
         };
@@ -120,7 +120,7 @@ describe('remote agent installer', () => {
 
     const result = await installRemoteAgent(host, 'pi');
     expect(result.ready).toBe(true);
-    expect(result.installedVersion).toBe('0.83.0');
+    expect(result.installedVersion).toBe(PINNED_PI_VERSION);
     expect(result.binaryPath).toBe('/home/u/.xdt-server/v1/pi/pi');
     // 4 个 POSIX 平台 SHA256(darwin-arm64 / darwin-x64 / linux-arm64 / linux-x64)。
     expect(calls[0].command).toContain(`'${PINNED_PI_VERSION}'`);

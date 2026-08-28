@@ -5,7 +5,7 @@
  * 树内 overlay(不用 RN Modal),避免和首页其它 Modal 抢 present/dismiss。
  * 动画 / 左滑关闭对齐 SessionListDrawer,遵循 reduce-motion。
  */
-import { Search, Settings } from 'lucide-react-native';
+import { LogOut, Search, Settings, UsersRound } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -52,7 +52,10 @@ export function HomeChromeDrawer({
   onClose,
   onClosed,
   onOpenSearch,
+  onOpenAccounts,
   onOpenSettings,
+  onLogout,
+  loggingOut = false,
   open,
   user,
 }: {
@@ -61,9 +64,19 @@ export function HomeChromeDrawer({
   onClose(): void;
   onClosed?(): void;
   onOpenSearch(): void;
+  onOpenAccounts(): void;
   onOpenSettings(): void;
+  onLogout(): void;
+  loggingOut?: boolean;
   open: boolean;
-  user: { avatar: string | null; email: string | null; name: string } | null;
+  user: {
+    avatar: string | null;
+    email: string | null;
+    membershipKind: 'personal' | 'org';
+    name: string;
+    orgLogoUrl: string | null;
+    orgName: string | null;
+  } | null;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -195,10 +208,15 @@ export function HomeChromeDrawer({
   }, [onOpenSettings]);
 
   const accountName = user?.name.trim() || user?.email?.trim() || t('settings.header.notSignedIn');
-  const accountEmail = user?.email?.trim() && user.email.trim() !== accountName
-    ? user.email.trim()
-    : null;
-  const avatarLabel = (accountName.trim()[0] ?? '?').toUpperCase();
+  const isOrg = user?.membershipKind === 'org';
+  const accountTitle = isOrg ? user?.orgName?.trim() || accountName : accountName;
+  const accountSubtitle = isOrg
+    ? accountName
+    : user?.email?.trim() && user.email.trim() !== accountName
+      ? user.email.trim()
+      : null;
+  const accountImage = isOrg ? user?.orgLogoUrl : user?.avatar;
+  const avatarLabel = (accountTitle.trim()[0] ?? '?').toUpperCase();
 
   if (!mounted) return null;
 
@@ -227,27 +245,21 @@ export function HomeChromeDrawer({
           ]}
           testID="home.chromeMenu.panel"
         >
-          <Pressable
-            accessibilityLabel={accountEmail ? `${accountName}, ${accountEmail}` : accountName}
-            accessibilityRole="button"
-            onPress={openSettingsImmediately}
-            style={({ pressed }) => [styles.accountRow, pressed && styles.pressed]}
-            testID="home.chromeDrawer.account"
-          >
+          <View style={styles.accountRow} testID="home.chromeDrawer.account">
             <View style={styles.avatar}>
-              {user?.avatar ? (
-                <Image source={{ uri: user.avatar }} style={styles.avatarImage} />
+              {accountImage ? (
+                <Image source={{ uri: accountImage }} style={styles.avatarImage} />
               ) : (
                 <Text style={styles.avatarText}>{avatarLabel}</Text>
               )}
             </View>
             <View style={styles.accountTexts}>
-              <Text numberOfLines={1} style={styles.accountName}>{accountName}</Text>
-              {accountEmail ? (
-                <Text numberOfLines={1} style={styles.accountEmail}>{accountEmail}</Text>
+              <Text numberOfLines={1} style={styles.accountName}>{accountTitle}</Text>
+              {accountSubtitle ? (
+                <Text numberOfLines={1} style={styles.accountEmail}>{accountSubtitle}</Text>
               ) : null}
             </View>
-          </Pressable>
+          </View>
 
           <View style={styles.divider} />
 
@@ -272,6 +284,40 @@ export function HomeChromeDrawer({
           >
             <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
             <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.list.menu.settings')}</Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityLabel={t('devices.list.accounts.title')}
+            accessibilityRole="button"
+            onPress={onOpenAccounts}
+            style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
+            testID="home.chromeDrawer.accounts"
+          >
+            <UsersRound color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.list.accounts.title')}</Text>
+          </Pressable>
+
+          <View style={styles.menuDivider} />
+
+          <Pressable
+            accessibilityLabel={loggingOut
+              ? t('settings.account.loggingOutAccessibility')
+              : t('settings.account.logout')}
+            accessibilityRole="button"
+            accessibilityState={{ busy: loggingOut || undefined, disabled: loggingOut || undefined }}
+            disabled={loggingOut}
+            onPress={onLogout}
+            style={({ pressed }) => [
+              styles.menuRow,
+              pressed && styles.pressed,
+              loggingOut && styles.disabled,
+            ]}
+            testID="home.chromeDrawer.logout"
+          >
+            <LogOut color={colors.destructive} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            <Text numberOfLines={1} style={[styles.menuLabel, styles.dangerMenuLabel]}>
+              {loggingOut ? t('settings.account.loggingOut') : t('settings.account.logout')}
+            </Text>
           </Pressable>
         </Animated.View>
       </GestureDetector>
@@ -350,6 +396,12 @@ const makeStyles = (colors: ThemeColors) =>
       height: StyleSheet.hairlineWidth,
       marginHorizontal: spacing.lg,
     },
+    menuDivider: {
+      backgroundColor: colors.border,
+      height: StyleSheet.hairlineWidth,
+      marginHorizontal: spacing.lg,
+      marginVertical: spacing.xs,
+    },
     menuRow: {
       alignItems: 'center',
       borderRadius: radius.container,
@@ -366,6 +418,12 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: fontWeight.medium,
       lineHeight: lineHeight.body,
       minWidth: 0,
+    },
+    dangerMenuLabel: {
+      color: colors.destructive,
+    },
+    disabled: {
+      opacity: 0.48,
     },
     pressed: {
       opacity: 0.72,

@@ -39,6 +39,10 @@ vi.mock('@/hooks/useBetaChannelSettings', () => ({
   useBetaChannelSettings: () => ({ state: betaChannelState }),
 }));
 
+vi.mock('@/hooks/useLogout', () => ({
+  useLogout: () => ({ handleLogout: vi.fn() }),
+}));
+
 vi.mock('@/components/sidebar/MobileDownloadDialog', () => ({
   MobileDownloadDialog: ({
     open,
@@ -89,9 +93,7 @@ describe('UserInfoSection mobile download entry', () => {
     expect(screen.getByTestId('sidebar-beta-channel-label').textContent).toBe(
       'settings.betaChannel.badge',
     );
-    expect(
-      screen.getByRole('link', { name: 'sidebar.user.settingsLinkBeta' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'sidebar.user.moreLabel' })).toBeTruthy();
   });
 
   it.each([

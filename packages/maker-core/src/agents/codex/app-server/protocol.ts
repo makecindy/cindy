@@ -215,8 +215,8 @@ export interface ThreadStartParams {
   model?: string;
   /**
    * 覆盖本 thread 的 model provider(config `model_providers` 里的 key)。
-   * 缺省走 config 顶层 model_provider。用于订阅直连 thread 选 OpenAI 身份
-   * provider(开远端压缩);provider 身份是 thread 级冻结,settings/update 改不了。
+   * 缺省走 config 顶层 model_provider。用于支持远端压缩的 thread 选择内部 OpenAI
+   * transport identity；产品 Provider 不随之改变。provider 身份是 thread 级冻结。
    */
   modelProvider?: string;
   cwd?: string;

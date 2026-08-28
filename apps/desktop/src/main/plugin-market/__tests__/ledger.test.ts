@@ -122,6 +122,23 @@ describe('PluginMarketLedger', () => {
     ).toBe(false);
   });
 
+  it('detaches a replacement source without creating or clearing explicit opt-out', () => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(record());
+    ledger.markRemoved('cindy-test', 'user-a');
+    ledger.restoreInstallation(record());
+    expect(ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`)).toBe(true);
+
+    ledger.markRemoved('cindy-test', null);
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({ installed: false });
+    expect(ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`)).toBe(true);
+    expect(ledger.isDefaultInstallSuppressed('user-b', `c${'a'.repeat(24)}`)).toBe(false);
+
+    ledger.restoreInstallation(record());
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({ installed: true });
+    expect(ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`)).toBe(true);
+  });
+
   it('atomically reconnects an unchanged server record and clears its false opt-out', () => {
     const { ledger } = harness();
     ledger.upsertInstallation(record({ rawManifestSha256: 'd'.repeat(64) }));

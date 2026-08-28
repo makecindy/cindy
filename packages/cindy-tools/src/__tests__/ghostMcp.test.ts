@@ -1152,6 +1152,18 @@ describe("cindy · media MCP 边界", () => {
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });
   });
 
+  it("把受管媒体地址交给 Host 按需解析本地路径", async () => {
+    const url = `cindy-media://blobs/${"a".repeat(64)}.png`;
+    const callMedia = vi.fn(async () => ({ ok: true, local_path: "/media/a.png" }));
+    const result = await handleMedia(fakeDeps({ callMedia }), {
+      action: "resolve_local_path",
+      url,
+    });
+
+    expect(callMedia).toHaveBeenCalledWith({ action: "resolve_local_path", url });
+    expect(parsePayload(result)).toMatchObject({ ok: true, local_path: "/media/a.png" });
+  });
+
   it("在进入 Host 前拒绝缺失字段和未知 capability", async () => {
     const callMedia = vi.fn(async () => ({ ok: true }));
     expect(
@@ -1167,6 +1179,13 @@ describe("cindy · media MCP 边界", () => {
         await handleMedia(fakeDeps({ callMedia }), {
           action: "list_models",
           capability: "document.generate" as "image.generate",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(
+      parsePayload(
+        await handleMedia(fakeDeps({ callMedia }), {
+          action: "resolve_local_path",
         }),
       ),
     ).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });

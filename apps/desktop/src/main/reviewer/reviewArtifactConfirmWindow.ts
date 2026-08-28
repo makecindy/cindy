@@ -1,8 +1,4 @@
-import {
-  BrowserWindow,
-  nativeTheme,
-  type BrowserWindowConstructorOptions,
-} from 'electron';
+import { BrowserWindow, nativeTheme, type BrowserWindowConstructorOptions } from 'electron';
 
 import { resolveAppThemeIsDark } from '../resolved-app-theme.js';
 import { readWindowThemeSnapshot } from '../window-theme-mode-store.js';
@@ -10,6 +6,10 @@ import type { ReviewArtifactConfirmDialogModel } from './reviewArtifactDialog.js
 import { markReviewArtifactConfirmWebContentsId } from './reviewArtifactConfirmWindowRegistry.js';
 
 const DEFAULT_TIMEOUT_MS = 90_000;
+const DECISION_PROTOCOL = 'cindy-review-artifact-confirm:';
+const ALLOW_DECISION_URL = `${DECISION_PROTOCOL}//allow`;
+const CANCEL_DECISION_URL = `${DECISION_PROTOCOL}//cancel`;
+const FOCUS_PRIMARY_ACTION_SCRIPT = "document.getElementById('review-confirm-allow')?.focus()";
 
 export interface ReviewArtifactConfirmWindowOptions {
   timeoutMs?: number;
@@ -68,13 +68,14 @@ li { margin-top: 8px; padding: 11px 12px; border: 1px solid var(--border); borde
 .label { overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
 .path { margin-top: 4px; overflow-wrap: anywhere; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 footer { display: flex; flex: none; justify-content: flex-end; gap: 10px; margin-top: auto; padding-top: 26px; }
-.button { display: inline-flex; min-width: 88px; height: 36px; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; font-weight: 600; text-decoration: none; }
+form { margin: 0; }
+.button { appearance: none; display: inline-flex; min-width: 88px; height: 36px; padding: 0; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 9999px; background: transparent; color: var(--text); cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; }
 .button:hover, .button:focus-visible { background: var(--hover); outline: none; }
 .primary { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
 .primary:hover, .primary:focus-visible { background: var(--accent); opacity: .88; }
 `;
 
-/** Build a script-free document whose only decisions are same-document fragments. */
+/** Build a script-free document whose forms can only target the private decision protocol. */
 export function buildReviewArtifactConfirmDocument(
   model: ReviewArtifactConfirmDialogModel,
   isDark: boolean,
@@ -82,14 +83,9 @@ export function buildReviewArtifactConfirmDocument(
   const stylesheet = `data:text/css;base64,${Buffer.from(DIALOG_CSS).toString('base64')}`;
   const items = model.items
     .map((item) => {
-      const secondary =
-        item.kind === 'external-path'
-          ? item.path
-          : item.inlineLabel;
+      const secondary = item.kind === 'external-path' ? item.path : item.inlineLabel;
       return `<li><div class="label">${escapeHtml(item.label)}</div>${
-        secondary
-          ? `<div class="path" dir="ltr">${escapeHtml(secondary)}</div>`
-          : ''
+        secondary ? `<div class="path" dir="ltr">${escapeHtml(secondary)}</div>` : ''
       }</li>`;
     })
     .join('');
@@ -97,7 +93,7 @@ export function buildReviewArtifactConfirmDocument(
 <html lang="und" data-theme="${isDark ? 'dark' : 'light'}">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src data:; base-uri 'none'; form-action ${DECISION_PROTOCOL}; frame-ancestors 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="${stylesheet}">
   <title>${escapeHtml(model.title)}</title>
@@ -110,8 +106,12 @@ export function buildReviewArtifactConfirmDocument(
     <p class="detail">${escapeHtml(model.detail)}</p>
     <ul>${items}</ul>
     <footer>
-      <a class="button" href="#cancel">${escapeHtml(model.cancelText)}</a>
-      <a class="button primary" href="#allow" autofocus>${escapeHtml(model.allowText)}</a>
+      <form action="${CANCEL_DECISION_URL}" method="get">
+        <button class="button" type="submit">${escapeHtml(model.cancelText)}</button>
+      </form>
+      <form action="${ALLOW_DECISION_URL}" method="get">
+        <button id="review-confirm-allow" class="button primary" type="submit" autofocus>${escapeHtml(model.allowText)}</button>
+      </form>
     </footer>
   </main>
 </body>
@@ -120,9 +120,20 @@ export function buildReviewArtifactConfirmDocument(
 
 function readDecision(url: string): boolean | null {
   try {
-    const hash = new URL(url).hash;
-    if (hash === '#allow') return true;
-    if (hash === '#cancel') return false;
+    const parsed = new URL(url);
+    if (
+      parsed.protocol !== DECISION_PROTOCOL ||
+      parsed.username !== '' ||
+      parsed.password !== '' ||
+      parsed.port !== '' ||
+      parsed.pathname !== '' ||
+      parsed.search !== '' ||
+      parsed.hash !== ''
+    ) {
+      return null;
+    }
+    if (parsed.hostname === 'allow') return true;
+    if (parsed.hostname === 'cancel') return false;
   } catch {
     // Invalid or non-URL navigation is denied below.
   }
@@ -133,8 +144,10 @@ function readDecision(url: string): boolean | null {
  * One authorization request owns one modal window. Reusing this security
  * prompt would risk carrying a stale parent, focus, or decision into another
  * grant, so it intentionally does not use the reusable auxiliary-tool window
- * lifecycle. The document has no preload, IPC, or script: an XSS in the main
- * app Renderer cannot observe or answer this prompt.
+ * lifecycle. The document has no preload, IPC, or embedded script: an XSS in
+ * the main app Renderer cannot observe or answer this prompt. Main only runs a
+ * fixed command that focuses the primary button; every decision still arrives
+ * as a denied navigation and is settled here.
  */
 export async function showReviewArtifactConfirmWindow(
   parent: BrowserWindow,
@@ -150,7 +163,8 @@ export async function showReviewArtifactConfirmWindow(
       persistedTheme?.mode,
       persistedTheme?.resolvedIsDark,
     );
-  const createWindow = options.createWindow ?? ((windowOptions) => new BrowserWindow(windowOptions));
+  const createWindow =
+    options.createWindow ?? ((windowOptions) => new BrowserWindow(windowOptions));
   let win: BrowserWindow;
   try {
     win = createWindow({
@@ -201,7 +215,6 @@ export async function showReviewArtifactConfirmWindow(
       win.removeListener('closed', onClosed);
       win.removeListener('ready-to-show', onReadyToShow);
       win.webContents.removeListener('will-navigate', onWillNavigate);
-      win.webContents.removeListener('did-navigate-in-page', onDidNavigateInPage);
       win.webContents.removeListener('before-input-event', onBeforeInput);
       win.webContents.removeListener('render-process-gone', onRendererGone);
       if (!win.isDestroyed()) win.destroy();
@@ -215,16 +228,21 @@ export async function showReviewArtifactConfirmWindow(
       // resources, so ready-to-show is also its business-content ready signal.
       win.show();
       win.focus();
+      try {
+        void win.webContents.executeJavaScript(FOCUS_PRIMARY_ACTION_SCRIPT, true).catch((error) => {
+          if (win.isDestroyed()) return;
+          options.log?.warn('failed to focus Review artifact confirmation action', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      } catch (error) {
+        options.log?.warn('failed to focus Review artifact confirmation action', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     };
-    const onWillNavigate = (event: { preventDefault(): void }): void => {
+    const onWillNavigate = (event: { preventDefault(): void }, url: string): void => {
       event.preventDefault();
-    };
-    const onDidNavigateInPage = (
-      _event: unknown,
-      url: string,
-      isMainFrame: boolean,
-    ): void => {
-      if (!isMainFrame) return;
       const decision = readDecision(url);
       if (decision !== null) settle(decision);
     };
@@ -242,7 +260,6 @@ export async function showReviewArtifactConfirmWindow(
     win.once('closed', onClosed);
     win.once('ready-to-show', onReadyToShow);
     win.webContents.on('will-navigate', onWillNavigate);
-    win.webContents.on('did-navigate-in-page', onDidNavigateInPage);
     win.webContents.on('before-input-event', onBeforeInput);
     win.webContents.on('render-process-gone', onRendererGone);
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -255,14 +272,14 @@ export async function showReviewArtifactConfirmWindow(
 
     const document = buildReviewArtifactConfirmDocument(model, isDark);
     try {
-      void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(document)}`).catch(
-        (error) => {
+      void win
+        .loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(document)}`)
+        .catch((error) => {
           options.log?.warn('failed to load Review artifact confirmation; access denied', {
             error: error instanceof Error ? error.message : String(error),
           });
           settle(false);
-        },
-      );
+        });
     } catch (error) {
       options.log?.warn('failed to load Review artifact confirmation; access denied', {
         error: error instanceof Error ? error.message : String(error),

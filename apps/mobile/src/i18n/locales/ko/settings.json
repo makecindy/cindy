@@ -131,7 +131,7 @@
     "analyticsResetAction": "되돌리기"
   },
   "account": {
-    "logoutHint": "로그아웃하면 이 휴대폰의 로그인 상태와 로컬 원격 미러만 삭제됩니다. 컴퓨터의 세션에는 영향이 없습니다.",
+    "logoutHint": "로그아웃하면 이 휴대폰에 저장된 모든 계정과 로컬 원격 미러가 삭제됩니다. 컴퓨터의 세션에는 영향이 없습니다.",
     "logout": "로그아웃",
     "loggingOut": "로그아웃 중",
     "loggingOutAccessibility": "로그아웃하는 중"

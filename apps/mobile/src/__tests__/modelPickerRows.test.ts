@@ -14,6 +14,7 @@ import {
   buildRowMetaLine,
   compactEffortLabelFor,
   effortLabelFor,
+  effortLabelFromRuntime,
   formatContextWindow,
   formatPriceLine,
   modelRowAccessibilityLabel,
@@ -111,6 +112,27 @@ describe('effortLabelFor —— 五级优先(i18n → 模型覆盖 → capabilit
   });
   it('词表也没有 → 原 id', () => {
     expect(effortLabelFor({}, 'nonexistent', null)).toBe('nonexistent');
+  });
+});
+
+
+describe('effortLabelFromRuntime —— 会话摘要按 app 语言覆盖 snapshot 标签', () => {
+  it('effortOptions 为 zh-CN 快照时仍随界面语言切换', async () => {
+    const previousLanguage = i18n.language;
+    const runtime = {
+      currentModel: null,
+      effortOptions: [{ id: 'xhigh', label: '超高' }],
+    };
+    try {
+      await i18n.changeLanguage('en');
+      expect(effortLabelFromRuntime(runtime, 'xhigh')).toBe('Extra High');
+      await i18n.changeLanguage('zh-CN');
+      expect(effortLabelFromRuntime(runtime, 'xhigh')).toBe('超高');
+      expect(effortLabelFromRuntime(runtime, '')).toBe('');
+      expect(effortLabelFromRuntime(runtime, null)).toBe('');
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
   });
 });
 

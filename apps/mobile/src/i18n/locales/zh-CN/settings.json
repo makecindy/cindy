@@ -131,7 +131,7 @@
     "analyticsResetAction": "恢复"
   },
   "account": {
-    "logoutHint": "退出只会清除这台手机上的登录态和本地远程镜像，不会影响电脑端任务。",
+    "logoutHint": "退出会清除这台手机上保存的全部账号和本地远程镜像，不会影响电脑端任务。",
     "logout": "退出登录",
     "loggingOut": "退出中",
     "loggingOutAccessibility": "正在退出登录"

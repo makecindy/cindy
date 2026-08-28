@@ -54,6 +54,7 @@ interface OwnerCommitOptions<T> {
   nextOwnerId: string | null;
   prepareTransition?: (context: { ownerChanged: boolean }) => Promise<void>;
   prepareCommit?: () => Promise<void>;
+  onCommitFailure?: (context: { commitApplied: boolean }) => void | Promise<void>;
   commit: () => T | Promise<T>;
 }
 
@@ -334,6 +335,7 @@ export async function withGhostSkillProjectionOwnerCommit<T>(
     const ownerChanged = previousOwnerId !== nextOwnerId;
     const transitionId = crypto.randomUUID();
     const prepareTransition = options.prepareTransition;
+    let commitApplied = false;
 
     if (requiresTransition) {
       if (!prepareTransition) {
@@ -369,6 +371,7 @@ export async function withGhostSkillProjectionOwnerCommit<T>(
       }
       await options.prepareCommit?.();
       const result = await options.commit();
+      commitApplied = true;
       if (requiresTransition) {
         writeState({
           version: 1,
@@ -382,6 +385,11 @@ export async function withGhostSkillProjectionOwnerCommit<T>(
       }
       return result;
     } catch (error) {
+      try {
+        await options.onCommitFailure?.({ commitApplied });
+      } catch (rollbackError) {
+        log.error('Ghost skill projection owner commit rollback failed', rollbackError);
+      }
       if (requiresTransition) {
         try {
           writeState({
@@ -436,6 +444,17 @@ export async function withSharedGlobalSkillProjectionMutation<T>(
 ): Promise<T> {
   if (isPassiveSharedUserDataInstance()) {
     throw new Error('Passive shared-userData instances cannot mutate global skill projections');
+  }
+  return withStableOwnerBoundaryMutation(ownerId, mutation);
+}
+
+/** Serialize non-projection state that must agree with the same durable owner. */
+export async function withStableOwnerBoundaryMutation<T>(
+  ownerId: string | null,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  if (isPassiveSharedUserDataInstance()) {
+    throw new Error('Passive shared-userData instances cannot mutate stable owner state');
   }
   const normalizedOwnerId = normalizeOwnerArgument(ownerId);
   return withStrictBoundaryLock(async () => {
