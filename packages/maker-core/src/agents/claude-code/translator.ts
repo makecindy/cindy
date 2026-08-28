@@ -42,6 +42,7 @@ import {
   finalizeClaudeGeneration,
   markClaudeGenerationUnreliable,
   newClaudeGenerationState,
+  noteClaudeParentStreamedOutputIncomplete,
   noteClaudeSubagent,
   pauseClaudeGeneration,
   resetClaudeGenerationTiming,
@@ -229,6 +230,28 @@ function mainTurnOutputTokens(tracker: UsageTracker): number {
   return output;
 }
 
+function mainActiveSegmentHasOutput(ctx: TranslateContext): boolean {
+  const segmentId = ctx.rt.activeUsageSegmentByParent.get(CLAUDE_MAIN_USAGE_PARENT);
+  if (!segmentId) return false;
+  for (const segment of ctx.tracker.getTurnUsageSegments()) {
+    if (segment.id === segmentId) return segment.outputTokens > 0;
+  }
+  return false;
+}
+
+function applySubagentLiveReliability(ctx: TranslateContext): void {
+  if (!ctx.rt.generation.sawSubagent) return;
+  // Live status cannot compare against result.usage yet. Parent tok/s stays
+  // reliable only while parent streamed output is present and no parent
+  // request closed without a usage frame.
+  if (
+    ctx.rt.generation.parentStreamedOutputIncomplete ||
+    mainTurnOutputTokens(ctx.tracker) <= 0
+  ) {
+    markClaudeGenerationUnreliable(ctx.rt.generation);
+  }
+}
+
 function liveParentOutputTokens(
   ctx: TranslateContext,
   resultOutput?: number,
@@ -255,6 +278,7 @@ function ccLiveStatus(
   status: string,
   isRunning: boolean,
 ): { status: string; isRunning: boolean } & ReturnType<UsageTracker['snapshot']> {
+  applySubagentLiveReliability(ctx);
   return {
     status,
     ...attachLiveGeneration(ctx.tracker.snapshot(), {
@@ -1343,6 +1367,9 @@ function handleAssistant(
   // 而父级 Agent 工具区间已从分母排除。记 sawSubagent，live tok/s 只用父级
   // streamed output，不再把整轮计时打成不可靠。
   if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
+  else if (!mainActiveSegmentHasOutput(ctx)) {
+    noteClaudeParentStreamedOutputIncomplete(ctx.rt.generation);
+  }
   // 完整 child assistant 是实际执行模型的正式观测来源。SDK 不保证 child 的
   // partial message_start 一定向外暴露，所以不能只靠 handleStreamEvent 填模型；
   // 同时保持 main 新增的 loop guard 按 parent scope 读取同一张 stream model 表。

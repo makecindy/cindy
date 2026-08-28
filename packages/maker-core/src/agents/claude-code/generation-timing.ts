@@ -12,6 +12,11 @@ export interface ClaudeGenerationState {
    * aggregate, which still includes subagent tokens.
    */
   sawSubagent: boolean;
+  /**
+   * True after a parent assistant closed without streamed output usage.
+   * Subagent live tok/s cannot use that incomplete parent numerator.
+   */
+  parentStreamedOutputIncomplete: boolean;
   heartbeatAt: number | null;
   heartbeatTimer: ReturnType<typeof setInterval> | null;
 }
@@ -23,6 +28,7 @@ export function newClaudeGenerationState(): ClaudeGenerationState {
     pendingToolIds: new Set(),
     reliable: true,
     sawSubagent: false,
+    parentStreamedOutputIncomplete: false,
     heartbeatAt: null,
     heartbeatTimer: null,
   };
@@ -73,6 +79,7 @@ export function resetClaudeGenerationTiming(state: ClaudeGenerationState): void 
   state.durationMs = 0;
   state.reliable = true;
   state.sawSubagent = false;
+  state.parentStreamedOutputIncomplete = false;
 }
 
 export function beginClaudeGeneration(state: ClaudeGenerationState, startedAt = Date.now()): void {
@@ -136,4 +143,8 @@ export function markClaudeGenerationUnreliable(state: ClaudeGenerationState): vo
 
 export function noteClaudeSubagent(state: ClaudeGenerationState): void {
   state.sawSubagent = true;
+}
+
+export function noteClaudeParentStreamedOutputIncomplete(state: ClaudeGenerationState): void {
+  state.parentStreamedOutputIncomplete = true;
 }
