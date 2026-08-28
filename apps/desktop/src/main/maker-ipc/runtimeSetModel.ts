@@ -85,6 +85,7 @@ export interface ApplyRuntimeSetModelChangeInput {
       providerId: string | null;
       rebuildCodexThread?: boolean;
       codexThreadRelinkCommitted?: boolean;
+      ownerScope?: { ownerScopeKey: string; runtimeOwnerEpoch: string };
       sourceCodexThreadModelProviderId?: string | null;
       previousRoute?: {
         model: string;
@@ -119,6 +120,7 @@ export interface ApplyRuntimeSetModelChangeInput {
         providerId: string | null;
         rebuildCodexThread?: boolean;
         codexThreadRelinkCommitted?: boolean;
+        ownerScope?: { ownerScopeKey: string; runtimeOwnerEpoch: string };
         sourceCodexThreadModelProviderId?: string | null;
         previousRoute?: {
           model: string;

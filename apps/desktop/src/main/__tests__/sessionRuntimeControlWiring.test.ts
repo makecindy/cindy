@@ -270,8 +270,33 @@ describe('session runtime control wiring', () => {
     expect(getter).toContain('{ rebuildCodexThread: true }');
     expect(getter).toContain('pending.codexThreadRelinkCommitted');
     expect(getter).toContain('{ codexThreadRelinkCommitted: true }');
+    expect(getter).toContain('pending.ownerScope');
     expect(getter).toContain('pending.sourceCodexThreadModelProviderId');
     expect(getter).toContain('pending.previousRoute');
+  });
+
+  it('binds deferred credential switches to the captured owner scope and runtime epoch', () => {
+    const registration = handlerBody(
+      registerSource,
+      'export async function registerPendingCredentialSwitchForSession(',
+      '/**\n * 跨订阅远端压缩身份边界时',
+    );
+    const service = handlerBody(
+      registerSource,
+      'const pendingCredentialSwitchService = new PendingCredentialSwitchService({',
+      'pendingCredentialSwitchHolder = pendingCredentialSwitchService;',
+    );
+
+    expect(registration).toContain('ownerScopeKey: activeOwnerScopeKey()');
+    expect(registration).toContain(
+      'runtimeOwnerEpoch: captureSessionRuntimeControlOwnerEpoch()',
+    );
+    expect(registration).toContain('target.ownerScope ??');
+    expect(service).toContain('!isAppSessionBoundaryPending()');
+    expect(service).toContain('activeOwnerScopeKey() === scope.ownerScopeKey');
+    expect(service).toContain(
+      'sessionRuntimeControlOwnerEpochMatches(scope.runtimeOwnerEpoch)',
+    );
   });
 
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {

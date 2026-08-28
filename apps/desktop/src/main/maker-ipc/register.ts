@@ -59,6 +59,7 @@ import {
 import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import {
+  activeOwnerScopeKey,
   getActiveAppSession,
   getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
@@ -3063,6 +3064,7 @@ export async function registerPendingCredentialSwitchForSession(
     providerId: string | null;
     rebuildCodexThread?: boolean;
     codexThreadRelinkCommitted?: boolean;
+    ownerScope?: { ownerScopeKey: string; runtimeOwnerEpoch: string };
     sourceCodexThreadModelProviderId?: string | null;
     previousRoute?: {
       model: string;
@@ -3076,6 +3078,12 @@ export async function registerPendingCredentialSwitchForSession(
   if (!service) {
     throw new Error('Pending credential switch service is not initialized');
   }
+  // Capture before any DB await. Restoring a cleared pending passes its original scope through;
+  // never relabel an old owner's target with the newly active owner.
+  const ownerScope = target.ownerScope ?? {
+    ownerScopeKey: activeOwnerScopeKey(),
+    runtimeOwnerEpoch: captureSessionRuntimeControlOwnerEpoch(),
+  };
   // 捕获会话 agent:deferred 切换在收口时刻要重过停用裁决(期间目标可能被停用,
   // PR #744 review 第七轮);读不到(会话行缺失)则登记不带 agentKind = 收口不裁决。
   const dbAgentKind = getSessionDbAgentKind(sessionId);
@@ -3110,6 +3118,7 @@ export async function registerPendingCredentialSwitchForSession(
   const prevModel = live?.model ?? prevRow?.model ?? null;
   service.register(sessionId, {
     ...target,
+    ownerScope,
     ...(live?.codexThreadModelProviderId !== undefined
       ? { sourceCodexThreadModelProviderId: live.codexThreadModelProviderId }
       : {}),
@@ -3309,6 +3318,7 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
       providerId: string | null;
       rebuildCodexThread?: boolean;
       codexThreadRelinkCommitted?: boolean;
+      ownerScope?: { ownerScopeKey: string; runtimeOwnerEpoch: string };
       sourceCodexThreadModelProviderId?: string | null;
       previousRoute?: {
         model: string;
@@ -3327,6 +3337,7 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
         ...(pending.codexThreadRelinkCommitted
           ? { codexThreadRelinkCommitted: true }
           : {}),
+        ...(pending.ownerScope ? { ownerScope: pending.ownerScope } : {}),
         ...(pending.sourceCodexThreadModelProviderId !== undefined
           ? { sourceCodexThreadModelProviderId: pending.sourceCodexThreadModelProviderId }
           : {}),
@@ -13629,6 +13640,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const pendingCredentialSwitchService = new PendingCredentialSwitchService({
     maker,
     isSessionInTurn,
+    isOwnerScopeCurrent: (scope) =>
+      !isAppSessionBoundaryPending() &&
+      activeOwnerScopeKey() === scope.ownerScopeKey &&
+      sessionRuntimeControlOwnerEpochMatches(scope.runtimeOwnerEpoch),
     broadcastApplied: (payload) => {
       broadcastToAllWindows(MAKER_PUSH.SESSION_CREDENTIAL_SWITCH_APPLIED, payload);
     },

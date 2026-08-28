@@ -33,7 +33,11 @@ interface HarnessSession {
 
 function createHarness(
   sessions: HarnessSession[],
-  opts?: { retryDelayMs?: number; resolveRoute?: PendingCredentialSwitchDeps['resolveRoute'] },
+  opts?: {
+    retryDelayMs?: number;
+    resolveRoute?: PendingCredentialSwitchDeps['resolveRoute'];
+    isOwnerScopeCurrent?: PendingCredentialSwitchDeps['isOwnerScopeCurrent'];
+  },
 ) {
   const closeSession = vi.fn(async (_sessionId: string) => {});
   const broadcastApplied = vi.fn<NonNullable<PendingCredentialSwitchDeps['broadcastApplied']>>();
@@ -53,6 +57,9 @@ function createHarness(
     onApplied,
     persistRoute,
     relinkCodexThreadForProviderSwitch,
+    ...(opts?.isOwnerScopeCurrent
+      ? { isOwnerScopeCurrent: opts.isOwnerScopeCurrent }
+      : {}),
     ...(opts?.resolveRoute ? { resolveRoute: opts.resolveRoute } : {}),
     ...(opts?.retryDelayMs !== undefined ? { retryDelayMs: opts.retryDelayMs } : {}),
   });
@@ -222,6 +229,79 @@ describe('PendingCredentialSwitchService', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
     expect(h.persistRoute).not.toHaveBeenCalled();
     expect(h.onApplied).not.toHaveBeenCalled();
+    h.service.clear(sessionId);
+  });
+
+  it('discards an old-owner relink target during teardown and never retries it after recovery', async () => {
+    const sessionId = rememberSession('pending-switch-owner-teardown');
+    setSessionProvider(sessionId, 'xd');
+    let currentOwner = { ownerScopeKey: 'owner-a:1', runtimeOwnerEpoch: '7' };
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      {
+        retryDelayMs: 10,
+        isOwnerScopeCurrent: (scope) =>
+          scope.ownerScopeKey === currentOwner.ownerScopeKey &&
+          scope.runtimeOwnerEpoch === currentOwner.runtimeOwnerEpoch,
+      },
+    );
+    const rollback = vi.fn(async () => {
+      throw new Error('old profile teardown closed the client');
+    });
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async (input) => {
+      currentOwner = { ownerScopeKey: 'owner-boundary', runtimeOwnerEpoch: '7' };
+      expect(input.isCurrent()).toBe(false);
+      return {
+        previousSdkSessionId: 'thread-xd',
+        newSdkSessionId: 'thread-openai',
+        rollback,
+      };
+    });
+
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+      ownerScope: { ownerScopeKey: 'owner-a:1', runtimeOwnerEpoch: '7' },
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(rollback).toHaveBeenCalledOnce();
+    currentOwner = { ownerScopeKey: 'owner-a:2', runtimeOwnerEpoch: '8' };
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
+    expect(h.persistRoute).not.toHaveBeenCalled();
+    expect(h.onApplied).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stale restored target erase the new owner pending for the same session id', () => {
+    const sessionId = rememberSession('pending-switch-owner-reused-session-id');
+    const currentOwner = { ownerScopeKey: 'owner-b:2', runtimeOwnerEpoch: '8' };
+    const h = createHarness([], {
+      retryDelayMs: 60_000,
+      isOwnerScopeCurrent: (scope) =>
+        scope.ownerScopeKey === currentOwner.ownerScopeKey &&
+        scope.runtimeOwnerEpoch === currentOwner.runtimeOwnerEpoch,
+    });
+
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      ownerScope: currentOwner,
+    });
+    h.service.register(sessionId, {
+      model: 'deepseek/deepseek-v4-pro',
+      providerId: 'deepseek',
+      ownerScope: { ownerScopeKey: 'owner-a:1', runtimeOwnerEpoch: '7' },
+    });
+
+    expect(h.service.get(sessionId)).toMatchObject({
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      ownerScope: currentOwner,
+    });
     h.service.clear(sessionId);
   });
 

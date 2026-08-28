@@ -41,6 +41,11 @@ import type { CodexProviderThreadRelinkReceipt } from './codexProviderThreadReli
 /** 自愈兜底重试间隔(事件路径正常时用户感知不到它)。 */
 const PENDING_APPLY_RETRY_DELAY_MS = 10_000;
 
+export interface PendingCredentialSwitchOwnerScope {
+  ownerScopeKey: string;
+  runtimeOwnerEpoch: string;
+}
+
 export interface PendingCredentialSwitch {
   model: string;
   providerId: string | null;
@@ -59,6 +64,8 @@ export interface PendingCredentialSwitch {
    * 缺席 = 无从回滚,退化为只清显式来源。
    */
   previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
+  /** 登记时的 data owner + runtime epoch；跨账号/teardown 后旧 target 必须终态丢弃。 */
+  ownerScope?: PendingCredentialSwitchOwnerScope;
   requestedAt: number;
 }
 
@@ -75,6 +82,8 @@ export interface PendingCredentialSwitchDeps {
     closeSession: (sessionId: string) => Promise<void>;
   };
   isSessionInTurn?: (sessionId: string) => boolean;
+  /** 缺席仅供旧调用方/最小测试；生产必须校验 pending 登记时捕获的 owner。 */
+  isOwnerScopeCurrent?: (scope: PendingCredentialSwitchOwnerScope) => boolean;
   /** 生效后广播给 renderer(清「任务结束后生效」标记 / 会话内 toast)。 */
   broadcastApplied?: (payload: {
     sessionId: string;
@@ -160,9 +169,10 @@ export class PendingCredentialSwitchService {
         effort?: string;
         fastMode?: boolean;
       };
+      ownerScope?: PendingCredentialSwitchOwnerScope;
     },
   ): void {
-    this.pending.set(sessionId, {
+    const pending: PendingCredentialSwitch = {
       model: target.model,
       providerId: target.providerId,
       ...(target.rebuildCodexThread ? { rebuildCodexThread: true } : {}),
@@ -172,8 +182,18 @@ export class PendingCredentialSwitchService {
         : {}),
       ...(target.agentKind ? { agentKind: target.agentKind } : {}),
       ...(target.previousRoute ? { previousRoute: target.previousRoute } : {}),
+      ...(target.ownerScope ? { ownerScope: target.ownerScope } : {}),
       requestedAt: Date.now(),
-    });
+    };
+    if (!this.ownerScopeCurrent(pending)) {
+      const existing = this.pending.get(sessionId);
+      if (existing && !this.ownerScopeCurrent(existing)) this.clear(sessionId);
+      this.deps.logger?.info('stale pending credential switch discarded at registration', {
+        sessionId,
+      });
+      return;
+    }
+    this.pending.set(sessionId, pending);
     this.scheduleRetry(sessionId);
     this.deps.logger?.info('pending credential switch registered', {
       sessionId,
@@ -183,11 +203,15 @@ export class PendingCredentialSwitchService {
   }
 
   has(sessionId: string): boolean {
-    return this.pending.has(sessionId);
+    const target = this.pending.get(sessionId);
+    if (!target) return false;
+    return !this.discardIfOwnerStale(sessionId, target);
   }
 
   get(sessionId: string): PendingCredentialSwitch | undefined {
-    return this.pending.get(sessionId);
+    const target = this.pending.get(sessionId);
+    if (!target || this.discardIfOwnerStale(sessionId, target)) return undefined;
+    return target;
   }
 
   clear(sessionId: string): void {
@@ -203,6 +227,7 @@ export class PendingCredentialSwitchService {
   async onTurnSettled(sessionId: string): Promise<void> {
     const target = this.pending.get(sessionId);
     if (!target) return;
+    if (this.discardIfOwnerStale(sessionId, target)) return;
     if (this.applying.has(sessionId)) return;
     const session = this.deps.maker
       .listActiveSessions()
@@ -238,6 +263,7 @@ export class PendingCredentialSwitchService {
       // 收口,不能用进入函数时捕获的 stale target 覆盖后选(后选覆盖先选)。
       const latest = this.pending.get(sessionId);
       if (!latest) return;
+      if (this.discardIfOwnerStale(sessionId, latest)) return;
       await this.finalizeApplyChecked(sessionId, latest, 'turn end');
     } finally {
       this.applying.delete(sessionId);
@@ -255,6 +281,7 @@ export class PendingCredentialSwitchService {
     if (this.applying.has(sessionId)) return;
     const target = this.pending.get(sessionId);
     if (!target) return;
+    if (this.discardIfOwnerStale(sessionId, target)) return;
     this.applying.add(sessionId);
     void this.finalizeApplyChecked(sessionId, target, 'session close').finally(() => {
       this.applying.delete(sessionId);
@@ -371,7 +398,10 @@ export class PendingCredentialSwitchService {
       return;
     }
     const resolved = await this.resolveApplyRoute(target);
-    if (this.pending.get(sessionId) !== target) return;
+    if (!this.targetCurrent(sessionId, target)) {
+      this.discardIfOwnerStale(sessionId, target);
+      return;
+    }
     await this.finalizeApply(sessionId, target, resolved, reason);
   }
 
@@ -427,7 +457,8 @@ export class PendingCredentialSwitchService {
             'pending credential switch: Codex thread relink dependency is unavailable; keeping queue gated',
             { sessionId, model: resolved.model ?? target.model, providerId: resolved.providerId },
           );
-          if (this.pending.get(sessionId) === target) this.scheduleRetry(sessionId);
+          if (this.targetCurrent(sessionId, target)) this.scheduleRetry(sessionId);
+          else this.discardIfOwnerStale(sessionId, target);
           return;
         }
         try {
@@ -442,7 +473,7 @@ export class PendingCredentialSwitchService {
               : {}),
             targetModel: resolved.model ?? target.model,
             targetProviderId: resolved.providerId,
-            isCurrent: () => this.pending.get(sessionId) === target,
+            isCurrent: () => this.targetCurrent(sessionId, target),
           });
         } catch (err) {
           this.deps.logger?.error?.(
@@ -454,10 +485,29 @@ export class PendingCredentialSwitchService {
               error: err instanceof Error ? err.message : String(err),
             },
           );
-          if (this.pending.get(sessionId) === target) this.scheduleRetry(sessionId);
+          if (this.targetCurrent(sessionId, target)) this.scheduleRetry(sessionId);
+          else this.discardIfOwnerStale(sessionId, target);
           return;
         }
-        if (this.pending.get(sessionId) !== target) return;
+        if (!this.targetCurrent(sessionId, target)) {
+          try {
+            if (relinkReceipt) await relinkReceipt.rollback();
+          } catch (rollbackError) {
+            this.deps.logger?.error?.(
+              'pending credential switch: owner-stale Codex relink rollback failed',
+              {
+                sessionId,
+                error:
+                  rollbackError instanceof Error
+                    ? rollbackError.message
+                    : String(rollbackError),
+              },
+            );
+          } finally {
+            this.discardIfOwnerStale(sessionId, target);
+          }
+          return;
+        }
       }
       setSessionProvider(sessionId, resolved.providerId);
       // 裁决改了落地路由(reroute / 丢弃停用显式来源 / 全停换模型或清空):回写 DB
@@ -527,13 +577,14 @@ export class PendingCredentialSwitchService {
                 : {}),
             },
           );
-          if (this.pending.get(sessionId) === target) this.scheduleRetry(sessionId);
+          if (this.targetCurrent(sessionId, target)) this.scheduleRetry(sessionId);
+          else this.discardIfOwnerStale(sessionId, target);
           return;
         }
         // await 期间用户可能改选 / 取消:本次让位,新登记有自己的收口路径。
         // relink 已在 persistRoute 之前提交;若这一代此刻已过时,必须先把它回滚，
         // 否则下一次无 live session 的选择会沿用被放弃来源的 sdk_session_id。
-        if (this.pending.get(sessionId) !== target) {
+        if (!this.targetCurrent(sessionId, target)) {
           if (relinkReceipt) {
             try {
               const restored = await relinkReceipt.rollback();
@@ -554,6 +605,7 @@ export class PendingCredentialSwitchService {
               );
             }
           }
+          this.discardIfOwnerStale(sessionId, target);
           return;
         }
       }
@@ -576,7 +628,8 @@ export class PendingCredentialSwitchService {
         providerId: target.providerId,
         },
       );
-      if (this.pending.get(sessionId) === target) this.scheduleRetry(sessionId);
+      if (this.targetCurrent(sessionId, target)) this.scheduleRetry(sessionId);
+      else this.discardIfOwnerStale(sessionId, target);
       return;
     }
     // 删登记(解除 coordinator 的 pending 门)必须在 route 写入 + DB 回写之后。
@@ -606,12 +659,15 @@ export class PendingCredentialSwitchService {
 
   private scheduleRetry(sessionId: string): void {
     this.clearRetry(sessionId);
+    const target = this.pending.get(sessionId);
+    if (!target || this.discardIfOwnerStale(sessionId, target)) return;
     const timer = setTimeout(() => {
       this.retryTimers.delete(sessionId);
-      if (!this.pending.has(sessionId)) return;
+      const current = this.pending.get(sessionId);
+      if (!current || this.discardIfOwnerStale(sessionId, current)) return;
       void this.onTurnSettled(sessionId).finally(() => {
         // 仍未收口(还在跑 / busy 竞态)→ 继续兜底。收口路径已 clearRetry。
-        if (this.pending.has(sessionId) && !this.retryTimers.has(sessionId)) {
+        if (this.has(sessionId) && !this.retryTimers.has(sessionId)) {
           this.scheduleRetry(sessionId);
         }
       });
@@ -623,5 +679,30 @@ export class PendingCredentialSwitchService {
     const timer = this.retryTimers.get(sessionId);
     if (timer) clearTimeout(timer);
     this.retryTimers.delete(sessionId);
+  }
+
+  private ownerScopeCurrent(target: PendingCredentialSwitch): boolean {
+    return !target.ownerScope || !this.deps.isOwnerScopeCurrent
+      ? true
+      : this.deps.isOwnerScopeCurrent(target.ownerScope);
+  }
+
+  private targetCurrent(sessionId: string, target: PendingCredentialSwitch): boolean {
+    return this.pending.get(sessionId) === target && this.ownerScopeCurrent(target);
+  }
+
+  private discardIfOwnerStale(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+  ): boolean {
+    if (this.ownerScopeCurrent(target)) return false;
+    if (this.pending.get(sessionId) === target) {
+      this.pending.delete(sessionId);
+      this.clearRetry(sessionId);
+      this.deps.logger?.info('stale pending credential switch discarded after owner boundary', {
+        sessionId,
+      });
+    }
+    return true;
   }
 }
