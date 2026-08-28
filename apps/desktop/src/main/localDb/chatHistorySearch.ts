@@ -41,7 +41,7 @@ import { getDbClient } from './client/current';
 import { messages as messagesTable, sessions as sessionsTable } from './schema';
 import { messageToCamel } from './mapper';
 import { fuseRRF, buildMessagesFtsMatch, extractMessagesFtsTokens } from './chatHistorySearch.pure';
-import { buildSnippetFromContent } from './cjkSeg';
+import { buildSnippetFromContent, SNIPPET_SOURCE_MAX_CHARS } from './cjkSeg';
 import { resolveStoredWorkingDirCandidates } from './workingDirHistoryFilter';
 import { createLogger } from '../logger';
 import { getEmbeddingService } from '../embedding-host';
@@ -238,7 +238,7 @@ async function runFtsArm(
            m.session_id  AS sessionId,
            m.role        AS role,
            m.created_at  AS createdAt,
-           m.content     AS content
+           substr(m.content, 1, ?) AS content
       FROM messages_fts
       JOIN messages m ON m.id = messages_fts.message_id
       JOIN sessions s ON s.id = m.session_id
@@ -254,7 +254,7 @@ async function runFtsArm(
       role: string;
       createdAt: number;
       content: string;
-    }>(sql, [match, ...params, limit]);
+    }>(sql, [SNIPPET_SOURCE_MAX_CHARS, match, ...params, limit]);
     return rows.map((r) => ({
       messageId: r.messageId,
       sessionId: r.sessionId,

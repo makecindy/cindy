@@ -129,6 +129,12 @@ export function isHanChar(ch: string): boolean {
 const SNIPPET_CONTEXT_CHARS = 24;
 /** snippet 窗口硬上限（码点数，含上下文）。跨命中不再拉整条超长消息。 */
 const SNIPPET_MAX_CHARS = SNIPPET_CONTEXT_CHARS * 2 + 32;
+/**
+ * 重建 snippet 时扫描 / 经 worker 传回的最大字符数。超长消息只看前缀，
+ * 命中落在此前缀之后时退回文首 fallback，召回本身不受影响。
+ * SQLite 对 TEXT 的 substr() 按 UTF-8 字符计，和 JS 码点扫描对齐。
+ */
+export const SNIPPET_SOURCE_MAX_CHARS = 16_384;
 
 /**
  * 从原文 content 上重建搜索 snippet：在「与原文逐字符对齐的分词形态」里定位
@@ -145,8 +151,9 @@ const SNIPPET_MAX_CHARS = SNIPPET_CONTEXT_CHARS * 2 + 32;
  * 消费端按实体还原，避免用户内容里的真 `<mark>` 被当成控制标记。
  */
 export function buildSnippetFromContent(content: unknown, queryTokens: readonly string[]): string {
-  const text = typeof content === 'string' ? content : content == null ? '' : String(content);
-  if (!text) return '';
+  const raw = typeof content === 'string' ? content : content == null ? '' : String(content);
+  if (!raw) return '';
+  const text = takeCodePoints(raw, SNIPPET_SOURCE_MAX_CHARS);
 
   const aligned = cjkSegAligned(text);
   if (!aligned || aligned.segChars.length === 0) return fallbackSnippet(text);
@@ -233,6 +240,15 @@ function escapeSnippetText(text: string): string {
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;');
+}
+
+function takeCodePoints(text: string, max: number): string {
+  const chars: string[] = [];
+  for (const ch of text) {
+    if (chars.length >= max) return chars.join('');
+    chars.push(ch);
+  }
+  return text;
 }
 
 function pickCompactSnippetCluster(

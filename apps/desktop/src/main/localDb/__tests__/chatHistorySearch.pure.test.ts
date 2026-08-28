@@ -5,7 +5,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { fuseRRF, buildFtsMatch, buildMessagesFtsMatch, RRF_K } from '../chatHistorySearch.pure';
+import {
+  fuseRRF,
+  buildFtsMatch,
+  buildMessagesFtsMatch,
+  visibleTextMatchesMessagesFtsQuery,
+  RRF_K,
+} from '../chatHistorySearch.pure';
 
 describe('fuseRRF', () => {
   it('空输入返回空数组', () => {
@@ -116,5 +122,19 @@ describe('buildFtsMatch', () => {
     const hex = 'a'.repeat(128);
     expect(buildMessagesFtsMatch(hex)).toBe(`"${hex}"`);
     expect(buildFtsMatch(hex)).toBe(`"${hex}"`);
+  });
+});
+
+describe('visibleTextMatchesMessagesFtsQuery', () => {
+  it('跨标点的按字 phrase 仍算可见命中', () => {
+    expect(visibleTextMatchesMessagesFtsQuery('边，界', '边界')).toBe(true);
+    expect(visibleTextMatchesMessagesFtsQuery('登录报错了', '登录')).toBe(true);
+  });
+
+  it('可见正文不含 query 时不算命中，即使隐藏字段会 MATCH', () => {
+    expect(visibleTextMatchesMessagesFtsQuery('please inspect the billing flow', 'secret')).toBe(
+      false,
+    );
+    expect(visibleTextMatchesMessagesFtsQuery('结论。', 'turn17search1')).toBe(false);
   });
 });

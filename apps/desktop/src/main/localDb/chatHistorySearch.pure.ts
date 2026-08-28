@@ -85,6 +85,45 @@ export function extractMessagesFtsTokens(query: string): string[] {
   return [...new Set(capped)].slice(0, FTS_TOKEN_CAP);
 }
 
+/**
+ * 把一段可见文本收成与 messages_fts 写入侧接近的 token 序列：先 cjk_seg，
+ * 再按字母/数字/汉字 run 切开，并小写。用于判断 FTS 命中是不是落在用户看得见的字上。
+ */
+export function tokenizeVisibleMessagesFtsText(text: string): string[] {
+  const segmented = cjkSeg(text) ?? text;
+  const tokens = segmented.match(FTS_TOKEN_RE);
+  if (!tokens || tokens.length === 0) return [];
+  return tokens.map((token) => token.toLowerCase());
+}
+
+function indexOfTokenSequence(haystack: readonly string[], needle: readonly string[]): number {
+  if (needle.length === 0 || needle.length > haystack.length) return -1;
+  outer: for (let i = 0; i <= haystack.length - needle.length; i += 1) {
+    for (let j = 0; j < needle.length; j += 1) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+/**
+ * 侧栏用：query 的 messages_fts token 是否作为相邻序列出现在可见文本里。
+ * 能保住「边，界」这种按字 phrase，但不会把附件文件名、内部 citation 当成可见命中。
+ * 不含 porter 词干（那是已知限制）。
+ */
+export function visibleTextMatchesMessagesFtsQuery(visibleText: string, query: string): boolean {
+  if (!visibleText) return false;
+  const haystack = tokenizeVisibleMessagesFtsText(visibleText);
+  if (haystack.length === 0) return false;
+  for (const token of extractMessagesFtsTokens(query)) {
+    const needle = tokenizeVisibleMessagesFtsText(token);
+    if (needle.length === 0) continue;
+    if (indexOfTokenSequence(haystack, needle) >= 0) return true;
+  }
+  return false;
+}
+
 function quoteFtsToken(token: string): string {
   return `"${token.replace(/"/g, '""')}"`;
 }

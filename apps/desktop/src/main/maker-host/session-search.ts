@@ -23,7 +23,7 @@ import {
   buildMessagesFtsMatch,
   extractMessagesFtsTokens,
 } from '../localDb/chatHistorySearch.pure.js';
-import { buildSnippetFromContent } from '../localDb/cjkSeg.js';
+import { buildSnippetFromContent, SNIPPET_SOURCE_MAX_CHARS } from '../localDb/cjkSeg.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('session-search');
@@ -53,14 +53,14 @@ export const searchSessionsFn: SessionSearchFn = async (
            m.session_id AS sessionId,
            m.role AS role,
            m.created_at AS ts,
-           m.content AS content,
+           substr(m.content, 1, ?) AS content,
            bm25(${TABLE}) AS score
     FROM ${TABLE}
     JOIN messages m ON m.id = ${TABLE}.message_id
     WHERE ${TABLE} MATCH ?
       AND m.rewind_at IS NULL
   `;
-  const params: unknown[] = [escapedQuery];
+  const params: unknown[] = [SNIPPET_SOURCE_MAX_CHARS, escapedQuery];
   if (opts.sessionId) {
     sql += ` AND m.session_id = ?`;
     params.push(opts.sessionId);

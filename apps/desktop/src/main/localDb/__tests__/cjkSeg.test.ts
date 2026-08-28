@@ -4,7 +4,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
-import { buildSnippetFromContent, cjkSeg } from '../cjkSeg';
+import { buildSnippetFromContent, cjkSeg, SNIPPET_SOURCE_MAX_CHARS } from '../cjkSeg';
 import { registerCjkSeg } from '../registerCjkSeg';
 import { buildMessagesFtsMatch, extractMessagesFtsTokens } from '../chatHistorySearch.pure';
 
@@ -101,6 +101,14 @@ describe('buildSnippetFromContent', () => {
     // 未命中不打高亮、不截出假空格。
     expect(buildSnippetFromContent('很长的原文内容'.repeat(10), ['不存在词'])).not.toContain('<mark>');
     expect(buildSnippetFromContent('短文本', ['任意'])).toBe('短文本');
+  });
+
+  it('超长原文只扫前缀，尾部命中退回文首 fallback', () => {
+    const long = `${'前'.repeat(SNIPPET_SOURCE_MAX_CHARS)}登录`;
+    const snippet = buildSnippetFromContent(long, ['登录']);
+    expect(snippet).not.toContain('<mark>');
+    expect(snippet.startsWith('前')).toBe(true);
+    expect(snippet.endsWith('…')).toBe(true);
   });
 
   it('真实 FTS 链路：snippet 不篡改中英相邻与原文真实空格', () => {
