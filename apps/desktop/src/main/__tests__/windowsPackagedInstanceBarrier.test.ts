@@ -41,10 +41,12 @@ describe('windowsPackagedInstanceBarrier', () => {
     async () => {
       const programName = `CindyBarrierTest${process.pid}`;
       const userDataDir = path.join(os.tmpdir(), programName);
+      // PowerShell Add-Type cold compile under Windows CI load has exceeded the
+      // previous 2s helper-start budget (timeoutMs 1s + 1s buffer).
       const first = await acquireWindowsPackagedInstanceBarrier({
         userDataDir,
         programName,
-        timeoutMs: 1_000,
+        timeoutMs: 10_000,
       });
       try {
         expect(first.isHeld()).toBe(true);
@@ -63,10 +65,11 @@ describe('windowsPackagedInstanceBarrier', () => {
       const retry = await acquireWindowsPackagedInstanceBarrier({
         userDataDir,
         programName,
-        timeoutMs: 1_000,
+        timeoutMs: 10_000,
       });
       expect(retry.isHeld()).toBe(true);
       await retry.release();
     },
+    30_000,
   );
 });

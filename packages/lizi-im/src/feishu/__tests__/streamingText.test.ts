@@ -163,6 +163,23 @@ describe('feishu streaming text', () => {
     );
   });
 
+  it('still mirrors parent-chat text when one extra image upload fails', async () => {
+    mocks.uploadImage.mockImplementation(async (absPath: string) => {
+      if (absPath.includes('missing')) throw new Error('file gone');
+      return 'img_ok';
+    });
+
+    await mirrorFinal(
+      'oc_group',
+      'g'.repeat(64),
+      '终态正文',
+      ['C:\\cindy-media\\ok.png', 'C:\\cindy-media\\missing.png'],
+    );
+
+    expect(mocks.sendCardToChat).toHaveBeenCalledTimes(1);
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe('终态正文');
+  });
+
   it('catches late-confirmation one-shot mirror failures instead of unhandledRejection', async () => {
     vi.mocked(waitForMirrorConfirmation).mockResolvedValueOnce(false);
     let deferred: (() => void) | undefined;

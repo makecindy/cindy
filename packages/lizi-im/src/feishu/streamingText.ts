@@ -89,6 +89,25 @@ function mirrorUuid(key: string, suffix: string): string {
   return `${key.slice(0, 32)}-${suffix}`.slice(0, 50);
 }
 
+async function uploadExtraImageKeys(absPaths: readonly string[]): Promise<string[]> {
+  const results = await Promise.all(
+    absPaths.map(async (absPath) => {
+      try {
+        return await uploadImage(absPath);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        getLog().warn(`[feishu/streamingText] uploadImage extra ${absPath} failed: ${msg}`);
+        return null;
+      }
+    }),
+  );
+  const keys: string[] = [];
+  for (const key of results) {
+    if (key) keys.push(key);
+  }
+  return keys;
+}
+
 interface FinalCardResult {
   card: unknown;
   fileLinks: ReturnType<typeof collectXdtFileLinks>;
@@ -275,29 +294,13 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     //     同一条 uploadImage 通道, 但 path 由 host 主进程已经解好直接传 absPath,
     //     这里不再过 resolveFeishuMediaUrl (@cindy/im 包对其它 host namespace 不感知)。
     //     正文里已内联的同图(按 absPath)跳过,防"正文一张 + 尾部一张"双份。
-    const extraImageKeys: string[] = [];
     const extrasToUpload = this.extraImageAbsPaths.filter((p) => !bodyImageAbsPaths.has(p));
     if (extrasToUpload.length > 0) {
       log.debug(
         `[feishu/streamingText] uploading ${extrasToUpload.length} extra image(s) from tool_result`,
       );
-      const results = await Promise.all(
-        extrasToUpload.map(async (absPath) => {
-          try {
-            return await uploadImage(absPath);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(
-              `[feishu/streamingText] uploadImage extra ${absPath} failed: ${msg}`,
-            );
-            return null;
-          }
-        }),
-      );
-      for (const k of results) {
-        if (k) extraImageKeys.push(k);
-      }
     }
+    const extraImageKeys = await uploadExtraImageKeys(extrasToUpload);
 
     // 2. Send xdt-file links as separate file messages.
     const fileLinks = collectXdtFileLinks(text);
@@ -540,11 +543,7 @@ export async function mirrorFinal(
         if (result) imageMap.set(result[0], result[1]);
       }
     }
-    const imageKeys: string[] = [];
-    const results = await Promise.all(extraImageAbsPaths.map((absPath) => uploadImage(absPath)));
-    for (const key of results) {
-      if (key) imageKeys.push(key);
-    }
+    const imageKeys = await uploadExtraImageKeys(extraImageAbsPaths);
     const fileLinks = collectXdtFileLinks(text);
     const cardText = stripXdtFileLinks(text);
     const hasImages = imageUrls.length > 0 || imageKeys.length > 0;
