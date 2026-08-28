@@ -29,7 +29,14 @@ const mocks = vi.hoisted(() => ({
   wakeSessionInputAfterCredentialSwitch: vi.fn(),
   getPendingCredentialSwitchTarget: vi.fn(() => undefined),
   readModelRouteSnapshot: vi.fn(
-    async (): Promise<{ model: string; effort: string; providerId: string | null } | null> => null,
+    async (): Promise<{
+      agentKind: 'codex' | 'pi' | 'claude-code';
+      remoteHostId: string | null;
+      sdkSessionId: string | null;
+      model: string;
+      effort: string;
+      providerId: string | null;
+    } | null> => null,
   ),
   readPermissionMode: vi.fn(async () => 'auto'),
   updatePermissionMode: vi.fn(async () => {}),
@@ -702,6 +709,7 @@ describe('model:pick 持久化失败', () => {
     };
     (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(live);
     mocks.readModelRouteSnapshot.mockResolvedValueOnce({
+      agentKind: 'claude-code', remoteHostId: null, sdkSessionId: null,
       model: 'claude-sonnet-4-6',
       effort: 'medium',
       providerId: 'openrouter',
@@ -730,6 +738,7 @@ describe('model:pick 持久化失败', () => {
 
   it('runtime setModel 失败时恢复已落盘的旧路由', async () => {
     mocks.readModelRouteSnapshot.mockResolvedValueOnce({
+      agentKind: 'claude-code', remoteHostId: null, sdkSessionId: null,
       model: 'claude-sonnet-4-6',
       effort: 'medium',
       providerId: 'openrouter',
@@ -753,6 +762,18 @@ describe('model:pick 持久化失败', () => {
       'medium',
       'openrouter',
     );
+    expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        persistedSession: {
+          agentKind: 'claude-code',
+          remoteHostId: null,
+          sdkSessionId: null,
+          model: 'claude-sonnet-4-6',
+          effort: 'medium',
+          providerId: 'openrouter',
+        },
+      }),
+    );
     expect(im.updateInteractiveCard).toHaveBeenCalledWith(
       'model-card',
       expect.objectContaining({ body: slackUi.cards.model.failed('runtime rejected') }),
@@ -773,6 +794,7 @@ describe('model:pick 持久化失败', () => {
     };
     (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(live);
     mocks.readModelRouteSnapshot.mockResolvedValueOnce({
+      agentKind: 'claude-code', remoteHostId: null, sdkSessionId: null,
       model: 'claude-sonnet-4-6',
       effort: 'medium',
       providerId: 'openrouter',
@@ -821,6 +843,7 @@ describe('model:pick 持久化失败', () => {
     };
     (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(live);
     mocks.readModelRouteSnapshot.mockResolvedValueOnce({
+      agentKind: 'claude-code', remoteHostId: null, sdkSessionId: null,
       model: 'claude-sonnet-4-6',
       effort: 'medium',
       providerId: null,

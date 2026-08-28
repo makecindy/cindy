@@ -200,6 +200,20 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain("throw new Error('Codex thread relink rollback was superseded')");
   });
 
+  it('passes the locked persistent thread identity into runtime model switching', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+
+    expect(setModel).toContain('agentKind: sessions.agentKind');
+    expect(setModel).toContain('sdkSessionId: sessions.sdkSessionId');
+    expect(setModel).toContain('persistedSession: {');
+    expect(setModel).toContain('model: runtimeStatus.model');
+    expect(setModel).toContain('providerId: runtimeStatus.providerId ?? null');
+  });
+
   it('keeps the Codex rebuild marker in the production pending-switch projection', () => {
     const getter = handlerBody(
       registerSource,

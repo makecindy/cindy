@@ -70,6 +70,9 @@ export interface ImSessionRow {
 }
 
 export interface SessionModelRouteSnapshot {
+  agentKind: AgentKind;
+  remoteHostId: string | null;
+  sdkSessionId: string | null;
   model: string;
   effort: Effort;
   providerId: string | null;
@@ -585,6 +588,9 @@ export async function readModelRouteSnapshot(
   const db = getDbClient().drizzle;
   const rows = await db
     .select({
+      agentKind: sessions.agentKind,
+      remoteHostId: sessions.remoteHostId,
+      sdkSessionId: sessions.sdkSessionId,
       model: sessions.model,
       effort: sessions.effort,
       providerId: sessions.providerId,
@@ -595,6 +601,9 @@ export async function readModelRouteSnapshot(
   const row = rows[0];
   if (!row) return null;
   return {
+    agentKind: toCoreAgentKind(row.agentKind),
+    remoteHostId: row.remoteHostId ?? null,
+    sdkSessionId: row.sdkSessionId ?? null,
     model: row.model,
     effort: row.effort as Effort,
     providerId: row.providerId ?? null,

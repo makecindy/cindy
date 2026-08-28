@@ -48,12 +48,26 @@ interface RuntimeSetModelLogger {
   info: (message: string, meta?: Record<string, unknown>) => void;
 }
 
+export interface RuntimeSetModelPersistedSession {
+  agentKind: AgentKind;
+  remoteHostId?: string | null;
+  model: string;
+  providerId: string | null;
+  sdkSessionId: string | null;
+}
+
 export interface ApplyRuntimeSetModelChangeInput {
   maker: RuntimeSetModelMaker;
   sessionId: string;
   model: string;
   providerId?: string | null;
   effort?: Effort;
+  /**
+   * 锁内读取的切换前持久化会话身份。live handle 不存在时，旧 sdkSessionId 仍会在
+   * 下一次 lazy-create 中作为 resumeSessionId；因此本地 Codex 的跨凭证家族切换
+   * 必须基于这份旧快照先 relink，不能把「无 live handle」当成「无旧 thread」。
+   */
+  persistedSession?: RuntimeSetModelPersistedSession;
   /**
    * Orca Worker 的 live model/provider 属于执行单元身份，不能热切。即使凭证
    * 形态相同，也必须沿用 credential-switch 的 idle close / busy defer 边界。
@@ -169,7 +183,19 @@ export async function applyRuntimeSetModelChange(
   const { maker, sessionId, model, providerId, effort, isSessionInTurn, logger } = input;
   const normalizedProviderId = normalizeSessionProviderId(providerId);
   const sess = maker.getSession(sessionId);
-  const currentProviderId = getSessionProvider(sessionId);
+  const persistedCodexThread =
+    !sess &&
+    input.persistedSession?.agentKind === 'codex' &&
+    !input.persistedSession.remoteHostId &&
+    Boolean(input.persistedSession.sdkSessionId)
+      ? input.persistedSession
+      : undefined;
+  const sourceSession = sess ?? persistedCodexThread;
+  // 无 live handle 时，provider store 可能尚未 hydrate，也可能被调用方的目标写入
+  // 提前覆盖；切换前的 DB 快照才是旧 thread 的来源身份。
+  const currentProviderId = persistedCodexThread
+    ? persistedCodexThread.providerId
+    : getSessionProvider(sessionId);
   // model-only 调用以 pending 的 providerId 为「当前来源意图」:用户先 deferred 选了
   // 新来源、再换模型时,决策与登记都要沿用那个来源,不能回落到 store 里的旧值
   // (否则会把 pending 的来源覆盖丢)。
@@ -181,24 +207,29 @@ export async function applyRuntimeSetModelChange(
       : pendingTarget !== undefined
         ? pendingTarget.providerId
         : currentProviderId;
-  const shouldCloseForCredentialSwitch = sess
+  const shouldCloseForCredentialSwitch = sourceSession
     ? shouldCloseSessionForCredentialSwitch({
-        agentKind: sess.agentKind,
-        remoteHostId: sess.remoteHostId,
+        agentKind: sourceSession.agentKind,
+        remoteHostId: sourceSession.remoteHostId,
         currentProviderId,
         nextProviderId,
-        currentModel: sess.model,
+        currentModel: sourceSession.model,
         nextModel: model,
-        currentCodexProxyActive: sess.codexProxyActive,
-        currentCodexThreadModelProviderId: sess.codexThreadModelProviderId,
+        // 持久化 sdkSessionId 是已经创建过的 provider-bound Codex thread。即使
+        // app-server handle 已释放，跨远端压缩身份边界仍须按 proxy thread 判定。
+        currentCodexProxyActive: sess ? sess.codexProxyActive : true,
+        currentCodexThreadModelProviderId: sess?.codexThreadModelProviderId,
         currentCodexCindyRemoteCompactionCompatible:
-          sess.codexCindyRemoteCompactionCompatible,
+          sess?.codexCindyRemoteCompactionCompatible,
         codexAuthInjection: input.codexAuthInjection,
       })
     : false;
   const shouldCloseSession = input.forceSessionRebuild === true || shouldCloseForCredentialSwitch;
   const shouldRelinkCodexThread =
-    shouldCloseForCredentialSwitch && sess?.agentKind === 'codex' && !sess.remoteHostId;
+    shouldCloseForCredentialSwitch &&
+    sourceSession?.agentKind === 'codex' &&
+    !sourceSession.remoteHostId &&
+    (sess !== undefined || persistedCodexThread !== undefined);
   let selfBusyMemo: boolean | undefined;
   const isSelfBusy = (): boolean => {
     if (selfBusyMemo !== undefined) return selfBusyMemo;
@@ -242,8 +273,8 @@ export async function applyRuntimeSetModelChange(
     );
   }
 
-  if (sess && shouldCloseSession) {
-    if (isSelfBusy() && input.registerPendingCredentialSwitch) {
+  if ((sess && shouldCloseSession) || (!sess && shouldRelinkCodexThread)) {
+    if (sess && isSelfBusy() && input.registerPendingCredentialSwitch) {
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
@@ -270,11 +301,13 @@ export async function applyRuntimeSetModelChange(
     input.clearPendingCredentialSwitch?.(sessionId, { wake: false });
     let codexThreadRelink: CodexProviderThreadRelinkReceipt | null = null;
     try {
-      await prepareLocalSessionCredentialModeSwitch({
-        maker,
-        sessionId,
-        isSessionInTurn,
-      });
+      if (sess) {
+        await prepareLocalSessionCredentialModeSwitch({
+          maker,
+          sessionId,
+          isSessionInTurn,
+        });
+      }
       if (shouldRelinkCodexThread) {
         const relinkCodexThreadForProviderSwitch = input.relinkCodexThreadForProviderSwitch;
         if (!relinkCodexThreadForProviderSwitch) {
@@ -284,14 +317,19 @@ export async function applyRuntimeSetModelChange(
         }
         codexThreadRelink = await relinkCodexThreadForProviderSwitch({
           sessionId,
-          sourceModel: sess.model,
+          sourceModel: sourceSession!.model,
           sourceProviderId: currentProviderId,
-          ...(sess.codexThreadModelProviderId !== undefined
+          ...(sess?.codexThreadModelProviderId !== undefined
             ? { sourceThreadModelProviderId: sess.codexThreadModelProviderId }
             : {}),
           targetModel: model,
           targetProviderId: nextProviderId,
         });
+        if (persistedCodexThread && !codexThreadRelink) {
+          throw new Error(
+            'Persisted Codex provider thread disappeared before credential-family relink',
+          );
+        }
       }
     } catch (err) {
       // 空闲判定与 close 之间的竞态(恰好起了新 turn):有 pending 通道就转延迟,
@@ -304,7 +342,7 @@ export async function applyRuntimeSetModelChange(
         });
         logger?.info('set-model: credential switch deferred after busy race', {
           sessionId,
-          agentKind: sess.agentKind,
+          agentKind: sourceSession!.agentKind,
         });
         return { status: 'deferred' };
       }
@@ -317,12 +355,12 @@ export async function applyRuntimeSetModelChange(
     if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
     // close + route 都落定后再唤醒队列:排队消息按新凭证形态 lazy-create 派发。
     input.wakeSessionInputQueue?.(sessionId);
-    logger?.info('set-model: closed live session after credential mode switch', {
+    logger?.info('set-model: rebuilt Codex thread or closed live session after credential switch', {
       sessionId,
-      agentKind: sess.agentKind,
+      agentKind: sourceSession!.agentKind,
       currentProviderId,
       nextProviderId,
-      fromModel: sess.model,
+      fromModel: sourceSession!.model,
       toModel: model,
     });
     return {

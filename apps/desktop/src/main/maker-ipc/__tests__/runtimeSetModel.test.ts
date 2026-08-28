@@ -480,6 +480,116 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('openai');
   });
 
+  it('relinks a persisted Codex thread before a no-live lazy resume crosses provider families', async () => {
+    const sessionId = rememberSession('runtime-set-model-no-live-persisted-relink');
+    // 模拟调用方/store 已看到目标来源；旧 thread 的来源必须仍以锁内 DB 快照为准。
+    setSessionProvider(sessionId, 'openai');
+    const rollback = vi.fn(async () => true);
+    const receipt = {
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback,
+    };
+    const relinkCodexThreadForProviderSwitch = vi.fn(async () => receipt);
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => undefined,
+      listActiveSessions: () => [],
+      closeSession,
+    };
+
+    await expect(
+      applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        persistedSession: {
+          agentKind: 'codex',
+          remoteHostId: null,
+          sdkSessionId: 'thread-xd',
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+        },
+        codexAuthInjection: 'oauth-bearer',
+        relinkCodexThreadForProviderSwitch,
+      }),
+    ).resolves.toEqual({ status: 'applied', codexThreadRelink: receipt });
+
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(relinkCodexThreadForProviderSwitch).toHaveBeenCalledWith({
+      sessionId,
+      sourceModel: 'codex/gpt-5.6-sol',
+      sourceProviderId: 'xd',
+      targetModel: 'gpt-5.6-sol',
+      targetProviderId: 'openai',
+    });
+    expect(getSessionProvider(sessionId)).toBe('openai');
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
+  it('keeps the old route when a no-live persisted Codex thread cannot be relinked', async () => {
+    const sessionId = rememberSession('runtime-set-model-no-live-relink-failure');
+    setSessionProvider(sessionId, 'xd');
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => undefined,
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(
+      applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        persistedSession: {
+          agentKind: 'codex',
+          remoteHostId: null,
+          sdkSessionId: 'thread-xd',
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+        },
+        codexAuthInjection: 'oauth-bearer',
+        relinkCodexThreadForProviderSwitch: vi.fn(async () => {
+          throw new Error('fork failed');
+        }),
+      }),
+    ).rejects.toThrow('fork failed');
+
+    expect(getSessionProvider(sessionId)).toBe('xd');
+  });
+
+  it('fails closed when a persisted no-live Codex thread disappears before relink', async () => {
+    const sessionId = rememberSession('runtime-set-model-no-live-relink-missing-source');
+    setSessionProvider(sessionId, 'xd');
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => undefined,
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(
+      applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        persistedSession: {
+          agentKind: 'codex',
+          remoteHostId: null,
+          sdkSessionId: 'thread-xd',
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+        },
+        codexAuthInjection: 'oauth-bearer',
+        relinkCodexThreadForProviderSwitch: vi.fn(async () => null),
+      }),
+    ).rejects.toThrow(/disappeared before credential-family relink/);
+
+    expect(getSessionProvider(sessionId)).toBe('xd');
+  });
+
   it('fails closed when a cross-provider switch has no thread relink dependency', async () => {
     const sessionId = rememberSession('runtime-set-model-missing-thread-relink');
     setSessionProvider(sessionId, 'xd');

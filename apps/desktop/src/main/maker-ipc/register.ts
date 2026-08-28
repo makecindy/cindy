@@ -15093,7 +15093,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 状态可封住两种次序：本请求先拿锁时终态写等待并在之后清理 override；终态
       // 先拿锁时旧请求看到非 active，不能在 cleanup 后重新建立 pending/override。
       const [runtimeStatus] = await getDbClient()
-        .drizzle.select({ status: sessions.status, orcaRole: sessions.orcaRole })
+        .drizzle.select({
+          status: sessions.status,
+          orcaRole: sessions.orcaRole,
+          agentKind: sessions.agentKind,
+          remoteHostId: sessions.remoteHostId,
+          sdkSessionId: sessions.sdkSessionId,
+          model: sessions.model,
+          providerId: sessions.providerId,
+        })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
@@ -15414,6 +15422,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               sessionId,
               model,
               providerId: effectiveProviderId,
+              persistedSession: {
+                agentKind: dbToMakerAgentKind(runtimeStatus.agentKind),
+                remoteHostId: runtimeStatus.remoteHostId,
+                sdkSessionId: runtimeStatus.sdkSessionId,
+                model: runtimeStatus.model,
+                providerId: runtimeStatus.providerId ?? null,
+              },
               ...(atomicSelection?.effort
                 ? {
                     effort: atomicSelection.effort as
