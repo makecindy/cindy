@@ -78,6 +78,23 @@ describe('Feishu native thread/main dual delivery', () => {
     expect(topic).toEqual({ kind: 'dispatch' });
   });
 
+  it('peeking taken-over does not commit an unpaired flat', async () => {
+    vi.useFakeTimers();
+    const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const flatDecision = await flat;
+    expect(flatDecision).toMatchObject({ kind: 'dispatch' });
+    if (flatDecision.kind !== 'dispatch' || !flatDecision.isUnpairedFlatTakenOver) {
+      throw new Error('unpaired flat must expose isUnpairedFlatTakenOver');
+    }
+    expect(flatDecision.isUnpairedFlatTakenOver()).toBe(false);
+
+    const topic = await coordinateDualDelivery(input());
+    expect(topic.kind).toBe('dispatch');
+    expect(flatDecision.isUnpairedFlatTakenOver()).toBe(true);
+    expect(flatDecision.commitUnpairedFlat?.()).toBe(false);
+  });
+
   it('lets a late topic take over an unpaired flat that has not committed yet', async () => {
     vi.useFakeTimers();
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));

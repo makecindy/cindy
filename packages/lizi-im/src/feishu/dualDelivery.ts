@@ -40,11 +40,17 @@ export type DualDeliveryDecision =
       kind: 'dispatch';
       mirrorKey?: string;
       /**
-       * Unpaired main-feed copies call this after `openThread` returns.
+       * Unpaired main-feed copies call this after `openThread` returns, and
+       * only when the copy is actually about to emit an Agent turn.
        * `false` means a late topic already claimed the route — recall the
        * bot-created opener and abort instead of emitting.
        */
       commitUnpairedFlat?: () => boolean;
+      /**
+       * Peek without committing. Orphaned / unconfirmed openers that will not
+       * dispatch still need to recall when a late topic already took over.
+       */
+      isUnpairedFlatTakenOver?: () => boolean;
     }
   | { kind: 'suppress-main-copy' };
 
@@ -110,6 +116,10 @@ function commitUnpairedFlatRoute(key: string): boolean {
   if (!rec) return !confirmed.has(key);
   rec.state = 'committed';
   return true;
+}
+
+function isUnpairedFlatTakenOver(key: string): boolean {
+  return recentFlats.get(key)?.state === 'taken-over';
 }
 
 function flushDeferredMirrors(key: string): void {
@@ -231,7 +241,11 @@ export async function coordinateDualDelivery(
 
   return (await entry.decision)
     ? { kind: 'suppress-main-copy' }
-    : { kind: 'dispatch', commitUnpairedFlat: () => commitUnpairedFlatRoute(key) };
+    : {
+        kind: 'dispatch',
+        commitUnpairedFlat: () => commitUnpairedFlatRoute(key),
+        isUnpairedFlatTakenOver: () => isUnpairedFlatTakenOver(key),
+      };
 }
 
 /** Waits only for the bounded pairing window; Agent execution itself is never delayed. */

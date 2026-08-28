@@ -313,6 +313,79 @@ describe('feishu group thread routing', () => {
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
   });
 
+  it('orphaned unpaired flat stays takeable so a late topic still dispatches', async () => {
+    vi.useFakeTimers();
+    mocks.openThread.mockResolvedValueOnce({
+      kind: 'orphaned',
+      openerMessageId: 'om_orphan_opener',
+    });
+    const events = collectMessages();
+    await connect();
+    const topic = groupTopicMessage('孤儿后迟到话题', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000003000';
+    topic.message.message_id = 'om_topic_after_orphan';
+    const flat = groupMainFlowMessage('孤儿后迟到话题', 'om_flat_after_orphan') as {
+      message: Record<string, unknown>;
+    };
+    flat.message.create_time = '1788000003000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flatHandling;
+
+    expect(events).toHaveLength(0);
+    expect(mocks.replyText).toHaveBeenCalledWith('om_orphan_opener', expect.any(String));
+
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_existing');
+    expect(events[0]?.messageId).toBe('om_topic_after_orphan');
+    expect(events[0]?.finalReplyMirror).toEqual({
+      kind: 'parent-chat',
+      chatId: 'oc_chat1',
+      idempotencyKey: expect.any(String),
+    });
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+  });
+
+  it('late topic takeover during orphaned openThread recalls the opener without a second turn', async () => {
+    vi.useFakeTimers();
+    let releaseOpenThread: ((value: { kind: 'orphaned'; openerMessageId: string }) => void) | undefined;
+    mocks.openThread.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseOpenThread = resolve;
+        }),
+    );
+    mocks.recallOwnMessage.mockResolvedValue(true);
+    const events = collectMessages();
+    await connect();
+    const topic = groupTopicMessage('孤儿途中接管', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000004000';
+    topic.message.message_id = 'om_topic_during_orphan';
+    const flat = groupMainFlowMessage('孤儿途中接管', 'om_flat_during_orphan') as {
+      message: Record<string, unknown>;
+    };
+    flat.message.create_time = '1788000004000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+    expect(releaseOpenThread).toBeDefined();
+    releaseOpenThread?.({ kind: 'orphaned', openerMessageId: 'om_orphan_during' });
+    await flatHandling;
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_existing');
+    expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_orphan_during');
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+  });
+
   it('late topic takeover recovers unconfirmed opener uuid and recalls it without a second turn', async () => {
     vi.useFakeTimers();
     let releaseOpenThread: ((value: { kind: 'unconfirmed' }) => void) | undefined;

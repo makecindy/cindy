@@ -1403,6 +1403,7 @@ async function processClaimedMessage(
   const rawContent = data.message?.content ?? '';
   let finalReplyMirrorKey: string | undefined;
   let commitUnpairedFlat: (() => boolean) | undefined;
+  let isUnpairedFlatTakenOver: (() => boolean) | undefined;
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
     if (!mentionsSelf(data.message?.mentions, botOpenId)) return;
@@ -1444,6 +1445,7 @@ async function processClaimedMessage(
       }
       finalReplyMirrorKey = paired.mirrorKey;
       commitUnpairedFlat = paired.commitUnpairedFlat;
+      isUnpairedFlatTakenOver = paired.isUnpairedFlatTakenOver;
     }
   } else {
     // TOFU: first p2p sender becomes owner. Send welcome and continue
@@ -1549,8 +1551,34 @@ async function processClaimedMessage(
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
         return;
       }
+      // 孤儿开场白不会派发副本 turn: 先 peek 是否已被迟到话题接管, 再决定
+      // 撤回或发故障提示。不要 commitUnpairedFlat — 提交会让迟到窗口内的
+      // 真实话题被抑制, 用户请求整轮丢掉。
+      if (opener.kind === 'orphaned') {
+        if (isUnpairedFlatTakenOver?.()) {
+          log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
+          try {
+            await outbound.recallOwnMessage(opener.openerMessageId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(
+              `[feishu/wsClient] recall orphaned opener after late topic takeover failed (non-fatal): ${msg}`,
+            );
+          }
+          return;
+        }
+        // 开场白卡已发出但话题 id 恢复失败、撤回也失败: 降级群 lane 会一边
+        // 留着「思考中」的开场白卡、一边把回答刷进群主流。不起 turn, 回复
+        // 开场白(落回话题)说明失败 — 宁可丢一轮, 不误导 + 不刷屏。迟到话题
+        // 仍可在 LATE_COPY_TTL 内接管这条尚未提交的路由。
+        log.error(
+          `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
+        );
+        await sendOrphanOpenerNotice(botAppId, service, messageId, opener.openerMessageId);
+        return;
+      }
       // 仍是本连接: 迟到的真实话题可能已经接管本轮路由, 不再把回答落进这份
-      // 群主流副本刚建的机器人话题。
+      // 群主流副本刚建的机器人话题。只在即将派发副本 turn 时提交。
       if (commitUnpairedFlat && !commitUnpairedFlat()) {
         log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
         if (opener.kind === 'opened') {
@@ -1560,15 +1588,6 @@ async function processClaimedMessage(
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(
               `[feishu/wsClient] recall bot-opened thread after late topic takeover failed (non-fatal): ${msg}`,
-            );
-          }
-        } else if (opener.kind === 'orphaned') {
-          try {
-            await outbound.recallOwnMessage(opener.openerMessageId);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(
-              `[feishu/wsClient] recall orphaned opener after late topic takeover failed (non-fatal): ${msg}`,
             );
           }
         } else if (opener.kind === 'unconfirmed') {
@@ -1601,15 +1620,6 @@ async function processClaimedMessage(
         // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
         // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
         groupContextLane = { chatId, threadId: '' };
-      } else if (opener.kind === 'orphaned') {
-        // 开场白卡已发出但话题 id 恢复失败、撤回也失败: 降级群 lane 会一边
-        // 留着「思考中」的开场白卡、一边把回答刷进群主流。不起 turn, 回复
-        // 开场白(落回话题)说明失败 — 宁可丢一轮, 不误导 + 不刷屏。
-        log.error(
-          `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
-        );
-        await sendOrphanOpenerNotice(botAppId, service, messageId, opener.openerMessageId);
-        return;
       } else if (opener.kind === 'unconfirmed') {
         // 三次即时 uuid 重试仍无回执: 服务端可能已发出思考卡。事件会在 3s
         // 内 ACK, 不能指望平台重投。不释放认领、不降级群主流, 改走 ACK 后
