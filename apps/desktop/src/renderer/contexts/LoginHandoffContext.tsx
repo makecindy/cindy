@@ -62,6 +62,7 @@ export type LoginHandoffPhase =
   | 'boot' // 等推进锚(品牌资产 ∧ auth init ∧ splash 退场)
   | 'settle' // t=0~300ms
   | 'shift' // t=300~950ms
+  | 'awaiting-splash-exit' // shift 结束但 Splash 仍延迟卸载(例如数据库清理)
   | 'awaiting-panel' // shift 结束但「面板已挂载」信号未到(仅未登录)
   | 'panel' // 面板入场中
   | 'slogan' // Slogan 入场中(面板开始 +100ms)
@@ -158,6 +159,7 @@ export function LoginHandoffProvider({
   // 冷启动只播一次:进程生命周期内 resize/reset/登出重回 /login 均不重播。
   const playedRef = useRef(false);
   const panelMountedRef = useRef(false);
+  const splashExitCompletedRef = useRef(false);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const schedule = useCallback((fn: () => void, ms: number) => {
@@ -176,7 +178,10 @@ export function LoginHandoffProvider({
 
   const reportBrandAssetsReady = useCallback(() => setBrandReady(true), []);
   const reportSplashExited = useCallback(() => setSplashExited(true), []);
-  const reportSplashExitCompleted = useCallback(() => setSplashExitCompleted(true), []);
+  const reportSplashExitCompleted = useCallback(() => {
+    splashExitCompletedRef.current = true;
+    setSplashExitCompleted(true);
+  }, []);
   const reportLoginPanelMounted = useCallback(() => {
     panelMountedRef.current = true;
     setPanelMounted(true);
@@ -215,11 +220,24 @@ export function LoginHandoffProvider({
     setPhase('settle');
     schedule(() => setPhase('shift'), LOGIN_HANDOFF_TIMINGS.settleMs);
     schedule(
-      // 未登录分支另需「面板已挂载」信号后才进 panel 步。
-      () => setPhase(panelMountedRef.current ? 'panel' : 'awaiting-panel'),
+      // 未登录分支必须等 Splash 真正卸载后才进入 panel,否则延迟卸载的
+      // 数据库清理会让 phase 先走完,随后 brandLayout 在 done 终态硬切。
+      () => {
+        if (!splashExitCompletedRef.current) {
+          setPhase('awaiting-splash-exit');
+          return;
+        }
+        setPhase(panelMountedRef.current ? 'panel' : 'awaiting-panel');
+      },
       LOGIN_HANDOFF_TIMINGS.settleMs + LOGIN_HANDOFF_TIMINGS.shiftMs,
     );
   }, [brandReady, splashExited, authResolved, authenticated, schedule]);
+
+  // Splash 延迟卸载时在 shift 末尾冻结;实际卸载后再恢复 panel/awaiting-panel。
+  useEffect(() => {
+    if (phase !== 'awaiting-splash-exit' || !splashExitCompleted) return;
+    setPhase(panelMountedRef.current ? 'panel' : 'awaiting-panel');
+  }, [phase, splashExitCompleted]);
 
   // awaiting-panel → panel:面板挂载信号到达即刻放行。
   useEffect(() => {

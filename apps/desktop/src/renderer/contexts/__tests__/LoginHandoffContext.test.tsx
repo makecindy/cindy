@@ -136,10 +136,11 @@ afterEach(() => {
 
 const T = LOGIN_HANDOFF_TIMINGS;
 
-function fireAnchors() {
+function fireAnchors({ splashComplete = true }: { splashComplete?: boolean } = {}) {
   act(() => {
     probe.current!.reportBrandAssetsReady();
     probe.current!.reportSplashExited();
+    if (splashComplete) probe.current!.reportSplashExitCompleted();
   });
 }
 
@@ -343,6 +344,30 @@ describe('LoginHandoff 时序(fake-timer)', () => {
     act(() => vi.advanceTimersByTime(T.settleMs + T.shiftMs));
     expect(probe.current!.phase).toBe('panel');
     expect(probe.current!.brandLayout).toBe('login');
+  });
+
+  it('Splash 延迟卸载时冻结在 Splash 布局,实际卸载后才进入 panel', () => {
+    render(
+      <LoginHandoffProvider authResolved authenticated={false}>
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    act(() => probe.current!.reportLoginPanelMounted());
+    fireAnchors({ splashComplete: false });
+
+    act(() => vi.advanceTimersByTime(T.settleMs + T.shiftMs));
+    expect(probe.current!.phase).toBe('awaiting-splash-exit');
+    expect(probe.current!.brandLayout).toBe('splash');
+    expect(probe.current!.panelRevealed).toBe(false);
+    expect(probe.current!.isPlaying).toBe(true);
+
+    act(() => vi.runAllTimers());
+    expect(probe.current!.phase).toBe('awaiting-splash-exit');
+
+    act(() => probe.current!.reportSplashExitCompleted());
+    expect(probe.current!.phase).toBe('panel');
+    expect(probe.current!.brandLayout).toBe('login');
+    expect(probe.current!.panelRevealed).toBe(true);
   });
 });
 
