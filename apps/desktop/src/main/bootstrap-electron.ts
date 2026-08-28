@@ -4458,14 +4458,20 @@ const registerIpcHandlers = () => {
       return behavior;
     },
   );
+  // 这三个 channel 写系统登录项与启动偏好,属特权副作用,一律先校验 sender 来自
+  // Cindy 自有顶层 frame(electron-security-and-process-boundaries.md §158)。
   ipcMain.handle(
     WINDOW_BEHAVIOR_GET_LAUNCH_AT_LOGIN_CHANNEL,
-    async (): Promise<LaunchAtLoginState> => ({
-      launchAtLogin: readLaunchAtLogin(app),
-      startInTrayOnLogin: readWindowBehaviorSettings().startInTrayOnLogin,
-    }),
+    async (event): Promise<LaunchAtLoginState> => {
+      assertTrustedAppRendererEvent(event);
+      return {
+        launchAtLogin: readLaunchAtLogin(app),
+        startInTrayOnLogin: readWindowBehaviorSettings().startInTrayOnLogin,
+      };
+    },
   );
-  ipcMain.handle(WINDOW_BEHAVIOR_SET_LAUNCH_AT_LOGIN_CHANNEL, async (_e, enabled: unknown) => {
+  ipcMain.handle(WINDOW_BEHAVIOR_SET_LAUNCH_AT_LOGIN_CHANNEL, async (event, enabled: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'launchAtLogin required (boolean)');
     }
@@ -4475,7 +4481,8 @@ const registerIpcHandlers = () => {
   });
   ipcMain.handle(
     WINDOW_BEHAVIOR_SET_START_IN_TRAY_ON_LOGIN_CHANNEL,
-    async (_e, enabled: unknown) => {
+    async (event, enabled: unknown) => {
+      assertTrustedAppRendererEvent(event);
       if (typeof enabled !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'startInTrayOnLogin required (boolean)');
       }
