@@ -15627,6 +15627,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
         | undefined;
       let appliedRuntimeSelectionWasDeferred = false;
+      type RestoredRuntimeSelectionState = {
+        sdkSessionId: string | null;
+        model: string;
+        providerId: string | null;
+        effort: typeof runtimeStatus.effort;
+        fastMode: boolean;
+      };
       const rollbackAppliedCodexThreadRelink = async (): Promise<boolean> => {
         const receipt = appliedCodexThreadRelink;
         if (!receipt) return true;
@@ -15634,22 +15641,87 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         appliedCodexThreadRelink = undefined;
         return restored;
       };
+      const recoverRuntimeAfterSelectionRollback = async (
+        restoredState: RestoredRuntimeSelectionState,
+      ): Promise<void> => {
+        const runtimeRecoveryCurrent =
+          runtimeOwnerBoundaryCurrent() &&
+          isDataOwnerBroadcastScopeCurrent(runtimeOwnerScope) &&
+          getCurrentDbClientSnapshot()?.clientEpoch === runtimeDbSnapshot.clientEpoch;
+        if (!runtimeRecoveryCurrent) return;
+
+        // SQLite may have needed no route rollback (ordinary renderer persists only after this
+        // handler returns), but applyRuntimeSetModelChange has already switched the provider
+        // store and may have left a replacement live Session. Compensate those runtime effects
+        // in the same unit as the thread receipt before surfacing the original failure.
+        pendingCredentialSwitchHolder?.clear(sessionId);
+        restoreControlStores();
+        const recoveryErrors: unknown[] = [];
+        let retainedLiveSession = false;
+        if (!appliedRuntimeSelectionWasDeferred && maker.getSession(sessionId)) {
+          try {
+            await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+          } catch (error) {
+            recoveryErrors.push(error);
+            retainedLiveSession = true;
+          }
+        }
+        if (recoveryErrors.length === 0) {
+          if (previousRuntime.pendingCredentialSwitch) {
+            await pendingCredentialSwitchHolder?.register(
+              sessionId,
+              previousRuntime.pendingCredentialSwitch,
+            );
+          } else {
+            wakeSessionInputAfterCredentialSwitch(sessionId);
+          }
+        }
+        broadcastSessionPatched(
+          sessionId,
+          {
+            ...restoredState,
+          },
+          runtimeOwnerScope,
+        );
+        if (retainedLiveSession) {
+          try {
+            // A live Session that cannot be retired remains the immediate dispatch authority.
+            // Re-adopt its actual profile so host stores/projection do not mix it with the
+            // restored durable source route; a later restart still hydrates that source route.
+            await reconcileRetainedLiveProfile();
+          } catch (error) {
+            recoveryErrors.push(error);
+          }
+        }
+        if (recoveryErrors.length > 0) {
+          throw new AggregateError(
+            recoveryErrors,
+            'runtime selection rollback could not retire the live session',
+          );
+        }
+      };
       const rollbackAppliedRuntimeSelection = async (): Promise<boolean> => {
         const persistedRoute = appliedPersistedRuntimeRoute;
-        if (!persistedRoute) return rollbackAppliedCodexThreadRelink();
+        if (!persistedRoute) {
+          const hadRelink = appliedCodexThreadRelink !== undefined;
+          const restored = await rollbackAppliedCodexThreadRelink();
+          if (!restored) return false;
+          if (hadRelink) {
+            await recoverRuntimeAfterSelectionRollback({
+              sdkSessionId: runtimeStatus.sdkSessionId,
+              model: runtimeStatus.model,
+              providerId: runtimeStatus.providerId,
+              effort: runtimeStatus.effort,
+              fastMode: runtimeStatus.fastMode,
+            });
+          }
+          return true;
+        }
 
         // Route persistence and thread relink are one compensation unit. Match every value
         // written by this selection so a later choice is never overwritten, then restore the
         // complete old-profile tuple in one SQLite statement even after the active DB changed.
-        let restoredState:
-          | {
-              sdkSessionId: string | null;
-              model: string;
-              providerId: string | null;
-              effort: typeof runtimeStatus.effort;
-              fastMode: boolean;
-            }
-          | undefined;
+        let restoredState: RestoredRuntimeSelectionState | undefined;
         const restored = await rollbackPersistedCodexRuntimeSelection({
           previous: {
             sdkSessionId: runtimeStatus.sdkSessionId,
@@ -15688,61 +15760,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         appliedPersistedRuntimeRoute = undefined;
         appliedCodexThreadRelink = undefined;
         if (!restored || !restoredState) return false;
-
-        const runtimeRecoveryCurrent =
-          runtimeOwnerBoundaryCurrent() &&
-          isDataOwnerBroadcastScopeCurrent(runtimeOwnerScope) &&
-          getCurrentDbClientSnapshot()?.clientEpoch === runtimeDbSnapshot.clientEpoch;
-        if (runtimeRecoveryCurrent) {
-          // Device Link receives this handler's failure as the complete SET_MODEL result and
-          // does not issue a renderer-side rollback. Restore the host stores and retire any
-          // already-mutated live Session in the same compensation unit as the SQLite route.
-          pendingCredentialSwitchHolder?.clear(sessionId);
-          restoreControlStores();
-          const recoveryErrors: unknown[] = [];
-          let retainedLiveSession = false;
-          if (!appliedRuntimeSelectionWasDeferred && maker.getSession(sessionId)) {
-            try {
-              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-            } catch (error) {
-              recoveryErrors.push(error);
-              retainedLiveSession = true;
-            }
-          }
-          if (recoveryErrors.length === 0) {
-            if (previousRuntime.pendingCredentialSwitch) {
-              await pendingCredentialSwitchHolder?.register(
-                sessionId,
-                previousRuntime.pendingCredentialSwitch,
-              );
-            } else {
-              wakeSessionInputAfterCredentialSwitch(sessionId);
-            }
-          }
-          broadcastSessionPatched(
-            sessionId,
-            {
-              ...restoredState,
-            },
-            runtimeOwnerScope,
-          );
-          if (retainedLiveSession) {
-            try {
-              // The SQLite/thread route is already restored, but a close failure leaves the
-              // target live Session in memory. Re-adopt its actual profile into host stores and
-              // the effective runtime projection so later input never runs with mixed axes.
-              await reconcileRetainedLiveProfile();
-            } catch (error) {
-              recoveryErrors.push(error);
-            }
-          }
-          if (recoveryErrors.length > 0) {
-            throw new AggregateError(
-              recoveryErrors,
-              'persisted runtime selection rollback could not retire the live session',
-            );
-          }
-        }
+        await recoverRuntimeAfterSelectionRollback(restoredState);
         return true;
       };
       try {

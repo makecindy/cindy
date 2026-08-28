@@ -245,24 +245,23 @@ describe('session runtime control wiring', () => {
     );
   });
 
-  it('restores host stores and retires the live session after a post-persistence failure', () => {
+  it('restores host stores and retires the live session after a post-selection failure', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
-    const rollback = setModel.indexOf(
-      'const rollbackAppliedRuntimeSelection = async (): Promise<boolean> => {',
+    const runtimeRecovery = setModel.indexOf(
+      'const recoverRuntimeAfterSelectionRollback = async (',
     );
-    const sqliteRestore = setModel.indexOf('rollbackPersistedCodexRuntimeSelection({', rollback);
-    const ownerGuard = setModel.indexOf('const runtimeRecoveryCurrent =', sqliteRestore);
+    const ownerGuard = setModel.indexOf('const runtimeRecoveryCurrent =', runtimeRecovery);
     const restoreStores = setModel.indexOf('restoreControlStores();', ownerGuard);
     const retireLiveSession = setModel.indexOf(
       'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
       restoreStores,
     );
     const restoredRouteBroadcast = setModel.indexOf(
-      'broadcastSessionPatched(\n            sessionId,\n            {\n              ...restoredState,',
+      'broadcastSessionPatched(\n          sessionId,\n          {\n            ...restoredState,',
       retireLiveSession,
     );
     const reconcileRetainedLive = setModel.indexOf(
@@ -270,19 +269,25 @@ describe('session runtime control wiring', () => {
       restoredRouteBroadcast,
     );
     const rollbackFailure = setModel.indexOf(
-      "'persisted runtime selection rollback could not retire the live session'",
+      "'runtime selection rollback could not retire the live session'",
       reconcileRetainedLive,
     );
+    const rollback = setModel.indexOf(
+      'const rollbackAppliedRuntimeSelection = async (): Promise<boolean> => {',
+      rollbackFailure,
+    );
+    const sqliteRestore = setModel.indexOf('rollbackPersistedCodexRuntimeSelection({', rollback);
     const projectionRead = setModel.indexOf('const projectionMeta = await maker.getSessionMeta(sessionId);');
     const outerCatch = setModel.lastIndexOf('} catch (err) {');
 
-    expect(sqliteRestore).toBeGreaterThan(rollback);
-    expect(ownerGuard).toBeGreaterThan(sqliteRestore);
+    expect(ownerGuard).toBeGreaterThan(runtimeRecovery);
     expect(restoreStores).toBeGreaterThan(ownerGuard);
     expect(retireLiveSession).toBeGreaterThan(restoreStores);
     expect(restoredRouteBroadcast).toBeGreaterThan(retireLiveSession);
     expect(reconcileRetainedLive).toBeGreaterThan(restoredRouteBroadcast);
     expect(rollbackFailure).toBeGreaterThan(reconcileRetainedLive);
+    expect(rollback).toBeGreaterThan(rollbackFailure);
+    expect(sqliteRestore).toBeGreaterThan(rollback);
     expect(setModel.slice(retireLiveSession, restoredRouteBroadcast)).toContain(
       'if (recoveryErrors.length === 0)',
     );
@@ -295,6 +300,51 @@ describe('session runtime control wiring', () => {
     expect(setModel.indexOf('await rollbackAppliedRuntimeSelection();', outerCatch)).toBeGreaterThan(
       outerCatch,
     );
+  });
+
+  it('compensates ordinary renderer runtime state when a post-relink metadata read fails', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const rollback = setModel.indexOf(
+      'const rollbackAppliedRuntimeSelection = async (): Promise<boolean> => {',
+    );
+    const noPersistedRoute = setModel.indexOf('if (!persistedRoute) {', rollback);
+    const captureRelink = setModel.indexOf(
+      'const hadRelink = appliedCodexThreadRelink !== undefined;',
+      noPersistedRoute,
+    );
+    const rollbackRelink = setModel.indexOf(
+      'const restored = await rollbackAppliedCodexThreadRelink();',
+      captureRelink,
+    );
+    const runtimeRecovery = setModel.indexOf(
+      'await recoverRuntimeAfterSelectionRollback({',
+      rollbackRelink,
+    );
+    const projectionRead = setModel.indexOf(
+      'const projectionMeta = await maker.getSessionMeta(sessionId);',
+    );
+    const outerCatch = setModel.lastIndexOf('} catch (err) {');
+    const outerRollback = setModel.indexOf(
+      'await rollbackAppliedRuntimeSelection();',
+      outerCatch,
+    );
+
+    expect(noPersistedRoute).toBeGreaterThan(rollback);
+    expect(captureRelink).toBeGreaterThan(noPersistedRoute);
+    expect(rollbackRelink).toBeGreaterThan(captureRelink);
+    expect(runtimeRecovery).toBeGreaterThan(rollbackRelink);
+    expect(setModel.slice(runtimeRecovery, runtimeRecovery + 500)).toContain(
+      'sdkSessionId: runtimeStatus.sdkSessionId',
+    );
+    expect(setModel.slice(runtimeRecovery, runtimeRecovery + 500)).toContain(
+      'providerId: runtimeStatus.providerId',
+    );
+    expect(projectionRead).toBeGreaterThan(runtimeRecovery);
+    expect(outerRollback).toBeGreaterThan(outerCatch);
   });
 
   it('treats teardown pending as stale at the final relink commit boundary', () => {

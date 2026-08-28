@@ -552,6 +552,8 @@ describe('sendToSession ordering', () => {
     );
     expect(setModelBlock).toContain('pendingCredentialSwitchHolder?.clear(sessionId);');
     expect(setModelBlock).toContain('restoreControlStores();');
+    expect(setModelBlock).toContain('const hadRelink = appliedCodexThreadRelink !== undefined;');
+    expect(setModelBlock).toContain('await recoverRuntimeAfterSelectionRollback({');
     expect(setModelBlock).toContain('previousRuntime.pendingCredentialSwitch');
     expect(setModelBlock).toContain('withRehydrateCloseSuppressed(sessionId');
     expect(setModelBlock).toContain('recordRecoveredSessionRuntimeMutation(sessionId');
