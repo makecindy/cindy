@@ -11,7 +11,10 @@ import {
 } from './workspacePrefsStore.js';
 
 export interface WorkspacePrefsMirrorDeps {
-  isLiveBound(channel: HookPrefsChannel): boolean;
+  /** 当前可镜像的绑定集合身份；null 表示没有 live binding。 */
+  getLiveBindingKey(channel: HookPrefsChannel): string | null;
+  /** multi-team 下只允许向仍处于当前绑定集合的 team 写回。 */
+  isMirrorTargetCurrent(channel: HookPrefsChannel, teamId: string | null): boolean;
   getRemoteSnapshotGeneration(channel: HookPrefsChannel): number;
   getRemotePrefs(channel: HookPrefsChannel): Promise<HookPrefsView>;
   setRemotePrefs(
@@ -48,38 +51,56 @@ export function createWorkspacePrefsMirror(
   const run = async (channel: HookPrefsChannel): Promise<void> => {
     while (true) {
       const requestedGeneration = triggerGeneration(channel);
+      const bindingKey = deps.getLiveBindingKey(channel);
       try {
-        if (!deps.isLiveBound(channel)) return;
+        if (bindingKey === null) return;
         const snapshotGeneration = deps.getRemoteSnapshotGeneration(channel);
         const remote: HookPrefsView = await deps.getRemotePrefs(channel);
         if (
           requestedGeneration !== triggerGeneration(channel) ||
-          snapshotGeneration !== deps.getRemoteSnapshotGeneration(channel)
+          snapshotGeneration !== deps.getRemoteSnapshotGeneration(channel) ||
+          bindingKey !== deps.getLiveBindingKey(channel)
         ) {
           continue;
         }
         if (!remote.bound) return;
 
         let restart = false;
-        for (const candidate of reconcileWorkspacePrefsForMirror(channel, remote.prefs)) {
-          if (requestedGeneration !== triggerGeneration(channel)) {
+        const currentPrefs = remote.prefs.filter((row) =>
+          deps.isMirrorTargetCurrent(channel, row.teamId ?? null),
+        );
+        for (const candidate of reconcileWorkspacePrefsForMirror(channel, currentPrefs)) {
+          const teamId = candidate.prefs.teamId ?? null;
+          if (
+            requestedGeneration !== triggerGeneration(channel) ||
+            bindingKey !== deps.getLiveBindingKey(channel)
+          ) {
             restart = true;
             break;
           }
+          if (!deps.isMirrorTargetCurrent(channel, teamId)) continue;
           if (!isWorkspacePrefsMirrorCandidateCurrent(channel, candidate)) continue;
           const row = candidate.prefs;
-          await deps.setRemotePrefs(channel, row.workspace, completePatch(row), row.teamId ?? null);
-          if (requestedGeneration !== triggerGeneration(channel)) {
+          await deps.setRemotePrefs(channel, row.workspace, completePatch(row), teamId);
+          if (
+            requestedGeneration !== triggerGeneration(channel) ||
+            bindingKey !== deps.getLiveBindingKey(channel)
+          ) {
             restart = true;
             break;
           }
-          markWorkspacePrefMirrored(channel, row.teamId ?? null, row.workspace, candidate.rev);
+          markWorkspacePrefMirrored(channel, teamId, row.workspace, candidate.rev);
         }
         if (restart || requestedGeneration !== triggerGeneration(channel)) continue;
         deps.onLocalPrefsChanged(channel);
         return;
       } catch (error) {
-        if (requestedGeneration !== triggerGeneration(channel)) continue;
+        if (
+          requestedGeneration !== triggerGeneration(channel) ||
+          bindingKey !== deps.getLiveBindingKey(channel)
+        ) {
+          continue;
+        }
         deps.onError(channel, error);
         return;
       }

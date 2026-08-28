@@ -36,6 +36,11 @@ export interface WorkspacePrefsEntry {
   rev?: number;
   /** 尚未成功镜像的本地写入。缺省：墓碑视为 dirty，旧实值行视为已同步。 */
   dirty?: boolean;
+  /**
+   * dirty 行里由本机实际修改的字段。缺省表示整行都是旧客户端留下的本机正本；
+   * 有值时可先用 server 快照补齐未改字段，再安全地生成完整镜像行。
+   */
+  dirtyPatch?: HookPrefsPatch;
 }
 
 interface StoreFile {
@@ -63,6 +68,18 @@ function isNullablePrefField(value: unknown): value is string | null {
   );
 }
 
+const PREF_FIELDS = ['model', 'effort', 'agentKind', 'permissionMode'] as const;
+type PrefField = (typeof PREF_FIELDS)[number];
+
+function isDirtyPatch(value: unknown): value is HookPrefsPatch {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const patch = value as Record<string, unknown>;
+  if (Object.keys(patch).some((key) => !PREF_FIELDS.includes(key as PrefField))) return false;
+  return PREF_FIELDS.every(
+    (field) => patch[field] === undefined || isNullablePrefField(patch[field]),
+  );
+}
+
 function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
   if (!raw || typeof raw !== 'object') return false;
   const r = raw as Record<string, unknown>;
@@ -78,7 +95,8 @@ function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
     isNullablePrefField(r.permissionMode) &&
     (r.rev === undefined ||
       (typeof r.rev === 'number' && Number.isInteger(r.rev) && r.rev >= 0 && r.rev <= 1_000_000_000)) &&
-    (r.dirty === undefined || typeof r.dirty === 'boolean')
+    (r.dirty === undefined || typeof r.dirty === 'boolean') &&
+    (r.dirtyPatch === undefined || isDirtyPatch(r.dirtyPatch))
   );
 }
 
@@ -144,6 +162,41 @@ function isDirtyRow(row: WorkspacePrefsEntry): boolean {
   return isBlankRow(row);
 }
 
+function mergePatch(base: HookPrefsPatch | undefined, patch: HookPrefsPatch): HookPrefsPatch {
+  const merged: HookPrefsPatch = { ...base };
+  for (const field of PREF_FIELDS) {
+    if (patch[field] !== undefined) merged[field] = patch[field];
+  }
+  return merged;
+}
+
+function mergeDirtyRowWithServer(
+  localRow: WorkspacePrefsEntry,
+  serverRow: WorkspacePrefsEntry | undefined,
+): WorkspacePrefsEntry {
+  if (localRow.dirtyPatch === undefined || serverRow === undefined) return localRow;
+  const merged: WorkspacePrefsEntry = {
+    ...serverRow,
+    channel: localRow.channel,
+    teamId: localRow.teamId,
+    workspace: localRow.workspace,
+    rev: rowRev(localRow),
+    dirty: true,
+    dirtyPatch: localRow.dirtyPatch,
+  };
+  for (const field of PREF_FIELDS) {
+    const value = localRow.dirtyPatch[field];
+    if (value !== undefined) merged[field] = value;
+  }
+  return merged;
+}
+
+function cleanRow(row: WorkspacePrefsEntry): WorkspacePrefsEntry {
+  const rest = { ...row };
+  delete rest.dirtyPatch;
+  return { ...rest, dirty: false };
+}
+
 export function isWorkspacePrefsMigrated(channel: HookPrefsChannel): boolean {
   return readStore(filePath()).migrated[channel] === true;
 }
@@ -204,6 +257,13 @@ export function setWorkspacePref(
           permissionMode: null,
         } satisfies WorkspacePrefsEntry));
   const rev = rowRev(current) + 1;
+  const fullLocalAuthority =
+    exact !== undefined &&
+    ((isDirtyRow(exact) && exact.dirtyPatch === undefined) ||
+      (store.migrated[channel] !== true && !isDirtyRow(exact)));
+  const dirtyPatch = fullLocalAuthority
+    ? undefined
+    : mergePatch(exact && isDirtyRow(exact) ? exact.dirtyPatch : undefined, patch);
   const nextRow: WorkspacePrefsEntry = {
     ...current,
     ...(patch.model !== undefined ? { model: patch.model } : {}),
@@ -212,6 +272,7 @@ export function setWorkspacePref(
     ...(patch.permissionMode !== undefined ? { permissionMode: patch.permissionMode } : {}),
     rev,
     dirty: true,
+    dirtyPatch,
   };
   const rest = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
   // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null。
@@ -277,7 +338,7 @@ export function markWorkspacePrefMirrored(
       writeStore(fp, {
         ...store,
         entries: store.entries.map((e) =>
-          sameKey(e, channel, teamId, workspace) ? { ...e, dirty: false } : e,
+          sameKey(e, channel, teamId, workspace) ? cleanRow(e) : e,
         ),
       });
       return;
@@ -295,7 +356,7 @@ export function markWorkspacePrefMirrored(
   writeStore(fp, {
     ...store,
     entries: store.entries.map((e) =>
-      sameKey(e, channel, teamId, workspace) ? { ...e, dirty: false } : e,
+      sameKey(e, channel, teamId, workspace) ? cleanRow(e) : e,
     ),
   });
 }
@@ -339,6 +400,16 @@ function prefKey(teamId: string | null | undefined, workspace: string): string {
   return `${teamId ?? ''}::${workspace}`;
 }
 
+function serverRowForLocal(
+  serverByKey: Map<string, WorkspacePrefsEntry>,
+  row: Pick<WorkspacePrefsEntry, 'teamId' | 'workspace'>,
+): WorkspacePrefsEntry | undefined {
+  return (
+    serverByKey.get(prefKey(row.teamId, row.workspace)) ??
+    (row.teamId !== null ? serverByKey.get(prefKey(null, row.workspace)) : undefined)
+  );
+}
+
 function asStoreRow(channel: HookPrefsChannel, pref: HookWorkspacePrefs): WorkspacePrefsEntry | null {
   if (!HOOK_WORKSPACE_ALIAS_RE.test(pref.workspace)) return null;
   const teamId = pref.teamId === undefined || pref.teamId === null ? null : pref.teamId;
@@ -370,17 +441,23 @@ export function importWorkspacePrefsIfNeeded(
   const localKeys = new Set(
     store.entries.filter((e) => e.channel === channel).map((e) => prefKey(e.teamId, e.workspace)),
   );
+  const serverByKey = new Map<string, WorkspacePrefsEntry>();
   const incoming: WorkspacePrefsEntry[] = [];
   for (const pref of serverPrefs) {
     const row = asStoreRow(channel, pref);
     if (row === null) continue;
+    serverByKey.set(prefKey(row.teamId, row.workspace), row);
     if (localKeys.has(prefKey(row.teamId, row.workspace))) continue;
     incoming.push(row);
   }
   // 首次迁移前的既有本地行是正本，必须作为 dirty 行镜像；本次刚导入的 server 行
   // 保持 clean，避免把 prefs.get 的旧快照无条件回写。
   const combined = [
-    ...store.entries.map((row) => (row.channel === channel ? { ...row, dirty: true } : row)),
+    ...store.entries.map((row) => {
+      if (row.channel !== channel) return row;
+      const dirtyRow = { ...row, dirty: true };
+      return mergeDirtyRowWithServer(dirtyRow, serverRowForLocal(serverByKey, row));
+    }),
     ...incoming,
   ];
   const channelRows = combined.filter((row) => row.channel === channel);
@@ -418,7 +495,7 @@ export function applyIncomingServerWorkspacePrefs(
     const key = prefKey(localRow.teamId, localRow.workspace);
     seen.add(key);
     if (isDirtyRow(localRow)) {
-      nextChannel.push(localRow);
+      nextChannel.push(mergeDirtyRowWithServer(localRow, serverRowForLocal(serverByKey, localRow)));
       continue;
     }
     const serverRow = serverByKey.get(key);

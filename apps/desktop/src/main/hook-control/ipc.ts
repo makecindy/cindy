@@ -46,7 +46,6 @@ import {
 import {
   applyIncomingServerWorkspacePrefs,
   listWorkspacePrefs,
-  markWorkspacePrefMirrored,
   markWorkspacePrefsMigrated,
   setWorkspacePref,
   type HookPrefsChannel,
@@ -320,16 +319,38 @@ function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWor
   }
 }
 
-function channelLiveBound(channel: HookPrefsChannel): boolean {
+function channelLiveBindingKey(channel: HookPrefsChannel): string | null {
   const snap = ensureInstances().manager.snapshot();
   if (channel === 'slack') {
-    return snap.binding?.state === 'confirmed' || snap.bindings.some((b) => !b.displaced);
+    if (snap.serverMultiTeam) {
+      const teamIds = snap.bindings
+        .filter((binding) => !binding.displaced)
+        .map((binding) => binding.teamId)
+        .sort();
+      return teamIds.length > 0 ? `slack:multi:${teamIds.join(',')}` : null;
+    }
+    const binding = snap.binding;
+    return binding?.state === 'confirmed'
+      ? `slack:single:${binding.slackUserId ?? ''}:${binding.teamName ?? ''}`
+      : null;
   }
-  return snap[channel].binding?.state === 'confirmed';
+  const binding = snap[channel].binding;
+  return binding?.state === 'confirmed'
+    ? `${channel}:${binding.bindingId}:${binding.scopeId ?? ''}`
+    : null;
+}
+
+function channelMirrorTargetCurrent(channel: HookPrefsChannel, teamId: string | null): boolean {
+  if (channelLiveBindingKey(channel) === null) return false;
+  if (channel !== 'slack' || teamId === null) return true;
+  const snap = ensureInstances().manager.snapshot();
+  if (!snap.serverMultiTeam) return true;
+  return snap.bindings.some((binding) => binding.teamId === teamId && !binding.displaced);
 }
 
 const mirrorWorkspacePrefs = createWorkspacePrefsMirror({
-  isLiveBound: channelLiveBound,
+  getLiveBindingKey: channelLiveBindingKey,
+  isMirrorTargetCurrent: channelMirrorTargetCurrent,
   getRemoteSnapshotGeneration: (channel) => remotePrefsSnapshotGenerations.get(channel) ?? 0,
   getRemotePrefs: async (channel) => {
     const manager = ensureInstances().manager;
@@ -922,11 +943,10 @@ export function registerHookControlIpc(): void {
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PREFS_SET, async (_e, payload) => {
     requireHookControl();
-    const { manager: m } = ensureInstances();
+    ensureInstances();
     const parsed = parseWorkspacePrefsWrite(payload);
-    let write: ReturnType<typeof setWorkspacePref>;
     try {
-      write = setWorkspacePref('slack', parsed.teamId, parsed.workspace, parsed.patch);
+      setWorkspacePref('slack', parsed.teamId, parsed.workspace, parsed.patch);
     } catch (err) {
       log.warn(
         `local slack workspace prefs write failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -935,20 +955,7 @@ export function registerHookControlIpc(): void {
     }
     const view = slackLocalPrefsView();
     broadcastPrefs(view);
-    const mirrorPatch = {
-      model: write.row.model,
-      effort: write.row.effort,
-      agentKind: write.row.agentKind,
-      permissionMode: write.row.permissionMode,
-    };
-    void m
-      .setWorkspacePrefs(parsed.workspace, mirrorPatch, parsed.teamId)
-      .then(() => markWorkspacePrefMirrored('slack', parsed.teamId, parsed.workspace, write.rev))
-      .catch((err: unknown) => {
-        log.warn(
-          `slack workspace prefs mirror failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
+    void mirrorWorkspacePrefs('slack');
     return { prefs: view };
   });
 
@@ -961,12 +968,11 @@ export function registerHookControlIpc(): void {
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_PREFS_SET, async (_e, payload) => {
     requireHookControl();
-    const { manager: m } = ensureInstances();
+    ensureInstances();
     const provider = requireNeutralProvider(payload);
     const parsed = parseWorkspacePrefsWrite(payload);
-    let write: ReturnType<typeof setWorkspacePref>;
     try {
-      write = setWorkspacePref(provider, parsed.teamId, parsed.workspace, parsed.patch);
+      setWorkspacePref(provider, parsed.teamId, parsed.workspace, parsed.patch);
     } catch (err) {
       log.warn(
         `local ${provider} workspace prefs write failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -975,20 +981,7 @@ export function registerHookControlIpc(): void {
     }
     const view = providerLocalPrefsView(provider);
     broadcastProviderPrefs(view);
-    const mirrorPatch = {
-      model: write.row.model,
-      effort: write.row.effort,
-      agentKind: write.row.agentKind,
-      permissionMode: write.row.permissionMode,
-    };
-    void m
-      .setProviderWorkspacePrefs(provider, parsed.workspace, mirrorPatch)
-      .then(() => markWorkspacePrefMirrored(provider, parsed.teamId, parsed.workspace, write.rev))
-      .catch((err: unknown) => {
-        log.warn(
-          `${provider} workspace prefs mirror failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
+    void mirrorWorkspacePrefs(provider);
     return { prefs: view };
   });
 

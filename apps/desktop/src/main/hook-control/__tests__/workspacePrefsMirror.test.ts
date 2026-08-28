@@ -34,7 +34,8 @@ describe('workspacePrefsMirror', () => {
     reconcileWorkspacePrefsForMirror('slack', []);
     const setRemotePrefs = vi.fn();
     const mirror = createWorkspacePrefsMirror({
-      isLiveBound: () => true,
+      getLiveBindingKey: () => 'slack:T1',
+      isMirrorTargetCurrent: () => true,
       getRemoteSnapshotGeneration: () => 0,
       getRemotePrefs: async () => ({
         bound: true,
@@ -80,7 +81,8 @@ describe('workspacePrefsMirror', () => {
     });
     const onError = vi.fn();
     const mirror = createWorkspacePrefsMirror({
-      isLiveBound: () => true,
+      getLiveBindingKey: () => 'slack:T1',
+      isMirrorTargetCurrent: () => true,
       getRemoteSnapshotGeneration: () => 0,
       getRemotePrefs: async () => ({ bound: true, prefs: [] }),
       setRemotePrefs,
@@ -133,7 +135,8 @@ describe('workspacePrefsMirror', () => {
     });
     const onLocalPrefsChanged = vi.fn();
     const mirror = createWorkspacePrefsMirror({
-      isLiveBound: () => true,
+      getLiveBindingKey: () => 'slack:T1',
+      isMirrorTargetCurrent: () => true,
       getRemoteSnapshotGeneration: () => 0,
       getRemotePrefs,
       setRemotePrefs: vi.fn(),
@@ -195,7 +198,8 @@ describe('workspacePrefsMirror', () => {
     });
     const setRemotePrefs = vi.fn();
     const mirror = createWorkspacePrefsMirror({
-      isLiveBound: () => true,
+      getLiveBindingKey: () => 'slack:T1',
+      isMirrorTargetCurrent: () => true,
       getRemoteSnapshotGeneration: () => generation,
       getRemotePrefs,
       setRemotePrefs,
@@ -219,5 +223,112 @@ describe('workspacePrefsMirror', () => {
       permissionMode: 'ask',
     });
     expect(setRemotePrefs).not.toHaveBeenCalled();
+  });
+
+  it('首次快照到达前的 partial patch 会先补齐远端未改字段再镜像', async () => {
+    setWorkspacePref('slack', 'T1', 'repo', { model: 'new-local-model' });
+    const setRemotePrefs = vi.fn();
+    const mirror = createWorkspacePrefsMirror({
+      getLiveBindingKey: () => 'slack:T1',
+      isMirrorTargetCurrent: () => true,
+      getRemoteSnapshotGeneration: () => 0,
+      getRemotePrefs: async () => ({
+        bound: true,
+        prefs: [
+          {
+            workspace: 'repo',
+            model: 'old-remote-model',
+            effort: 'high',
+            agentKind: 'claude-code',
+            permissionMode: 'ask',
+            teamId: 'T1',
+          },
+        ],
+      }),
+      setRemotePrefs,
+      onLocalPrefsChanged: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await mirror('slack');
+
+    expect(setRemotePrefs).toHaveBeenCalledWith(
+      'slack',
+      'repo',
+      {
+        model: 'new-local-model',
+        effort: 'high',
+        agentKind: 'claude-code',
+        permissionMode: 'ask',
+      },
+      'T1',
+    );
+    expect(getWorkspacePref('slack', 'T1', 'repo')).toMatchObject({
+      model: 'new-local-model',
+      effort: 'high',
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
+  });
+
+  it('prefs.get 在途时绑定集合变化会丢弃旧快照，且不再写已解绑 team', async () => {
+    setWorkspacePref('slack', 'T1', 'repo', { model: 'local-team-one' });
+    let bindingKey = 'slack:T1,T2';
+    let releaseFirstGet!: () => void;
+    const firstGetPending = new Promise<void>((resolve) => {
+      releaseFirstGet = resolve;
+    });
+    const getRemotePrefs = vi.fn(async () => {
+      if (getRemotePrefs.mock.calls.length === 1) {
+        await firstGetPending;
+        return {
+          bound: true,
+          prefs: [
+            {
+              workspace: 'repo',
+              model: 'stale-team-one',
+              effort: 'high',
+              agentKind: 'codex',
+              permissionMode: 'ask',
+              teamId: 'T1',
+            },
+          ],
+        };
+      }
+      return {
+        bound: true,
+        prefs: [
+          {
+            workspace: 'chat',
+            model: 'stale-team-one-only',
+            effort: null,
+            agentKind: 'claude-code',
+            permissionMode: null,
+            teamId: 'T1',
+          },
+        ],
+      };
+    });
+    const setRemotePrefs = vi.fn();
+    const mirror = createWorkspacePrefsMirror({
+      getLiveBindingKey: () => bindingKey,
+      isMirrorTargetCurrent: (_channel, teamId) => teamId === null || teamId === 'T2',
+      getRemoteSnapshotGeneration: () => 0,
+      getRemotePrefs,
+      setRemotePrefs,
+      onLocalPrefsChanged: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    const flight = mirror('slack');
+    await vi.waitFor(() => expect(getRemotePrefs).toHaveBeenCalledTimes(1));
+    bindingKey = 'slack:T2';
+    releaseFirstGet();
+    await flight;
+
+    expect(getRemotePrefs).toHaveBeenCalledTimes(2);
+    expect(setRemotePrefs).not.toHaveBeenCalled();
+    expect(getWorkspacePref('slack', 'T1', 'repo').model).toBe('local-team-one');
+    expect(getWorkspacePref('slack', 'T1', 'chat').model).toBeNull();
   });
 });
