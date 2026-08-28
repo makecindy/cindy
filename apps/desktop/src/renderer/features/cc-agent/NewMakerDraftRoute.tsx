@@ -19,7 +19,7 @@
  *           - 未就绪 → 弹通用 confirmDialog → 跳 settings → 中止
  *        b. 本机普通路径: createSession → sendMessage → navigate。首条消息在草稿
  *           路由发出,不把发送绑在 SessionView hydrate 上;切走只换画面。
- *           以 `/` 开头的首条仍 setPending,交给 SessionView 做完整 desktop / Pi 分派。
+ *           SessionView 会当成斜杠命令的首条(列首 /cmd,以及 Pi 空白前缀)仍 setPending。
  *        c. Worktree 路径: 先 createSession + 插入状态卡 + navigate,再后台
  *           createWorktree；成功后更新 workingDir 并发送首条消息，失败则把原消息
  *           存回该 session 的 composer draft 供用户重试
@@ -149,6 +149,7 @@ import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageClean
 import type { GoalLimitValues } from '@/components/new-chat/GoalAdvancedLimits';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
+  leadingSlashInvocation,
   rebaseInlineRangesAfterSlashCommandRewrite,
   rewritePiSkillMessageForSend,
 } from '@/lib/slashCommands';
@@ -4233,9 +4234,14 @@ export function NewMakerDraftRoute() {
 
           try {
             // 斜杠命令必须走 SessionView 的完整分派(SSH skipAgentSkills、远端 /review
-            // 拒绝、Pi runtime 重试)。草稿路由只识别「整条都是 /cmd」并交接,不复制那套逻辑。
+            // 拒绝、Pi runtime 重试)。识别窗口与 maybeDispatchDesktopSlashCommand 相同:
+            // 列首 /cmd,以及 Pi 的空白前缀 /cmd;草稿路由只交接,不复制分派逻辑。
             const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
-            if (slashMatch) {
+            const leading =
+              !slashMatch && capabilityAgentKind === 'pi'
+                ? leadingSlashInvocation(message)
+                : undefined;
+            if (slashMatch || leading) {
               setPending(newSession.id, {
                 text: message,
                 files: rehydratedFiles,

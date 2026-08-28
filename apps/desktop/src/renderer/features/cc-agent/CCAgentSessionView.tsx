@@ -3730,7 +3730,7 @@ export function CCAgentSessionView({
     [sessionId, t],
   );
 
-  // delayed-create:device-link / 远程草稿,以及本机以 `/` 开头的首条,把内容登记在
+  // delayed-create:device-link / 远程草稿,以及本机斜杠命令首条(含 Pi 空白前缀),把内容登记在
   // pending 里,等 session 完全 hydrate 后再由 maybeDispatchDesktopSlashCommand /
   // sendMessage 消费。本机普通文本已在草稿路由发出。一次性消费 + ref guard,防
   // StrictMode 双 mount / 重渲染时重复发送。

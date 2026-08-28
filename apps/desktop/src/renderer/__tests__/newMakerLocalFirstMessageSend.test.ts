@@ -70,6 +70,7 @@ describe('NewMakerDraftRoute local first-message send', () => {
 
   it('hands slash-looking first messages to SessionView instead of copying desktop dispatch', () => {
     const slashMatch = source.indexOf('const slashMatch = message.match(', localFence);
+    const leading = source.indexOf('leadingSlashInvocation(message)', slashMatch);
     const pendingHandoff = source.indexOf('setPending(newSession.id, {', slashMatch);
     const sendPromise = source.indexOf(
       'const sendPromise = makerChatStore.sendMessage(',
@@ -78,11 +79,15 @@ describe('NewMakerDraftRoute local first-message send', () => {
     const reviewStart = source.indexOf('window.electronAPI.maker.startReview({', localFence);
 
     expect(slashMatch).toBeGreaterThan(localFence);
+    expect(leading).toBeGreaterThan(slashMatch);
+    expect(leading).toBeLessThan(pendingHandoff);
     expect(pendingHandoff).toBeGreaterThan(slashMatch);
     expect(pendingHandoff).toBeLessThan(sendPromise);
     expect(reviewStart).toBe(-1);
+    expect(source.slice(slashMatch, pendingHandoff)).toContain("capabilityAgentKind === 'pi'");
     expect(sessionViewSource).toContain('const pending = consumePending(sessionId);');
     expect(sessionViewSource).toContain('maybeDispatchDesktopSlashCommand');
+    expect(sessionViewSource).toContain('leadingSlashInvocation(message)');
     expect(sessionViewSource).toContain('本机普通文本已在草稿路由发出');
   });
 });
