@@ -242,15 +242,17 @@ export function LoginHandoffProvider({
 
   const value = useMemo<LoginHandoffContextValue>(() => {
     const isPlaying = phase !== 'boot' && phase !== 'done';
+    const panelRevealed = phase === 'panel' || phase === 'slogan' || phase === 'done';
     return {
       phase,
       branch,
-      // Keep the exact Splash composition through the whole exit fade. The
-      // handoff timeline starts when fading begins, but the layout may switch
-      // only after Splash has actually finished fading and unmounted. There is
-      // no login panel in the authenticated branch, so it must never consume
-      // the login panel's footer reserve during this transition.
-      brandLayout: splashExitCompleted && phase !== 'brand-exit' ? 'login' : 'splash',
+      // Keep the exact Splash composition through the whole exit fade and the
+      // settle/shift handoff. The login geometry is only needed once the
+      // unauthenticated panel is actually revealed; switching earlier makes
+      // the artwork shrink while the panel is still hidden. Authenticated
+      // startup has no login panel, so it never switches to login geometry.
+      brandLayout:
+        branch === 'unauthenticated' && splashExitCompleted && panelRevealed ? 'login' : 'splash',
       panelBottomReserve,
       isPlaying,
       // startup 期(含 boot/播放中/brand-exit)恒挂以维持不透明白底全盖;done 后

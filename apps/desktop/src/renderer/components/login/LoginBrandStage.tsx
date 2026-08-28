@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useRef, type CSSProperties } from 'react';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { LOGIN_HANDOFF_TIMINGS, useLoginHandoff } from '@/contexts/LoginHandoffContext';
@@ -45,36 +45,19 @@ import { useViewportSize } from './LoginStage';
 export function LoginBrandStage() {
   const handoff = useLoginHandoff();
   const { width, height } = useViewportSize();
-  const previousBrandLayoutRef = useRef(handoff.brandLayout);
-  const [brandLayoutTransitioning, setBrandLayoutTransitioning] = useState(false);
   const panelBottomReserve =
     handoff.panelBottomReserve ??
-    (handoff.brandLayout === 'login' ? LOGIN_LOCAL_MODE.reservedHeight : 0);
+    (handoff.branch === 'authenticated'
+      ? 0
+      : handoff.brandLayout === 'login'
+        ? LOGIN_LOCAL_MODE.reservedHeight
+        : 0);
   // 品牌块整体让位(scale+translateY,构图冻结;用户拍板 2026-07-23,design.md §11)
   const { scale, translateY } =
     handoff.brandLayout === 'splash'
       ? splashBrandPlacement(width, height)
       : brandPlacement(width, height, panelBottomReserve);
   const sloganShift = sloganShiftX(width, scale);
-
-  // Splash and login layouts can have very different geometry in a short
-  // window. Animate the one-time handoff change, but do not leave a persistent
-  // transform transition that would animate ordinary window resizes.
-  const brandLayoutChanged =
-    previousBrandLayoutRef.current === 'splash' && handoff.brandLayout === 'login';
-  useEffect(() => {
-    const shouldTransition =
-      previousBrandLayoutRef.current === 'splash' && handoff.brandLayout === 'login';
-    previousBrandLayoutRef.current = handoff.brandLayout;
-    if (!shouldTransition || !handoff.isPlaying) return;
-
-    setBrandLayoutTransitioning(true);
-    const timer = window.setTimeout(
-      () => setBrandLayoutTransitioning(false),
-      LOGIN_HANDOFF_TIMINGS.shiftMs,
-    );
-    return () => window.clearTimeout(timer);
-  }, [handoff.brandLayout, handoff.isPlaying]);
   // 暗色画布用白字版字标/SLOGAN(figma 532:585 CINDY_Standard_White / SLOGAN #FBFBFB;
   // 深浅判定同 useBrandLogo:跟随 theme-service 挂的 dark class)。立绘两模式同资产。
   const isDark = useIsDarkMode();
@@ -160,10 +143,6 @@ export function LoginBrandStage() {
             height: STAGE.height,
             transform: `translate(-50%, calc(-50% + ${translateY}px)) scale(${scale})`,
             transformOrigin: '50% 50%',
-            transition:
-              handoff.isPlaying && (brandLayoutChanged || brandLayoutTransitioning)
-                ? `transform ${LOGIN_HANDOFF_TIMINGS.shiftMs}ms ${LOGIN_HANDOFF_TIMINGS.shiftEasing}`
-                : undefined,
           }}
         >
           <img
