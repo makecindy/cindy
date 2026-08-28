@@ -260,6 +260,54 @@ describe('PendingCredentialSwitchService', () => {
     h.service.clear(sessionId);
   });
 
+  it('restores a committed relink marker after cleanup so retry does not fork again', async () => {
+    const sessionId = rememberSession('pending-switch-restore-committed-relink');
+    setSessionProvider(sessionId, 'xd');
+    const rollback = vi.fn(async () => {
+      throw new Error('rollback failed');
+    });
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      {
+        resolveRoute: async (_agent, model, providerId) => ({
+          model,
+          providerId,
+          degraded: false,
+        }),
+        retryDelayMs: 60_000,
+      },
+    );
+    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback,
+    });
+    h.persistRoute.mockRejectedValueOnce(new Error('sqlite failed'));
+
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+      agentKind: 'codex',
+      sourceCodexThreadModelProviderId: 'cindy_gateway',
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(h.service.get(sessionId)?.codexThreadRelinkCommitted).toBe(true);
+    const recovered = h.service.get(sessionId)!;
+    h.service.clear(sessionId);
+    h.service.register(sessionId, recovered);
+
+    await h.service.onTurnSettled(sessionId);
+
+    expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
+    expect(h.persistRoute).toHaveBeenCalledTimes(2);
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(h.onApplied).toHaveBeenCalledOnce();
+  });
+
   it('rolls back an abandoned relink when route persistence is superseded', async () => {
     const sessionId = rememberSession('pending-switch-superseded-after-persist');
     setSessionProvider(sessionId, 'xd');

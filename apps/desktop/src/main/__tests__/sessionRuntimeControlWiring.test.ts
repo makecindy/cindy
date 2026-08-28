@@ -223,6 +223,8 @@ describe('session runtime control wiring', () => {
 
     expect(getter).toContain('pending.rebuildCodexThread');
     expect(getter).toContain('{ rebuildCodexThread: true }');
+    expect(getter).toContain('pending.codexThreadRelinkCommitted');
+    expect(getter).toContain('{ codexThreadRelinkCommitted: true }');
     expect(getter).toContain('pending.sourceCodexThreadModelProviderId');
     expect(getter).toContain('pending.previousRoute');
   });

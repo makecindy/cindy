@@ -151,6 +151,7 @@ export class PendingCredentialSwitchService {
       model: string;
       providerId: string | null;
       rebuildCodexThread?: boolean;
+      codexThreadRelinkCommitted?: boolean;
       sourceCodexThreadModelProviderId?: string | null;
       agentKind?: AgentKind;
       previousRoute?: {
@@ -165,6 +166,7 @@ export class PendingCredentialSwitchService {
       model: target.model,
       providerId: target.providerId,
       ...(target.rebuildCodexThread ? { rebuildCodexThread: true } : {}),
+      ...(target.codexThreadRelinkCommitted ? { codexThreadRelinkCommitted: true } : {}),
       ...(target.sourceCodexThreadModelProviderId !== undefined
         ? { sourceCodexThreadModelProviderId: target.sourceCodexThreadModelProviderId }
         : {}),

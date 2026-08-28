@@ -3061,6 +3061,7 @@ export async function registerPendingCredentialSwitchForSession(
     model: string;
     providerId: string | null;
     rebuildCodexThread?: boolean;
+    codexThreadRelinkCommitted?: boolean;
     sourceCodexThreadModelProviderId?: string | null;
     previousRoute?: {
       model: string;
@@ -3279,6 +3280,7 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
       model: string;
       providerId: string | null;
       rebuildCodexThread?: boolean;
+      codexThreadRelinkCommitted?: boolean;
       sourceCodexThreadModelProviderId?: string | null;
       previousRoute?: {
         model: string;
@@ -3294,6 +3296,9 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
         model: pending.model,
         providerId: pending.providerId,
         ...(pending.rebuildCodexThread ? { rebuildCodexThread: true } : {}),
+        ...(pending.codexThreadRelinkCommitted
+          ? { codexThreadRelinkCommitted: true }
+          : {}),
         ...(pending.sourceCodexThreadModelProviderId !== undefined
           ? { sourceCodexThreadModelProviderId: pending.sourceCodexThreadModelProviderId }
           : {}),

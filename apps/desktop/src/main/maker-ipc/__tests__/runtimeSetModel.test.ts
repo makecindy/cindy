@@ -648,6 +648,7 @@ describe('applyRuntimeSetModelChange', () => {
           model: 'gpt-5.6-sol',
           providerId: 'openai',
           rebuildCodexThread: true,
+          codexThreadRelinkCommitted: true,
           sourceCodexThreadModelProviderId: 'cindy_gateway',
           previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
         }),
@@ -663,6 +664,7 @@ describe('applyRuntimeSetModelChange', () => {
       model: 'gpt-5.6-sol',
       providerId: 'openai',
       rebuildCodexThread: true,
+      codexThreadRelinkCommitted: true,
       sourceCodexThreadModelProviderId: 'cindy_gateway',
       previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
     });

@@ -84,6 +84,7 @@ export interface ApplyRuntimeSetModelChangeInput {
       model: string;
       providerId: string | null;
       rebuildCodexThread?: boolean;
+      codexThreadRelinkCommitted?: boolean;
       sourceCodexThreadModelProviderId?: string | null;
       previousRoute?: {
         model: string;
@@ -117,6 +118,7 @@ export interface ApplyRuntimeSetModelChangeInput {
         model: string;
         providerId: string | null;
         rebuildCodexThread?: boolean;
+        codexThreadRelinkCommitted?: boolean;
         sourceCodexThreadModelProviderId?: string | null;
         previousRoute?: {
           model: string;
