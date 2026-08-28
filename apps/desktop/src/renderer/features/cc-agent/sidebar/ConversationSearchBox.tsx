@@ -1320,6 +1320,7 @@ function searchSourceLabel(
 }
 
 function renderSnippet(snippet: string | null | undefined, query: string): React.ReactNode | null {
+  // 侧栏 snippet 是原文切片，不是 buildSnippetFromContent 哨兵协议。不要传 protocol:true。
   const parts = parseSnippetMarkup(snippet);
   if (!parts) return null;
   return parts.map((part, index) => {

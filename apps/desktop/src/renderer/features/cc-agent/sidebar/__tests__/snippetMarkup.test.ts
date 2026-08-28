@@ -9,31 +9,39 @@ describe('parseSnippetMarkup', () => {
     expect(parseSnippetMarkup('   ')).toEqual([{ text: '   ', marked: false }]);
   });
 
-  it('不 trim 窗边缘空格', () => {
-    expect(parseSnippetMarkup('  <mark>登录</mark>  ')).toEqual([
+  it('默认当原文：字面 <mark> 和实体都不解码', () => {
+    expect(parseSnippetMarkup('see &lt;tag&gt; here')).toEqual([
+      { text: 'see &lt;tag&gt; here', marked: false },
+    ]);
+    expect(parseSnippetMarkup('<mark>&lt;tag&gt;</mark>')).toEqual([
+      { text: '<mark>&lt;tag&gt;</mark>', marked: false },
+    ]);
+    expect(parseSnippetMarkup('see <mark>here</mark> 登录')).toEqual([
+      { text: 'see <mark>here</mark> 登录', marked: false },
+    ]);
+  });
+
+  it('protocol：不 trim 窗边缘空格', () => {
+    expect(parseSnippetMarkup('  <mark>登录</mark>  ', { protocol: true })).toEqual([
       { text: '  ', marked: false },
       { text: '登录', marked: true },
       { text: '  ', marked: false },
     ]);
   });
 
-  it('原文转义后的 <mark> 还原成字面量，不被当成控制标记', () => {
-    expect(parseSnippetMarkup('see &lt;mark&gt;here&lt;/mark&gt; <mark>登录</mark>')).toEqual([
+  it('protocol：原文转义后的 <mark> 还原成字面量，不被当成控制标记', () => {
+    expect(
+      parseSnippetMarkup('see &lt;mark&gt;here&lt;/mark&gt; <mark>登录</mark>', { protocol: true }),
+    ).toEqual([
       { text: 'see <mark>here</mark> ', marked: false },
       { text: '登录', marked: true },
     ]);
   });
 
-  it('先还原 &amp; 再还原 &lt;，原文 &lt; 显示为字面量 &lt;', () => {
-    expect(parseSnippetMarkup('a &amp; b &amp;lt; c <mark>x</mark>')).toEqual([
+  it('protocol：先还原 &amp; 再还原 &lt;，原文 &lt; 显示为字面量 &lt;', () => {
+    expect(parseSnippetMarkup('a &amp; b &amp;lt; c <mark>x</mark>', { protocol: true })).toEqual([
       { text: 'a & b &lt; c ', marked: false },
       { text: 'x', marked: true },
-    ]);
-  });
-
-  it('没有 <mark> 哨兵时不解码实体，侧栏原文 &lt; 保持原样', () => {
-    expect(parseSnippetMarkup('see &lt;tag&gt; here')).toEqual([
-      { text: 'see &lt;tag&gt; here', marked: false },
     ]);
   });
 });

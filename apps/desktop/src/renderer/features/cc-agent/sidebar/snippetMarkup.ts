@@ -5,6 +5,10 @@
  * 插入 `<mark>`。消费端必须先按哨兵切开，再把实体还原，否则用户内容里的真
  * `<mark>` 会被当成控制标记，展示被改写。
  *
+ * 侧栏 `searchConversations` 的 snippet 是原文切片，不是这份协议。默认按原文
+ * 返回，不因字面出现 `<mark>` 就解码实体。只有调用方明确传入
+ * `{ protocol: true }` 时才按哨兵协议解析。
+ *
  * 不要 trim：窗边缘的原文空格也是用户内容。
  */
 export interface SnippetPart {
@@ -12,13 +16,18 @@ export interface SnippetPart {
   marked: boolean;
 }
 
-export function parseSnippetMarkup(snippet: string | null | undefined): SnippetPart[] | null {
+export interface ParseSnippetMarkupOptions {
+  /** 输入已按 buildSnippetFromContent 哨兵协议转义。默认 false：当原文。 */
+  protocol?: boolean;
+}
+
+export function parseSnippetMarkup(
+  snippet: string | null | undefined,
+  options?: ParseSnippetMarkupOptions,
+): SnippetPart[] | null {
   if (snippet == null || snippet === '') return null;
+  if (!options?.protocol) return [{ text: snippet, marked: false }];
   const parts = snippet.split(/(<\/?mark>)/g);
-  const hasMarkup = parts.some((part) => part === '<mark>' || part === '</mark>');
-  // 侧栏 preview/snippet 是原文切片，没有哨兵协议。没有 <mark> 时原样返回，
-  // 不能把字面量 &lt; 解成 <。
-  if (!hasMarkup) return [{ text: snippet, marked: false }];
   const out: SnippetPart[] = [];
   let marked = false;
   for (const part of parts) {
@@ -33,7 +42,7 @@ export function parseSnippetMarkup(snippet: string | null | undefined): SnippetP
     }
     out.push({ text: unescapeSnippetText(part), marked });
   }
-  return out.length > 0 ? out : null;
+  return out.length > 0 ? out : [{ text: snippet, marked: false }];
 }
 
 /** 还原 buildSnippetFromContent 写入的 HTML 实体，让原文 `<` / `>` / `&` 原样展示。 */
