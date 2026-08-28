@@ -64,7 +64,8 @@ export interface SlashCtx {
   };
   /**
    * 已确认双投时由 messageHandler 注入: 首个 markdown 终态同步到群主流。
-   * 只应消费一次(与 consumePendingOpener 同口径)。卡片回复没有可镜像的纯文本。
+   * 只应消费一次(与 consumePendingOpener 同口径)。卡片回复镜像卡片正文
+   * （没有正文时退回标题）；按钮仍只在话题内可点。
    */
   mirrorTerminalReply?: (text: string) => Promise<void>;
 }
@@ -102,13 +103,22 @@ export function createSlashHandlers(
   async function mirrorFirstSlashReply(ctx: SlashCtx, text: string): Promise<void> {
     const mirror = ctx.mirrorTerminalReply;
     if (!mirror) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
     ctx.mirrorTerminalReply = undefined;
     try {
-      await mirror(text);
+      await mirror(trimmed);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`slash parent-chat mirror failed (non-fatal): ${msg}`);
     }
+  }
+
+  function slashCardMirrorText(spec: InteractiveCardSpec | null | undefined): string {
+    if (!spec || typeof spec !== 'object') return '';
+    const body = typeof spec.body === 'string' ? spec.body.trim() : '';
+    const title = typeof spec.title === 'string' ? spec.title.trim() : '';
+    return body || title;
   }
 
   async function safeSendText(ctx: SlashCtx, text: string): Promise<void> {
@@ -148,7 +158,10 @@ export function createSlashHandlers(
     try {
       if (ctx.consumePendingOpener) {
         try {
-          if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) return true;
+          if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) {
+            await mirrorFirstSlashReply(ctx, slashCardMirrorText(spec));
+            return true;
+          }
         } catch (err) {
           // 替换失败回落正常发卡: 认领已完成, 用户至少拿到一张可用卡片。
           const msg = err instanceof Error ? err.message : String(err);
@@ -165,6 +178,7 @@ export function createSlashHandlers(
       } else {
         await richIm.sendInteractiveCard(ctx.userId, spec);
       }
+      await mirrorFirstSlashReply(ctx, slashCardMirrorText(spec));
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

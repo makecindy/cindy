@@ -2205,22 +2205,27 @@ export function createTurnRunner(
     if (!data || typeof data.fullText !== 'string') return;
     const urls = extractRenderableXdtImageUrls(data.fullText);
     if (urls.length === 0) return;
+    const extraAbsPaths: string[] = [];
+    for (const url of urls) {
+      try {
+        const { absPath } = url.startsWith('cindy-media://')
+          ? resolveCindyMediaUrl(url)
+          : resolveXdtImageUrl(url);
+        extraAbsPaths.push(absPath);
+        if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`[${channel}/turn] resolve managed image failed for ${url}: ${msg}`);
+      }
+    }
+    if (extraAbsPaths.length === 0) return;
     // streamingHandle 可能还没 spawn (e.g. 工具调用先于任何 text delta) — 触发
     // 一下 ensureStreamingHandle 让 card 先建出来, 再投递。投递接口本身是
-    // O(1) 同步 push, 不阻塞事件循环。
+    // O(1) 同步 push, 不阻塞事件循环。终态群主流镜像读 turn.mediaAbsPaths,
+    // 所以 extra 图必须同步记到 turn 上, 不能只挂在句柄里。
     void ensureStreamingHandle(turn).then((handle) => {
       if (!handle?.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力 / 创建失败(null)
-      for (const url of urls) {
-        try {
-          const { absPath } = url.startsWith('cindy-media://')
-            ? resolveCindyMediaUrl(url)
-            : resolveXdtImageUrl(url);
-          handle.addExtraImageAbsPath(absPath);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`[${channel}/turn] resolve managed image failed for ${url}: ${msg}`);
-        }
-      }
+      for (const absPath of extraAbsPaths) handle.addExtraImageAbsPath(absPath);
     });
   }
 

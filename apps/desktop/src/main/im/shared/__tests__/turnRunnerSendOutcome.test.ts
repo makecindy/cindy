@@ -2723,6 +2723,53 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(String(mocks.feishuIm.mirrorFinalReply.mock.calls[0][1])).toContain('final answer');
   });
 
+  it('mirrors side-channel tool images onto the parent-chat even when the final text omits them', async () => {
+    const extraAbsPath = 'C:\\cindy-media\\tool-extra.png';
+    mocks.resolveXdtImageUrl.mockReturnValue({ absPath: extraAbsPath });
+    const handle = {
+      messageId: 'stream-extra-image',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+      addExtraImageAbsPath: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-extra-image',
+    };
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({
+      type: 'tool_result_full',
+      data: {
+        fullText: JSON.stringify({ xdt_image_url: 'xdt-image://blob/tool-extra.png' }),
+      },
+    });
+    h.emit({ type: 'text', data: { text: 'here is the image', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalled();
+    });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
+      {
+        ...mirror,
+        allowedFileRoots: ['F:\\XDMaker'],
+      },
+      expect.stringContaining('here is the image'),
+      { mediaAbsPaths: [extraAbsPath] },
+    );
+  });
+
   it('defers parent-chat mirroring across an in-turn permission card until the turn completes', async () => {
     const firstHandle = {
       messageId: 'stream-pre',
