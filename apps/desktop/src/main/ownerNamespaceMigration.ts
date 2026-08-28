@@ -113,6 +113,13 @@ interface RegisteredInstanceRecord {
   rootDir?: string;
 }
 
+interface RegisteredInstanceCandidate {
+  pid: number;
+  userDataDir: string | undefined;
+  recordedAtMs: number | undefined;
+  rootDir: string | undefined;
+}
+
 interface ProcessIdentitySnapshot {
   startedAtMs: number;
   command: string;
@@ -601,34 +608,21 @@ function hasConcurrentLiveInstanceSync(
       if (isMissing(error)) continue;
       return true;
     }
-    let record: RegisteredInstanceRecord;
-    try {
-      record = JSON.parse(raw) as RegisteredInstanceRecord;
-    } catch {
-      // The filename still identifies the registering process even when its
-      // payload is torn. A live PID remains a possible writer; a dead PID is a
-      // stale record and must not block adoption forever.
-      const pid = instancePidFromRecordName(name);
-      if (pid !== null && pid !== selfPid && isPidAlive(pid)) return true;
-      continue;
-    }
-    const pid = record.pid;
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === selfPid) {
-      continue;
-    }
+    const candidate = parseRegisteredInstanceCandidate(raw, name);
+    if (candidate === null || candidate.pid === selfPid) continue;
     if (
-      typeof record.userDataDir === 'string' &&
-      !isSameUserDataDir(record.userDataDir, userDataDir, process.platform)
+      candidate.userDataDir !== undefined &&
+      !isSameUserDataDir(candidate.userDataDir, userDataDir, process.platform)
     ) {
       continue;
     }
-    if (!isPidAlive(pid)) continue;
+    if (!isPidAlive(candidate.pid)) continue;
     candidates.push({
       raw,
       fileName: name,
-      pid,
-      recordedAtMs: record.startedAtMs,
-      rootDir: record.rootDir,
+      pid: candidate.pid,
+      recordedAtMs: candidate.recordedAtMs,
+      rootDir: candidate.rootDir,
     });
   }
   if (readProcessIdentity) {
@@ -2447,6 +2441,34 @@ function instancePidFromRecordName(name: string): number | null {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
+function parseRegisteredInstanceCandidate(
+  raw: string,
+  fileName: string,
+): RegisteredInstanceCandidate | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as RegisteredInstanceRecord;
+      if (typeof record.pid === 'number' && Number.isInteger(record.pid) && record.pid > 0) {
+        return {
+          pid: record.pid,
+          userDataDir: typeof record.userDataDir === 'string' ? record.userDataDir : undefined,
+          recordedAtMs:
+            typeof record.startedAtMs === 'number' ? record.startedAtMs : undefined,
+          rootDir: typeof record.rootDir === 'string' ? record.rootDir : undefined,
+        };
+      }
+    }
+  } catch {
+    // A torn payload still has a process identity in its canonical filename.
+  }
+
+  const pid = instancePidFromRecordName(fileName);
+  return pid === null
+    ? null
+    : { pid, userDataDir: undefined, recordedAtMs: undefined, rootDir: undefined };
+}
+
 /**
  * Other live Cindy instances sharing this userData, discovered via the
  * `.dev-instances/<pid>.json` runtime provenance registry (devStartupStatus;
@@ -2459,8 +2481,8 @@ function instancePidFromRecordName(name: string): number | null {
  * (ENOENT) means that instance exited — skip it; a record file that exists
  * but cannot be READ (EACCES, I/O errors) may hide a live instance — fail
  * closed by rethrowing so the caller defers the destructive claim. If a
- * record reads but fails to parse, its `<pid>.json` filename still keeps a
- * live process visible; dead-PID leftovers remain safely ignorable.
+ * record reads but has an invalid payload, its `<pid>.json` filename still
+ * keeps a live process visible; dead-PID leftovers remain safely ignorable.
  */
 async function findConcurrentLiveInstancePids(
   deps: MigrationDeps,
@@ -2509,34 +2531,22 @@ async function findConcurrentLiveInstancePids(
         throw error;
       }
     }
-    let record: RegisteredInstanceRecord;
-    try {
-      record = JSON.parse(raw) as RegisteredInstanceRecord;
-    } catch {
-      const pid = instancePidFromRecordName(name);
-      if (pid !== null && pid !== selfPid && deps.isPidAlive(pid)) {
-        candidates.push({ raw, fileName: name, pid, recordedAtMs: undefined, rootDir: undefined });
-      }
-      continue;
-    }
-    const pid = record.pid;
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === selfPid) {
-      continue;
-    }
+    const candidate = parseRegisteredInstanceCandidate(raw, name);
+    if (candidate === null || candidate.pid === selfPid) continue;
     // 只认同一 userData 的记录;userDataDir 不一致说明是异常拷贝进来的残留。
     if (
-      typeof record.userDataDir === 'string' &&
-      !isSameUserDataDir(record.userDataDir, userDataDir, process.platform)
+      candidate.userDataDir !== undefined &&
+      !isSameUserDataDir(candidate.userDataDir, userDataDir, process.platform)
     ) {
       continue;
     }
-    if (!deps.isPidAlive(pid)) continue;
+    if (!deps.isPidAlive(candidate.pid)) continue;
     candidates.push({
       raw,
       fileName: name,
-      pid,
-      recordedAtMs: record.startedAtMs,
-      rootDir: record.rootDir,
+      pid: candidate.pid,
+      recordedAtMs: candidate.recordedAtMs,
+      rootDir: candidate.rootDir,
     });
   }
 

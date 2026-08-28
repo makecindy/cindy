@@ -381,11 +381,15 @@ describe('claimLegacyOwnerNamespace', () => {
     await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
   });
 
-  it('fails closed when a registry record is malformed', async () => {
+  it.each([
+    ['unparseable', '{not-json'],
+    ['missing pid', '{}'],
+    ['non-numeric pid', JSON.stringify({ pid: '4242' })],
+  ])('fails closed when a registry record payload is %s', async (_label, payload) => {
     const root = await tempRoot();
     await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
     await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
-    await fs.writeFile(path.join(root, '.dev-instances', '4242.json'), '{not-json', 'utf-8');
+    await fs.writeFile(path.join(root, '.dev-instances', '4242.json'), payload, 'utf-8');
 
     const result = await claimLegacyOwnerNamespace(
       { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
@@ -401,7 +405,7 @@ describe('claimLegacyOwnerNamespace', () => {
     await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
     await expect(
       fs.readFile(path.join(root, '.dev-instances', '4242.json'), 'utf-8'),
-    ).resolves.toBe('{not-json');
+    ).resolves.toBe(payload);
   });
 
   it('interrupts mid-claim when an instance registers during the move, then resumes next exclusive start', async () => {
@@ -3127,10 +3131,14 @@ describe('hasExclusiveSharedLegacyUserDataAccess', () => {
     expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
   });
 
-  it('fails closed when a shared instance registry record is malformed', async () => {
+  it.each([
+    ['unparseable', '{not-json'],
+    ['missing pid', '{}'],
+    ['non-numeric pid', JSON.stringify({ pid: '4242' })],
+  ])('fails closed when a shared instance registry payload is %s', async (_label, payload) => {
     const root = await tempRoot();
     await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
-    await fs.writeFile(path.join(root, '.dev-instances', '4242.json'), '{not-json', 'utf-8');
+    await fs.writeFile(path.join(root, '.dev-instances', '4242.json'), payload, 'utf-8');
 
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
     expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
