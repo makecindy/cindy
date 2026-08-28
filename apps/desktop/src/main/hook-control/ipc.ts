@@ -1195,6 +1195,7 @@ export async function stopHookControlAccount(): Promise<void> {
 
 /** Stop and discard all state tied to the current data owner; IPC stays registered. */
 export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
+  mirrorWorkspacePrefs.invalidateOwnerBoundary();
   unregisterSlackToolBridge();
   resetGroupContextCursorsSafely(options);
   resetTelegramSpeakerRegistrationCache();

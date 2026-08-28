@@ -157,6 +157,60 @@ describe('workspacePrefsMirror', () => {
     expect(onLocalPrefsChanged).toHaveBeenCalledTimes(1);
   });
 
+  it('账号边界切换会失效旧 flight，并允许相同 binding key 的新 owner 立即镜像', async () => {
+    reconcileWorkspacePrefsForMirror('slack', []);
+
+    let owner: 'old' | 'new' = 'old';
+    let releaseOldGet!: () => void;
+    const oldGetPending = new Promise<void>((resolve) => {
+      releaseOldGet = resolve;
+    });
+    const getRemotePrefs = vi.fn(async () => {
+      const requestedOwner = owner;
+      if (requestedOwner === 'old') await oldGetPending;
+      return {
+        bound: true,
+        prefs: [
+          {
+            workspace: 'repo',
+            model: `${requestedOwner}-owner-model`,
+            effort: null,
+            agentKind: 'claude-code',
+            permissionMode: null,
+            teamId: 'T1',
+          },
+        ],
+      };
+    });
+    const onLocalPrefsChanged = vi.fn();
+    const mirror = createWorkspacePrefsMirror({
+      getLiveBindingKey: () => 'slack:T1',
+      isMirrorTargetCurrent: () => true,
+      getRemoteSnapshotGeneration: () => 0,
+      getRemotePrefs,
+      setRemotePrefs: vi.fn(),
+      onLocalPrefsChanged,
+      onError: vi.fn(),
+    });
+
+    const oldFlight = mirror('slack');
+    await vi.waitFor(() => expect(getRemotePrefs).toHaveBeenCalledTimes(1));
+
+    mirror.invalidateOwnerBoundary();
+    owner = 'new';
+    const newFlight = mirror('slack');
+    await vi.waitFor(() => expect(getRemotePrefs).toHaveBeenCalledTimes(2));
+    await newFlight;
+    expect(getWorkspacePref('slack', 'T1', 'repo').model).toBe('new-owner-model');
+
+    releaseOldGet();
+    await oldFlight;
+
+    expect(getRemotePrefs).toHaveBeenCalledTimes(2);
+    expect(getWorkspacePref('slack', 'T1', 'repo').model).toBe('new-owner-model');
+    expect(onLocalPrefsChanged).toHaveBeenCalledTimes(1);
+  });
+
   it('prefs.get 在途期间收到主动快照时丢弃旧响应并重新拉取', async () => {
     reconcileWorkspacePrefsForMirror('slack', []);
 
