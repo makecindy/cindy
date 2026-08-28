@@ -65,6 +65,15 @@ export function createMessageHandler(
       return false;
     }
   }
+
+  async function mirrorTerminalReply(event: IMMessageEvent, text: string): Promise<void> {
+    if (!event.finalReplyMirror) return;
+    try {
+      await richIm?.mirrorFinalReply?.(event.finalReplyMirror, text);
+    } catch {
+      /* swallow */
+    }
+  }
   const log = createLogger(`im:${channel}:msg`);
 
   /** Per-user serial lock — same shape as legacy messageRouter.turnLocks. */
@@ -192,6 +201,7 @@ export function createMessageHandler(
           log.warn(`!stop reply failed (non-fatal): ${msg}`);
         }
       }
+      await mirrorTerminalReply(event, reply);
       return;
     }
 
@@ -285,6 +295,7 @@ export function createMessageHandler(
           log.warn(`unsupportedOnly send failed (non-fatal): ${msg}`);
         }
       }
+      await mirrorTerminalReply(event, notice);
       return;
     }
 
@@ -422,13 +433,7 @@ export function createMessageHandler(
           /* swallow */
         }
       }
-      if (event.finalReplyMirror) {
-        try {
-          await richIm?.mirrorFinalReply?.(event.finalReplyMirror, errorText);
-        } catch {
-          /* swallow */
-        }
-      }
+      await mirrorTerminalReply(event, errorText);
     }
   }
 

@@ -26,7 +26,7 @@ vi.mock('../moduleScope.js', () => ({
 }));
 
 import { messages } from '../messages.js';
-import { FEISHU_CARD_REQUEST_MAX_BYTES, start } from '../streamingText.js';
+import { FEISHU_CARD_REQUEST_MAX_BYTES, mirrorFinal, start } from '../streamingText.js';
 import {
   scheduleMirrorOnConfirmation,
   waitForMirrorConfirmation,
@@ -161,6 +161,33 @@ describe('feishu streaming text', () => {
       expect.anything(),
       `${'c'.repeat(32)}-card`,
     );
+  });
+
+  it('catches late-confirmation one-shot mirror failures instead of unhandledRejection', async () => {
+    vi.mocked(waitForMirrorConfirmation).mockResolvedValueOnce(false);
+    let deferred: (() => void) | undefined;
+    vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
+      deferred = run;
+    });
+    mocks.sendCardToChat.mockRejectedValueOnce(new Error('group unavailable'));
+
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      rejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await mirrorFinal('oc_group', 'f'.repeat(64), '早期拒绝终态');
+      expect(deferred).toBeDefined();
+      deferred?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(rejections).toEqual([]);
+      expect(mocks.sendCardToChat).toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('does not copy parent-chat files outside allowedFileRoots', async () => {

@@ -313,6 +313,52 @@ describe('feishu group thread routing', () => {
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
   });
 
+  it('late topic takeover recovers unconfirmed opener uuid and recalls it without a second turn', async () => {
+    vi.useFakeTimers();
+    let releaseOpenThread: ((value: { kind: 'unconfirmed' }) => void) | undefined;
+    mocks.openThread
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseOpenThread = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        kind: 'opened',
+        messageId: 'om_recovered_opener',
+        threadId: 'omt_bot',
+      });
+    mocks.recallOwnMessage.mockResolvedValue(true);
+    const events = collectMessages();
+    await connect();
+    const topic = groupTopicMessage('迟到话题未确认', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000001000';
+    topic.message.message_id = 'om_topic_late_unconfirmed';
+    const flat = groupMainFlowMessage('迟到话题未确认', 'om_flat_late_unconfirmed') as {
+      message: Record<string, unknown>;
+    };
+    flat.message.create_time = '1788000001000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+    expect(releaseOpenThread).toBeDefined();
+    releaseOpenThread?.({ kind: 'unconfirmed' });
+    await flatHandling;
+
+    expect(events).toHaveLength(1);
+    expect(events[0].senderId).toBe('g/oc_chat1/omt_existing');
+    expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
+    expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_recovered_opener');
+    expect(events).toHaveLength(1);
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+  });
+
   it('开话题失败时降级回群 lane(锚点 = 触发消息)', async () => {
     mocks.openThread.mockResolvedValueOnce({ kind: 'degraded' });
     const events = collectMessages();

@@ -260,6 +260,8 @@ interface UnconfirmedOpenRetry {
   unsupported: ReturnType<typeof parseIncoming>['unsupported'];
   raw: RawMessageEvent;
   attempt: number;
+  /** 迟到话题已接管路由: 只恢复 UUID 并撤回开场白, 不再派 turn。 */
+  recallOnly?: boolean;
 }
 
 const unconfirmedOpenRetries = new Map<string, UnconfirmedOpenRetry>();
@@ -298,6 +300,18 @@ function resumeUnconfirmedOpenRetriesFor(
     suspendedUnconfirmedOpens.splice(i, 1);
     if (entry.botAppId !== botAppId || entry.service !== service) continue;
     scheduleUnconfirmedOpenRetry(entry);
+  }
+}
+
+async function recallRecoveredOpener(messageId: string, kind: 'opened' | 'orphaned'): Promise<void> {
+  const log = getLog();
+  try {
+    await outbound.recallOwnMessage(messageId);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(
+      `[feishu/wsClient] recall ${kind} opener after late topic takeover failed (non-fatal): ${msg}`,
+    );
   }
 }
 
@@ -360,6 +374,10 @@ async function retryUnconfirmedOpen(
     return;
   }
   if (opener.kind === 'orphaned') {
+    if (entry.recallOnly) {
+      await recallRecoveredOpener(opener.openerMessageId, 'orphaned');
+      return;
+    }
     log.error(
       `[feishu/wsClient] unconfirmed openThread recovered as orphaned opener=...${opener.openerMessageId.slice(-8)}`,
     );
@@ -374,6 +392,10 @@ async function retryUnconfirmedOpen(
   let laneUserId: string;
   let groupContextLane: { chatId: string; threadId: string } | undefined;
   if (opener.kind === 'opened') {
+    if (entry.recallOnly) {
+      await recallRecoveredOpener(opener.messageId, 'opened');
+      return;
+    }
     laneUserId = encodeLaneUserId(entry.chatId, opener.threadId);
     outbound.pushReplyAnchor(laneUserId, opener.messageId);
     outbound.pushPatchableOpener(laneUserId, opener.messageId, entry.messageId);
@@ -1549,6 +1571,22 @@ async function processClaimedMessage(
               `[feishu/wsClient] recall orphaned opener after late topic takeover failed (non-fatal): ${msg}`,
             );
           }
+        } else if (opener.kind === 'unconfirmed') {
+          // 服务端可能已发出思考卡, 但同 UUID 恢复链不会再走 emit 路径。
+          // 接管后只恢复 UUID 并撤回, 不起第二个 turn。
+          scheduleUnconfirmedOpenRetry({
+            botAppId,
+            service,
+            messageId,
+            chatId,
+            senderOpenId,
+            text,
+            attachments,
+            unsupported,
+            raw: data,
+            attempt: 0,
+            recallOnly: true,
+          });
         }
         return;
       }

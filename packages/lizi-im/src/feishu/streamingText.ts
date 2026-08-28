@@ -499,7 +499,13 @@ async function sendOrScheduleMirror(
     return;
   }
   scheduleMirrorOnConfirmation(mirrorKey, () => {
-    void send();
+    void send().catch((err) => {
+      getLog().warn(
+        `[feishu/streamingText] deferred parent-chat mirror failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
   });
 }
 

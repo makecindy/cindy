@@ -507,6 +507,38 @@ describe('messageHandler !stop routing', () => {
     expect(mirrorFinalReply).toHaveBeenCalledWith(mirror, errorText);
   });
 
+  it('!stop 时同步镜像已确认双投的群主流终态', async () => {
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-stop',
+    };
+    deliver(makeEvent({ text: '!stop', finalReplyMirror: mirror }));
+    await flushMicrotasks();
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+      threadTs: '1234.5678',
+    });
+    expect(mirrorFinalReply).toHaveBeenCalledWith(mirror, slackUi.agent.stopDone(0));
+  });
+
+  it('纯 unsupported 输入时同步镜像已确认双投的群主流终态', async () => {
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-unsupported',
+    };
+    const unsupported = [{ type: 'audio', label: '语音（暂不支持）' }] as IMMessageEvent['unsupported'];
+    const notice = slackUi.agent.unsupportedOnly(unsupported);
+    deliver(makeEvent({ text: '', unsupported, finalReplyMirror: mirror }));
+    await flushMicrotasks();
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith('U123456789', notice, { threadTs: '1234.5678' });
+    expect(mirrorFinalReply).toHaveBeenCalledWith(mirror, notice);
+  });
+
   it('早期拒绝终态(missing_auth)经 onEarlyReject 收口开场白卡', async () => {
     let capturedArgs: Parameters<ImTurnRunner['runAgentTurn']>[0] | undefined;
     runAgentTurn.mockImplementationOnce(async (args: Parameters<ImTurnRunner['runAgentTurn']>[0]) => {
