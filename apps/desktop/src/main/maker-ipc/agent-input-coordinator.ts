@@ -3371,19 +3371,29 @@ export class AgentInputCoordinator {
         });
         // 候选态只压住**本次**的 message；既有 stickyError 是上一次未处置的错误，与本次无关，
         // 该继续显示。
+        const stickyError = state.stickyError;
         state.error = resumableCandidate
-          ? (state.stickyError ?? state.error)
-          : (state.stickyError ?? message ?? state.error);
-        if (!resumableCandidate) setErrorProjectionSignals(state, signals);
+          ? (stickyError ?? state.error)
+          : (stickyError ?? message ?? state.error);
+        if (!resumableCandidate) {
+          // A prior persistence failure owns the displayed error. Do not attach the
+          // later turn's structured signals to that unrelated sticky message.
+          if (stickyError !== null) clearErrorProjectionSignals(state);
+          else setErrorProjectionSignals(state, signals);
+        }
         state.recovery = null;
         this.emit(sessionId);
         return;
       }
       if (active && isActiveTurnDispatched(active)) {
         state.activeTurn = null;
-        state.error = state.stickyError ?? message ?? state.error;
+        const stickyError = state.stickyError;
+        state.error = stickyError ?? message ?? state.error;
         state.stickyError = state.error;
-        setErrorProjectionSignals(state, signals);
+        // A prior persistence failure owns the displayed error. Do not attach the
+        // later turn's structured signals to that unrelated sticky message.
+        if (stickyError !== null) clearErrorProjectionSignals(state);
+        else setErrorProjectionSignals(state, signals);
         state.recovery = null;
         this.emit(sessionId);
         this.scheduleDrain(sessionId, 'terminal-error-after-unpersisted-dispatch');
