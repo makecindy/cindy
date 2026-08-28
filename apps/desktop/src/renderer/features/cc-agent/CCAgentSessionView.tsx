@@ -591,7 +591,7 @@ function summarizeRunningWorkflow(taskUpdates: ReadonlyMap<string, AgentTaskUpda
 
 const EMPTY_UNREAD_FAILED_RUN_IDS: string[] = [];
 
-export async function applyWritableDirsUpdate(input: {
+export async function applyDirectoryGrantUpdate(input: {
   next: string[];
   previous: string[];
   activate: (dirs: string[]) => Promise<unknown>;
@@ -599,15 +599,20 @@ export async function applyWritableDirsUpdate(input: {
   refresh: () => Promise<void>;
 }): Promise<string[]> {
   const accepted = await input.activate(input.next);
-  const applied = Array.isArray(accepted) && accepted.every((dir) => typeof dir === 'string')
-    ? accepted
-    : input.next;
+  if (!Array.isArray(accepted) || !accepted.every((dir) => typeof dir === 'string')) {
+    // No live runtime/capability means there is no validated subset to persist.
+    // Keep the previous DB/UI truth instead of turning an unverified request
+    // into a grant that only appears after restart.
+    await input.refresh();
+    return input.previous;
+  }
+  const applied = accepted;
   if (input.persist) {
     try {
       await input.persist(applied);
     } catch (persistError) {
       // Runtime already accepted the grant. Restore the persisted/UI baseline before surfacing
-      // the failure so a DB error cannot leave invisible write access active until restart.
+      // the failure so a DB error cannot leave invisible file access active until restart.
       try {
         await input.activate(input.previous);
       } finally {
@@ -2780,44 +2785,37 @@ export function CCAgentSessionView({
   }, [refreshServerSession]);
 
   // ─── Extra reference dirs(中途增删) ──────────────────────────────────────
-  // 双 IPC 协调,跟 setModel 同模式:
-  //   1. sessionService.update({ extraDirs }) → 落 DB(持久化)
-  //   2. window.electronAPI.maker.setExtraDirs(sessionId, ...) → 推 closure
-  //      (Claude / Codex 都在下一 turn 使用新值；session 已 close 时 no-op)
-  //   3. refreshServerSession → 让本视图的 session.extraDirs 同步到最新值
-  // 失败任一只 toast warn,不阻塞;乐观 UI 由 chip 数字角标已经反映。
+  // 运行时先校验并返回实际接受的子集，再把同一子集持久化并刷新 UI。持久化失败时
+  // 回滚运行时，避免 SQLite/UI 与 Agent 权限分叉；远端仍由被控端回流持久化。
   const handleExtraDirsChange = useCallback(
     async (next: string[]) => {
       if (!sessionId) return;
-      // device-link 远程会话:被控端 row 不在本机库,sessionService.update 必抛(且 catch return
-      // 会连带阻断后面的 setExtraDirs)。extraDirs 在 REMOTE_PERSIST_FIELDS → 被控端 set-extra-dirs
-      // 经 dispatch persistRemoteSetting 落库 + 广播回流,所以远程只走 runtime 隧道、跳过本机 DB 写
-      // (对齐 set-permission-mode 远程分支);本机会话保持 DB + runtime 双写。
-      if (!getSessionDeviceId(sessionId)) {
-        try {
-          await sessionService.update(sessionId, { extraDirs: next });
-        } catch (err) {
-          log.warn('extraDirs DB update failed', err);
-          toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
-          return;
-        }
-      }
       try {
-        await makerApiFor(sessionId).setExtraDirs(sessionId, next);
+        await applyDirectoryGrantUpdate({
+          next,
+          previous: session?.extraDirs ?? [],
+          activate: (dirs) => makerApiFor(sessionId).setExtraDirs(sessionId, dirs),
+          ...(!getSessionDeviceId(sessionId)
+            ? {
+                persist: (dirs: string[]) =>
+                  sessionService.update(sessionId, { extraDirs: dirs }),
+              }
+            : {}),
+          refresh: refreshServerSession,
+        });
       } catch (err) {
-        // 运行时推送失败不致命 — 下次 session 重启会从 DB 读新值。
-        log.warn('extraDirs closure push failed (non-fatal)', err);
+        log.warn('extraDirs update failed', err);
+        toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
       }
-      await refreshServerSession();
     },
-    [sessionId, refreshServerSession, t],
+    [sessionId, session?.extraDirs, refreshServerSession, t],
   );
 
   const handleWritableDirsChange = useCallback(
     async (next: string[]) => {
       if (!sessionId) return;
       try {
-        await applyWritableDirsUpdate({
+        await applyDirectoryGrantUpdate({
           next,
           previous: session?.writableDirs ?? [],
           activate: (dirs) => makerApiFor(sessionId).setWritableDirs(sessionId, dirs),

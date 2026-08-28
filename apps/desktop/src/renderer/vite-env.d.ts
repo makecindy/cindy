@@ -5551,12 +5551,8 @@ interface ElectronAPI {
       draftText?: string;
       cancelled?: boolean;
     } | null>;
-    /**
-     * 附加只读引用目录的 closure 推送; DB 持久化要 renderer 同步调
-     * sessionService.update({ extraDirs }) (跟 setModel + sessionService.update 双 IPC 协调先例一致)。
-     * session 不在 / agent capability=false 都 no-op, 不抛错。
-     */
-    setExtraDirs: (sessionId: string, dirs: string[]) => Promise<void>;
+    /** 返回主进程校验、冲突过滤后真正应用的只读目录子集；no-op 时为 undefined。 */
+    setExtraDirs: (sessionId: string, dirs: string[]) => Promise<string[] | undefined>;
     /** 用户明确授予的附加可读写目录；持久化由调用方另调 sessions:update。 */
     setWritableDirs: (sessionId: string, dirs: string[]) => Promise<string[] | undefined>;
 

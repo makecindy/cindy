@@ -1387,12 +1387,14 @@ describe('远程交互接线不变式', () => {
     expect(src).toContain('if (!disposed && linkOnline && eligible.has(deviceId))');
   });
 
-  it('F4: extraDirs 远程跳过 sessionService.update(getSessionDeviceId 守卫,避免阻断 setExtraDirs)', () => {
+  it('F4: extraDirs 只给本地会话注入 persist，远程仅调用被控端 setExtraDirs', () => {
     const src = read('features/cc-agent/CCAgentSessionView.tsx');
     const start = src.indexOf('handleExtraDirsChange');
     expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, start + 700);
-    expect(body).toContain('if (!getSessionDeviceId(sessionId))');
+    const body = src.slice(start, start + 1_000);
+    expect(body).toContain('applyDirectoryGrantUpdate');
+    expect(body).toContain('...(!getSessionDeviceId(sessionId)');
+    expect(body).toContain('persist:');
     expect(body).toContain('setExtraDirs');
   });
 
