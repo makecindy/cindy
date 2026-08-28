@@ -2512,25 +2512,25 @@ async function findConcurrentLiveInstancePids(
     }),
   );
   for (const name of recordNames) {
-    let raw: string;
-    try {
-      raw = await deps.readFile(path.join(registryDir, name));
-    } catch (error) {
-      if (isMissing(error)) {
+    const recordPath = path.join(registryDir, name);
+    let raw: string | null = null;
+    for (let attempt = 0; attempt < 2 && raw === null; attempt += 1) {
+      try {
+        raw = await deps.readFile(recordPath);
+      } catch (error) {
+        if (!isMissing(error)) throw error;
         // During atomic backup exchange the canonical record may be absent
-        // while `<pid>.json.bak` is the only snapshot. Read that snapshot
-        // without treating the instance as gone; the backup and canonical
-        // names represent one live registration.
+        // while `<pid>.json.bak` is the only snapshot. If the writer finishes
+        // and removes the backup before this read, retry canonical once before
+        // deciding that the instance exited.
         try {
-          raw = await deps.readFile(path.join(registryDir, `${name}.bak`));
+          raw = await deps.readFile(`${recordPath}.bak`);
         } catch (backupError) {
-          if (isMissing(backupError)) continue;
-          throw backupError;
+          if (!isMissing(backupError)) throw backupError;
         }
-      } else {
-        throw error;
       }
     }
+    if (raw === null) continue;
     const candidate = parseRegisteredInstanceCandidate(raw, name);
     if (candidate === null || candidate.pid === selfPid) continue;
     // 只认同一 userData 的记录;userDataDir 不一致说明是异常拷贝进来的残留。

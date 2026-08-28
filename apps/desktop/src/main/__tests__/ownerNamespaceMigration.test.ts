@@ -381,6 +381,48 @@ describe('claimLegacyOwnerNamespace', () => {
     await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
   });
 
+  it('rechecks the canonical registry record when its backup vanishes during exchange', async () => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await writeDevInstanceRecord(root, 4242);
+    const recordPath = path.join(root, '.dev-instances', '4242.json');
+    const backupPath = `${recordPath}.bak`;
+    const recordRaw = await fs.readFile(recordPath, 'utf-8');
+    let canonicalReads = 0;
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(
+        root,
+        { isPidAlive: (pid) => pid === 4242 },
+        {
+          readFile: (file: string) => {
+            if (file === recordPath) {
+              canonicalReads += 1;
+              if (canonicalReads === 1) {
+                return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+              }
+              return Promise.resolve(recordRaw);
+            }
+            if (file === backupPath) {
+              return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+            }
+            return fs.readFile(file, 'utf-8');
+          },
+        },
+      ),
+    );
+
+    expect(canonicalReads).toBeGreaterThanOrEqual(2);
+    expect(result).toEqual({
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
+  });
+
   it.each([
     ['unparseable', '{not-json'],
     ['missing pid', '{}'],
