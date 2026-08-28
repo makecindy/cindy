@@ -148,6 +148,7 @@ function createCleanupFixture(): void {
     ['archived-boundary', 'archived', 1_000],
     ['archived-new', 'archived', 1_001],
     ['active-old', 'active', 100],
+    ['active-recent', 'active', 1_500],
     ['active-updated-after-scan', 'active', 100],
   ] as const) {
     insertSession.run(id, `title-${id}`, status, updatedAt);
@@ -209,6 +210,13 @@ function createCleanupFixture(): void {
       sessionId,
       'keep the external-file ownership ledger intact',
     );
+  }
+  for (const sessionId of ['active-old', 'active-recent', 'active-updated-after-scan']) {
+    db.prepare('INSERT INTO session_pr_refs (id, session_id) VALUES (?, ?)').run(
+      `pr-${sessionId}`,
+      sessionId,
+    );
+    db.prepare('INSERT INTO session_goals (session_id) VALUES (?)').run(sessionId);
   }
   db.pragma('journal_mode = WAL');
   db.close();
@@ -294,15 +302,17 @@ describe('runDbSlimmingMaintenance', () => {
         db.prepare('SELECT id FROM messages ORDER BY id').all().map((row) => (row as { id: string }).id),
       ).toEqual([
         'message-active-old',
+        'message-active-recent',
         'message-active-updated-after-scan',
         'message-archived-new',
         'message-deleted-new',
       ]);
-      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 4 });
+      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 5 });
       expect(
         db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
       ).toEqual([
         { message_id: 'message-active-old' },
+        { message_id: 'message-active-recent' },
         { message_id: 'message-active-updated-after-scan' },
         { message_id: 'message-archived-new' },
         { message_id: 'message-deleted-new' },
@@ -317,14 +327,15 @@ describe('runDbSlimmingMaintenance', () => {
       expect(
         db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
       ).toEqual([
+        { message_id: 'message-active-recent' },
         { message_id: 'message-active-updated-after-scan' },
         { message_id: 'message-archived-new' },
         { message_id: 'message-deleted-new' },
       ]);
       expect(db.prepare('SELECT count(*) AS count FROM subagent_runs').get()).toEqual({ count: 2 });
       expect(db.prepare('SELECT count(*) AS count FROM subagent_run_aliases').get()).toEqual({ count: 2 });
-      expect(db.prepare('SELECT count(*) AS count FROM session_pr_refs').get()).toEqual({ count: 2 });
-      expect(db.prepare('SELECT count(*) AS count FROM session_goals').get()).toEqual({ count: 2 });
+      expect(db.prepare('SELECT count(*) AS count FROM session_pr_refs').get()).toEqual({ count: 5 });
+      expect(db.prepare('SELECT count(*) AS count FROM session_goals').get()).toEqual({ count: 5 });
       expect(db.prepare('SELECT count(*) AS count FROM agent_input_queue_snapshots').get()).toEqual({ count: 2 });
       expect(db.prepare('SELECT count(*) AS count FROM ghost_cards').get()).toEqual({ count: 2 });
       expect(db.prepare('SELECT count(*) AS count FROM skill_usage_sources').get()).toEqual({ count: 2 });
@@ -377,8 +388,18 @@ describe('runDbSlimmingMaintenance', () => {
     }
   });
 
-  it('cleans active, archived, and deleted task history while freezing active tasks at scan time', async () => {
+  it('cleans only active tasks older than the selected cutoff and their associated history', async () => {
     createCleanupFixture();
+    const cleanedTurnChangeSetDir = path.join(tmpDir, 'turn-change-sets', 'active-old');
+    const retainedTurnChangeSetDir = path.join(
+      tmpDir,
+      'turn-change-sets',
+      'active-updated-after-scan',
+    );
+    for (const directory of [cleanedTurnChangeSetDir, retainedTurnChangeSetDir]) {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, 'index.json'), '{}');
+    }
     const dbBeforeScanExecution = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
     try {
       dbBeforeScanExecution
@@ -408,24 +429,45 @@ describe('runDbSlimmingMaintenance', () => {
       archivedTaskCount: 1,
       messageCount: 3,
     });
+    expect(fs.existsSync(cleanedTurnChangeSetDir)).toBe(false);
+    expect(fs.existsSync(retainedTurnChangeSetDir)).toBe(true);
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
     const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
     try {
       expect(
         db.prepare('SELECT id FROM messages ORDER BY id').all().map((row) => (row as { id: string }).id),
       ).toEqual([
+        'message-active-recent',
         'message-active-updated-after-scan',
         'message-archived-new',
         'message-deleted-new',
       ]);
-      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 3 });
+      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 4 });
       expect(
         db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
       ).toEqual([
+        { message_id: 'message-active-recent' },
         { message_id: 'message-active-updated-after-scan' },
         { message_id: 'message-archived-new' },
         { message_id: 'message-deleted-new' },
       ]);
-      expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 7 });
+      expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 8 });
+      expect(
+        db.prepare('SELECT session_id FROM session_pr_refs ORDER BY session_id').all(),
+      ).toEqual([
+        { session_id: 'active-recent' },
+        { session_id: 'active-updated-after-scan' },
+        { session_id: 'archived-boundary' },
+        { session_id: 'deleted-old' },
+      ]);
+      expect(
+        db.prepare('SELECT session_id FROM session_goals ORDER BY session_id').all(),
+      ).toEqual([
+        { session_id: 'active-recent' },
+        { session_id: 'active-updated-after-scan' },
+        { session_id: 'archived-boundary' },
+        { session_id: 'deleted-old' },
+      ]);
       expect(
         db.prepare(`
           SELECT status, updated_at, sdk_session_id, list_preview, list_preview_role,
@@ -457,6 +499,18 @@ describe('runDbSlimmingMaintenance', () => {
         list_message_count: 1,
         cleared_at: null,
         codex_plan_json: '{}',
+        summary: 'summary',
+      });
+      expect(
+        db.prepare(`
+          SELECT updated_at, sdk_session_id, list_preview, list_message_count, summary
+            FROM sessions WHERE id = 'active-recent'
+        `).get(),
+      ).toEqual({
+        updated_at: 1_500,
+        sdk_session_id: 'native-id',
+        list_preview: 'stale preview',
+        list_message_count: 1,
         summary: 'summary',
       });
     } finally {
@@ -517,7 +571,7 @@ describe('runDbSlimmingMaintenance', () => {
       fileMustExist: true,
     });
     try {
-      expect(backup.prepare('SELECT count(*) AS count FROM messages').get()).toEqual({ count: 6 });
+      expect(backup.prepare('SELECT count(*) AS count FROM messages').get()).toEqual({ count: 7 });
     } finally {
       backup.close();
     }

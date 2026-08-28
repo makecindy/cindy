@@ -39,6 +39,7 @@ function createHarness() {
     estimatedMessageBytes: 4_096,
   }));
   const selectBackupDirectory = vi.fn(async () => path.join(tmpDir, 'backups'));
+  const confirmActiveTaskCleanup = vi.fn(async () => true);
   const confirmWithoutBackup = vi.fn(async () => true);
   const revealFile = vi.fn(async () => true);
   const relaunch = vi.fn();
@@ -52,12 +53,14 @@ function createHarness() {
     getUserDataDir: () => tmpDir,
     canSchedule: () => canSchedule,
     selectBackupDirectory,
+    confirmActiveTaskCleanup,
     confirmWithoutBackup,
     revealFile,
     relaunch,
   });
   return {
     handlers,
+    confirmActiveTaskCleanup,
     confirmWithoutBackup,
     queryOne,
     revealFile,
@@ -101,7 +104,7 @@ describe('local database maintenance IPC', () => {
       scan.scannedAt,
       scan.archivedBeforeMs,
       0,
-      scan.scannedAt,
+      scan.archivedBeforeMs,
     ]);
 
     for (const includeActiveTasks of [null, 0, 'true', {}]) {
@@ -112,7 +115,7 @@ describe('local database maintenance IPC', () => {
     expect(queryOne).toHaveBeenCalledTimes(1);
   });
 
-  it('freezes an opted-in active-task scan and carries its scope into the request marker', async () => {
+  it('applies the selected age cutoff to active tasks and carries its scope into the marker', async () => {
     const harness = createHarness();
     harness.queryOne.mockResolvedValueOnce({
       activeTaskCount: 4,
@@ -130,12 +133,15 @@ describe('local database maintenance IPC', () => {
     expect(scan).toMatchObject({ includeActiveTasks: true, activeTaskCount: 4 });
     expect(harness.queryOne).toHaveBeenLastCalledWith(
       expect.stringContaining("status = 'active'"),
-      [scan.scannedAt, scan.archivedBeforeMs, 1, scan.scannedAt],
+      [scan.scannedAt, scan.archivedBeforeMs, 1, scan.archivedBeforeMs],
     );
 
     await expect(
       harness.handlers.schedule({ scanId: scan.scanId, backupEnabled: true }),
     ).resolves.toEqual({ scheduled: true });
+    expect(harness.confirmActiveTaskCleanup).toHaveBeenCalledExactlyOnceWith({
+      backupEnabled: true,
+    });
     expect(readDbSlimmingRequest(tmpDir)).toMatchObject({
       includeActiveTasks: true,
       activeTaskCount: 4,
@@ -231,6 +237,43 @@ describe('local database maintenance IPC', () => {
     expect(harness.relaunch).not.toHaveBeenCalled();
   });
 
+  it('requires a native Main confirmation for active-task cleanup with a backup', async () => {
+    const harness = createHarness();
+    harness.confirmActiveTaskCleanup.mockResolvedValue(false);
+    const scan = await harness.handlers.scan({
+      archiveAgeMonths: '7-days',
+      includeActiveTasks: true,
+    });
+
+    await expect(
+      harness.handlers.schedule({ scanId: scan.scanId, backupEnabled: true }),
+    ).resolves.toEqual({ scheduled: false });
+
+    expect(harness.confirmActiveTaskCleanup).toHaveBeenCalledExactlyOnceWith({
+      backupEnabled: true,
+    });
+    expect(harness.confirmWithoutBackup).not.toHaveBeenCalled();
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+    expect(harness.relaunch).not.toHaveBeenCalled();
+  });
+
+  it('includes the no-backup state in the active-task Main confirmation', async () => {
+    const harness = createHarness();
+    const scan = await harness.handlers.scan({
+      archiveAgeMonths: 1,
+      includeActiveTasks: true,
+    });
+
+    await expect(
+      harness.handlers.schedule({ scanId: scan.scanId, backupEnabled: false }),
+    ).resolves.toEqual({ scheduled: true });
+
+    expect(harness.confirmActiveTaskCleanup).toHaveBeenCalledExactlyOnceWith({
+      backupEnabled: false,
+    });
+    expect(harness.confirmWithoutBackup).not.toHaveBeenCalled();
+  });
+
   it('does not show the native no-backup confirmation when a backup is enabled', async () => {
     const harness = createHarness();
     const scan = await harness.handlers.scan({ archiveAgeMonths: '7-days' });
@@ -240,6 +283,7 @@ describe('local database maintenance IPC', () => {
     ).resolves.toEqual({ scheduled: true });
 
     expect(harness.confirmWithoutBackup).not.toHaveBeenCalled();
+    expect(harness.confirmActiveTaskCleanup).not.toHaveBeenCalled();
     expect(readDbSlimmingRequest(tmpDir)).toMatchObject({
       archiveAgeMonths: '7-days',
       backupEnabled: true,
@@ -263,6 +307,7 @@ describe('local database maintenance IPC', () => {
     ).resolves.toEqual({ scheduled: false });
 
     expect(harness.confirmWithoutBackup).not.toHaveBeenCalled();
+    expect(harness.confirmActiveTaskCleanup).not.toHaveBeenCalled();
     expect(harness.relaunch).not.toHaveBeenCalled();
     expect(readDbSlimmingRequest(tmpDir)).toBeNull();
   });

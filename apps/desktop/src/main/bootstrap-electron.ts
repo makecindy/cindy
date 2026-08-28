@@ -7422,6 +7422,34 @@ const registerIpcHandlers = () => {
           : await dialog.showOpenDialog(options);
         return result.canceled ? null : result.filePaths[0] ?? null;
       },
+      confirmActiveTaskCleanup: async ({ backupEnabled }) => {
+        const activeTaskWarning = t(
+          'settings.about.storage.dbSlimmingIncludeActiveConfirmDescription',
+        );
+        const detail = backupEnabled
+          ? activeTaskWarning
+          : `${activeTaskWarning}\n\n${t(
+              'settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup',
+            )}`;
+        const options: Electron.MessageBoxOptions = {
+          type: 'warning',
+          title: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+          message: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+          detail,
+          buttons: [
+            t('settings.about.storage.dbSlimmingRestartButton'),
+            t('settings.about.storage.cancelButton'),
+          ],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showMessageBox(ownerWindow, options)
+          : await dialog.showMessageBox(options);
+        return result.response === 0;
+      },
       confirmWithoutBackup: async () => {
         const options: Electron.MessageBoxOptions = {
           type: 'warning',

@@ -6,6 +6,10 @@ import type {
   DbSlimmingFailureReason,
   DbSlimmingMaintenanceProgress,
 } from '../../shared/localDbMaintenance';
+import {
+  isSafeTurnChangeSetSessionId,
+  turnChangeSetSessionDirectory,
+} from '../turn-change-set/storagePaths';
 import { createBetterSqliteDatabase, restrictDbFilePermissions } from './betterSqliteFactory';
 import {
   adoptDbSlimmingBackup,
@@ -55,6 +59,7 @@ interface MaintenancePaths {
 
 interface TargetCounts {
   activeTaskCount: number;
+  activeTaskIds: string[];
   deletedTaskCount: number;
   archivedTaskCount: number;
   messageCount: number;
@@ -184,7 +189,7 @@ export async function runDbSlimmingMaintenance(
         writeDbSlimmingResult(options.userDataDir, result);
       }
       try {
-        finalizeCommittedCleanup(options.userDataDir, paths);
+        finalizeCommittedCleanup(options.userDataDir, paths, request.activeTaskIds);
       } catch (error) {
         options.log.warn('database slimming committed cleanup will be retried', {
           requestId: request.id,
@@ -220,7 +225,7 @@ export async function runDbSlimmingMaintenance(
       try {
         writeDbSlimmingRequest(options.userDataDir, request);
         committed = true;
-        finalizeCommittedCleanup(options.userDataDir, paths);
+        finalizeCommittedCleanup(options.userDataDir, paths, request.activeTaskIds);
       } catch (error) {
         options.log.warn('database slimming recovery cleanup will be retried', {
           requestId: request.id,
@@ -306,7 +311,7 @@ export async function runDbSlimmingMaintenance(
     try {
       writeDbSlimmingRequest(options.userDataDir, request);
       committed = true;
-      finalizeCommittedCleanup(options.userDataDir, paths);
+      finalizeCommittedCleanup(options.userDataDir, paths, request.activeTaskIds);
     } catch (error) {
       // The replacement and the completed result are already durable. Keep the
       // on-disk committed marker so the next startup can retry artifact cleanup
@@ -595,7 +600,7 @@ function compactWorkingCopy(
       request.scannedAt,
       request.archivedBeforeMs,
       request.includeActiveTasks === true ? 1 : 0,
-      request.scannedAt,
+      request.archivedBeforeMs,
     );
 
     const counts = db
@@ -617,6 +622,15 @@ function compactWorkingCopy(
     };
     const targetCounts: TargetCounts = {
       activeTaskCount: counts.activeTaskCount ?? 0,
+      activeTaskIds: (
+        db
+          .prepare(
+            "SELECT id FROM temp.db_slimming_targets WHERE status = 'active' ORDER BY id",
+          )
+          .all() as Array<{ id: string }>
+      )
+        .map(({ id }) => id)
+        .filter(isSafeTurnChangeSetSessionId),
       deletedTaskCount: counts.deletedTaskCount ?? 0,
       archivedTaskCount: counts.archivedTaskCount ?? 0,
       messageCount: counts.messageCount ?? 0,
@@ -697,6 +711,22 @@ function compactWorkingCopy(
         );
       }
       if (request.includeActiveTasks === true) {
+        if (tableExists(activeDb, 'session_goals')) {
+          activeDb.exec(
+            `DELETE FROM session_goals
+              WHERE session_id IN (
+                SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
+              )`,
+          );
+        }
+        if (tableExists(activeDb, 'session_pr_refs')) {
+          activeDb.exec(
+            `DELETE FROM session_pr_refs
+              WHERE session_id IN (
+                SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
+              )`,
+          );
+        }
         const hasClearedAt = sessionColumns.has('cleared_at');
         const hasUpdatedAt = sessionColumns.has('updated_at');
         const activeResetAssignments = [
@@ -947,7 +977,17 @@ function tableExists(db: Database.Database, tableName: string): boolean {
   );
 }
 
-function finalizeCommittedCleanup(userDataDir: string, paths: MaintenancePaths): void {
+function finalizeCommittedCleanup(
+  userDataDir: string,
+  paths: MaintenancePaths,
+  activeTaskIds: string[] | undefined,
+): void {
+  for (const sessionId of activeTaskIds ?? []) {
+    fs.rmSync(turnChangeSetSessionDirectory(userDataDir, sessionId), {
+      recursive: true,
+      force: true,
+    });
+  }
   if (!cleanupAfterCommit(paths)) {
     throw new Error('database slimming committed artifacts could not be removed');
   }

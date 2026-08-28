@@ -66,6 +66,7 @@ export interface LocalDbMaintenanceIpcDeps {
   getUserDataDir(): string;
   canSchedule(): boolean;
   selectBackupDirectory(): Promise<string | null>;
+  confirmActiveTaskCleanup(input: { backupEnabled: boolean }): Promise<boolean>;
   confirmWithoutBackup(): Promise<boolean>;
   revealFile(filePath: string): Promise<boolean>;
   relaunch(requestId: string): void;
@@ -146,7 +147,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
                    ), 0)
               FROM messages message
               JOIN target_sessions target ON target.id = message.session_id) AS estimatedMessageBytes`,
-        [scannedAt, archivedBeforeMs, includeActiveTasks ? 1 : 0, scannedAt],
+        [scannedAt, archivedBeforeMs, includeActiveTasks ? 1 : 0, archivedBeforeMs],
       );
       assertOwnerCurrent(owner);
       const dbFilePath = deps.getCurrentDbPath();
@@ -244,7 +245,17 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
           backupDirectory = directoryGrant.directory;
         }
 
-        if (!input.backupEnabled && !(await deps.confirmWithoutBackup())) {
+        if (
+          scan.includeActiveTasks &&
+          !(await deps.confirmActiveTaskCleanup({ backupEnabled: input.backupEnabled }))
+        ) {
+          return { scheduled: false };
+        }
+        if (
+          !scan.includeActiveTasks &&
+          !input.backupEnabled &&
+          !(await deps.confirmWithoutBackup())
+        ) {
           return { scheduled: false };
         }
 
