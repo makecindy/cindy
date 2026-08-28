@@ -834,6 +834,78 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     );
   });
 
+  it('进程 error 后只在真实 exit 到达并完成既有清理后记录 exit', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost({ lifecycle: 'resident' });
+    const child = new FakeNodeProcess();
+    const kill = vi.spyOn(child, 'kill').mockImplementation(() => {
+      child.killed = true;
+      return true;
+    });
+    const statuses: Array<Record<string, unknown>> = [];
+    let requestSettled = false;
+    let broker!: GhostNodeRuntimeBroker;
+    const debug = vi.fn((message: string, meta?: Record<string, unknown>) => {
+      if (message === 'ghost node process lifecycle' && meta?.stage === 'exit') {
+        expect(requestSettled).toBe(true);
+        expect(broker.stateOf('node-ghost')).toBe('off');
+        expect(statuses.some(({ state }) => state === 'crashed')).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+      }
+    });
+    broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      sendToGhost: (_ghostId, payload) => statuses.push(payload as Record<string, unknown>),
+      log: { debug, info: vi.fn(), warn: vi.fn() },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest('error-then-exit'));
+    await vi.waitFor(() => expect(child.received).toHaveLength(1));
+
+    child.emit('error', new Error('utility process channel broke'));
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(
+      debug.mock.calls.filter(
+        ([message, meta]) => message === 'ghost node process lifecycle' && meta?.stage === 'exit',
+      ),
+    ).toHaveLength(0);
+
+    child.stderr.end();
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PROCESS_EXITED',
+    });
+    requestSettled = true;
+    expect(broker.stateOf('node-ghost')).toBe('off');
+    expect(statuses.some(({ state }) => state === 'crashed')).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+
+    child.emit('exit', 7, 'SIGTERM');
+
+    const exitLogs = debug.mock.calls.filter(
+      ([message, meta]) => message === 'ghost node process lifecycle' && meta?.stage === 'exit',
+    );
+    expect(exitLogs).toEqual([
+      [
+        'ghost node process lifecycle',
+        {
+          ghostId: 'node-ghost',
+          entry: 'node/worker.cjs',
+          appRunId: TEST_APP_RUN_ID,
+          attemptId: TEST_ATTEMPT_ID,
+          pid: 1234,
+          stage: 'exit',
+          code: 7,
+          signal: 'SIGTERM',
+        },
+      ],
+    ]);
+    expect(exitLogs[0]?.[1]).not.toHaveProperty('stoppingElapsedMs');
+  });
+
   it('native spawn 未观测时不给出 UtilityProcess 未创建的因果结论', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost();

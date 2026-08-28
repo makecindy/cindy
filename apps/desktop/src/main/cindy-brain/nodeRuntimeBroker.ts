@@ -1984,10 +1984,9 @@ export class GhostNodeRuntimeBroker {
         this.clearTimer(entry.hardKillTimer);
         entry.hardKillTimer = null;
       }
-      // stopWorker 已完成 pending/status/signal/grace 收口；真实 exit 日志只能在其后。
-      if (!error && entry.stoppingStartedAt !== undefined) {
-        this.debugProcessExit(entry, code, signal, Date.now());
-      }
+      // stopWorker 或先到的 error 已完成业务收口；真实 exit 日志只能在其后。
+      // error 路径没有 stopping baseline，但仍须记录随后到达的真实进程退出。
+      if (!error) this.debugProcessExit(entry, code, signal, Date.now());
       return;
     }
     if (error && !entry.stopping && !entry.hardKillTimer) {
