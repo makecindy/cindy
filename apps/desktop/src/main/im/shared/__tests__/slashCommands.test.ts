@@ -197,6 +197,22 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).not.toHaveBeenCalled();
   });
 
+  it('已确认双投时把首个 markdown 终态镜像到群主流', async () => {
+    const { handlers } = makeHarness();
+    const mirrorTerminalReply = vi.fn(async () => undefined);
+
+    const handled = await handlers.handleSlashCommand('/help', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      mirrorTerminalReply,
+    });
+
+    expect(handled).toBe(true);
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.help);
+    expect(mirrorTerminalReply).toHaveBeenCalledTimes(1);
+    expect(mirrorTerminalReply).toHaveBeenCalledWith(ui.slash.help);
+  });
+
   it('首条 slash 消费失败时回落正常发送', async () => {
     const { handlers } = makeHarness();
     const withMarkdown = vi.fn(async () => false);

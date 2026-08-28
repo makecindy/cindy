@@ -158,6 +158,7 @@ export function createMessageHandler(
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`controlInProgress notice failed (non-fatal): ${msg}`);
       }
+      await mirrorTerminalReply(event, ui.agent.controlInProgress);
       return;
     }
 
@@ -238,11 +239,18 @@ export function createMessageHandler(
             },
           }
         : undefined;
+      let slashMirrored = false;
+      const mirrorSlashReply = async (text: string): Promise<void> => {
+        if (slashMirrored) return;
+        slashMirrored = true;
+        await mirrorTerminalReply(event, text);
+      };
       try {
         await slash.handleSlashCommand(event.text, {
           botContextId: event.contextId,
           userId: event.senderId,
           consumePendingOpener: sink,
+          ...(event.finalReplyMirror ? { mirrorTerminalReply: mirrorSlashReply } : {}),
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -270,6 +278,7 @@ export function createMessageHandler(
             /* 发送失败与卡残留同一最终边界 */
           }
         }
+        await mirrorSlashReply(errorText);
       }
       return;
     }

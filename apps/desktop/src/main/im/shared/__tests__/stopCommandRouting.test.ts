@@ -30,6 +30,7 @@ vi.mock('../slashCommands', () => ({
 }));
 
 import { createMessageHandler, isStopCommand } from '../messageHandler';
+import { enterControl, exitControl } from '../controlState';
 import {
   activateImAccountBoundary,
   captureImAccountGeneration,
@@ -138,6 +139,7 @@ describe('messageHandler !stop routing', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    exitControl('bot-ctx', 'U123456789');
     activateImAccountBoundary();
     wire(true);
   });
@@ -537,6 +539,64 @@ describe('messageHandler !stop routing', () => {
     expect(runAgentTurn).not.toHaveBeenCalled();
     expect(sendText).toHaveBeenCalledWith('U123456789', notice, { threadTs: '1234.5678' });
     expect(mirrorFinalReply).toHaveBeenCalledWith(mirror, notice);
+  });
+
+  it('/ctr 控制中拦截时同步镜像已确认双投的群主流终态', async () => {
+    enterControl('bot-ctx', 'U123456789');
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-ctr',
+    };
+    deliver(makeEvent({ text: '帮我看看', finalReplyMirror: mirror }));
+    await flushMicrotasks();
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(handleSlashCommand).not.toHaveBeenCalled();
+    expect(sendMarkdownText).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.controlInProgress,
+      { threadTs: '1234.5678' },
+    );
+    expect(mirrorFinalReply).toHaveBeenCalledWith(mirror, slackUi.agent.controlInProgress);
+  });
+
+  it('slash 抛错时同步镜像已确认双投的群主流终态', async () => {
+    handleSlashCommand.mockRejectedValueOnce(new Error('list projects failed'));
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-slash-error',
+    };
+    const errorText = slackUi.agent.sendInternalError('list projects failed');
+    deliver(makeEvent({ text: '/ctr', finalReplyMirror: mirror }));
+    await flushMicrotasks();
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', errorText, {
+      threadTs: '1234.5678',
+    });
+    expect(mirrorFinalReply).toHaveBeenCalledWith(mirror, errorText);
+  });
+
+  it('slash 成功时把镜像回调交给命令实现', async () => {
+    let captured: Parameters<typeof handleSlashCommand>[1] | undefined;
+    handleSlashCommand.mockImplementationOnce(async (_text, ctx) => {
+      captured = ctx;
+      await ctx.mirrorTerminalReply?.('帮助正文');
+      return true;
+    });
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-slash-ok',
+    };
+    deliver(makeEvent({ text: '/help', finalReplyMirror: mirror }));
+    await flushMicrotasks();
+
+    expect(captured?.mirrorTerminalReply).toBeTypeOf('function');
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(mirrorFinalReply).toHaveBeenCalledWith(mirror, '帮助正文');
   });
 
   it('早期拒绝终态(missing_auth)经 onEarlyReject 收口开场白卡', async () => {

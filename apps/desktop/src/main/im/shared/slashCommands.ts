@@ -62,6 +62,11 @@ export interface SlashCtx {
     withMarkdown(userId: string, markdown: string): Promise<boolean>;
     withCard(userId: string, spec: InteractiveCardSpec): Promise<boolean>;
   };
+  /**
+   * 已确认双投时由 messageHandler 注入: 首个 markdown 终态同步到群主流。
+   * 只应消费一次(与 consumePendingOpener 同口径)。卡片回复没有可镜像的纯文本。
+   */
+  mirrorTerminalReply?: (text: string) => Promise<void>;
 }
 
 export interface ImSlashHandlers {
@@ -94,11 +99,26 @@ export function createSlashHandlers(
    * 群主流 @ 开话题的首条 slash: 首个回复经 ctx.consumePendingOpener 就地
    * patch 开场白卡(消费过一次后回落正常发送)。
    */
+  async function mirrorFirstSlashReply(ctx: SlashCtx, text: string): Promise<void> {
+    const mirror = ctx.mirrorTerminalReply;
+    if (!mirror) return;
+    ctx.mirrorTerminalReply = undefined;
+    try {
+      await mirror(text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`slash parent-chat mirror failed (non-fatal): ${msg}`);
+    }
+  }
+
   async function safeSendText(ctx: SlashCtx, text: string): Promise<void> {
     try {
       if (ctx.consumePendingOpener) {
         try {
-          if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) return;
+          if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) {
+            await mirrorFirstSlashReply(ctx, text);
+            return;
+          }
         } catch (err) {
           // patch 失败不吞回复: 认领已完成(卡不会再被误 patch), 回落正常
           // 发送 — 用户至少收到结果。
@@ -112,6 +132,7 @@ export function createSlashHandlers(
       } else {
         await im.sendMarkdownText(ctx.userId, text);
       }
+      await mirrorFirstSlashReply(ctx, text);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`safeSendText failed (non-fatal): ${msg}`);
