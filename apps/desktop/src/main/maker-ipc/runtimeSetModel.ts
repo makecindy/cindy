@@ -64,7 +64,8 @@ export interface ApplyRuntimeSetModelChangeInput {
   sessionId: string;
   model: string;
   providerId?: string | null;
-  effort?: Effort;
+  effort?: Effort | null;
+  fastMode?: boolean;
   /**
    * 锁内读取的切换前持久化会话身份。live handle 不存在时，旧 sdkSessionId 仍会在
    * 下一次 lazy-create 中作为 resumeSessionId；因此本地 Codex 的跨凭证家族切换
@@ -86,6 +87,8 @@ export interface ApplyRuntimeSetModelChangeInput {
     target: {
       model: string;
       providerId: string | null;
+      effort?: Effort;
+      fastMode?: boolean;
       rebuildCodexThread?: boolean;
       codexThreadRelinkCommitted?: boolean;
       ownerScope?: { ownerScopeKey: string; runtimeOwnerEpoch: string };
@@ -166,7 +169,7 @@ export type ApplyRuntimeSetModelChangeResult =
   /** 直接生效(热切 route / 或已关会话待下次发送重建)。 */
   | { status: 'applied'; codexThreadRelink?: CodexProviderThreadRelinkReceipt }
   /** 凭证形态要换但会话自己在跑:已登记 pending,turn 结束后自动生效。 */
-  | { status: 'deferred' };
+  | { status: 'deferred'; preservePersistedRoute?: true };
 
 export function isRemoteModelSwitchRouteChangeError(error: unknown): boolean {
   return (
@@ -194,7 +197,7 @@ export function isRemoteModelSwitchRouteChangeError(error: unknown): boolean {
 export async function applyRuntimeSetModelChange(
   input: ApplyRuntimeSetModelChangeInput,
 ): Promise<ApplyRuntimeSetModelChangeResult> {
-  const { maker, sessionId, model, providerId, effort, isSessionInTurn, logger } = input;
+  const { maker, sessionId, model, providerId, effort, fastMode, isSessionInTurn, logger } = input;
   const normalizedProviderId = normalizeSessionProviderId(providerId);
   const sess = maker.getSession(sessionId);
   const persistedCodexThread =
@@ -270,6 +273,8 @@ export async function applyRuntimeSetModelChange(
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(effort !== undefined && effort !== null ? { effort } : {}),
+        ...(fastMode !== undefined ? { fastMode } : {}),
         ...(shouldRelinkCodexThread ? { rebuildCodexThread: true } : {}),
         ...(input.persistedSession
           ? { sourcePersistedSession: input.persistedSession }
@@ -282,7 +287,10 @@ export async function applyRuntimeSetModelChange(
         fromModel: sess.model,
         toModel: model,
       });
-      return { status: 'deferred' };
+      return {
+        status: 'deferred',
+        ...(shouldRelinkCodexThread ? { preservePersistedRoute: true } : {}),
+      };
     }
     throw new CredentialModeSwitchBusyError(
       [sessionId],
@@ -295,6 +303,8 @@ export async function applyRuntimeSetModelChange(
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(effort !== undefined && effort !== null ? { effort } : {}),
+        ...(fastMode !== undefined ? { fastMode } : {}),
         ...(shouldRelinkCodexThread ? { rebuildCodexThread: true } : {}),
         ...(input.persistedSession
           ? { sourcePersistedSession: input.persistedSession }
@@ -308,7 +318,10 @@ export async function applyRuntimeSetModelChange(
         fromModel: sess.model,
         toModel: model,
       });
-      return { status: 'deferred' };
+      return {
+        status: 'deferred',
+        ...(shouldRelinkCodexThread ? { preservePersistedRoute: true } : {}),
+      };
     }
     // 关会话前先清可能存在的 stale pending(后选覆盖先选):close 会触发宿主的
     // onSessionClosed 钩子,pending 若还在会被它以**旧目标**抢先 finalize 并广播,
@@ -355,9 +368,11 @@ export async function applyRuntimeSetModelChange(
       // 空闲判定与 close 之间的竞态(恰好起了新 turn):有 pending 通道就转延迟,
       // 没有(老调用方)保持抛 busy 的旧语义。
       if (isCredentialModeSwitchBusyError(err) && input.registerPendingCredentialSwitch) {
-        input.registerPendingCredentialSwitch(sessionId, {
+        await input.registerPendingCredentialSwitch(sessionId, {
           model,
           providerId: nextProviderId,
+          ...(effort !== undefined && effort !== null ? { effort } : {}),
+          ...(fastMode !== undefined ? { fastMode } : {}),
           ...(shouldRelinkCodexThread ? { rebuildCodexThread: true } : {}),
           ...(input.persistedSession
             ? { sourcePersistedSession: input.persistedSession }
@@ -367,7 +382,10 @@ export async function applyRuntimeSetModelChange(
           sessionId,
           agentKind: sourceSession!.agentKind,
         });
-        return { status: 'deferred' };
+        return {
+          status: 'deferred',
+          ...(shouldRelinkCodexThread ? { preservePersistedRoute: true } : {}),
+        };
       }
       // 非 busy 失败:恢复被清除的 pending,用户的待定来源选择不随异常丢失。
       if (clearedPending && input.registerPendingCredentialSwitch) {
@@ -420,7 +438,7 @@ export async function applyRuntimeSetModelChange(
       pendingTarget !== undefined
         ? { providerId: nextProviderId }
         : {}),
-      ...(effort !== undefined ? { effort } : {}),
+      ...(effort !== undefined && effort !== null ? { effort } : {}),
     });
   } catch (err) {
     if (providerId !== undefined) {

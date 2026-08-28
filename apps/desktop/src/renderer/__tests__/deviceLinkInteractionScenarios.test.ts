@@ -962,7 +962,7 @@ describe('远程交互接线不变式', () => {
     expect(start).toBeGreaterThan(-1);
     const body = src.slice(start, start + 2800);
     const atomic = body.indexOf('? { effort: newEffort, fastMode: restoredFast }');
-    const fallback = body.indexOf('if (!useAtomicSelection) {');
+    const fallback = body.indexOf('if (!useAtomicSelection && !remoteDeferred) {');
     const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
     expect(atomic).toBeGreaterThan(-1);
@@ -986,7 +986,7 @@ describe('远程交互接线不变式', () => {
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
     const atomic = body.indexOf('? { effort: targetEffort, fastMode: restoredFast }');
-    const fallback = body.indexOf('if (!useAtomicSelection) {');
+    const fallback = body.indexOf('if (!useAtomicSelection && !remoteDeferred) {');
     const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
     const finalize = body.indexOf('onModelDidChange?.(targetModel);');

@@ -118,13 +118,23 @@ describe('PendingCredentialSwitchService', () => {
     const h = createHarness([
       { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
     ]);
+    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback: vi.fn(async () => true),
+    });
 
     h.service.register(sessionId, {
       model: 'gpt-5.6-sol',
       providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
       rebuildCodexThread: true,
       previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
     });
+    // A crash before settlement cannot have persisted the target route. The production
+    // registration bridge has already restored SQLite to previousRoute at this point.
+    expect(h.persistRoute).not.toHaveBeenCalled();
     await h.service.onTurnSettled(sessionId);
 
     expect(h.closeSession).toHaveBeenCalledWith(sessionId);
@@ -137,6 +147,16 @@ describe('PendingCredentialSwitchService', () => {
       isCurrent: expect.any(Function),
     });
     expect(h.relinkCodexThreadForProviderSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+      h.onApplied.mock.invocationCallOrder[0]!,
+    );
+    expect(h.persistRoute).toHaveBeenCalledTimes(1);
+    expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+    });
+    expect(h.persistRoute.mock.invocationCallOrder[0]).toBeLessThan(
       h.onApplied.mock.invocationCallOrder[0]!,
     );
   });

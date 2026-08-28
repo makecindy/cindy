@@ -387,7 +387,7 @@ describe('applyRuntimeSetModelChange', () => {
       registerPendingCredentialSwitch,
     });
 
-    expect(result).toEqual({ status: 'deferred' });
+    expect(result).toEqual({ status: 'deferred', preservePersistedRoute: true });
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'codex/gpt-5.5',
       providerId: 'xd',
@@ -751,7 +751,7 @@ describe('applyRuntimeSetModelChange', () => {
       codexAuthInjection: 'oauth-bearer',
     });
 
-    expect(result).toEqual({ status: 'deferred' });
+    expect(result).toEqual({ status: 'deferred', preservePersistedRoute: true });
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'codex/gpt-5.5',
       providerId: 'xd',
@@ -961,7 +961,7 @@ describe('applyRuntimeSetModelChange', () => {
       registerPendingCredentialSwitch,
     });
 
-    expect(result).toEqual({ status: 'deferred' });
+    expect(result).toEqual({ status: 'deferred', preservePersistedRoute: true });
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'gpt-5.5',
       providerId: 'xd',
@@ -1068,7 +1068,7 @@ describe('applyRuntimeSetModelChange', () => {
       getPendingCredentialSwitch: () => ({ model: 'gpt-5.5', providerId: 'xd' }),
     });
 
-    expect(result).toEqual({ status: 'deferred' });
+    expect(result).toEqual({ status: 'deferred', preservePersistedRoute: true });
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'gpt-5.4',
       providerId: 'xd',

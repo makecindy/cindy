@@ -681,14 +681,17 @@ describe('model:pick 持久化失败', () => {
           target: {
             model: string;
             providerId: string | null;
+            effort?: string;
             sourcePersistedSession?: unknown;
           },
         ) => void;
         persistedSession?: unknown;
+        effort?: string;
       };
       hooks.registerPendingCredentialSwitch?.('sess-target', {
         model: 'claude-opus-4-7',
         providerId: 'anthropic',
+        effort: hooks.effort,
         sourcePersistedSession: hooks.persistedSession,
       });
       return { status: 'deferred' as const };
@@ -710,6 +713,7 @@ describe('model:pick 持久化失败', () => {
       expect.objectContaining({
         model: 'claude-opus-4-7',
         providerId: 'anthropic',
+        effort: 'high',
         sourcePersistedSession: sourceSnapshot,
       }),
     );

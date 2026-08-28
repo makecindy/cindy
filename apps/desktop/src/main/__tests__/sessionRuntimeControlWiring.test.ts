@@ -346,6 +346,28 @@ describe('session runtime control wiring', () => {
     expect(getter).toContain('pending.restoreStaleOwnerRoute');
   });
 
+  it('restores the source route before an in-memory relink pending can be lost on restart', () => {
+    const registration = handlerBody(
+      registerSource,
+      'export async function registerPendingCredentialSwitchForSession(',
+      '/**\n * 跨订阅远端压缩身份边界时',
+    );
+    const restartSafeRestore = registration.indexOf(
+      'const restored = await restoreStaleOwnerRoute({',
+    );
+    const registrationAttempt = registration.indexOf('const registered = await service.register(');
+
+    expect(registration).toContain('model: capturedPrevRow.model');
+    expect(registration).toContain('providerId: capturedPrevRow.providerId');
+    expect(registration).toContain('effort: capturedPrevRow.effort');
+    expect(registration).toContain('fastMode: capturedPrevRow.fastMode');
+    expect(registration).toContain(
+      'Codex pending credential switch could not preserve the source route',
+    );
+    expect(restartSafeRestore).toBeGreaterThan(-1);
+    expect(registrationAttempt).toBeGreaterThan(restartSafeRestore);
+  });
+
   it('binds deferred credential switches to the captured owner scope and runtime epoch', () => {
     const registration = handlerBody(
       registerSource,

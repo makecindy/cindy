@@ -6747,7 +6747,7 @@ export function ChatInput({
                 return false;
               }
               remoteDeferred = remoteSetModelResult?.deferred === true;
-              if (!useAtomicSelection) {
+              if (!useAtomicSelection && !remoteDeferred) {
                 await remoteMaker.setEffort(sessionId, newEffort);
                 fastPersisted = await persistFastModeChange(restoredFast, {
                   silent: true,
@@ -7267,7 +7267,7 @@ export function ChatInput({
             return false;
           }
           remoteDeferred = remoteSetModelResult?.deferred === true;
-          if (!useAtomicSelection) {
+          if (!useAtomicSelection && !remoteDeferred) {
             await remoteMaker.setEffort(sessionId, targetEffort);
             fastPersisted = await persistFastModeChange(restoredFast, {
               silent: true,

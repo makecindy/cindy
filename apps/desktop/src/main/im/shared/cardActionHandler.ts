@@ -389,6 +389,7 @@ export function createCardActionHandler(
           sessionId,
           model: modelId,
           providerId,
+          ...(effort !== null ? { effort } : {}),
           ...(previousRoute ? { persistedSession: previousRoute } : {}),
           isSessionInTurn,
           registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,

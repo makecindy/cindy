@@ -34,8 +34,9 @@ import type { CodexProviderThreadRelinkReceipt } from './codexProviderThreadReli
  *     coordinator 的 hasPendingCredentialSwitch 门冻结 —— register 起周期定时器
  *     重试 onTurnSettled,杜绝"事件丢失 → 永久冻结"。
  *
- * DB 持久化不在本模块:renderer 在 set-model 返回 deferred 后照常
- * sessionService.update 落盘 sessions.{model,provider_id},重启后 hydrate 生效。
+ * 跨 Codex thread family 的 deferred 登记期间，SQLite 必须保留源 route/thread；
+ * finalizer 确认 close + relink 后才由 persistRoute 一次提交目标四轴。进程若提前
+ * 退出，内存 pending 虽丢失，重启也只会安全恢复源 route，不会跨来源 resume。
  */
 
 /** 自愈兜底重试间隔(事件路径正常时用户感知不到它)。 */
@@ -56,6 +57,9 @@ export interface PendingCredentialSwitchPersistedRoute {
 export interface PendingCredentialSwitch {
   model: string;
   providerId: string | null;
+  /** relink 成功后随 route 一次提交的目标运行轴；deferred 期间 SQLite 保持旧 route。 */
+  effort?: string;
+  fastMode?: boolean;
   /** 跨 cindy_gateway / cindy_openai 身份边界，收口前必须换成新的 native thread。 */
   rebuildCodexThread?: boolean;
   /** relink 已提交且回滚失败时，重试只补 route persist，不能再次 fork 新 thread。 */
@@ -130,14 +134,18 @@ export interface PendingCredentialSwitchDeps {
   }>;
   /**
    * 把收口裁决后的实际 route 持久化(生产 = 直写 sessions 行 + 广播
-   * sessions:patched)。renderer 在 deferred 被接受那一刻已按**请求值**落盘 DB;
-   * 收口裁决改道 / 丢弃被停用的显式来源 / 全停换模型时必须回写实际值 —— 否则下
-   * 一次懒 resume 按 DB 里的停用路由重建(resume 免裁决,PR #744 review 第十、
-   * 十四轮)。缺席 = 只写内存 store(测试最小 harness)。
+   * sessions:patched)。跨 family relink 在此首次提交目标 route；其它 deferred 可能已由
+   * renderer 按请求值落盘，若收口裁决改道仍必须回写实际值。缺席 = 只写内存 store
+   * (测试最小 harness)。
    */
   persistRoute?: (
     sessionId: string,
-    route: { providerId: string | null; model?: string; effort?: string; fastMode?: boolean },
+    route: {
+      providerId: string | null;
+      model?: string;
+      effort?: string;
+      fastMode?: boolean;
+    },
   ) => Promise<void>;
   /**
    * 把旧 Codex rollout 安全 fork 到目标来源使用的新 thread，并 CAS 替换持久化
@@ -177,6 +185,8 @@ export class PendingCredentialSwitchService {
     target: {
       model: string;
       providerId: string | null;
+      effort?: string;
+      fastMode?: boolean;
       rebuildCodexThread?: boolean;
       codexThreadRelinkCommitted?: boolean;
       sourceCodexThreadModelProviderId?: string | null;
@@ -196,6 +206,8 @@ export class PendingCredentialSwitchService {
     const pending: PendingCredentialSwitch = {
       model: target.model,
       providerId: target.providerId,
+      ...(target.effort !== undefined ? { effort: target.effort } : {}),
+      ...(target.fastMode !== undefined ? { fastMode: target.fastMode } : {}),
       ...(target.rebuildCodexThread ? { rebuildCodexThread: true } : {}),
       ...(target.codexThreadRelinkCommitted ? { codexThreadRelinkCommitted: true } : {}),
       ...(target.sourceCodexThreadModelProviderId !== undefined
@@ -345,7 +357,11 @@ export class PendingCredentialSwitchService {
     apply: boolean;
   }> {
     const { resolveRoute } = this.deps;
-    if (!resolveRoute) return { providerId: target.providerId, apply: true };
+    const targetAxes = {
+      ...(target.effort !== undefined ? { effort: target.effort } : {}),
+      ...(target.fastMode !== undefined ? { fastMode: target.fastMode } : {}),
+    };
+    if (!resolveRoute) return { providerId: target.providerId, ...targetAxes, apply: true };
     try {
       if (!target.agentKind) {
         for (const agent of ['claude-code', 'codex', 'pi'] as AgentKind[]) {
@@ -355,10 +371,10 @@ export class PendingCredentialSwitchService {
             resolved.providerId !== target.providerId ||
             resolved.degraded
           ) {
-            return { providerId: null, apply: true };
+            return { providerId: null, ...targetAxes, apply: true };
           }
         }
-        return { providerId: target.providerId, apply: true };
+        return { providerId: target.providerId, ...targetAxes, apply: true };
       }
       // desiredFastMode = 会话当前 fast(previousRoute 捕获;renderer 在 set-model 时
       // 不动 fast,DB 现值即它):目标全停换兜底模型时按落地拷贝 reconcile,不支持
@@ -382,7 +398,7 @@ export class PendingCredentialSwitchService {
             ...(prev.model !== target.model
               ? {
                   model: prev.model,
-                  ...(prev.effort ? { effort: prev.effort } : {}),
+                  ...(prev.effort !== undefined ? { effort: prev.effort } : {}),
                   ...(prev.fastMode !== undefined ? { fastMode: prev.fastMode } : {}),
                 }
               : {}),
@@ -400,7 +416,7 @@ export class PendingCredentialSwitchService {
           apply: true,
         };
       }
-      return { providerId: resolved.providerId, apply: true };
+      return { providerId: resolved.providerId, ...targetAxes, apply: true };
     } catch (err) {
       // 复核异常按「不写 route」保守处理:目标可能恰在等待期间被停用,异常放行会把
       // 停用来源写回会话(PR #744 review 第八轮)。生产 resolveRoute
@@ -428,7 +444,12 @@ export class PendingCredentialSwitchService {
       await this.finalizeApply(
         sessionId,
         target,
-        { providerId: target.providerId, apply: true },
+        {
+          providerId: target.providerId,
+          ...(target.effort !== undefined ? { effort: target.effort } : {}),
+          ...(target.fastMode !== undefined ? { fastMode: target.fastMode } : {}),
+          apply: true,
+        },
         reason,
       );
       return;
@@ -546,9 +567,9 @@ export class PendingCredentialSwitchService {
         }
       }
       setSessionProvider(sessionId, resolved.providerId);
-      // 裁决改了落地路由(reroute / 丢弃停用显式来源 / 全停换模型或清空):回写 DB
-      // —— renderer 在 deferred 接受时已按请求值落盘 sessions 行,不纠正的话下一次
-      // 懒 resume 按停用路由重建(resume 免裁决)。回写必须 **await 且先于**删登记 /
+      // 跨 family deferred 在登记时刻刻意让 DB 保持源 route；只有 relink 成功后才
+      // 在这里提交目标 route。裁决改道也必须回写，否则下次懒 resume 会按旧值重建。
+      // 回写必须 **await 且先于**删登记 /
       // 唤醒队列:排队消息在唤醒后立刻按 DB 懒 resume,fire-and-forget 会让它抢在
       // 替换模型落库前用停用目标重建(PR #744 review 第十五轮);await 期间 pending
       // 仍在,coordinator 的 pending 门保持关闭。失败留痕后仍收口(队列不能永久
@@ -558,26 +579,28 @@ export class PendingCredentialSwitchService {
       const resolvedRoute: PendingCredentialSwitchPersistedRoute = {
         providerId: resolved.providerId,
         model: resolved.model ?? target.model,
-        ...(modelChanged
-          ? {
-              ...(resolved.effort ? { effort: resolved.effort } : {}),
-              ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
-            }
-          : {}),
+        ...(resolved.effort !== undefined ? { effort: resolved.effort } : {}),
+        ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
       };
       // Only a successful await proves this exact fallback tuple reached SQLite. If the owner
       // expires in that window, stale cleanup must compare against it rather than the request.
       let persistedResolvedRoute: PendingCredentialSwitchPersistedRoute | undefined;
       // 恒写幂等回正(最后收口者赢,PR #744 review 第二十三轮):旧登记的 finalizer 在
-      // await persistRoute 期间被新选择替换时,旧写可能晚于 renderer 为新选择落的盘;
+      // await persistRoute 期间被新选择替换时,旧写可能晚于新选择的登记/落盘;
       // 若新登记收口时因「裁决未改路由」跳过回写,DB 会留着旧 finalizer 的迟到值,
       // 下次懒 resume 用错路由。收口时恒写 (providerId, model) —— 正常路径是对
-      // renderer 已写值的幂等重写,零语义差;不做 per-session 写锁(产品口径:先可用,
+      // 已写值的幂等重写,零语义差;不做 per-session 写锁(产品口径:先可用,
       // 低概率竞态由幂等回写收敛,见 model-route-guard.ts 头注)。
       // 仅在裁决接线存在时恒写:该竞态面来自 resolveRoute/persist 的 await 窗口,
       // 无接线的同步快路径(onSessionClosed 不 await,「关闭即生效」须同 tick 完成)
       // 既无竞态也不能引入异步,保持只在路由改动时回写。
-      if (this.deps.persistRoute && (routeChanged || this.deps.resolveRoute)) {
+      if (
+        this.deps.persistRoute &&
+        (routeChanged ||
+          this.deps.resolveRoute ||
+          shouldRelinkCodexThread ||
+          target.codexThreadRelinkCommitted === true)
+      ) {
         try {
           await this.deps.persistRoute(sessionId, resolvedRoute);
           persistedResolvedRoute = resolvedRoute;

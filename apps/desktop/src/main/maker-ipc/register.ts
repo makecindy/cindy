@@ -3067,6 +3067,8 @@ export async function registerPendingCredentialSwitchForSession(
   target: {
     model: string;
     providerId: string | null;
+    effort?: string;
+    fastMode?: boolean;
     rebuildCodexThread?: boolean;
     codexThreadRelinkCommitted?: boolean;
     ownerScope?: { ownerScopeKey: string; runtimeOwnerEpoch: string };
@@ -3145,7 +3147,9 @@ export async function registerPendingCredentialSwitchForSession(
     }
   }
   const prevModel = sourcePersistedSession?.model ?? live?.model ?? prevRow?.model ?? null;
-  let restoreCapturedProfileRoute: (() => Promise<boolean>) | undefined;
+  let restoreCapturedProfileRoute:
+    | ((persistedRoute?: PendingCredentialSwitchPersistedRoute) => Promise<boolean>)
+    | undefined;
   if (dbSnapshot && prevRow?.model && prevRow.effort && prevRow.fastMode !== null) {
     const capturedPrevRow = {
       ...prevRow,
@@ -3222,14 +3226,26 @@ export async function registerPendingCredentialSwitchForSession(
   ) {
     throw new Error('Codex pending credential switch requires an old-profile rollback snapshot');
   }
+  const restoreStaleOwnerRoute =
+    target.restoreStaleOwnerRoute ?? restoreCapturedProfileRoute;
+  if (target.rebuildCodexThread && restoreStaleOwnerRoute) {
+    // A deferred relink exists only in memory. Before registering it, make SQLite provably
+    // restart-safe: the source thread must remain paired with the complete source route until
+    // the finalizer has closed the live Session and committed the replacement thread.
+    const restored = await restoreStaleOwnerRoute({
+      model: target.model,
+      providerId: target.providerId,
+      ...(target.effort !== undefined ? { effort: target.effort } : {}),
+      ...(target.fastMode !== undefined ? { fastMode: target.fastMode } : {}),
+    });
+    if (!restored) {
+      throw new Error('Codex pending credential switch could not preserve the source route');
+    }
+  }
   const registered = await service.register(sessionId, {
     ...target,
     ownerScope,
-    ...(target.restoreStaleOwnerRoute
-      ? { restoreStaleOwnerRoute: target.restoreStaleOwnerRoute }
-      : restoreCapturedProfileRoute
-        ? { restoreStaleOwnerRoute: restoreCapturedProfileRoute }
-        : {}),
+    ...(restoreStaleOwnerRoute ? { restoreStaleOwnerRoute } : {}),
     ...(live?.codexThreadModelProviderId !== undefined
       ? { sourceCodexThreadModelProviderId: live.codexThreadModelProviderId }
       : {}),
@@ -3434,6 +3450,8 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
   | {
       model: string;
       providerId: string | null;
+      effort?: string;
+      fastMode?: boolean;
       rebuildCodexThread?: boolean;
       codexThreadRelinkCommitted?: boolean;
       ownerScope?: { ownerScopeKey: string; runtimeOwnerEpoch: string };
@@ -3454,6 +3472,8 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
     ? {
         model: pending.model,
         providerId: pending.providerId,
+        ...(pending.effort !== undefined ? { effort: pending.effort } : {}),
+        ...(pending.fastMode !== undefined ? { fastMode: pending.fastMode } : {}),
         ...(pending.rebuildCodexThread ? { rebuildCodexThread: true } : {}),
         ...(pending.codexThreadRelinkCommitted
           ? { codexThreadRelinkCommitted: true }
@@ -15744,9 +15764,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               ...(atomicSelection?.effort
                 ? {
                     effort: atomicSelection.effort as
-                      'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
+                      | 'minimal'
+                      | 'low'
+                      | 'medium'
+                      | 'high'
+                      | 'xhigh'
+                      | 'max'
+                      | 'ultra',
+                    fastMode: atomicSelection.fastMode,
                   }
-                : {}),
+                : atomicSelection
+                  ? { fastMode: atomicSelection.fastMode }
+                  : {}),
               forceSessionRebuild: rebuildLiveOrcaWorker,
               isSessionInTurn,
               registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
@@ -15773,6 +15802,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           deferred: result.status === 'deferred',
           superseded: false,
         };
+        const preservePersistedRoute =
+          result.status === 'deferred' && result.preservePersistedRoute === true;
         appliedRuntimeSelectionWasDeferred = response.deferred;
         const rollbackRuntimeSelectionForSupersededOwner = async (): Promise<boolean> => {
           if (runtimeOwnerBoundaryCurrent()) return false;
@@ -15836,16 +15867,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             patch.fastMode = atomicSelection.fastMode;
           }
           try {
-            await persistSessionFields(sessionId, patch);
-            appliedPersistedRuntimeRoute = {
-              model,
-              providerId:
-                effectiveProviderId === undefined
-                  ? runtimeStatus.providerId
-                  : (normalizeSessionProviderId(effectiveProviderId) ?? null),
-              effort: atomicSelection?.effort ?? runtimeStatus.effort,
-              fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
-            };
+            if (!preservePersistedRoute) {
+              await persistSessionFields(sessionId, patch);
+              appliedPersistedRuntimeRoute = {
+                model,
+                providerId:
+                  effectiveProviderId === undefined
+                    ? runtimeStatus.providerId
+                    : (normalizeSessionProviderId(effectiveProviderId) ?? null),
+                effort: atomicSelection?.effort ?? runtimeStatus.effort,
+                fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
+              };
+            }
           } catch (persistenceError) {
             // The live route and host stores are applied before SQLite so the
             // harness can switch atomically. If SQLite rejects, unwind every
@@ -15893,7 +15926,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             throw persistenceError;
           }
           if (isDeviceLinkInvoke()) {
-            // dispatch 继续兼容最小/旧 handler 的锁外回流；标记本结果避免重复写。
+            // dispatch 继续兼容最小/旧 handler 的锁外回流。deferred relink 即使刻意
+            // 保留旧 route，也必须标记为 host 已处理，禁止兼容回流把目标 route 写回。
             markRemoteSettingPersistedInsideHandler(response);
           }
         }

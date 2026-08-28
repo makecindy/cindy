@@ -521,6 +521,10 @@ describe('sendToSession ordering', () => {
     );
     expect(setModelBlock).toContain('patch.effort = atomicSelection.effort;');
     expect(setModelBlock).toContain('patch.fastMode = atomicSelection.fastMode;');
+    expect(setModelBlock).toContain(
+      "result.status === 'deferred' && result.preservePersistedRoute === true",
+    );
+    expect(setModelBlock).toContain('if (!preservePersistedRoute) {');
     expect(setModelBlock).toContain('await persistSessionFields(sessionId, patch);');
     expect(setModelBlock).toContain('markRemoteSettingPersistedInsideHandler(response);');
     expectOrder(
