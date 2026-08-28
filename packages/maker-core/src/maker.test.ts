@@ -91,6 +91,19 @@ describe('Maker agent status', () => {
       authReady: false,
     });
   });
+
+  it('registers an optional agent after construction idempotently', () => {
+    const maker = new Maker({
+      agents: {},
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const pi = createAgent(async () => undefined, 'pi');
+
+    expect(maker.registerAgent('pi', pi)).toBe(true);
+    expect(maker.registerAgent('pi', pi)).toBe(false);
+    expect(maker.listAvailableAgents()).toEqual(['pi']);
+  });
 });
 
 function createAgent(
