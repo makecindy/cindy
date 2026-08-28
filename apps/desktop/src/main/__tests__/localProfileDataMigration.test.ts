@@ -799,26 +799,40 @@ describe('adoptLocalProfileDatabase', () => {
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('partial');
   });
 
-  it('restores a pending-copy backup before passive target classification', async () => {
+  it('leaves a pending-copy backup for recovery under the migration lock', async () => {
     const { root, deps } = await fixture();
     const target = path.join(root, 'cindy-owner-a.db');
     const pending = `${target}.local-profile-copy-pending`;
+    const backup = `${pending}.bak`;
     await fs.writeFile(target, 'partial');
     await fs.writeFile(
-      `${pending}.bak`,
+      backup,
       JSON.stringify({ version: 1, attemptId: 'interrupted-windows-swap', phase: 'copying' }),
     );
 
     await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
       status: 'failed',
-      error: 'target database copy is incomplete',
+      error: 'database copy pending marker recovery requires migration lock',
     });
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('partial');
-    await expect(fs.readFile(pending, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+    await expect(fs.access(pending)).rejects.toThrow();
+    await expect(fs.readFile(backup, 'utf8').then(JSON.parse)).resolves.toMatchObject({
       attemptId: 'interrupted-windows-swap',
       phase: 'copying',
     });
-    await expect(fs.access(`${pending}.bak`)).rejects.toThrow();
+
+    // The lock holder must still be able to publish its replacement marker;
+    // passive inspection must not recreate the canonical path first.
+    const writerTemp = `${pending}.writer.tmp`;
+    await fs.writeFile(
+      writerTemp,
+      JSON.stringify({ version: 1, attemptId: 'writer', phase: 'copying' }),
+    );
+    await fs.rename(writerTemp, pending);
+    await expect(fs.readFile(pending, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      attemptId: 'writer',
+      phase: 'copying',
+    });
   });
 
   it('blocks passive initialization when target ownership is unproven', async () => {

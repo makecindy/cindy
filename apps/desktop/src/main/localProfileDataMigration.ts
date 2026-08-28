@@ -838,6 +838,33 @@ async function databaseFileGroupState(
 
 type DatabasePublicationRecovery = 'clean' | 'ambiguous';
 
+type PassivePendingDatabaseCopyMarkerRead =
+  | { status: 'absent' }
+  | { status: 'present'; raw: string }
+  | { status: 'recovery-required' };
+
+function readPendingDatabaseCopyMarkerForPassivePreflight(
+  pending: string,
+): PassivePendingDatabaseCopyMarkerRead {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return { status: 'present', raw: fs.readFileSync(pending, 'utf8') };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
+      // Passive preflight is deliberately read-only. During atomicWriteFileSync's
+      // Windows backup exchange the canonical marker can be absent while .bak is
+      // the writer's only valid snapshot. Restoring it here would race the writer
+      // outside the migration lock, so leave both paths untouched and fail closed.
+      if (fs.existsSync(`${pending}.bak`)) return { status: 'recovery-required' };
+      // The writer may have completed the exchange and removed .bak between the
+      // failed read and the backup check. Re-read canonical once before deciding
+      // that no publication marker exists.
+      if (attempt === 1) return { status: 'absent' };
+    }
+  }
+  return { status: 'absent' };
+}
+
 async function recoverIncompleteDatabasePublication(
   deps: LocalProfileDataMigrationDeps,
   targetDb: string,
@@ -917,9 +944,17 @@ export async function inspectPassiveLocalProfileAdoption(
       };
     }
     if (targetState.mainExists) {
-      const pendingRaw = readAtomicFileSync(`${targetDb}${DB_COPY_PENDING_SUFFIX}`);
-      if (pendingRaw !== null) {
-        const pending = parsePendingDatabaseCopyMarker(pendingRaw);
+      const pendingMarker = readPendingDatabaseCopyMarkerForPassivePreflight(
+        `${targetDb}${DB_COPY_PENDING_SUFFIX}`,
+      );
+      if (pendingMarker.status === 'recovery-required') {
+        return {
+          status: 'failed',
+          error: 'database copy pending marker recovery requires migration lock',
+        };
+      }
+      if (pendingMarker.status === 'present') {
+        const pending = parsePendingDatabaseCopyMarker(pendingMarker.raw);
         if (!pending) {
           return { status: 'failed', error: 'database copy pending marker is malformed' };
         }
