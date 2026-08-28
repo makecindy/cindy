@@ -89,6 +89,9 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(restoreHelper).toBeGreaterThan(-1);
     expect(saveDraft).toBeGreaterThan(failedCard);
     expect(restoreText).toBeGreaterThan(restoreHelper);
+    expect(source.slice(restoreHelper, restoreHelper + 500)).toContain(
+      'browserComments: preNavBrowserComments',
+    );
   });
 
   it('does not make the new worktree path the next New Maker default project', () => {

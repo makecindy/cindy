@@ -3914,7 +3914,9 @@ export function NewMakerDraftRoute() {
             // 不会暴露 cleared 后的视觉状态。clearFiles 仍然在 React 提交 unmount cleanup
             // 之前同步执行,所以 useAttachments 的 cleanup 不会把刚送出去的附件回写到 store。
             // 保存原始 doc JSON(含 quickStartPill 等 mark),供 worktree 失败恢复时原样还原。
-            const preNavDraftDoc = getComposerDraft(NEW_MAKER_DRAFT_KEY)?.text ?? null;
+            const preNavDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
+            const preNavDraftDoc = preNavDraft?.text ?? null;
+            const preNavBrowserComments = preNavDraft?.browserComments ?? [];
             navigate(`/cc-agent/${newSession.id}`, { replace: true });
             // clearDraftAndNotify (not bare clear): onSend returned false above
             // so ChatInput never cleared its editor — without notifying it, the
@@ -3934,6 +3936,7 @@ export function NewMakerDraftRoute() {
                 saveComposerDraft(newSession.id, {
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
                   attachments: rehomedFiles ?? [],
+                  browserComments: preNavBrowserComments,
                 });
                 // 第一条消息退回草稿 = 它没被交出去,也就永远不会有权威标题回流。
                 // 不撤回的话标题预览会一直盖着 DB 里的哨兵(每次全量刷新后重新盖上),
@@ -4193,14 +4196,16 @@ export function NewMakerDraftRoute() {
           // URL。必须在发出首条之前,否则消息里还是草稿命名空间。
           const rehydratedFiles = await rehomeDraftAttachments(files, newSession.id);
           const sendWorkingDir = workingDir ?? newSession.workingDir;
-          const preNavDraftDoc = getComposerDraft(NEW_MAKER_DRAFT_KEY)?.text ?? null;
+          const preNavDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
+          const preNavDraftDoc = preNavDraft?.text ?? null;
+          const preNavBrowserComments = preNavDraft?.browserComments ?? [];
           const restoreFirstMessageDraft = () => {
             // FIFO 插回失败的首条,不覆盖用户在等待期间已经写进新任务输入框的内容。
             restoreRemoteOptimisticDraft(newSession.id, {
               clientId: `local-first:${newSession.id}`,
               text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
               attachments: rehydratedFiles ?? [],
-              browserComments: [],
+              browserComments: preNavBrowserComments,
             });
             emitAutoTitlePreviewCleared(newSession.id);
             clearSessionStarting(newSession.id);
