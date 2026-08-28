@@ -36,6 +36,13 @@ describe('windowsPackagedInstanceBarrier', () => {
     );
   });
 
+  it('gives PowerShell a helper-start budget independent of a short mutex wait', () => {
+    // Busy-path WaitOne uses timeoutMs (can be 50ms). Add-Type cold compile
+    // under Windows CI load needs a separate start buffer, or Node times out
+    // before the helper can print {"status":"busy"}.
+    expect(__testing.helperReadinessTimeoutMs(50)).toBeGreaterThanOrEqual(10_050);
+  });
+
   it.runIf(process.platform === 'win32')(
     'holds the packaged startup mutex until release and allows a later retry',
     async () => {
@@ -70,6 +77,6 @@ describe('windowsPackagedInstanceBarrier', () => {
       expect(retry.isHeld()).toBe(true);
       await retry.release();
     },
-    30_000,
+    60_000,
   );
 });
