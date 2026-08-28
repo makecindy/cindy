@@ -69,10 +69,13 @@ export type LoginHandoffPhase =
   | 'done';
 
 export type LoginHandoffBranch = 'unauthenticated' | 'authenticated' | null;
+export type LoginBrandLayout = 'splash' | 'login';
 
 export interface LoginHandoffContextValue {
   phase: LoginHandoffPhase;
   branch: LoginHandoffBranch;
+  /** Splash 与已登录淡出期间保持 Splash 布局,未登录面板入场流程再切到登录避让布局。 */
+  brandLayout: LoginBrandLayout;
   /**
    * 登录面板下方内容需要预留的高度；null 表示 LoginPage 尚未上报，
    * 品牌层应使用常态本地模式 footer 的预留值。
@@ -89,7 +92,10 @@ export interface LoginHandoffContextValue {
   /** Slogan 已进入可见段(slogan/done)——必须最后出现。 */
   sloganRevealed: boolean;
   reportBrandAssetsReady: () => void;
+  /** Splash 开始淡出；用于启动 handoff 时序，但不代表布局可以切换。 */
   reportSplashExited: () => void;
+  /** Splash 淡出完成并卸载后，未登录分支才允许切到登录布局。 */
+  reportSplashExitCompleted: () => void;
   reportLoginPanelMounted: () => void;
   reportLoginPanelUnmounted: () => void;
   reportPanelBottomReserve: (reserve: number | null) => void;
@@ -104,6 +110,7 @@ const LoginHandoffContext = createContext<LoginHandoffContextValue | null>(null)
 const FALLBACK_VALUE: LoginHandoffContextValue = Object.freeze({
   phase: 'done',
   branch: null,
+  brandLayout: 'login',
   panelBottomReserve: null,
   isPlaying: false,
   brandStageMounted: true,
@@ -112,6 +119,7 @@ const FALLBACK_VALUE: LoginHandoffContextValue = Object.freeze({
   sloganRevealed: true,
   reportBrandAssetsReady: () => {},
   reportSplashExited: () => {},
+  reportSplashExitCompleted: () => {},
   reportLoginPanelMounted: () => {},
   reportLoginPanelUnmounted: () => {},
   reportPanelBottomReserve: () => {},
@@ -143,6 +151,7 @@ export function LoginHandoffProvider({
   const [branch, setBranch] = useState<LoginHandoffBranch>(null);
   const [brandReady, setBrandReady] = useState(false);
   const [splashExited, setSplashExited] = useState(false);
+  const [splashExitCompleted, setSplashExitCompleted] = useState(false);
   const [panelMounted, setPanelMounted] = useState(false);
   const [panelBottomReserve, setPanelBottomReserve] = useState<number | null>(null);
 
@@ -167,6 +176,7 @@ export function LoginHandoffProvider({
 
   const reportBrandAssetsReady = useCallback(() => setBrandReady(true), []);
   const reportSplashExited = useCallback(() => setSplashExited(true), []);
+  const reportSplashExitCompleted = useCallback(() => setSplashExitCompleted(true), []);
   const reportLoginPanelMounted = useCallback(() => {
     panelMountedRef.current = true;
     setPanelMounted(true);
@@ -235,6 +245,12 @@ export function LoginHandoffProvider({
     return {
       phase,
       branch,
+      // Keep the exact Splash composition through the whole exit fade. The
+      // handoff timeline starts when fading begins, but the layout may switch
+      // only after Splash has actually finished fading and unmounted. There is
+      // no login panel in the authenticated branch, so it must never consume
+      // the login panel's footer reserve during this transition.
+      brandLayout: splashExitCompleted && phase !== 'brand-exit' ? 'login' : 'splash',
       panelBottomReserve,
       isPlaying,
       // startup 期(含 boot/播放中/brand-exit)恒挂以维持不透明白底全盖;done 后
@@ -249,6 +265,7 @@ export function LoginHandoffProvider({
       sloganRevealed: phase === 'slogan' || phase === 'done',
       reportBrandAssetsReady,
       reportSplashExited,
+      reportSplashExitCompleted,
       reportLoginPanelMounted,
       reportLoginPanelUnmounted,
       reportPanelBottomReserve,
@@ -258,9 +275,12 @@ export function LoginHandoffProvider({
     branch,
     panelMounted,
     coverHeld,
+    splashExited,
+    splashExitCompleted,
     panelBottomReserve,
     reportBrandAssetsReady,
     reportSplashExited,
+    reportSplashExitCompleted,
     reportLoginPanelMounted,
     reportLoginPanelUnmounted,
     reportPanelBottomReserve,

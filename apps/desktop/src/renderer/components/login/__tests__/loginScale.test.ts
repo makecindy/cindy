@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BRAND_PANEL_OVERLAP_PX,
+  BRAND_PANEL_OVERLAP_MAX_HEIGHT,
   brandPlacement,
   desktopScale,
   panelPlacement,
   PANEL_FIXED_SCALE,
   sloganShiftX,
+  splashBrandPlacement,
 } from '../loginScale';
-import { CONTROL, PANEL, SSO_ORG_HISTORY } from '../loginDesignTokens';
+import { CONTROL, LOGIN_GROUP, PANEL, SSO_ORG_HISTORY } from '../loginDesignTokens';
 
 /**
  * 缩放公式行为单测(implementation-plan Step 2 WHAT1 锚点数值,demo v3.1 拍板)。
@@ -91,11 +94,9 @@ describe('panelPlacement(面板恒定 1x,用户拍板 2026-07-23,design.md §11)
     ['16 寸级大窗口', 1728, 1117],
   ])('%s下 SSO 候选层都锚定输入框下沿并收在面板内', (_label, width, height) => {
     const placement = panelPlacement(width, height, 1227);
-    const inputBottom =
-      placement.topY + (CONTROL.inputY + CONTROL.height) * placement.scale;
+    const inputBottom = placement.topY + (CONTROL.inputY + CONTROL.height) * placement.scale;
     const historyTop = placement.topY + SSO_ORG_HISTORY.y * placement.scale;
-    const historyBottom =
-      historyTop + SSO_ORG_HISTORY.maxHeight * placement.scale;
+    const historyBottom = historyTop + SSO_ORG_HISTORY.maxHeight * placement.scale;
     const panelBottom = placement.topY + PANEL.height * placement.scale;
 
     expect(historyTop - inputBottom).toBe(8 * placement.scale);
@@ -135,12 +136,42 @@ describe('brandPlacement(品牌块整体让位,用户拍板 2026-07-23 第二轮
     expect(blockBottomAfter).toBeCloseTo(366 - 12, 2);
   });
 
-  it('品牌让位与登录 footer 使用同一 bottom reserve，避免面板上移后再次遮挡品牌', () => {
+  it('短窗口允许登录面板覆盖立绘底部一小段,避免品牌块过度压缩', () => {
     const panelTop = panelPlacement(800, 600, 1229, 124).topY;
     const r = brandPlacement(800, 600, 124);
     const blockBottomAfter = 300 + 160 * r.scale + r.translateY;
-    // 组高 620 后本组合落进压缩档:块底代数上恰好等于 limit(= panelTop-12),
-    // 浮点余量 1e-9(压缩档 scale = (limit-12)/934,乘回 934 未必位精确;实测误差 ~1e-13)。
+    // 仍保留立绘顶部 12px 安全边界,但允许面板覆盖底部最多 64px。
+    expect(blockBottomAfter).toBeLessThanOrEqual(panelTop + BRAND_PANEL_OVERLAP_PX + 1e-9);
+    expect(r.scale).toBeGreaterThan(desktopScale(800, 600).scale * 0.7);
+  });
+
+  it('超过短窗口高度后恢复整张立绘避让面板', () => {
+    const width = 1280;
+    const height = BRAND_PANEL_OVERLAP_MAX_HEIGHT + 32;
+    const panelTop = panelPlacement(width, height, 1229, 124).topY;
+    const r = brandPlacement(width, height, 124);
+    const base = desktopScale(width, height).scale;
+    const blockBottomAfter = height / 2 + (1209 - 2098 / 2) * r.scale + r.translateY;
+
+    expect(r.scale).toBeLessThanOrEqual(base);
     expect(blockBottomAfter).toBeLessThanOrEqual(panelTop - 12 + 1e-9);
+  });
+});
+
+describe('splashBrandPlacement(Splash 使用 desktopScale 的品牌块布局)', () => {
+  it.each([
+    ['4:3 小窗口', 800, 600],
+    ['4:3 常见窗口', 1024, 768],
+    ['16:9 窗口', 1280, 720],
+    ['16:10 窗口', 1280, 800],
+    ['16 寸级窗口', 1728, 1117],
+  ])('%s保持原始 desktopScale,并与 Splash 面板保留安全间距', (_label, width, height) => {
+    const base = desktopScale(width, height).scale;
+    const placement = splashBrandPlacement(width, height);
+    expect(placement.scale).toBe(base);
+
+    const splashPanelTop = height / 2 + (LOGIN_GROUP.yDefault - 2098 / 2) * base;
+    const brandBottom = height / 2 + (1209 - 2098 / 2) * base + placement.translateY;
+    expect(brandBottom).toBeLessThanOrEqual(splashPanelTop - 12 + 1e-9);
   });
 });

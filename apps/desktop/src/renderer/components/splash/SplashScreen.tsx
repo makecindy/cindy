@@ -127,8 +127,9 @@ export function SplashScreen() {
   const reducedMotion = useReducedMotion();
   const handoff = useLoginHandoff();
   const [shellCoverFading, setShellCoverFading] = useState(false);
-  const [dbCleanupProgress, setDbCleanupProgress] =
-    useState<DbSlimmingStartupProgress | null>(null);
+  const [dbCleanupProgress, setDbCleanupProgress] = useState<DbSlimmingStartupProgress | null>(
+    null,
+  );
   const [dbCleanupNow, setDbCleanupNow] = useState(() => Date.now());
   const [dbCleanupCancelPending, setDbCleanupCancelPending] = useState(false);
   const prevCoverHeldRef = useRef(coverHeld);
@@ -197,12 +198,14 @@ export function SplashScreen() {
   });
 
   const splashLifecycleActive =
-    realPhase !== 'fading_out' &&
-    realPhase !== 'splash_done' &&
-    realPhase !== 'splash_skipped';
+    realPhase !== 'fading_out' && realPhase !== 'splash_done' && realPhase !== 'splash_skipped';
 
   useEffect(() => {
-    if (prevCoverHeldRef.current && !coverHeld && (realPhase === 'splash_done' || realPhase === 'splash_skipped')) {
+    if (
+      prevCoverHeldRef.current &&
+      !coverHeld &&
+      (realPhase === 'splash_done' || realPhase === 'splash_skipped')
+    ) {
       // reduced-motion 把 --splash-fade-duration 置 0ms。再留 500ms 透明全屏层
       // 会吞掉主界面刚露出时的点击(层未 pointer-events:none)。
       if (reducedMotion) {
@@ -243,6 +246,17 @@ export function SplashScreen() {
     ) {
       splashExitReportedRef.current = true;
       handoff.reportSplashExited();
+    }
+  }, [realPhase, handoff]);
+
+  // 布局锁定要覆盖整个 opacity fade；只有 Splash 真正进入 done/skipped 并卸载后，
+  // 未登录分支才允许 LoginBrandStage 切到带面板避让的登录布局。
+  const splashExitCompletedRef = useRef(false);
+  useEffect(() => {
+    if (splashExitCompletedRef.current) return;
+    if (realPhase === 'splash_done' || realPhase === 'splash_skipped') {
+      splashExitCompletedRef.current = true;
+      handoff.reportSplashExitCompleted();
     }
   }, [realPhase, handoff]);
 
@@ -387,12 +401,12 @@ export function SplashScreen() {
                   dbCleanupProgress
                     ? `${t(dbCleanupPhaseTranslationKey(dbCleanupProgress.phase))} · ${dbCleanupPercent}%`
                     : dialogKind === 'manifest'
-                    ? t('splash.manifestFailed.description')
-                    : dialogKind === 'download'
-                      ? t('splash.downloadFailed.description')
-                      : dialogKind === 'spawn'
-                        ? t('splash.spawnFailed.description')
-                        : undefined
+                      ? t('splash.manifestFailed.description')
+                      : dialogKind === 'download'
+                        ? t('splash.downloadFailed.description')
+                        : dialogKind === 'spawn'
+                          ? t('splash.spawnFailed.description')
+                          : undefined
                 }
               />
             )}

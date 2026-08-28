@@ -94,22 +94,20 @@ export interface BrandPlacement {
   translateY: number;
 }
 
-/**
- * 品牌块整体让位(用户拍板 2026-07-23 第二轮,design.md §11):
- * 字标任何窗口必须完整可见,且绝不遮挡立绘脸部/黑猫——后者由「构图冻结」保证:
- * 品牌块(立绘 275..1209,字标底 1191 / Slogan 底 995 均在其内)只作为整体
- * 移动/缩放,字标与立绘的设计相对位(压胸口渐隐区)永不改变。三级规则:
- *   ① 常态:v3.1 desktopScale + 画布居中(translateY=0),大窗零变化;
- *   ② 面板上侵:块底越过面板顶-12 → 整块上移补偿,至块顶触及视口顶 12 为止;
- *   ③ 极矮窗:上移仍不够 → 整块等比压缩至恰好塞进 [12, 面板顶-12]。
- * 面板锚点取 yDefault(sso 态差 2 设计px,由 12px gap 吸收)。
- */
-export function brandPlacement(w: number, h: number, bottomReserve = 0): BrandPlacement {
-  const { scale: base } = desktopScale(w, h);
-  const { topY: panelTop } = panelPlacement(w, h, 1229, bottomReserve);
+/** 短窗口登录面板允许覆盖立绘底部的最大屏幕高度。 */
+export const BRAND_PANEL_OVERLAP_PX = 64;
+/** 仅在短窗口启用立绘底部覆盖,更高窗口优先保证整张立绘可见。 */
+export const BRAND_PANEL_OVERLAP_MAX_HEIGHT = 768;
+
+function brandPlacementForPanelTop(
+  h: number,
+  base: number,
+  panelTop: number,
+  allowedBottomOverlap = 0,
+): BrandPlacement {
   const blockTop = h / 2 + (275 - LOGIN_STAGE_HEIGHT / 2) * base;
   const blockBottom = h / 2 + (1209 - LOGIN_STAGE_HEIGHT / 2) * base;
-  const limit = panelTop - 12;
+  const limit = allowedBottomOverlap > 0 ? panelTop + allowedBottomOverlap : panelTop - 12;
   const overflow = blockBottom - limit;
   if (overflow <= 0) return { scale: base, translateY: 0 };
   const maxShift = blockTop - 12;
@@ -118,4 +116,35 @@ export function brandPlacement(w: number, h: number, bottomReserve = 0): BrandPl
   const scale2 = Math.max(limit - 12, 0) / 934;
   const blockTop2 = h / 2 + (275 - LOGIN_STAGE_HEIGHT / 2) * scale2;
   return { scale: scale2, translateY: 12 - blockTop2 };
+}
+
+/**
+ * 品牌块整体让位(用户拍板 2026-07-23 第二轮,design.md §11):
+ * 字标任何窗口必须完整可见,且优先保护立绘脸部/黑猫——后者由「构图冻结」保证:
+ * 品牌块(立绘 275..1209,字标底 1191 / Slogan 底 995 均在其内)只作为整体
+ * 移动/缩放,字标与立绘的设计相对位(压胸口渐隐区)永不改变。三级规则:
+ *   ① 常态:v3.1 desktopScale + 画布居中(translateY=0),大窗零变化;
+ *   ② 面板上侵:短窗口(≤768px)有登录底部预留时允许面板覆盖立绘底部最多 64px,
+ *      更高窗口优先整张立绘可见;
+ *   ③ 极矮窗:上移仍不够 → 整块等比压缩至恰好塞进 [12, 面板顶+允许覆盖量]。
+ * 面板锚点取 yDefault(sso 态差 2 设计px,由 12px gap 吸收)。
+ */
+export function brandPlacement(w: number, h: number, bottomReserve = 0): BrandPlacement {
+  const { scale: base } = desktopScale(w, h);
+  const { topY: panelTop } = panelPlacement(w, h, 1229, bottomReserve);
+  const allowedBottomOverlap =
+    bottomReserve > 0 && h <= BRAND_PANEL_OVERLAP_MAX_HEIGHT ? BRAND_PANEL_OVERLAP_PX : 0;
+  return brandPlacementForPanelTop(h, base, panelTop, allowedBottomOverlap);
+}
+
+/**
+ * Splash 品牌块让位:品牌画布与 Splash 状态面板都使用 desktopScale,
+ * 因此不能复用登录页固定 0.5 面板的 bottom clamp。Splash 面板顶边在同一
+ * 设计画布坐标系的 LOGIN_GROUP.yDefault,仅保留品牌块与状态面板之间的
+ * 12px 屏幕安全间距;这样小窗口不会因为登录 footer reserve 被过度压缩。
+ */
+export function splashBrandPlacement(w: number, h: number): BrandPlacement {
+  const { scale: base } = desktopScale(w, h);
+  const splashPanelTop = h / 2 + (LOGIN_GROUP.yDefault - LOGIN_STAGE_HEIGHT / 2) * base;
+  return brandPlacementForPanelTop(h, base, splashPanelTop);
 }
