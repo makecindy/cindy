@@ -2563,6 +2563,130 @@ describe('CodexAgent reference directories', () => {
     await handle.close();
   });
 
+  it.each(['auto', 'ask'] as const)(
+    'interrupts an active %s turn when an activated writable root is revoked',
+    async (permissionMode) => {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-revoke-${permissionMode}` } };
+        if (method === Method.TurnInterrupt) return {};
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: `session-active-writable-revoke-${permissionMode}`,
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode,
+        writableDirs: ['/output-a'],
+      });
+
+      await handle.send({ type: 'user', content: 'write output' });
+      await handle.setWritableDirs?.(['/output-b']);
+
+      expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+        threadId: 'start-thread-id',
+        turnId: `turn-revoke-${permissionMode}`,
+      });
+      await handle.close();
+    },
+  );
+
+  it('does not interrupt an active turn when writable roots are only added or reordered', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-writable-expand' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-writable-expand',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+      writableDirs: ['/output-a', '/output-b'],
+    });
+
+    await handle.send({ type: 'user', content: 'write output' });
+    await handle.setWritableDirs?.(['/output-b', '/output-a', '/output-c']);
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('interrupts a pending Ask turn once its id arrives after writable-root revocation', async () => {
+    const turnStartGate = deferred<{ turn: { id: string } }>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return turnStartGate.promise;
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-pending-writable-revoke',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+      writableDirs: ['/output-a'],
+    });
+
+    const sendPromise = handle.send({ type: 'user', content: 'write output' });
+    await handle.setWritableDirs?.([]);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+
+    turnStartGate.resolve({ turn: { id: 'turn-pending-writable-revoke' } });
+    await sendPromise;
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+      threadId: 'start-thread-id',
+      turnId: 'turn-pending-writable-revoke',
+    });
+    await handle.close();
+  });
+
+  it('does not interrupt a pending turn when every revoked root is re-granted before its id arrives', async () => {
+    const turnStartGate = deferred<{ turn: { id: string } }>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return turnStartGate.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-pending-writable-regrant',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+      writableDirs: ['/output-a'],
+    });
+
+    const sendPromise = handle.send({ type: 'user', content: 'write output' });
+    await handle.setWritableDirs?.([]);
+    await handle.setWritableDirs?.(['/output-a', '/output-b']);
+    turnStartGate.resolve({ turn: { id: 'turn-pending-writable-regrant' } });
+    await sendPromise;
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('does not interrupt a Full access turn when removing an inactive named-profile root', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-full-access-writable-revoke' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-full-access-writable-revoke',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+      writableDirs: ['/output-a'],
+    });
+
+    await handle.send({ type: 'user', content: 'write output' });
+    await handle.setWritableDirs?.([]);
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+    await handle.close();
+  });
+
   it('keeps the thread-level reference profile active without repeating it on turn/start', async () => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;

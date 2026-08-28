@@ -6506,6 +6506,10 @@ export class CodexAgent extends BaseAgent {
      *     那次 turn/start 已携带旧的宽松策略发出,不补会继续无人值守跑到结束。
      */
     let pendingTightenInterrupt = false;
+    // Writable-root revocation is independent from permissionMode tightening.
+    // Ask turns can still hold a thread-local profile that grants the removed
+    // root, so setPermissionMode's unattended-turn filters must not clear this.
+    let pendingWritableRootRevocationInterrupt = false;
     /**
      * 最近一次 send 的 turn 是否以无人值守策略发射 (覆盖在飞与运行中两个阶段)。
      * auto_review / never / Auto policy turn 在收紧时需要中断;普通 user reviewer
@@ -10274,10 +10278,11 @@ export class CodexAgent extends BaseAgent {
         activateRootTurn(params.turn.id);
         // turn 开始 → 球在上游,起 idle 表(后续任何事件都会重置它)。
         armUpstreamIdle();
-        // turn/start 在飞期间权限被收紧 (turnStarted 通知可能先于 turn/start resp
+        // turn/start 在飞期间权限档或可写根被收紧 (turnStarted 通知可能先于 turn/start resp
         // 到达) → 拿到 id 立即补中断, 与 handleTurnStartResp 互斥消费同一标记。
-        if (pendingTightenInterrupt) {
+        if (pendingTightenInterrupt || pendingWritableRootRevocationInterrupt) {
           pendingTightenInterrupt = false;
+          pendingWritableRootRevocationInterrupt = false;
           void interruptTurnForPermissionTighten(params.turn.id);
         }
         if (!wasSameTurn) currentTurnPlanModeActive = pendingTurnStartPlanMode ?? planCycleActive;
@@ -11211,6 +11216,7 @@ export class CodexAgent extends BaseAgent {
         // 新 turn 总是携带当前 (可能已收紧的) 策略, 上一轮残留的延迟中断标记
         // 不得误伤本 turn (典型: 上次 turn/start 终失败, 标记未被 id 到达点消费)。
         pendingTightenInterrupt = false;
+        pendingWritableRootRevocationInterrupt = false;
         // 上一 send 周期的墓碑一并清空 (仅用于拦本周期内抢跑的终态)。
         turnsCompletedBeforeStartResp.clear();
         // 用户发新消息 = 上一轮的过载重投彻底作废(它要重投的是旧消息)。
@@ -11554,11 +11560,12 @@ export class CodexAgent extends BaseAgent {
               bufferedTurnEventQueues.delete(resp.turn.id);
               settleBufferedTurnReconcile(resp.turn.id, false);
             }
-            // turn/start 在飞期间权限被收紧 → 本 turn 携带的还是旧宽松策略,
+            // turn/start 在飞期间权限档或可写根被收紧 → 本 turn 携带的还是旧宽松策略,
             // 拿到 id 立即补中断 (fire-and-forget, 失败仅 warn); turn 已终结则
             // 收紧目的已达成, 消费标记即可, 不再发无意义的 interrupt。
-            if (pendingTightenInterrupt) {
+            if (pendingTightenInterrupt || pendingWritableRootRevocationInterrupt) {
               pendingTightenInterrupt = false;
+              pendingWritableRootRevocationInterrupt = false;
               if (!alreadyCompleted) void interruptTurnForPermissionTighten(resp.turn.id);
             }
           }
@@ -12422,9 +12429,39 @@ export class CodexAgent extends BaseAgent {
           mutableWritableDirs.length === newDirs.length &&
           mutableWritableDirs.every((dir, index) => dir === newDirs[index])
         ) return;
+        // The active turn keeps the thread-local profile selected before
+        // turn/start. Compare against that activated snapshot, not the mutable
+        // list: a root added only for the next turn cannot require revocation.
+        let revokesActiveProfileRoot = false;
+        if (readonlyReferencesProfileActive && readonlyReferencesProfileFingerprint !== null) {
+          try {
+            const activeRoots = JSON.parse(readonlyReferencesProfileFingerprint) as unknown;
+            const nextRoots = new Set(newDirs);
+            revokesActiveProfileRoot = !Array.isArray(activeRoots)
+              || activeRoots.some((dir) => typeof dir !== 'string' || !nextRoots.has(dir));
+          } catch {
+            // Internal profile state that cannot be proven safe is tightened
+            // fail-closed by stopping any turn that may still hold it.
+            revokesActiveProfileRoot = true;
+          }
+        }
         mutableWritableDirs = [...newDirs];
         autoReviewDirectoryGeneration++;
         log.debug('setWritableDirs', { count: mutableWritableDirs.length });
+        if (closed) return;
+        if (currentTurnId !== null && revokesActiveProfileRoot) {
+          await interruptTurnForPermissionTighten(currentTurnId);
+          return;
+        }
+        if (
+          isTurnStartPending
+          || overloadRetry?.timer != null
+          || overloadRetry?.inFlight === true
+        ) {
+          // Re-adding every root before the id arrives restores the old
+          // profile's authority and cancels this root-specific interruption.
+          pendingWritableRootRevocationInterrupt = revokesActiveProfileRoot;
+        }
       },
 
       async setPlanMode(enabled: boolean) {
