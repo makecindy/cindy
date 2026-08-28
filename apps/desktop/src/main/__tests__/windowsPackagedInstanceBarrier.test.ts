@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   acquireWindowsPackagedInstanceBarrier,
@@ -9,6 +10,12 @@ import {
 
 describe('windowsPackagedInstanceBarrier', () => {
   it('parses only complete helper statuses', () => {
+    expect(__testing.parseBarrierStatus('{"status":"started"}')).toEqual({
+      status: 'started',
+    });
+    expect(__testing.parseBarrierStatus('{"status":"locked"}')).toEqual({
+      status: 'locked',
+    });
     expect(__testing.parseBarrierStatus('{"status":"acquired"}')).toEqual({
       status: 'acquired',
     });
@@ -34,6 +41,36 @@ describe('windowsPackagedInstanceBarrier', () => {
     expect(__testing.WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT).toContain(
       'CINDY_SINGLETON_WINDOW_TITLE',
     );
+    expect(
+      __testing.WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT.indexOf('{"status":"locked"}'),
+    ).toBeLessThan(__testing.WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT.indexOf('Add-Type'));
+  });
+
+  it('waits for the helper exit after forced termination', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      signalCode: NodeJS.Signals | null;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => true);
+    let finished = false;
+    const waiting = __testing
+      .waitForExit(child as never, 20)
+      .then(() => {
+        finished = true;
+      });
+
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledOnce(), {
+      timeout: 30,
+      interval: 1,
+    });
+    expect(finished).toBe(false);
+    child.exitCode = 1;
+    child.emit('exit', 1, null);
+    await waiting;
+    expect(finished).toBe(true);
   });
 
   it.runIf(process.platform === 'win32')(
