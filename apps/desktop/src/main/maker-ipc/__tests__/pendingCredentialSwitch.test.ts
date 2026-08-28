@@ -6,6 +6,12 @@ import {
   setSessionProvider,
 } from '../../maker-host/session-provider-store.js';
 import {
+  getSessionEffort,
+  getSessionFastMode,
+  setSessionEffort,
+  setSessionFastMode,
+} from '../../maker-host/session-effort-store.js';
+import {
   PendingCredentialSwitchService,
   type PendingCredentialSwitchDeps,
 } from '../pendingCredentialSwitch.js';
@@ -15,6 +21,8 @@ const touchedSessions = new Set<string>();
 afterEach(() => {
   for (const sessionId of touchedSessions) {
     clearSessionProvider(sessionId);
+    setSessionEffort(sessionId, null);
+    setSessionFastMode(sessionId, false);
   }
   touchedSessions.clear();
 });
@@ -42,6 +50,8 @@ function createHarness(
   const closeSession = vi.fn(async (_sessionId: string) => {});
   const broadcastApplied = vi.fn<NonNullable<PendingCredentialSwitchDeps['broadcastApplied']>>();
   const onApplied = vi.fn<NonNullable<PendingCredentialSwitchDeps['onApplied']>>();
+  const onCancellationCompensated =
+    vi.fn<NonNullable<PendingCredentialSwitchDeps['onCancellationCompensated']>>();
   const persistRoute = vi.fn<NonNullable<PendingCredentialSwitchDeps['persistRoute']>>(
     async () => {},
   );
@@ -55,6 +65,7 @@ function createHarness(
     },
     broadcastApplied,
     onApplied,
+    onCancellationCompensated,
     persistRoute,
     relinkCodexThreadForProviderSwitch,
     ...(opts?.isOwnerScopeCurrent
@@ -68,6 +79,7 @@ function createHarness(
     closeSession,
     broadcastApplied,
     onApplied,
+    onCancellationCompensated,
     persistRoute,
     relinkCodexThreadForProviderSwitch,
     sessions,
@@ -522,17 +534,48 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.persistRoute).toHaveBeenCalledTimes(2);
     expect(h.service.has(sessionId)).toBe(false);
     expect(h.onApplied).toHaveBeenCalledOnce();
+    expect(h.onCancellationCompensated).not.toHaveBeenCalled();
   });
 
   it('rolls back an abandoned relink when route persistence is superseded', async () => {
     const sessionId = rememberSession('pending-switch-superseded-after-persist');
     setSessionProvider(sessionId, 'xd');
-    let sdkSessionId = 'thread-openai';
+    let persistedProfile = {
+      sdkSessionId: 'thread-openai',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd' as string | null,
+      effort: 'high',
+      fastMode: false,
+    };
     const rollback = vi.fn(async () => {
-      if (sdkSessionId !== 'thread-openai') return false;
-      sdkSessionId = 'thread-xd';
+      if (persistedProfile.sdkSessionId !== 'thread-openai') return false;
+      persistedProfile.sdkSessionId = 'thread-xd';
       return true;
     });
+    const restoreStaleOwnerRoute = vi.fn(
+      async (
+        route?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean },
+        expectedSdkSessionId?: string,
+      ) => {
+        if (
+          persistedProfile.sdkSessionId !== expectedSdkSessionId ||
+          persistedProfile.model !== route?.model ||
+          persistedProfile.providerId !== route?.providerId ||
+          persistedProfile.effort !== route?.effort ||
+          persistedProfile.fastMode !== route?.fastMode
+        ) {
+          return false;
+        }
+        persistedProfile = {
+          sdkSessionId: 'thread-xd',
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+          effort: 'high',
+          fastMode: false,
+        };
+        return true;
+      },
+    );
     const h = createHarness(
       [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
       {
@@ -548,30 +591,222 @@ describe('PendingCredentialSwitchService', () => {
       newSdkSessionId: 'thread-openai',
       rollback,
     });
-    h.persistRoute.mockImplementationOnce(async () => {
-      h.service.register(sessionId, {
+    h.persistRoute.mockImplementationOnce(async (_persistedSessionId, route) => {
+      persistedProfile = {
+        ...persistedProfile,
+        model: route.model ?? persistedProfile.model,
+        providerId: route.providerId,
+        effort: route.effort ?? persistedProfile.effort,
+        fastMode: route.fastMode ?? persistedProfile.fastMode,
+      };
+      h.service.clear(sessionId, { wake: false });
+      await h.service.register(sessionId, {
         model: 'gpt-5.6-sol',
         providerId: 'xd',
       });
     });
 
-    h.service.register(sessionId, {
+    await h.service.register(sessionId, {
       model: 'gpt-5.6-sol',
       providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
       rebuildCodexThread: true,
-      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
+      restoreStaleOwnerRoute,
     });
     await h.service.onTurnSettled(sessionId);
 
-    expect(rollback).toHaveBeenCalledOnce();
-    expect(sdkSessionId).toBe('thread-xd');
+    const abandonedRoute = {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+    };
+    expect(rollback).not.toHaveBeenCalled();
+    expect(restoreStaleOwnerRoute).toHaveBeenCalledWith(abandonedRoute, 'thread-openai');
+    expect(persistedProfile).toEqual({
+      sdkSessionId: 'thread-xd',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+      effort: 'high',
+      fastMode: false,
+    });
+    expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
     expect(h.service.get(sessionId)).toMatchObject({
       model: 'gpt-5.6-sol',
       providerId: 'xd',
     });
     expect(h.onApplied).not.toHaveBeenCalled();
+    expect(h.onCancellationCompensated).not.toHaveBeenCalled();
     expect(h.broadcastApplied).not.toHaveBeenCalled();
     h.service.clear(sessionId);
+  });
+
+  it('keeps cancellation gated until a late persisted route is atomically compensated', async () => {
+    const sessionId = rememberSession('pending-switch-cancel-during-persist');
+    setSessionProvider(sessionId, 'xd');
+    setSessionEffort(sessionId, 'xhigh');
+    setSessionFastMode(sessionId, true);
+    let persistedProfile = {
+      sdkSessionId: 'thread-xd',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd' as string | null,
+      effort: 'high',
+      fastMode: false,
+    };
+    let markPersistStarted!: () => void;
+    const persistStarted = new Promise<void>((resolve) => {
+      markPersistStarted = resolve;
+    });
+    let releasePersist!: () => void;
+    const persistGate = new Promise<void>((resolve) => {
+      releasePersist = resolve;
+    });
+    const restoreStaleOwnerRoute = vi.fn(
+      async (
+        route?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean },
+        expectedSdkSessionId?: string,
+      ) => {
+        if (
+          persistedProfile.sdkSessionId !== expectedSdkSessionId ||
+          persistedProfile.model !== route?.model ||
+          persistedProfile.providerId !== route?.providerId ||
+          persistedProfile.effort !== route?.effort ||
+          persistedProfile.fastMode !== route?.fastMode
+        ) {
+          return false;
+        }
+        persistedProfile = {
+          sdkSessionId: 'thread-xd',
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+          effort: 'high',
+          fastMode: false,
+        };
+        return true;
+      },
+    );
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      { retryDelayMs: 60_000 },
+    );
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async () => {
+      persistedProfile.sdkSessionId = 'thread-openai';
+      return {
+        previousSdkSessionId: 'thread-xd',
+        newSdkSessionId: 'thread-openai',
+        rollback: vi.fn(async () => false),
+      };
+    });
+    h.persistRoute.mockImplementationOnce(async (_persistedSessionId, route) => {
+      markPersistStarted();
+      await persistGate;
+      persistedProfile = {
+        ...persistedProfile,
+        model: route.model ?? persistedProfile.model,
+        providerId: route.providerId,
+        effort: route.effort ?? persistedProfile.effort,
+        fastMode: route.fastMode ?? persistedProfile.fastMode,
+      };
+    });
+
+    await h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+      rebuildCodexThread: true,
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
+      restoreStaleOwnerRoute,
+    });
+    const settling = h.service.onTurnSettled(sessionId);
+    await persistStarted;
+
+    h.service.clear(sessionId);
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(h.onApplied).not.toHaveBeenCalled();
+    releasePersist();
+    await settling;
+
+    expect(restoreStaleOwnerRoute).toHaveBeenCalledWith(
+      {
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        effort: 'xhigh',
+        fastMode: true,
+      },
+      'thread-openai',
+    );
+    expect(persistedProfile).toEqual({
+      sdkSessionId: 'thread-xd',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+      effort: 'high',
+      fastMode: false,
+    });
+    expect(getSessionProvider(sessionId)).toBe('xd');
+    expect(getSessionEffort(sessionId)).toBe('high');
+    expect(getSessionFastMode(sessionId)).toBe(false);
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(h.onApplied).not.toHaveBeenCalled();
+    expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
+    expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
+  });
+
+  it('keeps cancellation gated and retries when persisted-route compensation fails', async () => {
+    const sessionId = rememberSession('pending-switch-cancel-compensation-retry');
+    setSessionProvider(sessionId, 'openai');
+    const restoreStaleOwnerRoute = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('sqlite temporarily unavailable'))
+      .mockResolvedValueOnce(true);
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      { retryDelayMs: 5 },
+    );
+    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback: vi.fn(async () => false),
+    });
+    h.persistRoute.mockImplementationOnce(async () => {
+      h.service.clear(sessionId);
+    });
+
+    await h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+      rebuildCodexThread: true,
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
+      restoreStaleOwnerRoute,
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(h.onCancellationCompensated).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(restoreStaleOwnerRoute).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(h.service.has(sessionId)).toBe(false));
+    expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
+    expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
   it('compensates the actual fallback route when the owner changes during persistence', async () => {

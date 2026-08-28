@@ -10,6 +10,10 @@ import {
   CODEX_CINDY_COMPACT_PROVIDER_ID,
   CODEX_GATEWAY_PROVIDER_ID,
 } from '../maker-host/codex-gateway-config.js';
+import {
+  setSessionEffort,
+  setSessionFastMode,
+} from '../maker-host/session-effort-store.js';
 import { setSessionProvider } from '../maker-host/session-provider-store.js';
 import type { CodexProviderThreadRelinkReceipt } from './codexProviderThreadRelink.js';
 
@@ -82,9 +86,10 @@ export interface PendingCredentialSwitch {
   };
   /** 登记时的 data owner + runtime epoch；跨账号/teardown 后旧 target 必须终态丢弃。 */
   ownerScope?: PendingCredentialSwitchOwnerScope;
-  /** owner 失效时，针对登记时捕获的旧 Profile 成套恢复 thread + route。 */
+  /** 针对登记时捕获的旧 Profile 成套恢复 thread + route；第二参数用于迟到提交 CAS。 */
   restoreStaleOwnerRoute?: (
     persistedRoute?: PendingCredentialSwitchPersistedRoute,
+    expectedSdkSessionId?: string,
   ) => Promise<boolean>;
   requestedAt: number;
 }
@@ -112,6 +117,8 @@ export interface PendingCredentialSwitchDeps {
   }) => void;
   /** 生效后唤醒该会话的输入队列(排队消息此前被 pending 门挡住)。 */
   onApplied?: (sessionId: string) => void;
+  /** clear 撞上 finalizer 时，待补偿/关闭完成后再次唤醒此前被临时门挡住的队列。 */
+  onCancellationCompensated?: (sessionId: string) => void;
   /**
    * 停用轴裁决(生产 = model-route-guard-live 的 resolveLenientSessionRoute)。
    * SET_MODEL 请求时刻已裁决过,但 deferred 切换的**生效**可能在数分钟后 —— 期间
@@ -177,6 +184,18 @@ export class PendingCredentialSwitchService {
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** owner-stale 补偿中的 target；同步 has/get 重入不得重复写旧 Profile。 */
   private readonly staleDiscards = new Set<PendingCredentialSwitch>();
+  /** clear() 不能在迟到 finalizer 完成原子补偿前解除输入队列门。 */
+  private readonly clearedDuringApply = new Set<string>();
+  /** wake:false 的显式替换由新选择收尾，旧 finalizer 不得代为唤醒。 */
+  private readonly suppressedCancellationWakes = new Set<string>();
+  /** 新选择已完成但唤醒曾被旧 finalizer barrier 挡住，补偿结束后补发。 */
+  private readonly deferredCancellationWakes = new Set<string>();
+  /** SQLite 暂时失败时保持 gate，并用捕获的旧 Profile 继续补偿。 */
+  private readonly compensationFailures = new Set<string>();
+  private readonly compensationRetryTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
 
   constructor(private readonly deps: PendingCredentialSwitchDeps) {}
 
@@ -200,6 +219,7 @@ export class PendingCredentialSwitchService {
       ownerScope?: PendingCredentialSwitchOwnerScope;
       restoreStaleOwnerRoute?: (
         persistedRoute?: PendingCredentialSwitchPersistedRoute,
+        expectedSdkSessionId?: string,
       ) => Promise<boolean>;
     },
   ): Promise<boolean> {
@@ -245,6 +265,7 @@ export class PendingCredentialSwitchService {
   }
 
   has(sessionId: string): boolean {
+    if (this.clearedDuringApply.has(sessionId)) return true;
     const target = this.pending.get(sessionId);
     if (!target) return false;
     return !this.discardIfOwnerStale(sessionId, target);
@@ -256,9 +277,19 @@ export class PendingCredentialSwitchService {
     return target;
   }
 
-  clear(sessionId: string): void {
+  clear(sessionId: string, opts?: { wake?: boolean }): void {
     this.pending.delete(sessionId);
     this.clearRetry(sessionId);
+    if (this.applying.has(sessionId)) {
+      this.clearedDuringApply.add(sessionId);
+      if (opts?.wake === false) this.suppressedCancellationWakes.add(sessionId);
+    }
+  }
+
+  requestWakeAfterCancellationBarrier(sessionId: string): boolean {
+    if (!this.clearedDuringApply.has(sessionId)) return true;
+    this.deferredCancellationWakes.add(sessionId);
+    return false;
   }
 
   /**
@@ -314,7 +345,7 @@ export class PendingCredentialSwitchService {
       if (this.discardIfOwnerStale(sessionId, latest)) return;
       await this.finalizeApplyChecked(sessionId, latest, 'turn end');
     } finally {
-      this.applying.delete(sessionId);
+      this.finishApplying(sessionId);
     }
   }
 
@@ -332,7 +363,7 @@ export class PendingCredentialSwitchService {
     if (this.discardIfOwnerStale(sessionId, target)) return;
     this.applying.add(sessionId);
     void this.finalizeApplyChecked(sessionId, target, 'session close').finally(() => {
-      this.applying.delete(sessionId);
+      this.finishApplying(sessionId);
     });
   }
 
@@ -646,17 +677,19 @@ export class PendingCredentialSwitchService {
           return;
         }
         // await 期间用户可能改选 / 取消:本次让位,新登记有自己的收口路径。
-        // relink 已在 persistRoute 之前提交;若这一代此刻已过时,必须先把它回滚，
-        // 否则下一次无 live session 的选择会沿用被放弃来源的 sdk_session_id。
+        // 同 owner 的迟到写必须把实际 route + replacement thread 作为一个 CAS
+        // 成套补偿；先单独回滚 thread 会留下可被唤醒队列/重启观察到的裂分状态。
         if (!this.targetCurrent(sessionId, target)) {
-          if (relinkReceipt) {
+          if (!this.ownerScopeCurrent(target)) {
             try {
-              const restored = await relinkReceipt.rollback();
-              if (!restored) {
-                this.deps.logger?.warn(
-                  'pending credential switch: stale Codex thread relink rollback was superseded',
-                  { sessionId },
-                );
+              if (relinkReceipt) {
+                const restored = await relinkReceipt.rollback();
+                if (!restored) {
+                  this.deps.logger?.warn(
+                    'pending credential switch: stale Codex thread relink rollback was superseded',
+                    { sessionId },
+                  );
+                }
               }
             } catch (rollbackError) {
               this.deps.logger?.error?.(
@@ -668,8 +701,15 @@ export class PendingCredentialSwitchService {
                 },
               );
             }
+            this.discardIfOwnerStale(sessionId, target, persistedResolvedRoute);
+          } else {
+            await this.compensateSupersededPersistedRoute(
+              sessionId,
+              target,
+              persistedResolvedRoute,
+              relinkReceipt,
+            );
           }
-          this.discardIfOwnerStale(sessionId, target, persistedResolvedRoute);
           return;
         }
       }
@@ -699,6 +739,7 @@ export class PendingCredentialSwitchService {
     // 删登记(解除 coordinator 的 pending 门)必须在 route 写入 + DB 回写之后。
     this.pending.delete(sessionId);
     this.clearRetry(sessionId);
+    this.requestWakeAfterCancellationBarrier(sessionId);
     try {
       this.deps.onApplied?.(sessionId);
     } catch (err) {
@@ -745,6 +786,30 @@ export class PendingCredentialSwitchService {
     this.retryTimers.delete(sessionId);
   }
 
+  private finishApplying(sessionId: string): void {
+    this.applying.delete(sessionId);
+    if (this.compensationFailures.has(sessionId)) return;
+    this.releaseClearedDuringApply(sessionId);
+  }
+
+  private releaseClearedDuringApply(sessionId: string): void {
+    if (!this.clearedDuringApply.delete(sessionId)) return;
+    const wakeSuppressed = this.suppressedCancellationWakes.delete(sessionId);
+    const deferredWake = this.deferredCancellationWakes.delete(sessionId);
+    // clearPendingCredentialSwitchForSession() may already have tried to wake the queue, but
+    // has() kept it gated until the late finalizer finished compensating the captured Profile.
+    // A replacement target remains gated by pending.has(); a pure cancellation may now drain.
+    if (wakeSuppressed && !deferredWake) return;
+    try {
+      this.deps.onCancellationCompensated?.(sessionId);
+    } catch (err) {
+      this.deps.logger?.warn('pending credential switch: compensated cancellation wake failed', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   private ownerScopeCurrent(target: PendingCredentialSwitch): boolean {
     return !target.ownerScope || !this.deps.isOwnerScopeCurrent
       ? true
@@ -776,6 +841,93 @@ export class PendingCredentialSwitchService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * persistRoute() may finish after this generation was cancelled or replaced while the data
+   * owner is still valid. Owner-stale cleanup intentionally ignores that case, so compensate
+   * the exact tuple and replacement thread this finalizer wrote in one captured-Profile CAS.
+   * A newer route/thread therefore wins without being overwritten.
+   */
+  private async compensateSupersededPersistedRoute(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+    persistedRoute: PendingCredentialSwitchPersistedRoute,
+    relinkReceipt: CodexProviderThreadRelinkReceipt | null,
+  ): Promise<void> {
+    const safe = await this.tryCompensateSupersededPersistedRoute(
+      sessionId,
+      target,
+      persistedRoute,
+      relinkReceipt,
+    );
+    if (safe) return;
+    this.compensationFailures.add(sessionId);
+    this.scheduleCompensationRetry(sessionId, target, persistedRoute, relinkReceipt);
+  }
+
+  private async tryCompensateSupersededPersistedRoute(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+    persistedRoute: PendingCredentialSwitchPersistedRoute,
+    relinkReceipt: CodexProviderThreadRelinkReceipt | null,
+  ): Promise<boolean> {
+    try {
+      const restored = target.restoreStaleOwnerRoute
+        ? await target.restoreStaleOwnerRoute(persistedRoute, relinkReceipt?.newSdkSessionId)
+        : relinkReceipt
+          ? await relinkReceipt.rollback()
+          : false;
+      if (!restored) {
+        this.deps.logger?.warn(
+          'superseded pending credential switch route compensation was superseded',
+          { sessionId },
+        );
+        return true;
+      }
+      // A pure cancellation has no newer runtime selection to preserve. Re-align the provider
+      // store only after the captured Profile CAS succeeded; replacement targets own their store.
+      if (!this.pending.has(sessionId) && target.previousRoute) {
+        setSessionProvider(sessionId, target.previousRoute.providerId);
+        setSessionEffort(sessionId, target.previousRoute.effort);
+        if (target.previousRoute.fastMode !== undefined) {
+          setSessionFastMode(sessionId, target.previousRoute.fastMode);
+        }
+      }
+      return true;
+    } catch (error) {
+      this.deps.logger?.error?.('superseded pending credential switch route compensation failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  private scheduleCompensationRetry(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+    persistedRoute: PendingCredentialSwitchPersistedRoute,
+    relinkReceipt: CodexProviderThreadRelinkReceipt | null,
+  ): void {
+    if (this.compensationRetryTimers.has(sessionId)) return;
+    const timer = setTimeout(() => {
+      this.compensationRetryTimers.delete(sessionId);
+      void this.tryCompensateSupersededPersistedRoute(
+        sessionId,
+        target,
+        persistedRoute,
+        relinkReceipt,
+      ).then((safe) => {
+        if (!safe) {
+          this.scheduleCompensationRetry(sessionId, target, persistedRoute, relinkReceipt);
+          return;
+        }
+        this.compensationFailures.delete(sessionId);
+        this.releaseClearedDuringApply(sessionId);
+      });
+    }, this.deps.retryDelayMs ?? PENDING_APPLY_RETRY_DELAY_MS);
+    this.compensationRetryTimers.set(sessionId, timer);
   }
 
   private discardIfOwnerStale(

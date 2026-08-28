@@ -3082,6 +3082,7 @@ export async function registerPendingCredentialSwitchForSession(
     sourcePersistedSession?: RuntimeSetModelPersistedSession;
     restoreStaleOwnerRoute?: (
       persistedRoute?: PendingCredentialSwitchPersistedRoute,
+      expectedSdkSessionId?: string,
     ) => Promise<boolean>;
   },
 ): Promise<void> {
@@ -3148,7 +3149,10 @@ export async function registerPendingCredentialSwitchForSession(
   }
   const prevModel = sourcePersistedSession?.model ?? live?.model ?? prevRow?.model ?? null;
   let restoreCapturedProfileRoute:
-    | ((persistedRoute?: PendingCredentialSwitchPersistedRoute) => Promise<boolean>)
+    | ((
+        persistedRoute?: PendingCredentialSwitchPersistedRoute,
+        expectedSdkSessionId?: string,
+      ) => Promise<boolean>)
     | undefined;
   if (dbSnapshot && prevRow?.model && prevRow.effort && prevRow.fastMode !== null) {
     const capturedPrevRow = {
@@ -3159,15 +3163,17 @@ export async function registerPendingCredentialSwitchForSession(
     };
     restoreCapturedProfileRoute = async (
       persistedRoute?: PendingCredentialSwitchPersistedRoute,
+      expectedSdkSessionId?: string,
     ): Promise<boolean> => {
       const appliedRoute = persistedRoute ?? {
         model: target.model,
         providerId: target.providerId,
       };
+      const expectedSdk = expectedSdkSessionId ?? capturedPrevRow.sdkSessionId;
       const sdkMatches =
-        capturedPrevRow.sdkSessionId === null
+        expectedSdk === null
           ? isNull(sessions.sdkSessionId)
-          : eq(sessions.sdkSessionId, capturedPrevRow.sdkSessionId);
+          : eq(sessions.sdkSessionId, expectedSdk);
       const appliedProviderMatches =
         appliedRoute.providerId === null
           ? isNull(sessions.providerId)
@@ -3182,8 +3188,12 @@ export async function registerPendingCredentialSwitchForSession(
           sdkSessionId: capturedPrevRow.sdkSessionId,
           model: capturedPrevRow.model,
           providerId: capturedPrevRow.providerId,
-          effort: capturedPrevRow.effort,
-          fastMode: capturedPrevRow.fastMode,
+          ...(appliedRoute.effort !== undefined
+            ? { effort: capturedPrevRow.effort }
+            : {}),
+          ...(appliedRoute.fastMode !== undefined
+            ? { fastMode: capturedPrevRow.fastMode }
+            : {}),
           updatedAt: Date.now(),
         })
         .where(
@@ -3434,7 +3444,7 @@ export function clearPendingCredentialSwitchForSession(
   sessionId: string,
   opts?: { wake?: boolean },
 ): void {
-  pendingCredentialSwitchHolder?.clear(sessionId);
+  pendingCredentialSwitchHolder?.clear(sessionId, opts);
   // pending 门解除后 coordinator 没有其它唤醒源；wake:false 由调用方在
   // close + route 写入完成后显式唤醒，避免队首趁窗口派发到旧凭证。
   if (opts?.wake !== false) {
@@ -3443,6 +3453,9 @@ export function clearPendingCredentialSwitchForSession(
 }
 
 export function wakeSessionInputAfterCredentialSwitch(sessionId: string): void {
+  if (pendingCredentialSwitchHolder?.requestWakeAfterCancellationBarrier(sessionId) === false) {
+    return;
+  }
   agentInputCoordinatorHolder?.wakeSession(sessionId, 'credential-switch-applied-inline');
 }
 
@@ -3464,6 +3477,7 @@ export function getPendingCredentialSwitchTarget(sessionId: string):
       };
       restoreStaleOwnerRoute?: (
         persistedRoute?: PendingCredentialSwitchPersistedRoute,
+        expectedSdkSessionId?: string,
       ) => Promise<boolean>;
     }
   | undefined {
@@ -13793,6 +13807,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     onApplied: (sessionId) => {
       inputCoordinator.wakeSession(sessionId, 'pending-credential-switch-applied');
+    },
+    onCancellationCompensated: (sessionId) => {
+      inputCoordinator.wakeSession(sessionId, 'pending-credential-switch-cancellation-compensated');
     },
     relinkCodexThreadForProviderSwitch: relinkCodexThreadForCredentialSwitch,
     // 停用轴:deferred 切换收口前重裁决(SET_MODEL 时刻裁决过,但生效可能在数分钟
