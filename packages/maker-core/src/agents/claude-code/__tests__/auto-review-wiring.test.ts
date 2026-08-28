@@ -143,6 +143,8 @@ async function startSession(
     blockMcpServerStatus?: boolean;
     rejectPermissionModeChange?: boolean;
     mcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
+    extraDirs?: string[];
+    writableDirs?: string[];
   } = {},
 ) {
   const configDir = await makeTempDir();
@@ -171,6 +173,8 @@ async function startSession(
     providerId: options.providerId ?? 'xd',
     workingDir,
     permissionMode,
+    extraDirs: options.extraDirs,
+    writableDirs: options.writableDirs,
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
     | { canUseTool?: CanUseToolFn; permissionMode?: string; model?: string }
@@ -394,9 +398,82 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
+
+  it('external writable roots auto-approve writes while read-only references still review', async () => {
+    const referenceDir = await makeTempDir();
+    const writableDir = await makeTempDir();
+    const replacementWritableDir = await makeTempDir();
+    const reviewer = vi.fn(async () => ({ verdict: 'block' as const, reason: 'read-only reference' }));
+    const { handle, canUseTool, seen } = await startSession('auto', {
+      reviewer,
+      extraDirs: [referenceDir],
+      writableDirs: [writableDir],
+    });
+
+    await expect(canUseTool(
+      'Write',
+      { file_path: path.join(writableDir, 'result.txt') },
+      { toolUseID: 'external-writable' },
+    )).resolves.toMatchObject({ behavior: 'allow' });
+    expect(reviewer).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(0);
+
+    await expect(canUseTool(
+      'Write',
+      { file_path: path.join(referenceDir, 'spec.md') },
+      { toolUseID: 'readonly-reference' },
+    )).resolves.toMatchObject({ behavior: 'deny', message: 'read-only reference' });
+    expect(reviewedRequest(reviewer)).toMatchObject({
+      workspaceRoots: expect.arrayContaining([referenceDir, writableDir]),
+      writableRoots: expect.arrayContaining([writableDir]),
+    });
+    expect(reviewedRequest(reviewer).writableRoots).not.toContain(referenceDir);
+    expect(permissionRequests(seen)).toHaveLength(0);
+
+    await handle.setWritableDirs!([replacementWritableDir]);
+    await expect(canUseTool(
+      'Write',
+      { file_path: path.join(replacementWritableDir, 'new-result.txt') },
+      { toolUseID: 'replacement-writable' },
+    )).resolves.toMatchObject({ behavior: 'allow' });
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    await expect(canUseTool(
+      'Write',
+      { file_path: path.join(writableDir, 'stale-result.txt') },
+      { toolUseID: 'revoked-writable' },
+    )).resolves.toMatchObject({ behavior: 'deny', message: 'read-only reference' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
 });
 
 describe('Auto-review wiring: lightweight reviewer controls gray actions', () => {
+  it('discards an in-flight allow when external directory permissions change', async () => {
+    const writableDir = await makeTempDir();
+    let resolveReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const reviewer = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+      resolveReview = resolve;
+    }));
+    const { handle, canUseTool, seen } = await startSession('auto', {
+      reviewer,
+      writableDirs: [writableDir],
+    });
+
+    const pending = canUseTool(
+      'Bash',
+      { command: 'npm install left-pad', cwd: writableDir },
+      { toolUseID: 'late-directory-revoke', suggestions: SESSION_SUGGESTION },
+    );
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.setWritableDirs!([]);
+    resolveReview!({ verdict: 'allow', reason: 'reviewed before revoke' });
+
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
+    await handle.close();
+  });
+
   it('re-checks the latest permission mode after an in-flight review', async () => {
     let resolveReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
     const reviewer = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {

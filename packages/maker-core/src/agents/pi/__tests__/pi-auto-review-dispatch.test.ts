@@ -335,6 +335,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
     mcp?: McpSetup,
+    directories?: { extraDirs?: string[]; writableDirs?: string[] },
   ): Promise<PiTestSessionHandle> {
     const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel, mcp));
     return agent.startSession({
@@ -342,6 +343,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       workingDir: cwd,
       model: 'm',
       ...(permissionMode ? { permissionMode: permissionMode as never } : {}),
+      ...directories,
     }) as Promise<PiTestSessionHandle>;
   }
 
@@ -2474,6 +2476,89 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       confirmed: true,
     });
     expect(resolverCalls).toBe(0);
+  });
+
+  it('separates external writable roots from read-only references in real approval dispatch', async () => {
+    const referenceDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-reference-'));
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const replacementWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const review = vi.fn(async () => ({ verdict: 'block' as const, reason: 'read-only reference' }));
+    const handle = await start('auto', review, false, undefined, {
+      extraDirs: [referenceDir],
+      writableDirs: [writableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest('external-writable', 'edit', { path: path.join(writableDir, 'result.txt') });
+    expect(await waitForResponse('external-writable')).toEqual({
+      type: 'extension_ui_response',
+      id: 'external-writable',
+      confirmed: true,
+    });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+
+    firePermissionRequest('readonly-reference', 'edit', { path: path.join(referenceDir, 'spec.md') });
+    expect(await waitForResponse('readonly-reference')).toEqual({
+      type: 'extension_ui_response',
+      id: 'readonly-reference',
+      confirmed: false,
+    });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoots: [cwd, referenceDir, writableDir],
+      writableRoots: [cwd, writableDir],
+    }));
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.setWritableDirs!([replacementWritableDir]);
+    firePermissionRequest('replacement-writable', 'edit', {
+      path: path.join(replacementWritableDir, 'new-result.txt'),
+    });
+    expect(await waitForResponse('replacement-writable')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledTimes(1);
+    firePermissionRequest('revoked-writable', 'edit', {
+      path: path.join(writableDir, 'stale-result.txt'),
+    });
+    expect(await waitForResponse('revoked-writable')).toMatchObject({ confirmed: false });
+    expect(review).toHaveBeenCalledTimes(2);
+
+    await handle.close();
+    rmSync(referenceDir, { recursive: true, force: true });
+    rmSync(writableDir, { recursive: true, force: true });
+    rmSync(replacementWritableDir, { recursive: true, force: true });
+  });
+
+  it('discards an in-flight allow when external directory permissions change', async () => {
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    let resolveReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const review = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+      resolveReview = resolve;
+    }));
+    const handle = await start('auto', review, false, undefined, {
+      writableDirs: [writableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'late-directory-revoke',
+      'bash',
+      { command: 'npm install left-pad', cwd: writableDir },
+      { resolvedCredentialPaths: [] },
+    );
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+    await handle.setWritableDirs!([]);
+    resolveReview!({ verdict: 'allow', reason: 'reviewed before revoke' });
+
+    expect(await waitForResponse('late-directory-revoke')).toEqual({
+      type: 'extension_ui_response',
+      id: 'late-directory-revoke',
+      confirmed: true,
+    });
+    expect(resolver).toHaveBeenCalledOnce();
+    await handle.close();
+    rmSync(writableDir, { recursive: true, force: true });
   });
 
   it('auto mode silently approves first-party Subagent spawn through the source-aware envelope', async () => {

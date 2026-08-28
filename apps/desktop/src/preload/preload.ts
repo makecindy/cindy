@@ -5947,6 +5947,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         userPrompt?: string;
         makerMemoryEnabled?: boolean;
         extraDirs?: string[];
+        writableDirs?: string[];
         displayReasoning?: 'off' | 'summarized' | 'full';
         vendorOptions?: Record<string, unknown>;
         remoteHostId?: string;
@@ -6106,6 +6107,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // session 不在 / agent capability=false 都 no-op, 不会抛错。
     setExtraDirs: (sessionId: string, dirs: string[]): Promise<void> =>
       ipcRenderer.invoke('maker:set-extra-dirs', sessionId, dirs),
+    setWritableDirs: (sessionId: string, dirs: string[]): Promise<string[] | undefined> =>
+      ipcRenderer.invoke('maker:set-writable-dirs', sessionId, dirs),
 
     // Memory 控制 (Personalization → Memory section)。
     // 由 BaseAgent 子类落地; UI 层负责 Reset 前 confirm dialog。

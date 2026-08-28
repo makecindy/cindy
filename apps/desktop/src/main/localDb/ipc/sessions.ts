@@ -412,6 +412,7 @@ const REMOTE_PERSIST_FIELDS = new Set([
   'fastMode',
   'planModeEnabled',
   'extraDirs',
+  'writableDirs',
 ]);
 
 /**
@@ -1463,6 +1464,7 @@ export function registerSessionIpc(
       'planModeEnabled',
       'orcaRole',
       'extraDirs',
+      'writableDirs',
     ]);
     if (Object.keys(p).some((key) => REVIEW_IMMUTABLE_FIELDS.has(key))) {
       const [target] = await db
@@ -1525,6 +1527,7 @@ export function registerSessionIpc(
       'providerId',
       'orcaRole',
       'extraDirs',
+      'writableDirs',
       'pinnedAt',
       'workingDir',
       'workspaceKind',

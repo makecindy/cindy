@@ -1528,6 +1528,7 @@ function commandReadsProcessEnviron(command: unknown): boolean {
 function currentPermissionState(): {
   mode: 'ask' | 'bypassPermissions';
   readOnlyRoots: string[];
+  writableRoots: string[];
   reviewReadPaths: string[];
   reviewOnly: boolean;
 } {
@@ -1538,7 +1539,7 @@ function currentPermissionState(): {
   const reviewOnlyByStart = process.env.CINDY_PI_REVIEW_ONLY === '1';
   const file = process.env.CINDY_PI_PERMISSION_FILE ?? '';
   if (!file) {
-    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+    return { mode: 'ask', readOnlyRoots: [], writableRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
   }
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'));
@@ -1547,13 +1548,16 @@ function currentPermissionState(): {
       readOnlyRoots: Array.isArray(parsed?.readOnlyRoots)
         ? parsed.readOnlyRoots.filter((root: unknown) => typeof root === 'string')
         : [],
+      writableRoots: Array.isArray(parsed?.writableRoots)
+        ? parsed.writableRoots.filter((root: unknown) => typeof root === 'string')
+        : [],
       reviewReadPaths: Array.isArray(parsed?.reviewReadPaths)
         ? parsed.reviewReadPaths.filter((root: unknown) => typeof root === 'string')
         : [],
       reviewOnly: parsed?.reviewOnly === true || reviewOnlyByStart,
     };
   } catch {
-    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+    return { mode: 'ask', readOnlyRoots: [], writableRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
   }
 }
 

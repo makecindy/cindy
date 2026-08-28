@@ -135,6 +135,7 @@ export interface MakerSendTransactionDeps {
   buildCreateOptsWithStderr(opts: CreateOpts): CreateOpts;
   synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: CreateOpts): Promise<boolean>;
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
+  readSessionWritableDirsFromDb?(sessionId: string): Promise<string[]>;
   withRehydrateCloseSuppressed<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
   bootstrapSession(opts: CreateOpts): Promise<{
     session: MakerSendTransactionSession;
@@ -386,15 +387,27 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     opts: CreateOpts,
     source: 'lazy-create' | 'active-orca-rehydrate',
   ): Promise<void> {
-    if (opts.extraDirs !== undefined) return;
-    try {
-      const row = await deps.readSessionExtraDirsFromDb(sessionId);
-      if (row.length > 0) opts.extraDirs = row;
-    } catch (err) {
-      deps.log.warn(`${source}: read extra_dirs from DB failed (non-fatal)`, {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
+    if (opts.extraDirs === undefined) {
+      try {
+        const row = await deps.readSessionExtraDirsFromDb(sessionId);
+        if (row.length > 0) opts.extraDirs = row;
+      } catch (err) {
+        deps.log.warn(`${source}: read extra_dirs from DB failed (non-fatal)`, {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (opts.writableDirs === undefined) {
+      try {
+        const row = await deps.readSessionWritableDirsFromDb?.(sessionId) ?? [];
+        if (row.length > 0) opts.writableDirs = row;
+      } catch (err) {
+        deps.log.warn(`${source}: read writable_dirs from DB failed (non-fatal)`, {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 

@@ -798,6 +798,7 @@ const CAPABILITIES: Capabilities = {
   // SDK 原生 additionalDirectories 字段, buildQuery turn-by-turn 装配 → 改完下一 turn
   // 立即生效, 真正的 hot-reload 体验。
   extraDirs: { supported: true },
+  writableDirs: { supported: true },
 };
 
 // ── Agent 实现 ────────────────────────────────────────────────────────────────
@@ -1962,12 +1963,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       let forcePrompt = turnPolicyForcePrompt;
       let unavailableHandoff = false;
       if (mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')) {
-        const workspaceRoots = [opts.workingDir, ...mutableExtraDirs].filter(
+        const workspaceRoots = [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs].filter(
+          (d): d is string => typeof d === 'string' && d.length > 0,
+        );
+        const writableRoots = [opts.workingDir, ...mutableWritableDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
         );
         const autoDecision = await reviewAutoAction(
           normalizeBuiltinToolForAutoReview(toolName, input),
           workspaceRoots,
+          writableRoots,
           opts.remoteHostId ? 'linux' : process.platform,
         );
         // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)
@@ -2165,7 +2170,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     const usesNativeClaudeAutoReview = (): boolean =>
       !nativeAutoReviewUnavailable
       && mutableAutoReviewCredentialMode === 'oauth-bearer'
-      && !hasRegisteredMcpServers();
+      && !hasRegisteredMcpServers()
+      // Claude native Auto sees additionalDirectories as one undifferentiated scope.
+      // Route sessions with explicit directory grants through Cindy so read-only and
+      // read-write roots cannot be collapsed into the same permission bucket.
+      && mutableExtraDirs.length === 0
+      && mutableWritableDirs.length === 0;
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -2204,8 +2214,10 @@ export class ClaudeCodeAgent extends BaseAgent {
     const reviewAutoAction = (
       action: ReviewableAction,
       workspaceRoots: string[],
+      writableRoots: string[],
       platform: NodeJS.Platform,
     ): Promise<AutoReviewDecision> => {
+      const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'claude-code' as const,
@@ -2214,17 +2226,24 @@ export class ClaudeCodeAgent extends BaseAgent {
         userIntent: currentAutoReviewIntent,
         action,
         workspaceRoots,
+        writableRoots,
         platform,
       };
       const key = JSON.stringify(request);
       const cached = autoReviewDecisionCache.get(key);
-      if (cached) return cached;
-      const pending = resolveAutoReviewDecision(
-        request,
-        this.deps.reviewAutoPermissionAction,
-      );
-      autoReviewDecisionCache.set(key, pending);
-      return pending;
+      const pending = cached ?? resolveAutoReviewDecision(
+          request,
+          this.deps.reviewAutoPermissionAction,
+        );
+      if (!cached) autoReviewDecisionCache.set(key, pending);
+      return pending.then((decision) => (
+        directoryGeneration === autoReviewDirectoryGeneration
+          ? decision
+          : {
+              verdict: 'ask',
+              reason: 'Directory permissions changed while this action was under review.',
+            }
+      ));
     };
     // guard 桶常驻(每 turn 清空):适用性不再是会话级一票制,而是每个 scope 单独判。
     const toolLoopGuards = new Map<string | null, ToolLoopGuard>();
@@ -2305,6 +2324,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 附加只读引用目录: 启动时取 opts.extraDirs 快照, setExtraDirs 覆盖, buildQuery
     // 每 turn 读最新值传给 SDK options.additionalDirectories — 即时生效。
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
+    let mutableWritableDirs: string[] = Array.isArray(opts.writableDirs) ? [...opts.writableDirs] : [];
+    let autoReviewDirectoryGeneration = 0;
 
     // ── Usage tracker (Stage 2 B') ──────────────────────────────────────────
     // 单 session 共享的 mutable usage state. translator 通过 ctx 注入访问.
@@ -3122,6 +3143,9 @@ export class ClaudeCodeAgent extends BaseAgent {
                 [opts.workingDir].filter(
                   (d): d is string => typeof d === 'string' && d.length > 0,
                 ),
+                [opts.workingDir].filter(
+                  (d): d is string => typeof d === 'string' && d.length > 0,
+                ),
                 'linux',
               );
               if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'allow') {
@@ -3359,7 +3383,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           cwd: opts.workingDir,
           // 附加只读引用目录 — 每 turn buildQuery 读最新 closure 值, setExtraDirs 改完
           // 下一 turn 立即生效 (turn-by-turn 装配)。空数组省略字段, 让 SDK 走默认。
-          ...(mutableExtraDirs.length > 0 ? { additionalDirectories: mutableExtraDirs } : {}),
+          ...((mutableExtraDirs.length > 0 || mutableWritableDirs.length > 0)
+            ? { additionalDirectories: [...new Set([...mutableExtraDirs, ...mutableWritableDirs])] }
+            : {}),
           model: currentSdkModel,
           ...(currentSdkEffort ? { effort: currentSdkEffort } : {}),
           permissionMode: sdkStartPermissionMode,
@@ -6418,8 +6444,24 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 是 turn-by-turn 装配的 (rewind 重启 / fork 都走 buildQuery), 改完下一 turn
         // 自动用新值。当前 in-flight turn 不会变 (允许的 — 用户在 turn 中加目录
         // 通常意图是"下一 turn 让你看到新目录")。
+        if (
+          mutableExtraDirs.length === newDirs.length
+          && mutableExtraDirs.every((dir, index) => dir === newDirs[index])
+        ) return;
         log.debug('setExtraDirs', { from: mutableExtraDirs.length, to: newDirs.length });
         mutableExtraDirs = [...newDirs];
+        autoReviewDirectoryGeneration++;
+      },
+
+      async setWritableDirs(newDirs: string[]) {
+        if (reviewMode) return;
+        if (
+          mutableWritableDirs.length === newDirs.length
+          && mutableWritableDirs.every((dir, index) => dir === newDirs[index])
+        ) return;
+        log.debug('setWritableDirs', { from: mutableWritableDirs.length, to: newDirs.length });
+        mutableWritableDirs = [...newDirs];
+        autoReviewDirectoryGeneration++;
       },
 
       async setVendorOptions(patch: Record<string, unknown>) {

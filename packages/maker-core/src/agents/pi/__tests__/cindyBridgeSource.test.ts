@@ -1281,6 +1281,15 @@ describe('cindy-bridge extension source', () => {
     );
   });
 
+  it('hard-blocks writes only in read-only reference roots, not external writable roots', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const readOnlyGate = source.indexOf('permission.readOnlyRoots.some((root) =>');
+    const credentialGate = source.indexOf("if (event.toolName === 'bash' && commandReadsProcessEnviron", readOnlyGate);
+    expect(readOnlyGate).toBeGreaterThan(-1);
+    expect(credentialGate).toBeGreaterThan(readOnlyGate);
+    expect(source.slice(readOnlyGate, credentialGate)).not.toContain('permission.writableRoots');
+  });
+
   it('checks the Review deny-by-default boundary before ordinary permission handling', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
     const reviewGate = source.indexOf('if (permission.reviewOnly)');

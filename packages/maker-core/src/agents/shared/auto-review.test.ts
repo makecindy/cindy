@@ -41,6 +41,28 @@ describe('reviewAction — file-write 工作区边界', () => {
     // /extra 是只读引用目录,写入须升级,不能因它在 workspaceRoots 里就当可写(codex 报)。
     expect(reviewAction({ kind: 'file-write', path: '/extra/y.ts' }, roots)).toBe('prompt');
   });
+  it('用户显式授权的附加可写根允许结构化写，但不放宽其它只读根', () => {
+    const allRoots = ['/repo', '/reference', '/shared-output'];
+    const opts = { writableRoots: ['/repo', '/shared-output'] };
+    expect(reviewAction({ kind: 'file-write', path: '/shared-output/result.txt' }, allRoots, opts))
+      .toBe('auto-approve');
+    expect(reviewAction({ kind: 'file-write', path: '/reference/spec.md' }, allRoots, opts))
+      .toBe('prompt');
+    expect(reviewAction({ kind: 'file-write', path: '/shared-output/../outside.txt' }, allRoots, opts))
+      .toBe('prompt');
+  });
+  it('恶意或失效的目录授权不能覆盖凭证与系统路径红线', () => {
+    expect(reviewAction(
+      { kind: 'file-write', path: '/etc/hosts' },
+      ['/repo', '/etc'],
+      { writableRoots: ['/repo', '/etc'] },
+    )).toBe('prompt-each-time');
+    expect(reviewAction(
+      { kind: 'file-write', path: '/shared-output/.aws/credentials' },
+      ['/repo', '/shared-output'],
+      { writableRoots: ['/repo', '/shared-output'] },
+    )).toBe('prompt-each-time');
+  });
   it('区外(非系统)/ .. 逃逸 / 前缀不整段 → prompt(灰区,交 reviewer)', () => {
     expect(reviewAction({ kind: 'file-write', path: '/outside/x' }, roots)).toBe('prompt');
     expect(reviewAction({ kind: 'file-write', path: '/repo/../out/x' }, roots)).toBe('prompt');
@@ -75,6 +97,20 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
     expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/extra' }, roots)).toBe('prompt');
     expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/Users/me' }, roots)).toBe('prompt');
     expect(reviewAction({ kind: 'exec', command: 'rm -rf build', cwd: '/Users/me' }, roots)).toBe('prompt-each-time');
+  });
+  it('显式可写目录中的 cwd 保留命令分类，仍拒绝只读目录与整根破坏', () => {
+    const allRoots = ['/repo', '/reference', '/shared-output'];
+    const opts = { writableRoots: ['/repo', '/shared-output'] };
+    expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/shared-output/sub' }, allRoots, opts))
+      .toBe('auto-approve');
+    expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/reference' }, allRoots, opts))
+      .toBe('prompt');
+    expect(reviewAction({ kind: 'exec', command: 'rm -rf .', cwd: '/shared-output' }, allRoots, opts))
+      .toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'exec', command: 'rm -rf build', cwd: '/shared-output' }, allRoots, opts))
+      .toBe('prompt');
+    expect(reviewAction({ kind: 'exec', command: 'mkdir generated', cwd: '/shared-output' }, allRoots, opts))
+      .toBe('prompt');
   });
 });
 

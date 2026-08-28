@@ -25,6 +25,8 @@ export interface BuiltinAutoReviewContext {
   input: unknown;
   /** 会话的工作区根:cwd + additionalDirectories,绝对路径。远端会话是远端路径(纯字符串判定)。 */
   workspaceRoots: string[];
+  /** 明确可写根；缺省时仅 workspaceRoots[0]。 */
+  writableRoots?: string[];
   /** 会话所在平台(决定是否抹平 macOS firmlink /private)。缺省用本进程 process.platform;远端会话应传远端 OS。 */
   platform?: NodeJS.Platform;
 }
@@ -228,7 +230,9 @@ export function classifyBuiltinToolForAutoReview(
   ctx: BuiltinAutoReviewContext,
 ): BuiltinAutoReviewVerdict {
   const action = normalizeBuiltinToolForAutoReview(ctx.toolName, ctx.input);
-  const opts = ctx.platform ? { platform: ctx.platform } : undefined;
+  const opts = ctx.platform || ctx.writableRoots
+    ? { platform: ctx.platform, writableRoots: ctx.writableRoots }
+    : undefined;
   return reviewAction(action, ctx.workspaceRoots, opts);
 }
 

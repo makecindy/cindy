@@ -59,7 +59,16 @@ describe('buildAutoPermissionReviewPrompt', () => {
     // 的操作都要拦」,连读参考资料都被判 block(实测 nano 上 5/5 全错)。
     expect(prompt).toContain('READING anything inside them is routine reference work');
     expect(prompt).toContain('WRITING, deleting, or modifying anything inside them');
-    expect(prompt).toContain('edits inside workspaceRoot');
+    expect(prompt).toContain('edits inside writableRoots');
+  });
+
+  it('tells the reviewer which additional roots the user explicitly made writable', () => {
+    const prompt = buildAutoPermissionReviewPrompt(request({
+      workspaceRoots: ['/repo', '/extra-docs', '/shared-output'],
+      writableRoots: ['/repo', '/shared-output'],
+    }));
+    expect(prompt).toContain('"writableRoots":["/repo","/shared-output"]');
+    expect(prompt).toContain('"readOnlyReferenceRoots":["/extra-docs"]');
   });
 
   it('delimits the action as untrusted data so command text cannot rewrite the policy', () => {

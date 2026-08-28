@@ -2770,6 +2770,32 @@ export function CCAgentSessionView({
     [sessionId, refreshServerSession, t],
   );
 
+  const handleWritableDirsChange = useCallback(
+    async (next: string[]) => {
+      if (!sessionId) return;
+      let applied = next;
+      try {
+        const accepted = await makerApiFor(sessionId).setWritableDirs(sessionId, next);
+        if (Array.isArray(accepted)) applied = accepted;
+      } catch (err) {
+        log.warn('writableDirs closure push failed', err);
+        toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
+        return;
+      }
+      if (!getSessionDeviceId(sessionId)) {
+        try {
+          await sessionService.update(sessionId, { writableDirs: applied });
+        } catch (err) {
+          log.warn('writableDirs DB update failed', err);
+          toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
+          return;
+        }
+      }
+      await refreshServerSession();
+    },
+    [sessionId, refreshServerSession, t],
+  );
+
   // /issue 命令的 composer 附件不随命令 payload 走 main IPC 往返 —— AttachedFile 是
   // renderer 层类型(与 render/main 解耦一致),且发送后 composer 会 clearFiles。故在
   // dispatch 前于 renderer 侧快照,待 main 广播 DESKTOP_COMMAND_TRIGGERED 回流时取用。
@@ -3093,6 +3119,7 @@ export function CCAgentSessionView({
             // path on this machine, see maker-core buildMemoryScopeKey).
             ...(remoteDeviceId ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() }),
             extraDirs: session.extraDirs ?? [],
+            writableDirs: session.writableDirs ?? [],
             displayReasoning: 'summarized' as const,
             ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
             ...(session.sdkSessionId ? { resumeSessionId: session.sdkSessionId } : {}),
@@ -4827,6 +4854,8 @@ export function CCAgentSessionView({
                   vendorKey={normalizeDbAgentKind(displayAgentKind)}
                   extraDirs={session?.extraDirs ?? []}
                   onExtraDirsChange={handleExtraDirsChange}
+                  writableDirs={session?.writableDirs ?? []}
+                  onWritableDirsChange={handleWritableDirsChange}
                   compactToolbar={compactToolbar}
                   // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把字号/控件压一档。
                   denseToolbar={isCompactRail}

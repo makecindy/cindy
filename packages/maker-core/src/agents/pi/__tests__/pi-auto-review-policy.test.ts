@@ -42,6 +42,18 @@ describe('classifyPiToolForAutoReview', () => {
       toolName: 'write', input: { path: '/Users/t/reference/spec.md' }, workspaceRoots: roots, readRoots,
     })).toBe('prompt');
   });
+  it('allows structured writes only in explicitly writable extra roots', () => {
+    const readRoots = [WS, '/Users/t/reference', '/Users/t/output'];
+    const writableRoots = [WS, '/Users/t/output'];
+    expect(classifyPiToolForAutoReview({
+      toolName: 'write', input: { path: '/Users/t/output/result.md' },
+      workspaceRoots: roots, readRoots, writableRoots,
+    })).toBe('auto-approve');
+    expect(classifyPiToolForAutoReview({
+      toolName: 'write', input: { path: '/Users/t/reference/spec.md' },
+      workspaceRoots: roots, readRoots, writableRoots,
+    })).toBe('prompt');
+  });
 
   it('routes bash through the shell classifier', () => {
     expect(verdict('bash', { command: 'ls -la' })).toBe('auto-approve');

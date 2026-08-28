@@ -70,13 +70,13 @@ export type ReviewableAction =
 
 /**
  * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
- * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots[0] 是唯一可写工作目录，
- * 后续项是 additionalDirectories 只读引用目录，均为绝对路径。
+ * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots 是全部可读根；
+ * opts.writableRoots 是明确可写根。旧调用未提供 writableRoots 时仍只有首个工作目录可写。
  */
 export function reviewAction(
   action: ReviewableAction,
   workspaceRoots: string[],
-  opts?: { platform?: NodeJS.Platform },
+  opts?: { platform?: NodeJS.Platform; writableRoots?: readonly string[] },
 ): ReviewVerdict {
   // macOS firmlink(/private/{var,tmp,etc} == /{var,tmp,etc})仅在 darwin 上成立;在 Linux(含远端 Linux)
   // 上 /private/tmp 与 /tmp 是无关路径,无条件抹平会把区外写误判为区内(codex 报)→ 只在 darwin 上抹平。
@@ -99,29 +99,35 @@ export function reviewAction(
       // 把 secret 写进 git-tracked checkout 与写区外同样危险,凭证性优先于工作区边界。
       if (isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
       const normalizedWriteTarget = normalizeTarget(action.path, workspaceRoots);
-      // **只有工作目录(workspaceRoots[0])可写**;额外目录(additionalDirectories)是只读引用上下文
-      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写)。相对路径挂到 workspaceRoots[0] 解析。
-      // 区内一律放行 —— 即便工作区本身落在 /var、/root 等下,区内写也不该被系统红线误升(先判区内)。
-      const writableRoots = workspaceRoots.slice(0, 1);
-      if (isInsideWorkspace(normalizedWriteTarget, writableRoots, aliasFirmlinks)) return 'auto-approve';
+      // 相对路径始终挂到主工作目录(workspaceRoots[0])解析；绝对路径可落进任一显式可写根。
+      // 主工作目录内一律放行 —— 即便仓库本身落在 /var、/root 等下,区内写也不该被系统红线误升。
+      // 但用户追加的可写根不能把 /etc、/System 等系统红线洗成绿灯；那类目录仍须逐次确认。
+      const writableRoots = resolveWritableRoots(workspaceRoots, opts?.writableRoots);
+      const primaryWorkspaceRoot = workspaceRoots[0];
+      if (
+        primaryWorkspaceRoot
+        && isInsideWorkspace(normalizedWriteTarget, [primaryWorkspaceRoot], aliasFirmlinks)
+      ) return 'auto-approve';
       // 区外写系统/受保护目录(/etc、/System、C:\Windows 等)是高影响系统级写入,不能交灰区 reviewer
       // 静默 allow(copilot 报)→ 确定性必问。canonical(darwin 抹平 /private firmlink)后判,使
       // `/private/etc/passwd` 也命中 `/etc`。其它区外写 → 灰区 reviewer。
       if (isProtectedSystemPath(canonicalPath(normalizedWriteTarget, aliasFirmlinks))) return 'prompt-each-time';
+      if (isInsideWorkspace(normalizedWriteTarget, writableRoots, aliasFirmlinks)) return 'auto-approve';
       return 'prompt';
     }
     case 'exec': {
       const cwdUnknown = action.cwdUnknown === true || (action.cwd !== undefined && action.cwd.trim() === '');
+      const writableRoots = resolveWritableRoots(workspaceRoots, opts?.writableRoots);
       const shellVerdict = classifyShellCommand(action.command, workspaceRoots, {
         cwd: cwdUnknown ? undefined : action.cwd,
         cwdUnknown,
         platform: opts?.platform,
+        writableRoots,
       });
       // cwd 未知 → 相对目标无法证明落在工作区内,不能按"区内"放行(至少升到灰区交 reviewer)。
       if (cwdUnknown) return shellVerdict === 'auto-approve' ? 'prompt' : shellVerdict;
-      // 额外目录是只读引用，不是可执行写入边界。先保留命令分类器识别出的确定性红线，
-      // 其它命令只要 cwd 不在首个可写根内就升级到 reviewer，避免相对写落进 additionalDirectories。
-      const writableRoots = workspaceRoots.slice(0, 1);
+      // 先保留命令分类器识别出的确定性红线；其它命令只要 cwd 不在任一显式可写根内
+      // 就升级到 reviewer，避免相对写落进只读 additionalDirectories。
       if (action.cwd
         && !isInsideWorkspace(normalizeTarget(action.cwd, workspaceRoots), writableRoots, aliasFirmlinks)) {
         return shellVerdict === 'prompt-each-time' ? shellVerdict : 'prompt';
@@ -3120,7 +3126,16 @@ type ShellReviewOptions = {
   cwd?: string;
   cwdUnknown?: boolean;
   platform?: NodeJS.Platform;
+  /** 明确可写根；缺省保持历史语义，仅 workspaceRoots[0] 可写。 */
+  writableRoots?: readonly string[];
 };
+
+function resolveWritableRoots(
+  workspaceRoots: readonly string[],
+  explicit?: readonly string[],
+): string[] {
+  return [...(explicit ?? workspaceRoots.slice(0, 1))];
+}
 
 /** 提取普通位置参数；`--` 后即使以 `-` 开头也按目标处理。 */
 function positionalOperands(tokens: string[]): string[] {
@@ -3192,7 +3207,7 @@ function operandsIncludingAttachedPowerShellPaths(
   return out;
 }
 
-/** 破坏性目标是否无法证明被限制在首个可写根的子目录内。 */
+/** 破坏性目标是否无法证明被限制在某个可写根的子目录内。 */
 /**
  * 破坏目标里的字符类 `[…]` 能否展开出路径穿越字符 `.`(0x2E)或 `/`(0x2F)——能则运行期可拼出 `..`/额外
  * 分隔符逃出静态前缀(greptile 报 `rm -rf sub/[.-x][.-x]/etc/passwd`,`[.-x]` 范围含 `.`/`/`)。
@@ -3215,8 +3230,8 @@ function destructiveTargetNeedsConsent(
   workspaceRoots: string[],
   opts: ShellReviewOptions,
 ): boolean {
-  const writableRoot = workspaceRoots[0];
-  if (!writableRoot) return true;
+  const writableRoots = resolveWritableRoots(workspaceRoots, opts.writableRoots);
+  if (writableRoots.length === 0) return true;
   // 变量、命令/花括号展开的运行期目标不可静态求值；`~` 也不能按 cwd 解析。
   if (/[$`{}]/.test(target) || target.startsWith('~')) return true;
   // 字符类能展开出 `.`/`/` → 运行期路径可穿越出静态前缀,不可静态证明在区内 → 必问(greptile 报)。
@@ -3226,10 +3241,8 @@ function destructiveTargetNeedsConsent(
   // workspace”级别；只有明确进入子目录（如 build/*）才交 reviewer 静默裁决。
   const globIndex = target.search(/[*?[\]]/);
   const staticTarget = globIndex >= 0 ? (target.slice(0, globIndex) || '.') : target;
-  const cwd = opts.cwd ?? writableRoot;
+  const cwd = opts.cwd ?? workspaceRoots[0] ?? writableRoots[0];
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const normalizedRoot = canonicalPath(writableRoot, aliasFirmlinks);
-  if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
   const candidates = [staticTarget];
   if (globIndex >= 0) {
     // A bracket expression may itself spell `..` (`[.].`). Check the same
@@ -3239,7 +3252,11 @@ function destructiveTargetNeedsConsent(
   }
   return candidates.some((candidate) => {
     const normalizedTarget = normalizeTarget(candidate, [cwd]);
-    if (!isInsideWorkspace(normalizedTarget, [writableRoot], aliasFirmlinks)) return true;
+    const matchedRoot = writableRoots.find((root) =>
+      isInsideWorkspace(normalizedTarget, [root], aliasFirmlinks));
+    if (!matchedRoot) return true;
+    const normalizedRoot = canonicalPath(matchedRoot, aliasFirmlinks);
+    if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
     return canonicalPath(normalizedTarget, aliasFirmlinks) === normalizedRoot;
   });
 }
@@ -3891,7 +3908,8 @@ function pipelineFedWriteTargetNeedsConsent(
     if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(concrete))) return true;
     const resolved = canonicalPath(normalizeTarget(concrete, [base]), aliasFirmlinks);
     if (isProtectedSystemPath(resolved)) return true;
-    return !isInsideWorkspace(resolved, workspaceRoots, aliasFirmlinks);
+    const writableRoots = resolveWritableRoots(workspaceRoots, opts.writableRoots);
+    return !isInsideWorkspace(resolved, writableRoots, aliasFirmlinks);
   });
 }
 

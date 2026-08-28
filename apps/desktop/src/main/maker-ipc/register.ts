@@ -423,6 +423,7 @@ import {
 import {
   markSessionUsedProjectContext,
   readSessionExtraDirsFromDb,
+  readSessionWritableDirsFromDb,
   readSessionWorkingDirFromDb,
 } from '../maker-host/session-storage.js';
 import {
@@ -608,7 +609,10 @@ import { runAcceptedCallback } from './acceptedCallbackRunner.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
 import { broadcastSchedulerChanged } from './schedule.js';
-import { validateExtraDirs } from './extraDirsValidator.js';
+import {
+  excludeDirectoryGrantConflicts,
+  validateExtraDirs,
+} from './extraDirsValidator.js';
 import {
   prepareHandoffWorktree,
   shouldRecycleHandoffWorktreeOnFailure,
@@ -7568,6 +7572,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const validation = await validateExtraDirs(o.extraDirs, o.workingDir);
       o.extraDirs = validation.valid;
     }
+    if (o.writableDirs && o.writableDirs.length > 0) {
+      const validation = await validateExtraDirs(o.writableDirs, o.workingDir);
+      o.writableDirs = await excludeDirectoryGrantConflicts(
+        validation.valid,
+        o.extraDirs ?? [],
+      );
+    }
 
     await hydrateProviderIdBeforeSessionStart(o);
     await ensureManagedOllamaReadyForSession({
@@ -7712,6 +7723,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       orcaWorkerSessionId: target.sessionId,
     };
     const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);
+    const writableDirs = await readSessionWritableDirsFromDb(target.sessionId);
     const opts = buildCreateOptsWithStderr({
       id: row.id,
       agentKind: dbToMakerAgentKind(row.agentKind),
@@ -7729,6 +7741,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 且远端 daemon 的协同 MCP 通道不就绪。
       remoteHostId: row.remoteHostId ?? undefined,
       ...(extraDirs.length > 0 ? { extraDirs } : {}),
+      ...(writableDirs.length > 0 ? { writableDirs } : {}),
     });
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
     const { session: resumedSession } = await bootstrapSession(opts);
@@ -8866,6 +8879,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         }
       }
+      if (co.writableDirs === undefined) {
+        const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
+        if (writableDirs.length > 0) co.writableDirs = writableDirs;
+      }
       await ensureRemoteReadyForSessionStart({ createOpts: co });
       await bootstrapSession(co);
       broadcastSessionCreated(sessionId);
@@ -9675,6 +9692,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             });
           }
         }
+        if (createOpts.writableDirs === undefined) {
+          const row = await readSessionWritableDirsFromDb(targetSessionId).catch(() => []);
+          if (row.length > 0) createOpts.writableDirs = row;
+        }
         // lazy-resume 也要走 remote ensure:Orca 派活 / scheduler 等 main 侧
         // 通路不带 remoteHostId 快照, ensure 内部会从 sessions 行兜底回填并
         // 完成 SSH 重连 / agent 安装 / codex daemon MCP 注入。
@@ -10032,6 +10053,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           err: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    if (createOpts.writableDirs === undefined) {
+      const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
+      if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
     }
     return {
       agentKind: createOpts.agentKind,
@@ -11834,6 +11859,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     buildCreateOptsWithStderr,
     synthesizeOrcaVendorOptionsFromDb,
     readSessionExtraDirsFromDb,
+    readSessionWritableDirsFromDb,
     readSessionWorkingDirFromDb,
     withRehydrateCloseSuppressed,
     bootstrapSession,
@@ -12146,6 +12172,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         }
       }
+      if (createOpts.writableDirs === undefined) {
+        const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
+        if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
+      }
       const result = await sendToAgentAcceptedUnlocked(
         sessionId,
         persistedUserContentToWireMessage(agentFacingWireContent ?? content),
@@ -12361,6 +12391,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               err: err instanceof Error ? err.message : String(err),
             });
           }
+        }
+        if (co.writableDirs === undefined) {
+          const row = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
+          if (row.length > 0) co.writableDirs = row;
         }
         try {
           await ensureRemoteReadyForSessionStart({ createOpts: co });
@@ -15849,6 +15883,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
     const extraDirs = await readSessionExtraDirsFromDb(sessionId).catch(() => []);
     if (extraDirs.length > 0) createOpts.extraDirs = extraDirs;
+    const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
+    if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
     await ensureRemoteReadyForSessionStart({ createOpts });
     const { session: resumed } = await bootstrapSession(createOpts);
     await markOrcaRoleIfNeeded(resumed.id, createOpts.orcaRole);
@@ -16141,16 +16177,56 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // workingDir 从 SessionMeta 读 (sess.workDir 是 maker-core Session 的 getter)
     const workingDir = sess.workDir || undefined;
     const validation = await validateExtraDirs(dirs as string[], workingDir);
+    const writableDirs = await readSessionWritableDirsFromDb(sessionId);
+    const extraDirs = await excludeDirectoryGrantConflicts(
+      validation.valid,
+      writableDirs,
+    );
     log.info('set-extra-dirs', {
       sessionId,
       requested: (dirs as string[]).length,
-      kept: validation.valid.length,
-      rejected: validation.rejected.length,
+      kept: extraDirs.length,
+      rejected: validation.rejected.length + validation.valid.length - extraDirs.length,
     });
-    await sess.setExtraDirs(validation.valid);
+    await sess.setExtraDirs(extraDirs);
     // 返回实际应用的子集(已剔除校验未通过的目录),供远程 set-* 回流持久化用:
     // 远程控制端选的路径在被控端常被拒,持久化必须以这个生效值为准,不能用原始请求值。
-    return validation.valid;
+    return extraDirs;
+  });
+
+  ipcMain.handle(MAKER_INVOKE.SET_WRITABLE_DIRS, async (event, sessionId: unknown, dirs: unknown) => {
+    if (!isDeviceLinkInvoke()) {
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    }
+    if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+    if (!Array.isArray(dirs)) throwIpcError('INVALID_PARAMS', 'dirs must be string[]');
+    await assertReviewSettingsUnlocked(sessionId);
+    const sess = maker.getSession(sessionId);
+    if (!sess) {
+      log.debug('set-writable-dirs: session not found, no-op', { sessionId });
+      return;
+    }
+    if (!sess.capabilities.writableDirs?.supported) {
+      log.debug('set-writable-dirs: agent capability=false, no-op', {
+        sessionId,
+        agentKind: sess.agentKind,
+      });
+      return;
+    }
+    const validation = await validateExtraDirs(dirs as string[], sess.workDir || undefined);
+    const readOnlyDirs = await readSessionExtraDirsFromDb(sessionId);
+    const writableDirs = await excludeDirectoryGrantConflicts(
+      validation.valid,
+      readOnlyDirs,
+    );
+    log.info('set-writable-dirs', {
+      sessionId,
+      requested: (dirs as string[]).length,
+      kept: writableDirs.length,
+      rejected: validation.rejected.length + validation.valid.length - writableDirs.length,
+    });
+    await sess.setWritableDirs(writableDirs);
+    return writableDirs;
   });
 
   // ── Memory 控制 ────────────────────────────────────────────────────────

@@ -698,6 +698,9 @@ interface ChatInputProps {
    */
   extraDirs?: string[];
   onExtraDirsChange?: (next: string[]) => void | Promise<void>;
+  /** 用户明确授予的附加可读写目录，与 extraDirs 的只读授权分开显示和保存。 */
+  writableDirs?: string[];
+  onWritableDirsChange?: (next: string[]) => void | Promise<void>;
   /**
    * 「新建目标」入口回调(首页草稿态用):提供时「+」菜单显示「新建目标」,点击调它
    * (NewMakerDraftRoute 负责建会话 + setGoal)。会话态(有 sessionId)不需要传 ——
@@ -1089,6 +1092,8 @@ export function ChatInput({
   focusOnStorageKeyChange = false,
   ownsHardwareComposerActions = true,
   extraDirs,
+  writableDirs,
+  onWritableDirsChange,
   onExtraDirsChange,
   onNewGoal,
   rememberedEffortByModel,
@@ -4345,22 +4350,53 @@ export function ChatInput({
     }
     if (onExtraDirsChange) {
       const currentExtraDirs = extraDirs ?? [];
+      const currentWritableDirs = writableDirs ?? [];
+      const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
       actions.push({
         id: 'add-extra-dir',
         label:
-          currentExtraDirs.length >= MAX_EXTRA_DIRS
+          totalDirs >= MAX_EXTRA_DIRS
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
-            : t('extraDirs.add'),
-        disabled: composerMutationLocked || currentExtraDirs.length >= MAX_EXTRA_DIRS,
+            : t('extraDirs.addReadOnly'),
+        disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
         run: () => {
           void pickAndAddExtraDir({
             extraDirs: currentExtraDirs,
+            otherDirs: currentWritableDirs,
             workingDir,
             onChange: onExtraDirsChange,
             confirm: confirmDialog,
             parentDirectoryConfirm: {
               title: t('extraDirs.parentConfirmTitle'),
               description: (path) => t('extraDirs.parentConfirmDescription', { path }),
+              confirmText: t('extraDirs.parentConfirmAccept'),
+              cancelText: t('extraDirs.parentConfirmCancel'),
+            },
+          });
+        },
+      });
+    }
+    if (onWritableDirsChange) {
+      const currentExtraDirs = extraDirs ?? [];
+      const currentWritableDirs = writableDirs ?? [];
+      const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
+      actions.push({
+        id: 'add-writable-dir',
+        label:
+          totalDirs >= MAX_EXTRA_DIRS
+            ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
+            : t('extraDirs.addWritable'),
+        disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
+        run: () => {
+          void pickAndAddExtraDir({
+            extraDirs: currentWritableDirs,
+            otherDirs: currentExtraDirs,
+            workingDir,
+            onChange: onWritableDirsChange,
+            confirm: confirmDialog,
+            parentDirectoryConfirm: {
+              title: t('extraDirs.writableParentConfirmTitle'),
+              description: (path) => t('extraDirs.writableParentConfirmDescription', { path }),
               confirmText: t('extraDirs.parentConfirmAccept'),
               cancelText: t('extraDirs.parentConfirmCancel'),
             },
@@ -4377,10 +4413,12 @@ export function ChatInput({
     inSessionGoalEnabled,
     localAttachmentPickerEnabled,
     onExtraDirsChange,
+    onWritableDirsChange,
     onNewGoal,
     planModeEntry,
     runNewGoalAction,
     t,
+    writableDirs,
     workingDir,
   ]);
 
@@ -8159,8 +8197,8 @@ export function ChatInput({
                 )}
                 {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
                 <ExtraDirsButton
-                  extraDirsCount={(extraDirs ?? []).length}
-                  hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}
+                  extraDirsCount={(extraDirs ?? []).length + (writableDirs ?? []).length}
+                  hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   autoFocusTarget={composerSuggestionFocusTarget}
@@ -8182,6 +8220,18 @@ export function ChatInput({
                               onRemove: (path) => {
                                 void onExtraDirsChange(
                                   (extraDirs ?? []).filter((item) => item !== path),
+                                );
+                              },
+                            }
+                          : null
+                      }
+                      writableDirs={
+                        !settingsLocked && onWritableDirsChange
+                          ? {
+                              dirs: writableDirs ?? [],
+                              onRemove: (path) => {
+                                void onWritableDirsChange(
+                                  (writableDirs ?? []).filter((item) => item !== path),
                                 );
                               },
                             }
@@ -8534,6 +8584,18 @@ export function ChatInput({
                       dirs: extraDirs ?? [],
                       onRemove: (path) => {
                         void onExtraDirsChange((extraDirs ?? []).filter((item) => item !== path));
+                      },
+                    }
+                  : null
+              }
+              writableDirs={
+                onWritableDirsChange
+                  ? {
+                      dirs: writableDirs ?? [],
+                      onRemove: (path) => {
+                        void onWritableDirsChange(
+                          (writableDirs ?? []).filter((item) => item !== path),
+                        );
                       },
                     }
                   : null

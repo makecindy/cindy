@@ -868,6 +868,31 @@ describe('prompt-each-time never turns into a persisted grant', () => {
 });
 
 describe('a custom server cannot take over a builtin name', () => {
+  it('passes read-only and read-write directory grants through one SDK directory allowlist', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const agent = new ClaudeCodeAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-directory-grants',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'auto',
+      extraDirs: ['/reference-only'],
+      writableDirs: ['/shared-output'],
+    });
+    const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as {
+      additionalDirectories?: string[];
+      permissionMode?: string;
+    };
+    expect(options.additionalDirectories).toEqual(['/reference-only', '/shared-output']);
+    // Native Auto cannot distinguish the two grants; Cindy's canUseTool path owns review.
+    expect(options.permissionMode).toBe('default');
+    expect(agent.capabilities.writableDirs).toEqual({ supported: true });
+    await handle.close();
+  });
+
   it('把 session 花名册快照追加到 Claude systemPrompt', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;

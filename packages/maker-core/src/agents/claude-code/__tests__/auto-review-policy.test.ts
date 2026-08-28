@@ -64,6 +64,15 @@ describe('classifyBuiltinToolForAutoReview — 文件写(结构化 path 精确�
     // /extra 是只读引用目录(additionalDirectories),写入须升级(codex 报)。
     expect(verdict('Write', { file_path: '/extra/y.ts' })).toBe('prompt');
   });
+  it('显式可写附加目录通过，旁边的只读引用目录仍升级', () => {
+    const ctx = { workspaceRoots: ['/repo', '/reference', '/output'], writableRoots: ['/repo', '/output'] };
+    expect(classifyBuiltinToolForAutoReview({
+      toolName: 'Write', input: { file_path: '/output/a.ts' }, ...ctx,
+    })).toBe('auto-approve');
+    expect(classifyBuiltinToolForAutoReview({
+      toolName: 'Write', input: { file_path: '/reference/a.ts' }, ...ctx,
+    })).toBe('prompt');
+  });
   it('工作区外(非系统)写 → prompt(升级);系统目录写 → prompt-each-time', () => {
     expect(verdict('Write', { file_path: '/tmp/leak.txt' })).toBe('prompt');
     // 系统目录写是高影响系统级操作,不能交给灰区模型 reviewer 静默 allow(copilot 报)。

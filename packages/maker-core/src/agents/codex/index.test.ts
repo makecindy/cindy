@@ -599,6 +599,7 @@ describe('CodexAgent permissions', () => {
       'bypassPermissions',
     ]);
     expect(agent.capabilities.extraDirs).toEqual({ supported: true });
+    expect(agent.capabilities.writableDirs).toEqual({ supported: true });
     expect(agent.capabilities.turnPermissionPolicy).toEqual({
       supported: { supported: true },
       unsupportedPermissionModes: ['bypassPermissions'],
@@ -2479,6 +2480,88 @@ describe('CodexAgent capability routing', () => {
 
 describe('CodexAgent reference directories', () => {
   const profileName = 'cindy-readonly-references';
+
+  it('marks only explicitly writable additional roots as write in the thread profile', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { codexHome: '/tmp/mock-codex-home' });
+    const handle = await agent.startSession({
+      sessionId: 'session-writable-dirs',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      extraDirs: ['/reference'],
+      writableDirs: ['/shared-output'],
+    });
+    const [, startParams] = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    ) as [string, Record<string, unknown>];
+    expect(startParams.runtimeWorkspaceRoots).toEqual(['/repo', '/reference', '/shared-output']);
+    const profile = (
+      startParams.config as Record<string, { filesystem: Record<string, unknown> }>
+    )[`permissions.${profileName}`];
+    expect(profile.filesystem['/reference']).toBeUndefined();
+    expect(profile.filesystem['/shared-output']).toBe('write');
+    await handle.close();
+  });
+
+  it('refreshes the thread profile when writable roots are replaced or revoked', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      return undefined;
+    }, { codexHome: '/tmp/mock-codex-home' });
+    const handle = await agent.startSession({
+      sessionId: 'session-writable-dirs-refresh',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      writableDirs: ['/output-a'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.send({ type: 'user', content: 'write the first output' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setWritableDirs?.(['/output-b']);
+    await handle.send({ type: 'user', content: 'write the replacement output' });
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    const [, replacementResume] = resumeCalls[0] as [string, Record<string, unknown>];
+    const replacementProfile = (
+      replacementResume.config as Record<string, { filesystem: Record<string, unknown> }>
+    )[`permissions.${profileName}`];
+    expect(replacementProfile.filesystem['/output-a']).toBeUndefined();
+    expect(replacementProfile.filesystem['/output-b']).toBe('write');
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-2', status: 'completed' },
+    });
+
+    await handle.setWritableDirs?.([]);
+    await handle.send({ type: 'user', content: 'continue without external output' });
+    const [, revokedResume] = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    )[1] as [string, Record<string, unknown>];
+    expect('permissions' in revokedResume).toBe(false);
+    expect(revokedResume.sandbox).toBe('workspace-write');
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    expect(turnCalls[2]?.[1]).toMatchObject({
+      runtimeWorkspaceRoots: ['/repo'],
+      sandboxPolicy: {
+        type: 'workspaceWrite',
+        writableRoots: ['/tmp/mock-codex-home/memories'],
+      },
+    });
+    await handle.close();
+  });
 
   it('keeps the thread-level reference profile active without repeating it on turn/start', async () => {
     const agent = new CodexAgent(createDeps());
@@ -12612,6 +12695,85 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('reviews real approvals with separate read-only and external writable roots', async () => {
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({
+      verdict: 'block' as const,
+      reason: 'read-only reference',
+    }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-external-writable-review',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      extraDirs: ['/reference'],
+      writableDirs: ['/shared-output'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
+    if (!handlers.fileChangeApproval) throw new Error('expected fileChangeApproval');
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'writable-pwd',
+      command: 'pwd',
+      cwd: '/shared-output',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewer).not.toHaveBeenCalled();
+    await expect(handlers.fileChangeApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'writable-file-change',
+      grantRoot: '/shared-output',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewer).not.toHaveBeenCalled();
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'readonly-pwd',
+      command: 'pwd',
+      cwd: '/reference',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoots: ['/repo', '/reference', '/shared-output'],
+      writableRoots: ['/repo', '/shared-output'],
+      action: { kind: 'exec', command: 'pwd', cwd: '/reference' },
+    }));
+    await expect(handlers.fileChangeApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'readonly-file-change',
+      grantRoot: '/reference',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).toHaveBeenCalledWith(expect.objectContaining({
+      writableRoots: ['/repo', '/shared-output'],
+      action: { kind: 'file-write', path: '/reference' },
+    }));
+
+    await handle.setWritableDirs!(['/replacement-output']);
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'replacement-writable-pwd',
+      command: 'pwd',
+      cwd: '/replacement-output',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'revoked-writable-pwd',
+      command: 'pwd',
+      cwd: '/shared-output',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).toHaveBeenCalledTimes(3);
+    await handle.close();
+  });
+
   it('falls back to user approvals on XD without interrupting when the UI switches to Ask', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
@@ -12739,9 +12901,10 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const handlers = host.getThreadHandlers();
     if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
-    const resolver = vi.fn(async (): Promise<InteractionDecision> => (
-      { kind: 'permission', behavior: 'allow' }
-    ));
+    const resolver = vi.fn(async (request: InteractionRequest): Promise<InteractionDecision> => {
+      void request;
+      return { kind: 'permission', behavior: 'allow' };
+    });
     handle.setInteractionResolver(resolver);
 
     // 灰区不会自动弹窗；只有 lightweight reviewer 明确返回 ask 才转发用户。
@@ -13153,6 +13316,47 @@ describe('CodexAgent MCP thread context hooks', () => {
     await expect(pendingFull).resolves.toEqual({ decision: 'accept' });
     expect(fullResolver).not.toHaveBeenCalled();
     await fullHandle.close();
+  });
+
+  it('discards an in-flight allow when external directory permissions change', async () => {
+    const pendingReview = deferred<{ verdict: 'allow' }>();
+    const reviewer = vi.fn(() => pendingReview.promise);
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-auto-review-late-directory-revoke',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      writableDirs: ['/shared-output'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    const resolver = vi.fn(async (request: InteractionRequest): Promise<InteractionDecision> => {
+      void request;
+      return { kind: 'permission', behavior: 'allow' };
+    });
+    handle.setInteractionResolver(resolver);
+
+    const approval = handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-late-directory-revoke',
+      itemId: 'cmd-late-directory-revoke',
+      command: 'rm -rf build',
+      cwd: '/shared-output',
+    });
+    await waitForExpectation(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.setWritableDirs!([]);
+    pendingReview.resolve({ verdict: 'allow' });
+
+    await expect(approval).resolves.toEqual({ decision: 'accept' });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'permission',
+      suggestions: undefined,
+    });
+    await handle.close();
   });
 
   it('auto-approves safe fallback commands via the Cindy auto-review core without prompting', async () => {

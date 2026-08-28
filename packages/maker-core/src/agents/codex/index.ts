@@ -1244,6 +1244,7 @@ const CAPABILITIES: Capabilities = {
   // Codex app-server 0.144.6+ 支持 runtimeWorkspaceRoots + named permission
   // profiles；每 turn 覆盖 roots，因此会话中途增删可在下一 turn 生效。
   extraDirs: { supported: true },
+  writableDirs: { supported: true },
 };
 
 // ── UserMessage → app-server UserInput[] ─────────────────────────────────────
@@ -4085,6 +4086,8 @@ export class CodexAgent extends BaseAgent {
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
+    let mutableWritableDirs = [...(opts.writableDirs ?? [])];
+    let autoReviewDirectoryGeneration = 0;
     const reviewReadGrants = reviewMode
       ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? [])
       : [];
@@ -4096,6 +4099,7 @@ export class CodexAgent extends BaseAgent {
     // 0.145.0 cannot resolve that thread-local definition when the selector is
     // repeated on turn/start, so remember whether the thread is already using it.
     let readonlyReferencesProfileActive = false;
+    let readonlyReferencesProfileFingerprint: string | null = null;
     // A fresh thread/start has no rollout yet, so thread/resume fails until a
     // turn/start may have crossed the server acceptance boundary. Once a turn
     // was attempted, prefer resume before replacing the thread; "no rollout"
@@ -4533,13 +4537,18 @@ export class CodexAgent extends BaseAgent {
       ? []
       : [joinCodexHome('memories')];
     const runtimeWorkspaceRoots = (): string[] =>
-      reviewMode ? [opts.workingDir] : [opts.workingDir, ...mutableExtraDirs];
+      reviewMode
+        ? [opts.workingDir]
+        : [...new Set([opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs])];
+    const runtimeWritableRoots = (): string[] =>
+      reviewMode ? [] : [...new Set([opts.workingDir, ...mutableWritableDirs])];
     // Auto-review 传给 core 的会话平台(决定是否抹平 macOS /private firmlink)。远端会话的 host
     // process.platform 不代表远端 OS(host 可能 macOS、远端 Linux)——远端 OS 未接入前保守传 'linux'
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : process.platform;
     const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
+      const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'codex' as const,
@@ -4553,19 +4562,28 @@ export class CodexAgent extends BaseAgent {
         workspaceRoots: runtimeWorkspaceRoots().filter(
           (dir): dir is string => typeof dir === 'string' && dir.length > 0,
         ),
+        writableRoots: runtimeWritableRoots().filter(
+          (dir): dir is string => typeof dir === 'string' && dir.length > 0,
+        ),
         platform: sessionReviewPlatform,
       };
       const key = JSON.stringify(request);
       const cached = autoReviewDecisionCache.get(key);
-      if (cached) return cached;
-      const pending = resolveAutoReviewDecision(
-        request,
-        this.deps.reviewAutoPermissionAction,
-      );
-      autoReviewDecisionCache.set(key, pending);
-      return pending;
+      const pending = cached ?? resolveAutoReviewDecision(
+          request,
+          this.deps.reviewAutoPermissionAction,
+        );
+      if (!cached) autoReviewDecisionCache.set(key, pending);
+      return pending.then((decision) => (
+        directoryGeneration === autoReviewDirectoryGeneration
+          ? decision
+          : {
+              verdict: 'ask',
+              reason: 'Directory permissions changed while this action was under review.',
+            }
+      ));
     };
-    const readonlyReferencesConfig: Record<string, unknown> = {
+    const readonlyReferencesConfig = (): Record<string, unknown> => ({
       [`permissions.${READONLY_REFERENCES_PERMISSION_PROFILE}`]: {
         filesystem: {
           ':root': 'read',
@@ -4578,11 +4596,12 @@ export class CodexAgent extends BaseAgent {
             '.agents': 'read',
             '.codex': 'read',
           },
+          ...Object.fromEntries(mutableWritableDirs.map((dir) => [dir, 'write'])),
           ...(codexExtraWritableRoots[0] ? { [codexExtraWritableRoots[0]]: 'write' } : {}),
         },
         network: { enabled: false },
       },
-    };
+    });
     const reviewPermissionsConfig: Record<string, unknown> = {
       [`permissions.${REVIEW_PERMISSION_PROFILE}`]: {
         filesystem: {
@@ -5135,9 +5154,14 @@ export class CodexAgent extends BaseAgent {
       return (
         reviewMode ||
         (readonlyReferenceDirsSupported &&
-          mutableExtraDirs.length > 0 &&
+          (mutableExtraDirs.length > 0 || mutableWritableDirs.length > 0) &&
           mutablePermissionMode !== 'bypassPermissions')
       );
+    }
+
+    function currentReadonlyReferencesProfileFingerprint(): string | null {
+      if (!shouldUseReadonlyReferencesProfile()) return null;
+      return JSON.stringify(mutableWritableDirs);
     }
 
     function currentThreadWorkspaceConfig(): Pick<
@@ -5152,7 +5176,7 @@ export class CodexAgent extends BaseAgent {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
       const config = {
         ...capabilityRoutingConfig,
-        ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig : {}),
+        ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig() : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
         ...(reviewMode
           ? {
@@ -5230,7 +5254,10 @@ export class CodexAgent extends BaseAgent {
       }
       return {
         ...shared,
-        sandboxPolicy: sandboxModeToPolicy(sandbox, codexExtraWritableRoots),
+        sandboxPolicy: sandboxModeToPolicy(
+          sandbox,
+          [...new Set([...codexExtraWritableRoots, ...mutableWritableDirs])],
+        ),
       };
     }
 
@@ -5549,6 +5576,7 @@ export class CodexAgent extends BaseAgent {
         }
         sdkSessionId = threadId;
         readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+        readonlyReferencesProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
         threadMayHaveRollout = true;
         // Resumed app-server threads may have sticky collaborationMode='plan' from
         // a previous handle whose plan cycle ended without a follow-up turn. Since
@@ -5629,6 +5657,7 @@ export class CodexAgent extends BaseAgent {
         }
         sdkSessionId = threadId;
         readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+        readonlyReferencesProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
         threadMayHaveRollout = false;
         log.info('thread/start ok', {
           threadId,
@@ -5727,6 +5756,7 @@ export class CodexAgent extends BaseAgent {
       signal?: AbortSignal,
     ): Promise<void> => {
       const previousThreadId = threadId;
+      const replacementProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
       const replacementServiceTierGeneration = serviceTierMutationGeneration;
       const inheritedHostBindingLease = releaseHostBindingLease !== null;
       acquireHostBindingLeaseIfNeeded();
@@ -5812,7 +5842,10 @@ export class CodexAgent extends BaseAgent {
             ? { threadId, historyHasProductPrompt: true }
             : undefined;
         }
-        readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+        readonlyReferencesProfileActive = replacementProfileFingerprint !== null;
+        readonlyReferencesProfileFingerprint = readonlyReferencesProfileActive
+          ? replacementProfileFingerprint
+          : null;
         threadMayHaveRollout = false;
         log.debug('unused thread replaced with read-only reference profile', {
           previousThreadId,
@@ -5834,53 +5867,68 @@ export class CodexAgent extends BaseAgent {
     const ensureReadonlyReferencesProfileForNextTurn = (
       signal?: AbortSignal,
     ): Promise<void> | null => {
-      if (!shouldUseReadonlyReferencesProfile() || readonlyReferencesProfileActive) return null;
+      const desiredFingerprint = currentReadonlyReferencesProfileFingerprint();
+      if (
+        readonlyReferencesProfileActive === (desiredFingerprint !== null) &&
+        readonlyReferencesProfileFingerprint === desiredFingerprint
+      ) return null;
       return (async () => {
-        if (!threadMayHaveRollout) {
-          await replaceUnusedThreadWithCurrentProfile(signal);
-          return;
-        }
-        const resumeThreadWorkspaceConfig = currentThreadWorkspaceConfig();
-        const resumeServiceTierGeneration = serviceTierMutationGeneration;
-        assertCurrentHost('read-only reference profile refresh');
-        let resp: ThreadResumeResponse;
-        try {
-          resp = await requestProfileLifecycle<ThreadResumeResponse>({
-            action: 'refresh',
-            signal,
-            request: () => host.request<ThreadResumeResponse>(Method.ThreadResume, {
-              threadId,
-              ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
-              cwd: opts.workingDir,
-              ...resumeThreadWorkspaceConfig,
-              ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
-              ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-              ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
-            }),
+        while (true) {
+          const targetFingerprint = currentReadonlyReferencesProfileFingerprint();
+          if (
+            readonlyReferencesProfileActive === (targetFingerprint !== null) &&
+            readonlyReferencesProfileFingerprint === targetFingerprint
+          ) return;
+          if (!threadMayHaveRollout) {
+            await replaceUnusedThreadWithCurrentProfile(signal);
+            continue;
+          }
+          const resumeThreadWorkspaceConfig = currentThreadWorkspaceConfig();
+          const resumeProfileFingerprint = targetFingerprint;
+          const resumeServiceTierGeneration = serviceTierMutationGeneration;
+          assertCurrentHost('read-only reference profile refresh');
+          let resp: ThreadResumeResponse;
+          try {
+            resp = await requestProfileLifecycle<ThreadResumeResponse>({
+              action: 'refresh',
+              signal,
+              request: () => host.request<ThreadResumeResponse>(Method.ThreadResume, {
+                threadId,
+                ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
+                cwd: opts.workingDir,
+                ...resumeThreadWorkspaceConfig,
+                ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
+                ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
+                ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+              }),
+            });
+          } catch (e) {
+            if (!/no rollout found/i.test(String(e))) throw e;
+            if (signal?.aborted) throw new Error('Codex send cancelled before acceptance');
+            threadMayHaveRollout = false;
+            await replaceUnusedThreadWithCurrentProfile(signal);
+            continue;
+          }
+          assertCurrentHost('read-only reference profile refresh');
+          if (
+            Object.hasOwn(resp, 'serviceTier') &&
+            resumeServiceTierGeneration === serviceTierMutationGeneration
+          ) {
+            mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+          } else if (resumeServiceTierGeneration !== serviceTierMutationGeneration) {
+            void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
+          }
+          codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
+          readonlyReferencesProfileActive = 'permissions' in resumeThreadWorkspaceConfig;
+          readonlyReferencesProfileFingerprint = readonlyReferencesProfileActive
+            ? resumeProfileFingerprint
+            : null;
+          threadMayHaveRollout = true;
+          log.debug('read-only reference profile restored before turn/start', {
+            threadId,
+            referenceRoots: mutableExtraDirs.length,
           });
-        } catch (e) {
-          if (!/no rollout found/i.test(String(e))) throw e;
-          if (signal?.aborted) throw new Error('Codex send cancelled before acceptance');
-          threadMayHaveRollout = false;
-          await replaceUnusedThreadWithCurrentProfile(signal);
-          return;
         }
-        assertCurrentHost('read-only reference profile refresh');
-        if (
-          Object.hasOwn(resp, 'serviceTier') &&
-          resumeServiceTierGeneration === serviceTierMutationGeneration
-        ) {
-          mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
-        } else if (resumeServiceTierGeneration !== serviceTierMutationGeneration) {
-          void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
-        }
-        codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
-        readonlyReferencesProfileActive = 'permissions' in resumeThreadWorkspaceConfig;
-        threadMayHaveRollout = true;
-        log.debug('read-only reference profile restored before turn/start', {
-          threadId,
-          referenceRoots: mutableExtraDirs.length,
-        });
       })();
     };
 
@@ -6181,7 +6229,10 @@ export class CodexAgent extends BaseAgent {
             const verdict = reviewAction(
               opts.autoReviewAction,
               runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
-              { platform: sessionReviewPlatform },
+              {
+                platform: sessionReviewPlatform,
+                writableRoots: runtimeWritableRoots(),
+              },
             );
             // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
             // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
@@ -11211,6 +11262,7 @@ export class CodexAgent extends BaseAgent {
         // 用户在 session 创建时选的 effort 也是靠 first turn/start 这里传过去才生效。
         let turnWorkspaceConfig: ReturnType<typeof currentTurnWorkspaceConfig>;
         let turnThreadWorkspaceConfig: ReturnType<typeof currentThreadWorkspaceConfig>;
+        let turnThreadProfileFingerprint: string | null;
         try {
           const profileRefresh = ensureReadonlyReferencesProfileForNextTurn(sendOpts?.signal);
           if (profileRefresh) await profileRefresh;
@@ -11219,6 +11271,7 @@ export class CodexAgent extends BaseAgent {
           // that matches this turn, not mutable settings changed while the
           // original turn/start RPC was pending.
           turnThreadWorkspaceConfig = currentThreadWorkspaceConfig();
+          turnThreadProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
         } catch (e) {
           isTurnStartPending = false;
           endPlanCycleAfterPreStartFailure('read-only reference profile refresh failed');
@@ -11327,6 +11380,7 @@ export class CodexAgent extends BaseAgent {
         // turn even if the local transport loses the response.
         if ('sandboxPolicy' in turnWorkspaceConfig) {
           readonlyReferencesProfileActive = false;
+          readonlyReferencesProfileFingerprint = null;
         }
         // After turn/start is attempted, resume before ever replacing this
         // thread. Only an explicit "no rollout found" proves it stayed unused.
@@ -11744,6 +11798,9 @@ export class CodexAgent extends BaseAgent {
                   clampEffortForCodex(mutableModel, mutableEffort);
               }
               readonlyReferencesProfileActive = 'permissions' in turnThreadWorkspaceConfig;
+              readonlyReferencesProfileFingerprint = readonlyReferencesProfileActive
+                ? turnThreadProfileFingerprint
+                : null;
               threadMayHaveRollout = true;
               // The stale-daemon path has crossed an explicit app-server
               // execution boundary. Reset all thread cursors before the retry;
@@ -12345,8 +12402,29 @@ export class CodexAgent extends BaseAgent {
             `Codex reference directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
           );
         }
+        if (
+          mutableExtraDirs.length === newDirs.length
+          && mutableExtraDirs.every((dir, index) => dir === newDirs[index])
+        ) return;
         mutableExtraDirs = [...newDirs];
+        autoReviewDirectoryGeneration++;
         log.debug('setExtraDirs', { count: mutableExtraDirs.length });
+      },
+
+      async setWritableDirs(newDirs: string[]) {
+        if (reviewMode) return;
+        if (newDirs.length > 0 && !readonlyReferenceDirsSupported) {
+          throw new Error(
+            `Codex writable directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
+          );
+        }
+        if (
+          mutableWritableDirs.length === newDirs.length &&
+          mutableWritableDirs.every((dir, index) => dir === newDirs[index])
+        ) return;
+        mutableWritableDirs = [...newDirs];
+        autoReviewDirectoryGeneration++;
+        log.debug('setWritableDirs', { count: mutableWritableDirs.length });
       },
 
       async setPlanMode(enabled: boolean) {
@@ -12445,6 +12523,7 @@ export class CodexAgent extends BaseAgent {
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
           readonlyReferencesProfileActive = false;
+          readonlyReferencesProfileFingerprint = null;
           threadMayHaveRollout = true;
           subscription = host.subscribeThread(threadId, handlers);
           registerRootCodexMcpContext();

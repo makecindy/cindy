@@ -4294,6 +4294,7 @@ interface ElectronAPI {
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
         /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
         extraDirs?: string[];
+        writableDirs?: string[];
       }) => Promise<import('@/lib/ccAgent.types').Session>;
       get: (id: string) => Promise<import('@/lib/ccAgent.types').Session>;
       resolveReferences: (
@@ -4329,6 +4330,7 @@ interface ElectronAPI {
           orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
           /** 附加只读引用目录覆盖列表 (绝对路径)。 */
           extraDirs?: string[];
+          writableDirs?: string[];
         },
       ) => Promise<import('@/lib/ccAgent.types').Session>;
       /**
@@ -5206,6 +5208,7 @@ interface ElectronAPI {
       makerMemoryEnabled?: boolean;
       /** 附加只读引用目录列表 (绝对路径)。Codex agent 收到会忽略 (capability=false)。 */
       extraDirs?: string[];
+      writableDirs?: string[];
       displayReasoning?: 'off' | 'summarized' | 'full';
       /** 远端 host alias (Codex only) — codex agent 跑在远端机器上, workingDir 是远端路径。 */
       remoteHostId?: string;
@@ -5295,6 +5298,7 @@ interface ElectronAPI {
         makerMemoryEnabled?: boolean;
         /** 附加只读引用目录列表; 仅 lazy-create 那一次生效, 已 spawn 的 session 走 setExtraDirs。 */
         extraDirs?: string[];
+        writableDirs?: string[];
         displayReasoning?: 'off' | 'summarized' | 'full';
         vendorOptions?: Record<string, unknown>;
         resumeSessionId?: string;
@@ -5338,6 +5342,7 @@ interface ElectronAPI {
         userPrompt?: string;
         makerMemoryEnabled?: boolean;
         extraDirs?: string[];
+        writableDirs?: string[];
         displayReasoning?: 'off' | 'summarized' | 'full';
         vendorOptions?: Record<string, unknown>;
         remoteHostId?: string;
@@ -5552,6 +5557,8 @@ interface ElectronAPI {
      * session 不在 / agent capability=false 都 no-op, 不抛错。
      */
     setExtraDirs: (sessionId: string, dirs: string[]) => Promise<void>;
+    /** 用户明确授予的附加可读写目录；持久化由调用方另调 sessions:update。 */
+    setWritableDirs: (sessionId: string, dirs: string[]) => Promise<string[] | undefined>;
 
     // Memory 控制 (Settings → Personalization → Memory section)
     memoryGet: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{

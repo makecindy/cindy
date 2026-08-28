@@ -838,7 +838,7 @@ describe('Shared create project picker', () => {
     // extraDirs 只在换设备、或进入「对话」时清 —— 同机换项目那些目录仍然有效,
     // 不传则 store 保持原值。
     expect(action).toContain(
-      '...(deviceChanged || req.workingDir == null ? { extraDirs: [] } : {}),',
+      '...(deviceChanged || req.workingDir == null ? { extraDirs: [], writableDirs: [] } : {}),',
     );
     // 但 worktree 的 repo/branch 探测态照常重置 —— 换项目就是换 repo；用户偏好保留。
     expect(action).toContain('if (deviceChanged || workingDirChanged) {');
@@ -1510,7 +1510,7 @@ describe('Shared create project picker', () => {
     // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
     expect(chatInputSource).toContain('if (onExtraDirsChange) {');
     expect(chatInputSource).toContain(
-      'hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}',
+      'hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}',
     );
   });
 

@@ -125,3 +125,25 @@ export async function validateExtraDirs(
 
   return { valid, rejected };
 }
+
+async function canonicalDirectoryKey(dir: string): Promise<string> {
+  try {
+    return await fs.realpath(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+/** 阻止同一实体目录同时出现在只读与可写授权中（含符号链接别名）。 */
+export async function excludeDirectoryGrantConflicts(
+  candidates: readonly string[],
+  blocked: readonly string[],
+): Promise<string[]> {
+  if (candidates.length === 0 || blocked.length === 0) return [...candidates];
+  const blockedKeys = new Set(await Promise.all(blocked.map(canonicalDirectoryKey)));
+  const result: string[] = [];
+  for (const candidate of candidates) {
+    if (!blockedKeys.has(await canonicalDirectoryKey(candidate))) result.push(candidate);
+  }
+  return result;
+}
