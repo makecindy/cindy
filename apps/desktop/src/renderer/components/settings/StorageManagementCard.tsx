@@ -31,6 +31,7 @@ import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -409,9 +410,11 @@ type DbSlimmingPhase =
 
 function DatabaseSlimmingSection() {
   const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
   const [archiveAge, setArchiveAge] = useState<DbSlimmingArchiveAge>(
     DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
   );
+  const [includeActiveTasks, setIncludeActiveTasks] = useState(false);
   const [backupEnabled, setBackupEnabled] = useState(true);
   const [backupDirectory, setBackupDirectory] =
     useState<DbSlimmingBackupDirectorySelection>({ selected: false });
@@ -420,6 +423,7 @@ function DatabaseSlimmingSection() {
   const [reportOpen, setReportOpen] = useState(false);
   const [executionLocked, setExecutionLocked] = useState(false);
   const busyRef = useRef(false);
+  const activeTasksConfirmationPendingRef = useRef(false);
   const interactionLockReleaseRef = useRef<(() => void) | null>(null);
 
   const acquireInteractionLock = () => {
@@ -466,6 +470,31 @@ function DatabaseSlimmingSection() {
     invalidateScan();
   };
 
+  const handleIncludeActiveTasksChange = async (checked: boolean) => {
+    if (!checked) {
+      setIncludeActiveTasks(false);
+      invalidateScan();
+      return;
+    }
+    if (busyRef.current || scanLoading || activeTasksConfirmationPendingRef.current) return;
+    activeTasksConfirmationPendingRef.current = true;
+    let accepted = false;
+    try {
+      accepted = await confirm({
+        title: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+        description: t('settings.about.storage.dbSlimmingIncludeActiveConfirmDescription'),
+        confirmText: t('settings.about.storage.dbSlimmingIncludeActiveConfirmButton'),
+        cancelText: t('settings.about.storage.dbSlimmingIncludeActiveCancelButton'),
+        autoFocusConfirm: true,
+      });
+    } finally {
+      activeTasksConfirmationPendingRef.current = false;
+    }
+    if (!accepted) return;
+    setIncludeActiveTasks(true);
+    invalidateScan();
+  };
+
   const handleChooseBackupDirectory = async () => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -489,6 +518,7 @@ function DatabaseSlimmingSection() {
     try {
       const scan = await window.electronAPI.localDb.maintenance.scan({
         archiveAgeMonths: archiveAge,
+        includeActiveTasks,
       });
       setPhase({ kind: 'scanned', scan });
       setReportOpen(true);
@@ -655,6 +685,25 @@ function DatabaseSlimmingSection() {
         </div>
 
         <label
+          htmlFor="db-slimming-include-active"
+          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+        >
+          <span className="text-12 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.dbSlimmingIncludeActiveLabel')}
+          </span>
+          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.storage.dbSlimmingIncludeActiveDescription')}
+          </span>
+        </label>
+        <Switch
+          id="db-slimming-include-active"
+          checked={includeActiveTasks}
+          disabled={scanLoading}
+          onCheckedChange={(checked) => void handleIncludeActiveTasksChange(checked)}
+          aria-label={t('settings.about.storage.dbSlimmingIncludeActiveLabel')}
+        />
+
+        <label
           htmlFor="db-slimming-backup-enabled"
           className="flex min-w-0 cursor-pointer flex-col gap-0.5"
         >
@@ -698,7 +747,10 @@ function DatabaseSlimmingSection() {
                 {t('settings.about.storage.dbSlimmingResultCompleted', {
                   size: formatBytes(phase.result.reclaimedBytes),
                   messages: phase.result.messageCount,
-                  tasks: phase.result.deletedTaskCount + phase.result.archivedTaskCount,
+                  tasks:
+                    (phase.result.activeTaskCount ?? 0) +
+                    phase.result.deletedTaskCount +
+                    phase.result.archivedTaskCount,
                 })}
               </p>
               {phase.result.backupCreated && (
@@ -821,10 +873,16 @@ function DatabaseCleanupDialog({
                   >
                     <ReportLine
                       visible
-                      text={t('settings.about.storage.dbSlimmingReportTasks', {
-                        deleted: scanned.deletedTaskCount,
-                        archived: scanned.archivedTaskCount,
-                      })}
+                      text={t(
+                        scanned.includeActiveTasks
+                          ? 'settings.about.storage.dbSlimmingReportTasksWithActive'
+                          : 'settings.about.storage.dbSlimmingReportTasks',
+                        {
+                          active: scanned.activeTaskCount,
+                          deleted: scanned.deletedTaskCount,
+                          archived: scanned.archivedTaskCount,
+                        },
+                      )}
                     />
                     <ReportLine
                       visible

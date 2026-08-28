@@ -14,7 +14,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   View,
   useWindowDimensions,
 } from 'react-native';
@@ -41,9 +40,15 @@ import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import {
   MainWindowActionButton,
   MainWindowActionGroup,
-  ScreenHeader,
   StatusDot,
 } from '@/components/MobilePrimitives';
+import {
+  NativePullDownMenu,
+  NativeSwitch,
+  SimpleStackHeader,
+  simpleScreenSafeAreaEdges,
+  usesNativePullDownMenu,
+} from '@/platform/chrome';
 import {
   APP_BINARY_VERSION,
   AUTH_API_BASE_URL,
@@ -920,8 +925,8 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.screen">
+      <SimpleStackHeader
         backTestID="settings.backButton"
         onBack={() => goBackGuarded(router)}
         title={t('settings.title')}
@@ -1032,12 +1037,12 @@ export default function SettingsScreen() {
                     <Text style={styles.hint} testID="settings.pushMessage">{pushMessage}</Text>
                   ) : null}
                 </View>
-                <Switch
+                <NativeSwitch
                   accessibilityLabel={t('settings.notifications.taskDone')}
                   disabled={pushBusy}
                   onValueChange={() => void togglePushNotifications()}
+                  seedColor={colors.inputCaret}
                   testID="settings.pushToggle"
-                  trackColor={{ true: colors.inputCaret }}
                   value={pushEnabled}
                 />
               </View>,
@@ -1067,13 +1072,22 @@ export default function SettingsScreen() {
           footer={t('settings.language.hint')}
           title={t('settings.language.title')}
         >
-          <LanguagePickerRow
-            expanded={languagePickerOpen}
-            label={t('settings.language.title')}
-            onPress={openLanguagePicker}
-            testID="settings.language.picker"
-            value={t(`settings.language.options.${locale}`)}
-          />
+          <NativePullDownMenu
+            actions={LANGUAGE_OPTIONS.map((option) => ({
+              id: option,
+              state: option === locale ? 'on' : 'off',
+              title: t(`settings.language.options.${option}`),
+            }))}
+            onAction={selectLanguage}
+          >
+            <LanguagePickerRow
+              expanded={languagePickerOpen}
+              label={t('settings.language.title')}
+              onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}
+              testID="settings.language.picker"
+              value={t(`settings.language.options.${locale}`)}
+            />
+          </NativePullDownMenu>
         </SettingsGroup>
 
         {/* 关于这台手机 */}
@@ -1137,12 +1151,12 @@ export default function SettingsScreen() {
                     <Text style={styles.rowLabel}>{t('settings.betaChannel.title')}</Text>
                     <Text style={styles.hint}>{t('settings.betaChannel.description')}</Text>
                   </View>
-                  <Switch
+                  <NativeSwitch
                     accessibilityLabel={t('settings.betaChannel.title')}
                     disabled={betaBusy || !betaReady}
                     onValueChange={() => void toggleBeta()}
+                    seedColor={colors.inputCaret}
                     testID="settings.betaChannelToggle"
-                    trackColor={{ true: colors.inputCaret }}
                     value={betaEnabled}
                   />
                 </View>,
@@ -1166,12 +1180,12 @@ export default function SettingsScreen() {
                 <Text style={styles.hint} testID="settings.analyticsMessage">{analyticsMessage}</Text>
               ) : null}
             </View>
-            <Switch
+            <NativeSwitch
               accessibilityLabel={t('settings.legal.analytics')}
               disabled={analyticsBusy || !analyticsReady}
               onValueChange={() => void toggleAnalytics()}
+              seedColor={colors.inputCaret}
               testID="settings.analyticsToggle"
-              trackColor={{ true: colors.inputCaret }}
               value={analyticsEnabled}
             />
           </View>
@@ -1469,8 +1483,8 @@ function VoiceDictionaryScreen({
       : t('settings.voiceDictionary.readOnlyHint');
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.voiceDictionary.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.voiceDictionary.screen">
+      <SimpleStackHeader
         backTestID="settings.voiceDictionary.backButton"
         onBack={onBack}
         title={t('settings.voiceDictionary.screenTitle')}
@@ -1557,8 +1571,8 @@ function RenameSelfDeviceScreen({
   const { colors } = useTheme();
   const { t } = useTranslation();
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.renameSelfDevice.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.renameSelfDevice.screen">
+      <SimpleStackHeader
         backTestID="settings.renameSelfDevice.backButton"
         onBack={onDone}
         title={t('settings.deviceNameEditor.screenTitle')}

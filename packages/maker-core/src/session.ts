@@ -1426,6 +1426,11 @@ export class Session {
     return this.handle.codexThreadModelProviderId;
   }
 
+  /** Codex-only: 当前 host 的独立 Subagent 路由是否兼容 Cindy Codex 远程压缩。 */
+  get codexCindyRemoteCompactionCompatible(): boolean | undefined {
+    return this.handle.codexCindyRemoteCompactionCompatible;
+  }
+
   /** Snapshot used by temporary host overrides to avoid undoing a newer user change. */
   get permissionModeState(): PermissionModeState {
     return { ...this.permissionModeStateValue };

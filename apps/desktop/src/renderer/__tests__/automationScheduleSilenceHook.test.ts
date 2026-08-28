@@ -198,7 +198,7 @@ describe('useAutomationScheduleSessionIndex silence events', () => {
 
 /**
  * 事件丢失的自愈:refresh 拉到的 sidebar run 列表就是 scheduler 落库的权威状态
- * (且包含所有带 sessionId 的 run,没有 history limit),据它对账标记。
+ * (且包含所有 running run),据它对账标记。
  * 刻意不用定时器猜 run 是否还在飞行 —— 三种判据(事件序 / renderer running 快照 /
  * 固定时长)都被证明会误判,见 silencedSessionDoneStore 的文件头注释。
  */
@@ -228,6 +228,38 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
       ...overrides,
     };
   }
+
+  it('keeps old unread ids while the latest row wins session ownership', async () => {
+    stubApiWithRuns([
+      indexRun({
+        runId: 'run-old-unread',
+        scheduleId: 'schedule-old',
+        scheduleName: '旧自动化',
+        status: 'failed',
+        readAt: undefined,
+        firedAt: 10,
+      }),
+      indexRun({
+        runId: 'run-latest',
+        scheduleId: 'schedule-latest',
+        scheduleName: '最新自动化',
+        status: 'success',
+        readAt: 20,
+        firedAt: 20,
+      }),
+    ]);
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toMatchObject({
+        scheduleId: 'schedule-latest',
+        scheduleName: '最新自动化',
+        unreadRunIds: ['run-old-unread'],
+        unreadFailedRunIds: ['run-old-unread'],
+        latestUnreadFailedRunId: 'run-old-unread',
+      });
+    });
+  });
 
   it('clears markers whose run already reached a terminal status', async () => {
     vi.useFakeTimers();

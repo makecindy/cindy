@@ -219,7 +219,10 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
    Lead 汇总前必须按执行该任务的同一通道确认真实终态，并逐项标明
    `Orca Worker` 或 `native subagent`。原生 subagent 由 Codex
    `collabAgentToolCall`／Claude Agent/Task 任务卡展示标识、任务和终态，但不得写入 Orca
-   Worker 状态，也不得触发 Orca Worker 完成提醒。实现指针：
+   Worker 状态，也不得触发 Orca Worker 完成提醒。native subagent lifecycle tools（包括
+   `wait_agent` 或等价能力）只能管理用户明确要求的 native subagent，不得用来等待或管理
+   Orca Worker。部分 Worker 报告先到时，Lead 只处理当前报告与必要追问，不主动等待仍在
+   工作的 Worker；后续报告会作为新消息自动唤醒 Lead。实现指针：
    `packages/orca-workflow/src/orca-bridge-prompt.ts` 的
    `renderOrcaLeadSystemPrompt`，以及 `packages/maker-core/src/agents/codex/translator.ts`
    的 `handleCollabAgentToolCall`。

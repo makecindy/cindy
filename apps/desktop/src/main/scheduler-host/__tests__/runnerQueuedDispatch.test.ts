@@ -745,6 +745,42 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
   });
 
+  it('排队 Cindy Codex 在独立 Subagent 不兼容时接受正确的本地压缩身份', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      userSendAt: null,
+      providerId: 'xd',
+    });
+    mocks.getSessionProvider.mockReturnValue('xd');
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    Object.defineProperties(harness.session, {
+      agentKind: { value: 'codex' },
+      model: { value: 'codex/gpt-5.6-sol', writable: true },
+      codexProxyActive: { value: true },
+      codexThreadModelProviderId: { value: 'cindy_gateway' },
+      codexCindyRemoteCompactionCompatible: { value: false },
+    });
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps, {
+      metaModel: 'codex/gpt-5.6-sol',
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+      }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+    await vi.waitFor(() => expect(harness.listenerCount()).toBe(1));
+    harness.emit({ type: 'done', data: {}, source: 'codex' });
+
+    await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+
   it('排队 Pi 每次派发都写 Fast=false，清掉复用会话的旧 bridge 状态', async () => {
     const harness = createSessionHarness(async () => ({ accepted: true }));
     (harness.session as { agentKind: string }).agentKind = 'pi';

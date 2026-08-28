@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as testingLibraryRender,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { toast } = vi.hoisted(() => ({
@@ -19,6 +27,15 @@ vi.mock('@/lib/toast', () => ({ toast }));
 vi.mock('@/lib/composerDraftStore', () => ({ getAllDraftAttachmentUrls: () => [] }));
 
 import { StorageManagementCard } from '../StorageManagementCard';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+
+function render(ui: ReactElement) {
+  return testingLibraryRender(
+    <ConfirmDialogProvider>
+      {ui}
+    </ConfirmDialogProvider>,
+  );
+}
 
 function storageApi() {
   return {
@@ -42,11 +59,16 @@ function storageApi() {
 function maintenanceApi() {
   return {
     getLastResult: vi.fn(async () => null),
-    scan: vi.fn(async (input: { archiveAgeMonths: '7-days' | 1 | 3 | 6 }) => ({
+    scan: vi.fn(async (input: {
+      archiveAgeMonths: '7-days' | 1 | 3 | 6;
+      includeActiveTasks?: boolean;
+    }) => ({
       scanId: 'scan-1',
       archiveAgeMonths: input.archiveAgeMonths,
+      includeActiveTasks: input.includeActiveTasks === true,
       scannedAt: 1_000,
       archivedBeforeMs: 500,
+      activeTaskCount: input.includeActiveTasks ? 4 : 0,
       deletedTaskCount: 1,
       archivedTaskCount: 2,
       messageCount: 3,
@@ -247,9 +269,17 @@ describe('StorageManagementCard database cleanup', () => {
       'settings.about.storage.dbSlimmingArchiveAgeOption6',
     ]);
     fireEvent.click(options[0]!);
-    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
+    expect(
+      screen
+        .getByRole('switch', { name: 'settings.about.storage.dbSlimmingBackupLabel' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
     fireEvent.click(screen.getByText('settings.about.storage.dbSlimmingBackupLabel'));
-    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    expect(
+      screen
+        .getByRole('switch', { name: 'settings.about.storage.dbSlimmingBackupLabel' })
+        .getAttribute('aria-checked'),
+    ).toBe('false');
     fireEvent.click(screen.getByText('settings.about.storage.dbSlimmingBackupLabel'));
     const scanButton = screen.getByRole('button', {
       name: 'settings.about.storage.dbSlimmingScanButton',
@@ -259,6 +289,7 @@ describe('StorageManagementCard database cleanup', () => {
     await waitFor(() => {
       expect(window.electronAPI.localDb.maintenance.scan).toHaveBeenCalledWith({
         archiveAgeMonths: '7-days',
+        includeActiveTasks: false,
       });
     });
     await waitFor(() => expect(scanButton.getAttribute('aria-busy')).toBeNull());
@@ -266,6 +297,69 @@ describe('StorageManagementCard database cleanup', () => {
       await screen.findByRole('alertdialog', {
         name: 'settings.about.storage.dbSlimmingScanResultTitle',
       }),
+    ).toBeTruthy();
+  });
+
+  it('keeps active-task cleanup off until the warning is confirmed', async () => {
+    render(<StorageManagementCard />);
+
+    const activeSwitch = screen.getByRole('switch', {
+      name: 'settings.about.storage.dbSlimmingIncludeActiveLabel',
+    });
+    expect(activeSwitch.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(activeSwitch);
+    const warning = await screen.findByRole('alertdialog', {
+      name: 'settings.about.storage.dbSlimmingIncludeActiveConfirmTitle',
+    });
+    expect(activeSwitch.getAttribute('aria-checked')).toBe('false');
+    const confirmButton = screen.getByRole('button', {
+      name: 'settings.about.storage.dbSlimmingIncludeActiveConfirmButton',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(confirmButton));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.about.storage.dbSlimmingIncludeActiveCancelButton',
+      }),
+    );
+    await waitFor(() => expect(warning.getAttribute('data-state')).toBe('closed'));
+    expect(activeSwitch.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(activeSwitch);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.about.storage.dbSlimmingIncludeActiveConfirmButton',
+      }),
+    );
+    await waitFor(() => expect(activeSwitch.getAttribute('aria-checked')).toBe('true'));
+
+    fireEvent.click(activeSwitch);
+    expect(activeSwitch.getAttribute('aria-checked')).toBe('false');
+    expect(
+      screen.queryByRole('alertdialog', {
+        name: 'settings.about.storage.dbSlimmingIncludeActiveConfirmTitle',
+      }),
+    ).toBeNull();
+
+    fireEvent.click(activeSwitch);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.about.storage.dbSlimmingIncludeActiveConfirmButton',
+      }),
+    );
+    await waitFor(() => expect(activeSwitch.getAttribute('aria-checked')).toBe('true'));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingScanButton' }),
+    );
+
+    await waitFor(() => {
+      expect(window.electronAPI.localDb.maintenance.scan).toHaveBeenCalledWith({
+        archiveAgeMonths: '7-days',
+        includeActiveTasks: true,
+      });
+    });
+    expect(
+      await screen.findByText('settings.about.storage.dbSlimmingReportTasksWithActive'),
     ).toBeTruthy();
   });
 
@@ -299,8 +393,10 @@ describe('StorageManagementCard database cleanup', () => {
       resolveScan({
         scanId: 'scan-busy',
         archiveAgeMonths: '7-days',
+        includeActiveTasks: false,
         scannedAt: 1_000,
         archivedBeforeMs: 500,
+        activeTaskCount: 0,
         deletedTaskCount: 1,
         archivedTaskCount: 2,
         messageCount: 3,

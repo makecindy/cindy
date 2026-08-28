@@ -290,12 +290,35 @@ export function isCodexAuthInheritedFromSystemCli(): boolean {
     if (shouldSuppressLocalCodexAuth(codexHome, localAuth)) return false;
     const systemAuth = getSystemCodexAuthPath();
     if (!existsSync(localAuth) || !existsSync(systemAuth)) return false;
-    const localStat = fs.statSync(localAuth);
-    const systemStat = fs.statSync(systemAuth);
-    return localStat.ino === systemStat.ino && localStat.dev === systemStat.dev;
+    return pathsReferToSameFileSync(localAuth, systemAuth);
   } catch {
     return false;
   }
+}
+
+export function haveSameStableFileIdentity(
+  left: { dev: bigint; ino: bigint },
+  right: { dev: bigint; ino: bigint },
+): boolean {
+  // Windows file IDs are 64-bit. Number-valued Stats can round distinct IDs to
+  // the same IEEE-754 value, while some filesystems report ino=0 when no stable
+  // identity is available. Neither case is proof that two paths are hard links.
+  return left.ino !== 0n && right.ino !== 0n && left.dev === right.dev && left.ino === right.ino;
+}
+
+function pathsReferToSameFileSync(left: string, right: string): boolean {
+  return haveSameStableFileIdentity(
+    fs.statSync(left, { bigint: true }),
+    fs.statSync(right, { bigint: true }),
+  );
+}
+
+async function pathsReferToSameFile(left: string, right: string): Promise<boolean> {
+  const [leftStat, rightStat] = await Promise.all([
+    fsp.stat(left, { bigint: true }),
+    fsp.stat(right, { bigint: true }),
+  ]);
+  return haveSameStableFileIdentity(leftStat, rightStat);
 }
 
 /**
@@ -310,12 +333,8 @@ function detectCodexCredentialScope(codexHome: string): NonNullable<AuthState['c
     const localAuth = path.join(codexHome, 'auth.json');
     if (!existsSync(localAuth)) return 'unknown';
     const systemAuth = getSystemCodexAuthPath();
-    if (existsSync(systemAuth)) {
-      const localStat = fs.statSync(localAuth);
-      const systemStat = fs.statSync(systemAuth);
-      if (localStat.ino === systemStat.ino && localStat.dev === systemStat.dev) {
-        return 'system-shared';
-      }
+    if (existsSync(systemAuth) && pathsReferToSameFileSync(localAuth, systemAuth)) {
+      return 'system-shared';
     }
     if (isNativeProviderAuthBound('openai') && isNativeProviderAuthSelfAuthorized('openai')) {
       return 'instance-isolated';
@@ -334,9 +353,7 @@ function detectFinalizedCodexLoginCredentialScope(
   codexHome: string,
 ): NonNullable<AuthState['credentialScope']> {
   try {
-    const localStat = fs.statSync(path.join(codexHome, 'auth.json'));
-    const systemStat = fs.statSync(getSystemCodexAuthPath());
-    if (localStat.ino === systemStat.ino && localStat.dev === systemStat.dev) {
+    if (pathsReferToSameFileSync(path.join(codexHome, 'auth.json'), getSystemCodexAuthPath())) {
       return 'system-shared';
     }
   } catch {
@@ -996,11 +1013,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       const isolatedSystemAuth = getSystemCodexAuthPath();
       try {
         if (existsSync(isolatedMyAuth) && existsSync(isolatedSystemAuth)) {
-          const [sysStat, myStat] = await Promise.all([
-            fsp.stat(isolatedSystemAuth),
-            fsp.stat(isolatedMyAuth),
-          ]);
-          if (sysStat.ino === myStat.ino && sysStat.dev === myStat.dev) {
+          if (await pathsReferToSameFile(isolatedSystemAuth, isolatedMyAuth)) {
             await fsp.unlink(isolatedMyAuth);
             log.info('isolated-auth: detached shared codex auth hardlink for this sandbox');
           }
@@ -1035,9 +1048,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 热路径: 已经是同 inode 直接返回
     if (existsSync(myAuth)) {
       try {
-        const sysStat = await fsp.stat(systemAuth);
-        const myStat = await fsp.stat(myAuth);
-        if (sysStat.ino === myStat.ino && sysStat.dev === myStat.dev) {
+        if (await pathsReferToSameFile(systemAuth, myAuth)) {
           this.lastKnownCodexCredentialScope = 'system-shared';
           return;
         }
@@ -1815,6 +1826,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             log.warn('late Codex logout intent upgrade failed to revoke provider binding', {
               error: err instanceof Error ? err.message : String(err),
             });
+            throw err;
           }
         }
       }
@@ -1947,6 +1959,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       log.warn('unbind Codex OAuth provider after disconnect failed', {
         error: err instanceof Error ? err.message : String(err),
       });
+      if (activeIntent.explicitRequested) throw err;
     }
   }
 

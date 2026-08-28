@@ -1,8 +1,14 @@
 import { app } from 'electron';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import {
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+  LOCAL_DATA_OWNER_ID,
+} from '../appSessionState.js';
+import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
 import {
   isConnectionSourceKind,
   NATIVE_PROVIDER_CONNECTION_SOURCE,
@@ -10,6 +16,7 @@ import {
   type NativeHarnessInheritedProviderId,
   type NativeProviderId,
 } from './model-discovery/connection-source.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 
 const NATIVE_PROVIDER_IDS = [
   'anthropic',
@@ -18,6 +25,7 @@ const NATIVE_PROVIDER_IDS = [
 ] as const satisfies readonly NativeProviderId[];
 type BindingFile = Partial<Record<NativeProviderId, string>> & {
   legacyClaimOwner?: string;
+  legacyClaimToken?: string;
   /**
    * 被**显式登出**过、且尚未重新授权的 provider（值 = 执行登出的 owner，仅供诊断）。
    *
@@ -66,14 +74,35 @@ type BindingRead =
   /** 根有效、各 provider 归属可信，只有 revoked 这个字段被改坏。 */
   | { ok: false; reason: 'badRevoked'; bindings: Omit<BindingFile, 'revoked'> };
 
+let nativeBindingMutationLockDepth = 0;
+
 function readBindingsOrFail(): BindingRead {
+  const file = bindingPath();
   let raw: string;
   try {
-    raw = fs.readFileSync(bindingPath(), 'utf8');
-  } catch (err) {
-    // 文件不存在 = 合法的首次状态（还没有任何人绑定过）；其它读失败（EACCES / EIO 等）
-    // 说明归属不明，不能当成空。
-    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return { ok: true, bindings: {} };
+    if (nativeBindingMutationLockDepth > 0) {
+      const restored = readAtomicFileSync(file);
+      if (restored === null) return { ok: true, bindings: {} };
+      raw = restored;
+    } else {
+      try {
+        // The common read path has no filesystem side effects and therefore
+        // stays off the synchronous SQLite writer lock.
+        raw = fs.readFileSync(file, 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
+        if (!fs.existsSync(`${file}.bak`)) return { ok: true, bindings: {} };
+        // Restoring `<file>.bak` is a mutation. Acquire the same lock as the
+        // writer and recheck inside it so a reader cannot interrupt the
+        // Windows backup-exchange window.
+        return withNativeBindingMutationLock<BindingRead>(
+          { ok: false, reason: 'unreadable' },
+          () => readBindingsOrFail(),
+        );
+      }
+    }
+  } catch {
+    // EACCES / EIO / 无法恢复原子备份都说明归属不明，不能当成空。
     return { ok: false, reason: 'unreadable' };
   }
   try {
@@ -105,10 +134,260 @@ function readBindingsOrFail(): BindingRead {
 
 function writeBindings(value: BindingFile): void {
   const file = bindingPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
-  fs.renameSync(tmp, file);
+  atomicWriteFileSync(file, JSON.stringify(value, null, 2));
+  // Flush the published file on every platform. On Windows this maps to
+  // FlushFileBuffers and is the durable barrier available for a renamed
+  // file; POSIX additionally flushes the parent directory below.
+  // Windows requires a writable handle for FlushFileBuffers. The binding file is
+  // created with owner-only permissions, so r+ remains safe on POSIX while also
+  // making the post-rename durability barrier work on Windows.
+  const finalHandle = fs.openSync(file, 'r+');
+  try {
+    fs.fsyncSync(finalHandle);
+  } finally {
+    fs.closeSync(finalHandle);
+  }
+  syncParentDirectory(file);
+}
+
+const BINDING_MUTATION_LOCK_DB_SUFFIX = '.mutation-lock.db';
+
+function syncParentDirectory(file: string): void {
+  let dirHandle: number | undefined;
+  try {
+    dirHandle = fs.openSync(path.dirname(file), 'r');
+    fs.fsyncSync(dirHandle);
+  } catch (error) {
+    // Windows does not support opening directories on every filesystem. The
+    // final-file FlushFileBuffers above remains the fallback durability
+    // barrier in that case; do not turn a successful binding commit into a
+    // logout merely because directory fsync is unavailable.
+    if (process.platform !== 'win32') throw error;
+  } finally {
+    if (dirHandle !== undefined) fs.closeSync(dirHandle);
+  }
+}
+
+function withNativeBindingMutationLock<T>(
+  fallback: T,
+  operation: () => T,
+  opts?: { throwOnLockFailure?: boolean },
+): T {
+  const lockDbPath = `${bindingPath()}${BINDING_MUTATION_LOCK_DB_SUFFIX}`;
+  fs.mkdirSync(path.dirname(lockDbPath), { recursive: true });
+  let lockDb: ReturnType<typeof createBetterSqliteDatabase> | null = null;
+  try {
+    lockDb = createBetterSqliteDatabase(lockDbPath);
+    lockDb.pragma('busy_timeout = 30000');
+    lockDb.exec(
+      'CREATE TABLE IF NOT EXISTS binding_mutation_lock (id INTEGER PRIMARY KEY CHECK (id = 1))',
+    );
+    lockDb.exec('BEGIN IMMEDIATE');
+  } catch (error) {
+    try {
+      lockDb?.close();
+    } catch {
+      // Preserve the acquisition error; close is best effort on a failed open.
+    }
+    if (opts?.throwOnLockFailure) {
+      throw new Error(
+        `failed to acquire native provider binding mutation lock: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return fallback;
+  }
+  try {
+    nativeBindingMutationLockDepth += 1;
+    return operation();
+  } finally {
+    nativeBindingMutationLockDepth -= 1;
+    try {
+      // The transaction exists only to hold SQLite's cross-process writer
+      // lock while the JSON read-modify-write runs; no lock-db state is changed.
+      lockDb.exec('ROLLBACK');
+    } catch {
+      // Closing the connection still releases SQLite's OS-level lock.
+    }
+    lockDb.close();
+  }
+}
+
+function withRequiredNativeBindingMutationLock<T>(operation: () => T): T {
+  return withNativeBindingMutationLock<T>(undefined as T, operation, {
+    throwOnLockFailure: true,
+  });
+}
+
+export type LegacyNativeProviderAuthReservation =
+  'claimed' | 'already-owned' | 'owned-by-other' | 'failed';
+
+export interface LegacyNativeProviderAuthReservationDetails {
+  status: LegacyNativeProviderAuthReservation;
+  claimToken?: string;
+}
+
+export type PendingLegacyNativeProviderAuthRecovery =
+  | 'none'
+  | 'finalized'
+  | 'released'
+  | 'failed';
+
+export type LegacyNativeProviderAuthOwnerRead =
+  | { status: 'none' }
+  | { status: 'owned'; ownerId: string }
+  | { status: 'failed' };
+
+/** Read a durable legacy namespace owner without creating or finalizing a claim. */
+export function readLegacyNativeProviderAuthOwner(): LegacyNativeProviderAuthOwnerRead {
+  const read = readBindingsOrFail();
+  if (!read.ok) return { status: 'failed' };
+  const bindings = read.bindings;
+  if (!('legacyClaimOwner' in bindings)) return { status: 'none' };
+  if ('legacyClaimToken' in bindings) return { status: 'failed' };
+  const ownerId =
+    typeof bindings.legacyClaimOwner === 'string' ? bindings.legacyClaimOwner.trim() : '';
+  if (!ownerId || ownerId === LOCAL_DATA_OWNER_ID) return { status: 'failed' };
+  return { status: 'owned', ownerId };
+}
+
+function reserveLegacyNativeProviderAuthOwnerWithMode(
+  ownerId: string,
+  provisional: boolean,
+): LegacyNativeProviderAuthReservationDetails {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) {
+    return { status: 'failed' };
+  }
+  // Stable repair and ordinary same-owner refresh both reach this helper. A
+  // tokenless matching (or different) owner is a definitive no-op in either
+  // mode, so avoid blocking the Electron main thread on the synchronous writer
+  // lock. Missing or provisional state still enters the lock and is rechecked.
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return { status: 'failed' };
+  const bindings = snapshot.bindings;
+  if ('legacyClaimOwner' in bindings) {
+    if (bindings.legacyClaimOwner !== normalizedOwnerId) {
+      return { status: 'owned-by-other' };
+    }
+    if (!('legacyClaimToken' in bindings)) {
+      return { status: 'already-owned' };
+    }
+  }
+  return withNativeBindingMutationLock<LegacyNativeProviderAuthReservationDetails>(
+    { status: 'failed' },
+    () => {
+      try {
+        const read = readBindingsOrFail();
+        if (!read.ok) return { status: 'failed' };
+        const bindings = read.bindings;
+        if ('legacyClaimOwner' in bindings) {
+          if (bindings.legacyClaimOwner !== normalizedOwnerId) {
+            return { status: 'owned-by-other' };
+          }
+          if (!provisional && bindings.legacyClaimToken) {
+            const next = { ...bindings };
+            delete next.legacyClaimToken;
+            writeBindings(next);
+          }
+          return { status: 'already-owned' };
+        }
+        const claimToken = provisional ? randomUUID() : undefined;
+        writeBindings({
+          ...bindings,
+          legacyClaimOwner: normalizedOwnerId,
+          ...(claimToken ? { legacyClaimToken: claimToken } : {}),
+        });
+        return { status: 'claimed', ...(claimToken ? { claimToken } : {}) };
+      } catch {
+        return { status: 'failed' };
+      }
+    },
+  );
+}
+
+/** Reserve the one-shot native-provider namespace at the verified cloud commit edge. */
+export function reserveLegacyNativeProviderAuthOwnerDetailed(
+  ownerId: string,
+): LegacyNativeProviderAuthReservationDetails {
+  return reserveLegacyNativeProviderAuthOwnerWithMode(ownerId, true);
+}
+
+/** Reserve or finalize the namespace for an owner whose cloud session is already durable. */
+export function reserveCommittedLegacyNativeProviderAuthOwner(
+  ownerId: string,
+): LegacyNativeProviderAuthReservation {
+  return reserveLegacyNativeProviderAuthOwnerWithMode(ownerId, false).status;
+}
+
+export function reserveLegacyNativeProviderAuthOwner(
+  ownerId: string,
+): LegacyNativeProviderAuthReservation {
+  return reserveLegacyNativeProviderAuthOwnerDetailed(ownerId).status;
+}
+
+export function releaseLegacyNativeProviderAuthOwner(ownerId: string, claimToken: string): boolean {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId || !claimToken) return false;
+  return withNativeBindingMutationLock(false, () => {
+    try {
+      const read = readBindingsOrFail();
+      if (!read.ok) return false;
+      const bindings = read.bindings;
+      if (
+        bindings.legacyClaimOwner !== normalizedOwnerId ||
+        bindings.legacyClaimToken !== claimToken
+      ) {
+        return false;
+      }
+      const next = { ...bindings };
+      delete next.legacyClaimOwner;
+      delete next.legacyClaimToken;
+      writeBindings(next);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Settle a durable pre-commit legacy-namespace claim. The token belonging to
+ * the currently committed cloud owner is finalized; a token for any other
+ * owner is an interrupted reservation and is released. Tokenless ownership is
+ * already committed and remains untouched.
+ */
+export function recoverPendingLegacyNativeProviderAuthOwner(
+  committedOwnerId: string | null,
+): PendingLegacyNativeProviderAuthRecovery {
+  const normalizedCommittedOwnerId = committedOwnerId?.trim() || null;
+  // A tokenless binding is already durable ownership, not pending recovery.
+  // Read it without taking the synchronous writer lock so stable-owner
+  // initialization cannot block the Electron main thread on a no-op.
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return 'failed';
+  if (!snapshot.bindings.legacyClaimToken) return 'none';
+  return withNativeBindingMutationLock<PendingLegacyNativeProviderAuthRecovery>('failed', () => {
+    try {
+      const read = readBindingsOrFail();
+      if (!read.ok) return 'failed';
+      const bindings = read.bindings;
+      if (!bindings.legacyClaimToken) return 'none';
+      const next = { ...bindings };
+      if (bindings.legacyClaimOwner === normalizedCommittedOwnerId) {
+        delete next.legacyClaimToken;
+        writeBindings(next);
+        return 'finalized';
+      }
+      delete next.legacyClaimOwner;
+      delete next.legacyClaimToken;
+      writeBindings(next);
+      return 'released';
+    } catch {
+      return 'failed';
+    }
+  });
 }
 
 /** Return true only when the native OAuth credential is explicitly bound to this owner. */
@@ -138,54 +417,58 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
 export function bindNativeProviderAuth(provider: NativeProviderId): void {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner) throw new Error('cannot bind native provider auth without an active data owner');
-  const read = readBindingsOrFail();
-  if (read.ok) {
-    const bindings = read.bindings;
-    // 显式授权 = 用户重新表达了「我要连它」，撤销标记就此作废。
-    if (bindings.revoked && provider in bindings.revoked) {
-      const revoked = { ...bindings.revoked };
-      delete revoked[provider];
-      bindings.revoked = revoked;
+  const written = withNativeBindingMutationLock(false, () => {
+    const read = readBindingsOrFail();
+    if (read.ok) {
+      const bindings = read.bindings;
+      // 显式授权 = 用户重新表达了「我要连它」，撤销标记就此作废。
+      if (bindings.revoked && provider in bindings.revoked) {
+        const revoked = { ...bindings.revoked };
+        delete revoked[provider];
+        bindings.revoked = revoked;
+      }
+      // 记下「这是用户自己在 Cindy 里授权的」——继承类文案据此不再对它成立。
+      writeBindings({
+        ...bindings,
+        selfAuthorized: { ...bindings.selfAuthorized, [provider]: owner },
+        sources: {
+          ...bindings.sources,
+          [provider]: 'explicit-provider-oauth',
+        },
+        [provider]: owner,
+      });
+      return true;
     }
-    // 记下「这是用户自己在 Cindy 里授权的」——继承类文案据此不再对它成立。
+    // 归属信息有损:用户正在显式授权,不写等于让他连不上,所以必须写;但写法要保守。
+    //
+    //   · badRevoked —— 各 provider 的归属仍然可信,原样保留。直接重写成「只有本次授权的这
+    //     一家」会抹掉别人的 owner,那份凭证下一次就被自动认领给当前账号,等于用一次修复换
+    //     来一个新的越权口子。
+    //   · unreadable —— 连 legacyClaimOwner 带各家 owner 一起没了,无可保留;同样不能就这么
+    //     写一份「只有我」的干净文件,那会让其余 provider 的残留凭证在文件恢复可读后立刻可被
+    //     认领(PR #548 review)。
+    //
+    // 两种情形共用同一条保守收尾:凡是归属无从确认的 provider,一律按「撤销过」对待,自动继承
+    // 就此关闭 —— 无从得知谁被撤销过时,丢弃标记等于给所有残留凭证放行。用户对它们各自显式
+    // 授权即可恢复。
+    const salvaged = read.reason === 'badRevoked' ? read.bindings : {};
+    const suppressed: Partial<Record<NativeProviderId, string>> = {};
+    for (const other of NATIVE_PROVIDER_IDS) {
+      if (other !== provider) suppressed[other] = owner;
+    }
     writeBindings({
-      ...bindings,
-      selfAuthorized: { ...bindings.selfAuthorized, [provider]: owner },
+      ...salvaged,
+      revoked: suppressed,
+      selfAuthorized: { ...salvaged.selfAuthorized, [provider]: owner },
       sources: {
-        ...bindings.sources,
+        ...salvaged.sources,
         [provider]: 'explicit-provider-oauth',
       },
       [provider]: owner,
     });
-    return;
-  }
-  // 归属信息有损:用户正在显式授权,不写等于让他连不上,所以必须写;但写法要保守。
-  //
-  //   · badRevoked —— 各 provider 的归属仍然可信,原样保留。直接重写成「只有本次授权的这
-  //     一家」会抹掉别人的 owner,那份凭证下一次就被自动认领给当前账号,等于用一次修复换
-  //     来一个新的越权口子。
-  //   · unreadable —— 连 legacyClaimOwner 带各家 owner 一起没了,无可保留;同样不能就这么
-  //     写一份「只有我」的干净文件,那会让其余 provider 的残留凭证在文件恢复可读后立刻可被
-  //     认领(PR #548 review)。
-  //
-  // 两种情形共用同一条保守收尾:凡是归属无从确认的 provider,一律按「撤销过」对待,自动继承
-  // 就此关闭 —— 无从得知谁被撤销过时,丢弃标记等于给所有残留凭证放行。用户对它们各自显式
-  // 授权即可恢复。
-  const salvaged = read.reason === 'badRevoked' ? read.bindings : {};
-  const suppressed: Partial<Record<NativeProviderId, string>> = {};
-  for (const other of NATIVE_PROVIDER_IDS) {
-    if (other !== provider) suppressed[other] = owner;
-  }
-  writeBindings({
-    ...salvaged,
-    revoked: suppressed,
-    selfAuthorized: { ...salvaged.selfAuthorized, [provider]: owner },
-    sources: {
-      ...salvaged.sources,
-      [provider]: 'explicit-provider-oauth',
-    },
-    [provider]: owner,
+    return true;
   });
+  if (!written) throw new Error('cannot acquire native provider binding lease');
 }
 
 /**
@@ -234,28 +517,43 @@ export function unbindNativeProviderAuth(
   // 不写也是安全的:文件读不出来时 isNativeProviderAuthBound 已经一律 false(用户看到的就是
   // 未连接),claimDetectedNativeProviderAuth 也已在同一条件下拒绝认领 —— 撤销标记要挡的那
   // 件事,此刻本来就发生不了。凭证删除在调用方,不受这里影响。
-  const read = readBindingsOrFail();
-  if (!read.ok) return;
-  const bindings = read.bindings;
-  const owner = getActiveAppSession().dataOwnerId;
-  const marking = opts?.revoked === true && !!owner;
-  const hadSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
-  if (!(provider in bindings) && !marking && !hadSelfAuthorized) return;
-  delete bindings[provider];
-  // 授权来路随绑定一起作废:登出之后这份凭证若还在本机,它对 Cindy 就重新是「外部已有的
-  // 凭证」，继承语义（及其文案）重新成立。
-  if (hadSelfAuthorized) {
-    const selfAuthorized = { ...bindings.selfAuthorized };
-    delete selfAuthorized[provider];
-    bindings.selfAuthorized = selfAuthorized;
+  // 服务端失效会先做一次 early-unbind，随后 runLogout 再无 revoked 地收口。第二次若
+  // snapshot 已证明 slot、来路字段都不存在，就是确定性 no-op，不要在 Electron main
+  // thread 上同步等待跨进程 writer lock。显式登出仍必须进锁并持久化 revoked。
+  if (opts?.revoked !== true) {
+    const snapshot = readBindingsOrFail();
+    if (snapshot.ok) {
+      const bindings = snapshot.bindings;
+      const hasSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
+      const hasSource = bindings.sources?.[provider] !== undefined;
+      if (!(provider in bindings) && !hasSelfAuthorized && !hasSource) return;
+    }
   }
-  if (bindings.sources?.[provider] !== undefined) {
-    const sources = { ...bindings.sources };
-    delete sources[provider];
-    bindings.sources = sources;
-  }
-  if (marking) bindings.revoked = { ...(bindings.revoked ?? {}), [provider]: owner as string };
-  writeBindings(bindings);
+  withRequiredNativeBindingMutationLock(() => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return;
+    const bindings = read.bindings;
+    const owner = getActiveAppSession().dataOwnerId;
+    const marking = opts?.revoked === true && !!owner;
+    const hadSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
+    const hadSource = bindings.sources?.[provider] !== undefined;
+    if (!(provider in bindings) && !marking && !hadSelfAuthorized && !hadSource) return;
+    delete bindings[provider];
+    // 授权来路随绑定一起作废:登出之后这份凭证若还在本机,它对 Cindy 就重新是「外部已有的
+    // 凭证」，继承语义（及其文案）重新成立。
+    if (hadSelfAuthorized) {
+      const selfAuthorized = { ...bindings.selfAuthorized };
+      delete selfAuthorized[provider];
+      bindings.selfAuthorized = selfAuthorized;
+    }
+    if (hadSource) {
+      const sources = { ...bindings.sources };
+      delete sources[provider];
+      bindings.sources = sources;
+    }
+    if (marking) bindings.revoked = { ...(bindings.revoked ?? {}), [provider]: owner as string };
+    writeBindings(bindings);
+  });
 }
 
 /**
@@ -269,29 +567,128 @@ export function migrateLegacyNativeProviderAuthBindings(
 ): void {
   // 同 claimDetectedNativeProviderAuth:一次性迁移也是写路径,归属读不出来就不能推进
   // (还会把 legacyClaimOwner 名额一起消费掉,损失不可逆)。
-  const read = readBindingsOrFail();
-  if (!read.ok) return;
-  const bindings = read.bindings;
-  if (bindings.legacyClaimOwner) return;
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return;
+  if (!needsLegacyNativeProviderAuthMigration(snapshot.bindings, ownerId, available)) return;
 
-  const next: BindingFile = { ...bindings, legacyClaimOwner: ownerId };
-  for (const provider of NATIVE_PROVIDER_IDS) {
-    // 显式登出过的 provider 一律跳过:这条一次性迁移同样不能把用户弃用掉的残留凭证
-    // 认领回来(PR #548 review)。
-    if (bindings.revoked && provider in bindings.revoked) continue;
-    if (available[provider] && !next[provider]) {
-      next[provider] = ownerId;
-      next.sources = {
-        ...next.sources,
-        [provider]: NATIVE_PROVIDER_CONNECTION_SOURCE[provider],
-      };
-      // xAI 的旧 safeStorage blob 也是 Cindy 自己完成的 OAuth，不是本机 CLI 继承。
-      if (provider === 'xai') {
-        next.selfAuthorized = { ...next.selfAuthorized, xai: ownerId };
+  withNativeBindingMutationLock(undefined, () => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return;
+    const bindings = read.bindings;
+    if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== ownerId) return;
+
+    const next: BindingFile = { ...bindings };
+    let changed = false;
+    if (!('legacyClaimOwner' in bindings)) {
+      next.legacyClaimOwner = ownerId;
+      changed = true;
+    }
+    for (const provider of NATIVE_PROVIDER_IDS) {
+      // 显式登出过的 provider 一律跳过:这条一次性迁移同样不能把用户弃用掉的残留凭证
+      // 认领回来(PR #548 review)。
+      if (bindings.revoked && provider in bindings.revoked) continue;
+      if (available[provider] && !(provider in bindings)) {
+        next[provider] = ownerId;
+        changed = true;
+        next.sources = {
+          ...next.sources,
+          [provider]: NATIVE_PROVIDER_CONNECTION_SOURCE[provider],
+        };
+        // xAI 的旧 safeStorage blob 也是 Cindy 自己完成的 OAuth，不是本机 CLI 继承。
+        if (provider === 'xai') {
+          next.selfAuthorized = { ...next.selfAuthorized, xai: ownerId };
+        }
       }
     }
+    if (changed) writeBindings(next);
+  });
+}
+
+function needsLegacyNativeProviderAuthMigration(
+  bindings: BindingFile,
+  ownerId: string,
+  available: Partial<Record<NativeProviderId, boolean>>,
+): boolean {
+  if ('legacyClaimOwner' in bindings) {
+    if (bindings.legacyClaimOwner !== ownerId) return false;
+  } else {
+    return true;
   }
-  writeBindings(next);
+  return NATIVE_PROVIDER_IDS.some(
+    (provider) =>
+      !(bindings.revoked && provider in bindings.revoked) &&
+      available[provider] === true &&
+      !(provider in bindings),
+  );
+}
+
+/**
+ * Move native Harness credentials that were claimed by the account-free local
+ * session to the first verified cloud owner.
+ *
+ * Local mode uses a stable synthetic owner (`local-v1`) so provider reads can
+ * still be owner-scoped before login. Once a real Cindy account is verified,
+ * those same machine-level Claude/Codex credentials must follow that first
+ * cloud owner; otherwise the normal owner equality check correctly (but
+ * unexpectedly) hides them after login. This path is intentionally narrower
+ * than a generic claim: it only rewrites slots explicitly owned by local-v1,
+ * and an existing legacy claim owned by another account remains fail-closed.
+ */
+export function migrateLocalNativeProviderAuthBindings(ownerId: string): boolean {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) return false;
+  if (getActiveAppSession().dataOwnerId !== normalizedOwnerId) return false;
+  // This helper is called after the durable cloud commit. Keep the same floor
+  // as other binding writers for callers that accidentally invoke it during a
+  // different owner transition.
+  if (isAppSessionBoundaryPending()) return false;
+
+  // Stable-owner initialization commonly reaches this helper from ordinary
+  // renderer setup. If the snapshot proves that no local-v1 slot can move and
+  // the one-shot namespace is already owned, avoid waiting on the synchronous
+  // writer lock; the locked path below still rechecks before any write.
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return false;
+  const snapshotBindings = snapshot.bindings;
+  if (
+    snapshotBindings.legacyClaimOwner === normalizedOwnerId &&
+    !(['anthropic', 'openai'] as const).some(
+      (provider) =>
+        !(snapshotBindings.revoked && provider in snapshotBindings.revoked) &&
+        snapshotBindings[provider] === LOCAL_DATA_OWNER_ID,
+    )
+  ) {
+    return false;
+  }
+
+  return withNativeBindingMutationLock(false, () => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return false;
+    const bindings = read.bindings;
+
+    // A prior cloud owner winning the legacy claim is authoritative. Do not let
+    // a later account inherit any local residue that was not moved at the time.
+    if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== normalizedOwnerId) {
+      return false;
+    }
+
+    const next: BindingFile = { ...bindings };
+    let migrated = false;
+    for (const provider of ['anthropic', 'openai'] as const) {
+      if (bindings.revoked && provider in bindings.revoked) continue;
+      if (bindings[provider] !== LOCAL_DATA_OWNER_ID) continue;
+      next[provider] = normalizedOwnerId;
+      migrated = true;
+    }
+
+    // Reserve the one-shot legacy claim for this first cloud owner. This also
+    // prevents a later account from claiming another local credential that
+    // appears after the initial login.
+    if (!('legacyClaimOwner' in next)) next.legacyClaimOwner = normalizedOwnerId;
+    if (!migrated && 'legacyClaimOwner' in bindings) return false;
+    writeBindings(next);
+    return migrated;
+  });
 }
 
 /**
@@ -326,27 +723,40 @@ export function claimDetectedNativeProviderAuth(
   // Callers reached from an async settle (Codex reconcile) additionally pin an
   // owner+generation snapshot; this guard is the floor every caller gets.
   if (isAppSessionBoundaryPending()) return false;
-  // 归属文件读不出来 = 归属不明,一律不认领:这条路径是**写**路径,把损坏当空会把共享
-  // keychain 里可能属于别人的凭证判给当前账号,并覆盖掉原有归属(PR #548 review)。
-  const read = readBindingsOrFail();
-  if (!read.ok) return false;
-  const bindings = read.bindings;
-  // Key-presence, not truthiness: a corrupted/empty-string slot must count as
-  // "claimed by unknown" and fail closed, never as re-claimable (matches
-  // unbindNativeProviderAuth's `in` pattern).
-  if (provider in bindings) return false;
-  if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== owner) return false;
-  // 被显式登出过就绝不自动认领,且**不比对 owner**:凭证在共享的系统 keychain / CLI 里,
-  // 换个账号它仍是登出那个账号的凭证 —— 按 owner 比对等于给下一个账号开了继承别人凭证
-  // 的口子。解除只有「用户再次显式授权」一条路(PR #548 review)。
-  if (bindings.revoked && provider in bindings.revoked) return false;
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return false;
+  if (provider in snapshot.bindings) return false;
+  if (
+    ('legacyClaimOwner' in snapshot.bindings && snapshot.bindings.legacyClaimOwner !== owner) ||
+    (snapshot.bindings.revoked && provider in snapshot.bindings.revoked)
+  ) {
+    return false;
+  }
   if (!hasCredential()) return false;
-  writeBindings({
-    ...bindings,
-    sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
-    [provider]: owner,
+
+  return withNativeBindingMutationLock(false, () => {
+    // 归属文件读不出来 = 归属不明,一律不认领:这条路径是**写**路径,把损坏当空会把共享
+    // keychain 里可能属于别人的凭证判给当前账号,并覆盖掉原有归属(PR #548 review)。
+    const read = readBindingsOrFail();
+    if (!read.ok) return false;
+    const bindings = read.bindings;
+    // Key-presence, not truthiness: a corrupted/empty-string slot must count as
+    // "claimed by unknown" and fail closed, never as re-claimable (matches
+    // unbindNativeProviderAuth's `in` pattern).
+    if (provider in bindings) return false;
+    if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== owner) return false;
+    // 被显式登出过就绝不自动认领,且**不比对 owner**:凭证在共享的系统 keychain / CLI 里,
+    // 换个账号它仍是登出那个账号的凭证 —— 按 owner 比对等于给下一个账号开了继承别人凭证
+    // 的口子。解除只有「用户再次显式授权」一条路(PR #548 review)。
+    if (bindings.revoked && provider in bindings.revoked) return false;
+    if (!hasCredential()) return false;
+    writeBindings({
+      ...bindings,
+      sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
+      [provider]: owner,
+    });
+    return true;
   });
-  return true;
 }
 
 /**
@@ -362,16 +772,29 @@ export function restoreNativeProviderAuthForRecovery(
 ): boolean {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner || owner !== expectedOwner || isAppSessionBoundaryPending()) return false;
-  const read = readBindingsOrFail();
-  if (!read.ok) return false;
-  const bindings = read.bindings;
-  if (bindings.revoked && provider in bindings.revoked) return false;
+  // Recovery runs on the Electron main thread after Codex reconciliation. Avoid
+  // synchronously waiting on the cross-process writer lock when a read-only
+  // snapshot already proves that no write is needed. Any potentially writable
+  // state is still rechecked under the lock below.
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return false;
+  const snapshotBindings = snapshot.bindings;
+  if (snapshotBindings.revoked && provider in snapshotBindings.revoked) return false;
   if (!hasCredential()) return false;
-  if (provider in bindings) return bindings[provider] === expectedOwner;
-  writeBindings({
-    ...bindings,
-    sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
-    [provider]: expectedOwner,
+  if (provider in snapshotBindings) return snapshotBindings[provider] === expectedOwner;
+
+  return withNativeBindingMutationLock(false, () => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return false;
+    const bindings = read.bindings;
+    if (bindings.revoked && provider in bindings.revoked) return false;
+    if (!hasCredential()) return false;
+    if (provider in bindings) return bindings[provider] === expectedOwner;
+    writeBindings({
+      ...bindings,
+      sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
+      [provider]: expectedOwner,
+    });
+    return true;
   });
-  return true;
 }

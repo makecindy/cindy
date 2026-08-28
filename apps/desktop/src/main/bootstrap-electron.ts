@@ -61,6 +61,8 @@ import {
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
 
+let retryPiRuntimeAfterNetworkRecovery: (() => void) | null = null;
+let disposePiRuntimeRecovery: (() => void) | null = null;
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
 // both downloads, but allow normal consumer connections to finish while the
 // splash displays real byte progress.
@@ -213,7 +215,6 @@ import {
   prepare as binaryPrepare,
   peekNeedsDownload as binaryPeekNeedsDownload,
   broadcastResetForStep as binaryBroadcastResetForStep,
-  getCachedBinaryStatus,
   type AgentBinaryKind,
   type PrepareResult,
 } from './agent-binaries';
@@ -233,7 +234,10 @@ import {
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
-import { warmStaleProcessProvenance } from './ownerNamespaceMigration.js';
+import {
+  hasExclusiveSharedLegacyUserDataAccess,
+  warmStaleProcessProvenance,
+} from './ownerNamespaceMigration.js';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
@@ -281,7 +285,10 @@ import {
   stageLocalFileToCache,
 } from './file-browser/remote-file-cache';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
-import { legacyDialogueUserDataDirNames } from '@cindy/maker-shared/brand-identity';
+import {
+  BRAND_IDENTITY,
+  legacyDialogueUserDataDirNames,
+} from '@cindy/maker-shared/brand-identity';
 import * as videoCacheStore from './videoCacheStore';
 import { imageSchemePrivilege, registerImageProtocolHandler } from './imageProtocol';
 import { videoSchemePrivilege, registerVideoProtocolHandler } from './videoProtocol';
@@ -327,6 +334,12 @@ import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
 } from './legacyUserDataMigration';
+import {
+  adoptLocalProfileDatabase,
+  createProductionLocalProfileDataMigrationDeps,
+  inspectPassiveLocalProfileAdoption,
+} from './localProfileDataMigration';
+import { acquireWindowsPackagedInstanceBarrier } from './windowsPackagedInstanceBarrier';
 import { registerFsBrowseIpc } from './fsBrowse/ipc';
 import {
   ensureReady as localDbEnsureReady,
@@ -525,7 +538,9 @@ import {
   setProviderAccessRuntimeRefreshListener,
   restartCodexAfterAuthModeChange,
   waitForInitialCustomMcpRefresh,
+  registerPiAgentIfAvailable,
 } from './maker-host/index.js';
+import { createPiRuntimeRecovery } from './agent-binaries/pi-runtime-recovery.js';
 import { createDynamicMaker } from './maker-host/dynamic-maker.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
@@ -901,6 +916,7 @@ import {
   refreshGhostLocalization,
   registerGhostIpc,
   runStableOwnerPostCommitTask,
+  setGhostNodeRuntimeStartAttemptContextReader,
   setGhostsChangedObserver,
   suspendAllGhosts,
   waitForGhostMutations,
@@ -3182,6 +3198,9 @@ const windowsClosePromptFallback = createWindowsClosePromptFallbackController(
 
 app.on('before-quit', () => {
   isQuitting = true;
+  disposePiRuntimeRecovery?.();
+  retryPiRuntimeAfterNetworkRecovery = null;
+  disposePiRuntimeRecovery = null;
   windowsClosePromptFallback.dispose();
   destroyWindowsTray();
   disposeUpdatePresentationRecovery();
@@ -3240,6 +3259,7 @@ function scheduleAppFocusSync(): void {
 }
 
 app.on('browser-window-focus', (_event, win) => {
+  retryPiRuntimeAfterNetworkRecovery?.();
   if (win === mainWindowRef) updatePresentationRecovery?.onWindowFocused();
   if (appFocusSyncTimer) {
     clearTimeout(appFocusSyncTimer);
@@ -3730,6 +3750,29 @@ const createWindow = () => {
 
   // 装饰动画闸门的兜底信号。主窗在 running turn 期间会关掉 backgroundThrottling,
   // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
+  setGhostNodeRuntimeStartAttemptContextReader(() => {
+    let observedMainWindowState:
+      'absent' | 'hidden' | 'minimized' | 'visible-unfocused' | 'focused' | 'unknown' = 'unknown';
+    try {
+      if (mainWindow.isDestroyed()) observedMainWindowState = 'absent';
+      else if (mainWindow.isMinimized()) observedMainWindowState = 'minimized';
+      else if (!mainWindow.isVisible()) observedMainWindowState = 'hidden';
+      else if (mainWindow.isFocused()) observedMainWindowState = 'focused';
+      else observedMainWindowState = 'visible-unfocused';
+    } catch {
+      observedMainWindowState = 'unknown';
+    }
+    let observedScreenState: 'active' | 'idle' | 'locked' | 'unknown' = 'unknown';
+    try {
+      const state = powerMonitor.getSystemIdleState(60);
+      if (state === 'active' || state === 'idle' || state === 'locked') {
+        observedScreenState = state;
+      }
+    } catch {
+      observedScreenState = 'unknown';
+    }
+    return { observedMainWindowState, observedScreenState };
+  });
   installWindowHiddenBroadcast(mainWindow);
   // Keyboard hello when the window comes back from hide / minimize / Dock.
   attachWorkLouderCodexWindowReveal(mainWindow);
@@ -5461,9 +5504,28 @@ const registerIpcHandlers = () => {
   // getMaker() 在构造期就读 binary path, 早于 splash 调用会抛错; 第一次 splash 成功后置 true,
   // 后续 retry 走 check-environment 不重复注册 (重复 ipcMain.handle 会覆盖同名 handler)。
   let makerIpcsRegistered = false;
-  // Pi 是“本次启动可选”的能力：一旦首次准备失败，就算后续清单/CDN恢复，
-  // 也不再把 Pi 动态塞回已经构造好的 Maker，避免返回状态与实际能力不一致。
-  let piDisabledForLaunch = false;
+  // Pi 是“本次启动可选”的能力：准备失败不阻塞主界面，交给 recovery 在网络恢复后
+  // 重新走 managed prepare，并在成功后动态注册到当前 Maker。
+  const piRuntimeRecovery = createPiRuntimeRecovery({
+    isOnline: () => net.isOnline(),
+    prepare: async () => {
+      const result = await binaryPrepare('pi', {
+        broadcastFailure: false,
+        broadcastProgress: false,
+        signal: AbortSignal.timeout(PI_AGENT_INSTALL_STARTUP_DEADLINE_MS),
+      });
+      return result;
+    },
+    register: () => registerPiAgentIfAvailable(),
+    onRegistered: () => {
+      console.info('[bootstrap-electron] Pi runtime recovered and agent registered');
+    },
+    logWarn: (message, error) => console.warn(`[bootstrap-electron] ${message}`, error ?? ''),
+  });
+  retryPiRuntimeAfterNetworkRecovery = () => {
+    void piRuntimeRecovery.retryNow('window-focus');
+  };
+  disposePiRuntimeRecovery = () => piRuntimeRecovery.dispose();
   const registerMakerIpcsAfterSplash = async (): Promise<void> => {
     if (makerIpcsRegistered) return;
     // 模型供应商目录(providers.json)按「OSS 真源 / bundled 兜底」加载一次存内存:必须在第一次
@@ -5824,41 +5886,26 @@ const registerIpcHandlers = () => {
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
     let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
-    // 轮 27 LOW-4:首次准备失败后账号切换(同一进程),二进制可能已由后台
-    // 下载/手动放置变得可用 —— 轻量重试:意外可用则清除标志继续准备。
-    if (piDisabledForLaunch) {
-      const cached = getCachedBinaryStatus('pi');
-      if (cached?.binaryPath && cached.binaryPath.length > 0) {
-        piDisabledForLaunch = false;
-      }
-    }
-    if (piDisabledForLaunch) {
+    try {
+      const piRes = await binaryPrepare('pi', {
+        ...stepOptsFor('pi'),
+        broadcastFailure: false,
+        signal: piInstallSignal,
+      });
+      piInfo =
+        piRes.ready && piRes.path
+          ? { status: 'passed' as const, path: piRes.path }
+          : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
+    } catch (err: unknown) {
       piInfo = {
         status: 'failed' as const,
-        error: 'pi disabled for this launch after an earlier prepare failure',
+        error: err instanceof Error ? err.message : String(err),
       };
-    } else {
-      try {
-        const piRes = await binaryPrepare('pi', {
-          ...stepOptsFor('pi'),
-          broadcastFailure: false,
-          signal: piInstallSignal,
-        });
-        piInfo =
-          piRes.ready && piRes.path
-            ? { status: 'passed' as const, path: piRes.path }
-            : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
-      } catch (err: unknown) {
-        piInfo = {
-          status: 'failed' as const,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
     }
     if (piInfo.status === 'failed') {
-      piDisabledForLaunch = true;
+      piRuntimeRecovery.markUnavailable(piInfo.error);
       console.warn(
-        `[bootstrap-electron] pi binary prepare failed (non-fatal, pi disabled for this launch): ${piInfo.error}`,
+        `[bootstrap-electron] pi binary prepare failed (non-fatal, recovery scheduled): ${piInfo.error}`,
       );
     }
 
@@ -7480,6 +7527,34 @@ const registerIpcHandlers = () => {
           : await dialog.showOpenDialog(options);
         return result.canceled ? null : result.filePaths[0] ?? null;
       },
+      confirmActiveTaskCleanup: async ({ backupEnabled }) => {
+        const activeTaskWarning = t(
+          'settings.about.storage.dbSlimmingIncludeActiveConfirmDescription',
+        );
+        const detail = backupEnabled
+          ? activeTaskWarning
+          : `${activeTaskWarning}\n\n${t(
+              'settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup',
+            )}`;
+        const options: Electron.MessageBoxOptions = {
+          type: 'warning',
+          title: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+          message: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+          detail,
+          buttons: [
+            t('settings.about.storage.dbSlimmingRestartButton'),
+            t('settings.about.storage.cancelButton'),
+          ],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showMessageBox(ownerWindow, options)
+          : await dialog.showMessageBox(options);
+        return result.response === 0;
+      },
       confirmWithoutBackup: async () => {
         const options: Electron.MessageBoxOptions = {
           type: 'warning',
@@ -8038,9 +8113,61 @@ app.on('ready', async () => {
       }
       const user = authManager.getAuthState().user;
       if (user == null || user.id !== userId) return;
+      if (authManager.isPassiveSharedUserDataInstance()) {
+        const passivePreflight = await inspectPassiveLocalProfileAdoption(
+          user.id,
+          createProductionLocalProfileDataMigrationDeps(
+            app.getPath('userData'),
+            BRAND_IDENTITY.dbFilePrefix,
+            () => hasExclusiveSharedLegacyUserDataAccess(),
+          ),
+        );
+        if (passivePreflight.status === 'required') {
+          throw new Error('local profile database adoption is pending in the primary instance');
+        }
+        if (passivePreflight.status === 'failed') {
+          throw new Error(
+            `local profile database adoption preflight failed: ${passivePreflight.error}`,
+          );
+        }
+        return;
+      }
       // 首登轻量迁移(老 xdt-maker userData → Cindy):内部自带 marker 防重入与
       // 全量兜底,绝不 throw,失败不阻塞登录(ensureReady 照常建新库)。
       await runLegacyUserDataMigrationForUser(user.id);
+      // 登录前 local-v1 与登录后的 cloud owner 使用不同数据库文件。目标库不存在时
+      // 采用本地库，避免用户刚登录就看到空的任务/项目空间；目标库已存在则保持原样，
+      // 绝不覆盖账号已有内容。
+      const localProfileMigration = await adoptLocalProfileDatabase(
+        user.id,
+        createProductionLocalProfileDataMigrationDeps(
+          app.getPath('userData'),
+          BRAND_IDENTITY.dbFilePrefix,
+          () => hasExclusiveSharedLegacyUserDataAccess(),
+          process.platform === 'win32'
+            ? () =>
+                acquireWindowsPackagedInstanceBarrier({
+                  userDataDir: app.getPath('userData'),
+                  programName: BRAND_IDENTITY.executableName,
+                })
+            : undefined,
+        ),
+      );
+      if (localProfileMigration.status === 'failed') {
+        dbClientLog.error('local profile database adoption failed; blocking cloud database open', {
+          userId,
+          error: localProfileMigration.error,
+        });
+        throw new Error(`local profile database adoption failed: ${localProfileMigration.error}`);
+      } else if (localProfileMigration.status === 'claimed-by-other-owner') {
+        dbClientLog.warn('local profile database is already reserved for another cloud owner', {
+          userId,
+        });
+      } else if (localProfileMigration.status === 'adopted') {
+        dbClientLog.info('local profile database adopted for first cloud owner', {
+          userId,
+        });
+      }
     },
     onReady: async (userId) => {
       const startupHooksStartedAt = performance.now();

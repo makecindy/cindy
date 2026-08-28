@@ -167,8 +167,8 @@ export interface ReconcileRunMarkersResult {
  *   - 两份都没有 → 同样排 linger 退场。该 run 已经不存在了:删除 schedule 会级联删掉
  *     它的 `schedule_runs` 行,deferred run 也会被显式删除,这两种情况永远等不到一个终态
  *     状态。这里不可能是「标记建好但 run 还没落库」的极早期 —— 引擎先 `updateRun` 写
- *     sessionId、再 emit `session-bound` / `silenced`,而权威快照包含所有带 sessionId 的
- *     run,所以标记存在就意味着该 run 当时已进入快照范围。异步拉取的过期结果由调用方的
+ *     sessionId、再 emit `session-bound` / `silenced`,而权威快照包含所有 running run,
+ *     所以标记存在就意味着该 run 当时已进入快照范围。异步拉取的过期结果由调用方的
  *     seq 守卫挡掉,不会走到这里。
  *
  * **空的 dbRunStatus 不是异常,一样要对账**:权威查询在库里没有匹配行时合法返回空数组

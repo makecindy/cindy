@@ -664,6 +664,64 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
+  it('keeps tool image fallback unless the same turn embeds that URL as Markdown', () => {
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const items = normalizeRemoteMessages([
+      message({ id: 'u1', role: 'user', content: 'draw one', createdAt: '2026-01-01T00:00:01.000Z' }),
+      message({
+        id: 'tool-1',
+        role: 'tool_use',
+        toolUseId: 'tu-1',
+        content: { toolUseId: 'tu-1', toolName: 'image_generate', input: {} },
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }),
+      message({
+        id: 'result-1',
+        role: 'tool_result',
+        toolUseId: 'tu-1',
+        content: JSON.stringify({ xdt_image_url: url }),
+        createdAt: '2026-01-01T00:00:03.000Z',
+      }),
+      message({
+        id: 'steer-1',
+        role: 'user',
+        content: 'make it warmer',
+        agentMeta: { delivery: 'steer' },
+        createdAt: '2026-01-01T00:00:03.500Z',
+      }),
+      message({
+        id: 'a1',
+        role: 'assistant',
+        content: `![生成结果](${url})`,
+        createdAt: '2026-01-01T00:00:04.000Z',
+      }),
+      message({ id: 'u2', role: 'user', content: 'draw again', createdAt: '2026-01-01T00:00:05.000Z' }),
+      message({
+        id: 'tool-2',
+        role: 'tool_use',
+        toolUseId: 'tu-2',
+        content: { toolUseId: 'tu-2', toolName: 'image_generate', input: {} },
+        createdAt: '2026-01-01T00:00:06.000Z',
+      }),
+      message({
+        id: 'result-2',
+        role: 'tool_result',
+        toolUseId: 'tu-2',
+        content: JSON.stringify({ xdt_image_url: url }),
+        createdAt: '2026-01-01T00:00:07.000Z',
+      }),
+      message({
+        id: 'a2',
+        role: 'assistant',
+        content: `文件地址：${url}`,
+        createdAt: '2026-01-01T00:00:08.000Z',
+      }),
+    ]);
+
+    expect(items.find((item) => item.source.id === 'tool-1')?.media).toEqual([]);
+    expect(items.find((item) => item.source.id === 'tool-2')?.media).toMatchObject([{ url }]);
+  });
+
   it('keeps desktop media action metadata as mobile read-only actions', () => {
     const items = normalizeRemoteMessages([
       message({

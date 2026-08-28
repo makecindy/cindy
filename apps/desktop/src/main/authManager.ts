@@ -45,6 +45,7 @@ import {
 import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
 import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
@@ -84,6 +85,7 @@ import {
   isGhostSkillProjectionBoundaryStableForOwner,
   withGhostSkillProjectionOwnerCommit,
   withGhostSkillProjectionReadOnlyOwner,
+  withStableOwnerBoundaryMutation,
 } from './authBoundaryQuarantine.js';
 import { buildFocusDeepLink } from './deepLink';
 import { getResolvedMainLocale, t } from './i18n';
@@ -121,6 +123,20 @@ import {
   claimLegacyOwnerNamespace,
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
+import {
+  migrateLocalNativeProviderAuthBindings,
+  readLegacyNativeProviderAuthOwner,
+  recoverPendingLegacyNativeProviderAuthOwner,
+  releaseLegacyNativeProviderAuthOwner,
+  reserveCommittedLegacyNativeProviderAuthOwner,
+  reserveLegacyNativeProviderAuthOwnerDetailed,
+} from './maker-host/nativeProviderAuthBinding.js';
+import {
+  recoverPendingLocalProfileDataOwner,
+  releaseLocalProfileDataOwner,
+  reserveCommittedLocalProfileDataOwnerDetailed,
+  reserveLocalProfileDataOwnerDetailed,
+} from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
 import { withCrossProcessLock } from './device-link/crossProcessLock';
@@ -328,7 +344,10 @@ let accessToken: string | null = null;
 let currentUser: CurrentUser | null = null;
 /** 已登录会话区域；安装包区域 AUTH_REGION 始终不变。 */
 let activeAuthRealm: AuthRegion = AUTH_REGION;
-/** 企业发现成功后冻结到整次 SSO 流程，reset/cancel/失败回收时清除。 */
+/**
+ * 当前登录流使用的区域。个人登录固定为安装包区域，企业发现后改为组织区域；
+ * 账号选择、绑定等后续步骤继续复用，reset/cancel/失败回收时清除。
+ */
 let pendingAuthRealm: AuthRegion | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshPromise: Promise<boolean> | null = null;
@@ -374,6 +393,12 @@ let loginActionPromiseEpoch: number | null = null;
 // Separate from authStateEpoch: closing an add-account surface must invalidate
 // its requests without expiring the still-active account's runtime refresh.
 let loginFlowEpoch = 0;
+// Once an accepted login starts its durable owner transaction, renderer teardown
+// may unmount the add-account route as part of the boundary-pending projection.
+// That lifecycle cleanup must not supersede the transaction it just triggered.
+// A depth map keeps the guard correct even if two same-epoch commits briefly
+// overlap before authStateEpoch rejects the stale one.
+const sealedLoginFlowCommitDepths = new Map<number, number>();
 // `accountDeletionRestored` may arrive before membership selection. Keep it
 // main-only until the final resource-token login commits.
 let pendingAccountDeletionRestored = false;
@@ -436,7 +461,7 @@ function createAuthClient(
  * delete 兜底,防 ambient env 污染),线上零影响。env 由解析后的 profileKind
  * 不是 isolated-sandbox 且 passive 落地,覆盖正式目录与非隔离 custom 共库。
  */
-function isPassiveSharedUserDataInstance(): boolean {
+export function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
 }
 
@@ -793,16 +818,13 @@ function readAuthAccountVault(
         memberships,
       };
     }
-    const active =
-      typeof parsed.activeAccountKey === 'string' ? parsed.activeAccountKey : null;
+    const active = typeof parsed.activeAccountKey === 'string' ? parsed.activeAccountKey : null;
     return {
       version: 1,
       activeAccountKey: active && resources[active] ? active : null,
       resources,
       passports,
-      ...(typeof parsed.signedOutAt === 'number'
-        ? { signedOutAt: parsed.signedOutAt }
-        : {}),
+      ...(typeof parsed.signedOutAt === 'number' ? { signedOutAt: parsed.signedOutAt } : {}),
     };
   } catch (error) {
     if (options.recoverInvalid) {
@@ -889,7 +911,10 @@ async function transactAuthAccountVault<T>(
         } catch (error) {
           if (previousWasAbsent) {
             removeAtomicSafeOrThrow(AUTH_ACCOUNT_VAULT_KEY);
-          } else if (previousRaw !== null && !writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, previousRaw)) {
+          } else if (
+            previousRaw !== null &&
+            !writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, previousRaw)
+          ) {
             throw new AuthApiError(
               'CREDENTIAL_STORE_UNAVAILABLE',
               503,
@@ -1233,8 +1258,7 @@ async function commitDesktopRefreshCredentials(
         typeof vault.signedOutAt !== 'number' &&
         Object.keys(vault.resources).length === 0;
       const stillOwnsActiveSession =
-        requestedTokenStillStored &&
-        (vault.activeAccountKey === key || canClaimUninitializedVault);
+        requestedTokenStillStored && (vault.activeAccountKey === key || canClaimUninitializedVault);
       const passportId = pair.membership.passportId;
       if (passportId && (stillOwnsActiveSession || vault.resources[key])) {
         // A passive stale refresh may still rotate account A's resource token
@@ -1508,10 +1532,7 @@ async function reconcileDesktopActiveAuthSession(): Promise<
         : undefined;
       if (!activeResource) return session;
       if (!session) {
-        writePersistedAuthSessionOrThrow(
-          activeResource.refreshToken,
-          activeResource.realm,
-        );
+        writePersistedAuthSessionOrThrow(activeResource.refreshToken, activeResource.realm);
         return {
           version: 1,
           realm: activeResource.realm,
@@ -1979,6 +2000,8 @@ async function withCloudOwnerCommit<T>(opts: {
   let forceBumpGeneration = false;
   let result!: T;
   let committed = false;
+  let commitApplied = false;
+  let rollbackReservation: CloudOwnerDataReservation | null = null;
   try {
     result = await withGhostSkillProjectionOwnerCommit({
       previousOwnerId: opts.previousOwnerId,
@@ -2003,9 +2026,18 @@ async function withCloudOwnerCommit<T>(opts: {
           await projectionRepairTeardown('same-owner-projection-recovery');
         }
       },
-      prepareCommit: opts.prepareCommit,
+      prepareCommit: async () => {
+        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId);
+        await opts.prepareCommit?.();
+      },
       commit: async () => {
         const result = await opts.commit();
+        commitApplied = true;
+        const reservation = rollbackReservation as CloudOwnerDataReservation | null;
+        if (reservation && !reservation.finalize()) {
+          throw new Error('cloud owner data reservation finalization remains pending');
+        }
+        rollbackReservation = null;
         // Same-owner repair: advance the owner generation after the real commit
         // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
         if (forceBumpGeneration) {
@@ -2014,9 +2046,25 @@ async function withCloudOwnerCommit<T>(opts: {
         }
         return result;
       },
+      onCommitFailure: ({ commitApplied: boundaryCommitApplied }) => {
+        // The cloud session/token commit is already durable at this point. A
+        // later projection-state publication failure must keep the first-owner
+        // reservations so another account cannot inherit the same local data.
+        if (boundaryCommitApplied || commitApplied) return;
+        const reservation = rollbackReservation as CloudOwnerDataReservation | null;
+        if (!reservation) return;
+        if (!reservation.rollback()) {
+          throw new Error('cloud owner data reservation rollback remains pending');
+        }
+        rollbackReservation = null;
+      },
     });
     committed = true;
   } finally {
+    if (!committed && !commitApplied) {
+      const reservation = rollbackReservation as CloudOwnerDataReservation | null;
+      if (reservation?.rollback()) rollbackReservation = null;
+    }
     const release = releaseBoundary as (() => void) | null;
     release?.();
     if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
@@ -2192,11 +2240,202 @@ async function recoverAccountFreeOwnerAtStartup(
   });
 }
 
+interface CloudOwnerDataReservation {
+  rollback(): boolean;
+  finalize(): boolean;
+}
+
+function recoverCloudOwnerDataReservations(committedOwnerId: string | null): boolean {
+  const profileRecovery = recoverPendingLocalProfileDataOwner(
+    committedOwnerId,
+    app.getPath('userData'),
+    BRAND_IDENTITY.dbFilePrefix,
+  );
+  const nativeRecovery = recoverPendingLegacyNativeProviderAuthOwner(committedOwnerId);
+  return profileRecovery !== 'failed' && nativeRecovery !== 'failed';
+}
+
+function resolveProfileReservationOwnerId(ownerId: string): string {
+  const nativeOwner = readLegacyNativeProviderAuthOwner();
+  if (nativeOwner.status === 'failed') {
+    throw new Error('native provider ownership could not be read before profile reservation');
+  }
+  return nativeOwner.status === 'owned' ? nativeOwner.ownerId : ownerId;
+}
+
+function reserveCloudOwnerData(
+  ownerId: string,
+  previousOwnerId: string | null,
+): CloudOwnerDataReservation {
+  const rollbackActions: Array<() => void> = [];
+  try {
+    if (!recoverCloudOwnerDataReservations(previousOwnerId)) {
+      throw new Error('pending cloud owner data reservation recovery failed');
+    }
+    // Older builds could durably assign only the native-provider namespace.
+    // Preserve that first owner when introducing the profile marker: a
+    // different currently persisted account may authenticate, but must not
+    // reinterpret the still-shared local database as its own.
+    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    const profileReservation = reserveLocalProfileDataOwnerDetailed(
+      profileReservationOwnerId,
+      app.getPath('userData'),
+      BRAND_IDENTITY.dbFilePrefix,
+    );
+    if (profileReservation.status === 'failed') {
+      throw new Error('local profile data reservation failed before cloud owner commit');
+    }
+    if (profileReservation.status === 'claimed' && profileReservation.claimToken) {
+      rollbackActions.push(() => {
+        releaseLocalProfileDataOwner(
+          profileReservationOwnerId,
+          app.getPath('userData'),
+          BRAND_IDENTITY.dbFilePrefix,
+          profileReservation.claimToken!,
+        );
+      });
+    }
+
+    const authoritativeOwnerId = profileReservation.ownerId;
+    if (!authoritativeOwnerId) {
+      throw new Error('local profile data reservation did not identify its durable owner');
+    }
+    // Keep this reservation provisional until the same cloud commit finalizes
+    // both namespaces. Even when the profile marker was already durable, a
+    // missing native marker must remain rollback-able if this auth transition
+    // is superseded before commit.
+    const nativeReservation = reserveLegacyNativeProviderAuthOwnerDetailed(authoritativeOwnerId);
+    if (nativeReservation.status === 'failed') {
+      throw new Error('native provider ownership reservation failed before cloud owner commit');
+    }
+    if (nativeReservation.status === 'owned-by-other') {
+      throw new Error('local profile and native provider ownership reservations disagree');
+    }
+    if (nativeReservation.status === 'claimed' && nativeReservation.claimToken) {
+      rollbackActions.push(() => {
+        releaseLegacyNativeProviderAuthOwner(authoritativeOwnerId, nativeReservation.claimToken!);
+      });
+    }
+    if (authoritativeOwnerId !== ownerId) {
+      log.info('cloud owner committed without adopting legacy local data', {
+        ownerId,
+        authoritativeOwnerId,
+        profileReservation: profileReservation.status,
+        nativeReservation: nativeReservation.status,
+      });
+    }
+    return {
+      rollback: () => {
+        for (const rollback of rollbackActions.reverse()) rollback();
+        return recoverCloudOwnerDataReservations(previousOwnerId);
+      },
+      finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId),
+    };
+  } catch (error) {
+    for (const rollback of rollbackActions.reverse()) rollback();
+    throw error;
+  }
+}
+
+function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boolean {
+  let profileReservation: ReturnType<typeof reserveCommittedLocalProfileDataOwnerDetailed> = {
+    status: 'failed',
+  };
+  let nativeReservation: ReturnType<typeof reserveCommittedLegacyNativeProviderAuthOwner> =
+    'failed';
+
+  if (!recoverCloudOwnerDataReservations(ownerId)) {
+    log.error('stable cloud owner reservation recovery failed', { ownerId });
+    return false;
+  }
+  try {
+    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    profileReservation = reserveCommittedLocalProfileDataOwnerDetailed(
+      profileReservationOwnerId,
+      app.getPath('userData'),
+      BRAND_IDENTITY.dbFilePrefix,
+    );
+  } catch (error) {
+    log.warn('stable cloud owner local profile reservation repair failed', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (profileReservation.status === 'failed' || !profileReservation.ownerId) {
+    log.warn('stable cloud owner remains authenticated with local adoption fail-closed', {
+      ownerId,
+      profileReservation: profileReservation.status,
+      nativeReservation,
+    });
+    return false;
+  }
+  const authoritativeOwnerId = profileReservation.ownerId;
+  try {
+    nativeReservation = reserveCommittedLegacyNativeProviderAuthOwner(authoritativeOwnerId);
+  } catch (error) {
+    log.warn('stable cloud owner native provider reservation repair failed', {
+      ownerId,
+      authoritativeOwnerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (nativeReservation === 'failed' || nativeReservation === 'owned-by-other') {
+    log.warn('stable cloud owner remains authenticated with local adoption fail-closed', {
+      ownerId,
+      authoritativeOwnerId,
+      profileReservation: profileReservation.status,
+      nativeReservation,
+    });
+    return false;
+  }
+  return authoritativeOwnerId === ownerId;
+}
+
+async function repairStableCloudOwnerDataReservations(ownerId: string): Promise<boolean> {
+  try {
+    // Cloud commits already hold this cross-process owner lock from reservation
+    // through finalize/rollback. Stable-owner repair must join the same lock so
+    // it cannot settle one namespace while a concurrent login settles the other.
+    return await withStableOwnerBoundaryMutation(ownerId, async () =>
+      repairStableCloudOwnerDataReservationsWhileLocked(ownerId),
+    );
+  } catch (error) {
+    log.warn('stable cloud owner reservation repair could not enter owner transaction', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 function commitCloudAppSession(ownerId: string): void {
   if (isPassiveSharedUserDataInstance()) {
     commitVolatileAppSession('cloud', ownerId);
   } else {
     commitActiveAppSession('cloud', ownerId);
+  }
+}
+
+/**
+ * Complete the one-way local → cloud native-provider ownership handoff after
+ * the durable owner boundary is stable. The binding layer keeps this
+ * fail-closed for other cloud owners and corrupted state.
+ */
+async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Promise<void> {
+  if (isPassiveSharedUserDataInstance()) return;
+  try {
+    // The profile marker is the single durable authority for both retained
+    // local namespaces. Reconcile the native marker to that owner before any
+    // legacy credential migration can run.
+    if (!(await repairStableCloudOwnerDataReservations(ownerId))) return;
+    if (migrateLocalNativeProviderAuthBindings(ownerId)) {
+      log.info('migrated local native provider bindings to first cloud owner', { ownerId });
+    }
+  } catch (error) {
+    log.warn('local native provider binding migration failed', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -2298,6 +2537,7 @@ function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
  * 这里另生成一对凭据,只把哈希后的 clientState 交给 authorize。
  */
 async function openHostedBrowserAuthorization(
+  client: CindyAuthClient,
   input: BrowserAuthorizationInput,
   redirectUri: string,
   signal: AbortSignal,
@@ -2305,7 +2545,6 @@ async function openHostedBrowserAuthorization(
   if (signal.aborted) return { error: 'USER_CANCELLED' };
 
   const { clientState, pollSecret } = createDesktopPollCredentials();
-  const client = createAuthClient();
   const authUrl = client.buildAuthorizeUrl({ ...input, state: clientState, redirectUri });
 
   // 整次尝试共用一个截止时间:唤起浏览器与随后的轮询都从这份预算里花,和 loopback
@@ -2353,17 +2592,19 @@ async function openHostedBrowserAuthorization(
 
 /** 按端点清单分流到托管回调或 loopback(语义见本节顶部注释)。 */
 async function openSystemBrowserAuthorization(
+  client: CindyAuthClient,
+  loginRealm: AuthRegion,
   input: BrowserAuthorizationInput,
   signal: AbortSignal,
 ): Promise<{ code: string } | { error: string }> {
-  const loginRealm = pendingAuthRealm ?? activeAuthRealm;
   const hostedCallbackUrl = getClientEndpointForRealm(loginRealm, 'authDesktopCallbackUrl');
   return hostedCallbackUrl
-    ? openHostedBrowserAuthorization(input, hostedCallbackUrl, signal)
-    : openLoopbackBrowserAuthorization(input, signal);
+    ? openHostedBrowserAuthorization(client, input, hostedCallbackUrl, signal)
+    : openLoopbackBrowserAuthorization(client, input, signal);
 }
 
 async function openLoopbackBrowserAuthorization(
+  client: CindyAuthClient,
   input: BrowserAuthorizationInput,
   signal: AbortSignal,
 ): Promise<{ code: string } | { error: string }> {
@@ -2438,7 +2679,7 @@ async function openLoopbackBrowserAuthorization(
       }
       const address = server.address() as AddressInfo;
       const redirectUri = `http://127.0.0.1:${address.port}/auth/callback`;
-      const authUrl = createAuthClient().buildAuthorizeUrl({ ...input, redirectUri });
+      const authUrl = client.buildAuthorizeUrl({ ...input, redirectUri });
       // dev bridge 挂接(packaged no-op):fixture 触发与真实回调走同一渲染/finish。
       authLoopbackDevBridgeSlot.attach(finish, renderCallbackPage);
       timeout = setTimeout(() => finish({ error: 'USER_CANCELLED' }), BROWSER_AUTH_TIMEOUT_MS);
@@ -2937,6 +3178,25 @@ function assertLoginFlowCurrent(expectedEpoch: number): void {
   );
 }
 
+function sealLoginFlowCommit(expectedEpoch: number): () => void {
+  sealedLoginFlowCommitDepths.set(
+    expectedEpoch,
+    (sealedLoginFlowCommitDepths.get(expectedEpoch) ?? 0) + 1,
+  );
+  return () => {
+    const depth = sealedLoginFlowCommitDepths.get(expectedEpoch) ?? 0;
+    if (depth <= 1) {
+      sealedLoginFlowCommitDepths.delete(expectedEpoch);
+      return;
+    }
+    sealedLoginFlowCommitDepths.set(expectedEpoch, depth - 1);
+  };
+}
+
+function isLoginFlowCommitSealed(expectedEpoch: number): boolean {
+  return (sealedLoginFlowCommitDepths.get(expectedEpoch) ?? 0) > 0;
+}
+
 function resetActiveAuthRealmToBuild(): void {
   activeAuthRealm = AUTH_REGION;
   resetClientEndpointRealm();
@@ -3400,6 +3660,10 @@ export async function beginAddAccountLogin(): Promise<DesktopLoginActionResult> 
 }
 
 export function cancelAddAccountLogin(): void {
+  if (isLoginFlowCommitSealed(loginFlowEpoch)) {
+    log.info('add-account close ignored after accepted login commit began');
+    return;
+  }
   loginFlowEpoch += 1;
   browserAuthorizationSlot.cancelActive();
   resetLoginFlowState();
@@ -3817,8 +4081,15 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
         commit: () => commitCloudAppSession(currentUser!.id),
       });
     } else {
+      // This owner is already durably authenticated. Repair missing first-owner
+      // reservations best-effort, but never turn malformed local metadata into
+      // a renderer-visible logout while main remains signed in.
+      if (!isPassiveSharedUserDataInstance()) {
+        await repairStableCloudOwnerDataReservations(currentUser.id);
+      }
       commitCloudAppSession(currentUser.id);
     }
+    await migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);
     await ensureStableOwnerPostCommit('auth-initialize-stable-cloud');
     return snapshotAuthState();
   }
@@ -4158,6 +4429,7 @@ async function runColdStartRefreshFlow(
         clearReplacementIntegrationReloadTimers();
       },
     });
+    await migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
     scheduleCanaryFlagSync({
       token: refreshData.accessToken,
       expectedAuthEpoch: epochAtStart,
@@ -4292,114 +4564,120 @@ async function completeLogin(
     }
   };
   assertTransitionCurrent();
+  const releaseLoginFlowCommit = sealLoginFlowCommit(expectedLoginFlowEpoch);
 
-  const committedRealm = pendingAuthRealm ?? AUTH_REGION;
-  const accountRefreshToken = outcome.accountRefreshToken ?? pendingAccountRefreshToken;
-  let previousPersistedSession: ReturnType<typeof readPersistedAuthSession> = null;
-  let activeSessionWritten = false;
-  await commitDesktopLoginSessions(
-    {
-      pair: outcome,
-      realm: committedRealm,
-      passportId: nextUser.passportId || undefined,
-      accountRefreshToken,
-      memberships:
-        pendingAccountMemberships.length > 0 ? pendingAccountMemberships : [outcome.membership],
-    },
-    {
-      commit: async () => {
-        // The aggregate account vault, compatibility active session, old-owner
-        // teardown and final owner publication are one epoch-owned transaction.
-        // Any cancellation before commit restores both durable records while
-        // the cross-process vault lock is still held.
-        assertTransitionCurrent();
-        // Capture the compatibility session only after entering the same
-        // cross-process ownership window as the vault write. A concurrent
-        // passive refresh may have rotated it while this login waited on the
-        // lock; rollback must restore that latest generation, not a stale one.
-        previousPersistedSession = readPersistedAuthSession();
-        writePersistedAuthSessionOrThrow(outcome.refreshToken, committedRealm);
-        activeSessionWritten = true;
-        assertTransitionCurrent();
-        await withCloudOwnerCommit({
-          previousOwnerId: previousSession.dataOwnerId,
-          nextOwnerId: nextUser.id,
-          prepareTransition: async () => {
-            assertTransitionCurrent();
-            if (!accountSwitchTeardown) {
-              throw new Error('login cloud owner transition requires a teardown hook');
-            }
-            await accountSwitchTeardown({
-              previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
-              nextUserId: nextUser.id,
-            });
-            assertTransitionCurrent();
-          },
-          prepareCommit: async () => {
-            assertTransitionCurrent();
-            await claimLegacyNamespaceForVerifiedUser(nextUser.id);
-            assertTransitionCurrent();
-          },
-          commit: () =>
-            commitWithClearedAccountDeletionReceipt(() => {
+  try {
+    const committedRealm = pendingAuthRealm ?? AUTH_REGION;
+    const accountRefreshToken = outcome.accountRefreshToken ?? pendingAccountRefreshToken;
+    let previousPersistedSession: ReturnType<typeof readPersistedAuthSession> = null;
+    let activeSessionWritten = false;
+    await commitDesktopLoginSessions(
+      {
+        pair: outcome,
+        realm: committedRealm,
+        passportId: nextUser.passportId || undefined,
+        accountRefreshToken,
+        memberships:
+          pendingAccountMemberships.length > 0 ? pendingAccountMemberships : [outcome.membership],
+      },
+      {
+        commit: async () => {
+          // The aggregate account vault, compatibility active session, old-owner
+          // teardown and final owner publication are one epoch-owned transaction.
+          // Any cancellation before commit restores both durable records while
+          // the cross-process vault lock is still held.
+          assertTransitionCurrent();
+          // Capture the compatibility session only after entering the same
+          // cross-process ownership window as the vault write. A concurrent
+          // passive refresh may have rotated it while this login waited on the
+          // lock; rollback must restore that latest generation, not a stale one.
+          previousPersistedSession = readPersistedAuthSession();
+          writePersistedAuthSessionOrThrow(outcome.refreshToken, committedRealm);
+          activeSessionWritten = true;
+          assertTransitionCurrent();
+          await withCloudOwnerCommit({
+            previousOwnerId: previousSession.dataOwnerId,
+            nextOwnerId: nextUser.id,
+            prepareTransition: async () => {
               assertTransitionCurrent();
-              pendingAccountToken = null;
-              pendingAccountRefreshToken = null;
-              pendingAccountMemberships = [];
-              pendingAccountDeletionRestored = false;
-              accessToken = outcome.accessToken;
-              persistedRefreshTokenNeedsIdentityCheck = false;
-              clearReplacementIntegrationReloadTimers();
-              activateClientEndpointRealm(committedRealm);
-              activeAuthRealm = committedRealm;
-              if (!isPassiveSharedUserDataInstance()) {
-                removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+              if (!accountSwitchTeardown) {
+                throw new Error('login cloud owner transition requires a teardown hook');
               }
-              lastAcceptedRefreshToken = outcome.refreshToken;
-              if (!isPassiveSharedUserDataInstance()) {
-                clearReloginFlag();
-              }
-              accountDeletionRestoredNoticePending = deletionWasRestored;
-              // 显式登录解除本进程登出墓碑(passive / foreign-device)。
-              passiveLocalSignOut = false;
-              foreignDeviceLocalSignOut = false;
-              currentUser = nextUser;
-              commitCloudAppSession(currentUser.id);
-              if (!isPassiveSharedUserDataInstance()) {
-                canaryFlagStore.clear();
-              }
-              pendingAuthRealm = null;
-            }),
-        });
+              await accountSwitchTeardown({
+                previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
+                nextUserId: nextUser.id,
+              });
+              assertTransitionCurrent();
+            },
+            prepareCommit: async () => {
+              assertTransitionCurrent();
+              await claimLegacyNamespaceForVerifiedUser(nextUser.id);
+              assertTransitionCurrent();
+            },
+            commit: () =>
+              commitWithClearedAccountDeletionReceipt(() => {
+                assertTransitionCurrent();
+                pendingAccountToken = null;
+                pendingAccountRefreshToken = null;
+                pendingAccountMemberships = [];
+                pendingAccountDeletionRestored = false;
+                accessToken = outcome.accessToken;
+                persistedRefreshTokenNeedsIdentityCheck = false;
+                clearReplacementIntegrationReloadTimers();
+                activateClientEndpointRealm(committedRealm);
+                activeAuthRealm = committedRealm;
+                if (!isPassiveSharedUserDataInstance()) {
+                  removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+                }
+                lastAcceptedRefreshToken = outcome.refreshToken;
+                if (!isPassiveSharedUserDataInstance()) {
+                  clearReloginFlag();
+                }
+                accountDeletionRestoredNoticePending = deletionWasRestored;
+                // 显式登录解除本进程登出墓碑(passive / foreign-device)。
+                passiveLocalSignOut = false;
+                foreignDeviceLocalSignOut = false;
+                currentUser = nextUser;
+                commitCloudAppSession(currentUser.id);
+                if (!isPassiveSharedUserDataInstance()) {
+                  canaryFlagStore.clear();
+                }
+                pendingAuthRealm = null;
+              }),
+          });
+        },
+        rollback: () => {
+          if (!activeSessionWritten) return;
+          restorePersistedAuthSessionIfCurrent(
+            outcome.refreshToken,
+            committedRealm,
+            previousPersistedSession,
+          );
+        },
       },
-      rollback: () => {
-        if (!activeSessionWritten) return;
-        restorePersistedAuthSessionIfCurrent(
-          outcome.refreshToken,
-          committedRealm,
-          previousPersistedSession,
-        );
-      },
-    },
-  );
-  scheduleCanaryFlagSync({
-    token: outcome.accessToken,
-    expectedAuthEpoch: loginEpoch,
-    expectedUserId: nextUser.id,
-  });
-  scheduleXdOrgBetaDefault({
-    expectedAuthEpoch: loginEpoch,
-    expectedUserId: nextUser.id,
-  });
-  scheduleRefresh(outcome.accessToken);
-  getProviderSecretStore().reconcileOwner(outcome.membership.id);
-  pendingLoginTicket = null;
-  pendingBindTicket = null;
-  pendingSsoVerificationTicket = null;
-  loginFlowState = reduceAuthFlow(loginFlowState, { type: 'outcome', outcome });
-  notifyRenderer();
-  notifyAuthListeners();
-  return loginFlowState;
+    );
+    await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
+    scheduleCanaryFlagSync({
+      token: outcome.accessToken,
+      expectedAuthEpoch: loginEpoch,
+      expectedUserId: nextUser.id,
+    });
+    scheduleXdOrgBetaDefault({
+      expectedAuthEpoch: loginEpoch,
+      expectedUserId: nextUser.id,
+    });
+    scheduleRefresh(outcome.accessToken);
+    getProviderSecretStore().reconcileOwner(outcome.membership.id);
+    pendingLoginTicket = null;
+    pendingBindTicket = null;
+    pendingSsoVerificationTicket = null;
+    loginFlowState = reduceAuthFlow(loginFlowState, { type: 'outcome', outcome });
+    notifyRenderer();
+    notifyAuthListeners();
+    return loginFlowState;
+  } finally {
+    releaseLoginFlowCommit();
+  }
 }
 
 async function acceptLoginOutcome(
@@ -4450,10 +4728,8 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
     action.type === 'request-code' ||
     action.type === 'verify-code' ||
     (action.type === 'start-browser' && action.kind === 'social');
-  if (startsBuildRealmFlow) pendingAuthRealm = null;
-  const client = createAuthClient(
-    startsBuildRealmFlow ? AUTH_REGION : (pendingAuthRealm ?? activeAuthRealm),
-  );
+  const loginRealm = startsBuildRealmFlow ? AUTH_REGION : (pendingAuthRealm ?? activeAuthRealm);
+  const client = createAuthClient(loginRealm);
   const stateBeforeAction = loginFlowState?.step === 'error' ? null : loginFlowState;
   try {
     // Cancellation is intercepted by dispatchLoginAction so it can settle the
@@ -4502,6 +4778,10 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       return { success: true, state: loginFlowState };
     }
     if (!providerConfig) await loadLoginProviders(actionLoginFlowEpoch);
+    // loadLoginProviders clears transient login state. Pin a new personal login
+    // afterwards so account selection and binding cannot inherit the active
+    // organization's realm. The active account remains untouched until commit.
+    if (startsBuildRealmFlow) pendingAuthRealm = loginRealm;
 
     if (action.type === 'discover') {
       const email = action.email.trim().toLowerCase();
@@ -4610,6 +4890,8 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       const deactivateCancellation = browserAuthorizationSlot.activate(() => cancellation.abort());
       try {
         const callback = await openSystemBrowserAuthorization(
+          client,
+          loginRealm,
           {
             kind: action.kind,
             providerOrConnectionId: action.providerOrConnectionId,
@@ -5018,6 +5300,7 @@ export async function refresh(): Promise<boolean> {
             commitCloudAppSession(currentUser.id);
           },
         });
+        await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
         persistedRefreshTokenNeedsIdentityCheck = false;
         getProviderSecretStore().reconcileOwner(nextUser.id);
         if (accountSwitched) {
@@ -5075,6 +5358,7 @@ export async function refresh(): Promise<boolean> {
           commitCloudAppSession(currentUser.id);
         },
       });
+      await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
       persistedRefreshTokenNeedsIdentityCheck = false;
       scheduleRefresh(data.accessToken);
       notifyRenderer();

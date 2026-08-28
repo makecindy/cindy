@@ -201,7 +201,7 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // remarkHtmlImages(<img> HTML → mdast image)与 remarkLocalPathLinks(正文裸路径
 // → link)。remarkSessionLinks 产出的 cindy:// 深链带 scheme,被它的判据跳过,
 // 顺序无关。
-const REMARK_PLUGINS: PluggableList = [
+export const REMARK_PLUGINS: PluggableList = [
   [remarkGfm, { singleTilde: false }],
   remarkCjkFriendly,
   remarkMath,
@@ -211,7 +211,7 @@ const REMARK_PLUGINS: PluggableList = [
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
 ];
-const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
+export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   [remarkGfm, { singleTilde: false }],
   remarkCjkFriendly,
   remarkMath,
@@ -242,6 +242,14 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlight,
   rehypeFencedCodeMarker,
 ];
+
+/** MarkdownRenderer 与所有“实际是否渲染”判定共用的输入归一化。 */
+export function normalizeMarkdownRendererContent(
+  content: string,
+  preserveLineCount = false,
+): string {
+  return normalizeMathDelimiters(content, { preserveLineCount });
+}
 /**
  * 聊天正文里一切「可点」的行内元素共用这一套外观:**正文色 + 常显下划线**。
  *
@@ -1668,7 +1676,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     [throttledContent, streamFade],
   );
   const renderedContent = useMemo(
-    () => normalizeMathDelimiters(repairedContent, { preserveLineCount: emitSourceLines }),
+    () => normalizeMarkdownRendererContent(repairedContent, emitSourceLines),
     [repairedContent, emitSourceLines],
   );
   const streamingChunks = useMemo(

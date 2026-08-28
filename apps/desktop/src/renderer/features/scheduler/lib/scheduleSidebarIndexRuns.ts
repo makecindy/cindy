@@ -29,6 +29,30 @@ export interface ScheduleSidebarIndexSnapshot {
   inflightRunIds: string[];
 }
 
+/**
+ * 同一 session 可能同时返回最新映射和更早的未读 run。需要 Automation 归属的入口
+ * 必须按 projection 的 (firedAt, runId) 规则取最新一条，不能依赖数组顺序或 find()。
+ */
+export function findLatestSidebarIndexRunForSession(
+  runs: readonly ScheduleSidebarIndexRun[],
+  sessionId: string,
+): ScheduleSidebarIndexRun | undefined {
+  let latest: ScheduleSidebarIndexRun | undefined;
+  for (const run of runs) {
+    if (run.sessionId !== sessionId) continue;
+    const firedAt = run.firedAt ?? Number.NEGATIVE_INFINITY;
+    const latestFiredAt = latest?.firedAt ?? Number.NEGATIVE_INFINITY;
+    if (
+      latest === undefined ||
+      firedAt > latestFiredAt ||
+      (firedAt === latestFiredAt && run.runId > latest.runId)
+    ) {
+      latest = run;
+    }
+  }
+  return latest;
+}
+
 export async function loadScheduleSidebarIndexSnapshot(): Promise<ScheduleSidebarIndexSnapshot> {
   // main 与 renderer 同包发布,不存在版本 skew,所以这里不做跨形态兼容 —— 形态不符就是
   // bug,应该暴露出来而不是静默降级成「没有 in-flight 信息」(那会让对账去误清仍在跑的

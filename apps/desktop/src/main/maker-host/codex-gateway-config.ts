@@ -38,6 +38,12 @@ export const CODEX_GATEWAY_PROVIDER_ID = 'cindy_gateway';
 export const CODEX_OPENAI_COMPACT_PROVIDER_ID = 'cindy_openai';
 
 /**
+ * Cindy Provider codex/* 的内部 transport identity。产品 Provider 和上游不变；
+ * name="OpenAI" 只用于让 Codex 启用远程压缩，HTTP 与订阅 WS identity 分开冻结。
+ */
+export const CODEX_CINDY_COMPACT_PROVIDER_ID = 'cindy_codex';
+
+/**
  * 注入 codex 子进程的环境变量名 —— codex 通过 config 的 `env_key` 来这里读 API key。
  * 用专名避免撞用户机器上已有的同名变量。
  */
@@ -97,6 +103,17 @@ export function buildCodexProxySpawnArgs(
     // 只有不依赖请求体改写的订阅直连 provider(下面的 cindy_openai)才放开 WS。
     '-c', `model_providers.${p}.supports_websockets=false`,
   ];
+  const c = CODEX_CINDY_COMPACT_PROVIDER_ID;
+  const cindyCompactAuthArg = authMode === 'oauth-bearer'
+    ? `model_providers.${c}.requires_openai_auth=true`
+    : `model_providers.${c}.env_key="${CODEX_GATEWAY_ENV_KEY}"`;
+  args.push(
+    '-c', `model_providers.${c}.name="OpenAI"`,
+    '-c', `model_providers.${c}.base_url="${baseUrl}"`,
+    '-c', `model_providers.${c}.wire_api="responses"`,
+    '-c', cindyCompactAuthArg,
+    '-c', `model_providers.${c}.supports_websockets=false`,
+  );
   if (authMode === 'oauth-bearer') {
     // OpenAI 身份 provider(见 CODEX_OPENAI_COMPACT_PROVIDER_ID):默认 model_provider
     // 仍是 cindy_gateway(本地压缩,安全缺省),订阅直连 thread 由 maker-core 在
@@ -137,8 +154,9 @@ export function buildCodexProxySpawnArgs(
       // is_openai + codex-backend OAuth 命中时 codex 默认对 /responses 请求体做 zstd
       // 压缩(enable_request_compression 默认开);loopback proxy 要整段 JSON.parse
       // 改写请求体,无法解 zstd,必须显式关掉(仅少传输优化,无功能损失)。
-      '-c', 'features.enable_request_compression=false',
     );
   }
+  // OpenAI identity 可能启用 zstd；loopback proxy 需要解析 JSON 做路由和 prompt 注入。
+  args.push('-c', 'features.enable_request_compression=false');
   return args;
 }

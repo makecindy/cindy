@@ -159,6 +159,8 @@ export interface DeviceLinkContextValue {
   // when its last owner unsubscribes.
   subscribe(owner: string, deviceId: string, topics: string[]): Promise<void>;
   unsubscribe(owner: string, deviceId: string, topics: string[]): Promise<void>;
+  /** 被控端 runtime Agent roster 发生变化时通知当前控制端页面。 */
+  onAgentsChanged: (listener: (deviceId: string) => void) => () => void;
 }
 
 const DeviceLinkContext = createContext<DeviceLinkContextValue | null>(null);
@@ -178,6 +180,7 @@ const CONTROLLER_CAPABILITIES = [
 // 响应性熔断;只用于判定并发返回的 unavailable 是否已被更晚目标应答推翻。
 const remoteResponseEvidenceEpochs = createPresenceAvailabilityEpochs();
 const remoteResponseEvidenceListeners = new Set<(deviceId: string) => void>();
+const remoteAgentRosterListeners = new Set<(deviceId: string) => void>();
 
 // 永久 link-close 后被抑制后台重建的设备(见 updateRehydrateSuppressionOnLinkClose)。
 // 模块级(与 remoteResponseEvidenceEpochs 同模式):sendOpenLink 等模块级函数也需要
@@ -195,6 +198,13 @@ function subscribeRemoteResponseEvidence(
 ): () => void {
   remoteResponseEvidenceListeners.add(listener);
   return () => remoteResponseEvidenceListeners.delete(listener);
+}
+
+function subscribeRemoteAgentRoster(
+  listener: (deviceId: string) => void,
+): () => void {
+  remoteAgentRosterListeners.add(listener);
+  return () => remoteAgentRosterListeners.delete(listener);
 }
 
 interface RehydrateState {
@@ -909,6 +919,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           .catch(() => { /* 下次进入选择器或重连补齐时继续重试。 */ });
         void refreshDeviceCapabilities(client, deviceId);
       },
+      onAgentsChanged: (deviceId) => {
+        for (const listener of remoteAgentRosterListeners) listener(deviceId);
+      },
     }));
     // 与 transport-timeout link-close 同族的链路死锁自救(互为兜底):对端还在按
     // 可靠流给本机发帧,而本机侧 link 未就绪——典型成因是 link-accept 在弱网丢失
@@ -1175,6 +1188,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     invoke,
     subscribe,
     unsubscribe,
+    onAgentsChanged: subscribeRemoteAgentRoster,
   }), [
     closeLink,
     connectionEpoch,
@@ -1188,6 +1202,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     status,
     subscribe,
     unsubscribe,
+    subscribeRemoteAgentRoster,
   ]);
 
   return <DeviceLinkContext.Provider value={value}>{children}</DeviceLinkContext.Provider>;
@@ -1206,6 +1221,7 @@ export function routeFrame(env: Envelope, handlers: {
   onAccessRevoked?: (deviceId: string) => void;
   onLinkClosed?: (deviceId: string, reason?: string) => void;
   onProviderChanged?: (deviceId: string) => void;
+  onAgentsChanged?: (deviceId: string) => void;
 } = {}): void {
   const peerLinkClosed = handlePeerLinkCloseFrame(
     env,
@@ -1220,6 +1236,10 @@ export function routeFrame(env: Envelope, handlers: {
   const push = env.payload as PushPayload;
   if (push.channel === 'maker:provider:changed') {
     handlers.onProviderChanged?.(env.src);
+    return;
+  }
+  if (push.channel === 'maker:agents:changed') {
+    handlers.onAgentsChanged?.(env.src);
     return;
   }
   if (push.channel === 'maker:schedule:event') {

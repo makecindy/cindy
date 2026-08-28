@@ -22,6 +22,7 @@ export { GrokBuildAgent, resolveGrokBinaryFromPath, probeGrokBuildAcp, detectGro
 export {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
+  isCindyProviderCodexRemoteCompactionRoute,
   resolveAgentCredentialMode,
 } from './credential-mode.js';
 // host 在 boot 阶段需要的 env 守卫(详见 claude-code/env-builder.ts 注释)

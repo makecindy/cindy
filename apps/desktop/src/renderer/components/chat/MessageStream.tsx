@@ -46,6 +46,7 @@ import {
   isPlanUserBoundary,
   isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
+import { extractRenderedMarkdownImageTargets } from './markdownImageTargets';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -1518,6 +1519,32 @@ export function buildRenderItems(
     return allMessages.slice(start, end);
   };
 
+  // Agent 最终正文中的 Markdown 图片是首选排版；tool_result 媒体仍保留为
+  // 确定性兜底。只有同一真实 user turn 内确实嵌入了同一 URL，才压掉兜底卡。
+  const inlineImageUrlsByTurnStart = new Map<number, ReadonlySet<string>>();
+  const recordTurnInlineImages = (lo: number, hi: number): void => {
+    if (hi <= lo) return;
+    const urls = new Set<string>();
+    for (const message of messages.slice(lo, hi)) {
+      if (message.role !== 'assistant' || message.systemCardType || message.isStreaming) continue;
+      for (const url of extractRenderedMarkdownImageTargets(message.content)) urls.add(url);
+    }
+    inlineImageUrlsByTurnStart.set(lo, urls);
+  };
+  let inlineTurnStart = 0;
+  for (let index = 0; index <= messages.length; index += 1) {
+    const message = messages[index];
+    const isBoundary =
+      message?.role === 'user' &&
+      message.delivery !== 'steer' &&
+      !message.isSyntheticTrigger;
+    if (isBoundary && index > inlineTurnStart) {
+      recordTurnInlineImages(inlineTurnStart, index);
+      inlineTurnStart = index;
+    }
+    if (index === messages.length) recordTurnInlineImages(inlineTurnStart, index);
+  }
+
   // ── Pass 0: build toolUseId → tool_result.content lookup ──
   // Plan/task rendering and regular tool result pairing both need a stable
   // lookup by vendor toolUseId. Adjacency remains a fallback in Pass 2.
@@ -1743,6 +1770,12 @@ export function buildRenderItems(
       for (const message of originalTurnSlice(lo, hi)) {
         if (message.role !== 'tool_result' || !isSubagentInternalMessage(message)) continue;
         for (const item of extractToolResultMedia(message.content)) {
+          if (
+            item.kind === 'image' &&
+            inlineImageUrlsByTurnStart.get(lo)?.has(item.url)
+          ) {
+            continue;
+          }
           if (seenMediaUrls.has(item.url)) continue;
           seenMediaUrls.add(item.url);
           hiddenMedia.push(item);
@@ -1964,6 +1997,12 @@ export function buildRenderItems(
       // 提交消息被 rewind/异 ghost 伪锚)回退今日行为——本调用位置渲染。
       const collectResultMedia = (result: string): void => {
         let media = extractToolResultMedia(result);
+        const inlineImageUrls = inlineImageUrlsByTurnStart.get(turnStartIdx);
+        if (inlineImageUrls?.size) {
+          media = media.filter(
+            (item) => item.kind !== 'image' || !inlineImageUrls.has(item.url),
+          );
+        }
         if (media.length === 0) return;
         if (isGhostCallToolName(toolName)) {
           const anchor = extractAnchorCardId(result);

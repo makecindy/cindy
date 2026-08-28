@@ -282,6 +282,8 @@ export interface ScheduleRun {
   costMoney?: ScheduleRunMoney;
   /** 新版区域订阅价值估算；不代表实际账单。 */
   estimatedValueMoney?: ScheduleRunMoney;
+  /** 本次 run 关联 assistant 消息的 Token 用量总和，供无法可靠计价时展示。 */
+  totalTokens?: number;
   /**
    * exact = 已确认费用（可能是实际账单，也可能是 estimate-only）；direct = 费用仅来自
    * 无法挂载消息的直接账本；mixed = 快照同时包含直接账本和消息账本；zero = 已确认零费用；

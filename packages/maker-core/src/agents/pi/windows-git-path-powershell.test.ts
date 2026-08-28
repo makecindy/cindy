@@ -234,7 +234,9 @@ describe('Windows Git PATH PowerShell probes', () => {
               '}',
             ].join('\n'),
           ],
-          { stdio: 'ignore', timeout: 5_000, windowsHide: true },
+           // PowerShell startup can exceed five seconds on a busy hosted Windows runner;
+           // allow cleanup to observe the child process exit without changing the probe budget.
+           { stdio: 'ignore', timeout: 10_000, windowsHide: true },
         );
       } finally {
         if (coordinatorPid) {
@@ -251,7 +253,7 @@ describe('Windows Git PATH PowerShell probes', () => {
         }
       }
     },
-    12_000,
+     20_000,
   );
 
   it('reports recoverable script failures only when a logger is supplied', () => {
