@@ -450,6 +450,33 @@ describe('claimLegacyOwnerNamespace', () => {
     ).resolves.toBe(payload);
   });
 
+  it.each([
+    ['current process', process.pid],
+    ['dead replacement', 9999],
+  ])('uses the registry filename pid when payload names the %s', async (_label, payloadPid) => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, '.dev-instances', '4242.json'),
+      JSON.stringify({ schemaVersion: 1, pid: payloadPid, userDataDir: root, passive: false }),
+      'utf-8',
+    );
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, { isPidAlive: (pid) => pid === 4242 }),
+    );
+
+    expect(result).toEqual({
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
+  });
+
   it('interrupts mid-claim when an instance registers during the move, then resumes next exclusive start', async () => {
     const root = await tempRoot();
     // LEGACY_PATHS 顺序:ghost-cindy-prefs.json 在 slack-hook.json 之前。
@@ -3181,6 +3208,22 @@ describe('hasExclusiveSharedLegacyUserDataAccess', () => {
     const root = await tempRoot();
     await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
     await fs.writeFile(path.join(root, '.dev-instances', '4242.json'), payload, 'utf-8');
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
+  });
+
+  it.each([
+    ['current process', process.pid],
+    ['dead replacement', 9999],
+  ])('uses the registry filename pid when the shared payload names the %s', async (_label, payloadPid) => {
+    const root = await tempRoot();
+    await fs.mkdir(path.join(root, '.dev-instances'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, '.dev-instances', '4242.json'),
+      JSON.stringify({ schemaVersion: 1, pid: payloadPid, userDataDir: root, passive: false }),
+      'utf-8',
+    );
 
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
     expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);

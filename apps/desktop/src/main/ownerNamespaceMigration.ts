@@ -2445,11 +2445,20 @@ function parseRegisteredInstanceCandidate(
   raw: string,
   fileName: string,
 ): RegisteredInstanceCandidate | null {
+  const filePid = instancePidFromRecordName(fileName);
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const record = parsed as RegisteredInstanceRecord;
       if (typeof record.pid === 'number' && Number.isInteger(record.pid) && record.pid > 0) {
+        if (filePid !== null && record.pid !== filePid) {
+          return {
+            pid: filePid,
+            userDataDir: undefined,
+            recordedAtMs: undefined,
+            rootDir: undefined,
+          };
+        }
         return {
           pid: record.pid,
           userDataDir: typeof record.userDataDir === 'string' ? record.userDataDir : undefined,
@@ -2463,10 +2472,9 @@ function parseRegisteredInstanceCandidate(
     // A torn payload still has a process identity in its canonical filename.
   }
 
-  const pid = instancePidFromRecordName(fileName);
-  return pid === null
+  return filePid === null
     ? null
-    : { pid, userDataDir: undefined, recordedAtMs: undefined, rootDir: undefined };
+    : { pid: filePid, userDataDir: undefined, recordedAtMs: undefined, rootDir: undefined };
 }
 
 /**
@@ -2481,8 +2489,9 @@ function parseRegisteredInstanceCandidate(
  * (ENOENT) means that instance exited — skip it; a record file that exists
  * but cannot be READ (EACCES, I/O errors) may hide a live instance — fail
  * closed by rethrowing so the caller defers the destructive claim. If a
- * record reads but has an invalid payload, its `<pid>.json` filename still
- * keeps a live process visible; dead-PID leftovers remain safely ignorable.
+ * record reads but has an invalid or mismatched payload, its `<pid>.json`
+ * filename still keeps a live process visible; dead-PID leftovers remain
+ * safely ignorable.
  */
 async function findConcurrentLiveInstancePids(
   deps: MigrationDeps,
