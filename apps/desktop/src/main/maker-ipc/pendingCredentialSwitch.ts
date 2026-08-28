@@ -184,7 +184,14 @@ export class PendingCredentialSwitchService {
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** owner-stale 补偿中的 target；同步 has/get 重入不得重复写旧 Profile。 */
   private readonly staleDiscards = new Set<PendingCredentialSwitch>();
-  /** clear() 不能在迟到 finalizer 完成原子补偿前解除输入队列门。 */
+  /** owner-stale Profile 补偿未完成时按 session 保持输入 gate，且不让新 owner 重跑 apply。 */
+  private readonly staleCompensations = new Map<string, Set<PendingCredentialSwitch>>();
+  /** owner-stale 只重试捕获的 Profile CAS；绝不重跑 close / relink / route persist。 */
+  private readonly staleCompensationRetryTimers = new Map<
+    PendingCredentialSwitch,
+    ReturnType<typeof setTimeout>
+  >();
+  /** clear() / owner-stale 不能在迟到 finalizer 完成 Profile 补偿前解除输入队列门。 */
   private readonly clearedDuringApply = new Set<string>();
   /** wake:false 的显式替换由新选择收尾，旧 finalizer 不得代为唤醒。 */
   private readonly suppressedCancellationWakes = new Set<string>();
@@ -248,7 +255,10 @@ export class PendingCredentialSwitchService {
       }
       // This target never enters the map, so discardIfOwnerStale cannot compensate it later.
       // Finish its captured old-Profile restore before the caller receives registration failure.
-      await this.compensateStaleOwnerRoute(sessionId, pending);
+      const compensated = await this.compensateStaleOwnerRoute(sessionId, pending);
+      if (!compensated) {
+        throw new Error('Stale pending credential switch route compensation failed');
+      }
       this.deps.logger?.info('stale pending credential switch discarded at registration', {
         sessionId,
       });
@@ -265,10 +275,13 @@ export class PendingCredentialSwitchService {
   }
 
   has(sessionId: string): boolean {
-    if (this.clearedDuringApply.has(sessionId)) return true;
+    if (this.clearedDuringApply.has(sessionId) || this.staleCompensations.has(sessionId)) {
+      return true;
+    }
     const target = this.pending.get(sessionId);
     if (!target) return false;
-    return !this.discardIfOwnerStale(sessionId, target);
+    if (!this.discardIfOwnerStale(sessionId, target)) return true;
+    return this.clearedDuringApply.has(sessionId) || this.staleCompensations.has(sessionId);
   }
 
   get(sessionId: string): PendingCredentialSwitch | undefined {
@@ -298,6 +311,7 @@ export class PendingCredentialSwitchService {
    * 让下一次发送按新来源重建。任何路径都不允许向外抛错(register 侧 fire-and-forget)。
    */
   async onTurnSettled(sessionId: string): Promise<void> {
+    if (this.staleCompensations.has(sessionId)) return;
     const target = this.pending.get(sessionId);
     if (!target) return;
     if (this.discardIfOwnerStale(sessionId, target)) return;
@@ -357,6 +371,7 @@ export class PendingCredentialSwitchService {
    * 让完成权归 turn-settled 路径,避免双写 route / 双广播(renderer 双 toast)。
    */
   onSessionClosed(sessionId: string): void {
+    if (this.staleCompensations.has(sessionId)) return;
     if (this.applying.has(sessionId)) return;
     const target = this.pending.get(sessionId);
     if (!target) return;
@@ -811,7 +826,7 @@ export class PendingCredentialSwitchService {
 
   private finishApplying(sessionId: string): void {
     this.applying.delete(sessionId);
-    if (this.compensationFailures.has(sessionId)) return;
+    if (this.compensationFailures.has(sessionId) || this.staleCompensations.has(sessionId)) return;
     this.releaseClearedDuringApply(sessionId);
   }
 
@@ -847,7 +862,7 @@ export class PendingCredentialSwitchService {
     sessionId: string,
     target: PendingCredentialSwitch,
     persistedRoute?: PendingCredentialSwitchPersistedRoute,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       if (target.restoreStaleOwnerRoute) {
         const restored = await target.restoreStaleOwnerRoute(persistedRoute);
@@ -858,11 +873,68 @@ export class PendingCredentialSwitchService {
           );
         }
       }
+      return true;
     } catch (error) {
       this.deps.logger?.error?.('stale pending credential switch route compensation failed', {
         sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
+    }
+  }
+
+  private async retryStaleOwnerCompensation(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+    persistedRoute?: PendingCredentialSwitchPersistedRoute,
+  ): Promise<void> {
+    const compensated = await this.compensateStaleOwnerRoute(
+      sessionId,
+      target,
+      persistedRoute,
+    );
+    if (!compensated) {
+      this.scheduleStaleOwnerCompensationRetry(sessionId, target, persistedRoute);
+      return;
+    }
+    this.completeStaleOwnerCompensation(sessionId, target);
+  }
+
+  private scheduleStaleOwnerCompensationRetry(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+    persistedRoute?: PendingCredentialSwitchPersistedRoute,
+  ): void {
+    if (this.staleCompensationRetryTimers.has(target)) return;
+    const timer = setTimeout(() => {
+      this.staleCompensationRetryTimers.delete(target);
+      void this.retryStaleOwnerCompensation(sessionId, target, persistedRoute);
+    }, this.deps.retryDelayMs ?? PENDING_APPLY_RETRY_DELAY_MS);
+    this.staleCompensationRetryTimers.set(target, timer);
+  }
+
+  private completeStaleOwnerCompensation(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+  ): void {
+    const timer = this.staleCompensationRetryTimers.get(target);
+    if (timer) clearTimeout(timer);
+    this.staleCompensationRetryTimers.delete(target);
+    this.staleDiscards.delete(target);
+    const targets = this.staleCompensations.get(sessionId);
+    targets?.delete(target);
+    if (targets?.size === 0) this.staleCompensations.delete(sessionId);
+    if (this.pending.get(sessionId) === target) {
+      this.pending.delete(sessionId);
+    }
+    this.deps.logger?.info('stale pending credential switch discarded after owner boundary', {
+      sessionId,
+    });
+    if (
+      !this.staleCompensations.has(sessionId) &&
+      !this.compensationFailures.has(sessionId)
+    ) {
+      this.releaseClearedDuringApply(sessionId);
     }
   }
 
@@ -968,26 +1040,19 @@ export class PendingCredentialSwitchService {
     persistedRoute?: PendingCredentialSwitchPersistedRoute,
   ): boolean {
     if (this.ownerScopeCurrent(target)) return false;
-    if (this.pending.get(sessionId) === target) {
-      // Stop retries immediately, but keep the exact target identity until its captured old
-      // Profile has been compensated. A new owner may register the same session id meanwhile;
-      // the identity check in finally prevents the old cleanup from deleting that new target.
-      this.clearRetry(sessionId);
-      if (this.staleDiscards.has(target)) return true;
+    if (!this.staleDiscards.has(target)) {
+      // Stop normal apply retries immediately, but keep a compensation barrier until the exact
+      // old Profile CAS succeeds (or proves a newer selection won). A new owner may register the
+      // same session id meanwhile; target identity keeps the old cleanup from deleting it.
+      if (this.pending.get(sessionId) === target) this.clearRetry(sessionId);
       this.staleDiscards.add(target);
-      void (async () => {
-        try {
-          await this.compensateStaleOwnerRoute(sessionId, target, persistedRoute);
-        } finally {
-          this.staleDiscards.delete(target);
-          if (this.pending.get(sessionId) === target) {
-            this.pending.delete(sessionId);
-          }
-          this.deps.logger?.info('stale pending credential switch discarded after owner boundary', {
-            sessionId,
-          });
-        }
-      })();
+      const targets = this.staleCompensations.get(sessionId) ?? new Set();
+      targets.add(target);
+      this.staleCompensations.set(sessionId, targets);
+      // Reuse the cancellation barrier lifecycle so finishApplying cannot release the queue
+      // while SQLite is temporarily unavailable; successful compensation performs one wake.
+      this.clearedDuringApply.add(sessionId);
+      void this.retryStaleOwnerCompensation(sessionId, target, persistedRoute);
     }
     return true;
   }
