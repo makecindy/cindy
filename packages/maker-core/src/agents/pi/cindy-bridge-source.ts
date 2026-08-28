@@ -3282,7 +3282,7 @@ export default async function cindyBridge(pi: any) {
       : null;
     const captureToolName = gatewayCall?.qualifiedName ?? event.toolName;
     const captureInput = gatewayCall?.args ?? event.input ?? {};
-    if (captureToolName !== 'bash' && !String(captureToolName ?? '').startsWith('mcp__')) return;
+    if (!isCindyShellTool(captureToolName) && !String(captureToolName ?? '').startsWith('mcp__')) return;
     try {
       await ctx.ui.confirm(
         TURN_CHANGE_CAPTURE_TITLE,

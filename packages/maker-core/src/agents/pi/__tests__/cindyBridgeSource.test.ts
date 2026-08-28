@@ -1060,10 +1060,22 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on('tool_call'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('FILE_WRITE_BUILTINS.has(event.toolName)');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on('tool_result'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("captureToolName !== 'bash'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("String(captureToolName ?? '').startsWith('mcp__')");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('captureToolName = gatewayCall?.qualifiedName');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('captureInput = gatewayCall?.args');
+  });
+
+  it('routes PowerShell results through the same opaque turn-change capture as bash', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const handlerStart = source.indexOf("pi.on('tool_result'");
+    const handlerEnd = source.indexOf('// ── 视觉桥工具', handlerStart);
+    expect(handlerStart).toBeGreaterThanOrEqual(0);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    const handler = source.slice(handlerStart, handlerEnd);
+
+    expect(source).toContain("return toolName === 'bash' || toolName === 'powershell';");
+    expect(handler).toContain('if (!isCindyShellTool(captureToolName)');
+    expect(handler).toContain('TURN_CHANGE_CAPTURE_TITLE');
   });
 
   it('exposes a constant two-tool MCP gateway while preserving the real MCP identity for approval', () => {
