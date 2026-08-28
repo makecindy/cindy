@@ -62,7 +62,13 @@ export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
  *   other         未知/其它 → fail-closed
  */
 export type ReviewableAction =
-  | { kind: 'read'; path?: string; scope?: 'file' | 'tree' }
+  | {
+      kind: 'read';
+      path?: string;
+      scope?: 'file' | 'tree';
+      /** Harness 的执行范围会动态收紧时，区外读不得沿用旧 provider allowlist。 */
+      requireWorkspaceBoundary?: boolean;
+    }
   | { kind: 'session-state' }
   | {
       kind: 'file-write';
@@ -109,6 +115,12 @@ export function reviewAction(
     case 'read':
       // 读凭证/密钥文件(内置 Read/Grep 等,path 命中)必问、不可记住。
       if (action.path && isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
+      if (action.requireWorkspaceBoundary && action.path
+        && !isInsideWorkspace(
+          normalizeTarget(action.path, workspaceRoots),
+          workspaceRoots,
+          aliasFirmlinks,
+        )) return 'prompt-each-time';
       // 目录级递归读(Grep/Glob/LS,scope='tree')的**根目录**在工作区外 → 能遍历进区外的凭证子路径
       // (如 `Grep {path:'/Users/me', pattern:'AKIA'}` 读出 ~/.aws/credentials,而 path 本身不含凭证名,
       // copilot 报)→ 升级。读取范围含额外只读引用目录(整个 workspaceRoots)。单文件读只读一个具名文件。

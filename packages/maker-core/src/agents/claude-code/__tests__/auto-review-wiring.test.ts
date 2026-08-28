@@ -149,6 +149,7 @@ async function startSession(
     mcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
     extraDirs?: string[];
     writableDirs?: string[];
+    interactionResolver?: (request: InteractionRequest) => Promise<InteractionDecision>;
   } = {},
 ) {
   const configDir = await makeTempDir();
@@ -189,6 +190,7 @@ async function startSession(
   if (options.attachResolver !== false) {
     handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
       seen.push(req);
+      if (options.interactionResolver) return options.interactionResolver(req);
       return { kind: 'permission', behavior: 'allow' };
     });
   }
@@ -381,8 +383,12 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
 
 describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
   it('read-only tool → allow without hitting the resolver', async () => {
-    const { handle, canUseTool, seen } = await startSession('auto');
-    const r = await canUseTool('Read', { file_path: '/anywhere/x' }, { toolUseID: 't1' });
+    const { handle, canUseTool, seen, workingDir } = await startSession('auto');
+    const r = await canUseTool(
+      'Read',
+      { file_path: path.join(workingDir, 'x') },
+      { toolUseID: 't1' },
+    );
     expect(r.behavior).toBe('allow');
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
@@ -451,6 +457,60 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
     await handle.close();
   });
 
+  it('checks reads against the latest roots after an in-query writable grant revoke', async () => {
+    const writableDir = await makeTempDir();
+    const { handle, canUseTool, fakeQuery, reviewAutoPermissionAction, seen } =
+      await startSession('auto', { writableDirs: [writableDir] });
+
+    await handle.setWritableDirs!([]);
+    await handle.setPermissionMode!('ask');
+    await handle.setPermissionMode!('auto');
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+    await expect(canUseTool(
+      'Read',
+      { file_path: path.join(writableDir, 'revoked.txt') },
+      { toolUseID: 'read-revoked', suggestions: SESSION_SUGGESTION },
+    )).resolves.toMatchObject({ behavior: 'allow' });
+
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
+    await handle.close();
+  });
+
+  it('denies pending file approvals on revoke without dismissing unrelated requests', async () => {
+    const writableDir = await makeTempDir();
+    let resolveNetwork!: (decision: InteractionDecision) => void;
+    const { handle, canUseTool, seen } = await startSession('auto', {
+      writableDirs: [writableDir],
+      reviewVerdict: 'ask',
+      interactionResolver: (request) => new Promise<InteractionDecision>((resolve) => {
+        if (request.kind === 'permission' && request.toolName === 'WebFetch') {
+          resolveNetwork = resolve;
+        }
+      }),
+    });
+    const pendingRead = canUseTool(
+      'Read',
+      { file_path: '/outside/pending.txt' },
+      { toolUseID: 'pending-read-revoke' },
+    );
+    const pendingNetwork = canUseTool(
+      'WebFetch',
+      { url: 'https://example.com' },
+      { toolUseID: 'pending-network' },
+    );
+    await vi.waitFor(() => expect(permissionRequests(seen)).toHaveLength(2));
+
+    await handle.setWritableDirs!([]);
+
+    await expect(pendingRead).resolves.toMatchObject({ behavior: 'deny' });
+    resolveNetwork({ kind: 'permission', behavior: 'allow' });
+    await expect(pendingNetwork).resolves.toMatchObject({ behavior: 'allow' });
+    await handle.close();
+  });
+
   it('canonicalizes every structured write tool through the nearest existing ancestor', async () => {
     const writableDir = await makeTempDir();
     const realDir = path.join(writableDir, 'real-output');
@@ -482,6 +542,56 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
     }
     expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
     expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('auto-approves a write beneath a writable root that is itself a symlink', async () => {
+    const rootParent = await makeTempDir();
+    const realRoot = await makeTempDir();
+    const linkedRoot = path.join(rootParent, 'linked-root');
+    await fs.symlink(realRoot, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+    const canonicalRealRoot = await fs.realpath(realRoot);
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+      writableDirs: [linkedRoot],
+    });
+
+    await expect(canUseTool(
+      'Write',
+      { file_path: path.join(linkedRoot, 'result.txt') },
+      { toolUseID: 'linked-writable-root' },
+    )).resolves.toMatchObject({
+      behavior: 'allow',
+      updatedInput: { file_path: path.join(canonicalRealRoot, 'result.txt') },
+    });
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('prompts when a writable root cannot be canonicalized', async () => {
+    const rootParent = await makeTempDir();
+    const realRoot = await makeTempDir();
+    const linkedRoot = path.join(rootParent, 'linked-root');
+    const lexicalFile = path.join(linkedRoot, 'existing.txt');
+    await fs.writeFile(path.join(realRoot, 'existing.txt'), 'before');
+    await fs.symlink(realRoot, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+    const originalRealpath = fs.realpath.bind(fs);
+    vi.spyOn(fs, 'realpath').mockImplementation(async (target) => {
+      if (String(target) === linkedRoot) throw new Error('root realpath unavailable');
+      return originalRealpath(target);
+    });
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+      writableDirs: [linkedRoot],
+    });
+
+    await expect(canUseTool(
+      'Edit',
+      { file_path: lexicalFile },
+      { toolUseID: 'unresolved-writable-root', suggestions: SESSION_SUGGESTION },
+    )).resolves.toMatchObject({ behavior: 'allow' });
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
     await handle.close();
   });
 

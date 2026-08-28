@@ -313,6 +313,17 @@ async function resolveClaudeFileWriteTarget(
   }
 }
 
+async function resolveClaudeWritableRoots(roots: readonly string[]): Promise<string[]> {
+  const resolved = await Promise.all(roots.map(async (root) => {
+    try {
+      return await fs.realpath(path.resolve(root));
+    } catch {
+      return null;
+    }
+  }));
+  return [...new Set(resolved.filter((root): root is string => root !== null))];
+}
+
 function bindClaudeFileWriteTarget(
   toolName: string,
   input: Record<string, unknown>,
@@ -1683,6 +1694,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       forcePrompt?: boolean;
       /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
       unavailableHandoff?: boolean;
+      /** 目录授权变化会使这次文件读写审批的根快照失效。 */
+      directorySensitive?: boolean;
     };
     const pendingInteractions = new Map<string, PendingEntry>();
 
@@ -1698,7 +1711,7 @@ export class ClaudeCodeAgent extends BaseAgent {
      */
     async function dispatchInteraction(
       req: InteractionRequest,
-      opts?: { forcePrompt?: boolean },
+      opts?: { forcePrompt?: boolean; directorySensitive?: boolean },
     ): Promise<InteractionDecision> {
       if (!interactionResolver) {
         return safeDefaultDecision(req.kind, 'no_resolver_attached');
@@ -1710,6 +1723,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           resolve,
           settled: false,
           ...(opts?.forcePrompt ? { forcePrompt: true } : {}),
+          ...(opts?.directorySensitive ? { directorySensitive: true } : {}),
           ...(req.kind === 'permission' && isAutoReviewUnavailableMetadata(req.metadata)
             ? { unavailableHandoff: true }
             : {}),
@@ -1774,6 +1788,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       entry.resolve(safeDefaultDecision(entry.kind, reason));
       const resolvedAs = entry.kind === 'ask_user_question' ? 'allow' : 'deny';
       eventQueue.push({ type: 'interaction_dismissed', data: { requestId, reason, resolvedAs }, source: 'claude-code' });
+    }
+
+    function dismissDirectorySensitivePending(reason: string): void {
+      for (const [requestId, entry] of pendingInteractions) {
+        if (entry.directorySensitive) dismissSinglePending(requestId, reason);
+      }
     }
 
     /**
@@ -2021,6 +2041,11 @@ export class ClaudeCodeAgent extends BaseAgent {
       let unavailableHandoff = false;
       let reviewedWritePath: string | null | undefined;
       let executionInput = input;
+      const builtinReviewAction = toolName.startsWith('mcp__')
+        ? undefined
+        : normalizeBuiltinToolForAutoReview(toolName, input);
+      const directorySensitivePermission = builtinReviewAction?.kind === 'read'
+        || builtinReviewAction?.kind === 'file-write';
       if (mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')) {
         const workspaceRoots = [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
@@ -2028,7 +2053,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const writableRoots = [opts.workingDir, ...mutableWritableDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
         );
-        const action = normalizeBuiltinToolForAutoReview(toolName, input);
+        const action = builtinReviewAction!;
         if (action.kind === 'exec' && opts.remoteHostId) {
           action.destructivePathResolution = 'unavailable';
         }
@@ -2036,15 +2061,20 @@ export class ClaudeCodeAgent extends BaseAgent {
           const resolutionDirectoryGeneration = autoReviewDirectoryGeneration;
           // SSH paths belong to the remote filesystem. Until the remote manager can
           // attest a real path, never use a same-named controller path as evidence.
-          reviewedWritePath = opts.remoteHostId
-            ? null
-            : await resolveClaudeFileWriteTarget(opts.workingDir, action.path);
+          const [resolvedPath, resolvedWritableRoots] = opts.remoteHostId
+            ? [null, null] as const
+            : await Promise.all([
+                resolveClaudeFileWriteTarget(opts.workingDir, action.path),
+                resolveClaudeWritableRoots(writableRoots),
+              ]);
+          reviewedWritePath = resolvedPath;
           // A grant revoked while realpath was pending cannot be evaluated against
           // the old roots snapshot. Keep the canonical target, but require consent.
           if (resolutionDirectoryGeneration !== autoReviewDirectoryGeneration) {
             forcePrompt = true;
           }
           action.resolvedPath = reviewedWritePath;
+          action.resolvedWritableRoots = resolvedWritableRoots;
           executionInput = bindClaudeFileWriteTarget(toolName, input, reviewedWritePath);
         }
         const autoDecision = await reviewAutoAction(
@@ -2114,7 +2144,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         unavailableHandoff
           ? annotatePermissionRequestForUnavailableReview(permissionRequest)
           : permissionRequest,
-        { forcePrompt },
+        { forcePrompt, directorySensitive: directorySensitivePermission },
       );
       notifyIfAutoReviewConfirmUndelivered(unavailableHandoff, decision);
       if (decision.kind !== 'permission') {
@@ -2253,11 +2283,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       !nativeAutoReviewUnavailable
       && mutableAutoReviewCredentialMode === 'oauth-bearer'
       && !hasRegisteredMcpServers()
-      // Claude native Auto sees additionalDirectories as one undifferentiated scope.
-      // Route sessions with explicit directory grants through Cindy so read-only and
-      // read-write roots cannot be collapsed into the same permission bucket.
-      && mutableExtraDirs.length === 0
-      && mutableWritableDirs.length === 0;
+      // Claude native Auto sees additionalDirectories as one undifferentiated scope and
+      // bypasses canUseTool. Use the scope frozen into the active Query: after revoke,
+      // that Query still carries its broader directory allowlist.
+      && !activeQueryHasDirectoryGrants;
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -2408,6 +2437,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
     let mutableWritableDirs: string[] = Array.isArray(opts.writableDirs) ? [...opts.writableDirs] : [];
     let autoReviewDirectoryGeneration = 0;
+    let activeQueryHasDirectoryGrants = mutableExtraDirs.length > 0 || mutableWritableDirs.length > 0;
 
     // ── Usage tracker (Stage 2 B') ──────────────────────────────────────────
     // 单 session 共享的 mutable usage state. translator 通过 ctx 注入访问.
@@ -3465,6 +3495,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
       }
       // 计划模式开启时 SDK 跑 plan; 读 mutable 值让 rewind/fork 重建拿到当前档而非创建时快照。
+      const additionalDirectories = [...new Set([...mutableExtraDirs, ...mutableWritableDirs])];
+      activeQueryHasDirectoryGrants = additionalDirectories.length > 0;
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
       const query = sdkQuery({
@@ -3472,10 +3504,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         options: {
           abortController,
           cwd: opts.workingDir,
-          // 附加只读引用目录 — 每 turn buildQuery 读最新 closure 值, setExtraDirs 改完
-          // 下一 turn 立即生效 (turn-by-turn 装配)。空数组省略字段, 让 SDK 走默认。
-          ...((mutableExtraDirs.length > 0 || mutableWritableDirs.length > 0)
-            ? { additionalDirectories: [...new Set([...mutableExtraDirs, ...mutableWritableDirs])] }
+          // 附加目录在 Query 创建时冻结；运行时 setter 立即收紧 Cindy 审核，后续 Query
+          // 重建再取最新 closure。空数组省略字段，让 SDK 走默认。
+          ...(additionalDirectories.length > 0
+            ? { additionalDirectories }
             : {}),
           model: currentSdkModel,
           ...(currentSdkEffort ? { effort: currentSdkEffort } : {}),
@@ -6550,9 +6582,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           mutableWritableDirs.length === newDirs.length
           && mutableWritableDirs.every((dir, index) => dir === newDirs[index])
         ) return;
-        log.debug('setWritableDirs', { from: mutableWritableDirs.length, to: newDirs.length });
+        const revoked = mutableWritableDirs.some((dir) => !newDirs.includes(dir));
+        log.debug('setWritableDirs', { from: mutableWritableDirs.length, to: newDirs.length, revoked });
         mutableWritableDirs = [...newDirs];
         autoReviewDirectoryGeneration++;
+        if (revoked) dismissDirectorySensitivePending('writable_dirs_revoked');
       },
 
       async setVendorOptions(patch: Record<string, unknown>) {

@@ -34,6 +34,14 @@ describe('reviewAction — 非 shell 动作', () => {
     expect(reviewAction({ kind: 'other', description: 'unmapped', requireConsent: true }, roots))
       .toBe('prompt-each-time');
   });
+  it('动态 provider 目录范围收紧后，区外读取逐次确认', () => {
+    expect(reviewAction({
+      kind: 'read',
+      path: '/revoked/file.txt',
+      scope: 'file',
+      requireWorkspaceBoundary: true,
+    }, roots)).toBe('prompt-each-time');
+  });
 });
 
 describe('reviewAction — file-write 工作区边界', () => {
