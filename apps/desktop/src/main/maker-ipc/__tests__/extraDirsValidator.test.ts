@@ -28,4 +28,37 @@ describe('excludeDirectoryGrantConflicts', () => {
       excludeDirectoryGrantConflicts([reference, alias, output], [reference]),
     ).resolves.toEqual([output]);
   });
+
+  it('rejects ancestor and descendant overlaps in both grant directions', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-dir-grants-nested-'));
+    cleanupDirs.push(root);
+    const shared = path.join(root, 'shared');
+    const specs = path.join(shared, 'specs');
+    const output = path.join(root, 'output');
+    mkdirSync(specs, { recursive: true });
+    mkdirSync(output);
+
+    await expect(excludeDirectoryGrantConflicts([shared, output], [specs])).resolves.toEqual([
+      output,
+    ]);
+    await expect(excludeDirectoryGrantConflicts([specs, output], [shared])).resolves.toEqual([
+      output,
+    ]);
+  });
+
+  it('uses canonical paths for nested aliases without rejecting sibling prefixes', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-dir-grants-alias-nested-'));
+    cleanupDirs.push(root);
+    const shared = path.join(root, 'shared');
+    const specs = path.join(shared, 'specs');
+    const sharedAlias = path.join(root, 'shared-alias');
+    const sibling = path.join(root, 'shared-other');
+    mkdirSync(specs, { recursive: true });
+    mkdirSync(sibling);
+    symlinkSync(shared, sharedAlias, 'dir');
+
+    await expect(
+      excludeDirectoryGrantConflicts([sharedAlias, sibling], [specs]),
+    ).resolves.toEqual([sibling]);
+  });
 });

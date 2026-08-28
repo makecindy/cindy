@@ -50,7 +50,7 @@ function isSelfOrSubdir(candidate: string, base: string): boolean {
   // 同一个目录 → '' (Windows 也是)
   if (rel === '' || rel === '.') return true;
   // 子目录 → 不以 .. 开头, 也不是绝对路径 (跨盘符时 relative 会返回绝对路径)
-  if (rel.startsWith('..')) return false;
+  if (rel === '..' || rel.startsWith(`..${path.sep}`)) return false;
   if (path.isAbsolute(rel)) return false;
   return true;
 }
@@ -134,16 +134,19 @@ async function canonicalDirectoryKey(dir: string): Promise<string> {
   }
 }
 
-/** 阻止同一实体目录同时出现在只读与可写授权中（含符号链接别名）。 */
+/** 阻止同一实体目录树同时出现在只读与可写授权中（含符号链接别名）。 */
 export async function excludeDirectoryGrantConflicts(
   candidates: readonly string[],
   blocked: readonly string[],
 ): Promise<string[]> {
   if (candidates.length === 0 || blocked.length === 0) return [...candidates];
-  const blockedKeys = new Set(await Promise.all(blocked.map(canonicalDirectoryKey)));
+  const blockedKeys = await Promise.all(blocked.map(canonicalDirectoryKey));
   const result: string[] = [];
   for (const candidate of candidates) {
-    if (!blockedKeys.has(await canonicalDirectoryKey(candidate))) result.push(candidate);
+    const candidateKey = await canonicalDirectoryKey(candidate);
+    const overlapsBlockedTree = blockedKeys.some((blockedKey) =>
+      isSelfOrSubdir(candidateKey, blockedKey) || isSelfOrSubdir(blockedKey, candidateKey));
+    if (!overlapsBlockedTree) result.push(candidate);
   }
   return result;
 }
