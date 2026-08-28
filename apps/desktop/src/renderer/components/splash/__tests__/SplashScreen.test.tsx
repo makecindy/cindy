@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DbSlimmingStartupProgress } from '../../../../shared/localDbMaintenance';
 
@@ -45,6 +45,10 @@ const mocks = vi.hoisted(() => ({
   },
   env: { step: undefined as 1 | 2 | undefined, totalSteps: undefined as 2 | undefined },
   coverHeld: false,
+  handoff: {
+    reportSplashExited: vi.fn(),
+    reportSplashExitCompleted: vi.fn(),
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -78,6 +82,10 @@ vi.mock('@/contexts/EnvCheckContext', () => ({
 
 vi.mock('@/contexts/AppShellCoverContext', () => ({
   useAppShellCover: () => ({ coverHeld: mocks.coverHeld, reportLocalDbGate: () => {} }),
+}));
+
+vi.mock('@/contexts/LoginHandoffContext', () => ({
+  useLoginHandoff: () => mocks.handoff,
 }));
 
 vi.mock('@/components/title-bar/WindowControls', () => ({
@@ -446,6 +454,28 @@ describe('SplashScreen wave4 统一面板', () => {
     view.rerender(<SplashScreen />);
     expect(screen.getByTestId('splash-root').className).toContain('pointer-events-none');
     expect(screen.getByTestId('splash-root').className).toContain('opacity-0');
+  });
+
+  it('等待 Splash 淡出层完成并可卸载后才上报退场完成', () => {
+    vi.useFakeTimers();
+    try {
+      mocks.coverHeld = true;
+      const view = renderSplash('splash_done');
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      mocks.coverHeld = false;
+      view.rerender(<SplashScreen />);
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      act(() => vi.advanceTimersByTime(499));
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(mocks.handoff.reportSplashExitCompleted).toHaveBeenCalledTimes(1);
+      expect(view.container.firstElementChild).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reduced-motion 下 cover 放行立即卸载,不留 500ms 透明遮罩', () => {

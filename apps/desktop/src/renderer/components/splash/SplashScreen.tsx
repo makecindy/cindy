@@ -222,6 +222,20 @@ export function SplashScreen() {
   }, [coverHeld, holdAfterDone, realPhase, reducedMotion]);
 
   const shellCoverVisible = holdAfterDone || shellCoverFading;
+  // The cover-release effect below sets shellCoverFading in a subsequent
+  // render. Include that one-render handoff window in the lock so completion
+  // cannot be reported before the fade state is visible to this component.
+  const shellCoverFadePending =
+    !reducedMotion &&
+    prevCoverHeldRef.current &&
+    !coverHeld &&
+    (realPhase === 'splash_done' || realPhase === 'splash_skipped');
+  const splashCanUnmount =
+    !fixture &&
+    (realPhase === 'splash_done' || realPhase === 'splash_skipped') &&
+    !shellCoverVisible &&
+    !shellCoverFadePending &&
+    !dbCleanupProgress;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -254,20 +268,15 @@ export function SplashScreen() {
   const splashExitCompletedRef = useRef(false);
   useEffect(() => {
     if (splashExitCompletedRef.current) return;
-    if (realPhase === 'splash_done' || realPhase === 'splash_skipped') {
+    if (splashCanUnmount) {
       splashExitCompletedRef.current = true;
       handoff.reportSplashExitCompleted();
     }
-  }, [realPhase, handoff]);
+  }, [handoff, splashCanUnmount]);
 
   // dev fixture 激活时冻结停留:真实生命周期跑完也不退场,供状态遍历/视觉走查
   // (readSplashPhaseFixture 在 PROD 恒 null,本分支不可达)。
-  if (
-    !fixture &&
-    (realPhase === 'splash_done' || realPhase === 'splash_skipped') &&
-    !shellCoverVisible &&
-    !dbCleanupProgress
-  ) {
+  if (splashCanUnmount) {
     return null;
   }
 
