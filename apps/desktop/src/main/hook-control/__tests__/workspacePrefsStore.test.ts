@@ -80,6 +80,42 @@ describe('workspacePrefsStore', () => {
     });
   });
 
+  it('新建 team 行继承 dirty null 兜底尚未镜像的本地字段', () => {
+    reconcileWorkspacePrefsForMirror('slack', []);
+    setWorkspacePref('slack', null, 'repo', { effort: 'high' });
+    setWorkspacePref('slack', 'T1', 'repo', { model: 'team-model' });
+
+    const candidates = reconcileWorkspacePrefsForMirror('slack', [
+      {
+        workspace: 'repo',
+        model: 'fallback-model',
+        effort: 'low',
+        agentKind: 'claude-code',
+        permissionMode: 'ask',
+        teamId: null,
+      },
+      {
+        workspace: 'repo',
+        model: 'old-team-model',
+        effort: 'low',
+        agentKind: 'codex',
+        permissionMode: 'full',
+        teamId: 'T1',
+      },
+    ]);
+
+    expect(candidates.find((candidate) => candidate.prefs.teamId === 'T1')).toMatchObject({
+      prefs: {
+        workspace: 'repo',
+        model: 'team-model',
+        effort: 'high',
+        agentKind: 'codex',
+        permissionMode: 'full',
+        teamId: 'T1',
+      },
+    });
+  });
+
   it('四个字段都清空则保留墓碑，不丢键', () => {
     setWorkspacePref('x', null, 'chat', { model: 'grok-4', agentKind: 'pi' });
     setWorkspacePref('x', null, 'chat', {

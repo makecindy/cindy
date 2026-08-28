@@ -260,13 +260,14 @@ export function setWorkspacePref(
           permissionMode: null,
         } satisfies WorkspacePrefsEntry));
   const rev = rowRev(current) + 1;
+  const localBase = exact ?? inherited;
   const fullLocalAuthority =
-    exact !== undefined &&
-    ((isDirtyRow(exact) && exact.dirtyPatch === undefined) ||
-      (store.migrated[channel] !== true && !isDirtyRow(exact)));
+    localBase !== undefined &&
+    ((isDirtyRow(localBase) && localBase.dirtyPatch === undefined) ||
+      (store.migrated[channel] !== true && !isDirtyRow(localBase)));
   const dirtyPatch = fullLocalAuthority
     ? undefined
-    : mergePatch(exact && isDirtyRow(exact) ? exact.dirtyPatch : undefined, patch);
+    : mergePatch(localBase && isDirtyRow(localBase) ? localBase.dirtyPatch : undefined, patch);
   const nextRow: WorkspacePrefsEntry = {
     ...current,
     ...(patch.model !== undefined ? { model: patch.model } : {}),
