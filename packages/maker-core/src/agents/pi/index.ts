@@ -263,6 +263,16 @@ type PiPermissionResolution =
   | 'auto-review-deny'
   | 'system-deny';
 
+/** Remote paths belong to the execution host, never the controller filesystem. */
+export function constrainPiDestructivePathResolution(
+  action: ReviewableAction,
+  remote: boolean,
+): ReviewableAction {
+  return remote && action.kind === 'exec'
+    ? { ...action, destructivePathResolution: 'unavailable' }
+    : action;
+}
+
 /**
  * baseUrl 是否指向本机 loopback(远端会话不可达)。与 host 侧 isLoopbackUrl 同口径:
  * localhost / ::1 / 0.0.0.0 / **整个 127.0.0.0/8**(轮 42 P2 —— 只匹配 127.0.0.1
@@ -3364,13 +3374,16 @@ export class PiAgent extends BaseAgent {
           return requestUserDecision({ forcePrompt: turnPolicyForcePrompt });
         }
         try {
-          const action = normalizePiToolForAutoReview({
-            toolName,
-            input,
-            workspaceRoots: [opts.workingDir],
-            readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
-            writableRoots: [opts.workingDir, ...mutableWritableDirs],
-          });
+          const action = constrainPiDestructivePathResolution(
+            normalizePiToolForAutoReview({
+              toolName,
+              input,
+              workspaceRoots: [opts.workingDir],
+              readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+              writableRoots: [opts.workingDir, ...mutableWritableDirs],
+            }),
+            Boolean(opts.remoteHostId),
+          );
           if (action.kind === 'file-write') {
             action.resolvedPath = resolvedWritePath;
             action.resolvedWritableRoots = resolvedWritableRoots;
@@ -6924,14 +6937,17 @@ export class PiAgent extends BaseAgent {
           return;
         }
         try {
-          const action = normalizePiToolForAutoReview({
-            toolName,
-            input,
-            resolvedCredentialPaths,
-            workspaceRoots,
-            readRoots,
-            writableRoots,
-          });
+          const action = constrainPiDestructivePathResolution(
+            normalizePiToolForAutoReview({
+              toolName,
+              input,
+              resolvedCredentialPaths,
+              workspaceRoots,
+              readRoots,
+              writableRoots,
+            }),
+            getPermissionCtx().remote,
+          );
           if (action.kind === 'file-write') {
             action.resolvedPath = resolvedWritePath;
             action.resolvedWritableRoots = resolvedWritableRoots;

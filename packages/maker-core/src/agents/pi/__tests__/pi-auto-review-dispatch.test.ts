@@ -145,7 +145,10 @@ import {
   PiManagedPackageMutationCancelledError,
   type TurnPermissionPolicy,
 } from '../../base-agent.js';
-import { PiAgent } from '../index.js';
+import {
+  constrainPiDestructivePathResolution,
+  PiAgent,
+} from '../index.js';
 import { Session } from '../../../session.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -205,6 +208,24 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     savedNoProxyLower = process.env.no_proxy;
   });
 
+  it('uses the same remote destructive-path constraint in root and durable approval flows', () => {
+    const localAction = { kind: 'exec' as const, command: 'rm -rf build' };
+    expect(constrainPiDestructivePathResolution(localAction, false)).toBe(localAction);
+    expect(constrainPiDestructivePathResolution(localAction, true)).toEqual({
+      ...localAction,
+      destructivePathResolution: 'unavailable',
+    });
+
+    const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+    const durableStart = source.indexOf('const resolvePiSubagentApproval');
+    const durableEnd = source.indexOf('const refreshPiSubagentRuns', durableStart);
+    const rootStart = source.indexOf('private handleExtensionUiRequest');
+    expect(source.slice(durableStart, durableEnd)).toContain(
+      'constrainPiDestructivePathResolution',
+    );
+    expect(source.slice(rootStart)).toContain('constrainPiDestructivePathResolution');
+  });
+
   afterEach(() => {
     rmSync(agentHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -258,6 +279,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
       runtimeConfig: {
         endpoint: 'http://127.0.0.1:9',
+        remoteEndpoint: 'https://gateway.example.test',
         systemPrompt: 'You are Cindy.',
         managedExecutablePaths: { ripgrep: managedRipgrepPath },
       },
@@ -296,6 +318,24 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async () => ({
+        writeLine: async () => {},
+        onLine: () => () => {},
+        onStderr: () => () => {},
+        onClose: () => () => {},
+        close: async () => {},
+        pid: 4321,
+        isClosed: () => false,
+        remoteBinaryPath: '/remote/pi',
+      }),
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {},
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
       spawnPiSubagentRunner: (request) => {
         captured.runnerLaunches.push(request);
         const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -336,7 +376,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
     mcp?: McpSetup,
-    directories?: { extraDirs?: string[]; writableDirs?: string[] },
+    directories?: {
+      extraDirs?: string[];
+      writableDirs?: string[];
+      remoteHostId?: string;
+    },
   ): Promise<PiTestSessionHandle> {
     const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel, mcp));
     return agent.startSession({
@@ -2556,6 +2600,38 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(referenceDir, { recursive: true, force: true });
     rmSync(writableDir, { recursive: true, force: true });
     rmSync(replacementWritableDir, { recursive: true, force: true });
+  });
+
+  it('forces confirmation for remote Pi destructive paths instead of using controller realpath', async () => {
+    const localSafeTarget = path.join(cwd, 'controller-safe-target');
+    const remoteLink = path.join(cwd, 'remote-link');
+    mkdirSync(localSafeTarget);
+    symlinkSync(
+      localSafeTarget,
+      remoteLink,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const review = vi.fn(async () => ({
+      verdict: 'allow' as const,
+      reason: 'model allow',
+    }));
+    const handle = await start('auto', review, false, undefined, {
+      remoteHostId: 'remote-host',
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'remote-destructive-link',
+      'bash',
+      { command: `rm -rf ${path.join(remoteLink, 'subdir')}` },
+      { resolvedCredentialPaths: [] },
+    );
+
+    expect(await waitForResponse('remote-destructive-link')).toMatchObject({ confirmed: false });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+    await handle.close();
   });
 
   it('never silently approves a writable-root path whose real target escapes through a link', async () => {
