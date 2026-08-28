@@ -3178,19 +3178,34 @@ export class PiAgent extends BaseAgent {
       }
       let toolName = 'tool';
       let input: Record<string, unknown> = {};
+      let resolvedWritePath: string | null | undefined;
       const approvalPayload = approval.method === 'input'
         ? approval.placeholder
         : approval.message;
       if (approval.title === 'cindy:permission' && approvalPayload) {
         try {
-          const payload = JSON.parse(approvalPayload) as { toolName?: unknown; input?: unknown };
+          const payload = JSON.parse(approvalPayload) as {
+            toolName?: unknown;
+            input?: unknown;
+            resolvedWritePath?: unknown;
+          };
           if (typeof payload.toolName === 'string' && payload.toolName) toolName = payload.toolName;
           if (payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)) {
             input = payload.input as Record<string, unknown>;
           }
+          if (Object.hasOwn(payload, 'resolvedWritePath')) {
+            resolvedWritePath = typeof payload.resolvedWritePath === 'string'
+              && payload.resolvedWritePath.length > 0
+              ? payload.resolvedWritePath
+              : null;
+          }
         } catch {
           /* malformed permission payload remains a generic, deny-by-default prompt */
         }
+      }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritePath === undefined) {
+        // Durable child 可能来自旧 bridge；缺少执行期真实路径时不能回退成字面绿灯。
+        resolvedWritePath = null;
       }
       const requestId = `pi-subagent:${key}`;
       const turnPolicyForcePrompt = (() => {
@@ -3335,13 +3350,15 @@ export class PiAgent extends BaseAgent {
           return requestUserDecision({ forcePrompt: turnPolicyForcePrompt });
         }
         try {
-          const decision = await reviewAutoAction(normalizePiToolForAutoReview({
+          const action = normalizePiToolForAutoReview({
             toolName,
             input,
             workspaceRoots: [opts.workingDir],
             readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
             writableRoots: [opts.workingDir, ...mutableWritableDirs],
-          }));
+          });
+          if (action.kind === 'file-write') action.resolvedPath = resolvedWritePath;
+          const decision = await reviewAutoAction(action);
           if (permissionMode !== 'auto' || turnPolicyForcePrompt) {
             return requestUserDecision({ forcePrompt: true });
           }
@@ -6567,12 +6584,14 @@ export class PiAgent extends BaseAgent {
       let toolName = 'tool';
       let input: Record<string, unknown> = {};
       let resolvedCredentialPaths: string[] | null | undefined;
+      let resolvedWritePath: string | null | undefined;
       try {
         const rawPayload = method === 'input' ? event.placeholder : event.message;
         const payload = JSON.parse(typeof rawPayload === 'string' ? rawPayload : '{}') as {
           toolName?: unknown;
           input?: unknown;
           resolvedCredentialPaths?: unknown;
+          resolvedWritePath?: unknown;
         };
         if (typeof payload.toolName === 'string' && payload.toolName.length > 0) toolName = payload.toolName;
         if (payload.input && typeof payload.input === 'object') input = payload.input as Record<string, unknown>;
@@ -6581,6 +6600,12 @@ export class PiAgent extends BaseAgent {
             && payload.resolvedCredentialPaths.length <= 64
             && payload.resolvedCredentialPaths.every((item) => typeof item === 'string' && item.length > 0)
             ? payload.resolvedCredentialPaths as string[]
+            : null;
+        }
+        if (Object.hasOwn(payload, 'resolvedWritePath')) {
+          resolvedWritePath = typeof payload.resolvedWritePath === 'string'
+            && payload.resolvedWritePath.length > 0
+            ? payload.resolvedWritePath
             : null;
         }
       } catch {
@@ -6594,6 +6619,10 @@ export class PiAgent extends BaseAgent {
         // canonical-path evidence. Missing evidence means an old or malformed bridge,
         // not a safe read; require explicit consent instead of trusting a link name.
         resolvedCredentialPaths = null;
+      }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritePath === undefined) {
+        // 旧版或畸形 bridge 没有执行期 canonical 证据时，Auto 不得回退到字面路径绿灯。
+        resolvedWritePath = null;
       }
       const {
         resolver,
@@ -6872,6 +6901,7 @@ export class PiAgent extends BaseAgent {
             readRoots,
             writableRoots,
           });
+          if (action.kind === 'file-write') action.resolvedPath = resolvedWritePath;
           const decision = await reviewAutoAction(action);
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,
           // 不能用进入审查前捕获的旧 auto 档直接放行(Pi 明确支持热切换,codex review P1):

@@ -61,7 +61,15 @@ export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
 export type ReviewableAction =
   | { kind: 'read'; path?: string; scope?: 'file' | 'tree' }
   | { kind: 'session-state' }
-  | { kind: 'file-write'; path: string | undefined }
+  | {
+      kind: 'file-write';
+      path: string | undefined;
+      /**
+       * Harness 在实际执行进程中解析出的写目标。`null` 表示 harness 声明会提供
+       * canonical 证据、但本次无法证明；缺省保持不具备 realpath 能力的旧 adapter 语义。
+       */
+      resolvedPath?: string | null;
+    }
   // cwdUnknown:harness 上报了 cwd 字段但内容为空/不可解析 —— 与"未提供 cwd"(按会话工作目录)不同,
   // 必须按未知处理:相对破坏目标不可证明在区内(copidot 报 `params.cwd || workingDir` 把空串当区内)。
   | { kind: 'exec'; command: string; cwd?: string; cwdUnknown?: boolean }
@@ -95,24 +103,60 @@ export function reviewAction(
       return 'auto-approve';
     case 'file-write': {
       if (!action.path) return 'prompt';
+      // 能提供执行期真实路径的 harness 一旦解析失败，就不能退回字面路径绿灯。
+      // 这不是普通灰区：用户看到的授权根与实际落盘目标可能已经不同，必须逐次确认。
+      if (action.resolvedPath === null) return 'prompt-each-time';
+      const writeTargets = action.resolvedPath === undefined
+        ? [action.path]
+        : [action.path, action.resolvedPath];
       // 写凭证文件必问、不可记住 —— 即便落在工作区内(如 /repo/.aws/credentials、/repo/.codex/auth.json):
       // 把 secret 写进 git-tracked checkout 与写区外同样危险,凭证性优先于工作区边界。
-      if (isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
-      const normalizedWriteTarget = normalizeTarget(action.path, workspaceRoots);
+      if (writeTargets.some((target) => isSensitiveCredentialPath(target))) {
+        return 'prompt-each-time';
+      }
+      const normalizedWriteTargets = writeTargets.map((target) =>
+        normalizeTarget(target, workspaceRoots));
+      const normalizedWriteTarget = normalizedWriteTargets[0]!;
+      const normalizedResolvedTarget = normalizedWriteTargets[1];
       // 相对路径始终挂到主工作目录(workspaceRoots[0])解析；绝对路径可落进任一显式可写根。
       // 主工作目录内一律放行 —— 即便仓库本身落在 /var、/root 等下,区内写也不该被系统红线误升。
       // 但用户追加的可写根不能把 /etc、/System 等系统红线洗成绿灯；那类目录仍须逐次确认。
       const writableRoots = resolveWritableRoots(workspaceRoots, opts?.writableRoots);
       const primaryWorkspaceRoot = workspaceRoots[0];
-      if (
+      const lexicalTargetIsPrimary = Boolean(
         primaryWorkspaceRoot
         && isInsideWorkspace(normalizedWriteTarget, [primaryWorkspaceRoot], aliasFirmlinks)
-      ) return 'auto-approve';
+      );
+      const lexicalTargetIsWritable = isInsideWorkspace(
+        normalizedWriteTarget,
+        writableRoots,
+        aliasFirmlinks,
+      );
+      if (normalizedResolvedTarget !== undefined) {
+        // 系统与凭证红线必须对实际落盘目标重跑，不能被授权根内的链接名遮住。
+        if (isProtectedSystemPath(canonicalPath(normalizedResolvedTarget, aliasFirmlinks))) {
+          return 'prompt-each-time';
+        }
+        const resolvedTargetIsWritable = isInsideWorkspace(
+          normalizedResolvedTarget,
+          writableRoots,
+          aliasFirmlinks,
+        );
+        // 最危险的形态是“看起来在授权内，实际写到授权外”。普通区外写仍保留
+        // 既有灰区语义；链接越界则必须让用户看到真实边界变化并逐次确认。
+        if ((lexicalTargetIsPrimary || lexicalTargetIsWritable) && !resolvedTargetIsWritable) {
+          return 'prompt-each-time';
+        }
+        // 原始路径本身也必须在授权边界内；不能用一个区外别名反向洗成绿灯。
+        if (!lexicalTargetIsPrimary && !lexicalTargetIsWritable) return 'prompt';
+        return 'auto-approve';
+      }
+      if (lexicalTargetIsPrimary) return 'auto-approve';
       // 区外写系统/受保护目录(/etc、/System、C:\Windows 等)是高影响系统级写入,不能交灰区 reviewer
       // 静默 allow(copilot 报)→ 确定性必问。canonical(darwin 抹平 /private firmlink)后判,使
       // `/private/etc/passwd` 也命中 `/etc`。其它区外写 → 灰区 reviewer。
       if (isProtectedSystemPath(canonicalPath(normalizedWriteTarget, aliasFirmlinks))) return 'prompt-each-time';
-      if (isInsideWorkspace(normalizedWriteTarget, writableRoots, aliasFirmlinks)) return 'auto-approve';
+      if (lexicalTargetIsWritable) return 'auto-approve';
       return 'prompt';
     }
     case 'exec': {

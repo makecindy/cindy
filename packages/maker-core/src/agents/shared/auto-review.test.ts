@@ -51,6 +51,41 @@ describe('reviewAction — file-write 工作区边界', () => {
     expect(reviewAction({ kind: 'file-write', path: '/shared-output/../outside.txt' }, allRoots, opts))
       .toBe('prompt');
   });
+  it('对 harness 提供的真实写目标重新应用授权、系统与凭证边界', () => {
+    const allRoots = ['/repo', '/reference', '/shared-output'];
+    const opts = { writableRoots: ['/repo', '/shared-output'] };
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/link/result.txt',
+      resolvedPath: '/shared-output/real/result.txt',
+    }, allRoots, opts)).toBe('auto-approve');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/link/result.txt',
+      resolvedPath: '/outside/result.txt',
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/link/hosts',
+      resolvedPath: '/etc/hosts',
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/link/key',
+      resolvedPath: '/Users/me/.ssh/id_rsa',
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/unresolved/result.txt',
+      resolvedPath: null,
+    }, allRoots, opts)).toBe('prompt-each-time');
+    // 原始路径本就在授权外时保留既有灰区语义，不能被真实目标反向洗成绿灯。
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/outside/alias.txt',
+      resolvedPath: '/shared-output/result.txt',
+    }, allRoots, opts)).toBe('prompt');
+  });
   it('恶意或失效的目录授权不能覆盖凭证与系统路径红线', () => {
     expect(reviewAction(
       { kind: 'file-write', path: '/etc/hosts' },

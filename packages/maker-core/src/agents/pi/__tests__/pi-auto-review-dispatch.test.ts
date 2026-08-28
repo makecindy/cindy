@@ -365,14 +365,21 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     id: string,
     toolName: string,
     input: Record<string, unknown>,
-    options?: { resolvedCredentialPaths: unknown },
+    options?: { resolvedCredentialPaths?: unknown; resolvedWritePath?: unknown },
   ): void {
+    const writeEvidence = toolName === 'write' || toolName === 'edit'
+      ? {
+          resolvedWritePath: options && Object.hasOwn(options, 'resolvedWritePath')
+            ? options.resolvedWritePath
+            : (typeof input.path === 'string' ? input.path : null),
+        }
+      : {};
     captured.onEvent!({
       type: 'extension_ui_request',
       method: 'confirm',
       id,
       title: 'cindy:permission',
-      message: JSON.stringify({ toolName, input, ...options }),
+      message: JSON.stringify({ toolName, input, ...options, ...writeEvidence }),
     });
   }
 
@@ -381,12 +388,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     toolName: string,
     input: Record<string, unknown>,
   ): void {
+    const writeEvidence = toolName === 'write' || toolName === 'edit'
+      ? { resolvedWritePath: typeof input.path === 'string' ? input.path : null }
+      : {};
     captured.onEvent!({
       type: 'extension_ui_request',
       method: 'input',
       id,
       title: 'cindy:permission',
-      placeholder: JSON.stringify({ toolName, input }),
+      placeholder: JSON.stringify({ toolName, input, ...writeEvidence }),
     });
   }
 
@@ -2529,6 +2539,39 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(replacementWritableDir, { recursive: true, force: true });
   });
 
+  it('never silently approves a writable-root path whose real target escapes through a link', async () => {
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-outside-'));
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const handle = await start('auto', review, false, undefined, { writableDirs: [writableDir] });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    const linkedPath = path.join(writableDir, 'link', 'result.txt');
+    const cases = [
+      ['ordinary-escape', path.join(outsideDir, 'result.txt')],
+      ['system-escape', '/etc/hosts'],
+      ['credential-escape', path.join(outsideDir, '.ssh', 'id_rsa')],
+      ['unresolved-escape', null],
+    ] as const;
+    for (const [id, resolvedWritePath] of cases) {
+      firePermissionRequest(id, 'write', { path: linkedPath }, { resolvedWritePath });
+      expect(await waitForResponse(id)).toMatchObject({ confirmed: false });
+    }
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledTimes(cases.length);
+
+    firePermissionRequest('authorized-real-target', 'write', { path: linkedPath }, {
+      resolvedWritePath: path.join(writableDir, 'real', 'result.txt'),
+    });
+    expect(await waitForResponse('authorized-real-target')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledTimes(cases.length);
+
+    await handle.close();
+    rmSync(writableDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
   it('discards an in-flight allow when external directory permissions change', async () => {
     const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
     let resolveReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
@@ -2714,7 +2757,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         agentKind: 'pi',
         model: 'm',
         userIntent: 'Update the shared scratch file for this test.',
-        action: { kind: 'file-write', path: '/tmp/outside.txt' },
+        action: {
+          kind: 'file-write',
+          path: '/tmp/outside.txt',
+          resolvedPath: '/tmp/outside.txt',
+        },
       }),
     );
     expect(resolverCalls).toBe(0);
