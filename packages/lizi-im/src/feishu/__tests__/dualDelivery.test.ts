@@ -51,7 +51,7 @@ describe('Feishu native thread/main dual delivery', () => {
     vi.useFakeTimers();
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
     await vi.advanceTimersByTimeAsync(1_000);
-    await expect(flat).resolves.toEqual({ kind: 'dispatch' });
+    await expect(flat).resolves.toMatchObject({ kind: 'dispatch' });
   });
 
   it('does not merge equal text from different create_time values', async () => {
@@ -62,7 +62,7 @@ describe('Feishu native thread/main dual delivery', () => {
     );
     await vi.advanceTimersByTimeAsync(1_000);
 
-    await expect(flat).resolves.toEqual({ kind: 'dispatch' });
+    await expect(flat).resolves.toMatchObject({ kind: 'dispatch' });
     expect(topic.kind).toBe('dispatch');
     if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(false);
@@ -78,15 +78,50 @@ describe('Feishu native thread/main dual delivery', () => {
     expect(topic).toEqual({ kind: 'dispatch' });
   });
 
-  it('suppresses a late topic after an unpaired flat has already dispatched', async () => {
+  it('lets a late topic take over an unpaired flat that has not committed yet', async () => {
     vi.useFakeTimers();
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
     await vi.advanceTimersByTimeAsync(1_000);
-    await expect(flat).resolves.toEqual({ kind: 'dispatch' });
+    const flatDecision = await flat;
+    expect(flatDecision).toMatchObject({ kind: 'dispatch' });
+    if (flatDecision.kind !== 'dispatch' || !flatDecision.commitUnpairedFlat) {
+      throw new Error('unpaired flat must expose commitUnpairedFlat');
+    }
+
+    const topic = await coordinateDualDelivery(input());
+    expect(topic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+    expect(flatDecision.commitUnpairedFlat()).toBe(false);
+  });
+
+  it('suppresses a late topic after the unpaired flat has committed its route', async () => {
+    vi.useFakeTimers();
+    const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const flatDecision = await flat;
+    expect(flatDecision.kind).toBe('dispatch');
+    if (flatDecision.kind !== 'dispatch' || !flatDecision.commitUnpairedFlat) {
+      throw new Error('unpaired flat must expose commitUnpairedFlat');
+    }
+    expect(flatDecision.commitUnpairedFlat()).toBe(true);
 
     await expect(coordinateDualDelivery(input())).resolves.toEqual({
       kind: 'suppress-main-copy',
     });
+  });
+
+  it('suppresses a later main-feed copy after a late topic has taken over', async () => {
+    vi.useFakeTimers();
+    const firstFlat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await firstFlat;
+    const topic = await coordinateDualDelivery(input());
+    expect(topic.kind).toBe('dispatch');
+
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat_retry', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
   });
 
   it('delivers a scheduled mirror when the main-feed copy arrives after the pair window', async () => {
@@ -115,7 +150,7 @@ describe('Feishu native thread/main dual delivery', () => {
 
     const lateFlat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
     await vi.advanceTimersByTimeAsync(1_000);
-    await expect(lateFlat).resolves.toEqual({ kind: 'dispatch' });
+    await expect(lateFlat).resolves.toMatchObject({ kind: 'dispatch' });
     expect(scheduled).not.toHaveBeenCalled();
   });
 });

@@ -36,12 +36,26 @@ export interface DualDeliveryInput {
 }
 
 export type DualDeliveryDecision =
-  | { kind: 'dispatch'; mirrorKey?: string }
+  | {
+      kind: 'dispatch';
+      mirrorKey?: string;
+      /**
+       * Unpaired main-feed copies call this after `openThread` returns.
+       * `false` means a late topic already claimed the route — recall the
+       * bot-created opener and abort instead of emitting.
+       */
+      commitUnpairedFlat?: () => boolean;
+    }
   | { kind: 'suppress-main-copy' };
+
+interface RecentFlatRecord {
+  ts: number;
+  state: 'pending' | 'committed' | 'taken-over';
+}
 
 const pending = new Map<string, PendingLogicalSend>();
 const recentThreads = new Map<string, number>();
-const recentFlats = new Map<string, number>();
+const recentFlats = new Map<string, RecentFlatRecord>();
 const confirmed = new Map<string, number>();
 const deferredMirrors = new Map<string, Array<() => void>>();
 
@@ -74,6 +88,28 @@ function rememberRecent(map: Map<string, number>, key: string, now: number): voi
   map.delete(key);
   map.set(key, now);
   pruneTtlMap(map, now);
+}
+
+function pruneRecentFlats(now: number): void {
+  for (const [key, rec] of recentFlats) {
+    if (now - rec.ts <= LATE_COPY_TTL_MS && recentFlats.size <= MAX_RECENT) break;
+    recentFlats.delete(key);
+    deferredMirrors.delete(key);
+  }
+}
+
+function rememberRecentFlat(key: string, now: number): void {
+  recentFlats.delete(key);
+  recentFlats.set(key, { ts: now, state: 'pending' });
+  pruneRecentFlats(now);
+}
+
+function commitUnpairedFlatRoute(key: string): boolean {
+  const rec = recentFlats.get(key);
+  if (rec?.state === 'taken-over') return false;
+  if (!rec) return !confirmed.has(key);
+  rec.state = 'committed';
+  return true;
 }
 
 function flushDeferredMirrors(key: string): void {
@@ -123,7 +159,7 @@ function createPending(key: string): PendingLogicalSend {
       pending.delete(key);
       const now = Date.now();
       if (entry.threadMessageId) rememberRecent(recentThreads, key, now);
-      else if (entry.flatMessageIds.size > 0) rememberRecent(recentFlats, key, now);
+      else if (entry.flatMessageIds.size > 0) rememberRecentFlat(key, now);
       entry.resolveDecision(false);
     }, PAIR_WINDOW_MS),
   };
@@ -150,7 +186,7 @@ export async function coordinateDualDelivery(
 
   const now = Date.now();
   pruneTtlMap(recentThreads, now);
-  pruneTtlMap(recentFlats, now);
+  pruneRecentFlats(now);
   pruneConfirmed(now);
   if (!input.threadId && recentThreads.has(key)) {
     recentThreads.delete(key);
@@ -160,9 +196,18 @@ export async function coordinateDualDelivery(
     flushDeferredMirrors(key);
     return { kind: 'suppress-main-copy' };
   }
-  if (input.threadId && recentFlats.has(key)) {
-    recentFlats.delete(key);
-    return { kind: 'suppress-main-copy' };
+  const recentFlat = recentFlats.get(key);
+  if (input.threadId && recentFlat) {
+    if (recentFlat.state === 'committed' || recentFlat.state === 'taken-over') {
+      return { kind: 'suppress-main-copy' };
+    }
+    recentFlat.state = 'taken-over';
+    confirmed.delete(key);
+    confirmed.set(key, now);
+    pruneConfirmed(now);
+    rememberRecent(recentThreads, key, now);
+    flushDeferredMirrors(key);
+    return { kind: 'dispatch', mirrorKey: key };
   }
 
   let entry = pending.get(key);
@@ -173,8 +218,8 @@ export async function coordinateDualDelivery(
     if (entry.flatMessageIds.size > 0) confirmPair(key, entry);
     // Topic input is always the preferred Agent route and must not wait. A flat
     // copy that arrived first is already parked on `entry.decision`; a later
-    // flat copy is suppressed through `recentThreads`, and a late topic after
-    // an unpaired flat is suppressed through `recentFlats`.
+    // flat copy is suppressed through `recentThreads`. A late topic after an
+    // unpaired flat takes over unless that flat has already committed.
     return { kind: 'dispatch', mirrorKey: key };
   }
 
@@ -186,7 +231,7 @@ export async function coordinateDualDelivery(
 
   return (await entry.decision)
     ? { kind: 'suppress-main-copy' }
-    : { kind: 'dispatch' };
+    : { kind: 'dispatch', commitUnpairedFlat: () => commitUnpairedFlatRoute(key) };
 }
 
 /** Waits only for the bounded pairing window; Agent execution itself is never delayed. */
@@ -205,6 +250,7 @@ export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void
   const now = Date.now();
   pruneConfirmed(now);
   pruneTtlMap(recentThreads, now);
+  pruneRecentFlats(now);
   if (confirmed.has(mirrorKey)) {
     send();
     return;

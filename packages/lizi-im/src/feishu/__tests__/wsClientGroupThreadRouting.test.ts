@@ -37,6 +37,7 @@ const mocks = {
       | { kind: 'unconfirmed' }
     >
   >(async () => ({ kind: 'opened', messageId: 'om_opener', threadId: 'omt_new' })),
+  recallOwnMessage: vi.fn(async () => true),
   evictOpenThreadOutcome: vi.fn(),
   pushReplyAnchor: vi.fn(),
   pushPatchableOpener: vi.fn(),
@@ -88,6 +89,7 @@ vi.doMock('../outbound.js', () => ({
   sendText: mocks.sendText,
   replyText: mocks.replyText,
   openThread: mocks.openThread,
+  recallOwnMessage: mocks.recallOwnMessage,
   evictOpenThreadOutcome: mocks.evictOpenThreadOutcome,
   pushReplyAnchor: mocks.pushReplyAnchor,
   pushPatchableOpener: mocks.pushPatchableOpener,
@@ -268,6 +270,47 @@ describe('feishu group thread routing', () => {
       idempotencyKey: expect.any(String),
     });
     expect(mocks.openThread).not.toHaveBeenCalled();
+  });
+
+  it('late topic after pair window takes over before the unpaired flat opens a new thread', async () => {
+    vi.useFakeTimers();
+    let releaseOpenThread: ((value: { kind: 'opened'; messageId: string; threadId: string }) => void) | undefined;
+    mocks.openThread.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseOpenThread = resolve;
+        }),
+    );
+    mocks.recallOwnMessage.mockResolvedValue(true);
+    const events = collectMessages();
+    await connect();
+    const topic = groupTopicMessage('迟到话题', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000000000';
+    topic.message.message_id = 'om_topic_late';
+    const flat = groupMainFlowMessage('迟到话题', 'om_flat_late') as {
+      message: Record<string, unknown>;
+    };
+    flat.message.create_time = '1788000000000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+    expect(releaseOpenThread).toBeDefined();
+    releaseOpenThread?.({ kind: 'opened', messageId: 'om_bot_opener', threadId: 'omt_bot' });
+    await flatHandling;
+
+    expect(events).toHaveLength(1);
+    expect(events[0].senderId).toBe('g/oc_chat1/omt_existing');
+    expect(events[0].finalReplyMirror).toEqual({
+      kind: 'parent-chat',
+      chatId: 'oc_chat1',
+      idempotencyKey: expect.any(String),
+    });
+    expect(mocks.openThread).toHaveBeenCalledTimes(1);
+    expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_bot_opener');
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
   });
 
   it('开话题失败时降级回群 lane(锚点 = 触发消息)', async () => {

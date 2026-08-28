@@ -718,6 +718,7 @@ export function createTurnRunner(
             ui.agent.apiKeyMissing;
           const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
           if (!consumed) await replyMissingAuth(userId, created.missingAuth, scopeKey);
+          await mirrorEarlyRejectReply(args.finalReplyMirror, text);
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -737,6 +738,12 @@ export function createTurnRunner(
           if (!consumed) {
             await replyMissingAuth(userId, authStatus, scopeKey, target.attached);
           }
+          await mirrorEarlyRejectReply(
+            args.finalReplyMirror
+              ? { ...args.finalReplyMirror, allowedFileRoots: [row.workingDir] }
+              : undefined,
+            text,
+          );
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -834,6 +841,7 @@ export function createTurnRunner(
           } else {
             await completeTurnCallbackAfterAck(turn);
           }
+          await mirrorEarlyRejectReply(turn.finalReplyMirror, ui.agent.credentialBusy);
         } else {
           await completeTurnCallbackAfterAck(turn);
         }
@@ -1503,6 +1511,19 @@ export function createTurnRunner(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`apiKeyMissing send failed (non-fatal): ${msg}`);
+    }
+  }
+
+  async function mirrorEarlyRejectReply(
+    mirror: IMFinalReplyMirror | undefined,
+    text: string,
+  ): Promise<void> {
+    if (!mirror || output.kind !== 'rich-card') return;
+    try {
+      await output.im.mirrorFinalReply?.(mirror, text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`early-reject terminal mirror failed (non-fatal): ${msg}`);
     }
   }
 
@@ -2605,6 +2626,7 @@ export function createTurnRunner(
             await sendTextClaimingOpener(userId, message, state.scopeKey);
           }
         }
+        await mirrorEarlyRejectReply(failure.turn.finalReplyMirror, message);
         // 群会话「完全访问」档被强确认策略拒绝: 报错文案之外, 再给 owner
         // 私聊发一张一键修复卡(切回 auto)。只对提供 permissionModeFix 文案
         // 的渠道(飞书)与群 lane 生效 — 私聊不挂群策略, 防御性跳过; 卡片

@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
     consumePendingOpenerCard: vi.fn(),
     getPendingOpenerTrigger: vi.fn(),
     takeNotedFallbackOpenerId: vi.fn(),
+    mirrorFinalReply: vi.fn(),
   },
   getMaker: vi.fn(),
   listProviders: vi.fn(),
@@ -427,6 +428,11 @@ interface TurnOverrides {
   groupHistoryAccess?: GroupHistoryAccessScope;
   prePersistedUserMessage?: { sessionId: string; clientId: string };
   onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
+  finalReplyMirror?: {
+    kind: 'parent-chat';
+    chatId: string;
+    idempotencyKey: string;
+  };
 }
 
 async function runDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrides = {}) {
@@ -451,6 +457,7 @@ async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrid
       ? { prePersistedUserMessage: overrides.prePersistedUserMessage }
       : {}),
     ...(overrides.onEarlyReject ? { onEarlyReject: overrides.onEarlyReject } : {}),
+    ...(overrides.finalReplyMirror ? { finalReplyMirror: overrides.finalReplyMirror } : {}),
   });
   return { onTurnComplete, turnPromise };
 }
@@ -1787,6 +1794,27 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
   });
 
+  it('mirrors credential-busy early reject onto the parent-chat dual-delivery target', async () => {
+    const busy = new CredentialModeSwitchBusyError(['busy-session']);
+    mocks.getMaker.mockReturnValue(createMakerCreateSessionFailureHarness(busy));
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-busy',
+    };
+
+    await runDefaultTurn(vi.fn(), { finalReplyMirror: mirror });
+    await flushMicrotasks();
+
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', ui.agent.credentialBusy, {
+      threadTs: undefined,
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
+      { ...mirror, allowedFileRoots: ['F:\\XDMaker'] },
+      ui.agent.credentialBusy,
+    );
+  });
+
   it('queues a second message while the first turn is running and dispatches it after done', async () => {
     mocks.feishuIm.reactToMessage.mockImplementation(
       async (messageId: string) => `reaction-${messageId}`,
@@ -2628,6 +2656,31 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       }),
       { threadTs: undefined },
     );
+  });
+
+  it('mirrors missing-auth early reject onto the parent-chat dual-delivery target', async () => {
+    mocks.readXdGatewayApiKey.mockReturnValue(null);
+    mocks.findActiveSession.mockResolvedValue(null);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      idempotencyKey: 'mirror-auth',
+    };
+    const expected = ui.agent.authMissing?.({
+      agentKind: 'claude-code',
+      model: 'claude-opus-4-7',
+      providerId: 'xd',
+      providerLabel: 'XD',
+      missing: 'gateway-key',
+    });
+
+    await runDefaultTurn(vi.fn(), { finalReplyMirror: mirror });
+
+    expect(mocks.createSession).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', expected, {
+      threadTs: undefined,
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(mirror, expected);
   });
 
   it('does not report route resolution before auth passes on an existing route', async () => {
