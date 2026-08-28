@@ -3730,9 +3730,10 @@ export function CCAgentSessionView({
     [sessionId, t],
   );
 
-  // delayed-create:从 NewMakerDraftRoute 经 navigate 进来的首条消息,在 session
-  // 完全 hydrate(historyLoaded + workingDir 就位)后自动 sendMessage。
-  // 一次性消费 + ref guard,防 StrictMode 双 mount / 重渲染时重复发送。
+  // delayed-create:device-link / 远程草稿把首条登记在 pending 里,等 session
+  // 完全 hydrate(historyLoaded + workingDir 就位)后再 sendMessage。本机新建已在
+  // 草稿路由发出,不会 setPending。一次性消费 + ref guard,防 StrictMode 双 mount /
+  // 重渲染时重复发送。
   const pendingConsumedRef = useRef(false);
   useEffect(() => {
     if (!sessionId || !historyLoaded || !session) return;
