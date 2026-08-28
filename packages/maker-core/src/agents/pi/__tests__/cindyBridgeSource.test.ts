@@ -99,6 +99,31 @@ function loadFileWriteTargetHelper(): (targetPath: string) => string | null {
   return context.resolveFileWriteTargetPath as (targetPath: string) => string | null;
 }
 
+function loadWritableRootResolver(
+  workingDir: string,
+): (writableRoots: string[]) => string[] | null {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function resolveWritableRootsForHost');
+  const end = source.indexOf('function reviewAncestorsWithin', start);
+  if (start < 0 || end <= start) throw new Error('writable-root resolver was not found');
+  const executableSource = [
+    source.slice(start, end),
+    '(globalThis as any).resolveWritableRootsForHost = resolveWritableRootsForHost;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = {
+    process: { cwd: () => workingDir },
+    realpathSync,
+  };
+  runInNewContext(compiled, context);
+  return context.resolveWritableRootsForHost as (writableRoots: string[]) => string[] | null;
+}
+
 function loadBashPackageHomeHelper(): {
   resolveBashPackageHome: () => string | undefined;
   env: Record<string, string | undefined>;
@@ -1309,6 +1334,9 @@ describe('cindy-bridge extension source', () => {
     expect(credentialGate).toBeGreaterThan(readOnlyGate);
     expect(source.slice(readOnlyGate, credentialGate)).not.toContain('permission.writableRoots');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
+    expect(source).toContain(
+      'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',
+    );
     expect(source).toContain('event.input.path = writeTargetResolved');
     expect(source).toContain('Cindy could not verify the real file-write target.');
   });
@@ -1339,6 +1367,29 @@ describe('cindy-bridge extension source', () => {
         symlinkSync(path.join(tempRoot, 'missing-target'), dangling, 'dir');
         expect(resolveTarget(path.join(dangling, 'new.txt'))).toBeNull();
       }
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves the workspace and writable roots in the write executor filesystem', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'cindy-pi-writable-root-'));
+    try {
+      const realWorkspace = path.join(tempRoot, 'real-workspace');
+      const realOutput = path.join(tempRoot, 'real-output');
+      const workspaceLink = path.join(tempRoot, 'workspace-link');
+      const outputLink = path.join(tempRoot, 'output-link');
+      mkdirSync(realWorkspace);
+      mkdirSync(realOutput);
+      symlinkSync(realWorkspace, workspaceLink, process.platform === 'win32' ? 'junction' : 'dir');
+      symlinkSync(realOutput, outputLink, process.platform === 'win32' ? 'junction' : 'dir');
+      const resolveRoots = loadWritableRootResolver(workspaceLink);
+
+      expect([...resolveRoots([outputLink])!]).toEqual([
+        realpathSync(realWorkspace),
+        realpathSync(realOutput),
+      ]);
+      expect(resolveRoots([path.join(tempRoot, 'missing-root')])).toBeNull();
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

@@ -1601,6 +1601,19 @@ function resolveFileWriteTargetPath(targetPath: string): string | null {
   }
 }
 
+/** Canonical roots are evidence from the same filesystem that will execute the write. */
+function resolveWritableRootsForHost(writableRoots: string[]): string[] | null {
+  const resolved = new Set<string>();
+  for (const root of [process.cwd(), ...writableRoots]) {
+    try {
+      resolved.add(realpathSync(root));
+    } catch {
+      return null;
+    }
+  }
+  return [...resolved];
+}
+
 function reviewAncestorsWithin(start: string, root: string): string[] {
   const boundary = path.resolve(root);
   const ancestors: string[] = [];
@@ -3224,7 +3237,10 @@ export default async function cindyBridge(pi: any) {
           input: permissionInput,
           resolvedCredentialPaths: credentialEvidenceForHost,
           ...(FILE_WRITE_BUILTINS.has(event.toolName)
-            ? { resolvedWritePath: writeTargetResolved }
+            ? {
+                resolvedWritePath: writeTargetResolved,
+                resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots),
+              }
             : {}),
         }),
       );

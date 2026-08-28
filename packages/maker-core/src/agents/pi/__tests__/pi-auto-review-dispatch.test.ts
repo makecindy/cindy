@@ -18,6 +18,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -365,13 +366,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     id: string,
     toolName: string,
     input: Record<string, unknown>,
-    options?: { resolvedCredentialPaths?: unknown; resolvedWritePath?: unknown },
+    options?: {
+      resolvedCredentialPaths?: unknown;
+      resolvedWritePath?: unknown;
+      resolvedWritableRoots?: unknown;
+    },
   ): void {
     const writeEvidence = toolName === 'write' || toolName === 'edit'
       ? {
           resolvedWritePath: options && Object.hasOwn(options, 'resolvedWritePath')
             ? options.resolvedWritePath
             : (typeof input.path === 'string' ? input.path : null),
+          resolvedWritableRoots: options && Object.hasOwn(options, 'resolvedWritableRoots')
+            ? options.resolvedWritableRoots
+            : [cwd],
         }
       : {};
     captured.onEvent!({
@@ -389,7 +397,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     input: Record<string, unknown>,
   ): void {
     const writeEvidence = toolName === 'write' || toolName === 'edit'
-      ? { resolvedWritePath: typeof input.path === 'string' ? input.path : null }
+      ? {
+          resolvedWritePath: typeof input.path === 'string' ? input.path : null,
+          resolvedWritableRoots: [cwd],
+        }
       : {};
     captured.onEvent!({
       type: 'extension_ui_request',
@@ -2500,7 +2511,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
     handle.setInteractionResolver?.(resolver as never);
 
-    firePermissionRequest('external-writable', 'edit', { path: path.join(writableDir, 'result.txt') });
+    firePermissionRequest(
+      'external-writable',
+      'edit',
+      { path: path.join(writableDir, 'result.txt') },
+      { resolvedWritableRoots: [cwd, writableDir] },
+    );
     expect(await waitForResponse('external-writable')).toEqual({
       type: 'extension_ui_response',
       id: 'external-writable',
@@ -2522,9 +2538,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(resolver).not.toHaveBeenCalled();
 
     await handle.setWritableDirs!([replacementWritableDir]);
-    firePermissionRequest('replacement-writable', 'edit', {
-      path: path.join(replacementWritableDir, 'new-result.txt'),
-    });
+    firePermissionRequest(
+      'replacement-writable',
+      'edit',
+      { path: path.join(replacementWritableDir, 'new-result.txt') },
+      { resolvedWritableRoots: [cwd, replacementWritableDir] },
+    );
     expect(await waitForResponse('replacement-writable')).toMatchObject({ confirmed: true });
     expect(review).toHaveBeenCalledTimes(1);
     firePermissionRequest('revoked-writable', 'edit', {
@@ -2558,18 +2577,56 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       firePermissionRequest(id, 'write', { path: linkedPath }, { resolvedWritePath });
       expect(await waitForResponse(id)).toMatchObject({ confirmed: false });
     }
+    firePermissionRequest('malformed-root-evidence', 'write', { path: linkedPath }, {
+      resolvedWritePath: path.join(writableDir, 'real', 'result.txt'),
+      resolvedWritableRoots: [''],
+    });
+    expect(await waitForResponse('malformed-root-evidence')).toMatchObject({ confirmed: false });
     expect(review).not.toHaveBeenCalled();
-    expect(resolver).toHaveBeenCalledTimes(cases.length);
+    expect(resolver).toHaveBeenCalledTimes(cases.length + 1);
 
     firePermissionRequest('authorized-real-target', 'write', { path: linkedPath }, {
       resolvedWritePath: path.join(writableDir, 'real', 'result.txt'),
+      resolvedWritableRoots: [cwd, writableDir],
     });
     expect(await waitForResponse('authorized-real-target')).toMatchObject({ confirmed: true });
-    expect(resolver).toHaveBeenCalledTimes(cases.length);
+    expect(resolver).toHaveBeenCalledTimes(cases.length + 1);
 
     await handle.close();
     rmSync(writableDir, { recursive: true, force: true });
     rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('auto-approves a canonical target when the writable root itself is a link', async () => {
+    const realWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-real-writable-'));
+    const linkParent = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-linked-writable-'));
+    const linkedWritableDir = path.join(linkParent, 'output');
+    symlinkSync(
+      realWritableDir,
+      linkedWritableDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const handle = await start('auto', undefined, false, undefined, {
+      writableDirs: [linkedWritableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'linked-writable-root',
+      'write',
+      { path: path.join(linkedWritableDir, 'result.txt') },
+      {
+        resolvedWritePath: path.join(realpathSync(realWritableDir), 'result.txt'),
+        resolvedWritableRoots: [realpathSync(cwd), realpathSync(realWritableDir)],
+      },
+    );
+    expect(await waitForResponse('linked-writable-root')).toMatchObject({ confirmed: true });
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.close();
+    rmSync(linkParent, { recursive: true, force: true });
+    rmSync(realWritableDir, { recursive: true, force: true });
   });
 
   it('discards an in-flight allow when external directory permissions change', async () => {
@@ -2761,6 +2818,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           kind: 'file-write',
           path: '/tmp/outside.txt',
           resolvedPath: '/tmp/outside.txt',
+          resolvedWritableRoots: [cwd],
         },
       }),
     );

@@ -86,6 +86,47 @@ describe('reviewAction — file-write 工作区边界', () => {
       resolvedPath: '/shared-output/result.txt',
     }, allRoots, opts)).toBe('prompt');
   });
+  it('用 canonical 可写根验证真实目标，同时保留词法授权边界', () => {
+    const allRoots = ['/repo-link', '/output-link'];
+    const opts = { writableRoots: ['/repo-link', '/output-link'] };
+    const resolvedWritableRoots = ['/repo-real', '/output-real'];
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/result.txt',
+      resolvedPath: '/output-real/result.txt',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('auto-approve');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/nested/result.txt',
+      resolvedPath: '/outside/result.txt',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/hosts',
+      resolvedPath: '/etc/hosts',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/key',
+      resolvedPath: '/Users/me/.ssh/id_rsa',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/outside/alias.txt',
+      resolvedPath: '/output-real/result.txt',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('prompt');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/result.txt',
+      resolvedPath: '/output-real/result.txt',
+      resolvedWritableRoots: null,
+    }, allRoots, opts)).toBe('prompt-each-time');
+  });
   it('恶意或失效的目录授权不能覆盖凭证与系统路径红线', () => {
     expect(reviewAction(
       { kind: 'file-write', path: '/etc/hosts' },

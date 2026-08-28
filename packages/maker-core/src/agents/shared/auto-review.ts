@@ -69,6 +69,11 @@ export type ReviewableAction =
        * canonical 证据、但本次无法证明；缺省保持不具备 realpath 能力的旧 adapter 语义。
        */
       resolvedPath?: string | null;
+      /**
+       * 与 resolvedPath 同一执行文件系统内解析出的可写根。原始 path 仍只按词法根检查，
+       * 避免区外别名借真实根反向洗成绿灯。`null` 表示证据无法证明。
+       */
+      resolvedWritableRoots?: readonly string[] | null;
     }
   // cwdUnknown:harness 上报了 cwd 字段但内容为空/不可解析 —— 与"未提供 cwd"(按会话工作目录)不同,
   // 必须按未知处理:相对破坏目标不可证明在区内(copidot 报 `params.cwd || workingDir` 把空串当区内)。
@@ -105,7 +110,9 @@ export function reviewAction(
       if (!action.path) return 'prompt';
       // 能提供执行期真实路径的 harness 一旦解析失败，就不能退回字面路径绿灯。
       // 这不是普通灰区：用户看到的授权根与实际落盘目标可能已经不同，必须逐次确认。
-      if (action.resolvedPath === null) return 'prompt-each-time';
+      if (action.resolvedPath === null || action.resolvedWritableRoots === null) {
+        return 'prompt-each-time';
+      }
       const writeTargets = action.resolvedPath === undefined
         ? [action.path]
         : [action.path, action.resolvedPath];
@@ -122,6 +129,9 @@ export function reviewAction(
       // 主工作目录内一律放行 —— 即便仓库本身落在 /var、/root 等下,区内写也不该被系统红线误升。
       // 但用户追加的可写根不能把 /etc、/System 等系统红线洗成绿灯；那类目录仍须逐次确认。
       const writableRoots = resolveWritableRoots(workspaceRoots, opts?.writableRoots);
+      const resolvedWritableRoots = action.resolvedWritableRoots === undefined
+        ? writableRoots
+        : [...action.resolvedWritableRoots];
       const primaryWorkspaceRoot = workspaceRoots[0];
       const lexicalTargetIsPrimary = Boolean(
         primaryWorkspaceRoot
@@ -139,7 +149,7 @@ export function reviewAction(
         }
         const resolvedTargetIsWritable = isInsideWorkspace(
           normalizedResolvedTarget,
-          writableRoots,
+          resolvedWritableRoots,
           aliasFirmlinks,
         );
         // 最危险的形态是“看起来在授权内，实际写到授权外”。普通区外写仍保留

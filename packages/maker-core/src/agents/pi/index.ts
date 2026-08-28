@@ -3179,6 +3179,7 @@ export class PiAgent extends BaseAgent {
       let toolName = 'tool';
       let input: Record<string, unknown> = {};
       let resolvedWritePath: string | null | undefined;
+      let resolvedWritableRoots: string[] | null | undefined;
       const approvalPayload = approval.method === 'input'
         ? approval.placeholder
         : approval.message;
@@ -3188,6 +3189,7 @@ export class PiAgent extends BaseAgent {
             toolName?: unknown;
             input?: unknown;
             resolvedWritePath?: unknown;
+            resolvedWritableRoots?: unknown;
           };
           if (typeof payload.toolName === 'string' && payload.toolName) toolName = payload.toolName;
           if (payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)) {
@@ -3199,6 +3201,15 @@ export class PiAgent extends BaseAgent {
               ? payload.resolvedWritePath
               : null;
           }
+          if (Object.hasOwn(payload, 'resolvedWritableRoots')) {
+            resolvedWritableRoots = Array.isArray(payload.resolvedWritableRoots)
+              && payload.resolvedWritableRoots.length <= 64
+              && payload.resolvedWritableRoots.every(
+                (root) => typeof root === 'string' && root.length > 0,
+              )
+              ? payload.resolvedWritableRoots as string[]
+              : null;
+          }
         } catch {
           /* malformed permission payload remains a generic, deny-by-default prompt */
         }
@@ -3206,6 +3217,9 @@ export class PiAgent extends BaseAgent {
       if ((toolName === 'write' || toolName === 'edit') && resolvedWritePath === undefined) {
         // Durable child 可能来自旧 bridge；缺少执行期真实路径时不能回退成字面绿灯。
         resolvedWritePath = null;
+      }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritableRoots === undefined) {
+        resolvedWritableRoots = null;
       }
       const requestId = `pi-subagent:${key}`;
       const turnPolicyForcePrompt = (() => {
@@ -3357,7 +3371,10 @@ export class PiAgent extends BaseAgent {
             readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
             writableRoots: [opts.workingDir, ...mutableWritableDirs],
           });
-          if (action.kind === 'file-write') action.resolvedPath = resolvedWritePath;
+          if (action.kind === 'file-write') {
+            action.resolvedPath = resolvedWritePath;
+            action.resolvedWritableRoots = resolvedWritableRoots;
+          }
           const decision = await reviewAutoAction(action);
           if (permissionMode !== 'auto' || turnPolicyForcePrompt) {
             return requestUserDecision({ forcePrompt: true });
@@ -6585,6 +6602,7 @@ export class PiAgent extends BaseAgent {
       let input: Record<string, unknown> = {};
       let resolvedCredentialPaths: string[] | null | undefined;
       let resolvedWritePath: string | null | undefined;
+      let resolvedWritableRoots: string[] | null | undefined;
       try {
         const rawPayload = method === 'input' ? event.placeholder : event.message;
         const payload = JSON.parse(typeof rawPayload === 'string' ? rawPayload : '{}') as {
@@ -6592,6 +6610,7 @@ export class PiAgent extends BaseAgent {
           input?: unknown;
           resolvedCredentialPaths?: unknown;
           resolvedWritePath?: unknown;
+          resolvedWritableRoots?: unknown;
         };
         if (typeof payload.toolName === 'string' && payload.toolName.length > 0) toolName = payload.toolName;
         if (payload.input && typeof payload.input === 'object') input = payload.input as Record<string, unknown>;
@@ -6606,6 +6625,15 @@ export class PiAgent extends BaseAgent {
           resolvedWritePath = typeof payload.resolvedWritePath === 'string'
             && payload.resolvedWritePath.length > 0
             ? payload.resolvedWritePath
+            : null;
+        }
+        if (Object.hasOwn(payload, 'resolvedWritableRoots')) {
+          resolvedWritableRoots = Array.isArray(payload.resolvedWritableRoots)
+            && payload.resolvedWritableRoots.length <= 64
+            && payload.resolvedWritableRoots.every(
+              (root) => typeof root === 'string' && root.length > 0,
+            )
+            ? payload.resolvedWritableRoots as string[]
             : null;
         }
       } catch {
@@ -6623,6 +6651,9 @@ export class PiAgent extends BaseAgent {
       if ((toolName === 'write' || toolName === 'edit') && resolvedWritePath === undefined) {
         // 旧版或畸形 bridge 没有执行期 canonical 证据时，Auto 不得回退到字面路径绿灯。
         resolvedWritePath = null;
+      }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritableRoots === undefined) {
+        resolvedWritableRoots = null;
       }
       const {
         resolver,
@@ -6901,7 +6932,10 @@ export class PiAgent extends BaseAgent {
             readRoots,
             writableRoots,
           });
-          if (action.kind === 'file-write') action.resolvedPath = resolvedWritePath;
+          if (action.kind === 'file-write') {
+            action.resolvedPath = resolvedWritePath;
+            action.resolvedWritableRoots = resolvedWritableRoots;
+          }
           const decision = await reviewAutoAction(action);
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,
           // 不能用进入审查前捕获的旧 auto 档直接放行(Pi 明确支持热切换,codex review P1):
