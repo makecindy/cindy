@@ -2134,6 +2134,30 @@ describe('Full Access 插件文件交接', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it('插件 setup 等待期间账号切换:不把新账号当成旧会话基准', async () => {
+    activeOwnerScopeKeyMock
+      .mockReturnValueOnce('local:owner-a:0') // setup 等待前捕获的 owner 快照
+      .mockReturnValue('local:owner-b:0'); // setup 返回后的派发前复判
+    ensureReadyMock.mockImplementationOnce(async () => {
+      // 模拟 OAuth/设置确认等待期间发生 account-switch。
+      activeOwnerScopeKeyMock.mockReturnValue('local:owner-b:0');
+      return {
+        ok: true as const,
+        assessment: { state: 'ready' as const, revision: 0, groups: [] },
+      };
+    });
+
+    const result = await makeDeps('codex', 'owner-switch-during-setup').callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(ensureReadyMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it('附件授权成功后到派发之间账号切换：撤销旧账号的授权，不派发到新账号', async () => {
     // 回归 Codex 新发现的 P1:grantAttachmentUrls 只保证授权写入那一刻的
     // owner 没漂移;它返回之后到实际派发之间还有 dir/save_dir 确认、

@@ -1686,6 +1686,12 @@ export function getCindyGhostsMcpDeps(
           message: '插件设置通道尚未就绪，本次调用未执行。',
         };
       }
+      // 普通调用的 owner 快照必须早于 setupCoordinator.ensureReady:setup/OAuth
+      // 可能等待用户输入数分钟,这段窗口也属于整段交接的一部分。如果等它返回
+      // 后才捕获,账号切换后的新 owner 会被错误地当成这次旧会话的基准,后续
+      // 重新查到同 id 插件时就可能把旧会话的附件/票据/上下文送进新账号。
+      // 派发前的无 await 复判会使用这份快照,漂移即 fail closed。
+      const ownerScopeKeyAtHandoffStart = activeOwnerScopeKey();
       const setup = await setupCoordinator.ensureReady({
         sessionId: ghostSetupInteractionSessionId(sessionContext),
         ghostId,
@@ -1860,15 +1866,10 @@ export function getCindyGhostsMcpDeps(
           }
         }
       }
-      // owner 快照:下面这段从这里到实际派发之间会经过 dir/save_dir 确认、
-      // 附件授权、session-context 构建等好几个 await 窗口。就算这次调用没有
-      // 附件,dir/save_dir 出的一次性票据与 buildGhostSessionContext 铸的
-      // 上下文同样是"交接"——账号在这些窗口切换后,若新账号下恰好也装了
-      // 同 id 插件,后续 classifyGhostVisibility 只现查"当前活跃账号",会
-      // 照常放行并把旧账号铸好的票据/上下文连同派发一起送进新账号的进程。
-      // 在整段交接开始前统一捕获一次,派发前统一复核,不局限于"有附件才
-      // 检查"。
-      const ownerScopeKeyAtHandoffStart = activeOwnerScopeKey();
+      // 从这里到实际派发之间还会经过 dir/save_dir 确认、附件授权、
+      // session-context 构建等好几个 await 窗口。上面在 setup 等待前捕获的
+      // owner 快照覆盖整段交接:就算这次调用没有附件,dir/save_dir 出的一次性
+      // 票据与 buildGhostSessionContext 铸的上下文同样不能跨账号派发。
       // 附件授权(ghost-grant/ghost-tool-grant)是持久 ledger 记录,不是这次
       // 调用专属的一次性凭证——插件此后任何时候引用同一 hash 都会被判定为
       // 已授权。下面直到实际派发之间还有多处会拒绝这次调用(目录/save_dir
