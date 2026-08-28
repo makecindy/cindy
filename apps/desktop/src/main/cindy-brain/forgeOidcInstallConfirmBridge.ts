@@ -17,11 +17,10 @@ export interface ForgeOidcInstallConfirmFacts {
   hosts: string[];
 }
 
-/** 只有本次安装发生在企业身份下，receipt 才记录 Forge 作者自测来源。 */
-export function forgeInstallOriginForMembership(
-  membershipKind: 'personal' | 'org',
-): 'agent-forge' | undefined {
-  return membershipKind === 'org' ? 'agent-forge' : undefined;
+/** 所有明确由 ghost_forge_install 发起的安装都记录作者自测来源。 */
+export function forgeInstallOriginForMembership(membershipKind: 'personal' | 'org'): 'agent-forge' {
+  void membershipKind;
+  return 'agent-forge';
 }
 
 /** 只有企业身份安装声明了 oidc-token 的 Forge 包才需要这扇窄确认窗。 */

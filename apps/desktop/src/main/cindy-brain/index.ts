@@ -102,7 +102,6 @@ import {
 import {
   getAccessToken,
   getAuthState,
-  getCurrentUserId,
   onAuthStateChange,
 } from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.js';
@@ -5504,7 +5503,6 @@ async function updateLocalGhostPackageLocked(
   inspected: InspectedGhostPackage,
   expectedPackageSha256: string,
   expectedInstalledApproval: string,
-  mutationOwner: ActiveAppSession,
   installOrigin?: 'agent-forge',
 ): Promise<InstalledGhost> {
   const runtime = getGhostRuntime();
@@ -5517,19 +5515,8 @@ async function updateLocalGhostPackageLocked(
   // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
   await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
   let marketRecord: PluginMarketInstallationRecord | null;
-  let marketInstallSubject: string | null = null;
-  let marketRecordWasSuppressed = false;
   try {
     marketRecord = marketLedger.installationForGhost(inspected.manifest.id);
-    if (
-      marketRecord?.installed &&
-      (marketRecord.source === 'market' || marketRecord.source === 'legacy-adopted')
-    ) {
-      marketInstallSubject = getCurrentUserId() ?? mutationOwner.dataOwnerId;
-      marketRecordWasSuppressed = marketInstallSubject
-        ? marketLedger.isDefaultInstallSuppressed(marketInstallSubject, marketRecord.pluginId)
-        : false;
-    }
   } catch (error) {
     if (previousGhost) spawnIfResident(previousGhost);
     log.warn('failed to verify Plugin provenance before local update', {
@@ -5544,15 +5531,9 @@ async function updateLocalGhostPackageLocked(
   const restoreMarketRecord = (): void => {
     if (!detachMarketRecord || !marketRecord) return;
     try {
-      marketLedger.restoreInstallation(
-        marketRecord,
-        marketInstallSubject
-          ? {
-              userId: marketInstallSubject,
-              suppressed: marketRecordWasSuppressed,
-            }
-          : undefined,
-      );
+      // 来源解绑不触碰 opt-out，失败恢复同样只恢复旧路由；用户过去的显式
+      // 卸载决定因此既不会被新增，也不会被清除。
+      marketLedger.restoreInstallation(marketRecord);
     } catch (error) {
       // 恢复失败时保持路由失效是安全降级：不能让旧市场自动覆盖用户明确选择的本地包。
       log.error('failed to restore Plugin market provenance after local update failure', {
@@ -5563,8 +5544,9 @@ async function updateLocalGhostPackageLocked(
   };
   if (detachMarketRecord) {
     try {
-      // 先持久化切断自动更新路由，再改真实包。账本不可写时不触碰包。
-      marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject);
+      // 先持久化切断自动更新路由，再改真实包。普通本地/Forge 换源不是
+      // 用户显式卸载，不得产生 default-install opt-out。
+      marketLedger.markRemoved(inspected.manifest.id, null);
     } catch (error) {
       restoreMarketRecord();
       if (previousGhost) spawnIfResident(previousGhost);
@@ -5698,7 +5680,6 @@ export async function installOrUpdateLocalGhostPackageFromForge(
         inspected,
         expected.packageSha256,
         ghostInstallApprovalToken(installed.approval),
-        getActiveAppSession(),
         installOrigin,
       ),
       action: 'updated',
@@ -7302,7 +7283,6 @@ export function registerGhostIpc(): void {
             inspected,
             expectedPackageSha256,
             expectedInstalledApproval,
-            mutationOwner,
           ),
         ),
       };
