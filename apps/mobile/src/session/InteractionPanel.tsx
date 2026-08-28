@@ -703,8 +703,12 @@ function PermissionEvidence({
           {presentation.toolName}
         </Text>
       </View>
-      {presentation.description ? (
-        <Text style={styles.permissionDescription}>{presentation.description}</Text>
+      {presentation.autoReviewUnavailable || presentation.description ? (
+        <Text style={styles.permissionDescription}>
+          {presentation.autoReviewUnavailable
+            ? t('interaction.permission.autoReviewUnavailable')
+            : presentation.description}
+        </Text>
       ) : null}
       {riskWarningText ? (
         <View

@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { sameFileIdentity } from '../utils/fileIdentity.js';
+
 /**
  * ghostContentTree —— 「插件内容目录怎么读」的**唯一判据**。
  *
@@ -176,15 +178,12 @@ interface GhostContentAncestorIdentity {
   ctimeNs: bigint;
 }
 
-function sameFileIdentity(
-  a: Pick<fs.BigIntStats, 'dev' | 'ino'>,
-  b: Pick<fs.BigIntStats, 'dev' | 'ino'>,
-): boolean {
-  if (a.dev === 0n || a.ino === 0n || b.dev === 0n || b.ino === 0n) return false;
-  return a.dev === b.dev && a.ino === b.ino;
-}
-
-function sameStableFileState(before: fs.BigIntStats, after: fs.BigIntStats): boolean {
+/**
+ * 「读取期间这个文件没被换掉也没被改过」的统一判据。`ctimeNs` 让它同时覆盖
+ * `chmod` —— 权限变化也算内容快照失效,导出侧据此拒绝把不同时刻的 mode 与字节
+ * 拼进同一个归档条目。
+ */
+export function sameStableFileState(before: fs.BigIntStats, after: fs.BigIntStats): boolean {
   return after.isFile() &&
     sameFileIdentity(before, after) &&
     before.size === after.size &&

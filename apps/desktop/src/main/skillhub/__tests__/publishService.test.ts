@@ -1,7 +1,9 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const TEST_ROOT = '/tmp/xdt-publish-service-test';
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-publish-service-test-'));
 const authState = vi.hoisted(() => ({ ownerId: 'user-1' as string | null }));
 
 vi.mock('electron', () => ({
@@ -80,9 +82,9 @@ vi.mock('../../appCapabilities.js', () => ({
 
 
 function writeApiKeyFile() {
-  const safeStorageDir = `${TEST_ROOT}/safe-storage`;
+  const safeStorageDir = path.join(TEST_ROOT, 'safe-storage');
   fs.mkdirSync(safeStorageDir, { recursive: true });
-  fs.writeFileSync(`${safeStorageDir}/api_key.enc`, Buffer.from('encrypted-api-key').toString('base64'));
+  fs.writeFileSync(path.join(safeStorageDir, 'api_key.enc'), Buffer.from('encrypted-api-key').toString('base64'));
 }
 
 describe('SkillPublishService', () => {
@@ -124,7 +126,7 @@ describe('SkillPublishService', () => {
 
   it('allows version publishes without category metadata and omits category fields from commit', async () => {
     writeApiKeyFile();
-    const skillPath = '/tmp/xdt-publish-service-test/skill';
+    const skillPath = path.join(TEST_ROOT, 'skill');
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(`${skillPath}/SKILL.md`, [
       '---',
@@ -192,7 +194,7 @@ describe('SkillPublishService', () => {
   });
 
   it('publishes through Hub without requiring a local LLM API key file', async () => {
-    const skillPath = '/tmp/xdt-publish-service-test/skill';
+    const skillPath = path.join(TEST_ROOT, 'skill');
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(`${skillPath}/SKILL.md`, [
       '---',
@@ -263,8 +265,8 @@ describe('SkillPublishService', () => {
 
   it('sends the hand-filled 280-char text to Hub commit as summary', async () => {
     writeApiKeyFile();
-    fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
+    fs.mkdirSync(path.join(TEST_ROOT, 'skill'), { recursive: true });
+    fs.writeFileSync(path.join(TEST_ROOT, 'skill', 'SKILL.md'), [
       '---',
       'name: lark-task',
       'description: Frontmatter description',
@@ -306,7 +308,7 @@ describe('SkillPublishService', () => {
     const service = new SkillPublishService();
     const result = await service.publish(
       {
-        absolutePath: '/tmp/xdt-publish-service-test/skill',
+        absolutePath: path.join(TEST_ROOT, 'skill'),
         name: 'lark-task',
         isFirstPublish: true,
         version: '1.0.0',
@@ -337,8 +339,8 @@ describe('SkillPublishService', () => {
 
   it('allows auto category mode and asks Hub to classify the skill', async () => {
     writeApiKeyFile();
-    fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
+    fs.mkdirSync(path.join(TEST_ROOT, 'skill'), { recursive: true });
+    fs.writeFileSync(path.join(TEST_ROOT, 'skill', 'SKILL.md'), [
       '---',
       'name: lark-task',
       'description: Frontmatter description',
@@ -380,7 +382,7 @@ describe('SkillPublishService', () => {
     const service = new SkillPublishService();
     const result = await service.publish(
       {
-        absolutePath: '/tmp/xdt-publish-service-test/skill',
+        absolutePath: path.join(TEST_ROOT, 'skill'),
         name: 'lark-task',
         isFirstPublish: true,
         version: '1.0.0',
@@ -407,8 +409,8 @@ describe('SkillPublishService', () => {
 
   it('keeps an explicit empty visibleSlugs list in first-publish commit', async () => {
     writeApiKeyFile();
-    fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
+    fs.mkdirSync(path.join(TEST_ROOT, 'skill'), { recursive: true });
+    fs.writeFileSync(path.join(TEST_ROOT, 'skill', 'SKILL.md'), [
       '---',
       'name: lark-task',
       'description: Frontmatter description',
@@ -450,7 +452,7 @@ describe('SkillPublishService', () => {
     const service = new SkillPublishService();
     const result = await service.publish(
       {
-        absolutePath: '/tmp/xdt-publish-service-test/skill',
+        absolutePath: path.join(TEST_ROOT, 'skill'),
         name: 'lark-task',
         isFirstPublish: true,
         version: '1.0.0',
@@ -478,7 +480,7 @@ describe('SkillPublishService', () => {
 
   it('calls writeSnapshot and syncPublishedRegistry immediately after commit succeeds', async () => {
     writeApiKeyFile();
-    const skillPath = '/tmp/xdt-publish-service-test/skill';
+    const skillPath = path.join(TEST_ROOT, 'skill');
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
       `${skillPath}/SKILL.md`,
@@ -567,7 +569,7 @@ describe('SkillPublishService', () => {
 
   it('finishes local reconciliation when cancellation happens after commit is accepted', async () => {
     writeApiKeyFile();
-    const skillPath = '/tmp/xdt-publish-service-test/skill';
+    const skillPath = path.join(TEST_ROOT, 'skill');
     fs.mkdirSync(skillPath, { recursive: true });
     fs.writeFileSync(
       `${skillPath}/SKILL.md`,
@@ -660,8 +662,8 @@ describe('SkillPublishService', () => {
 
   it('maps preserved Hub business error codes to actionable publish errors', async () => {
     writeApiKeyFile();
-    fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
+    fs.mkdirSync(path.join(TEST_ROOT, 'skill'), { recursive: true });
+    fs.writeFileSync(path.join(TEST_ROOT, 'skill', 'SKILL.md'), [
       '---',
       'name: lark-task',
       'description: Frontmatter description',
@@ -698,7 +700,7 @@ describe('SkillPublishService', () => {
     const service = new SkillPublishService();
     const result = await service.publish(
       {
-        absolutePath: '/tmp/xdt-publish-service-test/skill',
+        absolutePath: path.join(TEST_ROOT, 'skill'),
         name: 'lark-task',
         isFirstPublish: true,
         version: '1.0.0',
@@ -716,7 +718,7 @@ describe('SkillPublishService', () => {
   });
 
   it('emits a failed progress event when packing throws unexpectedly', async () => {
-    fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
+    fs.mkdirSync(path.join(TEST_ROOT, 'skill'), { recursive: true });
     const originalSkillMd = [
       '---',
       'name: lark-task',
@@ -727,7 +729,7 @@ describe('SkillPublishService', () => {
       '# Lark task',
       '',
     ].join('\n');
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', originalSkillMd);
+    fs.writeFileSync(path.join(TEST_ROOT, 'skill', 'SKILL.md'), originalSkillMd);
 
     const { computeFolderHash } = await import('../folderHash');
     const { pack } = await import('../zipPacker');
@@ -740,7 +742,7 @@ describe('SkillPublishService', () => {
     const service = new SkillPublishService();
     const result = await service.publish(
       {
-        absolutePath: '/tmp/xdt-publish-service-test/skill',
+        absolutePath: path.join(TEST_ROOT, 'skill'),
         name: 'lark-task',
         isFirstPublish: false,
         version: '1.0.0',
@@ -754,12 +756,12 @@ describe('SkillPublishService', () => {
       { phase: 'packing' },
       { phase: 'failed', name: 'lark-task', errorCode: 'PACK_FAILED', message: 'zip failed' },
     ]);
-    expect(fs.readFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', 'utf8')).toBe(originalSkillMd);
+    expect(fs.readFileSync(path.join(TEST_ROOT, 'skill', 'SKILL.md'), 'utf8')).toBe(originalSkillMd);
   });
 
   it('maps pack timeout failures to PACK_FAILED without relying on IPC rejection', async () => {
-    fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
+    fs.mkdirSync(path.join(TEST_ROOT, 'skill'), { recursive: true });
+    fs.writeFileSync(path.join(TEST_ROOT, 'skill', 'SKILL.md'), [
       '---',
       'name: lark-task',
       'version: 0.9.0',
@@ -781,7 +783,7 @@ describe('SkillPublishService', () => {
     const service = new SkillPublishService();
     const result = await service.publish(
       {
-        absolutePath: '/tmp/xdt-publish-service-test/skill',
+        absolutePath: path.join(TEST_ROOT, 'skill'),
         name: 'lark-task',
         isFirstPublish: false,
         changelog: 'Update flow.',
@@ -803,8 +805,8 @@ describe('SkillPublishService', () => {
   });
 
   it('treats cancellation during packing as CANCELLED', async () => {
-    fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
-    fs.writeFileSync('/tmp/xdt-publish-service-test/skill/SKILL.md', [
+    fs.mkdirSync(path.join(TEST_ROOT, 'skill'), { recursive: true });
+    fs.writeFileSync(path.join(TEST_ROOT, 'skill', 'SKILL.md'), [
       '---',
       'name: lark-task',
       'version: 0.9.0',
@@ -828,7 +830,7 @@ describe('SkillPublishService', () => {
     const service = new SkillPublishService();
     const publishPromise = service.publish(
       {
-        absolutePath: '/tmp/xdt-publish-service-test/skill',
+        absolutePath: path.join(TEST_ROOT, 'skill'),
         name: 'lark-task',
         isFirstPublish: false,
         changelog: 'Update flow.',
@@ -848,7 +850,7 @@ describe('SkillPublishService', () => {
   });
 
   it('cancels an in-flight publish when the data owner changes', async () => {
-    fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
+    fs.mkdirSync(path.join(TEST_ROOT, 'skill'), { recursive: true });
     const { computeFolderHash } = await import('../folderHash');
     const { pack } = await import('../zipPacker');
     const { SkillPublishService } = await import('../publishService');
@@ -866,7 +868,7 @@ describe('SkillPublishService', () => {
 
     const service = new SkillPublishService();
     const result = await service.publish({
-      absolutePath: '/tmp/xdt-publish-service-test/skill',
+        absolutePath: path.join(TEST_ROOT, 'skill'),
       name: 'lark-task',
       isFirstPublish: false,
     });

@@ -1,7 +1,10 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const settingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-maker-test-'));
 
 const scopeMocks = vi.hoisted(() => ({
   owner: 'cloud-a',
@@ -11,7 +14,7 @@ const scopeMocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn(() => '/tmp/xdt-maker-test'),
+    getPath: vi.fn(() => settingsDir),
   },
 }));
 
@@ -26,7 +29,7 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 
 vi.mock('../ownerScopedStorage.js', () => ({
   ownerScopedImUserDataPath: (...parts: string[]) =>
-    scopeMocks.join('/tmp/xdt-maker-test', 'owners', scopeMocks.owner, ...parts),
+    scopeMocks.join(settingsDir, 'owners', scopeMocks.owner, ...parts),
   claimLegacyImPath: scopeMocks.claimLegacy,
 }));
 
@@ -41,7 +44,6 @@ import {
   writeImDefaultSettingsPatch,
 } from '../defaultSettingsStore';
 
-const settingsDir = '/tmp/xdt-maker-test';
 const settingsFile = () =>
   path.join(settingsDir, 'owners', scopeMocks.owner, 'im-default-settings.json');
 

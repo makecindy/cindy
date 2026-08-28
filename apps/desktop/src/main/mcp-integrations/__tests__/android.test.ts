@@ -1,5 +1,10 @@
 import { EventEmitter } from 'node:events';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const TEST_TEMP_DIR = mkdtempSync(path.join(os.tmpdir(), 'xdt-android-test-'));
 
 const { existsSyncMock, outboundFetchMock, spawnMock, execFileMock } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
@@ -39,7 +44,7 @@ vi.mock('node:net', () => {
 
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn((name: string) => (name === 'temp' ? '/tmp' : '/Users/tester')),
+    getPath: vi.fn((name: string) => (name === 'temp' ? TEST_TEMP_DIR : '/Users/tester')),
     getAppPath: vi.fn(() => '/repo/apps/desktop'),
   },
 }));
@@ -167,6 +172,10 @@ function pngWithSize(width: number, height: number): Buffer {
 }
 
 describe('android mcp integration', () => {
+  afterAll(() => {
+    rmSync(TEST_TEMP_DIR, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     spawnMock.mockReset();
     existsSyncMock.mockReset();

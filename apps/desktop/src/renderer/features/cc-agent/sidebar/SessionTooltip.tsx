@@ -30,8 +30,9 @@ import type { ScheduleSidebarIndexRun } from '@/features/scheduler/lib/scheduleS
 
 const CONTENT_SURFACE_CLASS = cn(
   'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
-  // base Tooltip.Content 有 dark:border-transparent,tailwind-merge 不会被无 variant
-  // 的 border-[...] 覆盖,需要显式 dark: override 才能让 dark 模式下浮层边框可见。
+  // base Tooltip.Content 默认 border-transparent（深底气泡不要浅描边）。
+  // tailwind-merge 不会被无 variant 的 border-[...] 单独覆盖 dark 态，需要显式
+  // dark: override 才能让这个浅色浮层在两模式下都看得到边框。
   'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
 );
 
@@ -48,6 +49,11 @@ export interface SessionTooltipProps {
    * 计划信息次之,sourceLabel 只是「来自哪个项目」的静态标签)。
    */
   isAutomationSession?: boolean;
+  /**
+   * 受控开关。普通任务行在指针进入内嵌动作时传 false，避免行级详情与动作 Tip 重叠。
+   * 未提供时保持各变体原有的 Radix 非受控行为。
+   */
+  controlledOpen?: boolean;
   children: ReactNode;
 }
 
@@ -56,20 +62,29 @@ export function SessionTooltip({
   prRefs,
   sourceLabel,
   isAutomationSession,
+  controlledOpen,
   children,
 }: SessionTooltipProps) {
   if (prRefs.length > 0) {
     return (
-      <PrTooltip sessionId={sessionId} prRefs={prRefs}>
+      <PrTooltip sessionId={sessionId} prRefs={prRefs} controlledOpen={controlledOpen}>
         {children}
       </PrTooltip>
     );
   }
   if (isAutomationSession) {
-    return <AutomationTooltip sessionId={sessionId}>{children}</AutomationTooltip>;
+    return (
+      <AutomationTooltip sessionId={sessionId} controlledOpen={controlledOpen}>
+        {children}
+      </AutomationTooltip>
+    );
   }
   if (sourceLabel) {
-    return <SourceTooltip sourceLabel={sourceLabel}>{children}</SourceTooltip>;
+    return (
+      <SourceTooltip sourceLabel={sourceLabel} controlledOpen={controlledOpen}>
+        {children}
+      </SourceTooltip>
+    );
   }
   return <>{children}</>;
 }
@@ -77,21 +92,28 @@ export function SessionTooltip({
 function PrTooltip({
   sessionId,
   prRefs,
+  controlledOpen,
   children,
 }: {
   sessionId: string;
   prRefs: readonly SessionPrRef[];
+  controlledOpen?: boolean;
   children: ReactNode;
 }) {
   const { statuses, fetchStatusesForSession } = usePrStatuses();
+
+  useEffect(() => {
+    if (controlledOpen) fetchStatusesForSession(sessionId);
+  }, [controlledOpen, fetchStatusesForSession, sessionId]);
 
   return (
     // 独立 Provider + delayDuration=0:hover 立即弹出,不吃 sidebar 顶层 Provider
     // 的 500ms 默认延迟。skipDelayDuration 也归零,行间移动同样无跳变。
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
       <Tooltip.Root
+        open={controlledOpen}
         onOpenChange={(open) => {
-          if (open) fetchStatusesForSession(sessionId);
+          if (open && controlledOpen === undefined) fetchStatusesForSession(sessionId);
         }}
       >
         <Tooltip.Trigger
@@ -129,12 +151,21 @@ function PrTooltip({
  * 拉到的 nextFireAt 用一次性 formatSidebarFutureTime 转成 "N 分钟后运行",不做秒级 tick
  * (tooltip 通常只停留几秒,静态文案够用)。
  */
-function AutomationTooltip({ sessionId, children }: { sessionId: string; children: ReactNode }) {
+function AutomationTooltip({
+  sessionId,
+  controlledOpen,
+  children,
+}: {
+  sessionId: string;
+  controlledOpen?: boolean;
+  children: ReactNode;
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const effectiveOpen = controlledOpen ?? open;
   const [runs, setRuns] = useState<ScheduleSidebarIndexRun[] | null>(null);
   useEffect(() => {
-    if (!open || runs !== null) return;
+    if (!effectiveOpen || runs !== null) return;
     let cancelled = false;
     loadScheduleSidebarIndexRuns()
       .then((next) => {
@@ -146,7 +177,7 @@ function AutomationTooltip({ sessionId, children }: { sessionId: string; childre
     return () => {
       cancelled = true;
     };
-  }, [open, runs]);
+  }, [effectiveOpen, runs]);
 
   const hit = runs?.find((r) => r.sessionId === sessionId) ?? null;
   const countdownText =
@@ -162,7 +193,7 @@ function AutomationTooltip({ sessionId, children }: { sessionId: string; childre
 
   return (
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root onOpenChange={setOpen}>
+      <Tooltip.Root open={controlledOpen} onOpenChange={setOpen}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>
@@ -180,11 +211,19 @@ function AutomationTooltip({ sessionId, children }: { sessionId: string; childre
   );
 }
 
-function SourceTooltip({ sourceLabel, children }: { sourceLabel: string; children: ReactNode }) {
+function SourceTooltip({
+  sourceLabel,
+  controlledOpen,
+  children,
+}: {
+  sourceLabel: string;
+  controlledOpen?: boolean;
+  children: ReactNode;
+}) {
   return (
     // 独立 Provider + delayDuration=0:与 PrTooltip 同规,hover 立即弹出。
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root>
+      <Tooltip.Root open={controlledOpen}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>

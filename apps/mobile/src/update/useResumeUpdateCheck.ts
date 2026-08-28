@@ -18,9 +18,12 @@ import { shouldCheckBundleUpdate } from './bundleUpdate';
 import { fetchLatestRelease } from './fetchLatestRelease';
 import { createResumeUpdateChecker } from './resumeUpdateCheck';
 import { promptBundleUpdate } from './useBundleUpdatePrompt';
-import { isCanaryChannel } from './canaryChannelStore';
+import { resolveUpdateChannelForDevice } from './canaryChannelStore';
+import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
 
-export function useResumeUpdateCheck(isCanary = isCanaryChannel()): void {
+export function useResumeUpdateCheck(
+  channel: UpdateChannel = resolveUpdateChannelForDevice(),
+): void {
   const bundleCheckEnabled = shouldCheckBundleUpdate({
     isSelfHosted: IS_OTA_SELFHOST,
     isReviewMode: REVIEW_MODE,
@@ -41,7 +44,7 @@ export function useResumeUpdateCheck(isCanary = isCanaryChannel()): void {
         Platform.OS === 'android' ? 'android' : 'ios',
         undefined,
         undefined,
-        isCanary,
+        channel,
       ),
       getCurrentRuntimeVersion: () => Updates.runtimeVersion,
       // 与 useBundleUpdatePrompt / useForcedUpdateRecheck 同口径:强更比较按原生真值,热更后不漂移。
@@ -58,5 +61,5 @@ export function useResumeUpdateCheck(isCanary = isCanaryChannel()): void {
       current = false;
       subscription.remove();
     };
-  }, [bundleCheckEnabled, isCanary]);
+  }, [bundleCheckEnabled, channel]);
 }

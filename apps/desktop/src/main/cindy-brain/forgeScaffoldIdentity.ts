@@ -1,5 +1,7 @@
 import type fs from 'node:fs';
 
+import { sameFileIdentity } from '../utils/fileIdentity.js';
+
 export interface ForgeScaffoldParentIdentity {
   realPath: string;
   dev: bigint;
@@ -8,16 +10,14 @@ export interface ForgeScaffoldParentIdentity {
 
 /**
  * Forge scaffold can only promise a stable parent when both sides expose a
- * real filesystem identity. Zero-valued identities are "unknown", not a
- * wildcard: accepting them would reduce the worker check to a same-path test.
+ * real filesystem identity. A zero inode remains unknown. On Windows,
+ * however, path lstat commonly exposes dev=0 while retaining a nonzero NTFS
+ * FileId; use the shared cross-platform identity rule for that case.
  */
 export function sameForgeScaffoldParentIdentity(
   stats: fs.BigIntStats,
   expected: ForgeScaffoldParentIdentity,
 ): boolean {
   if (!stats.isDirectory() || stats.isSymbolicLink()) return false;
-  if (stats.dev === 0n || stats.ino === 0n || expected.dev === 0n || expected.ino === 0n) {
-    return false;
-  }
-  return stats.dev === expected.dev && stats.ino === expected.ino;
+  return sameFileIdentity(stats, expected);
 }

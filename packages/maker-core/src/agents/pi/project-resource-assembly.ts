@@ -235,7 +235,14 @@ function sameFileIdentity(
   first: Pick<Awaited<ReturnType<typeof fs.lstat>>, 'dev' | 'ino'>,
   second: Pick<Awaited<ReturnType<typeof fs.lstat>>, 'dev' | 'ino'>,
 ): boolean {
-  return first.dev === second.dev && first.ino === second.ino;
+  const isZero = (value: number | bigint): boolean => value === 0 || value === 0n;
+  if (isZero(first.ino) || isZero(second.ino) || first.ino !== second.ino) return false;
+  if (first.dev === second.dev) {
+    // Windows path stats may expose dev=0 while handle stats expose the real
+    // volume serial. A matching nonzero NTFS FileId remains an exact identity.
+    return !isZero(first.dev) || process.platform === 'win32';
+  }
+  return process.platform === 'win32' && (isZero(first.dev) || isZero(second.dev));
 }
 
 function sameEntrySnapshot(

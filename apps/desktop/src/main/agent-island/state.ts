@@ -6,6 +6,7 @@ import {
 import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
+import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../shared/liveTaskPriority';
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
 import { formatIslandToolDetail } from './toolDetail.js';
@@ -403,6 +404,22 @@ export function requestAgentIslandManualExpand(state: AgentIslandState, displayI
   return changed;
 }
 
+export function requestAgentIslandManualCollapse(state: AgentIslandState, now: number): boolean {
+  if (state.layoutDragActive) return false;
+  const changed = state.hoverExpanded
+    || state.hoverIntentAt !== null
+    || state.collapseAt !== null
+    || state.protectedDismissPending;
+  state.hoverIntentAt = null;
+  state.hoverExpanded = false;
+  state.collapseAt = null;
+  state.protectedDismissPending = false;
+  state.hoverCooldownUntil = now + AGENT_ISLAND_HOVER_SHORT_COOLDOWN_MS;
+  // Keep current pointer-zone flags. Hover expand only re-arms after leave+re-enter,
+  // so clicking the original compact position does not immediately pop the island open again.
+  return changed;
+}
+
 export function applyAgentIslandMetadata(
   state: AgentIslandState,
   meta: AgentIslandSessionMeta,
@@ -437,7 +454,7 @@ export function applyAgentIslandUserPrompt(
   if (!text) return false;
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
-  markSessionRunning(state, session);
+  markSessionRunning(state, session, now);
   session.phase = 'running';
   session.interactionKind = undefined;
   session.detail = '';
@@ -517,7 +534,7 @@ export function applyAgentIslandEvent(
     const isRunning = data?.isRunning;
     const status = typeof data?.status === 'string' ? data.status : null;
     if (isRunning === true) {
-      markSessionRunning(state, session);
+      markSessionRunning(state, session, now);
       if (session.pendingInteractionIds.size === 0) {
         session.phase = 'running';
         session.interactionKind = undefined;
@@ -555,7 +572,7 @@ export function applyAgentIslandEvent(
     const toolDescription = toolName
       ? formatIslandToolDetail(toolName, toolInput, { wording: state.toolWording }, data ?? undefined)
       : firstNonEmptyString(data?.description, data?.toolDescription);
-    markSessionRunning(state, session);
+    markSessionRunning(state, session, now);
     if (toolUseId) {
       dismissPendingInteraction(state, session, toolUseId, now, { requirePending: true });
     }
@@ -668,7 +685,7 @@ export function applyAgentIslandInteractionRequest(
   session.pendingInteractionIds.add(request.requestId);
   session.pendingInteractionKinds.set(request.requestId, request.kind);
   session.pendingInteractionDetails.set(request.requestId, detailForInteraction(request, state.toolWording));
-  session.running = true;
+  markSessionRunning(state, session, now);
   session.completionAllowedAfterTerminalError = false;
   const activateRequest = request.kind !== 'permission' || session.permissionRequestId === null;
   if (request.kind === 'permission') {
@@ -1234,7 +1251,12 @@ function updateFocusVerificationLifecycle(state: AgentIslandState, now: number):
   state.pendingFocusUntil = null;
 }
 
-function markSessionRunning(state: AgentIslandState, session: AgentIslandSessionState): void {
+function markSessionRunning(
+  state: AgentIslandState,
+  session: AgentIslandSessionState,
+  now: number,
+): void {
+  if (!session.running) session.startedAt = now;
   session.running = true;
   session.completedUntil = null;
   session.errorUntil = null;
@@ -1588,7 +1610,8 @@ function orderSessionsForCurrentSurface(
 
   const rank = new Map(state.expandedSessionOrder.map((sessionId, index) => [sessionId, index]));
   const ordered = sortedSessions.slice().sort((a, b) => {
-    const priorityDelta = priorityRank(state, b, now) - priorityRank(state, a, now);
+    const priorityDelta =
+      islandDisplayPriorityRank(state, a, now) - islandDisplayPriorityRank(state, b, now);
     if (priorityDelta !== 0) return priorityDelta;
     const aRank = rank.get(a.sessionId);
     const bRank = rank.get(b.sessionId);
@@ -2184,22 +2207,55 @@ function compareSessionsForDisplay(
   b: AgentIslandSessionState,
   now: number,
 ): number {
-  const rankDelta = priorityRank(state, b, now) - priorityRank(state, a, now);
+  const rankDelta = islandDisplayPriorityRank(state, a, now) - islandDisplayPriorityRank(state, b, now);
   if (rankDelta !== 0) return rankDelta;
   const activityDelta = b.sortActivityAt - a.sortActivityAt;
   if (activityDelta !== 0) return activityDelta;
   return b.startedAt - a.startedAt;
 }
 
-function priorityRank(state: AgentIslandState, session: AgentIslandSessionState, now: number): number {
-  if (session.pendingInteractionIds.size > 0 || session.phase === 'needs-interaction') return 500;
-  if (session.phase === 'error' && (session.unread || (session.errorUntil && session.errorUntil > now))) return 400;
-  if (state.activeTransientSessionId === session.sessionId && session.revealUntil && session.revealUntil > now) {
-    return 350;
+function isWaitingSession(session: AgentIslandSessionState, now: number): boolean {
+  return (
+    session.pendingInteractionIds.size > 0
+    || session.phase === 'needs-interaction'
+    || (session.phase === 'error' && (session.unread || (session.errorUntil !== null && session.errorUntil > now)))
+  );
+}
+
+function isUnreadCompletedSession(session: AgentIslandSessionState, now: number): boolean {
+  return session.phase === 'completed' && (session.unread || (session.completedUntil !== null && session.completedUntil > now));
+}
+
+function isTransientlyPinnedSession(
+  state: AgentIslandState,
+  session: AgentIslandSessionState,
+  now: number,
+): boolean {
+  return (
+    state.activeTransientSessionId === session.sessionId
+    && session.revealUntil !== null
+    && session.revealUntil > now
+  );
+}
+
+/**
+ * 岛上展示序 = 与侧栏共用的活任务档位,再叠一层「刚完成短暂置顶」。
+ * 数字越小越靠前。短暂置顶只压过完成未读 / 运行中,压不过等你处理(含出错)。
+ */
+function islandDisplayPriorityRank(
+  state: AgentIslandState,
+  session: AgentIslandSessionState,
+  now: number,
+): number {
+  const live = liveTaskPriorityRank({
+    waiting: isWaitingSession(session, now),
+    unread: isUnreadCompletedSession(session, now),
+    running: session.running,
+  });
+  if (isTransientlyPinnedSession(state, session, now) && live > LIVE_TASK_PRIORITY.waiting) {
+    return LIVE_TASK_PRIORITY.waiting + 0.5;
   }
-  if (session.phase === 'completed' && (session.unread || (session.completedUntil && session.completedUntil > now))) return 300;
-  if (session.running) return 100;
-  return 0;
+  return live;
 }
 
 function detailForInteraction(

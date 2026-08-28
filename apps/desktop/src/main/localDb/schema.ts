@@ -183,6 +183,8 @@ export const sessions = sqliteTable(
      * "restore once if leaving proxy mode" by maker-core.
      */
     codexHistoryHasProductPrompt: integer('codex_history_has_product_prompt', { mode: 'boolean' }),
+    /** Codex-only: latest native update_plan snapshot. */
+    codexPlanJson: text('codex_plan_json'),
     /**
      * Session 附加只读引用目录列表(JSON 字符串数组,绝对路径)。
      * agent 在每 turn 透传：Claude Code 使用 options.additionalDirectories，
@@ -1553,6 +1555,36 @@ export const mediaRefs = sqliteTable(
     byHash: index('media_refs_hash_idx').on(t.hash),
     /** 业务删除自己名下 ref 的主路径(删会话/卸载意识)。 */
     byRef: index('media_refs_ref_idx').on(t.refKind, t.refId),
+  }),
+);
+
+/**
+ * Cindy Core 媒体模型调用记录。
+ *
+ * guideJson 固化 prepare 时取得的服务端调用说明，保证后续 request / poll
+ * 不会因目录刷新而切换协议；submitting 是付费 POST 的单次消费闸门，进程
+ * 中断后恢复为 unknown，禁止自动重提。
+ */
+export const mediaInvocations = sqliteTable(
+  'media_invocations',
+  {
+    id: text('id').primaryKey(),
+    owner: text('owner').notNull(),
+    modelId: text('model_id').notNull(),
+    capability: text('capability').notNull(),
+    guideRevision: text('guide_revision').notNull(),
+    guideJson: text('guide_json').notNull(),
+    state: text('state', {
+      enum: ['prepared', 'submitting', 'pending', 'complete', 'failed', 'unknown'],
+    }).notNull(),
+    taskId: text('task_id'),
+    responseJson: text('response_json'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    byOwnerCreatedAt: index('media_invocations_owner_created_at_idx').on(t.owner, t.createdAt),
+    byOwnerState: index('media_invocations_owner_state_idx').on(t.owner, t.state),
   }),
 );
 

@@ -169,6 +169,8 @@ export const MAKER_INVOKE = {
   EXECUTE_DESKTOP_COMMAND: 'maker:execute-desktop-command',
   LIST_AGENT_COMMANDS: 'maker:list-agent-commands',
   LIST_AGENT_SKILLS: 'maker:list-agent-skills',
+  PI_PACKAGES_LIST: 'maker:pi-packages:list',
+  PI_PACKAGES_MUTATE: 'maker:pi-packages:mutate',
   SCAN_AT_RESOURCES: 'maker:scan-at-resources',
   /**
    * "agent 自己认识的本地 customization 全集"。
@@ -260,6 +262,8 @@ export const MAKER_INVOKE = {
   AUTO_TITLE: 'maker:auto-title',
   // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(读 DB 素材,失败返 null)
   REGENERATE_TITLE: 'maker:regenerate-title',
+  /** 输入框推荐提示词:turn 结束后预测用户下一步输入(走 titleModel 轻量 one-shot)。 */
+  PREDICT_PROMPT: 'maker:predict-prompt',
   HELP_ASK: 'maker:help:ask',
   /**
    * Help-assistant 反馈草稿 (Phase 1):用户对某条回答不满时,点 👎 → 弹小表单 →
@@ -309,6 +313,8 @@ export const MAKER_INVOKE = {
   USAGE_CODEX_RATE_LIMIT_RESET: 'maker:usage:codex-rate-limit-reset',
   // Claude 订阅账号余量 (oauth/usage 端点 + unified headers 双源, cached-first) — 状态栏 chip 用
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
+  // SuperGrok 账号周用量 (cli-chat-proxy settings + billing?format=credits)
+  USAGE_XAI_SUBSCRIPTION: 'maker:usage:xai-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
   // Desktop renderer v2:Cindy AI `/models` 下发的 XD 原生报价。
@@ -356,8 +362,8 @@ export const MAKER_INVOKE = {
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
   /**
-   * Claude Code 自动上下文压缩触发阈值 —— 存在 <userData>/compaction-settings.json。
-   * SET 后仅对新 session 生效, 已运行的 Claude Code 子进程 env 不变。
+   * Claude Code 与 Pi 共用的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
+   * 经 runtimeConfig.autoCompactThresholdPct getter 热读，当前会话下一轮结束即按新值判断。
    */
   COMPACTION_GET_PCT: 'maker:compaction:get-pct',
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
@@ -629,6 +635,7 @@ export const MAKER_INVOKE = {
   IOS_SIMULATOR_SET_AGENT_CONTROL: 'maker:ios-simulator:set-agent-control',
   IOS_SIMULATOR_SET_MUTATION_CONTROL: 'maker:ios-simulator:set-mutation-control',
   IOS_SIMULATOR_SET_VIEWER_VISIBILITY: 'maker:ios-simulator:set-viewer-visibility',
+  IOS_SIMULATOR_RETRY_NATIVE_ROUTE: 'maker:ios-simulator:retry-native-route',
   IOS_SIMULATOR_LATEST_FRAME: 'maker:ios-simulator:latest-frame',
   IOS_SIMULATOR_SET_STREAM_PROFILE: 'maker:ios-simulator:set-stream-profile',
   IOS_SIMULATOR_LIVE_TOUCH: 'maker:ios-simulator:live-touch',
@@ -794,6 +801,8 @@ export const MAKER_PUSH = {
    * 无 payload；收到即重拉 listCustomMcpServers。
    */
   MCP_CHANGED: 'maker:mcp:changed',
+  /** Cindy-owned Pi extension roster changed; renderer refetches settings and slash previews. */
+  PI_PACKAGES_CHANGED: 'maker:pi-packages:changed',
   /**
    * 自定义供应商上游错误的结构化广播(payload = ProviderUpstreamErrorEvent:
    * { agent, providerId, code, retryable, status, detail?, errorType?, reqId? })。

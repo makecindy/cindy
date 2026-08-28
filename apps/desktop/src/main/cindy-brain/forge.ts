@@ -42,6 +42,10 @@ import {
 } from './ghostManualValidation.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
+import {
+  ARCHIVE_REGULAR_0644,
+  unixRegularFilePermissionsForArchive,
+} from './ghostZipPermissions.js';
 import { isPathInsideDir } from './dirDeposit.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
@@ -721,20 +725,22 @@ async function buildGhostPackage(
     // 文件耗尽内存。快照字节也必须出自这把闸,不能再按路径重读。
     let manifestRaw: unknown;
     let manifestBytes: Buffer;
+    let manifestUnixPermissions: number;
     try {
-      const bytes = await readBoundedFileNoFollow(
+      const read = await readBoundedFileNoFollowWithStat(
         path.join(realDir, GHOST_MANIFEST_FILE),
         GHOST_MANIFEST_MAX_BYTES,
         { containWithin: realDir },
       );
-      if (bytes === null) {
+      if (read === null) {
         return {
           ok: false,
           errorCode: 'MANIFEST_INVALID',
           message: `${GHOST_MANIFEST_FILE} 不是普通文件或超过 ${GHOST_MANIFEST_MAX_BYTES} 字节上限`,
         };
       }
-      manifestBytes = bytes;
+      manifestBytes = read.bytes;
+      manifestUnixPermissions = unixRegularFilePermissionsForArchive(read.stat.mode);
       manifestRaw = JSON.parse(manifestBytes.toString('utf-8'));
     } catch (err) {
       return {
@@ -846,7 +852,10 @@ async function buildGhostPackage(
     // Markdown 文件；逐文件限量、严格 UTF-8，并拒绝并发截短与二进制内容。
     // 缓存本次校验过的字节，生成 zip 时直接使用同一份快照，避免“预检一份、
     // 入包时又读到另一份”的竞态。嵌套单元共享缓存，同一物理文件只校验一次。
-    const manualFileSnapshots = new Map<string, Buffer>();
+    const manualFileSnapshots = new Map<
+      string,
+      { bytes: Buffer; unixPermissions: number }
+    >();
     for (const item of manifest.manual?.items ?? []) {
       const unitRoot = path.join(dir, ...item.dir.split('/'));
       const validateManualDir = async (
@@ -932,7 +941,10 @@ async function buildGhostPackage(
               message: `manual 文件不合格(${logicalPath}):${decoded.reason}`,
             };
           }
-          manualFileSnapshots.set(logicalPath, read.bytes);
+          manualFileSnapshots.set(logicalPath, {
+            bytes: read.bytes,
+            unixPermissions: unixRegularFilePermissionsForArchive(read.stat.mode),
+          });
         }
         return null;
       };
@@ -1129,29 +1141,35 @@ async function buildGhostPackage(
     let packedBytes = 0;
     for (const f of files) {
       let content: Buffer;
+      let unixPermissions: number;
       if (f.rel === GHOST_MANIFEST_FILE) {
         content = manifestBytes;
+        unixPermissions = manifestUnixPermissions;
       } else if (iconPng !== undefined && f.rel === FORGE_AI_ICON_PATH) {
         content = iconPng;
+        unixPermissions = ARCHIVE_REGULAR_0644;
       } else if (manualFileSnapshots.has(f.rel)) {
-        content = manualFileSnapshots.get(f.rel)!;
+        const snapshot = manualFileSnapshots.get(f.rel)!;
+        content = snapshot.bytes;
+        unixPermissions = snapshot.unixPermissions;
       } else {
-        let bytes: Buffer | null;
+        let read: Awaited<ReturnType<typeof readBoundedFileNoFollowWithStat>>;
         try {
-          bytes = await readBoundedFileNoFollow(f.abs, maxTotalBytes - packedBytes, {
+          read = await readBoundedFileNoFollowWithStat(f.abs, maxTotalBytes - packedBytes, {
             containWithin: realDir,
           });
         } catch {
-          bytes = null;
+          read = null;
         }
-        if (bytes === null) {
+        if (read === null) {
           return {
             ok: false,
             errorCode: 'TOO_LARGE',
             message: `文件在打包期间被并发改动或超出剩余体积预算:${f.rel}`,
           };
         }
-        content = bytes;
+        content = read.bytes;
+        unixPermissions = unixRegularFilePermissionsForArchive(read.stat.mode);
       }
       packedBytes += content.byteLength;
       if (packedBytes > maxTotalBytes) {
@@ -1161,7 +1179,7 @@ async function buildGhostPackage(
           message: `总体积超上限(${maxTotalBytes} 字节)`,
         };
       }
-      zip.file(f.rel, content);
+      zip.file(f.rel, content, { unixPermissions });
     }
     if (iconPng !== undefined && !iconSourceEntry) {
       packedBytes += iconPng.byteLength;
@@ -1172,9 +1190,13 @@ async function buildGhostPackage(
           message: `总体积超上限(${maxTotalBytes} 字节)`,
         };
       }
-      zip.file(FORGE_AI_ICON_PATH, iconPng);
+      zip.file(FORGE_AI_ICON_PATH, iconPng, { unixPermissions: ARCHIVE_REGULAR_0644 });
     }
-    const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    const buf = await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      platform: 'UNIX',
+    });
     const maxCindyBytes = manifest.node ? MAX_NODE_CINDY_BYTES : MAX_BASIC_CINDY_BYTES;
     if (buf.byteLength > maxCindyBytes) {
       return {
@@ -1332,7 +1354,7 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 意识是 Cindy 的第三方能力包,文件形态是 \`.cindy\`(zip 包)。装入后可给
 主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
 写一个意识。**流程:先取手册目录 → 按 §0 用提问卡片和用户对齐设计 → 按需用 section
-读透相关章(动手前至少读完"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 →
+读透相关章(动手前至少读完 §2 卡槽总览、"沙箱红线"与"打包与测试"三章) → 在工作目录写源码文件 →
 ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
 
 从零开始时优先调用 \`ghost_forge_scaffold\` 生成一份不会覆盖现有文件的骨架，再在
@@ -1364,7 +1386,8 @@ ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
 - **联网与凭证**:要不要 network 槽白名单联网(§4.7);要用户填 key 就需要 setup
   就绪声明与 settingsHtml 设置区(§4.7、§4.8)。
 - **运行形态**:纯沙箱 main.js 够用,还是要随包 Node 进程装依赖跑重活(node 槽,§4.12)。
-- **媒体代办**:要不要让主机代生成/改图/视频(cindy 槽,§2、§4.0.1)。
+- **媒体能力**:要不要基于 Cindy Core 的图片/视频模型封装上层能力；插件负责场景、
+  配置和结果呈现，生成请求由当前 Agent 调用 Core media 工具(§2、§4.0.4)。
 
 问完后把选择复述成一份简短设计小结(要解决的问题/目标用户/交互流程/所选形态/
 权限边界/验收标准),并顺带说明源码会放在工作目录的哪个文件夹——位置不需要用户选
@@ -1392,6 +1415,17 @@ my-ghost/
 ├── panel.js
 └── settings.html ← 自定义设置区(声明了 settingsHtml 时必须,见 §4.8)
 \`\`\`
+
+想看**真实完整范例**,浏览官方插件源码仓
+\`github.com/makecindy/cindy-official-plugins\`:仓库根下每个**含 ghost.json 的
+一级目录**(cindy-art、cindy-github、cindy-web-search……)都是一个已上架插件的
+全部源码,各槽(卡槽/
+面板/网络/设置页)都有现成写法可对照;\`.tests\`、\`docs\` 等无 ghost.json 的
+目录是仓库自身的基础设施,不是插件。需要理解宿主侧能力实现(某个槽的代发
+细节、校验器行为)时可参考主仓 \`github.com/makecindy/cindy\`(插件基座在
+\`apps/desktop/src/main/cindy-brain/\`),但**API 契约一律以本手册为准**——
+线上 main 分支可能领先或落后用户当前安装的主机版本,照 main 写码可能装进
+旧版就不工作。
 
 ## 2. ghost.json 身份卡
 
@@ -1436,7 +1470,8 @@ my-ghost/
   // top/bottom 暂未支持(排期中)
   // panel.systemButtons(可选,仅停靠形态):标准头系统按钮开关,缺省全开、
   // 声明 false 逐个关闭。当前一批:maximize(撑满内容区)、detach(在独立
-  // 窗口中打开)、minimize(最小化为浮动气泡)。标题条本体恒由主机绘制、
+  // 窗口中打开)、minimize(最小化面板;恢复入口由用户偏好决定为浮动气泡或
+  // 左侧栏)。标题条本体恒由主机绘制、
   // 关不掉;未知键拒装;position:"tab" 时声明本字段拒装
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
@@ -1626,8 +1661,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 }
 \`\`\`
 
-**cindy 能力详单**:声明"这个意识被允许点主机代办菜单上的哪些菜"——只有类目和
-动作,**没有任何具体模型/供应商信息**(选型权在主机与用户,意识只表达意图)。
+**cindy 能力详单**:声明插件要基于哪些 Cindy Core 能力提供上层能力--只有类目和
+动作,**没有任何具体模型/供应商信息**。image / video 声明同时决定该插件能否在
+自己的设置页或面板读取对应类型的模型目录；生成请求仍由当前 Agent 发起。
 类目与动作:\`image\`(\`generate\`=出图 / \`edit\`=改图)、\`video\`(\`generate\`=
 文生视频 / \`edit\`=图生视频,参考图怎么用由 \`refMode\` 决定:首尾帧 1–2 张,
 或多张参考图,详见 §4 的 cindy-request 视频段)、\`media\`(\`deposit\`=把手里的
@@ -1857,9 +1893,9 @@ Cindy 先发布，确认首个支持它的**正式版本号**后，再把 \`minC
 cindy.onHostMessage(function (msg) {
   if (msg.type !== 'tool-call') return;
   // msg.tool = 工具名, msg.args = AI 填的参数, msg.callId = 卷号
-  // msg.args.attachments(可能出现):用户随消息发给你的图,已由主机过户
-  // 到你名下的**指纹数组**——与你自己生成的媒体同等待遇(可当改图源图、
-  // 可经 cindy-ghost://<id>/media/<指纹> 上墙)。工具要吃用户图就读它。
+  // msg.args.attachments(可能出现):用户交出的媒体,或当前 Agent / Core 工具
+  // 生成后显式交给你的媒体,已由主机过户到你名下的**指纹数组**——
+  // 可当源媒体,也可经 cindy-ghost://<id>/media/<指纹> 上墙。
 });
 
 // 交卷(默认 330 秒内,超时作废;够覆盖一单大文件上传/取件。长任务可续命,
@@ -1915,7 +1951,10 @@ cindy.send({
 // - 预计超过 30 分钟天花板的超长任务,不要吊着一次 tool-call 等:视频代办用
 //   mode:'submit' 异步提交(见下),自己的外部任务拆成"提交 + 查询"两个工具。
 
-// Cindy 代办(需声明 cindy 槽 + 能力详单;主机出图、落仓、记账,你只拿到指纹字符串):
+// 以下 gen_image / edit_image / gen_video / edit_video 是存量插件兼容接口。
+// 新插件不要从沙箱或面板直接发媒体生成请求；按 §4.0.4 让当前 Agent 使用
+// Cindy Core media 工具。非媒体的 cindy-request 能力继续按各自章节使用。
+// 存量 Cindy 代办(需声明 cindy 槽 + 能力详单;主机出图、落仓、记账):
 // 由 tool-call 触发的代办**务必带上收到的 callId**(归因号:让用户在日志/账单里
 // 对上"哪次调用花的钱");面板交互等自发代办可不带。
 const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '一只猫', callId: msg.callId });
@@ -2217,6 +2256,90 @@ const r = await cindy.send({
   不会让你的 \`await\` 永久悬着;
 - 同步返回,没有异步单;每插件在途上限与媒体代办共用;装入确认框会单列一行
   「可把文字送去算成向量」并写明单次条数上限。
+
+## 4.0.4 媒体模型配置与调用边界
+
+媒体上层能力由插件定义，Cindy Core 只提供两项低级能力：
+
+1. 插件设置页 / panel 按类型读取当前可用模型，用来保存插件自己的模型选择；
+2. 当前 Agent 执行插件能力时，使用永久注册的 Cindy Core \`media\` 工具发起调用。
+
+设置页 / panel 没有 preload 桥，直接走同源只读端点。插件必须声明 \`cindy\` 槽，
+并在 \`cindy.image\` 或 \`cindy.video\` 中声明至少一个动作：
+
+\`\`\`js
+const result = await (await fetch('/media-models?type=image')).json();
+// → {
+//   ok:true,
+//   type:'image',
+//   models:[{
+//     id,
+//     name,
+//     providerId,
+//     modalities:{ input:['text','image'], output:['image'] }
+//   }],
+//   defaultModelId:string|null,
+//   defaultProviderId:string|null
+// }
+\`\`\`
+
+\`type\` 只接受 \`image\` / \`video\`。Host 按模型 \`mode\` 切大类，并结合插件在
+\`cindy.image/video\` 声明的动作、模型 \`modalities\`、Guide operation 与当前客户端
+协议支持度，只返回当前真正可执行的模型。单个模型的 Guide 缺失、损坏或版本过新只隔离
+该模型，不拖垮整个目录。
+
+响应只把已归一化的 \`modalities.input/output\` 与来源 \`providerId\` 交给插件，
+不下发 Guide、endpoint、凭证或 Host 内部兼容判定。插件可把用户选择的模型 id 存进自己的
+\`/kv\`，但必须同时保存 \`providerId\`，并把这对精确选择交给当前 Agent；同一个模型 id
+可由多个 Provider 提供，不能按 id 去重或自行改换来源。付费请求前 Core 会再次校验。
+
+插件与 Agent 不需要新的媒体协议，继续使用现有工具调用链：
+
+1. Agent 用 \`ghost_call\` 调用插件的业务工具；
+2. 插件通过普通 \`tool-result\` JSON 返回业务参数、面板里保存的模型选择或其它上下文；
+3. 同一个 Agent 读取结果后，自行调用 Cindy Core \`media\` 工具；
+4. 如果插件需要最终媒体，Agent 再调用插件的普通接收工具，并通过顶层
+   \`ghost_call.attachments\` 显式交接；Host 复用通用 attachments 授权链，把授权后的
+   指纹注入 \`args.attachments\`，避免把本地绝对路径暴露给插件。插件自行保存业务状态
+   与更新 UI。
+
+第 2 步的字段完全由插件定义，Host 不识别 \`mediaIntent\`、\`nextTool\` 等保留字段，也不
+自动把插件结果转成媒体请求。下面只是普通结果示例，字段名不是平台契约：
+
+\`\`\`js
+const prefs = await (await fetch('/kv')).json();
+await cindy.send({
+  type: 'tool-result',
+  callId: msg.callId,
+  ok: true,
+  result: {
+    prompt: msg.args.prompt,
+    selectedModel: prefs.imageModelId,
+    sceneOptions: { aspectRatio: msg.args.aspectRatio }
+  }
+});
+\`\`\`
+
+媒体生成硬规则：插件沙箱和 panel 不直接提交生成请求，不持有 endpoint、凭证、
+轮询或下载逻辑。当前 Agent 自己决定如何把插件的普通结果转换为 \`media\` 调用，并根据
+Guide 组装请求；Core 负责鉴权、Guide、安全边界、任务状态与结果入库。插件可以提供
+业务参数、参数规范化、模型偏好和可选 UI，但不负责执行底层请求。
+
+插件获取结果不需要专用回调协议：
+
+\`\`\`js
+// Agent 侧：Core media 成功后通过通用附件参数交给插件
+ghost_call({
+  ghost_id: 'cindy-art',
+  tool: 'receive_media',
+  args: { caption: prompt },
+  attachments: [resultUrl]
+});
+
+// 插件侧：msg.args.attachments 是已授权指纹；插件自行写 /kv 并广播面板
+\`\`\`
+
+Host 不理解“画廊”或其它插件业务，也不会因为一次 \`media\` 成功自动唤醒、回调任意插件。
 
 ## 4.1 宿主公开上下文(request,无需卡槽)
 
@@ -2949,15 +3072,21 @@ tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任�
 settingsHeight(此时主机不注入上述响应式规则,超出部分由你的页面内部滚动)。
 意识沉睡时设置区不渲染(显示沉睡提示),唤醒后可用。
 
-**外链(前往控制台)**:设置区/面板里可以放 \`<a href="https://…">\` 链接,但
-只有 **href 与身份卡 \`network.secrets[].url\` 声明逐字一致**的地址会被主机放行
-——点击时主机拦下导航、转系统浏览器打开(沙箱页自身永远不离开自己协议)。
-声明之外的任何外链点了没反应(主机静默拦下),脚本自动跳转也无效(须用户
-真点击且页面持有焦点,同一意识 1s 内至多放行一次)。href 直接从身份卡声明里
-**原样复制**——浏览器会把导航地址归一化(域名转小写、根路径补尾斜杠),声明
-写成非规范形态会导致比对永远失配、链接点了没反应,所以声明本身也用规范形态
-(小写域名、根路径带 \`/\`)。典型用法:输入行下方放一条
-\`<a class="console-link" href="…">前往控制台获取 ↗</a>\`,方便用户一键去申请 key。
+**外链(前往控制台)**:设置区/面板里可以放普通同页
+\`<a href="https://…">\`。主机会拦下导航并交给系统默认浏览器,沙箱页自身永远
+不离开 \`cindy-ghost://\`。合法地址按以下顺序处理:
+
+1. href 与身份卡既有 \`network.secrets[].url\` 或 \`node.secretBindings[].url\`
+   **逐字一致**时直接打开(保持存量插件兼容);href 最好从声明原样复制;
+2. URL 解析后的主机是 \`xd.com\` / \`xd.cn\` 根域或任意层级子域,或精确
+   \`workers.xd.team\`,直接打开;
+3. 其它合法 HTTPS 地址会显示完整规范化 URL,由用户二次确认后才打开。
+
+非 HTTPS、畸形 URL、内嵌用户名/密码的地址一律拒绝。只支持普通同页链接:
+\`target="_blank"\` 与 \`window.open()\` 不支持。页面必须持有焦点,同一意识
+1s 内至多处理一次外链尝试,且同一意识同时最多一个确认框。典型用法:输入行
+下方放一条 \`<a class="console-link" href="…">前往控制台获取 ↗</a>\`,方便用户
+一键去申请 key。
 
 **自定义参数持久化(/kv)**:每段意识有一份主机代管的 JSON 参数(单意识一份,
 互相隔离),设置页 / 面板 / 电子脑同源共用,读写都走 \`fetch('/kv')\`:
@@ -3848,9 +3977,9 @@ const opened = await cindy.iosSimulator.request({
   自己持久化(见 §4.6 的偏好存储);
 - 停靠形态的**标题条(标准头)由主机绘制**:标题(\`panel.title\`)+ 一批系统
   按钮(当前:「撑满内容区」、「在独立窗口中打开」——用户可把你的面板抽进
-  自己的 OS 窗口,关窗/合并即回停靠原位——以及「最小化为浮动气泡」——用户
-  可把面板收成一枚可拖动的圆形气泡悬浮在主窗最上层,点击气泡即回停靠原位,
-  气泡位置与最小化状态重启保留;三者面板代码全程零感知;后续新增的系统按钮
+  自己的 OS 窗口,关窗/合并即回停靠原位——以及「最小化面板」——用户选择的
+  恢复入口可能是一枚悬浮在主窗最上层的可拖动圆形气泡,也可能是左侧栏入口;
+  最小化状态重启保留;三者面板代码全程零感知;后续新增的系统按钮
   也长在这里)。你的 panel.html 只画标题条以下的部分,**不要自己再画一条
   标题栏**。不想要某颗系统按钮时在身份卡声明
   \`"systemButtons": { "maximize": false, "detach": false, "minimize": false }\`
@@ -3955,6 +4084,9 @@ const opened = await cindy.iosSimulator.request({
    开发已有插件，先把源码复制/迁出到工作目录中的新目录，再从该副本制作;
 2. 调 \`ghost_forge_pack({ dir: '<绝对路径>' })\`——校验 + 打包 + 弹装入确认框;
    产物落在源码目录里(\`<id>-<version>.cindy\`,同版本覆盖,下次打包自动跳过);
+   macOS / Linux 源文件的普通 Unix 权限会原样进入包(特殊位会剥除)，所以随包本机
+   可执行程序必须在打包前就设好执行位(例如 \`chmod 755 path/to/program\`)，不要靠
+   文件扩展名或 \`bin/\` 目录让宿主猜测;
    若返回 \`SOURCE_IS_INSTALLED_PLUGIN\`,不要重试或换大小写、软链接、junction 绕过,
    按上一步迁出源码后再打包;也可能返回 \`SOURCE_OUTSIDE_WORKDIR\`(源码不在会话工作目录内);
 3. **告知用户去点弹窗**(装入默认沉睡,提醒用户勾"立即开启"或到主界面侧边栏「插件」中唤醒);
@@ -3992,7 +4124,8 @@ const opened = await cindy.iosSimulator.request({
 
 ### 8.1 发布到官方插件仓的额外门禁
 
-要提交到官方插件仓 \`makecindy/cindy-official-plugins\` 的插件,除本手册的打包/装入
+官方插件仓:\`github.com/makecindy/cindy-official-plugins\`(公开,合入即自动上架
+插件市场)。要提交到该仓的插件,除本手册的打包/装入
 校验外还有仓级 CI 硬门禁,过不了整次发布被拦:
 
 - **四语言 locale 缺一不可**:\`locales\` 必须**恰好**包含 \`zh-CN\` / \`en\` / \`ja\` /

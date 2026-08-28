@@ -1,11 +1,14 @@
 import fs from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const settingsDir = fs.mkdtempSync(path.join(tmpdir(), 'cindy-subagent-model-test-'));
+
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn(() => '/tmp/cindy-subagent-model-test'),
+    getPath: vi.fn(() => settingsDir),
   },
 }));
 
@@ -20,7 +23,7 @@ vi.mock('../logger-adapter.js', () => ({
 
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'test-owner', generation: 1 }),
-  ownerScopedUserDataPath: (...parts: string[]) => path.join('/tmp/cindy-subagent-model-test', ...parts),
+  ownerScopedUserDataPath: (...parts: string[]) => path.join(settingsDir, ...parts),
 }));
 
 import {
@@ -37,7 +40,6 @@ import {
   type SubagentModelSettings,
 } from '../../../shared/subagentModelSettings';
 
-const settingsDir = '/tmp/cindy-subagent-model-test';
 const settingsFile = path.join(settingsDir, 'subagent-model-settings.json');
 
 function withDefaults(partial: Partial<SubagentModelSettings> = {}): SubagentModelSettings {
@@ -277,8 +279,8 @@ describe('subagent model settings store', () => {
 
   it('codexSpawnConfigChanged tracks spawn-affecting keys only', () => {
     const base = withDefaults();
-    // codexProviderId 是纯客户端展示维度,claude* 走 env 通道:都不触发重启。
-    expect(codexSpawnConfigChanged(base, withDefaults({ codexProviderId: 'openai' }))).toBe(false);
+    // Provider 决定 runtime 模型改写与子线程路由，因此变化必须重启；claude* 仍走 env 通道。
+    expect(codexSpawnConfigChanged(base, withDefaults({ codexProviderId: 'openai' }))).toBe(true);
     expect(codexSpawnConfigChanged(base, withDefaults({ claudeCode: 'claude-opus-5' }))).toBe(false);
     expect(codexSpawnConfigChanged(base, withDefaults({ codex: 'gpt-5.6-terra' }))).toBe(true);
     expect(codexSpawnConfigChanged(base, withDefaults({ codexEffort: 'low' }))).toBe(true);

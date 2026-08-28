@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { BrowserWindowConstructorOptions, WebContents } from 'electron';
 
 const originalPlatform = process.platform;
@@ -49,6 +51,7 @@ const harness = vi.hoisted(() => {
   const resumeComputerDriverPermissionProbe = vi.fn();
   const broadcastSend = vi.fn();
   const openExternal = vi.fn(async () => undefined);
+  let userData = '';
   let deferWindowClosedEvents = false;
   let nextId = 100;
   const broadcastRecipient = {
@@ -150,7 +153,9 @@ const harness = vi.hoisted(() => {
     setDeferWindowClosedEvents: (defer: boolean) => {
       deferWindowClosedEvents = defer;
     },
-    app: { getPath: () => '/tmp/cindy-computer-permission-guide-test' },
+    get userData() { return userData; },
+    set userData(value: string) { userData = value; },
+    app: { getPath: () => userData },
     nativeImage: {
       createFromDataURL: vi.fn(() => ({ isEmpty: () => false })),
     },
@@ -238,10 +243,10 @@ function writeDragState(state: {
   accessibility: boolean;
   screenRecording: boolean;
 }): void {
-  const directory = '/tmp/cindy-computer-permission-guide-test/computer-permission-guide';
+  const directory = path.join(harness.userData, 'computer-permission-guide');
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(
-    `${directory}/cua-driver-drag-state-v2.json`,
+    path.join(directory, 'cua-driver-drag-state-v2.json'),
     `${JSON.stringify(state)}\n`,
     'utf8',
   );
@@ -335,8 +340,9 @@ describe('Electron Computer Use permission guide window', () => {
     harness.locateComputerUseSwitchTarget.mockResolvedValue({ status: 'unavailable' });
     harness.locateComputerUseSwitchTarget.mockClear();
     harness.isComputerDriverPermissionProbePaused.mockReturnValue(false);
+    harness.userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-computer-permission-guide-test-'));
     fs.rmSync(
-      '/tmp/cindy-computer-permission-guide-test/computer-permission-guide',
+      path.join(harness.userData, 'computer-permission-guide'),
       { recursive: true, force: true },
     );
     vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://127.0.0.1:5173');
@@ -355,6 +361,8 @@ describe('Electron Computer Use permission guide window', () => {
       configurable: true,
       value: originalPlatform,
     });
+    fs.rmSync(harness.userData, { recursive: true, force: true });
+    harness.userData = '';
   });
 
   it('creates the guide and mouse-transparent backdrop routes', async () => {

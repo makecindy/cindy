@@ -10,8 +10,16 @@ function activity(
   return {
     sessionId,
     phase: 'running',
+    recordStatus: 'active',
     compactDetail,
+    startedAtMs: 1,
+    lastActivityAtMs: 1,
+    currentActionSummary: compactDetail,
     attention: false,
+    workflow: null,
+    turnGeneration: null,
+    gracefulStopState: 'none',
+    source: 'live',
     ...patch,
   };
 }

@@ -368,11 +368,14 @@ export function createResponsesChatHandler(
         }
         writeSse(res, output, seq++);
       };
-      const parseDataPayload = (payload: string): void => {
-        if (!payload) return;
+      // 返回 true = 该帧是流内终态 provider error(已发出 response.failed):
+      // 上游可能在错误事件后保持连接不关,继续等 EOF 会让请求、上游连接与
+      // 相关会话资源一直挂着 —— 调用侧应立即停读并取消上游 reader(#2839)。
+      const parseDataPayload = (payload: string): boolean => {
+        if (!payload) return false;
         if (payload === '[DONE]') {
           translator.markTerminal();
-          return;
+          return false;
         }
         let event: unknown;
         try {
@@ -392,12 +395,14 @@ export function createResponsesChatHandler(
             JSON.stringify(streamedError).slice(0, MAX_ERROR_BODY_CHARS),
           );
           for (const output of translator.fail(message)) emit(output);
-          return;
+          return true;
         }
         for (const output of translator.push(event)) emit(output);
+        return false;
       };
+      let upstreamErrored = false;
       try {
-        for (;;) {
+        readLoop: for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
@@ -407,17 +412,34 @@ export function createResponsesChatHandler(
             const line = buffer.slice(start, newline).replace(/\r$/, '');
             start = newline + 1;
             if (!line.startsWith('data:')) continue;
-            parseDataPayload(line.slice(5).trim());
+            if (parseDataPayload(line.slice(5).trim())) {
+              upstreamErrored = true;
+              break readLoop;
+            }
           }
           if (start > 0) buffer = buffer.slice(start);
           if (buffer.length > MAX_SSE_BUFFER_CHARS) {
             throw new Error('upstream SSE line exceeds 1 MiB');
           }
         }
-        buffer += decoder.decode();
-        if (buffer.trim()) {
-          for (const line of buffer.split(/\r?\n/)) {
-            if (line.startsWith('data:')) parseDataPayload(line.slice(5).trim());
+        if (upstreamErrored) {
+          // 终态错误之后:当前 chunk 剩余帧不再解析,取消上游 reader 释放
+          // 连接。不 await:注入的 fetchImpl 可能给出取消长期 pending 的流,
+          // 挂起的取消不能阻塞下游收口。
+          try {
+            reader.cancel().catch(() => {
+              // 取消失败不影响下游收口。
+            });
+          } catch {
+            // 同步抛出的取消失败同样不影响下游收口。
+          }
+        } else {
+          buffer += decoder.decode();
+          if (buffer.trim()) {
+            for (const line of buffer.split(/\r?\n/)) {
+              if (!line.startsWith('data:')) continue;
+              if (parseDataPayload(line.slice(5).trim())) break;
+            }
           }
         }
       } catch (error) {

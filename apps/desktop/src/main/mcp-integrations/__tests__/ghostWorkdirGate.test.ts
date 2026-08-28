@@ -76,6 +76,7 @@ const ledgerAddRefMock = vi.fn(async (params: TestLedgerRef) => {
   ledgerRefs.push({ ...params });
   return `ref-${ledgerRefs.length}`;
 });
+const callCindyMediaMock = vi.fn();
 const dirDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'dir-ticket' } }));
 const saveDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'save-ticket' } }));
 const liveGrantStateMock = vi.fn();
@@ -87,9 +88,19 @@ vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
   activeOwnerScopeKey: activeOwnerScopeKeyMock,
 }));
-vi.mock('../../maker-host/logger-adapter.js', () => ({
-  desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
-}));
+vi.mock('../../maker-host/logger-adapter.js', () => {
+  const createMakerLogger = () => ({
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    fatal: () => {},
+    child: () => createMakerLogger(),
+    isDebugEnabled: () => false,
+  });
+  return { createMakerLogger, desktopMakerLogger: createMakerLogger() };
+});
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: logInfoMock, warn: logWarnMock, error: () => {}, debug: () => {} }),
 }));
@@ -186,6 +197,9 @@ vi.mock('../../cindy-media/ledger.js', () => ({
   hasRef: ledgerHasRefMock,
   hasGhostToolGrant: ledgerHasGhostToolGrantMock,
   addRef: ledgerAddRefMock,
+}));
+vi.mock('../../cindy-media/invocationService.js', () => ({
+  callCindyMedia: callCindyMediaMock,
 }));
 vi.mock('../../cindy-media/attachmentGrantGate.js', () => ({ chatAttachmentOrigin: vi.fn() }));
 vi.mock('../../cindy-media/refCompensationJournal.js', () => ({

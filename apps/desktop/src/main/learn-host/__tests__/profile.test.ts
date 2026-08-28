@@ -1,13 +1,14 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => '/tmp/xdt-learn-profile-test/userData') },
+  app: { getPath: vi.fn(() => path.join(TEST_ROOT, 'userData')) },
 }));
 vi.mock('../../appSessionState', () => ({
   ownerScopedUserDataPath: (...parts: string[]) =>
-    `/tmp/xdt-learn-profile-test/userData/owners/test-owner/${parts.join('/')}`,
+    path.join(TEST_ROOT, 'userData', 'owners', 'test-owner', ...parts),
 }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -24,7 +25,7 @@ import {
 } from '../profile';
 import { readMemorySettings } from '../../maker-host/memory-settings-store';
 
-const TEST_ROOT = '/tmp/xdt-learn-profile-test';
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-learn-profile-test-'));
 
 const shard = (over: Partial<ProfileShard> = {}): ProfileShard => ({
   type: 'user',

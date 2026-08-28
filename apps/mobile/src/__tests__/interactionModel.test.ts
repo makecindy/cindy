@@ -164,6 +164,7 @@ describe('interactionModel', () => {
     });
 
     expect(presentation).toEqual({
+      autoReviewUnavailable: false,
       canAlwaysAllow: false,
       code: 'pnpm --filter mobile test',
       description: 'Run the requested test command.',
@@ -175,6 +176,24 @@ describe('interactionModel', () => {
       title: '允许使用 Shell?',
       toolName: 'Bash',
     });
+  });
+
+  it('localizes auto-review unavailable confirmation copy instead of the English fallback', () => {
+    const presentation = buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-unavailable',
+      toolName: 'Bash',
+      description: 'Automatic review could not finish, so this action needs your confirmation.',
+      metadata: { autoReviewUnavailable: true },
+      input: { command: 'npx tsc --noEmit' },
+    });
+    expect(presentation.autoReviewUnavailable).toBe(true);
+
+    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
+    expect(interactionPanelSource).toContain("t('interaction.permission.autoReviewUnavailable')");
+    expect(i18n.t('interaction.permission.autoReviewUnavailable')).not.toBe(
+      'interaction.permission.autoReviewUnavailable',
+    );
   });
 
   it('projects ask question review presentation through the shared mobile model', () => {

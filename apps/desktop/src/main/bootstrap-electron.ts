@@ -193,6 +193,7 @@ import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import {
   installWebviewHardener,
+  setLoginCaptchaOriginResolver,
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
   setRsbPopupOpenerResolver,
@@ -327,6 +328,7 @@ import {
   configureIOSSimulatorRendererAccessConfirmation,
   configureIOSSimulatorRendererTargets,
   inheritIOSSimulatorRendererSessionAccess,
+  syncIOSSimulatorRendererAccessForSessionChange,
 } from './mcp-integrations/ios-simulator-renderer-access';
 import {
   parseIOSSimulatorReleaseGateArgs,
@@ -349,6 +351,17 @@ import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
+import {
+  attachWorkLouderCodexWindowReveal,
+} from './worklouder-codex/index.js';
+import {
+  disposeInputDevices,
+  resumeInputDeviceTaskSlots,
+  startInputDeviceRuntime,
+  startInputDevices,
+  suspendInputDeviceTaskSlots,
+  updateInputDeviceSessionActivity,
+} from './input-devices/index.js';
 import {
   isAppContentWindow,
   isFocusedAppContentWindow,
@@ -458,8 +471,17 @@ import {
   refreshAnthropicModelsFromHttp,
   clearAnthropicDiscoveredModels,
 } from './maker-host/model-discovery/anthropic.js';
+import {
+  clearXaiDiscoveredModels,
+  discardXaiModelsDiskCache,
+  loadXaiModelsFromDiskCache,
+  refreshXaiModelsFromHttp,
+} from './maker-host/model-discovery/xai.js';
 import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
-import { clearXaiRateLimitSnapshot } from './usageBroadcaster.js';
+import {
+  clearXaiRateLimitSnapshot,
+  clearXaiSubscriptionUsageSnapshot,
+} from './usageBroadcaster.js';
 import {
   ensureAnthropicCompatProxyReady,
   disposeAnthropicCompatProxy,
@@ -507,6 +529,7 @@ import {
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
+  registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
   isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
@@ -526,11 +549,28 @@ import {
 } from './maker-host/memory-settings-store.js';
 import {
   createAppFocusAutoRefreshTracker,
+  refreshProviderModelsManually,
   requestProviderModelAutoRefresh,
   resetProviderModelAutoRefreshCooldowns,
 } from './maker-host/provider-model-auto-refresh.js';
-import { refreshProviderModelsAfterAccountReady } from './maker-host/account-provider-model-refresh.js';
-import { accountProviderReadinessBarrier } from './maker-host/account-provider-readiness-barrier.js';
+import {
+  discoverAccountProviderModels,
+  resetAccountProviderRuntimes,
+} from './maker-host/account-provider-model-refresh.js';
+import {
+  accountProviderReadinessBarrier,
+  shouldClearCatalogAfterJoiningPreviousScope,
+} from './maker-host/account-provider-readiness-barrier.js';
+import {
+  accountProviderReadinessArm,
+  shouldFirePendingReadinessStart,
+  shouldKeepPendingReadinessStart,
+} from './maker-host/account-provider-readiness-arm.js';
+import {
+  ensureCurrentAccountProviderReadiness,
+  setAccountProviderReadinessReadyHandler,
+  shouldStartReadinessConsumers,
+} from './maker-host/account-provider-readiness-ensure.js';
 import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
@@ -548,6 +588,7 @@ import {
   hasGrokOAuthLogin,
 } from './maker-host/grok-oauth-login.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
+import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
 import {
   getChatgptBridgeAuth,
   invalidateChatgptBridgeAuth,
@@ -623,6 +664,7 @@ import { registerMakerStatusIpc } from './maker-ipc/status.js';
 import {
   registerMakerUsageIpc,
   syncClaudeSubscriptionUsageForAuthChange,
+  syncXaiSubscriptionUsageForAuthChange,
 } from './maker-ipc/usage.js';
 import { prewarmModelPricing } from './usage/modelPricing.js';
 import { registerMakerBinaryVersionIpc } from './maker-ipc/binary-version.js';
@@ -711,6 +753,7 @@ import {
 import { isBrowserOpenablePath } from '../shared/browserOpenableExts.js';
 import {
   getClientEndpoint,
+  getClientEndpointForRealm,
   initClientEndpoints,
   registerClientEndpointsIpc,
 } from './clientEndpointsService.js';
@@ -807,19 +850,33 @@ import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 
 let makerProviderRefreshConfigured = false;
-let startPendingAccountProviderReadiness: (() => void) | null = null;
+let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
 
 function markMakerProviderRefreshConfigured(): void {
   makerProviderRefreshConfigured = true;
   const startPending = startPendingAccountProviderReadiness;
   startPendingAccountProviderReadiness = null;
-  startPending?.();
+  if (!startPending) return;
+  const decision = {
+    pendingOwnerId: startPending.ownerId,
+    currentOwnerId: getActiveAppSession().dataOwnerId,
+    boundaryPending: isAppSessionBoundaryPending(),
+  };
+  if (shouldFirePendingReadinessStart(decision)) {
+    startPending.start();
+    return;
+  }
+  // Same-owner Ghost repair holds the boundary while this one-shot callback
+  // fires. Put the pending start back so a later unchanged ensureReady / arm
+  // start can still launch discovery after the window closes.
+  if (shouldKeepPendingReadinessStart(decision)) {
+    startPendingAccountProviderReadiness = startPending;
+  }
 }
 
 async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
-  const scopeKey = activeOwnerScopeKey();
-  const ready = await accountProviderReadinessBarrier.waitForScope(scopeKey);
-  if (!ready || activeOwnerScopeKey() !== scopeKey || isAppSessionBoundaryPending()) {
+  const ready = await ensureCurrentAccountProviderReadiness();
+  if (!ready) {
     throwIpcError(
       'PRECONDITION_FAILED',
       'Account provider models are not ready for this app session; retry.',
@@ -1170,6 +1227,9 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   const blockingFailures: unknown[] = [];
+  // Hardware must stop before the long async drain. Otherwise a held stick or
+  // microphone keeps acting on the outgoing account while caches and IM stop.
+  suspendInputDeviceTaskSlots();
   // The boundary is already marked pending by every caller. New actions now
   // fail closed; drain an action that crossed the boundary before closing its DB.
   try {
@@ -1184,6 +1244,9 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // before any Agent route can start. A failed DB read therefore stays fail-closed (empty)
   // instead of retaining the previous owner's endpoint or model entries.
   setCustomProviders([]);
+  accountProviderReadinessArm.clear();
+  startPendingAccountProviderReadiness = null;
+  accountProviderReadinessBarrier.invalidateAdoption();
   clearModelVisibilityMirror();
   // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
   // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
@@ -1420,6 +1483,21 @@ if (!app.isPackaged) {
 // 首次 attach webview 都走 hardener。详见 webview-security.ts。
 installWebviewHardener();
 
+// 登录 captcha webview 的 auth origin 白名单:hardener 附加/导航闸据此校验
+// 挑战页地址。惰性解析(attach 时刻取当前端点清单),两 realm 都收——
+// 邮箱发码固定走构建区域,但清单在 dev/远程回填形态下地址可能变化。
+setLoginCaptchaOriginResolver(() => {
+  const origins = new Set<string>();
+  for (const realm of ['cn', 'global'] as const) {
+    try {
+      origins.add(new URL(getClientEndpointForRealm(realm, 'authApiBaseUrl')).origin);
+    } catch {
+      // 该 realm 清单不可用(启动早期/异常)时不加入 —— fail-closed。
+    }
+  }
+  return [...origins];
+});
+
 // ── RSB browser bridge (browser-backend Phase 2) ────────────────────────
 // Renderer → main 桥,把 RSB `<webview>` 注册到 main 端 TabRegistry,future
 // 浏览器自动化 backend(Phase 3+)消费 webContents 句柄。
@@ -1443,6 +1521,9 @@ const rsbWindowController = new RsbWindowController({
         : null;
     if (mainTarget) {
       inheritIOSSimulatorRendererSessionAccess(mainTarget, window.webContents);
+      // This renderer is still hidden for prewarm. Keep its Viewer buckets,
+      // but pause the inherited active mutation grant until it is shown.
+      syncIOSSimulatorRendererAccessForSessionChange(window.webContents, null);
     }
     return window;
   },
@@ -1463,6 +1544,23 @@ const rsbWindowController = new RsbWindowController({
     } catch {
       // window torn down mid-send — ignore
     }
+  },
+  onWindowWillShow: (window) => {
+    const mainTarget =
+      mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()
+        ? mainWindowRef.webContents
+        : null;
+    const inherited = mainTarget
+      ? inheritIOSSimulatorRendererSessionAccess(mainTarget, window.webContents)
+      : false;
+    if (!inherited) {
+      // No authoritative Main snapshot is available. Never leave a cached
+      // sidebar's previous active mutation grant usable when it becomes visible.
+      syncIOSSimulatorRendererAccessForSessionChange(window.webContents, null);
+    }
+  },
+  onWindowHidden: (window) => {
+    syncIOSSimulatorRendererAccessForSessionChange(window.webContents, null);
   },
   contextChannel: MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED,
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,
@@ -3028,6 +3126,8 @@ const createWindow = () => {
   // 装饰动画闸门的兜底信号。主窗在 running turn 期间会关掉 backgroundThrottling,
   // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
   installWindowHiddenBroadcast(mainWindow);
+  // Keyboard hello when the window comes back from hide / minimize / Dock.
+  attachWorkLouderCodexWindowReveal(mainWindow);
 
   // App badge: 用户把任意 Cindy 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
   // 「已查看」,直接清空整个 dock 红点。badge 是 app 级状态,不该依赖当前停在哪个
@@ -3218,6 +3318,9 @@ const registerIpcHandlers = () => {
   initAgentIslandService({
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
+    onSessionActivityChange: (activity) => {
+      updateInputDeviceSessionActivity(activity);
+    },
   })?.setAppFocused(hasFocusedAppWindow());
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
@@ -3762,8 +3865,14 @@ const registerIpcHandlers = () => {
   // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
   setXaiAuthInvalidatedHandler(() => {
     resetProviderModelAutoRefreshCooldowns('xai');
+    clearXaiDiscoveredModels();
+    clearXaiMediaModels();
     clearXaiRateLimitSnapshot();
-    broadcastXaiAuthStateChanged();
+    void (async () => {
+      await clearXaiSubscriptionUsageSnapshot();
+      await syncXaiSubscriptionUsageForAuthChange();
+      broadcastXaiAuthStateChanged();
+    })();
   });
 
   // xAI(SuperGrok 订阅)OAuth —— 与 claude-oauth 同形态。登录成功后 bridge 的 xai provider 立即可用
@@ -3774,11 +3883,28 @@ const registerIpcHandlers = () => {
     const result = await runGrokOAuthLogin();
     if (result.ok) {
       resetProviderModelAutoRefreshCooldowns('xai');
+      // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
+      // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
+      await clearXaiSubscriptionUsageSnapshot();
+      // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
+      // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。
+      clearXaiDiscoveredModels();
+      await discardXaiModelsDiskCache();
+      // 登录可直接覆盖旧账号凭证。先跨授权边界清掉旧账号发现快照，再补拉新账号；
+      // 旧在途请求由 discovery generation + owner scope 双重守卫作废。
+      clearXaiMediaModels();
       // 登录成功后广播 provider 变更 —— 其它已打开的窗口(聊天/模型选择器等)跟随刷新
       // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
       clearXaiRateLimitSnapshot();
+      await syncXaiSubscriptionUsageForAuthChange();
       broadcastXaiAuthStateChanged();
+      void refreshXaiModelsFromHttp();
+      void refreshProviderModelsManually('xai').catch((error) => {
+        createLogger('xai-model-refresh').warn('xAI models refresh after login failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
       return { ok: true, authorized: true };
     }
     return { ok: false, reason: result.reason ?? 'unknown', authorized: hasGrokOAuthLogin() };
@@ -3787,6 +3913,9 @@ const registerIpcHandlers = () => {
     try {
       logoutGrok();
       resetProviderModelAutoRefreshCooldowns('xai');
+      await clearXaiSubscriptionUsageSnapshot();
+      clearXaiDiscoveredModels();
+      clearXaiMediaModels();
     } catch (err) {
       throwIpcError(
         'INTERNAL',
@@ -3796,6 +3925,7 @@ const registerIpcHandlers = () => {
     // 登出后同步广播给其它窗口,让已挂载的 useProviders 立刻重拉连接态;
     // 并清掉账号级限流快照 —— 登出后没有下一个成功响应来覆盖,不清会一直挂着旧账号余量。
     clearXaiRateLimitSnapshot();
+    await syncXaiSubscriptionUsageForAuthChange();
     broadcastXaiAuthStateChanged();
     return { authorized: hasGrokOAuthLogin() };
   });
@@ -4420,6 +4550,13 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('auth:dispatch-login-action', async (_event, action: unknown) => {
     return authManager.dispatchLoginAction(action);
+  });
+
+  // 登录 captcha 托管挑战页地址(不含 query)。只返回按构建区域拼出的公开 URL,
+  // 无副作用、不含凭证;renderer 的 LoginCaptchaOverlay 用它装载 webview。
+  ipcMain.handle('auth:get-captcha-challenge-url', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.getLoginCaptchaChallengeUrl();
   });
 
   ipcMain.handle('auth:logout', async () => {
@@ -6770,6 +6907,8 @@ app.on('ready', async () => {
   });
 
   registerIpcHandlers();
+  startInputDeviceRuntime();
+  startInputDevices();
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。
   // 无 DB / 无登录依赖,随其它顶层 handler 一起注册即可。
   registerFsBrowseIpc();
@@ -6798,12 +6937,22 @@ app.on('ready', async () => {
       // Provider discovery is detached from DB read readiness for the same owner, but a
       // different owner must not replace the DB while the previous account task can still
       // update owner-scoped catalogs or agent environments.
+      const nextProviderScopeKey = activeOwnerScopeKey();
       const previousProviderTaskSettled =
-        await accountProviderReadinessBarrier.waitForPreviousScope(activeOwnerScopeKey());
+        await accountProviderReadinessBarrier.waitForPreviousScope(nextProviderScopeKey);
       // The old task may have completed its owner-scoped DB read after teardown cleared the
-      // process-global catalog. Clear once more after joining it so a failed next-owner reload
-      // cannot inherit the old endpoint/model snapshot. Same-scope ensure retries skip this.
-      if (previousProviderTaskSettled) setCustomProviders([]);
+      // process-global catalog. Clear once more after joining a *different owner* so a
+      // failed next-owner reload cannot inherit the old snapshot. Same-owner generation
+      // bumps also wait here, but must keep the current account's custom providers.
+      if (
+        shouldClearCatalogAfterJoiningPreviousScope({
+          waited: previousProviderTaskSettled,
+          currentSameOwnerAsNext:
+            accountProviderReadinessBarrier.hasSameOwnerIdentity(nextProviderScopeKey),
+        })
+      ) {
+        setCustomProviders([]);
+      }
       const user = authManager.getAuthState().user;
       if (user == null || user.id !== userId) return;
       // 首登轻量迁移(老 xdt-maker userData → Cindy):内部自带 marker 防重入与
@@ -6841,6 +6990,15 @@ app.on('ready', async () => {
           userId,
           mode: dbClientTakeover.mode,
         });
+        // Teardown already closed the keyboard. The renderer still enters the
+        // main UI, so restore hardware even when the lifecycle client did not.
+        try {
+          await resumeInputDeviceTaskSlots();
+        } catch (error) {
+          dbClientLog.warn('Input device task slot refresh failed (non-fatal)', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
       }
       if (dbClientTakeover.mode === 'unchanged') {
@@ -6854,30 +7012,69 @@ app.on('ready', async () => {
             userId,
           });
         }
+        // Same-owner generation bump also lands here. Ensure adopts a settled
+        // discovery task, starts one if it never launched (pending start was
+        // held across a Ghost boundary), and starts consumers if the original
+        // then() skipped them while boundaryPending.
+        void ensureCurrentAccountProviderReadiness();
+        // Logout suspends the keyboard. Relogin of the same owner still lands
+        // here, so restore task slots even when the lifecycle client is reused.
+        try {
+          await resumeInputDeviceTaskSlots();
+        } catch (error) {
+          dbClientLog.warn('Input device task slot refresh failed (non-fatal)', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
+      }
+      try {
+        await resumeInputDeviceTaskSlots();
+      } catch (error) {
+        dbClientLog.warn('Input device task slot refresh failed (non-fatal)', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
-      try {
-        const protectedPaths = await listPersistedChatAttachmentPaths();
-        const result = await sweepStagedChatAttachmentsOnStartup({
+      //
+      // Staged-attachment bookkeeping is not first-paint readiness. The persisted-path
+      // lookup is a LIKE + json_tree scan over every retained message body; on a
+      // multi-GB owner DB that blocked LocalDbGate for ~24s after splash had already
+      // unmounted, leaving a white window. Sweep is fire-and-forget, only queries the
+      // DB when the owner cache already has stale files, and is delayed so the shared
+      // db worker can serve session-list / first-paint RPCs first. A stale-cache user
+      // would otherwise just move the 24s stall from the white screen onto the first
+      // task-list query (the db worker's better-sqlite3 .all() is synchronous).
+      const STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS = 5_000;
+      const stagedAttachmentSweepTimer = setTimeout(() => {
+        void sweepStagedChatAttachmentsOnStartup({
           ownerId: userId,
-          protectedPaths,
           createdBeforeMs: PROCESS_STARTED_AT_MS,
-        });
-        if (result.removed > 0 || result.protected > 0) {
-          dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
-            ...result,
-            ownerId: userId,
+          loadProtectedPaths: listPersistedChatAttachmentPaths,
+          canContinue: () =>
+            getActiveAppSession().dataOwnerId === userId && !isAppSessionBoundaryPending(),
+        })
+          .then((result) => {
+            if (result.removed > 0 || result.protected > 0) {
+              dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
+                ...result,
+                ownerId: userId,
+              });
+            }
+          })
+          .catch((err) => {
+            dbClientLog.warn(
+              '[ChatAttachment] startup staged attachment sweep failed (non-fatal)',
+              {
+                ownerId: userId,
+                error: err instanceof Error ? err.message : String(err),
+              },
+            );
           });
-        }
-      } catch (err) {
-        dbClientLog.warn('[ChatAttachment] startup staged attachment sweep failed (non-fatal)', {
-          ownerId: userId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      }, STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS);
+      stagedAttachmentSweepTimer.unref?.();
       logStartupPhase('chat-attachment-sweep');
       if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
         // 只把连接交给 worker，不能释放 shared-passive schema reader lease：worker
@@ -6944,12 +7141,60 @@ app.on('ready', async () => {
       //
       // 模型发现必须排在 Codex 重启序列之后：后者末尾会按 auth 边界重读
       // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
-      const providerScopeKey = activeOwnerScopeKey();
+      const resumeIncompleteDiscovery = async (): Promise<void> => {
+        const handle = accountProviderReadinessBarrier.currentHandle();
+        if (
+          !handle ||
+          getActiveAppSession().dataOwnerId !== userId ||
+          !accountProviderReadinessBarrier.needsIncompleteDiscoveryResume(handle.scopeKey)
+        ) {
+          return;
+        }
+        const catalogMayWrite = () =>
+          handle.isLive() &&
+          accountProviderReadinessBarrier.isCurrentAdoptable() &&
+          getActiveAppSession().dataOwnerId === userId;
+        await discoverAccountProviderModels(
+          {
+            loadXaiLkg: loadXaiModelsFromDiskCache,
+            refreshProviderModels: requestProviderModelAutoRefresh,
+            log: accountSwitchLog,
+          },
+          catalogMayWrite,
+        );
+        if (catalogMayWrite()) handle.markDiscoveryComplete();
+      };
       const startProviderReadiness = (): void => {
-        if (activeOwnerScopeKey() !== providerScopeKey || isAppSessionBoundaryPending()) return;
+        if (!makerProviderRefreshConfigured) {
+          startPendingAccountProviderReadiness = { ownerId: userId, start: startProviderReadiness };
+          return;
+        }
+        const providerScopeKey = activeOwnerScopeKey();
+        const currentOwnerId = getActiveAppSession().dataOwnerId;
+        if (!currentOwnerId || currentOwnerId !== userId) {
+          return;
+        }
+        if (isAppSessionBoundaryPending()) {
+          startPendingAccountProviderReadiness = {
+            ownerId: userId,
+            start: startProviderReadiness,
+          };
+          return;
+        }
+        if (accountProviderReadinessBarrier.needsIncompleteDiscoveryResume(providerScopeKey)) {
+          void resumeIncompleteDiscovery();
+          return;
+        }
+        if (
+          accountProviderReadinessBarrier.hasScope(providerScopeKey) ||
+          (accountProviderReadinessBarrier.hasAdoptableSameOwner(providerScopeKey) &&
+            accountProviderReadinessBarrier.isDiscoveryComplete())
+        ) {
+          return;
+        }
         const providerReadiness = accountProviderReadinessBarrier.start(
           providerScopeKey,
-          async () => {
+          async (handle) => {
             const startedAt = performance.now();
             try {
               // 自定义 MCP 与自定义供应商都只服务 Agent 路由，不应该阻塞任务列表。
@@ -6966,15 +7211,43 @@ app.on('ready', async () => {
                   error: err instanceof Error ? err.message : String(err),
                 });
               }
-              await refreshCustomProvidersIntoCatalog(
-                () => activeOwnerScopeKey() === providerScopeKey && !isAppSessionBoundaryPending(),
-              );
-              await refreshProviderModelsAfterAccountReady({
-                restartCodex: restartCodexAfterAuthModeChange,
-                shutdownCodexEnvironment,
-                refreshProviderModels: requestProviderModelAutoRefresh,
-                log: accountSwitchLog,
-              });
+              // Cleanup is owed to this start() entry, not the process-wide boundary
+              // flag. Same-owner Ghost repair holds beginAppSessionBoundary() across
+              // teardown + commit; if that flag gated reset/Pi shutdown, an in-flight
+              // A→B restartCodex would skip shutdownCodexEnvironment forever while
+              // discovery still marked the entry complete and adoptable.
+              const entryStillLive = () => handle.isLive();
+              // Catalog writes die with a real owner teardown (`invalidateAdoption`).
+              // Codex/Pi cleanup stays owed to this entry across a same-owner bump.
+              const catalogMayWrite = () =>
+                handle.isLive() && accountProviderReadinessBarrier.isCurrentAdoptable();
+              await refreshCustomProvidersIntoCatalog(catalogMayWrite);
+              // A new start() is already a new incarnation (same-owner rollover adopts
+              // instead). Bind reset/discovery/Pi teardown to this entry so a later
+              // generation bump cannot skip A→B cleanup, and a replaced entry cannot
+              // mark the next incarnation complete.
+              if (entryStillLive()) {
+                await resetAccountProviderRuntimes(
+                  {
+                    restartCodex: restartCodexAfterAuthModeChange,
+                    shutdownCodexEnvironment,
+                    log: accountSwitchLog,
+                  },
+                  entryStillLive,
+                );
+              }
+              if (catalogMayWrite()) {
+                await discoverAccountProviderModels(
+                  {
+                    loadXaiLkg: loadXaiModelsFromDiskCache,
+                    refreshProviderModels: requestProviderModelAutoRefresh,
+                    log: accountSwitchLog,
+                  },
+                  catalogMayWrite,
+                );
+                handle.markDiscoveryComplete();
+              }
+              if (!entryStillLive()) return;
               // Pi bridge 与 Codex 同源（HTTP bridge + gateway key），账号切换后也必须
               // 清掉旧账号环境，让下一次 Pi 会话按新账号凭证重建。
               try {
@@ -7023,8 +7296,20 @@ app.on('ready', async () => {
         // them only after discovery settles. The Maker lifecycle hook remains the final guard for
         // every direct create path. The scope check prevents an old completion from reviving hosts
         // after an account boundary.
+        const startedHandle = accountProviderReadinessBarrier.currentHandle();
         void providerReadiness.then(() => {
-          if (activeOwnerScopeKey() !== providerScopeKey || isAppSessionBoundaryPending()) return;
+          if (
+            !startedHandle?.isLive() ||
+            !shouldStartReadinessConsumers({
+              capturedScopeKey: providerScopeKey,
+              currentScopeKey: activeOwnerScopeKey(),
+              boundaryPending: isAppSessionBoundaryPending(),
+              adoptable: accountProviderReadinessBarrier.isCurrentAdoptable(),
+            }) ||
+            !accountProviderReadinessBarrier.markConsumersStarted()
+          ) {
+            return;
+          }
           startAccountIntegrationsAfterOwnerDbReady(userId, {
             isOwnerCurrent: (ownerId) =>
               isLocalDbOwnerCurrent(
@@ -7042,8 +7327,24 @@ app.on('ready', async () => {
       };
       // localDb 与 splash 可以任意先后完成。协调器已配置就立即开后台任务；
       // 否则只登记当前 scope 的启动闭包，不创建一个可能永久 pending 的 Promise。
+      setAccountProviderReadinessReadyHandler((ownerId) => {
+        startAccountIntegrationsAfterOwnerDbReady(ownerId, {
+          isOwnerCurrent: (id) =>
+            isLocalDbOwnerCurrent(
+              authManager.getAuthState(),
+              id,
+              isAppSessionBoundaryPending(),
+            ),
+          startHookControlAccount,
+          startImConnection,
+          log: dbClientLog,
+        });
+        attemptStartScheduler();
+        attemptStartEmbeddingHost();
+      });
+      accountProviderReadinessArm.publish(userId, startProviderReadiness, resumeIncompleteDiscovery);
       if (makerProviderRefreshConfigured) startProviderReadiness();
-      else startPendingAccountProviderReadiness = startProviderReadiness;
+      else startPendingAccountProviderReadiness = { ownerId: userId, start: startProviderReadiness };
       logStartupPhase('post-db-hooks-scheduled');
     },
   });
@@ -7068,6 +7369,7 @@ app.on('ready', async () => {
   // invoke-registry 捕获后供控制端隧道调用,本机 renderer 不调用)。
   registerGitReviewDeviceOp();
   registerModelVisibilityOwnerClaimIpc();
+  registerModelVisibilitySyncIpc();
   registerSidebarSettingsIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
@@ -7283,6 +7585,7 @@ onQuit('rsb-window', () => rsbWindowController.dispose(), 'sync');
 onQuit('ghost-panel-windows', () => ghostPanelWindowsController.dispose(), 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
 onQuit('session-drag-preview', () => disposeSessionDragPreview(), 'sync');
+onQuit('input-devices', () => disposeInputDevices(), 'async');
 // 自带 adb 的常驻 server 守护进程随退出收掉(fire-and-forget detached spawn,
 // 不阻塞)。不收会一直锁安装目录里的 adb.exe,弄挂增量更新(os error 32)。
 onQuit('android-adb-kill-server', () => disposeAndroidAdb(), 'sync');

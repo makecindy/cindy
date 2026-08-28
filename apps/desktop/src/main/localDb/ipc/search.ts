@@ -104,5 +104,16 @@ function parseFilters(value: unknown): ConversationSearchFilters | undefined {
       return id.trim();
     });
   }
+  if (body.workingDirs !== undefined && body.workingDirs !== null) {
+    if (!Array.isArray(body.workingDirs)) {
+      throwIpcError('INVALID_PARAMS', 'filters.workingDirs must be an array');
+    }
+    filters.workingDirs = body.workingDirs.map((dir, index) => {
+      if (typeof dir !== 'string' || dir.trim() === '') {
+        throwIpcError('INVALID_PARAMS', `filters.workingDirs[${index}] must be a non-empty string`);
+      }
+      return dir;
+    });
+  }
   return filters;
 }

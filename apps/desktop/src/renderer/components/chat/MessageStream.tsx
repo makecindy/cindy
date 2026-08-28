@@ -56,12 +56,11 @@ import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
-import {
-  isRemoteSessionSticky,
-  subscribeTurnChangeSetUpdated,
-} from '@/lib/makerTransport';
+import { isRemoteSessionSticky, subscribeTurnChangeSetUpdated } from '@/lib/makerTransport';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
+import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
+import { joystickScrollDelta } from '../../../shared/workLouderCodexScroll';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
 import { cn } from '@/lib/utils';
 import {
@@ -283,6 +282,7 @@ import {
   resolveNearBottomOnScroll,
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
+  resolveSendWindowHandoff,
   selectTailUserMessageId,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
@@ -362,6 +362,11 @@ interface MessageStreamProps {
    * behavior of treating every new tail user message as a local send.
    */
   isLocalUserSend?: (clientId: string) => boolean;
+  /**
+   * Whether this stream should consume hardware scroll commands.
+   * Split panes keep every MessageStream mounted; only the focused owner may act.
+   */
+  ownsHardwareScrollActions?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1876,6 +1881,13 @@ export function buildRenderItems(
     } else if (msg.role === 'tool_result') {
       // Orphan tool_result — skip
       i++;
+    } else if (
+      msg.role === 'assistant'
+      && !msg.systemCardType
+      && msg.content.trim().length === 0
+    ) {
+      // A leaked model stop token or other empty wrap-up must not become a bubble.
+      i++;
     } else {
       // Any non-tool message flushes the pending segment first so tool
       // segments appear above their text result, not after it.
@@ -1983,8 +1995,8 @@ function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(it.update?.status, it.result, {
     resultIsLaunchReceipt:
-      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !== undefined
-      || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
+      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !==
+        undefined || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
   });
   return status === 'running';
 }
@@ -2787,6 +2799,7 @@ export function MessageStream({
   forkOrigin,
   onOpenForkOrigin,
   isLocalUserSend,
+  ownsHardwareScrollActions = true,
 }: MessageStreamProps) {
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
   // 与 DiffPanelToggle 在同一栈中各占一行。Provider 不存在时返回 null,
@@ -2880,9 +2893,9 @@ export function MessageStream({
   const restoreDefaultViewportRef = useRef(
     Boolean(
       restoringRef.current &&
-        restoreSnapshotRef.current?.windowAnchorKey === null &&
-        restoreSnapshotRef.current?.isNearBottom === false &&
-        restoreSnapshotRef.current?.viewportTopKey,
+      restoreSnapshotRef.current?.windowAnchorKey === null &&
+      restoreSnapshotRef.current?.isNearBottom === false &&
+      restoreSnapshotRef.current?.viewportTopKey,
     ),
   );
   // 两段式默认窗口的当前尺寸(FIRST_PAINT → 空闲期扩到 INITIAL)。只影响
@@ -2979,7 +2992,8 @@ export function MessageStream({
         return next;
       });
     });
-    void window.electronAPI.maker.listTurnChangeSets(sessionId)
+    void window.electronAPI.maker
+      .listTurnChangeSets(sessionId)
       .then((next) => {
         if (cancelled) return;
         setTurnChangeSets((current) => {
@@ -3118,23 +3132,26 @@ export function MessageStream({
     }
 
     const startIdx = snapRenderWindowStartIdx(allRenderItems, idx);
-    const windowItemCount = resolveAnchoredWindowItemCount(
-      startIdx,
-      idx,
-      anchoredForwardItems,
-    );
+    const windowItemCount = resolveAnchoredWindowItemCount(startIdx, idx, anchoredForwardItems);
     return {
       items: allRenderItems.slice(startIdx, startIdx + windowItemCount),
       startIdx,
     };
-  }, [allRenderItems, firstVisibleItemKey, defaultWindowItems, anchoredForwardItems, firstMountDeferred]);
+  }, [
+    allRenderItems,
+    firstVisibleItemKey,
+    defaultWindowItems,
+    anchoredForwardItems,
+    firstMountDeferred,
+  ]);
 
   // If a restored default-tail anchor fell out of the tail while this session
   // was backgrounded, permanently fall back to the bounded default window for
   // this mount. This also prevents expandWindow from treating the stale key as
   // a user-created anchored window.
   useLayoutEffect(() => {
-    if (!restoreDefaultViewportRef.current || !restoringRef.current || firstVisibleItemKey === null) return;
+    if (!restoreDefaultViewportRef.current || !restoringRef.current || firstVisibleItemKey === null)
+      return;
     const snap = restoreSnapshotRef.current;
     if (!snap?.viewportTopKey) return;
     if (allRenderItems.length === 0) return;
@@ -4298,6 +4315,83 @@ export function MessageStream({
     }, CHIP_JUMP_SAFETY_MS);
   }, [beginProgrammaticScroll, cancelFocusJump, finishChipJump, finishProgrammaticScroll, refreshViewportAnchor]);
 
+  // ── Codex Micro 摇杆:按住持续滚动 ──
+  // 摇杆推住时主进程持续送 { type:'scroll', intensity },这里逐帧按速度改
+  // scrollTop —— 像拖鼠标滚轮,而不是每拨一下跳一屏。速度走平方曲线(见
+  // shared/workLouderCodexScroll.ts):轻推能微调,推到底才最快。
+  // 不用 behavior:'smooth' —— 逐帧位移叠加缓动会互相打架,松手后还会惯性飘。
+  const joystickScrollRef = useRef<{ direction: 'up' | 'down'; intensity: number } | null>(null);
+  const joystickScrollFrameRef = useRef<number | null>(null);
+  const stopJoystickScroll = useCallback(() => {
+    joystickScrollRef.current = null;
+    if (joystickScrollFrameRef.current !== null) {
+      cancelAnimationFrame(joystickScrollFrameRef.current);
+      joystickScrollFrameRef.current = null;
+    }
+  }, []);
+  useEffect(() => stopJoystickScroll, [stopJoystickScroll]);
+
+  useEffect(() => {
+    if (!ownsHardwareScrollActions) stopJoystickScroll();
+    return subscribeWorkLouderCodexAction((action) => {
+      if (action.type === 'scroll-stop') {
+        stopJoystickScroll();
+        return ownsHardwareScrollActions;
+      }
+      if (!ownsHardwareScrollActions) return false;
+      if (action.type === 'scroll') {
+        joystickScrollRef.current = { direction: action.direction, intensity: action.intensity };
+        if (joystickScrollFrameRef.current !== null) return true;
+        let lastAt = performance.now();
+        const step = (now: number): void => {
+          joystickScrollFrameRef.current = null;
+          const active = joystickScrollRef.current;
+          const el = scrollRef.current;
+          if (!active || !el) return;
+          const delta = joystickScrollDelta(active.intensity, now - lastAt);
+          lastAt = now;
+          if (active.direction === 'up') {
+            // 程序化改 scrollTop 不发 wheel 事件,所以不会自动解除 auto-follow;
+            // 不显式解除的话,向上滚会被跟随逻辑一路拽回底部。
+            unpinAutoFollowForUserUpIntent();
+            el.scrollTop -= delta;
+          } else {
+            el.scrollTop += delta;
+          }
+          joystickScrollFrameRef.current = requestAnimationFrame(step);
+        };
+        joystickScrollFrameRef.current = requestAnimationFrame(step);
+        return true;
+      }
+      if (action.type !== 'command') return false;
+      if (action.commandId === 'conversation.scrollBottom') {
+        scrollToBottomSmooth();
+        return true;
+      }
+      // 键盘快捷键与改绑到其它键的场景仍走这条一次性路径。
+      if (
+        action.commandId !== 'conversation.scrollUp' &&
+        action.commandId !== 'conversation.scrollDown'
+      ) {
+        return false;
+      }
+      const el = scrollRef.current;
+      if (!el) return false;
+      const direction = action.commandId === 'conversation.scrollUp' ? -1 : 1;
+      if (direction < 0) unpinAutoFollowForUserUpIntent();
+      el.scrollBy({
+        top: direction * Math.max(160, el.clientHeight * 0.7),
+        behavior: 'smooth',
+      });
+      return true;
+    });
+  }, [
+    ownsHardwareScrollActions,
+    scrollToBottomSmooth,
+    stopJoystickScroll,
+    unpinAutoFollowForUserUpIntent,
+  ]);
+
   // F2: messages diff → 按角色累计 unreadCount
   //   - 计数规则抽成纯函数 countUnreadAdded（见 unreadCount.ts）：新 clientId 才计、
   //     贴底不计、assistant/ask_user/plan_review 计；#2194 起非本端发送的 user 也计。
@@ -4340,9 +4434,7 @@ export function MessageStream({
       visibleLastItem,
       realLastItem,
       userMessageId: (item) =>
-        item?.type === 'message' && item.message.role === 'user'
-          ? item.message.clientId
-          : null,
+        item?.type === 'message' && item.message.role === 'user' ? item.message.clientId : null,
     });
     const lastUserMsg =
       tailUserMessageId === null
@@ -4354,45 +4446,41 @@ export function MessageStream({
             ? visibleLastItem.message
             : null;
 
-    // 锚定窗口外检测到真实的新发送：当前 effect 的 visibleRenderItems 仍是旧切片，
-    // 不能同帧 pinToBottom。先清锚并恢复 near-bottom，下一次 render 切回默认尾窗
-    // 后再自然 pin；提前同步 lastUserMsgIdRef，防下一帧重复判成新发送。
-    let windowAnchorClearedOnSend = false;
-    const realTailUserSendOutsideWindow =
-      !restoringRef.current &&
-      firstVisibleItemKey !== null &&
-      !windowCoversEnd &&
-      lastUserMsg !== null &&
-      lastUserMsg.clientId !== lastUserMsgIdRef.current;
-    if (realTailUserSendOutsideWindow) {
-      setFirstVisibleItemKey(null);
-      isNearBottomRef.current = true;
-      setIsNearBottom(true);
-      setUnreadCount(0);
-      lastUserMsgIdRef.current = lastUserMsg.clientId;
-      windowAnchorClearedOnSend = true;
-    }
+    // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
+    // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
+    // 绕过）时按外部注入处理，不用 ?? true 掩盖（Copilot review nit）。
+    const sentFromThisRenderer = lastUserMsg
+      ? isLocalUserSend
+        ? isLocalUserSend(lastUserMsg.clientId) === true
+        : true
+      : false;
     const userMessageObservation = resolveLastUserMessageObservation({
       restoring: restoringRef.current,
       tailUserMessageId: lastUserMsg?.clientId ?? null,
       previousTailUserMessageId: lastUserMsgIdRef.current,
     });
-    if (!windowAnchorClearedOnSend) {
-      lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
-    }
+    lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,
       newUserSend: userMessageObservation.isNewUserSend,
-      // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
-      // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
-      // 绕过）时按外部注入处理，不用 ?? true 掩盖（Copilot review nit）。
-      sentFromThisRenderer: lastUserMsg
-        ? isLocalUserSend
-          ? isLocalUserSend(lastUserMsg.clientId) === true
-          : true
-        : false,
+      sentFromThisRenderer,
       nearBottom: isNearBottomRef.current,
     });
+    // 本端发送必须离开锚定历史窗，回到默认尾窗。只清「未覆盖末尾」的锚会漏掉
+    // 「发送时窗口仍盖住末尾、随后 assistant/工具卡把尾部顶出窗口」——视口已经
+    // 钉到最新，下一轮新消息却不再跟随。
+    const windowHandoff = resolveSendWindowHandoff({
+      isNewUserSend: userMessageObservation.isNewUserSend,
+      sentFromThisRenderer,
+      hasWindowAnchor: firstVisibleItemKey !== null,
+      windowCoversEnd,
+    });
+    if (windowHandoff.clearWindowAnchor) {
+      setFirstVisibleItemKey(null);
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      setUnreadCount(0);
+    }
 
     if (userMessageObservation.isNewUserSend && lastUserMsg) {
       lastUserMsgIdRef.current = lastUserMsg.clientId;
@@ -4401,11 +4489,18 @@ export function MessageStream({
       restoringRef.current = false;
       isNearBottomRef.current = true;
     }
-    if (decision.pinToBottom && !windowAnchorClearedOnSend) pinToBottom();
+    if (decision.pinToBottom && !windowHandoff.deferPinToNextRender) pinToBottom();
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
-  }, [visibleRenderItems, bottomPadding, pinToBottom, firstVisibleItemKey, windowCoversEnd, allRenderItems]);
+  }, [
+    visibleRenderItems,
+    bottomPadding,
+    pinToBottom,
+    firstVisibleItemKey,
+    windowCoversEnd,
+    allRenderItems,
+  ]);
 
   // ── 还原浏览位置(layout effect,在上面的 pin-to-bottom effect 之后跑) ──
   // mount 首帧 + 还原期间窗口变化时把视口摆回锚点。settle(图片/markdown 异步加载
@@ -4762,7 +4857,8 @@ export function MessageStream({
   // 与 pinToBottom 高频竞态(小幅上滚永远越不过距离阈值就被钉回,且
   // programmaticScrollRef 窗口会吞掉部分用户 scroll 事件),距离判定对
   // 「上滚一行就停」不可靠。本 handler 只负责:
-  //   - 离底 >= threshold → 解除(滚动条拖拽等无 wheel 事件路径的兜底);
+  //   - 离底 >= threshold 且明确上滚 → 解除(滚动条拖拽等无 wheel 路径的兜底);
+  //     已在跟时内容在下方长高不得解除,否则发送后第一块新内容会把跟随掐死;
   //   - 已解除 + 明确向下滚回阈值带内 → 恢复跟随。
   // 迁移规则收敛在 resolveNearBottomOnScroll(纯函数,见 autoFollowIntent.ts)。
   // `isNearBottomRef`(auto-follow gate)与 `isNearBottom` state(指示器显隐)
@@ -4852,7 +4948,11 @@ export function MessageStream({
       // 用户向下滚动接近当前窗口下缘时，扩 anchoredForwardItems 纳入更多 item。
       // 向下 append 不改变已有内容的滚动偏移，不需要 F-SYNC-2 delta 补偿。
       // 扩到覆盖末尾后直接清除锚点，回到默认贴底窗口。
-      if (!windowCoversEnd && delta > SCROLL_DIRECTION_DEAD_ZONE_PX && distanceFromBottom < threshold) {
+      if (
+        !windowCoversEnd &&
+        delta > SCROLL_DIRECTION_DEAD_ZONE_PX &&
+        distanceFromBottom < threshold
+      ) {
         const nextForward = anchoredForwardItems + RENDER_WINDOW_GROWTH_ITEMS;
         // 最后一批照常渲染：不在此处清除锚点。用户真正滚到窗口底部后，
         // 上面 effectiveNearBottom + windowCoversEnd 分支会自然清除锚点、

@@ -12,6 +12,8 @@ import {
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
   rewriteAgentSkillInvocationForDispatch,
+  rewritePiSkillAliasFromCommand,
+  rewritePiSkillMessageForSend,
   slashCommandInvocationName,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -35,6 +37,13 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
     expect(rewriteAgentSkillInvocationForDispatch('/demo   keep spacing', loaded)).toBe(
       '/skill:demo   keep spacing',
     );
+    expect(rewriteAgentSkillInvocationForDispatch('  \n/demo keep', loaded)).toBe(
+      '  \n/skill:demo keep',
+    );
+    expect(rewriteAgentSkillInvocationForDispatch('please /demo', loaded)).toBe('please /demo');
+    expect(rewriteAgentSkillInvocationForDispatch('> quoted\n\n/demo', loaded)).toBe(
+      '> quoted\n\n/demo',
+    );
   });
 
   it('rebases command and later inline metadata when the runtime alias grows', () => {
@@ -54,6 +63,18 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
       { start: 12, end: 17, kind: 'reference' },
       { start: 18, end: 24, kind: 'paste' },
     ]);
+
+    expect(rebaseInlineRangesAfterSlashCommandRewrite(
+      [
+        { start: 3, end: 8, kind: 'slash' },
+        { start: 9, end: 14, kind: 'reference' },
+      ],
+      '  \n/demo @task',
+      '  \n/skill:demo @task',
+    )).toEqual([
+      { start: 3, end: 14, kind: 'slash' },
+      { start: 15, end: 20, kind: 'reference' },
+    ]);
   });
 
   it('does not rewrite unavailable, mismatched, or non-skill commands', () => {
@@ -71,6 +92,26 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
       runtimeStatus: 'loaded',
     })).toBe('/other');
     expect(rewriteAgentSkillInvocationForDispatch('/demo', desktop)).toBe('/demo');
+  });
+
+  it('leaves non-Pi first messages untouched without loading a roster', async () => {
+    await expect(rewritePiSkillMessageForSend({
+      agentKind: 'codex',
+      message: '/git please',
+    })).resolves.toBe('/git please');
+  });
+
+  it('rewrites a discovered Pi project skill that already has a runtime alias', () => {
+    const discovered = skill({
+      name: 'git',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+      runtimeCommandName: 'skill:git',
+    });
+    expect(rewriteAgentSkillInvocationForDispatch('/git please', discovered)).toBe('/git please');
+    expect(rewritePiSkillAliasFromCommand('/git please', discovered)).toBe('/skill:git please');
+    expect(rewritePiSkillAliasFromCommand(' \n/git please', discovered)).toBe(' \n/skill:git please');
+    expect(rewritePiSkillAliasFromCommand('note /git', discovered)).toBe('note /git');
   });
 });
 
@@ -138,31 +179,37 @@ describe('Pi project skill availability', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it('does not retry a Pi slash name absent from the refreshed filesystem catalog', async () => {
-    const sleeps: number[] = [];
-    const reload = vi.fn(async () => [] as UnifiedCommand[]);
+  it.each(['foo', 'path'])(
+    'forwards unknown Pi slash text /%s after one refresh without retry delays',
+    async (commandName) => {
+      const sleeps: number[] = [];
+      const reload = vi.fn(async () => [] as UnifiedCommand[]);
 
-    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
-      agentKind: 'pi',
-      sessionId: 'session-1',
-      commandName: 'missing',
-      commands: [],
-      retryDelaysMs: [10, 20],
-      sleep: async (delayMs) => { sleeps.push(delayMs); },
-      reload,
-    })).resolves.toEqual({ command: undefined, commands: [] });
-    expect(sleeps).toEqual([]);
-    expect(reload).toHaveBeenCalledTimes(1);
-  });
+      await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+        agentKind: 'pi',
+        sessionId: 'session-1',
+        commandName,
+        commands: [],
+        retryDelaysMs: [10, 20],
+        sleep: async (delayMs) => { sleeps.push(delayMs); },
+        reload,
+      })).resolves.toEqual({ command: undefined, commands: [] });
+      expect(sleeps).toEqual([]);
+      expect(reload).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  it('disables only discovered project skills', () => {
+  it('disables unproven runtime skills while keeping approved new-task previews available', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'discovered' }))).toBe(true);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'loaded' }))).toBe(false);
     expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'discovered' }))).toBe(false);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'unknown' }))).toBe(true);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'failed' }))).toBe(true);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'approved' }))).toBe(false);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo' }))).toBe(false);
   });
 
-  it('keeps the palette label while invoking Pi skills by their runtime command name', () => {
+  it('keeps the palette / composer label while invoking Pi skills by their runtime command name', () => {
     const loaded = skill({
       name: 'demo',
       scope: 'repo',
@@ -357,6 +404,30 @@ describe('Pi project skill availability', () => {
       },
     })).resolves.toEqual({ command: loaded, commands: [loaded] });
     expect(events).toEqual(['runtime', 'catalog']);
+  });
+
+  it('retries a missing command after explicitly starting its project runtime', async () => {
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+    const sleeps: number[] = [];
+    let reloads = 0;
+
+    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [],
+      prepareRuntime: async () => undefined,
+      retryDelaysMs: [10, 20],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+      reload: async () => (++reloads < 2 ? [] : [loaded]),
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+    expect(sleeps).toEqual([10]);
+    expect(reloads).toBe(2);
   });
 
   it('does not restart the runtime for an already loaded Pi skill', async () => {

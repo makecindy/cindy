@@ -10,15 +10,19 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { AppState, Linking } from 'react-native';
+import { AppState, Keyboard, Linking, Platform } from 'react-native';
 import {
   AuthApiError,
+  CAPTCHA_CHALLENGE_PAGE_PATH,
   CindyAuthClient,
+  captchaRequiredActionForVerificationKind,
   discoverSsoOrgRealm,
   parseAccountDeletionReceiptRecord,
   parseAuthSessionRecord,
   reduceAuthFlow,
   serializeAccountDeletionReceiptRecord,
+  soleAutoStartSsoMethod,
+  soleLoginMethod,
   ssoOrgDiscoveryToMethods,
   serializeAuthSessionRecord,
   type AuthFlowState,
@@ -28,6 +32,7 @@ import {
   type AccountDeletionAvailability,
   type AccountDeletionChallenge,
   type AccountDeletionStatus,
+  type CaptchaConfig,
   type LoginOutcome,
   type SocialProvider,
   type SsoOrgDiscovery,
@@ -57,9 +62,10 @@ import {
   resetMobileSessionRealm,
 } from '@/config/env';
 import { syncCanaryChannelAfterAuth } from '@/auth/canaryChannelSync';
-import { ensureDeviceId } from '@/auth/deviceId';
-import { isAccessTokenExpiring } from '@/auth/jwt';
-import { getAuthLocale } from '@/auth/loginMessages';
+import { ensureDeviceId, hasStoredDeviceId } from '@/auth/deviceId';
+import { decodeJwtOrgSlug, isAccessTokenExpiring } from '@/auth/jwt';
+import { maybeEnableXdOrgBetaDefault } from '@/auth/xdOrgBetaDefault';
+import { getAuthLocale, getLoginLanguage } from '@/auth/loginMessages';
 import { acquireNativeSocialCredential } from '@/auth/nativeSocial';
 import {
   matchesOAuthCallbackUrl,
@@ -98,6 +104,12 @@ import {
   clearCanaryChannel,
   syncCanaryChannel,
 } from '@/update/canaryChannelStore';
+import {
+  prepareBetaChannelForDevice,
+  enableUncustomizedBetaChannel,
+  readBetaChannelState,
+} from '@/update/betaChannelStore';
+import { probeBetaChannel } from '@/update/fetchLatestRelease';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -177,6 +189,13 @@ export interface AuthContextValue {
   clearAuthError(): void;
   consumeAccountDeletionRestored(): void;
   dispatchLoginAction(action: MobileLoginAction): Promise<boolean>;
+  /**
+   * 登录人机验证挑战(global 邮箱发码前置闸):非空时登录页渲染 WebView Modal
+   * 装载该托管挑战页;结果经 resolveCaptchaChallenge 回到挂起的发码动作
+   * (token = 通过,null = 用户取消/挑战失败)。
+   */
+  captchaChallenge: { url: string } | null;
+  resolveCaptchaChallenge(token: string | null): void;
   completeOAuthCallback(callbackUrl: string): Promise<void>;
   logout(): Promise<void>;
   /** 认证服务已明确拒绝当前会话时，单飞执行完整本地退登。 */
@@ -213,6 +232,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAuthError: () => undefined,
       consumeAccountDeletionRestored: () => undefined,
       dispatchLoginAction: async () => true,
+      captchaChallenge: null,
+      resolveCaptchaChallenge: () => undefined,
       completeOAuthCallback: async () => undefined,
       logout: async () => undefined,
       terminateSession: async () => undefined,
@@ -295,6 +316,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const accountDeletionReceiptMutationRef = useRef<Promise<void>>(
     Promise.resolve(),
   );
+  // OAuth deep link、常规登录和冷启动恢复可并发到达。第一次调用必须在创建
+  // device ID 前记录新旧设备状态；后续调用复用同一次 beta 偏好迁移。
+  const betaChannelPreparationRef = useRef<Promise<string> | null>(null);
 
   const suspendSessionRecoveryForLogin = useCallback(() => {
     if (sessionRecoverySuspendedRef.current) return;
@@ -325,6 +349,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ).catch(() => undefined);
     },
     [],
+  );
+
+  const prepareBetaChannelForCurrentDevice = useCallback((): Promise<string> => {
+    const existing = betaChannelPreparationRef.current;
+    if (existing) return existing;
+    const run = (async () => {
+      const hadExistingDeviceId = await hasStoredDeviceId();
+      const did = await ensureDeviceId();
+      // beta 偏好存储异常不能拖垮认证启动；失败时 store 保持 migration hold，
+      // 只会保守地不自动开 beta。
+      await prepareBetaChannelForDevice({ hadExistingDeviceId }).catch(
+        () => undefined,
+      );
+      return did;
+    })();
+    betaChannelPreparationRef.current = run;
+    run.catch(() => {
+      if (betaChannelPreparationRef.current === run)
+        betaChannelPreparationRef.current = null;
+    });
+    return run;
+  }, []);
+
+  /** 登录态落地后为 xd 组织尝试打开设备级 beta；不阻塞主界面。 */
+  const scheduleXdOrgBetaDefault = useCallback(
+    (token: string, expectedAuthGeneration: number) => {
+      if (!IS_OTA_SELFHOST) return;
+      const currentUser = userRef.current;
+      if (!currentUser) return;
+      const expectedUserId = currentUser.id;
+      void (async () => {
+        await prepareBetaChannelForCurrentDevice();
+        await maybeEnableXdOrgBetaDefault(
+          {
+            expectedAuthGeneration,
+            expectedUserId,
+            user: {
+              membershipKind: currentUser.membershipKind,
+              orgSlug: decodeJwtOrgSlug(token),
+              orgName: currentUser.orgName,
+            },
+          },
+          {
+            readCurrentAuthIdentity: () => ({
+              authGeneration: authGenerationRef.current,
+              userId: userRef.current?.id ?? null,
+            }),
+            readChannelState: readBetaChannelState,
+            probeBetaManifest: () =>
+              probeBetaChannel(Platform.OS === 'android' ? 'android' : 'ios'),
+            enableBeta: () =>
+              enableUncustomizedBetaChannel(
+                () =>
+                  authGenerationRef.current === expectedAuthGeneration &&
+                  userRef.current?.id === expectedUserId,
+              ),
+          },
+        );
+      })().catch(() => undefined);
+    },
+    [prepareBetaChannelForCurrentDevice],
   );
 
   const serializeRefreshTokenMutation = useCallback(
@@ -384,10 +469,105 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  /* ── 登录人机验证(Turnstile 托管挑战页,按 requiredFor 控制邮箱/短信发码)── */
+  const captchaConfigRef = useRef<CaptchaConfig | null>(null);
+  const [captchaChallenge, setCaptchaChallenge] = useState<{ url: string } | null>(null);
+  const captchaResolveRef = useRef<((token: string | null) => void) | null>(null);
+
   const updateLoginState = useCallback((next: AuthFlowState | null) => {
+    // providers.captcha 只随 identifier/realm-confirmation 步下发,发码动作发生在
+    // 后续步骤,进 ref 存续(登录流必经 identifier,ref 必然先就位);cn 构建 /
+    // 服务端未开启时字段缺席,captcha 闸整体 no-op。
+    if (next?.step === 'identifier' || next?.step === 'realm-confirmation') {
+      captchaConfigRef.current = next.providers.captcha ?? null;
+    }
     loginStateRef.current = next;
     setLoginState(next);
   }, []);
+
+  /** 登录页 WebView Modal 的结果回传口(token = 通过,null = 取消/失败)。 */
+  const resolveCaptchaChallenge = useCallback((token: string | null) => {
+    const resolve = captchaResolveRef.current;
+    captchaResolveRef.current = null;
+    setCaptchaChallenge(null);
+    resolve?.(token);
+  }, []);
+
+  /** 出题并等结果。有效登录主题由 ThemeOverrideProvider 内的 WebView 补入 URL。 */
+  const runCaptchaChallenge = useCallback((kind: VerificationKind): Promise<string | null> => {
+    let base = getMobileEndpointForRealm(BUILD_AUTH_REGION, 'authApiBaseUrl');
+    while (base.endsWith('/')) base = base.slice(0, -1);
+    const action = captchaRequiredActionForVerificationKind(kind);
+    const url = `${base}${CAPTCHA_CHALLENGE_PAGE_PATH}?action=${encodeURIComponent(action)}&lang=${encodeURIComponent(getLoginLanguage())}`;
+    return new Promise<string | null>((resolve) => {
+      // 单飞:dispatchLoginAction 本身串行,这里不会出现并发挑战。
+      captchaResolveRef.current = resolve;
+      // 验证码浮层不是原生 Modal，也不做键盘避让；先收键盘，避免 iOS 小屏上
+      // 挑战内容与取消动作被仍聚焦的 identifier 输入框键盘遮挡。
+      Keyboard.dismiss();
+      setCaptchaChallenge({ url });
+    });
+  }, []);
+
+  /** 按发码类型执行前置闸:未启用 → 放行;启用 → 出题;取消 → 不发码。 */
+  const ensureCaptchaGate = useCallback(
+    async (
+      kind: VerificationKind,
+    ): Promise<
+      { proceed: true; captchaToken?: string } | { proceed: false }
+    > => {
+      if (
+        captchaConfigRef.current?.requiredFor.includes(
+          captchaRequiredActionForVerificationKind(kind),
+        ) !== true
+      ) {
+        return { proceed: true };
+      }
+      const token = await runCaptchaChallenge(kind);
+      return token === null
+        ? { proceed: false }
+        : { proceed: true, captchaToken: token };
+    },
+    [runCaptchaChallenge],
+  );
+
+  /**
+   * 发验证码 + 错误驱动兜底:服务端返回 CAPTCHA_REQUIRED/CAPTCHA_INVALID
+   * (providers 缓存旧于服务端开关,或 token 恰好过期)时重新出题一次后重试,
+   * 仅一次防循环;重试被取消或再失败则抛原错误走统一错误链路。
+   */
+  const requestCodeWithCaptchaFallback = useCallback(
+    async (
+      did: string,
+      kind: VerificationKind,
+      identifier: string,
+      captchaToken: string | undefined,
+    ): Promise<void> => {
+      try {
+        await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+          kind,
+          identifier,
+          {
+            captchaToken,
+          },
+        );
+      } catch (error) {
+        const code = authErrorCode(error);
+        if (code !== 'CAPTCHA_REQUIRED' && code !== 'CAPTCHA_INVALID')
+          throw error;
+        const retryToken = await runCaptchaChallenge(kind);
+        if (retryToken === null) throw error;
+        await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+          kind,
+          identifier,
+          {
+            captchaToken: retryToken,
+          },
+        );
+      }
+    },
+    [runCaptchaChallenge],
+  );
 
   const setToken = useCallback((token: string | null) => {
     accessTokenRef.current = token;
@@ -533,6 +713,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
       sessionRecoverySuspendedRef.current = false;
       scheduleCanaryChannelSync(outcome.accessToken, generation);
+      scheduleXdOrgBetaDefault(outcome.accessToken, generation);
       updateLoginState(
         reduceAuthFlow(loginStateRef.current, { type: 'outcome', outcome }),
       );
@@ -547,6 +728,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loadMe,
       persistAccountDeletionReceipt,
       scheduleCanaryChannelSync,
+      scheduleXdOrgBetaDefault,
       serializeRefreshTokenMutation,
       setToken,
       updateLoginState,
@@ -595,6 +777,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             mergeMembershipWithExisting(pair.membership, userRef.current),
           );
           scheduleCanaryChannelSync(pair.accessToken, generation);
+          scheduleXdOrgBetaDefault(pair.accessToken, generation);
           void loadMe(pair.accessToken, did, generation).catch(() => undefined);
           return pair.accessToken;
         } catch (error) {
@@ -614,6 +797,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       applyUser,
       loadMe,
       scheduleCanaryChannelSync,
+      scheduleXdOrgBetaDefault,
       serializeRefreshTokenMutation,
       setToken,
     ],
@@ -624,7 +808,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const run = async () => {
       setIsBusy(true);
       try {
-        const did = await ensureDeviceId();
+        const did = await prepareBetaChannelForCurrentDevice();
         if (cancelled || sessionRecoverySuspendedRef.current) return;
         deviceIdRef.current = did;
         setDeviceId(did);
@@ -746,7 +930,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [prepareBetaChannelForCurrentDevice, refresh]);
 
   // 降级会话自愈:已安全发布的缓存用户，或因跨区清单失败而延迟发布的会话，
   // 都以退避节奏和回前台时机重试。
@@ -935,7 +1119,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsBusy(true);
         setAuthError(null);
         try {
-          const did = deviceIdRef.current ?? (await ensureDeviceId());
+          const did =
+            deviceIdRef.current ?? (await prepareBetaChannelForCurrentDevice());
           deviceIdRef.current = did;
           setDeviceId(did);
           const startsBuildRealmFlow =
@@ -1026,6 +1211,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ) {
               throw authCodeError('INVALID_AUTH_ACTION');
             }
+            const sole = soleAutoStartSsoMethod(confirmation.methods);
+            if (sole) {
+              return startBrowserAuthorization({
+                previousState: confirmation,
+                kind: 'sso',
+                providerOrConnectionId: sole.connectionId,
+                label: sole.connectionName || sole.orgName,
+              });
+            }
             updateLoginState(
               reduceAuthFlow(confirmation, {
                 type: 'discovery-loaded',
@@ -1056,8 +1250,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               did,
               BUILD_AUTH_REGION,
             ).discover(email);
+            const currentState = loginStateRef.current;
+            const sole = soleLoginMethod(methods);
+            if (sole?.type === 'sso' && currentState) {
+              return startBrowserAuthorization({
+                previousState: currentState,
+                kind: 'sso',
+                providerOrConnectionId: sole.connectionId,
+                label: sole.connectionName || sole.orgName,
+              });
+            }
+            if (sole?.type === 'email_code') {
+              // 人机验证前置闸(覆盖 discovery→发码的自动串发路径):取消则不
+              // 串发,落 method-choice,用户可从个人行再次发起(会重新过闸)。
+              const gate = await ensureCaptchaGate('email');
+              if (!gate.proceed) {
+                updateLoginState(
+                  reduceAuthFlow(currentState, {
+                    type: 'discovery-loaded',
+                    email,
+                    methods,
+                  }),
+                );
+                return true;
+              }
+              await requestCodeWithCaptchaFallback(
+                did,
+                'email',
+                email,
+                gate.captchaToken,
+              );
+              updateLoginState(
+                reduceAuthFlow(currentState, {
+                  type: 'code-requested',
+                  kind: 'email',
+                  identifier: email,
+                }),
+              );
+              return true;
+            }
             updateLoginState(
-              reduceAuthFlow(loginStateRef.current, {
+              reduceAuthFlow(currentState, {
                 type: 'discovery-loaded',
                 email,
                 methods,
@@ -1065,8 +1298,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             );
             return true;
           }
-          // 企业 SSO 入口（按组织 ID/slug/已验证域名）：结果映射进 method-choice，
-          // 复用连接选择 UI 与 start-sso 流程。
+          // 企业 SSO 入口（按组织 ID/slug/已验证域名）：唯一连接直接进浏览器；
+          // 多连接才映射进 method-choice，复用连接选择 UI 与 start-sso 流程。
           if (action.type === 'discover-sso-org') {
             const org = action.org.trim().toLowerCase();
             // 新的一次组织发现不得复用上一轮成功结果；只有本轮双区判定成功后
@@ -1118,6 +1351,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 }),
               );
             } else {
+              const sole = soleAutoStartSsoMethod(methods);
+              if (sole && currentState) {
+                return startBrowserAuthorization({
+                  previousState: currentState,
+                  kind: 'sso',
+                  providerOrConnectionId: sole.connectionId,
+                  label: sole.connectionName || sole.orgName,
+                });
+              }
               updateLoginState(
                 reduceAuthFlow(currentState, {
                   type: 'discovery-loaded',
@@ -1130,9 +1372,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           if (action.type === 'request-code') {
             const identifier = action.identifier.trim();
-            await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+            const gate = await ensureCaptchaGate(action.kind);
+            // 取消:不发码、不改状态、不报错(用户可再点发送/重发)。
+            if (!gate.proceed) return false;
+            await requestCodeWithCaptchaFallback(
+              did,
               action.kind,
               identifier,
+              gate.captchaToken,
             );
             updateLoginState(
               reduceAuthFlow(loginStateRef.current, {
@@ -1313,6 +1560,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       acceptOutcome,
       completeOAuthCallback,
+      ensureCaptchaGate,
+      requestCodeWithCaptchaFallback,
+      prepareBetaChannelForCurrentDevice,
       suspendSessionRecoveryForLogin,
       updateLoginState,
     ],
@@ -1325,12 +1575,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 残留由 server 侧 APNs 410 回收与换账号重注册的让位逻辑兜底。
     // Invalidate in-flight remote creates before any async logout cleanup begins.
     setMobileAuthOwner(null);
+    // 同步失效认证代次，必须早于第一个 await。否则推送 token 注销的网络等待窗口内，
+    // 迟到的 canary / XD beta 探测仍会把旧账号结果写回本地。
+    authGenerationRef.current += 1;
+    refreshInFlightRef.current = null;
     await unregisterPushTokenBestEffort(
       accessTokenRef.current,
       activeAuthRealmRef.current,
     );
-    authGenerationRef.current += 1;
-    refreshInFlightRef.current = null;
     setToken(null);
     applyUser(null);
     updateLoginState(null);
@@ -1604,6 +1856,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAuthError,
       consumeAccountDeletionRestored,
       dispatchLoginAction,
+      captchaChallenge,
+      resolveCaptchaChallenge,
       completeOAuthCallback,
       logout,
       terminateSession,
@@ -1621,6 +1875,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accountDeletionReceipt,
       accountDeletionRestored,
       authError,
+      captchaChallenge,
       clearAccountDeletionReceipt,
       clearAuthError,
       completeOAuthCallback,
@@ -1637,6 +1892,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginState,
       logout,
       requestAccountDeletionChallenge,
+      resolveCaptchaChallenge,
       terminateSession,
       user,
     ],

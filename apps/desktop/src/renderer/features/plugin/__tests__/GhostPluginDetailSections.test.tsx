@@ -59,6 +59,7 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.collapseInfoValue': `Collapse ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.panelNotDocked': 'Not docked',
         'settings.ghosts.detail.cindyPrefs.noModels': 'No models available',
+        'settings.defaults.restore': 'Restore default',
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
       };
@@ -587,7 +588,7 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.getByText('By Cindy').className).toContain('truncate');
   });
 
-  it('marks Cindy model preferences as a card-width responsive control group', () => {
+  it('uses each Cindy capability catalog in the responsive control group', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -595,12 +596,56 @@ describe('Ghost plugin detail sections', () => {
           cindyPrefsSync: () => ({
             overrides: {},
             image: {
-              options: [{ id: 'image-default', label: 'Image Default' }],
-              defaultModel: { id: 'image-default', label: 'Image Default' },
+              options: [
+                {
+                  id: 'image-default',
+                  label: 'Image Default',
+                  providerId: 'xd',
+                  providerName: 'Cindy AI',
+                },
+                {
+                  id: 'image-option',
+                  label: 'Image Option',
+                  providerId: 'xd',
+                  providerName: 'Cindy AI',
+                },
+              ],
+              defaultModel: {
+                id: 'image-default',
+                label: 'Image Default',
+                providerId: 'xd',
+                providerName: 'Cindy AI',
+              },
+            },
+            imageEdit: {
+              options: [
+                {
+                  id: 'image-edit',
+                  label: 'Image Edit',
+                  providerId: 'xd',
+                  providerName: 'Cindy AI',
+                },
+                {
+                  id: 'image-edit-option',
+                  label: 'Image Edit Option',
+                  providerId: 'xd',
+                  providerName: 'Cindy AI',
+                },
+              ],
+              defaultModel: {
+                id: 'image-edit',
+                label: 'Image Edit',
+                providerId: 'xd',
+                providerName: 'Cindy AI',
+              },
             },
             video: {
               options: [{ id: 'video-default', label: 'Video Default' }],
               defaultModel: { id: 'video-default', label: 'Video Default' },
+            },
+            videoEdit: {
+              options: [{ id: 'video-edit', label: 'Video Edit' }],
+              defaultModel: { id: 'video-edit', label: 'Video Edit' },
             },
           }),
           setCindyPref: vi.fn(),
@@ -611,16 +656,23 @@ describe('Ghost plugin detail sections', () => {
     const { container } = render(
       <CindyCapabilityPrefs
         ghostId="builtin.example"
-        capabilities={['image.generate']}
+        capabilities={['image.generate', 'image.edit']}
         appearance="plugin"
       />,
     );
 
     expect(container.querySelector('.cindy-capability-prefs')).toBeTruthy();
     expect(container.querySelector('.cindy-capability-row')).toBeTruthy();
-    const select = screen.getByRole('combobox');
-    expect(select.className).toContain('cindy-capability-select');
-    expect(select.className).toContain('max-w-[60%]');
+    const pickers = screen.getAllByRole('combobox');
+    expect(pickers).toHaveLength(2);
+    fireEvent.click(pickers[0]!);
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(2);
+    expect(screen.getByText('Image Option')).toBeTruthy();
+    fireEvent.click(pickers[0]!);
+    fireEvent.click(pickers[1]!);
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(2);
+    expect(screen.getByText('Image Edit Option')).toBeTruthy();
+    expect(pickers[0]!.className).toContain('max-w-[60%]');
   });
 
   // 2026-08-05:快问快答钉档扩展为目录全量文本模型——富列表选择器(供应商
@@ -642,7 +694,9 @@ describe('Ghost plugin detail sections', () => {
           cindyPrefsSync: () => ({
             overrides: {},
             image: { options: [], defaultModel: null },
+            imageEdit: { options: [], defaultModel: null },
             video: { options: [], defaultModel: null },
+            videoEdit: { options: [], defaultModel: null },
             text: {
               options: [
                 {
@@ -728,7 +782,9 @@ describe('Ghost plugin detail sections', () => {
           cindyPrefsSync: () => ({
             overrides: { 'text.oneshot': 'litellm-kimi-k2.6' },
             image: { options: [], defaultModel: null },
+            imageEdit: { options: [], defaultModel: null },
             video: { options: [], defaultModel: null },
+            videoEdit: { options: [], defaultModel: null },
             text: {
               options: [
                 {
@@ -782,7 +838,9 @@ describe('Ghost plugin detail sections', () => {
           cindyPrefsSync: () => ({
             overrides: { 'text.oneshot': 'cat:gone:codex:retired-model' },
             image: { options: [], defaultModel: null },
+            imageEdit: { options: [], defaultModel: null },
             video: { options: [], defaultModel: null },
+            videoEdit: { options: [], defaultModel: null },
             text: {
               options: [
                 {
@@ -829,7 +887,8 @@ describe('Ghost plugin detail sections', () => {
     vi.unstubAllEnvs();
   });
 
-  it('replaces the select with tertiary copy for ability categories the catalog has no models for', () => {
+  it('keeps a reset entry for a stale media override when the catalog has no models', async () => {
+    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -837,13 +896,30 @@ describe('Ghost plugin detail sections', () => {
           cindyPrefsSync: () => ({
             overrides: { 'video.generate': 'retired-video-model' },
             image: {
-              options: [{ id: 'image-default', label: 'Image Default' }],
-              defaultModel: { id: 'image-default', label: 'Image Default' },
+              options: [
+                {
+                  id: 'image-default',
+                  label: 'Image Default',
+                  providerId: 'xd',
+                  providerName: 'Cindy AI',
+                },
+              ],
+              defaultModel: {
+                id: 'image-default',
+                label: 'Image Default',
+                providerId: 'xd',
+                providerName: 'Cindy AI',
+              },
+            },
+            imageEdit: {
+              options: [{ id: 'image-edit', label: 'Image Edit' }],
+              defaultModel: { id: 'image-edit', label: 'Image Edit' },
             },
             // 目录没给视频清单 = 能力暂不可用。
             video: { options: [], defaultModel: null },
+            videoEdit: { options: [], defaultModel: null },
           }),
-          setCindyPref: vi.fn(),
+          setCindyPref,
         },
       },
     });
@@ -861,10 +937,13 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.getAllByRole('combobox')).toHaveLength(1);
 
     const empties = container.querySelectorAll('.cindy-capability-empty');
-    expect(empties).toHaveLength(2);
-    empties.forEach((node) => {
-      expect(node.textContent).toBe('No models available');
-      expect(node.className).toContain('text-[var(--text-tertiary)]');
+    expect(empties).toHaveLength(1);
+    expect(empties[0]!.textContent).toBe('No models available');
+    expect(empties[0]!.className).toContain('text-[var(--text-tertiary)]');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore default' }));
+    await waitFor(() => {
+      expect(setCindyPref).toHaveBeenCalledWith('builtin.example', 'video.generate', null);
     });
   });
 

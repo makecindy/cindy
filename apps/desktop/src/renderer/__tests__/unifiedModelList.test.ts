@@ -50,6 +50,7 @@ beforeEach(() => {
         claimLegacyModelVisibilityOwner: () => ({
           dataOwnerId: 'test-owner',
           ownerGeneration: 1,
+          canWriteOwnerScoped: true,
           claimed: true,
           claimedByOtherOwner: false,
           canInitialize: true,

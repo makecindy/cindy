@@ -25,7 +25,7 @@ import catalogJson from '../catalog/providers.json' with { type: 'json' };
 import modelRegistryJson from '../catalog/model-registry.json' with { type: 'json' };
 
 import type { ModelRegistry } from './modelAccessBean.js';
-import type { Catalog, Provider } from './types.js';
+import type { Catalog, CatalogModel, Provider } from './types.js';
 
 /** 仓内 v2 目录文件(xai 清单 + presets;同一文件发布到 OSS `cfg/providers.json`)。 */
 const catalogFile = catalogJson as unknown as Catalog;
@@ -63,7 +63,18 @@ if (!xaiRaw) {
   // 仓内目录文件被误删 xai 段属于构建期错误,越早炸越好(import 期即失败)。
   throw new Error('[model-providers] catalog/providers.json missing builtin provider "xai"');
 }
+if (!xaiRaw.routing.pi?.wireProtocol) {
+  throw new Error('[model-providers] catalog/providers.json missing explicit xai Pi protocol');
+}
 const xaiFromCatalog = withVerifiedStaticWindows(xaiRaw);
+const withoutPiApi = (model: CatalogModel): CatalogModel => {
+  if (model.piApi === undefined) return model;
+  const rest = { ...model };
+  delete rest.piApi;
+  return rest;
+};
+const xaiClaudeModels = xaiFromCatalog.models['claude-code'] ?? [];
+const xaiCodexModels = xaiFromCatalog.models.codex ?? [];
 
 /** xAI 静态清单同时供 Claude bridge、Codex 与 Pi bridge 使用。 */
 const XAI_PROVIDER: Provider = {
@@ -73,11 +84,15 @@ const XAI_PROVIDER: Provider = {
     : [...xaiFromCatalog.agents, 'pi'],
   routing: {
     ...xaiFromCatalog.routing,
-    pi: xaiFromCatalog.routing.pi ?? xaiFromCatalog.routing['claude-code'],
+    pi: xaiFromCatalog.routing.pi,
   },
   models: {
     ...xaiFromCatalog.models,
-    pi: xaiFromCatalog.models.pi ?? xaiFromCatalog.models['claude-code'] ?? [],
+    'claude-code': xaiClaudeModels.map(withoutPiApi),
+    codex: xaiCodexModels.map(withoutPiApi),
+    // providers.json 的 piApi 只属于 Pi；源文件仍与 xAI 静态根同表维护，
+    // bundled 投影在这里拆开，避免协议注解污染 Claude/Codex 快照契约。
+    pi: xaiFromCatalog.models.pi ?? xaiClaudeModels,
   },
 };
 
@@ -109,6 +124,7 @@ const ANTHROPIC_PROVIDER: Provider = {
     },
     pi: {
       upstream: 'https://api.anthropic.com',
+      wireProtocol: 'anthropic-messages',
       authStrategy: 'provider-oauth-header',
       headerOverride: {
         'anthropic-version': '2023-06-01',
@@ -133,7 +149,14 @@ const OPENAI_PROVIDER: Provider = {
   // image_generation tool;用户另配 `openai-images` Platform key 时优先走 public
   // Images API。id 带 openai/ 前缀(跨供应商数据契约,防 first-wins 归属漂移);
   // 不声明 imageDefaults(xd 默认地位不动)。
-  imageModels: [{ id: 'openai/gpt-image-2', name: 'GPT Image 2' }],
+  imageModels: [
+    {
+      id: 'openai/gpt-image-2',
+      name: 'GPT Image 2',
+      modalities: { input: ['text', 'image'], output: ['image'] },
+      officialDocs: 'https://platform.openai.com/docs/guides/image-generation',
+    },
+  ],
   routing: {
     codex: {
       upstream: 'https://chatgpt.com/backend-api/codex',
@@ -146,6 +169,7 @@ const OPENAI_PROVIDER: Provider = {
     },
     pi: {
       upstream: 'https://chatgpt.com/backend-api/codex',
+      wireProtocol: 'anthropic-messages',
       authStrategy: 'oauth-passthrough',
       modelPrefixes: ['chatgpt/'],
     },

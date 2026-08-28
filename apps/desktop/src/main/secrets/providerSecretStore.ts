@@ -2,6 +2,8 @@ import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { storedCustomProviderId } from '@cindy/model-providers';
+
 import { createLogger } from '../logger.js';
 import {
   providerSecretStorageKey,
@@ -17,6 +19,7 @@ import {
   GHOST_SECRET_PREFIX,
   GHOST_SECRET_HINT_PREFIX,
   PROVIDER_SECRET_IDS,
+  PI_PROXY_DERIVATION_KEY_STORAGE_KEY,
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
   type ProviderSecretId,
 } from '../../shared/providerSecrets.js';
@@ -275,6 +278,7 @@ export function createProviderSecretStore(
     // SSH 远端 daemon 直连 MCP bridge 的 persistent token 同清:同机换账号后,
     // 旧账号远端 host 上仍在跑的 daemon env 里的 token 必须失效,防串号。
     io.remove(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
+    io.remove(PI_PROXY_DERIVATION_KEY_STORAGE_KEY);
     // 动态键名密钥同清(按前缀扫 io.list()):自定义 MCP bearer token(mcp_token_<id>)、
     // 自定义供应商 per-runtime key(provider_key_*)、通用 OAuth 凭证 blob(provider_oauth_*)、
     // 意识 network 槽凭证(ghost_secret_*)。这些不在 PROVIDER_SECRET_IDS 静态集合里,
@@ -388,8 +392,9 @@ export function getProviderSecretStore(): ProviderSecretStore {
  * 与 renderer 经通用 safe-storage IPC 写入的 .enc 文件字节级互通。
  */
 export function readCustomProviderKey(providerId: string, agent: string): string | null {
+  const storageProviderId = storedCustomProviderId(providerId);
   try {
-    return electronSecretIo.read(customProviderSecretStorageKey(providerId, agent));
+    return electronSecretIo.read(customProviderSecretStorageKey(storageProviderId, agent));
   } catch (err) {
     log.warn(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
@@ -416,8 +421,9 @@ export function readCustomProviderHeaders(
   providerId: string,
   agent: string,
 ): Record<string, string> | null {
+  const storageProviderId = storedCustomProviderId(providerId);
   try {
-    const raw = electronSecretIo.read(customProviderHeaderStorageKey(providerId, agent));
+    const raw = electronSecretIo.read(customProviderHeaderStorageKey(storageProviderId, agent));
     return raw === null ? null : parseCustomProviderHeaders(raw);
   } catch (err) {
     log.warn(
@@ -561,6 +567,32 @@ export function writeRemoteMcpBridgeToken(value: string): boolean {
     log.warn(
       { err: err instanceof Error ? err.message : String(err) },
       'write remote mcp bridge token failed',
+    );
+    return false;
+  }
+}
+
+/** Read the host-only HMAC key used to derive remote Pi proxy session tokens. */
+export function readPiProxyDerivationKey(): string | null {
+  try {
+    return electronSecretIo.read(PI_PROXY_DERIVATION_KEY_STORAGE_KEY);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'read pi proxy derivation key failed',
+    );
+    return null;
+  }
+}
+
+/** Persist the host-only remote Pi proxy derivation key on first use. */
+export function writePiProxyDerivationKey(value: string): boolean {
+  try {
+    return electronSecretIo.write(PI_PROXY_DERIVATION_KEY_STORAGE_KEY, value);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'write pi proxy derivation key failed',
     );
     return false;
   }

@@ -1,4 +1,9 @@
 ﻿import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -21,9 +26,19 @@ import {
   repairToolExchangeAdjacency,
   stripEncryptedContentFromBody,
 } from './transform.js';
+import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
 import type { ProxyHandle } from './types.js';
+
+const TEST_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const TEST_PI_BINARY = path.join(
+  TEST_REPO_ROOT,
+  'apps',
+  'pi-bin',
+  `${process.platform}-${process.arch}`,
+  process.platform === 'win32' ? 'pi.exe' : 'pi',
+);
 
 function startFakeUpstream(
   handler: (reqIndex: number, body: string, res: ServerResponse) => void,
@@ -463,6 +478,124 @@ describe('anthropic-compat-proxy encrypted content retry', () => {
     expect(upstream.bodies).toHaveLength(2);
     expect(upstream.bodies[0]).toContain('encrypted_content');
     expect(upstream.bodies[1]).not.toContain('encrypted_content');
+  });
+
+  it('retries LiteLLM-wrapped xAI ModelInput 422 after sanitizing input', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(422, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'litellm.BadRequestError: XaiException - {"error":"Failed to deserialize the JSON body into the target type: data did not match any variant of untagged enum ModelInput"}',
+        }));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, attempt: idx }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createXaiModelInputRecoveryRule()],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'my-custom-grok',
+      input: [
+        { type: 'message', role: 'user', content: 'hi' },
+        { type: 'agent_message', author: 'bot', content: 'done' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.text)).toMatchObject({ ok: true });
+    expect(upstream.bodies).toHaveLength(2);
+    expect(upstream.bodies[0]).toContain('agent_message');
+    expect(upstream.bodies[1]).not.toContain('agent_message');
+    expect(JSON.parse(upstream.bodies[1]).input).toEqual([
+      { type: 'message', role: 'user', content: 'hi' },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '[collab bot]\ndone' }],
+      },
+    ]);
+  });
+
+  it('does not rewrite OpenAI collab history when another recovery rule retries', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, attempt: idx }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [
+        createEncryptedContentRecoveryRule({ enabled: () => true }),
+        createXaiModelInputRecoveryRule(),
+      ],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'reasoning', encrypted_content: 'gAAAsecret' },
+        { type: 'agent_message', author: 'bot', content: 'keep me' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]).input).toEqual([
+      { type: 'agent_message', author: 'bot', content: 'keep me' },
+    ]);
+  });
+
+  it('does not stack encrypted-content strip onto a ModelInput 422 retry', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(422, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'litellm.BadRequestError: XaiException - {"error":"data did not match any variant of untagged enum ModelInput"}',
+        }));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, attempt: idx }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [
+        createEncryptedContentRecoveryRule({ enabled: () => true }),
+        createXaiModelInputRecoveryRule(),
+      ],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'grok-4.5',
+      input: [
+        { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'gAAAkeep' },
+        { type: 'agent_message', author: 'bot', content: 'done' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(JSON.parse(upstream.bodies[1]).input).toEqual([
+      { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'gAAAkeep' },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '[collab bot]\ndone' }],
+      },
+    ]);
   });
 
   it('keeps proactive stripping active when a provider transform rewrites the model id', async () => {
@@ -1880,6 +2013,167 @@ describe('anthropic-compat-proxy empty-assistant-message recovery (moonshot/kimi
 });
 
 describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不转发上游)', () => {
+  it.skipIf(!existsSync(TEST_PI_BINARY))(
+    'real PI zstd request crosses the proxy parse boundary and reaches the raw local handler',
+    { timeout: 30_000 },
+    async () => {
+      const gateway = await startFakeUpstream((_i, _b, res) => {
+        res.writeHead(500);
+        res.end('default upstream must not be reached');
+      });
+      upstreamClose = gateway.close;
+      let seen: { raw: Buffer; encoding: string | undefined; parsed: unknown; url: string } | null = null;
+      let resolveSeen: (() => void) | null = null;
+      const seenPromise = new Promise<void>((resolve) => { resolveSeen = resolve; });
+      proxy = await createAnthropicCompatProxy({
+        upstream: gateway.url,
+        transformRequest: [],
+        routingTransform: (body, ctx) => {
+          if (ctx.headers['x-native-route'] !== 'openai') return null;
+          return {
+            localHandler: async ({ rawBody, parsedBody, res }) => {
+              seen = {
+                raw: Buffer.from(rawBody),
+                encoding: ctx.headers['content-encoding'],
+                parsed: parsedBody,
+                url: ctx.url,
+              };
+              resolveSeen?.();
+              res.writeHead(401, { 'content-type': 'application/json' });
+              res.end('{"error":{"message":"intentional test stop"}}');
+            },
+          };
+        },
+      });
+      const configHome = mkdtempSync(path.join(tmpdir(), 'pi-zstd-proxy-e2e-'));
+      const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
+      const placeholderJwt = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
+        'https://api.openai.com/auth': { chatgpt_account_id: 'cindy-pi-proxy' },
+      })}.`;
+      let child: ChildProcessWithoutNullStreams | null = null;
+      try {
+        writeFileSync(path.join(configHome, 'models.json'), JSON.stringify({
+          providers: {
+            'openai-codex': {
+              baseUrl: proxy.url,
+              apiKey: '$CINDY_PI_OPENAI_PROXY_KEY',
+              headers: { 'x-native-route': 'openai' },
+              models: [{
+                id: 'gpt-cindy-zstd-test',
+                name: 'GPT Cindy zstd test',
+                reasoning: false,
+                input: ['text'],
+                contextWindow: 128_000,
+                maxTokens: 16_000,
+              }],
+            },
+          },
+        }));
+        writeFileSync(path.join(configHome, 'settings.json'), JSON.stringify({ transport: 'sse' }));
+        child = spawn(TEST_PI_BINARY, [
+          '--provider', 'openai-codex',
+          '--model', 'gpt-cindy-zstd-test',
+          '--no-session',
+          '--no-tools',
+          '--no-extensions',
+          '--no-skills',
+          '--no-prompt-templates',
+          '--no-context-files',
+          '--mode', 'rpc',
+        ], {
+          cwd: TEST_REPO_ROOT,
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: configHome,
+            CINDY_PI_OPENAI_PROXY_KEY: placeholderJwt,
+          },
+        });
+        let stderr = '';
+        child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+        child.stdin.write(JSON.stringify({ id: 'test-prompt', type: 'prompt', message: 'ping' }) + '\n');
+        let reachTimeout: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            seenPromise,
+            new Promise<never>((_resolve, reject) => {
+              reachTimeout = setTimeout(
+                () => reject(new Error(`real PI did not reach proxy: ${stderr}`)),
+                10_000,
+              );
+            }),
+          ]);
+        } finally {
+          if (reachTimeout) clearTimeout(reachTimeout);
+        }
+
+        const observed = seen as {
+          raw: Buffer;
+          encoding: string | undefined;
+          parsed: unknown;
+          url: string;
+        } | null;
+        expect(observed).not.toBeNull();
+        expect(observed?.url).toBe('/codex/responses');
+        expect(observed?.encoding).toBe('zstd');
+        expect(observed?.parsed).toBeUndefined();
+        expect([...observed!.raw.subarray(0, 4)]).toEqual([0x28, 0xb5, 0x2f, 0xfd]);
+        expect(gateway.bodies).toHaveLength(0);
+      } finally {
+        if (child && child.exitCode === null && child.signalCode === null) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+              if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+              resolve();
+            }, 1_000);
+            child!.once('close', () => {
+              clearTimeout(timer);
+              resolve();
+            });
+            child!.kill('SIGTERM');
+          });
+        }
+        rmSync(configHome, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('JSON content-type with compressed bytes still routes by headers and preserves raw body', async () => {
+    const gateway = await startFakeUpstream((_i, _b, res) => { res.writeHead(200); res.end('{}'); });
+    upstreamClose = gateway.close;
+    const compressed = gzipSync(Buffer.from(JSON.stringify({ model: 'gpt-native' })));
+    let seen: Buffer | null = null;
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      routingTransform: (body, ctx) => {
+        expect(body).toBeUndefined();
+        if (ctx.headers['x-native-route'] !== 'openai') return null;
+        return {
+          localHandler: async ({ rawBody, parsedBody, res }) => {
+            seen = Buffer.from(rawBody);
+            expect(parsedBody).toBeUndefined();
+            res.writeHead(204);
+            res.end();
+          },
+        };
+      },
+    });
+
+    const response = await fetch(`${proxy.url}/codex/responses`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-encoding': 'gzip',
+        'x-native-route': 'openai',
+      },
+      body: compressed,
+    });
+
+    expect(response.status).toBe(204);
+    expect(seen).toEqual(compressed);
+    expect(gateway.bodies).toHaveLength(0);
+  });
+
   it('命中 handler:收到原始字节 + 已解析 body + ctx,自写响应(含 SSE 流式),上游零请求', async () => {
     const gateway = await startFakeUpstream((_i, _b, res) => { res.writeHead(200); res.end('{}'); });
     upstreamClose = gateway.close;

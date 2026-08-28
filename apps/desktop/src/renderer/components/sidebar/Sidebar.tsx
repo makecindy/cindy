@@ -45,6 +45,8 @@ interface SidebarProps {
   width?: number;
   /** Whether the user is currently dragging the resize handle. */
   isDragging?: boolean;
+  /** Keep feature state mounted while the sidebar remains visually hidden. */
+  forceMountFeatureContent?: boolean;
   /** Pointer-down handler for the resize handle. */
   onDragStart?: (e: React.PointerEvent) => void;
   /** Double-click handler to reset width to default. */
@@ -73,6 +75,7 @@ export function Sidebar({
   isRail = false,
   width,
   isDragging,
+  forceMountFeatureContent = false,
   onDragStart,
   onResetWidth,
   onOpenUpdateNotice,
@@ -98,8 +101,11 @@ export function Sidebar({
   const isPeek = peekState != null;
   // 副窗口默认完全隐藏侧栏。此时不挂载任务列表及其搜索 Provider，避免开窗
   // 首帧为了不可见内容发起两份大列表查询；展开、rail 与 peek 都仍需完整内容。
+  // 新建任务页会强制保留 feature owner：目录恢复必须原子更新该 renderer 的
+  // hidden snapshot 与 Project filter，不能退回跨窗口共享存储的无 owner 读改写。
   // 主窗口保持原有常驻挂载语义，避免改变切换与缓存体验。
-  const shouldMountFeatureContent = !isSecondaryWindow() || !isCollapsed || isPeek;
+  const shouldMountFeatureContent =
+    forceMountFeatureContent || !isSecondaryWindow() || !isCollapsed || isPeek;
 
   // 离开 peek 的交换帧必须禁用宽度过渡:peekClosing → idle(收起)时,aside 带着
   // 上一帧的 width=展开宽 回流为流内 width=0,若 transition-[width] 还挂着,这次
@@ -218,7 +224,7 @@ export function Sidebar({
               rail（收窄）态放不下,隐藏——rail 自身承担入口;展开后回归。
               完全隐藏态 w-0 自然裁掉。 */}
             {/* 任务列表页把「新建」以外的行搬进自己的列表滚动区(向上滚一起滚走,
-              对齐 Codex);此时这里只渲染固定的「新建」。其它视图仍整块渲染五行。 */}
+              对齐 Codex);此时这里只渲染固定的「新建」。其它视图仍整块渲染常驻行。 */}
             {!isRail && <SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />}
 
             {/* Upper: feature-injected content slot.

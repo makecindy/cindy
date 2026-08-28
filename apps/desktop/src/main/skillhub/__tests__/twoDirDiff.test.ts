@@ -1,11 +1,12 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const TEST_ROOT = '/tmp/xdt-two-dir-diff-test';
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-two-dir-diff-test-'));
 
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => '/tmp/xdt-two-dir-diff-test/userData') },
+  app: { getPath: vi.fn(() => path.join(TEST_ROOT, 'userData')) },
 }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),

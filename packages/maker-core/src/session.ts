@@ -16,6 +16,8 @@ import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import type { SessionGracefulStopState } from '@cindy/maker-shared/session-activity';
+export type { SessionGracefulStopState } from '@cindy/maker-shared/session-activity';
 import type {
   Effort,
   PermissionMode,
@@ -50,6 +52,11 @@ import type {
   SendOptions,
   TurnContinuationState,
 } from './agents/base-agent.js';
+import {
+  TurnDispatchRejectedError,
+  TurnDispatchUnconfirmedError,
+} from './agents/base-agent.js';
+import { formatManagedImageReferences } from './agents/shared/managed-image-reference.js';
 import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
@@ -107,6 +114,9 @@ export const STALL_ABORT_RECOVERY_GRACE_MS = 10_000;
  * 端到端最长不超过 15s(review #944 第十一轮末尾调优)。
  */
 export const MANUAL_ABORT_RECOVERY_GRACE_MS = 15_000;
+
+/** Shared confirmation budget for provider interrupt ACK and send acceptance. */
+const GRACEFUL_STOP_CONFIRMATION_TIMEOUT_MS = 5_000;
 
 /**
  * turn 零事件看门狗的计时分片长度。额度按片累加,片尾核对真实经过时间,
@@ -238,6 +248,29 @@ function redactNestedStrings(value: unknown, onChange: () => void): unknown {
   return copy;
 }
 
+/**
+ * Vision bridging replaces image blocks before the provider adapter sees them.
+ * Preserve the Host-managed attachment identities as ordinary per-turn text,
+ * without exposing them to the external vision backend or changing image bytes.
+ */
+function appendManagedImageReferences(
+  source: UserMessage,
+  bridged: UserMessage,
+): UserMessage {
+  const references = formatManagedImageReferences(source.content);
+  if (!references) return bridged;
+  if (typeof bridged.content === 'string') {
+    return {
+      ...bridged,
+      content: bridged.content ? `${bridged.content}\n${references}` : references,
+    };
+  }
+  return {
+    ...bridged,
+    content: [...bridged.content, { type: 'text', text: references }],
+  };
+}
+
 export interface SessionSendOptions extends SendOptions {
   /**
    * Turn reservation 建立后的原子准备钩子。
@@ -289,13 +322,62 @@ export interface SessionTurnLifecycleObserver {
  */
 export type SessionSendResult =
   | { accepted: true }
-  | { accepted: false; reason: 'cancelled-before-dispatch' };
+  | {
+      accepted: false;
+      reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
+    };
+
+export interface SessionTurnControlSnapshot {
+  active: boolean;
+  turnGeneration: number | null;
+  activeToolCount: number;
+  pendingInteractionCount: number;
+  gracefulStopState: SessionGracefulStopState;
+}
+
+export type SessionGracefulStopResult =
+  | { status: 'no-active-turn' }
+  | { status: 'unsupported'; reason: 'provider-not-supported' }
+  | { status: 'waiting-for-safe-point'; turnGeneration: number }
+  | { status: 'requested'; turnGeneration: number }
+  | { status: 'unconfirmed'; turnGeneration: number; reason: string };
+
+type TurnControlState = {
+  generation: number;
+  activeToolIds: Set<string>;
+  anonymousActiveTools: number;
+  pendingInteractionToolIds: Map<string, number>;
+  gracefulStopState: SessionGracefulStopState;
+  gracefulStopPromise: Promise<SessionGracefulStopResult> | null;
+};
 
 type SendReservation = {
+  generation: number;
   phase: 'accepting' | 'dispatching';
   cancelled: boolean;
   abortController: AbortController;
+  settled: Promise<SendReservationOutcome>;
+  settle(outcome: SendReservationOutcome): void;
+  gracefulStopPromise: Promise<SessionGracefulStopResult> | null;
 };
+
+type SendReservationOutcome = 'accepted' | 'undispatched' | 'unconfirmed';
+
+function createSendReservation(generation: number): SendReservation {
+  let resolveSettled!: (outcome: SendReservationOutcome) => void;
+  const settled = new Promise<SendReservationOutcome>((resolve) => {
+    resolveSettled = resolve;
+  });
+  return {
+    generation,
+    phase: 'accepting',
+    cancelled: false,
+    abortController: new AbortController(),
+    settled,
+    settle: resolveSettled,
+    gracefulStopPromise: null,
+  };
+}
 
 export class Session {
   readonly id: string;
@@ -374,6 +456,8 @@ export class Session {
   /** 已为哪个 turn 代号排过 abort 复核；同一 turn 上重复 abort 不重复排。 */
   private abortRecoveryScheduledFor: number | null = null;
   private lastEventType: string | null = null;
+  /** 优雅停止所需的 turn 控制事实；不承担 UI/MCP 会话状态投影。 */
+  private turnControlState: TurnControlState | null = null;
 
   constructor(opts: SessionOptions) {
     this.id = opts.id;
@@ -398,6 +482,7 @@ export class Session {
       // 等用户回应期间挂起 stall 看门狗:用户可能离开电脑很久,没有事件是正常的,
       // 中断这种 turn 等于把"等你决定"误判成"卡死"(见 DEFAULT_TURN_STALL_MS)。
       this.pendingInteractions += 1;
+      const interactionRuntime = this.observeInteractionStarted(req);
       this.clearTurnStallWatchdog();
       try {
         if (!this.interactionListener) {
@@ -413,6 +498,7 @@ export class Session {
         return await this.interactionListener(req);
       } finally {
         this.pendingInteractions = Math.max(0, this.pendingInteractions - 1);
+        this.observeInteractionSettled(interactionRuntime);
         this.armTurnStallWatchdog();
       }
     });
@@ -479,22 +565,20 @@ export class Session {
     if (this.sendReservation !== null) {
       throw this.createSessionRunningError();
     }
-    const reservation: SendReservation = {
-      phase: 'accepting',
-      cancelled: false,
-      abortController: new AbortController(),
-    };
-    this.sendReservation = reservation;
     // 新一轮 turn 的代号（见 turnGeneration）：看门狗的善后动作据此判断"还是不是那个
     // 卡死的 turn"，避免误杀宽限期内新起的健康 turn。
     const previousTurnGeneration = this.turnGeneration;
     this.turnGeneration += 1;
     const reservedTurnGeneration = this.turnGeneration;
+    const reservation = createSendReservation(reservedTurnGeneration);
+    this.sendReservation = reservation;
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
     let originInstalled = false;
     let turnDispatched = false;
+    let dispatchConfirmedUndispatched = false;
+    let dispatchUnconfirmed = false;
     let previousTurnOrigin: SendOrigin | null = null;
     let previousTurnAttemptToken: number | null = null;
     const turnLifecycleObserver = this.turnLifecycleObserver;
@@ -565,20 +649,37 @@ export class Session {
       originInstalled = true;
       this.startEventLoopIfNeeded();
       try {
+        this.beginTurnControl(reservedTurnGeneration);
         onDispatching?.();
         await this.handle.send(msg, {
           ...handleOpts,
           signal: reservation.abortController.signal,
         });
       } catch (e) {
+        if (e instanceof TurnDispatchRejectedError) {
+          // The provider returned a trustworthy rejection before accepting any
+          // work. This path is safe to reschedule and must not arm the
+          // ambiguous-tail drain used for unknown dispatch failures.
+          dispatchConfirmedUndispatched = true;
+          return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+        }
+        // Cancellation cannot downgrade an explicitly ambiguous provider result
+        // into "cancelled before dispatch"; that would skip the mandatory
+        // transport fence and could leave accepted work running invisibly.
+        if (e instanceof TurnDispatchUnconfirmedError) throw e;
         if (reservation.cancelled) {
           return { accepted: false, reason: 'cancelled-before-dispatch' };
         }
         throw e;
       }
-      if (reservation.cancelled) {
-        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      if (reservation.cancelled && (this.terminationStarted || this.closePromise)) {
+        throw new TurnDispatchUnconfirmedError(
+          `Session ${this.id} terminated before provider acceptance could be reconciled`,
+        );
       }
+      // A resolved handle.send is the provider-acceptance boundary. A signal
+      // racing after that point may request abort, but cannot rewrite history
+      // and report the turn as undispatched.
       turnDispatched = true;
       // turn 真正开始跑 → 起 stall 看门狗。后续每个事件都会重置它，done / 终态
       // error 会清掉它（见 armTurnStallWatchdog）。
@@ -587,6 +688,19 @@ export class Session {
     } catch (e) {
       if (this.sendReservation === reservation) {
         this.sendReservation = null;
+      }
+      if (e instanceof TurnDispatchUnconfirmedError) {
+        dispatchUnconfirmed = true;
+        // Reserve Session shutdown before closing the handle. This suppresses
+        // a synthetic terminal event from transport teardown and fences any
+        // late provider activity before the orchestrator reports blocked.
+        if (originInstalled && !turnDispatched) {
+          this.currentTurnOrigin = previousTurnOrigin;
+          this.currentTurnAttemptToken = previousTurnAttemptToken;
+          this.turnGeneration = previousTurnGeneration;
+          originInstalled = false;
+        }
+        await this.close();
       }
       throw e;
     } finally {
@@ -608,13 +722,12 @@ export class Session {
         this.currentTurnOrigin = previousTurnOrigin;
         this.currentTurnAttemptToken = previousTurnAttemptToken;
         this.turnGeneration = previousTurnGeneration;
-        // runEventLoop may already be awaiting the failed generation. Reusing
-        // the rolled-back generation immediately creates an ABA window where
-        // a delayed terminal event from this failed dispatch can claim the
-        // next turn's origin/token. Reuse the existing bounded tail fence:
-        // an old terminal event releases it; no tail closes the ambiguous
-        // Session so Maker can rebuild before the next send.
-        this.armTerminalErrorDrain(previousTurnGeneration);
+        // Confirmed provider rejection cannot produce a turn tail, so it may
+        // immediately reuse the rolled-back generation. Other failures retain
+        // the bounded tail fence before another turn can enter.
+        if (!dispatchConfirmedUndispatched) {
+          this.armTerminalErrorDrain(previousTurnGeneration);
+        }
       }
       if (turnLifecyclePrepared && !turnDispatched) {
         try {
@@ -626,6 +739,10 @@ export class Session {
           });
         }
       }
+      if (!turnDispatched) this.clearTurnControl(reservedTurnGeneration);
+      reservation.settle(
+        turnDispatched ? 'accepted' : dispatchUnconfirmed ? 'unconfirmed' : 'undispatched',
+      );
     }
   }
 
@@ -641,7 +758,7 @@ export class Session {
         signal,
         sessionId: this.id,
       });
-      if (bridged.applied) return bridged.message;
+      if (bridged.applied) return appendManagedImageReferences(msg, bridged.message);
       if (bridged.note) {
         // 无论 applied 与否，note（fallback 生效 / 视觉桥不可用）都上报，避免静默。
         this.logger.info('vision bridge note', { sessionId: this.id, note: bridged.note });
@@ -711,6 +828,130 @@ export class Session {
         this.setStatus('active');
       }
     }
+  }
+
+  getTurnControlSnapshot(): SessionTurnControlSnapshot {
+    const control = this.turnControlState;
+    if (!control) {
+      return {
+        active: false,
+        turnGeneration: null,
+        activeToolCount: 0,
+        pendingInteractionCount: 0,
+        gracefulStopState: 'none',
+      };
+    }
+    return {
+      active: true,
+      turnGeneration: control.generation,
+      activeToolCount: control.activeToolIds.size + control.anonymousActiveTools,
+      pendingInteractionCount: [...control.pendingInteractionToolIds.values()]
+        .reduce((sum, count) => sum + count, 0),
+      gracefulStopState: control.gracefulStopState,
+    };
+  }
+
+  async requestGracefulStop(): Promise<SessionGracefulStopResult> {
+    const reservation = this.sendReservation;
+    if (reservation) return this.requestGracefulStopForReservation(reservation);
+    const control = this.turnControlState;
+    if (!control || control.generation !== this.turnGeneration || !this.isHandleTurnRunning()) {
+      return { status: 'no-active-turn' };
+    }
+    if (!this.handle.requestGracefulStop) {
+      return { status: 'unsupported', reason: 'provider-not-supported' };
+    }
+    if (control.gracefulStopPromise) return control.gracefulStopPromise;
+    if (control.gracefulStopState === 'requested') {
+      return { status: 'requested', turnGeneration: control.generation };
+    }
+    if (control.gracefulStopState === 'unconfirmed') {
+      return {
+        status: 'unconfirmed',
+        turnGeneration: control.generation,
+        reason: 'provider-did-not-confirm',
+      };
+    }
+    if (!this.isGracefulStopSafePoint(control)) {
+      control.gracefulStopState = 'waiting-for-safe-point';
+      return { status: 'waiting-for-safe-point', turnGeneration: control.generation };
+    }
+    return this.issueGracefulStop(control);
+  }
+
+  /** Fence a graceful stop against input that the provider has not accepted yet. */
+  private requestGracefulStopForReservation(
+    reservation: SendReservation,
+  ): Promise<SessionGracefulStopResult> {
+    if (reservation.gracefulStopPromise) return reservation.gracefulStopPromise;
+    this.cancelSendReservation(reservation);
+    const control = this.turnControlState;
+    if (control?.generation === reservation.generation) control.gracefulStopState = 'requesting';
+
+    const result = this.waitForSendReservationSettlement(reservation).then(async (outcome) => {
+      const currentControl = this.turnControlState;
+      if (outcome === 'undispatched') {
+        if (currentControl?.generation === reservation.generation) {
+          currentControl.gracefulStopState = 'requested';
+        }
+        return { status: 'requested', turnGeneration: reservation.generation } as const;
+      }
+      if (outcome === 'unconfirmed' || outcome === 'timeout') {
+        if (currentControl?.generation === reservation.generation) {
+          currentControl.gracefulStopState = 'unconfirmed';
+        }
+        return {
+          status: 'unconfirmed',
+          turnGeneration: reservation.generation,
+          reason: outcome === 'timeout'
+            ? 'provider-acceptance-timeout'
+            : 'provider-acceptance-unconfirmed',
+        } as const;
+      }
+
+      // The provider accepted while cancellation raced; only its own soft-interrupt ACK can
+      // confirm the stop from this point onward.
+      if (
+        !currentControl ||
+        currentControl.generation !== reservation.generation ||
+        !this.isHandleTurnRunning()
+      ) {
+        return { status: 'requested', turnGeneration: reservation.generation } as const;
+      }
+      if (!this.handle.requestGracefulStop) {
+        return { status: 'unsupported', reason: 'provider-not-supported' } as const;
+      }
+      if (!this.isGracefulStopSafePoint(currentControl)) {
+        currentControl.gracefulStopState = 'waiting-for-safe-point';
+        return {
+          status: 'waiting-for-safe-point',
+          turnGeneration: currentControl.generation,
+        } as const;
+      }
+      return this.issueGracefulStop(currentControl);
+    });
+    reservation.gracefulStopPromise = result;
+    return result;
+  }
+
+  private waitForSendReservationSettlement(
+    reservation: SendReservation,
+  ): Promise<SendReservationOutcome | 'timeout'> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve('timeout');
+      }, GRACEFUL_STOP_CONFIRMATION_TIMEOUT_MS);
+      (timeout as unknown as { unref?: () => void }).unref?.();
+      void reservation.settled.then((outcome) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(outcome);
+      });
+    });
   }
 
   /**
@@ -789,6 +1030,7 @@ export class Session {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
+      this.turnControlState = null;
       this.eventListeners.clear();
       this.interactionListener = null;
       if (closeSucceeded) {
@@ -810,21 +1052,30 @@ export class Session {
     // （vision bridge 等前置 hook 的 fetch），而不是等 handle.detach()/视觉通道超时——
     // 否则 handle.detach() 慢/挂起时，in-flight 视觉请求会继续拖住退出链。
     this.cancelSendReservation(this.sendReservation);
+    let detachSucceeded = false;
     try {
       if (this.handle.detach) {
         await this.handle.detach();
       } else {
         await this.handle.close();
       }
+      detachSucceeded = true;
     } finally {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
+      this.turnControlState = null;
       this.clearTerminalErrorDrain();
-      this.setStatus('closed');
       this.eventListeners.clear();
-      this.statusListeners.clear();
       this.interactionListener = null;
+      if (detachSucceeded) {
+        this.setStatus('closed');
+        this.statusListeners.clear();
+      } else {
+        // Shutdown must retain Maker's status listener and active-session owner
+        // until a later detach/close attempt confirms the process is gone.
+        this.setStatus('error');
+      }
     }
   }
 
@@ -1300,6 +1551,154 @@ export class Session {
     void this.runEventLoop();
   }
 
+  private beginTurnControl(generation: number): void {
+    this.turnControlState = {
+      generation,
+      activeToolIds: new Set(),
+      anonymousActiveTools: 0,
+      pendingInteractionToolIds: new Map(),
+      gracefulStopState: 'none',
+      gracefulStopPromise: null,
+    };
+  }
+
+  private clearTurnControl(generation: number): void {
+    if (this.turnControlState?.generation === generation) this.turnControlState = null;
+  }
+
+  /**
+   * Provider 的权限/提问/计划确认会直接经过 InteractionResolver，不保证另发
+   * interaction_request event。这里从权威入口更新探针，并把“尚未执行、正在等用户”
+   * 视为优雅停止安全点，避免 stop 永久等不到该工具的 result。
+   */
+  private observeInteractionStarted(
+    request: InteractionRequest,
+  ): { control: TurnControlState; toolUseId: string | null } | null {
+    const control = this.turnControlState;
+    if (!control || control.generation !== this.turnGeneration) return null;
+    const toolUseId = request.toolUseId?.trim() || null;
+    if (toolUseId) {
+      control.pendingInteractionToolIds.set(
+        toolUseId,
+        (control.pendingInteractionToolIds.get(toolUseId) ?? 0) + 1,
+      );
+    }
+    if (
+      control.gracefulStopState === 'waiting-for-safe-point' &&
+      this.isGracefulStopSafePoint(control)
+    ) {
+      void this.issueGracefulStop(control);
+    }
+    return { control, toolUseId };
+  }
+
+  private observeInteractionSettled(
+    observation: { control: TurnControlState; toolUseId: string | null } | null,
+  ): void {
+    if (!observation || this.turnControlState !== observation.control) return;
+    const { control, toolUseId } = observation;
+    if (toolUseId) {
+      const remaining = (control.pendingInteractionToolIds.get(toolUseId) ?? 0) - 1;
+      if (remaining > 0) control.pendingInteractionToolIds.set(toolUseId, remaining);
+      else control.pendingInteractionToolIds.delete(toolUseId);
+    }
+  }
+
+  private isGracefulStopSafePoint(control: TurnControlState): boolean {
+    if (control.anonymousActiveTools > 0) return false;
+    return (
+      control.activeToolIds.size === 0 ||
+      [...control.activeToolIds].every((id) => control.pendingInteractionToolIds.has(id))
+    );
+  }
+
+  private issueGracefulStop(control: TurnControlState): Promise<SessionGracefulStopResult> {
+    if (control.gracefulStopPromise) return control.gracefulStopPromise;
+    control.gracefulStopState = 'requesting';
+    const abortController = new AbortController();
+    const request = Promise.resolve().then(() =>
+      this.handle.requestGracefulStop!({ signal: abortController.signal }),
+    );
+    const result = new Promise<SessionGracefulStopResult>((resolve) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        settled = true;
+        abortController.abort();
+        if (this.turnControlState === control) control.gracefulStopState = 'unconfirmed';
+        resolve({
+          status: 'unconfirmed',
+          turnGeneration: control.generation,
+          reason: 'provider-confirmation-timeout',
+        });
+      }, GRACEFUL_STOP_CONFIRMATION_TIMEOUT_MS);
+      (timeout as unknown as { unref?: () => void }).unref?.();
+      void request.then(
+        () => {
+          clearTimeout(timeout);
+          if (settled) return;
+          settled = true;
+          if (this.turnControlState === control) control.gracefulStopState = 'requested';
+          resolve({ status: 'requested', turnGeneration: control.generation });
+        },
+        (error) => {
+          clearTimeout(timeout);
+          if (settled) return;
+          settled = true;
+          if (this.turnControlState === control) control.gracefulStopState = 'unconfirmed';
+          this.logger.warn('graceful stop request failed', {
+            turnGeneration: control.generation,
+            error: String(error),
+          });
+          resolve({
+            status: 'unconfirmed',
+            turnGeneration: control.generation,
+            reason: 'provider-request-failed',
+          });
+        },
+      );
+    });
+    control.gracefulStopPromise = result;
+    return result;
+  }
+
+  private observeTurnControl(event: AgentEvent, observedGeneration: number): void {
+    const control = this.turnControlState;
+    if (!control || control.generation !== observedGeneration || event.turnScope === 'background') return;
+    const data = event.data && typeof event.data === 'object'
+      ? event.data as Record<string, unknown>
+      : {};
+    if (event.type === 'tool_use') {
+      const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : null;
+      // Some providers expose display-only tool-shaped snapshots (for example,
+      // Codex native plan updates). They have no matching tool_result and must
+      // not occupy the graceful-stop safe-point lifecycle.
+      if (data.runtimeActivity === 'snapshot') {
+        return;
+      }
+      if (toolUseId) control.activeToolIds.add(toolUseId);
+      else control.anonymousActiveTools += 1;
+      return;
+    }
+    if (event.type === 'tool_result_full' || event.type === 'tool_result') {
+      const ids = [
+        ...(typeof data.toolUseId === 'string' ? [data.toolUseId] : []),
+        ...(Array.isArray(data.toolUseIds)
+          ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
+          : []),
+      ];
+      for (const id of ids) control.activeToolIds.delete(id);
+      if (ids.length === 0 && control.anonymousActiveTools > 0) {
+        control.anonymousActiveTools -= 1;
+      }
+      if (
+        this.isGracefulStopSafePoint(control) &&
+        control.gracefulStopState === 'waiting-for-safe-point'
+      ) {
+        void this.issueGracefulStop(control);
+      }
+    }
+  }
+
   /**
    * 事件 fan-out 的唯一出口(真实事件与看门狗合成的事件共用)。三件事都收在这里,
    * 保证两条来路语义一致 —— origin 打标、订阅者分发、stall 看门狗记账。
@@ -1314,6 +1713,7 @@ export class Session {
     if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
     const isCurrentGeneration = observedGeneration === this.turnGeneration;
+    this.observeTurnControl(event, observedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
     if (!isBackgroundEvent && isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
@@ -1367,6 +1767,9 @@ export class Session {
       this.clearTerminalErrorDrain();
     }
     const listenerEvent = redactEventForListeners(event);
+    if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
+      this.clearTurnControl(observedGeneration);
+    }
     if (isTerminal && !isBackgroundEvent) {
       try {
         const pending = this.turnLifecycleObserver?.onTerminal({
@@ -1688,8 +2091,9 @@ export class Session {
           // clear that fence. The fence itself prevents any later generation entering.
           observedGeneration = this.turnGeneration;
         }
+        if (this.terminationStarted) continue;
         // origin 打标与终态清理都收在 fanOutEvent 里（看门狗合成的事件共用同一语义，
-        // 见那里的注释）。
+        // 见那里的注释）。关闭门一旦占住，旧 handle 的迟到事件不得再改写业务状态。
         this.fanOutEvent(event, observedGeneration);
       }
     } catch (e) {
@@ -1753,6 +2157,7 @@ export class Session {
     this.sendReservation = null;
     this.currentTurnOrigin = null;
     this.currentTurnAttemptToken = null;
+    this.turnControlState = null;
     this.setStatus('closed');
     this.eventListeners.clear();
     this.statusListeners.clear();

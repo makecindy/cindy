@@ -227,7 +227,7 @@ describe('messageRenderModel', () => {
     expect(todo.todos).toEqual([{ content: 'Implement', status: 'completed', activeForm: undefined }]);
   });
 
-  it('counts restored thinking duration in completed work groups', () => {
+  it('anchors completed work duration to the user message like desktop', () => {
     const items = buildMobileMessageRenderItems([
       message({ id: 'user', role: 'user', content: 'start', createdAt: at(1) }),
       message({
@@ -241,7 +241,7 @@ describe('messageRenderModel', () => {
 
     expect(items.map((item) => item.type)).toEqual(['message', 'work_group', 'message']);
     const group = expectType(items[1], 'work_group');
-    expect(group.durationMs).toBe(23_000);
+    expect(group.durationMs).toBe(24_000);
   });
 
   it('keeps unfinished trailing work visible when no final assistant answer exists yet', () => {

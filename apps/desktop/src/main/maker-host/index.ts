@@ -16,11 +16,12 @@ import {
   ClaudeCodeAgent,
   CodexAgent,
   configureDefaultImageResizer,
-  type AutoReviewRequest,
   type McpProvider,
 } from '@cindy/maker-core';
+import type { ProviderView } from '@cindy/model-providers';
 import {
   getActiveCatalog,
+  getLocalCatalogOverridesSnapshot,
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
 } from './active-catalog.js';
@@ -89,6 +90,7 @@ import {
   resolveRemotePiBinaryPath,
 } from './pi-remote-transport.js';
 import { ensurePiManagerInstalled } from './pi-manager-client.js';
+import { createPiRemoteProviderForwardLease } from './pi-remote-provider-forward.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { routeInjectedRemoteMcpApprovalsThroughCindy } from './remote-claude-permission-mode.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
@@ -110,6 +112,7 @@ import { buildPiAgent } from './pi-host.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
+  getDesktopProviderService,
   reloadActiveCatalogForEndpointChange,
   refreshDiscoveredCodexModels,
   setNativeProviderClaimListener,
@@ -131,9 +134,11 @@ import {
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
-import { findCatalogModel, resolveAutoReviewBudget } from './auto-review-budget.js';
-import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
-import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
+import {
+  AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
+  createAutoReviewModelRouter,
+} from './auto-review-model-router.js';
+import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   armCodexHttpRecovery,
@@ -216,7 +221,10 @@ import {
 } from './codex-gateway-config.js';
 import {
   buildCodexSubagentSpawnArgs,
+  codexSubagentRouteResolutionFailed,
   resolveCodexSubagentModelFallback,
+  resolveCodexSubagentHostCredentialPlan,
+  resolveCodexSubagentRouteSnapshot,
 } from './codex-subagent-config.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
@@ -259,20 +267,6 @@ let _maker: Maker | null = null;
 /** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
 let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
 
-/**
- * 本次审核请求的额度。按模型能力自适应:能关思考的走紧凑档,强制思考的
- * (以及目录里查不到的)给足思考+结论的空间 —— 固定 384 token 会让 DeepSeek
- * 这类模型正文恒为空。详见 auto-review-budget.ts。
- */
-function autoReviewBudgetFor(request: AutoReviewRequest) {
-  return resolveAutoReviewBudget(findCatalogModel(
-    getActiveCatalog().providers,
-    request.providerId,
-    request.agentKind,
-    request.model,
-  ));
-}
-
 let providerAccessRuntimeRefreshListener: (() => void) | null = null;
 
 /** Register the bootstrap-owned runtime reconciliation that follows provider access changes. */
@@ -280,24 +274,15 @@ export function setProviderAccessRuntimeRefreshListener(listener: (() => void) |
   providerAccessRuntimeRefreshListener = listener;
 }
 
+const requestAutoReviewText = createAutoReviewModelRouter({
+  logger: desktopMakerLogger,
+});
+
 const reviewAutoPermissionAction = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
-  // 重试守卫必须按同一份额度计时,否则放宽额度的那一档会被自己的守卫切断。
-  resolveRequestTimeoutMs: (request) => autoReviewBudgetFor(request).timeoutMs,
-  requestText: async (request, prompt) => {
-    const maker = _maker;
-    if (!maker) return null;
-    const budget = autoReviewBudgetFor(request);
-    const result = await requestUtilityText(maker, prompt, {
-      providerId: request.providerId?.trim() || undefined,
-      agentKind: request.agentKind,
-      model: request.model,
-      maxTokens: budget.maxTokens,
-      timeoutMs: budget.timeoutMs,
-      ...(budget.reasoningEffort ? { reasoningEffort: budget.reasoningEffort } : {}),
-    });
-    return result.ok ? result.text : null;
-  },
+  managesRetries: true,
+  resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
+  requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
 });
 
 /**
@@ -1444,23 +1429,107 @@ export function getMaker(): Maker {
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
         const subagentModelSettings = readSubagentModelSettings();
-        const subagentModelFallback = resolveCodexSubagentModelFallback(
-          subagentModelSettings,
-          ctx.remoteHostId,
-        );
+        const subagentModelFallback = !isReview
+          ? resolveCodexSubagentModelFallback(subagentModelSettings, ctx.remoteHostId)
+          : undefined;
+        let subagentProviderViews: ProviderView[] | undefined;
+        if (
+          !isReview
+          && !ctx.remoteHostId
+          && subagentModelSettings.codexSubagentsEnabled
+          && subagentModelSettings.codex?.trim()
+        ) {
+          // 显式来源同样必须按当前目录严格校验；读取失败时保留空数组，令下面的路由
+          // 解析 fail-closed，而不是信任可能已经断连或删除模型的旧设置。
+          subagentProviderViews = [];
+          try {
+            subagentProviderViews = await getDesktopProviderService().listProviders({
+              allowSideEffects: false,
+            });
+          } catch (err) {
+            desktopMakerLogger.warn('Codex implicit subagent Provider resolution failed', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        let subagentRoute = !isReview
+          ? resolveCodexSubagentRouteSnapshot(
+              subagentModelSettings,
+              ctx.remoteHostId,
+              subagentProviderViews,
+            )
+          : undefined;
+        let forceDisableSubagents = false;
+        if (codexSubagentRouteResolutionFailed(subagentModelSettings, subagentRoute, {
+          remoteHostId: ctx.remoteHostId,
+          isReview,
+        })) {
+          // 未显式保存 Provider 时依赖目录做隐式解析。解析失败不能继承父任务来源继续
+          // 运行，否则默认子代理模型会静默跑到错误上游。
+          desktopMakerLogger.warn(
+            'Codex subagents disabled: configured model Provider route could not be resolved',
+            { catalogModel: subagentModelSettings.codex?.trim() },
+          );
+          forceDisableSubagents = true;
+        } else if (subagentRoute && !ready) {
+          // proxy 未就绪时 fallback 会直连真实 Gateway，无法兑现冻结的 Provider、
+          // upstream、鉴权与模型恢复。fail-closed：本 app-server 关闭子代理，父任务
+          // 仍可沿既有 Gateway fallback 工作；路由快照也不注册。
+          desktopMakerLogger.warn(
+            'Codex subagents disabled: configured Provider route requires unavailable proxy',
+            { providerId: subagentRoute.providerId, catalogModel: subagentRoute.catalogModel },
+          );
+          forceDisableSubagents = true;
+          subagentRoute = undefined;
+        } else if (subagentRoute) {
+          const selectedRouting = subagentProviderViews
+            ?.find((provider) => provider.id === subagentRoute?.providerId)
+            ?.routing.codex;
+          const hasRequiredOAuth = selectedRouting?.authStrategy === 'oauth-passthrough'
+            ? await desktopCodexAuthAdapter.hasCodexOAuthLogin().catch(() => false)
+            : false;
+          const credentialPlan = resolveCodexSubagentHostCredentialPlan(
+            subagentRoute,
+            subagentProviderViews,
+            credentialMode,
+            hasRequiredOAuth,
+          );
+          if (credentialPlan.forceDisableSubagents) {
+            desktopMakerLogger.warn(
+              'Codex subagents disabled: configured Provider route requires unavailable ChatGPT OAuth',
+              { providerId: subagentRoute.providerId, catalogModel: subagentRoute.catalogModel },
+            );
+            forceDisableSubagents = true;
+            subagentRoute = undefined;
+          } else if (credentialPlan.requiredSpawnCredentialMode) {
+            return {
+              extraArgs: [],
+              extraEnv: {},
+              requiredSpawnCredentialMode: credentialPlan.requiredSpawnCredentialMode,
+              codexProxyActive: ready,
+            };
+          }
+        }
+        const openAiWebSocketsEnabled = !subagentRoute;
         return {
           // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
           // model/list 无影响,不加 hostPurpose 分支。
           extraArgs: [
             ...mcpExtraArgs,
-            ...(!isReview ? buildCodexSubagentSpawnArgs(subagentModelSettings) : []),
-            ...buildCodexProxySpawnArgs(endpoint, authInjection),
+            ...(!isReview && !ctx.remoteHostId
+              ? buildCodexSubagentSpawnArgs(subagentModelSettings, subagentRoute, {
+                  forceDisableSubagents,
+                })
+              : []),
+            ...buildCodexProxySpawnArgs(endpoint, authInjection, { openAiWebSocketsEnabled }),
           ],
           extraEnv: mcpExtraEnv,
           ...(subagentModelFallback ? { subagentModelFallback } : {}),
+          ...(subagentRoute ? { subagentRoute } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
+          codexOpenAiWebSocketsEnabled: useOAuthBearer && ready && openAiWebSocketsEnabled,
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
           ...(browserCompanion?.status === 'ready'
             ? {
@@ -1508,8 +1577,13 @@ export function getMaker(): Maker {
       },
       unregisterCodexMcpThreadContext,
       prepareCodexResumeSession: prepareExternalCodexSessionForResume,
-      registerCodexSystemPromptForThread: ({ sessionId, threadId, text }) =>
-        registerCodexProxyComposed(sessionId, threadId, text),
+      registerCodexSystemPromptForThread: ({
+        sessionId,
+        threadId,
+        text,
+        subagentRoute,
+      }) =>
+        registerCodexProxyComposed(sessionId, threadId, text, { subagentRoute }),
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);
@@ -1729,7 +1803,9 @@ export function getMaker(): Maker {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
-        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId),
+        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId, {
+          localOverrides: getLocalCatalogOverridesSnapshot(),
+        }),
       resolvePiGatewayModelDescriptor: (providerId, modelId) => {
         // `cindy` / null 是 Pi 的默认 gateway 路由；其 wire 由 v3 XD runtime plan
         // 决定，因此描述符也必须锁定 XD，不能让复合 `cindy` 按目录顺序命中同 id 订阅模型。
@@ -1737,6 +1813,7 @@ export function getMaker(): Maker {
           getDesktopSelectableCatalog(),
           resolvePiGatewayDescriptorProviderId(providerId),
           modelId,
+          { localOverrides: getLocalCatalogOverridesSnapshot() },
         );
       },
       mcpProviders: piMcpProviders,
@@ -1760,7 +1837,19 @@ export function getMaker(): Maker {
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
       // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
       // 远端机器没在 pool / 未连接 → 抛错, PiAgent 把它当 startSession 失败传上去。
-      getRemotePiTransport: async (remoteHostId, { binaryPath: _localBinaryPath, remoteBinaryPath: providedRemoteBinaryPath, args, cwd, env, logger, sessionId }) => {
+      getRemotePiTransport: async (
+        remoteHostId,
+        {
+          binaryPath: _localBinaryPath,
+          remoteBinaryPath: providedRemoteBinaryPath,
+          args,
+          cwd,
+          env,
+          logger,
+          sessionId,
+          hostProxyForwards,
+        },
+      ) => {
         const remoteHost = getRemoteSshPool().get(remoteHostId);
         if (!remoteHost) {
           throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
@@ -1799,15 +1888,53 @@ export function getMaker(): Maker {
             });
           }
         });
-        return createSshPiDaemonTransport({
-          remoteHost,
-          binaryPath: remoteBinaryPath,
-          args,
-          cwd,
-          env,
-          logger,
-          daemonSessionId: sessionId ?? undefined,
-        });
+        const providerForwardLease = createPiRemoteProviderForwardLease(
+          (spec) => remoteHost.ensureRemoteForward(spec),
+        );
+        try {
+          for (const spec of hostProxyForwards ?? []) {
+            await providerForwardLease.ensure(spec);
+          }
+        } catch (error) {
+          await Promise.allSettled([providerForwardLease.releaseAll()]);
+          throw error;
+        }
+        let transport;
+        try {
+          transport = createSshPiDaemonTransport({
+            remoteHost,
+            binaryPath: remoteBinaryPath,
+            args,
+            cwd,
+            env,
+            logger,
+            daemonSessionId: sessionId ?? undefined,
+          });
+        } catch (error) {
+          await providerForwardLease.releaseAll();
+          throw error;
+        }
+        transport.ensureHostProxyForward = providerForwardLease.ensure;
+        if (transport.killRemoteSession) {
+          const killRemoteSession = transport.killRemoteSession.bind(transport);
+          transport.killRemoteSession = async () => {
+            try {
+              await killRemoteSession();
+            } finally {
+              await providerForwardLease.releaseAll();
+            }
+          };
+        } else {
+          const close = transport.close.bind(transport);
+          transport.close = async (reason?: string) => {
+            try {
+              await close(reason);
+            } finally {
+              await providerForwardLease.releaseAll();
+            }
+          };
+        }
+        return transport;
       },
       // 远端 Pi 的 agentHome 文件操作:models.json / extensions / perm / subagent 快照 /
       // resume stat 都落到远端机器(pi 进程在远端读)。经 SSH stdin 管道写文件(cat > 原子
@@ -1912,14 +2039,8 @@ export function getMaker(): Maker {
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
         prepareStartOptions: async (sessionId, opts) => {
-          const providerScopeKey = activeOwnerScopeKey();
-          const providerReady =
-            await accountProviderReadinessBarrier.waitForScope(providerScopeKey);
-          if (
-            !providerReady ||
-            activeOwnerScopeKey() !== providerScopeKey ||
-            isAppSessionBoundaryPending()
-          ) {
+          const providerReady = await ensureCurrentAccountProviderReadiness();
+          if (!providerReady) {
             throw new Error('Account provider models are not ready for this app session; retry.');
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);

@@ -104,6 +104,27 @@ describe('useComposerSendFocusRestore', () => {
     expect(editor.state.selection.to).toBe(6);
   });
 
+  it('keeps the intent captured before the first lock when a later capture observes blurred state', () => {
+    const editor = createEditor();
+    const hook = renderRestoreHook(editor);
+
+    focusComposerSelection(editor);
+    act(() => {
+      hook.result.current();
+    });
+    hook.rerender({ composerMutationLocked: true, sendDispatchInFlight: true });
+    act(() => editor.view.dom.blur());
+    // dispatchSend captures a second time after the lock stole focus; this must
+    // not overwrite the intent captured while the composer was still focused.
+    act(() => {
+      hook.result.current();
+    });
+    hook.rerender({ composerMutationLocked: false, sendDispatchInFlight: false });
+    flushAnimationFrames();
+
+    expect(document.activeElement).toBe(editor.view.dom);
+  });
+
   it('keeps the restore intent until every composer lock is released', () => {
     const editor = createEditor();
     const hook = renderRestoreHook(editor);

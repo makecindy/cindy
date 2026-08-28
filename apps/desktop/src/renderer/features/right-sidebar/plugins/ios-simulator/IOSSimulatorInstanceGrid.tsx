@@ -14,6 +14,7 @@ import {
   Send,
   Smartphone,
   UnlockKeyhole,
+  type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -27,6 +28,7 @@ import type {
   IOSSimulatorSessionStatus,
   IOSSimulatorToolResponse,
 } from '../../../../../shared/iosSimulatorIpc';
+import { Tip } from '@/components/ui/tooltip';
 
 interface IOSSimulatorInstanceGridProps {
   sessionId: string;
@@ -64,6 +66,52 @@ interface TileGesture {
   startClientY: number;
   startXRatio: number;
   startYRatio: number;
+}
+
+function SimulatorIconButton({
+  icon: Icon,
+  label,
+  disabled = false,
+  disabledLabel,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  disabled?: boolean;
+  disabledLabel?: string;
+  onClick: () => void;
+}) {
+  const accessibleLabel = disabled && disabledLabel ? `${label} — ${disabledLabel}` : label;
+  const button = (
+    <button
+      type="button"
+      aria-label={label}
+      aria-hidden={disabled ? true : undefined}
+      disabled={disabled}
+      onClick={onClick}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+    >
+      <Icon size={12} aria-hidden="true" />
+    </button>
+  );
+
+  return (
+    <Tip text={accessibleLabel} side="bottom">
+      {disabled ? (
+        <span
+          role="button"
+          aria-disabled="true"
+          aria-label={accessibleLabel}
+          tabIndex={0}
+          className="inline-flex rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {button}
+        </span>
+      ) : (
+        button
+      )}
+    </Tip>
+  );
 }
 
 function routeFor(instance: IOSSimulatorPublicInstance) {
@@ -513,6 +561,10 @@ export function IOSSimulatorInstanceGrid({
           const agentBusy = agentBusyInstanceIds.has(instance.instanceId);
           const routeInvalidated = invalidatedRouteKeys[instance.instanceId] === routeKey(instance);
           const busy = isTileBusy(instance);
+          const controlsUnavailableLabel = agentBusy
+            ? t('rightSidebar.iosSimulator.agentBusyDescription')
+            : t('rightSidebar.iosSimulator.controlsUnavailable');
+          const textToSend = tileText[instance.instanceId] ?? '';
           const error = tileErrors[instance.instanceId];
           return (
             <article
@@ -581,28 +633,29 @@ export function IOSSimulatorInstanceGrid({
                     className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface)] pl-7 pr-2 text-10 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
                   />
                 </div>
-                <button
-                  type="button"
-                  aria-label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.sendText')}`}
-                  disabled={busy || !(tileText[instance.instanceId] ?? '')}
+                <SimulatorIconButton
+                  icon={Send}
+                  label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.sendText')}`}
+                  disabled={busy || !textToSend}
+                  disabledLabel={
+                    busy
+                      ? controlsUnavailableLabel
+                      : t('rightSidebar.iosSimulator.enterTextBeforeSending')
+                  }
                   onClick={() => void sendTileText(instance)}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-                >
-                  <Send size={12} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.pressHome')}`}
+                />
+                <SimulatorIconButton
+                  icon={House}
+                  label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.pressHome')}`}
                   disabled={busy}
+                  disabledLabel={controlsUnavailableLabel}
                   onClick={() => void callTile(instance, 'press_home', {})}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-                >
-                  <House size={12} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.rotateDevice')}`}
+                />
+                <SimulatorIconButton
+                  icon={RotateCw}
+                  label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.rotateDevice')}`}
                   disabled={busy}
+                  disabledLabel={controlsUnavailableLabel}
                   onClick={() =>
                     void callTile(instance, 'set_orientation', {
                       orientation:
@@ -611,28 +664,21 @@ export function IOSSimulatorInstanceGrid({
                           : 'LANDSCAPE',
                     })
                   }
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-                >
-                  <RotateCw size={12} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.lockScreen')}`}
+                />
+                <SimulatorIconButton
+                  icon={LockKeyhole}
+                  label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.lockScreen')}`}
                   disabled={busy}
+                  disabledLabel={controlsUnavailableLabel}
                   onClick={() => void callTile(instance, 'lock_screen', {})}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-                >
-                  <LockKeyhole size={12} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.unlockScreen')}`}
+                />
+                <SimulatorIconButton
+                  icon={UnlockKeyhole}
+                  label={`${instance.simulatorName} ${t('rightSidebar.iosSimulator.unlockScreen')}`}
                   disabled={busy}
+                  disabledLabel={controlsUnavailableLabel}
                   onClick={() => void callTile(instance, 'unlock_screen', {})}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-                >
-                  <UnlockKeyhole size={12} aria-hidden="true" />
-                </button>
+                />
               </div>
               {agentBusy && (
                 <div className="border-t border-[var(--border-default)] px-2 py-1 text-10 text-[var(--warning-accent)]">

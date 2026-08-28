@@ -36,6 +36,10 @@ import {
 } from './modelsSyncRefresh.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { hasAuthSessionIdentityChanged } from './authSessionIdentity.js';
+import {
+  listExecutableMediaModels,
+  resetExecutableMediaModelCache,
+} from './mediaModels.js';
 export { isModelAccessReady } from './readiness.js';
 
 const log = createLogger('modelAccess');
@@ -125,9 +129,11 @@ function broadcastStatus(status: ModelAccessStatus): void {
 }
 
 // ─── XD 网关模型目录同步(`/models` 是模型、能力与价格的唯一事实源)─────────
-// 凭据同步成功后从 model-access-server 拉 GET /models(AIGateway /model-groups
-// 的 mode=chat 投影),整体重建 xd 供应商的模型列表(active-catalog
-// setXdGatewayModels)。拉取失败保留最后一次完整成功快照；成功空列表同时清空模型和价格。
+// 凭据同步成功后从 model-access-server 拉现有 GET /models：聊天模型与
+// 媒体模型都来自同一份 AIGateway /model-groups 投影。active-catalog 按 agents
+// 重建聊天目录；媒体存在性仍按 mode，客户端另行预检 Guide operation 与执行器兼容性，
+// 只把当前可执行投影交给插件设置和 Core media。调用时仍按 modelId 再取 Guide 复验。
+// 拉取失败保留最后一次完整成功快照；成功空列表同时清空模型和价格。
 
 let modelsSyncInflight: Promise<void> | null = null;
 /** 模型请求的单调尝试号与最近成功号，供手动刷新区分“旧成功 + 本次失败”。 */
@@ -165,6 +171,7 @@ function applyGatewayModels(models: ModelAccessGatewayModel[], authenticatedUser
   // 一次归一化成 contextWindow / agents / efforts / supportsFastMode / modalities,
   // 同一含义只下发一个字段。这里直接用下发值，唯一事实源在服务端。
   // active-catalog 统一收口会原地刷新 Maker capabilities，再广播同一 revision。
+  resetExecutableMediaModelCache();
   setXdGatewayModels(models);
 }
 
@@ -202,6 +209,27 @@ async function runModelsSync(
   }
   log.info(`xd gateway models synced: ${models.length}`);
   applyGatewayModels(models, authenticatedUserId);
+  try {
+    const availability = await listExecutableMediaModels([], {
+      includeDisabled: true,
+      forceRefresh: true,
+    });
+    if (myGen !== authGeneration) return;
+    // executable cache 已按当前客户端 Guide 能力重建；再次提升 catalog revision，
+    // 让同步读取插件设置的界面从临时空清单刷新到可执行投影。
+    setXdGatewayModels(models);
+    if (availability.unavailable.length > 0) {
+      log.warn('xd media Guide preflight isolated unavailable models', {
+        unavailableModelCount: availability.unavailable.length,
+      });
+    }
+  } catch (error) {
+    // 原始模型目录仍然有效；Guide 预检失败只让媒体可执行投影保持为空，
+    // 不能撤销聊天目录或拖垮登录后的模型同步。
+    log.warn('xd media Guide preflight failed; keeping media execution disabled', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   lastModelsSyncSucceededAttempt = myAttempt;
 }
 

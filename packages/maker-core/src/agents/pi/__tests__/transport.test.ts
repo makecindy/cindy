@@ -108,25 +108,51 @@ describe('createPiStdioTransport', () => {
     }
   });
 
-  it('close() resolves even if child never confirms exit after SIGKILL (round 40-w4-t3 HIGH — no hang)', async () => {
+  it('retries a full termination attempt after SIGKILL exit is unconfirmed', async () => {
     vi.useFakeTimers();
     try {
       const { transport, child } = makeTransport();
-      // child 不响应任何信号:不 emit close, kill 是 no-op。
       child.kill.mockImplementation(() => true);
       const onClose = vi.fn();
       transport.onClose(onClose);
 
-      const closePromise = transport.close();
-      // SIGTERM 宽限期(3s)→ SIGKILL
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
-      // SIGKILL 确认窗口(5s)超时 → close() 必须 resolve(不再永久挂住)
-      await vi.advanceTimersByTimeAsync(5_000);
-      await closePromise;
-      // 主动 close 语义:onClose 收到通知
-      expect(onClose).toHaveBeenCalledTimes(1);
+      const firstClose = transport.close();
+      const firstRejected = expect(firstClose).rejects.toThrow(
+        /did not confirm exit after SIGKILL/,
+      );
+      await vi.advanceTimersByTimeAsync(8_000);
+      await firstRejected;
+      expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+      expect(onClose).not.toHaveBeenCalled();
       expect(transport.isClosed()).toBe(true);
+      await expect(transport.writeLine('{"x":1}')).rejects.toThrow(/closed/);
+
+      // A new owner retry shares one in-flight attempt and sends fresh signals.
+      const retry = transport.close();
+      const concurrentRetry = transport.close();
+      expect(concurrentRetry).toBe(retry);
+      expect(child.kill.mock.calls).toEqual([
+        ['SIGTERM'],
+        ['SIGKILL'],
+        ['SIGTERM'],
+      ]);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(child.kill.mock.calls).toEqual([
+        ['SIGTERM'],
+        ['SIGKILL'],
+        ['SIGTERM'],
+        ['SIGKILL'],
+      ]);
+
+      // A real close may arrive late from either kill attempt. It is the sole
+      // success signal and settles every waiter exactly once.
+      child.emit('close', null, 'SIGKILL');
+      await expect(retry).resolves.toBeUndefined();
+      await expect(concurrentRetry).resolves.toBeUndefined();
+      expect(onClose).toHaveBeenCalledTimes(1);
+
+      await expect(transport.close()).resolves.toBeUndefined();
+      expect(child.kill).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }
