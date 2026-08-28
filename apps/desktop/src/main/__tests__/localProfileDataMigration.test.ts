@@ -741,6 +741,85 @@ describe('adoptLocalProfileDatabase', () => {
     });
   });
 
+  it('blocks passive initialization when a fallback copy is still in progress', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');
+    await fs.writeFile(target, 'partial');
+    await fs.writeFile(
+      `${target}.local-profile-copy-pending`,
+      JSON.stringify({ version: 1, attemptId: 'interrupted', phase: 'copying' }),
+    );
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'failed',
+      error: 'target database copy is incomplete',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('partial');
+  });
+
+  it('blocks passive initialization when target ownership is unproven', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    const pending = `${target}.local-profile-copy-pending`;
+    await fs.writeFile(target, 'partial');
+    await fs.writeFile(
+      pending,
+      JSON.stringify({ version: 1, attemptId: 'interrupted', phase: 'claiming' }),
+    );
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'failed',
+      error: 'database copy publication has an unproven target owner',
+    });
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('partial');
+    await expect(fs.readFile(pending, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      phase: 'claiming',
+    });
+  });
+
+  it('allows passive initialization after a published fallback copy', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(target, 'cloud-db');
+    await fs.writeFile(
+      `${target}.local-profile-copy-pending`,
+      JSON.stringify({ version: 1, attemptId: 'interrupted', phase: 'published' }),
+    );
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'not-required',
+      reason: 'target-exists',
+    });
+  });
+
+  it('allows passive initialization after a raced fallback copy', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(target, 'cloud-db');
+    await fs.writeFile(
+      `${target}.local-profile-copy-pending`,
+      JSON.stringify({ version: 1, attemptId: 'interrupted', phase: 'raced' }),
+    );
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'not-required',
+      reason: 'target-exists',
+    });
+  });
+
+  it('blocks passive initialization when the pending copy marker is malformed', async () => {
+    const { root, deps } = await fixture();
+    const target = path.join(root, 'cindy-owner-a.db');
+    await fs.writeFile(target, 'cloud-db');
+    await fs.writeFile(`${target}.local-profile-copy-pending`, '{');
+
+    await expect(inspectPassiveLocalProfileAdoption('owner-a', deps)).resolves.toEqual({
+      status: 'failed',
+      error: 'database copy pending marker is malformed',
+    });
+  });
+
   it('assigns the retained local source to only the first cloud owner', async () => {
     const { root, deps } = await fixture();
     await fs.writeFile(path.join(root, 'cindy-local-v1.db'), 'local-db');

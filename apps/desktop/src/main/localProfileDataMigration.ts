@@ -868,7 +868,28 @@ export async function inspectPassiveLocalProfileAdoption(
         error: 'target database sidecar exists without its main database',
       };
     }
-    if (targetState.mainExists) return { status: 'not-required', reason: 'target-exists' };
+    if (targetState.mainExists) {
+      try {
+        const pending = parsePendingDatabaseCopyMarker(
+          await deps.fs.readFile(`${targetDb}${DB_COPY_PENDING_SUFFIX}`),
+        );
+        if (!pending) {
+          return { status: 'failed', error: 'database copy pending marker is malformed' };
+        }
+        if (pending.phase === 'claiming') {
+          return {
+            status: 'failed',
+            error: 'database copy publication has an unproven target owner',
+          };
+        }
+        if (pending.phase === 'copying') {
+          return { status: 'failed', error: 'target database copy is incomplete' };
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
+      }
+      return { status: 'not-required', reason: 'target-exists' };
+    }
     const sourceState = await databaseFileGroupState(deps, sourceDb);
     if (sourceState.sidecarExists && !sourceState.mainExists) {
       return {
