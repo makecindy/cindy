@@ -675,6 +675,10 @@ describe('claude generation pause boundaries', () => {
     const generating = events.filter(
       (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
     );
+    expect(generating[1]?.data).toMatchObject({
+      outputTokens: 0,
+      generationReliable: false,
+    });
     expect(generating.at(-1)?.data).toMatchObject({
       outputTokens: 80,
       generationReliable: true,
@@ -684,6 +688,188 @@ describe('claude generation pause boundaries', () => {
     );
     expect(doneStatus?.data).toMatchObject({
       outputTokens: 80,
+      generationReliable: true,
+      generationActive: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('hides live tok/s until the current parent request streams output', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent-1', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 80 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-1',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-1',
+        event: { type: 'message_delta', usage: { output_tokens: 500 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent-1', content: 'child 1 done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 20 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    vi.setSystemTime(2_600);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-2',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent-2', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 40 } },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-2',
+        event: { type: 'message_delta', usage: { output_tokens: 200 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent-2', content: 'child 2 done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(3_200);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 40, output_tokens: 820 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+
+    const generating = events.filter(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
+    );
+    const pendingCurrentParent = generating.filter((event) => {
+      const data = event.data as { outputTokens?: number; generationReliable?: boolean };
+      return data.outputTokens === 80 && data.generationReliable === false;
+    });
+    expect(pendingCurrentParent.length).toBeGreaterThan(0);
+    expect(generating.at(-1)?.data).toMatchObject({
+      outputTokens: 120,
+      generationReliable: true,
+    });
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({
+      outputTokens: 120,
       generationReliable: true,
       generationActive: false,
     });

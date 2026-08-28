@@ -250,6 +250,18 @@ function applySubagentLiveReliability(ctx: TranslateContext): void {
   }
 }
 
+/**
+ * Snapshot-only: the current parent request exists but has not streamed output.
+ * A later child `message_start` can win the race; hide this status without
+ * sticky-failing `generation.reliable`, so the parent `message_delta` can
+ * restore tok/s.
+ */
+function currentParentStreamedOutputPending(ctx: TranslateContext): boolean {
+  if (!ctx.rt.generation.sawSubagent) return false;
+  if (!ctx.rt.activeUsageSegmentByParent.get(CLAUDE_MAIN_USAGE_PARENT)) return false;
+  return !mainActiveSegmentHasOutput(ctx);
+}
+
 function liveParentOutputTokens(
   ctx: TranslateContext,
   resultOutput?: number,
@@ -283,7 +295,7 @@ function ccLiveStatus(
       outputTokens: mainTurnOutputTokens(ctx.tracker),
       closedDurationMs: ctx.rt.generation.durationMs,
       openStartedAt: ctx.rt.generation.startedAt,
-      reliable: ctx.rt.generation.reliable,
+      reliable: ctx.rt.generation.reliable && !currentParentStreamedOutputPending(ctx),
     }),
     isRunning,
   };
