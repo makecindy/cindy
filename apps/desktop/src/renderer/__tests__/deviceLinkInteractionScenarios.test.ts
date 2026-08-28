@@ -956,17 +956,18 @@ describe('远程交互接线不变式', () => {
     expect(body.slice(activeBranch, elseBranch)).not.toContain('modelMemory?.setFast');
   });
 
-  it('ChatInput 远程切模型优先原子提交 model/effort/fast,旧 host 才走兼容链', () => {
+  it('ChatInput 远程切模型优先原子提交,旧 host 的 deferred 也走完兼容链', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const start = src.indexOf('if (sourceRemoteDeviceId) {');
     expect(start).toBeGreaterThan(-1);
     const body = src.slice(start, start + 2800);
     const atomic = body.indexOf('? { effort: newEffort, fastMode: restoredFast }');
-    const fallback = body.indexOf('if (!useAtomicSelection && !remoteDeferred) {');
+    const fallback = body.indexOf('if (!useAtomicSelection) {');
     const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
     expect(atomic).toBeGreaterThan(-1);
     expect(fallback).toBeGreaterThan(atomic);
+    expect(body.slice(fallback, fallback + 80)).not.toContain('remoteDeferred');
     expect(persist).toBeGreaterThan(
       body.indexOf('await remoteMaker.setEffort(sessionId, newEffort);'),
     );
@@ -978,7 +979,7 @@ describe('远程交互接线不变式', () => {
     expect(body.slice(sync, sync + 300)).toContain('fast: fastPersisted ? restoredFast : fastMode');
   });
 
-  it('ChatInput 远程切来源优先原子提交选择快照,旧 host 才走兼容链', () => {
+  it('ChatInput 远程切来源优先原子提交,旧 host 的 deferred 也走完兼容链', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const start = src.indexOf('if (sessionId && sourceRemoteDeviceId)');
     const end = src.indexOf('// 把这次切换后落定的 (model, effort)', start);
@@ -986,12 +987,13 @@ describe('远程交互接线不变式', () => {
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
     const atomic = body.indexOf('? { effort: targetEffort, fastMode: restoredFast }');
-    const fallback = body.indexOf('if (!useAtomicSelection && !remoteDeferred) {');
+    const fallback = body.indexOf('if (!useAtomicSelection) {');
     const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
     const finalize = body.indexOf('onModelDidChange?.(targetModel);');
     expect(atomic).toBeGreaterThan(-1);
     expect(fallback).toBeGreaterThan(atomic);
+    expect(body.slice(fallback, fallback + 80)).not.toContain('remoteDeferred');
     expect(persist).toBeGreaterThan(
       body.indexOf('await remoteMaker.setEffort(sessionId, targetEffort);'),
     );

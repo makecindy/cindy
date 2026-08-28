@@ -6747,7 +6747,9 @@ export function ChatInput({
                 return false;
               }
               remoteDeferred = remoteSetModelResult?.deferred === true;
-              if (!useAtomicSelection && !remoteDeferred) {
+              // Old hosts receive axes as separate calls. Their pending handlers persist these
+              // values without touching the running turn, so deferred must still finish the chain.
+              if (!useAtomicSelection) {
                 await remoteMaker.setEffort(sessionId, newEffort);
                 fastPersisted = await persistFastModeChange(restoredFast, {
                   silent: true,
@@ -7267,7 +7269,8 @@ export function ChatInput({
             return false;
           }
           remoteDeferred = remoteSetModelResult?.deferred === true;
-          if (!useAtomicSelection && !remoteDeferred) {
+          // Keep the old-host selection tuple complete even when SET_MODEL was deferred.
+          if (!useAtomicSelection) {
             await remoteMaker.setEffort(sessionId, targetEffort);
             fastPersisted = await persistFastModeChange(restoredFast, {
               silent: true,
