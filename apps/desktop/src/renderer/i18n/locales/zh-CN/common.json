@@ -539,6 +539,14 @@
     },
     "windowBehavior": {
       "title": "应用行为",
+      "launchAtLogin": {
+        "label": "开机时启动 Cindy",
+        "hint": "登录 Windows 后自动启动 Cindy。你也可以在任务管理器的「启动应用」里关闭它。"
+      },
+      "startInTrayOnLogin": {
+        "label": "开机启动时收起到托盘",
+        "hint": "开机自动启动时不显示主窗口，只在系统托盘留一个图标，点击图标即可打开。\n你自己打开 Cindy 时窗口照常显示。"
+      },
       "closeBehavior": {
         "label": "关闭主窗口时",
         "hint": "首次关闭时会询问，选择后可随时在这里修改。",

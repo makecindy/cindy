@@ -1834,6 +1834,9 @@ interface ElectronAPI {
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
     onWindowsCloseBehaviorRequested: (callback: () => void) => () => void;
     notifyWindowsCloseBehaviorPromptShown: () => void;
+    getLaunchAtLogin: () => Promise<{ launchAtLogin: boolean; startInTrayOnLogin: boolean }>;
+    setLaunchAtLogin: (enabled: boolean) => Promise<boolean>;
+    setStartInTrayOnLogin: (enabled: boolean) => Promise<{ ok: true }>;
   };
 
   workLouderCodex: {

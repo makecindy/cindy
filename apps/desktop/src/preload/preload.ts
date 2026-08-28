@@ -34,11 +34,15 @@ import {
 } from '../shared/agentIsland';
 import type { AgentProxyTunnelState, SshHostAgentProxyPref } from '../shared/agentProxyConfig';
 import {
+  WINDOW_BEHAVIOR_GET_LAUNCH_AT_LOGIN_CHANNEL,
   WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
+  WINDOW_BEHAVIOR_SET_LAUNCH_AT_LOGIN_CHANNEL,
+  WINDOW_BEHAVIOR_SET_START_IN_TRAY_ON_LOGIN_CHANNEL,
   WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
   WINDOW_BEHAVIOR_SET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
+  type LaunchAtLoginState,
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior';
 import {
@@ -1606,6 +1610,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL),
     setWindowsCloseBehavior: (behavior: WindowsCloseBehavior): Promise<WindowsCloseBehavior> =>
       ipcRenderer.invoke(WINDOW_BEHAVIOR_SET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL, behavior),
+    getLaunchAtLogin: (): Promise<LaunchAtLoginState> =>
+      ipcRenderer.invoke(WINDOW_BEHAVIOR_GET_LAUNCH_AT_LOGIN_CHANNEL),
+    // 返回写入后的事实状态(可能与请求值不同:改登录项失败时保持原状)。
+    setLaunchAtLogin: (enabled: boolean): Promise<boolean> =>
+      ipcRenderer.invoke(WINDOW_BEHAVIOR_SET_LAUNCH_AT_LOGIN_CHANNEL, enabled),
+    setStartInTrayOnLogin: (enabled: boolean): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(WINDOW_BEHAVIOR_SET_START_IN_TRAY_ON_LOGIN_CHANNEL, enabled),
     onWindowsCloseBehaviorRequested: (callback: () => void): (() => void) => {
       const listener = (): void => callback();
       ipcRenderer.on(WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL, listener);

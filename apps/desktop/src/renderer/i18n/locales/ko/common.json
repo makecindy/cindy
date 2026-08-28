@@ -539,6 +539,14 @@
     },
     "windowBehavior": {
       "title": "앱 동작",
+      "launchAtLogin": {
+        "label": "로그인 시 Cindy 시작",
+        "hint": "Windows에 로그인하면 Cindy를 자동으로 시작합니다. 작업 관리자의 「시작 앱」에서 끌 수도 있습니다."
+      },
+      "startInTrayOnLogin": {
+        "label": "로그인 시 트레이로 시작",
+        "hint": "로그인 시 자동으로 시작할 때는 기본 창을 표시하지 않고 트레이 아이콘만 남깁니다. 아이콘을 클릭하면 열립니다.\n직접 Cindy를 열면 창이 평소대로 표시됩니다."
+      },
       "closeBehavior": {
         "label": "기본 창을 닫을 때",
         "hint": "처음 닫을 때 묻습니다. 나중에 여기에서 변경할 수 있습니다.",

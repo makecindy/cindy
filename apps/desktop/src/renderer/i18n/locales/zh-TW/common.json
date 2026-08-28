@@ -539,6 +539,14 @@
     },
     "windowBehavior": {
       "title": "應用行為",
+      "launchAtLogin": {
+        "label": "開機時啟動 Cindy",
+        "hint": "登入 Windows 後自動啟動 Cindy。你也可以在工作管理員的「開機應用程式」裡關閉它。"
+      },
+      "startInTrayOnLogin": {
+        "label": "開機啟動時收起到系統匣",
+        "hint": "開機自動啟動時不顯示主視窗，只在系統匣留一個圖示，點擊圖示即可開啟。\n你自己開啟 Cindy 時視窗照常顯示。"
+      },
       "closeBehavior": {
         "label": "關閉主視窗時",
         "hint": "首次關閉時會詢問，選擇後可隨時在這裡修改。",

@@ -1,7 +1,8 @@
 /**
  * windowBehavior — 窗口交互行为相关的 IPC 通道 & 常量。
  *
- * 承载后台窗口点击行为和 Windows 主窗口关闭行为。
+ * 承载后台窗口点击行为、Windows 主窗口关闭行为,以及开机自启动与自启时的
+ * 窗口呈现方式。
  *
  * Windows 上此开关由 renderer 层的 `swallowActivationClick.ts` 用 localStorage
  * 同步读取,toggle 即时生效。macOS 上因为等效能力(`acceptFirstMouse: false`)
@@ -27,3 +28,23 @@ export const WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL =
 export function isWindowsCloseBehavior(value: unknown): value is WindowsCloseBehavior {
   return value === 'quit' || value === 'tray';
 }
+
+/**
+ * 开机自启动状态。`launchAtLogin` 是系统登录项的事实状态(由 main 侧向
+ * Electron 查询,不自行持久化——用户可能在系统设置或任务管理器里改掉它);
+ * `startInTrayOnLogin` 是我们自己的偏好,记在 window-behavior-settings.json。
+ *
+ * 两者独立:关掉自启动不清除 startInTrayOnLogin,用户重新打开自启动时保留
+ * 原来的选择。
+ */
+export interface LaunchAtLoginState {
+  launchAtLogin: boolean;
+  startInTrayOnLogin: boolean;
+}
+
+export const WINDOW_BEHAVIOR_GET_LAUNCH_AT_LOGIN_CHANNEL =
+  'window-behavior:get-launch-at-login';
+export const WINDOW_BEHAVIOR_SET_LAUNCH_AT_LOGIN_CHANNEL =
+  'window-behavior:set-launch-at-login';
+export const WINDOW_BEHAVIOR_SET_START_IN_TRAY_ON_LOGIN_CHANNEL =
+  'window-behavior:set-start-in-tray-on-login';

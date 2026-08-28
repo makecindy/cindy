@@ -816,9 +816,15 @@ import { healWindowsShortcuts } from './windowsShortcutSelfHeal.js';
 import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import {
   readWindowBehaviorSettings,
+  writeStartInTrayOnLogin,
   writeSwallowActivationClick,
   writeWindowsCloseBehavior,
 } from './window-behavior-settings-store.js';
+import {
+  readLaunchAtLogin,
+  shouldStartHiddenInTray,
+  writeLaunchAtLogin,
+} from './launchAtLogin.js';
 import {
   hideWindowToWindowsTray,
   popUpWindowsTrayMenu,
@@ -828,11 +834,15 @@ import {
 import { createWindowsClosePromptFallbackController } from './windowsClosePromptFallback.js';
 import {
   isWindowsCloseBehavior,
+  WINDOW_BEHAVIOR_GET_LAUNCH_AT_LOGIN_CHANNEL,
   WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
+  WINDOW_BEHAVIOR_SET_LAUNCH_AT_LOGIN_CHANNEL,
+  WINDOW_BEHAVIOR_SET_START_IN_TRAY_ON_LOGIN_CHANNEL,
   WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
   WINDOW_BEHAVIOR_SET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
+  type LaunchAtLoginState,
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior.js';
 import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './commands/index.js';
@@ -3706,9 +3716,23 @@ const createWindow = () => {
 
   // Show window only after content is rendered — eliminates theme flash
   mainWindow.once('ready-to-show', () => {
-    showMainWindowAndRestoreFullscreen(mainWindow, {
-      restoreFullscreen: shouldRestoreMacFullscreen,
+    // 自启动静默模式:窗口本来就是 show:false 创建的,这里直接不 show 即可——
+    // 不存在"先显示再隐藏"的闪现。ensureWindowsTray 作为最后一个条件求值,
+    // 它返回 false(图标资源缺失等)时必须照常显示窗口,否则用户既没窗口也
+    // 没托盘图标,只能去任务管理器结束进程。
+    const startHidden = shouldStartHiddenInTray({
+      platform: process.platform,
+      argv: process.argv,
+      startInTrayOnLogin: readWindowBehaviorSettings().startInTrayOnLogin,
+      ensureTray: ensureWindowsTray,
     });
+    if (startHidden) {
+      windowsTrayLog.info('main window stays hidden in tray on login start');
+    } else {
+      showMainWindowAndRestoreFullscreen(mainWindow, {
+        restoreFullscreen: shouldRestoreMacFullscreen,
+      });
+    }
     if (!app.isPackaged) markDesktopDevWindowReady();
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
     // renderer 和首份进程快照预热；回调绑定当代主窗口，重建/退出后不会创建孤儿窗。
@@ -4432,6 +4456,31 @@ const registerIpcHandlers = () => {
       writeWindowsCloseBehavior(behavior);
       if (behavior === 'quit') destroyWindowsTray();
       return behavior;
+    },
+  );
+  ipcMain.handle(
+    WINDOW_BEHAVIOR_GET_LAUNCH_AT_LOGIN_CHANNEL,
+    async (): Promise<LaunchAtLoginState> => ({
+      launchAtLogin: readLaunchAtLogin(app),
+      startInTrayOnLogin: readWindowBehaviorSettings().startInTrayOnLogin,
+    }),
+  );
+  ipcMain.handle(WINDOW_BEHAVIOR_SET_LAUNCH_AT_LOGIN_CHANNEL, async (_e, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'launchAtLogin required (boolean)');
+    }
+    // 回传写入后重新查询到的事实状态:用户没权限改登录项时 renderer 要把
+    // 乐观更新退回真实值,而不是显示一个并未生效的开启态。
+    return writeLaunchAtLogin(app, enabled);
+  });
+  ipcMain.handle(
+    WINDOW_BEHAVIOR_SET_START_IN_TRAY_ON_LOGIN_CHANNEL,
+    async (_e, enabled: unknown) => {
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'startInTrayOnLogin required (boolean)');
+      }
+      writeStartInTrayOnLogin(enabled);
+      return { ok: true as const };
     },
   );
   ipcMain.on(WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL, (event) => {

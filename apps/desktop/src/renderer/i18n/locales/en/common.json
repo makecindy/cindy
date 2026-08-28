@@ -539,6 +539,14 @@
     },
     "windowBehavior": {
       "title": "App Behavior",
+      "launchAtLogin": {
+        "label": "Launch Cindy at login",
+        "hint": "Start Cindy automatically after you sign in to Windows. You can also turn this off under \"Startup apps\" in Task Manager."
+      },
+      "startInTrayOnLogin": {
+        "label": "Start in the tray at login",
+        "hint": "When Cindy starts at login, keep the main window hidden and leave only a tray icon — click it to open the window.\nOpening Cindy yourself still shows the window as usual."
+      },
       "closeBehavior": {
         "label": "When closing the main window",
         "hint": "You will be asked the first time. You can change the choice here later.",
