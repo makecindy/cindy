@@ -761,6 +761,98 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('openai');
   });
 
+  it('waits for pending registration before reporting an idle-to-busy race as deferred', async () => {
+    const sessionId = rememberSession('runtime-set-model-idle-to-busy-await-registration');
+    setSessionProvider(sessionId, 'openai');
+    let busyProbe = 0;
+    let releaseRegistration!: () => void;
+    const registrationGate = new Promise<void>((resolve) => {
+      releaseRegistration = resolve;
+    });
+    const registerPendingCredentialSwitch = vi.fn(async () => {
+      await registrationGate;
+    });
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        model: 'gpt-5.4',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [{
+        id: sessionId,
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => busyProbe++ > 0,
+      }],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    let settled = false;
+    const result = applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+      codexAuthInjection: 'oauth-bearer',
+      registerPendingCredentialSwitch,
+    }).finally(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(registerPendingCredentialSwitch).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(getSessionProvider(sessionId)).toBe('openai');
+
+    releaseRegistration();
+    await expect(result).resolves.toEqual({
+      status: 'deferred',
+      preservePersistedRoute: true,
+    });
+    expect(getSessionProvider(sessionId)).toBe('openai');
+  });
+
+  it('fails closed when pending registration rejects during an idle-to-busy race', async () => {
+    const sessionId = rememberSession('runtime-set-model-idle-to-busy-registration-reject');
+    setSessionProvider(sessionId, 'openai');
+    let busyProbe = 0;
+    const closeSession = vi.fn(async () => {});
+    const registerPendingCredentialSwitch = vi.fn(async () => {
+      throw new Error('pending registration rejected');
+    });
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        model: 'gpt-5.4',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [{
+        id: sessionId,
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => busyProbe++ > 0,
+      }],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+      codexAuthInjection: 'oauth-bearer',
+      registerPendingCredentialSwitch,
+    })).rejects.toThrow('pending registration rejected');
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledOnce();
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('openai');
+  });
+
   it('fails closed on a busy subscription-to-XD Codex switch without a pending channel', async () => {
     const sessionId = rememberSession('runtime-set-model-busy-boundary-no-channel');
     setSessionProvider(sessionId, 'openai');
