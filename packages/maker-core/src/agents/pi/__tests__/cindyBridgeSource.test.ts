@@ -372,6 +372,8 @@ describe('cindy-bridge extension source', () => {
         'Get-Content -Path ' + operand,
         "Get-Content -LiteralPath '" + operand + "' -Raw",
         'Write-Output ok; Get-Content ' + operand,
+        'Get-Content ' + operand + ' | Out-String',
+        'Write-Output ok | Get-Content ' + operand,
         'Write-Output "ok; still"; Get-Content ' + operand,
         'Write-Output ok\nGet-Content ' + operand,
         'Write-Output ok\rGet-Content ' + operand,
@@ -394,7 +396,6 @@ describe('cindy-bridge extension source', () => {
       'Get-Content $target',
       'Get-Content "${target}"',
       'Get-Content (Join-Path . id_rsa)',
-      'Get-Content ./safe.txt | Select-Object -First 1',
       'Get-Content ./safe"name".txt',
       "Get-Content ./safe'name'.txt",
       'Get-Content ./safe*.txt',
@@ -402,7 +403,12 @@ describe('cindy-bridge extension source', () => {
       'Get-Content\u00a0./safe.txt',
       'Write-Output ok; Get-Content $target',
       'Write-Output ok; Get-Content (Join-Path . id_rsa)',
-      'Write-Output ok | Get-Content ./safe.txt',
+      'git status | Get-Content $target',
+      'git status > status.txt; Get-Content ./safe.txt',
+      '(Get-Content ./safe.txt)',
+      '{ Get-Content ./safe.txt }',
+      'git status & Get-Content ./safe.txt',
+      'Get-`Content ./safe.txt',
       'Write-Output ok && Get-Content ./safe.txt',
       'Write-Output ok\u2028Get-Content ./safe.txt',
       "Write-Output ok; Get-Content './unterminated",
@@ -410,6 +416,23 @@ describe('cindy-bridge extension source', () => {
       expect(evidence({ command }), command).toEqual({ targets: [], unresolved: true });
     }
     expect(evidence({ command: 'Write-Output ok' })).toEqual({ targets: [], unresolved: false });
+  });
+
+  it('keeps ordinary PowerShell operators out of credential-read evidence', () => {
+    const evidence = loadPowerShellReadEvidence(process.cwd());
+    for (const command of [
+      'git status | Out-String',
+      'git status > status.txt',
+      '(git status)',
+      '{ git status }',
+      'git status &',
+      'Write-Output foo`nbar',
+      "Write-Output '(Get-Content ./safe.txt)'",
+      'Write-Output ok && Write-Output done',
+      'Write-Output ok\u2028Write-Output done',
+    ]) {
+      expect(evidence({ command }), command).toEqual({ targets: [], unresolved: false });
+    }
   });
 
   it.skipIf(process.platform === 'win32')(

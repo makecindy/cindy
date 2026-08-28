@@ -768,7 +768,12 @@ function powershellDirectStatements(command: string): PowerShellDirectStatements
       current += character;
       continue;
     }
-    if (character === String.fromCharCode(96) || /[|&(){}<>]/.test(character)) {
+    if (character === '|') {
+      flush();
+      if (command[cursor + 1] === '|') cursor += 1;
+      continue;
+    }
+    if (character === String.fromCharCode(96) || /[&(){}<>]/.test(character)) {
       return { statements, unresolved: true };
     }
     const startsComment = character === '#'
@@ -790,6 +795,45 @@ function powershellDirectStatements(command: string): PowerShellDirectStatements
   if (quote) return { statements, unresolved: true };
   flush();
   return { statements, unresolved: false };
+}
+
+function powershellMayHideDirectFileRead(command: string): boolean {
+  let surface = '';
+  let quote: "'" | '"' | null = null;
+  for (let cursor = 0; cursor < command.length; cursor += 1) {
+    const character = command[cursor];
+    if (quote) {
+      if (quote === '"' && character === String.fromCharCode(96)) {
+        cursor += 1;
+      } else if (character === quote) {
+        if (quote === "'" && command[cursor + 1] === "'") cursor += 1;
+        else quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    const startsComment = character === '#'
+      && (surface.length === 0 || /[\s;|&(){}<>]/.test(surface[surface.length - 1]));
+    if (startsComment) {
+      while (cursor + 1 < command.length && !/[\r\n]/.test(command[cursor + 1])) cursor += 1;
+      continue;
+    }
+    if (character === String.fromCharCode(96)) {
+      const escaped = command[cursor + 1];
+      if (escaped === '\r' && command[cursor + 2] === '\n') cursor += 2;
+      else if (escaped === '\r' || escaped === '\n') cursor += 1;
+      else if (escaped) {
+        surface += /[\s;|&(){}<>]/.test(escaped) ? '_' : escaped;
+        cursor += 1;
+      }
+      continue;
+    }
+    surface += character;
+  }
+  return /(?:^|[;\r\n\u2028\u2029|&(){}])\s*(?:[A-Za-z][A-Za-z0-9.-]*\\)?(?:get-content|gc|cat|type)(?=\s|[;|&(){}<>]|$)/i.test(surface);
 }
 
 function powershellDirectArguments(command: string, start: number): PowerShellDirectArguments {
@@ -891,7 +935,11 @@ function powershellInputReadEvidence(input: unknown): BashInputReadEvidence {
   const command = (input as Record<string, unknown>).command;
   if (typeof command !== 'string' || !command) return { targets: [], unresolved: false };
   const payload = powershellDirectStatements(command);
-  if (payload.unresolved) return { targets: [], unresolved: true };
+  if (payload.unresolved) {
+    return powershellMayHideDirectFileRead(command)
+      ? { targets: [], unresolved: true }
+      : { targets: [], unresolved: false };
+  }
   const targets: string[] = [];
   let unresolved = false;
   for (const statement of payload.statements) {
