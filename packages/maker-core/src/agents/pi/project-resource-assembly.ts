@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { constants, createWriteStream } from 'node:fs';
+import { constants, createWriteStream, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
@@ -232,22 +232,29 @@ function localPathIsWithin(root: string, candidate: string): boolean {
 }
 
 function sameFileIdentity(
-  first: Pick<Awaited<ReturnType<typeof fs.lstat>>, 'dev' | 'ino'>,
-  second: Pick<Awaited<ReturnType<typeof fs.lstat>>, 'dev' | 'ino'>,
+  first: Pick<BigIntStats, 'dev' | 'ino'>,
+  second: Pick<BigIntStats, 'dev' | 'ino'>,
 ): boolean {
-  const isZero = (value: number | bigint): boolean => value === 0 || value === 0n;
-  if (isZero(first.ino) || isZero(second.ino) || first.ino !== second.ino) return false;
+  if (first.ino === 0n || second.ino === 0n || first.ino !== second.ino) return false;
   if (first.dev === second.dev) {
     // Windows path stats may expose dev=0 while handle stats expose the real
     // volume serial. A matching nonzero NTFS FileId remains an exact identity.
-    return !isZero(first.dev) || process.platform === 'win32';
+    return first.dev !== 0n || process.platform === 'win32';
   }
-  return process.platform === 'win32' && (isZero(first.dev) || isZero(second.dev));
+  return process.platform === 'win32' && (first.dev === 0n || second.dev === 0n);
+}
+
+function samePathAndHandleFileIdentity(
+  pathEntry: Pick<BigIntStats, 'dev' | 'ino'>,
+  handleEntry: Pick<BigIntStats, 'dev' | 'ino'>,
+): boolean {
+  return sameFileIdentity(pathEntry, handleEntry)
+    && (pathEntry.dev !== 0n || handleEntry.dev !== 0n);
 }
 
 function sameEntrySnapshot(
-  first: Awaited<ReturnType<FileHandle['stat']>>,
-  second: Awaited<ReturnType<FileHandle['stat']>>,
+  first: BigIntStats,
+  second: BigIntStats,
 ): boolean {
   return sameFileIdentity(first, second)
     && first.size === second.size
@@ -302,11 +309,11 @@ async function fingerprintSkillEntrypointOnce(
   const skillPath = path.join(rootPath, 'SKILL.md');
   const [rootEntry, canonicalRoot, skillLinkEntry, canonicalSkill, skillTargetEntry] =
     await Promise.all([
-      fs.lstat(rootPath),
+      fs.lstat(rootPath, { bigint: true }),
       fs.realpath(rootPath),
-      fs.lstat(skillPath),
+      fs.lstat(skillPath, { bigint: true }),
       fs.realpath(skillPath),
-      fs.stat(skillPath),
+      fs.stat(skillPath, { bigint: true }),
     ]);
   if (
     !rootEntry.isDirectory()
@@ -325,8 +332,8 @@ async function fingerprintSkillEntrypointOnce(
     if (sharedBudget && Date.now() >= sharedBudget.deadlineAtMs) {
       throw new Error('approved skill fingerprint deadline expired');
     }
-    const openedEntry = await handle.stat();
-    if (!openedEntry.isFile() || !sameFileIdentity(skillTargetEntry, openedEntry)) {
+    const openedEntry = await handle.stat({ bigint: true });
+    if (!openedEntry.isFile() || !samePathAndHandleFileIdentity(skillTargetEntry, openedEntry)) {
       throw new Error('approved skill entrypoint changed before fingerprinting');
     }
     const contentDigest = await hashOpenFile(handle, sharedBudget?.deadlineAtMs);
@@ -338,19 +345,19 @@ async function fingerprintSkillEntrypointOnce(
       skillTargetEntryAfterRead,
       openedAfterRead,
     ] = await Promise.all([
-      fs.lstat(rootPath),
+      fs.lstat(rootPath, { bigint: true }),
       fs.realpath(rootPath),
-      fs.lstat(skillPath),
+      fs.lstat(skillPath, { bigint: true }),
       fs.realpath(skillPath),
-      fs.stat(skillPath),
-      handle.stat(),
+      fs.stat(skillPath, { bigint: true }),
+      handle.stat({ bigint: true }),
     ]);
     if (
       !sameEntrySnapshot(rootEntry, rootEntryAfterRead)
       || !sameEntrySnapshot(skillLinkEntry, skillLinkEntryAfterRead)
       || !sameEntrySnapshot(skillTargetEntry, skillTargetEntryAfterRead)
       || !sameEntrySnapshot(openedEntry, openedAfterRead)
-      || !sameFileIdentity(openedEntry, skillTargetEntryAfterRead)
+      || !samePathAndHandleFileIdentity(openedEntry, skillTargetEntryAfterRead)
       || path.relative(canonicalRootAfterRead, canonicalRoot) !== ''
       || path.relative(canonicalSkillAfterRead, canonicalSkill) !== ''
     ) {
@@ -390,9 +397,9 @@ async function fingerprintSkillTreeStateOnce(
       throw new Error('approved skill tree exceeds the fingerprint entry budget');
     }
     const [linkEntry, canonicalEntry, targetEntry] = await Promise.all([
-      fs.lstat(entryPath),
+      fs.lstat(entryPath, { bigint: true }),
       fs.realpath(entryPath),
-      fs.stat(entryPath),
+      fs.stat(entryPath, { bigint: true }),
     ]);
     if (
       !localPathIsWithin(canonicalRepoRoot, canonicalEntry)
@@ -462,9 +469,9 @@ async function fingerprintSkillTreeStateOnce(
     }
 
     const [linkEntryAfter, canonicalEntryAfter, targetEntryAfter] = await Promise.all([
-      fs.lstat(entryPath),
+      fs.lstat(entryPath, { bigint: true }),
       fs.realpath(entryPath),
-      fs.stat(entryPath),
+      fs.stat(entryPath, { bigint: true }),
     ]);
     if (
       !sameEntrySnapshot(linkEntry, linkEntryAfter)
@@ -531,7 +538,7 @@ async function materializeSkillEntry(
   activeDirectories: Set<string>,
 ): Promise<void> {
   const [entry, canonicalSource] = await Promise.all([
-    fs.lstat(sourcePath),
+    fs.lstat(sourcePath, { bigint: true }),
     fs.realpath(sourcePath),
   ]);
   if (!localPathIsWithin(canonicalRepoRoot, canonicalSource)) {
@@ -560,7 +567,7 @@ async function materializeSkillEntry(
       }
       const [canonicalAfterCopy, entryAfterCopy] = await Promise.all([
         fs.realpath(sourcePath),
-        fs.lstat(sourcePath),
+        fs.lstat(sourcePath, { bigint: true }),
       ]);
       if (
         path.relative(canonicalAfterCopy, canonicalSource) !== ''
@@ -581,24 +588,24 @@ async function materializeSkillEntry(
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
   );
   try {
-    const openedEntry = await sourceHandle.stat();
-    if (!openedEntry.isFile() || !sameFileIdentity(entry, openedEntry)) {
+    const openedEntry = await sourceHandle.stat({ bigint: true });
+    if (!openedEntry.isFile() || !samePathAndHandleFileIdentity(entry, openedEntry)) {
       throw new Error('approved skill file changed before snapshot read');
     }
     await pipeline(
       sourceHandle.createReadStream({ autoClose: false }),
-      createWriteStream(targetPath, { flags: 'wx', mode: openedEntry.mode }),
+      createWriteStream(targetPath, { flags: 'wx', mode: Number(openedEntry.mode) }),
     );
     const [openedAfterCopy, sourcePathAfterCopy, sourceAfterCopy, targetAfterCopy] =
       await Promise.all([
-        sourceHandle.stat(),
-        fs.lstat(sourcePath),
+        sourceHandle.stat({ bigint: true }),
+        fs.lstat(sourcePath, { bigint: true }),
         fs.realpath(sourcePath),
-        fs.lstat(targetPath),
+        fs.lstat(targetPath, { bigint: true }),
       ]);
     if (
       !sameEntrySnapshot(openedEntry, openedAfterCopy)
-      || !sameFileIdentity(openedEntry, sourcePathAfterCopy)
+      || !samePathAndHandleFileIdentity(sourcePathAfterCopy, openedEntry)
       || path.relative(sourceAfterCopy, canonicalSource) !== ''
       || !targetAfterCopy.isFile()
     ) {
@@ -614,8 +621,8 @@ async function materializeSkillEntry(
         hashOpenFile(targetHandle),
       ]);
       const [sourceAfterStableRead, targetAfterStableRead] = await Promise.all([
-        sourceHandle.stat(),
-        targetHandle.stat(),
+        sourceHandle.stat({ bigint: true }),
+        targetHandle.stat({ bigint: true }),
       ]);
       if (
         sourceDigest !== targetDigest
@@ -628,7 +635,7 @@ async function materializeSkillEntry(
     } finally {
       await targetHandle.close();
     }
-    await fs.chmod(targetPath, openedEntry.mode & 0o777);
+    await fs.chmod(targetPath, Number(openedEntry.mode) & 0o777);
   } finally {
     await sourceHandle.close();
   }
@@ -688,7 +695,7 @@ export async function stageApprovedPiProjectResources(
       const targetPath = path.join(temporaryRoot, relativePath);
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       const [sourceRootBeforeCopy, canonicalSourceBeforeCopy] = await Promise.all([
-        fs.lstat(sourcePath),
+        fs.lstat(sourcePath, { bigint: true }),
         fs.realpath(sourcePath),
       ]);
       if (
@@ -723,7 +730,7 @@ export async function stageApprovedPiProjectResources(
         fingerprintPiProjectSkillEntrypoint(sourcePath, canonicalRepoRoot),
       ]);
       const [sourceRootAfterFingerprint, canonicalSourceAfterFingerprint] = await Promise.all([
-        fs.lstat(sourcePath),
+        fs.lstat(sourcePath, { bigint: true }),
         fs.realpath(sourcePath),
       ]);
       if (
