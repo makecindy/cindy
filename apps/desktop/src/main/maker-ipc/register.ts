@@ -660,7 +660,10 @@ import {
 } from './orcaDiagnostics.js';
 import { startOrcaTeamWithPermissionGate } from './orcaStartTeamPermissionGate.js';
 import { createWorkerCreationPrefsSyncHandler } from './workerCreationPrefsSyncHandler.js';
-import { createMakerSendTransaction } from './makerSendTransaction.js';
+import {
+  createMakerSendTransaction,
+  prepareDirectoryGrantsForBootstrap,
+} from './makerSendTransaction.js';
 import {
   installDesktopInteractionHandler,
   installInteractionLifecycleObserver,
@@ -7569,17 +7572,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const didInjectProjectContext =
       o.reviewMode === true ? false : await applyProjectContextInjection(o);
 
-    if (o.extraDirs && o.extraDirs.length > 0) {
-      const validation = await validateExtraDirs(o.extraDirs, o.workingDir);
-      o.extraDirs = validation.valid;
-    }
-    if (o.writableDirs && o.writableDirs.length > 0) {
-      const validation = await validateExtraDirs(o.writableDirs, o.workingDir);
-      o.writableDirs = await excludeDirectoryGrantConflicts(
-        validation.valid,
-        o.extraDirs ?? [],
-      );
-    }
+    await prepareDirectoryGrantsForBootstrap(o, {
+      persistExistingSession: async (sessionId, patch) => {
+        const [existing] = await getDbClient()
+          .drizzle.select({ id: sessions.id })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        if (existing) await persistSessionFields(sessionId, patch);
+      },
+    });
 
     await hydrateProviderIdBeforeSessionStart(o);
     await ensureManagedOllamaReadyForSession({

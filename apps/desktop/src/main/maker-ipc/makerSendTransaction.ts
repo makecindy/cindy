@@ -25,9 +25,48 @@ import {
   buildMobileClientPromptNote,
   shouldPrependMobileClientPromptNote,
 } from './mobileClientPromptNote.js';
+import { excludeDirectoryGrantConflicts, validateExtraDirs } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
+
+export interface BootstrapDirectoryGrantDeps {
+  persistExistingSession(
+    sessionId: string,
+    patch: { extraDirs: string[]; writableDirs: string[] },
+  ): Promise<void>;
+}
+
+function sameDirectoryList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/**
+ * Apply the exact directory-grant subset that a session may start with. Existing local
+ * session rows are narrowed before the runtime is created, so a failed persist cannot
+ * leave a stale grant waiting to be reactivated on the next lazy bootstrap.
+ */
+export async function prepareDirectoryGrantsForBootstrap(
+  opts: CreateOpts,
+  deps: BootstrapDirectoryGrantDeps,
+): Promise<void> {
+  const requestedExtraDirs = opts.extraDirs ?? [];
+  const requestedWritableDirs = opts.writableDirs ?? [];
+  const extraValidation = await validateExtraDirs(requestedExtraDirs, opts.workingDir);
+  const writableValidation = await validateExtraDirs(requestedWritableDirs, opts.workingDir);
+  const extraDirs = extraValidation.valid;
+  const writableDirs = await excludeDirectoryGrantConflicts(writableValidation.valid, extraDirs);
+
+  if (opts.extraDirs !== undefined || extraDirs.length > 0) opts.extraDirs = extraDirs;
+  if (opts.writableDirs !== undefined || writableDirs.length > 0) opts.writableDirs = writableDirs;
+
+  const changed =
+    !sameDirectoryList(requestedExtraDirs, extraDirs) ||
+    !sameDirectoryList(requestedWritableDirs, writableDirs);
+  if (!changed || opts.remoteHostId || typeof opts.id !== 'string' || !opts.id) return;
+
+  await deps.persistExistingSession(opts.id, { extraDirs, writableDirs });
+}
 
 type IpcUserMessage =
   string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
@@ -400,7 +439,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     }
     if (opts.writableDirs === undefined) {
       try {
-        const row = await deps.readSessionWritableDirsFromDb?.(sessionId) ?? [];
+        const row = (await deps.readSessionWritableDirsFromDb?.(sessionId)) ?? [];
         if (row.length > 0) opts.writableDirs = row;
       } catch (err) {
         deps.log.warn(`${source}: read writable_dirs from DB failed (non-fatal)`, {
@@ -958,9 +997,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           throwOnStartFailure: so.throwOnStartFailure,
           turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
-          ...(so.onVendorTurnReserved
-            ? { onTurnReserved: so.onVendorTurnReserved }
-            : {}),
+          ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
           ...(so.origin ? { origin: so.origin } : {}),
