@@ -116,6 +116,19 @@ function loadBashPackageHomeHelper(): {
   };
 }
 
+function powerShellOverlayEnabled(platform: NodeJS.Platform, factory: unknown): boolean {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('const createPowerShellTool =');
+  const end = source.indexOf('// Cindy owns a separate Pi extension store.', start);
+  if (start < 0 || end <= start) throw new Error('PowerShell overlay was not found');
+  const condition = /^\s*if \((.*createPowerShellTool.*)\) \{$/m.exec(source.slice(start, end))?.[1];
+  if (!condition) throw new Error('PowerShell overlay condition was not found');
+  return Boolean(runInNewContext(condition, {
+    createPowerShellTool: factory,
+    process: { platform },
+  }));
+}
+
 function loadPiPackageMutationCommandHelper(): (input: unknown) => boolean {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const parserStart = source.indexOf('function readShellRedirectionTarget');
@@ -1023,6 +1036,18 @@ describe('cindy-bridge extension source', () => {
       timeout: 12,
     });
   });
+
+  it('registers the native PowerShell overlay on Windows when Pi exports its factory', () => {
+    expect(powerShellOverlayEnabled('win32', () => undefined)).toBe(true);
+    expect(powerShellOverlayEnabled('win32', undefined)).toBe(false);
+  });
+
+  it.each(['darwin', 'linux'] as const)(
+    'does not register the native PowerShell overlay on %s',
+    (platform) => {
+      expect(powerShellOverlayEnabled(platform, () => undefined)).toBe(false);
+    },
+  );
 
   it('keeps Pi vision bridge tool security invariants (registration, size, magic-byte, redirect, redaction)', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;

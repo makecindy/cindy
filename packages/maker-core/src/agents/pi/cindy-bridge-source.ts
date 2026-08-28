@@ -2924,9 +2924,9 @@ export default async function cindyBridge(pi: any) {
   });
 
   // Pi v0.84.3 Windows powershell is the same spawn family as bash. Overlay only
-  // when the runtime exports the factory so 0.83.0 sessions keep loading.
+  // on Windows and when the runtime exports the factory so 0.83.0 sessions keep loading.
   const createPowerShellTool = (piCodingAgent as { createPowerShellTool?: typeof createBashTool }).createPowerShellTool;
-  if (typeof createPowerShellTool === 'function') {
+  if (process.platform === 'win32' && typeof createPowerShellTool === 'function') {
     const powershellTool = createPowerShellTool(process.cwd(), {
       exposeSessionEnvironment: false,
       spawnHook: ({ command, cwd, env }) => ({
