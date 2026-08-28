@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   sendCardToChat: vi.fn(),
   sendText: vi.fn(),
   uploadImage: vi.fn(),
+  getAccountEpoch: vi.fn(() => 1),
+  getBoundClient: vi.fn(() => ({ pinned: true })),
+  runWithPinnedAccount: vi.fn(async (_pin: unknown, fn: () => Promise<void>) => fn()),
+  isPinnedAccountCurrent: vi.fn(() => true),
   // 默认无 patchable opener — 走新建流式卡路径
   claimPatchableOpener: vi.fn(() => null),
   resolveMediaUrl: vi.fn((): string | null => null),
@@ -62,6 +66,12 @@ describe('feishu streaming text', () => {
     mocks.sendFileToChat.mockResolvedValue({ ok: true, messageId: 'om_mirror_file' });
     mocks.sendText.mockResolvedValue({ messageId: 'om_fallback' });
     mocks.resolveMediaUrl.mockReturnValue(null);
+    mocks.getAccountEpoch.mockReturnValue(1);
+    mocks.getBoundClient.mockReturnValue({ pinned: true });
+    mocks.isPinnedAccountCurrent.mockReturnValue(true);
+    mocks.runWithPinnedAccount.mockImplementation(async (_pin: unknown, fn: () => Promise<void>) =>
+      fn(),
+    );
   });
 
   it('keeps an in-limit final card unchanged', async () => {
@@ -243,6 +253,54 @@ describe('feishu streaming text', () => {
     expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).not.toBe(
       messages.streaming.emptyReply,
     );
+  });
+
+  it('drops a deferred parent-chat mirror after Feishu credentials rebind', async () => {
+    vi.mocked(waitForMirrorConfirmation).mockResolvedValueOnce(false);
+    let deferred: (() => void) | undefined;
+    vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
+      deferred = run;
+    });
+
+    await mirrorFinal('oc_group', 'k'.repeat(64), '终态正文');
+    expect(deferred).toBeDefined();
+    expect(mocks.sendCardToChat).not.toHaveBeenCalled();
+
+    mocks.getAccountEpoch.mockReturnValue(2);
+    mocks.getBoundClient.mockReturnValue({ pinned: false });
+    deferred?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mocks.sendCardToChat).not.toHaveBeenCalled();
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    expect(mocks.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it('drops a handle-deferred parent-chat mirror after Feishu credentials rebind', async () => {
+    vi.mocked(waitForMirrorConfirmation).mockResolvedValueOnce(false);
+    let deferred: (() => void) | undefined;
+    vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
+      deferred = run;
+    });
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'l'.repeat(64),
+    });
+    await handle.finalize('话题终态');
+    expect(deferred).toBeDefined();
+    expect(mocks.sendCardToChat).not.toHaveBeenCalled();
+
+    mocks.getAccountEpoch.mockReturnValue(2);
+    mocks.getBoundClient.mockReturnValue({ pinned: false });
+    deferred?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mocks.sendCardToChat).not.toHaveBeenCalled();
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
   });
 
   it('catches late-confirmation one-shot mirror failures instead of unhandledRejection', async () => {

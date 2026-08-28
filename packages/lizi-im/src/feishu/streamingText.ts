@@ -33,6 +33,10 @@ import {
   sendCardToChat,
   sendText,
   claimPatchableOpener,
+  getAccountEpoch,
+  getBoundClient,
+  runWithPinnedAccount,
+  isPinnedAccountCurrent,
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
 import { getLog } from './moduleScope.js';
@@ -383,13 +387,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   private async sendOrScheduleMirror(result: FinalCardResult): Promise<void> {
     const key = this.mirrorKey;
     if (!this.mirrorChatId || !key) return;
-    if (await waitForMirrorConfirmation(key)) {
-      await this.mirrorFinalResult(result);
-      return;
-    }
-    scheduleMirrorOnConfirmation(key, () => {
-      void this.mirrorFinalResult(result);
-    });
+    await sendOrScheduleMirror(key, () => this.mirrorFinalResult(result));
   }
 
   private async mirrorFinalResult(result: FinalCardResult): Promise<void> {
@@ -407,6 +405,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       );
       return;
     }
+    if (!isPinnedAccountCurrent()) return;
     await sendMirroredFiles(chatId, key, result.fileLinks, this.allowedFileRoots);
   }
 }
@@ -468,6 +467,7 @@ async function sendMirroredFiles(
         );
         return;
       }
+      if (!isPinnedAccountCurrent()) return;
       try {
         const sent = await sendFileToChat(
           chatId,
@@ -497,12 +497,18 @@ async function sendOrScheduleMirror(
   mirrorKey: string,
   send: () => Promise<void>,
 ): Promise<void> {
+  const epoch = getAccountEpoch();
+  const pinned = getBoundClient();
+  const runPinned = async (): Promise<void> => {
+    if (!pinned || getAccountEpoch() !== epoch) return;
+    await runWithPinnedAccount({ client: pinned, epoch }, send);
+  };
   if (await waitForMirrorConfirmation(mirrorKey)) {
-    await send();
+    await runPinned();
     return;
   }
   scheduleMirrorOnConfirmation(mirrorKey, () => {
-    void send().catch((err) => {
+    void runPinned().catch((err) => {
       getLog().warn(
         `[feishu/streamingText] deferred parent-chat mirror failed (non-fatal): ${
           err instanceof Error ? err.message : String(err)
@@ -553,10 +559,12 @@ export async function mirrorFinal(
       for (const result of results) {
         if (result) imageMap.set(result[0], result[1]);
       }
+      if (!isPinnedAccountCurrent()) return;
     }
     const imageKeys = await uploadExtraImageKeys(
       extraImageAbsPaths.filter((absPath) => !bodyImageAbsPaths.has(absPath)),
     );
+    if (!isPinnedAccountCurrent()) return;
     const fileLinks = collectXdtFileLinks(text);
     const cardText = stripXdtFileLinks(text);
     const cardTextTrimmed = cardText.trim();
@@ -577,6 +585,7 @@ export async function mirrorFinal(
         : buildMarkdownCardV2(visibleText),
     );
     await sendCardToChat(chatId, card, mirrorUuid(mirrorKey, 'card'));
+    if (!isPinnedAccountCurrent()) return;
     await sendMirroredFiles(chatId, mirrorKey, fileLinks, allowedFileRoots);
   };
   await sendOrScheduleMirror(mirrorKey, send);

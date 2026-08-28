@@ -156,6 +156,59 @@ describe('Feishu native thread/main dual delivery', () => {
     expect(scheduled).toHaveBeenCalledTimes(1);
   });
 
+  it('writes a recent-thread tombstone when a pending pair is capacity-evicted', async () => {
+    // Must stay in lockstep with dualDelivery MAX_PENDING (512).
+    const pendingCap = 512;
+    const first = await coordinateDualDelivery(
+      input({ createTime: '1', messageId: 'om_t0', threadId: 'omt_0' }),
+    );
+    expect(first).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+
+    for (let i = 1; i <= pendingCap; i++) {
+      await coordinateDualDelivery(
+        input({
+          createTime: String(i + 1),
+          messageId: `om_t${i}`,
+          threadId: `omt_${i}`,
+        }),
+      );
+    }
+
+    vi.useFakeTimers();
+    const lateFlat = coordinateDualDelivery(
+      input({ createTime: '1', messageId: 'om_flat', threadId: '' }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(lateFlat).resolves.toEqual({ kind: 'suppress-main-copy' });
+  });
+
+  it('writes a recent-flat tombstone when a pending pair is capacity-evicted', async () => {
+    const pendingCap = 512;
+    const firstFlat = coordinateDualDelivery(
+      input({ createTime: '1', messageId: 'om_f0', threadId: '' }),
+    );
+    for (let i = 1; i <= pendingCap; i++) {
+      void coordinateDualDelivery(
+        input({
+          createTime: String(i + 1),
+          messageId: `om_f${i}`,
+          threadId: '',
+        }),
+      );
+    }
+    const firstDecision = await firstFlat;
+    expect(firstDecision).toMatchObject({ kind: 'dispatch' });
+    if (firstDecision.kind !== 'dispatch' || !firstDecision.commitUnpairedFlat) {
+      throw new Error('evicted unpaired flat must expose commitUnpairedFlat');
+    }
+
+    const lateTopic = await coordinateDualDelivery(
+      input({ createTime: '1', messageId: 'om_t0', threadId: 'omt_0' }),
+    );
+    expect(lateTopic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(firstDecision.commitUnpairedFlat()).toBe(false);
+  });
+
   it('does not suppress a copy after the late-copy window, and drops the deferred mirror', async () => {
     vi.useFakeTimers();
     const topic = await coordinateDualDelivery(input());

@@ -18,6 +18,7 @@
  * `img` elements directly.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
@@ -394,7 +395,38 @@ export function getBoundCreds(): BotCredentials | null {
   return creds;
 }
 
+interface PinnedAccount {
+  client: Lark.Client;
+  epoch: number;
+}
+
+const pinnedAccount = new AsyncLocalStorage<PinnedAccount>();
+
+/** Run outbound work against the client captured at schedule time. */
+export function runWithPinnedAccount<T>(
+  pin: PinnedAccount,
+  fn: () => Promise<T> | T,
+): Promise<T> | T {
+  return pinnedAccount.run(pin, fn);
+}
+
+/** `true` when no pin is active, or the pin still matches the current account epoch. */
+export function isPinnedAccountCurrent(): boolean {
+  const pin = pinnedAccount.getStore();
+  if (!pin) return true;
+  return pin.epoch === accountEpoch;
+}
+
 function ensureClient(): Lark.Client {
+  const pin = pinnedAccount.getStore();
+  if (pin) {
+    if (pin.epoch !== accountEpoch) {
+      throw new Error(
+        '[feishu/outbound] pinned Feishu account was replaced — send aborted',
+      );
+    }
+    return pin.client;
+  }
   if (!client)
     throw new Error('[feishu/outbound] Lark.Client not bound — feishu connection not established');
   return client;

@@ -141,6 +141,13 @@ function pruneConfirmed(now: number): void {
   }
 }
 
+function settleUnpairedPending(key: string, entry: PendingLogicalSend): void {
+  const now = Date.now();
+  if (entry.threadMessageId) rememberRecent(recentThreads, key, now);
+  else if (entry.flatMessageIds.size > 0) rememberRecentFlat(key, now);
+  entry.resolveDecision(false);
+}
+
 function prunePending(): void {
   while (pending.size > MAX_PENDING) {
     const oldestKey = pending.keys().next().value;
@@ -149,7 +156,7 @@ function prunePending(): void {
     pending.delete(oldestKey);
     if (entry) {
       clearTimeout(entry.timer);
-      entry.resolveDecision(false);
+      settleUnpairedPending(oldestKey, entry);
     }
   }
 }
@@ -167,10 +174,7 @@ function createPending(key: string): PendingLogicalSend {
     timer: setTimeout(() => {
       if (pending.get(key) !== entry) return;
       pending.delete(key);
-      const now = Date.now();
-      if (entry.threadMessageId) rememberRecent(recentThreads, key, now);
-      else if (entry.flatMessageIds.size > 0) rememberRecentFlat(key, now);
-      entry.resolveDecision(false);
+      settleUnpairedPending(key, entry);
     }, PAIR_WINDOW_MS),
   };
   pending.set(key, entry);
