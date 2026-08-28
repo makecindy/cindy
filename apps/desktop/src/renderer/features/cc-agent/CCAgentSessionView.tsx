@@ -3730,10 +3730,10 @@ export function CCAgentSessionView({
     [sessionId, t],
   );
 
-  // delayed-create:device-link / 远程草稿把首条登记在 pending 里,等 session
-  // 完全 hydrate(historyLoaded + workingDir 就位)后再 sendMessage。本机新建已在
-  // 草稿路由发出,不会 setPending。一次性消费 + ref guard,防 StrictMode 双 mount /
-  // 重渲染时重复发送。
+  // delayed-create:device-link / 远程草稿,以及本机以 `/` 开头的首条,把内容登记在
+  // pending 里,等 session 完全 hydrate 后再由 maybeDispatchDesktopSlashCommand /
+  // sendMessage 消费。本机普通文本已在草稿路由发出。一次性消费 + ref guard,防
+  // StrictMode 双 mount / 重渲染时重复发送。
   const pendingConsumedRef = useRef(false);
   useEffect(() => {
     if (!sessionId || !historyLoaded || !session) return;

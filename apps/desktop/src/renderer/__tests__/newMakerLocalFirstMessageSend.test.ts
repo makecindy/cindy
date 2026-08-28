@@ -39,7 +39,9 @@ describe('NewMakerDraftRoute local first-message send', () => {
     const localSend = source.indexOf('const sendPromise = makerChatStore.sendMessage(', localFence);
     const pendingAfterSend = source.indexOf('setPending(newSession.id', localSend);
     expect(source).toContain('setPending(remoteSessionId, {');
-    expect(pendingSource).toContain('本机新建不走这里:草稿路由 createSession 后直接 sendMessage');
+    expect(pendingSource).toContain(
+      '本机新建的普通文本不走这里:草稿路由 createSession 后直接 sendMessage',
+    );
     expect(pendingAfterSend).toBe(-1);
   });
 
@@ -66,18 +68,21 @@ describe('NewMakerDraftRoute local first-message send', () => {
     expect(falseRestore).not.toBe(catchRestore);
   });
 
-  it('dispatches local /review from the draft route and keeps other desktop commands on SessionView', () => {
-    const reviewStart = source.indexOf('window.electronAPI.maker.startReview({', localFence);
-    const desktopPending = source.indexOf(
-      "if (hit?.kind === 'desktop') {",
+  it('hands slash-looking first messages to SessionView instead of copying desktop dispatch', () => {
+    const slashMatch = source.indexOf('const slashMatch = message.match(', localFence);
+    const pendingHandoff = source.indexOf('setPending(newSession.id, {', slashMatch);
+    const sendPromise = source.indexOf(
+      'const sendPromise = makerChatStore.sendMessage(',
       localFence,
     );
-    const pendingHandoff = source.indexOf('setPending(newSession.id, {', desktopPending);
+    const reviewStart = source.indexOf('window.electronAPI.maker.startReview({', localFence);
 
-    expect(reviewStart).toBeGreaterThan(localFence);
-    expect(desktopPending).toBeGreaterThan(localFence);
-    expect(pendingHandoff).toBeGreaterThan(desktopPending);
+    expect(slashMatch).toBeGreaterThan(localFence);
+    expect(pendingHandoff).toBeGreaterThan(slashMatch);
+    expect(pendingHandoff).toBeLessThan(sendPromise);
+    expect(reviewStart).toBe(-1);
     expect(sessionViewSource).toContain('const pending = consumePending(sessionId);');
-    expect(sessionViewSource).toContain('本机新建已在');
+    expect(sessionViewSource).toContain('maybeDispatchDesktopSlashCommand');
+    expect(sessionViewSource).toContain('本机普通文本已在草稿路由发出');
   });
 });

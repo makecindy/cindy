@@ -1,10 +1,12 @@
 /**
  * pendingFirstMessage —— 跨路由把「还不能在草稿页发出的首条」递交给真实 SessionView。
  *
- * 本机新建不走这里:草稿路由 createSession 后直接 sendMessage,再 navigate。
+ * 本机新建的普通文本不走这里:草稿路由 createSession 后直接 sendMessage,再 navigate。
  * 切走只换画面,发送在 makerChatStore 里继续,不依赖 SessionView hydrate。
+ * 以 `/` 开头的本机首条仍走 setPending:desktop / Pi 分派必须等 SessionView 挂上
+ * (SSH 跳过控制端 skill、远端 /review 拒绝、Pi runtime 重试),不能在草稿路由复制一套。
  *
- * 仍走这套交接的是 device-link 远程草稿(含开协同):对端建会话之后,首条必须等
+ * 仍走这套交接的还有 device-link 远程草稿(含开协同):对端建会话之后,首条必须等
  * SessionView 挂上隧道订阅 / 开协同,不能挡在 navigate 前面。
  *
  *   NewMakerDraftRoute.handleSend(远程)
@@ -124,8 +126,9 @@ export function consumePendingGoal(sessionId: string): PendingGoalPayload | null
 // ─── 远程协同交接的可恢复副本 ──────────────────────────────────────────────────
 //
 // 为什么只有 remoteCollab 这条路径要落盘(greptile P1):
-// 本机新建已在草稿路由直接 sendMessage,不经过这套内存 pending。仍走 setPending 的
-// 是 device-link 远程草稿。**device-link 远程交接**和本机不同 ——
+// 本机普通文本已在草稿路由直接 sendMessage。仍走 setPending 的是 device-link
+// 远程草稿,以及本机以 `/` 开头、必须交给 SessionView 分派的首条。
+// **device-link 远程交接**和本机不同 ——
 // consume 之后还要 await 隧道往返:开协同要等被控端起 Worker(正常一两秒,慢设备会一路走到
 // 30s 隧道超时再加 6×3s 回查),起目标之前还要先 await 一次 `deviceLink.subscribe`
 // (同样是 invoke,同样可能走到 30s)。这段时间用户输入只存在于渲染进程内存里,
