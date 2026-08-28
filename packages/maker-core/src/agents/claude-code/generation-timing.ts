@@ -6,6 +6,12 @@ export interface ClaudeGenerationState {
   durationMs: number;
   pendingToolIds: Set<string>;
   reliable: boolean;
+  /**
+   * True after this turn observed a child assistant/stream (`parent_tool_use_id`).
+   * Live tok/s then uses parent-only streamed output instead of the result
+   * aggregate, which still includes subagent tokens.
+   */
+  sawSubagent: boolean;
   heartbeatAt: number | null;
   heartbeatTimer: ReturnType<typeof setInterval> | null;
 }
@@ -16,6 +22,7 @@ export function newClaudeGenerationState(): ClaudeGenerationState {
     durationMs: 0,
     pendingToolIds: new Set(),
     reliable: true,
+    sawSubagent: false,
     heartbeatAt: null,
     heartbeatTimer: null,
   };
@@ -65,6 +72,7 @@ export function resetClaudeGenerationTiming(state: ClaudeGenerationState): void 
   state.pendingToolIds.clear();
   state.durationMs = 0;
   state.reliable = true;
+  state.sawSubagent = false;
 }
 
 export function beginClaudeGeneration(state: ClaudeGenerationState, startedAt = Date.now()): void {
@@ -124,4 +132,8 @@ export function finalizeClaudeGeneration(
 
 export function markClaudeGenerationUnreliable(state: ClaudeGenerationState): void {
   state.reliable = false;
+}
+
+export function noteClaudeSubagent(state: ClaudeGenerationState): void {
+  state.sawSubagent = true;
 }
