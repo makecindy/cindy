@@ -245,6 +245,40 @@ describe('session runtime control wiring', () => {
     );
   });
 
+  it('restores host stores and retires the live session after a post-persistence failure', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const rollback = setModel.indexOf(
+      'const rollbackAppliedRuntimeSelection = async (): Promise<boolean> => {',
+    );
+    const sqliteRestore = setModel.indexOf('rollbackPersistedCodexRuntimeSelection({', rollback);
+    const ownerGuard = setModel.indexOf('const runtimeRecoveryCurrent =', sqliteRestore);
+    const restoreStores = setModel.indexOf('restoreControlStores();', ownerGuard);
+    const retireLiveSession = setModel.indexOf(
+      'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
+      restoreStores,
+    );
+    const projectionRead = setModel.indexOf('const projectionMeta = await maker.getSessionMeta(sessionId);');
+    const outerCatch = setModel.lastIndexOf('} catch (err) {');
+
+    expect(sqliteRestore).toBeGreaterThan(rollback);
+    expect(ownerGuard).toBeGreaterThan(sqliteRestore);
+    expect(restoreStores).toBeGreaterThan(ownerGuard);
+    expect(retireLiveSession).toBeGreaterThan(restoreStores);
+    expect(setModel.slice(ownerGuard, restoreStores)).toContain('runtimeOwnerBoundaryCurrent()');
+    expect(setModel.slice(ownerGuard, restoreStores)).toContain(
+      'getCurrentDbClientSnapshot()?.clientEpoch === runtimeDbSnapshot.clientEpoch',
+    );
+    expect(projectionRead).toBeGreaterThan(retireLiveSession);
+    expect(outerCatch).toBeGreaterThan(projectionRead);
+    expect(setModel.indexOf('await rollbackAppliedRuntimeSelection();', outerCatch)).toBeGreaterThan(
+      outerCatch,
+    );
+  });
+
   it('treats teardown pending as stale at the final relink commit boundary', () => {
     const relink = handlerBody(
       registerSource,

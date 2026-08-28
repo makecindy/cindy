@@ -15555,6 +15555,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             fastMode: boolean;
           }
         | undefined;
+      let appliedRuntimeSelectionWasDeferred = false;
       const rollbackAppliedCodexThreadRelink = async (): Promise<boolean> => {
         const receipt = appliedCodexThreadRelink;
         if (!receipt) return true;
@@ -15617,11 +15618,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         appliedCodexThreadRelink = undefined;
         if (!restored || !restoredState) return false;
 
-        if (
+        const runtimeRecoveryCurrent =
           runtimeOwnerBoundaryCurrent() &&
           isDataOwnerBroadcastScopeCurrent(runtimeOwnerScope) &&
-          getCurrentDbClientSnapshot()?.clientEpoch === runtimeDbSnapshot.clientEpoch
-        ) {
+          getCurrentDbClientSnapshot()?.clientEpoch === runtimeDbSnapshot.clientEpoch;
+        if (runtimeRecoveryCurrent) {
+          // Device Link receives this handler's failure as the complete SET_MODEL result and
+          // does not issue a renderer-side rollback. Restore the host stores and retire any
+          // already-mutated live Session in the same compensation unit as the SQLite route.
+          pendingCredentialSwitchHolder?.clear(sessionId);
+          restoreControlStores();
+          const recoveryErrors: unknown[] = [];
+          if (!appliedRuntimeSelectionWasDeferred && maker.getSession(sessionId)) {
+            try {
+              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+            } catch (error) {
+              recoveryErrors.push(error);
+            }
+          }
+          if (previousRuntime.pendingCredentialSwitch) {
+            pendingCredentialSwitchHolder?.register(
+              sessionId,
+              previousRuntime.pendingCredentialSwitch,
+            );
+          } else if (recoveryErrors.length === 0) {
+            wakeSessionInputAfterCredentialSwitch(sessionId);
+          }
           broadcastSessionPatched(
             sessionId,
             {
@@ -15629,6 +15651,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             },
             runtimeOwnerScope,
           );
+          if (recoveryErrors.length > 0) {
+            throw new AggregateError(
+              recoveryErrors,
+              'persisted runtime selection rollback could not retire the live session',
+            );
+          }
         }
         return true;
       };
@@ -15678,6 +15706,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           deferred: result.status === 'deferred',
           superseded: false,
         };
+        appliedRuntimeSelectionWasDeferred = response.deferred;
         const rollbackRuntimeSelectionForSupersededOwner = async (): Promise<boolean> => {
           if (runtimeOwnerBoundaryCurrent()) return false;
           const restored = await rollbackAppliedRuntimeSelection();
