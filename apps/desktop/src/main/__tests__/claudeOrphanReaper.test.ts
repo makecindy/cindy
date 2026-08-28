@@ -49,6 +49,12 @@ async function importReaper(options: {
     execFileSync: options.execFileSync ?? vi.fn(),
     spawnSync: options.spawnSync ?? vi.fn(),
   }));
+  // These fixtures assert the Global region's CindyGlobal markers. Production
+  // derives the region from brandRegion; pin it here instead of inheriting the
+  // test runner's build-region define (which can legitimately be CN).
+  vi.doMock('../../shared/brandRegion.js', () => ({
+    CURRENT_CINDY_REGION: 'global',
+  }));
   return import('../claude-orphan-reaper');
 }
 
@@ -57,6 +63,7 @@ describe('reapClaudeOrphansSync', () => {
     vi.restoreAllMocks();
     vi.doUnmock('../logger');
     vi.doUnmock('node:child_process');
+    vi.doUnmock('../../shared/brandRegion.js');
     restorePlatform();
     logger.debug.mockReset();
     logger.info.mockReset();

@@ -29,11 +29,14 @@ import {
   patchCardRaw,
   uploadImage,
   sendFile,
+  sendFileToChat,
+  sendCardToChat,
   sendText,
   claimPatchableOpener,
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
 import { getLog } from './moduleScope.js';
+import { waitForMirrorConfirmation } from './dualDelivery.js';
 import { messages as transportMessages } from './messages.js';
 import type { StreamingTextHandle } from '../types.js';
 // xdt-* 引用解析抽到渠道无关模块(slack streamingText 共用同一套语义)
@@ -81,6 +84,15 @@ function fitCardToLimit(
   return fitted;
 }
 
+function mirrorUuid(key: string, suffix: string): string {
+  return `${key.slice(0, 32)}-${suffix}`.slice(0, 50);
+}
+
+interface FinalCardResult {
+  card: unknown;
+  fileLinks: ReturnType<typeof collectXdtFileLinks>;
+}
+
 class FeishuStreamingTextHandle implements StreamingTextHandle {
   readonly messageId: string;
   private readonly openId: string;
@@ -89,6 +101,8 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   private pending: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private finalized = false;
+  private readonly mirrorChatId?: string;
+  private readonly mirrorKey?: string;
   /**
    * 工具结果(tool_result_full event)带过来的图片 absPath, finalize 时跟文本里
    * xdt-image markdown 链接一起 upload + 拼到 card 末尾。host 主进程负责把
@@ -97,9 +111,17 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
    */
   private extraImageAbsPaths: string[] = [];
 
-  constructor(messageId: string, openId: string, initial: string) {
+  constructor(
+    messageId: string,
+    openId: string,
+    initial: string,
+    mirrorChatId?: string,
+    mirrorKey?: string,
+  ) {
     this.messageId = messageId;
     this.openId = openId;
+    this.mirrorChatId = mirrorChatId;
+    this.mirrorKey = mirrorKey;
     // `initial` is what's currently DISPLAYED in feishu (e.g. "🧠 思考中...").
     // `buffer` is what we've ACCUMULATED to display — starts empty so the
     // first real append() *replaces* the placeholder rather than appending
@@ -301,6 +323,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     //    c) empty text + only files → "🎉 N 个文件已送达" placeholder
     //    d) totally empty → fallback "(空回复)"
     const hasAnyImage = imageUrls.length > 0 || extraImageKeys.length > 0;
+    let primaryCardPatched = false;
     try {
       let card: unknown;
       if (cardTextTrimmed.length === 0 && !hasAnyImage && fileLinks.length > 0) {
@@ -319,8 +342,24 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           : buildMarkdownCardV2(visibleText),
       );
       await patchCardRaw(this.messageId, card);
+      primaryCardPatched = true;
       this.flushed = this.buffer;
+      if (
+        this.mirrorChatId &&
+        this.mirrorKey &&
+        (await waitForMirrorConfirmation(this.mirrorKey))
+      ) {
+        await this.mirrorFinalResult({ card, fileLinks });
+      }
     } catch (err) {
+      if (primaryCardPatched) {
+        log.warn(
+          `[feishu/streamingText] parent-chat mirror failed after primary finalize (non-fatal): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`[feishu/streamingText] finalize patch failed: ${msg}`);
       const notice = transportMessages.streaming.deliveryFailed;
@@ -339,18 +378,75 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       }
     }
   }
+
+  private async mirrorFinalResult(result: FinalCardResult): Promise<void> {
+    const chatId = this.mirrorChatId;
+    const key = this.mirrorKey;
+    if (!chatId || !key) return;
+    const log = getLog();
+    try {
+      await sendCardToChat(chatId, result.card, mirrorUuid(key, 'card'));
+    } catch (err) {
+      log.warn(
+        `[feishu/streamingText] parent-chat mirror card failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return;
+    }
+    await Promise.all(
+      result.fileLinks.map(async (link, index) => {
+        try {
+          const sent = await sendFileToChat(
+            chatId,
+            link.absPath,
+            link.alt || undefined,
+            mirrorUuid(key, `f${index}`),
+          );
+          if (!sent.ok) {
+            log.warn(
+              `[feishu/streamingText] parent-chat mirror file failed (non-fatal): ${
+                sent.reason ?? 'unknown'
+              }`,
+            );
+          }
+        } catch (err) {
+          log.warn(
+            `[feishu/streamingText] parent-chat mirror file threw (non-fatal): ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }),
+    );
+  }
 }
 
 export async function start(
   openId: string,
   initial: string = transportMessages.streaming.randomThinking(),
+  opts?: { mirrorChatId?: string; mirrorKey?: string },
 ): Promise<StreamingTextHandle> {
   // 群主流 @ 开话题时, 开场白卡就是本轮流式卡(openThread 已用它开好话题) —
   // 认领后直接 patch, 不再新建一条「开个话题」占位回复。
   const claimed = claimPatchableOpener(openId);
-  if (claimed) return new FeishuStreamingTextHandle(claimed, openId, initial);
+  if (claimed) {
+    return new FeishuStreamingTextHandle(
+      claimed,
+      openId,
+      initial,
+      opts?.mirrorChatId,
+      opts?.mirrorKey,
+    );
+  }
   const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial));
-  return new FeishuStreamingTextHandle(messageId, openId, initial);
+  return new FeishuStreamingTextHandle(
+    messageId,
+    openId,
+    initial,
+    opts?.mirrorChatId,
+    opts?.mirrorKey,
+  );
 }
 
 /**
@@ -359,4 +455,63 @@ export async function start(
  */
 export async function patchMarkdown(messageId: string, markdown: string): Promise<void> {
   await patchCardRaw(messageId, buildMarkdownCardV2(markdown));
+}
+
+/** One-shot mirror used when the primary streaming surface failed to start. */
+export async function mirrorFinal(
+  chatId: string,
+  mirrorKey: string,
+  text: string,
+  extraImageAbsPaths: readonly string[] = [],
+): Promise<void> {
+  if (!(await waitForMirrorConfirmation(mirrorKey))) return;
+  const imageUrls = collectXdtImageUrls(text);
+  const imageMap = new Map<string, string>();
+  if (imageUrls.length > 0) {
+    const { resolveFeishuMediaUrl } = await import('./mediaCache.js');
+    const { getHost } = await import('./moduleScope.js');
+    const results = await Promise.all(
+      imageUrls.map(async (url) => {
+        try {
+          const absPath =
+            getHost().media?.resolveMediaUrl(url) ??
+            resolveFeishuMediaUrl(url, getHost().paths.feishuMediaDir).absPath;
+          const key = await uploadImage(absPath);
+          return key ? ([url, key] as const) : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    for (const result of results) {
+      if (result) imageMap.set(result[0], result[1]);
+    }
+  }
+  const imageKeys: string[] = [];
+  const results = await Promise.all(extraImageAbsPaths.map((absPath) => uploadImage(absPath)));
+  for (const key of results) {
+    if (key) imageKeys.push(key);
+  }
+  const fileLinks = collectXdtFileLinks(text);
+  const cardText = stripXdtFileLinks(text);
+  const hasImages = imageUrls.length > 0 || imageKeys.length > 0;
+  let card = hasImages
+    ? buildMixedMarkdownCardV2(cardText, imageMap, imageKeys)
+    : buildMarkdownCardV2(cardText.trim() ? cardText : transportMessages.streaming.emptyReply);
+  card = fitCardToLimit(cardText, card, (visibleText) =>
+    hasImages
+      ? buildMixedMarkdownCardV2(visibleText, imageMap, imageKeys)
+      : buildMarkdownCardV2(visibleText),
+  );
+  await sendCardToChat(chatId, card, mirrorUuid(mirrorKey, 'card'));
+  await Promise.all(
+    fileLinks.map((link, index) =>
+      sendFileToChat(
+        chatId,
+        link.absPath,
+        link.alt || undefined,
+        mirrorUuid(mirrorKey, `f${index}`),
+      ),
+    ),
+  );
 }

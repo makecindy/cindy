@@ -58,6 +58,10 @@ import { parseIncoming } from './incomingContent.js';
 import { downloadAttachments } from './attachmentDownloader.js';
 import { parseCardAction } from './cardActionParser.js';
 import { encodeLaneUserId } from './codec.js';
+import {
+  coordinateDualDelivery,
+  resetDualDeliveryForTest,
+} from './dualDelivery.js';
 import { getLog } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
 import type { BotCredentials, FeishuConnectionStatus } from './internal-types.js';
@@ -759,6 +763,7 @@ function abandonInboundTurn(botAppId: string, messageId: string): void {
 /** 测试注入口 — 生产代码不要调用(生产语义就是跨 stop/start 不清空)。 */
 export function resetInboundDedupeForTest(): void {
   seenInboundMessages.clear();
+  resetDualDeliveryForTest();
 }
 
 const DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 1500;
@@ -1246,6 +1251,9 @@ interface RawMessageEvent {
   sender?: { sender_id?: { open_id?: string } };
   message?: {
     message_id?: string;
+    root_id?: string;
+    parent_id?: string;
+    create_time?: string;
     chat_id?: string;
     thread_id?: string;
     chat_type?: string;
@@ -1325,8 +1333,6 @@ async function handleIncomingMessage(
   const senderOpenId = data.sender.sender_id?.open_id;
   const messageId = data.message.message_id;
   const chatId = data.message.chat_id;
-  const msgType = data.message.message_type ?? '';
-  const rawContent = data.message.content ?? '';
   if (!senderOpenId || !messageId || !chatId) return;
 
   // 重推闸门 —— 必须在第一个 await 之前同步认领(见 claimInboundMessage), 也必须
@@ -1373,6 +1379,7 @@ async function processClaimedMessage(
   // 提取分支后 data.message 的窄化不跨函数传递。
   const msgType = data.message?.message_type ?? '';
   const rawContent = data.message?.content ?? '';
+  let finalReplyMirrorKey: string | undefined;
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
     if (!mentionsSelf(data.message?.mentions, botOpenId)) return;
@@ -1394,6 +1401,25 @@ async function processClaimedMessage(
         }
       }
       return;
+    }
+
+    const createTime = data.message?.create_time ?? '';
+    if (createTime) {
+      const paired = await coordinateDualDelivery({
+        appId: botAppId,
+        chatId,
+        senderOpenId,
+        createTime,
+        messageType: msgType,
+        rawContent,
+        messageId,
+        threadId: data.message?.thread_id ?? '',
+      });
+      if (paired.kind === 'suppress-main-copy') {
+        log.info('[feishu/wsClient] native thread main-feed copy suppressed');
+        return;
+      }
+      finalReplyMirrorKey = paired.mirrorKey;
     }
   } else {
     // TOFU: first p2p sender becomes owner. Send welcome and continue
@@ -1562,6 +1588,15 @@ async function processClaimedMessage(
         }
       : {}),
     ...(groupContextLane ? { groupContextLane } : {}),
+    ...(finalReplyMirrorKey && data.message?.thread_id
+      ? {
+          finalReplyMirror: {
+            kind: 'parent-chat' as const,
+            chatId,
+            idempotencyKey: finalReplyMirrorKey,
+          },
+        }
+      : {}),
     attachments,
     unsupported,
     raw: data,

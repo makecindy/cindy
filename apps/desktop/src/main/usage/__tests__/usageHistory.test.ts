@@ -693,8 +693,12 @@ describe('readUsageHistoryWith', () => {
       inputTokens: 179_300,
       cacheReadTokens: 1_600_000,
     });
-    // 179.3k * $2 + 9.3k * $6 + 1.6M * $0.50 = $1.2144
-    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(1.2144, 6);
+    // 179.3k * $2 + 9.3k * $6 + 1.6M * $0.50 = $1.2144 USD;
+    // CN 账本按固定汇率投影为 CNY, Global 账本保持 USD。
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(
+      regionalUsdAmount(1.2144),
+      6,
+    );
   });
 
   it('marks estimates pending only when a subscription price is missing during refresh', async () => {

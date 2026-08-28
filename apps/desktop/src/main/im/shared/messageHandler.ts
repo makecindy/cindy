@@ -387,6 +387,7 @@ export function createMessageHandler(
             }
           : {}),
         attachments: event.attachments,
+        ...(event.finalReplyMirror ? { finalReplyMirror: event.finalReplyMirror } : {}),
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)
         scopeKey: threadScoped ? event.scopeKey : undefined,
         // Title generation and similar detached work must stay visible to the

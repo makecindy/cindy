@@ -164,6 +164,20 @@ export interface IMUnsupportedEntry {
   label: string;
 }
 
+/**
+ * Optional terminal-output mirror requested by an inbound channel event.
+ *
+ * Feishu uses this for its native “同时发送到群聊” thread option: the thread
+ * remains the single task/Agent route, while its final answer is copied once
+ * to the parent group timeline. The idempotency key is opaque to the host and
+ * must be stable for the logical user send.
+ */
+export interface IMFinalReplyMirror {
+  kind: 'parent-chat';
+  chatId: string;
+  idempotencyKey: string;
+}
+
 export interface IMMessageEvent {
   channelName: string;
   /** Sender open_id (or channel-equivalent stable user id). */
@@ -233,6 +247,11 @@ export interface IMMessageEvent {
   };
   /** Channel-specific raw event for debug. */
   raw?: unknown;
+  /**
+   * Copy this turn's complete terminal answer to another channel-native
+   * destination without changing the session/lane that runs the Agent.
+   */
+  finalReplyMirror?: IMFinalReplyMirror;
   /**
    * 群历史上下文的取数 lane, 与路由 lane(senderId)分离。仅 feishu 群主流 @
    * 开新话题时设置: 出站路由进新话题 lane, 但上下文前缀仍按触发时所在 lane

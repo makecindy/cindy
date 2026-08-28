@@ -20,6 +20,7 @@ import type { ChannelIM } from '../channelIM.js';
 import type {
   IMHost,
   IMCardActionEvent,
+  IMFinalReplyMirror,
   IMMessageEvent,
   IMStatus,
   InteractiveCardSpec,
@@ -431,8 +432,41 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     );
   }
 
-  startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
-    return streamingText.start(userId, initial);
+  startStreamingText(
+    userId: string,
+    initial?: string,
+    opts?: { finalReplyMirror?: IMFinalReplyMirror },
+  ): Promise<StreamingTextHandle> {
+    const mirror = opts?.finalReplyMirror;
+    return streamingText.start(
+      userId,
+      initial,
+      mirror?.kind === 'parent-chat'
+        ? { mirrorChatId: mirror.chatId, mirrorKey: mirror.idempotencyKey }
+        : undefined,
+    );
+  }
+
+  async mirrorFinalReply(
+    mirror: IMFinalReplyMirror,
+    text: string,
+    opts?: { mediaAbsPaths?: string[] },
+  ): Promise<void> {
+    if (mirror.kind !== 'parent-chat') return;
+    try {
+      await streamingText.mirrorFinal(
+        mirror.chatId,
+        mirror.idempotencyKey,
+        text,
+        opts?.mediaAbsPaths,
+      );
+    } catch (err) {
+      this.log.warn(
+        `parent-chat terminal mirror failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**

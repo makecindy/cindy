@@ -350,6 +350,7 @@ async function createMessage(
   target: SendTarget,
   msgType: string,
   content: string,
+  uuid?: string,
 ): Promise<{ messageId: string }> {
   const c = ensureClient();
   if (target.kind === 'reply') {
@@ -368,7 +369,7 @@ async function createMessage(
   }
   const res = await c.im.v1.message.create({
     params: { receive_id_type: target.kind },
-    data: { receive_id: target.id, msg_type: msgType, content },
+    data: { receive_id: target.id, msg_type: msgType, content, ...(uuid ? { uuid } : {}) },
   });
   const id = res.data?.message_id ?? '';
   if (!id) throw new Error('[feishu/outbound] create: no message_id in response');
@@ -839,6 +840,20 @@ export async function sendCardRaw(
   );
 }
 
+/** Send a terminal-output mirror directly to a parent group main timeline. */
+export async function sendCardToChat(
+  chatId: string,
+  cardJson: unknown,
+  uuid: string,
+): Promise<{ messageId: string }> {
+  return createMessage(
+    { kind: 'chat_id', id: chatId },
+    'interactive',
+    JSON.stringify(cardJson),
+    uuid,
+  );
+}
+
 // ── file send ────────────────────────────────────────────────────────────────
 
 const FEISHU_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
@@ -865,6 +880,30 @@ export async function sendFile(
   absPath: string,
   displayName?: string,
 ): Promise<SendFileResult> {
+  const target = resolveSendTarget(userId);
+  if (!target) {
+    getLog().error(`[feishu/outbound] sendFile: no reply anchor for topic lane ...${userId.slice(-8)}`);
+    return { ok: false, reason: 'SEND_FAIL' };
+  }
+  return sendFileToTarget(target, absPath, displayName);
+}
+
+/** Copy one terminal-output file directly to a parent group main timeline. */
+export async function sendFileToChat(
+  chatId: string,
+  absPath: string,
+  displayName: string | undefined,
+  uuid: string,
+): Promise<SendFileResult> {
+  return sendFileToTarget({ kind: 'chat_id', id: chatId }, absPath, displayName, uuid);
+}
+
+async function sendFileToTarget(
+  target: SendTarget,
+  absPath: string,
+  displayName?: string,
+  uuid?: string,
+): Promise<SendFileResult> {
   const log = getLog();
   const c = ensureClient();
   const baseName = path.basename(absPath);
@@ -875,16 +914,10 @@ export async function sendFile(
   if (stat.size === 0) return { ok: false, reason: 'EMPTY' };
   if (stat.size > FEISHU_FILE_SIZE_LIMIT) return { ok: false, reason: 'TOO_LARGE' };
 
-  const target = resolveSendTarget(userId);
-  if (!target) {
-    log.error(`[feishu/outbound] sendFile: no reply anchor for topic lane ...${userId.slice(-8)}`);
-    return { ok: false, reason: 'SEND_FAIL' };
-  }
-
   // Image fast-path: if the file is a feishu-supported image type and within
   // the image-msg size cap, send as msg_type:image so it previews inline.
   if (isFeishuImageExt(absPath) && stat.size <= FEISHU_IMAGE_MAX_BYTES) {
-    return sendImageMessage(c, target, absPath);
+    return sendImageMessage(c, target, absPath, uuid);
   }
 
   // 1. Upload to obtain file_key.
@@ -909,7 +942,7 @@ export async function sendFile(
 
   // 2. Send message referencing file_key.
   try {
-    const res = await createMessage(target, 'file', JSON.stringify({ file_key: fileKey }));
+    const res = await createMessage(target, 'file', JSON.stringify({ file_key: fileKey }), uuid);
     return { ok: true, messageId: res.messageId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1070,6 +1103,7 @@ async function sendImageMessage(
   c: Lark.Client,
   target: SendTarget,
   absPath: string,
+  uuid?: string,
 ): Promise<SendFileResult> {
   const log = getLog();
   try {
@@ -1082,7 +1116,7 @@ async function sendImageMessage(
     const imageKey = (upRes as { image_key?: string }).image_key;
     if (!imageKey) return { ok: false, reason: 'UPLOAD_FAIL' };
 
-    const res = await createMessage(target, 'image', JSON.stringify({ image_key: imageKey }));
+    const res = await createMessage(target, 'image', JSON.stringify({ image_key: imageKey }), uuid);
     return { ok: true, messageId: res.messageId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -243,6 +243,33 @@ describe('feishu group thread routing', () => {
     expect(events[0].groupContextLane).toBeUndefined();
   });
 
+  it('勾选同时发送到群聊: 不同 message_id 的话题/群副本只派一个话题 turn', async () => {
+    const events = collectMessages();
+    await connect();
+    const topic = groupTopicMessage('同步回答', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000000000';
+    topic.message.message_id = 'om_topic_copy';
+    const flat = groupMainFlowMessage('同步回答', 'om_flat_copy') as {
+      message: Record<string, unknown>;
+    };
+    flat.message.create_time = '1788000000000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+    await flatHandling;
+
+    expect(events).toHaveLength(1);
+    expect(events[0].senderId).toBe('g/oc_chat1/omt_existing');
+    expect(events[0].finalReplyMirror).toEqual({
+      kind: 'parent-chat',
+      chatId: 'oc_chat1',
+      idempotencyKey: expect.any(String),
+    });
+    expect(mocks.openThread).not.toHaveBeenCalled();
+  });
+
   it('开话题失败时降级回群 lane(锚点 = 触发消息)', async () => {
     mocks.openThread.mockResolvedValueOnce({ kind: 'degraded' });
     const events = collectMessages();

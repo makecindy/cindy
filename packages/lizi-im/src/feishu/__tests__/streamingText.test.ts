@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   patchCardRaw: vi.fn(),
   sendCardRaw: vi.fn(),
   sendFile: vi.fn(),
+  sendFileToChat: vi.fn(),
+  sendCardToChat: vi.fn(),
   sendText: vi.fn(),
   uploadImage: vi.fn(),
   // 默认无 patchable opener — 走新建流式卡路径
@@ -11,6 +13,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../outbound.js', () => mocks);
+vi.mock('../dualDelivery.js', () => ({
+  waitForMirrorConfirmation: vi.fn(async () => true),
+}));
 vi.mock('../moduleScope.js', () => ({
   getLog: () => ({ debug: vi.fn(), error: vi.fn(), warn: vi.fn() }),
 }));
@@ -31,6 +36,8 @@ describe('feishu streaming text', () => {
     vi.clearAllMocks();
     mocks.sendCardRaw.mockResolvedValue({ messageId: 'om_stream' });
     mocks.patchCardRaw.mockResolvedValue(undefined);
+    mocks.sendCardToChat.mockResolvedValue({ messageId: 'om_mirror' });
+    mocks.sendFileToChat.mockResolvedValue({ ok: true, messageId: 'om_mirror_file' });
     mocks.sendText.mockResolvedValue({ messageId: 'om_fallback' });
   });
 
@@ -90,5 +97,33 @@ describe('feishu streaming text', () => {
       'ou_owner',
       messages.streaming.deliveryFailed,
     );
+  });
+
+  it('mirrors one finalized card to the parent group with a stable uuid', async () => {
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'a'.repeat(64),
+    });
+    await handle.finalize('最终正文');
+
+    expect(mocks.patchCardRaw).toHaveBeenCalledWith('om_stream', expect.anything());
+    expect(mocks.sendCardToChat).toHaveBeenCalledWith(
+      'oc_group',
+      expect.anything(),
+      `${'a'.repeat(32)}-card`,
+    );
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe('最终正文');
+  });
+
+  it('keeps primary finalize successful when parent-group mirroring fails', async () => {
+    mocks.sendCardToChat.mockRejectedValueOnce(new Error('group rate limited'));
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'b'.repeat(64),
+    });
+
+    await expect(handle.finalize('最终正文')).resolves.toBeUndefined();
+    expect(mocks.patchCardRaw).toHaveBeenCalledTimes(1);
+    expect(mocks.sendText).not.toHaveBeenCalled();
   });
 });

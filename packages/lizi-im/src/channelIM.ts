@@ -18,6 +18,7 @@
 
 import type {
   IMCardActionEvent,
+  IMFinalReplyMirror,
   IMMessageEvent,
   IMStatus,
   InteractiveCardSpec,
@@ -126,8 +127,15 @@ export interface RichChannelIM extends TextChannelIM {
   startStreamingText(
     userId: string,
     initial?: string,
-    opts?: { threadTs?: string },
+    opts?: { threadTs?: string; finalReplyMirror?: IMFinalReplyMirror },
   ): Promise<StreamingTextHandle>;
+
+  /** Best-effort terminal mirror when the primary rich surface could not be created. */
+  mirrorFinalReply?(
+    mirror: IMFinalReplyMirror,
+    text: string,
+    opts?: { mediaAbsPaths?: string[] },
+  ): Promise<void>;
 
   /**
    * 从出站消息的 messageId 提取 thread 维度键(= 该消息作为 thread root 时的
