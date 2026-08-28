@@ -8,6 +8,7 @@ import {
 } from '../maker-host/session-provider-store.js';
 // type-only import:编译期擦除,不会把 codex-proxy-host 的运行时依赖拖进本模块/单测。
 import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
+import type { CodexProviderThreadRelinkReceipt } from './codexProviderThreadRelink.js';
 import {
   CredentialModeSwitchBusyError,
   isCredentialModeSwitchBusyError,
@@ -22,7 +23,10 @@ interface RuntimeSetModelSession {
   codexProxyActive?: boolean | null;
   codexThreadModelProviderId?: string | null;
   model: string;
-  setModel: (model: string, opts?: { providerId?: string | null; effort?: Effort }) => Promise<void>;
+  setModel: (
+    model: string,
+    opts?: { providerId?: string | null; effort?: Effort },
+  ) => Promise<void>;
 }
 
 interface RuntimeSetModelActiveSession {
@@ -65,6 +69,13 @@ export interface ApplyRuntimeSetModelChangeInput {
       model: string;
       providerId: string | null;
       rebuildCodexThread?: boolean;
+      sourceCodexThreadModelProviderId?: string | null;
+      previousRoute?: {
+        model: string;
+        providerId: string | null;
+        effort?: string;
+        fastMode?: boolean;
+      };
     },
   ) => void | Promise<void>;
   /**
@@ -86,9 +97,20 @@ export interface ApplyRuntimeSetModelChangeInput {
    * 模型是否仍需切换 —— 仍需则更新 pending 的模型,不需则取消 pending(review
    * P1 2026-07-04:折扣模型 pending 后切回普通模型,旧实现不清 pending)。
    */
-  getPendingCredentialSwitch?: (
-    sessionId: string,
-  ) => { model: string; providerId: string | null } | undefined;
+  getPendingCredentialSwitch?: (sessionId: string) =>
+    | {
+        model: string;
+        providerId: string | null;
+        rebuildCodexThread?: boolean;
+        sourceCodexThreadModelProviderId?: string | null;
+        previousRoute?: {
+          model: string;
+          providerId: string | null;
+          effort?: string;
+          fastMode?: boolean;
+        };
+      }
+    | undefined;
   /**
    * 当前本地 Codex spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
    * shouldCloseSessionForCredentialSwitch 用它解析隐式来源的凭证家族,精确判定
@@ -102,15 +124,18 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   relinkCodexThreadForProviderSwitch?: (input: {
     sessionId: string;
-    model: string;
-    providerId: string | null;
-  }) => Promise<void>;
+    sourceModel: string;
+    sourceProviderId: string | null;
+    sourceThreadModelProviderId?: string | null;
+    targetModel: string;
+    targetProviderId: string | null;
+  }) => Promise<CodexProviderThreadRelinkReceipt | null>;
   logger?: RuntimeSetModelLogger;
 }
 
 export type ApplyRuntimeSetModelChangeResult =
   /** 直接生效(热切 route / 或已关会话待下次发送重建)。 */
-  | { status: 'applied' }
+  | { status: 'applied'; codexThreadRelink?: CodexProviderThreadRelinkReceipt }
   /** 凭证形态要换但会话自己在跑:已登记 pending,turn 结束后自动生效。 */
   | { status: 'deferred' };
 
@@ -148,9 +173,7 @@ export async function applyRuntimeSetModelChange(
   // 新来源、再换模型时,决策与登记都要沿用那个来源,不能回落到 store 里的旧值
   // (否则会把 pending 的来源覆盖丢)。
   const pendingTarget =
-    normalizedProviderId === undefined
-      ? input.getPendingCredentialSwitch?.(sessionId)
-      : undefined;
+    normalizedProviderId === undefined ? input.getPendingCredentialSwitch?.(sessionId) : undefined;
   const nextProviderId =
     normalizedProviderId !== undefined
       ? normalizedProviderId
@@ -172,15 +195,11 @@ export async function applyRuntimeSetModelChange(
     : false;
   const shouldCloseSession = input.forceSessionRebuild === true || shouldCloseForCredentialSwitch;
   const shouldRelinkCodexThread =
-    shouldCloseForCredentialSwitch &&
-    sess?.agentKind === 'codex' &&
-    !sess.remoteHostId;
+    shouldCloseForCredentialSwitch && sess?.agentKind === 'codex' && !sess.remoteHostId;
   let selfBusyMemo: boolean | undefined;
   const isSelfBusy = (): boolean => {
     if (selfBusyMemo !== undefined) return selfBusyMemo;
-    const active = maker
-      .listActiveSessions()
-      .find((candidate) => candidate.id === sessionId);
+    const active = maker.listActiveSessions().find((candidate) => candidate.id === sessionId);
     selfBusyMemo = active
       ? isLocalSessionBusy(active, isSessionInTurn)
       : isSessionInTurn?.(sessionId) === true;
@@ -246,6 +265,7 @@ export async function applyRuntimeSetModelChange(
     // (Greptile review #1035)。
     const clearedPending = input.getPendingCredentialSwitch?.(sessionId);
     input.clearPendingCredentialSwitch?.(sessionId, { wake: false });
+    let codexThreadRelink: CodexProviderThreadRelinkReceipt | null = null;
     try {
       await prepareLocalSessionCredentialModeSwitch({
         maker,
@@ -259,10 +279,15 @@ export async function applyRuntimeSetModelChange(
             'Codex provider thread relink is required for a credential-family switch',
           );
         }
-        await relinkCodexThreadForProviderSwitch({
+        codexThreadRelink = await relinkCodexThreadForProviderSwitch({
           sessionId,
-          model,
-          providerId: nextProviderId,
+          sourceModel: sess.model,
+          sourceProviderId: currentProviderId,
+          ...(sess.codexThreadModelProviderId !== undefined
+            ? { sourceThreadModelProviderId: sess.codexThreadModelProviderId }
+            : {}),
+          targetModel: model,
+          targetProviderId: nextProviderId,
         });
       }
     } catch (err) {
@@ -297,7 +322,10 @@ export async function applyRuntimeSetModelChange(
       fromModel: sess.model,
       toModel: model,
     });
-    return { status: 'applied' };
+    return {
+      status: 'applied',
+      ...(codexThreadRelink ? { codexThreadRelink } : {}),
+    };
   }
 
   if (providerId !== undefined) {
@@ -323,9 +351,9 @@ export async function applyRuntimeSetModelChange(
     await sess.setModel(model, {
       // model-only 且内存尚未确认来源时不要把 providerId:null 传进 runtime,
       // 否则未 hydrate 的 custom 会话会被清成默认网关。
-      ...(normalizedProviderId !== undefined
-        || hasSessionProvider(sessionId)
-        || pendingTarget !== undefined
+      ...(normalizedProviderId !== undefined ||
+      hasSessionProvider(sessionId) ||
+      pendingTarget !== undefined
         ? { providerId: nextProviderId }
         : {}),
       ...(effort !== undefined ? { effort } : {}),

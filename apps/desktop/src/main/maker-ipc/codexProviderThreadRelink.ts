@@ -11,18 +11,40 @@ export interface CodexProviderThreadRelinkSource {
   workingDir: string | null;
 }
 
+export interface CodexProviderThreadRelinkReceipt {
+  previousSdkSessionId: string;
+  newSdkSessionId: string;
+  /** Restore the source thread only while this relink still owns sdk_session_id. */
+  rollback(): Promise<boolean>;
+}
+
+function resolveForkSourceProviderId(
+  sourceProviderId: string | null,
+  sourceThreadModelProviderId: string | null | undefined,
+): string | null {
+  // thread/start|resume is the fact source when a control plane already overwrote the
+  // route store. Feed forkSdkSession a public provider id that resolves to the same
+  // credential family as the source thread, never the target selection.
+  if (sourceThreadModelProviderId === 'cindy_openai') return 'openai';
+  if (sourceThreadModelProviderId === 'cindy_gateway' && sourceProviderId === 'openai') {
+    return 'xd';
+  }
+  return sourceProviderId;
+}
+
 export interface CodexProviderThreadRelinkDeps {
   readSource(sessionId: string): Promise<CodexProviderThreadRelinkSource | null>;
   fork(input: {
     sourceSdkSessionId: string;
-    model: string;
-    providerId: string | null;
+    sourceModel: string;
+    sourceProviderId: string | null;
     workingDir?: string;
   }): Promise<{ newSdkSessionId: string }>;
   commit(input: {
     sessionId: string;
     expectedSdkSessionId: string;
     newSdkSessionId: string;
+    isCurrent?: () => boolean;
   }): Promise<boolean>;
   onCommitted?(input: {
     sessionId: string;
@@ -33,21 +55,31 @@ export interface CodexProviderThreadRelinkDeps {
 
 export async function relinkCodexProviderThread(
   deps: CodexProviderThreadRelinkDeps,
-  input: { sessionId: string; model: string; providerId: string | null },
+  input: {
+    sessionId: string;
+    sourceModel: string;
+    sourceProviderId: string | null;
+    sourceThreadModelProviderId?: string | null;
+    isCurrent?: () => boolean;
+  },
 ): Promise<{ previousSdkSessionId: string; newSdkSessionId: string } | null> {
   const source = await deps.readSource(input.sessionId);
   if (!source?.sdkSessionId) return null;
 
   const forked = await deps.fork({
     sourceSdkSessionId: source.sdkSessionId,
-    model: input.model,
-    providerId: input.providerId,
+    sourceModel: input.sourceModel,
+    sourceProviderId: resolveForkSourceProviderId(
+      input.sourceProviderId,
+      input.sourceThreadModelProviderId,
+    ),
     ...(source.workingDir ? { workingDir: source.workingDir } : {}),
   });
   const committed = await deps.commit({
     sessionId: input.sessionId,
     expectedSdkSessionId: source.sdkSessionId,
     newSdkSessionId: forked.newSdkSessionId,
+    ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
   });
   if (!committed) {
     throw new Error(`Codex provider thread relink was superseded for session ${input.sessionId}`);

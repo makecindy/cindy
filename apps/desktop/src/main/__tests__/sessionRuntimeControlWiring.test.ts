@@ -186,6 +186,33 @@ describe('session runtime control wiring', () => {
     expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
   });
 
+  it('rolls back a committed Codex thread relink when atomic route persistence fails', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch)');
+    const rollback = setModel.indexOf('await result.codexThreadRelink.rollback()');
+
+    expect(persist).toBeGreaterThan(-1);
+    expect(rollback).toBeGreaterThan(persist);
+    expect(setModel).toContain("throw new Error('Codex thread relink rollback was superseded')");
+  });
+
+  it('keeps the Codex rebuild marker in the production pending-switch projection', () => {
+    const getter = handlerBody(
+      registerSource,
+      'export function getPendingCredentialSwitchTarget(',
+      '// ── Scheduler 撞忙排队桥',
+    );
+
+    expect(getter).toContain('pending.rebuildCodexThread');
+    expect(getter).toContain('{ rebuildCodexThread: true }');
+    expect(getter).toContain('pending.sourceCodexThreadModelProviderId');
+    expect(getter).toContain('pending.previousRoute');
+  });
+
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
       registerSource,

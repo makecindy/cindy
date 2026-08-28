@@ -881,7 +881,10 @@ import {
   applyRuntimeSetModelChange,
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
-import { relinkCodexProviderThread } from './codexProviderThreadRelink.js';
+import {
+  relinkCodexProviderThread,
+  type CodexProviderThreadRelinkReceipt,
+} from './codexProviderThreadRelink.js';
 import {
   applyRuntimeSelectionAxesWithRecovery,
   commitRuntimeAxisAfterPersistence,
@@ -3058,6 +3061,13 @@ export async function registerPendingCredentialSwitchForSession(
     model: string;
     providerId: string | null;
     rebuildCodexThread?: boolean;
+    sourceCodexThreadModelProviderId?: string | null;
+    previousRoute?: {
+      model: string;
+      providerId: string | null;
+      effort?: string;
+      fastMode?: boolean;
+    };
   },
 ): Promise<void> {
   const service = pendingCredentialSwitchHolder;
@@ -3098,8 +3108,11 @@ export async function registerPendingCredentialSwitchForSession(
   const prevModel = live?.model ?? prevRow?.model ?? null;
   service.register(sessionId, {
     ...target,
+    ...(live?.codexThreadModelProviderId !== undefined
+      ? { sourceCodexThreadModelProviderId: live.codexThreadModelProviderId }
+      : {}),
     ...(dbAgentKind ? { agentKind: dbToMakerAgentKind(dbAgentKind) } : {}),
-    ...(prevModel
+    ...(!target.previousRoute && prevModel
       ? {
           previousRoute: {
             model: prevModel,
@@ -3119,18 +3132,22 @@ export async function registerPendingCredentialSwitchForSession(
  */
 export async function relinkCodexThreadForCredentialSwitch(input: {
   sessionId: string;
-  model: string;
-  providerId: string | null;
-}): Promise<void> {
+  sourceModel: string;
+  sourceProviderId: string | null;
+  sourceThreadModelProviderId?: string | null;
+  targetModel: string;
+  targetProviderId: string | null;
+  isCurrent?: () => boolean;
+}): Promise<CodexProviderThreadRelinkReceipt | null> {
   const ownerScope = captureDataOwnerBroadcastScope();
   const dbSnapshot = getCurrentDbClientSnapshot();
   if (!dbSnapshot) throw new Error('Codex provider thread relink requires an active database');
 
-  await relinkCodexProviderThread(
+  const relinked = await relinkCodexProviderThread(
     {
       readSource: async (sessionId) => {
-        const [row] = await dbSnapshot.client
-          .drizzle.select({
+        const [row] = await dbSnapshot.client.drizzle
+          .select({
             sdkSessionId: sessions.sdkSessionId,
             workingDir: sessions.workingDir,
           })
@@ -3139,11 +3156,11 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
           .limit(1);
         return row ?? null;
       },
-      fork: async ({ sourceSdkSessionId, model, providerId, workingDir }) => {
+      fork: async ({ sourceSdkSessionId, sourceModel, sourceProviderId, workingDir }) => {
         const forked = await getMaker().forkSdkSession('codex', {
           sourceSdkSessionId,
-          model,
-          providerId,
+          model: sourceModel,
+          providerId: sourceProviderId,
           upToMessageId: undefined,
           ...(workingDir ? { workingDir } : {}),
           stripEncryptedReasoning: true,
@@ -3151,20 +3168,31 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
         });
         return { newSdkSessionId: forked.newSdkSessionId };
       },
-      commit: async ({ sessionId, expectedSdkSessionId, newSdkSessionId }) => {
+      commit: async ({ sessionId, expectedSdkSessionId, newSdkSessionId, isCurrent }) => {
         if (
+          isCurrent?.() === false ||
           !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
           getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
         ) {
           return false;
         }
         const now = Date.now();
-        const write = await dbSnapshot.client
-          .drizzle.update(sessions)
+        const write = await dbSnapshot.client.drizzle
+          .update(sessions)
           .set({ sdkSessionId: newSdkSessionId, updatedAt: now })
           .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, expectedSdkSessionId)))
           .run();
         if (write.changes === 0) return false;
+        // register()/clear() can supersede a deferred target while SQLite awaits. Undo the
+        // just-written CAS before yielding to the newer generation.
+        if (isCurrent?.() === false) {
+          await dbSnapshot.client.drizzle
+            .update(sessions)
+            .set({ sdkSessionId: expectedSdkSessionId, updatedAt: Date.now() })
+            .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, newSdkSessionId)))
+            .run();
+          return false;
+        }
         broadcastSessionPatched(
           sessionId,
           {
@@ -3180,13 +3208,54 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
           sessionId,
           fromThreadId: previousSdkSessionId,
           toThreadId: newSdkSessionId,
-          model: input.model,
-          providerId: input.providerId,
+          sourceModel: input.sourceModel,
+          sourceProviderId: input.sourceProviderId,
+          targetModel: input.targetModel,
+          targetProviderId: input.targetProviderId,
         });
       },
     },
     input,
   );
+  if (!relinked) return null;
+
+  return {
+    ...relinked,
+    rollback: async () => {
+      if (
+        !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
+        getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
+      ) {
+        return false;
+      }
+      const now = Date.now();
+      const write = await dbSnapshot.client.drizzle
+        .update(sessions)
+        .set({ sdkSessionId: relinked.previousSdkSessionId, updatedAt: now })
+        .where(
+          and(
+            eq(sessions.id, input.sessionId),
+            eq(sessions.sdkSessionId, relinked.newSdkSessionId),
+          ),
+        )
+        .run();
+      if (write.changes === 0) return false;
+      broadcastSessionPatched(
+        input.sessionId,
+        {
+          sdkSessionId: relinked.previousSdkSessionId,
+          updatedAt: new Date(now).toISOString(),
+        },
+        ownerScope,
+      );
+      log.info('Codex provider thread relink rolled back', {
+        sessionId: input.sessionId,
+        fromThreadId: relinked.newSdkSessionId,
+        toThreadId: relinked.previousSdkSessionId,
+      });
+      return true;
+    },
+  };
 }
 
 export function clearPendingCredentialSwitchForSession(
@@ -3205,11 +3274,32 @@ export function wakeSessionInputAfterCredentialSwitch(sessionId: string): void {
   agentInputCoordinatorHolder?.wakeSession(sessionId, 'credential-switch-applied-inline');
 }
 
-export function getPendingCredentialSwitchTarget(
-  sessionId: string,
-): { model: string; providerId: string | null } | undefined {
+export function getPendingCredentialSwitchTarget(sessionId: string):
+  | {
+      model: string;
+      providerId: string | null;
+      rebuildCodexThread?: boolean;
+      sourceCodexThreadModelProviderId?: string | null;
+      previousRoute?: {
+        model: string;
+        providerId: string | null;
+        effort?: string;
+        fastMode?: boolean;
+      };
+    }
+  | undefined {
   const pending = pendingCredentialSwitchHolder?.get(sessionId);
-  return pending ? { model: pending.model, providerId: pending.providerId } : undefined;
+  return pending
+    ? {
+        model: pending.model,
+        providerId: pending.providerId,
+        ...(pending.rebuildCodexThread ? { rebuildCodexThread: true } : {}),
+        ...(pending.sourceCodexThreadModelProviderId !== undefined
+          ? { sourceCodexThreadModelProviderId: pending.sourceCodexThreadModelProviderId }
+          : {}),
+        ...(pending.previousRoute ? { previousRoute: pending.previousRoute } : {}),
+      }
+    : undefined;
 }
 
 // ── Scheduler 撞忙排队桥(scheduler-host runner 消费)────────────────────────
@@ -4537,8 +4627,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         !session.remoteHostId &&
         event.type === 'error' &&
         isTerminalTurnErrorEvent(event) &&
-        (isContextOverflowErrorData(event.data) ||
-          isOversizedHistoryErrorData(event.data));
+        (isContextOverflowErrorData(event.data) || isOversizedHistoryErrorData(event.data));
       if (suppressOverflowBroadcast) {
         overflowSuppressedBroadcasts.set(session.id, {
           sessionId: session.id,
@@ -5991,11 +6080,9 @@ async function confirmReviewExternalArtifacts(
 ): Promise<boolean> {
   const parent = BrowserWindow.fromWebContents(event.sender);
   if (!parent || parent.isDestroyed()) return false;
-  return showReviewArtifactConfirmWindow(
-    parent,
-    buildReviewArtifactConfirmationDialog(items, t),
-    { log },
-  );
+  return showReviewArtifactConfirmWindow(parent, buildReviewArtifactConfirmationDialog(items, t), {
+    log,
+  });
 }
 
 export interface RegisterMakerIpcOptions {
@@ -6130,8 +6217,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // submit_github_issue 工具的 main 侧提交服务(确认桥 → serverApiFetch)。
-  initGithubIssueSubmit(issueConfirmBridge, (sessionId) =>
-    turnModelPromiseBySession.get(sessionId) ?? readSessionModelForUsage(sessionId),
+  initGithubIssueSubmit(
+    issueConfirmBridge,
+    (sessionId) => turnModelPromiseBySession.get(sessionId) ?? readSessionModelForUsage(sessionId),
   );
   initRenameSessionsConfirm(renameSessionsConfirmBridge);
 
@@ -12052,7 +12140,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .limit(1);
       return row ?? null;
     },
-    tryStripOversizedCodexHistory: async ({ sessionId, threadId, model, providerId, workingDir }) => {
+    tryStripOversizedCodexHistory: async ({
+      sessionId,
+      threadId,
+      model,
+      providerId,
+      workingDir,
+    }) => {
       const ownerScope = captureDataOwnerBroadcastScope();
       const dbSnapshot = getCurrentDbClientSnapshot();
       let committed = false;
@@ -12086,8 +12180,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return 'stale';
         }
         const now = Date.now();
-        const write = await dbSnapshot.client
-          .drizzle.update(sessions)
+        const write = await dbSnapshot.client.drizzle
+          .update(sessions)
           .set({ sdkSessionId: forked.newSdkSessionId, updatedAt: now })
           .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, threadId)))
           .run();
@@ -15408,7 +15502,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             // describe the old profile.
             pendingCredentialSwitchHolder?.clear(sessionId);
             restoreControlStores();
-            let recoveryError: unknown;
+            const recoveryErrors: unknown[] = [];
+            if (result.status === 'applied' && result.codexThreadRelink) {
+              try {
+                const restored = await result.codexThreadRelink.rollback();
+                if (!restored) {
+                  throw new Error('Codex thread relink rollback was superseded');
+                }
+              } catch (error) {
+                recoveryErrors.push(error);
+              }
+            }
             if (
               result.status !== 'deferred' &&
               previousRuntime.hadLiveSession &&
@@ -15417,7 +15521,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               try {
                 await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
               } catch (error) {
-                recoveryError = error;
+                recoveryErrors.push(error);
               }
             }
             if (previousRuntime.pendingCredentialSwitch) {
@@ -15425,13 +15529,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 sessionId,
                 previousRuntime.pendingCredentialSwitch,
               );
-            } else if (!recoveryError) {
+            } else if (recoveryErrors.length === 0) {
               wakeSessionInputAfterCredentialSwitch(sessionId);
             }
-            if (recoveryError) {
+            if (recoveryErrors.length > 0) {
               await reconcileRetainedLiveProfile();
               throw new AggregateError(
-                [persistenceError, recoveryError],
+                [persistenceError, ...recoveryErrors],
                 'runtime selection persistence and session recovery both failed',
               );
             }

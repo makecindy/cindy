@@ -235,7 +235,7 @@ describe('applyRuntimeSetModelChange', () => {
       sessionId,
       model: 'codex/gpt-5.5',
       providerId: 'xd',
-      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => null),
     });
 
     expect(closeSession).toHaveBeenCalledWith(sessionId);
@@ -271,7 +271,7 @@ describe('applyRuntimeSetModelChange', () => {
       sessionId,
       model: 'xai/grok-4.3',
       providerId: 'xai',
-      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => null),
     });
 
     expect(closeSession).toHaveBeenCalledWith(sessionId);
@@ -360,7 +360,7 @@ describe('applyRuntimeSetModelChange', () => {
     const setModel = vi.fn(async () => {});
     const closeSession = vi.fn(async () => {});
     const registerPendingCredentialSwitch = vi.fn();
-    const relinkCodexThreadForProviderSwitch = vi.fn(async () => {});
+    const relinkCodexThreadForProviderSwitch = vi.fn(async () => null);
     const maker: RuntimeSetModelMaker = {
       getSession: () => ({
         agentKind: 'codex', remoteHostId: null, codexProxyActive: true,
@@ -388,8 +388,10 @@ describe('applyRuntimeSetModelChange', () => {
     expect(closeSession).toHaveBeenCalledWith(sessionId);
     expect(relinkCodexThreadForProviderSwitch).toHaveBeenCalledWith({
       sessionId,
-      model: 'codex/gpt-5.5',
-      providerId: 'xd',
+      sourceModel: 'gpt-5.4',
+      sourceProviderId: 'openai',
+      targetModel: 'codex/gpt-5.5',
+      targetProviderId: 'xd',
     });
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xd');
@@ -399,7 +401,7 @@ describe('applyRuntimeSetModelChange', () => {
     const sessionId = rememberSession('runtime-set-model-xd-to-subscription-relink');
     setSessionProvider(sessionId, 'xd');
     const closeSession = vi.fn(async () => {});
-    const relinkCodexThreadForProviderSwitch = vi.fn(async () => {});
+    const relinkCodexThreadForProviderSwitch = vi.fn(async () => null);
     const maker: RuntimeSetModelMaker = {
       getSession: () => ({
         agentKind: 'codex',
@@ -432,8 +434,11 @@ describe('applyRuntimeSetModelChange', () => {
     expect(closeSession).toHaveBeenCalledWith(sessionId);
     expect(relinkCodexThreadForProviderSwitch).toHaveBeenCalledWith({
       sessionId,
-      model: 'gpt-5.6-sol',
-      providerId: 'openai',
+      sourceModel: 'codex/gpt-5.6-sol',
+      sourceProviderId: 'xd',
+      sourceThreadModelProviderId: 'cindy_gateway',
+      targetModel: 'gpt-5.6-sol',
+      targetProviderId: 'openai',
     });
     expect(getSessionProvider(sessionId)).toBe('openai');
   });
@@ -464,6 +469,58 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
+  it('restores a cleared pending switch with its Codex rebuild marker after relink fails', async () => {
+    const sessionId = rememberSession('runtime-set-model-restore-pending-rebuild-marker');
+    setSessionProvider(sessionId, 'xd');
+    const registerPendingCredentialSwitch = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        codexThreadModelProviderId: 'cindy_gateway',
+        model: 'codex/gpt-5.6-sol',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [{
+        id: sessionId,
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => false,
+      }],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(
+      applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        getPendingCredentialSwitch: () => ({
+          model: 'gpt-5.6-sol',
+          providerId: 'openai',
+          rebuildCodexThread: true,
+          sourceCodexThreadModelProviderId: 'cindy_gateway',
+          previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+        }),
+        clearPendingCredentialSwitch: vi.fn(),
+        registerPendingCredentialSwitch,
+        relinkCodexThreadForProviderSwitch: vi.fn(async () => {
+          throw new Error('fork failed');
+        }),
+      }),
+    ).rejects.toThrow('fork failed');
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+      sourceCodexThreadModelProviderId: 'cindy_gateway',
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+    });
+  });
+
   it('closes an idle OpenAI thread when the provider store was already overwritten with DeepSeek', async () => {
     const sessionId = rememberSession('runtime-set-model-stale-openai-thread-to-deepseek');
     setSessionProvider(sessionId, 'deepseek');
@@ -492,7 +549,7 @@ describe('applyRuntimeSetModelChange', () => {
       sessionId,
       model: 'deepseek/deepseek-v4-pro',
       providerId: 'deepseek',
-      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => null),
     });
 
     expect(result).toEqual({ status: 'applied' });
@@ -665,7 +722,7 @@ describe('applyRuntimeSetModelChange', () => {
       model: 'xai/grok-4.3',
       providerId: 'xai',
       codexAuthInjection: 'oauth-bearer',
-      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => null),
     });
 
     expect(closeSession).toHaveBeenCalledWith(sessionId);
@@ -700,7 +757,7 @@ describe('applyRuntimeSetModelChange', () => {
       model: 'codex/gpt-5.5',
       providerId: 'xd',
       registerPendingCredentialSwitch: vi.fn(),
-      relinkCodexThreadForProviderSwitch: vi.fn(async () => {}),
+      relinkCodexThreadForProviderSwitch: vi.fn(async () => null),
     });
 
     expect(result).toEqual({ status: 'applied' });
@@ -865,7 +922,10 @@ describe('applyRuntimeSetModelChange', () => {
     });
     const wakeSessionInputQueue = vi.fn(() => { order.push('wake'); });
     const closeSession = vi.fn(async () => { order.push('close'); });
-    const relinkCodexThreadForProviderSwitch = vi.fn(async () => { order.push('relink'); });
+    const relinkCodexThreadForProviderSwitch = vi.fn(async () => {
+      order.push('relink');
+      return null;
+    });
     const maker: RuntimeSetModelMaker = {
       getSession: () => ({
         agentKind: 'codex',

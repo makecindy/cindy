@@ -43,7 +43,7 @@ function createHarness(
   );
   const relinkCodexThreadForProviderSwitch = vi.fn<
     NonNullable<PendingCredentialSwitchDeps['relinkCodexThreadForProviderSwitch']>
-  >(async () => {});
+  >(async () => null);
   const service = new PendingCredentialSwitchService({
     maker: {
       listActiveSessions: () => sessions,
@@ -116,14 +116,18 @@ describe('PendingCredentialSwitchService', () => {
       model: 'gpt-5.6-sol',
       providerId: 'openai',
       rebuildCodexThread: true,
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
     });
     await h.service.onTurnSettled(sessionId);
 
     expect(h.closeSession).toHaveBeenCalledWith(sessionId);
     expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledWith({
       sessionId,
-      model: 'gpt-5.6-sol',
-      providerId: 'openai',
+      sourceModel: 'codex/gpt-5.6-sol',
+      sourceProviderId: 'xd',
+      targetModel: 'gpt-5.6-sol',
+      targetProviderId: 'openai',
+      isCurrent: expect.any(Function),
     });
     expect(h.relinkCodexThreadForProviderSwitch.mock.invocationCallOrder[0]).toBeLessThan(
       h.onApplied.mock.invocationCallOrder[0]!,
@@ -150,6 +154,66 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.persistRoute).not.toHaveBeenCalled();
     expect(h.onApplied).not.toHaveBeenCalled();
     h.service.clear(sessionId);
+  });
+
+  it('rolls back the relink when deferred route persistence fails', async () => {
+    const sessionId = rememberSession('pending-switch-persist-rollback');
+    setSessionProvider(sessionId, 'xd');
+    const rollback = vi.fn(async () => true);
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      {
+        resolveRoute: async (_agent, model, providerId) => ({
+          model,
+          providerId,
+          degraded: false,
+        }),
+      },
+    );
+    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback,
+    });
+    h.persistRoute.mockRejectedValueOnce(new Error('sqlite failed'));
+
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(h.service.get(sessionId)?.rebuildCodexThread).toBe(true);
+    expect(h.onApplied).not.toHaveBeenCalled();
+    h.service.clear(sessionId);
+  });
+
+  it('does not commit an abandoned relink generation after the user cancels it', async () => {
+    const sessionId = rememberSession('pending-switch-cancel-during-relink');
+    setSessionProvider(sessionId, 'xd');
+    const h = createHarness([
+      { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+    ]);
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async (input) => {
+      h.service.clear(sessionId);
+      expect(input.isCurrent()).toBe(false);
+      throw new Error('superseded');
+    });
+
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(getSessionProvider(sessionId)).toBe('xd');
+    expect(h.onApplied).not.toHaveBeenCalled();
   });
 
   it('re-registration overwrites the previous pending target (last click wins)', async () => {

@@ -6,6 +6,7 @@ import {
   prepareLocalSessionCredentialModeSwitch,
 } from '../maker-host/codex-credential-switch.js';
 import { setSessionProvider } from '../maker-host/session-provider-store.js';
+import type { CodexProviderThreadRelinkReceipt } from './codexProviderThreadRelink.js';
 
 /**
  * PendingCredentialSwitchService —— 会话凭证形态切换的「延迟生效」登记表。
@@ -40,6 +41,8 @@ export interface PendingCredentialSwitch {
   providerId: string | null;
   /** 跨 cindy_gateway / cindy_openai 身份边界，收口前必须换成新的 native thread。 */
   rebuildCodexThread?: boolean;
+  /** app-server 确认的源 thread provider 身份，路由 store 被提前覆盖时仍是事实源。 */
+  sourceCodexThreadModelProviderId?: string | null;
   /** 目标会话的 agent(register 时由调用方捕获,收口前的停用重裁决用;可缺席 = 不裁决)。 */
   agentKind?: AgentKind;
   /**
@@ -110,9 +113,13 @@ export interface PendingCredentialSwitchDeps {
    */
   relinkCodexThreadForProviderSwitch?: (input: {
     sessionId: string;
-    model: string;
-    providerId: string | null;
-  }) => Promise<void>;
+    sourceModel: string;
+    sourceProviderId: string | null;
+    sourceThreadModelProviderId?: string | null;
+    targetModel: string;
+    targetProviderId: string | null;
+    isCurrent: () => boolean;
+  }) => Promise<CodexProviderThreadRelinkReceipt | null>;
   /** 自愈兜底重试间隔覆写(测试用)。 */
   retryDelayMs?: number;
   logger?: {
@@ -137,14 +144,23 @@ export class PendingCredentialSwitchService {
       model: string;
       providerId: string | null;
       rebuildCodexThread?: boolean;
+      sourceCodexThreadModelProviderId?: string | null;
       agentKind?: AgentKind;
-      previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
+      previousRoute?: {
+        model: string;
+        providerId: string | null;
+        effort?: string;
+        fastMode?: boolean;
+      };
     },
   ): void {
     this.pending.set(sessionId, {
       model: target.model,
       providerId: target.providerId,
       ...(target.rebuildCodexThread ? { rebuildCodexThread: true } : {}),
+      ...(target.sourceCodexThreadModelProviderId !== undefined
+        ? { sourceCodexThreadModelProviderId: target.sourceCodexThreadModelProviderId }
+        : {}),
       ...(target.agentKind ? { agentKind: target.agentKind } : {}),
       ...(target.previousRoute ? { previousRoute: target.previousRoute } : {}),
       requestedAt: Date.now(),
@@ -200,10 +216,13 @@ export class PendingCredentialSwitchService {
           }
           // 关闭失败也要落 route:下一次发送的 getHost 仲裁仍会按新来源协调,
           // 不能让用户的选择因一次 close 失败而静默蒸发。
-          this.deps.logger?.warn('pending credential switch: close session failed; applying route anyway', {
+          this.deps.logger?.warn(
+            'pending credential switch: close session failed; applying route anyway',
+            {
             sessionId,
             error: err instanceof Error ? err.message : String(err),
-          });
+            },
+          );
         }
       }
       // await close 期间用户可能又 register(改选)或 clear(取消):以**当前**登记为准
@@ -246,7 +265,13 @@ export class PendingCredentialSwitchService {
    */
   private async resolveApplyRoute(
     target: PendingCredentialSwitch,
-  ): Promise<{ providerId: string | null; model?: string; effort?: string; fastMode?: boolean; apply: boolean }> {
+  ): Promise<{
+    providerId: string | null;
+    model?: string;
+    effort?: string;
+    fastMode?: boolean;
+    apply: boolean;
+  }> {
     const { resolveRoute } = this.deps;
     if (!resolveRoute) return { providerId: target.providerId, apply: true };
     try {
@@ -350,9 +375,16 @@ export class PendingCredentialSwitchService {
   private async finalizeApply(
     sessionId: string,
     target: PendingCredentialSwitch,
-    resolved: { providerId: string | null; model?: string; effort?: string; fastMode?: boolean; apply: boolean },
+    resolved: {
+      providerId: string | null;
+      model?: string;
+      effort?: string;
+      fastMode?: boolean;
+      apply: boolean;
+    },
     reason: string,
   ): Promise<void> {
+    let relinkReceipt: CodexProviderThreadRelinkReceipt | null = null;
     if (resolved.apply) {
       if (target.rebuildCodexThread) {
         const relink = this.deps.relinkCodexThreadForProviderSwitch;
@@ -365,10 +397,18 @@ export class PendingCredentialSwitchService {
           return;
         }
         try {
-          await relink({
+          relinkReceipt = await relink({
             sessionId,
-            model: resolved.model ?? target.model,
-            providerId: resolved.providerId,
+            sourceModel: target.previousRoute?.model ?? target.model,
+            sourceProviderId: target.previousRoute?.providerId ?? target.providerId,
+            ...(target.sourceCodexThreadModelProviderId !== undefined
+              ? {
+                  sourceThreadModelProviderId: target.sourceCodexThreadModelProviderId,
+                }
+              : {}),
+            targetModel: resolved.model ?? target.model,
+            targetProviderId: resolved.providerId,
+            isCurrent: () => this.pending.get(sessionId) === target,
           });
         } catch (err) {
           this.deps.logger?.error?.(
@@ -384,8 +424,6 @@ export class PendingCredentialSwitchService {
           return;
         }
         if (this.pending.get(sessionId) !== target) return;
-        // persistRoute 失败会重试本 target；thread 已完成 CAS 换代，不得再次 fork。
-        target.rebuildCodexThread = false;
       }
       setSessionProvider(sessionId, resolved.providerId);
       // 裁决改了落地路由(reroute / 丢弃停用显式来源 / 全停换模型或清空):回写 DB
@@ -419,16 +457,41 @@ export class PendingCredentialSwitchService {
               : {}),
           });
         } catch (err) {
+          let relinkRollbackError: unknown;
+          if (relinkReceipt) {
+            try {
+              const restored = await relinkReceipt.rollback();
+              if (!restored) {
+                throw new Error('Codex thread relink rollback was superseded');
+              }
+            } catch (rollbackError) {
+              relinkRollbackError = rollbackError;
+              // The replacement thread still owns sdk_session_id. Avoid forking it again on
+              // retry; the pending gate remains closed until route persistence succeeds.
+              target.rebuildCodexThread = false;
+            }
+          }
           // fail-closed(PR #744 review 第十六轮):DB 里躺着 renderer 预写的停用
           // 目标,回写失败就唤醒队列 = 排队消息立刻按停用路由懒 resume。保留登记
           // (pending 门继续挡住派发)+ 自愈定时器重试整个收口(重新裁决 + 回写);
           // 用户改选 / 取消随时接管。error 级留痕 —— 这是会冻结该会话队列的状态。
-          this.deps.logger?.error?.('pending credential switch: persist resolved route failed; keeping queue gated for retry', {
+          this.deps.logger?.error?.(
+            'pending credential switch: persist resolved route failed; keeping queue gated for retry',
+            {
             sessionId,
             providerId: resolved.providerId,
             model: resolved.model,
             error: err instanceof Error ? err.message : String(err),
-          });
+              ...(relinkRollbackError
+                ? {
+                    relinkRollbackError:
+                      relinkRollbackError instanceof Error
+                        ? relinkRollbackError.message
+                        : String(relinkRollbackError),
+                  }
+                : {}),
+            },
+          );
           if (this.pending.get(sessionId) === target) this.scheduleRetry(sessionId);
           return;
         }
@@ -446,11 +509,14 @@ export class PendingCredentialSwitchService {
       // 会让排队消息按未经复核的路由懒 resume(PR #744 review 第二十轮)。保留
       // 登记(pending 门继续挡派发)+ 自愈定时器重试整个收口;生产 resolveRoute
       // 自带降级不抛,此分支纯防御,fail-closed 零日常代价。
-      this.deps.logger?.error?.('pending credential switch revalidation failed; keeping queue gated for retry', {
+      this.deps.logger?.error?.(
+        'pending credential switch revalidation failed; keeping queue gated for retry',
+        {
         sessionId,
         model: target.model,
         providerId: target.providerId,
-      });
+        },
+      );
       if (this.pending.get(sessionId) === target) this.scheduleRetry(sessionId);
       return;
     }
