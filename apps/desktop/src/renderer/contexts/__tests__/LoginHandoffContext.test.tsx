@@ -473,6 +473,9 @@ describe('冷启动集成(resolved snapshot,禁 mock-reject)', () => {
     });
     expect(probe.current!.phase).toBe('panel');
     expect(probe.current!.brandLayout).toBe('login');
+    expect(screen.getByTestId('login-brand-canvas').style.transition).toBe(
+      `transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`,
+    );
     const groupIn = screen.getByTestId('login-group');
     expect(groupIn.style.opacity).toBe('1');
     expect(groupIn.style.transform).toContain('translateY(0px)');
@@ -494,6 +497,7 @@ describe('冷启动集成(resolved snapshot,禁 mock-reject)', () => {
     });
     expect(probe.current!.phase).toBe('done');
     expect(screen.getByTestId('login-brand-hero').style.left).toBe('443px');
+    expect(probe.current!.brandLayout).toBe('login');
     expect(screen.getByTestId('login-brand-canvas').style.transition).toBe('');
     const doneGroup = screen.getByTestId('login-group');
     expect(doneGroup.style.opacity).toBe('1');
@@ -612,6 +616,7 @@ describe('冷启动集成(resolved snapshot,禁 mock-reject)', () => {
     expect(group.style.transform).toBe('translateY(0px)');
     expect(group.style.transition).toBe('');
     expect(group.style.pointerEvents).not.toBe('none');
+    expect(probe.current!.brandLayout).toBe('login');
     // phase 恒 done;跑空全部在途 timer(仅剩 jsdom input focus 的 0ms 内部 timer)
     // 后 phase/视觉零变化 = 不重播(playedRef 语义)
     expect(probe.current!.phase).toBe('done');

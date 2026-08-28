@@ -252,7 +252,10 @@ export function LoginHandoffProvider({
       // the artwork shrink while the panel is still hidden. Authenticated
       // startup has no login panel, so it never switches to login geometry.
       brandLayout:
-        branch === 'unauthenticated' && splashExitCompleted && panelRevealed ? 'login' : 'splash',
+        (branch === 'unauthenticated' && splashExitCompleted && panelRevealed) ||
+        (phase === 'done' && panelMounted)
+          ? 'login'
+          : 'splash',
       panelBottomReserve,
       isPlaying,
       // startup 期(含 boot/播放中/brand-exit)恒挂以维持不透明白底全盖;done 后

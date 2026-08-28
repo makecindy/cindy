@@ -47,11 +47,7 @@ export function LoginBrandStage() {
   const { width, height } = useViewportSize();
   const panelBottomReserve =
     handoff.panelBottomReserve ??
-    (handoff.branch === 'authenticated'
-      ? 0
-      : handoff.brandLayout === 'login'
-        ? LOGIN_LOCAL_MODE.reservedHeight
-        : 0);
+    (handoff.brandLayout === 'login' ? LOGIN_LOCAL_MODE.reservedHeight : 0);
   // 品牌块整体让位(scale+translateY,构图冻结;用户拍板 2026-07-23,design.md §11)
   const { scale, translateY } =
     handoff.brandLayout === 'splash'
@@ -143,6 +139,14 @@ export function LoginBrandStage() {
             height: STAGE.height,
             transform: `translate(-50%, calc(-50% + ${translateY}px)) scale(${scale})`,
             transformOrigin: '50% 50%',
+            // The layout switch is synchronized with panel/slogan playback;
+            // shift and terminal states remain immediate.
+            transition:
+              handoff.isPlaying &&
+              handoff.brandLayout === 'login' &&
+              (handoff.phase === 'panel' || handoff.phase === 'slogan')
+                ? `transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
+                : undefined,
           }}
         >
           <img
