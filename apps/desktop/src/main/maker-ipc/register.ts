@@ -3190,6 +3190,7 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
       },
       commit: async ({ sessionId, expectedSdkSessionId, newSdkSessionId, isCurrent }) => {
         const isBoundaryCurrent = (): boolean =>
+          !isAppSessionBoundaryPending() &&
           isCurrent?.() !== false &&
           isDataOwnerBroadcastScopeCurrent(ownerScope) &&
           getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch;
@@ -3262,6 +3263,7 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
       });
       if (!restored) return false;
       if (
+        !isAppSessionBoundaryPending() &&
         isDataOwnerBroadcastScopeCurrent(ownerScope) &&
         getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch
       ) {
@@ -15097,8 +15099,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     let atomicSelection = selection as
       { effort: SessionRuntimeProfile['effort']; fastMode: boolean } | undefined;
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
+    const runtimeOwnerBoundaryCurrent = (): boolean =>
+      !isAppSessionBoundaryPending() &&
+      sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch);
     const assertRuntimeOwnerCurrent = (): void => {
-      if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
+      if (!runtimeOwnerBoundaryCurrent()) {
         throwIpcError(
           'PRECONDITION_FAILED',
           'app session changed during runtime selection; request dropped',
@@ -15106,7 +15111,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     };
     const supersededByOwnerBoundary = (): boolean => {
-      if (sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return false;
+      if (runtimeOwnerBoundaryCurrent()) return false;
       if (internalOptions.source === 'user') {
         assertRuntimeOwnerCurrent();
       }
@@ -15446,6 +15451,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         });
       };
+      let appliedCodexThreadRelink: CodexProviderThreadRelinkReceipt | undefined;
+      const rollbackAppliedCodexThreadRelink = async (): Promise<boolean> => {
+        const receipt = appliedCodexThreadRelink;
+        if (!receipt) return true;
+        const restored = await receipt.rollback();
+        appliedCodexThreadRelink = undefined;
+        return restored;
+      };
       try {
         const result = routeExplicit
           ? await applyRuntimeSetModelChange({
@@ -15483,6 +15496,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               logger: log,
             })
           : { status: 'applied' as const };
+        if (result.status === 'applied') {
+          appliedCodexThreadRelink = result.codexThreadRelink;
+        }
         // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
         // "任务结束后生效"而不是当成已即时切换。
         const response = {
@@ -15490,10 +15506,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           superseded: false,
         };
         const rollbackRelinkForSupersededOwner = async (): Promise<boolean> => {
-          if (sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return false;
-          if (result.status === 'applied' && result.codexThreadRelink) {
-            await result.codexThreadRelink.rollback();
-          }
+          if (runtimeOwnerBoundaryCurrent()) return false;
+          await rollbackAppliedCodexThreadRelink();
           if (internalOptions.source === 'user') {
             assertRuntimeOwnerCurrent();
           }
@@ -15559,9 +15573,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             pendingCredentialSwitchHolder?.clear(sessionId);
             restoreControlStores();
             const recoveryErrors: unknown[] = [];
-            if (result.status === 'applied' && result.codexThreadRelink) {
+            if (appliedCodexThreadRelink) {
               try {
-                const restored = await result.codexThreadRelink.rollback();
+                const restored = await rollbackAppliedCodexThreadRelink();
                 if (!restored) {
                   throw new Error('Codex thread relink rollback was superseded');
                 }
@@ -15721,12 +15735,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             error: error instanceof Error ? error.message : String(error),
           });
         });
+        // No await is allowed between this final boundary check and success return. Teardown
+        // may begin while context/projection work above is awaiting; compensate the captured
+        // old-profile relink before the request can report success or owner supersession.
+        if (await rollbackRelinkForSupersededOwner()) {
+          return { deferred: false, superseded: true };
+        }
         return {
           ...response,
           generation,
           effectiveProviderId: normalizeSessionProviderId(effectiveProviderId) ?? null,
         };
       } catch (err) {
+        try {
+          await rollbackAppliedCodexThreadRelink();
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [err, rollbackError],
+            'runtime selection failed and Codex thread relink rollback also failed',
+          );
+        }
         if (err instanceof CredentialModeSwitchBusyError) {
           // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
           // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。

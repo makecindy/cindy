@@ -193,7 +193,10 @@ describe('session runtime control wiring', () => {
       'const recoverRemoteRuntimeAxisPersistence',
     );
     const persist = setModel.indexOf('await persistSessionFields(sessionId, patch)');
-    const rollback = setModel.indexOf('await result.codexThreadRelink.rollback()', persist);
+    const rollback = setModel.indexOf(
+      'const restored = await rollbackAppliedCodexThreadRelink()',
+      persist,
+    );
 
     expect(persist).toBeGreaterThan(-1);
     expect(rollback).toBeGreaterThan(persist);
@@ -209,13 +212,37 @@ describe('session runtime control wiring', () => {
     const guard = setModel.indexOf(
       'const rollbackRelinkForSupersededOwner = async (): Promise<boolean> => {',
     );
-    const rollback = setModel.indexOf('await result.codexThreadRelink.rollback();', guard);
+    const rollback = setModel.indexOf('await rollbackAppliedCodexThreadRelink();', guard);
     const ownerFailure = setModel.indexOf('assertRuntimeOwnerCurrent();', guard);
 
+    expect(setModel).toContain('!isAppSessionBoundaryPending()');
+    expect(setModel).toContain('const rollbackAppliedCodexThreadRelink = async ()');
     expect(guard).toBeGreaterThan(-1);
     expect(rollback).toBeGreaterThan(guard);
     expect(ownerFailure).toBeGreaterThan(rollback);
-    expect(setModel.match(/await rollbackRelinkForSupersededOwner\(\)/g)).toHaveLength(2);
+    expect(setModel.match(/await rollbackRelinkForSupersededOwner\(\)/g)).toHaveLength(3);
+    const outerCatch = setModel.lastIndexOf('} catch (err) {');
+    expect(setModel.indexOf('await rollbackAppliedCodexThreadRelink();', outerCatch)).toBeGreaterThan(
+      outerCatch,
+    );
+  });
+
+  it('treats teardown pending as stale at the final relink commit boundary', () => {
+    const relink = handlerBody(
+      registerSource,
+      'export async function relinkCodexThreadForCredentialSwitch(',
+      'export function clearPendingCredentialSwitchForSession(',
+    );
+    const guardedCommit = relink.indexOf(
+      'commitCodexProviderThreadRelinkWithBoundaryGuard({',
+    );
+    const pendingGuard = relink.lastIndexOf('!isAppSessionBoundaryPending()', guardedCommit);
+    const broadcast = relink.indexOf('broadcastSessionPatched(', guardedCommit);
+
+    expect(pendingGuard).toBeGreaterThan(-1);
+    expect(pendingGuard).toBeLessThan(guardedCommit);
+    expect(broadcast).toBeGreaterThan(guardedCommit);
+    expect(relink).toContain('rollbackCapturedRelink({');
   });
 
   it('passes the locked persistent thread identity into runtime model switching', () => {
