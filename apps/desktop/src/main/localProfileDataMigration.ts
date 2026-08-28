@@ -521,6 +521,49 @@ function restoreClaimedLocalProfileMarker(candidate: string, marker: string): bo
   }
 }
 
+function recoverReleasedLocalProfileMigrationMarker(
+  marker: string,
+  committedOwnerId: string | null,
+): Exclude<PendingLocalProfileReservationRecovery, 'none'> | null {
+  const candidate = `${marker}.release`;
+  if (!fs.existsSync(candidate)) return null;
+  // A release candidate is created by renaming the canonical marker while the
+  // migration lock is held. Seeing another canonical/pending marker beside it
+  // is not a state we can attribute safely, so preserve all evidence.
+  if (fs.existsSync(marker) || fs.existsSync(`${marker}.pending`)) return 'failed';
+
+  let parsed: LocalProfileMigrationMarker | null = null;
+  try {
+    parsed = parseLocalProfileMigrationMarker(fs.readFileSync(candidate, 'utf8'));
+  } catch {
+    parsed = null;
+  }
+  if (!parsed) return 'failed';
+
+  // Tokenless markers are already committed ownership records. A release call
+  // can only have moved one here before it verified a stale/wrong claim token;
+  // restore it regardless of the current account rather than deleting it.
+  if (!parsed.claimToken) {
+    return restoreClaimedLocalProfileMarker(candidate, marker) ? null : 'failed';
+  }
+  if (parsed.ownerId === committedOwnerId) {
+    if (!restoreClaimedLocalProfileMarker(candidate, marker)) return 'failed';
+    replaceLocalProfileMigrationMarker(
+      marker,
+      `${JSON.stringify({ ownerId: parsed.ownerId, claimedAt: Date.now() })}\n`,
+    );
+    return 'finalized';
+  }
+
+  try {
+    fs.unlinkSync(candidate);
+    syncMarkerDirectory(marker);
+    return 'released';
+  } catch {
+    return 'failed';
+  }
+}
+
 function recoverPendingLocalProfileMigrationMarker(marker: string): void {
   const pending = `${marker}.pending`;
   if (!fs.existsSync(pending)) return;
@@ -734,6 +777,11 @@ export function recoverPendingLocalProfileDataOwner(
     'failed',
     () => {
       try {
+        const releasedMarkerRecovery = recoverReleasedLocalProfileMigrationMarker(
+          marker,
+          normalizedCommittedOwnerId,
+        );
+        if (releasedMarkerRecovery) return releasedMarkerRecovery;
         recoverPendingLocalProfileMigrationMarker(marker);
         // atomicWriteFileSync may leave the only valid snapshot in .bak after
         // an interrupted Windows backup exchange. Restore it before deciding

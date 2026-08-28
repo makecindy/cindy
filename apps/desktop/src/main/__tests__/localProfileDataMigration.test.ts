@@ -421,6 +421,47 @@ describe('adoptLocalProfileDatabase', () => {
     expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
   });
 
+  it('finalizes a committed claim stranded in a release candidate', async () => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    const candidate = `${marker}.release`;
+    const reservation = reserveLocalProfileDataOwnerDetailed('owner-a', root, 'cindy');
+    expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
+    originalFs.renameSync(marker, candidate);
+
+    expect(recoverPendingLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('finalized');
+    await expect(fs.access(candidate)).rejects.toThrow();
+    expect(JSON.parse(await fs.readFile(marker, 'utf8'))).toMatchObject({ ownerId: 'owner-a' });
+    expect(JSON.parse(await fs.readFile(marker, 'utf8'))).not.toHaveProperty('claimToken');
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
+  it('releases an uncommitted claim stranded in a release candidate', async () => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    const candidate = `${marker}.release`;
+    expect(reserveLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+    originalFs.renameSync(marker, candidate);
+
+    expect(recoverPendingLocalProfileDataOwner(null, root, 'cindy')).toBe('released');
+    await expect(fs.access(marker)).rejects.toThrow();
+    await expect(fs.access(candidate)).rejects.toThrow();
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('claimed');
+  });
+
+  it('restores a tokenless owner stranded in a release candidate', async () => {
+    const { root } = await fixture();
+    const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
+    const candidate = `${marker}.release`;
+    expect(reserveCommittedLocalProfileDataOwner('owner-a', root, 'cindy')).toBe('claimed');
+    originalFs.renameSync(marker, candidate);
+
+    expect(recoverPendingLocalProfileDataOwner(null, root, 'cindy')).toBe('none');
+    await expect(fs.access(candidate)).rejects.toThrow();
+    expect(JSON.parse(await fs.readFile(marker, 'utf8'))).toMatchObject({ ownerId: 'owner-a' });
+    expect(reserveLocalProfileDataOwner('owner-b', root, 'cindy')).toBe('owned-by-other');
+  });
+
   it('restores an atomic-write backup before settling a pending claim', async () => {
     const { root } = await fixture();
     const marker = path.join(root, `cindy-local-v1${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`);
