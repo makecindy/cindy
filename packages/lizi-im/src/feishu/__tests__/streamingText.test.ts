@@ -186,6 +186,27 @@ describe('feishu streaming text', () => {
     expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe('终态正文');
   });
 
+  it('still mirrors parent-chat text and files when an inline image upload fails', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-inline-fail-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+    mocks.resolveMediaUrl.mockReturnValue('/cindy-media/missing.png');
+    mocks.uploadImage.mockRejectedValue(new Error('file gone'));
+
+    await mirrorFinal(
+      'oc_group',
+      'j'.repeat(64),
+      `终态正文 ![坏](xdt-image://blob/missing.png)\n[report.txt](xdt-file://${allowedFile})`,
+      [],
+      [root],
+    );
+
+    expect(mocks.sendCardToChat).toHaveBeenCalledTimes(1);
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toContain('终态正文');
+    expect(mocks.sendFileToChat).toHaveBeenCalled();
+  });
+
   it('does not re-upload extra images already inlined in the mirrored markdown', async () => {
     const absPath = '/cindy-media/same.png';
     mocks.resolveMediaUrl.mockReturnValue(absPath);

@@ -351,6 +351,52 @@ describe('feishu group thread routing', () => {
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
   });
 
+  it('unconfirmed unpaired flat stays takeable so a late topic still dispatches', async () => {
+    vi.useFakeTimers();
+    mocks.openThread
+      .mockResolvedValueOnce({ kind: 'unconfirmed' })
+      .mockResolvedValueOnce({
+        kind: 'opened',
+        messageId: 'om_recovered_after_unconfirmed',
+        threadId: 'omt_bot_unconfirmed',
+      });
+    mocks.recallOwnMessage.mockResolvedValue(true);
+    const events = collectMessages();
+    await connect();
+    const topic = groupTopicMessage('未确认后迟到话题', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000005000';
+    topic.message.message_id = 'om_topic_after_unconfirmed';
+    const flat = groupMainFlowMessage('未确认后迟到话题', 'om_flat_after_unconfirmed') as {
+      message: Record<string, unknown>;
+    };
+    flat.message.create_time = '1788000005000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flatHandling;
+
+    expect(events).toHaveLength(0);
+
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_existing');
+    expect(events[0]?.messageId).toBe('om_topic_after_unconfirmed');
+    expect(events[0]?.finalReplyMirror).toEqual({
+      kind: 'parent-chat',
+      chatId: 'oc_chat1',
+      idempotencyKey: expect.any(String),
+    });
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
+    expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_recovered_after_unconfirmed');
+    expect(events).toHaveLength(1);
+  });
+
   it('late topic takeover during orphaned openThread recalls the opener without a second turn', async () => {
     vi.useFakeTimers();
     let releaseOpenThread: ((value: { kind: 'orphaned'; openerMessageId: string }) => void) | undefined;

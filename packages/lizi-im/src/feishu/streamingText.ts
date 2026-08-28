@@ -538,8 +538,16 @@ export async function mirrorFinal(
             return null;
           }
           bodyImageAbsPaths.add(absPath);
-          const key = await uploadImage(absPath);
-          return key ? ([url, key] as const) : null;
+          try {
+            const key = await uploadImage(absPath);
+            return key ? ([url, key] as const) : null;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            getLog().warn(
+              `[feishu/streamingText] uploadImage inline ${absPath} failed: ${msg}`,
+            );
+            return null;
+          }
         }),
       );
       for (const result of results) {

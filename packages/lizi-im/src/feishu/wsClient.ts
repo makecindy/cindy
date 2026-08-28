@@ -262,6 +262,9 @@ interface UnconfirmedOpenRetry {
   attempt: number;
   /** 迟到话题已接管路由: 只恢复 UUID 并撤回开场白, 不再派 turn。 */
   recallOnly?: boolean;
+  /** 未配对群副本: 恢复链真正要派 turn 时才提交路由。 */
+  commitUnpairedFlat?: () => boolean;
+  isUnpairedFlatTakenOver?: () => boolean;
 }
 
 const unconfirmedOpenRetries = new Map<string, UnconfirmedOpenRetry>();
@@ -374,7 +377,7 @@ async function retryUnconfirmedOpen(
     return;
   }
   if (opener.kind === 'orphaned') {
-    if (entry.recallOnly) {
+    if (entry.recallOnly || entry.isUnpairedFlatTakenOver?.()) {
       await recallRecoveredOpener(opener.openerMessageId, 'orphaned');
       return;
     }
@@ -392,7 +395,7 @@ async function retryUnconfirmedOpen(
   let laneUserId: string;
   let groupContextLane: { chatId: string; threadId: string } | undefined;
   if (opener.kind === 'opened') {
-    if (entry.recallOnly) {
+    if (entry.recallOnly || (entry.commitUnpairedFlat && !entry.commitUnpairedFlat())) {
       await recallRecoveredOpener(opener.messageId, 'opened');
       return;
     }
@@ -1577,22 +1580,12 @@ async function processClaimedMessage(
         await sendOrphanOpenerNotice(botAppId, service, messageId, opener.openerMessageId);
         return;
       }
-      // 仍是本连接: 迟到的真实话题可能已经接管本轮路由, 不再把回答落进这份
-      // 群主流副本刚建的机器人话题。只在即将派发副本 turn 时提交。
-      if (commitUnpairedFlat && !commitUnpairedFlat()) {
-        log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
-        if (opener.kind === 'opened') {
-          try {
-            await outbound.recallOwnMessage(opener.messageId);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(
-              `[feishu/wsClient] recall bot-opened thread after late topic takeover failed (non-fatal): ${msg}`,
-            );
-          }
-        } else if (opener.kind === 'unconfirmed') {
-          // 服务端可能已发出思考卡, 但同 UUID 恢复链不会再走 emit 路径。
-          // 接管后只恢复 UUID 并撤回, 不起第二个 turn。
+      if (opener.kind === 'unconfirmed') {
+        // 三次即时 uuid 重试仍无回执: 服务端可能已发出思考卡。事件会在 3s
+        // 内 ACK, 不能指望平台重投。不释放认领、不降级群主流, 也不提交副本
+        // 路由 — unconfirmed 还没派 turn, 迟到话题仍可在 LATE_COPY_TTL 内接管。
+        if (isUnpairedFlatTakenOver?.()) {
+          log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
           scheduleUnconfirmedOpenRetry({
             botAppId,
             service,
@@ -1606,24 +1599,8 @@ async function processClaimedMessage(
             attempt: 0,
             recallOnly: true,
           });
+          return;
         }
-        return;
-      }
-      if (opener.kind === 'opened') {
-        laneUserId = encodeLaneUserId(chatId, opener.threadId);
-        outbound.pushReplyAnchor(laneUserId, opener.messageId);
-        // 开场白卡是本轮流式卡: streamingText.start 认领后直接 patch,
-        // 话题里不会多出一条占位消息。trigger 一并登记 — patch 失败撤回
-        // 开场白卡时锚点回拨到触发消息(reply_in_thread 落回话题)。
-        outbound.pushPatchableOpener(laneUserId, opener.messageId, messageId);
-        // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
-        // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
-        // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
-        groupContextLane = { chatId, threadId: '' };
-      } else if (opener.kind === 'unconfirmed') {
-        // 三次即时 uuid 重试仍无回执: 服务端可能已发出思考卡。事件会在 3s
-        // 内 ACK, 不能指望平台重投。不释放认领、不降级群主流, 改走 ACK 后
-        // 定时再用同一 uuid 取回 — 恢复 turn 或 orphan 收口。
         log.error(
           '[feishu/wsClient] openThread reply unconfirmed — scheduling delayed uuid recovery, not degrading',
         );
@@ -1638,8 +1615,38 @@ async function processClaimedMessage(
           unsupported,
           raw: data,
           attempt: 0,
+          commitUnpairedFlat,
+          isUnpairedFlatTakenOver,
         });
         return;
+      }
+      // 仍是本连接: 迟到的真实话题可能已经接管本轮路由, 不再把回答落进这份
+      // 群主流副本刚建的机器人话题。只在即将派发副本 turn 时提交。
+      if (commitUnpairedFlat && !commitUnpairedFlat()) {
+        log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
+        if (opener.kind === 'opened') {
+          try {
+            await outbound.recallOwnMessage(opener.messageId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(
+              `[feishu/wsClient] recall bot-opened thread after late topic takeover failed (non-fatal): ${msg}`,
+            );
+          }
+        }
+        return;
+      }
+      if (opener.kind === 'opened') {
+        laneUserId = encodeLaneUserId(chatId, opener.threadId);
+        outbound.pushReplyAnchor(laneUserId, opener.messageId);
+        // 开场白卡是本轮流式卡: streamingText.start 认领后直接 patch,
+        // 话题里不会多出一条占位消息。trigger 一并登记 — patch 失败撤回
+        // 开场白卡时锚点回拨到触发消息(reply_in_thread 落回话题)。
+        outbound.pushPatchableOpener(laneUserId, opener.messageId, messageId);
+        // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
+        // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
+        // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
+        groupContextLane = { chatId, threadId: '' };
       } else {
         laneUserId = encodeLaneUserId(chatId, null);
         outbound.pushReplyAnchor(laneUserId, messageId);
