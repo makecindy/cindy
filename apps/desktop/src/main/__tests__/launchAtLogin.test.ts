@@ -84,6 +84,12 @@ describe('login item read/write', () => {
    */
   function createApp(
     initial: boolean,
+    /**
+     * 模拟用户在任务管理器「启动应用」里停用 Cindy:注册表项仍在,但 run key
+     * 被停用。Electron 用 executableWillLaunchAtLogin 反映这一点,且该字段忽略
+     * args——所以它按可执行文件而非条目来记。
+     */
+    { runKeyDeactivated = false }: { runKeyDeactivated?: boolean } = {},
   ): LoginItemApp & { readArgs: (string[] | undefined)[]; writes: unknown[] } {
     const entries = new Map<string, boolean>();
     const key = (args?: string[]): string => JSON.stringify(args ?? []);
@@ -95,7 +101,11 @@ describe('login item read/write', () => {
       writes,
       getLoginItemSettings: (options) => {
         readArgs.push(options?.args);
-        return { openAtLogin: entries.get(key(options?.args)) ?? false };
+        return {
+          openAtLogin: entries.get(key(options?.args)) ?? false,
+          // 忽略 args:只要该 exe 有任一登录项且未被停用就是 true。
+          executableWillLaunchAtLogin: entries.size > 0 && !runKeyDeactivated,
+        };
       },
       setLoginItemSettings: (settings) => {
         writes.push(settings);
@@ -116,6 +126,26 @@ describe('login item read/write', () => {
     const app = createApp(true);
     readLaunchAtLogin(app);
     expect(app.readArgs).toEqual([[OPENED_AT_LOGIN_FLAG]]);
+  });
+
+  // 回归:用户在任务管理器「启动应用」里停用 Cindy 后,注册表项还在、openAtLogin
+  // 仍为 true,但开机不会启动。只读 openAtLogin 会把开关显示成开、并让「收起到
+  // 托盘」保持可用,用户还无法靠再点一次开启把自启动恢复。
+  it('reports off when the run key is deactivated in Task Manager', () => {
+    const app = createApp(true, { runKeyDeactivated: true });
+    // 条目确实还在。
+    expect(app.getLoginItemSettings({ args: [OPENED_AT_LOGIN_FLAG] }).openAtLogin).toBe(true);
+    // 但实际不会启动,所以对外必须报 false。
+    expect(readLaunchAtLogin(app)).toBe(false);
+  });
+
+  // 非 Windows 的 Electron 不返回该字段,不能把 undefined 当成「已停用」。
+  it('ignores the missing Windows-only field on other platforms', () => {
+    const app: LoginItemApp = {
+      getLoginItemSettings: () => ({ openAtLogin: true }),
+      setLoginItemSettings: () => {},
+    };
+    expect(readLaunchAtLogin(app)).toBe(true);
   });
 
   it('does not find the entry when queried without matching args', () => {

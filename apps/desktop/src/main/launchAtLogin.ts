@@ -25,7 +25,11 @@ export const OPENED_AT_LOGIN_FLAG = '--opened-at-login';
 
 /** Electron `app` 的登录项相关子集,便于单测替身。 */
 export interface LoginItemApp {
-  getLoginItemSettings(options?: { args?: string[] }): { openAtLogin: boolean };
+  getLoginItemSettings(options?: { args?: string[] }): {
+    openAtLogin: boolean;
+    /** Windows only。非 win32 平台的 Electron 不返回该字段。 */
+    executableWillLaunchAtLogin?: boolean;
+  };
   setLoginItemSettings(settings: {
     openAtLogin: boolean;
     args?: string[];
@@ -66,16 +70,30 @@ export function shouldStartHiddenInTray(input: {
 }
 
 /**
- * 读取系统登录项的当前状态。查询失败按「未启用」处理。
+ * 读取系统登录项的当前状态——「我们注册的那条存在,且开机真的会启动」。
  *
- * ⚠️ 必须传与注册时相同的 `args`。Windows 上 `args` 的语义是「用于比对的命令行
- * 参数」,缺省是空数组——我们注册的条目带 `--opened-at-login`,不传就是拿空参数
- * 去比对,匹配不到那条登录项而恒返回 false。后果是开关打开后一进设置页就被打回
- * 关闭态,依赖它的 startInTrayOnLogin 也跟着永久置灰。
+ * 两个字段各自只回答一半,必须取交集:
+ *
+ *  - `openAtLogin` 认 `args`,所以能区分是不是我们注册的那条。⚠️ 必须传与注册时
+ *    相同的 args:Windows 上 args 的语义是「用于比对的命令行参数」、缺省空数组,
+ *    漏传就是拿空参数去比对,匹配不到而恒返回 false。
+ *  - `executableWillLaunchAtLogin` 反映 run key 有没有被停用,但**忽略 args**
+ *    (Electron 文档原文:"this property will be true if the given executable
+ *    would be launched at login with **any** arguments")。
+ *
+ * 只看前者:用户在任务管理器「启动应用」里禁用 Cindy 后,注册表项还在,开关仍
+ * 显示为开,实际却不会启动。只看后者:任何参数的登录项都算,分不清是不是我们
+ * 写的那条。
+ *
+ * 非 win32 平台不返回 `executableWillLaunchAtLogin`,此时按 undefined 处理、
+ * 只取 `openAtLogin`——该功能本身只在 Windows 暴露,这里只保证跨平台读取不炸。
  */
 export function readLaunchAtLogin(app: LoginItemApp): boolean {
   try {
-    return app.getLoginItemSettings({ args: [OPENED_AT_LOGIN_FLAG] }).openAtLogin;
+    const settings = app.getLoginItemSettings({ args: [OPENED_AT_LOGIN_FLAG] });
+    if (!settings.openAtLogin) return false;
+    // 字段缺失(非 Windows)时不参与判断,不要把 undefined 当成"已停用"。
+    return settings.executableWillLaunchAtLogin !== false;
   } catch {
     return false;
   }
