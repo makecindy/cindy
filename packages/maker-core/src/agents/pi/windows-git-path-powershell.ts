@@ -5,7 +5,7 @@ import type { Logger } from '../../interfaces/logger.js';
 export type WindowsGitPathLogger = Pick<Logger, 'warn'>;
 
 const DIAGNOSTIC_PREFIX = '__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__';
-const WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS = 2_000;
+const WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS = 10_000;
 
 type WindowsPowerShellProbe = 'registry' | 'network-drives' | 'path-kinds' | 'path-cleanup';
 

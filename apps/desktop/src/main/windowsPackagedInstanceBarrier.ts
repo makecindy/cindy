@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 5_000;
+const HELPER_STARTUP_GRACE_MS = 5_000;
 const HELPER_EXIT_TIMEOUT_MS = 2_000;
 const MAX_HELPER_OUTPUT_BYTES = 16 * 1024;
 
@@ -114,7 +115,10 @@ function waitForFirstLine(
     const timer = setTimeout(() => {
       finish(() => reject(new Error('timed out acquiring Windows packaged-instance barrier')));
       child.kill();
-    }, timeoutMs + 1_000);
+    // PowerShell cold-start time is separate from the mutex wait budget. The
+    // extra grace keeps a loaded Windows host from reporting a false timeout
+    // before the helper can emit its status line.
+    }, timeoutMs + HELPER_STARTUP_GRACE_MS);
     const onStdout = (chunk: Buffer | string): void => {
       stdout += chunk.toString();
       if (stdout.length > MAX_HELPER_OUTPUT_BYTES) {
