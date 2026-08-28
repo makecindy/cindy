@@ -52,6 +52,14 @@ export interface RecycleWorktreeForRemovedSessionOptions {
   recycleOwner?: (sessionId: string) => Promise<void>;
 }
 
+/**
+ * 回收通知只关心 store 中实际登记过 worktree 的 session。这个窄查询由状态回收链
+ * 在真正进入低层回收前调用，避免无 worktree 的普通任务也广播 worktree 变化。
+ */
+export function hasRegisteredWorktreeForSession(sessionId: string): boolean {
+  return store.get(sessionId) !== null;
+}
+
 export async function recycleWorktreeForRemovedSession(
   sessionId: string,
   options: RecycleWorktreeForRemovedSessionOptions = {},

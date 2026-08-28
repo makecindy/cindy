@@ -807,7 +807,7 @@ function makeInstalledGhost(id: string): InstalledGhost {
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['fs'],
+      fs: true,
       tools: [{ name: 'jira_issues', description: 'jira' }],
     } as InstalledGhost['manifest'],
     dir: '/tmp/fake-install-dir',

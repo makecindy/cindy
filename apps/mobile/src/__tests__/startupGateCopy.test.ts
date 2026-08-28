@@ -31,10 +31,11 @@ const loginSource = readFileSync(
 );
 
 describe("endpoint 闸门失败屏(_layout.tsx)文案 key 化", () => {
-  it("error 态三段文案全部走 loginMessages key", () => {
+  it("error 态文案与动态动作全部走 loginMessages key", () => {
     expect(layoutSource).toContain("loginText('endpointGateTitle')");
     expect(layoutSource).toContain("loginText('endpointGateSubtitle')");
-    expect(layoutSource).toContain("loginText('retry')");
+    expect(layoutSource).toContain("'endpointGateResetToDev' : 'retry'");
+    expect(layoutSource).toContain('endpointGate.resetToDev');
     // {reason} 占位符在渲染点替换,保留闸门失败原因透出
     expect(layoutSource).toContain("'{reason}'");
     expect(layoutSource).toContain("endpointGate.reason ?? 'unknown'");
@@ -51,6 +52,7 @@ describe("endpoint 闸门失败屏(_layout.tsx)文案 key 化", () => {
       const catalog = loginMessages[locale];
       expect(catalog.endpointGateTitle.trim(), locale).not.toBe("");
       expect(catalog.endpointGateSubtitle, locale).toContain("{reason}");
+      expect(catalog.endpointGateResetToDev.trim(), locale).not.toBe("");
       expect(catalog.retry.trim(), locale).not.toBe("");
     }
   });

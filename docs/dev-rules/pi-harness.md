@@ -45,24 +45,34 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   真值仅经 Pi 父进程专用 env 传递，`CINDY_PI_MCP_BRIDGE` 只存 env 引用；这些 env 与描述符
   都会在 bash spawn 边界剥离。bridge 并行执行外部 server 启动探测，每个 server 的
   `initialize + tools/list` 总预算为 10s（低于 Pi RPC 30s ready 门槛）；探测完成后实际工具
-  调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。工具注册
-  为 `mcp__<server>__<tool>`。配置新增、修改、禁用或删除对下一新建/重启会话生效；旧活动
-  会话保留启动时 generation 快照至 close。
+  调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。Pi 模型侧
+  始终只注册 `cindy_mcp_list_tools` 与 `cindy_mcp_call_tool` 两个稳定网关 schema；完整工具目录与
+  input schema 留在 bridge 内部。先发现名称／描述，再按具体 server + tool 取单个 schema，
+  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。Host 审批、策略与变更捕获仍使用真实
+  `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
+  Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
+  下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
   时从 `get_entries` 校正。
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
-Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、启动时 RPC
-`set_auto_compaction{enabled:false}` / `set_thinking_level`。接近窗口上限时由 host 交接换窗，不再先让 PI 自动压缩。env:`CINDY_PI_API_KEY`、
+Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.maxRetries=6`
+（`retry.provider.maxRetries` 保持 0）、`--append-system-prompt`、`--session-dir`、启动时 RPC
+`set_auto_compaction{enabled:true}` / `set_thinking_level`。Pi 原生负责 threshold 与 overflow 压缩；
+Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
+下一次发送前换窗。设置页的 Pi 百分比在每次启动或恢复 Pi 任务时冻结，并写入该任务 `settings.json` 的
+`compaction.reserveTokens`（`window * (1 - pct/100)`）；切模只按这份快照重算，不回读最新全局值。
+Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
 
-放任 pi 默认(未写 settings.json):`retry.*`(agent 级 3 次退避、provider 级 0)、
-`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、`compaction.reserveTokens/keepRecentTokens`、
-`defaultProjectTrust`。这些默认目前合理;**若未来发现某默认值需钉死防 pi 二进制升级漂移,
-在 `index.ts` 加 `writeSettingsJson` 显式写入**(与 models.json 同机制,每次 startSession 覆写)。
+放任 pi 默认(未写 settings.json):`httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、
+`compaction.keepRecentTokens`、`defaultProjectTrust`。Cindy 会在每次 startSession 覆写
+`transport`、`retry.maxRetries=6`（provider 级保持 0）与 `compaction.reserveTokens`；
+未配置 Pi 百分比时不写 `reserveTokens`，沿用 Pi 默认 16384。
+
 
 ## 3. 设计原则(Chris 2026-07-30 裁决)
 
@@ -120,6 +130,22 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
    extension(`cindy-bridge` / `cindy-subagent`)源码字节必须进入 launch identity:
    `CINDY_PI_EXTENSION_BUNDLE_HASH` 只由源码确定,禁止随机数或时间戳;字节不变可 reattach,
    字节变化必须 restart。
+11. **正式包后台脚本启动边界**:Desktop 正式包保持 `RunAsNode=false`,因此 Main 的
+   `process.execPath` 是 Cindy 应用程序,**不是 Node 可执行文件**。Pi Subagent 的 durable
+   runner 必须经 host 注入的 `spawnPiSubagentRunner` 交给 Desktop
+   `utilityProcess.fork` 固定入口执行;扩展与 maker-core 不得再拼
+   `ELECTRON_RUN_AS_NODE=1` 或把 `process.execPath` 写入子代理 env。开发版 / Vitest 里
+   `process.execPath` 恰好可执行 JavaScript 不构成生产证据。打包契约测试必须同时断言
+   `RunAsNode=false`、固定 utility-process 入口在 forge 清单中、Pi host 使用该入口，避免
+   两份各自正确的测试再次掩盖跨模块矛盾。身份校验必须读未截断命令行（POSIX `ps -ww`
+   / Linux `/proc/<pid>/cmdline`）；成功读到的命令行不含本 run 的 `runnerScript` 即
+   视为 gone，只有读失败才 unverifiable。紧急停止和就绪超时都先对 runner pid 发 SIGTERM
+   再 SIGKILL，禁止 `kill(-pid)` 把 utility-process 当成独立进程组。未确认退出不得写
+   failed 终态（控制协议要带回 unconfirmed），否则 quit / 账号边界 sweep 会跳过仍可能活着的 runner。
+   真正 spawn 前必须再读一次账号边界，并把在途 launch 纳入 teardown 收敛。Host 只用
+   realpath 校验包含关系，传给 runner 的 argv 必须与 `config.runDir` 同一套原始绝对路径。
+   dispose 未确认 runner 退出必须失败；Host 观察到的退出要能通过控制协议通知前台等待，不能只靠 status.json。
+   Windows 上 SIGTERM 不得带 taskkill /F；前台若已读到终态必须先返回，不得被 Host 退出通知盖成失败。
 
 ## 5. 已交付(2026-07 里程碑)
 
@@ -180,8 +206,9 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
       每个真实模型(chatgpt/、xai/、glm、deepseek、kimi…)仍建议在 release candidate 上
       anthropic-compat 下至少跑一轮**带工具调用**的回合,逐个确认 thinking 格式 / tool
       streaming / redacted thinking 正确；这是额度/账号发布 smoke，不再是功能缺口。
-- [x] **compaction**:启动显式关闭 auto-compaction；接近/超过目标窗口由 host 交接换窗。
-      手动 compact、boundary/usage 翻译、compaction digest 写入与缓存命中仍有测试。
+- [x] **compaction**:启动显式开启 Pi 原生 auto-compaction；threshold／overflow 压缩及续接由 Pi
+      负责，Cindy 只投影事件并在本机确定性失败后换窗。手动 compact、boundary/usage 翻译、
+      compaction digest 写入与缓存命中仍有测试。
 - [x] **无人值守**:scheduler 对 `agentKind=pi` 使用 Pi 默认模型与
       `bypassPermissions` 的契约测试已补；Pi bridge 的 auto allow/deny 也用真二进制覆盖。
 - [x] **resume 边界**:已用 Pi v0.82.1 真二进制创建 JSONL，再由 v0.83.0 恢复；

@@ -376,6 +376,11 @@ export function hasModelEngineOverride(providerId: string, modelId: string): boo
   return getModelEngineOverride(providerId, modelId) !== undefined;
 }
 
+/** 当前账号是否存在任一显式 Harness 选择；用于旧草稿迁移时保护用户意图。 */
+export function hasAnyModelEngineOverride(): boolean {
+  return Object.keys(load()).length > 0;
+}
+
 /** 订阅引擎 override 变更(非 React 调用方)。 */
 export function subscribeModelEnginePrefs(listener: () => void): () => void {
   return subscribe(listener);

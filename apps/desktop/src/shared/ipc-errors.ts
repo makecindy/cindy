@@ -36,6 +36,15 @@ export type IpcErrorCode =
   // 远端切模/切来源需要不同路由(claude-code setModel 守卫):提示重建会话。
   | 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE'
   | 'NO_LIVE_QUERY'
+  // 已保存账号切换 / 同步 / 新增账号。保留 auth 业务码跨 Electron IPC，
+  // renderer 才能区分重新登录、区域不匹配与本地凭证库故障。
+  | 'INVALID_AUTH_ACTION'
+  | 'PASSIVE_AUTH_MUTATION_BLOCKED'
+  | 'ACCOUNT_NOT_FOUND'
+  | 'ACCOUNT_REAUTH_REQUIRED'
+  | 'REGION_MISMATCH'
+  | 'CREDENTIAL_STORE_UNAVAILABLE'
+  | 'AUTH_FLOW_SUPERSEDED'
   // 智能通讯录: (platform, value) 身份已属于另一个联系人 — message 里带占用者 id
   | 'IDENTITY_CONFLICT'
   // domain-specific
@@ -176,11 +185,10 @@ export type IpcErrorCode =
   | 'TERMINAL_ALREADY_DISPOSED' // 在已 dispose 的 session 上调 restart 等操作
   // 意识(.cindy 装入)
   | 'GHOST_FILE_INVALID' // 不是合法 zip / 缺 ghost.json / 清单不合格 / 超限
-  | 'GHOST_HOST_UNSUPPORTED' // 插件包合法，但当前 Cindy 不认识其 schema / capability slot
+  | 'GHOST_HOST_UNSUPPORTED' // 插件包使用了当前 Cindy 不认识的未来 schema
   | 'GHOST_COMMAND_CONFLICT' // 显式指令与已装意识撞名(装入拒绝)
   | 'GHOST_ID_RESERVED' // id 属 shared/ghost.ts 登记的官方保留前缀,用户通道拒装(防抢注蹭凭证别名)
-  | 'GHOST_BROKER_MANUAL_INSTALL_NOT_AUTHORIZED' // 手动 .cindy 来源无权使用授权 broker
-  | 'GHOST_BROKER_NOT_AUTHORIZED' // 当前来源或组织身份无权使用授权 broker
+  | 'GHOST_BROKER_MANUAL_INSTALL_NOT_AUTHORIZED' // 本地 .cindy 来源无权使用授权 broker
   | 'GHOST_BROKER_REDIRECT_PORT_REQUIRED' // 新包声明授权 broker 时缺少本机回跳端口
   // 自定义插件市场源(Git / 本地文件夹)
   | 'MARKET_SOURCE_INVALID' // 来源格式非法 / 本地路径不是目录 / 参数组合不允许
@@ -264,6 +272,13 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'LOCAL_OLLAMA_NOT_READY',
   'REMOTE_MODEL_SWITCH_ROUTE_CHANGE',
   'NO_LIVE_QUERY',
+  'INVALID_AUTH_ACTION',
+  'PASSIVE_AUTH_MUTATION_BLOCKED',
+  'ACCOUNT_NOT_FOUND',
+  'ACCOUNT_REAUTH_REQUIRED',
+  'REGION_MISMATCH',
+  'CREDENTIAL_STORE_UNAVAILABLE',
+  'AUTH_FLOW_SUPERSEDED',
   'STALE_DIFF',
   'PUSH_LEASE_EXPIRED',
   'PUSH_NO_REMOTE',
@@ -381,7 +396,6 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'GHOST_COMMAND_CONFLICT',
   'GHOST_ID_RESERVED',
   'GHOST_BROKER_MANUAL_INSTALL_NOT_AUTHORIZED',
-  'GHOST_BROKER_NOT_AUTHORIZED',
   'GHOST_BROKER_REDIRECT_PORT_REQUIRED',
   'MARKET_SOURCE_INVALID',
   'MARKET_GIT_UNAVAILABLE',

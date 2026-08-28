@@ -5,6 +5,7 @@ import {
   UI_ACTION_TRIGGER_PREFIX,
 } from '@cindy/maker-shared/synthetic-trigger';
 import { composerDocumentFromSerializedMessage } from '@/session/composerDocument';
+import { buildMobileMessageCopyText } from '@/session/messageActions';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { RemoteMessage } from '@/session/types';
 
@@ -476,6 +477,37 @@ describe('normalizeRemoteMessages', () => {
     });
   });
 
+  it('renders and copies compacted tool results without exposing the internal marker', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'tool-compacted',
+        role: 'tool_use',
+        content: {
+          toolUseId: 'tu_compacted',
+          toolName: 'Read',
+          input: { file_path: '/repo/a.ts' },
+        },
+      }),
+      message({
+        id: 'result-compacted',
+        role: 'tool_result',
+        toolUseId: 'tu_compacted',
+        content: {
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 128 * 1024,
+          compactedAt: 500,
+        },
+      }),
+    ]);
+
+    expect(item.secondaryBody).toBe('Full tool output was released (original size 128 KB)');
+    expect(buildMobileMessageCopyText(item)).toContain(
+      'Full tool output was released (original size 128 KB)',
+    );
+    expect(buildMobileMessageCopyText(item)).not.toContain('tool_result_compacted');
+  });
+
   it('marks tools settled by result arrival, including hidden orca empty results', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -630,6 +662,64 @@ describe('normalizeRemoteMessages', () => {
         previewable: false,
       },
     ]);
+  });
+
+  it('keeps tool image fallback unless the same turn embeds that URL as Markdown', () => {
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const items = normalizeRemoteMessages([
+      message({ id: 'u1', role: 'user', content: 'draw one', createdAt: '2026-01-01T00:00:01.000Z' }),
+      message({
+        id: 'tool-1',
+        role: 'tool_use',
+        toolUseId: 'tu-1',
+        content: { toolUseId: 'tu-1', toolName: 'image_generate', input: {} },
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }),
+      message({
+        id: 'result-1',
+        role: 'tool_result',
+        toolUseId: 'tu-1',
+        content: JSON.stringify({ xdt_image_url: url }),
+        createdAt: '2026-01-01T00:00:03.000Z',
+      }),
+      message({
+        id: 'steer-1',
+        role: 'user',
+        content: 'make it warmer',
+        agentMeta: { delivery: 'steer' },
+        createdAt: '2026-01-01T00:00:03.500Z',
+      }),
+      message({
+        id: 'a1',
+        role: 'assistant',
+        content: `![生成结果](${url})`,
+        createdAt: '2026-01-01T00:00:04.000Z',
+      }),
+      message({ id: 'u2', role: 'user', content: 'draw again', createdAt: '2026-01-01T00:00:05.000Z' }),
+      message({
+        id: 'tool-2',
+        role: 'tool_use',
+        toolUseId: 'tu-2',
+        content: { toolUseId: 'tu-2', toolName: 'image_generate', input: {} },
+        createdAt: '2026-01-01T00:00:06.000Z',
+      }),
+      message({
+        id: 'result-2',
+        role: 'tool_result',
+        toolUseId: 'tu-2',
+        content: JSON.stringify({ xdt_image_url: url }),
+        createdAt: '2026-01-01T00:00:07.000Z',
+      }),
+      message({
+        id: 'a2',
+        role: 'assistant',
+        content: `文件地址：${url}`,
+        createdAt: '2026-01-01T00:00:08.000Z',
+      }),
+    ]);
+
+    expect(items.find((item) => item.source.id === 'tool-1')?.media).toEqual([]);
+    expect(items.find((item) => item.source.id === 'tool-2')?.media).toMatchObject([{ url }]);
   });
 
   it('keeps desktop media action metadata as mobile read-only actions', () => {

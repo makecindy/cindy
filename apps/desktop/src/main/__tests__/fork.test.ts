@@ -470,6 +470,7 @@ describe('forkSessionAtMessage', () => {
     const second = makeMessageRow({ id: 'asst-1', role: 'assistant', createdAt: 2000 });
 
     selectQueue.push([source]); // source session
+    selectQueue.push([]); // no existing strip-fork child
     selectQueue.push([first, second]); // source messages for max + ids
     selectQueue.push([
       makeSourceRow({
@@ -515,6 +516,112 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.providerId).toBe('xd');
     expect(txArgs.newMessageIds).toHaveLength(2);
     expect(result.parentSessionId).toBe('src-session');
+  });
+
+  it('reuses an existing strip-fork child instead of forking twice', async () => {
+    const source = makeSourceRow({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      sdkSessionId: 'codex-thread-source',
+    });
+    const existing = makeSourceRow({
+      id: 'already-stripped',
+      agentKind: 'codex',
+      title: '[Fork·已剥离] Project A',
+      sdkSessionId: 'codex-thread-stripped',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: null,
+      status: 'active',
+    });
+    selectQueue.push([source]);
+    selectQueue.push([existing]);
+    selectQueue.push([]); // source has not advanced
+    selectQueue.push([]); // child copied boundary still covers source
+
+    const result = await forkSessionStripEncrypted('src-session');
+
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(txCalls).toHaveLength(0);
+    expect(result.id).toBe('already-stripped');
+    expect(result.parentSessionId).toBe('src-session');
+  });
+
+  it('does not reuse a strip-fork child after the source history has advanced', async () => {
+    const source = makeSourceRow({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      sdkSessionId: 'codex-thread-source',
+    });
+    const existing = makeSourceRow({
+      id: 'already-stripped',
+      agentKind: 'codex',
+      title: '[Fork·已剥离] Project A',
+      sdkSessionId: 'codex-thread-stripped',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: null,
+      status: 'active',
+      createdAt: 1500,
+    });
+    const later = makeMessageRow({ id: 'user-2', role: 'user', createdAt: 3000 });
+    selectQueue.push([source]);
+    selectQueue.push([existing]);
+    selectQueue.push([later]);
+    selectQueue.push([makeMessageRow({ id: 'copied-old', role: 'user', createdAt: 1000 })]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        title: '[Fork·已剥离] Project A',
+        sdkSessionId: 'codex-thread-new',
+        parentSessionId: 'src-session',
+        forkedAtMessageId: null,
+      }),
+    ]);
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'codex-thread-new',
+      uuidMap: new Map<string, string>(),
+    });
+
+    const result = await forkSessionStripEncrypted('src-session');
+
+    expect(forkSdkSessionMock).toHaveBeenCalled();
+    expect(result.parentSessionId).toBe('src-session');
+  });
+
+  it('reuses the newest strip-fork child that still covers source history', async () => {
+    const source = makeSourceRow({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      sdkSessionId: 'codex-thread-source',
+    });
+    const older = makeSourceRow({
+      id: 'strip-old',
+      agentKind: 'codex',
+      title: '[Fork·已剥离] Project A',
+      sdkSessionId: 'codex-thread-old',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: null,
+      status: 'active',
+      createdAt: 1000,
+    });
+    const newer = makeSourceRow({
+      id: 'strip-new',
+      agentKind: 'codex',
+      title: '[Fork·已剥离] Project A',
+      sdkSessionId: 'codex-thread-new',
+      parentSessionId: 'src-session',
+      forkedAtMessageId: null,
+      status: 'active',
+      createdAt: 4000,
+    });
+    selectQueue.push([source]);
+    selectQueue.push([older, newer]);
+    selectQueue.push([makeMessageRow({ id: 'user-2', role: 'user', createdAt: 3000 })]);
+    selectQueue.push([makeMessageRow({ id: 'copied', role: 'user', createdAt: 3000 })]);
+
+    const result = await forkSessionStripEncrypted('src-session');
+
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(result.id).toBe('strip-new');
   });
 
   it('remaps agentMeta uuid via maker uuidMap so chained fork (B → C) keeps valid uuids', async () => {

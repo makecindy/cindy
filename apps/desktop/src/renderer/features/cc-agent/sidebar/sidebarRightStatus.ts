@@ -28,7 +28,7 @@ export interface SidebarRightStatusInput {
    * 定时任务未读(attentionKind 缺失)语义等同 'done'。
    */
   attentionKind: AttentionKind | undefined;
-  /** 定时任务未读且非成功结局(failed/aborted/interrupted)—— 语义等同 error。 */
+  /** 定时任务未读且失败/中断(failed/interrupted)—— 语义等同 error。 */
   isUrgentFromContext: boolean;
   isRunning: boolean;
   hasAttentionNotification: boolean;

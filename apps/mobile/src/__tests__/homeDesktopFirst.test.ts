@@ -46,6 +46,19 @@ describe('mobile Home startup reads', () => {
 });
 
 describe('mobile home desktop-first surface', () => {
+  it('surfaces durable logout failures from the home drawer', () => {
+    const source = readSource('app/devices/index.tsx');
+    const logoutStart = source.indexOf('const logout = useCallback');
+    const logoutBody = source.slice(
+      logoutStart,
+      source.indexOf('const toggleProject', logoutStart),
+    );
+
+    expect(logoutBody).toContain('await auth.logout();');
+    expect(logoutBody).toContain("t('devices.list.alert.actionFailed')");
+    expect(logoutBody).toContain('formatRemoteError(error)');
+  });
+
   it('uses the desktop-sidebar Home as the authenticated root instead of a device picker route', () => {
     const indexSource = readSource('app/index.tsx');
     const layoutSource = readSource('app/_layout.tsx');
@@ -123,6 +136,17 @@ describe('mobile home desktop-first surface', () => {
     expect(chromeDrawer).toContain('testID="devices.settingsButton"');
     expect(chromeDrawer).toContain('testID="home.chromeDrawer.search"');
     expect(chromeDrawer).toContain('testID="home.chromeDrawer.account"');
+    expect(chromeDrawer).toContain('testID="home.chromeDrawer.accounts"');
+    expect(chromeDrawer).toContain('testID="home.chromeDrawer.logout"');
+    expect(chromeDrawer.indexOf('testID="devices.settingsButton"'))
+      .toBeLessThan(chromeDrawer.indexOf('testID="home.chromeDrawer.accounts"'));
+    expect(chromeDrawer.indexOf('testID="home.chromeDrawer.accounts"'))
+      .toBeLessThan(chromeDrawer.indexOf('testID="home.chromeDrawer.logout"'));
+    expect(chromeDrawer).toContain('<View style={styles.menuDivider} />');
+    expect(chromeDrawer.indexOf('<View style={styles.menuDivider} />'))
+      .toBeLessThan(chromeDrawer.indexOf('testID="home.chromeDrawer.logout"'));
+    expect(chromeDrawer.match(/onPress=\{onOpenAccounts\}/g)).toHaveLength(1);
+    expect(chromeDrawer).toContain("t('settings.account.logout')");
     expect(chromeDrawer).toContain('openSettingsImmediately');
     expect(chromeDrawer).toContain('closeInstant');
     expect(chromeDrawer).not.toContain('remoteSettings');
@@ -472,6 +496,34 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('syncInFlightRef');
     expect(source).not.toContain('presenceVersion');
     expect(source).not.toContain('refreshControl={<RefreshControl refreshing={loading}');
+  });
+
+  it('binds every Home device projection and async continuation to the active account generation', () => {
+    const source = readSource('app/devices/index.tsx');
+
+    // Home remains mounted across saved-account activation, so clearing the shared DeviceLink
+    // stores is insufficient: page-local refs/state must disappear before the next paint too.
+    expect(source).toContain('const { accountGeneration, apiFetch, deviceId: selfDeviceId, user } = auth;');
+    expect(source).toContain('const homeAccountGenerationRef = useRef(accountGeneration);');
+    expect(source).toContain('useLayoutEffect(() => {');
+    expect(source).toContain('syncInFlightRef.current = null;');
+    expect(source).toContain('devicesRef.current = [];');
+    expect(source).toContain('setDevices([]);');
+    expect(source).toContain('setDeviceConnectionStates({});');
+    expect(source).toContain('setScheduleIndex(new Map());');
+
+    // Both REST and per-device WS hydrations capture the owner generation and refuse every late
+    // write. The old task's finally block must not drain a queue now owned by the next account.
+    expect(source).toContain('const accountGenerationAtStart = accountGeneration;');
+    expect(source).toContain('hydrateDeviceSessions(item.device, accountGenerationAtStart)');
+    expect(source).toContain('homeAccountGenerationRef.current !== expectedAccountGeneration');
+    expect(source).toContain('return { failure: null, offline: false, superseded: true };');
+    expect(source).toContain('if (syncInFlightRef.current !== task) return;');
+
+    // A late account-keyed startup cache read is another producer of the same projection and must
+    // pass the identical owner fence before hydrating the shared session store.
+    expect(source).toContain('const expectedAccountGeneration = accountGeneration;');
+    expect(source).toMatch(/cancelled\s*\|\| homeAccountGenerationRef\.current !== expectedAccountGeneration/);
   });
 
   it('does not show the no-device empty state before startup sync settles', () => {

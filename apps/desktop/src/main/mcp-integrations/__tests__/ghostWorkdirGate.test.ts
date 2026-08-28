@@ -29,9 +29,12 @@ const outsideDir = path.join(tmpUserData, 'outside');
 const logWarnMock = vi.fn();
 const logInfoMock = vi.fn();
 const grantAttachmentsMock = vi.fn();
-const { packGhostDirMock } = vi.hoisted(() => ({ packGhostDirMock: vi.fn() }));
-const { handleIncomingCindyFileMock, completeForgePackStagingMock } = vi.hoisted(() => ({
-  handleIncomingCindyFileMock: vi.fn(async () => undefined),
+const { packGhostDirMock, scaffoldGhostDirMock, forgeInstallPackageMock } = vi.hoisted(() => ({
+  packGhostDirMock: vi.fn(),
+  scaffoldGhostDirMock: vi.fn(),
+  forgeInstallPackageMock: vi.fn(),
+}));
+const { completeForgePackStagingMock } = vi.hoisted(() => ({
   completeForgePackStagingMock: vi.fn(() => ({
     ticket: 'publish-token-1',
     installPath: '/host/staging/demo.cindy',
@@ -58,6 +61,7 @@ const {
 }));
 const releaseMutationMock = vi.fn();
 const appSessionBoundaryPendingMock = vi.fn(() => false);
+const appVersionMock = vi.fn(() => '2.3.4');
 const captureMutationOwnerMock = vi.fn(() => ({
   mode: 'local' as const,
   dataOwnerId: 'test',
@@ -169,6 +173,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
     listMock().find((ghost: any) => ghost.manifest?.id === id) ?? null,
   captureGhostMutationOwnerForMcp: captureMutationOwnerMock,
   acquireGhostMutationLeaseForMcp: acquireMutationLeaseMock,
+  installOrUpdateLocalGhostPackageFromForge: forgeInstallPackageMock,
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
   getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
   getGhostSetupAssessment: setupAssessmentMock,
@@ -202,7 +207,7 @@ vi.mock('../../cindy-brain/cardService.js', () => ({ withCardToken: (r: unknown)
 vi.mock('../../cindy-brain/forge.js', () => ({
   FORGE_GUIDE: 'guide',
   packGhostDir: packGhostDirMock,
-  scaffoldGhostDir: vi.fn(),
+  scaffoldGhostDir: scaffoldGhostDirMock,
 }));
 vi.mock('../../cindy-brain/forgePackStaging.js', () => ({
   completeForgePackStaging: completeForgePackStagingMock,
@@ -213,12 +218,8 @@ vi.mock('../../cindy-brain/forgePackStaging.js', () => ({
   invalidateForgePackTicket: vi.fn(),
   releaseForgePackStaging: releaseForgePackStagingMock,
 }));
-vi.mock('../../cindy-brain/openFileInstall.js', () => ({
-  handleIncomingCindyFile: handleIncomingCindyFileMock,
-}));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionFsSnapshot: sessionSnapshotMock,
-  getSessionTitle: vi.fn(async () => 'Test session'),
 }));
 vi.mock('../../plugin-publisher/host.js', () => ({
   currentPublisherIdentity: currentPublisherIdentityMock,
@@ -247,7 +248,7 @@ import type { LiziMcpSessionContext } from '@cindy/mcps';
 
 function chipGhost(
   id: string,
-  slots: string[] = ['tool'],
+  capabilities: string[] = ['tool'],
   extra: Record<string, unknown> = {},
 ): unknown {
   return {
@@ -256,8 +257,9 @@ function chipGhost(
       id,
       name: `Ghost ${id}`,
       kind: 'chip',
-      slots,
       tools: [{ name: 'run', description: 'd' }],
+      ...(capabilities.includes('panel') ? { panel: { html: 'panel.html' } } : {}),
+      ...(capabilities.includes('session-context') ? { sessionContext: true } : {}),
       ...extra,
     },
   };
@@ -281,6 +283,7 @@ function makeDeps(
   // 在 tool-call 时从 ALS 恢复真实 ctx。
   alsSessionContextMock.mockReturnValue(agentKind === 'claude-code' ? undefined : ctx);
   return getCindyGhostsMcpDeps(agentKind === 'claude-code' ? ctx : undefined, {
+    getAppVersion: appVersionMock,
     getLiveSessionGrantState: liveGrantStateMock,
   });
 }
@@ -391,6 +394,7 @@ beforeEach(() => {
   saveDepositMock.mockClear();
   liveGrantStateMock.mockReset();
   liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null });
+  callCindyMediaMock.mockReset();
   alsSessionContextMock.mockReset();
   logWarnMock.mockClear();
   logInfoMock.mockClear();
@@ -410,7 +414,22 @@ beforeEach(() => {
     errorCode: 'MANIFEST_INVALID',
     message: 'stop after gate assertion',
   });
-  handleIncomingCindyFileMock.mockClear();
+  scaffoldGhostDirMock.mockReset();
+  scaffoldGhostDirMock.mockResolvedValue({
+    ok: true,
+    dir: path.join(WORKDIR, 'new-plugin'),
+    template: 'plain',
+    files: ['ghost.json', 'main.js'],
+    nextSteps: [],
+  });
+  forgeInstallPackageMock.mockReset();
+  forgeInstallPackageMock.mockResolvedValue({
+    action: 'installed',
+    ghost: {
+      enabled: true,
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    },
+  });
   completeForgePackStagingMock.mockClear();
   publishTicketConsumeMock.mockReset();
   publishTicketConsumeMock.mockReturnValue({
@@ -423,9 +442,16 @@ beforeEach(() => {
   });
   releaseForgePackStagingMock.mockClear();
   startPluginPublishMock.mockClear();
-  currentPublisherIdentityMock.mockClear();
+  currentPublisherIdentityMock.mockReset();
+  currentPublisherIdentityMock.mockReturnValue({
+    membershipId: 'member-1',
+    orgSlug: 'acme',
+    orgName: 'Acme',
+  });
   appSessionBoundaryPendingMock.mockReset();
   appSessionBoundaryPendingMock.mockReturnValue(false);
+  appVersionMock.mockReset();
+  appVersionMock.mockReturnValue('2.3.4');
   clearAllPrefs();
 });
 
@@ -447,7 +473,7 @@ describe('Forge session workdir gate', () => {
     });
   });
 
-  it('keeps default intent on the install-confirm path without exposing a publish token', async () => {
+  it('keeps default intent as pure packaging without exposing a publish token', async () => {
     packGhostDirMock.mockResolvedValueOnce({
       ok: true,
       buf: Buffer.from('packed'),
@@ -455,18 +481,44 @@ describe('Forge session workdir gate', () => {
       manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
     });
     const result = await makeDeps().forgePack({ dir: path.join(WORKDIR, 'plugin-src') });
-    expect(result).toMatchObject({ ok: true, cindyPath: 'demo-1.0.0.cindy' });
-    if (!result.ok) throw new Error('default install pack unexpectedly failed');
+    expect(result).toMatchObject({
+      ok: true,
+      cindyPath: path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy'),
+    });
+    if (!result.ok) throw new Error('default pack unexpectedly failed');
     expect(result).not.toHaveProperty('publishToken');
-    expect(result.note).toContain("若接下来要发布到组织市场,请用 intent='publish' 重新打包");
-    expect(handleIncomingCindyFileMock).toHaveBeenCalledWith(
-      '/host/staging/demo.cindy',
-      'ghost-forge',
-      expect.objectContaining({ kind: 'agent-forge' }),
-    );
+    expect(result.note).toContain('本工具不会安装或更新插件');
+    expect(completeForgePackStagingMock).not.toHaveBeenCalled();
   });
 
-  it('does not suggest organization publishing to a personal account after default install pack', async () => {
+  it('installs only through the explicit Forge install method and binds the packed bytes', async () => {
+    const bytes = Buffer.from('packed');
+    const cindyPath = path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy');
+    packGhostDirMock.mockResolvedValueOnce({
+      ok: true,
+      buf: bytes,
+      cindyPath,
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    });
+
+    const result = await makeDeps().forgeInstall({
+      dir: path.join(WORKDIR, 'plugin-src'),
+    });
+
+    expect(forgeInstallPackageMock).toHaveBeenCalledWith(cindyPath, {
+      ghostId: 'demo',
+      packageSha256: createHash('sha256').update(bytes).digest('hex'),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      action: 'installed',
+      id: 'demo',
+      enabled: true,
+    });
+    expect(completeForgePackStagingMock).not.toHaveBeenCalled();
+  });
+
+  it('does not suggest organization publishing to a personal account after default pack', async () => {
     currentPublisherIdentityMock.mockReturnValueOnce(null);
     packGhostDirMock.mockResolvedValueOnce({
       ok: true,
@@ -479,18 +531,13 @@ describe('Forge session workdir gate', () => {
 
     // Excludes showing an unusable publish next step to personal accounts.
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('personal install pack unexpectedly failed');
+    if (!result.ok) throw new Error('personal pack unexpectedly failed');
     expect(result.note).not.toContain("intent='publish'");
-    // Excludes changing the default intent while adding the conditional note.
+    // Default packaging remains independent from publisher identity.
     expect(result).not.toHaveProperty('publishToken');
-    expect(handleIncomingCindyFileMock).toHaveBeenCalledWith(
-      '/host/staging/demo.cindy',
-      'ghost-forge',
-      expect.objectContaining({ kind: 'agent-forge' }),
-    );
   });
 
-  it('returns the one-shot token for publish intent without opening install confirmation', async () => {
+  it('returns the one-shot token for publish intent', async () => {
     packGhostDirMock.mockResolvedValueOnce({
       ok: true,
       buf: Buffer.from('packed'),
@@ -502,7 +549,6 @@ describe('Forge session workdir gate', () => {
       intent: 'publish',
     });
     expect(result).toMatchObject({ ok: true, publishToken: 'publish-token-1' });
-    expect(handleIncomingCindyFileMock).not.toHaveBeenCalled();
   });
 
   it('consumes the publish token and binds publisher input to ticket id, SHA and cleanup', async () => {
@@ -597,6 +643,73 @@ describe('Forge session workdir gate', () => {
     await expect(
       deps.forgeScaffold({ dir: path.join(WORKDIR, 'new-plugin'), template: 'plain', id: 'x', name: 'X' }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'WORKDIR_READ_ONLY' });
+  });
+
+  it('uses the current stable Cindy version only as scaffold metadata for the concrete package', async () => {
+    const deps = makeDeps();
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(scaffoldGhostDirMock).toHaveBeenCalledWith(
+      expect.objectContaining({ minCindyVersion: '2.3.4' }),
+      expect.any(Object),
+    );
+  });
+
+  it('requires explicit package metadata when scaffold runs in an unpublished Cindy build', async () => {
+    appVersionMock.mockReturnValue('0.0.0');
+    const deps = makeDeps();
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(scaffoldGhostDirMock).not.toHaveBeenCalled();
+
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+        minCindyVersion: '1.4.0',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(scaffoldGhostDirMock).toHaveBeenCalledWith(
+      expect.objectContaining({ minCindyVersion: '1.4.0' }),
+      expect.any(Object),
+    );
+
+    scaffoldGhostDirMock.mockClear();
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+        minCindyVersion: '1.4.0-beta.1',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(scaffoldGhostDirMock).not.toHaveBeenCalled();
+
+    await expect(
+      deps.forgeScaffold({
+        dir: path.join(WORKDIR, 'new-plugin'),
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+        minCindyVersion: '0.0.0',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(scaffoldGhostDirMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1110,6 +1223,67 @@ describe('session-context 宿主铸造', () => {
         },
       }),
     );
+  });
+});
+
+describe('Cindy media 本机路径揭示', () => {
+  it('只在用户点击允许后把已解析路径返回给 Agent', async () => {
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({
+      ok: true,
+      url,
+      local_path: process.execPath,
+      mime_type: 'image/png',
+    });
+
+    const result = await makeDeps('codex', 'media-path').callMedia?.({
+      action: 'resolve_local_path',
+      url,
+    });
+
+    expect(confirmRequestMock).toHaveBeenCalledWith(
+      'media-path',
+      expect.objectContaining({
+        ghostId: 'cindy-media',
+        ghostName: 'Cindy Media',
+        lane: 'reveal_path',
+        items: [
+          expect.objectContaining({
+            absPath: process.execPath,
+            mimeType: 'image/png',
+          }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, local_path: process.execPath });
+  });
+
+  it('用户拒绝或调用缺少会话语境时不把路径放进工具结果', async () => {
+    const url = `cindy-media://blobs/${'b'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({
+      ok: true,
+      url,
+      local_path: process.execPath,
+      mime_type: 'image/png',
+    });
+    confirmRequestMock.mockResolvedValueOnce({ confirmed: false, allowDirs: false });
+
+    const denied = await makeDeps('claude-code', 'media-path-denied').callMedia?.({
+      action: 'resolve_local_path',
+      url,
+    });
+    expect(denied).toMatchObject({ ok: false, errorCode: 'LOCAL_PATH_REVEAL_DENIED' });
+    expect(denied).not.toHaveProperty('local_path');
+
+    const noSession = await makeDeps('claude-code', null).callMedia?.({
+      action: 'resolve_local_path',
+      url,
+    });
+    expect(noSession).toMatchObject({
+      ok: false,
+      errorCode: 'LOCAL_PATH_REVEAL_CONFIRM_UNAVAILABLE',
+    });
+    expect(noSession).not.toHaveProperty('local_path');
   });
 });
 

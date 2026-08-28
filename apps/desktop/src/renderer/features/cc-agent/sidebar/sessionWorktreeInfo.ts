@@ -155,8 +155,8 @@ export function useTaskInfoWorktree(
       return inflight;
     };
     void refresh();
-    const unsubscribe = window.electronAPI.onWorktreeChanged?.(() => {
-      void refresh();
+    const unsubscribe = window.electronAPI.onWorktreeChanged?.(({ sessionId }) => {
+      if (sessionId === session.id) void refresh();
     });
     const onFocus = () => {
       void refresh();

@@ -2,14 +2,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  performMessageDeletion,
-  type MessageDeleteHandlerDeps,
-} from '../messageDeleteHandler';
+import { performMessageDeletion, type MessageDeleteHandlerDeps } from '../messageDeleteHandler';
 
-function makeDeps(
-  overrides: Partial<MessageDeleteHandlerDeps> = {},
-): MessageDeleteHandlerDeps {
+function makeDeps(overrides: Partial<MessageDeleteHandlerDeps> = {}): MessageDeleteHandlerDeps {
   return {
     getSessionRow: vi.fn(async () => ({ status: 'active', agentKind: 'cc' })),
     getMessage: vi.fn(async () => ({
@@ -49,7 +44,12 @@ describe('performMessageDeletion', () => {
       source.indexOf('export function broadcastMessageDeleted'),
     );
 
-    expect(deletionBlock).toContain('preview = await latestVisiblePreview(sessionId);');
+    expect(deletionBlock).toContain('const latest = await latestVisiblePreviewRow(sessionId);');
+    expect(deletionBlock).toContain(
+      'preview = extractMessagePreview(latest?.content, latest?.role);',
+    );
+    expect(deletionBlock).toContain('await persistSessionListPreview(');
+    expect(deletionBlock).toContain('latest?.createdAt');
     expect(deletionBlock).not.toContain('.where(eq(messages.sessionId, sessionId))');
   });
 
@@ -102,10 +102,12 @@ describe('performMessageDeletion', () => {
   it('closes the old native session and rebuilds handoff from history without the target', async () => {
     const deps = makeDeps();
 
-    await expect(performMessageDeletion(deps, {
-      sessionId: 's1',
-      clientId: 'target',
-    })).resolves.toEqual({
+    await expect(
+      performMessageDeletion(deps, {
+        sessionId: 's1',
+        clientId: 'target',
+      }),
+    ).resolves.toEqual({
       sessionId: 's1',
       clientId: 'target',
       clientIds: ['target'],
@@ -148,25 +150,27 @@ describe('performMessageDeletion', () => {
   it('recomputes the deletion range and handoff after queued records become durable', async () => {
     let drained = false;
     const deps = makeDeps({
-      getMessage: vi.fn(async () => drained
-        ? {
-            id: 'final-row',
-            role: 'assistant' as const,
-            deletedClientIds: ['progress', 'late-result', 'final'],
-            subagentTurnWindow: {
-              startedAtInclusive: 100,
-              startedAtExclusive: 700,
+      getMessage: vi.fn(async () =>
+        drained
+          ? {
+              id: 'final-row',
+              role: 'assistant' as const,
+              deletedClientIds: ['progress', 'late-result', 'final'],
+              subagentTurnWindow: {
+                startedAtInclusive: 100,
+                startedAtExclusive: 700,
+              },
+            }
+          : {
+              id: 'final-row',
+              role: 'assistant' as const,
+              deletedClientIds: ['progress', 'final'],
+              subagentTurnWindow: {
+                startedAtInclusive: 100,
+                startedAtExclusive: 600,
+              },
             },
-          }
-        : {
-            id: 'final-row',
-            role: 'assistant' as const,
-            deletedClientIds: ['progress', 'final'],
-            subagentTurnWindow: {
-              startedAtInclusive: 100,
-              startedAtExclusive: 600,
-            },
-          }),
+      ),
       drainPersistQueue: vi.fn(async () => {
         drained = true;
       }),
@@ -227,10 +231,12 @@ describe('performMessageDeletion', () => {
       ]),
     });
 
-    await expect(performMessageDeletion(deps, {
-      sessionId: 's1',
-      clientId: 'final',
-    })).resolves.toEqual({
+    await expect(
+      performMessageDeletion(deps, {
+        sessionId: 's1',
+        clientId: 'final',
+      }),
+    ).resolves.toEqual({
       sessionId: 's1',
       clientId: 'final',
       clientIds: ['progress', 'thinking', 'auto-resume', 'tool', 'final'],
@@ -260,10 +266,12 @@ describe('performMessageDeletion', () => {
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => true })),
     });
 
-    await expect(performMessageDeletion(deps, {
-      sessionId: 's1',
-      clientId: 'target',
-    })).rejects.toThrow('SESSION_RUNNING');
+    await expect(
+      performMessageDeletion(deps, {
+        sessionId: 's1',
+        clientId: 'target',
+      }),
+    ).rejects.toThrow('SESSION_RUNNING');
     expect(deps.listMessagesForContext).not.toHaveBeenCalled();
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.commitDeletion).not.toHaveBeenCalled();
@@ -274,10 +282,12 @@ describe('performMessageDeletion', () => {
       hasBackgroundActivity: vi.fn(() => true),
     });
 
-    await expect(performMessageDeletion(deps, {
-      sessionId: 's1',
-      clientId: 'target',
-    })).rejects.toThrow('SESSION_RUNNING');
+    await expect(
+      performMessageDeletion(deps, {
+        sessionId: 's1',
+        clientId: 'target',
+      }),
+    ).rejects.toThrow('SESSION_RUNNING');
     expect(deps.listMessagesForContext).not.toHaveBeenCalled();
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.commitDeletion).not.toHaveBeenCalled();
@@ -289,10 +299,12 @@ describe('performMessageDeletion', () => {
       hasBackgroundActivity: vi.fn(() => ++reads > 1),
     });
 
-    await expect(performMessageDeletion(deps, {
-      sessionId: 's1',
-      clientId: 'target',
-    })).rejects.toThrow('SESSION_RUNNING');
+    await expect(
+      performMessageDeletion(deps, {
+        sessionId: 's1',
+        clientId: 'target',
+      }),
+    ).rejects.toThrow('SESSION_RUNNING');
     expect(deps.listMessagesForContext).not.toHaveBeenCalled();
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.commitDeletion).not.toHaveBeenCalled();
@@ -303,10 +315,12 @@ describe('performMessageDeletion', () => {
       getMessage: vi.fn(async () => null),
     });
 
-    await expect(performMessageDeletion(deps, {
-      sessionId: 's1',
-      clientId: 'missing',
-    })).rejects.toThrow('NOT_FOUND');
+    await expect(
+      performMessageDeletion(deps, {
+        sessionId: 's1',
+        clientId: 'missing',
+      }),
+    ).rejects.toThrow('NOT_FOUND');
     expect(deps.listMessagesForContext).not.toHaveBeenCalled();
     expect(deps.commitDeletion).not.toHaveBeenCalled();
   });
@@ -318,10 +332,12 @@ describe('performMessageDeletion', () => {
       ]),
     });
 
-    await expect(performMessageDeletion(deps, {
-      sessionId: 's1',
-      clientId: 'target',
-    })).resolves.toEqual({
+    await expect(
+      performMessageDeletion(deps, {
+        sessionId: 's1',
+        clientId: 'target',
+      }),
+    ).resolves.toEqual({
       sessionId: 's1',
       clientId: 'target',
       clientIds: ['target'],

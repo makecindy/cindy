@@ -26,6 +26,7 @@ import {
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
+  type PinnedHostname,
   type SsrFPolicy,
 } from '../_generated/leaf/src/infra/net/ssrf.js';
 
@@ -40,6 +41,18 @@ export interface GuardedFetchOptions {
   requireHttps?: boolean;
   maxRedirects?: number;
   lookupFn?: LookupFn;
+  /**
+   * 可选的安全出口适配器。DNS 守门完成后才调用；返回 undefined 时继续使用
+   * 默认的直连 pinned dispatcher。调用方若返回自定义 dispatcher，必须保证它
+   * 仍只连接 pinned.addresses 中的地址。
+   */
+  dispatcherFactory?: (params: {
+    url: URL;
+    pinned: PinnedHostname;
+    policy?: SsrFPolicy;
+  }) => Dispatcher | undefined | Promise<Dispatcher | undefined>;
+  /** DNS 与出口选择完成后、真正 dispatch 前的最后一道同步/异步资格复核。 */
+  beforeDispatch?: () => void | Promise<void>;
   /** Accepted for call-site compatibility; not used by the thin shell. */
   auditContext?: string;
   [extra: string]: unknown;
@@ -92,12 +105,54 @@ async function guardHop(
   policy: SsrFPolicy | undefined,
   lookupFn: LookupFn | undefined,
   requireHttps: boolean | undefined,
+  dispatcherFactory: GuardedFetchOptions['dispatcherFactory'],
 ): Promise<{ url: URL; dispatcher: Dispatcher }> {
   const url = new URL(rawUrl);
   assertScheme(url, requireHttps);
   const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, { policy, lookupFn });
-  const dispatcher = createPinnedDispatcher(pinned, undefined, policy);
+  const dispatcher =
+    (await dispatcherFactory?.({ url, pinned, policy }))
+    ?? createPinnedDispatcher(pinned, undefined, policy);
   return { url, dispatcher };
+}
+
+/**
+ * Guard and execute exactly one manually redirected HTTP hop.
+ *
+ * Callers that own redirect semantics can re-run this function for every hop;
+ * the returned dispatcher keeps the vetted DNS answers pinned until the
+ * response body has been consumed and `release()` is called.
+ */
+export async function fetchSingleHopWithSsrFGuard(
+  params: GuardedFetchOptions,
+): Promise<{ response: Response; release: () => Promise<void> }> {
+  const { url, dispatcher } = await guardHop(
+    params.url,
+    params.policy,
+    params.lookupFn,
+    params.requireHttps,
+    params.dispatcherFactory,
+  );
+  try {
+    await params.beforeDispatch?.();
+    const fetchOptions = {
+      ...params.init,
+      signal: params.signal ?? params.init?.signal,
+      redirect: 'manual' as const,
+      dispatcher,
+    };
+    const response = (await undiciFetch(
+      url.href,
+      fetchOptions as unknown as Parameters<typeof undiciFetch>[1],
+    )) as unknown as Response;
+    return {
+      response,
+      release: () => closeDispatcher(dispatcher),
+    };
+  } catch (err) {
+    await closeDispatcher(dispatcher);
+    throw err;
+  }
 }
 
 function stripSensitiveHeaders(init: RequestInit | undefined): RequestInit | undefined {
@@ -130,8 +185,11 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         params.policy,
         params.lookupFn,
         params.requireHttps,
+        params.dispatcherFactory,
       );
       dispatchers.push(dispatcher);
+
+      await params.beforeDispatch?.();
 
       // undici's fetch accepts a `dispatcher`; its RequestInit differs slightly
       // from the DOM lib types, so we go through `unknown` for the options bag.

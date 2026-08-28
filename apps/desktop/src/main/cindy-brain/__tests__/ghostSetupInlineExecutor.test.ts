@@ -32,7 +32,6 @@ function manifest(source?: 'user' | 'oauth' | 'login-email' | 'gh-cli' | 'oidc-t
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['tool', 'network'],
     tools: [{ name: 'call', description: 'Call' }],
     network: {
       hosts: ['api.example.com'],
@@ -107,7 +106,6 @@ describe('executeGhostSetupInlineSubmission', () => {
     const nodeManifest: GhostManifest = {
       ...manifest(),
       settingsHtml: 'settings.html',
-      slots: ['tool', 'network', 'node'],
       node: {
         entry: 'node/worker.cjs',
         protocol: 'json-rpc-stdio',

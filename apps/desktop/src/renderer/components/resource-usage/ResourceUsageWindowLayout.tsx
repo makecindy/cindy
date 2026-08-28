@@ -24,6 +24,7 @@ import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { ToastContainer } from '@/components/ui/toast';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ResourceUsageWindowLayout');
@@ -44,14 +45,17 @@ const EMPTY_STATE: ResourceUsageState = {};
 export function ResourceUsageWindowLayout() {
   const { t } = useTranslation();
   const { effectiveLocale, setLocale } = useLocale();
-  const isMac = window.electronAPI?.platform === 'darwin';
+  const { isMac, isFullscreen } = useMacFullscreen();
   const presentationReadySentRef = useRef(false);
   const presentationReadyInFlightRef = useRef(false);
   const presentationReadyAttemptRef = useRef(0);
   const presentationReadyRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const presentationReadyDisposedRef = useRef(false);
-  // 首次隐藏挂载需要采一份数据完成预热；main 在 presentationReady 后会切回 false。
-  const [samplingActive, setSamplingActive] = useState(true);
+  // Windows 隐藏预热只挂载 renderer，不触发 OS 进程扫描；用户显式打开后由 Main
+  // 发送 true。其他平台保留现有首份快照预热行为。
+  const [samplingActive, setSamplingActive] = useState(
+    window.electronAPI.platform !== 'win32',
+  );
   // BrowserWindow hide 后 Chromium 不会继续更新鼠标命中，复用窗口时自绘按钮可能保留
   // 上一次点击留下的 focus / :hover。隐藏时重建一次 chrome，确保下次 show 从干净状态开始。
   const [windowChromeRevision, setWindowChromeRevision] = useState(0);
@@ -142,7 +146,10 @@ export function ResourceUsageWindowLayout() {
         className="relative flex h-[46px] shrink-0 items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)]"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <div className={isMac ? 'w-20 shrink-0' : 'w-3 shrink-0'} />
+        <div
+          data-testid="resource-window-title-spacer"
+          className={isMac && !isFullscreen ? 'w-20 shrink-0' : 'w-3 shrink-0'}
+        />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Activity size={14} className="shrink-0 text-[var(--text-tertiary)]" />
           <span className="truncate text-13 text-[var(--text-secondary)]">

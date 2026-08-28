@@ -50,7 +50,7 @@ export function getElectronNativeBindingPath(
 }
 
 export function resolveBetterSqliteNativeBinding(
-  env: EnvLike = process.env,
+  env: EnvLike = runtimeProcessEnv(),
   versions: ProcessVersionsLike = process.versions,
   options: ResolveNativeBindingOptions = {},
 ): string | undefined {
@@ -70,6 +70,18 @@ export function resolveBetterSqliteNativeBinding(
   }
 
   return undefined;
+}
+
+/**
+ * Vite replaces the literal `process.env` expression in preload-target bundles
+ * with a build-time object. Utility processes still need their fork-time env,
+ * especially the Electron-native better-sqlite3 binding selected by Main.
+ */
+function runtimeProcessEnv(): EnvLike {
+  const runtimeProcess = Reflect.get(globalThis, 'process') as
+    | { env?: EnvLike }
+    | undefined;
+  return runtimeProcess?.env ?? {};
 }
 
 // createRequire 绑定到本 bundle 文件位置 —— 与主进程静态 `import Database from 'better-sqlite3'`

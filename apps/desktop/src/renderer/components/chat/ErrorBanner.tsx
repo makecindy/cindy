@@ -180,6 +180,10 @@ export function ErrorBanner({
     !isAnyRemoteSession &&
     !silentEncryptedRetryEnabled &&
     isInvalidEncryptedContentError(error);
+  const isOversizedHistoryError =
+    agentKind === 'codex' && errorReason === 'codex_history_oversized';
+  // SSH 不能自动剥图。本机 / device-link 由 main 侧协调器就地恢复，横幅不给按钮。
+  const isSshRemoteSession = Boolean(remoteHostId);
   // Codex 401 auth-missing detection 分三层:
   //  - isCodexAuthMissing: codex session + 401/Missing bearer pattern。
   //  - isCodexRemoteAuthMissing: 远端 codex + 上面命中 → 显「同步登录态」按钮。
@@ -309,6 +313,7 @@ export function ErrorBanner({
     isGatewayProxyTokenInvalid ||
     isCodexThreadStale ||
     showInvalidEncryptedContentRecovery ||
+    isOversizedHistoryError ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||
     openAiReconnectRequired ||
     isCodexLocalOAuthAuthMissing;
@@ -335,6 +340,12 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.codexThreadStale');
   } else if (showInvalidEncryptedContentRecovery) {
     displayError = t('chat.errorBanner.invalidEncryptedContent');
+  } else if (isOversizedHistoryError) {
+    displayError = t(
+      isSshRemoteSession
+        ? 'logic.errors.codexHistoryOversizedRemote'
+        : 'logic.errors.codexHistoryOversized',
+    );
   } else if (isCodexRemoteAuthMissing) {
     displayError = syncedSinceError
       ? t('chat.errorBanner.codexAuthSynced')

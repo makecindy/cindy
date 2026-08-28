@@ -925,6 +925,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
             nextModel: model,
             currentCodexProxyActive: liveSession.codexProxyActive,
             currentCodexThreadModelProviderId: liveSession.codexThreadModelProviderId,
+            currentCodexCindyRemoteCompactionCompatible:
+              liveSession.codexCindyRemoteCompactionCompatible,
           }
         : null;
       if (
@@ -1344,6 +1346,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
               nextModel: runtimeModel,
               currentCodexProxyActive: session.codexProxyActive,
               currentCodexThreadModelProviderId: session.codexThreadModelProviderId,
+              currentCodexCindyRemoteCompactionCompatible:
+                session.codexCindyRemoteCompactionCompatible,
             })
           ) {
             throw new Error(
@@ -2124,6 +2128,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         nextModel: live.model,
         currentCodexProxyActive: live.codexProxyActive,
         currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
+        currentCodexCindyRemoteCompactionCompatible:
+          live.codexCindyRemoteCompactionCompatible,
       })
     ) {
       throw new QueuedCodexThreadIdentityMismatchError(
@@ -2140,6 +2146,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         nextModel: targetModel,
         currentCodexProxyActive: live.codexProxyActive,
         currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
+        currentCodexCindyRemoteCompactionCompatible:
+          live.codexCindyRemoteCompactionCompatible,
       })
     ) {
       // 早退 = 本轮沿用 live 当前路由派发:这条保留路由自己也要过停用裁决 ——

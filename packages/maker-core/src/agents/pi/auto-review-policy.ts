@@ -26,7 +26,7 @@ import { CINDY_SUBAGENT_TOOL_NAME } from './cindy-subagent-source.js';
 export type PiAutoReviewVerdict = ReviewVerdict;
 
 export interface PiAutoReviewContext {
-  /** pi 工具名(内置小写:bash/edit/write/read/…;桥接 MCP 为 mcp__<server>__<tool>)。 */
+  /** pi 内置工具名，或 bridge 从稳定网关还原出的 mcp__<server>__<tool> 真实身份。 */
   toolName: string;
   /** 工具入参(bridge 透传的原始对象)。 */
   input: Record<string, unknown>;

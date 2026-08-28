@@ -1,17 +1,18 @@
 /**
- * compaction-settings-store —— Claude Code 与 Pi 共用的自动上下文压缩阈值。
+ * compaction-settings-store —— Claude Code 与 Pi 的自动上下文压缩阈值。
  *
- * 文件: <userData>/compaction-settings.json
- *   { "claudeCodeAutoCompactPct": 75 }
- * 字段名保留历史 key，避免用户已调过的阈值丢失；Codex 不读这份设置。
+ * 文件:
+ *   <userData>/compaction-settings.json       { "claudeCodeAutoCompactPct": 75 }
+ *   <userData>/pi-compaction-settings.json    { "piAutoCompactPct": 75 }
  *
- * 默认 75 —— 对齐历史自动压缩默认阈值。范围固定 50–95,
- * 写入和读取都 clamp + round, 确保注入 runtimeConfig.autoCompactThresholdPct 始终是合法整数百分比。
+ * 两个 agent 使用独立 override 文件，恢复其中一个默认值不会覆盖另一个设置；Codex
+ * 不读这两份设置。
  *
- * 同步 R/W —— 文件极小, Electron main 已是 background, 不会卡 renderer 主线程。
- * read 失败 (corrupt JSON / 文件不存在) → 走默认值, 同时清掉坏文件避免反复报错。
+ * 默认 75 —— 对齐历史自动压缩默认阈值。范围固定 50–95，写入和读取都 clamp + round。
+ * 同步 R/W —— 文件极小，Electron main 已是 background，不会卡 renderer 主线程。
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -20,6 +21,7 @@ import {
   type OverrideSettingsState,
 } from './override-settings-file.js';
 import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 
 const log = desktopMakerLogger.child('compaction-settings-store');
 
@@ -90,3 +92,123 @@ export function writeCompactionPct(value: number): void {
 export function resetCompactionPct(): number {
   return currentStore().reset().claudeCodeAutoCompactPct;
 }
+
+interface PiCompactionSettings {
+  piAutoCompactPct: number;
+}
+
+function piSettingsFilePath(rootPath?: string): string {
+  return path.join(rootPath ?? ownerScopedUserDataPath(), 'pi-compaction-settings.json');
+}
+
+function piMigrationMarkerPath(rootPath?: string): string {
+  return path.join(rootPath ?? ownerScopedUserDataPath(), 'pi-compaction-migrated.json');
+}
+
+function writeJsonAtomic(filePath: string, value: unknown): void {
+  atomicWriteFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function isReadableJsonObject(filePath: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed));
+  } catch {
+    return false;
+  }
+}
+
+function readMigratedPiPct(piPath: string): number | null {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(piPath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const pct = (parsed as { piAutoCompactPct?: unknown }).piAutoCompactPct;
+    if (typeof pct !== 'number' || !Number.isFinite(pct)) return null;
+    return clampPct(pct);
+  } catch {
+    return null;
+  }
+}
+
+function markPiMigrationDone(ownerRoot: string | null): void {
+  const marker = piMigrationMarkerPath(ownerRoot ?? undefined);
+  if (isReadableJsonObject(marker)) return;
+  writeJsonAtomic(marker, { version: 1 });
+}
+
+function normalizePi(raw: unknown): PiCompactionSettings {
+  if (!raw || typeof raw !== 'object') {
+    return { piAutoCompactPct: DEFAULT_PCT };
+  }
+  const r = raw as Record<string, unknown>;
+  return { piAutoCompactPct: clampPct(r.piAutoCompactPct) };
+}
+
+const piStores = new Map<string, ReturnType<typeof createOverrideSettingsFile<PiCompactionSettings>>>();
+
+function migratePiFromLegacyIfNeeded(ownerRoot: string | null): void {
+  const marker = piMigrationMarkerPath(ownerRoot ?? undefined);
+  if (isReadableJsonObject(marker)) return;
+  const piPath = piSettingsFilePath(ownerRoot ?? undefined);
+  if (readMigratedPiPct(piPath) !== null) {
+    markPiMigrationDone(ownerRoot);
+    return;
+  }
+  const claude = currentStore().readState();
+  if (claude.isCustomized) {
+    const pct = clampPct(claude.value.claudeCodeAutoCompactPct);
+    writeJsonAtomic(piPath, { piAutoCompactPct: pct });
+    if (readMigratedPiPct(piPath) === null) {
+      log.warn('pi compaction migration wrote an unreadable override; will retry next start', {
+        pct,
+      });
+      return;
+    }
+    log.info('pi compaction migrated from customized claude setting', { pct });
+  }
+  markPiMigrationDone(ownerRoot);
+}
+
+function currentPiStore() {
+  const ownerRoot = getActiveAppSession().dataOwnerId ? ownerScopedUserDataPath() : null;
+  const key = ownerRoot ?? '<no-session>';
+  let store = piStores.get(key);
+  if (!store) {
+    migratePiFromLegacyIfNeeded(ownerRoot);
+    store = createOverrideSettingsFile<PiCompactionSettings>({
+      filePath: () => piSettingsFilePath(ownerRoot ?? undefined),
+      defaults: { piAutoCompactPct: DEFAULT_PCT },
+      normalize: normalizePi,
+      log,
+      label: 'pi-compaction',
+    });
+    piStores.set(key, store);
+  }
+  return store;
+}
+
+/** 同步读取 Pi 原生自动压缩百分比。下次 startSession / 恢复任务时读取。 */
+export function readPiCompactionPct(): number {
+  return currentPiStore().read().piAutoCompactPct;
+}
+
+export function readPiCompactionState(): OverrideSettingsState<PiCompactionSettings> {
+  return currentPiStore().readState();
+}
+
+export function writePiCompactionPct(value: number): void {
+  const next: PiCompactionSettings = { piAutoCompactPct: clampPct(value) };
+  currentPiStore().writePatch(next);
+  log.info('pi compaction setting written', { pct: next.piAutoCompactPct });
+}
+
+export function resetPiCompactionPct(): number {
+  return currentPiStore().reset().piAutoCompactPct;
+}
+
+export const __testing = {
+  resetStores(): void {
+    stores.clear();
+    piStores.clear();
+  },
+};

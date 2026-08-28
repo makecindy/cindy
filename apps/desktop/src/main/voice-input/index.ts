@@ -22,6 +22,7 @@ import { createLogger } from '../logger.js';
 import {
   isProviderModelRouteDisabled,
   isUtilityRouteDisabled,
+  isUtilityRoutePaymentRequired,
 } from '../utility-model/oneShotCandidates.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
@@ -788,6 +789,16 @@ async function resolveVoiceInputRefinerChainForRuntime(
       });
       continue;
     }
+    // BYOK LiteLLM refinement calls XD directly, outside the Session rail.
+    // Apply the same owner-scoped v5 paid entitlement used by utility one-shot
+    // candidates before admitting the profile into the fallback chain.
+    if (isUtilityRoutePaymentRequired(profile)) {
+      log.info('refiner profile skipped: paid entitlement required', {
+        profileId: profile.id,
+        model: profile.model,
+      });
+      continue;
+    }
     refinerChainProfiles.push(profile);
     refinerReadinessList.push(readiness);
   }
@@ -876,11 +887,11 @@ async function getVoiceInputRefinerReadiness(
 }
 
 /**
- * TextModelClient 的停用轴 live 包装(BYOK):每次 requestJson(= 一次精修付费请求)
- * 前按当前 override 重查该档的真实路由,停用即抛错 —— FallbackTextModelClient 将其
- * 视为该档失败,自然落到下一档(PR #744 review 第二十一轮)。
+ * TextModelClient 的 live 可用性包装(BYOK):每次 requestJson(= 一次精修请求)
+ * 前重查设置停用与 Cindy 账号付费权限；不可用即抛错，FallbackTextModelClient
+ * 将其视为该档失败并自然落到下一档。
  */
-function guardRefinerClientAgainstDisable(
+function guardRefinerClientAgainstUnavailableRoute(
   profile: VoiceInputRefinerProfile,
   client: TextModelClient,
 ): TextModelClient {
@@ -888,6 +899,12 @@ function guardRefinerClientAgainstDisable(
     requestJson: (input) => {
       if (isUtilityRouteDisabled(profile)) {
         return Promise.reject(new Error('voice refiner route disabled in settings'));
+      }
+      // Refinement may start minutes after chain resolution. Re-read the live
+      // owner-scoped catalog immediately before every direct XD request so a
+      // newly denied paid model cannot be dispatched from a retained session.
+      if (isUtilityRoutePaymentRequired(profile)) {
+        return Promise.reject(new Error('voice refiner route requires paid entitlement'));
       }
       return client.requestJson(input);
     },
@@ -2167,10 +2184,10 @@ export function registerVoiceInputIpc(): void {
           const refinerAttempts: FallbackTextModelAttempt[] = readyRefinerProfiles.map((profile) => ({
             profileId: profile.id as VoiceInputRefinerProviderKind,
             model: profile.model,
-            // live 谓词包装(PR #744 review 第二十一轮):精修请求在用户停止说话时才
-            // 发出,可能距控制器构造数分钟 —— 每次请求前按当前 override 重查,停用
-            // 即抛错让 fallback 落到下一档。
-            client: guardRefinerClientAgainstDisable(
+            // live 谓词包装:精修请求在用户停止说话时才发出,可能距控制器构造
+            // 数分钟 —— 每次请求前重查设置停用与付费权限,不可用即让 fallback
+            // 落到下一档。
+            client: guardRefinerClientAgainstUnavailableRoute(
               profile,
               createVoiceInputTextModelClient(profile, {
                 timeoutMs: VOICE_INPUT_REFINER_IDLE_TIMEOUT_MS,

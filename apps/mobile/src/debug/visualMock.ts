@@ -54,6 +54,7 @@ export const visualMockUser: MobileUser = {
   membershipRole: 'owner',
   orgId: null,
   orgName: null,
+  orgLogoUrl: null,
   passportId: 'visual-mock-passport',
 };
 
@@ -151,6 +152,10 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       candidateDeviceId === deviceId ? true : null
     ),
     openLink: async (): Promise<LinkAcceptPayload> => ({
+      appVersion: '0.0.0-visual-mock',
+      allowlistHash: 'visual-mock',
+    }),
+    reopenLink: async (): Promise<LinkAcceptPayload> => ({
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
     }),

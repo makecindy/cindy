@@ -2152,9 +2152,8 @@ export function createTurnRunner(
    * 投递给 streaming handle, 让 finalize 时跟文本里的 markdown 图一起
    * upload + 拼到卡片上。
    *
-   * 这是 IM 端"画了图却看不到"的修复入口 — art image_generate 工具按设计
-   * 不让模型在文本里嵌 xdt-image markdown (避免 desktop 渲染重复), 所以 IM
-   * 端拿不到图的唯一通路就是从这里 sidechannel 把图 URL 接走。
+   * 这是媒体工具结果的可靠兜底。Agent 最终回复若也用 markdown 引用了同一张图，
+   * materializeTurnLocalImages 会按真实路径去重并清理正文引用，渠道最终只发一份。
    */
   function handleToolResultFullEvent(turn: TurnState, event: AgentEvent): void {
     const data = event.data as { fullText?: unknown } | null;

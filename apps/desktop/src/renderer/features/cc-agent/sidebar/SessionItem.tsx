@@ -75,6 +75,7 @@ import {
 } from '../lib/sessionDisplayTitle';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import {
+  findLatestSidebarIndexRunForSession,
   loadScheduleSidebarIndexRuns,
   type ScheduleSidebarIndexRun,
 } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
@@ -434,7 +435,7 @@ export const SessionItem = memo(function SessionItem({
   const handleAutomationIconClick = useCallback(async () => {
     try {
       const runs = await loadScheduleSidebarIndexRuns();
-      const hit = runs.find((r) => r.sessionId === session.id);
+      const hit = findLatestSidebarIndexRunForSession(runs, session.id);
       navigate(hit ? scheduleFocusPath(hit.scheduleId) : '/cc-agent/scheduled');
     } catch {
       navigate('/cc-agent/scheduled');
@@ -459,7 +460,7 @@ export const SessionItem = memo(function SessionItem({
     loadScheduleSidebarIndexRunsCached()
       .then((runs) => {
         if (cancelled) return;
-        const hit = runs.find((r) => r.sessionId === session.id);
+        const hit = findLatestSidebarIndexRunForSession(runs, session.id);
         setResolvedScheduleId(hit?.scheduleId ?? null);
       })
       .catch(() => {
@@ -1356,7 +1357,7 @@ export const SessionItem = memo(function SessionItem({
   // 统一 hover 浮层:PR 优先;来源标签已写在标题旁,不再用浮层重复。
   // 具体优先级、配色和 orca-lead 回退详见 SessionTooltip.tsx。
   // 单独 automation-generated 会话(未被 AutomationSessionGroupItem 吸走)在 hover 时
-  // 显示「下次运行倒计时 + 累计运行次数」,与分组头 rowTooltip 同语义。分组内子行
+  // 显示下次运行或停止状态。分组内子行
   // (insideAutomationGroup=true)由组头承担,这里不再挂 automation 浮层。
   const showAutomationTooltip = isAutomationGenerated && !insideAutomationGroup;
   return (

@@ -16,6 +16,7 @@ import { BUNDLED_CATALOG, type CatalogModel } from '@cindy/model-providers';
 import {
   getActiveCatalog,
   getXdGatewayModels,
+  isXdGatewayPaymentRequiredRoute,
   resolveXdPiGatewayWireProtocol,
   setActiveCatalog,
   setAnthropicDiscoveredModels,
@@ -49,6 +50,34 @@ describe('XD 网关权威模型清单重建', () => {
     setXdGatewayModels([]);
     expect(xdModels('claude-code')).toEqual([]);
     expect(xdModels('codex')).toEqual([]);
+  });
+
+  it('刷新失败可隐藏付费行，但派发边界保留最近一次明确拒绝直到成功响应', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'paid-only-model',
+        agents: ['claude-code'],
+        availability: 'requires_payment',
+      },
+    ]);
+    expect(isXdGatewayPaymentRequiredRoute('paid-only-model', 'claude-code')).toBe(true);
+
+    setXdGatewayModels([], {
+      authoritative: false,
+      preservePaymentRequiredRoutes: true,
+    });
+    expect(getXdGatewayModels()).toEqual([]);
+    expect(isXdGatewayPaymentRequiredRoute('paid-only-model', 'claude-code')).toBe(true);
+
+    setXdGatewayModels([
+      {
+        id: 'paid-only-model',
+        agents: ['claude-code'],
+        availability: 'available',
+      },
+    ], { authoritative: true });
+    expect(isXdGatewayPaymentRequiredRoute('paid-only-model', 'claude-code')).toBe(false);
   });
 
   it('/models 同时控制 XD chat 与媒体成员，忽略 Catalog 里的旧媒体清单', () => {

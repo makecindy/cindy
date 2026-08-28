@@ -352,17 +352,23 @@ describe('codex gateway config', () => {
     expect(args).toContain('model_providers.cindy_openai.wire_api="responses"');
     expect(args).toContain('model_providers.cindy_openai.requires_openai_auth=true');
     expect(args).toContain('model_providers.cindy_openai.supports_websockets=true');
+    expect(args).toContain('model_providers.cindy_codex.name="OpenAI"');
+    expect(args).toContain('model_providers.cindy_codex.requires_openai_auth=true');
+    expect(args).toContain('model_providers.cindy_codex.supports_websockets=false');
     // is_openai + OAuth 命中时 codex 默认 zstd 压缩请求体,loopback proxy 无法解析,必须关。
     expect(args).toContain('features.enable_request_compression=false');
   });
 
-  it('env-key / provider-oauth 模式: 不定义 OpenAI 身份 provider', async () => {
+  it('env-key / provider-oauth 只定义 Cindy Codex 远程压缩 identity', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 
     for (const mode of ['env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
       expect(args.some((arg) => arg.includes('cindy_openai'))).toBe(false);
-      expect(args).not.toContain('features.enable_request_compression=false');
+      expect(args).toContain('model_providers.cindy_codex.name="OpenAI"');
+      expect(args).toContain('model_providers.cindy_codex.env_key="XDT_CODEX_API_KEY"');
+      expect(args).toContain('model_providers.cindy_codex.supports_websockets=false');
+      expect(args).toContain('features.enable_request_compression=false');
     }
   });
 
@@ -470,6 +476,27 @@ describe('createCrossProviderCompactionCompatTransform', () => {
       { model: 'gpt-5.5', input: [compactionItem, agentMessage, reasoningItem, userMessage] },
       { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
     )).toBeNull();
+  });
+
+  it('Cindy Provider codex/* 原样透传 compaction，同时清理 agent 消息密文', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    const out = transform(
+      { model: 'codex/gpt-5.6-sol', input: [compactionItem, agentMessage, userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    ) as { input: Array<Record<string, unknown>> };
+
+    expect(out.input).toEqual([
+      compactionItem,
+      {
+        type: 'agent_message',
+        author: 'researcher',
+        recipient: 'parent',
+        content: [{ type: 'input_text', text: 'readable agent result' }],
+      },
+      userMessage,
+    ]);
   });
 
   it('upstreamBase 缺失时不改写(保守方向:宁可维持现状,不误伤 ChatGPT 请求)', async () => {
@@ -622,6 +649,14 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   });
 
   it.each([
+    ['https://api.kimi.com/coding/v1', 'k3'],
+    ['https://api.kimi.com/coding/v1/', 'k3-256k'],
+  ])('enables image_url for Kimi Code coding-plan route: %s / %s (#2732)', async (upstream, model) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+  });
+
+  it.each([
     ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-2-1-pro-260628'],
     ['https://ark.ap-southeast-1.volces.com/api/v3/', 'doubao-seed-1-6-vision-260615'],
   ])('enables image_url for Doubao Seed on official Volcengine Ark host: %s (#771)', async (upstream, model) => {
@@ -642,6 +677,12 @@ describe('chatBridgeCapabilitiesForRoute', () => {
 
   it.each([
     ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
+    // Kimi Code: non-HTTPS, spoofed subdomain, and models without verified image support stay closed.
+    ['http://api.kimi.com/coding/v1', 'k3'],
+    ['https://api.kimi.com.evil.example/coding/v1', 'k3'],
+    ['https://api.kimi.com/coding/v1', 'kimi-k3'],
+    ['https://api.kimi.com/coding/v1', 'kimi-for-coding'],
+    ['https://api.moonshot.cn/v1', 'k3'],
     ['https://api.deepseek.com/v1', 'kimi-k3'],
     ['https://api.moonshot.cn.evil.example/v1', 'kimi-k3'],
     ['http://api.moonshot.cn/v1', 'kimi-k3'],
@@ -2532,6 +2573,7 @@ describe('codex proxy host', () => {
     });
     await host.ensureCodexProxyReady();
     host.setCodexProxyAuthInjection('oauth-bearer');
+    host.setCodexProxyGatewayKeyReader(() => 'gateway-subagent-key');
     host.registerComposed(
       'session-ws-parent',
       'thread-ws-parent',
@@ -2580,6 +2622,20 @@ describe('codex proxy host', () => {
         'session-ws-child-2',
         'thread-ws-parent',
       ))).toBeNull();
+      // Codex's HTTP fallback may only carry the child thread id. The WS
+      // handshake must have bound the child route before returning 426, or this
+      // request falls through as a normal ChatGPT OAuth request.
+      await expect(Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'gpt-5.6-sol', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { 'thread-id': 'thread-ws-child-2' },
+        },
+      ))).resolves.toEqual({
+        headerOverride: { authorization: 'Bearer gateway-subagent-key' },
+      });
       // 未配置独立 route 的 collab child 不应被全局降级。
       expect(proxyOpts.resolveWebSocketUpstream(ctxForCodex145ChildPrewarm(
         'thread-openai-child',
@@ -2590,6 +2646,7 @@ describe('codex proxy host', () => {
       );
     } finally {
       host.unregister('session-ws-parent');
+      host.setCodexProxyGatewayKeyReader(() => null);
       host.clearCodexProxyAuthInjection();
     }
   });

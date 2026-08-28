@@ -12,7 +12,7 @@
  */
 
 import {
-  getModel,
+  findCatalogModel,
   isModelSelectableForNewRoute,
   isModelVisible,
   providerOffersModel,
@@ -34,6 +34,11 @@ import { isSubscriptionDirectModel } from '../../shared/subscriptionModels';
  * 不能复用 `deriveModelsFromProviders`：后者是 picker 的跨来源 union，按目录顺序
  * first-wins；同一模型 id 在内置来源与 BYOM 上的显式 effort 子集可以不同。运行时切换
  * 若读拍平条目，会把另一来源支持的档位写给目标 provider。
+ *
+ * 查找走 `findCatalogModel`(精确 id 优先,失配再按 bridge 前缀 / 裸 id 归一)。
+ * 不能只用 `getModel` 精确匹配:同一逻辑模型在 Pi 目录是 `grok-4.6`、在
+ * Codex/订阅目录是 `xai/grok-4.6`。精确匹配失败会让调用方把 efforts 收成空数组,
+ * 面板已解析好的 high 被 `resolveEffort` 占位成 low。
  */
 export function resolveProviderModelEfforts(params: {
   providers: ProviderView[];
@@ -43,7 +48,7 @@ export function resolveProviderModelEfforts(params: {
 }): Pick<ModelDescriptor, 'efforts' | 'defaultEffort'> | null {
   const { providers, providerId, modelId, agentKind } = params;
   const provider = providersForAgent(providers, agentKind).find((entry) => entry.id === providerId);
-  const model = provider ? getModel(provider, modelId, agentKind) : undefined;
+  const model = findCatalogModel(provider, modelId, agentKind);
   if (!model) return null;
   return { efforts: model.efforts, defaultEffort: model.defaultEffort };
 }

@@ -86,6 +86,7 @@ import {
   onInteractionResolved,
   onThinkingEvent,
   flushAssistantBlock,
+  sealAssistantBlockForLateFinal,
   flushOrphanToolResults,
   isSuccessfulCodexDoneEventData,
   onTurnErrorEvent,
@@ -2025,6 +2026,93 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
   });
 });
 
+describe('stale-idle assistant late final identity', () => {
+  it('reuses the sealed row for the same SDK request after per-turn reset', async () => {
+    const meta = { requestId: 'req-stale-idle', uuid: 'assistant-stale-idle' };
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Cindy 能够理解多轮对', isFinal: false },
+      meta,
+    );
+    sealAssistantBlockForLateFinal(SESSION, null);
+    expect(consumeLastAssistantPersistId(SESSION)).toBe(persistId);
+    expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBe(persistId);
+    resetTurnPersistState(SESSION);
+
+    const lateFinalId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Cindy 能够理解多轮对', isFinal: true, isFullText: true },
+      { ...meta, uuid: 'assistant-late-snapshot', stopReason: 'stop_sequence' },
+    );
+    expect(lateFinalId).toBe(persistId);
+    // The late final must not restore the consumed turn target: a paired done
+    // still belongs to the stale-idle failure seal rather than a new success.
+    expect(consumeLastAssistantPersistId(SESSION)).toBeUndefined();
+    expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBeUndefined();
+
+    await flushWrites();
+    const assistantCreates = (createMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .filter((c) => (c[1] as { role?: string }).role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+    expect(assistantCreates[0]?.[1]).toEqual(
+      expect.objectContaining({ clientId: persistId, content: 'Cindy 能够理解多轮对' }),
+    );
+    expect(updateMessageContent).not.toHaveBeenCalled();
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+  });
+
+  it('updates the same row when the matching late final supplies a longer snapshot', async () => {
+    const meta = { requestId: 'req-longer-final', uuid: 'assistant-longer-final' };
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'partial', isFinal: false },
+      meta,
+    );
+    sealAssistantBlockForLateFinal(SESSION, null);
+    consumeLastAssistantPersistId(SESSION);
+    consumeLastTopLevelAssistantPersistId(SESSION);
+    resetTurnPersistState(SESSION);
+
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'partial output', isFinal: true, isFullText: true },
+      meta,
+    )).toBe(persistId);
+    await flushWrites();
+
+    const assistantCreates = (createMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .filter((c) => (c[1] as { role?: string }).role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, 'partial output');
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageRow).toHaveBeenCalled();
+  });
+
+  it('keeps identical text from a different SDK request as a separate message', async () => {
+    const firstId = onAssistantTextEvent(
+      SESSION,
+      { text: 'same text', isFinal: false },
+      { requestId: 'req-first', uuid: 'assistant-first' },
+    );
+    sealAssistantBlockForLateFinal(SESSION, null);
+    consumeLastAssistantPersistId(SESSION);
+    consumeLastTopLevelAssistantPersistId(SESSION);
+    resetTurnPersistState(SESSION);
+
+    const secondId = onAssistantTextEvent(
+      SESSION,
+      { text: 'same text', isFinal: true },
+      { requestId: 'req-second', uuid: 'assistant-second' },
+    );
+    expect(secondId).not.toBe(firstId);
+    await flushWrites();
+
+    const assistantCreates = (createMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .filter((c) => (c[1] as { role?: string }).role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
+});
+
 describe('streamed assistant final calibration', () => {
   it('persists the authoritative final text even when it is shorter than accumulated deltas', async () => {
     const persistId = onAssistantTextEvent(
@@ -2150,8 +2238,10 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
   it('does not persist a leaked Grok stop token as the last assistant', async () => {
     const first = onAssistantTextEvent(SESSION, { text: '现有 reviewer 空闲。', isFinal: true }, null);
     const leaked = onAssistantTextEvent(SESSION, { text: '<|eos|>', isFinal: true }, null);
+    const repeated = onAssistantTextEvent(SESSION, { text: '<|eos|><|eos|>', isFinal: true }, null);
     await flushWrites();
     expect(leaked).toBeUndefined();
+    expect(repeated).toBeUndefined();
     expect(createMessage).toHaveBeenCalledTimes(1);
     expect(consumeLastAssistantPersistId(SESSION)).toBe(first);
   });

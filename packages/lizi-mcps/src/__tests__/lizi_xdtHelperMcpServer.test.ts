@@ -194,6 +194,19 @@ describe("cindy_helper MCP server", () => {
               gracefulStopState: "none" as const,
             },
           })),
+          setSessionRuntime: vi.fn(async () => ({
+            ok: true as const,
+            status: "applied" as const,
+            generation: 1,
+            effectiveProfile: {
+              agentKind: "codex" as const,
+              model: "gpt-5.6-sol",
+              providerId: "openai",
+              effort: "high" as const,
+              fastMode: false,
+            },
+            pendingMutation: null,
+          })),
         },
       },
       {
@@ -223,6 +236,7 @@ describe("cindy_helper MCP server", () => {
         "steer_session",
         "stop_session_turn",
         "get_session_runtime",
+        "set_session_runtime",
       ]));
     } finally {
       await client.close();

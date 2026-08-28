@@ -1,16 +1,21 @@
 /**
- * 同一任务里因上下文超限而隐藏重建原生 Agent 会话。
+ * 同一任务里的 Cindy 保底压缩执行器。
  *
- * 抄 messageDeleteHandler 的 same-engine context_rebuild，不抄可见 agent_switch。
- * 规划函数是纯的，host 只负责关 live handle、落库、注入交接、wire 重放失败那条 user 消息。
+ * 决定「剥图还是交接重建」见 cindyContextCompression.ts。这里只执行：
+ * 关 live handle、剥图 relink、或 context_rebuild 交接 + 必要时 replay。
  */
 
-import { CONTEXT_OVERFLOW_REASON, isContextOverflowErrorMessage } from '@cindy/maker-core';
+import {
+  CODEX_HISTORY_OVERSIZED_REASON,
+  CONTEXT_OVERFLOW_REASON,
+  isContextOverflowErrorMessage,
+} from '@cindy/maker-core';
 import {
   projectAgentFacingText,
   readAgentInputReferences,
 } from '@cindy/maker-shared/agent-input-projection';
 
+import { afterStripAttempt, decideCindyCompression } from './cindyContextCompression.js';
 import { buildHandoffText, extractPlainText, type HandoffSourceMessage } from './agentHandoff.js';
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
@@ -41,6 +46,13 @@ export function isContextOverflowErrorData(data: unknown): boolean {
     (value) => typeof value === 'string' && isContextOverflowErrorMessage(value),
   );
 }
+
+export function isOversizedHistoryErrorData(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  return (data as { reason?: unknown }).reason === CODEX_HISTORY_OVERSIZED_REASON;
+}
+
+export type CodexStripRelinkResult = 'recovered' | 'not-needed' | 'failed' | 'busy' | 'stale';
 
 const PI_PROMPT_RPC_TIMEOUT_RE = /pi rpc timeout after \d+ms: prompt\b/i;
 
@@ -267,6 +279,7 @@ export function findLatestRebuildableError(
       const data = errorContentToData(message.content);
       if (isContextOverflowErrorData(data)) return data;
       if (allowPiPromptTimeout && isPiPromptRpcTimeoutError(data)) return data;
+      if (isOversizedHistoryErrorData(data)) return data;
       return null;
     }
     if (message.role === 'assistant' && extractPlainText(message.content).trim().length > 0) {
@@ -287,7 +300,19 @@ export interface ContextOverflowRolloverDeps {
     contextWindow?: number | null;
     model?: string | null;
     providerId?: string | null;
+    workingDir?: string | null;
   } | null>;
+  /**
+   * Codex 字节病第一档：同任务剥图并 relink native thread。
+   * recovered = 已换干净 thread；not-needed = 当前 thread 已可发送；failed = 落到换窗。
+   */
+  tryStripOversizedCodexHistory?(args: {
+    sessionId: string;
+    threadId: string;
+    model: string | null;
+    providerId: string | null;
+    workingDir: string | null;
+  }): Promise<CodexStripRelinkResult>;
   resolveVerifiedWindow?(
     agentKind: string,
     modelId: string,
@@ -343,11 +368,39 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 } {
   const inFlight = new Set<string>();
 
+  const runStripRelink = async (
+    sessionId: string,
+    sessionRow: {
+      agentKind: string;
+      sdkSessionId?: string | null;
+      model?: string | null;
+      providerId?: string | null;
+      workingDir?: string | null;
+    },
+  ): Promise<CodexStripRelinkResult> => {
+    if (
+      sessionRow.agentKind !== 'codex' ||
+      !sessionRow.sdkSessionId ||
+      !deps.tryStripOversizedCodexHistory
+    ) {
+      return 'failed';
+    }
+    return deps.tryStripOversizedCodexHistory({
+      sessionId,
+      threadId: sessionRow.sdkSessionId,
+      model: sessionRow.model ?? null,
+      providerId: sessionRow.providerId ?? null,
+      workingDir: sessionRow.workingDir ?? null,
+    });
+  };
+
   const runRecover = async (sessionId: string, errorData: unknown): Promise<boolean> => {
-    if (!isContextOverflowErrorData(errorData)) return false;
+    const oversized = isOversizedHistoryErrorData(errorData);
+    if (!isContextOverflowErrorData(errorData) && !oversized) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
+    // SSH only. device-link 会话落在被控桌面本地库,没有 remoteHostId,必须继续换窗。
     if (sessionRow.remoteHostId) return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
@@ -356,6 +409,30 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
       }
+      const tokens: 'violated' | 'unknown' = isContextOverflowErrorData(errorData)
+        ? 'violated'
+        : 'unknown';
+      let action = decideCindyCompression({
+        local: true,
+        bytes: oversized ? 'violated' : 'unknown',
+        tokens,
+      });
+      if (action === 'strip') {
+        const strip = await runStripRelink(sessionId, sessionRow);
+        const next = afterStripAttempt(strip, { local: true, tokens });
+        if (next === 'done') {
+          deps.onRebuilt?.(sessionId);
+          deps.log.info('codex oversized history strip settled', { sessionId, strip, next });
+          return true;
+        }
+        if (next === 'none') {
+          if (strip === 'not-needed') deps.onRebuilt?.(sessionId);
+          return strip === 'not-needed';
+        }
+        action = next;
+        deps.log.warn('codex oversized strip did not finish; rebuilding', { sessionId, strip });
+      }
+      if (action !== 'rebuild') return false;
       const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
       const [source, rebuildMeta] = await Promise.all([
         deps.listMessages(sessionId),
@@ -425,6 +502,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
+    // SSH only; device-link 会话在被控桌面是本地 session,继续换窗。
     if (sessionRow.remoteHostId) return false;
     if (!sessionRow.sdkSessionId) return false;
     const live = deps.getLiveSession(sessionId);
@@ -436,7 +514,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       liveUsage !== undefined &&
       Number.isFinite(liveUsage.contextTokens) &&
       liveUsage.contextTokens >= 0;
-    const tokens = hasLiveTokens
+    const usedTokens = hasLiveTokens
       ? liveUsage.contextTokens
       : typeof sessionRow.contextTokens === 'number'
         ? sessionRow.contextTokens
@@ -454,9 +532,38 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       sessionRow.agentKind,
     );
     const window = effectiveContextWindow(sessionRow.model, reportedWindow, verified);
-    const pressure = shouldRebuildForContextPressure(tokens, window);
+    const pressure = shouldRebuildForContextPressure(usedTokens, window);
     const compactFailed = liveUsage?.needsRollover === true;
-    if (!lastError && !pressure && !compactFailed) return false;
+    const tokenViolated =
+      isContextOverflowErrorData(lastError) ||
+      isPiPromptRpcTimeoutError(lastError) ||
+      pressure ||
+      compactFailed;
+    let action = decideCindyCompression({
+      local: true,
+      bytes: isOversizedHistoryErrorData(lastError) ? 'violated' : 'unknown',
+      tokens: tokenViolated ? 'violated' : 'unknown',
+    });
+    if (action === 'none') return false;
+    if (action === 'strip') {
+      const strip = await runStripRelink(sessionId, sessionRow);
+      const next = afterStripAttempt(strip, {
+        local: true,
+        tokens: tokenViolated ? 'violated' : 'unknown',
+      });
+      if (next === 'done') {
+        deps.onRebuilt?.(sessionId);
+        deps.log.info('codex oversized history stripped before send', { sessionId });
+        return true;
+      }
+      if (next === 'none') return false;
+      action = next;
+      deps.log.warn('codex oversized strip did not finish before send; rebuilding', {
+        sessionId,
+        strip,
+      });
+    }
+    if (action !== 'rebuild') return false;
     let lastUser: OverflowSourceMessage | undefined;
     let lastUserIndex = -1;
     for (let i = source.length - 1; i >= 0; i -= 1) {

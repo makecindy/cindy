@@ -49,6 +49,8 @@ const h = vi.hoisted(() => ({
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
+  runtimeCleanup: vi.fn(),
+  compactSessionToolResultsBestEffort: vi.fn(async () => undefined),
   userDataDir: null as string | null,
 }));
 
@@ -77,6 +79,7 @@ vi.mock('../../../logger', () => ({
 }));
 vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db }),
+  getCurrentDbClientUserId: () => 'test-user',
 }));
 vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../../../git-context/prRefsStore', () => ({
@@ -97,6 +100,9 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../toolResultCompaction.js', () => ({
+  compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
+}));
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
@@ -116,7 +122,12 @@ vi.mock('../../../cindy-brain/index.js', () => ({
   notifyGhostSessionEvent: vi.fn(),
 }));
 
-import { registerSessionIpc, resumeDeletedPiSubagentCleanup } from '../sessions';
+import {
+  patchSessionMetaInDb,
+  registerSessionIpc,
+  resumeDeletedPiSubagentCleanup,
+  setSessionRuntimeCleanup,
+} from '../sessions';
 import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
@@ -169,7 +180,10 @@ function createDb(): void {
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
-      last_turn_ended_at INTEGER
+      last_turn_ended_at INTEGER,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER
     );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
@@ -234,10 +248,12 @@ beforeEach(() => {
   h.userDataDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-sessions-update-'));
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
+  setSessionRuntimeCleanup(h.runtimeCleanup);
   registerSessionIpc(undefined, { closeIdleSessionForMove: h.closeIdleSessionForMove });
 });
 
 afterEach(async () => {
+  setSessionRuntimeCleanup(null);
   setSessionRouteLockImplementation(null);
   const dir = h.userDataDir;
   if (dir) {
@@ -507,6 +523,9 @@ describe('local-db:sessions:update handler wiring', () => {
         patch: { status: 'deleted' },
       }),
     );
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'cc-local' }),
+    );
   });
 
   it('broadcasts local unarchive status patches to every window (#3175)', async () => {
@@ -523,6 +542,7 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 'codex-local',
       patch: { status: 'active' },
     });
+    expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
   });
 
   // setStatus 的归档形是 { status, pinnedAt: null }:广播沿用置顶合并逻辑,
@@ -540,6 +560,41 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 'codex-local',
       patch: { status: 'archived', pinnedAt: null, summary: null },
     });
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'codex-local' }),
+    );
+  });
+
+  it('cleans runtime state before releasing the local terminal status lock', async () => {
+    const order: string[] = [];
+    h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
+      const result = await task();
+      order.push('lock-released');
+      h.sqlite!.prepare("UPDATE sessions SET status = 'active' WHERE id = ?").run('codex-local');
+      return result;
+    });
+
+    await invokeUpdate('codex-local', { status: 'archived' });
+
+    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(h.runtimeCleanup).toHaveBeenCalledOnce();
+  });
+
+  it('cleans runtime state before releasing the remote terminal status lock', async () => {
+    const order: string[] = [];
+    h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
+      const result = await task();
+      order.push('lock-released');
+      h.sqlite!.prepare("UPDATE sessions SET status = 'active' WHERE id = ?").run('codex-local');
+      return result;
+    });
+
+    await patchSessionMetaInDb('codex-local', { status: 'archived' });
+
+    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(h.runtimeCleanup).toHaveBeenCalledOnce();
   });
 
   // 竞态收敛(review on #3225):写入与查询不在同一串行区间,归档写入后、查询前

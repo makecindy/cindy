@@ -9,6 +9,9 @@ import { rewriteContextModeDoctorPath } from '../context-mode-doctor-path.js';
 import {
   createPiTranslateContext,
   disposePiTranslateContext,
+  markPiHostAbortRequested,
+  markPiHostTurnStartPending,
+  rollbackPiHostTurnStart,
   translatePiEvent,
   usageSnapshotOf,
 } from '../translator.js';
@@ -355,6 +358,44 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'text')).toEqual([]);
   });
 
+  it('does not emit a repeated Grok stop token as assistant text', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '<|eos|>' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '<|eos|>' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: '<|eos|><|eos|>' }],
+          model: 'xai/grok-4.6',
+          stopReason: 'stop',
+        },
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'text')).toEqual([]);
+  });
+
   it('surfaces a terminal provider error after Pi settles instead of staying in Working', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -530,6 +571,227 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
   });
 
+  it('keeps real aborted Responses stream failures resumable without a Host stop', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const rawError = 'OpenAI Responses stream ended before a terminal response event';
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'thinking', thinking: 'planning' }],
+          stopReason: 'aborted',
+          errorMessage: rawError,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'text')).toHaveLength(0);
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          message: rawError,
+          isTerminal: true,
+        }),
+      }),
+    ]);
+    expect((events.find((event) => event.type === 'error')?.data as { reason?: string }).reason)
+      .toBeUndefined();
+  });
+
+  it('treats an aborted Responses stream failure as cancellation after a Host stop', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const rawError = 'OpenAI Responses stream ended before a terminal response event';
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    markPiHostAbortRequested(ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'thinking', thinking: 'planning' }],
+          stopReason: 'aborted',
+          errorMessage: rawError,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'auto_retry_start',
+        attempt: 1,
+        maxAttempts: 3,
+        errorMessage: rawError,
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+  });
+
+  it('keeps a Host stop when it arrives before the pending turn agent_start', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const rawError = 'OpenAI Responses stream ended before a terminal response event';
+
+    markPiHostTurnStartPending(ctx);
+    markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'aborted',
+          errorMessage: rawError,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+  });
+
+  it('does not carry a stopped rejected prompt into the next Pi turn', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const rawError = 'OpenAI Responses stream ended before a terminal response event';
+
+    const rejectedPrompt = markPiHostTurnStartPending(ctx);
+    markPiHostAbortRequested(ctx);
+    rollbackPiHostTurnStart(ctx, rejectedPrompt);
+
+    markPiHostTurnStartPending(ctx);
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'aborted',
+          errorMessage: rawError,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          message: rawError,
+          isTerminal: true,
+        }),
+      }),
+    ]);
+  });
+
+  it('does not carry a Host stop marker into the next Pi turn', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const rawError = 'OpenAI Responses stream ended before a terminal response event';
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'aborted',
+          errorMessage: rawError,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          message: rawError,
+          isTerminal: true,
+        }),
+      }),
+    ]);
+  });
+
+  it('does not treat a bare abort as a provider failure', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'partial answer' }],
+          stopReason: 'aborted',
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+    expect((events.find((event) => event.type === 'done')?.data as { result?: string }).result)
+      .toBe('partial answer');
+  });
+
+  it('notifies Pi network auto-retries with the shared Reconnecting progress line', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(
+      ev({
+        type: 'auto_retry_start',
+        attempt: 1,
+        maxAttempts: 6,
+        errorMessage: 'The operation timed out.',
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        source: 'pi',
+        data: expect.objectContaining({
+          message: 'Reconnecting... 1/6',
+          isTerminal: false,
+          willRetry: true,
+        }),
+      }),
+    ]);
+  });
+
   it('keeps unclassified Pi auto-retries silent instead of reusing the overload marker', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -546,6 +808,34 @@ describe('pi translator', () => {
     );
 
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+  });
+
+  it('hands exhausted network retries back to the user instead of host auto-resume', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'auto_retry_end',
+        success: false,
+        finalError: 'The operation timed out.',
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const terminalErrors = events.filter(
+      (event) =>
+        event.type === 'error' &&
+        (event.data as { isTerminal?: boolean }).isTerminal === true,
+    );
+    expect(terminalErrors).toHaveLength(1);
+    expect(terminalErrors[0]?.data).toMatchObject({
+      message: 'The operation timed out.',
+      reason: 'pi-gateway-drop',
+    });
   });
 
   it('does not duplicate a terminal error after Pi auto-retry is exhausted', () => {
@@ -737,19 +1027,6 @@ describe('pi translator', () => {
     expect(ctx.contextTokens).toBe(32000);
   });
 
-  it('labels host-triggered compact RPC as auto even when Pi reports reason=manual', () => {
-    const ctx = createPiTranslateContext(noopLogger);
-    ctx.hostAutoCompactInFlight = true;
-    const { queue, events } = makeQueue();
-    translatePiEvent(
-      ev({ type: 'compaction_end', reason: 'manual', result: { tokensBefore: 160000, estimatedTokensAfter: 20000 } }),
-      queue,
-      ctx,
-    );
-    const data = events.find((e) => e.type === 'compact_boundary')!.data as { trigger: string };
-    expect(data.trigger).toBe('auto');
-  });
-
   it('maps manual compaction trigger through to compact_boundary', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -790,10 +1067,9 @@ describe('pi translator', () => {
     expect(endStatus?.turnScope).toBe('background');
   });
 
-  it('marks idle/host auto-compact status as background so it cannot latch a product turn', () => {
+  it('marks idle manual compaction status as background so it cannot latch a product turn', () => {
     const ctx = createPiTranslateContext(noopLogger);
     ctx.isStreaming = false;
-    ctx.hostAutoCompactInFlight = true;
     const { queue, events } = makeQueue();
     translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
     const start = events.find((e) => e.type === 'status');

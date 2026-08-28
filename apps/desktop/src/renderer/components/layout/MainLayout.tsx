@@ -33,6 +33,7 @@ import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLin
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { isAppInteractionLocked } from '@/lib/appInteractionLock';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import {
   addOrFocusSingletonTab,
@@ -79,7 +80,6 @@ import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 import { useSchemaDriftWarningToast } from '@/hooks/useSchemaDriftWarningToast';
 import { useVoiceInputShortcutRecoveryToast } from '@/hooks/useVoiceInputShortcutRecoveryToast';
 import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast';
-import { usePluginUpgradeNoticeToast } from '@/hooks/usePluginUpgradeNoticeToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
@@ -477,7 +477,6 @@ export function MainLayout() {
   useVoiceInputShortcutRecoveryToast();
   // 冷启动市场对账可能早于 Renderer 挂载；Main pending + 常驻 consume 保证清理不静默。
   usePluginRemovalNoticeToast();
-  usePluginUpgradeNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
   useDeviceLinkRemoteProjects();
 
@@ -1027,6 +1026,7 @@ export function MainLayout() {
 
   useEffect(() => {
     return window.electronAPI.onApplicationMenuCommand((command) => {
+      if (isAppInteractionLocked()) return;
       switch (command) {
         case 'open-about':
           navigate('/settings?tab=about');
@@ -1150,6 +1150,7 @@ export function MainLayout() {
 
   useEffect(() => {
     return subscribeWorkLouderCodexAction((action) => {
+      if (isAppInteractionLocked()) return true;
       if (action.type === 'keyboard') {
         const target =
           document.activeElement instanceof HTMLElement ? document.activeElement : document.body;

@@ -237,6 +237,11 @@ describe('ChatInput model source switching wiring', () => {
     ]) {
       expect(draftBlock).toContain(write);
     }
+    // 「恢复推荐」已先删除记忆键；直通草稿时不得把推荐档位重新写成 override。
+    expect(draftBlock).toContain('!selection.resetToRecommended');
+    expect(draftBlock).toContain(
+      '...(selection.resetToRecommended ? { resetToRecommended: true as const } : {})',
+    );
   });
 
   it('feeds the selector the session/draft wire id as the selected model', () => {

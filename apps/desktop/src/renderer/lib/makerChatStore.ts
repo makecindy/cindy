@@ -143,12 +143,15 @@ import {
 } from '@/lib/remoteDataOwnerPushFence';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import {
+  parseIssueEnvHarness,
+  parseIssueEnvModelId,
   parseIssueEnvRegion,
   parseOptionalGithubUserIdentity,
   parseIssueSuggestedPublicName,
   parseIssueSubmissionIdentity,
   type IssueSubmissionIdentity,
 } from '@/lib/issueConfirmPayload';
+import type { IssueHarness } from '../../shared/issueRuntimeMetadata';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
 import { normalizeTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails';
 import {
@@ -779,6 +782,8 @@ export interface PendingIssueConfirm {
     platform: string;
     arch: string;
     osVersion: string;
+    harness?: IssueHarness;
+    modelId?: string;
     region?: CindyRegion;
   };
   /**
@@ -804,11 +809,12 @@ export interface PendingGhostGrantConfirm {
   ghostName: string;
   /**
    * attachments = 媒体文件交给意识;dir = 上传目录/文件;save_dir = 允许意识
-   * 往目录里存文件;fs_write = 意识申请写工作目录文件(会话 permission 为
+   * 往目录里存文件;reveal_path = 允许当前 Agent 获得单个媒体仓本机路径;
+   * fs_write = 意识申请写工作目录文件(会话 permission 为
    * 逐条确认档时逐次弹,同目录本会话批一次);workspace = 意识申请以该目录
    * 为工作区在侧边栏创建/复用会话入口(不过户字节)。
    */
-  lane: 'attachments' | 'dir' | 'save_dir' | 'fs_write' | 'workspace';
+  lane: 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace';
   items: Array<{
     name: string;
     absPath: string;
@@ -4788,7 +4794,7 @@ export function handleStreamEvent(
       : null;
   const isCodexReconnectProgress =
     event.type === 'error' &&
-    event.source === 'codex' &&
+    (event.source === 'codex' || event.source === 'pi') &&
     !isTerminalErrorData(event.data) &&
     reconnectAttempt !== null &&
     !isCodexUserActionableRetryError(event.data);
@@ -7470,11 +7476,16 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // ephemeral 卡片(同 permission 语义,无 persistId 不落库),直接写 state,
       // 不走 handleStreamEvent —— 它不属于 agent 事件流。
       const draft = request.draft as PendingIssueConfirm['draft'] | undefined;
-      // region 必须先 Omit 掉再重建成 unknown:交叉类型做不到这件事
+      // 公开 runtime metadata 必须先 Omit 掉再重建成 unknown:交叉类型做不到这件事
       // (`CindyRegion & unknown` 仍是 `CindyRegion`),那样写会让 TS 以为 IPC 传来的
       // region 已经是合法值,下面的白名单校验看着像在校验、实际没有类型层面的约束。
       const rawEnv = request.env as
-        (Omit<PendingIssueConfirm['env'], 'region'> & { region?: unknown }) | undefined;
+        | (Omit<PendingIssueConfirm['env'], 'region' | 'harness' | 'modelId'> & {
+            region?: unknown;
+            harness?: unknown;
+            modelId?: unknown;
+          })
+        | undefined;
       const submissionIdentity = parseIssueSubmissionIdentity(request.submissionIdentity);
       if (!draft || !rawEnv || !submissionIdentity) return;
       // 新版 Main:平台默认 + 可选 GitHub 身份。旧版 Main:只传已经固定的单一
@@ -7487,8 +7498,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         submissionIdentity.kind === 'platform'
           ? parseIssueSuggestedPublicName(request.suggestedPublicName)
           : undefined;
-      // region 过一遍白名单:非法值宁可不展示区域,也不能把 CN 版说成默认版。
-      const env = { ...rawEnv, region: parseIssueEnvRegion(rawEnv.region) };
+      // IPC 值过白名单/单行化：非法值宁可不展示，也不能污染公开确认内容。
+      const env = {
+        ...rawEnv,
+        region: parseIssueEnvRegion(rawEnv.region),
+        harness: parseIssueEnvHarness(rawEnv.harness),
+        modelId: parseIssueEnvModelId(rawEnv.modelId),
+      };
       setState(sessionId, (s) => ({
         ...s,
         pendingIssueConfirm: {
@@ -9931,6 +9947,12 @@ function retryInvalidatedInitialHistoryFetchIfNeeded(
   epoch: number,
 ): void {
   const ownsFetch = _historyFetchToken.get(sessionId) === token;
+  // Release the shared pagination lock only when this fetch still owns the
+  // token.  A stale callback from a superseded fetch must not clear the lock
+  // that a newer replacement backfill is actively holding.
+  if (ownsFetch) {
+    setState(sessionId, (s) => (s.isLoadingMore ? { ...s, isLoadingMore: false } : s));
+  }
   const epochChanged = (_messagesEpoch.get(sessionId) ?? 0) !== epoch;
   const originUnchanged = remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
   releaseHistoryFetchIfCurrent(sessionId, token);
@@ -10490,7 +10512,7 @@ function ensureInitialMessages(sessionId: string): void {
       // rewind 之类的粘滞抑制(见 releaseCacheHydrationAfterFailure)。屏上已 hydrate 的
       // 缓存行**保持不动**:离线时它是用户唯一能看到的历史,清掉纯属倒退。
       releaseCacheHydrationAfterFailure(sessionId);
-      setState(sessionId, (s) => ({ ...s, historyLoaded: false }));
+      setState(sessionId, (s) => ({ ...s, historyLoaded: false, isLoadingMore: false }));
     });
 }
 
@@ -14105,6 +14127,7 @@ function parseGhostGrantConfirmRequest(request: {
     lane !== 'attachments' &&
     lane !== 'dir' &&
     lane !== 'save_dir' &&
+    lane !== 'reveal_path' &&
     lane !== 'fs_write' &&
     lane !== 'workspace'
   )
@@ -14873,6 +14896,8 @@ function setSessionRuntime(
     agentKind?: 'claude-code' | 'codex' | 'pi';
     fastMode?: boolean;
     planModeEnabled?: boolean;
+    /** Seed before SessionView hydrates the DB row; sendMessage reads this for SSH routing. */
+    remoteHostId?: string | null;
   },
 ): void {
   if (!sessionId) return;
@@ -14880,10 +14905,14 @@ function setSessionRuntime(
     const nextAgentKind = opts.agentKind ?? s.agentKind;
     const nextFastMode = opts.fastMode ?? s.fastMode;
     const nextPlanMode = opts.planModeEnabled ?? s.planModeEnabled;
+    const nextRemoteHostId = Object.hasOwn(opts, 'remoteHostId')
+      ? (opts.remoteHostId ?? null)
+      : s.remoteHostId;
     if (
       s.agentKind === nextAgentKind &&
       s.fastMode === nextFastMode &&
-      s.planModeEnabled === nextPlanMode
+      s.planModeEnabled === nextPlanMode &&
+      s.remoteHostId === nextRemoteHostId
     )
       return s;
     return {
@@ -14891,6 +14920,7 @@ function setSessionRuntime(
       agentKind: nextAgentKind,
       fastMode: nextFastMode,
       planModeEnabled: nextPlanMode,
+      remoteHostId: nextRemoteHostId,
       ...(s.planModeEnabled !== nextPlanMode ? { planModeRev: s.planModeRev + 1 } : {}),
     };
   });

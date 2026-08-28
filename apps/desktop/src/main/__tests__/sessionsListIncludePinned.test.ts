@@ -8,8 +8,14 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { resetSessionListSingleFlightForTests } from '../localDb/ipc/sessionListSingleFlight.js';
+
 const h = vi.hoisted(() => {
   const queryResults: unknown[][] = [];
+  const queryHold = {
+    pending: null as Promise<void> | null,
+    remaining: 0,
+  };
 
   // builder 方法一律返回自身，**只有 await（then）才消费一份 queryResults**。
   // 惰性很关键：list 走两段式后，CTE 内层的 `select(...).limit(cap)` 只是被交给
@@ -28,7 +34,15 @@ const h = vi.hoisted(() => {
     chain.then = (
       resolve: (value: unknown[]) => void,
       reject: (reason?: unknown) => void,
-    ) => Promise.resolve(queryResults.shift() ?? []).then(resolve, reject);
+    ) => {
+      const rows = queryResults.shift() ?? [];
+      const finish = () => Promise.resolve(rows).then(resolve, reject);
+      if (queryHold.remaining > 0 && queryHold.pending) {
+        queryHold.remaining -= 1;
+        return queryHold.pending.then(finish);
+      }
+      return finish();
+    };
     return chain;
   };
 
@@ -41,6 +55,7 @@ const h = vi.hoisted(() => {
     logDebug: vi.fn(),
     logInfo: vi.fn(),
     queryResults,
+    queryHold,
     listQuery: withFn,
     fakeDb: {
       select: vi.fn(() => makeSelectChain()),
@@ -57,7 +72,10 @@ vi.mock('electron', () => ({
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: h.logDebug, info: h.logInfo, warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb }) }));
+vi.mock('../localDb/client/current', () => ({
+  getDbClient: () => ({ drizzle: h.fakeDb }),
+  getCurrentDbClientUserId: () => 'test-user',
+}));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
@@ -77,6 +95,9 @@ import { registerSessionIpc } from '../localDb/ipc/sessions.js';
 beforeEach(() => {
   vi.clearAllMocks();
   h.queryResults.length = 0;
+  h.queryHold.pending = null;
+  h.queryHold.remaining = 0;
+  resetSessionListSingleFlightForTests();
 });
 
 function sessionRow(id: string, patch: Record<string, unknown> = {}) {
@@ -119,7 +140,7 @@ function listRow(id: string, patch: Record<string, unknown> = {}) {
   return {
     session: sessionRow(id, patch),
     messageCount: 0,
-    latestMessageContent: null,
+    latestMessageExtract: null,
     latestMessageRole: null,
   };
 }
@@ -216,6 +237,32 @@ describe('local-db:sessions:list includePinned', () => {
 
     expect(h.logInfo).toHaveBeenCalledTimes(2);
     expect(h.logDebug).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a fresh list join an in-flight matching query', async () => {
+    const handler = sessionsListHandler();
+    let release!: () => void;
+    h.queryHold.pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.queryHold.remaining = 1;
+    h.queryResults.push([listRow('stale')], [listRow('fresh')]);
+
+    const stale = handler({}, 20, 'active');
+    await vi.waitFor(() => expect(h.listQuery).toHaveBeenCalledTimes(1));
+
+    const joined = handler({}, 20, 'active');
+    const fresh = handler({}, 20, 'active', { fresh: true });
+    await vi.waitFor(() => expect(h.listQuery).toHaveBeenCalledTimes(2));
+
+    release();
+    await expect(Promise.all([stale, joined])).resolves.toEqual([
+      [expect.objectContaining({ id: 'stale' })],
+      [expect.objectContaining({ id: 'stale' })],
+    ]);
+    await expect(fresh).resolves.toEqual([expect.objectContaining({ id: 'fresh' })]);
+    expect(h.listQuery).toHaveBeenCalledTimes(2);
+    expect(h.queryResults).toHaveLength(0);
   });
 });
 

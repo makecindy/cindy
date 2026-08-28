@@ -32,7 +32,6 @@ function chipGhost(id = 'demo'): InstalledGhost {
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['cindy'],
     },
     dir: `/fake/brain/${id}`,
     enabled: true,

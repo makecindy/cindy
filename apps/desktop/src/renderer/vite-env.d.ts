@@ -64,6 +64,7 @@ type DesktopAccountDeletionConfirmResult =
   import('../shared/authIpc').DesktopAccountDeletionConfirmResult;
 type DesktopAccountDeletionStatusResult =
   import('../shared/authIpc').DesktopAccountDeletionStatusResult;
+type DesktopAccountSwitcherSnapshot = import('../shared/authIpc').DesktopAccountSwitcherSnapshot;
 type PendingRemotePrecreatedWorktree =
   import('../shared/remotePrecreatedWorktreeLedger').PendingRemotePrecreatedWorktree;
 type PendingRemotePrecreatedWorktreeTarget =
@@ -303,6 +304,10 @@ type SubagentModelSettingsState =
   import('../shared/subagentModelSettings').SubagentModelSettingsState;
 type SubagentModelSettingsWriteResult =
   import('../shared/subagentModelSettings').SubagentModelSettingsWriteResult;
+type AuxiliaryModelSettingsPatch =
+  import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsPatch;
+type AuxiliaryModelSettingsState =
+  import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsState;
 type VisionBridgeSettingsPatch =
   import('../shared/visionBridgeSettings').VisionBridgeSettingsPatch;
 type VisionBridgeSettingsState =
@@ -1119,6 +1124,7 @@ interface ElectronAPI {
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
+  windowExitFullscreen: () => void;
   windowClose: () => void;
   /**
    * 手动窗口拖拽(no-drag 元素上"按住拖动移动窗口"):start 后 main 用光标
@@ -1222,6 +1228,18 @@ interface ElectronAPI {
   ghosts: {
     /** 首帧同步拉取已装清单(规则 7:意识面板与内置面板同帧注册,无跳变)。 */
     listSync: () => { ghosts: import('../shared/ghost').InstalledGhost[] };
+    onForgeOidcInstallConfirmRequest: (
+      callback: (payload: {
+        requestId: string;
+        ghostId: string;
+        ghostName: string;
+        hosts: string[];
+      }) => void,
+    ) => () => void;
+    resolveForgeOidcInstallConfirm: (
+      requestId: string,
+      confirmed: boolean,
+    ) => Promise<{ handled: boolean }>;
     /** Plugin 快捷行最近使用顺序(最新在前,首帧同步读取避免排序跳变)。 */
     recentUsageSync: () => { ids: string[] };
     /** 成功发送一次 Plugin 指令后记录最近使用。 */
@@ -1238,8 +1256,8 @@ interface ElectronAPI {
     onRecentUsageChanged: (callback: (payload: { ids: string[] }) => void) => () => void;
     install: (
       lizFilePath: string,
-      /** enable:装入后立即开启(确认框勾选决定;缺省沉睡)。 */
-      opts: { enable?: boolean; expectedPackageSha256: string; packTicket?: string },
+      /** enable:装入后立即开启；缺省沉睡。 */
+      opts: { enable?: boolean; expectedPackageSha256: string },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /** 原位更新(同 id 换版):唤醒状态与面板位置延续,沙箱熄灯待重拉。 */
     update: (
@@ -1247,7 +1265,6 @@ interface ElectronAPI {
       opts: {
         expectedPackageSha256: string;
         expectedInstalledApproval: string;
-        packTicket?: string;
       },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /**
@@ -1307,44 +1324,16 @@ interface ElectronAPI {
     ) => Promise<{ config: Record<string, unknown> }>;
     /** 系统文件选择框(.cindy 过滤),只选不装;取消返回 { canceled: true }。 */
     pickFile: () => Promise<{ canceled: true } | { filePath: string }>;
-    /** 只验不装:读出清单、签名信任等级与 icon data URL,供确认弹窗展示。 */
+    /** 只验不装:读出清单、签名信任等级与 icon data URL,供安装编排使用。 */
     inspect: (lizFilePath: string) => Promise<{
       manifest: import('../shared/ghost').GhostManifest;
       trust: import('../shared/ghost').GhostTrustInfo;
       /** 本次检查的整包指纹；安装/更新时回传，防止确认后文件被替换。 */
       packageSha256: string;
+      /** v2 清单中无法映射的历史 slot；仅用于兼容诊断，不阻塞安装。 */
+      unsupportedSlots: string[];
       iconDataUrl?: string;
-      /** Host 一次性打包凭证。有则回传给 install/update；无则按手动装入。 */
-      packTicket?: string;
     }>;
-    /** 用户取消确认框时丢掉 inspect 签发的一次性打包凭证并清理 staging。 */
-    abandonPackTicket: (packTicket: string) => Promise<{ ok: true }>;
-    /** 本地包第三条恢复路径第一步:从已装目录读确认卡事实,零副作用。 */
-    reapproveInspect: (
-      id: string,
-    ) => Promise<{
-      manifest: import('../shared/ghost').GhostManifest;
-      trust: import('../shared/ghost').GhostTrustInfo;
-      /** 确认卡展示时的清单字节指纹;确认时回传,防确认间隙清单被换。 */
-      manifestSha256: string;
-      /** 确认卡展示时的完整批准投影指纹;覆盖技能、locale、icon、trust。 */
-      approvalProjectionSha256: string;
-      /** 升级前的启停偏好(.disabled 镜像读数):确认卡勾选默认值。 */
-      previouslyEnabled: boolean;
-      /** 一次性票据(Host 进程内钉住 inspect 时点的 owner 与事实,confirm 原子消费)。 */
-      inspectTicket: string;
-    }>;
-    /** 第三条恢复路径第二步:用户点过确认卡后开 receipt。 */
-    reapproveInstalled: (
-      id: string,
-      opts: {
-        enable: boolean;
-        expectedManifestSha256: string;
-        expectedApprovalProjectionSha256: string;
-        expectedInstalledApproval: string;
-        inspectTicket: string;
-      },
-    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     uninstall: (id: string) => Promise<{ ok: true }>;
     /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
     export: (
@@ -1360,14 +1349,8 @@ interface ElectronAPI {
       id: string,
       disabled: boolean,
     ) => Promise<{ disabled: string[] }>;
-    /**
-     * 双击 .cindy / forge 转交的待装路径与来源,原子取走(取即清空;无则 null)。
-     * 来源由主机填写、与路径同存同取,agent 不可伪造;没有待装项时返回 manual。
-     */
-    takePendingInstall: () => Promise<{
-      filePath: string | null;
-      origin: import('../shared/ghostInstallOrigin').GhostInstallOrigin;
-    }>;
+    /** 双击 .cindy 的待装路径，原子取走（取即清空；无则 null）。 */
+    takePendingInstall: () => Promise<{ filePath: string | null }>;
     onChanged: (
       callback: (payload: { ghosts: import('../shared/ghost').InstalledGhost[] }) => void,
     ) => () => void;
@@ -1379,11 +1362,7 @@ interface ElectronAPI {
           | { sessionId: string; target: 'client_settings' },
       ) => void,
     ) => () => void;
-    /**
-     * 双击 .cindy / forge 转交的"来取货"通知,**不携带任何事实**:收到后调
-     * takePendingInstall 取路径与来源。事实只放在 main 的 pending 缓冲里,
-     * 没有窗口时(冷启动 / macOS 关窗后应用仍在跑)本通知丢掉也不影响正确性。
-     */
+    /** 双击 .cindy 转交信号:收到后调 takePendingInstall 取路径走一键装入流程。 */
     onInstallRequested: (callback: () => void) => () => void;
     /** 运行时状态广播:crashed / fused 时面板原地显示错误接管态。 */
     onRuntimeChanged: (
@@ -1622,24 +1601,11 @@ interface ElectronAPI {
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ) => Promise<import('../shared/pluginMarket').PluginMarketInstallResult>;
-    onPackagePermissionReview: (
-      callback: (
-        request: import('../shared/pluginMarket').PluginMarketPackageReviewRequest,
-      ) => void,
-    ) => () => void;
-    resolvePackagePermissionReview: (
-      requestId: string,
-      confirmed: boolean,
-    ) => Promise<{ handled: boolean }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
     consumeRemovalNotice: () => Promise<
       import('../shared/pluginMarket').PluginRemovalUserNotice | null
     >;
     onRemovalNoticeAvailable: (callback: () => void) => () => void;
-    consumeUpgradeNotice: () => Promise<
-      import('../shared/pluginMarket').PluginUpgradeUserNotice | null
-    >;
-    onUpgradeNoticeAvailable: (callback: () => void) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,
@@ -2085,6 +2051,11 @@ interface ElectronAPI {
   /** 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。 */
   authGetCaptchaChallengeUrl: () => Promise<string>;
   authLogout: () => Promise<void>;
+  authListAccounts: () => Promise<DesktopAccountSwitcherSnapshot>;
+  authSyncAccounts: () => Promise<DesktopAccountSwitcherSnapshot>;
+  authSwitchAccount: (accountKey: string) => Promise<void>;
+  authBeginAddAccount: () => Promise<DesktopLoginActionResult>;
+  authCancelAddAccount: () => Promise<void>;
   authEnterLocal: () => Promise<AuthStateChangePayload>;
   authExitLocal: () => Promise<AuthStateChangePayload>;
   authRefresh: () => Promise<boolean>;
@@ -3462,6 +3433,10 @@ interface ElectronAPI {
   cindyMediaStorage: {
     /** 本窗口草稿附件 URL 变化时上报(fire-and-forget;多窗口防误删取证)。 */
     reportDraftUrls: (urls: string[]) => void;
+    openLegacyImagesDir: () => Promise<{ opened: boolean }>;
+    clearLegacyImagesDir: () => Promise<{ cleared: boolean }>;
+    openChatAttachmentsDir: () => Promise<{ opened: boolean }>;
+    clearChatAttachmentsDir: () => Promise<{ cleared: boolean }>;
     stats: () => Promise<{
       success: boolean;
       error?: string;
@@ -3931,10 +3906,7 @@ interface ElectronAPI {
     reason?: 'gone' | 'no-worktree' | 'git-error';
     detail?: string;
   }>;
-  /**
-   * 「worktree 回收链已跑完」推送。归档/删除后 main 侧的回收是 fire-and-forget 的
-   * 异步链，store 条目移除远晚于状态 IPC 返回，renderer 必须等这条才能拿到真实快照。
-   */
+  /** worktree 回收完成后，按实际受影响的 sessionId 增量更新本机缓存。 */
   onWorktreeChanged: (callback: (payload: { sessionId: string }) => void) => () => void;
 
   // ── Slack Hook(中心 slack-hook-server 接入) ── 类型正本在 shared/hookControlIpc.ts
@@ -4178,6 +4150,17 @@ interface ElectronAPI {
         ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
       ) => void,
     ) => () => void;
+    setMainViewHidden: (
+      ghostId: string,
+      hidden: boolean,
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => Promise<string[]>;
+    onHiddenMainViewGhostIdsChanged: (
+      cb: (
+        ghostIds: string[],
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
     getProjectOrder: () => Promise<import('../shared/projectOrderSettings').SyncedProjectOrderSnapshot>;
     applyProjectOrder: (request: {
       manualProjectOrder: readonly string[];
@@ -4266,10 +4249,37 @@ interface ElectronAPI {
           };
         }
     >;
+    maintenance: {
+      scan: (
+        input: import('../shared/localDbMaintenance').DbSlimmingScanInput,
+      ) => Promise<import('../shared/localDbMaintenance').DbSlimmingScanResult>;
+      chooseBackupDirectory: () => Promise<
+        import('../shared/localDbMaintenance').DbSlimmingBackupDirectorySelection
+      >;
+      schedule: (
+        input: import('../shared/localDbMaintenance').DbSlimmingScheduleInput,
+      ) => Promise<import('../shared/localDbMaintenance').DbSlimmingScheduleResult>;
+      getLastResult: () => Promise<
+        import('../shared/localDbMaintenance').DbSlimmingResult | null
+      >;
+      openLastBackupDirectory: () => Promise<{ opened: boolean }>;
+      getStartupProgress: () => Promise<
+        import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null
+      >;
+      cancelStartup: () => Promise<
+        import('../shared/localDbMaintenance').DbSlimmingStartupCancelResult
+      >;
+      onStartupProgress: (
+        callback: (
+          progress: import('../shared/localDbMaintenance').DbSlimmingStartupProgress | null,
+        ) => void,
+      ) => () => void;
+    };
     sessions: {
       list: (
         limit?: number,
         status?: 'active' | 'archived' | 'all',
+        options?: { includePinned?: boolean; fresh?: boolean },
       ) => Promise<import('@/lib/ccAgent.types').Session[]>;
       create: (body?: {
         id?: string;
@@ -5055,7 +5065,6 @@ interface ElectronAPI {
       focus?: string;
       attachments?: import('./lib/fileTypes').SerializedAttachedFile[];
     }) => Promise<{ ok: true; runId: string; reviewerSessionId: string }>;
-
     listAgentCommands: (
       agentKind: 'claude-code' | 'codex' | 'pi',
       params?: { sessionId?: string; allowManagedPiPackagePreview?: boolean },
@@ -5629,6 +5638,10 @@ interface ElectronAPI {
       patch: SubagentModelSettingsPatch,
     ) => Promise<SubagentModelSettingsWriteResult>;
     subagentModelSettingsReset: () => Promise<SubagentModelSettingsWriteResult>;
+    auxiliaryModelSettingsGet: () => Promise<AuxiliaryModelSettingsState>;
+    auxiliaryModelSettingsSet: (
+      patch: AuxiliaryModelSettingsPatch,
+    ) => Promise<AuxiliaryModelSettingsState>;
 
     /** 视觉桥设置（目标模型勾选 + 视觉后端主/备选）。 */
     visionBridgeSettingsGet: () => Promise<VisionBridgeSettingsState>;
@@ -5662,6 +5675,23 @@ interface ElectronAPI {
       defaultEnabled: boolean;
       effective: 'immediate';
     }>;
+    sessionRuntimeFallbackGet: () => Promise<{
+      enabled: boolean;
+      isCustomized?: boolean;
+      defaultEnabled?: boolean;
+    }>;
+    sessionRuntimeFallbackSet: (enabled: boolean) => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'immediate';
+    }>;
+    sessionRuntimeFallbackReset: () => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'immediate';
+    }>;
 
     /** Claude Code 自动上下文压缩触发百分比。仅对新建会话生效 */
     compactionGetPct: () => Promise<number>;
@@ -5669,25 +5699,46 @@ interface ElectronAPI {
     /** 写入后返回 main 端 clamp 后的最终百分比 */
     compactionSetPct: (
       pct: number,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
     ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
-    compactionResetPct: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+    compactionResetPct: (
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+
+    /** Pi 原生自动上下文压缩触发百分比。下次启动或恢复 Pi 任务时生效 */
+    piCompactionGetPct: () => Promise<number>;
+    piCompactionGetState: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+    piCompactionSetPct: (
+      pct: number,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
+    piCompactionResetPct: (
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ) => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
 
     /** LSP Beta 开关 — 控制 mcp providers 是否注入 lsp_* 工具 (默认 false) */
     lspModeGet: () => Promise<{ enabled: boolean }>;
     /** 仅对新 session 生效; 已开 session 的 mcp providers 已固化 */
     lspModeSet: (enabled: boolean) => Promise<{ effective: 'next-session' }>;
 
-    /** 聊天嵌入开关 — 控制 chat-history-embedder 是否对新消息入队嵌入到本地向量库 */
+    /** 对话语义索引开关 — owner-scoped；企业组织账号默认开，其余默认关 */
     chatEmbeddingGet: () => Promise<{
       enabled: boolean;
       isCustomized?: boolean;
       defaultEnabled?: boolean;
     }>;
+    onChatEmbeddingChanged: (
+      cb: (stamp: { dataOwnerId: string | null; ownerGeneration: number }) => void,
+    ) => () => void;
     /** 立即生效; 第一次开启时 main 会在 embedding_meta 表写入 cutoff 时间戳 */
     chatEmbeddingSet: (
       enabled: boolean,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
     ) => Promise<{ enabled: boolean; isCustomized: boolean; defaultEnabled: boolean }>;
-    chatEmbeddingReset: () => Promise<{
+    chatEmbeddingReset: (owner: {
+      dataOwnerId: string | null;
+      ownerGeneration: number;
+    }) => Promise<{
       enabled: boolean;
       isCustomized: boolean;
       defaultEnabled: boolean;
@@ -6143,7 +6194,6 @@ interface ElectronAPI {
       listRuns: (id: string, limit?: number) => Promise<unknown[]>;
       /** { runs, inflightRunIds } —— 形态见 features/scheduler/lib/scheduleSidebarIndexRuns。 */
       listSidebarIndexRuns: () => Promise<unknown>;
-      listCostSummaries: () => Promise<unknown[]>;
       deleteRun: (runId: string) => Promise<void>;
       getInflightCount: (id: string) => Promise<number>;
       getRuntimeState: () => Promise<unknown>;

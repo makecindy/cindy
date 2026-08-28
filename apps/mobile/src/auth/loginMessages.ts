@@ -125,6 +125,7 @@ const messages = {
     errorFallback: "登入未完成，請重試。",
     endpointGateTitle: "無法取得伺服器設定",
     endpointGateSubtitle: "請檢查網路連線後重試({reason})",
+    endpointGateResetToDev: "返回 Dev",
     retry: "重試",
     configIssueAuthBaseUrl: "登入服務地址必須是 http(s) URL。",
   },
@@ -239,6 +240,7 @@ const messages = {
     errorFallback: "登录未完成，请重试。",
     endpointGateTitle: "无法获取服务器配置",
     endpointGateSubtitle: "请检查网络连接后重试({reason})",
+    endpointGateResetToDev: "返回 Dev",
     retry: "重试",
     configIssueAuthBaseUrl: "登录服务地址必须是 http(s) URL。",
   },
@@ -366,6 +368,7 @@ const messages = {
     endpointGateTitle: "Unable to load server configuration",
     endpointGateSubtitle:
       "Check your network connection and try again ({reason})",
+    endpointGateResetToDev: "Return to Dev",
     retry: "Retry",
     configIssueAuthBaseUrl:
       "The sign-in service address must be an http(s) URL.",
@@ -493,6 +496,7 @@ const messages = {
     endpointGateTitle: "サーバー設定を取得できません",
     endpointGateSubtitle:
       "ネットワーク接続を確認してから再試行してください({reason})",
+    endpointGateResetToDev: "Dev に戻る",
     retry: "再試行",
     configIssueAuthBaseUrl:
       "ログインサービスのアドレスは http(s) URL である必要があります。",
@@ -617,6 +621,7 @@ const messages = {
     endpointGateTitle: "서버 설정을 가져올 수 없습니다",
     endpointGateSubtitle:
       "네트워크 연결을 확인한 후 다시 시도해 주세요({reason})",
+    endpointGateResetToDev: "Dev로 돌아가기",
     retry: "다시 시도",
     configIssueAuthBaseUrl: "로그인 서비스 주소는 http(s) URL이어야 합니다.",
   },
