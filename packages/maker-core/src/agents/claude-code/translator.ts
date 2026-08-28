@@ -251,15 +251,15 @@ function applySubagentLiveReliability(ctx: TranslateContext): void {
 }
 
 /**
- * Snapshot-only: the current parent request exists but has not streamed output.
- * A later child `message_start` can win the race; hide this status without
- * sticky-failing `generation.reliable`, so the parent `message_delta` can
- * restore tok/s.
+ * Snapshot-only: the current parent generation interval has no streamed output
+ * yet. Hide this status without sticky-failing `generation.reliable`, so a
+ * later parent `message_delta` can restore tok/s.
  */
 function currentParentStreamedOutputPending(ctx: TranslateContext): boolean {
   if (!ctx.rt.generation.sawSubagent) return false;
-  if (!ctx.rt.activeUsageSegmentByParent.get(CLAUDE_MAIN_USAGE_PARENT)) return false;
-  return !mainActiveSegmentHasOutput(ctx);
+  if (mainActiveSegmentHasOutput(ctx)) return false;
+  if (ctx.rt.generation.startedAt !== null) return true;
+  return Boolean(ctx.rt.activeUsageSegmentByParent.get(CLAUDE_MAIN_USAGE_PARENT));
 }
 
 function liveParentOutputTokens(
@@ -1377,8 +1377,14 @@ function handleAssistant(
   // 而父级 Agent 工具区间已从分母排除。记 sawSubagent，live tok/s 只用父级
   // streamed output，不再把整轮计时打成不可靠。
   if (parentToolUseId) observeClaudeSubagentStream(ctx, parentToolUseId);
-  else if (!mainActiveSegmentHasOutput(ctx)) {
-    noteClaudeParentStreamedOutputIncomplete(ctx.rt.generation);
+  else {
+    // Active __main__ segment is this request only. Keep it while checking
+    // completeness, then detach so the next open interval cannot inherit
+    // the previous request's streamed output.
+    if (!mainActiveSegmentHasOutput(ctx)) {
+      noteClaudeParentStreamedOutputIncomplete(ctx.rt.generation);
+    }
+    ctx.rt.activeUsageSegmentByParent.delete(CLAUDE_MAIN_USAGE_PARENT);
   }
   // 完整 child assistant 是实际执行模型的正式观测来源。SDK 不保证 child 的
   // partial message_start 一定向外暴露，所以不能只靠 handleStreamEvent 填模型；

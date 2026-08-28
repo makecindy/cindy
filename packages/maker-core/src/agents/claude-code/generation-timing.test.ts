@@ -979,6 +979,103 @@ describe('claude generation pause boundaries', () => {
     vi.useRealTimers();
   });
 
+  it('does not reuse the previous parent request output after that assistant closes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent-1', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 80 } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu-agent-1', name: 'Agent', input: {} }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent-1', content: 'child 1 done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    vi.setSystemTime(2_600);
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu-agent-2', name: 'Agent', input: {} }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-2',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    expect(events.at(-1)?.data).toMatchObject({
+      outputTokens: 80,
+      generationReliable: false,
+    });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
   it('excludes subagent output from parent live tok/s', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
