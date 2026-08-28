@@ -63,6 +63,21 @@ import { HomeChromeFrost } from '@/session/HomeChromeFrost';
 import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
+import {
+  HomeNativeStackHeader,
+  NativePullDownMenu,
+  usesNativePullDownMenu,
+  usesNativeStackHeader,
+  usesSystemActionMenu,
+} from '@/platform/chrome';
+import {
+  buildHomeDisplayPullDownActions,
+  buildHomeScopePullDownActions,
+  homeDisplayMenuPatch,
+  parseHomeScopePullDownAction,
+  type HomeDisplayMenuKey,
+} from '@/session/homeChromeMenus';
+import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
@@ -183,7 +198,7 @@ import { createScheduleIndexDeferRegistry } from '@/session/scheduleIndexDefer';
 import { resolveMobileSessionRightStatus } from '@/session/sessionRightStatus';
 import { AutomationTimerIcon } from '@/session/AutomationTimerIcon';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
-import { SessionActionSheet } from '@/session/SessionActionSheet';
+import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
 import { createSwipeRowRegistry } from '@/session/swipeRowRegistry';
 import { useSessionListActions } from '@/session/useSessionListActions';
@@ -944,14 +959,20 @@ export default function HomeScreen() {
 
   const openRenameDevice = useCallback((item: MobileHomeDeviceFilterItem) => {
     if (!item.deviceId) return;
-    // 不能在菜单还没卸载时直接挂重命名 Modal(见 pendingMenuActionRef 注释),先关菜单再延后打开。
-    pendingMenuActionRef.current = () => {
+    const begin = () => {
       setRenameTarget(item);
       setRenameDraft(item.label);
       setError(null);
     };
-    setDeviceMenuOpen(false);
-  }, []);
+    // 自定义范围菜单还没卸掉时不能直接挂重命名 Modal。
+    // 原生 UIMenu 没有这层 Modal,可以立刻打开。
+    if (deviceMenuOpen) {
+      pendingMenuActionRef.current = begin;
+      setDeviceMenuOpen(false);
+      return;
+    }
+    begin();
+  }, [deviceMenuOpen]);
 
   // 菜单 Modal 完全关闭(淡出结束 + 卸载)后,执行延后的弹窗动作。
   const handleDeviceMenuClosed = useCallback(() => {
@@ -1110,6 +1131,22 @@ export default function HomeScreen() {
       : t('devices.list.search.filter.selectedProjects', { count: indexedSearch.projectSelection.length }),
     sort: t(`devices.list.search.filter.sort.${indexedSearch.sortBy}`),
     status: t(`devices.list.search.filter.status.${indexedSearch.statusFilter}`),
+  });
+  const searchFilterMenu = useConversationSearchFilterMenu({
+    activeCount: indexedSearch.activeFilterCount,
+    agentKind: indexedSearch.agentFilter,
+    lastActivity: indexedSearch.lastActivityFilter,
+    lockedProjects: false,
+    onAgentKindChange: indexedSearch.setAgentFilter,
+    onLastActivityChange: indexedSearch.setLastActivityFilter,
+    onProjectsChange: indexedSearch.setProjectSelection,
+    onReset: indexedSearch.resetFilters,
+    onSortChange: indexedSearch.setSortBy,
+    onStatusChange: indexedSearch.setStatusFilter,
+    projectSelection: indexedSearch.projectSelection,
+    projects: searchProjects,
+    sortBy: indexedSearch.sortBy,
+    status: indexedSearch.statusFilter,
   });
   useEffect(() => {
     const expectedAccountGeneration = accountGeneration;
@@ -1834,19 +1871,122 @@ export default function HomeScreen() {
     windowWidth: screenWidth,
   });
 
-  const chromeHeight = headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT;
+  const selectHomeScope = useCallback((item: MobileHomeDeviceFilterItem) => {
+    if (item.deviceId && item.state === 'access_revoked') {
+      const deviceId = item.deviceId;
+      if (usesSystemActionMenu()) {
+        setRevokedTipDeviceId(deviceId);
+        return;
+      }
+      pendingMenuActionRef.current = () => setRevokedTipDeviceId(deviceId);
+      setDeviceMenuOpen(false);
+      return;
+    }
+    viewPrefsTouchedRef.current = true;
+    restoredSelectionUnvalidatedRef.current = false;
+    setSelectedDeviceId(item.deviceId);
+    setRestoredDeviceName(null);
+    setDeviceMenuOpen(false);
+    void saveHomeViewPreferences({
+      selectedDevice: item.deviceId ? { deviceId: item.deviceId, name: item.label } : null,
+    });
+  }, []);
+
+  const nativeHomeMenus = usesNativePullDownMenu();
+  const homeScopePullDownActions = useMemo(
+    () => buildHomeScopePullDownActions(
+      home.deviceFilters,
+      t('devices.list.allConversations'),
+      {
+        openLabel: t('devices.list.menu.openDevice'),
+        renameLabel: t('devices.list.menu.renameDevice'),
+        showTasksLabel: t('devices.list.menu.showDeviceTasks'),
+      },
+    ),
+    [home.deviceFilters, t],
+  );
+  const handleHomeScopeAction = useCallback((id: string) => {
+    const parsed = parseHomeScopePullDownAction(id);
+    if (parsed.kind === 'open') {
+      const item = home.deviceFilters.find((filter) => filter.deviceId === parsed.deviceId);
+      if (!item?.deviceId) return;
+      guardedPush({
+        pathname: '/devices/[deviceId]',
+        params: { deviceId: item.deviceId, name: item.label },
+      });
+      return;
+    }
+    if (parsed.kind === 'rename') {
+      const item = home.deviceFilters.find((filter) => filter.deviceId === parsed.deviceId);
+      if (item) openRenameDevice(item);
+      return;
+    }
+    const item = home.deviceFilters.find((filter) => filter.id === parsed.filterId);
+    if (item) selectHomeScope(item);
+  }, [guardedPush, home.deviceFilters, openRenameDevice, selectHomeScope]);
+  const homeDisplayPullDownActions = useMemo(
+    () => buildHomeDisplayPullDownActions({
+      groupByProject,
+      groupByProjectLabel: t('devices.list.menu.groupByProject'),
+      groupDialogue,
+      groupDialogueLabel: t('devices.list.menu.groupDialogue'),
+      groupHeading: t('devices.list.menu.groupHeading'),
+      projectOrder: displayedProjectOrder,
+      projectOrderActivityLabel: t('devices.list.menu.projectOrderActivity'),
+      projectOrderCustomLabel: t('devices.list.menu.projectOrderManual'),
+      projectOrderHeading: t('devices.list.menu.projectOrderHeading'),
+      showProjectOrder: true,
+      sortBy,
+      sortByPriorityLabel: t('devices.list.menu.sortByPriority'),
+      sortByTimeLabel: t('devices.list.menu.sortByTime'),
+      sortHeading: t('devices.list.menu.sortHeading'),
+      statusActiveLabel: t('devices.list.menu.statusActive'),
+      statusAllLabel: t('devices.list.menu.statusAll'),
+      statusArchivedLabel: t('devices.list.menu.statusArchived'),
+      statusFilter,
+      statusHeading: t('devices.list.menu.statusHeading'),
+    }),
+    [displayedProjectOrder, groupByProject, groupDialogue, sortBy, statusFilter, t],
+  );
+
+  const nativeHomeHeader = usesNativeStackHeader();
+  const chromeHeight = nativeHomeHeader
+    ? (headerHeight ?? 0)
+    : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);
   return (
     <View
       ref={homeRootRef}
       style={[styles.safeArea, { paddingLeft: edgePadding.paddingLeft, paddingRight: edgePadding.paddingRight }]}
       testID="devices.screen"
     >
+      {nativeHomeHeader ? (
+        <HomeNativeStackHeader
+          displayA11y={t('devices.list.a11y.openDisplaySettings')}
+          displayActions={homeDisplayPullDownActions}
+          menuA11y={t('devices.list.a11y.openMenu')}
+          onDisplayAction={(id) => {
+            applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, {
+              groupByProject,
+              groupDialogue,
+            }));
+          }}
+          onOpenDeviceMenu={openDeviceMenu}
+          onOpenDisplaySettings={openDisplaySettings}
+          onOpenMenu={openChromeMenu}
+          onSelectScope={handleHomeScopeAction}
+          scopeActions={homeScopePullDownActions}
+          showRemoteGuide={showRemoteGuide}
+          title={selectedDeviceLabel}
+          titleA11y={t('devices.list.a11y.selectScope')}
+        />
+      ) : null}
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
-        style={[styles.homeChrome, headerFrosted && styles.homeChromeFrosted]}
+        style={[styles.homeChrome, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
       >
-        <HomeChromeFrost visible={headerFrosted} />
-        <View style={{ paddingTop: edgePadding.paddingTop }}>
+        <HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>
+        <View style={{ paddingTop: nativeHomeHeader ? 0 : edgePadding.paddingTop }}>
+        {nativeHomeHeader ? null : (
         <View style={styles.homeHeader}>
         <HomeHeaderGlassButton
           accessibilityLabel={t('devices.list.a11y.openMenu')}
@@ -1861,39 +2001,57 @@ export default function HomeScreen() {
             <Text style={styles.headerTitle} numberOfLines={1}>Cindy</Text>
           </View>
         ) : (
-          <Pressable
-            accessibilityLabel={t('devices.list.a11y.selectScope')}
-            accessibilityRole="button"
-            onPress={openDeviceMenu}
-            onPressIn={openDeviceMenu}
-            style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.pressed]}
-            testID="devices.title"
+          <NativePullDownMenu
+            actions={homeScopePullDownActions}
+            onAction={handleHomeScopeAction}
           >
-            <View style={styles.headerTitleCluster}>
-              <Text style={styles.headerTitle} numberOfLines={1}>{selectedDeviceLabel}</Text>
-              <ChevronDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.medium} />
-            </View>
-          </Pressable>
+            <Pressable
+              accessibilityLabel={t('devices.list.a11y.selectScope')}
+              accessibilityRole="button"
+              onPress={nativeHomeMenus ? () => undefined : openDeviceMenu}
+              onPressIn={nativeHomeMenus ? undefined : openDeviceMenu}
+              style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.pressed]}
+              testID="devices.title"
+            >
+              <View style={styles.headerTitleCluster}>
+                <Text style={styles.headerTitle} numberOfLines={1}>{selectedDeviceLabel}</Text>
+                <ChevronDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.medium} />
+              </View>
+            </Pressable>
+          </NativePullDownMenu>
         )}
         {showRemoteGuide ? (
           <View style={styles.headerIconButton} />
         ) : (
-          <HomeHeaderGlassButton
-            accessibilityLabel={t('devices.list.a11y.openDisplaySettings')}
-            onPress={openDisplaySettings}
-            testID="home.displaySettingsButton"
+          <NativePullDownMenu
+            actions={homeDisplayPullDownActions}
+            onAction={(id) => {
+              applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, {
+                groupByProject,
+                groupDialogue,
+              }));
+            }}
           >
-            <Ellipsis color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-          </HomeHeaderGlassButton>
+            <HomeHeaderGlassButton
+              accessibilityLabel={t('devices.list.a11y.openDisplaySettings')}
+              onPress={nativeHomeMenus ? () => undefined : openDisplaySettings}
+              testID="home.displaySettingsButton"
+            >
+              <Ellipsis color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+            </HomeHeaderGlassButton>
+          </NativePullDownMenu>
         )}
         </View>
+        )}
 
         {searchOpen || !!searchQuery.trim() ? (
           <HomeSearchBar
             autoFocus={searchOpen && !searchQuery}
             filterA11y={searchFilterA11y}
+            filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
             onChangeQuery={indexedSearch.setQuery}
+            onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}
             query={searchQuery}
           />
@@ -1926,6 +2084,7 @@ export default function HomeScreen() {
         </View>
         ) : null}
         </View>
+        </HomeChromeFrost>
       </View>
 
       <SectionList
@@ -2194,7 +2353,7 @@ export default function HomeScreen() {
         saving={renameSaving}
         visible={renameTarget !== null}
       />
-      <SessionActionSheet
+      <SessionOptionsPresenter
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
         onClosed={handleSessionSheetClosed}

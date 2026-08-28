@@ -27,9 +27,12 @@ import {
   MainWindowMetric,
   MainWindowOptionButton,
   RemoteListSyncingPlaceholder,
-  ScreenHeader,
   SummaryStrip,
 } from '@/components/MobilePrimitives';
+import {
+  SimpleStackHeader,
+  simpleScreenSafeAreaEdges,
+} from '@/platform/chrome';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -61,6 +64,7 @@ import {
 } from '@/session/sessionSelection';
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
+import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
 import {
   conversationSearchAllowsLocalWrites,
@@ -71,7 +75,7 @@ import { useConversationSearch } from '@/session/useConversationSearch';
 import { sessionMatchesProjectDir } from '@/session/mobileHome';
 import { HomeSessionRow } from './index';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
-import { SessionActionSheet } from '@/session/SessionActionSheet';
+import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
 import type { SessionSwipeAction } from '@/session/swipeRowRegistry';
 import { useSessionListActions } from '@/session/useSessionListActions';
@@ -201,6 +205,22 @@ export default function DeviceDetailScreen() {
         : t('devices.list.search.filter.selectedProjects', { count: indexedSearch.projectSelection.length }),
     sort: t(`devices.list.search.filter.sort.${indexedSearch.sortBy}`),
     status: t(`devices.list.search.filter.status.${indexedSearch.statusFilter}`),
+  });
+  const searchFilterMenu = useConversationSearchFilterMenu({
+    activeCount: indexedSearch.activeFilterCount,
+    agentKind: indexedSearch.agentFilter,
+    lastActivity: indexedSearch.lastActivityFilter,
+    lockedProjects: !!projectWorkingDir,
+    onAgentKindChange: indexedSearch.setAgentFilter,
+    onLastActivityChange: indexedSearch.setLastActivityFilter,
+    onProjectsChange: indexedSearch.setProjectSelection,
+    onReset: indexedSearch.resetFilters,
+    onSortChange: indexedSearch.setSortBy,
+    onStatusChange: indexedSearch.setStatusFilter,
+    projectSelection: indexedSearch.projectSelection,
+    projects: searchProjects,
+    sortBy: indexedSearch.sortBy,
+    status: indexedSearch.statusFilter,
   });
   // 自动化 / 项目分支视图的条件挂载 banner:普通弱网断线也要有可见信号(防闪延迟后)
   const showConnectionBanner = useShowConnectionBanner(status, error, connectionIssue, deviceUnresponsive);
@@ -633,8 +653,8 @@ export default function DeviceDetailScreen() {
       return !automationScopeDir || sessionMatchesProjectDir(item.session.workingDir, automationScopeDir);
     });
     return (
-      <SafeAreaView style={styles.safeArea} testID="deviceDetail.screen">
-        <ScreenHeader
+      <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+        <SimpleStackHeader
           backTestID="deviceDetail.backButton"
           eyebrow={t('devices.detail.automationScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
@@ -697,8 +717,8 @@ export default function DeviceDetailScreen() {
   if (projectWorkingDir) {
     const projectItems = sections.flatMap((section) => section.data);
     return (
-      <SafeAreaView style={styles.safeArea} testID="deviceDetail.screen">
-        <ScreenHeader
+      <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+        <SimpleStackHeader
           action={{
             label: t('devices.common.create'),
             // 在这个项目里建新对话:预填 workingDir。
@@ -736,9 +756,11 @@ export default function DeviceDetailScreen() {
             <HomeSearchBar
               autoFocus={searchOpen && !searchQuery}
               filterA11y={searchFilterA11y}
+              filterActions={searchFilterMenu.filterActions}
               filterActive={indexedSearch.activeFilterCount > 0}
               onChangeQuery={setSearchQuery}
               onDismiss={() => setSearchOpen(false)}
+              onFilterAction={searchFilterMenu.onFilterAction}
               onOpenFilter={() => setSearchFilterOpen(true)}
               padded={false}
               query={searchQuery}
@@ -814,8 +836,8 @@ export default function DeviceDetailScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="deviceDetail.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+      <SimpleStackHeader
         action={{
           label: t('devices.common.create'),
           onPress: () => guardedPush({
@@ -960,8 +982,10 @@ export default function DeviceDetailScreen() {
           <HomeSearchBar
             autoFocus={searchOpen && !searchQuery}
             filterA11y={searchFilterA11y}
+            filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
             onChangeQuery={setSearchQuery}
+            onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}
             padded={false}
             query={searchQuery}
@@ -1261,7 +1285,7 @@ function SessionListActionOverlays({
 }) {
   return (
     <>
-      <SessionActionSheet
+      <SessionOptionsPresenter
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
         onClosed={handleSessionSheetClosed}

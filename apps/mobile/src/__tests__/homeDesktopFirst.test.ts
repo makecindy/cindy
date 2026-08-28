@@ -110,9 +110,11 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('<HomeChromeDrawer');
     expect(source).toContain('<HomeHeaderGlassButton');
     const headerGlass = readSource('src/session/HomeHeaderGlassButton.tsx');
-    expect(headerGlass).toContain('from \'expo-glass-effect\'');
+    expect(headerGlass).toMatch(/from ['"]expo-glass-effect['"]/);
     expect(headerGlass).toContain('glassEffectStyle="regular"');
-    expect(source).toContain('<HomeChromeFrost visible={headerFrosted} />');
+    expect(source).toContain('<HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>');
+    expect(source).toContain('</HomeChromeFrost>');
+    expect(source).toContain('<HomeNativeStackHeader');
     expect(source).toContain('onProjectDragStart={displayedProjectOrder === \'custom\'');
     expect(source).toContain('projectOrder={displayedProjectOrder}');
     expect(source).toContain('resolveDisplayedProjectOrder(');
@@ -129,7 +131,8 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('onScroll={onListScroll}');
     const chromeFrost = readSource('src/session/HomeChromeFrost.tsx');
     expect(chromeFrost).toContain('overlayColor={colors.surfaceTranslucent}');
-    expect(chromeFrost).toContain('backgroundColor: colors.surface');
+    expect(chromeFrost).toContain('intensity={50}');
+    expect(chromeFrost).toContain('<View style={styles.body}>{children}</View>');
     expect(chromeFrost).not.toContain('expo-glass-effect');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
     const chromeDrawer = readSource('src/session/HomeChromeDrawer.tsx');
@@ -149,6 +152,8 @@ describe('mobile home desktop-first surface', () => {
     expect(chromeDrawer).toContain("t('settings.account.logout')");
     expect(chromeDrawer).toContain('openSettingsImmediately');
     expect(chromeDrawer).toContain('closeInstant');
+    expect(chromeDrawer).toContain('FullWindowOverlay');
+    expect(chromeDrawer).toContain('GestureHandlerRootView');
     expect(chromeDrawer).not.toContain('remoteSettings');
     expect(source).toContain("guardedPush('/settings')");
     expect(source).toContain('setChromeMenuCloseInstant(true)');
@@ -193,11 +198,12 @@ describe('mobile home desktop-first surface', () => {
     const searchBar = readSource('src/session/HomeSearchBar.tsx');
     const filterSheet = readSource('src/session/ConversationSearchFilterSheet.tsx');
 
+    expect(searchBar).toContain('<NativePullDownMenu');
     expect(source).toContain('<HomeSearchBar');
     expect(source).toContain('onOpenFilter={() => setSearchFilterOpen(true)}');
     expect(source).not.toContain('onOpenFilter={openDisplaySettings}');
     expect(source).toContain('<ConversationSearchFilterSheet');
-    expect(searchBar).toContain('testID={testIDs?.filter ?? \'home.searchFilterButton\'}');
+    expect(searchBar).toMatch(/testID=\{testIDs\?\.filter \?\? ['"]home\.searchFilterButton['"]\}/);
     expect(filterSheet).toContain('testID="home.searchFilter"');
     expect(filterSheet).toContain('devices.list.search.filter.sortHeading');
     expect(filterSheet).toContain('devices.list.search.filter.statusHeading');

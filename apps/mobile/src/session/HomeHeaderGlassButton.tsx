@@ -1,12 +1,12 @@
 /**
  * 首页顶栏图标钮:iOS 26+ 走系统 Liquid Glass(UIGlassEffect),其它环境回退成无底图标热区。
  */
-import { GlassView } from 'expo-glass-effect';
-import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
-import { useLiquidGlassAvailable } from '@/session/useLiquidGlassAvailable';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { radius } from '@/theme/tokens';
+import { GlassView } from "expo-glass-effect";
+import type { ReactNode } from "react";
+import { Pressable, StyleSheet, View } from "react-native";
+import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
+import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
+import { radius } from "@/theme/tokens";
 
 export function HomeHeaderGlassButton({
   accessibilityLabel,
@@ -19,7 +19,7 @@ export function HomeHeaderGlassButton({
   onPress(): void;
   testID: string;
 }) {
-  const { mode } = useTheme();
+  const { colors, mode } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const liquidGlass = useLiquidGlassAvailable();
 
@@ -37,6 +37,7 @@ export function HomeHeaderGlassButton({
           glassEffectStyle="regular"
           isInteractive
           style={styles.glass}
+          tintColor={colors.surface}
         >
           <View pointerEvents="none" style={styles.iconSlot}>
             {children}
@@ -57,16 +58,16 @@ const makeStyles = (_colors: ThemeColors) =>
       width: 44,
     },
     glass: {
-      alignItems: 'center',
+      alignItems: "center",
       borderRadius: radius.pill,
       flex: 1,
-      justifyContent: 'center',
-      overflow: 'hidden',
+      justifyContent: "center",
+      overflow: "hidden",
     },
     iconSlot: {
-      alignItems: 'center',
+      alignItems: "center",
       flex: 1,
-      justifyContent: 'center',
+      justifyContent: "center",
     },
     pressed: {
       opacity: 0.72,

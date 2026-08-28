@@ -215,7 +215,10 @@
       "projectOrderActivity": "最近のアクティビティ順",
       "projectOrderManual": "手動",
       "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
-      "statusHeading": "ステータス"
+      "statusHeading": "ステータス",
+      "showDeviceTasks": "タスクを表示",
+      "openDevice": "開く",
+      "renameDevice": "名前を変更"
     },
     "search": {
       "placeholder": "タイトルまたは内容を検索…",
