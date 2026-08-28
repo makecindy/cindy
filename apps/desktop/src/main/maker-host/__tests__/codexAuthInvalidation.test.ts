@@ -71,6 +71,18 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
+it('compares Codex hard-link identities without Windows number precision collisions', async () => {
+  const { haveSameStableFileIdentity } = await import('../auth-adapters.js');
+  expect(
+    haveSameStableFileIdentity(
+      { dev: 0n, ino: 9_007_199_254_740_992n },
+      { dev: 0n, ino: 9_007_199_254_740_993n },
+    ),
+  ).toBe(false);
+  expect(haveSameStableFileIdentity({ dev: 0n, ino: 0n }, { dev: 0n, ino: 0n })).toBe(false);
+  expect(haveSameStableFileIdentity({ dev: 7n, ino: 11n }, { dev: 7n, ino: 11n })).toBe(true);
+});
+
 async function createRecoveryCandidate(
   credentialScope: 'system-shared' | 'instance-isolated' | 'unknown',
 ) {
@@ -459,7 +471,7 @@ describe('Codex system credential suppression marker', () => {
       }
     ).finishSuccessfulCodexLogin.bind(adapter);
     await expect(finishSuccessfulCodexLogin()).resolves.toMatchObject({ authenticated: true });
-    expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(systemAuth).ino);
+    expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
     expect(JSON.parse(fs.readFileSync(localAuth, 'utf8'))).toMatchObject({
       tokens: { access_token: 'new-local-token', account_id: 'acct-1' },
     });
@@ -542,7 +554,7 @@ describe('Codex system credential suppression marker', () => {
       authenticated: true,
       credentialScope: 'instance-isolated',
     });
-    expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(systemAuth).ino);
+    expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
     expect(JSON.parse(fs.readFileSync(localAuth, 'utf8'))).toMatchObject({
       tokens: { access_token: 'new-cindy-token' },
     });
@@ -1135,7 +1147,7 @@ describe('Codex system credential suppression marker', () => {
       recoveryRequiredReason: 'token_revoked',
       credentialScope: 'instance-isolated',
     });
-    expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(systemAuth).ino);
+    expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
     expect(getActiveInvalidatedSystemCodexAuthMarker(codexHome, systemAuth)).toMatchObject({
       reason: 'token_revoked',
       credentialScope: 'instance-isolated',
@@ -1355,7 +1367,7 @@ describe('Codex system credential suppression marker', () => {
       }),
     );
     fs.renameSync(replacement, systemAuth);
-    expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(systemAuth).ino);
+    expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
 
     const broadcast = vi.fn();
     adapter.setOnInvalidatedBroadcast(broadcast);
