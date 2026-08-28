@@ -129,6 +129,34 @@ function powerShellOverlayEnabled(platform: NodeJS.Platform, factory: unknown): 
   }));
 }
 
+function loadPowerShellReadEvidence(
+  cwd: string,
+): (input: unknown) => { targets: string[]; unresolved: boolean } {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('const POWERSHELL_DIRECT_FILE_READ_COMMANDS');
+  const end = source.indexOf('function bashInputReadEvidence', start);
+  if (start < 0 || end <= start) throw new Error('PowerShell read evidence helper was not found');
+  const executableSource = [
+    'type BashInputReadEvidence = { targets: string[]; unresolved: boolean };',
+    source.slice(start, end),
+    '(globalThis as any).powershellInputReadEvidence = powershellInputReadEvidence;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = {
+    path,
+    process: { cwd: () => cwd },
+  };
+  runInNewContext(compiled, context);
+  return context.powershellInputReadEvidence as (
+    input: unknown,
+  ) => { targets: string[]; unresolved: boolean };
+}
+
 function loadPiPackageMutationCommandHelper(): (input: unknown) => boolean {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const parserStart = source.indexOf('function readShellRedirectionTarget');
@@ -322,6 +350,55 @@ describe('cindy-bridge extension source', () => {
     expect(evidence('read', { path: '.env.local', offset: 1 }).touchesCredential).toBe(true);
     expect(evidence('ls', { path: 'src/.environment' }).touchesCredential).toBe(false);
     expect(evidence('read', { path: 42 }).touchesCredential).toBe(true);
+  });
+
+  it('canonicalizes direct PowerShell read operands through a directory symlink or junction', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'cindy-pi-powershell-link-'));
+    try {
+      const sshDir = path.join(tempRoot, 'secrets', '.ssh');
+      const keyPath = path.join(sshDir, 'id_rsa');
+      const innocentLink = path.join(tempRoot, 'innocent');
+      mkdirSync(sshDir, { recursive: true });
+      writeFileSync(keyPath, 'secret');
+      symlinkSync(sshDir, innocentLink, process.platform === 'win32' ? 'junction' : 'dir');
+      const operand = process.platform === 'win32'
+        ? '.\\innocent\\id_rsa'
+        : './innocent/id_rsa';
+      const evidence = loadPowerShellReadEvidence(tempRoot);
+
+      const commands = [
+        ...['Get-Content', 'gc', 'cat', 'type', 'Microsoft.PowerShell.Management\\Get-Content']
+          .map((commandName) => commandName + ' ' + operand),
+        'Get-Content -Path ' + operand,
+        "Get-Content -LiteralPath '" + operand + "' -Raw",
+      ];
+      for (const command of commands) {
+        const result = evidence({ command });
+        expect(result.unresolved, command).toBe(false);
+        expect(result.targets, command).toHaveLength(1);
+        expect(realpathSync(result.targets[0]), command).toBe(realpathSync(keyPath));
+      }
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a direct PowerShell read operand is not statically resolvable', () => {
+    const evidence = loadPowerShellReadEvidence(process.cwd());
+    for (const command of [
+      'Get-Content $target',
+      'Get-Content "${target}"',
+      'Get-Content (Join-Path . id_rsa)',
+      'Get-Content ./safe.txt | Select-Object -First 1',
+      'Get-Content ./safe"name".txt',
+      "Get-Content ./safe'name'.txt",
+      'Get-Content ./safe*.txt',
+      'Get-Content -Encoding utf8 ./safe.txt',
+      'Get-Content\u00a0./safe.txt',
+    ]) {
+      expect(evidence({ command }), command).toEqual({ targets: [], unresolved: true });
+    }
+    expect(evidence({ command: 'Write-Output ok' })).toEqual({ targets: [], unresolved: false });
   });
 
   it.skipIf(process.platform === 'win32')(

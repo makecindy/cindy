@@ -734,12 +734,106 @@ function bashExpandedPathCandidates(
   }
 }
 
+const POWERSHELL_DIRECT_FILE_READ_COMMANDS = new Set(['get-content', 'gc', 'cat', 'type']);
+const POWERSHELL_GET_CONTENT_SWITCHES = new Set(['-raw', '-wait', '-force', '-asbytestream']);
+
+type PowerShellDirectArguments = { words: string[]; unresolved: boolean };
+
+function powershellDirectArguments(command: string, start: number): PowerShellDirectArguments {
+  const words: string[] = [];
+  let cursor = start;
+  while (cursor < command.length) {
+    while (/[ \t\r]/.test(command[cursor] ?? '')) cursor += 1;
+    if (cursor >= command.length || command[cursor] === '#') break;
+    if (/\s/.test(command[cursor])) return { words, unresolved: true };
+    const quote = command[cursor] === "'" || command[cursor] === '"' ? command[cursor] : null;
+    let word = '';
+    if (quote) {
+      cursor += 1;
+      let closed = false;
+      while (cursor < command.length) {
+        const character = command[cursor];
+        if (character === quote) {
+          if (quote === "'" && command[cursor + 1] === "'") {
+            word += "'";
+            cursor += 2;
+            continue;
+          }
+          cursor += 1;
+          closed = true;
+          break;
+        }
+        if (quote === '"' && (character === '$' || character === String.fromCharCode(96))) {
+          return { words, unresolved: true };
+        }
+        word += character;
+        cursor += 1;
+      }
+      if (!closed || (cursor < command.length && !/[ \t\r#]/.test(command[cursor]))) {
+        return { words, unresolved: true };
+      }
+    } else {
+      while (cursor < command.length && !/[ \t\r]/.test(command[cursor])) {
+        const character = command[cursor];
+        if (/\s/.test(character) || /[;|&(){}<>]/.test(character)) {
+          return { words, unresolved: true };
+        }
+        if (
+          character === '$'
+          || character === ','
+          || character === "'"
+          || character === '"'
+          || character === String.fromCharCode(96)
+        ) {
+          return { words, unresolved: true };
+        }
+        word += character;
+        cursor += 1;
+      }
+    }
+    if (!word) return { words, unresolved: true };
+    words.push(word);
+  }
+  return { words, unresolved: false };
+}
+
+function powershellStaticReadTarget(word: string, literal: boolean): string | null {
+  if (!word || word === '-' || word.startsWith('@') || word.startsWith('~')) return null;
+  if (/^[A-Za-z][A-Za-z0-9.-]*:/.test(word) && !/^[A-Za-z]:[\\/]/.test(word)) return null;
+  if (!literal && /[*?\[]/.test(word)) return null;
+  return path.isAbsolute(word) ? path.normalize(word) : path.resolve(process.cwd(), word);
+}
+
 function powershellInputReadEvidence(input: unknown): BashInputReadEvidence {
   if (!input || typeof input !== 'object') return { targets: [], unresolved: false };
   const command = (input as Record<string, unknown>).command;
   if (typeof command !== 'string' || !command) return { targets: [], unresolved: false };
-  // PowerShell 不走 bash 重定向解析器;整条命令当字符串叶子扫凭证特征。
-  return { targets: [command], unresolved: false };
+  const direct = /^\s*(?:[A-Za-z][A-Za-z0-9.-]*\\)?([A-Za-z][A-Za-z0-9-]*)(?=\s|$)/.exec(command);
+  if (!direct || !POWERSHELL_DIRECT_FILE_READ_COMMANDS.has(direct[1].toLowerCase())) {
+    // Invoke-Expression, the call operator, variable command names and other indirect forms
+    // are intentionally outside this narrow direct-read contract.
+    return { targets: [], unresolved: false };
+  }
+  const parsed = powershellDirectArguments(command, direct[0].length);
+  if (parsed.unresolved) return { targets: [], unresolved: true };
+  let targetWord: string | null = null;
+  let literal = false;
+  for (let index = 0; index < parsed.words.length; index += 1) {
+    const word = parsed.words[index];
+    const lower = word.toLowerCase();
+    if (lower === '-path' || lower === '-literalpath') {
+      if (targetWord !== null || index + 1 >= parsed.words.length) return { targets: [], unresolved: true };
+      literal = lower === '-literalpath';
+      targetWord = parsed.words[index + 1];
+      index += 1;
+      continue;
+    }
+    if (POWERSHELL_GET_CONTENT_SWITCHES.has(lower)) continue;
+    if (word.startsWith('-') || targetWord !== null) return { targets: [], unresolved: true };
+    targetWord = word;
+  }
+  const target = targetWord === null ? null : powershellStaticReadTarget(targetWord, literal);
+  return target ? { targets: [target], unresolved: false } : { targets: [], unresolved: true };
 }
 
 function bashInputReadEvidence(input: unknown): BashInputReadEvidence {
