@@ -15677,20 +15677,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           pendingCredentialSwitchHolder?.clear(sessionId);
           restoreControlStores();
           const recoveryErrors: unknown[] = [];
+          let retainedLiveSession = false;
           if (!appliedRuntimeSelectionWasDeferred && maker.getSession(sessionId)) {
             try {
               await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
             } catch (error) {
               recoveryErrors.push(error);
+              retainedLiveSession = true;
             }
           }
-          if (previousRuntime.pendingCredentialSwitch) {
-            pendingCredentialSwitchHolder?.register(
-              sessionId,
-              previousRuntime.pendingCredentialSwitch,
-            );
-          } else if (recoveryErrors.length === 0) {
-            wakeSessionInputAfterCredentialSwitch(sessionId);
+          if (recoveryErrors.length === 0) {
+            if (previousRuntime.pendingCredentialSwitch) {
+              pendingCredentialSwitchHolder?.register(
+                sessionId,
+                previousRuntime.pendingCredentialSwitch,
+              );
+            } else {
+              wakeSessionInputAfterCredentialSwitch(sessionId);
+            }
           }
           broadcastSessionPatched(
             sessionId,
@@ -15699,6 +15703,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             },
             runtimeOwnerScope,
           );
+          if (retainedLiveSession) {
+            try {
+              // The SQLite/thread route is already restored, but a close failure leaves the
+              // target live Session in memory. Re-adopt its actual profile into host stores and
+              // the effective runtime projection so later input never runs with mixed axes.
+              await reconcileRetainedLiveProfile();
+            } catch (error) {
+              recoveryErrors.push(error);
+            }
+          }
           if (recoveryErrors.length > 0) {
             throw new AggregateError(
               recoveryErrors,

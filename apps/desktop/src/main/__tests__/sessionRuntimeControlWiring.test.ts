@@ -261,6 +261,18 @@ describe('session runtime control wiring', () => {
       'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
       restoreStores,
     );
+    const restoredRouteBroadcast = setModel.indexOf(
+      'broadcastSessionPatched(\n            sessionId,\n            {\n              ...restoredState,',
+      retireLiveSession,
+    );
+    const reconcileRetainedLive = setModel.indexOf(
+      'await reconcileRetainedLiveProfile();',
+      restoredRouteBroadcast,
+    );
+    const rollbackFailure = setModel.indexOf(
+      "'persisted runtime selection rollback could not retire the live session'",
+      reconcileRetainedLive,
+    );
     const projectionRead = setModel.indexOf('const projectionMeta = await maker.getSessionMeta(sessionId);');
     const outerCatch = setModel.lastIndexOf('} catch (err) {');
 
@@ -268,6 +280,12 @@ describe('session runtime control wiring', () => {
     expect(ownerGuard).toBeGreaterThan(sqliteRestore);
     expect(restoreStores).toBeGreaterThan(ownerGuard);
     expect(retireLiveSession).toBeGreaterThan(restoreStores);
+    expect(restoredRouteBroadcast).toBeGreaterThan(retireLiveSession);
+    expect(reconcileRetainedLive).toBeGreaterThan(restoredRouteBroadcast);
+    expect(rollbackFailure).toBeGreaterThan(reconcileRetainedLive);
+    expect(setModel.slice(retireLiveSession, restoredRouteBroadcast)).toContain(
+      'if (recoveryErrors.length === 0)',
+    );
     expect(setModel.slice(ownerGuard, restoreStores)).toContain('runtimeOwnerBoundaryCurrent()');
     expect(setModel.slice(ownerGuard, restoreStores)).toContain(
       'getCurrentDbClientSnapshot()?.clientEpoch === runtimeDbSnapshot.clientEpoch',
