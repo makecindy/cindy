@@ -1,4 +1,4 @@
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, Effort } from '@cindy/maker-core';
 
 import {
   isCredentialModeSwitchBusyError,
@@ -42,12 +42,24 @@ import {
  *     重试 onTurnSettled,杜绝"事件丢失 → 永久冻结"。
  *
  * 跨 Codex thread family 的 deferred 登记期间，SQLite 必须保留源 route/thread；
- * finalizer 确认 close + relink 后才由 persistRoute 一次提交目标四轴。进程若提前
- * 退出，内存 pending 虽丢失，重启也只会安全恢复源 route，不会跨来源 resume。
+ * finalizer 确认 close 后由 relink CAS 一次提交新 thread + 最终目标四轴。进程在
+ * 任意边界退出都只会恢复完整源 tuple 或完整目标 tuple，不会跨来源 resume。
  */
 
 /** 自愈兜底重试间隔(事件路径正常时用户感知不到它)。 */
 const PENDING_APPLY_RETRY_DELAY_MS = 10_000;
+
+function isAtomicPersistedRouteEffort(effort: string | undefined): effort is Effort {
+  return (
+    effort === 'minimal' ||
+    effort === 'low' ||
+    effort === 'medium' ||
+    effort === 'high' ||
+    effort === 'xhigh' ||
+    effort === 'max' ||
+    effort === 'ultra'
+  );
+}
 
 export interface PendingCredentialSwitchOwnerScope {
   ownerScopeKey: string;
@@ -59,6 +71,13 @@ export interface PendingCredentialSwitchPersistedRoute {
   providerId: string | null;
   effort?: string;
   fastMode?: boolean;
+}
+
+interface PendingCredentialSwitchAtomicPersistedRoute {
+  model: string;
+  providerId: string | null;
+  effort: Effort;
+  fastMode: boolean;
 }
 
 export interface PendingCredentialSwitch {
@@ -144,9 +163,9 @@ export interface PendingCredentialSwitchDeps {
   }>;
   /**
    * 把收口裁决后的实际 route 持久化(生产 = 直写 sessions 行 + 广播
-   * sessions:patched)。跨 family relink 在此首次提交目标 route；其它 deferred 可能已由
-   * renderer 按请求值落盘，若收口裁决改道仍必须回写实际值。缺席 = 只写内存 store
-   * (测试最小 harness)。
+   * sessions:patched)。无 native thread 的切换及其它 deferred 会走这里；跨 family
+   * relink 的 route 已与 sdkSessionId 在 relink CAS 中提交，不再二次写。若收口裁决
+   * 改道仍必须回写实际值。缺席 = 只写内存 store(测试最小 harness)。
    */
   persistRoute?: (
     sessionId: string,
@@ -158,8 +177,8 @@ export interface PendingCredentialSwitchDeps {
     },
   ) => Promise<void>;
   /**
-   * 把旧 Codex rollout 安全 fork 到目标来源使用的新 thread，并 CAS 替换持久化
-   * sdkSessionId。失败时 pending 保留、输入队列继续 gated，等待自愈重试。
+   * 把旧 Codex rollout 安全 fork 到目标来源使用的新 thread，并用同一 CAS 替换持久化
+   * sdkSessionId + 完整最终 route。失败时 pending 保留、输入队列继续 gated。
    */
   relinkCodexThreadForProviderSwitch?: (input: {
     sessionId: string;
@@ -169,6 +188,10 @@ export interface PendingCredentialSwitchDeps {
     targetModel: string;
     targetProviderId: string | null;
     isCurrent: () => boolean;
+    persistedRouteTransition: {
+      previous: PendingCredentialSwitchAtomicPersistedRoute;
+      next: PendingCredentialSwitchAtomicPersistedRoute;
+    };
   }) => Promise<CodexProviderThreadRelinkReceipt | null>;
   /** 自愈兜底重试间隔覆写(测试用)。 */
   retryDelayMs?: number;
@@ -544,6 +567,21 @@ export class PendingCredentialSwitchService {
   ): Promise<void> {
     let relinkReceipt: CodexProviderThreadRelinkReceipt | null = null;
     if (resolved.apply) {
+      const modelChanged = !!resolved.model && resolved.model !== target.model;
+      const routeChanged = resolved.providerId !== target.providerId || modelChanged;
+      const resolvedEffort = resolved.effort ?? target.effort ?? target.previousRoute?.effort;
+      const resolvedFastMode =
+        resolved.fastMode ?? target.fastMode ?? target.previousRoute?.fastMode;
+      const resolvedRoute: PendingCredentialSwitchPersistedRoute = {
+        providerId: resolved.providerId,
+        model: resolved.model ?? target.model,
+        ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+        ...(resolvedFastMode !== undefined ? { fastMode: resolvedFastMode } : {}),
+      };
+      // A successful relink CAS can make the complete target tuple durable before this
+      // finalizer resumes. Keep that fact for cancellation/owner compensation and skip the
+      // legacy second route write; otherwise a crash could expose a target thread on source route.
+      let persistedResolvedRoute: PendingCredentialSwitchPersistedRoute | undefined;
       // 等待期间停用裁决可能把最终 provider/model 改到另一 thread 身份家族。
       // source thread 身份完整时必须按最终 route 重算，不能沿用登记时冻结的 marker；
       // 身份不完整时保留旧 marker 的 fail-closed 兼容语义。
@@ -580,6 +618,36 @@ export class PendingCredentialSwitchService {
           else this.discardIfOwnerStale(sessionId, target);
           return;
         }
+        const previousRoute = target.previousRoute;
+        if (
+          !previousRoute ||
+          !isAtomicPersistedRouteEffort(previousRoute.effort) ||
+          previousRoute.fastMode === undefined ||
+          !isAtomicPersistedRouteEffort(resolvedRoute.effort) ||
+          resolvedRoute.fastMode === undefined
+        ) {
+          this.deps.logger?.error?.(
+            'pending credential switch: complete persisted route is unavailable; keeping queue gated',
+            { sessionId, model: resolvedRoute.model, providerId: resolvedRoute.providerId },
+          );
+          if (this.targetCurrent(sessionId, target)) this.scheduleRetry(sessionId);
+          else this.discardIfOwnerStale(sessionId, target);
+          return;
+        }
+        const persistedRouteTransition = {
+          previous: {
+            model: previousRoute.model,
+            providerId: previousRoute.providerId,
+            effort: previousRoute.effort,
+            fastMode: previousRoute.fastMode,
+          },
+          next: {
+            model: resolvedRoute.model,
+            providerId: resolvedRoute.providerId,
+            effort: resolvedRoute.effort,
+            fastMode: resolvedRoute.fastMode,
+          },
+        };
         try {
           relinkReceipt = await relink({
             sessionId,
@@ -593,7 +661,9 @@ export class PendingCredentialSwitchService {
             targetModel: resolved.model ?? target.model,
             targetProviderId: resolved.providerId,
             isCurrent: () => this.targetCurrent(sessionId, target),
+            persistedRouteTransition,
           });
+          if (relinkReceipt) persistedResolvedRoute = resolvedRoute;
         } catch (err) {
           this.deps.logger?.error?.(
             'pending credential switch: Codex thread relink failed; keeping queue gated for retry',
@@ -610,14 +680,14 @@ export class PendingCredentialSwitchService {
               this.discardIfOwnerStale(
                 sessionId,
                 target,
-                undefined,
+                resolvedRoute,
                 receipt.newSdkSessionId,
               );
             } else {
               await this.compensateSupersededPersistedRoute(
                 sessionId,
                 target,
-                undefined,
+                resolvedRoute,
                 receipt,
               );
               if (this.targetCurrent(sessionId, target)) this.scheduleRetry(sessionId);
@@ -652,14 +722,14 @@ export class PendingCredentialSwitchService {
               this.discardIfOwnerStale(
                 sessionId,
                 target,
-                undefined,
+                persistedResolvedRoute,
                 relinkReceipt.newSdkSessionId,
               );
             } else {
               await this.compensateSupersededPersistedRoute(
                 sessionId,
                 target,
-                undefined,
+                persistedResolvedRoute,
                 relinkReceipt,
               );
             }
@@ -670,24 +740,17 @@ export class PendingCredentialSwitchService {
         }
       }
       setSessionProvider(sessionId, resolved.providerId);
-      // 跨 family deferred 在登记时刻刻意让 DB 保持源 route；只有 relink 成功后才
-      // 在这里提交目标 route。裁决改道也必须回写，否则下次懒 resume 会按旧值重建。
+      // 跨 family deferred 在登记时刻刻意让 DB 保持源 route；有 native thread 时
+      // relink CAS 已成套提交目标 route，无 thread 或裁决不跨 family 才在这里回写。
       // 回写必须 **await 且先于**删登记 /
       // 唤醒队列:排队消息在唤醒后立刻按 DB 懒 resume,fire-and-forget 会让它抢在
       // 替换模型落库前用停用目标重建(PR #744 review 第十五轮);await 期间 pending
       // 仍在,coordinator 的 pending 门保持关闭。失败留痕后仍收口(队列不能永久
       // 冻结;内存 store 已是权威路由,DB 差异在下次显式切换收敛)。
-      const modelChanged = !!resolved.model && resolved.model !== target.model;
-      const routeChanged = resolved.providerId !== target.providerId || modelChanged;
-      const resolvedRoute: PendingCredentialSwitchPersistedRoute = {
-        providerId: resolved.providerId,
-        model: resolved.model ?? target.model,
-        ...(resolved.effort !== undefined ? { effort: resolved.effort } : {}),
-        ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
-      };
-      // Only a successful await proves this exact fallback tuple reached SQLite. If the owner
-      // expires in that window, stale cleanup must compare against it rather than the request.
-      let persistedResolvedRoute: PendingCredentialSwitchPersistedRoute | undefined;
+      // When relink returned null there was no native thread to replace, so the route still
+      // needs the ordinary persistence write. A non-null receipt already committed this exact
+      // tuple atomically with the replacement sdk_session_id and broadcast it.
+      const routeCommittedWithRelink = relinkReceipt !== null;
       // 恒写幂等回正(最后收口者赢,PR #744 review 第二十三轮):旧登记的 finalizer 在
       // await persistRoute 期间被新选择替换时,旧写可能晚于新选择的登记/落盘;
       // 若新登记收口时因「裁决未改路由」跳过回写,DB 会留着旧 finalizer 的迟到值,
@@ -699,6 +762,7 @@ export class PendingCredentialSwitchService {
       // 既无竞态也不能引入异步,保持只在路由改动时回写。
       if (
         this.deps.persistRoute &&
+        !routeCommittedWithRelink &&
         (routeChanged ||
           this.deps.resolveRoute ||
           shouldRelinkCodexThread ||

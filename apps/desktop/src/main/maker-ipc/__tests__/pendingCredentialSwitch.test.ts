@@ -125,16 +125,34 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.onApplied).toHaveBeenCalledWith(sessionId);
   });
 
-  it('relinks a deferred Codex thread before route persistence and queue wake', async () => {
+  it('atomically commits a deferred Codex thread with its final route before queue wake', async () => {
     const sessionId = rememberSession('pending-switch-relink-codex-thread');
     setSessionProvider(sessionId, 'xd');
+    let persistedProfile = {
+      sdkSessionId: 'thread-xd',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd' as string | null,
+      effort: 'high',
+      fastMode: false,
+    };
     const h = createHarness([
       { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
     ]);
-    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
-      previousSdkSessionId: 'thread-xd',
-      newSdkSessionId: 'thread-openai',
-      rollback: vi.fn(async () => true),
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async (input) => {
+      // A forced exit before the relink CAS can only restart the complete source tuple.
+      expect(persistedProfile).toEqual({
+        sdkSessionId: 'thread-xd',
+        ...input.persistedRouteTransition.previous,
+      });
+      persistedProfile = {
+        sdkSessionId: 'thread-openai',
+        ...input.persistedRouteTransition.next,
+      };
+      return {
+        previousSdkSessionId: 'thread-xd',
+        newSdkSessionId: 'thread-openai',
+        rollback: vi.fn(async () => true),
+      };
     });
 
     h.service.register(sessionId, {
@@ -143,7 +161,12 @@ describe('PendingCredentialSwitchService', () => {
       effort: 'xhigh',
       fastMode: true,
       rebuildCodexThread: true,
-      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
     });
     // A crash before settlement cannot have persisted the target route. The production
     // registration bridge has already restored SQLite to previousRoute at this point.
@@ -158,20 +181,32 @@ describe('PendingCredentialSwitchService', () => {
       targetModel: 'gpt-5.6-sol',
       targetProviderId: 'openai',
       isCurrent: expect.any(Function),
+      persistedRouteTransition: {
+        previous: {
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+          effort: 'high',
+          fastMode: false,
+        },
+        next: {
+          model: 'gpt-5.6-sol',
+          providerId: 'openai',
+          effort: 'xhigh',
+          fastMode: true,
+        },
+      },
     });
     expect(h.relinkCodexThreadForProviderSwitch.mock.invocationCallOrder[0]).toBeLessThan(
       h.onApplied.mock.invocationCallOrder[0]!,
     );
-    expect(h.persistRoute).toHaveBeenCalledTimes(1);
-    expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
+    expect(h.persistRoute).not.toHaveBeenCalled();
+    expect(persistedProfile).toEqual({
+      sdkSessionId: 'thread-openai',
       model: 'gpt-5.6-sol',
       providerId: 'openai',
       effort: 'xhigh',
       fastMode: true,
     });
-    expect(h.persistRoute.mock.invocationCallOrder[0]).toBeLessThan(
-      h.onApplied.mock.invocationCallOrder[0]!,
-    );
   });
 
   it('recomputes relink from the final route when revalidation crosses thread families', async () => {
@@ -187,13 +222,23 @@ describe('PendingCredentialSwitchService', () => {
         }),
       },
     );
+    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback: vi.fn(async () => true),
+    });
 
     h.service.register(sessionId, {
       model: 'xai/grok-4.3',
       providerId: 'xai',
       agentKind: 'codex',
       sourceCodexThreadModelProviderId: 'cindy_gateway',
-      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
     });
     await h.service.onTurnSettled(sessionId);
 
@@ -205,11 +250,22 @@ describe('PendingCredentialSwitchService', () => {
       targetModel: 'gpt-5.6-sol',
       targetProviderId: 'openai',
       isCurrent: expect.any(Function),
+      persistedRouteTransition: {
+        previous: {
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+          effort: 'high',
+          fastMode: false,
+        },
+        next: {
+          model: 'gpt-5.6-sol',
+          providerId: 'openai',
+          effort: 'high',
+          fastMode: false,
+        },
+      },
     });
-    expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
-      model: 'gpt-5.6-sol',
-      providerId: 'openai',
-    });
+    expect(h.persistRoute).not.toHaveBeenCalled();
   });
 
   it('skips a stale relink marker when revalidation returns to the source thread family', async () => {
@@ -578,7 +634,7 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.service.has(sessionId)).toBe(false);
   });
 
-  it('rolls back the relink when deferred route persistence fails', async () => {
+  it('keeps the pending gated while an atomic relink compensation receipt rolls back', async () => {
     const sessionId = rememberSession('pending-switch-persist-rollback');
     setSessionProvider(sessionId, 'xd');
     const rollback = vi.fn(async () => true);
@@ -592,28 +648,35 @@ describe('PendingCredentialSwitchService', () => {
         }),
       },
     );
-    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
-      previousSdkSessionId: 'thread-xd',
-      newSdkSessionId: 'thread-openai',
-      rollback,
-    });
-    h.persistRoute.mockRejectedValueOnce(new Error('sqlite failed'));
+    h.relinkCodexThreadForProviderSwitch.mockRejectedValueOnce(
+      new CodexProviderThreadRelinkCompensationRequiredError({
+        previousSdkSessionId: 'thread-xd',
+        newSdkSessionId: 'thread-openai',
+        rollback,
+      }),
+    );
 
     h.service.register(sessionId, {
       model: 'gpt-5.6-sol',
       providerId: 'openai',
       rebuildCodexThread: true,
-      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
     });
     await h.service.onTurnSettled(sessionId);
 
     expect(rollback).toHaveBeenCalledOnce();
     expect(h.service.get(sessionId)?.rebuildCodexThread).toBe(true);
+    expect(h.persistRoute).not.toHaveBeenCalled();
     expect(h.onApplied).not.toHaveBeenCalled();
     h.service.clear(sessionId);
   });
 
-  it('restores runtime axes before waking a cancellation whose route persistence failed', async () => {
+  it('restores runtime axes before waking a cancellation during atomic relink rollback', async () => {
     const sessionId = rememberSession('pending-switch-persist-failure-cancelled');
     setSessionProvider(sessionId, 'xd');
     setSessionEffort(sessionId, 'xhigh');
@@ -629,14 +692,13 @@ describe('PendingCredentialSwitchService', () => {
         }),
       },
     );
-    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
-      previousSdkSessionId: 'thread-xd',
-      newSdkSessionId: 'thread-openai',
-      rollback,
-    });
-    h.persistRoute.mockImplementationOnce(async () => {
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async () => {
       h.service.clear(sessionId);
-      throw new Error('sqlite failed');
+      throw new CodexProviderThreadRelinkCompensationRequiredError({
+        previousSdkSessionId: 'thread-xd',
+        newSdkSessionId: 'thread-openai',
+        rollback,
+      });
     });
 
     await h.service.register(sessionId, {
@@ -663,14 +725,16 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.onApplied).not.toHaveBeenCalled();
     expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
     expect(h.broadcastApplied).not.toHaveBeenCalled();
+    expect(h.persistRoute).not.toHaveBeenCalled();
   });
 
-  it('restores a committed relink marker after cleanup so retry does not fork again', async () => {
-    const sessionId = rememberSession('pending-switch-restore-committed-relink');
+  it('retries an atomic relink compensation receipt without reforking while rollback is failing', async () => {
+    const sessionId = rememberSession('pending-switch-retry-atomic-compensation');
     setSessionProvider(sessionId, 'xd');
-    const rollback = vi.fn(async () => {
-      throw new Error('rollback failed');
-    });
+    const rollback = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('rollback failed'))
+      .mockResolvedValueOnce(true);
     const h = createHarness(
       [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
       {
@@ -679,15 +743,17 @@ describe('PendingCredentialSwitchService', () => {
           providerId,
           degraded: false,
         }),
-        retryDelayMs: 60_000,
+        retryDelayMs: 5,
       },
     );
-    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
-      previousSdkSessionId: 'thread-xd',
-      newSdkSessionId: 'thread-openai',
-      rollback,
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async () => {
+      h.service.clear(sessionId);
+      throw new CodexProviderThreadRelinkCompensationRequiredError({
+        previousSdkSessionId: 'thread-xd',
+        newSdkSessionId: 'thread-openai',
+        rollback,
+      });
     });
-    h.persistRoute.mockRejectedValueOnce(new Error('sqlite failed'));
 
     h.service.register(sessionId, {
       model: 'gpt-5.6-sol',
@@ -695,26 +761,25 @@ describe('PendingCredentialSwitchService', () => {
       rebuildCodexThread: true,
       agentKind: 'codex',
       sourceCodexThreadModelProviderId: 'cindy_gateway',
-      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
     });
     await h.service.onTurnSettled(sessionId);
 
     expect(rollback).toHaveBeenCalledOnce();
-    expect(h.service.get(sessionId)?.codexThreadRelinkCommitted).toBe(true);
-    const recovered = h.service.get(sessionId)!;
-    h.service.clear(sessionId);
-    h.service.register(sessionId, recovered);
-
-    await h.service.onTurnSettled(sessionId);
-
+    expect(h.service.has(sessionId)).toBe(true);
     expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
-    expect(h.persistRoute).toHaveBeenCalledTimes(2);
-    expect(h.service.has(sessionId)).toBe(false);
-    expect(h.onApplied).toHaveBeenCalledOnce();
-    expect(h.onCancellationCompensated).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(rollback).toHaveBeenCalledTimes(2));
+    expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
+    expect(h.persistRoute).not.toHaveBeenCalled();
+    h.service.clear(sessionId);
   });
 
-  it('rolls back an abandoned relink when route persistence is superseded', async () => {
+  it('atomically rolls back an abandoned relink when its generation is superseded', async () => {
     const sessionId = rememberSession('pending-switch-superseded-after-persist');
     setSessionProvider(sessionId, 'xd');
     let persistedProfile = {
@@ -726,7 +791,13 @@ describe('PendingCredentialSwitchService', () => {
     };
     const rollback = vi.fn(async () => {
       if (persistedProfile.sdkSessionId !== 'thread-openai') return false;
-      persistedProfile.sdkSessionId = 'thread-xd';
+      persistedProfile = {
+        sdkSessionId: 'thread-xd',
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      };
       return true;
     });
     const restoreStaleOwnerRoute = vi.fn(
@@ -763,24 +834,21 @@ describe('PendingCredentialSwitchService', () => {
         }),
       },
     );
-    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
-      previousSdkSessionId: 'thread-xd',
-      newSdkSessionId: 'thread-openai',
-      rollback,
-    });
-    h.persistRoute.mockImplementationOnce(async (_persistedSessionId, route) => {
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async (input) => {
       persistedProfile = {
-        ...persistedProfile,
-        model: route.model ?? persistedProfile.model,
-        providerId: route.providerId,
-        effort: route.effort ?? persistedProfile.effort,
-        fastMode: route.fastMode ?? persistedProfile.fastMode,
+        sdkSessionId: 'thread-openai',
+        ...input.persistedRouteTransition.next,
       };
       h.service.clear(sessionId, { wake: false });
       await h.service.register(sessionId, {
         model: 'gpt-5.6-sol',
         providerId: 'xd',
       });
+      return {
+        previousSdkSessionId: 'thread-xd',
+        newSdkSessionId: 'thread-openai',
+        rollback,
+      };
     });
 
     await h.service.register(sessionId, {
@@ -799,14 +867,8 @@ describe('PendingCredentialSwitchService', () => {
     });
     await h.service.onTurnSettled(sessionId);
 
-    const abandonedRoute = {
-      model: 'gpt-5.6-sol',
-      providerId: 'openai',
-      effort: 'xhigh',
-      fastMode: true,
-    };
-    expect(rollback).not.toHaveBeenCalled();
-    expect(restoreStaleOwnerRoute).toHaveBeenCalledWith(abandonedRoute, 'thread-openai');
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(restoreStaleOwnerRoute).not.toHaveBeenCalled();
     expect(persistedProfile).toEqual({
       sdkSessionId: 'thread-xd',
       model: 'codex/gpt-5.6-sol',
@@ -815,6 +877,7 @@ describe('PendingCredentialSwitchService', () => {
       fastMode: false,
     });
     expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
+    expect(h.persistRoute).not.toHaveBeenCalled();
     expect(h.service.get(sessionId)).toMatchObject({
       model: 'gpt-5.6-sol',
       providerId: 'xd',
@@ -825,7 +888,7 @@ describe('PendingCredentialSwitchService', () => {
     h.service.clear(sessionId);
   });
 
-  it('keeps cancellation gated until a late persisted route is atomically compensated', async () => {
+  it('keeps cancellation gated until a late atomic relink is compensated', async () => {
     const sessionId = rememberSession('pending-switch-cancel-during-persist');
     setSessionProvider(sessionId, 'xd');
     setSessionEffort(sessionId, 'xhigh');
@@ -837,13 +900,13 @@ describe('PendingCredentialSwitchService', () => {
       effort: 'high',
       fastMode: false,
     };
-    let markPersistStarted!: () => void;
-    const persistStarted = new Promise<void>((resolve) => {
-      markPersistStarted = resolve;
+    let markCommitStarted!: () => void;
+    const commitStarted = new Promise<void>((resolve) => {
+      markCommitStarted = resolve;
     });
-    let releasePersist!: () => void;
-    const persistGate = new Promise<void>((resolve) => {
-      releasePersist = resolve;
+    let releaseCommit!: () => void;
+    const commitGate = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
     });
     const restoreStaleOwnerRoute = vi.fn(
       async (
@@ -873,23 +936,17 @@ describe('PendingCredentialSwitchService', () => {
       [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
       { retryDelayMs: 60_000 },
     );
-    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async () => {
-      persistedProfile.sdkSessionId = 'thread-openai';
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async (input) => {
+      persistedProfile = {
+        sdkSessionId: 'thread-openai',
+        ...input.persistedRouteTransition.next,
+      };
+      markCommitStarted();
+      await commitGate;
       return {
         previousSdkSessionId: 'thread-xd',
         newSdkSessionId: 'thread-openai',
         rollback: vi.fn(async () => false),
-      };
-    });
-    h.persistRoute.mockImplementationOnce(async (_persistedSessionId, route) => {
-      markPersistStarted();
-      await persistGate;
-      persistedProfile = {
-        ...persistedProfile,
-        model: route.model ?? persistedProfile.model,
-        providerId: route.providerId,
-        effort: route.effort ?? persistedProfile.effort,
-        fastMode: route.fastMode ?? persistedProfile.fastMode,
       };
     });
 
@@ -908,12 +965,12 @@ describe('PendingCredentialSwitchService', () => {
       restoreStaleOwnerRoute,
     });
     const settling = h.service.onTurnSettled(sessionId);
-    await persistStarted;
+    await commitStarted;
 
     h.service.clear(sessionId);
     expect(h.service.has(sessionId)).toBe(true);
     expect(h.onApplied).not.toHaveBeenCalled();
-    releasePersist();
+    releaseCommit();
     await settling;
 
     expect(restoreStaleOwnerRoute).toHaveBeenCalledWith(
@@ -939,10 +996,11 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.onApplied).not.toHaveBeenCalled();
     expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
     expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
+    expect(h.persistRoute).not.toHaveBeenCalled();
     expect(h.broadcastApplied).not.toHaveBeenCalled();
   });
 
-  it('keeps cancellation gated and retries when persisted-route compensation fails', async () => {
+  it('keeps cancellation gated and retries when atomic relink compensation fails', async () => {
     const sessionId = rememberSession('pending-switch-cancel-compensation-retry');
     setSessionProvider(sessionId, 'openai');
     const restoreStaleOwnerRoute = vi
@@ -953,13 +1011,13 @@ describe('PendingCredentialSwitchService', () => {
       [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
       { retryDelayMs: 5 },
     );
-    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
-      previousSdkSessionId: 'thread-xd',
-      newSdkSessionId: 'thread-openai',
-      rollback: vi.fn(async () => false),
-    });
-    h.persistRoute.mockImplementationOnce(async () => {
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async () => {
       h.service.clear(sessionId);
+      return {
+        previousSdkSessionId: 'thread-xd',
+        newSdkSessionId: 'thread-openai',
+        rollback: vi.fn(async () => false),
+      };
     });
 
     await h.service.register(sessionId, {
@@ -984,6 +1042,7 @@ describe('PendingCredentialSwitchService', () => {
     await vi.waitFor(() => expect(h.service.has(sessionId)).toBe(false));
     expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
     expect(getSessionProvider(sessionId)).toBe('xd');
+    expect(h.persistRoute).not.toHaveBeenCalled();
   });
 
   it.each(['older-first', 'newer-first'] as const)(
@@ -1049,42 +1108,29 @@ describe('PendingCredentialSwitchService', () => {
         { retryDelayMs: 5 },
       );
       h.relinkCodexThreadForProviderSwitch
-        .mockImplementationOnce(async () => {
-          persistedProfile.sdkSessionId = 'thread-older';
+        .mockImplementationOnce(async (input) => {
+          persistedProfile = {
+            sdkSessionId: 'thread-older',
+            ...input.persistedRouteTransition.next,
+          };
+          h.service.clear(sessionId);
           return {
             previousSdkSessionId: 'thread-xd',
             newSdkSessionId: 'thread-older',
             rollback: vi.fn(async () => false),
           };
         })
-        .mockImplementationOnce(async () => {
-          persistedProfile.sdkSessionId = 'thread-newer';
+        .mockImplementationOnce(async (input) => {
+          persistedProfile = {
+            sdkSessionId: 'thread-newer',
+            ...input.persistedRouteTransition.next,
+          };
+          h.service.clear(sessionId);
           return {
             previousSdkSessionId: 'thread-older',
             newSdkSessionId: 'thread-newer',
             rollback: vi.fn(async () => false),
           };
-        });
-      h.persistRoute
-        .mockImplementationOnce(async (_persistedSessionId, route) => {
-          persistedProfile = {
-            ...persistedProfile,
-            model: route.model ?? persistedProfile.model,
-            providerId: route.providerId,
-            effort: route.effort ?? persistedProfile.effort,
-            fastMode: route.fastMode ?? persistedProfile.fastMode,
-          };
-          h.service.clear(sessionId);
-        })
-        .mockImplementationOnce(async (_persistedSessionId, route) => {
-          persistedProfile = {
-            ...persistedProfile,
-            model: route.model ?? persistedProfile.model,
-            providerId: route.providerId,
-            effort: route.effort ?? persistedProfile.effort,
-            fastMode: route.fastMode ?? persistedProfile.fastMode,
-          };
-          h.service.clear(sessionId);
         });
 
       await h.service.register(sessionId, {
@@ -1149,16 +1195,16 @@ describe('PendingCredentialSwitchService', () => {
       });
       expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
       expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledTimes(2);
-      expect(h.persistRoute).toHaveBeenCalledTimes(2);
+      expect(h.persistRoute).not.toHaveBeenCalled();
       expect(h.onApplied).not.toHaveBeenCalled();
     },
   );
 
-  it('compensates the actual fallback route when the owner changes during persistence', async () => {
+  it('compensates the actual fallback route when the owner changes during atomic relink', async () => {
     const sessionId = rememberSession('pending-switch-owner-stale-during-fallback-persist');
     setSessionProvider(sessionId, 'xd');
     let ownerCurrent = true;
-    const rollback = vi.fn(async () => true);
+    const rollback = vi.fn(async () => false);
     const restoreStaleOwnerRoute = vi.fn(async () => true);
     const h = createHarness(
       [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
@@ -1173,13 +1219,13 @@ describe('PendingCredentialSwitchService', () => {
         }),
       },
     );
-    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
-      previousSdkSessionId: 'thread-xd',
-      newSdkSessionId: 'thread-openai',
-      rollback,
-    });
-    h.persistRoute.mockImplementationOnce(async () => {
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async () => {
       ownerCurrent = false;
+      return {
+        previousSdkSessionId: 'thread-xd',
+        newSdkSessionId: 'thread-openai',
+        rollback,
+      };
     });
 
     h.service.register(sessionId, {
@@ -1205,8 +1251,8 @@ describe('PendingCredentialSwitchService', () => {
       effort: 'xhigh',
       fastMode: true,
     };
-    expect(h.persistRoute).toHaveBeenCalledWith(sessionId, persistedFallback);
-    expect(rollback).not.toHaveBeenCalled();
+    expect(h.persistRoute).not.toHaveBeenCalled();
+    expect(rollback).toHaveBeenCalledOnce();
     expect(restoreStaleOwnerRoute).toHaveBeenCalledWith(
       persistedFallback,
       'thread-openai',
@@ -1215,7 +1261,7 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.onApplied).not.toHaveBeenCalled();
   });
 
-  it('keeps an owner-stale persisted route gated until Profile compensation retry succeeds', async () => {
+  it('keeps an owner-stale atomic relink gated until Profile compensation retry succeeds', async () => {
     const sessionId = rememberSession('pending-switch-owner-stale-compensation-retry');
     setSessionProvider(sessionId, 'xd');
     let ownerCurrent = true;
@@ -1226,11 +1272,7 @@ describe('PendingCredentialSwitchService', () => {
       effort: 'high',
       fastMode: false,
     };
-    const rollback = vi.fn(async () => {
-      if (persistedProfile.sdkSessionId !== 'thread-openai') return false;
-      persistedProfile.sdkSessionId = 'thread-xd';
-      return true;
-    });
+    const rollback = vi.fn(async () => false);
     const restoreStaleOwnerRoute = vi
       .fn()
       .mockRejectedValueOnce(new Error('sqlite temporarily unavailable'))
@@ -1261,26 +1303,20 @@ describe('PendingCredentialSwitchService', () => {
         isOwnerScopeCurrent: () => ownerCurrent,
       },
     );
-    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async () => {
-      persistedProfile.sdkSessionId = 'thread-openai';
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async (input) => {
+      persistedProfile = {
+        sdkSessionId: 'thread-openai',
+        ...input.persistedRouteTransition.next,
+      };
+      ownerCurrent = false;
+      // A concurrent queue probe can begin stale cleanup before the relink returns. The
+      // finalizer must upgrade that in-flight cleanup with the committed tuple + replacement id.
+      expect(h.service.has(sessionId)).toBe(true);
       return {
         previousSdkSessionId: 'thread-xd',
         newSdkSessionId: 'thread-openai',
         rollback,
       };
-    });
-    h.persistRoute.mockImplementationOnce(async (_persistedSessionId, route) => {
-      persistedProfile = {
-        ...persistedProfile,
-        model: route.model ?? persistedProfile.model,
-        providerId: route.providerId,
-        effort: route.effort ?? persistedProfile.effort,
-        fastMode: route.fastMode ?? persistedProfile.fastMode,
-      };
-      ownerCurrent = false;
-      // A concurrent queue probe can begin stale cleanup before persistRoute returns. The
-      // finalizer must upgrade that in-flight cleanup with the persisted tuple + replacement id.
-      expect(h.service.has(sessionId)).toBe(true);
     });
 
     await h.service.register(sessionId, {
@@ -1300,7 +1336,7 @@ describe('PendingCredentialSwitchService', () => {
     });
     await h.service.onTurnSettled(sessionId);
 
-    expect(rollback).not.toHaveBeenCalled();
+    expect(rollback).toHaveBeenCalledOnce();
     expect(restoreStaleOwnerRoute).toHaveBeenCalledTimes(2);
     expect(persistedProfile).toEqual({
       sdkSessionId: 'thread-openai',
@@ -1349,7 +1385,7 @@ describe('PendingCredentialSwitchService', () => {
     });
     expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
     expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
-    expect(h.persistRoute).toHaveBeenCalledOnce();
+    expect(h.persistRoute).not.toHaveBeenCalled();
     expect(h.onApplied).not.toHaveBeenCalled();
     expect(h.broadcastApplied).not.toHaveBeenCalled();
   });
@@ -1370,7 +1406,12 @@ describe('PendingCredentialSwitchService', () => {
       model: 'gpt-5.6-sol',
       providerId: 'openai',
       rebuildCodexThread: true,
-      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
     });
     await h.service.onTurnSettled(sessionId);
 

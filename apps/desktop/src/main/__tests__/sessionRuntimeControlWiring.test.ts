@@ -268,6 +268,40 @@ describe('session runtime control wiring', () => {
     }
   });
 
+  it('commits a deferred Codex relink with the final route in the same SQLite CAS', () => {
+    const finalizer = handlerBody(
+      pendingCredentialSwitchSource,
+      'private async finalizeApply(',
+      'private scheduleRetry(',
+    );
+    const transition = finalizer.indexOf('const persistedRouteTransition = {');
+    const relink = finalizer.indexOf('relinkReceipt = await relink({', transition);
+    const transitionArgument = finalizer.indexOf('persistedRouteTransition,', relink);
+    const committedRoute = finalizer.indexOf(
+      'if (relinkReceipt) persistedResolvedRoute = resolvedRoute;',
+      transitionArgument,
+    );
+    const skipSecondWrite = finalizer.indexOf(
+      'const routeCommittedWithRelink = relinkReceipt !== null;',
+      committedRoute,
+    );
+    const guardedPersist = finalizer.indexOf('!routeCommittedWithRelink', skipSecondWrite);
+
+    expect(transition).toBeGreaterThan(-1);
+    expect(finalizer.slice(transition, relink)).toContain('previous: {');
+    expect(finalizer.slice(transition, relink)).toContain('next: {');
+    expect(relink).toBeGreaterThan(transition);
+    expect(transitionArgument).toBeGreaterThan(relink);
+    expect(committedRoute).toBeGreaterThan(transitionArgument);
+    expect(skipSecondWrite).toBeGreaterThan(committedRoute);
+    expect(guardedPersist).toBeGreaterThan(skipSecondWrite);
+    expect(registerSource).toContain(
+      'relinkCodexThreadForProviderSwitch: relinkCodexThreadForCredentialSwitch',
+    );
+    expect(registerSource).toContain('...(transition ? transition.next : {})');
+    expect(registerSource).toContain('...(transition ? transition.previous : {})');
+  });
+
   it('rolls back the complete persisted route before an owner-boundary request exits', () => {
     const setModel = handlerBody(
       registerSource,
