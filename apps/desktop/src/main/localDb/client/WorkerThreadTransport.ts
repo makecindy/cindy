@@ -67,6 +67,7 @@ function registerCjkSeg(nextDb) {
   const hanChar = /\\p{Script=Han}/u;
   const letterOrNumber = /[\\p{L}\\p{N}]/u;
   const mark = /\\p{M}/u;
+  const whitelist = "('user', 'assistant', 'ask_user', 'plan_review')";
   nextDb.function('cjk_seg', { deterministic: true }, (value) => {
     if (value == null) return null;
     const text = typeof value === 'string' ? value : String(value);
@@ -96,6 +97,32 @@ function registerCjkSeg(nextDb) {
   if (!row || row.v !== '探 针') {
     throw new Error("cjk_seg probe failed: expected '探 针', got " + JSON.stringify(row && row.v));
   }
+  const hasMessages = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages');
+  const hasFts = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages_fts');
+  const hasRows = !!nextDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get('messages_fts_rows');
+  if (!hasMessages || !hasFts || !hasRows) return;
+  nextDb.exec('DROP TRIGGER IF EXISTS temp.messages_fts_insert_cjk;');
+  nextDb.exec('DROP TRIGGER IF EXISTS temp.messages_fts_update_cjk;');
+  nextDb.exec(
+    "CREATE TEMP TRIGGER messages_fts_insert_cjk AFTER INSERT ON messages " +
+    "WHEN new.rewind_at IS NULL AND new.role IN " + whitelist + " BEGIN " +
+    "INSERT OR IGNORE INTO messages_fts_rows(message_id) VALUES (new.id); " +
+    "INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content) " +
+    "SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content) " +
+    "FROM messages_fts_rows WHERE message_id = new.id; END;",
+  );
+  nextDb.exec(
+    "CREATE TEMP TRIGGER messages_fts_update_cjk AFTER UPDATE OF id, session_id, role, content, rewind_at ON messages " +
+    "WHEN old.id IS NOT new.id OR old.session_id IS NOT new.session_id OR old.role IS NOT new.role " +
+    "OR old.content IS NOT new.content OR old.rewind_at IS NOT new.rewind_at BEGIN " +
+    "DELETE FROM messages_fts WHERE rowid = (SELECT fts_rowid FROM messages_fts_rows WHERE message_id = old.id); " +
+    "UPDATE messages_fts_rows SET message_id = new.id WHERE message_id = old.id AND old.id IS NOT new.id; " +
+    "INSERT OR IGNORE INTO messages_fts_rows(message_id) SELECT new.id " +
+    "WHERE new.rewind_at IS NULL AND new.role IN " + whitelist + "; " +
+    "INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content) " +
+    "SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content) FROM messages_fts_rows " +
+    "WHERE message_id = new.id AND new.rewind_at IS NULL AND new.role IN " + whitelist + "; END;",
+  );
 }
 
 function hashMigrationFile(filePath) {

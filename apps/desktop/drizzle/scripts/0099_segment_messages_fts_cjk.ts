@@ -151,10 +151,11 @@ function createTriggers(db: Database.Database): void {
     CREATE TRIGGER messages_fts_insert
     AFTER INSERT ON messages
     WHEN new.rewind_at IS NULL AND new.role IN ${FTS_ROLE_WHITELIST}
+      AND NOT EXISTS (SELECT 1 FROM pragma_function_list WHERE name='cjk_seg')
     BEGIN
       INSERT OR IGNORE INTO messages_fts_rows(message_id) VALUES (new.id);
       INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content)
-        SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content)
+        SELECT fts_rowid, new.id, new.session_id, new.role, new.content
         FROM messages_fts_rows
         WHERE message_id = new.id;
     END;
@@ -174,6 +175,57 @@ function createTriggers(db: Database.Database): void {
 
   db.exec(`
     CREATE TRIGGER messages_fts_update
+    AFTER UPDATE OF id, session_id, role, content, rewind_at ON messages
+    WHEN (old.id IS NOT new.id
+      OR old.session_id IS NOT new.session_id
+      OR old.role IS NOT new.role
+      OR old.content IS NOT new.content
+      OR old.rewind_at IS NOT new.rewind_at)
+      AND NOT EXISTS (SELECT 1 FROM pragma_function_list WHERE name='cjk_seg')
+    BEGIN
+      DELETE FROM messages_fts
+        WHERE rowid = (
+          SELECT fts_rowid FROM messages_fts_rows WHERE message_id = old.id
+        );
+      UPDATE messages_fts_rows
+        SET message_id = new.id
+        WHERE message_id = old.id AND old.id IS NOT new.id;
+      INSERT OR IGNORE INTO messages_fts_rows(message_id)
+        SELECT new.id
+        WHERE new.rewind_at IS NULL AND new.role IN ${FTS_ROLE_WHITELIST};
+      INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content)
+        SELECT fts_rowid, new.id, new.session_id, new.role, new.content
+        FROM messages_fts_rows
+        WHERE message_id = new.id
+          AND new.rewind_at IS NULL
+          AND new.role IN ${FTS_ROLE_WHITELIST};
+    END;
+  `);
+}
+
+function installCjkSegTempTriggers(db: Database.Database): void {
+  if (!tableExists(db, 'messages') || !tableExists(db, 'messages_fts') || !tableExists(db, 'messages_fts_rows')) {
+    return;
+  }
+
+  db.exec('DROP TRIGGER IF EXISTS temp.messages_fts_insert_cjk;');
+  db.exec('DROP TRIGGER IF EXISTS temp.messages_fts_update_cjk;');
+
+  db.exec(`
+    CREATE TEMP TRIGGER messages_fts_insert_cjk
+    AFTER INSERT ON messages
+    WHEN new.rewind_at IS NULL AND new.role IN ${FTS_ROLE_WHITELIST}
+    BEGIN
+      INSERT OR IGNORE INTO messages_fts_rows(message_id) VALUES (new.id);
+      INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content)
+        SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content)
+        FROM messages_fts_rows
+        WHERE message_id = new.id;
+    END;
+  `);
+
+  db.exec(`
+    CREATE TEMP TRIGGER messages_fts_update_cjk
     AFTER UPDATE OF id, session_id, role, content, rewind_at ON messages
     WHEN old.id IS NOT new.id
       OR old.session_id IS NOT new.session_id
@@ -214,14 +266,15 @@ function createRowsTable(db: Database.Database): void {
 
 function run(db: Database.Database): void {
   registerCjkSeg(db);
-  db.exec('DROP TRIGGER IF EXISTS messages_fts_insert;');
-  db.exec('DROP TRIGGER IF EXISTS messages_fts_delete;');
-  db.exec('DROP TRIGGER IF EXISTS messages_fts_update;');
+  db.exec('DROP TRIGGER IF EXISTS main.messages_fts_insert;');
+  db.exec('DROP TRIGGER IF EXISTS main.messages_fts_delete;');
+  db.exec('DROP TRIGGER IF EXISTS main.messages_fts_update;');
 
   createRowsTable(db);
   if (!tableExists(db, 'messages')) return;
   if (!tableExists(db, 'messages_fts') || !reuseExistingFtsRows(db)) rebuildFts(db);
   createTriggers(db);
+  installCjkSegTempTriggers(db);
 }
 
 module.exports = { run };

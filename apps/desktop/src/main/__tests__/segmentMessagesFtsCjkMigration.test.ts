@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
@@ -129,7 +133,7 @@ describe('0099 segment messages_fts CJK', () => {
     db.close();
   });
 
-  it('后续插入走 cjk_seg；新连接漏注册会让写入失败', () => {
+  it('后续插入走 TEMP cjk_seg；旧连接漏注册仍能写原文', () => {
     const db = setupLegacyDb();
     migration.run(db);
     insertMessage(db, 'm-new', 'user', '边界');
@@ -137,7 +141,13 @@ describe('0099 segment messages_fts CJK', () => {
     const insertTrigger = db
       .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_insert'")
       .get() as { sql: string };
-    expect(insertTrigger.sql).toContain('cjk_seg(new.content)');
+    expect(insertTrigger.sql).toContain('new.content');
+    expect(insertTrigger.sql).toContain("pragma_function_list");
+    expect(insertTrigger.sql).not.toContain('cjk_seg(new.content)');
+    const tempInsert = db
+      .prepare("SELECT sql FROM sqlite_temp_master WHERE type='trigger' AND name='messages_fts_insert_cjk'")
+      .get() as { sql: string };
+    expect(tempInsert.sql).toContain('cjk_seg(new.content)');
     db.close();
 
     const bare = new Database(':memory:');
@@ -169,7 +179,66 @@ describe('0099 segment messages_fts CJK', () => {
            VALUES ('m1', 's1', 'user', '边界', NULL)`,
         )
         .run(),
-    ).toThrow(/no such function: cjk_seg/i);
+    ).not.toThrow();
+    expect(ftsRows(bare).map((row) => row.content)).toEqual(['边界']);
+    expect(matchIds(bare, '"边 界"')).toEqual([]);
+    expect(matchIds(bare, '"边界"')).toEqual(['m1']);
     bare.close();
+  });
+
+  it('文件库重开后新连接按字切、旧连接仍写原文', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-cjk-fts-rollback-'));
+    const dbPath = path.join(dir, 'chat.db');
+    try {
+      const writer = new Database(dbPath);
+      registerCjkSeg(writer);
+      writer.exec(`
+        CREATE TABLE messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          agent_meta TEXT,
+          rewind_at INTEGER
+        );
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+          message_id UNINDEXED,
+          session_id UNINDEXED,
+          role UNINDEXED,
+          content,
+          tokenize='porter unicode61'
+        );
+        CREATE TABLE messages_fts_rows (
+          fts_rowid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+          message_id TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX messages_fts_rows_message_id_idx
+          ON messages_fts_rows(message_id);
+      `);
+      migration.run(writer);
+      insertMessage(writer, 'm-new', 'user', '登录');
+      expect(matchIds(writer, '"登 录"')).toEqual(['m-new']);
+      writer.close();
+
+      const oldClient = new Database(dbPath);
+      insertMessage(oldClient, 'm-old', 'user', '边界');
+      expect(ftsRows(oldClient).map((row) => row.content).sort()).toEqual(['登 录', '边界']);
+      expect(matchIds(oldClient, '"边 界"')).toEqual([]);
+      expect(matchIds(oldClient, '"边界"')).toEqual(['m-old']);
+      oldClient.close();
+
+      const newClient = new Database(dbPath);
+      registerCjkSeg(newClient);
+      insertMessage(newClient, 'm-again', 'user', '探针');
+      expect(matchIds(newClient, '"探 针"')).toEqual(['m-again']);
+      expect(matchIds(newClient, '"登 录"')).toEqual(['m-new']);
+      newClient.close();
+    } finally {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Windows 上 WAL 伴随文件可能短暂占用，不影响断言。
+      }
+    }
   });
 });
