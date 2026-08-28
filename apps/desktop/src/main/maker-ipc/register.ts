@@ -886,6 +886,7 @@ import {
 import {
   commitCodexProviderThreadRelinkWithBoundaryGuard,
   relinkCodexProviderThread,
+  rollbackCommittedCodexProviderThreadRelink,
   rollbackPersistedCodexRuntimeSelection,
   type CodexProviderThreadRelinkReceipt,
   type PersistedCodexRuntimeSelectionState,
@@ -3410,11 +3411,13 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
         // The post-write guard above covers pending generation, owner scope, and client epoch.
         // Broadcast only after all three still match the initiating selection.
         if (!isBoundaryCurrent()) {
-          await rollbackCapturedRelink({
-            sessionId,
-            previousSdkSessionId: expectedSdkSessionId,
-            newSdkSessionId,
-          });
+          await rollbackCommittedCodexProviderThreadRelink(() =>
+            rollbackCapturedRelink({
+              sessionId,
+              previousSdkSessionId: expectedSdkSessionId,
+              newSdkSessionId,
+            }),
+          );
           return false;
         }
         broadcastSessionPatched(

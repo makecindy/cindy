@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  CodexProviderThreadRelinkCompensationRequiredError,
   commitCodexProviderThreadRelinkWithBoundaryGuard,
   relinkCodexProviderThread,
   rollbackPersistedCodexRuntimeSelection,
@@ -83,6 +84,95 @@ describe('relinkCodexProviderThread', () => {
       expect(sdkSessionId).toBe('thread-old');
     },
   );
+
+  it('hands off a retryable receipt when post-commit boundary rollback fails', async () => {
+    let boundaryCurrent = true;
+    let sdkSessionId = 'thread-old';
+    const rollback = vi
+      .fn(async () => false)
+      .mockRejectedValueOnce(new Error('sqlite temporarily unavailable'))
+      .mockImplementationOnce(async () => {
+        if (sdkSessionId !== 'thread-new') return false;
+        sdkSessionId = 'thread-old';
+        return true;
+      });
+    let caught: unknown;
+
+    try {
+      await relinkCodexProviderThread(
+        {
+          readSource: vi.fn(async () => ({ sdkSessionId: 'thread-old', workingDir: null })),
+          fork: vi.fn(async () => ({ newSdkSessionId: 'thread-new' })),
+          commit: () =>
+            commitCodexProviderThreadRelinkWithBoundaryGuard({
+              isBoundaryCurrent: () => boundaryCurrent,
+              commit: async () => {
+                sdkSessionId = 'thread-new';
+                boundaryCurrent = false;
+                return true;
+              },
+              rollback,
+            }),
+        },
+        {
+          sessionId: 'session-1',
+          sourceModel: 'codex/gpt-5.6-sol',
+          sourceProviderId: 'xd',
+          isCurrent: () => boundaryCurrent,
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(CodexProviderThreadRelinkCompensationRequiredError);
+    const receipt = (caught as CodexProviderThreadRelinkCompensationRequiredError).receipt;
+    expect(receipt).toMatchObject({
+      previousSdkSessionId: 'thread-old',
+      newSdkSessionId: 'thread-new',
+    });
+    expect(sdkSessionId).toBe('thread-new');
+    await expect(receipt.rollback()).resolves.toBe(true);
+    expect(sdkSessionId).toBe('thread-old');
+    expect(rollback).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats a post-commit rollback CAS miss as a newer winner without a handoff', async () => {
+    let boundaryCurrent = true;
+    const rollback = vi.fn(async () => false);
+    let caught: unknown;
+
+    try {
+      await relinkCodexProviderThread(
+        {
+          readSource: vi.fn(async () => ({ sdkSessionId: 'thread-old', workingDir: null })),
+          fork: vi.fn(async () => ({ newSdkSessionId: 'thread-new' })),
+          commit: () =>
+            commitCodexProviderThreadRelinkWithBoundaryGuard({
+              isBoundaryCurrent: () => boundaryCurrent,
+              commit: async () => {
+                boundaryCurrent = false;
+                return true;
+              },
+              rollback,
+            }),
+        },
+        {
+          sessionId: 'session-1',
+          sourceModel: 'codex/gpt-5.6-sol',
+          sourceProviderId: 'xd',
+          isCurrent: () => boundaryCurrent,
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).not.toBeInstanceOf(CodexProviderThreadRelinkCompensationRequiredError);
+    expect((caught as Error).message).toMatch(/superseded/);
+    expect(rollback).toHaveBeenCalledOnce();
+  });
 
   it('forks a provider-neutral history and CAS-relinks the Cindy session', async () => {
     const fork = vi.fn(async () => ({ newSdkSessionId: 'thread-openai' }));

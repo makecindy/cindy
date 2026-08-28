@@ -15,6 +15,7 @@ import {
   PendingCredentialSwitchService,
   type PendingCredentialSwitchDeps,
 } from '../pendingCredentialSwitch.js';
+import { CodexProviderThreadRelinkCompensationRequiredError } from '../codexProviderThreadRelink.js';
 
 const touchedSessions = new Set<string>();
 
@@ -264,30 +265,49 @@ describe('PendingCredentialSwitchService', () => {
     h.service.clear(sessionId);
   });
 
-  it('discards an old-owner relink target during teardown and never retries it after recovery', async () => {
+  it('keeps an old-owner relink gated until post-commit rollback compensation succeeds', async () => {
     const sessionId = rememberSession('pending-switch-owner-teardown');
     setSessionProvider(sessionId, 'xd');
     let currentOwner = { ownerScopeKey: 'owner-a:1', runtimeOwnerEpoch: '7' };
+    let persistedProfile = {
+      sdkSessionId: 'thread-xd',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd' as string | null,
+      effort: 'high',
+      fastMode: false,
+    };
+    const restoreStaleOwnerRoute = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('old profile temporarily unavailable'))
+      .mockImplementationOnce(async (_route, expectedSdkSessionId) => {
+        if (
+          expectedSdkSessionId !== 'thread-openai' ||
+          persistedProfile.sdkSessionId !== 'thread-openai'
+        ) {
+          return false;
+        }
+        persistedProfile.sdkSessionId = 'thread-xd';
+        return true;
+      });
     const h = createHarness(
       [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
       {
-        retryDelayMs: 10,
+        retryDelayMs: 50,
         isOwnerScopeCurrent: (scope) =>
           scope.ownerScopeKey === currentOwner.ownerScopeKey &&
           scope.runtimeOwnerEpoch === currentOwner.runtimeOwnerEpoch,
       },
     );
-    const rollback = vi.fn(async () => {
-      throw new Error('old profile teardown closed the client');
-    });
+    const rollback = vi.fn(async () => false);
     h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async (input) => {
+      persistedProfile.sdkSessionId = 'thread-openai';
       currentOwner = { ownerScopeKey: 'owner-boundary', runtimeOwnerEpoch: '7' };
       expect(input.isCurrent()).toBe(false);
-      return {
+      throw new CodexProviderThreadRelinkCompensationRequiredError({
         previousSdkSessionId: 'thread-xd',
         newSdkSessionId: 'thread-openai',
         rollback,
-      };
+      });
     });
 
     h.service.register(sessionId, {
@@ -295,17 +315,77 @@ describe('PendingCredentialSwitchService', () => {
       providerId: 'openai',
       rebuildCodexThread: true,
       ownerScope: { ownerScopeKey: 'owner-a:1', runtimeOwnerEpoch: '7' },
-      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
+      restoreStaleOwnerRoute,
     });
     await h.service.onTurnSettled(sessionId);
 
-    expect(h.service.has(sessionId)).toBe(false);
-    expect(rollback).toHaveBeenCalledOnce();
-    currentOwner = { ownerScopeKey: 'owner-a:2', runtimeOwnerEpoch: '8' };
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await vi.waitFor(() => expect(restoreStaleOwnerRoute).toHaveBeenCalledOnce());
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(h.onCancellationCompensated).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(restoreStaleOwnerRoute).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(h.service.has(sessionId)).toBe(false));
+    expect(persistedProfile.sdkSessionId).toBe('thread-xd');
     expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledOnce();
     expect(h.persistRoute).not.toHaveBeenCalled();
     expect(h.onApplied).not.toHaveBeenCalled();
+    expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
+  it('keeps a same-owner cancellation gated while post-commit compensation retries', async () => {
+    const sessionId = rememberSession('pending-switch-same-owner-post-commit-compensation');
+    setSessionProvider(sessionId, 'xd');
+    let persistedSdkSessionId = 'thread-xd';
+    const restoreStaleOwnerRoute = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('sqlite temporarily unavailable'))
+      .mockImplementationOnce(async (_route, expectedSdkSessionId) => {
+        if (expectedSdkSessionId !== 'thread-openai') return false;
+        persistedSdkSessionId = 'thread-xd';
+        return true;
+      });
+    const receipt = {
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback: vi.fn(async () => false),
+    };
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      { retryDelayMs: 50 },
+    );
+    h.relinkCodexThreadForProviderSwitch.mockImplementationOnce(async () => {
+      persistedSdkSessionId = 'thread-openai';
+      h.service.clear(sessionId);
+      throw new CodexProviderThreadRelinkCompensationRequiredError(receipt);
+    });
+
+    await h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
+      restoreStaleOwnerRoute,
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(h.onCancellationCompensated).not.toHaveBeenCalled();
+    expect(persistedSdkSessionId).toBe('thread-openai');
+    await vi.waitFor(() => expect(restoreStaleOwnerRoute).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(h.service.has(sessionId)).toBe(false));
+    expect(persistedSdkSessionId).toBe('thread-xd');
+    expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
   });
 
   it('restores the captured old Profile before completing an owner-stale discard', async () => {
@@ -452,6 +532,50 @@ describe('PendingCredentialSwitchService', () => {
       ownerScope: currentOwner,
     });
     h.service.clear(sessionId);
+  });
+
+  it('releases only the stale target barrier when its compensation CAS misses a newer tuple', async () => {
+    const sessionId = rememberSession('pending-switch-stale-compensation-newer-winner');
+    let currentOwner = { ownerScopeKey: 'owner-a:1', runtimeOwnerEpoch: '7' };
+    const h = createHarness([], {
+      isOwnerScopeCurrent: (scope) =>
+        scope.ownerScopeKey === currentOwner.ownerScopeKey &&
+        scope.runtimeOwnerEpoch === currentOwner.runtimeOwnerEpoch,
+    });
+    let releaseRestore!: () => void;
+    const restoreGate = new Promise<void>((resolve) => {
+      releaseRestore = resolve;
+    });
+    const restoreStaleOwnerRoute = vi.fn(async () => {
+      await restoreGate;
+      return false;
+    });
+
+    await h.service.register(sessionId, {
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+      ownerScope: currentOwner,
+      restoreStaleOwnerRoute,
+    });
+    currentOwner = { ownerScopeKey: 'owner-b:2', runtimeOwnerEpoch: '8' };
+    expect(h.service.has(sessionId)).toBe(true);
+    await vi.waitFor(() => expect(restoreStaleOwnerRoute).toHaveBeenCalledOnce());
+    await h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      ownerScope: currentOwner,
+    });
+
+    releaseRestore();
+    await vi.waitFor(() => expect(h.onCancellationCompensated).toHaveBeenCalledOnce());
+    expect(h.service.get(sessionId)).toMatchObject({
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      ownerScope: currentOwner,
+    });
+    expect(h.service.has(sessionId)).toBe(true);
+    h.service.clear(sessionId);
+    expect(h.service.has(sessionId)).toBe(false);
   });
 
   it('rolls back the relink when deferred route persistence fails', async () => {
@@ -942,7 +1066,7 @@ describe('PendingCredentialSwitchService', () => {
     const restoreStaleOwnerRoute = vi
       .fn()
       .mockRejectedValueOnce(new Error('sqlite temporarily unavailable'))
-      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error('sqlite still temporarily unavailable'))
       .mockImplementationOnce(async (route, expectedSdkSessionId) => {
         if (
           persistedProfile.sdkSessionId !== expectedSdkSessionId ||

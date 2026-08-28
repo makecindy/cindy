@@ -18,6 +18,51 @@ export interface CodexProviderThreadRelinkReceipt {
   rollback(): Promise<boolean>;
 }
 
+/**
+ * The replacement thread reached SQLite, but a boundary-triggered rollback did not.
+ * Callers must keep their dispatch gate closed and retry this receipt against the captured DB.
+ */
+export class CodexProviderThreadRelinkCompensationRequiredError extends Error {
+  readonly name = 'CodexProviderThreadRelinkCompensationRequiredError';
+
+  constructor(
+    readonly receipt: CodexProviderThreadRelinkReceipt,
+    readonly rollbackError?: unknown,
+  ) {
+    super('Codex provider thread relink requires post-commit compensation');
+  }
+}
+
+export function isCodexProviderThreadRelinkCompensationRequiredError(
+  error: unknown,
+): error is CodexProviderThreadRelinkCompensationRequiredError {
+  return error instanceof CodexProviderThreadRelinkCompensationRequiredError;
+}
+
+class CodexProviderThreadRelinkRollbackHandoffError extends Error {
+  readonly name = 'CodexProviderThreadRelinkRollbackHandoffError';
+
+  constructor(
+    readonly retryRollback: () => Promise<boolean>,
+    readonly rollbackError?: unknown,
+  ) {
+    super('Codex provider thread relink rollback requires a retry handoff');
+  }
+}
+
+/** Preserve the retry closure whenever a committed replacement cannot be rolled back now. */
+export async function rollbackCommittedCodexProviderThreadRelink(
+  rollback: () => Promise<boolean>,
+): Promise<void> {
+  try {
+    // false means the replacement tuple no longer owns the CAS target; a newer selection won.
+    // Only an actual SQLite rejection needs a retry handoff.
+    await rollback();
+  } catch (error) {
+    throw new CodexProviderThreadRelinkRollbackHandoffError(rollback, error);
+  }
+}
+
 export interface PersistedCodexRuntimeSelectionState {
   sdkSessionId: string | null;
   model: string;
@@ -70,7 +115,7 @@ export async function commitCodexProviderThreadRelinkWithBoundaryGuard(input: {
   const committed = await input.commit();
   if (!committed) return false;
   if (input.isBoundaryCurrent()) return true;
-  await input.rollback();
+  await rollbackCommittedCodexProviderThreadRelink(input.rollback);
   return false;
 }
 
@@ -131,12 +176,30 @@ export async function relinkCodexProviderThread(
     ),
     ...(source.workingDir ? { workingDir: source.workingDir } : {}),
   });
-  const committed = await deps.commit({
-    sessionId: input.sessionId,
-    expectedSdkSessionId: source.sdkSessionId,
-    newSdkSessionId: forked.newSdkSessionId,
-    ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
-  });
+  let committed: boolean;
+  try {
+    committed = await deps.commit({
+      sessionId: input.sessionId,
+      expectedSdkSessionId: source.sdkSessionId,
+      newSdkSessionId: forked.newSdkSessionId,
+      ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
+    });
+  } catch (error) {
+    if (error instanceof CodexProviderThreadRelinkRollbackHandoffError && input.isCurrent) {
+      throw new CodexProviderThreadRelinkCompensationRequiredError(
+        {
+          previousSdkSessionId: source.sdkSessionId,
+          newSdkSessionId: forked.newSdkSessionId,
+          rollback: error.retryRollback,
+        },
+        error.rollbackError,
+      );
+    }
+    if (error instanceof CodexProviderThreadRelinkRollbackHandoffError) {
+      throw error.rollbackError ?? error;
+    }
+    throw error;
+  }
   if (!committed) {
     throw new Error(`Codex provider thread relink was superseded for session ${input.sessionId}`);
   }

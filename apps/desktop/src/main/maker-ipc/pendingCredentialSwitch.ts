@@ -15,7 +15,10 @@ import {
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
 import { setSessionProvider } from '../maker-host/session-provider-store.js';
-import type { CodexProviderThreadRelinkReceipt } from './codexProviderThreadRelink.js';
+import {
+  isCodexProviderThreadRelinkCompensationRequiredError,
+  type CodexProviderThreadRelinkReceipt,
+} from './codexProviderThreadRelink.js';
 
 /**
  * PendingCredentialSwitchService —— 会话凭证形态切换的「延迟生效」登记表。
@@ -265,8 +268,8 @@ export class PendingCredentialSwitchService {
       }
       // This target never enters the map, so discardIfOwnerStale cannot compensate it later.
       // Finish its captured old-Profile restore before the caller receives registration failure.
-      const compensated = await this.compensateStaleOwnerRoute(sessionId, pending);
-      if (!compensated) {
+      const compensation = await this.compensateStaleOwnerRoute(sessionId, pending);
+      if (compensation === 'retry') {
         throw new Error('Stale pending credential switch route compensation failed');
       }
       this.deps.logger?.info('stale pending credential switch discarded at registration', {
@@ -598,25 +601,66 @@ export class PendingCredentialSwitchService {
               error: err instanceof Error ? err.message : String(err),
             },
           );
-          if (this.targetCurrent(sessionId, target)) this.scheduleRetry(sessionId);
-          else this.discardIfOwnerStale(sessionId, target);
+          if (isCodexProviderThreadRelinkCompensationRequiredError(err)) {
+            const receipt = err.receipt;
+            if (!this.ownerScopeCurrent(target)) {
+              this.discardIfOwnerStale(
+                sessionId,
+                target,
+                undefined,
+                receipt.newSdkSessionId,
+              );
+            } else {
+              await this.compensateSupersededPersistedRoute(
+                sessionId,
+                target,
+                undefined,
+                receipt,
+              );
+              if (this.targetCurrent(sessionId, target)) this.scheduleRetry(sessionId);
+            }
+          } else if (this.targetCurrent(sessionId, target)) {
+            this.scheduleRetry(sessionId);
+          } else {
+            this.discardIfOwnerStale(sessionId, target);
+          }
           return;
         }
         if (!this.targetCurrent(sessionId, target)) {
-          try {
-            if (relinkReceipt) await relinkReceipt.rollback();
-          } catch (rollbackError) {
-            this.deps.logger?.error?.(
-              'pending credential switch: owner-stale Codex relink rollback failed',
-              {
+          let rollbackRestored = relinkReceipt === null;
+          if (relinkReceipt) {
+            try {
+              rollbackRestored = await relinkReceipt.rollback();
+            } catch (rollbackError) {
+              this.deps.logger?.error?.(
+                'pending credential switch: superseded Codex relink rollback failed',
+                {
+                  sessionId,
+                  error:
+                    rollbackError instanceof Error
+                      ? rollbackError.message
+                      : String(rollbackError),
+                },
+              );
+            }
+          }
+          if (!rollbackRestored && relinkReceipt) {
+            if (!this.ownerScopeCurrent(target)) {
+              this.discardIfOwnerStale(
                 sessionId,
-                error:
-                  rollbackError instanceof Error
-                    ? rollbackError.message
-                    : String(rollbackError),
-              },
-            );
-          } finally {
+                target,
+                undefined,
+                relinkReceipt.newSdkSessionId,
+              );
+            } else {
+              await this.compensateSupersededPersistedRoute(
+                sessionId,
+                target,
+                undefined,
+                relinkReceipt,
+              );
+            }
+          } else {
             this.discardIfOwnerStale(sessionId, target);
           }
           return;
@@ -861,7 +905,7 @@ export class PendingCredentialSwitchService {
     target: PendingCredentialSwitch,
     persistedRoute?: PendingCredentialSwitchPersistedRoute,
     expectedSdkSessionId?: string,
-  ): Promise<boolean> {
+  ): Promise<'safe' | 'retry'> {
     try {
       if (target.restoreStaleOwnerRoute) {
         const restored = await target.restoreStaleOwnerRoute(
@@ -873,16 +917,16 @@ export class PendingCredentialSwitchService {
             'stale pending credential switch route compensation was superseded',
             { sessionId },
           );
-          return false;
+          return 'safe';
         }
       }
-      return true;
+      return 'safe';
     } catch (error) {
       this.deps.logger?.error?.('stale pending credential switch route compensation failed', {
         sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
-      return false;
+      return 'retry';
     }
   }
 
@@ -893,7 +937,7 @@ export class PendingCredentialSwitchService {
     if (this.staleCompensationRunning.has(target)) return;
     this.staleCompensationRunning.add(target);
     const context = this.staleCompensationContexts.get(target);
-    const compensated = await this.compensateStaleOwnerRoute(
+    const compensation = await this.compensateStaleOwnerRoute(
       sessionId,
       target,
       context?.persistedRoute,
@@ -906,7 +950,7 @@ export class PendingCredentialSwitchService {
       this.requestStaleOwnerCompensation(sessionId, target);
       return;
     }
-    if (!compensated) {
+    if (compensation === 'retry') {
       this.scheduleStaleOwnerCompensationRetry(sessionId, target);
       return;
     }
@@ -973,7 +1017,7 @@ export class PendingCredentialSwitchService {
   private async compensateSupersededPersistedRoute(
     sessionId: string,
     target: PendingCredentialSwitch,
-    persistedRoute: PendingCredentialSwitchPersistedRoute,
+    persistedRoute: PendingCredentialSwitchPersistedRoute | undefined,
     relinkReceipt: CodexProviderThreadRelinkReceipt | null,
   ): Promise<void> {
     const safe = await this.tryCompensateSupersededPersistedRoute(
@@ -990,7 +1034,7 @@ export class PendingCredentialSwitchService {
   private async tryCompensateSupersededPersistedRoute(
     sessionId: string,
     target: PendingCredentialSwitch,
-    persistedRoute: PendingCredentialSwitchPersistedRoute,
+    persistedRoute: PendingCredentialSwitchPersistedRoute | undefined,
     relinkReceipt: CodexProviderThreadRelinkReceipt | null,
   ): Promise<boolean> {
     try {
@@ -1037,7 +1081,7 @@ export class PendingCredentialSwitchService {
   private scheduleCompensationRetry(
     sessionId: string,
     target: PendingCredentialSwitch,
-    persistedRoute: PendingCredentialSwitchPersistedRoute,
+    persistedRoute: PendingCredentialSwitchPersistedRoute | undefined,
     relinkReceipt: CodexProviderThreadRelinkReceipt | null,
   ): void {
     if (this.compensationRetryTimers.has(sessionId)) return;
