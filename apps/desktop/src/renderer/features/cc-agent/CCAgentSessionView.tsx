@@ -133,7 +133,11 @@ import {
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
-import { useAgentCapabilities, resolveManualCompactChannel } from '@/hooks/useAgentCapabilities';
+import {
+  canExposeWritableDirsChange,
+  resolveManualCompactChannel,
+  useAgentCapabilities,
+} from '@/hooks/useAgentCapabilities';
 import { useLiveErrorSourceProvider } from '@/hooks/useLiveErrorSourceProvider';
 import { resolveFastSupported } from '@/lib/providerModels';
 import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSessionSync';
@@ -1800,6 +1804,13 @@ export function CCAgentSessionView({
   );
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
+  // SSH 仍没有远端目录选择器；device-link 只有被控端明确声明 writableDirs 后才暴露
+  // 新 channel。能力尚未返回、旧端缺字段或返回不支持时一律隐藏，避免用户选完才失败。
+  const writableDirsChangeSupported = canExposeWritableDirsChange({
+    capabilities: sessionCaps,
+    deviceId: remoteDeviceId,
+    remoteHostId: session?.remoteHostId,
+  });
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
   // 2026-07 统一后展示不再产生已读 —— 横幅还在就说明告警未处理,红点必须留着。
   // 红角标现在只由用户处置横幅(handleRetry / handleSilentStopContinue /
@@ -4884,9 +4895,7 @@ export function CCAgentSessionView({
                   onExtraDirsChange={handleExtraDirsChange}
                   writableDirs={session?.writableDirs ?? []}
                   onWritableDirsChange={
-                    isRemoteWorktreeSession || remoteDeviceId != null
-                      ? undefined
-                      : handleWritableDirsChange
+                    writableDirsChangeSupported ? handleWritableDirsChange : undefined
                   }
                   compactToolbar={compactToolbar}
                   // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把字号/控件压一档。

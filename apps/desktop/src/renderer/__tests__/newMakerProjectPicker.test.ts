@@ -1522,8 +1522,12 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'isDeviceLinkDraft || isRemoteProjectDraft\n                        ? undefined\n                        : handleWritableDirsChange',
     );
+    expect(agentCapabilitiesHookSource).toContain('writableDirs?: CapabilityStatus;');
     expect(ccAgentSessionViewSource).toContain(
-      'isRemoteWorktreeSession || remoteDeviceId != null\n                      ? undefined\n                      : handleWritableDirsChange',
+      'const writableDirsChangeSupported = canExposeWritableDirsChange({',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'writableDirsChangeSupported ? handleWritableDirsChange : undefined',
     );
     expect(ccAgentSessionViewSource).toContain(
       'const isRemoteWorktreeSession = Boolean(session?.deviceLinkDeviceId || session?.remoteHostId)',
