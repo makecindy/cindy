@@ -211,9 +211,12 @@ export class PendingCredentialSwitchService {
   /** 新选择已完成但唤醒曾被旧 finalizer barrier 挡住，补偿结束后补发。 */
   private readonly deferredCancellationWakes = new Set<string>();
   /** SQLite 暂时失败时保持 gate，并用捕获的旧 Profile 继续补偿。 */
-  private readonly compensationFailures = new Set<string>();
-  private readonly compensationRetryTimers = new Map<
+  private readonly compensationFailures = new Map<
     string,
+    Set<PendingCredentialSwitch>
+  >();
+  private readonly compensationRetryTimers = new Map<
+    PendingCredentialSwitch,
     ReturnType<typeof setTimeout>
   >();
 
@@ -868,7 +871,21 @@ export class PendingCredentialSwitchService {
 
   private finishApplying(sessionId: string): void {
     this.applying.delete(sessionId);
-    if (this.compensationFailures.has(sessionId) || this.staleCompensations.has(sessionId)) return;
+    this.maybeReleaseCancellationBarrier(sessionId);
+  }
+
+  private hasCompensationFailures(sessionId: string): boolean {
+    return (this.compensationFailures.get(sessionId)?.size ?? 0) > 0;
+  }
+
+  private maybeReleaseCancellationBarrier(sessionId: string): void {
+    if (
+      this.applying.has(sessionId) ||
+      this.staleCompensations.has(sessionId) ||
+      this.hasCompensationFailures(sessionId)
+    ) {
+      return;
+    }
     this.releaseClearedDuringApply(sessionId);
   }
 
@@ -999,13 +1016,7 @@ export class PendingCredentialSwitchService {
     this.deps.logger?.info('stale pending credential switch discarded after owner boundary', {
       sessionId,
     });
-    if (
-      !this.staleCompensations.has(sessionId) &&
-      !this.compensationFailures.has(sessionId) &&
-      !this.applying.has(sessionId)
-    ) {
-      this.releaseClearedDuringApply(sessionId);
-    }
+    this.maybeReleaseCancellationBarrier(sessionId);
   }
 
   /**
@@ -1026,8 +1037,13 @@ export class PendingCredentialSwitchService {
       persistedRoute,
       relinkReceipt,
     );
-    if (safe) return;
-    this.compensationFailures.add(sessionId);
+    if (safe) {
+      this.completeSupersededCompensation(sessionId, target);
+      return;
+    }
+    const failures = this.compensationFailures.get(sessionId) ?? new Set();
+    failures.add(target);
+    this.compensationFailures.set(sessionId, failures);
     this.scheduleCompensationRetry(sessionId, target, persistedRoute, relinkReceipt);
   }
 
@@ -1084,9 +1100,9 @@ export class PendingCredentialSwitchService {
     persistedRoute: PendingCredentialSwitchPersistedRoute | undefined,
     relinkReceipt: CodexProviderThreadRelinkReceipt | null,
   ): void {
-    if (this.compensationRetryTimers.has(sessionId)) return;
+    if (this.compensationRetryTimers.has(target)) return;
     const timer = setTimeout(() => {
-      this.compensationRetryTimers.delete(sessionId);
+      this.compensationRetryTimers.delete(target);
       void this.tryCompensateSupersededPersistedRoute(
         sessionId,
         target,
@@ -1097,11 +1113,23 @@ export class PendingCredentialSwitchService {
           this.scheduleCompensationRetry(sessionId, target, persistedRoute, relinkReceipt);
           return;
         }
-        this.compensationFailures.delete(sessionId);
-        this.releaseClearedDuringApply(sessionId);
+        this.completeSupersededCompensation(sessionId, target);
       });
     }, this.deps.retryDelayMs ?? PENDING_APPLY_RETRY_DELAY_MS);
-    this.compensationRetryTimers.set(sessionId, timer);
+    this.compensationRetryTimers.set(target, timer);
+  }
+
+  private completeSupersededCompensation(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+  ): void {
+    const timer = this.compensationRetryTimers.get(target);
+    if (timer) clearTimeout(timer);
+    this.compensationRetryTimers.delete(target);
+    const failures = this.compensationFailures.get(sessionId);
+    failures?.delete(target);
+    if (failures?.size === 0) this.compensationFailures.delete(sessionId);
+    this.maybeReleaseCancellationBarrier(sessionId);
   }
 
   private discardIfOwnerStale(

@@ -986,6 +986,174 @@ describe('PendingCredentialSwitchService', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
+  it.each(['older-first', 'newer-first'] as const)(
+    'isolates overlapping compensation retries by target generation (%s)',
+    async (completionOrder) => {
+      const sessionId = rememberSession(`pending-switch-compensation-${completionOrder}`);
+      setSessionProvider(sessionId, 'xd');
+      let persistedProfile = {
+        sdkSessionId: 'thread-xd',
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd' as string | null,
+        effort: 'high',
+        fastMode: false,
+      };
+      let releaseOlderRetry!: () => void;
+      const olderRetryGate = new Promise<void>((resolve) => {
+        releaseOlderRetry = resolve;
+      });
+      let markOlderRetryDone!: () => void;
+      const olderRetryDone = new Promise<void>((resolve) => {
+        markOlderRetryDone = resolve;
+      });
+      let releaseNewerRetry!: () => void;
+      const newerRetryGate = new Promise<void>((resolve) => {
+        releaseNewerRetry = resolve;
+      });
+      let markNewerRetryDone!: () => void;
+      const newerRetryDone = new Promise<void>((resolve) => {
+        markNewerRetryDone = resolve;
+      });
+      const restoreOlderRoute = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('older compensation temporarily failed'))
+        .mockImplementationOnce(async () => {
+          await olderRetryGate;
+          markOlderRetryDone();
+          // The newer target owns SQLite now; the old CAS correctly proves superseded.
+          return false;
+        });
+      const restoreNewerRoute = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('newer compensation temporarily failed'))
+        .mockImplementationOnce(async (_route, expectedSdkSessionId) => {
+          await newerRetryGate;
+          if (
+            expectedSdkSessionId !== 'thread-newer' ||
+            persistedProfile.sdkSessionId !== 'thread-newer'
+          ) {
+            return false;
+          }
+          persistedProfile = {
+            sdkSessionId: 'thread-xd',
+            model: 'codex/gpt-5.6-sol',
+            providerId: 'xd',
+            effort: 'high',
+            fastMode: false,
+          };
+          markNewerRetryDone();
+          return true;
+        });
+      const h = createHarness(
+        [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+        { retryDelayMs: 5 },
+      );
+      h.relinkCodexThreadForProviderSwitch
+        .mockImplementationOnce(async () => {
+          persistedProfile.sdkSessionId = 'thread-older';
+          return {
+            previousSdkSessionId: 'thread-xd',
+            newSdkSessionId: 'thread-older',
+            rollback: vi.fn(async () => false),
+          };
+        })
+        .mockImplementationOnce(async () => {
+          persistedProfile.sdkSessionId = 'thread-newer';
+          return {
+            previousSdkSessionId: 'thread-older',
+            newSdkSessionId: 'thread-newer',
+            rollback: vi.fn(async () => false),
+          };
+        });
+      h.persistRoute
+        .mockImplementationOnce(async (_persistedSessionId, route) => {
+          persistedProfile = {
+            ...persistedProfile,
+            model: route.model ?? persistedProfile.model,
+            providerId: route.providerId,
+            effort: route.effort ?? persistedProfile.effort,
+            fastMode: route.fastMode ?? persistedProfile.fastMode,
+          };
+          h.service.clear(sessionId);
+        })
+        .mockImplementationOnce(async (_persistedSessionId, route) => {
+          persistedProfile = {
+            ...persistedProfile,
+            model: route.model ?? persistedProfile.model,
+            providerId: route.providerId,
+            effort: route.effort ?? persistedProfile.effort,
+            fastMode: route.fastMode ?? persistedProfile.fastMode,
+          };
+          h.service.clear(sessionId);
+        });
+
+      await h.service.register(sessionId, {
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        effort: 'xhigh',
+        fastMode: true,
+        rebuildCodexThread: true,
+        previousRoute: {
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+          effort: 'high',
+          fastMode: false,
+        },
+        restoreStaleOwnerRoute: restoreOlderRoute,
+      });
+      await h.service.onTurnSettled(sessionId);
+      await h.service.register(sessionId, {
+        model: 'deepseek/deepseek-v4-pro',
+        providerId: 'deepseek',
+        effort: 'max',
+        fastMode: true,
+        rebuildCodexThread: true,
+        previousRoute: {
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+          effort: 'high',
+          fastMode: false,
+        },
+        restoreStaleOwnerRoute: restoreNewerRoute,
+      });
+      await h.service.onTurnSettled(sessionId);
+
+      await vi.waitFor(() => expect(restoreOlderRoute).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(restoreNewerRoute).toHaveBeenCalledTimes(2));
+      if (completionOrder === 'older-first') {
+        releaseOlderRetry();
+        await olderRetryDone;
+      } else {
+        releaseNewerRetry();
+        await newerRetryDone;
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.service.has(sessionId)).toBe(true);
+      expect(h.onCancellationCompensated).not.toHaveBeenCalled();
+
+      if (completionOrder === 'older-first') {
+        releaseNewerRetry();
+        await newerRetryDone;
+      } else {
+        releaseOlderRetry();
+        await olderRetryDone;
+      }
+      await vi.waitFor(() => expect(h.service.has(sessionId)).toBe(false));
+      expect(persistedProfile).toEqual({
+        sdkSessionId: 'thread-xd',
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      });
+      expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
+      expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledTimes(2);
+      expect(h.persistRoute).toHaveBeenCalledTimes(2);
+      expect(h.onApplied).not.toHaveBeenCalled();
+    },
+  );
+
   it('compensates the actual fallback route when the owner changes during persistence', async () => {
     const sessionId = rememberSession('pending-switch-owner-stale-during-fallback-persist');
     setSessionProvider(sessionId, 'xd');
