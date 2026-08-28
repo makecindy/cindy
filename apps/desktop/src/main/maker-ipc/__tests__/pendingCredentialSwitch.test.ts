@@ -134,6 +134,75 @@ describe('PendingCredentialSwitchService', () => {
     );
   });
 
+  it('recomputes relink from the final route when revalidation crosses thread families', async () => {
+    const sessionId = rememberSession('pending-switch-reroute-crosses-thread-family');
+    setSessionProvider(sessionId, 'xd');
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      {
+        resolveRoute: async () => ({
+          model: 'gpt-5.6-sol',
+          providerId: 'openai',
+          degraded: true,
+        }),
+      },
+    );
+
+    h.service.register(sessionId, {
+      model: 'xai/grok-4.3',
+      providerId: 'xai',
+      agentKind: 'codex',
+      sourceCodexThreadModelProviderId: 'cindy_gateway',
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(h.relinkCodexThreadForProviderSwitch).toHaveBeenCalledWith({
+      sessionId,
+      sourceModel: 'codex/gpt-5.6-sol',
+      sourceProviderId: 'xd',
+      sourceThreadModelProviderId: 'cindy_gateway',
+      targetModel: 'gpt-5.6-sol',
+      targetProviderId: 'openai',
+      isCurrent: expect.any(Function),
+    });
+    expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+    });
+  });
+
+  it('skips a stale relink marker when revalidation returns to the source thread family', async () => {
+    const sessionId = rememberSession('pending-switch-reroute-returns-to-source-family');
+    setSessionProvider(sessionId, 'xd');
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      {
+        resolveRoute: async () => ({
+          model: 'codex/gpt-5.6-sol',
+          providerId: 'xd',
+          degraded: true,
+        }),
+      },
+    );
+
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+      agentKind: 'codex',
+      sourceCodexThreadModelProviderId: 'cindy_gateway',
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(h.relinkCodexThreadForProviderSwitch).not.toHaveBeenCalled();
+    expect(h.persistRoute).toHaveBeenCalledWith(sessionId, {
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+    });
+  });
+
   it('keeps a deferred switch gated when the Codex thread relink fails', async () => {
     const sessionId = rememberSession('pending-switch-relink-failed');
     setSessionProvider(sessionId, 'xd');

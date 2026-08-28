@@ -4,7 +4,12 @@ import {
   isCredentialModeSwitchBusyError,
   isLocalSessionBusy,
   prepareLocalSessionCredentialModeSwitch,
+  shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
+import {
+  CODEX_CINDY_COMPACT_PROVIDER_ID,
+  CODEX_GATEWAY_PROVIDER_ID,
+} from '../maker-host/codex-gateway-config.js';
 import { setSessionProvider } from '../maker-host/session-provider-store.js';
 import type { CodexProviderThreadRelinkReceipt } from './codexProviderThreadRelink.js';
 
@@ -41,6 +46,8 @@ export interface PendingCredentialSwitch {
   providerId: string | null;
   /** 跨 cindy_gateway / cindy_openai 身份边界，收口前必须换成新的 native thread。 */
   rebuildCodexThread?: boolean;
+  /** relink 已提交且回滚失败时，重试只补 route persist，不能再次 fork 新 thread。 */
+  codexThreadRelinkCommitted?: boolean;
   /** app-server 确认的源 thread provider 身份，路由 store 被提前覆盖时仍是事实源。 */
   sourceCodexThreadModelProviderId?: string | null;
   /** 目标会话的 agent(register 时由调用方捕获,收口前的停用重裁决用;可缺席 = 不裁决)。 */
@@ -386,7 +393,32 @@ export class PendingCredentialSwitchService {
   ): Promise<void> {
     let relinkReceipt: CodexProviderThreadRelinkReceipt | null = null;
     if (resolved.apply) {
-      if (target.rebuildCodexThread) {
+      // 等待期间停用裁决可能把最终 provider/model 改到另一 thread 身份家族。
+      // source thread 身份完整时必须按最终 route 重算，不能沿用登记时冻结的 marker；
+      // 身份不完整时保留旧 marker 的 fail-closed 兼容语义。
+      const shouldRelinkCodexThread =
+        target.codexThreadRelinkCommitted !== true &&
+        (target.agentKind === 'codex' &&
+          target.previousRoute &&
+          target.sourceCodexThreadModelProviderId !== undefined
+          ? shouldCloseSessionForCredentialSwitch({
+              agentKind: 'codex',
+              remoteHostId: null,
+              currentProviderId: target.previousRoute.providerId,
+              nextProviderId: resolved.providerId,
+              currentModel: target.previousRoute.model,
+              nextModel: resolved.model ?? target.model,
+              currentCodexProxyActive: true,
+              currentCodexThreadModelProviderId: target.sourceCodexThreadModelProviderId,
+              currentCodexCindyRemoteCompactionCompatible:
+                target.sourceCodexThreadModelProviderId === CODEX_GATEWAY_PROVIDER_ID
+                  ? false
+                  : target.sourceCodexThreadModelProviderId === CODEX_CINDY_COMPACT_PROVIDER_ID
+                    ? true
+                    : undefined,
+            })
+          : target.rebuildCodexThread === true);
+      if (shouldRelinkCodexThread) {
         const relink = this.deps.relinkCodexThreadForProviderSwitch;
         if (!relink) {
           this.deps.logger?.error?.(
@@ -469,6 +501,7 @@ export class PendingCredentialSwitchService {
               // The replacement thread still owns sdk_session_id. Avoid forking it again on
               // retry; the pending gate remains closed until route persistence succeeds.
               target.rebuildCodexThread = false;
+              target.codexThreadRelinkCommitted = true;
             }
           }
           // fail-closed(PR #744 review 第十六轮):DB 里躺着 renderer 预写的停用
