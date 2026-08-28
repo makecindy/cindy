@@ -55,7 +55,7 @@ export const LOGIN_HANDOFF_TIMINGS = Object.freeze({
   /** demo 收尾 buffer(300+moveMs+100+500+60 后 commit)。 */
   doneBufferMs: 60,
   /** authenticated 分支品牌淡出时长(与 splash fade 同步,--splash-fade-duration)。 */
-  brandExitMs: 500,
+  brandExitMs: 400,
 } as const);
 
 export type LoginHandoffPhase =

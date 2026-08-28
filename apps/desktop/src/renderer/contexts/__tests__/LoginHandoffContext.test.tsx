@@ -82,6 +82,8 @@ import {
   panelPlacement,
   splashBrandPlacement,
 } from '@/components/login/loginScale';
+import '@/themes/colors';
+import { colorRegistry } from '@/themes/color-registry';
 
 /* ── 探针:抓取 context 值供命令式驱动 ── */
 const probe: { current: LoginHandoffContextValue | null } = { current: null };
@@ -495,8 +497,17 @@ describe('冷启动集成(resolved snapshot,禁 mock-reject)', () => {
       'var(--login-bg-base)',
     );
 
+    expect(`${LOGIN_HANDOFF_TIMINGS.brandExitMs}ms`).toBe(
+      colorRegistry.resolveDefault('splash-fade-duration', 'light'),
+    );
     await act(async () => {
-      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(LOGIN_HANDOFF_TIMINGS.brandExitMs - 1);
+    });
+    expect(probe.current!.phase).toBe('brand-exit');
+    expect(screen.getByTestId('login-brand-bg')).toBeTruthy();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
     });
     expect(probe.current!.phase).toBe('done');
     // overlay 卸载,主界面接管;全程未出现登录面板
