@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { PluginMarketApi } from '../api';
@@ -5,12 +7,23 @@ import { PluginMarketApi } from '../api';
 const logger = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
-const serverApi = vi.hoisted(() => ({ serverApiFetch: vi.fn() }));
+const serverApi = vi.hoisted(() => {
+  class TestServerApiError extends Error {
+    constructor(
+      public readonly code: string,
+      public readonly statusCode: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+  return { ServerApiError: TestServerApiError, serverApiFetch: vi.fn() };
+});
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: logger.warn, error: vi.fn() }),
 }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: serverApi.serverApiFetch }));
+vi.mock('../../serverApiClient.js', () => serverApi);
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: () => 'https://plugins.example.com',
 }));
@@ -133,10 +146,9 @@ describe('PluginMarketApi', () => {
       plugins: [{ id: PLUGIN_A }],
       removals: [{ pluginId: PLUGIN_B }],
     });
-    expect(logger.warn).toHaveBeenCalledWith(
-      'market removal ignored because plugin is active',
-      { pluginId: PLUGIN_A },
-    );
+    expect(logger.warn).toHaveBeenCalledWith('market removal ignored because plugin is active', {
+      pluginId: PLUGIN_A,
+    });
   });
 
   it('fails closed when the server still returns schema v1', async () => {
@@ -160,6 +172,82 @@ describe('PluginMarketApi', () => {
     const api = new PluginMarketApi(fetcher);
 
     await expect(api.listAll()).rejects.toThrow('游标未前进');
+  });
+
+  it('posts the PR-2A successful-install contract with a short deadline', async () => {
+    const eventId = '123e4567-e89b-42d3-a456-426614174000';
+    const fetcher = vi.fn().mockResolvedValue({
+      accepted: true,
+      duplicate: false,
+      eventId,
+    });
+    const api = new PluginMarketApi(fetcher, () => '1.2.3');
+
+    await expect(api.recordInstallReceipt(PLUGIN_A, 'release-1', eventId)).resolves.toEqual({
+      accepted: true,
+      duplicate: false,
+      eventId,
+    });
+    expect(fetcher).toHaveBeenCalledWith(`/api/plugins/${PLUGIN_A}/install-events`, {
+      cache: 'no-store',
+      headers: { 'x-cindy-version': '1.2.3' },
+      method: 'POST',
+      body: { eventId, releaseId: 'release-1' },
+      timeoutMs: 5_000,
+      suppressAuthSideEffects: true,
+    });
+  });
+
+  it('omits active-session credentials when draining a local-owner receipt', async () => {
+    const eventId = '123e4567-e89b-42d3-a456-426614174000';
+    const fetcher = vi.fn().mockResolvedValue({
+      accepted: true,
+      duplicate: false,
+      eventId,
+    });
+    const api = new PluginMarketApi(fetcher, () => '1.2.3');
+
+    await api.recordInstallReceipt(PLUGIN_A, 'release-1', eventId, 'none');
+
+    expect(fetcher).toHaveBeenCalledWith(
+      `/api/plugins/${PLUGIN_A}/install-events`,
+      expect.objectContaining({
+        suppressAuthSideEffects: true,
+        token: null,
+      }),
+    );
+  });
+
+  it('accepts the idempotent duplicate response and rejects response drift', async () => {
+    const eventId = '123e4567-e89b-42d3-a456-426614174000';
+    const duplicate = new PluginMarketApi(
+      vi.fn().mockResolvedValue({ accepted: true, duplicate: true, eventId }),
+    );
+    await expect(
+      duplicate.recordInstallReceipt(PLUGIN_A, 'release-1', eventId),
+    ).resolves.toMatchObject({ duplicate: true, eventId });
+
+    const drifted = new PluginMarketApi(
+      vi.fn().mockResolvedValue({ accepted: true, duplicate: false, eventId: crypto.randomUUID() }),
+    );
+    await expect(drifted.recordInstallReceipt(PLUGIN_A, 'release-1', eventId)).rejects.toThrow(
+      'response is invalid',
+    );
+  });
+
+  it('marks terminal 4xx receipt failures as permanent but keeps retryable failures', async () => {
+    const permanent = new PluginMarketApi(
+      vi.fn().mockRejectedValue(new serverApi.ServerApiError('NOT_FOUND', 404, 'not found')),
+    );
+    await expect(
+      permanent.recordInstallReceipt(PLUGIN_A, 'release-1', crypto.randomUUID()),
+    ).rejects.toMatchObject({ name: 'PermanentPluginInstallReceiptError' });
+
+    const retryableError = new serverApi.ServerApiError('RATE_LIMITED', 429, 'retry later');
+    const retryable = new PluginMarketApi(vi.fn().mockRejectedValue(retryableError));
+    await expect(
+      retryable.recordInstallReceipt(PLUGIN_A, 'release-1', crypto.randomUUID()),
+    ).rejects.toBe(retryableError);
   });
 
   it('surfaces currentOrganization from the completed list response', async () => {

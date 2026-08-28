@@ -204,6 +204,47 @@ describe('serverApiFetch', () => {
     expect(mocks.invalidateSession).toHaveBeenCalledWith('resource-unauthorized-after-refresh');
   });
 
+  it.each(['TOKEN_EXPIRED', 'ACCOUNT_UNAVAILABLE'])(
+    'suppressAuthSideEffects 遇到 %s 时不 refresh 也不退登',
+    async (code) => {
+      mocks.getAccessToken.mockReturnValue('token-a');
+      mocks.netFetch.mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { code } }),
+      });
+
+      await expect(
+        serverApiFetch('/api/resource', {
+          baseUrl: 'https://resource.example.com',
+          suppressAuthSideEffects: true,
+        }),
+      ).rejects.toMatchObject({ code, statusCode: 401 });
+      expect(mocks.refresh).not.toHaveBeenCalled();
+      expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it('explicit token null omits the active session Authorization header', async () => {
+    mocks.getAccessToken.mockReturnValue('token-a');
+    mocks.netFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    });
+
+    await expect(
+      serverApiFetch('/api/resource', {
+        baseUrl: 'https://resource.example.com',
+        token: null,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(mocks.getAccessToken).not.toHaveBeenCalled();
+    const headers = mocks.netFetch.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+  });
+
   it.each([
     { name: '403', response: { ok: false, status: 403, json: async () => ({}) } },
     { name: 'network failure', response: new Error('offline') },

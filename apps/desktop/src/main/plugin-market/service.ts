@@ -59,8 +59,10 @@ import {
   isCindyOfficialTrustInfo,
 } from '../cindy-brain/GhostManager.js';
 import {
+  dataOwnerStorageKey,
   getActiveAppSession,
   isAppSessionBoundaryPending,
+  LOCAL_DATA_OWNER_ID,
   ownerScopedUserDataPath,
   type ActiveAppSession,
 } from '../appSessionState.js';
@@ -80,6 +82,7 @@ import { PluginMarketApi } from './api.js';
 import { createOrganizationPrefixStore } from './organizationPrefixStore.js';
 import { downloadVerifiedPlugin } from './download.js';
 import { installCustomMarketPlugin } from './install.js';
+import { PluginInstallReceiptOutbox, type PluginInstallReceipt } from './installReceiptOutbox.js';
 import {
   PluginMarketLedger,
   ghostManifestDigest,
@@ -156,6 +159,19 @@ function requireSameMarketOwner(
   ) {
     throwIpcError('PRECONDITION_FAILED', 'The active account changed during the Plugin operation');
   }
+}
+
+function canSendInstallReceiptForOwner(
+  owner: ActiveAppSession,
+  requireGeneration: boolean,
+): boolean {
+  if (isAppSessionBoundaryPending()) return false;
+  const current = getActiveAppSession();
+  return (
+    current.mode === owner.mode &&
+    current.dataOwnerId === owner.dataOwnerId &&
+    (!requireGeneration || current.generation === owner.generation)
+  );
 }
 
 function visiblePluginsForOwner(
@@ -545,6 +561,16 @@ export class PluginMarketService {
   private customIconProjectionGeneration = crypto
     .randomBytes(PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH / 2)
     .toString('hex');
+  private readonly installReceiptOutboxes = new Map<string, PluginInstallReceiptOutbox>();
+  private localInstallReceiptDrainer: {
+    deliveryScopeKey: string;
+    outbox: PluginInstallReceiptOutbox;
+  } | null = null;
+  private readonly installReceiptOutboxFactory: (
+    directory: string,
+    receiptOwner: ActiveAppSession,
+    deliveryOwner?: ActiveAppSession,
+  ) => PluginInstallReceiptOutbox;
 
   constructor(
     private readonly api = new PluginMarketApi(undefined, () => app.getVersion()),
@@ -554,7 +580,32 @@ export class PluginMarketService {
     private readonly sourceStore = new MarketSourceStore(() =>
       ownerScopedUserDataPath('plugin-market', 'sources.v1.json'),
     ),
-  ) {}
+    installReceiptOutboxFactory?: (
+      directory: string,
+      receiptOwner: ActiveAppSession,
+      deliveryOwner?: ActiveAppSession,
+    ) => PluginInstallReceiptOutbox,
+  ) {
+    this.installReceiptOutboxFactory =
+      installReceiptOutboxFactory ??
+      ((directory, receiptOwner, deliveryOwner) =>
+        new PluginInstallReceiptOutbox(
+          directory,
+          (receipt: PluginInstallReceipt) =>
+            this.api
+              .recordInstallReceipt(
+                receipt.pluginId,
+                receipt.releaseId,
+                receipt.eventId,
+                receiptOwner.mode === 'local' ? 'none' : 'active-session',
+              )
+              .then(() => undefined),
+          {
+            shouldSend: () =>
+              canSendInstallReceiptForOwner(deliveryOwner ?? receiptOwner, Boolean(deliveryOwner)),
+          },
+        ));
+  }
 
   private automaticUpgradeRetryKey(
     owner: ActiveAppSession,
@@ -624,6 +675,13 @@ export class PluginMarketService {
       return this.snapshotPublicCatalogWithoutOwner();
     }
     const iconProjectionGeneration = this.nextCustomIconProjectionGeneration();
+    const installReceipts = this.installReceiptOutboxForOwner(owner);
+    if (getClientEndpoint('pluginApiBaseUrl')) {
+      void installReceipts.flush();
+      // 登录后继续补发 local 模式留下的公开安装回执。它使用固定 local 目录和
+      // 匿名 sender，绝不会把当前 cloud token 带给旧 local owner 的事件。
+      if (owner.mode === 'cloud') void this.localInstallReceiptOutbox(owner).flush();
+    }
     const customSourceNames = this.customSourceNamesSafe(owner);
     const customDiscoveryPromise = this.discoverCustomEntriesBounded(
       owner,
@@ -1704,6 +1762,7 @@ export class PluginMarketService {
     } = { expectedInstalled: false },
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
+    installReceipts = this.installReceiptOutboxForOwner(owner),
   ): Promise<PluginMarketInstallResult> {
     requireSameMarketOwner(owner);
     if (owner.mode === 'local' && plugin.scope !== 'public') {
@@ -1783,6 +1842,7 @@ export class PluginMarketService {
         },
         owner,
         ledger,
+        installReceipts,
       );
       return { ghost };
     } finally {
@@ -1802,6 +1862,7 @@ export class PluginMarketService {
     },
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
+    installReceipts: PluginInstallReceiptOutbox,
   ): Promise<InstalledGhost> {
     return withGhostInstallLock(plugin.ghostId, async () => {
       const installedNow = getGhostManager()
@@ -1840,11 +1901,15 @@ export class PluginMarketService {
         }
       }
       requireSameMarketOwner(owner);
+      const installedTargetMarketRoute = Boolean(
+        installedNow &&
+        serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow),
+      );
       const replacingSource = Boolean(
         installedNow &&
         options.allowSourceReplacement &&
         currentRecordNow?.installed &&
-        !serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow),
+        !installedTargetMarketRoute,
       );
       let routeDetached = false;
       let replacedRouteWasSuppressed = false;
@@ -1911,6 +1976,13 @@ export class PluginMarketService {
         }
         throw error;
       });
+      // 只有新建 Public 市场路由、运行时落位与安装账本全部成功后才铸造 eventId。
+      // 同一市场路由的升级不计；本地/自定义来源替换为公共市场包属于一次新安装。
+      // 网络发送永不 await；失败留在 owner-scoped outbox，不回滚本地安装。
+      if (!installedTargetMarketRoute && plugin.scope === 'public') {
+        const queued = installReceipts.enqueue(plugin.id, plugin.currentRelease.id);
+        if (queued) void installReceipts.flush();
+      }
       return installed;
     });
   }
@@ -2670,6 +2742,46 @@ export class PluginMarketService {
   private ledgerForOwner(owner: ActiveAppSession): PluginMarketLedger {
     requireSameMarketOwner(owner);
     return this.ledger.bind(ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'));
+  }
+
+  private installReceiptOutboxForOwner(owner: ActiveAppSession): PluginInstallReceiptOutbox {
+    requireSameMarketOwner(owner);
+    const directory = ownerScopedUserDataPath('plugin-market', 'install-receipts.v1');
+    return this.installReceiptOutboxForDirectory(directory, owner);
+  }
+
+  private localInstallReceiptOutbox(deliveryOwner: ActiveAppSession): PluginInstallReceiptOutbox {
+    const deliveryScopeKey = `${deliveryOwner.mode}:${deliveryOwner.dataOwnerId}:${deliveryOwner.generation}`;
+    if (this.localInstallReceiptDrainer?.deliveryScopeKey === deliveryScopeKey) {
+      return this.localInstallReceiptDrainer.outbox;
+    }
+    const receiptOwner: ActiveAppSession = {
+      mode: 'local',
+      dataOwnerId: LOCAL_DATA_OWNER_ID,
+      generation: 0,
+    };
+    const directory = path.join(
+      app.getPath('userData'),
+      'owners',
+      dataOwnerStorageKey(LOCAL_DATA_OWNER_ID),
+      'plugin-market',
+      'install-receipts.v1',
+    );
+    const outbox = this.installReceiptOutboxFactory(directory, receiptOwner, deliveryOwner);
+    this.localInstallReceiptDrainer = { deliveryScopeKey, outbox };
+    return outbox;
+  }
+
+  private installReceiptOutboxForDirectory(
+    directory: string,
+    owner: ActiveAppSession,
+  ): PluginInstallReceiptOutbox {
+    let outbox = this.installReceiptOutboxes.get(directory);
+    if (!outbox) {
+      outbox = this.installReceiptOutboxFactory(directory, owner);
+      this.installReceiptOutboxes.set(directory, outbox);
+    }
+    return outbox;
   }
 
   /**
