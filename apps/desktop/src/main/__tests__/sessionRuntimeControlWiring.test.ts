@@ -271,20 +271,25 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('return withSendToSessionLock(sessionId, applyLocked);');
   });
 
-  it('maps Codex relink CAS conflicts to the structured IPC error protocol', () => {
+  it('maps every Codex relink failure to the structured IPC error protocol', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
-    const conflictMapping = setModel.indexOf(
-      "err.message.startsWith('Codex provider thread relink was superseded')",
+    const relinkBoundary = setModel.slice(
+      setModel.indexOf('const relinkCodexThread ='),
+      setModel.indexOf('const rebuildLiveOrcaWorker'),
     );
-    expect(conflictMapping).toBeGreaterThan(-1);
-    expect(
-      setModel.indexOf("throwIpcError(\n            'PRECONDITION_FAILED'", conflictMapping),
-    ).toBeGreaterThan(conflictMapping);
-    expect(setModel.indexOf('throw err;', conflictMapping)).toBeGreaterThan(conflictMapping);
+    expect(relinkBoundary).toContain(
+      "throwIpcError(\n                'PRECONDITION_FAILED'",
+    );
+    expect(relinkBoundary).toContain('.catch((error) => {');
+    expect(relinkBoundary).toContain('if (isIpcError(error)) throw error;');
+    expect(relinkBoundary).toContain(
+      "throwIpcError('INTERNAL', 'Failed to rebuild Codex provider thread')",
+    );
+    expect(relinkBoundary).not.toContain('throw new Error');
   });
 
   it('rejects terminal tasks before effort or Fast mutations recreate runtime state', () => {

@@ -15166,7 +15166,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             const ownerScope = captureDataOwnerBroadcastScope();
             const dbSnapshot = getCurrentDbClientSnapshot();
             if (!dbSnapshot) {
-              throw new Error('Codex provider thread relink requires an active Profile database');
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'Codex provider thread relink requires an active Profile database',
+              );
             }
             const relinked = await relinkCodexProviderThread(
               {
@@ -15249,10 +15252,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 },
               },
               { sessionId, target: targetCodexRoute },
-            );
+            ).catch((error) => {
+              if (isIpcError(error)) throw error;
+              if (
+                error instanceof Error &&
+                error.message.startsWith('Codex provider thread relink was superseded')
+              ) {
+                throwIpcError(
+                  'PRECONDITION_FAILED',
+                  'Codex provider thread changed during model switch; retry the selection',
+                );
+              }
+              throwIpcError('INTERNAL', 'Failed to rebuild Codex provider thread');
+            });
             if (!relinked) {
-              throw new Error(
-                `Codex provider thread relink was superseded for session ${sessionId}`,
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'Codex provider thread changed during model switch; retry the selection',
               );
             }
             log.info('Codex provider thread and route committed atomically', {
@@ -15628,16 +15644,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
           // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
           throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
-        }
-        if (
-          requiresCodexThreadRelink &&
-          err instanceof Error &&
-          err.message.startsWith('Codex provider thread relink was superseded')
-        ) {
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'Codex provider thread changed during model switch; retry the selection',
-          );
         }
         throw err;
       }
