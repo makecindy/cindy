@@ -3,9 +3,59 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   commitCodexProviderThreadRelinkWithBoundaryGuard,
   relinkCodexProviderThread,
+  rollbackPersistedCodexRuntimeSelection,
 } from '../codexProviderThreadRelink.js';
 
 describe('relinkCodexProviderThread', () => {
+  it('atomically restores thread and route when teardown follows route persistence', async () => {
+    let persisted = {
+      sdkSessionId: 'thread-new' as string | null,
+      model: 'gpt-5.6-sol',
+      providerId: 'openai' as string | null,
+      effort: 'xhigh',
+      fastMode: true,
+    };
+    const restore = vi.fn(async ({ expected, previous }) => {
+      if (JSON.stringify(persisted) !== JSON.stringify(expected)) return false;
+      persisted = previous;
+      return true;
+    });
+
+    // Simulate teardown beginning during a later projection await, after both writes landed.
+    await Promise.resolve();
+    await expect(
+      rollbackPersistedCodexRuntimeSelection({
+        previous: {
+          sdkSessionId: 'thread-old',
+          model: 'deepseek/deepseek-v4-pro',
+          providerId: 'xd',
+          effort: 'high',
+          fastMode: false,
+        },
+        appliedRoute: {
+          model: 'gpt-5.6-sol',
+          providerId: 'openai',
+          effort: 'xhigh',
+          fastMode: true,
+        },
+        relinkReceipt: {
+          previousSdkSessionId: 'thread-old',
+          newSdkSessionId: 'thread-new',
+        },
+        restore,
+      }),
+    ).resolves.toBe(true);
+
+    expect(restore).toHaveBeenCalledOnce();
+    expect(persisted).toEqual({
+      sdkSessionId: 'thread-old',
+      model: 'deepseek/deepseek-v4-pro',
+      providerId: 'xd',
+      effort: 'high',
+      fastMode: false,
+    });
+  });
+
   it.each(['account switch', 'teardown', 'client epoch change'])(
     'rolls back a CAS when %s happens while the write is awaiting',
     async () => {

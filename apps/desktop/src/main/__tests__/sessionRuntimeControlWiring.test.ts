@@ -203,26 +203,40 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain("throw new Error('Codex thread relink rollback was superseded')");
   });
 
-  it('rolls back a committed Codex relink before an owner-boundary request exits', () => {
+  it('rolls back the complete persisted route before an owner-boundary request exits', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
     const guard = setModel.indexOf(
-      'const rollbackRelinkForSupersededOwner = async (): Promise<boolean> => {',
+      'const rollbackRuntimeSelectionForSupersededOwner = async (): Promise<boolean> => {',
     );
-    const rollback = setModel.indexOf('await rollbackAppliedCodexThreadRelink();', guard);
+    const rollback = setModel.indexOf('await rollbackAppliedRuntimeSelection();', guard);
     const ownerFailure = setModel.indexOf('assertRuntimeOwnerCurrent();', guard);
 
     expect(setModel).toContain('!isAppSessionBoundaryPending()');
-    expect(setModel).toContain('const rollbackAppliedCodexThreadRelink = async ()');
+    expect(setModel).toContain('const rollbackAppliedRuntimeSelection = async ()');
+    expect(setModel).toContain('const runtimeDbSnapshot = getCurrentDbClientSnapshot();');
+    expect(setModel).toContain('effort: sessions.effort');
+    expect(setModel).toContain('fastMode: sessions.fastMode');
+    expect(setModel).toContain('rollbackPersistedCodexRuntimeSelection({');
+    expect(setModel).toContain('sdkSessionId: runtimeStatus.sdkSessionId');
+    expect(setModel).toContain('model: runtimeStatus.model');
+    expect(setModel).toContain('providerId: runtimeStatus.providerId');
+    expect(setModel).toContain('effort: runtimeStatus.effort');
+    expect(setModel).toContain('fastMode: runtimeStatus.fastMode');
+    expect(setModel).toContain('eq(sessions.model, expected.model)');
+    expect(setModel).toContain('eq(sessions.sdkSessionId, expected.sdkSessionId)');
+    expect(setModel).toContain('eq(sessions.providerId, expected.providerId)');
+    expect(setModel).toContain('eq(sessions.effort, expected.effort');
+    expect(setModel).toContain('eq(sessions.fastMode, expected.fastMode)');
     expect(guard).toBeGreaterThan(-1);
     expect(rollback).toBeGreaterThan(guard);
     expect(ownerFailure).toBeGreaterThan(rollback);
-    expect(setModel.match(/await rollbackRelinkForSupersededOwner\(\)/g)).toHaveLength(3);
+    expect(setModel.match(/await rollbackRuntimeSelectionForSupersededOwner\(\)/g)).toHaveLength(3);
     const outerCatch = setModel.lastIndexOf('} catch (err) {');
-    expect(setModel.indexOf('await rollbackAppliedCodexThreadRelink();', outerCatch)).toBeGreaterThan(
+    expect(setModel.indexOf('await rollbackAppliedRuntimeSelection();', outerCatch)).toBeGreaterThan(
       outerCatch,
     );
   });

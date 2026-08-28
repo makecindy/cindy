@@ -18,6 +18,44 @@ export interface CodexProviderThreadRelinkReceipt {
   rollback(): Promise<boolean>;
 }
 
+export interface PersistedCodexRuntimeSelectionState {
+  sdkSessionId: string | null;
+  model: string;
+  providerId: string | null;
+  effort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+  fastMode: boolean;
+}
+
+/**
+ * Turn a route write plus an optional Codex relink into one compensation record.
+ * The injected restore must compare the complete applied tuple and replace it with
+ * the complete previous tuple atomically against the captured profile database.
+ */
+export async function rollbackPersistedCodexRuntimeSelection(input: {
+  previous: PersistedCodexRuntimeSelectionState;
+  appliedRoute: Omit<PersistedCodexRuntimeSelectionState, 'sdkSessionId'>;
+  relinkReceipt?: Pick<
+    CodexProviderThreadRelinkReceipt,
+    'previousSdkSessionId' | 'newSdkSessionId'
+  >;
+  restore: (states: {
+    expected: PersistedCodexRuntimeSelectionState;
+    previous: PersistedCodexRuntimeSelectionState;
+  }) => Promise<boolean>;
+}): Promise<boolean> {
+  return input.restore({
+    expected: {
+      sdkSessionId: input.relinkReceipt?.newSdkSessionId ?? input.previous.sdkSessionId,
+      ...input.appliedRoute,
+    },
+    previous: {
+      ...input.previous,
+      sdkSessionId:
+        input.relinkReceipt?.previousSdkSessionId ?? input.previous.sdkSessionId,
+    },
+  });
+}
+
 /**
  * Commit a relink only while its owner/generation boundary remains current.
  * The write itself may yield, so a boundary change after the preflight check

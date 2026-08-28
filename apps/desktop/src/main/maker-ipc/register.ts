@@ -885,6 +885,7 @@ import {
 import {
   commitCodexProviderThreadRelinkWithBoundaryGuard,
   relinkCodexProviderThread,
+  rollbackPersistedCodexRuntimeSelection,
   type CodexProviderThreadRelinkReceipt,
 } from './codexProviderThreadRelink.js';
 import {
@@ -15140,11 +15141,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (supersededByOwnerBoundary()) {
         return { deferred: false, superseded: true };
       }
+      const runtimeOwnerScope = captureDataOwnerBroadcastScope();
+      const runtimeDbSnapshot = getCurrentDbClientSnapshot();
+      if (!runtimeDbSnapshot) {
+        return { deferred: false, superseded: true };
+      }
       // 归档/删除写入与本 handler 共用同一把 session route lock。拿锁后重读持久
       // 状态可封住两种次序：本请求先拿锁时终态写等待并在之后清理 override；终态
       // 先拿锁时旧请求看到非 active，不能在 cleanup 后重新建立 pending/override。
-      const [runtimeStatus] = await getDbClient()
-        .drizzle.select({
+      const [runtimeStatus] = await runtimeDbSnapshot.client.drizzle
+        .select({
           status: sessions.status,
           orcaRole: sessions.orcaRole,
           agentKind: sessions.agentKind,
@@ -15152,6 +15158,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sdkSessionId: sessions.sdkSessionId,
           model: sessions.model,
           providerId: sessions.providerId,
+          effort: sessions.effort,
+          fastMode: sessions.fastMode,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
@@ -15467,12 +15475,90 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       };
       let appliedCodexThreadRelink: CodexProviderThreadRelinkReceipt | undefined;
+      let appliedPersistedRuntimeRoute:
+        | {
+            model: string;
+            providerId: string | null;
+            effort: typeof runtimeStatus.effort;
+            fastMode: boolean;
+          }
+        | undefined;
       const rollbackAppliedCodexThreadRelink = async (): Promise<boolean> => {
         const receipt = appliedCodexThreadRelink;
         if (!receipt) return true;
         const restored = await receipt.rollback();
         appliedCodexThreadRelink = undefined;
         return restored;
+      };
+      const rollbackAppliedRuntimeSelection = async (): Promise<boolean> => {
+        const persistedRoute = appliedPersistedRuntimeRoute;
+        if (!persistedRoute) return rollbackAppliedCodexThreadRelink();
+
+        // Route persistence and thread relink are one compensation unit. Match every value
+        // written by this selection so a later choice is never overwritten, then restore the
+        // complete old-profile tuple in one SQLite statement even after the active DB changed.
+        let restoredState:
+          | {
+              sdkSessionId: string | null;
+              model: string;
+              providerId: string | null;
+              effort: typeof runtimeStatus.effort;
+              fastMode: boolean;
+            }
+          | undefined;
+        const restored = await rollbackPersistedCodexRuntimeSelection({
+          previous: {
+            sdkSessionId: runtimeStatus.sdkSessionId,
+            model: runtimeStatus.model,
+            providerId: runtimeStatus.providerId,
+            effort: runtimeStatus.effort,
+            fastMode: runtimeStatus.fastMode,
+          },
+          appliedRoute: persistedRoute,
+          ...(appliedCodexThreadRelink
+            ? { relinkReceipt: appliedCodexThreadRelink }
+            : {}),
+          restore: async ({ expected, previous }) => {
+            const write = await runtimeDbSnapshot.client.drizzle
+              .update(sessions)
+              .set({ ...previous, updatedAt: Date.now() })
+              .where(
+                and(
+                  eq(sessions.id, sessionId),
+                  expected.sdkSessionId === null
+                    ? isNull(sessions.sdkSessionId)
+                    : eq(sessions.sdkSessionId, expected.sdkSessionId),
+                  eq(sessions.model, expected.model),
+                  expected.providerId === null
+                    ? isNull(sessions.providerId)
+                    : eq(sessions.providerId, expected.providerId),
+                  eq(sessions.effort, expected.effort as typeof runtimeStatus.effort),
+                  eq(sessions.fastMode, expected.fastMode),
+                ),
+              )
+              .run();
+            if (write.changes > 0) restoredState = previous as typeof restoredState;
+            return write.changes > 0;
+          },
+        });
+        appliedPersistedRuntimeRoute = undefined;
+        appliedCodexThreadRelink = undefined;
+        if (!restored || !restoredState) return false;
+
+        if (
+          runtimeOwnerBoundaryCurrent() &&
+          isDataOwnerBroadcastScopeCurrent(runtimeOwnerScope) &&
+          getCurrentDbClientSnapshot()?.clientEpoch === runtimeDbSnapshot.clientEpoch
+        ) {
+          broadcastSessionPatched(
+            sessionId,
+            {
+              ...restoredState,
+            },
+            runtimeOwnerScope,
+          );
+        }
+        return true;
       };
       try {
         const result = routeExplicit
@@ -15520,15 +15606,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           deferred: result.status === 'deferred',
           superseded: false,
         };
-        const rollbackRelinkForSupersededOwner = async (): Promise<boolean> => {
+        const rollbackRuntimeSelectionForSupersededOwner = async (): Promise<boolean> => {
           if (runtimeOwnerBoundaryCurrent()) return false;
-          await rollbackAppliedCodexThreadRelink();
+          const restored = await rollbackAppliedRuntimeSelection();
+          if (!restored) {
+            throw new Error('runtime selection rollback was superseded');
+          }
           if (internalOptions.source === 'user') {
             assertRuntimeOwnerCurrent();
           }
           return true;
         };
-        if (await rollbackRelinkForSupersededOwner()) {
+        if (await rollbackRuntimeSelectionForSupersededOwner()) {
           return { deferred: false, superseded: true };
         }
         if (atomicSelection) {
@@ -15580,6 +15669,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           try {
             await persistSessionFields(sessionId, patch);
+            appliedPersistedRuntimeRoute = {
+              model,
+              providerId:
+                effectiveProviderId === undefined
+                  ? runtimeStatus.providerId
+                  : (normalizeSessionProviderId(effectiveProviderId) ?? null),
+              effort: atomicSelection?.effort ?? runtimeStatus.effort,
+              fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
+            };
           } catch (persistenceError) {
             // The live route and host stores are applied before SQLite so the
             // harness can switch atomically. If SQLite rejects, unwind every
@@ -15636,7 +15734,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentSwitchIntent: null,
           agentSwitchIntentCanceled: true,
         });
-        if (await rollbackRelinkForSupersededOwner()) {
+        if (await rollbackRuntimeSelectionForSupersededOwner()) {
           return { deferred: false, superseded: true };
         }
         let generation: number;
@@ -15752,8 +15850,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
         // No await is allowed between this final boundary check and success return. Teardown
         // may begin while context/projection work above is awaiting; compensate the captured
-        // old-profile relink before the request can report success or owner supersession.
-        if (await rollbackRelinkForSupersededOwner()) {
+        // old-profile thread and route before the request can report success or supersession.
+        if (await rollbackRuntimeSelectionForSupersededOwner()) {
           return { deferred: false, superseded: true };
         }
         return {
@@ -15763,11 +15861,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       } catch (err) {
         try {
-          await rollbackAppliedCodexThreadRelink();
+          const restored = await rollbackAppliedRuntimeSelection();
+          if (!restored) {
+            throw new Error('runtime selection rollback was superseded');
+          }
         } catch (rollbackError) {
           throw new AggregateError(
             [err, rollbackError],
-            'runtime selection failed and Codex thread relink rollback also failed',
+            'runtime selection failed and persisted route rollback also failed',
           );
         }
         if (err instanceof CredentialModeSwitchBusyError) {
