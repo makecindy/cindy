@@ -15153,12 +15153,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         !!runtimeStatus.sdkSessionId &&
         isXdOpenAiCodexProviderTransition(runtimeStatus.providerId, targetProviderId);
       const targetCodexRoute: CodexProviderThreadRoute | undefined =
-        requiresCodexThreadRelink && atomicSelection
+        requiresCodexThreadRelink
           ? {
               model,
               providerId: targetProviderId,
-              effort: atomicSelection.effort,
-              fastMode: atomicSelection.fastMode,
+              effort: atomicSelection?.effort ?? runtimeStatus.effort,
+              fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
             }
           : undefined;
       const relinkCodexThread = targetCodexRoute

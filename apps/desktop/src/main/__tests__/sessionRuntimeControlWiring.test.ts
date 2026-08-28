@@ -292,6 +292,26 @@ describe('session runtime control wiring', () => {
     expect(relinkBoundary).not.toContain('throw new Error');
   });
 
+  it('relinks legacy provider selections with the persisted effort and Fast axes', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const targetRoute = setModel.slice(
+      setModel.indexOf('const targetCodexRoute:'),
+      setModel.indexOf('const relinkCodexThread ='),
+    );
+    expect(targetRoute).toContain('requiresCodexThreadRelink\n          ? {');
+    expect(targetRoute).toContain(
+      'effort: atomicSelection?.effort ?? runtimeStatus.effort',
+    );
+    expect(targetRoute).toContain(
+      'fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode',
+    );
+    expect(targetRoute).not.toContain('requiresCodexThreadRelink && atomicSelection');
+  });
+
   it('rejects terminal tasks before effort or Fast mutations recreate runtime state', () => {
     const effort = handlerBody(
       registerSource,
