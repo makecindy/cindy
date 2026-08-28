@@ -9,7 +9,7 @@
  * 三块都是整页内容卡片/列表;首页是栈底,自身无返回。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -141,6 +141,8 @@ export function SkillhubHomeView({
   );
   const hasSearchResults = (marketAllowed && recommended.length > 0) || visibleLocalCount > 0;
 
+  const skillhubScrollRef = useRef<HTMLElement | null>(null);
+
   // 推荐技能的预览浮层 + 安装选择器(复用 Market 那套):点推荐卡 = 下一步直接
   // 进入该技能的预览;关闭 = 回退到首页。
   const [previewSkill, setPreviewSkill] = useState<MarketSkill | null>(null);
@@ -210,6 +212,7 @@ export function SkillhubHomeView({
       onSelectTab={onSelectCatalogTab}
     >
       <main
+        ref={skillhubScrollRef}
         className={cn(
           'relative h-full w-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable_both-edges]',
           embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
@@ -395,6 +398,7 @@ export function SkillhubHomeView({
         <SkillhubMarketPreviewPanel
           open={previewSkill !== null}
           skill={previewSkill}
+          scrollLockRef={skillhubScrollRef}
           onClose={() => setPreviewSkill(null)}
           primaryAction={
             previewSkill
