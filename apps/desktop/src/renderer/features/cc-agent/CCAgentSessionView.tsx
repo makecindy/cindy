@@ -4855,7 +4855,11 @@ export function CCAgentSessionView({
                   extraDirs={session?.extraDirs ?? []}
                   onExtraDirsChange={handleExtraDirsChange}
                   writableDirs={session?.writableDirs ?? []}
-                  onWritableDirsChange={handleWritableDirsChange}
+                  onWritableDirsChange={
+                    isRemoteWorktreeSession || remoteDeviceId != null
+                      ? undefined
+                      : handleWritableDirsChange
+                  }
                   compactToolbar={compactToolbar}
                   // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把字号/控件压一档。
                   denseToolbar={isCompactRail}

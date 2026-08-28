@@ -19,6 +19,7 @@ const readSource = (...segments: string[]): string =>
   readFileSync(resolve(__dirname, '..', ...segments), 'utf8').replace(/\r\n?/g, '\n');
 
 const newMakerDraftRouteSource = readSource('features', 'cc-agent', 'NewMakerDraftRoute.tsx');
+const ccAgentSessionViewSource = readSource('features', 'cc-agent', 'CCAgentSessionView.tsx');
 
 const worktreeChipsSource = readSource('components', 'new-chat', 'WorktreeChipsRow.tsx');
 
@@ -1511,6 +1512,21 @@ describe('Shared create project picker', () => {
     expect(chatInputSource).toContain('if (onExtraDirsChange) {');
     expect(chatInputSource).toContain(
       'hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}',
+    );
+  });
+
+  // Writable-directory selection uses the controller's native picker. SSH and device-link
+  // workspaces both execute on another filesystem, so a local absolute path must never be
+  // offered as a remote writable root. Local drafts and sessions retain the callback.
+  it('hides the local writable-directory picker on remote drafts and active sessions', () => {
+    expect(newMakerDraftRouteSource).toContain(
+      'isDeviceLinkDraft || isRemoteProjectDraft\n                        ? undefined\n                        : handleWritableDirsChange',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'isRemoteWorktreeSession || remoteDeviceId != null\n                      ? undefined\n                      : handleWritableDirsChange',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'const isRemoteWorktreeSession = Boolean(session?.deviceLinkDeviceId || session?.remoteHostId)',
     );
   });
 

@@ -5429,7 +5429,11 @@ export function NewMakerDraftRoute() {
                     // Plugin 入口不受影响)。进入远程设备时 extraDirs 已被清空,不会留下无法删除的残留。
                     // 恢复这个能力要把 picker 路由到对端(设备域浏览器已有 fs:list-dir),见 follow-up。
                     onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}
-                    onWritableDirsChange={isDeviceLinkDraft ? undefined : handleWritableDirsChange}
+                    onWritableDirsChange={
+                      isDeviceLinkDraft || isRemoteProjectDraft
+                        ? undefined
+                        : handleWritableDirsChange
+                    }
                     // 首页「新建目标」入口:草稿态没有 sessionId,由本组件 createSession→setGoal。
                     // ChatInput 把输入框当前文字传上来作默认目标内容。
                     onNewGoal={(text) => {
