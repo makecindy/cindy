@@ -389,7 +389,10 @@ export async function applyRuntimeSetModelChange(
       }
       // 非 busy 失败:恢复被清除的 pending,用户的待定来源选择不随异常丢失。
       if (clearedPending && input.registerPendingCredentialSwitch) {
-        input.registerPendingCredentialSwitch(sessionId, clearedPending);
+        // 生产适配器会先等待旧 Profile 快照/路由补偿，再把 pending gate 重新登记。
+        // 必须等它完成后才能把原 close/relink 错误返回给调用方；否则调用方可能在
+        // gate 尚未恢复时继续派发，登记拒绝也会变成未处理 Promise rejection。
+        await input.registerPendingCredentialSwitch(sessionId, clearedPending);
       }
       throw err;
     }

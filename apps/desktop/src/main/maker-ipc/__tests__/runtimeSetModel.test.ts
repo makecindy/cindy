@@ -637,7 +637,15 @@ describe('applyRuntimeSetModelChange', () => {
   it('restores a cleared pending switch with its Codex rebuild marker after relink fails', async () => {
     const sessionId = rememberSession('runtime-set-model-restore-pending-rebuild-marker');
     setSessionProvider(sessionId, 'xd');
-    const registerPendingCredentialSwitch = vi.fn();
+    let releaseRegistration!: () => void;
+    const registrationGate = new Promise<void>((resolve) => {
+      releaseRegistration = resolve;
+    });
+    let restorationComplete = false;
+    const registerPendingCredentialSwitch = vi.fn(async () => {
+      await registrationGate;
+      restorationComplete = true;
+    });
     const maker: RuntimeSetModelMaker = {
       getSession: () => ({
         agentKind: 'codex',
@@ -656,8 +664,8 @@ describe('applyRuntimeSetModelChange', () => {
       closeSession: vi.fn(async () => {}),
     };
 
-    await expect(
-      applyRuntimeSetModelChange({
+    let settled = false;
+    const result = applyRuntimeSetModelChange({
         maker,
         sessionId,
         model: 'gpt-5.6-sol',
@@ -675,8 +683,18 @@ describe('applyRuntimeSetModelChange', () => {
         relinkCodexThreadForProviderSwitch: vi.fn(async () => {
           throw new Error('fork failed');
         }),
-      }),
-    ).rejects.toThrow('fork failed');
+      }).finally(() => {
+        settled = true;
+      });
+
+    await vi.waitFor(() => expect(registerPendingCredentialSwitch).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(restorationComplete).toBe(false);
+
+    releaseRegistration();
+    await expect(result).rejects.toThrow('fork failed');
+    expect(restorationComplete).toBe(true);
 
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'gpt-5.6-sol',
@@ -686,6 +704,57 @@ describe('applyRuntimeSetModelChange', () => {
       sourceCodexThreadModelProviderId: 'cindy_gateway',
       previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
     });
+  });
+
+  it('fails closed when restoring a cleared pending switch rejects after close fails', async () => {
+    const sessionId = rememberSession('runtime-set-model-restore-pending-close-reject');
+    setSessionProvider(sessionId, 'xd');
+    const closeSession = vi.fn(async () => {
+      throw new Error('close failed');
+    });
+    const registerPendingCredentialSwitch = vi.fn(async () => {
+      throw new Error('pending restoration rejected');
+    });
+    const wakeSessionInputQueue = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        codexThreadModelProviderId: 'cindy_gateway',
+        model: 'codex/gpt-5.6-sol',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [{
+        id: sessionId,
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => false,
+      }],
+      closeSession,
+    };
+    const clearedPending = {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+    } as const;
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      getPendingCredentialSwitch: () => clearedPending,
+      clearPendingCredentialSwitch: vi.fn(),
+      registerPendingCredentialSwitch,
+      wakeSessionInputQueue,
+    })).rejects.toThrow('pending restoration rejected');
+
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, clearedPending);
+    expect(wakeSessionInputQueue).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
   it('closes an idle OpenAI thread when the provider store was already overwritten with DeepSeek', async () => {
