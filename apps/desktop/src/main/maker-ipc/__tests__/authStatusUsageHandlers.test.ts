@@ -36,6 +36,75 @@ describe('maker auth IPC handlers', () => {
     expect(getAgentAuthState).toHaveBeenCalledWith('pi');
   });
 
+  it('accepts Grok Build across the auth IPC boundary so the unauthenticated modal can run grok login', async () => {
+    const harness = new IpcHarness();
+    const broadcast = vi.fn();
+    const getAgentAuthState = vi.fn().mockResolvedValue({ authenticated: false });
+    const triggerAgentLogin = vi.fn().mockResolvedValue({ authenticated: true });
+    const logoutAgent = vi.fn().mockResolvedValue(undefined);
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ getAgentAuthState, triggerAgentLogin, logoutAgent }),
+      broadcast,
+      () => null,
+    );
+
+    await expect(harness.invoke(MAKER_INVOKE.AUTH_GET_STATE, 'grok-build')).resolves.toEqual({
+      authenticated: false,
+    });
+    expect(getAgentAuthState).toHaveBeenCalledWith('grok-build');
+
+    await expect(harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'grok-build')).resolves.toEqual({
+      authenticated: true,
+    });
+    expect(triggerAgentLogin).toHaveBeenCalledWith(
+      'grok-build',
+      expect.objectContaining({ mode: 'browser' }),
+    );
+
+    await expect(harness.invoke(MAKER_INVOKE.AUTH_LOGOUT, 'grok-build')).resolves.toBeUndefined();
+    expect(logoutAgent).toHaveBeenCalledWith('grok-build');
+    expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_STATE_CHANGED, {
+      agentKind: 'grok-build',
+      authenticated: false,
+    });
+  });
+
+  it('keeps device-code login and owner tokens Codex-only for Grok Build', async () => {
+    const harness = new IpcHarness();
+    const triggerAgentLogin = vi.fn();
+    registerMakerAuthHandlers(harness, createMakerStub({ triggerAgentLogin }), vi.fn(), () => null);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'grok-build', { mode: 'device-code' }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      harness.invokeFrom(202, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'grok-build', {
+        ownerId: 'window-1',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      harness.invokeFrom(202, MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'grok-build', {
+        releaseOwner: true,
+        ownerId: 'window-1',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(triggerAgentLogin).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a non-agent kind at the auth IPC boundary', async () => {
+    const harness = new IpcHarness();
+    const getAgentAuthState = vi.fn();
+    registerMakerAuthHandlers(harness, createMakerStub({ getAgentAuthState }), vi.fn(), () => null);
+
+    // 'grok' 是 xAI catalog provider 名，不是 harness 的 UI vendor。
+    await expect(harness.invoke(MAKER_INVOKE.AUTH_GET_STATE, 'grok')).rejects.toMatchObject({
+      code: 'INVALID_PARAMS',
+    });
+    expect(getAgentAuthState).not.toHaveBeenCalled();
+  });
+
   it('normalizes login progress and broadcasts final auth state', async () => {
     const harness = new IpcHarness();
     const broadcast = vi.fn();

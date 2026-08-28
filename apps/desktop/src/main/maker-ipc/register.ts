@@ -580,6 +580,8 @@ import {
   recordTurnSpend,
 } from '../usageBroadcaster.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import { requireAgentKind, requireDraftAgentKind } from './agentKindGate.js';
+import { requireQueuedMessageShape } from './queuedMessageGate.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import {
   runPiPackageListIpcBoundary,
@@ -2075,15 +2077,6 @@ function createBridgeWorkerLabel(task: string): string {
 export function stopOrcaIdleWatcher(): void {
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
-}
-
-/**
- * 这些 wire 入口(capabilities / New Maker 草稿镜像等)只认三个可在控制端建草稿的
- * agent;grok-build 是本机可选 harness,没有草稿 vendor 槽,继续按非法参数拒绝。
- */
-function requireAgentKind(value: unknown): 'claude-code' | 'codex' | 'pi' {
-  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
-  throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
 type IpcUserMessage =
@@ -6448,7 +6441,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // (model/effort/fast/permission/source/是否显式选过模型)。控制端经隧道调用 → seed 远程项目草稿。
   // 缓存未就绪 / 该 vendor 无草稿 model → 返回 {},控制端按 capabilities 默认兜底。
   ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS, (_e, agentKind: unknown) => {
-    return getRemoteNewMakerDefaults(requireAgentKind(agentKind));
+    return getRemoteNewMakerDefaults(requireDraftAgentKind(agentKind));
   });
 
   // device-link 草稿「模型 effort/fast」写穿:控制端经隧道调用 → 跑在**被控端**。被控端不直接改
@@ -6467,9 +6460,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       active?: unknown;
       markModelChoice?: unknown;
     };
-    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') {
-      throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi');
-    }
+    const draftAgent = requireDraftAgentKind(p.agent, 'agent');
     if (p.providerId !== undefined && typeof p.providerId !== 'string') {
       throwIpcError('INVALID_PARAMS', 'providerId must be string');
     }
@@ -6492,7 +6483,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'markModelChoice must be boolean');
     }
     broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
-      agent: p.agent,
+      agent: draftAgent,
       providerId: p.providerId ?? '',
       modelId: p.modelId,
       active: p.active === true,
@@ -13662,28 +13653,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     value: unknown,
     opts?: { allowMissingTrustedContexts?: boolean },
   ): AgentInputQueuedMessage => {
-    if (!value || typeof value !== 'object')
-      throwIpcError('INVALID_PARAMS', 'queued message required');
-    const msg = value as AgentInputQueuedMessage;
-    if (typeof msg.clientId !== 'string' || !msg.clientId) {
-      throwIpcError('INVALID_PARAMS', 'queued.clientId required');
-    }
-    if (typeof msg.text !== 'string') throwIpcError('INVALID_PARAMS', 'queued.text required');
-    if (typeof msg.persistedContent !== 'string')
-      throwIpcError('INVALID_PARAMS', 'queued.persistedContent required');
-    if (!msg.chatMessage || typeof msg.chatMessage !== 'object') {
-      throwIpcError('INVALID_PARAMS', 'queued.chatMessage required');
-    }
-    if (!msg.createOpts || typeof msg.createOpts !== 'object') {
-      throwIpcError('INVALID_PARAMS', 'queued.createOpts required');
-    }
-    if (
-      msg.createOpts.agentKind !== 'claude-code' &&
-      msg.createOpts.agentKind !== 'codex' &&
-      msg.createOpts.agentKind !== 'pi'
-    ) {
-      throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
-    }
+    const msg = requireQueuedMessageShape(value);
     const normalized: AgentInputQueuedMessage = { ...msg };
     const refs = requireSessionRefs(normalized.sessionRefs);
     if (!isDeviceLinkInvoke()) {
