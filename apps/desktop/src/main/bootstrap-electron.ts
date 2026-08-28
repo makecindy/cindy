@@ -879,6 +879,7 @@ import {
   refreshGhostLocalization,
   registerGhostIpc,
   runStableOwnerPostCommitTask,
+  setGhostNodeRuntimeStartAttemptContextReader,
   setGhostsChangedObserver,
   suspendAllGhosts,
   waitForGhostMutations,
@@ -3708,6 +3709,29 @@ const createWindow = () => {
 
   // 装饰动画闸门的兜底信号。主窗在 running turn 期间会关掉 backgroundThrottling,
   // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
+  setGhostNodeRuntimeStartAttemptContextReader(() => {
+    let observedMainWindowState:
+      'absent' | 'hidden' | 'minimized' | 'visible-unfocused' | 'focused' | 'unknown' = 'unknown';
+    try {
+      if (mainWindow.isDestroyed()) observedMainWindowState = 'absent';
+      else if (mainWindow.isMinimized()) observedMainWindowState = 'minimized';
+      else if (!mainWindow.isVisible()) observedMainWindowState = 'hidden';
+      else if (mainWindow.isFocused()) observedMainWindowState = 'focused';
+      else observedMainWindowState = 'visible-unfocused';
+    } catch {
+      observedMainWindowState = 'unknown';
+    }
+    let observedScreenState: 'active' | 'idle' | 'locked' | 'unknown' = 'unknown';
+    try {
+      const state = powerMonitor.getSystemIdleState(60);
+      if (state === 'active' || state === 'idle' || state === 'locked') {
+        observedScreenState = state;
+      }
+    } catch {
+      observedScreenState = 'unknown';
+    }
+    return { observedMainWindowState, observedScreenState };
+  });
   installWindowHiddenBroadcast(mainWindow);
   // Keyboard hello when the window comes back from hide / minimize / Dock.
   attachWorkLouderCodexWindowReveal(mainWindow);

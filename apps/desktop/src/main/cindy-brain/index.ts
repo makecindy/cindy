@@ -7,6 +7,7 @@ import {
   shell,
   type WebContents,
 } from 'electron';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -238,7 +239,10 @@ import {
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
-import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
+import {
+  GhostNodeRuntimeBroker,
+  type NodeRuntimeStartAttemptContext,
+} from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
@@ -1674,6 +1678,21 @@ export function getInstalledGhostName(id: string): string | null {
 }
 
 let nodeRuntimeBrokerSingleton: GhostNodeRuntimeBroker | null = null;
+let nodeRuntimeStartAttemptContextReader: (() => NodeRuntimeStartAttemptContext) | null = null;
+const nodeRuntimeAppRunId = (() => {
+  try {
+    return randomUUID().replaceAll('-', '');
+  } catch {
+    return 'unknown';
+  }
+})();
+
+/** Desktop bootstrap 注入主窗/系统的粗粒度只读快照；不注册额外全局监听。 */
+export function setGhostNodeRuntimeStartAttemptContextReader(
+  reader: (() => NodeRuntimeStartAttemptContext) | null,
+): void {
+  nodeRuntimeStartAttemptContextReader = reader;
+}
 
 /**
  * `GhostNodeRuntimeBroker.destroyAll()` is a terminal host-exit operation. An
@@ -1698,6 +1717,12 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
       sendToGhost: (ghostId, payload) => {
         sendToGhostLogic(ghostId, payload);
       },
+      getStartAttemptContext: () =>
+        nodeRuntimeStartAttemptContextReader?.() ?? {
+          observedMainWindowState: 'unknown',
+          observedScreenState: 'unknown',
+        },
+      appRunId: nodeRuntimeAppRunId,
       log,
     });
   }
