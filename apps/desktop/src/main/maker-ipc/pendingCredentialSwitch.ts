@@ -278,15 +278,21 @@ export class PendingCredentialSwitchService {
             // turn done 与新 turn start 竞态:保留 pending,等下一个边界。
             return;
           }
-          // 关闭失败也要落 route:下一次发送的 getHost 仲裁仍会按新来源协调,
-          // 不能让用户的选择因一次 close 失败而静默蒸发。
-          this.deps.logger?.warn(
-            'pending credential switch: close session failed; applying route anyway',
+          // A rejected close leaves the live Session state unknown. Keep the pending gate and
+          // retry from the close boundary; relinking or persisting a target route here could
+          // pair the still-live source thread with the target provider/model.
+          this.deps.logger?.error?.(
+            'pending credential switch: close session failed; keeping queue gated for retry',
             {
-            sessionId,
-            error: err instanceof Error ? err.message : String(err),
+              sessionId,
+              error: err instanceof Error ? err.message : String(err),
             },
           );
+          const latest = this.pending.get(sessionId);
+          if (latest && !this.discardIfOwnerStale(sessionId, latest)) {
+            this.scheduleRetry(sessionId);
+          }
+          return;
         }
       }
       // await close 期间用户可能又 register(改选)或 clear(取消):以**当前**登记为准

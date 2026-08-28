@@ -670,21 +670,30 @@ describe('PendingCredentialSwitchService', () => {
     expect(h.onApplied).toHaveBeenCalledWith(sessionId);
   });
 
-  it('still applies the route when closing the session fails hard', async () => {
-    // close 失败不能让用户的选择静默蒸发:route 照写,下一次发送由 getHost 仲裁兜底。
+  it('keeps the queue gated and never relinks while the live-session close is unconfirmed', async () => {
     const sessionId = rememberSession('pending-switch-close-failed');
-    setSessionProvider(sessionId, 'openai');
-    const h = createHarness([
-      { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
-    ]);
+    setSessionProvider(sessionId, 'xd');
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      { retryDelayMs: 60_000 },
+    );
     h.closeSession.mockRejectedValueOnce(new Error('close blew up'));
 
-    h.service.register(sessionId, { model: 'gpt-5.5', providerId: 'xd' });
+    h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      rebuildCodexThread: true,
+      previousRoute: { model: 'codex/gpt-5.6-sol', providerId: 'xd' },
+    });
     await h.service.onTurnSettled(sessionId);
 
-    expect(h.service.has(sessionId)).toBe(false);
+    expect(h.service.has(sessionId)).toBe(true);
     expect(getSessionProvider(sessionId)).toBe('xd');
-    expect(h.broadcastApplied).toHaveBeenCalledTimes(1);
+    expect(h.relinkCodexThreadForProviderSwitch).not.toHaveBeenCalled();
+    expect(h.persistRoute).not.toHaveBeenCalled();
+    expect(h.onApplied).not.toHaveBeenCalled();
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
+    h.service.clear(sessionId);
   });
 
   it('applies the latest registration when the user re-selects during the async close (last click wins)', async () => {
