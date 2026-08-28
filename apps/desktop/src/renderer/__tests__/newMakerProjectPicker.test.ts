@@ -1531,15 +1531,17 @@ describe('Shared create project picker', () => {
       'writableDirsChangeSupported ? handleWritableDirsChange : undefined',
     );
     expect(ccAgentSessionViewSource).toContain(
+      'writableDirsChangeSupported ? handleWritableDirRemove : undefined',
+    );
+    expect(ccAgentSessionViewSource).toContain(
       'session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true',
     );
     expect(chatInputSource).toContain(
       'if (onWritableDirsChange && !remoteHostId && deviceLinkDeviceId === null) {',
     );
     expect(chatInputSource).toContain('!settingsLocked && onWritableDirsChange');
-    expect(chatInputSource).toContain(
-      'void onWritableDirsChange(\n                          (writableDirs ?? []).filter((item) => item !== path),',
-    );
+    expect(chatInputSource).toContain('void onWritableDirRemove(path);');
+    expect(chatInputSource).toContain('(writableDirs ?? []).filter((item) => item !== path)');
     expect(ccAgentSessionViewSource).toContain(
       'const isRemoteWorktreeSession = Boolean(session?.deviceLinkDeviceId || session?.remoteHostId)',
     );

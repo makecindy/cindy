@@ -2,7 +2,10 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { applyDirectoryGrantUpdate } from '../CCAgentSessionView';
+import {
+  applyDirectoryGrantUpdate,
+  createWritableDirRemovalQueue,
+} from '../CCAgentSessionView';
 
 describe('applyDirectoryGrantUpdate', () => {
   it('rolls runtime grants back and refreshes when local persistence fails', async () => {
@@ -140,6 +143,101 @@ describe('applyDirectoryGrantUpdate', () => {
     expect(database).toEqual({
       extraDirs: [],
       writableDirs: ['/shared'],
+    });
+  });
+});
+
+describe('createWritableDirRemovalQueue', () => {
+  it('serializes rapid removals against the latest accepted grant set', async () => {
+    const queue = createWritableDirRemovalQueue();
+    const order: string[] = [];
+    let runtime = ['/output/a', '/output/b'];
+    let stored = [...runtime];
+    let releaseFirstActivation: (() => void) | undefined;
+    const firstActivation = new Promise<void>((resolve) => {
+      releaseFirstActivation = resolve;
+    });
+    let activationCount = 0;
+
+    const apply = (next: string[], previous: string[]) =>
+      applyDirectoryGrantUpdate({
+        next,
+        previous,
+        activate: async (dirs) => {
+          activationCount += 1;
+          order.push(`activate:${dirs.join(',')}`);
+          if (activationCount === 1) await firstActivation;
+          runtime = [...dirs];
+          return dirs;
+        },
+        persist: async (dirs) => {
+          order.push(`persist:${dirs.join(',')}`);
+          stored = [...dirs];
+        },
+        refresh: async () => undefined,
+      });
+
+    const removeA = queue.remove({
+      sessionId: 'session-1',
+      path: '/output/a',
+      observed: ['/output/a', '/output/b'],
+      apply,
+    });
+    const removeB = queue.remove({
+      sessionId: 'session-1',
+      path: '/output/b',
+      observed: ['/output/a', '/output/b'],
+      apply,
+    });
+
+    await vi.waitFor(() => expect(order).toEqual(['activate:/output/b']));
+    expect(activationCount).toBe(1);
+    releaseFirstActivation?.();
+    await expect(Promise.all([removeA, removeB])).resolves.toEqual([['/output/b'], []]);
+
+    expect(order).toEqual(['activate:/output/b', 'persist:/output/b', 'activate:', 'persist:']);
+    expect({ runtime, stored }).toEqual({ runtime: [], stored: [] });
+  });
+
+  it('continues from the rolled-back grants when an earlier persistence fails', async () => {
+    const queue = createWritableDirRemovalQueue();
+    let runtime = ['/output/a', '/output/b'];
+    let stored = [...runtime];
+    let persistCount = 0;
+    const apply = (next: string[], previous: string[]) =>
+      applyDirectoryGrantUpdate({
+        next,
+        previous,
+        activate: async (dirs) => {
+          runtime = [...dirs];
+          return dirs;
+        },
+        persist: async (dirs) => {
+          persistCount += 1;
+          if (persistCount === 1) throw new Error('database unavailable');
+          stored = [...dirs];
+        },
+        refresh: async () => undefined,
+      });
+
+    const removeA = queue.remove({
+      sessionId: 'session-1',
+      path: '/output/a',
+      observed: ['/output/a', '/output/b'],
+      apply,
+    });
+    const removeB = queue.remove({
+      sessionId: 'session-1',
+      path: '/output/b',
+      observed: ['/output/a', '/output/b'],
+      apply,
+    });
+
+    await expect(removeA).rejects.toThrow('database unavailable');
+    await expect(removeB).resolves.toEqual(['/output/a']);
+    expect({ runtime, stored }).toEqual({
+      runtime: ['/output/a'],
+      stored: ['/output/a'],
     });
   });
 });

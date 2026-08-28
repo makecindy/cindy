@@ -625,6 +625,72 @@ export async function applyDirectoryGrantUpdate(input: {
   return applied;
 }
 
+type WritableDirRemovalLane = {
+  accepted: string[];
+  observed: string[];
+  pending: number;
+  tail: Promise<void>;
+};
+
+function sameDirectories(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((dir, index) => dir === right[index]);
+}
+
+/**
+ * Keep revocations for one session ordered by the last runtime-accepted grant set.
+ * ChatInput reports the removed path (rather than another render-time array snapshot),
+ * so two quick removals from [A, B] become [B] then [] instead of [B] and stale [A].
+ */
+export function createWritableDirRemovalQueue() {
+  const lanes = new Map<string, WritableDirRemovalLane>();
+
+  const getLane = (sessionId: string, observed: string[]): WritableDirRemovalLane => {
+    let lane = lanes.get(sessionId);
+    if (!lane) {
+      lane = {
+        accepted: [...observed],
+        observed: [...observed],
+        pending: 0,
+        tail: Promise.resolve(),
+      };
+      lanes.set(sessionId, lane);
+    } else if (lane.pending === 0 && !sameDirectories(lane.observed, observed)) {
+      // A committed DB/remote projection supersedes the last renderer snapshot. Do not
+      // overwrite accepted state merely because an unrelated render repeated the old prop.
+      lane.accepted = [...observed];
+      lane.observed = [...observed];
+    }
+    return lane;
+  };
+
+  return {
+    remove(input: {
+      sessionId: string;
+      path: string;
+      observed: string[];
+      apply: (next: string[], previous: string[]) => Promise<string[]>;
+    }): Promise<string[]> {
+      const lane = getLane(input.sessionId, input.observed);
+      lane.pending += 1;
+      const operation = lane.tail.then(async () => {
+        const previous = [...lane.accepted];
+        const next = previous.filter((dir) => dir !== input.path);
+        if (sameDirectories(previous, next)) return previous;
+        const accepted = await input.apply(next, previous);
+        lane.accepted = [...accepted];
+        return accepted;
+      });
+      lane.tail = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      return operation.finally(() => {
+        lane.pending -= 1;
+      });
+    },
+  };
+}
+
 export function CCAgentSessionView({
   sessionIdProp,
   routeOwner,
@@ -2836,6 +2902,41 @@ export function CCAgentSessionView({
     [sessionId, session?.writableDirs, refreshServerSession, t],
   );
 
+  const writableDirRemovalQueueRef = useRef<ReturnType<typeof createWritableDirRemovalQueue> | null>(
+    null,
+  );
+  const writableDirRemovalQueue =
+    (writableDirRemovalQueueRef.current ??= createWritableDirRemovalQueue());
+  const handleWritableDirRemove = useCallback(
+    async (path: string) => {
+      if (!sessionId) return;
+      try {
+        await writableDirRemovalQueue.remove({
+          sessionId,
+          path,
+          observed: session?.writableDirs ?? [],
+          apply: (next, previous) =>
+            applyDirectoryGrantUpdate({
+              next,
+              previous,
+              activate: (dirs) => makerApiFor(sessionId).setWritableDirs(sessionId, dirs),
+              ...(!getSessionDeviceId(sessionId)
+                ? {
+                    persist: (dirs: string[]) =>
+                      sessionService.update(sessionId, { writableDirs: dirs }),
+                  }
+                : {}),
+              refresh: refreshServerSession,
+            }),
+        });
+      } catch (err) {
+        log.warn('writableDirs removal failed', err);
+        toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
+      }
+    },
+    [sessionId, session?.writableDirs, refreshServerSession, t, writableDirRemovalQueue],
+  );
+
   // /issue 命令的 composer 附件不随命令 payload 走 main IPC 往返 —— AttachedFile 是
   // renderer 层类型(与 render/main 解耦一致),且发送后 composer 会 clearFiles。故在
   // dispatch 前于 renderer 侧快照,待 main 广播 DESKTOP_COMMAND_TRIGGERED 回流时取用。
@@ -4897,6 +4998,9 @@ export function CCAgentSessionView({
                   writableDirs={session?.writableDirs ?? []}
                   onWritableDirsChange={
                     writableDirsChangeSupported ? handleWritableDirsChange : undefined
+                  }
+                  onWritableDirRemove={
+                    writableDirsChangeSupported ? handleWritableDirRemove : undefined
                   }
                   compactToolbar={compactToolbar}
                   // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把字号/控件压一档。

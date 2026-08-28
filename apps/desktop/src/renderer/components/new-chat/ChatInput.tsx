@@ -701,6 +701,8 @@ interface ChatInputProps {
   /** 用户明确授予的附加可读写目录，与 extraDirs 的只读授权分开显示和保存。 */
   writableDirs?: string[];
   onWritableDirsChange?: (next: string[]) => void | Promise<void>;
+  /** 会话态撤权使用路径意图，避免连续删除基于同一份旧 writableDirs 快照。 */
+  onWritableDirRemove?: (path: string) => void | Promise<void>;
   /**
    * 「新建目标」入口回调(首页草稿态用):提供时「+」菜单显示「新建目标」,点击调它
    * (NewMakerDraftRoute 负责建会话 + setGoal)。会话态(有 sessionId)不需要传 ——
@@ -1094,6 +1096,7 @@ export function ChatInput({
   extraDirs,
   writableDirs,
   onWritableDirsChange,
+  onWritableDirRemove,
   onExtraDirsChange,
   onNewGoal,
   rememberedEffortByModel,
@@ -8235,9 +8238,13 @@ export function ChatInput({
                           ? {
                               dirs: writableDirs ?? [],
                               onRemove: (path) => {
-                                void onWritableDirsChange(
-                                  (writableDirs ?? []).filter((item) => item !== path),
-                                );
+                                if (onWritableDirRemove) {
+                                  void onWritableDirRemove(path);
+                                } else {
+                                  void onWritableDirsChange(
+                                    (writableDirs ?? []).filter((item) => item !== path),
+                                  );
+                                }
                               },
                             }
                           : null
@@ -8598,9 +8605,13 @@ export function ChatInput({
                   ? {
                       dirs: writableDirs ?? [],
                       onRemove: (path) => {
-                        void onWritableDirsChange(
-                          (writableDirs ?? []).filter((item) => item !== path),
-                        );
+                        if (onWritableDirRemove) {
+                          void onWritableDirRemove(path);
+                        } else {
+                          void onWritableDirsChange(
+                            (writableDirs ?? []).filter((item) => item !== path),
+                          );
+                        }
                       },
                     }
                   : null
