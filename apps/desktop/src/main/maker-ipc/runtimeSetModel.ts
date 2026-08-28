@@ -451,7 +451,9 @@ export async function applyRuntimeSetModelChange(
     // (providerId !== undefined)时旧 pending 已被本次明确选择覆盖,恢复它会静默
     // 撤销用户最后一次选择(Greptile review #1035 七轮)。
     if (pendingTarget && input.registerPendingCredentialSwitch) {
-      input.registerPendingCredentialSwitch(sessionId, pendingTarget);
+      // 恢复适配器可能先等待旧 Profile 补偿再重新建立 pending gate；必须等它
+      // 完成后再返回原 setModel 错误，避免后续输入穿透或 rejection 脱离调用链。
+      await input.registerPendingCredentialSwitch(sessionId, pendingTarget);
     }
     throw err;
   }

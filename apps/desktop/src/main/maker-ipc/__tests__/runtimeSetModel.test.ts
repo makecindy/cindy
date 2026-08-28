@@ -1202,6 +1202,92 @@ describe('applyRuntimeSetModelChange', () => {
     expect(setModel).toHaveBeenCalledWith('gpt-5.5', { providerId: null });
   });
 
+  it('waits for pending restoration before returning a failed model-only hot switch', async () => {
+    const sessionId = rememberSession('runtime-set-model-hot-failure-await-pending-restore');
+    setSessionProvider(sessionId, null);
+    let releaseRestoration!: () => void;
+    const restorationGate = new Promise<void>((resolve) => {
+      releaseRestoration = resolve;
+    });
+    let restorationComplete = false;
+    const registerPendingCredentialSwitch = vi.fn(async () => {
+      await restorationGate;
+      restorationComplete = true;
+    });
+    const pendingTarget = {
+      model: 'codex/gpt-5.5',
+      providerId: null,
+      rebuildCodexThread: true,
+      previousRoute: { model: 'gpt-5.5', providerId: null },
+    } as const;
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.5',
+        setModel: vi.fn(async () => {
+          throw new Error('hot switch failed');
+        }),
+      }),
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    let settled = false;
+    const result = applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.5',
+      getPendingCredentialSwitch: () => pendingTarget,
+      clearPendingCredentialSwitch: vi.fn(),
+      registerPendingCredentialSwitch,
+    }).finally(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(registerPendingCredentialSwitch).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(restorationComplete).toBe(false);
+
+    releaseRestoration();
+    await expect(result).rejects.toThrow('hot switch failed');
+    expect(restorationComplete).toBe(true);
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, pendingTarget);
+  });
+
+  it('fails closed when pending restoration rejects after a model-only hot switch failure', async () => {
+    const sessionId = rememberSession('runtime-set-model-hot-failure-pending-restore-reject');
+    setSessionProvider(sessionId, null);
+    const pendingTarget = { model: 'codex/gpt-5.5', providerId: null } as const;
+    const registerPendingCredentialSwitch = vi.fn(async () => {
+      throw new Error('pending restoration rejected');
+    });
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.5',
+        setModel: vi.fn(async () => {
+          throw new Error('hot switch failed');
+        }),
+      }),
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.5',
+      getPendingCredentialSwitch: () => pendingTarget,
+      clearPendingCredentialSwitch: vi.fn(),
+      registerPendingCredentialSwitch,
+    })).rejects.toThrow('pending restoration rejected');
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, pendingTarget);
+  });
+
   it('updates the pending model and keeps its provider on a model-only change under a deferred source', async () => {
     // 用户先 deferred 选了 xd 来源,turn 未结束又换了个模型:pending 的来源意图必须
     // 保留,只把目标模型更新为最新选择(model-only 调用回落 store 旧值会把 xd 丢掉)。
