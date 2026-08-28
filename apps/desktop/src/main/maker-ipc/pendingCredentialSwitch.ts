@@ -496,7 +496,31 @@ export class PendingCredentialSwitchService {
           return;
         }
         // await 期间用户可能改选 / 取消:本次让位,新登记有自己的收口路径。
-        if (this.pending.get(sessionId) !== target) return;
+        // relink 已在 persistRoute 之前提交;若这一代此刻已过时,必须先把它回滚，
+        // 否则下一次无 live session 的选择会沿用被放弃来源的 sdk_session_id。
+        if (this.pending.get(sessionId) !== target) {
+          if (relinkReceipt) {
+            try {
+              const restored = await relinkReceipt.rollback();
+              if (!restored) {
+                this.deps.logger?.warn(
+                  'pending credential switch: stale Codex thread relink rollback was superseded',
+                  { sessionId },
+                );
+              }
+            } catch (rollbackError) {
+              this.deps.logger?.error?.(
+                'pending credential switch: stale Codex thread relink rollback failed',
+                {
+                  sessionId,
+                  error:
+                    rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+                },
+              );
+            }
+          }
+          return;
+        }
       }
       this.deps.logger?.info(`pending credential switch applied on ${reason}`, {
         sessionId,
