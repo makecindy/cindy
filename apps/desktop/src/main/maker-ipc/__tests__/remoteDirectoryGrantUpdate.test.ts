@@ -15,6 +15,7 @@ function createState(extraDirs: string[] = [], writableDirs: string[] = []) {
     if (patch.extraDirs) db.extraDirs = [...patch.extraDirs];
     if (patch.writableDirs) db.writableDirs = [...patch.writableDirs];
   });
+  const terminate = vi.fn(async () => undefined);
   const update = (axis: RemoteDirectoryGrantAxis, dirs: string[]) =>
     applyRemoteDirectoryGrantUpdate(axis, dirs, { setExtraDirs, setWritableDirs }, {
       validate: async (requested) => ({ valid: [...requested], rejected: [] }),
@@ -22,8 +23,9 @@ function createState(extraDirs: string[] = [], writableDirs: string[] = []) {
       readWritableDirs: async () => [...db.writableDirs],
       excludeConflicts: excludeDirectoryGrantConflicts,
       persist,
+      terminate,
     });
-  return { db, runtime, persist, setExtraDirs, setWritableDirs, update };
+  return { db, runtime, persist, terminate, setExtraDirs, setWritableDirs, update };
 }
 
 function createSessionSerializer() {
@@ -58,6 +60,7 @@ describe('remote directory grant atomic update', () => {
     expect(state.runtime.writableDirs).toEqual(['/old-write']);
     expect(state.db.writableDirs).toEqual(['/old-write']);
     expect(state.persist).toHaveBeenNthCalledWith(2, { writableDirs: ['/old-write'] });
+    expect(state.terminate).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -105,5 +108,6 @@ describe('remote directory grant atomic update', () => {
           expect.objectContaining({ message: 'runtime rollback failed' }),
         ]),
       });
+    expect(state.terminate).toHaveBeenCalledOnce();
   });
 });

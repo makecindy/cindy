@@ -11,6 +11,8 @@ export interface RemoteDirectoryGrantUpdateDeps {
   readWritableDirs(): Promise<string[]>;
   excludeConflicts(candidates: readonly string[], blocked: readonly string[]): Promise<string[]>;
   persist(patch: { extraDirs?: string[]; writableDirs?: string[] }): Promise<void>;
+  /** Close the live harness when rollback cannot prove that old permissions were restored. */
+  terminate(): Promise<unknown>;
 }
 
 export interface RemoteDirectoryGrantUpdateResult {
@@ -19,7 +21,7 @@ export interface RemoteDirectoryGrantUpdateResult {
 }
 
 /**
- * Apply one remote directory-grant axis while the caller holds the session route lock.
+ * Apply one directory-grant axis while the caller holds the session route lock.
  * Both persisted axes are read inside that lock, so a concurrent controller validates
  * against the latest complete grant state. Persistence failure restores the harness
  * closure first, then best-effort restores SQLite + patched-session mirrors.
@@ -51,9 +53,15 @@ export async function applyRemoteDirectoryGrantUpdate(
     try {
       await applyRuntime(previousDirs);
     } catch (rollbackError) {
+      const errors: unknown[] = [applyError, rollbackError];
+      try {
+        await deps.terminate();
+      } catch (terminateError) {
+        errors.push(terminateError);
+      }
       throw new AggregateError(
-        [applyError, rollbackError],
-        `remote ${axis} runtime apply and rollback both failed`,
+        errors,
+        `${axis} runtime apply and rollback both failed; live session terminated`,
       );
     }
     throw applyError;
@@ -74,9 +82,14 @@ export async function applyRemoteDirectoryGrantUpdate(
       rollbackErrors.push(error);
     }
     if (rollbackErrors.length > 0) {
+      try {
+        await deps.terminate();
+      } catch (error) {
+        rollbackErrors.push(error);
+      }
       throw new AggregateError(
         [persistenceError, ...rollbackErrors],
-        `remote ${axis} persistence rollback failed`,
+        `${axis} persistence rollback failed; live session terminated`,
       );
     }
     throw persistenceError;

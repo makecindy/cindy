@@ -91,15 +91,15 @@ export type ReviewableAction =
       command: string;
       cwd?: string;
       cwdUnknown?: boolean;
-      /** 远端路径不属于控制端文件系统；无法取得执行端 realpath 时必须逐次确认破坏性目标。 */
+      /** 远端路径不属于控制端文件系统；无法取得执行端 realpath 时所有写目标都逐次确认。 */
       destructivePathResolution?: 'host' | 'unavailable';
     }
   | { kind: 'network'; target?: string; operation?: string }
   | { kind: 'other'; description?: string; requireConsent?: boolean };
 
 /**
- * 核心裁决。除 shell 删除目标外保持纯字符串判定；删除目标会在实际执行主机上解析最近存在
- * 祖先的 realpath，防止授权根内 symlink / junction 越界。远端 adapter 必须显式标记无法取证，
+ * 核心裁决。shell 写目标会在实际执行主机上解析最近存在祖先的 realpath，防止授权根内
+ * symlink / junction 越界。远端 adapter 必须显式标记无法取证，
  * 此时 fail closed 到逐次确认。workspaceRoots 是全部可读根；opts.writableRoots 是明确可写根。
  * 旧调用未提供 writableRoots 时仍只有首个工作目录可写。
  */
@@ -3396,6 +3396,46 @@ function destructiveTargetNeedsConsent(
   });
 }
 
+/** 普通 shell 写目标只有在词法授权内却无法证明真实落点仍在同一授权根时才升级。 */
+function writeTargetNeedsConsent(
+  target: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): boolean {
+  if (/[$`{}]/.test(target) || target.startsWith('~')) {
+    return opts.destructivePathResolution === 'host'
+      || opts.destructivePathResolution === 'unavailable';
+  }
+  if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(target))) return true;
+  const writableRoots = resolveWritableRoots(workspaceRoots, opts.writableRoots);
+  const cwd = opts.cwd ?? workspaceRoots[0] ?? writableRoots[0];
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  const normalizedTarget = normalizeTarget(target, [cwd]);
+  const lexicalTarget = canonicalPath(normalizedTarget, aliasFirmlinks);
+  if (isProtectedSystemPath(lexicalTarget) || isSensitiveCredentialPath(lexicalTarget)) return true;
+  const matchedRoot = writableRoots.find((root) =>
+    isInsideWorkspace(normalizedTarget, [root], aliasFirmlinks));
+  // Ordinary writes outside an authorized root retain the existing grey reviewer path.
+  if (!matchedRoot) return false;
+  if (opts.destructivePathResolution === 'unavailable') return true;
+  if (opts.destructivePathResolution !== 'host') return false;
+
+  const resolvedTarget = resolveDestructiveTargetPath(normalizedTarget);
+  const resolvedRoot = resolveDestructiveTargetPath(matchedRoot);
+  if (resolvedTarget === null || resolvedRoot === null) return true;
+  const canonicalResolvedTarget = canonicalPath(resolvedTarget, aliasFirmlinks);
+  const canonicalResolvedRoot = canonicalPath(resolvedRoot, aliasFirmlinks);
+  if (
+    isProtectedSystemPath(canonicalResolvedTarget)
+    || isSensitiveCredentialPath(canonicalResolvedTarget)
+  ) return true;
+  return !isInsideWorkspace(
+    canonicalResolvedTarget,
+    [canonicalResolvedRoot],
+    aliasFirmlinks,
+  );
+}
+
 function findDeleteRoots(tokens: string[]): string[] {
   let i = 1;
   // find 的遍历选项先于路径；-D 额外消费一个 debug 参数。
@@ -3820,7 +3860,8 @@ function systemWriteTargetsInSegment(
       if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(concrete))) return true;
       const resolved = canonicalPath(normalizeTarget(concrete, [base]), aliasFirmlinks);
       if (isProtectedProviderPath(resolved) || isProtectedSystemPath(resolved)) return true;
-      return !isInsideWorkspace(resolved, workspaceRoots, aliasFirmlinks);
+      if (!isInsideWorkspace(resolved, workspaceRoots, aliasFirmlinks)) return true;
+      return writeTargetNeedsConsent(concrete, workspaceRoots, opts);
     }
     // 每个目标查三种形态:原样(保留 Windows `\` 分隔符)、去 POSIX `\` 转义(`/e\tc`→`/etc`)、
     // 去 PowerShell 反引号转义。后者是 codex 报的绕过:PowerShell 里 `` ` `` 转义下一个字符,
@@ -3832,7 +3873,7 @@ function systemWriteTargetsInSegment(
       const forward = toForwardSlashes(v);
       // cwd 未知 + 相对目标 → 无法证明它没落进系统目录,fail-closed。
       if (opts.cwdUnknown && !isAbsolutePath(forward)) return true;
-      return isProtectedSystemPath(canonicalPath(normalizeTarget(v, [base]), aliasFirmlinks));
+      return writeTargetNeedsConsent(v, workspaceRoots, opts);
     });
   });
 }
@@ -4025,8 +4066,6 @@ function pipelineFedWriteTargetNeedsConsent(
   //   · `targets: 'last'` 且不销毁源(Copy-Item)—— 项只被读,不需要同意。
   if (spec.targets === 'last' && spec.sources !== true) return false;
   if (hasExplicitPathArgument(tokens)) return false; // 项写在命令行上 → 已由写目标表判过
-  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const base = opts.cwd ?? workspaceRoots[0];
   // `null` = 上游来源不可证(表外的 pipeline 阶段能返回任意对象)→ 直接要求同意。
   if (upstreamOperands === null) return true;
   const candidates = upstreamOperands.length > 0 ? upstreamOperands : ['.'];
@@ -4041,10 +4080,7 @@ function pipelineFedWriteTargetNeedsConsent(
       .map((part) => (POWERSHELL_WILDCARD.test(part) ? GLOB_COMPONENT_PLACEHOLDER : part))
       .join('');
     if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(concrete))) return true;
-    const resolved = canonicalPath(normalizeTarget(concrete, [base]), aliasFirmlinks);
-    if (isProtectedSystemPath(resolved)) return true;
-    const writableRoots = resolveWritableRoots(workspaceRoots, opts.writableRoots);
-    return !isInsideWorkspace(resolved, writableRoots, aliasFirmlinks);
+    return writeTargetNeedsConsent(concrete, workspaceRoots, opts);
   });
 }
 

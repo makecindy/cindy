@@ -46,6 +46,20 @@ describe('excludeDirectoryGrantConflicts', () => {
     ]);
   });
 
+  it('keeps only the first canonical root when candidates overlap within one grant group', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-dir-grants-same-group-'));
+    cleanupDirs.push(root);
+    const shared = path.join(root, 'shared');
+    const specs = path.join(shared, 'specs');
+    const alias = path.join(root, 'shared-alias');
+    mkdirSync(specs, { recursive: true });
+    symlinkSync(shared, alias, process.platform === 'win32' ? 'junction' : 'dir');
+
+    await expect(excludeDirectoryGrantConflicts([shared, specs], [])).resolves.toEqual([shared]);
+    await expect(excludeDirectoryGrantConflicts([specs, shared], [])).resolves.toEqual([specs]);
+    await expect(excludeDirectoryGrantConflicts([shared, alias], [])).resolves.toEqual([shared]);
+  });
+
   it('uses canonical paths for nested aliases without rejecting sibling prefixes', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-dir-grants-alias-nested-'));
     cleanupDirs.push(root);

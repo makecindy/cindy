@@ -595,7 +595,6 @@ export async function applyDirectoryGrantUpdate(input: {
   next: string[];
   previous: string[];
   activate: (dirs: string[]) => Promise<unknown>;
-  persist?: (dirs: string[]) => Promise<unknown>;
   refresh: () => Promise<void>;
 }): Promise<string[]> {
   const accepted = await input.activate(input.next);
@@ -607,20 +606,8 @@ export async function applyDirectoryGrantUpdate(input: {
     return input.previous;
   }
   const applied = accepted;
-  if (input.persist) {
-    try {
-      await input.persist(applied);
-    } catch (persistError) {
-      // Runtime already accepted the grant. Restore the persisted/UI baseline before surfacing
-      // the failure so a DB error cannot leave invisible file access active until restart.
-      try {
-        await input.activate(input.previous);
-      } finally {
-        await input.refresh();
-      }
-      throw persistError;
-    }
-  }
+  // Main validates, applies, persists, and rolls back under one session lock.
+  // Renderer only refreshes the returned accepted subset; it never performs a second DB write.
   await input.refresh();
   return applied;
 }
@@ -2851,8 +2838,7 @@ export function CCAgentSessionView({
   }, [refreshServerSession]);
 
   // ─── Extra reference dirs(中途增删) ──────────────────────────────────────
-  // 运行时先校验并返回实际接受的子集，再把同一子集持久化并刷新 UI。持久化失败时
-  // 回滚运行时，避免 SQLite/UI 与 Agent 权限分叉；远端仍由被控端回流持久化。
+  // Main 在 session 锁内校验、应用、持久化并回滚；renderer 只刷新它返回的实际子集。
   const handleExtraDirsChange = useCallback(
     async (next: string[]) => {
       if (!sessionId) return;
@@ -2861,12 +2847,6 @@ export function CCAgentSessionView({
           next,
           previous: session?.extraDirs ?? [],
           activate: (dirs) => makerApiFor(sessionId).setExtraDirs(sessionId, dirs),
-          ...(!getSessionDeviceId(sessionId)
-            ? {
-                persist: (dirs: string[]) =>
-                  sessionService.update(sessionId, { extraDirs: dirs }),
-              }
-            : {}),
           refresh: refreshServerSession,
         });
       } catch (err) {
@@ -2885,12 +2865,6 @@ export function CCAgentSessionView({
           next,
           previous: session?.writableDirs ?? [],
           activate: (dirs) => makerApiFor(sessionId).setWritableDirs(sessionId, dirs),
-          ...(!getSessionDeviceId(sessionId)
-            ? {
-                persist: (dirs: string[]) =>
-                  sessionService.update(sessionId, { writableDirs: dirs }),
-              }
-            : {}),
           refresh: refreshServerSession,
         });
       } catch (err) {
@@ -2920,12 +2894,6 @@ export function CCAgentSessionView({
               next,
               previous,
               activate: (dirs) => makerApiFor(sessionId).setWritableDirs(sessionId, dirs),
-              ...(!getSessionDeviceId(sessionId)
-                ? {
-                    persist: (dirs: string[]) =>
-                      sessionService.update(sessionId, { writableDirs: dirs }),
-                  }
-                : {}),
               refresh: refreshServerSession,
             }),
         });
@@ -4996,6 +4964,7 @@ export function CCAgentSessionView({
                   extraDirs={session?.extraDirs ?? []}
                   onExtraDirsChange={handleExtraDirsChange}
                   writableDirs={session?.writableDirs ?? []}
+                  writableGrantScope={sessionId}
                   onWritableDirsChange={
                     writableDirsChangeSupported ? handleWritableDirsChange : undefined
                   }

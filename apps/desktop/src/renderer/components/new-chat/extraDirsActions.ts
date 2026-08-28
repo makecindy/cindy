@@ -68,6 +68,8 @@ export interface PickAndAddExtraDirOptions {
   /** 另一授权组中的目录；用于总上限与跨组去重。 */
   otherDirs?: readonly string[];
   workingDir?: string | null;
+  /** 本机可写目录由 Main picker 绑定到当前任务；只读引用目录不传。 */
+  writableGrantScope?: string;
   onChange: (next: string[]) => void | Promise<void>;
   /** ConfirmDialogProvider 的 confirm(父目录警告)。 */
   confirm: (opts: {
@@ -92,6 +94,7 @@ export async function pickAndAddExtraDir({
   extraDirs,
   otherDirs = [],
   workingDir,
+  writableGrantScope,
   onChange,
   confirm,
   parentDirectoryConfirm,
@@ -99,7 +102,9 @@ export async function pickAndAddExtraDir({
   if (extraDirs.length + otherDirs.length >= MAX_EXTRA_DIRS) return;
   let picked: string | null = null;
   try {
-    const r = await window.electronAPI.dialog.showOpenDirectory({});
+    const r = await window.electronAPI.dialog.showOpenDirectory(
+      writableGrantScope ? { writableGrantScope } : {},
+    );
     picked = r?.success ? r.path : null;
   } catch (e) {
     log.warn('showOpenDirectory failed', { error: String(e) });

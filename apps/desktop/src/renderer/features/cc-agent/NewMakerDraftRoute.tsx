@@ -669,6 +669,9 @@ export function NewMakerDraftRoute() {
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
   const modePickerSelectionSeqRef = useRef(0);
   const handledFolderPickerRequestRef = useRef<string | null>(null);
+  // Writable picker evidence is Main-owned and bound to the actual local task id.
+  // Reserve that id for the lifetime of this draft instead of generating it after selection.
+  const localDraftSessionIdRef = useRef(makeDraftSessionId());
   // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
   // 与进行中对话页(CCAgentSessionView 同传 914)一致,发送首条消息时输入框宽度不跳变。
   // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
@@ -3874,7 +3877,7 @@ export function NewMakerDraftRoute() {
           // Send 流程会先 createSession (本段下方) 创建 Lead,然后立刻调 enableOrca
           // 拉起 Worker (见下方 "F-COLLAB: draft 阶段开了协同模式" 段)。
 
-          const sessionId = makeDraftSessionId();
+          const sessionId = localDraftSessionIdRef.current;
           const optimisticTitle = optimisticFirstMessageTitle(
             message,
             files,
@@ -4871,7 +4874,7 @@ export function NewMakerDraftRoute() {
           && selectedWorktree.enabled
           && selectedWorktree.confirmedIneligible !== true,
         );
-        goalSessionId = makeDraftSessionId();
+        goalSessionId = localDraftSessionIdRef.current;
         optimisticGoalTitle = normalizeAutoTitle(objective);
         if (optimisticGoalTitle) emitAutoTitlePreview(goalSessionId, optimisticGoalTitle);
         let goalWorkingDir = selectedWorkingDir;
@@ -5422,6 +5425,7 @@ export function NewMakerDraftRoute() {
                     // createSession 各路径都会带上 extraDirs;workingDir=null 时 ExtraDirsButton 跳过重叠校验。
                     extraDirs={effectiveExtraDirs}
                     writableDirs={effectiveWritableDirs}
+                    writableGrantScope={localDraftSessionIdRef.current}
                     // 远程草稿不给引用目录入口(Codex review P1):ExtraDirsButton 开的是**控制端**
                     // 原生目录对话框,选出来的本机路径发到对端后要么被 validateExtraDirs 静默丢掉、
                     // 要么撞上对端同名的无关目录 —— 界面上那几个 chip 于是并不描述真实授予的上下文。

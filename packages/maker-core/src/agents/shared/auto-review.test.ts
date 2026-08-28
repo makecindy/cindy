@@ -233,6 +233,17 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
         command: `find ${join(grant, 'outside-link')} -delete`,
         cwd: grant,
       }, [grant], opts)).toBe('prompt-each-time');
+      for (const command of [
+        `echo owned > ${join(grant, 'outside-link', 'result.txt')}`,
+        `cp payload ${join(grant, 'outside-link', 'result.txt')}`,
+        `tee ${join(grant, 'outside-link', 'result.txt')}`,
+        `sed -i 's/a/b/' ${join(grant, 'outside-link', 'result.txt')}`,
+        `Set-Content -Path ${join(grant, 'outside-link', '*.txt')} -Value owned`,
+        `Get-ChildItem ${join(grant, 'outside-link', 'subdir')} | Remove-Item -Recurse`,
+      ]) {
+        expect(reviewAction({ kind: 'exec', command, cwd: grant }, [grant], opts), command)
+          .toBe('prompt-each-time');
+      }
       expect(reviewAction({
         kind: 'exec',
         command: `rm -rf ${join(grant, 'credential-link', 'id_rsa')}`,
@@ -257,6 +268,11 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
       }, [grant], opts)).toBe('prompt');
       expect(reviewAction({
         kind: 'exec',
+        command: `cp payload ${join(grant, 'build', 'result.txt')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt');
+      expect(reviewAction({
+        kind: 'exec',
         command: `rm -rf ${join(grantAlias, 'build')}`,
         cwd: grantAlias,
       }, [grantAlias], { writableRoots: [grantAlias] })).toBe('prompt');
@@ -268,6 +284,12 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
     expect(reviewAction({
       kind: 'exec',
       command: 'rm -rf build',
+      cwd: '/remote/repo',
+      destructivePathResolution: 'unavailable',
+    }, ['/remote/repo'])).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'exec',
+      command: 'cp payload build/result.txt',
       cwd: '/remote/repo',
       destructivePathResolution: 'unavailable',
     }, ['/remote/repo'])).toBe('prompt-each-time');

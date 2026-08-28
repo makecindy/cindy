@@ -167,6 +167,7 @@ function createDb(): void {
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
       one_m INTEGER NOT NULL DEFAULT 0,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       orca_role TEXT,
@@ -263,6 +264,13 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('rejects renderer-side directory grant writes outside the atomic maker handlers', async () => {
+    await expect(invokeUpdate('cc-local', { writableDirs: ['/forged'] }))
+      .rejects.toThrow(/maker:set-\*-dirs/i);
+    await expect(invokeUpdate('cc-local', { extraDirs: ['/forged-read'] }))
+      .rejects.toThrow(/maker:set-\*-dirs/i);
+  });
+
   it('recovers cleanup only for deleted parent tasks after restart', async () => {
     const userData = h.userDataDir!;
     const parentRoot = path.join(userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');

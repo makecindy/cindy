@@ -700,6 +700,8 @@ interface ChatInputProps {
   onExtraDirsChange?: (next: string[]) => void | Promise<void>;
   /** 用户明确授予的附加可读写目录，与 extraDirs 的只读授权分开显示和保存。 */
   writableDirs?: string[];
+  /** Main-owned writable picker 的一次性授权作用域；本机新增入口必须提供。 */
+  writableGrantScope?: string;
   onWritableDirsChange?: (next: string[]) => void | Promise<void>;
   /** 会话态撤权使用路径意图，避免连续删除基于同一份旧 writableDirs 快照。 */
   onWritableDirRemove?: (path: string) => void | Promise<void>;
@@ -1095,6 +1097,7 @@ export function ChatInput({
   ownsHardwareComposerActions = true,
   extraDirs,
   writableDirs,
+  writableGrantScope,
   onWritableDirsChange,
   onWritableDirRemove,
   onExtraDirsChange,
@@ -4382,7 +4385,12 @@ export function ChatInput({
     // 远端已有授权仍通过 onWritableDirsChange 展示并可撤销；但这里调用的是控制端
     // 原生目录选择器，只能在已确认本机会话中提供，不能把本机绝对路径发给 SSH/
     // device-link 被控端。undefined 表示归属尚未解析，同样 fail closed。
-    if (onWritableDirsChange && !remoteHostId && deviceLinkDeviceId === null) {
+    if (
+      onWritableDirsChange
+      && writableGrantScope
+      && !remoteHostId
+      && deviceLinkDeviceId === null
+    ) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
       const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
@@ -4398,6 +4406,7 @@ export function ChatInput({
             extraDirs: currentWritableDirs,
             otherDirs: currentExtraDirs,
             workingDir,
+            writableGrantScope,
             onChange: onWritableDirsChange,
             confirm: confirmDialog,
             parentDirectoryConfirm: {
@@ -4427,6 +4436,7 @@ export function ChatInput({
     t,
     deviceLinkDeviceId,
     writableDirs,
+    writableGrantScope,
     workingDir,
   ]);
 

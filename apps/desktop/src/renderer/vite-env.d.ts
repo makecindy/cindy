@@ -4736,7 +4736,10 @@ interface ElectronAPI {
   // ── Dialog（v0.6 新增） ────────────────────────────────────────────────────
   dialog: {
     /** 打开系统目录选择对话框，返回用户选中的目录路径（取消时 path=null）。 */
-    showOpenDirectory: (params?: { defaultPath?: string }) => Promise<{
+    showOpenDirectory: (params?: {
+      defaultPath?: string;
+      writableGrantScope?: string;
+    }) => Promise<{
       success: boolean;
       path: string | null;
     }>;

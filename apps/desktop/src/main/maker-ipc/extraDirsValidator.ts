@@ -139,14 +139,20 @@ export async function excludeDirectoryGrantConflicts(
   candidates: readonly string[],
   blocked: readonly string[],
 ): Promise<string[]> {
-  if (candidates.length === 0 || blocked.length === 0) return [...candidates];
+  if (candidates.length === 0) return [];
   const blockedKeys = await Promise.all(blocked.map(canonicalDirectoryKey));
   const result: string[] = [];
+  const acceptedKeys: string[] = [];
   for (const candidate of candidates) {
     const candidateKey = await canonicalDirectoryKey(candidate);
     const overlapsBlockedTree = blockedKeys.some((blockedKey) =>
       isSelfOrSubdir(candidateKey, blockedKey) || isSelfOrSubdir(blockedKey, candidateKey));
-    if (!overlapsBlockedTree) result.push(candidate);
+    const overlapsAcceptedTree = acceptedKeys.some((acceptedKey) =>
+      isSelfOrSubdir(candidateKey, acceptedKey) || isSelfOrSubdir(acceptedKey, candidateKey));
+    if (!overlapsBlockedTree && !overlapsAcceptedTree) {
+      result.push(candidate);
+      acceptedKeys.push(candidateKey);
+    }
   }
   return result;
 }

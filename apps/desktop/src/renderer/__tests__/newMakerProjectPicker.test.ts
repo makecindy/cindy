@@ -1536,9 +1536,9 @@ describe('Shared create project picker', () => {
     expect(ccAgentSessionViewSource).toContain(
       'session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true',
     );
-    expect(chatInputSource).toContain(
-      'if (onWritableDirsChange && !remoteHostId && deviceLinkDeviceId === null) {',
-    );
+    expect(chatInputSource).toContain('&& writableGrantScope');
+    expect(chatInputSource).toContain('&& !remoteHostId');
+    expect(chatInputSource).toContain('&& deviceLinkDeviceId === null');
     expect(chatInputSource).toContain('!settingsLocked && onWritableDirsChange');
     expect(chatInputSource).toContain('void onWritableDirRemove(path);');
     expect(chatInputSource).toContain('(writableDirs ?? []).filter((item) => item !== path)');

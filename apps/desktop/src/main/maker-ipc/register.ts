@@ -614,6 +614,7 @@ import {
   validateExtraDirs,
 } from './extraDirsValidator.js';
 import { applyRemoteDirectoryGrantUpdate } from './remoteDirectoryGrantUpdate.js';
+import { consumeWritableDirectoryPickerGrants } from './writableDirectoryPickerGrant.js';
 import {
   prepareHandoffWorktree,
   shouldRecycleHandoffWorktreeOnFailure,
@@ -16153,10 +16154,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
-  const applyRemoteDirectoryGrants = (
+  const applyDirectoryGrants = (
     axis: 'extraDirs' | 'writableDirs',
     sessionId: string,
     requestedDirs: string[],
+    options: { remote: boolean; senderId?: number },
   ) => withSendToSessionLock(sessionId, async () => {
     await assertReviewSettingsUnlocked(sessionId);
     const sess = maker.getSession(sessionId);
@@ -16175,8 +16177,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       validate: (requested) => validateExtraDirs(requested, sess.workDir || undefined),
       readExtraDirs: () => readSessionExtraDirsFromDb(sessionId),
       readWritableDirs: () => readSessionWritableDirsFromDb(sessionId),
-      excludeConflicts: excludeDirectoryGrantConflicts,
+      excludeConflicts: async (candidates, blocked) => {
+        const accepted = await excludeDirectoryGrantConflicts(candidates, blocked);
+        if (axis === 'writableDirs' && !options.remote) {
+          const [route] = await getDbClient()
+            .drizzle.select({ remoteHostId: sessions.remoteHostId })
+            .from(sessions)
+            .where(eq(sessions.id, sessionId))
+            .limit(1);
+          if (!route?.remoteHostId) {
+            if (options.senderId === undefined) {
+              throwIpcError('PRECONDITION_FAILED', 'Writable directory picker owner unavailable');
+            }
+            try {
+              await consumeWritableDirectoryPickerGrants({
+                scopeId: sessionId,
+                senderId: options.senderId,
+                requestedDirs: accepted,
+                previousDirs: await readSessionWritableDirsFromDb(sessionId),
+              });
+            } catch (error) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                error instanceof Error
+                  ? error.message
+                  : 'Writable directory authorization failed',
+              );
+            }
+          }
+        }
+        return accepted;
+      },
       persist: (patch) => persistSessionFields(sessionId, patch),
+      terminate: () => maker.closeSession(sessionId),
     });
     log.info(label, {
       sessionId,
@@ -16184,12 +16217,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       kept: result.dirs.length,
       rejected: result.rejectedCount,
     });
-    markRemoteSettingPersistedInsideHandler(result.dirs);
+    if (options.remote) markRemoteSettingPersistedInsideHandler(result.dirs);
     return result.dirs;
   });
 
-  // 附加只读引用目录的运行时 closure 推送。DB 持久化由 renderer 同步调
-  // local-db:sessions:update 完成 (跟 SET_MODEL / sessionService.update 同模式)。
+  // 两类目录授权均在同一 session 锁内完成校验、运行时应用与持久化。
   // session 不在 / capability 不支持都 no-op, 不抛错 — 跟 setModel 容错语义一致。
   ipcMain.handle(MAKER_INVOKE.SET_EXTRA_DIRS, async (event, sessionId: unknown, dirs: unknown) => {
     // 轮 24-I3 HIGH:SET_EXTRA_DIRS 会扩展 agent 的文件可见面(任意已存在绝对目录
@@ -16200,40 +16232,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     if (!Array.isArray(dirs)) throwIpcError('INVALID_PARAMS', 'dirs must be string[]');
-    if (deviceLinkInvoke) {
-      return applyRemoteDirectoryGrants('extraDirs', sessionId, dirs as string[]);
-    }
-    await assertReviewSettingsUnlocked(sessionId);
-    const sess = maker.getSession(sessionId);
-    if (!sess) {
-      log.debug('set-extra-dirs: session not found, no-op', { sessionId });
-      return;
-    }
-    if (!sess.capabilities.extraDirs.supported) {
-      log.debug('set-extra-dirs: agent capability=false, no-op', {
-        sessionId,
-        agentKind: sess.agentKind,
-      });
-      return;
-    }
-    // workingDir 从 SessionMeta 读 (sess.workDir 是 maker-core Session 的 getter)
-    const workingDir = sess.workDir || undefined;
-    const validation = await validateExtraDirs(dirs as string[], workingDir);
-    const writableDirs = await readSessionWritableDirsFromDb(sessionId);
-    const extraDirs = await excludeDirectoryGrantConflicts(
-      validation.valid,
-      writableDirs,
-    );
-    log.info('set-extra-dirs', {
-      sessionId,
-      requested: (dirs as string[]).length,
-      kept: extraDirs.length,
-      rejected: validation.rejected.length + validation.valid.length - extraDirs.length,
+    return applyDirectoryGrants('extraDirs', sessionId, dirs as string[], {
+      remote: deviceLinkInvoke,
+      ...(!deviceLinkInvoke ? { senderId: event.sender.id } : {}),
     });
-    await sess.setExtraDirs(extraDirs);
-    // 返回实际应用的子集(已剔除校验未通过的目录),供远程 set-* 回流持久化用:
-    // 远程控制端选的路径在被控端常被拒,持久化必须以这个生效值为准,不能用原始请求值。
-    return extraDirs;
   });
 
   ipcMain.handle(MAKER_INVOKE.SET_WRITABLE_DIRS, async (event, sessionId: unknown, dirs: unknown) => {
@@ -16243,36 +16245,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     if (!Array.isArray(dirs)) throwIpcError('INVALID_PARAMS', 'dirs must be string[]');
-    if (deviceLinkInvoke) {
-      return applyRemoteDirectoryGrants('writableDirs', sessionId, dirs as string[]);
-    }
-    await assertReviewSettingsUnlocked(sessionId);
-    const sess = maker.getSession(sessionId);
-    if (!sess) {
-      log.debug('set-writable-dirs: session not found, no-op', { sessionId });
-      return;
-    }
-    if (!sess.capabilities.writableDirs?.supported) {
-      log.debug('set-writable-dirs: agent capability=false, no-op', {
-        sessionId,
-        agentKind: sess.agentKind,
-      });
-      return;
-    }
-    const validation = await validateExtraDirs(dirs as string[], sess.workDir || undefined);
-    const readOnlyDirs = await readSessionExtraDirsFromDb(sessionId);
-    const writableDirs = await excludeDirectoryGrantConflicts(
-      validation.valid,
-      readOnlyDirs,
-    );
-    log.info('set-writable-dirs', {
-      sessionId,
-      requested: (dirs as string[]).length,
-      kept: writableDirs.length,
-      rejected: validation.rejected.length + validation.valid.length - writableDirs.length,
+    return applyDirectoryGrants('writableDirs', sessionId, dirs as string[], {
+      remote: deviceLinkInvoke,
+      ...(!deviceLinkInvoke ? { senderId: event.sender.id } : {}),
     });
-    await sess.setWritableDirs(writableDirs);
-    return writableDirs;
   });
 
   // ── Memory 控制 ────────────────────────────────────────────────────────
