@@ -373,6 +373,51 @@ describe('workspacePrefsMirror', () => {
     });
   });
 
+  it('multi-team 镜像保留完整快照中的非当前 team 偏好，但不向它写回', async () => {
+    reconcileWorkspacePrefsForMirror('slack', [
+      {
+        workspace: 'repo',
+        model: 'team-one-model',
+        effort: 'high',
+        agentKind: 'claude-code',
+        permissionMode: 'ask',
+        teamId: 'T1',
+      },
+    ]);
+    const setRemotePrefs = vi.fn();
+    const mirror = createWorkspacePrefsMirror({
+      getLiveBindingKey: () => 'slack:T2',
+      isMirrorTargetCurrent: (_channel, teamId) => teamId === null || teamId === 'T2',
+      getRemoteSnapshotGeneration: () => 0,
+      getRemotePrefs: async () => ({
+        bound: true,
+        prefs: [
+          {
+            workspace: 'repo',
+            model: 'stale-team-one-model',
+            effort: 'low',
+            agentKind: 'codex',
+            permissionMode: 'full',
+            teamId: 'T1',
+          },
+        ],
+      }),
+      setRemotePrefs,
+      onLocalPrefsChanged: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await mirror('slack');
+
+    expect(getWorkspacePref('slack', 'T1', 'repo')).toMatchObject({
+      model: 'team-one-model',
+      effort: 'high',
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
+    expect(setRemotePrefs).not.toHaveBeenCalled();
+  });
+
   it('prefs.get 在途时绑定集合变化会丢弃旧快照，且不再写已解绑 team', async () => {
     setWorkspacePref('slack', 'T1', 'repo', { model: 'local-team-one' });
     let bindingKey = 'slack:T1,T2';

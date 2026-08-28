@@ -5,6 +5,7 @@ import type {
 } from '../../shared/hookControlIpc.js';
 import {
   isWorkspacePrefsMirrorCandidateCurrent,
+  listWorkspacePrefs,
   markWorkspacePrefMirrored,
   pinWorkspacePrefForMirrorRetry,
   reconcileWorkspacePrefsForMirror,
@@ -71,7 +72,13 @@ export function createWorkspacePrefsMirror(
         const currentPrefs = remote.prefs.filter((row) =>
           deps.isMirrorTargetCurrent(channel, row.teamId ?? null),
         );
-        for (const candidate of reconcileWorkspacePrefsForMirror(channel, currentPrefs)) {
+        const preservedPrefs = listWorkspacePrefs(channel).filter(
+          (row) => !deps.isMirrorTargetCurrent(channel, row.teamId ?? null),
+        );
+        for (const candidate of reconcileWorkspacePrefsForMirror(channel, [
+          ...currentPrefs,
+          ...preservedPrefs,
+        ])) {
           const teamId = candidate.prefs.teamId ?? null;
           if (
             requestedGeneration !== triggerGeneration(channel) ||
