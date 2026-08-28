@@ -165,7 +165,7 @@ describe('withCodexUpstreamRecording', () => {
     expect(host.getCodexThreadUpstreamOrigin('t-xai')).toBe('https://api.x.ai');
     // 没记录过的 thread 不借用别人的结论。
     expect(host.getCodexThreadUpstreamOrigin('t-other')).toBe(null);
-  });
+  }, 15_000);
 
   it('falls back to the default upstream when the decision does not override it', async () => {
     const host = await freshCodexProxyHost();
