@@ -5,6 +5,12 @@ export interface ClaudeGenerationState {
   startedAt: number | null;
   durationMs: number;
   pendingToolIds: Set<string>;
+  /**
+   * Pause ids that already resumed this generation. A later pause of the same
+   * id must not close the current open interval or re-enter pending — the
+   * matching tool_result will not arrive again.
+   */
+  settledPauseIds: Set<string>;
   reliable: boolean;
   /**
    * True after this turn observed a child assistant/stream (`parent_tool_use_id`).
@@ -26,6 +32,7 @@ export function newClaudeGenerationState(): ClaudeGenerationState {
     startedAt: null,
     durationMs: 0,
     pendingToolIds: new Set(),
+    settledPauseIds: new Set(),
     reliable: true,
     sawSubagent: false,
     parentStreamedOutputIncomplete: false,
@@ -76,6 +83,7 @@ export function resetClaudeGenerationTiming(state: ClaudeGenerationState): void 
   stopHeartbeat(state);
   state.startedAt = null;
   state.pendingToolIds.clear();
+  state.settledPauseIds.clear();
   state.durationMs = 0;
   state.reliable = true;
   state.sawSubagent = false;
@@ -99,6 +107,7 @@ export function pauseClaudeGeneration(
     return;
   }
   if (state.pendingToolIds.has(pauseId)) return;
+  if (state.settledPauseIds.has(pauseId)) return;
   if (state.pendingToolIds.size === 0) {
     // No open generation interval means we never saw message_start (or it was
     // already closed). Pausing here would resume the clock at tool_result and
@@ -118,6 +127,7 @@ export function resumeClaudeGeneration(
     state.reliable = false;
     return;
   }
+  state.settledPauseIds.add(pauseId);
   if (state.pendingToolIds.size === 0) {
     state.startedAt = resumedAt;
     startHeartbeat(state);

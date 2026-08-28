@@ -1540,7 +1540,8 @@ function pauseClaudeGenerationForKnownTools(ctx: TranslateContext): void {
  * pause 边界关掉父级开区间，避免分母吞进子代理时间、分子却只有父级 output。
  * 没有开区间且 pending 为空时不 pause：result/reset 后的后台 child、以及
  * 本 turn 尚未 begin 的 child，都不得钉死旧 parent_tool_use_id，否则下一轮
- * parent message_start 无法 begin。
+ * parent message_start 无法 begin。已 resume 的 pause id 由
+ * pauseClaudeGeneration 忽略，不会再次 close 当前开区间。
  */
 function observeClaudeSubagentStream(
   ctx: TranslateContext,

@@ -51,6 +51,22 @@ describe('claude generation timing', () => {
     finalizeClaudeGeneration(state, 5_200);
     expect(state.reliable).toBe(false);
   });
+
+  it('does not re-pause a settled id while the current interval is open', () => {
+    const state = newClaudeGenerationState();
+    beginClaudeGeneration(state, 1_000);
+    pauseClaudeGeneration(state, 'tool-1', 1_400);
+    resumeClaudeGeneration(state, 'tool-1', 5_000);
+    expect(state.startedAt).toBe(5_000);
+    expect(state.pendingToolIds.size).toBe(0);
+    expect(state.settledPauseIds.has('tool-1')).toBe(true);
+
+    pauseClaudeGeneration(state, 'tool-1', 5_500);
+    expect(state.startedAt).toBe(5_000);
+    expect(state.pendingToolIds.size).toBe(0);
+    expect(state.reliable).toBe(true);
+    expect(state.durationMs).toBe(400);
+  });
 });
 
 function createTurnState(): TurnState {
@@ -974,6 +990,114 @@ describe('claude generation pause boundaries', () => {
     expect(ctx.rt.generation.startedAt).toBe(3_000);
     expect(ctx.rt.generation.reliable).toBe(true);
     expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+    vi.useRealTimers();
+  });
+
+  it('does not re-pause a resumed background child during the next parent generation', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent-bg', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 80 } },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent-bg')).toBe(true);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent-bg', content: 'async_launched' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+    expect(ctx.rt.generation.settledPauseIds.has('toolu-agent-bg')).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    vi.setSystemTime(3_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 20 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-bg',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(2_200);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    vi.setSystemTime(3_400);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-2',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent-2')).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(true);
     resetClaudeGenerationTiming(ctx.rt.generation);
     queue.end();
     vi.useRealTimers();
