@@ -21,6 +21,7 @@ interface RuntimeSetModelSession {
   remoteHostId?: string | null;
   codexProxyActive?: boolean | null;
   codexThreadModelProviderId?: string | null;
+  codexCindyRemoteCompactionCompatible?: boolean | null;
   model: string;
   setModel: (model: string, opts?: { providerId?: string | null; effort?: Effort }) => Promise<void>;
 }
@@ -153,6 +154,8 @@ export async function applyRuntimeSetModelChange(
         nextModel: model,
         currentCodexProxyActive: sess.codexProxyActive,
         currentCodexThreadModelProviderId: sess.codexThreadModelProviderId,
+        currentCodexCindyRemoteCompactionCompatible:
+          sess.codexCindyRemoteCompactionCompatible,
         codexAuthInjection: input.codexAuthInjection,
       })
     : false;

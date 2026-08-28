@@ -220,6 +220,7 @@ import {
 } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import {
   buildCodexProxySpawnArgs,
+  CODEX_CINDY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
 import {
@@ -1569,8 +1570,10 @@ export function getMaker(): Maker {
                 codexBrowserUseStartupTimeoutMs: browserCompanion.startupTimeoutMs,
               }
             : {}),
-          // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
-          // 「订阅直连路由」的 thread 用它开 OpenAI 远端压缩,其余 thread 保持本地压缩。
+          ...(ready
+            ? { codexCindyRemoteCompactionProviderId: CODEX_CINDY_COMPACT_PROVIDER_ID }
+            : {}),
+          // oauth spawn 额外定义订阅直连 identity；Cindy codex/* 使用上面的 HTTP identity。
           ...(useOAuthBearer && ready
             ? { codexRemoteCompactionProviderId: CODEX_OPENAI_COMPACT_PROVIDER_ID }
             : {}),
@@ -1615,7 +1618,9 @@ export function getMaker(): Maker {
         text,
         subagentRoute,
       }) =>
-        registerCodexProxyComposed(sessionId, threadId, text, { subagentRoute }),
+        registerCodexProxyComposed(sessionId, threadId, text, {
+          ...(subagentRoute ? { subagentRoute } : {}),
+        }),
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);

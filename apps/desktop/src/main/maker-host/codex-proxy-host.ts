@@ -35,6 +35,7 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
+import { isCindyProviderCodexRemoteCompactionRoute } from '@cindy/maker-core';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   createResponsesCustomToolFunctionAdapter,
@@ -47,7 +48,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { isCuratedQwen38Tag } from '../../shared/localModelRuntime.js';
-import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-config.js';
+import {
+  buildCodexGatewayBaseUrl,
+  CODEX_OAUTH_UPSTREAM,
+} from './codex-gateway-config.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import {
   getActiveCatalog,
@@ -2121,17 +2125,13 @@ function createGatewayGrokResponsesCompatTransform(
 /**
  * 跨来源恢复的加密压缩历史兼容(Greptile P1, PR #265):
  *
- * OpenAI 远端压缩会把早期历史替换成加密 compaction 块(只有 ChatGPT 后端能解)。
- * 该会话切到 XD / xAI / 自定义供应商后按原 thread id resume,持久化历史里的加密块
- * 会被逐请求重放给读不懂它的上游 → 请求被拒、会话卡死。客户端无法解密转换,
- * 唯一可行的降级是:发往**非 ChatGPT 上游**时把加密块替换成明文占位 user message,
- * 明确告知模型「压缩点之前的上下文不可用」,保留压缩点之后仍在历史里的对话继续跑。
+ * 远端压缩会把早期历史替换成加密 compaction 块。ChatGPT 和 Cindy Provider
+ * codex/* 都需要原样回放；切到 xAI / 自定义供应商后仍按既有明文占位降级。
  * 判断去向用 ctx.upstreamBase(引擎按最终路由注入),不复刻路由逻辑。
- * ChatGPT 路由(chatgpt.com)原样透传,远端压缩语义不受影响。
  */
 const COMPACTION_UNAVAILABLE_NOTE =
   '[context note] Earlier conversation history was compacted into an encrypted snapshot by the ' +
-  'OpenAI subscription backend and is not readable on the current model provider. Treat the ' +
+  'previous Codex backend and is not readable on the current model provider. Treat the ' +
   'conversation from this point on as the available context; ask the user if earlier details are needed.';
 
 function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
@@ -2154,12 +2154,16 @@ function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
  * - reasoning.encrypted_content 不属于本故障；继续交给后续供应商兼容层判断，
  *   不在这里扩大删除面。
  */
-function rewriteCrossProviderHistoryItems(body: unknown): Record<string, unknown> | null {
+function rewriteCrossProviderHistoryItems(
+  body: unknown,
+  opts: { preserveCompaction?: boolean } = {},
+): Record<string, unknown> | null {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
   let changed = false;
   const input: unknown[] = [];
   for (const item of body.input) {
     if (
+      opts.preserveCompaction !== true &&
       isPlainObject(item) &&
       (item.type === 'compaction' || item.type === 'context_compaction') &&
       typeof item.encrypted_content === 'string' &&
@@ -2190,10 +2194,18 @@ function rewriteCrossProviderHistoryItems(body: unknown): Record<string, unknown
 
 export function createCrossProviderCompactionCompatTransform(): RequestTransform {
   return (body, ctx) => {
-    // upstreamBase 未注入(理论不发生)按非 ChatGPT 保守处理?否——保守方向是不改写:
-    // 改写会丢加密块,误伤真 ChatGPT 请求的代价(远端压缩语义被破坏)高于维持现状。
-    if (!ctx.upstreamBase || isChatGptUpstreamBase(ctx.upstreamBase)) return null;
-    const replaced = rewriteCrossProviderHistoryItems(body);
+    // upstreamBase 未注入(理论不发生)时不猜目标后端，避免误删合法加密快照。
+    if (!ctx.upstreamBase) return null;
+    const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+    const providerContext = providerContextForRequest(ctx.headers, requestModel);
+    const isCindyCodexRoute = isCindyProviderCodexRemoteCompactionRoute({
+      providerId: providerContext.providerId,
+      model: providerContext.catalogModel,
+    });
+    if (isChatGptUpstreamBase(ctx.upstreamBase)) return null;
+    const replaced = rewriteCrossProviderHistoryItems(body, {
+      preserveCompaction: isCindyCodexRoute,
+    });
     if (!replaced) return null;
     log.info('rewrote incompatible Codex history for non-ChatGPT upstream', {
       reqId: ctx.reqId,

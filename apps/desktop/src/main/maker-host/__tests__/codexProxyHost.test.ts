@@ -352,17 +352,23 @@ describe('codex gateway config', () => {
     expect(args).toContain('model_providers.cindy_openai.wire_api="responses"');
     expect(args).toContain('model_providers.cindy_openai.requires_openai_auth=true');
     expect(args).toContain('model_providers.cindy_openai.supports_websockets=true');
+    expect(args).toContain('model_providers.cindy_codex.name="OpenAI"');
+    expect(args).toContain('model_providers.cindy_codex.requires_openai_auth=true');
+    expect(args).toContain('model_providers.cindy_codex.supports_websockets=false');
     // is_openai + OAuth 命中时 codex 默认 zstd 压缩请求体,loopback proxy 无法解析,必须关。
     expect(args).toContain('features.enable_request_compression=false');
   });
 
-  it('env-key / provider-oauth 模式: 不定义 OpenAI 身份 provider', async () => {
+  it('env-key / provider-oauth 只定义 Cindy Codex 远程压缩 identity', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 
     for (const mode of ['env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
       expect(args.some((arg) => arg.includes('cindy_openai'))).toBe(false);
-      expect(args).not.toContain('features.enable_request_compression=false');
+      expect(args).toContain('model_providers.cindy_codex.name="OpenAI"');
+      expect(args).toContain('model_providers.cindy_codex.env_key="XDT_CODEX_API_KEY"');
+      expect(args).toContain('model_providers.cindy_codex.supports_websockets=false');
+      expect(args).toContain('features.enable_request_compression=false');
     }
   });
 
@@ -470,6 +476,27 @@ describe('createCrossProviderCompactionCompatTransform', () => {
       { model: 'gpt-5.5', input: [compactionItem, agentMessage, reasoningItem, userMessage] },
       { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
     )).toBeNull();
+  });
+
+  it('Cindy Provider codex/* 原样透传 compaction，同时清理 agent 消息密文', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    const out = transform(
+      { model: 'codex/gpt-5.6-sol', input: [compactionItem, agentMessage, userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    ) as { input: Array<Record<string, unknown>> };
+
+    expect(out.input).toEqual([
+      compactionItem,
+      {
+        type: 'agent_message',
+        author: 'researcher',
+        recipient: 'parent',
+        content: [{ type: 'input_text', text: 'readable agent result' }],
+      },
+      userMessage,
+    ]);
   });
 
   it('upstreamBase 缺失时不改写(保守方向:宁可维持现状,不误伤 ChatGPT 请求)', async () => {

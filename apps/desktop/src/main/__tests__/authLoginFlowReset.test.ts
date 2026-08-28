@@ -83,7 +83,7 @@ describe('auth login-flow reset', () => {
     expect(confirmBody).not.toContain("type: 'start-browser'");
   });
 
-  it('clears stale organization realm state before personal login and a new discovery', () => {
+  it('pins personal login to the build realm and clears stale realm before organization discovery', () => {
     const discoveryStart = source.indexOf('async function discoverOrganizationRealm(');
     const discoveryBody = source.slice(discoveryStart, source.indexOf('\n}', discoveryStart));
     expect(discoveryBody).toContain('pendingAuthRealm = null;');
@@ -97,7 +97,16 @@ describe('auth login-flow reset', () => {
     expect(actionPreamble).toContain("action.type === 'request-code'");
     expect(actionPreamble).toContain("action.type === 'verify-code'");
     expect(actionPreamble).toContain("action.type === 'start-browser' && action.kind === 'social'");
-    expect(actionPreamble).toContain('if (startsBuildRealmFlow) pendingAuthRealm = null;');
+    expect(actionPreamble).toContain('? AUTH_REGION');
+    expect(actionPreamble).toContain('const client = createAuthClient(loginRealm);');
+
+    const personalActionSetup = source.slice(
+      source.indexOf('if (!providerConfig) await loadLoginProviders', actionStart),
+      source.indexOf("if (action.type === 'discover')", actionStart),
+    );
+    expect(personalActionSetup).toContain(
+      'if (startsBuildRealmFlow) pendingAuthRealm = loginRealm;',
+    );
   });
 
   it('does not leave expired private tickets on a screen that can only reuse them', () => {
@@ -201,9 +210,7 @@ describe('auth login-flow reset', () => {
     const readEnd = source.indexOf('\n}\n\nfunction writeAuthAccountVault', readStart);
     const readBody = source.slice(readStart, readEnd);
 
-    expect(readBody).toContain(
-      'if (options.allowUnreadable || options.recoverInvalid) continue;',
-    );
+    expect(readBody).toContain('if (options.allowUnreadable || options.recoverInvalid) continue;');
     expect(readBody).toContain("throw new Error('invalid saved resource credential')");
     expect(readBody).toContain("throw new Error('invalid saved Passport credential')");
     expect(readBody).toContain("throw new Error('invalid saved Passport membership')");
@@ -229,23 +236,16 @@ describe('auth login-flow reset', () => {
     );
     const transactionBody = source.slice(transactionStart, transactionEnd);
     expect(transactionBody).toContain('recoverInvalidForExplicitLogin?: boolean');
-    expect(transactionBody).toContain(
-      'recoverInvalid: options.recoverInvalidForExplicitLogin',
-    );
+    expect(transactionBody).toContain('recoverInvalid: options.recoverInvalidForExplicitLogin');
 
     const loginStart = source.indexOf('async function commitDesktopLoginSessions(');
-    const loginEnd = source.indexOf(
-      '\n}\n\n/** Persist a rotated Passport',
-      loginStart,
-    );
+    const loginEnd = source.indexOf('\n}\n\n/** Persist a rotated Passport', loginStart);
     const loginBody = source.slice(loginStart, loginEnd);
     expect(loginBody).toContain('recoverInvalidForExplicitLogin: true');
     expect(loginBody).toContain('waitWhileBusyAfterRotation: true');
     const transitionCommit = loginBody.indexOf('await transition.commit();');
     const transitionRollback = loginBody.indexOf('await transition.rollback();');
-    expect(transitionCommit).toBeGreaterThan(
-      loginBody.indexOf('await transactAuthAccountVault('),
-    );
+    expect(transitionCommit).toBeGreaterThan(loginBody.indexOf('await transactAuthAccountVault('));
     expect(transitionRollback).toBeGreaterThan(transitionCommit);
     expect(transitionRollback).toBeLessThan(
       loginBody.indexOf('recoverInvalidForExplicitLogin: true'),
@@ -272,7 +272,10 @@ describe('auth login-flow reset', () => {
   it('waits through a busy vault lock after the server has rotated a credential', () => {
     const rotatedCredentialHelpers = [
       ['async function rememberResourceSession(', '\n}\n\ntype ResourceSessionReplacementResult'],
-      ['async function replaceResourceSessionIfCurrent(', '\n}\n\ntype RejectedResourceSessionRemovalResult'],
+      [
+        'async function replaceResourceSessionIfCurrent(',
+        '\n}\n\ntype RejectedResourceSessionRemovalResult',
+      ],
       ['async function replacePassportSessionIfCurrent(', '\n}\n\n/** Delete a rejected Passport'],
       ['async function commitDesktopRefreshCredentials(', '\n}\n\n/**\n * Account refresh tokens'],
     ] as const;
@@ -281,9 +284,7 @@ describe('auth login-flow reset', () => {
       const start = source.indexOf(startMarker);
       const end = source.indexOf(endMarker, start);
       expect(start).toBeGreaterThan(-1);
-      expect(source.slice(start, end)).toContain(
-        'waitWhileBusyAfterRotation: true',
-      );
+      expect(source.slice(start, end)).toContain('waitWhileBusyAfterRotation: true');
     }
   });
 
@@ -307,7 +308,7 @@ describe('auth login-flow reset', () => {
     );
   });
 
-  it('invalidates every pending add-account action when its surface closes', () => {
+  it('invalidates pending add-account actions without cancelling an accepted login commit', () => {
     const runStart = source.indexOf('async function runLoginAction(action: DesktopLoginAction)');
     const runEnd = source.indexOf('\n}\n\nexport async function dispatchLoginAction', runStart);
     const runBody = source.slice(runStart, runEnd);
@@ -320,6 +321,10 @@ describe('auth login-flow reset', () => {
     const completeBody = source.slice(completeStart, completeEnd);
     expect(completeBody).toContain('expectedLoginFlowEpoch = loginFlowEpoch');
     expect(completeBody).toContain('loginFlowEpoch !== expectedLoginFlowEpoch');
+    expect(completeBody).toContain(
+      'const releaseLoginFlowCommit = sealLoginFlowCommit(expectedLoginFlowEpoch);',
+    );
+    expect(completeBody).toContain('releaseLoginFlowCommit();');
     const vaultTransaction = completeBody.indexOf('await commitDesktopLoginSessions(');
     const durableSession = completeBody.indexOf('writePersistedAuthSessionOrThrow(');
     const teardown = completeBody.indexOf('await accountSwitchTeardown(');
@@ -329,8 +334,13 @@ describe('auth login-flow reset', () => {
     expect(completeBody).toContain('restorePersistedAuthSessionIfCurrent(');
 
     const cancelStart = source.indexOf('export function cancelAddAccountLogin(): void {');
-    const cancelEnd = source.indexOf('\n}', cancelStart);
-    expect(source.slice(cancelStart, cancelEnd)).toContain('loginFlowEpoch += 1;');
+    const cancelEnd = source.indexOf('\n}\n\nexport function getCurrentDataOwnerId', cancelStart);
+    const cancelBody = source.slice(cancelStart, cancelEnd);
+    expect(cancelBody).toContain('if (isLoginFlowCommitSealed(loginFlowEpoch))');
+    expect(cancelBody).toContain('loginFlowEpoch += 1;');
+    expect(cancelBody.indexOf('isLoginFlowCommitSealed')).toBeLessThan(
+      cancelBody.indexOf('loginFlowEpoch += 1;'),
+    );
   });
 
   it('single-flights Passport refresh and rejects cross-realm personal account switching', () => {
@@ -411,9 +421,7 @@ describe('auth login-flow reset', () => {
     const initializeEnd = source.indexOf('\n}\n\n/**\n * 冷启动 refresh 流程本体', initializeStart);
     const initializeBody = source.slice(initializeStart, initializeEnd);
     const localGuard = initializeBody.indexOf("getActiveAppSession().mode === 'local'");
-    const refreshTokenRead = initializeBody.indexOf(
-      'await reconcileDesktopActiveAuthSession()',
-    );
+    const refreshTokenRead = initializeBody.indexOf('await reconcileDesktopActiveAuthSession()');
 
     expect(localGuard).toBeGreaterThan(-1);
     expect(refreshTokenRead).toBeGreaterThan(localGuard);
@@ -423,13 +431,8 @@ describe('auth login-flow reset', () => {
   });
 
   it('preserves compatibility and vault generations before cold-start refresh', () => {
-    const helperStart = source.indexOf(
-      'async function reconcileDesktopActiveAuthSession()',
-    );
-    const helperEnd = source.indexOf(
-      '\n}\n\nfunction readPersistedRefreshToken',
-      helperStart,
-    );
+    const helperStart = source.indexOf('async function reconcileDesktopActiveAuthSession()');
+    const helperEnd = source.indexOf('\n}\n\nfunction readPersistedRefreshToken', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
     expect(helperBody).toContain('authAccountVaultLockPath()');
     expect(helperBody).toContain("label: 'auth-account-vault-reconcile'");
@@ -438,9 +441,7 @@ describe('auth login-flow reset', () => {
     expect(helperBody).toContain('writePersistedAuthSessionOrThrow(');
     expect(helperBody).toContain('return session;');
 
-    const candidatesStart = source.indexOf(
-      'function readStoredRefreshTokenCandidates',
-    );
+    const candidatesStart = source.indexOf('function readStoredRefreshTokenCandidates');
     const candidatesEnd = source.indexOf(
       '\n}\n\nfunction readPersistedAccountDeletionReceipt',
       candidatesStart,
@@ -450,9 +451,7 @@ describe('auth login-flow reset', () => {
     expect(candidatesBody).toContain('vault.resources[vault.activeAccountKey]');
     expect(candidatesBody).toContain('activeResource.refreshToken');
 
-    const commitStart = source.indexOf(
-      'async function commitDesktopRefreshCredentials',
-    );
+    const commitStart = source.indexOf('async function commitDesktopRefreshCredentials');
     const commitEnd = source.indexOf(
       '\n}\n\n/**\n * Account refresh tokens have no replay grace.',
       commitStart,
@@ -460,13 +459,8 @@ describe('auth login-flow reset', () => {
     const commitBody = source.slice(commitStart, commitEnd);
     expect(commitBody).toContain('vault.resources[key]?.refreshToken === requestedRefreshToken');
 
-    const deadStart = source.indexOf(
-      'async function clearConfirmedDeadRefreshTokens',
-    );
-    const deadEnd = source.indexOf(
-      '\n}\n\n/**\n * replacement-retry',
-      deadStart,
-    );
+    const deadStart = source.indexOf('async function clearConfirmedDeadRefreshTokens');
+    const deadEnd = source.indexOf('\n}\n\n/**\n * replacement-retry', deadStart);
     const deadBody = source.slice(deadStart, deadEnd);
     expect(deadBody).toContain('await mutateAuthAccountVault((vault) => {');
     expect(deadBody).toContain('deadTokens.includes(activeResource.refreshToken)');
@@ -474,24 +468,16 @@ describe('auth login-flow reset', () => {
     expect(deadBody).toContain('vault.activeAccountKey = null;');
 
     const listStart = source.indexOf('export function listSavedAccounts()');
-    const listEnd = source.indexOf(
-      '\n}\n\nexport async function syncSavedAccounts',
-      listStart,
-    );
+    const listEnd = source.indexOf('\n}\n\nexport async function syncSavedAccounts', listStart);
     const listBody = source.slice(listStart, listEnd);
     expect(listBody).toContain(
       'const activeKey = currentUser ? accountVaultKey(activeAuthRealm, currentUser.id) : null;',
     );
 
     const initializeStart = source.indexOf('export async function initialize(');
-    const initializeEnd = source.indexOf(
-      '\n}\n\n/**\n * 冷启动 refresh 流程本体',
-      initializeStart,
-    );
+    const initializeEnd = source.indexOf('\n}\n\n/**\n * 冷启动 refresh 流程本体', initializeStart);
     const initializeBody = source.slice(initializeStart, initializeEnd);
-    const reconcileAt = initializeBody.indexOf(
-      'await reconcileDesktopActiveAuthSession()',
-    );
+    const reconcileAt = initializeBody.indexOf('await reconcileDesktopActiveAuthSession()');
     const refreshAt = initializeBody.indexOf(
       'runColdStartRefreshFlow(storedToken, persistedSession.realm)',
     );
@@ -503,10 +489,7 @@ describe('auth login-flow reset', () => {
     expect(source).toContain('signedOutAt?: number;');
 
     const clearStart = source.indexOf('async function clearAuthAccountVault(');
-    const clearEnd = source.indexOf(
-      '\n}\n\nfunction metadataFromMembership',
-      clearStart,
-    );
+    const clearEnd = source.indexOf('\n}\n\nfunction metadataFromMembership', clearStart);
     const clearBody = source.slice(clearStart, clearEnd);
     expect(clearBody).toContain('withCrossProcessLock(');
     expect(clearBody).toContain("label: 'auth-account-vault-clear'");
@@ -519,29 +502,21 @@ describe('auth login-flow reset', () => {
       clearBody.indexOf('await afterPersist();'),
     );
 
-    const reconcileStart = source.indexOf(
-      'async function reconcileDesktopActiveAuthSession()',
-    );
+    const reconcileStart = source.indexOf('async function reconcileDesktopActiveAuthSession()');
     const reconcileEnd = source.indexOf(
       '\n}\n\nfunction readPersistedRefreshToken',
       reconcileStart,
     );
     const reconcileBody = source.slice(reconcileStart, reconcileEnd);
-    const tombstoneGuard = reconcileBody.indexOf(
-      "typeof vault.signedOutAt === 'number'",
-    );
+    const tombstoneGuard = reconcileBody.indexOf("typeof vault.signedOutAt === 'number'");
     expect(tombstoneGuard).toBeGreaterThan(-1);
-    expect(reconcileBody.indexOf('removeSafe(AUTH_SESSION_KEY);')).toBeGreaterThan(
-      tombstoneGuard,
-    );
+    expect(reconcileBody.indexOf('removeSafe(AUTH_SESSION_KEY);')).toBeGreaterThan(tombstoneGuard);
     expect(reconcileBody.indexOf('return null;')).toBeGreaterThan(tombstoneGuard);
     expect(reconcileBody.indexOf('writePersistedAuthSessionOrThrow(')).toBeGreaterThan(
       tombstoneGuard,
     );
 
-    const refreshCommitStart = source.indexOf(
-      'async function commitDesktopRefreshCredentials(',
-    );
+    const refreshCommitStart = source.indexOf('async function commitDesktopRefreshCredentials(');
     const refreshCommitEnd = source.indexOf(
       '\n}\n\n/**\n * Account refresh tokens',
       refreshCommitStart,
@@ -574,9 +549,7 @@ describe('auth login-flow reset', () => {
     const tombstoneCommit = logoutBody.indexOf('await clearAuthAccountVault(() => {');
     const ownerTeardown = logoutBody.indexOf('await withAccountFreeOwnerCommit({');
     expect(tombstoneCommit).toBeGreaterThan(-1);
-    expect(logoutBody.indexOf('removeSafe(AUTH_SESSION_KEY);')).toBeGreaterThan(
-      tombstoneCommit,
-    );
+    expect(logoutBody.indexOf('removeSafe(AUTH_SESSION_KEY);')).toBeGreaterThan(tombstoneCommit);
     expect(ownerTeardown).toBeGreaterThan(tombstoneCommit);
     expect(logoutBody).toContain('preservePersistedRefreshToken: true');
   });
@@ -591,9 +564,7 @@ describe('auth login-flow reset', () => {
     const coldStart = source.indexOf('async function runColdStartRefreshFlow(');
     const coldEnd = source.indexOf('\n}\n\nasync function loadLoginProviders()', coldStart);
     const coldBody = source.slice(coldStart, coldEnd);
-    const coldCredentialCommit = coldBody.indexOf(
-      'await commitDesktopRefreshCredentials(',
-    );
+    const coldCredentialCommit = coldBody.indexOf('await commitDesktopRefreshCredentials(');
     const coldPolicyGuard = coldBody.indexOf('!canRestoreAuthSessionForMembership(');
     const coldRealmActivation = coldBody.indexOf('activateClientEndpointRealm(storedRealm);');
     expect(coldCredentialCommit).toBeGreaterThan(-1);
@@ -609,10 +580,7 @@ describe('auth login-flow reset', () => {
       'readActiveVaultRefreshCandidate()',
       inactiveCommit,
     );
-    const ownershipRetry = coldBody.indexOf(
-      'return runColdStartRefreshFlow(',
-      activeCandidateRead,
-    );
+    const ownershipRetry = coldBody.indexOf('return runColdStartRefreshFlow(', activeCandidateRead);
     expect(activeCandidateRead).toBeGreaterThan(inactiveCommit);
     expect(ownershipRetry).toBeGreaterThan(activeCandidateRead);
     expect(coldBody.slice(inactiveCommit, ownershipRetry)).toContain(
@@ -819,9 +787,7 @@ describe('auth login-flow reset', () => {
       serializedRepairStart,
     );
     const serializedRepairBody = source.slice(serializedRepairStart, serializedRepairEnd);
-    expect(serializedRepairBody).toContain(
-      'withStableOwnerBoundaryMutation(ownerId',
-    );
+    expect(serializedRepairBody).toContain('withStableOwnerBoundaryMutation(ownerId');
     expect(serializedRepairBody).toContain(
       'repairStableCloudOwnerDataReservationsWhileLocked(ownerId)',
     );

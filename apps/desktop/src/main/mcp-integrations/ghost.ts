@@ -439,6 +439,66 @@ async function requestGrantConfirm(params: {
 }
 
 /**
+ * 媒体仓路径揭示必须由 Host-owned 点击确认授权。用户是否在正文里“明确问过”
+ * 只能指导 Agent 何时发起，不能作为安全边界；模型本身无法代替用户点按钮。
+ */
+async function requestMediaPathRevealConfirm(params: {
+  sessionId: string | null;
+  absPath: string;
+  mimeType: string;
+}): Promise<{ ok: true } | { ok: false; errorCode: string; message: string }> {
+  if (!params.sessionId) {
+    return {
+      ok: false,
+      errorCode: 'LOCAL_PATH_REVEAL_CONFIRM_UNAVAILABLE',
+      message: '当前调用没有会话语境，无法让用户确认是否把本机路径返回给 Agent',
+    };
+  }
+  const bridge = getGhostGrantConfirmBridge();
+  if (!bridge) {
+    return {
+      ok: false,
+      errorCode: 'LOCAL_PATH_REVEAL_CONFIRM_UNAVAILABLE',
+      message: '本机路径确认通道未就绪，请稍后重试',
+    };
+  }
+  let size: number;
+  try {
+    const stat = fs.statSync(params.absPath);
+    if (!stat.isFile()) throw new Error('not a file');
+    size = stat.size;
+  } catch {
+    return {
+      ok: false,
+      errorCode: 'MEDIA_FILE_NOT_FOUND',
+      message: '该受管媒体文件在确认前已不存在',
+    };
+  }
+  const decision = await bridge.request(params.sessionId, {
+    ghostId: 'cindy-media',
+    ghostName: 'Cindy Media',
+    lane: 'reveal_path',
+    items: [
+      {
+        name: path.basename(params.absPath),
+        absPath: params.absPath,
+        size,
+        mimeType: params.mimeType,
+      },
+    ],
+  });
+  if (decision.confirmed) return { ok: true };
+  return {
+    ok: false,
+    errorCode: 'LOCAL_PATH_REVEAL_DENIED',
+    message:
+      decision.reason === 'timeout'
+        ? '本机路径确认超时，本次调用已取消；如仍需要，请提醒用户后重试'
+        : '用户未允许把本机路径返回给 Agent，不要重试',
+  };
+}
+
+/**
  * attachments 的「任意本地路径」预处理:原有三层解析不命中、但输入是真实
  * 存在的本地媒体文件路径时,按两层策略放行(workdir 内直通记 tool、外部
  * 确认后记 user),产出 url → ResolvedGrantSource 的旁路表;workdir 外的
@@ -1254,7 +1314,24 @@ export function getCindyGhostsMcpDeps(
     callMedia: async (request) => {
       const result = await callCindyMedia(request);
       const sessionId = resolveSessionContext()?.sessionId;
-      if (result.ok !== false && sessionId) {
+      if (request.action === 'resolve_local_path' && result.ok !== false) {
+        const localPath = typeof result.local_path === 'string' ? result.local_path : '';
+        const mimeType = typeof result.mime_type === 'string' ? result.mime_type : '';
+        if (!localPath || !mimeType) {
+          return {
+            ok: false,
+            errorCode: 'INTERNAL',
+            message: '媒体路径解析结果缺少必要字段',
+          };
+        }
+        const confirmed = await requestMediaPathRevealConfirm({
+          sessionId: sessionId ?? null,
+          absPath: localPath,
+          mimeType,
+        });
+        if (!confirmed.ok) return confirmed;
+      }
+      if (request.action !== 'resolve_local_path' && result.ok !== false && sessionId) {
         // Core 结果返回给当前 Agent 前先同步挂到本会话。后续消息落库钩子仍会
         // 幂等补账，但不能依赖那个异步时序：Agent 可能紧接着通过
         // ghost_call.attachments 把结果交给插件。

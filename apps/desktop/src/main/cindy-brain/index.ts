@@ -225,6 +225,8 @@ import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
 import {
   deriveCindyMediaConfig,
+  filterLegacyCindyMediaConfig,
+  selectExecutableCoreMediaModels,
   type CindyCapabilityKind,
   type CindyMediaCatalogConfig,
 } from './cindyMediaCatalog.js';
@@ -3462,22 +3464,16 @@ function getMediaPreferenceConfig(
   capability: GhostMediaCapability,
 ): CindyMediaPreferenceConfig {
   const kind = capability.startsWith('image.') ? 'image' : 'video';
-  const videoRegistry = kind === 'video' ? getVideoProviderRegistry() : null;
   const coreCapability: MediaCapability =
     capability === 'video.edit' ? 'video.image_to_video' : capability;
   const providers = new Map(
     getActiveCatalog().providers.map((provider) => [provider.id, provider] as const),
   );
-  const providerModels: CindyMediaPreferenceModel[] = (kind === 'video'
-    ? listLocalProviderVideoModels()
-    : listProviderMediaModels())
-    .filter(
-      (model) =>
-        model.mode === (kind === 'image' ? 'image_generation' : 'video_generation') &&
-        supportsMediaCapability(model.modalities, coreCapability) &&
-        (kind !== 'video' ||
-          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
-    )
+  const providerModels: CindyMediaPreferenceModel[] = selectExecutableCoreMediaModels(
+    kind === 'video' ? listLocalProviderVideoModels() : listProviderMediaModels(),
+    kind,
+    (model) => supportsMediaCapability(model.modalities, coreCapability),
+  )
     .map((model) => {
       const provider = providers.get(model.providerId);
       const providerName = provider?.name ?? model.providerId;
@@ -3493,16 +3489,15 @@ function getMediaPreferenceConfig(
         supportsEdit: supportsMediaCapability(model.modalities, 'image.edit'),
       };
     });
-  const gatewayModels: CindyMediaPreferenceModel[] = filterEnabledGatewayMediaModels(
-    getXdGatewayModels(),
-    coreCapability,
-    readModelDisableOverrides(),
+  const gatewayModels: CindyMediaPreferenceModel[] = selectExecutableCoreMediaModels(
+    filterEnabledGatewayMediaModels(
+      getXdGatewayModels(),
+      coreCapability,
+      readModelDisableOverrides(),
+    ),
+    kind,
+    (model) => isMediaModelExecutable(model.id, coreCapability),
   )
-    .filter(
-      (model) =>
-        isMediaModelExecutable(model.id, coreCapability) &&
-        (kind !== 'video' || (videoRegistry?.hasAlias(model.id, 'xd') ?? false)),
-    )
     .map((model) => {
       const provider = providers.get('xd');
       const providerName = provider?.name ?? 'Cindy AI';
@@ -3668,8 +3663,6 @@ async function getGhostConfigurableMediaModels(
     // carried image-provider models. Video providers are host-owned (the video
     // registry executes them), so add their local projection explicitly and do
     // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
-    const mode = type === 'image' ? 'image_generation' : 'video_generation';
-    const videoRegistry = type === 'video' ? getVideoProviderRegistry() : null;
     const localVideoModels = type === 'video' ? listLocalProviderVideoModels() : [];
     const availability = await loadPluginMediaAvailability(
       type,
@@ -3682,12 +3675,7 @@ async function getGhostConfigurableMediaModels(
           (candidate) => candidate.id === model.id && candidate.providerId === model.providerId,
         ) === index,
     );
-    const candidates = allModels.filter(
-      (model) =>
-        model.mode === mode &&
-        (type !== 'video' ||
-          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
-    );
+    const candidates = selectExecutableCoreMediaModels(allModels, type);
     const models = isProviderBlindCoreArt(ghost)
       ? collapseProviderBlindMediaModels(candidates, (model) => model.id)
       : candidates;
@@ -4319,10 +4307,20 @@ export function getGhostCindySlot(): GhostCindySlot {
         const value = readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
         if (!value) return null;
         const mediaCapability = capability as GhostMediaCapability;
+        const config = getGhostMediaPreferenceConfig(ghostId, mediaCapability);
+        const videoRegistry = capability.startsWith('video.') ? getVideoProviderRegistry() : null;
+        // Core 专用选型不能交给旧执行器。复用存量配置迁移，确保回退后
+        // 用户保存的 provider + modelId 与实际执行一致，不影响 Core 清单。
+        const executableConfig = capability.startsWith('video.')
+          ? filterLegacyCindyMediaConfig(
+              config,
+              (model) => videoRegistry?.hasAlias(model.modelId, model.providerId) ?? false,
+            )
+          : config;
         const selected = resolveAndMigrateGhostMediaPreference(
           ghostId,
           mediaCapability,
-          getGhostMediaPreferenceConfig(ghostId, mediaCapability),
+          executableConfig,
           value,
         );
         return selected
