@@ -866,7 +866,7 @@
           "dbSlimmingIncludeActiveLabel": "清理活躍任務歷史",
           "dbSlimmingIncludeActiveDescription": "同時清理超過所選時間的活躍任務歷史",
           "dbSlimmingIncludeActiveConfirmTitle": "將活躍任務納入資料庫清理？",
-          "dbSlimmingIncludeActiveConfirmDescription": "活躍任務即使超過所選時間，也可能仍在執行。清理不會等待任務停止，任務在掃描後繼續產生的訊息也可能被清除。啟用後，超過所選時間的活躍、已封存和軟刪除任務都會被清理。符合範圍的活躍任務歷史訊息和 Agent 上下文將被清除；任務項目仍會保留。如果不建立備份，清除的歷史內容無法復原。",
+          "dbSlimmingIncludeActiveConfirmDescription": "活躍任務即使超過所選時間，也可能仍在執行。清理不會等待任務停止，任務在掃描後繼續產生的訊息也可能被清除。啟用後，超過所選時間的活躍、已封存和軟刪除任務都會被清理。符合範圍的活躍任務歷史訊息和 Agent 上下文將被清除；任務項目仍會保留。資料庫備份可以復原任務和訊息資料；不建立備份時，這些資料也無法復原。用於審查或撤銷這些訊息所產生檔案變更的記錄不包含在資料庫備份中，無法復原。",
           "dbSlimmingIncludeActiveConfirmButton": "納入活躍任務",
           "dbSlimmingIncludeActiveCancelButton": "保留活躍任務",
           "dbSlimmingBackupLabel": "清理前備份資料庫",

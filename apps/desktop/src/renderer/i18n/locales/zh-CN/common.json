@@ -866,7 +866,7 @@
           "dbSlimmingIncludeActiveLabel": "清理活跃任务历史",
           "dbSlimmingIncludeActiveDescription": "同时清理超过所选时间的活跃任务历史",
           "dbSlimmingIncludeActiveConfirmTitle": "将活跃任务纳入数据库清理？",
-          "dbSlimmingIncludeActiveConfirmDescription": "活跃任务即使超过所选时间，也可能仍在运行。清理不会等待任务停止，任务在扫描后继续产生的消息也可能被清除。启用后，超过所选时间的活跃、已归档和软删除任务都会被清理。符合范围的活跃任务历史消息和 Agent 上下文将被清除；任务条目仍会保留。如果不创建备份，清除的历史内容无法恢复。",
+          "dbSlimmingIncludeActiveConfirmDescription": "活跃任务即使超过所选时间，也可能仍在运行。清理不会等待任务停止，任务在扫描后继续产生的消息也可能被清除。启用后，超过所选时间的活跃、已归档和软删除任务都会被清理。符合范围的活跃任务历史消息和 Agent 上下文将被清除；任务条目仍会保留。数据库备份可以恢复任务和消息数据；不创建备份时，这些数据也无法恢复。用于审查或撤销这些消息所产生文件改动的记录不包含在数据库备份中，无法恢复。",
           "dbSlimmingIncludeActiveConfirmButton": "纳入活跃任务",
           "dbSlimmingIncludeActiveCancelButton": "保留活跃任务",
           "dbSlimmingBackupLabel": "清理前备份数据库",
