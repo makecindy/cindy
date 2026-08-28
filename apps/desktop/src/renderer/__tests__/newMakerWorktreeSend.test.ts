@@ -93,7 +93,10 @@ describe('NewMakerDraftRoute worktree send flow', () => {
       'browserComments: rehomedComments',
     );
     expect(source.slice(restoreHelper, failedCard)).toContain(
-      'rehomeDraftBrowserComments(preNavBrowserComments, newSession.id)',
+      'rewriteBrowserCommentsFromRehomedFiles(',
+    );
+    expect(source.slice(restoreHelper, failedCard)).toContain(
+      'excludeCommentScreenshots(rehomedFiles, rehomedComments)',
     );
   });
 
