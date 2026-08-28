@@ -266,6 +266,23 @@ describe('LoginHandoff 时序(fake-timer)', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('reduced-motion 下品牌布局切换不挂 transform transition', () => {
+    setReducedMotion(true);
+    render(
+      <LoginHandoffProvider authResolved authenticated={false}>
+        <LoginBrandStage />
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    act(() => probe.current!.reportLoginPanelMounted());
+    fireAnchors();
+    act(() => probe.current!.reportSplashExitCompleted());
+
+    expect(probe.current!.phase).toBe('done');
+    expect(probe.current!.brandLayout).toBe('login');
+    expect(screen.getByTestId('login-brand-canvas').style.transition).toBe('');
+  });
+
   it('登录面板与品牌层通过 context 共享同一 bottom reserve', () => {
     render(
       <LoginHandoffProvider authResolved authenticated={false}>
@@ -418,6 +435,9 @@ describe('冷启动集成(resolved snapshot,禁 mock-reject)', () => {
     expect(probe.current!.phase).toBe('shift');
     expect(probe.current!.brandLayout).toBe('login');
     expect(screen.getByTestId('login-group').style.opacity).toBe('0');
+    expect(screen.getByTestId('login-brand-canvas').style.transition).toBe(
+      `transform ${LOGIN_HANDOFF_TIMINGS.shiftMs}ms ${LOGIN_HANDOFF_TIMINGS.shiftEasing}`,
+    );
 
     // t=950:面板入场(420ms 上滑 20px);Slogan 仍未出现
     await act(async () => {
@@ -445,6 +465,7 @@ describe('冷启动集成(resolved snapshot,禁 mock-reject)', () => {
     });
     expect(probe.current!.phase).toBe('done');
     expect(screen.getByTestId('login-brand-hero').style.left).toBe('443px');
+    expect(screen.getByTestId('login-brand-canvas').style.transition).toBe('');
     const doneGroup = screen.getByTestId('login-group');
     expect(doneGroup.style.opacity).toBe('1');
     expect(doneGroup.style.pointerEvents).not.toBe('none');
