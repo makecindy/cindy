@@ -79,6 +79,13 @@ describe('submit_github_issue tool', () => {
     expect(tool?.inputShape.body.description).not.toContain('bug 优先用');
     expect(tool?.inputShape.body.description).toContain('禁止声称截图已附');
     expect(tool?.inputShape.body.description).toContain('提交时的任务环境');
+    expect(tool?.inputShape.body.description).toContain('实际故障');
+    expect(tool?.inputShape.body.description).toContain(
+      '不要复制系统自动附加的当前任务快照',
+    );
+    expect(tool?.inputShape.body.description).not.toMatch(
+      /不要写环境信息\(客户端版本 \/ 版本区域 \/ OS \/ Harness \/ 模型 ID/,
+    );
   });
 
   it('缺参数 → INVALID_ARGS, host 不被调', async () => {

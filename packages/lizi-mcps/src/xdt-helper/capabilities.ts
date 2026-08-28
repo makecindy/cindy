@@ -131,7 +131,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '整理出结构化标题与正文后调用 submit_github_issue(cindy_helper 的 feedback 类目),系统会尽量隐藏常见密钥、个人路径和邮箱。',
       '提交前 App 内弹系统确认卡片,用户可编辑标题/正文、确认或取消;',
       '不需要安装或配置 GitHub 插件:默认由 Cindy 官方 Bot 提交;当前已配置且可用的 GitHub 账号只作为确认卡里的额外身份选项。',
-      `客户端版本 / OS / Harness / 模型 ID / 界面语言由系统作为「提交时的任务环境」自动附加,最终创建到 ${BRAND_NAME} 官方 GitHub 仓库。创建后会返回 issue 链接,并可继续协助用户从源码复现、修复 Bug、开发功能和准备 PR。`,
+      `客户端版本 / OS / Harness / 模型 ID / 界面语言由系统作为「提交时的任务环境」自动附加(OS 来自提交客户端本机,Harness / 模型是当前任务快照,不是出问题的那个)。用户说明的实际故障环境按需写进正文。最终创建到 ${BRAND_NAME} 官方 GitHub 仓库。创建后会返回 issue 链接,并可继续协助用户从源码复现、修复 Bug、开发功能和准备 PR。`,
     ].join(' '),
   },
   {
