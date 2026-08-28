@@ -758,6 +758,122 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).not.toContain('clearAuth({ notify: false });');
   });
 
+  it('reserves local namespaces before publishing a cloud owner', () => {
+    const cloudStart = source.indexOf('async function withCloudOwnerCommit(');
+    const prepareStart = source.indexOf('prepareCommit: async () => {', cloudStart);
+    const prepareEnd = source.indexOf('\n      },\n      commit: async () => {', prepareStart);
+    const prepareBody = source.slice(prepareStart, prepareEnd);
+
+    expect(prepareBody).toContain(
+      'rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId);',
+    );
+    expect(prepareBody.indexOf('reserveCloudOwnerData')).toBeLessThan(
+      prepareBody.indexOf('await opts.prepareCommit?.();'),
+    );
+    expect(source).toContain('await repairStableCloudOwnerDataReservations(currentUser.id);');
+    expect(source).toContain('if (reservation && !reservation.finalize())');
+    expect(source).toContain('if (!reservation.rollback())');
+    expect(source).toContain('if (boundaryCommitApplied || commitApplied) return;');
+
+    const failureStart = source.indexOf(
+      'onCommitFailure: ({ commitApplied: boundaryCommitApplied }) => {',
+      cloudStart,
+    );
+    const failureEnd = source.indexOf('\n      },\n    });', failureStart);
+    const failureBody = source.slice(failureStart, failureEnd);
+    expect(failureBody).toContain('if (boundaryCommitApplied || commitApplied) return;');
+    expect(failureBody.indexOf('if (!reservation.rollback())')).toBeLessThan(
+      failureBody.indexOf('rollbackReservation = null;'),
+    );
+    const finallyStart = source.indexOf('  } finally {', failureEnd);
+    const finallyBody = source.slice(finallyStart, source.indexOf('\n  }\n', finallyStart));
+    expect(finallyBody).toContain('if (!committed && !commitApplied)');
+
+    const repairStart = source.indexOf(
+      'function repairStableCloudOwnerDataReservationsWhileLocked(',
+    );
+    const repairEnd = source.indexOf(
+      '\n}\n\nasync function repairStableCloudOwnerDataReservations(',
+      repairStart,
+    );
+    const repairBody = source.slice(repairStart, repairEnd);
+    expect(repairBody).toContain('reserveCommittedLocalProfileDataOwnerDetailed(');
+    expect(repairBody).toContain(
+      'const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);',
+    );
+    expect(repairBody).toContain(
+      'reserveCommittedLocalProfileDataOwnerDetailed(\n      profileReservationOwnerId,',
+    );
+    expect(repairBody).toContain(
+      'reserveCommittedLegacyNativeProviderAuthOwner(authoritativeOwnerId)',
+    );
+    expect(repairBody).not.toContain('reserveLocalProfileDataOwnerDetailed(');
+    expect(repairBody).not.toContain('reserveLegacyNativeProviderAuthOwnerDetailed(ownerId)');
+    expect(repairBody).toContain('remains authenticated with local adoption fail-closed');
+    expect(repairBody).not.toContain('throw new Error');
+    const serializedRepairStart = source.indexOf(
+      'async function repairStableCloudOwnerDataReservations(',
+    );
+    const serializedRepairEnd = source.indexOf(
+      '\n}\n\nfunction commitCloudAppSession(',
+      serializedRepairStart,
+    );
+    const serializedRepairBody = source.slice(serializedRepairStart, serializedRepairEnd);
+    expect(serializedRepairBody).toContain(
+      'withStableOwnerBoundaryMutation(ownerId',
+    );
+    expect(serializedRepairBody).toContain(
+      'repairStableCloudOwnerDataReservationsWhileLocked(ownerId)',
+    );
+
+    const reserveStart = source.indexOf('function reserveCloudOwnerData(');
+    const reserveEnd = source.indexOf(
+      '\n}\n\nfunction repairStableCloudOwnerDataReservationsWhileLocked(',
+      reserveStart,
+    );
+    const reserveBody = source.slice(reserveStart, reserveEnd);
+    expect(reserveBody).toContain(
+      'const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);',
+    );
+    expect(reserveBody).toContain(
+      'reserveLocalProfileDataOwnerDetailed(\n      profileReservationOwnerId,',
+    );
+    expect(reserveBody).toContain(
+      'releaseLocalProfileDataOwner(\n          profileReservationOwnerId,',
+    );
+    expect(reserveBody).toContain(
+      "if (nativeReservation.status === 'claimed' && nativeReservation.claimToken)",
+    );
+    expect(reserveBody).not.toContain(
+      "profileReservation.status === 'claimed' &&\n      nativeReservation.status === 'claimed'",
+    );
+    expect(reserveBody).toContain('const authoritativeOwnerId = profileReservation.ownerId;');
+    expect(reserveBody).toContain(
+      'reserveLegacyNativeProviderAuthOwnerDetailed(authoritativeOwnerId)',
+    );
+    expect(reserveBody).toContain(
+      "throw new Error('local profile and native provider ownership reservations disagree')",
+    );
+    expect(reserveBody).toContain(
+      'finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId)',
+    );
+
+    const migrationStart = source.indexOf(
+      'async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Promise<void> {',
+    );
+    const migrationEnd = source.indexOf(
+      '\n}\n\nasync function finishColdStartSignedOut(',
+      migrationStart,
+    );
+    const migrationBody = source.slice(migrationStart, migrationEnd);
+    expect(migrationBody).toContain(
+      'if (!(await repairStableCloudOwnerDataReservations(ownerId))) return;',
+    );
+    expect(migrationBody.indexOf('repairStableCloudOwnerDataReservations')).toBeLessThan(
+      migrationBody.indexOf('migrateLocalNativeProviderAuthBindings'),
+    );
+  });
+
   it('synchronizes canary flags on every path that establishes a new auth identity', () => {
     expect(source).not.toContain('canaryFlagStore.sync(false)');
     expect(source.match(/scheduleCanaryFlagSync\(\{/g)).toHaveLength(3);

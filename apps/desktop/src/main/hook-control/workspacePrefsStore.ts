@@ -36,6 +36,11 @@ export interface WorkspacePrefsEntry {
   rev?: number;
   /** 尚未成功镜像的本地写入。缺省：墓碑视为 dirty，旧实值行视为已同步。 */
   dirty?: boolean;
+  /**
+   * dirty 行里由本机实际修改的字段。缺省表示整行都是旧客户端留下的本机正本；
+   * 有值时可先用 server 快照补齐未改字段，再安全地生成完整镜像行。
+   */
+  dirtyPatch?: HookPrefsPatch;
 }
 
 interface StoreFile {
@@ -63,6 +68,18 @@ function isNullablePrefField(value: unknown): value is string | null {
   );
 }
 
+const PREF_FIELDS = ['model', 'effort', 'agentKind', 'permissionMode'] as const;
+type PrefField = (typeof PREF_FIELDS)[number];
+
+function isDirtyPatch(value: unknown): value is HookPrefsPatch {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const patch = value as Record<string, unknown>;
+  if (Object.keys(patch).some((key) => !PREF_FIELDS.includes(key as PrefField))) return false;
+  return PREF_FIELDS.every(
+    (field) => patch[field] === undefined || isNullablePrefField(patch[field]),
+  );
+}
+
 function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
   if (!raw || typeof raw !== 'object') return false;
   const r = raw as Record<string, unknown>;
@@ -78,7 +95,8 @@ function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
     isNullablePrefField(r.permissionMode) &&
     (r.rev === undefined ||
       (typeof r.rev === 'number' && Number.isInteger(r.rev) && r.rev >= 0 && r.rev <= 1_000_000_000)) &&
-    (r.dirty === undefined || typeof r.dirty === 'boolean')
+    (r.dirty === undefined || typeof r.dirty === 'boolean') &&
+    (r.dirtyPatch === undefined || isDirtyPatch(r.dirtyPatch))
   );
 }
 
@@ -144,6 +162,44 @@ function isDirtyRow(row: WorkspacePrefsEntry): boolean {
   return isBlankRow(row);
 }
 
+function mergePatch(base: HookPrefsPatch | undefined, patch: HookPrefsPatch): HookPrefsPatch {
+  const merged: HookPrefsPatch = { ...base };
+  for (const field of PREF_FIELDS) {
+    if (patch[field] !== undefined) merged[field] = patch[field];
+  }
+  return merged;
+}
+
+function mergeDirtyRowWithServer(
+  localRow: WorkspacePrefsEntry,
+  serverRow: WorkspacePrefsEntry | undefined,
+): WorkspacePrefsEntry {
+  if (localRow.dirtyPatch === undefined) return localRow;
+  const merged: WorkspacePrefsEntry = {
+    channel: localRow.channel,
+    teamId: localRow.teamId,
+    workspace: localRow.workspace,
+    model: serverRow?.model ?? null,
+    effort: serverRow?.effort ?? null,
+    agentKind: serverRow?.agentKind ?? null,
+    permissionMode: serverRow?.permissionMode ?? null,
+    rev: rowRev(localRow),
+    dirty: true,
+    dirtyPatch: localRow.dirtyPatch,
+  };
+  for (const field of PREF_FIELDS) {
+    const value = localRow.dirtyPatch[field];
+    if (value !== undefined) merged[field] = value;
+  }
+  return merged;
+}
+
+function cleanRow(row: WorkspacePrefsEntry): WorkspacePrefsEntry {
+  const rest = { ...row };
+  delete rest.dirtyPatch;
+  return { ...rest, dirty: false };
+}
+
 export function isWorkspacePrefsMigrated(channel: HookPrefsChannel): boolean {
   return readStore(filePath()).migrated[channel] === true;
 }
@@ -182,7 +238,7 @@ export function setWorkspacePref(
   teamId: string | null,
   workspace: string,
   patch: HookPrefsPatch,
-): { prefs: HookWorkspacePrefs[]; rev: number } {
+): { prefs: HookWorkspacePrefs[]; row: HookWorkspacePrefs; rev: number } {
   const fp = filePath();
   const store = readStore(fp);
   const exact = store.entries.find((e) => sameKey(e, channel, teamId, workspace));
@@ -204,6 +260,14 @@ export function setWorkspacePref(
           permissionMode: null,
         } satisfies WorkspacePrefsEntry));
   const rev = rowRev(current) + 1;
+  const localBase = exact ?? inherited;
+  const fullLocalAuthority =
+    localBase !== undefined &&
+    ((isDirtyRow(localBase) && localBase.dirtyPatch === undefined) ||
+      (store.migrated[channel] !== true && !isDirtyRow(localBase)));
+  const dirtyPatch = fullLocalAuthority
+    ? undefined
+    : mergePatch(localBase && isDirtyRow(localBase) ? localBase.dirtyPatch : undefined, patch);
   const nextRow: WorkspacePrefsEntry = {
     ...current,
     ...(patch.model !== undefined ? { model: patch.model } : {}),
@@ -212,6 +276,7 @@ export function setWorkspacePref(
     ...(patch.permissionMode !== undefined ? { permissionMode: patch.permissionMode } : {}),
     rev,
     dirty: true,
+    dirtyPatch,
   };
   const rest = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
   // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null。
@@ -221,21 +286,46 @@ export function setWorkspacePref(
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, entries });
-  return { prefs: entries.filter((e) => e.channel === channel).map(toHookPrefs), rev };
+  return {
+    prefs: entries.filter((e) => e.channel === channel).map(toHookPrefs),
+    row: toHookPrefs(nextRow),
+    rev,
+  };
 }
 
-export function peekWorkspacePrefRev(
-  channel: HookPrefsChannel,
-  teamId: string | null,
-  workspace: string,
-): number | null {
-  const current = readStore(filePath()).entries.find((e) => sameKey(e, channel, teamId, workspace));
-  return current ? rowRev(current) : null;
+function needsTeamTombstone(entries: WorkspacePrefsEntry[], row: WorkspacePrefsEntry): boolean {
+  return (
+    row.teamId !== null &&
+    entries.some(
+      (candidate) => sameKey(candidate, row.channel, null, row.workspace) && !isBlankRow(candidate),
+    )
+  );
+}
+
+function pruneRedundantBlankRows(entries: WorkspacePrefsEntry[]): WorkspacePrefsEntry[] {
+  return entries.filter(
+    (row) => !isBlankRow(row) || isDirtyRow(row) || needsTeamTombstone(entries, row),
+  );
+}
+
+function shouldMirrorRow(row: WorkspacePrefsEntry): boolean {
+  return isDirtyRow(row);
+}
+
+function samePrefs(row: WorkspacePrefsEntry, prefs: HookWorkspacePrefs): boolean {
+  return (
+    row.teamId === (prefs.teamId ?? null) &&
+    row.workspace === prefs.workspace &&
+    row.model === prefs.model &&
+    row.effort === prefs.effort &&
+    row.agentKind === prefs.agentKind &&
+    row.permissionMode === prefs.permissionMode
+  );
 }
 
 /**
  * 确认某次本地写入已镜像到 server：代次必须仍是 expectedRev。
- * 墓碑对上就丢掉；实值对上就清 dirty，之后卡片删除才能落地。
+ * team 空行若仍需遮住 null-team 兜底就转为 clean 墓碑；其余墓碑丢掉。
  */
 export function markWorkspacePrefMirrored(
   channel: HookPrefsChannel,
@@ -248,9 +338,21 @@ export function markWorkspacePrefMirrored(
   const current = store.entries.find((e) => sameKey(e, channel, teamId, workspace));
   if (!current || rowRev(current) !== expectedRev) return;
   if (isBlankRow(current)) {
+    if (needsTeamTombstone(store.entries, current)) {
+      writeStore(fp, {
+        ...store,
+        entries: store.entries.map((e) =>
+          sameKey(e, channel, teamId, workspace) ? cleanRow(e) : e,
+        ),
+      });
+      return;
+    }
+    const remaining = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
+    const otherChannels = remaining.filter((e) => e.channel !== channel);
+    const currentChannel = remaining.filter((e) => e.channel === channel);
     writeStore(fp, {
       ...store,
-      entries: store.entries.filter((e) => !sameKey(e, channel, teamId, workspace)),
+      entries: [...otherChannels, ...pruneRedundantBlankRows(currentChannel)],
     });
     return;
   }
@@ -258,7 +360,7 @@ export function markWorkspacePrefMirrored(
   writeStore(fp, {
     ...store,
     entries: store.entries.map((e) =>
-      sameKey(e, channel, teamId, workspace) ? { ...e, dirty: false } : e,
+      sameKey(e, channel, teamId, workspace) ? cleanRow(e) : e,
     ),
   });
 }
@@ -302,6 +404,16 @@ function prefKey(teamId: string | null | undefined, workspace: string): string {
   return `${teamId ?? ''}::${workspace}`;
 }
 
+function serverRowForLocal(
+  serverByKey: Map<string, WorkspacePrefsEntry>,
+  row: Pick<WorkspacePrefsEntry, 'teamId' | 'workspace'>,
+): WorkspacePrefsEntry | undefined {
+  return (
+    serverByKey.get(prefKey(row.teamId, row.workspace)) ??
+    (row.teamId !== null ? serverByKey.get(prefKey(null, row.workspace)) : undefined)
+  );
+}
+
 function asStoreRow(channel: HookPrefsChannel, pref: HookWorkspacePrefs): WorkspacePrefsEntry | null {
   if (!HOOK_WORKSPACE_ALIAS_RE.test(pref.workspace)) return null;
   const teamId = pref.teamId === undefined || pref.teamId === null ? null : pref.teamId;
@@ -333,14 +445,30 @@ export function importWorkspacePrefsIfNeeded(
   const localKeys = new Set(
     store.entries.filter((e) => e.channel === channel).map((e) => prefKey(e.teamId, e.workspace)),
   );
+  const serverByKey = new Map<string, WorkspacePrefsEntry>();
   const incoming: WorkspacePrefsEntry[] = [];
   for (const pref of serverPrefs) {
     const row = asStoreRow(channel, pref);
-    if (row === null || isBlankRow(row)) continue;
+    if (row === null) continue;
+    serverByKey.set(prefKey(row.teamId, row.workspace), row);
     if (localKeys.has(prefKey(row.teamId, row.workspace))) continue;
     incoming.push(row);
   }
-  const entries = [...store.entries, ...incoming];
+  // 首次迁移前的既有本地行是正本，必须作为 dirty 行镜像；本次刚导入的 server 行
+  // 保持 clean，避免把 prefs.get 的旧快照无条件回写。
+  const combined = [
+    ...store.entries.map((row) => {
+      if (row.channel !== channel) return row;
+      const dirtyRow = { ...row, dirty: true };
+      return mergeDirtyRowWithServer(dirtyRow, serverRowForLocal(serverByKey, row));
+    }),
+    ...incoming,
+  ];
+  const channelRows = combined.filter((row) => row.channel === channel);
+  const retainedChannelRows = new Set(pruneRedundantBlankRows(channelRows));
+  const entries = combined.filter(
+    (row) => row.channel !== channel || retainedChannelRows.has(row),
+  );
   if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
     throw new Error('too many workspace prefs entries');
   }
@@ -348,9 +476,8 @@ export function importWorkspacePrefsIfNeeded(
 }
 
 /**
- * /model 卡主动推送的全量快照：尚未镜像的本机墓碑优先（未同步的清空不能被救活），
- * 快照里已经没有该键时丢掉墓碑；已同步的本机实值若快照省略该键，视为卡片删除；
- * 尚未镜像的本机实值无论快照有没有同键都保留。快照里的实值只覆盖已同步行。
+ * /model 卡主动推送的全量快照：所有尚未镜像的本机写入优先；已同步行以 server 为准。
+ * team 空行在仍有 null-team 兜底时必须保留，避免该 team 的显式清空被兜底重新救活。
  */
 export function applyIncomingServerWorkspacePrefs(
   channel: HookPrefsChannel,
@@ -363,7 +490,7 @@ export function applyIncomingServerWorkspacePrefs(
   const serverByKey = new Map<string, WorkspacePrefsEntry>();
   for (const pref of serverPrefs) {
     const row = asStoreRow(channel, pref);
-    if (row === null || isBlankRow(row)) continue;
+    if (row === null) continue;
     serverByKey.set(prefKey(row.teamId, row.workspace), row);
   }
   const nextChannel: WorkspacePrefsEntry[] = [];
@@ -371,29 +498,92 @@ export function applyIncomingServerWorkspacePrefs(
   for (const localRow of local) {
     const key = prefKey(localRow.teamId, localRow.workspace);
     seen.add(key);
-    if (isBlankRow(localRow)) {
-      if (serverByKey.has(key)) nextChannel.push(localRow);
+    if (isDirtyRow(localRow)) {
+      nextChannel.push(mergeDirtyRowWithServer(localRow, serverRowForLocal(serverByKey, localRow)));
       continue;
     }
     const serverRow = serverByKey.get(key);
     if (serverRow) {
-      // 未镜像的本机实值不能被「别的目录」触发的全量快照盖掉。
-      if (isDirtyRow(localRow)) nextChannel.push(localRow);
-      else nextChannel.push({ ...serverRow, rev: rowRev(localRow), dirty: false });
+      nextChannel.push({ ...serverRow, rev: rowRev(localRow), dirty: false });
       continue;
     }
-    if (isDirtyRow(localRow)) nextChannel.push(localRow);
+    if (isBlankRow(localRow)) nextChannel.push(localRow);
   }
   for (const [key, serverRow] of serverByKey) {
     if (seen.has(key)) continue;
     nextChannel.push(serverRow);
   }
-  const entries = [...other, ...nextChannel];
+  const prunedChannel = pruneRedundantBlankRows(nextChannel);
+  const entries = [...other, ...prunedChannel];
   if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, entries });
-  return nextChannel.map(toHookPrefs);
+  return prunedChannel.map(toHookPrefs);
+}
+
+export interface WorkspacePrefsMirrorCandidate {
+  prefs: HookWorkspacePrefs;
+  rev: number;
+}
+
+/**
+ * 完整行写回期间若撞上更新的 server 快照，本机 dirty 行已经合并了该快照。
+ * 固定当前完整行，避免重试拉到刚被旧写回覆盖的 server 行后再次丢掉新字段。
+ */
+export function pinWorkspacePrefForMirrorRetry(
+  channel: HookPrefsChannel,
+  teamId: string | null,
+  workspace: string,
+): void {
+  const fp = filePath();
+  const store = readStore(fp);
+  const current = store.entries.find((row) => sameKey(row, channel, teamId, workspace));
+  if (!current || !isDirtyRow(current) || current.dirtyPatch === undefined) return;
+  const pinned = { ...current };
+  delete pinned.dirtyPatch;
+  writeStore(fp, {
+    ...store,
+    entries: store.entries.map((row) =>
+      sameKey(row, channel, teamId, workspace) ? pinned : row,
+    ),
+  });
+}
+
+/**
+ * 渠道重连时先合并完整 server 快照，再返回需要镜像的本机完整行及其代次。
+ * 首次连接保留升级迁移语义；之后每次连接都吸收 /model 在离线期间的改动。
+ */
+export function reconcileWorkspacePrefsForMirror(
+  channel: HookPrefsChannel,
+  serverPrefs: HookWorkspacePrefs[],
+): WorkspacePrefsMirrorCandidate[] {
+  if (isWorkspacePrefsMigrated(channel)) {
+    applyIncomingServerWorkspacePrefs(channel, serverPrefs);
+  } else {
+    importWorkspacePrefsIfNeeded(channel, serverPrefs);
+  }
+  const channelRows = readStore(filePath()).entries.filter((row) => row.channel === channel);
+  return channelRows
+    .filter(shouldMirrorRow)
+    .map((row) => ({ prefs: toHookPrefs(row), rev: rowRev(row) }));
+}
+
+/** 发送镜像帧前再次确认候选仍是当前本地正本，关闭快照与逐行发送之间的竞态窗口。 */
+export function isWorkspacePrefsMirrorCandidateCurrent(
+  channel: HookPrefsChannel,
+  candidate: WorkspacePrefsMirrorCandidate,
+): boolean {
+  const channelRows = readStore(filePath()).entries.filter((row) => row.channel === channel);
+  const row = channelRows.find((entry) =>
+    sameKey(entry, channel, candidate.prefs.teamId ?? null, candidate.prefs.workspace),
+  );
+  return (
+    row !== undefined &&
+    rowRev(row) === candidate.rev &&
+    samePrefs(row, candidate.prefs) &&
+    shouldMirrorRow(row)
+  );
 }
 
 /**

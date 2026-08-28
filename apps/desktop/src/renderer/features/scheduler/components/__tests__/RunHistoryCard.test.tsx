@@ -108,6 +108,56 @@ describe('RunHistoryCard 前置检查结果', () => {
 });
 
 describe('RunHistoryCard 费用展示', () => {
+  it('有真实费用时只显示费用，不同时显示估算价值或 Token', () => {
+    renderRun({
+      id: 'run-priced',
+      scheduleId: 'schedule-1',
+      firedAt: 1,
+      finishedAt: 11,
+      status: 'success',
+      costAttribution: 'exact',
+      costUsd: 0.12,
+      estimatedValueUsd: 0.2,
+      totalTokens: 12_400,
+    });
+
+    expect(screen.getByText('scheduler.runs.runCost')).toBeTruthy();
+    expect(screen.queryByText('scheduler.runs.runValue')).toBeNull();
+    expect(screen.queryByText('scheduler.runs.runTokens')).toBeNull();
+  });
+
+  it('只有估算价值时改为显示 Token 用量', () => {
+    renderRun({
+      id: 'run-estimate-only',
+      scheduleId: 'schedule-1',
+      firedAt: 1,
+      finishedAt: 11,
+      status: 'success',
+      costAttribution: 'exact',
+      estimatedValueUsd: 0.2,
+      totalTokens: 12_400,
+    });
+
+    expect(screen.getByText('scheduler.runs.runTokens')).toBeTruthy();
+    expect(screen.queryByText('scheduler.runs.runCost')).toBeNull();
+    expect(screen.queryByText('scheduler.runs.runValue')).toBeNull();
+  });
+
+  it('不可可靠计价但有 Token 事实时显示 Token 用量', () => {
+    renderRun({
+      id: 'run-unavailable-token-usage',
+      scheduleId: 'schedule-1',
+      firedAt: 1,
+      finishedAt: 11,
+      status: 'success',
+      costAttribution: 'unavailable',
+      totalTokens: 8_000,
+    });
+
+    expect(screen.getByText('scheduler.runs.runTokens')).toBeTruthy();
+    expect(screen.queryByText('scheduler.runs.costUnavailable')).toBeNull();
+  });
+
   it('不可可靠计价时不显示假 $0.00', () => {
     renderRun({
       id: 'run-unavailable-cost',

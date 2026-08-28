@@ -592,9 +592,9 @@ export const MAKER_INVOKE = {
   /** 表单「AI 生成」:按自然语言描述生成前置检查脚本并落盘,返回可填入的命令。 */
   SCHEDULE_GENERATE_PRE_RUN_HOOK: 'maker:schedule:generate-pre-run-hook',
   SCHEDULE_LIST_RUNS: 'maker:schedule:list-runs',
-  /** Sidebar 聚合索引：带 sessionId 的 run + 未读终态 run，避免固定 history limit 截断。 */
+  /** Sidebar 聚合索引：每个 session 最新映射 + 全部 running / 未读终态 run。 */
   SCHEDULE_LIST_SIDEBAR_INDEX_RUNS: 'maker:schedule:list-sidebar-index-runs',
-  /** Automation 列表总开销：按 schedule 去重 session 汇总 sessions.total_cost_usd。 */
+  /** 已移除累计费用展示；保留 channel 供旧 device-link 控制端降级为空结果。 */
   SCHEDULE_LIST_COST_SUMMARIES: 'maker:schedule:list-cost-summaries',
   SCHEDULE_DELETE_RUN: 'maker:schedule:delete-run',
   /** Renderer 在 delete/pause 前查这条 schedule 当前有多少个 in-flight run,>0 时弹二次确认。 */

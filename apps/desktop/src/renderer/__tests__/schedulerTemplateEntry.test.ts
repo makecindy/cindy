@@ -130,10 +130,6 @@ vi.mock('@/features/scheduler/hooks/useScheduleUnreadRunCounts', () => ({
   useScheduleUnreadRunCounts: () => new Map(),
 }));
 
-vi.mock('@/features/scheduler/hooks/useScheduleCostSummaries', () => ({
-  useScheduleCostSummaries: () => ({ summaries: new Map(), loaded: true }),
-}));
-
 vi.mock('@/features/scheduler/hooks/useSessionReferences', () => ({
   useSessionReferences: () => new Map(),
 }));

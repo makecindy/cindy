@@ -45,6 +45,7 @@ import {
 import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
 import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
@@ -84,6 +85,7 @@ import {
   isGhostSkillProjectionBoundaryStableForOwner,
   withGhostSkillProjectionOwnerCommit,
   withGhostSkillProjectionReadOnlyOwner,
+  withStableOwnerBoundaryMutation,
 } from './authBoundaryQuarantine.js';
 import { buildFocusDeepLink } from './deepLink';
 import { getResolvedMainLocale, t } from './i18n';
@@ -121,6 +123,20 @@ import {
   claimLegacyOwnerNamespace,
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
+import {
+  migrateLocalNativeProviderAuthBindings,
+  readLegacyNativeProviderAuthOwner,
+  recoverPendingLegacyNativeProviderAuthOwner,
+  releaseLegacyNativeProviderAuthOwner,
+  reserveCommittedLegacyNativeProviderAuthOwner,
+  reserveLegacyNativeProviderAuthOwnerDetailed,
+} from './maker-host/nativeProviderAuthBinding.js';
+import {
+  recoverPendingLocalProfileDataOwner,
+  releaseLocalProfileDataOwner,
+  reserveCommittedLocalProfileDataOwnerDetailed,
+  reserveLocalProfileDataOwnerDetailed,
+} from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
 import { withCrossProcessLock } from './device-link/crossProcessLock';
@@ -436,7 +452,7 @@ function createAuthClient(
  * delete 兜底,防 ambient env 污染),线上零影响。env 由解析后的 profileKind
  * 不是 isolated-sandbox 且 passive 落地,覆盖正式目录与非隔离 custom 共库。
  */
-function isPassiveSharedUserDataInstance(): boolean {
+export function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
 }
 
@@ -1979,6 +1995,8 @@ async function withCloudOwnerCommit<T>(opts: {
   let forceBumpGeneration = false;
   let result!: T;
   let committed = false;
+  let commitApplied = false;
+  let rollbackReservation: CloudOwnerDataReservation | null = null;
   try {
     result = await withGhostSkillProjectionOwnerCommit({
       previousOwnerId: opts.previousOwnerId,
@@ -2003,9 +2021,18 @@ async function withCloudOwnerCommit<T>(opts: {
           await projectionRepairTeardown('same-owner-projection-recovery');
         }
       },
-      prepareCommit: opts.prepareCommit,
+      prepareCommit: async () => {
+        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId);
+        await opts.prepareCommit?.();
+      },
       commit: async () => {
         const result = await opts.commit();
+        commitApplied = true;
+        const reservation = rollbackReservation as CloudOwnerDataReservation | null;
+        if (reservation && !reservation.finalize()) {
+          throw new Error('cloud owner data reservation finalization remains pending');
+        }
+        rollbackReservation = null;
         // Same-owner repair: advance the owner generation after the real commit
         // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
         if (forceBumpGeneration) {
@@ -2014,9 +2041,25 @@ async function withCloudOwnerCommit<T>(opts: {
         }
         return result;
       },
+      onCommitFailure: ({ commitApplied: boundaryCommitApplied }) => {
+        // The cloud session/token commit is already durable at this point. A
+        // later projection-state publication failure must keep the first-owner
+        // reservations so another account cannot inherit the same local data.
+        if (boundaryCommitApplied || commitApplied) return;
+        const reservation = rollbackReservation as CloudOwnerDataReservation | null;
+        if (!reservation) return;
+        if (!reservation.rollback()) {
+          throw new Error('cloud owner data reservation rollback remains pending');
+        }
+        rollbackReservation = null;
+      },
     });
     committed = true;
   } finally {
+    if (!committed && !commitApplied) {
+      const reservation = rollbackReservation as CloudOwnerDataReservation | null;
+      if (reservation?.rollback()) rollbackReservation = null;
+    }
     const release = releaseBoundary as (() => void) | null;
     release?.();
     if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
@@ -2192,11 +2235,202 @@ async function recoverAccountFreeOwnerAtStartup(
   });
 }
 
+interface CloudOwnerDataReservation {
+  rollback(): boolean;
+  finalize(): boolean;
+}
+
+function recoverCloudOwnerDataReservations(committedOwnerId: string | null): boolean {
+  const profileRecovery = recoverPendingLocalProfileDataOwner(
+    committedOwnerId,
+    app.getPath('userData'),
+    BRAND_IDENTITY.dbFilePrefix,
+  );
+  const nativeRecovery = recoverPendingLegacyNativeProviderAuthOwner(committedOwnerId);
+  return profileRecovery !== 'failed' && nativeRecovery !== 'failed';
+}
+
+function resolveProfileReservationOwnerId(ownerId: string): string {
+  const nativeOwner = readLegacyNativeProviderAuthOwner();
+  if (nativeOwner.status === 'failed') {
+    throw new Error('native provider ownership could not be read before profile reservation');
+  }
+  return nativeOwner.status === 'owned' ? nativeOwner.ownerId : ownerId;
+}
+
+function reserveCloudOwnerData(
+  ownerId: string,
+  previousOwnerId: string | null,
+): CloudOwnerDataReservation {
+  const rollbackActions: Array<() => void> = [];
+  try {
+    if (!recoverCloudOwnerDataReservations(previousOwnerId)) {
+      throw new Error('pending cloud owner data reservation recovery failed');
+    }
+    // Older builds could durably assign only the native-provider namespace.
+    // Preserve that first owner when introducing the profile marker: a
+    // different currently persisted account may authenticate, but must not
+    // reinterpret the still-shared local database as its own.
+    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    const profileReservation = reserveLocalProfileDataOwnerDetailed(
+      profileReservationOwnerId,
+      app.getPath('userData'),
+      BRAND_IDENTITY.dbFilePrefix,
+    );
+    if (profileReservation.status === 'failed') {
+      throw new Error('local profile data reservation failed before cloud owner commit');
+    }
+    if (profileReservation.status === 'claimed' && profileReservation.claimToken) {
+      rollbackActions.push(() => {
+        releaseLocalProfileDataOwner(
+          profileReservationOwnerId,
+          app.getPath('userData'),
+          BRAND_IDENTITY.dbFilePrefix,
+          profileReservation.claimToken!,
+        );
+      });
+    }
+
+    const authoritativeOwnerId = profileReservation.ownerId;
+    if (!authoritativeOwnerId) {
+      throw new Error('local profile data reservation did not identify its durable owner');
+    }
+    // Keep this reservation provisional until the same cloud commit finalizes
+    // both namespaces. Even when the profile marker was already durable, a
+    // missing native marker must remain rollback-able if this auth transition
+    // is superseded before commit.
+    const nativeReservation = reserveLegacyNativeProviderAuthOwnerDetailed(authoritativeOwnerId);
+    if (nativeReservation.status === 'failed') {
+      throw new Error('native provider ownership reservation failed before cloud owner commit');
+    }
+    if (nativeReservation.status === 'owned-by-other') {
+      throw new Error('local profile and native provider ownership reservations disagree');
+    }
+    if (nativeReservation.status === 'claimed' && nativeReservation.claimToken) {
+      rollbackActions.push(() => {
+        releaseLegacyNativeProviderAuthOwner(authoritativeOwnerId, nativeReservation.claimToken!);
+      });
+    }
+    if (authoritativeOwnerId !== ownerId) {
+      log.info('cloud owner committed without adopting legacy local data', {
+        ownerId,
+        authoritativeOwnerId,
+        profileReservation: profileReservation.status,
+        nativeReservation: nativeReservation.status,
+      });
+    }
+    return {
+      rollback: () => {
+        for (const rollback of rollbackActions.reverse()) rollback();
+        return recoverCloudOwnerDataReservations(previousOwnerId);
+      },
+      finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId),
+    };
+  } catch (error) {
+    for (const rollback of rollbackActions.reverse()) rollback();
+    throw error;
+  }
+}
+
+function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boolean {
+  let profileReservation: ReturnType<typeof reserveCommittedLocalProfileDataOwnerDetailed> = {
+    status: 'failed',
+  };
+  let nativeReservation: ReturnType<typeof reserveCommittedLegacyNativeProviderAuthOwner> =
+    'failed';
+
+  if (!recoverCloudOwnerDataReservations(ownerId)) {
+    log.error('stable cloud owner reservation recovery failed', { ownerId });
+    return false;
+  }
+  try {
+    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    profileReservation = reserveCommittedLocalProfileDataOwnerDetailed(
+      profileReservationOwnerId,
+      app.getPath('userData'),
+      BRAND_IDENTITY.dbFilePrefix,
+    );
+  } catch (error) {
+    log.warn('stable cloud owner local profile reservation repair failed', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (profileReservation.status === 'failed' || !profileReservation.ownerId) {
+    log.warn('stable cloud owner remains authenticated with local adoption fail-closed', {
+      ownerId,
+      profileReservation: profileReservation.status,
+      nativeReservation,
+    });
+    return false;
+  }
+  const authoritativeOwnerId = profileReservation.ownerId;
+  try {
+    nativeReservation = reserveCommittedLegacyNativeProviderAuthOwner(authoritativeOwnerId);
+  } catch (error) {
+    log.warn('stable cloud owner native provider reservation repair failed', {
+      ownerId,
+      authoritativeOwnerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (nativeReservation === 'failed' || nativeReservation === 'owned-by-other') {
+    log.warn('stable cloud owner remains authenticated with local adoption fail-closed', {
+      ownerId,
+      authoritativeOwnerId,
+      profileReservation: profileReservation.status,
+      nativeReservation,
+    });
+    return false;
+  }
+  return authoritativeOwnerId === ownerId;
+}
+
+async function repairStableCloudOwnerDataReservations(ownerId: string): Promise<boolean> {
+  try {
+    // Cloud commits already hold this cross-process owner lock from reservation
+    // through finalize/rollback. Stable-owner repair must join the same lock so
+    // it cannot settle one namespace while a concurrent login settles the other.
+    return await withStableOwnerBoundaryMutation(ownerId, async () =>
+      repairStableCloudOwnerDataReservationsWhileLocked(ownerId),
+    );
+  } catch (error) {
+    log.warn('stable cloud owner reservation repair could not enter owner transaction', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 function commitCloudAppSession(ownerId: string): void {
   if (isPassiveSharedUserDataInstance()) {
     commitVolatileAppSession('cloud', ownerId);
   } else {
     commitActiveAppSession('cloud', ownerId);
+  }
+}
+
+/**
+ * Complete the one-way local → cloud native-provider ownership handoff after
+ * the durable owner boundary is stable. The binding layer keeps this
+ * fail-closed for other cloud owners and corrupted state.
+ */
+async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Promise<void> {
+  if (isPassiveSharedUserDataInstance()) return;
+  try {
+    // The profile marker is the single durable authority for both retained
+    // local namespaces. Reconcile the native marker to that owner before any
+    // legacy credential migration can run.
+    if (!(await repairStableCloudOwnerDataReservations(ownerId))) return;
+    if (migrateLocalNativeProviderAuthBindings(ownerId)) {
+      log.info('migrated local native provider bindings to first cloud owner', { ownerId });
+    }
+  } catch (error) {
+    log.warn('local native provider binding migration failed', {
+      ownerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -3817,8 +4051,15 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
         commit: () => commitCloudAppSession(currentUser!.id),
       });
     } else {
+      // This owner is already durably authenticated. Repair missing first-owner
+      // reservations best-effort, but never turn malformed local metadata into
+      // a renderer-visible logout while main remains signed in.
+      if (!isPassiveSharedUserDataInstance()) {
+        await repairStableCloudOwnerDataReservations(currentUser.id);
+      }
       commitCloudAppSession(currentUser.id);
     }
+    await migrateLocalProviderBindingsAfterCloudCommit(currentUser.id);
     await ensureStableOwnerPostCommit('auth-initialize-stable-cloud');
     return snapshotAuthState();
   }
@@ -4158,6 +4399,7 @@ async function runColdStartRefreshFlow(
         clearReplacementIntegrationReloadTimers();
       },
     });
+    await migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
     scheduleCanaryFlagSync({
       token: refreshData.accessToken,
       expectedAuthEpoch: epochAtStart,
@@ -4382,6 +4624,7 @@ async function completeLogin(
       },
     },
   );
+  await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
   scheduleCanaryFlagSync({
     token: outcome.accessToken,
     expectedAuthEpoch: loginEpoch,
@@ -5018,6 +5261,7 @@ export async function refresh(): Promise<boolean> {
             commitCloudAppSession(currentUser.id);
           },
         });
+        await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
         persistedRefreshTokenNeedsIdentityCheck = false;
         getProviderSecretStore().reconcileOwner(nextUser.id);
         if (accountSwitched) {
@@ -5075,6 +5319,7 @@ export async function refresh(): Promise<boolean> {
           commitCloudAppSession(currentUser.id);
         },
       });
+      await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
       persistedRefreshTokenNeedsIdentityCheck = false;
       scheduleRefresh(data.accessToken);
       notifyRenderer();
