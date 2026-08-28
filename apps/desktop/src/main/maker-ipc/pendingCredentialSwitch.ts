@@ -637,12 +637,14 @@ export class PendingCredentialSwitchService {
           persistedResolvedRoute = resolvedRoute;
         } catch (err) {
           let relinkRollbackError: unknown;
+          let relinkRestored = relinkReceipt === null;
           if (relinkReceipt) {
             try {
               const restored = await relinkReceipt.rollback();
               if (!restored) {
                 throw new Error('Codex thread relink rollback was superseded');
               }
+              relinkRestored = true;
             } catch (rollbackError) {
               relinkRollbackError = rollbackError;
               // The replacement thread still owns sdk_session_id. Avoid forking it again on
@@ -672,8 +674,29 @@ export class PendingCredentialSwitchService {
                 : {}),
             },
           );
-          if (this.targetCurrent(sessionId, target)) this.scheduleRetry(sessionId);
-          else this.discardIfOwnerStale(sessionId, target);
+          if (this.targetCurrent(sessionId, target)) {
+            this.scheduleRetry(sessionId);
+          } else if (this.ownerScopeCurrent(target)) {
+            // persistRoute did not prove that any target tuple reached SQLite. A same-owner
+            // cancellation may nevertheless have deleted pending after setSessionProvider()
+            // switched the in-memory route. Only release its cancellation barrier after the
+            // thread is back on the source and all captured runtime axes are restored.
+            if (relinkRestored) {
+              this.restoreCancelledRuntimeRoute(sessionId, target);
+            } else {
+              // The failed persist may have written nothing or may have committed before a
+              // later hook rejected. The captured Profile callback accepts either the resolved
+              // tuple or previousRoute and retries fail-closed until thread + route are safe.
+              await this.compensateSupersededPersistedRoute(
+                sessionId,
+                target,
+                resolvedRoute,
+                relinkReceipt,
+              );
+            }
+          } else {
+            this.discardIfOwnerStale(sessionId, target);
+          }
           return;
         }
         // await 期间用户可能改选 / 取消:本次让位,新登记有自己的收口路径。
@@ -887,13 +910,7 @@ export class PendingCredentialSwitchService {
       }
       // A pure cancellation has no newer runtime selection to preserve. Re-align the provider
       // store only after the captured Profile CAS succeeded; replacement targets own their store.
-      if (!this.pending.has(sessionId) && target.previousRoute) {
-        setSessionProvider(sessionId, target.previousRoute.providerId);
-        setSessionEffort(sessionId, target.previousRoute.effort);
-        if (target.previousRoute.fastMode !== undefined) {
-          setSessionFastMode(sessionId, target.previousRoute.fastMode);
-        }
-      }
+      this.restoreCancelledRuntimeRoute(sessionId, target);
       return true;
     } catch (error) {
       this.deps.logger?.error?.('superseded pending credential switch route compensation failed', {
@@ -901,6 +918,21 @@ export class PendingCredentialSwitchService {
         error: error instanceof Error ? error.message : String(error),
       });
       return false;
+    }
+  }
+
+  private restoreCancelledRuntimeRoute(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+  ): void {
+    if (this.pending.has(sessionId) || !target.previousRoute) return;
+    // The finalizer already closed the old live Session before relink/persist. The next lazy
+    // creation reads model + sdk_session_id from the unchanged/restored SQLite source tuple;
+    // these three owner-scoped stores are the remaining runtime axes that must match it.
+    setSessionProvider(sessionId, target.previousRoute.providerId);
+    setSessionEffort(sessionId, target.previousRoute.effort);
+    if (target.previousRoute.fastMode !== undefined) {
+      setSessionFastMode(sessionId, target.previousRoute.fastMode);
     }
   }
 

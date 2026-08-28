@@ -488,6 +488,58 @@ describe('PendingCredentialSwitchService', () => {
     h.service.clear(sessionId);
   });
 
+  it('restores runtime axes before waking a cancellation whose route persistence failed', async () => {
+    const sessionId = rememberSession('pending-switch-persist-failure-cancelled');
+    setSessionProvider(sessionId, 'xd');
+    setSessionEffort(sessionId, 'xhigh');
+    setSessionFastMode(sessionId, true);
+    const rollback = vi.fn(async () => true);
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      {
+        resolveRoute: async (_agent, model, providerId) => ({
+          model,
+          providerId,
+          degraded: false,
+        }),
+      },
+    );
+    h.relinkCodexThreadForProviderSwitch.mockResolvedValueOnce({
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback,
+    });
+    h.persistRoute.mockImplementationOnce(async () => {
+      h.service.clear(sessionId);
+      throw new Error('sqlite failed');
+    });
+
+    await h.service.register(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+      rebuildCodexThread: true,
+      previousRoute: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: 'xd',
+        effort: 'high',
+        fastMode: false,
+      },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(h.closeSession).toHaveBeenCalledWith(sessionId);
+    expect(getSessionProvider(sessionId)).toBe('xd');
+    expect(getSessionEffort(sessionId)).toBe('high');
+    expect(getSessionFastMode(sessionId)).toBe(false);
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(h.onApplied).not.toHaveBeenCalled();
+    expect(h.onCancellationCompensated).toHaveBeenCalledOnce();
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
+  });
+
   it('restores a committed relink marker after cleanup so retry does not fork again', async () => {
     const sessionId = rememberSession('pending-switch-restore-committed-relink');
     setSessionProvider(sessionId, 'xd');
