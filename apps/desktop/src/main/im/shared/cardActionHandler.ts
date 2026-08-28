@@ -374,16 +374,31 @@ export function createCardActionHandler(
         }
       };
 
-      // 持久化与运行态切换必须和 send / agent switch 共用 session 锁，保证后选覆盖先选。
       try {
-        await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error(`model:pick DB update failed: ${msg}`);
-        return msg;
-      }
-
-      try {
+        const relinkWithPersistedRoute = async (
+          relinkInput: Parameters<typeof relinkCodexThreadForCredentialSwitch>[0],
+        ) => {
+          if (!previousRoute) {
+            throw new Error('IM Codex thread relink requires a persisted source route snapshot');
+          }
+          return relinkCodexThreadForCredentialSwitch({
+            ...relinkInput,
+            persistedRouteTransition: {
+              previous: {
+                model: previousRoute.model,
+                providerId: previousRoute.providerId,
+                effort: previousRoute.effort,
+                fastMode: previousRoute.fastMode,
+              },
+              next: {
+                model: relinkInput.targetModel,
+                providerId: relinkInput.targetProviderId,
+                effort: effort ?? 'high',
+                fastMode: previousRoute.fastMode,
+              },
+            },
+          });
+        };
         const runtimeChange = await applyRuntimeSetModelChange({
           maker: getMaker(),
           sessionId,
@@ -396,9 +411,31 @@ export function createCardActionHandler(
           clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
           wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
           getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
-          relinkCodexThreadForProviderSwitch: relinkCodexThreadForCredentialSwitch,
+          relinkCodexThreadForProviderSwitch: relinkWithPersistedRoute,
           logger: log,
         });
+
+        const preservePersistedRoute =
+          runtimeChange.status === 'deferred' &&
+          runtimeChange.preservePersistedRoute === true;
+        const routePersistedWithRelink =
+          runtimeChange.status === 'applied' && runtimeChange.codexThreadRelink !== undefined;
+        if (!preservePersistedRoute && !routePersistedWithRelink) {
+          try {
+            // Non-relink selections persist only after runtime acceptance. Cross-family Codex
+            // relinks use the single SQLite CAS above, so a crash observes either the complete
+            // source tuple or the complete target tuple, never a mixed route/thread pair.
+            await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`model:pick DB update failed: ${msg}`);
+            clearPendingCredentialSwitchForSession(sessionId);
+            if (runtimeChange.status !== 'deferred') {
+              await rollbackRuntimeChange('DB persistence');
+            }
+            return msg;
+          }
+        }
 
         const liveAfterModel = turnRunner.getMakerSessionById(sessionId);
         if (runtimeChange.status !== 'deferred' && liveAfterModel && effort) {
@@ -415,7 +452,6 @@ export function createCardActionHandler(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`model:pick runtime setModel failed: ${msg}`);
-        await restorePersistentRoute('runtime setModel');
         return msg;
       }
 

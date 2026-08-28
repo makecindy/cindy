@@ -22,8 +22,26 @@ const mocks = vi.hoisted(() => ({
   getDesktopCcPrefs: vi.fn<() => DesktopCcPrefs | null>(() => null),
   resolveLenientSessionRoute: vi.fn(),
   applyRuntimeSetModelChange:
-    vi.fn<(input: unknown) => Promise<{ status: 'applied' | 'deferred' }>>(),
-  relinkCodexThreadForCredentialSwitch: vi.fn(async () => {}),
+    vi.fn<
+      (input: unknown) => Promise<
+        | {
+            status: 'applied';
+            codexThreadRelink?: {
+              previousSdkSessionId: string;
+              newSdkSessionId: string;
+              rollback: () => Promise<boolean>;
+            };
+          }
+        | { status: 'deferred'; preservePersistedRoute?: true }
+      >
+    >(),
+  relinkCodexThreadForCredentialSwitch: vi.fn<
+    (input: unknown) => Promise<{
+      previousSdkSessionId: string;
+      newSdkSessionId: string;
+      rollback: () => Promise<boolean>;
+    } | null>
+  >(async () => null),
   registerPendingCredentialSwitchForSession: vi.fn(),
   clearPendingCredentialSwitchForSession: vi.fn(),
   wakeSessionInputAfterCredentialSwitch: vi.fn(),
@@ -724,7 +742,72 @@ describe('model:pick 持久化失败', () => {
     );
   });
 
-  it('DB 未落盘时不触碰 runtime，并收口失败卡', async () => {
+  it('空闲 Codex 跨来源切换用同一 CAS 成套提交 thread 与 route', async () => {
+    const sourceSnapshot = {
+      agentKind: 'codex' as const,
+      remoteHostId: null,
+      sdkSessionId: 'thread-xd',
+      model: 'codex/gpt-5.6-sol',
+      effort: 'medium',
+      fastMode: false,
+      providerId: 'xd',
+    };
+    mocks.readModelRouteSnapshot.mockResolvedValueOnce(sourceSnapshot);
+    const receipt = {
+      previousSdkSessionId: 'thread-xd',
+      newSdkSessionId: 'thread-openai',
+      rollback: vi.fn(async () => true),
+    };
+    mocks.relinkCodexThreadForCredentialSwitch.mockResolvedValueOnce(receipt);
+    mocks.applyRuntimeSetModelChange.mockImplementationOnce(async (input: unknown) => {
+      expect(mocks.updateModelEffort).not.toHaveBeenCalled();
+      const hooks = input as {
+        relinkCodexThreadForProviderSwitch: (relinkInput: {
+          sessionId: string;
+          sourceModel: string;
+          sourceProviderId: string | null;
+          targetModel: string;
+          targetProviderId: string | null;
+        }) => Promise<typeof receipt | null>;
+      };
+      const committed = await hooks.relinkCodexThreadForProviderSwitch({
+        sessionId: 'sess-target',
+        sourceModel: sourceSnapshot.model,
+        sourceProviderId: sourceSnapshot.providerId,
+        targetModel: 'claude-opus-4-7',
+        targetProviderId: 'anthropic',
+      });
+      return { status: 'applied' as const, codexThreadRelink: committed ?? undefined };
+    });
+    const im = makeIm();
+
+    await pressModelPick(im);
+
+    expect(mocks.relinkCodexThreadForCredentialSwitch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'sess-target',
+        persistedRouteTransition: {
+          previous: {
+            model: 'codex/gpt-5.6-sol',
+            providerId: 'xd',
+            effort: 'medium',
+            fastMode: false,
+          },
+          next: {
+            model: 'claude-opus-4-7',
+            providerId: 'anthropic',
+            effort: 'high',
+            fastMode: false,
+          },
+        },
+      }),
+    );
+    // The relink CAS already persisted the complete target tuple; no second route write window.
+    expect(mocks.updateModelEffort).not.toHaveBeenCalled();
+    expect(mocks.cancelPendingAgentSwitchForSession).toHaveBeenCalledWith('sess-target');
+  });
+
+  it('DB 落盘失败时回滚已接受的 runtime，并收口失败卡', async () => {
     const live = {
       agentKind: 'claude-code',
       remoteHostId: null,
@@ -750,18 +833,21 @@ describe('model:pick 持久化失败', () => {
       'high',
       'anthropic',
     );
-    expect(mocks.applyRuntimeSetModelChange).not.toHaveBeenCalled();
+    expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledOnce();
     expect(mocks.cancelPendingAgentSwitchForSession).not.toHaveBeenCalled();
-    expect(mocks.setSessionProvider).not.toHaveBeenCalled();
-    expect(live.setModel).not.toHaveBeenCalled();
-    expect(live.setEffort).not.toHaveBeenCalled();
+    expect(mocks.clearPendingCredentialSwitchForSession).toHaveBeenCalledWith('sess-target');
+    expect(mocks.setSessionProvider).toHaveBeenCalledWith('sess-target', 'openrouter');
+    expect(live.setModel).toHaveBeenCalledWith('claude-sonnet-4-6', {
+      providerId: 'openrouter',
+    });
+    expect(live.setEffort).toHaveBeenCalledWith('medium');
     expect(im.updateInteractiveCard).toHaveBeenCalledWith(
       'model-card',
       expect.objectContaining({ body: slackUi.cards.model.failed('db locked') }),
     );
   });
 
-  it('runtime setModel 失败时恢复已落盘的旧路由', async () => {
+  it('runtime setModel 失败时不预写目标路由', async () => {
     mocks.readModelRouteSnapshot.mockResolvedValueOnce({
       agentKind: 'claude-code', remoteHostId: null, sdkSessionId: null,
       model: 'claude-sonnet-4-6',
@@ -773,20 +859,7 @@ describe('model:pick 持久化失败', () => {
 
     await pressModelPick(im);
 
-    expect(mocks.updateModelEffort).toHaveBeenNthCalledWith(
-      1,
-      'sess-target',
-      'claude-opus-4-7',
-      'high',
-      'anthropic',
-    );
-    expect(mocks.updateModelEffort).toHaveBeenNthCalledWith(
-      2,
-      'sess-target',
-      'claude-sonnet-4-6',
-      'medium',
-      'openrouter',
-    );
+    expect(mocks.updateModelEffort).not.toHaveBeenCalled();
     expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledWith(
       expect.objectContaining({
         persistedSession: {

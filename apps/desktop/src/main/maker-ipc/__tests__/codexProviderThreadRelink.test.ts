@@ -129,6 +129,77 @@ describe('relinkCodexProviderThread', () => {
     });
   });
 
+  it('keeps the restart tuple on the source route until fork and atomic commit complete', async () => {
+    let persisted = {
+      sdkSessionId: 'thread-xd',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+      effort: 'medium',
+      fastMode: false,
+    };
+    let releaseFork!: () => void;
+    const forkGate = new Promise<void>((resolve) => {
+      releaseFork = resolve;
+    });
+    const fork = vi.fn(async () => {
+      await forkGate;
+      return { newSdkSessionId: 'thread-openai' };
+    });
+    const relinking = relinkCodexProviderThread(
+      {
+        readSource: vi.fn(async () => ({
+          sdkSessionId: persisted.sdkSessionId,
+          workingDir: null,
+        })),
+        fork,
+        commit: vi.fn(async ({ expectedSdkSessionId, newSdkSessionId }) => {
+          if (
+            persisted.sdkSessionId !== expectedSdkSessionId ||
+            persisted.model !== 'codex/gpt-5.6-sol' ||
+            persisted.providerId !== 'xd' ||
+            persisted.effort !== 'medium' ||
+            persisted.fastMode !== false
+          ) {
+            return false;
+          }
+          persisted = {
+            sdkSessionId: newSdkSessionId,
+            model: 'gpt-5.6-sol',
+            providerId: 'openai',
+            effort: 'xhigh',
+            fastMode: true,
+          };
+          return true;
+        }),
+      },
+      {
+        sessionId: 'session-1',
+        sourceModel: 'codex/gpt-5.6-sol',
+        sourceProviderId: 'xd',
+      },
+    );
+
+    await vi.waitFor(() => expect(fork).toHaveBeenCalledOnce());
+    // Simulated process exit here restarts with a source provider and its own source thread.
+    expect(persisted).toEqual({
+      sdkSessionId: 'thread-xd',
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+      effort: 'medium',
+      fastMode: false,
+    });
+
+    releaseFork();
+    await relinking;
+    expect(persisted).toEqual({
+      sdkSessionId: 'thread-openai',
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+    });
+  });
+
   it('does nothing when the Cindy session has no native thread yet', async () => {
     const fork = vi.fn();
     const commit = vi.fn();

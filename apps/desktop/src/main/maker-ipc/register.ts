@@ -888,6 +888,7 @@ import {
   relinkCodexProviderThread,
   rollbackPersistedCodexRuntimeSelection,
   type CodexProviderThreadRelinkReceipt,
+  type PersistedCodexRuntimeSelectionState,
 } from './codexProviderThreadRelink.js';
 import {
   applyRuntimeSelectionAxesWithRecovery,
@@ -3293,6 +3294,11 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
   targetModel: string;
   targetProviderId: string | null;
   isCurrent?: () => boolean;
+  /** IM 等先于通用持久化调用 relink 的入口，用单条 CAS 成套提交 thread + route。 */
+  persistedRouteTransition?: {
+    previous: Omit<PersistedCodexRuntimeSelectionState, 'sdkSessionId'>;
+    next: Omit<PersistedCodexRuntimeSelectionState, 'sdkSessionId'>;
+  };
 }): Promise<CodexProviderThreadRelinkReceipt | null> {
   const ownerScope = captureDataOwnerBroadcastScope();
   const dbSnapshot = getCurrentDbClientSnapshot();
@@ -3303,13 +3309,28 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
     previousSdkSessionId: string;
     newSdkSessionId: string;
   }): Promise<boolean> => {
+    const transition = input.persistedRouteTransition;
     const write = await dbSnapshot.client.drizzle
       .update(sessions)
-      .set({ sdkSessionId: params.previousSdkSessionId, updatedAt: Date.now() })
+      .set({
+        sdkSessionId: params.previousSdkSessionId,
+        ...(transition ? transition.previous : {}),
+        updatedAt: Date.now(),
+      })
       .where(
         and(
           eq(sessions.id, params.sessionId),
           eq(sessions.sdkSessionId, params.newSdkSessionId),
+          ...(transition
+            ? [
+                eq(sessions.model, transition.next.model),
+                transition.next.providerId === null
+                  ? isNull(sessions.providerId)
+                  : eq(sessions.providerId, transition.next.providerId),
+                eq(sessions.effort, transition.next.effort),
+                eq(sessions.fastMode, transition.next.fastMode),
+              ]
+            : []),
         ),
       )
       .run();
@@ -3342,6 +3363,7 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
         return { newSdkSessionId: forked.newSdkSessionId };
       },
       commit: async ({ sessionId, expectedSdkSessionId, newSdkSessionId, isCurrent }) => {
+        const transition = input.persistedRouteTransition;
         const isBoundaryCurrent = (): boolean =>
           !isAppSessionBoundaryPending() &&
           isCurrent?.() !== false &&
@@ -3353,9 +3375,26 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
           commit: async () => {
             const write = await dbSnapshot.client.drizzle
               .update(sessions)
-              .set({ sdkSessionId: newSdkSessionId, updatedAt: now })
+              .set({
+                sdkSessionId: newSdkSessionId,
+                ...(transition ? transition.next : {}),
+                updatedAt: now,
+              })
               .where(
-                and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, expectedSdkSessionId)),
+                and(
+                  eq(sessions.id, sessionId),
+                  eq(sessions.sdkSessionId, expectedSdkSessionId),
+                  ...(transition
+                    ? [
+                        eq(sessions.model, transition.previous.model),
+                        transition.previous.providerId === null
+                          ? isNull(sessions.providerId)
+                          : eq(sessions.providerId, transition.previous.providerId),
+                        eq(sessions.effort, transition.previous.effort),
+                        eq(sessions.fastMode, transition.previous.fastMode),
+                      ]
+                    : []),
+                ),
               )
               .run();
             return write.changes > 0;
@@ -3382,6 +3421,7 @@ export async function relinkCodexThreadForCredentialSwitch(input: {
           sessionId,
           {
             sdkSessionId: newSdkSessionId,
+            ...(transition ? transition.next : {}),
             updatedAt: new Date(now).toISOString(),
           },
           ownerScope,
