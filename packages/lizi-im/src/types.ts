@@ -176,6 +176,11 @@ export interface IMFinalReplyMirror {
   kind: 'parent-chat';
   chatId: string;
   idempotencyKey: string;
+  /**
+   * Host-approved directory roots for parent-chat file copies. Missing or empty
+   * means fail-closed: the card still mirrors, local files do not.
+   */
+  allowedFileRoots?: string[];
 }
 
 export interface IMMessageEvent {

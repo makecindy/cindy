@@ -791,7 +791,9 @@ export function createTurnRunner(
       turnId: randomUUID(),
       userId,
       scopeKey: target.scopeKey,
-      finalReplyMirror: args.finalReplyMirror,
+      finalReplyMirror: args.finalReplyMirror
+        ? { ...args.finalReplyMirror, allowedFileRoots: [row.workingDir] }
+        : undefined,
       initialMessageText: text,
       streamingHandle: null,
       streamingHandlePromise: null,

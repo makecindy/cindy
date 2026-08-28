@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   patchCardRaw: vi.fn(),
@@ -15,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../outbound.js', () => mocks);
 vi.mock('../dualDelivery.js', () => ({
   waitForMirrorConfirmation: vi.fn(async () => true),
+  scheduleMirrorOnConfirmation: vi.fn(),
 }));
 vi.mock('../moduleScope.js', () => ({
   getLog: () => ({ debug: vi.fn(), error: vi.fn(), warn: vi.fn() }),
@@ -22,6 +27,10 @@ vi.mock('../moduleScope.js', () => ({
 
 import { messages } from '../messages.js';
 import { FEISHU_CARD_REQUEST_MAX_BYTES, start } from '../streamingText.js';
+import {
+  scheduleMirrorOnConfirmation,
+  waitForMirrorConfirmation,
+} from '../dualDelivery.js';
 
 function markdownContent(card: unknown): string {
   return (card as { body: { elements: Array<{ content: string }> } }).body.elements[0].content;
@@ -30,6 +39,14 @@ function markdownContent(card: unknown): string {
 function requestBytes(card: unknown): number {
   return Buffer.byteLength(JSON.stringify({ content: JSON.stringify(card) }), 'utf8');
 }
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
+});
 
 describe('feishu streaming text', () => {
   beforeEach(() => {
@@ -125,5 +142,56 @@ describe('feishu streaming text', () => {
     await expect(handle.finalize('最终正文')).resolves.toBeUndefined();
     expect(mocks.patchCardRaw).toHaveBeenCalledTimes(1);
     expect(mocks.sendText).not.toHaveBeenCalled();
+  });
+
+  it('defers parent-chat mirroring until late confirmation', async () => {
+    vi.mocked(waitForMirrorConfirmation).mockResolvedValueOnce(false);
+    vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
+      run();
+    });
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'c'.repeat(64),
+    });
+    await handle.finalize('迟到镜像');
+
+    expect(scheduleMirrorOnConfirmation).toHaveBeenCalledWith('c'.repeat(64), expect.any(Function));
+    expect(mocks.sendCardToChat).toHaveBeenCalledWith(
+      'oc_group',
+      expect.anything(),
+      `${'c'.repeat(32)}-card`,
+    );
+  });
+
+  it('does not copy parent-chat files outside allowedFileRoots', async () => {
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'd'.repeat(64),
+      allowedFileRoots: [path.join(os.tmpdir(), 'cindy-feishu-allowed-missing')],
+    });
+    await handle.finalize(`见 [secret](xdt-file://${path.join(os.tmpdir(), 'cindy-secret.txt')})`);
+
+    expect(mocks.sendCardToChat).toHaveBeenCalled();
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+  });
+
+  it('copies parent-chat files that stay inside allowedFileRoots', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-allowed-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'e'.repeat(64),
+      allowedFileRoots: [root],
+    });
+    await handle.finalize(`见 [report.txt](xdt-file://${allowedFile})`);
+
+    expect(mocks.sendFileToChat).toHaveBeenCalledWith(
+      'oc_group',
+      await fs.realpath(allowedFile),
+      'report.txt',
+      `${'e'.repeat(32)}-f0`,
+    );
   });
 });

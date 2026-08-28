@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   coordinateDualDelivery,
   resetDualDeliveryForTest,
+  scheduleMirrorOnConfirmation,
   waitForMirrorConfirmation,
 } from '../dualDelivery.js';
 
@@ -75,5 +76,46 @@ describe('Feishu native thread/main dual delivery', () => {
 
     expect(flat).toEqual({ kind: 'dispatch' });
     expect(topic).toEqual({ kind: 'dispatch' });
+  });
+
+  it('suppresses a late topic after an unpaired flat has already dispatched', async () => {
+    vi.useFakeTimers();
+    const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(flat).resolves.toEqual({ kind: 'dispatch' });
+
+    await expect(coordinateDualDelivery(input())).resolves.toEqual({
+      kind: 'suppress-main-copy',
+    });
+  });
+
+  it('delivers a scheduled mirror when the main-feed copy arrives after the pair window', async () => {
+    vi.useFakeTimers();
+    const topic = await coordinateDualDelivery(input());
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(false);
+
+    const scheduled = vi.fn();
+    scheduleMirrorOnConfirmation(topic.mirrorKey, scheduled);
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    expect(scheduled).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not suppress a copy after the late-copy window, and drops the deferred mirror', async () => {
+    vi.useFakeTimers();
+    const topic = await coordinateDualDelivery(input());
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    await vi.advanceTimersByTimeAsync(1_000);
+    const scheduled = vi.fn();
+    scheduleMirrorOnConfirmation(topic.mirrorKey, scheduled);
+    await vi.advanceTimersByTimeAsync(25_001);
+
+    const lateFlat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(lateFlat).resolves.toEqual({ kind: 'dispatch' });
+    expect(scheduled).not.toHaveBeenCalled();
   });
 });

@@ -442,7 +442,11 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       userId,
       initial,
       mirror?.kind === 'parent-chat'
-        ? { mirrorChatId: mirror.chatId, mirrorKey: mirror.idempotencyKey }
+        ? {
+            mirrorChatId: mirror.chatId,
+            mirrorKey: mirror.idempotencyKey,
+            allowedFileRoots: mirror.allowedFileRoots,
+          }
         : undefined,
     );
   }
@@ -459,6 +463,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         mirror.idempotencyKey,
         text,
         opts?.mediaAbsPaths,
+        mirror.allowedFileRoots,
       );
     } catch (err) {
       this.log.warn(
