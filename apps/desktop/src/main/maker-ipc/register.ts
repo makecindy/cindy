@@ -613,6 +613,7 @@ import {
   excludeDirectoryGrantConflicts,
   validateExtraDirs,
 } from './extraDirsValidator.js';
+import { applyRemoteDirectoryGrantUpdate } from './remoteDirectoryGrantUpdate.js';
 import {
   prepareHandoffWorktree,
   shouldRecycleHandoffWorktreeOnFailure,
@@ -16150,17 +16151,56 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
+  const applyRemoteDirectoryGrants = (
+    axis: 'extraDirs' | 'writableDirs',
+    sessionId: string,
+    requestedDirs: string[],
+  ) => withSendToSessionLock(sessionId, async () => {
+    await assertReviewSettingsUnlocked(sessionId);
+    const sess = maker.getSession(sessionId);
+    const supported = axis === 'extraDirs'
+      ? sess?.capabilities.extraDirs.supported
+      : sess?.capabilities.writableDirs?.supported;
+    const label = axis === 'extraDirs' ? 'set-extra-dirs' : 'set-writable-dirs';
+    if (!sess || !supported) {
+      log.debug(`${label}: ${sess ? 'agent capability=false' : 'session not found'}, no-op`, {
+        sessionId,
+        ...(sess ? { agentKind: sess.agentKind } : {}),
+      });
+      return;
+    }
+    const result = await applyRemoteDirectoryGrantUpdate(axis, requestedDirs, sess, {
+      validate: (requested) => validateExtraDirs(requested, sess.workDir || undefined),
+      readExtraDirs: () => readSessionExtraDirsFromDb(sessionId),
+      readWritableDirs: () => readSessionWritableDirsFromDb(sessionId),
+      excludeConflicts: excludeDirectoryGrantConflicts,
+      persist: (patch) => persistSessionFields(sessionId, patch),
+    });
+    log.info(label, {
+      sessionId,
+      requested: requestedDirs.length,
+      kept: result.dirs.length,
+      rejected: result.rejectedCount,
+    });
+    markRemoteSettingPersistedInsideHandler(result.dirs);
+    return result.dirs;
+  });
+
   // 附加只读引用目录的运行时 closure 推送。DB 持久化由 renderer 同步调
   // local-db:sessions:update 完成 (跟 SET_MODEL / sessionService.update 同模式)。
   // session 不在 / capability 不支持都 no-op, 不抛错 — 跟 setModel 容错语义一致。
   ipcMain.handle(MAKER_INVOKE.SET_EXTRA_DIRS, async (event, sessionId: unknown, dirs: unknown) => {
     // 轮 24-I3 HIGH:SET_EXTRA_DIRS 会扩展 agent 的文件可见面(任意已存在绝对目录
     // 加入额外可读范围)—— 必须 sender 校验, 否则受污染页面可扩大文件访问。
-    if (!isDeviceLinkInvoke()) {
+    const deviceLinkInvoke = isDeviceLinkInvoke();
+    if (!deviceLinkInvoke) {
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     }
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     if (!Array.isArray(dirs)) throwIpcError('INVALID_PARAMS', 'dirs must be string[]');
+    if (deviceLinkInvoke) {
+      return applyRemoteDirectoryGrants('extraDirs', sessionId, dirs as string[]);
+    }
     await assertReviewSettingsUnlocked(sessionId);
     const sess = maker.getSession(sessionId);
     if (!sess) {
@@ -16195,11 +16235,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   ipcMain.handle(MAKER_INVOKE.SET_WRITABLE_DIRS, async (event, sessionId: unknown, dirs: unknown) => {
-    if (!isDeviceLinkInvoke()) {
+    const deviceLinkInvoke = isDeviceLinkInvoke();
+    if (!deviceLinkInvoke) {
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     }
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     if (!Array.isArray(dirs)) throwIpcError('INVALID_PARAMS', 'dirs must be string[]');
+    if (deviceLinkInvoke) {
+      return applyRemoteDirectoryGrants('writableDirs', sessionId, dirs as string[]);
+    }
     await assertReviewSettingsUnlocked(sessionId);
     const sess = maker.getSession(sessionId);
     if (!sess) {

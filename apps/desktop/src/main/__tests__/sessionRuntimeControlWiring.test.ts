@@ -135,6 +135,31 @@ describe('session runtime control wiring', () => {
     }
   });
 
+  it('serializes remote directory validation, runtime apply, persistence, and rollback', () => {
+    const grantUpdate = handlerBody(
+      registerSource,
+      'const applyRemoteDirectoryGrants =',
+      '// 附加只读引用目录的运行时 closure 推送',
+    );
+    const extraDirs = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_EXTRA_DIRS',
+      'MAKER_INVOKE.SET_WRITABLE_DIRS',
+    );
+    const writableDirs = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_WRITABLE_DIRS',
+      '// ── Memory 控制',
+    );
+
+    expect(grantUpdate).toContain('withSendToSessionLock(sessionId');
+    expect(grantUpdate).toContain('applyRemoteDirectoryGrantUpdate(axis');
+    expect(grantUpdate).toContain('persist: (patch) => persistSessionFields(sessionId, patch)');
+    expect(grantUpdate).toContain('markRemoteSettingPersistedInsideHandler(result.dirs)');
+    expect(extraDirs).toContain("applyRemoteDirectoryGrants('extraDirs'");
+    expect(writableDirs).toContain("applyRemoteDirectoryGrants('writableDirs'");
+  });
+
   it('guards local user model changes before parsing input while preserving trusted internal paths', () => {
     const setModel = handlerBody(
       registerSource,
