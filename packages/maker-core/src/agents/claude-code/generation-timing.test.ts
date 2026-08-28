@@ -877,7 +877,7 @@ describe('claude generation pause boundaries', () => {
     vi.useRealTimers();
   });
 
-  it('fails closed when a child stream arrives with no parent generation interval', () => {
+  it('does not pin a pause id when a child stream arrives with no parent generation interval', () => {
     const ctx = createTranslatorCtx();
     const queue = createAsyncQueue<AgentEvent>();
     translateSdkMessage(
@@ -893,10 +893,90 @@ describe('claude generation pause boundaries', () => {
       ctx,
     );
     expect(ctx.rt.generation.sawSubagent).toBe(true);
-    expect(ctx.rt.generation.reliable).toBe(false);
+    expect(ctx.rt.generation.reliable).toBe(true);
     expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
     resetClaudeGenerationTiming(ctx.rt.generation);
     queue.end();
+  });
+
+  it('does not let a settled-turn background child block the next parent generation', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: { type: 'message_delta', usage: { output_tokens: 80 } },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 10, output_tokens: 80 },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent-bg',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+
+    vi.setSystemTime(3_000);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 20 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(3_000);
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+    vi.useRealTimers();
   });
 
   it('excludes subagent output from parent live tok/s', async () => {

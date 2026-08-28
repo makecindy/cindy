@@ -1531,8 +1531,10 @@ function pauseClaudeGenerationForKnownTools(ctx: TranslateContext): void {
 /**
  * 子代理事件到达时：父级生成时钟必须已经因对应 Agent 工具停表。
  * 若 child 先于父级 tool_use / message_delta，用 parent_tool_use_id 作为既有
- * pause 边界关掉父级区间，避免分母吞进子代理时间、分子却只有父级 output。
- * 父级从未开始生成时 pause 会 fail closed（与无 message_start 的 tool_use 同款）。
+ * pause 边界关掉父级开区间，避免分母吞进子代理时间、分子却只有父级 output。
+ * 没有开区间且 pending 为空时不 pause：result/reset 后的后台 child、以及
+ * 本 turn 尚未 begin 的 child，都不得钉死旧 parent_tool_use_id，否则下一轮
+ * parent message_start 无法 begin。
  */
 function observeClaudeSubagentStream(
   ctx: TranslateContext,
@@ -1540,6 +1542,12 @@ function observeClaudeSubagentStream(
 ): void {
   noteClaudeSubagent(ctx.rt.generation);
   if (ctx.rt.generation.pendingToolIds.has(parentToolUseId)) return;
+  if (
+    ctx.rt.generation.startedAt === null &&
+    ctx.rt.generation.pendingToolIds.size === 0
+  ) {
+    return;
+  }
   pauseClaudeGeneration(ctx.rt.generation, parentToolUseId);
 }
 
