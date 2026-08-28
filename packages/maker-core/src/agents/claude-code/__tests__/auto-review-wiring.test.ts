@@ -121,7 +121,11 @@ type CanUseToolFn = (
   toolName: string,
   input: Record<string, unknown>,
   options: { toolUseID: string; suggestions?: unknown[] },
-) => Promise<{ behavior: 'allow' | 'deny'; message?: string }>;
+) => Promise<{
+  behavior: 'allow' | 'deny';
+  message?: string;
+  updatedInput?: Record<string, unknown>;
+}>;
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'maker-core-auto-review-'));
@@ -220,6 +224,7 @@ function permissionRequests(seen: InteractionRequest[]) {
 const SESSION_SUGGESTION = [{ type: 'addRules', destination: 'session', behavior: 'allow' }];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   sdkMock.forkSession.mockReset();
   sdkMock.query.mockReset();
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -443,6 +448,182 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
       { toolUseID: 'revoked-writable' },
     )).resolves.toMatchObject({ behavior: 'deny', message: 'read-only reference' });
     expect(reviewer).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
+  it('canonicalizes every structured write tool through the nearest existing ancestor', async () => {
+    const writableDir = await makeTempDir();
+    const realDir = path.join(writableDir, 'real-output');
+    const linkedDir = path.join(writableDir, 'linked-output');
+    await fs.mkdir(realDir);
+    await fs.symlink(realDir, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const canonicalRealDir = await fs.realpath(realDir);
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+      writableDirs: [writableDir],
+    });
+
+    const cases = [
+      { toolName: 'Write', pathField: 'file_path', fileName: 'write.txt' },
+      { toolName: 'Edit', pathField: 'file_path', fileName: 'edit.txt' },
+      { toolName: 'MultiEdit', pathField: 'file_path', fileName: 'multi-edit.txt' },
+      { toolName: 'NotebookEdit', pathField: 'notebook_path', fileName: 'notebook.ipynb' },
+    ] as const;
+    for (const testCase of cases) {
+      const lexicalPath = path.join(linkedDir, testCase.fileName);
+      const result = await canUseTool(
+        testCase.toolName,
+        { [testCase.pathField]: lexicalPath },
+        { toolUseID: `canonical-${testCase.toolName}` },
+      );
+      expect(result).toMatchObject({
+        behavior: 'allow',
+        updatedInput: { [testCase.pathField]: path.join(canonicalRealDir, testCase.fileName) },
+      });
+    }
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('prompts for each structured write whose authorized-looking link escapes the writable root', async () => {
+    const writableDir = await makeTempDir();
+    const outsideDir = await makeTempDir();
+    const linkedDir = path.join(writableDir, 'linked-output');
+    await fs.symlink(outsideDir, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const canonicalOutsideDir = await fs.realpath(outsideDir);
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+      writableDirs: [writableDir],
+    });
+
+    for (const toolName of ['Write', 'Edit'] as const) {
+      const fileName = `${toolName.toLowerCase()}.txt`;
+      const result = await canUseTool(
+        toolName,
+        { file_path: path.join(linkedDir, fileName) },
+        { toolUseID: `escape-${toolName}`, suggestions: SESSION_SUGGESTION },
+      );
+      expect(result).toMatchObject({
+        behavior: 'allow',
+        updatedInput: { file_path: path.join(canonicalOutsideDir, fileName) },
+      });
+    }
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(2);
+    for (const request of permissionRequests(seen)) {
+      expect(request.suggestions).toBeUndefined();
+      expect(request.input.file_path).toContain(canonicalOutsideDir);
+    }
+    await handle.close();
+  });
+
+  it('re-applies system and credential protections to canonical write targets', async () => {
+    const writableDir = await makeTempDir();
+    const credentialDir = path.join(writableDir, '.ssh');
+    const credentialAlias = path.join(writableDir, 'build-cache');
+    const systemAlias = path.join(writableDir, 'system-cache');
+    await fs.mkdir(credentialDir);
+    await fs.symlink(
+      credentialDir,
+      credentialAlias,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const systemRoot = process.platform === 'win32'
+      ? (process.env.SystemRoot ?? 'C:\\Windows')
+      : '/etc';
+    await fs.symlink(systemRoot, systemAlias, process.platform === 'win32' ? 'junction' : 'dir');
+    const canonicalCredentialDir = await fs.realpath(credentialDir);
+    const canonicalSystemRoot = await fs.realpath(systemRoot);
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+      writableDirs: [writableDir],
+    });
+
+    const credentialResult = await canUseTool(
+      'Write',
+      { file_path: path.join(credentialAlias, 'key') },
+      { toolUseID: 'credential-link', suggestions: SESSION_SUGGESTION },
+    );
+    expect(credentialResult).toMatchObject({
+      behavior: 'allow',
+      updatedInput: { file_path: path.join(canonicalCredentialDir, 'key') },
+    });
+    const systemResult = await canUseTool(
+      'Edit',
+      { file_path: path.join(systemAlias, 'cindy-review-test') },
+      { toolUseID: 'system-link', suggestions: SESSION_SUGGESTION },
+    );
+    expect(systemResult).toMatchObject({
+      behavior: 'allow',
+      updatedInput: { file_path: path.join(canonicalSystemRoot, 'cindy-review-test') },
+    });
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(2);
+    expect(permissionRequests(seen).every((request) => request.suggestions === undefined)).toBe(true);
+    await handle.close();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'prompts when a dangling link prevents proving the write target',
+    async () => {
+      const writableDir = await makeTempDir();
+      const linkedDir = path.join(writableDir, 'dangling-output');
+      await fs.symlink(path.join(writableDir, 'missing-target'), linkedDir, 'dir');
+      const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+        writableDirs: [writableDir],
+      });
+      const lexicalPath = path.join(linkedDir, 'result.txt');
+
+      const result = await canUseTool(
+        'Write',
+        { file_path: lexicalPath },
+        { toolUseID: 'unresolved-link', suggestions: SESSION_SUGGESTION },
+      );
+      expect(result).toMatchObject({
+        behavior: 'allow',
+        updatedInput: { file_path: lexicalPath },
+      });
+      expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+      expect(permissionRequests(seen)).toHaveLength(1);
+      expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
+      await handle.close();
+    },
+  );
+
+  it('prompts if a writable directory is revoked while its real path is resolving', async () => {
+    const writableDir = await makeTempDir();
+    const lexicalPath = path.join(writableDir, 'result.txt');
+    const canonicalWritableDir = await fs.realpath(writableDir);
+    const originalRealpath = fs.realpath.bind(fs);
+    let markResolutionStarted!: () => void;
+    let releaseResolution!: () => void;
+    const resolutionStarted = new Promise<void>((resolve) => { markResolutionStarted = resolve; });
+    const resolutionGate = new Promise<void>((resolve) => { releaseResolution = resolve; });
+    vi.spyOn(fs, 'realpath').mockImplementation(async (target) => {
+      if (String(target) === lexicalPath) {
+        markResolutionStarted();
+        await resolutionGate;
+      }
+      return originalRealpath(target);
+    });
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+      writableDirs: [writableDir],
+    });
+
+    const pending = canUseTool(
+      'Write',
+      { file_path: lexicalPath },
+      { toolUseID: 'revoked-during-realpath', suggestions: SESSION_SUGGESTION },
+    );
+    await resolutionStarted;
+    await handle.setWritableDirs!([]);
+    releaseResolution();
+
+    await expect(pending).resolves.toMatchObject({
+      behavior: 'allow',
+      updatedInput: { file_path: path.join(canonicalWritableDir, 'result.txt') },
+    });
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
     await handle.close();
   });
 });

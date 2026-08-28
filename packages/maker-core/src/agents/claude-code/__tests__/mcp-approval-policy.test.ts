@@ -290,6 +290,10 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     const { handle, hooks, workingDir } = await startSession(undefined, {
       turnChangeCapture: { beforeKnownFileWrite, noteOpaqueWrite },
     });
+    const realDir = await makeTempDir();
+    const linkedDir = path.join(workingDir, 'linked-output');
+    await fs.symlink(realDir, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const canonicalRealDir = await fs.realpath(realDir);
     const pre = hooks?.PreToolUse?.[0]?.hooks[0];
     const post = hooks?.PostToolUse?.[0]?.hooks[0];
     if (!pre || !post) throw new Error('expected turn change capture hooks');
@@ -297,7 +301,7 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     await pre({
       hook_event_name: 'PreToolUse',
       tool_name: 'Write',
-      tool_input: { file_path: 'a.ts', content: 'next' },
+      tool_input: { file_path: path.join(linkedDir, 'a.ts'), content: 'next' },
     });
     await pre({
       hook_event_name: 'PreToolUse',
@@ -308,7 +312,7 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
       sessionId: 'session-mcp-policy',
       provider: 'claude-code',
       cwd: workingDir,
-      targetPath: 'a.ts',
+      targetPath: path.join(canonicalRealDir, 'a.ts'),
     });
     expect(noteOpaqueWrite).not.toHaveBeenCalled();
 
@@ -1180,6 +1184,7 @@ describe('remote sessions share the same permission semantics', () => {
       seen,
       remoteStartParams,
       remoteIdentity,
+      workingDir,
     };
   }
 
@@ -1239,6 +1244,27 @@ describe('remote sessions share the same permission semantics', () => {
 
     expect(result.behavior).toBe('allow');
     expect(seen).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('prompts for remote structured writes when the controller cannot prove the real target', async () => {
+    const { handle, onApprovalRequest, seen, workingDir } = await startRemoteSession(
+      () => 'auto-approve',
+      {
+        permissionMode: 'auto',
+        attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
+      },
+    );
+
+    const result = await onApprovalRequest({
+      requestId: 'r-remote-write',
+      kind: 'permission',
+      toolName: 'Write',
+      input: { file_path: path.join(workingDir, 'result.txt') },
+    });
+
+    expect(result.behavior).toBe('allow');
+    expect(permissionRequests(seen)).toHaveLength(1);
     await handle.close();
   });
 

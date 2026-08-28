@@ -278,6 +278,52 @@ function hostOfUrl(url: string | undefined): string | undefined {
 }
 
 /**
+ * Resolve the path that a Claude structured write will actually follow. New files
+ * inherit the real path of their nearest existing ancestor, so symlinks/junctions
+ * inside an authorized root cannot hide an out-of-root target. A lexically existing
+ * but unresolvable ancestor is evidence failure, not permission to skip upward.
+ */
+async function resolveClaudeFileWriteTarget(
+  workingDir: string,
+  targetPath: string | undefined,
+): Promise<string | null> {
+  if (!targetPath) return null;
+  const absoluteTarget = path.resolve(workingDir, targetPath);
+  try {
+    return await fs.realpath(absoluteTarget);
+  } catch {
+    let ancestor = path.dirname(absoluteTarget);
+    for (let depth = 0; depth < 64; depth += 1) {
+      try {
+        return path.join(await fs.realpath(ancestor), path.relative(ancestor, absoluteTarget));
+      } catch {
+        try {
+          await fs.lstat(ancestor);
+          return null;
+        } catch (lstatError) {
+          const code = (lstatError as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+        }
+        const parent = path.dirname(ancestor);
+        if (parent === ancestor) return null;
+        ancestor = parent;
+      }
+    }
+    return null;
+  }
+}
+
+function bindClaudeFileWriteTarget(
+  toolName: string,
+  input: Record<string, unknown>,
+  resolvedPath: string | null | undefined,
+): Record<string, unknown> {
+  if (typeof resolvedPath !== 'string') return input;
+  const pathField = toolName === 'NotebookEdit' ? 'notebook_path' : 'file_path';
+  return { ...input, [pathField]: resolvedPath };
+}
+
+/**
  * 已知的 Claude 内置只读工具白名单(纯读、无本地写 / 无命令执行 / 无外部发送副作用)。
  *
  * 仅用于 canUseTool 在**没有** interactionResolver 这一异常分支下做 fail-closed 判定:
@@ -1488,13 +1534,24 @@ export class ClaudeCodeAgent extends BaseAgent {
           .map((key) => toolInput?.[key])
           .find((value): value is string => typeof value === 'string' && value.length > 0);
         if (targetPath && ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(pre.tool_name)) {
-          await this.deps.turnChangeCapture.beforeKnownFileWrite({
-            sessionId: captureSessionId,
-            provider: 'claude-code',
-            cwd: captureCwd,
-            targetPath,
-            ...(opts.remoteHostId ? { remote: true } : {}),
-          });
+          const captureTargetPath = opts.remoteHostId
+            ? targetPath
+            : await resolveClaudeFileWriteTarget(captureCwd, targetPath);
+          if (captureTargetPath) {
+            await this.deps.turnChangeCapture.beforeKnownFileWrite({
+              sessionId: captureSessionId,
+              provider: 'claude-code',
+              cwd: captureCwd,
+              targetPath: captureTargetPath,
+              ...(opts.remoteHostId ? { remote: true } : {}),
+            });
+          } else {
+            this.deps.turnChangeCapture.noteOpaqueWrite({
+              sessionId: captureSessionId,
+              provider: 'claude-code',
+              cwd: captureCwd,
+            });
+          }
         }
       } else if (
         input.hook_event_name === 'PostToolUse'
@@ -1962,6 +2019,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       const hostApprovalPresentation = mcpApprovalPresentation(toolName, input);
       let forcePrompt = turnPolicyForcePrompt;
       let unavailableHandoff = false;
+      let reviewedWritePath: string | null | undefined;
+      let executionInput = input;
       if (mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')) {
         const workspaceRoots = [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
@@ -1969,8 +2028,24 @@ export class ClaudeCodeAgent extends BaseAgent {
         const writableRoots = [opts.workingDir, ...mutableWritableDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
         );
+        const action = normalizeBuiltinToolForAutoReview(toolName, input);
+        if (action.kind === 'file-write') {
+          const resolutionDirectoryGeneration = autoReviewDirectoryGeneration;
+          // SSH paths belong to the remote filesystem. Until the remote manager can
+          // attest a real path, never use a same-named controller path as evidence.
+          reviewedWritePath = opts.remoteHostId
+            ? null
+            : await resolveClaudeFileWriteTarget(opts.workingDir, action.path);
+          // A grant revoked while realpath was pending cannot be evaluated against
+          // the old roots snapshot. Keep the canonical target, but require consent.
+          if (resolutionDirectoryGeneration !== autoReviewDirectoryGeneration) {
+            forcePrompt = true;
+          }
+          action.resolvedPath = reviewedWritePath;
+          executionInput = bindClaudeFileWriteTarget(toolName, input, reviewedWritePath);
+        }
         const autoDecision = await reviewAutoAction(
-          normalizeBuiltinToolForAutoReview(toolName, input),
+          action,
           workspaceRoots,
           writableRoots,
           opts.remoteHostId ? 'linux' : process.platform,
@@ -1982,14 +2057,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         // mutablePermissionMode 仍视为 'auto';运行期它确实可能已变,故按 union 类型现读。
         const modeAfterReview = mutablePermissionMode as PermissionMode;
         if (modeAfterReview === 'bypassPermissions') {
-          return { behavior: 'allow', updatedInput: input };
+          return { behavior: 'allow', updatedInput: executionInput };
         }
         if (modeAfterReview !== 'auto') {
           // 已收紧到 Ask/更严:不吃 auto 裁决,强制走用户确认(下方 forcePrompt 流程)。
           forcePrompt = true;
-        } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'allow') {
-          return { behavior: 'allow', updatedInput: input };
-        } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'block') {
+        } else if (!forcePrompt && autoDecision.verdict === 'allow') {
+          return { behavior: 'allow', updatedInput: executionInput };
+        } else if (!forcePrompt && autoDecision.verdict === 'block') {
           // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默,只把 reason 喂给模型。
           // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这条分支。)
           return {
@@ -2017,7 +2092,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         requestId: options.toolUseID,
         toolUseId: options.toolUseID,
         toolName,
-        input: input as Record<string, unknown>,
+        input: executionInput as Record<string, unknown>,
         title: hostApprovalPresentation?.title ?? options.title,
         displayName: options.displayName,
         description: hostApprovalPresentation?.description ?? options.description,
@@ -2050,7 +2125,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           updatedPermissions?: PermissionUpdate[];
         } = {
           behavior: 'allow',
-          updatedInput: (decision.updatedInput ?? input) as Record<string, unknown>,
+          updatedInput: bindClaudeFileWriteTarget(
+            toolName,
+            (decision.updatedInput ?? executionInput) as Record<string, unknown>,
+            reviewedWritePath,
+          ),
         };
         // Pass-through vendor-specific permission rule updates. BaseAgent owns
         // the session-scope normalization; Claude SDK validates the final shape.
@@ -3138,8 +3217,16 @@ export class ClaudeCodeAgent extends BaseAgent {
               && remoteToolName
               && !remoteToolName.startsWith('mcp__')
             ) {
+              const action = normalizeBuiltinToolForAutoReview(
+                remoteToolName,
+                params.input ?? {},
+              );
+              // The controller cannot prove a path on the SSH filesystem. Mark
+              // structured writes unresolved so shared review never grants them
+              // from a lexical prefix alone.
+              if (action.kind === 'file-write') action.resolvedPath = null;
               const autoDecision = await reviewAutoAction(
-                normalizeBuiltinToolForAutoReview(remoteToolName, params.input ?? {}),
+                action,
                 [opts.workingDir].filter(
                   (d): d is string => typeof d === 'string' && d.length > 0,
                 ),
