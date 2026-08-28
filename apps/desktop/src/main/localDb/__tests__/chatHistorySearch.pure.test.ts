@@ -111,4 +111,10 @@ describe('buildFtsMatch', () => {
     expect(out.length).toBeLessThanOrEqual(2048);
     expect(out.startsWith('"边 ')).toBe(true);
   });
+
+  it('超长 Latin / 数字 token 不截断，quoted MATCH 仍是精确命中', () => {
+    const hex = 'a'.repeat(128);
+    expect(buildMessagesFtsMatch(hex)).toBe(`"${hex}"`);
+    expect(buildFtsMatch(hex)).toBe(`"${hex}"`);
+  });
 });

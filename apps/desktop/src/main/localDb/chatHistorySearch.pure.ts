@@ -72,7 +72,15 @@ export function extractMessagesFtsTokens(query: string): string[] {
   const tokens = query.match(FTS_TOKEN_RE);
   if (!tokens || tokens.length === 0) return [];
   const capped = tokens
-    .map((token) => [...token].slice(0, FTS_TOKEN_CHAR_CAP).join(''))
+    .map((token) => {
+      const chars = [...token];
+      // 只有会按字展开的汉字 token 才截长度；Latin / 数字整段是一个 FTS token，
+      // 截断后 quoted MATCH 不再是精确命中（例如 128 位 hex）。
+      if (chars.length <= FTS_TOKEN_CHAR_CAP || !chars.some((ch) => /\p{Script=Han}/u.test(ch))) {
+        return token;
+      }
+      return chars.slice(0, FTS_TOKEN_CHAR_CAP).join('');
+    })
     .filter((token) => token.length > 0);
   return [...new Set(capped)].slice(0, FTS_TOKEN_CAP);
 }
