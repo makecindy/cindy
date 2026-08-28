@@ -2908,7 +2908,6 @@ describe('CodexAgent reference directories', () => {
     );
     expect(turnCall?.[1]).toMatchObject({
       threadId: 'start-thread-2',
-      serviceTier: 'fast',
     });
     expect(bindingLeases.has('local')).toBe(false);
     await handle.close();
@@ -3234,7 +3233,6 @@ describe('CodexAgent reference directories', () => {
     );
     expect(turnCalls[1]?.[1]).toMatchObject({
       threadId: 'start-thread-id',
-      serviceTier: 'fast',
     });
     await handle.close();
   });
@@ -3529,7 +3527,7 @@ describe('CodexAgent reference directories', () => {
     await handle.close();
   });
 
-  it('retries a stale reference turn with its frozen permission profile', async () => {
+  it('retries a stale reference turn with its frozen send route', async () => {
     const agent = new CodexAgent(createDeps());
     const firstTurnGate = deferred<never>();
     let turnStartCount = 0;
@@ -3577,8 +3575,7 @@ describe('CodexAgent reference directories', () => {
       runtimeWorkspaceRoots: ['/repo', '/shared-frozen-turn'],
       permissions: profileName,
       approvalPolicy: 'on-request',
-      model: 'gpt-5.5',
-      serviceTier: 'fast',
+      model: 'gpt-5.4',
     });
     expect('sandbox' in resumeParams).toBe(false);
 
@@ -3591,8 +3588,7 @@ describe('CodexAgent reference directories', () => {
       expect('sandboxPolicy' in params).toBe(false);
     }
     expect(turnCalls[1]?.[1]).toMatchObject({
-      model: 'gpt-5.5',
-      serviceTier: 'fast',
+      model: 'gpt-5.4',
     });
     await handle.close();
   });
@@ -25330,10 +25326,10 @@ describe('CodexAgent plan mode', () => {
       collaborationMode?: { mode: string; settings: { model: string; reasoning_effort: string } };
     }];
     expect(retryParams.collaborationMode?.settings).toMatchObject({
-      model: 'gpt-5.4',
+      model: 'gpt-5',
       reasoning_effort: 'high',
     });
-    expect(handle.model).toBe('gpt-5.4');
+    expect(handle.model).toBe('gpt-5');
     await handle.close();
   });
 
@@ -27542,6 +27538,7 @@ describe('CodexAgent context window reporting', () => {
     let turnSeq = 0;
     return installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.ThreadResume) return { thread: { id: 'start-thread-id' } };
       if (method === Method.ThreadSettingsUpdate) return {};
       if (method === Method.TurnInterrupt) return {};
       return undefined;
@@ -27567,6 +27564,215 @@ describe('CodexAgent context window reporting', () => {
       },
     } as never);
   }
+
+  it('passes a verified provider/model window to new and resumed thread config', async () => {
+    const resolveVerifiedContextWindow = vi.fn(
+      (providerId: string | null | undefined, modelId: string) =>
+        providerId === 'custom-provider' && modelId === 'custom-model' ? 1_000_001 : null,
+    );
+    const agent = new CodexAgent(createDeps({}, { resolveVerifiedContextWindow }));
+    const host = installFakeHost(agent);
+    const started = await agent.startSession({
+      sessionId: 'session-context-window-start',
+      model: 'custom-model',
+      providerId: 'custom-provider',
+      workingDir: '/repo',
+    });
+    const [, startParams] = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    ) as [string, Record<string, unknown>];
+    expect(startParams.config).toMatchObject({ model_context_window: 1_000_001 });
+    await started.close();
+
+    const resumed = await agent.startSession({
+      sessionId: 'session-context-window-resume',
+      model: 'custom-model',
+      providerId: 'custom-provider',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+    const [, resumeParams] = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    ) as [string, Record<string, unknown>];
+    expect(resumeParams.config).toMatchObject({ model_context_window: 1_000_001 });
+    expect(resolveVerifiedContextWindow).toHaveBeenCalledWith('custom-provider', 'custom-model');
+    await resumed.close();
+  });
+
+  it('reapplies a changed verified window on an idle model switch', async () => {
+    const agent = agentWithVerified((_providerId, modelId) =>
+      modelId === 'new-model' ? 900_000 : 300_000,
+    );
+    const host = installTurnCapableHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-context-window-idle-switch',
+      model: 'old-model',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    await handle.send({ type: 'user', content: 'create a rollout' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    } as never);
+    if (!handle.setModel) throw new Error('expected setModel support');
+    await handle.setModel('new-model');
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('start-thread-id');
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    expect(resumeCalls).toHaveLength(1);
+    expect(resumeCalls[0]?.[1]).toMatchObject({
+      model: 'new-model',
+      config: { model_context_window: 900_000 },
+    });
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadSettingsUpdate)).toBe(false);
+    await handle.close();
+  });
+
+  it('records the profile sent by an unused-thread replacement', async () => {
+    const replacementGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+    }>();
+    let threadStartCount = 0;
+    const agent = agentWithVerified((_providerId, modelId) =>
+      modelId === 'new-model' ? 900_000 : 300_000,
+    );
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        threadStartCount += 1;
+        if (threadStartCount === 2) return replacementGate.promise;
+        return {
+          thread: { id: `start-thread-${threadStartCount}` },
+          model: 'new-model',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-context-window-replacement-profile',
+      model: 'old-model',
+      workingDir: '/repo',
+    });
+
+    if (!handle.setModel) throw new Error('expected setModel support');
+    const switchPromise = handle.setModel('new-model');
+    await vi.waitFor(() => expect(threadStartCount).toBe(2));
+    await handle.setExtraDirs?.(['/shared-during-replacement']);
+    replacementGate.resolve({
+      thread: { id: 'start-thread-2' },
+      model: 'new-model',
+      modelProvider: 'openai',
+      cwd: '/repo',
+    });
+    await switchPromise;
+
+    await handle.send({ type: 'user', content: 'use the reference' });
+    const startCalls = host.request.mock.calls.filter(([method]) => method === Method.ThreadStart);
+    expect(startCalls).toHaveLength(3);
+    expect(startCalls[2]?.[1]).toMatchObject({
+      permissions: 'cindy-readonly-references',
+      runtimeWorkspaceRoots: ['/repo', '/shared-during-replacement'],
+    });
+    await handle.close();
+  });
+
+  it('clears a previously applied window when the live catalog no longer verifies it', async () => {
+    let catalogWindow: number | undefined = 300_000;
+    const agent = agentWithVerified((_providerId, modelId) =>
+      modelId === 'old-model' || modelId === 'new-model' ? catalogWindow ?? null : null,
+    );
+    const host = installTurnCapableHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-context-window-clear',
+      model: 'old-model',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    await handle.send({ type: 'user', content: 'create a rollout' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    } as never);
+    if (!handle.setModel) throw new Error('expected setModel support');
+    catalogWindow = undefined;
+    await handle.setModel('new-model');
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    expect(resumeCalls).toHaveLength(1);
+    expect(resumeCalls[0]?.[1]).not.toHaveProperty('config.model_context_window');
+    await handle.close();
+  });
+
+  it('freezes the send route while asynchronous input preparation is pending', async () => {
+    const skillsEntered = deferred<void>();
+    const skillsGate = deferred<{ skills: []; errors: [] }>();
+    const agent = agentWithVerified((_providerId, modelId) =>
+      modelId === 'new-model' ? 900_000 : 300_000,
+    );
+    vi.spyOn(agent as unknown as {
+      listSkillsForCwd: (
+        workingDir: string,
+        forceReload: boolean,
+      ) => Promise<{ skills: []; errors: [] }>;
+    }, 'listSkillsForCwd').mockImplementation(() => {
+      skillsEntered.resolve();
+      return skillsGate.promise;
+    });
+    const host = installTurnCapableHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-context-window-input-snapshot',
+      model: 'old-model',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    const initialStart = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    );
+    expect(initialStart?.[1]).toMatchObject({ config: { model_context_window: 300_000 } });
+    await handle.send({ type: 'user', content: 'first' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    } as never);
+    const pendingSend = handle.send({ type: 'user', content: '/slow-skill' });
+    await skillsEntered.promise;
+    if (!handle.setModel) throw new Error('expected setModel support');
+    await handle.setModel('new-model');
+    skillsGate.resolve({ skills: [], errors: [] });
+    await pendingSend;
+    const turnCalls = host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
+    expect(turnCalls[1]?.[1]).toMatchObject({ model: 'old-model' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-2', status: 'completed' },
+    } as never);
+    await vi.waitFor(() => {
+      const resumeCalls = host.request.mock.calls.filter(([method]) => method === Method.ThreadResume);
+      expect(resumeCalls[0]?.[1]).toMatchObject({
+        model: 'new-model',
+        config: { model_context_window: 900_000 },
+      });
+    });
+    await handle.send({ type: 'user', content: 'next' });
+    const nextTurnCall = host.request.mock.calls.filter(([method]) => method === Method.TurnStart).at(-1);
+    expect(nextTurnCall?.[1]).toMatchObject({ model: 'new-model' });
+    await handle.close();
+  });
 
   async function reportedContextWindow(
     agent: CodexAgent,
@@ -27726,10 +27932,8 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
-  // daemon 重启后 turn/start 报 "thread not found" 会走 thread/resume + 重投; 若会话是用
-  // 'gpt-5' 哨兵启动的, resume 会把它解析成具体路由模型并重写 turnParams.model。快照必须
-  // 跟着改写走 —— 否则重投 turn 的用量按 'gpt-5' 去问 host(拿不到上限), 保留 1M。
-  it('daemon 恢复重写模型后刷新 turn 模型快照', async () => {
+  // 未验证的 sentinel 路由不做 model/list 探测；恢复时保持 Codex 默认窗口。
+  it('daemon 恢复时对未验证 sentinel 保持 Codex 默认窗口', async () => {
     const agent = agentWithWindows({ [GATEWAY_MODEL]: 372_000 });
     let turnStartCount = 0;
     const host = installFakeHost(agent, (method) => {
@@ -27764,7 +27968,7 @@ describe('CodexAgent context window reporting', () => {
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
     pushUsage(handlers, 'turn-2', 1_000_000);
 
-    expect(handle.getUsageSnapshot().contextWindow).toBe(372_000);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
     await handle.close();
   });
 

@@ -90,6 +90,52 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
+  it('serializes route writes so an older failure cannot overwrite a newer switch', async () => {
+    const sessionId = rememberSession('runtime-set-model-concurrent-rollback');
+    setSessionProvider(sessionId, 'openai');
+    let rejectFirst!: (error: Error) => void;
+    const firstGate = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    let callCount = 0;
+    const setModel = vi.fn(() => {
+      callCount += 1;
+      return callCount === 1 ? firstGate : Promise.resolve();
+    });
+    const writes: Array<string | null> = [];
+    sessionProviderWriteObserver.current = (writtenSessionId, providerId) => {
+      if (writtenSessionId === sessionId) writes.push(providerId);
+    };
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: 'remote-1',
+        model: 'model-a',
+        setModel,
+      }),
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    const firstSwitch = applyRuntimeSetModelChange({ maker, sessionId, model: 'model-b', providerId: 'xd' });
+    const firstFailure = expect(firstSwitch).rejects.toThrow('first switch failed');
+    await vi.waitFor(() => expect(setModel).toHaveBeenCalledTimes(1));
+    const secondSwitch = applyRuntimeSetModelChange({ maker, sessionId, model: 'model-c', providerId: 'xai' });
+    await Promise.resolve();
+    expect(setModel).toHaveBeenCalledTimes(1);
+    expect(getSessionProvider(sessionId)).toBe('xd');
+
+    rejectFirst(new Error('first switch failed'));
+    await firstFailure;
+    await secondSwitch;
+    expect(setModel.mock.calls).toEqual([
+      ['model-b', { providerId: 'xd' }],
+      ['model-c', { providerId: 'xai' }],
+    ]);
+    expect(writes).toEqual(['xd', 'openai', 'xai']);
+    expect(getSessionProvider(sessionId)).toBe('xai');
+  });
+
   it('keeps a successful provider route change after live setModel succeeds', async () => {
     const sessionId = rememberSession('runtime-set-model-success');
     const setModel = vi.fn(async () => {});

@@ -108,6 +108,29 @@ export function isRemoteModelSwitchRouteChangeError(error: unknown): boolean {
   );
 }
 
+const runtimeSetModelChangeLocks = new Map<string, Promise<void>>();
+
+async function withRuntimeSetModelChangeLock<T>(
+  sessionId: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = runtimeSetModelChangeLocks.get(sessionId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  runtimeSetModelChangeLocks.set(sessionId, current);
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (runtimeSetModelChangeLocks.get(sessionId) === current) {
+      runtimeSetModelChangeLocks.delete(sessionId);
+    }
+  }
+}
+
 /**
  * 应用本地运行时 model/provider 切换。
  *
@@ -125,6 +148,13 @@ export function isRemoteModelSwitchRouteChangeError(error: unknown): boolean {
  * 可能包含多次上游请求，统一延迟到 turn 边界，避免后续工具回合误路由。
  */
 export async function applyRuntimeSetModelChange(
+  input: ApplyRuntimeSetModelChangeInput,
+): Promise<ApplyRuntimeSetModelChangeResult> {
+  return withRuntimeSetModelChangeLock(input.sessionId, () =>
+    applyRuntimeSetModelChangeUnlocked(input));
+}
+
+async function applyRuntimeSetModelChangeUnlocked(
   input: ApplyRuntimeSetModelChangeInput,
 ): Promise<ApplyRuntimeSetModelChangeResult> {
   const { maker, sessionId, model, providerId, effort, isSessionInTurn, logger } = input;

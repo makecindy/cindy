@@ -4110,6 +4110,28 @@ export class CodexAgent extends BaseAgent {
     // was attempted, prefer resume before replacing the thread; "no rollout"
     // is the only safe proof that the thread is still unused.
     let threadMayHaveRollout = false;
+    // model_context_window is thread-scoped and cannot be changed through
+    // thread/settings/update. Keep the last successfully applied value so a
+    // live catalog refresh cannot make the old route look newer than the
+    // loaded thread actually is.
+    let appliedThreadModelContextWindow: number | undefined;
+    let hasAppliedThreadModelContextWindow = false;
+    let pendingThreadModelContextWindowReapply = false;
+    // Model/provider changes and turn route admission share one FIFO. A send
+    // snapshots every change queued before it; changes queued while that
+    // snapshot is being prepared wait for the admission gate and affect the
+    // next turn only.
+    let modelChangeChain: Promise<void> = Promise.resolve();
+    let turnRouteAdmissionGate: Promise<void> | null = null;
+    const enqueueModelChange = <T,>(task: () => Promise<T>): Promise<T> => {
+      const admissionGate = turnRouteAdmissionGate;
+      const run = modelChangeChain.then(async () => {
+        if (admissionGate) await admissionGate;
+        return task();
+      });
+      modelChangeChain = run.then(() => undefined, () => undefined);
+      return run;
+    };
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮「计划 → 审阅 → 修订/批准」循环由 planCycleActive 承载:
@@ -5169,7 +5191,47 @@ export class CodexAgent extends BaseAgent {
       return JSON.stringify(mutableWritableDirs);
     }
 
-    function currentThreadWorkspaceConfig(): Pick<
+    type CodexRouteSnapshot = {
+      model: string;
+      catalogModel: string | undefined;
+      providerId: string | null | undefined;
+      effort: Effort;
+      serviceTier: ServiceTier | null | undefined;
+    };
+
+    const currentRouteSnapshot = (): CodexRouteSnapshot => ({
+      model: mutableModel,
+      catalogModel: mutableCatalogModel,
+      providerId: mutableProviderId,
+      effort: mutableEffort,
+      serviceTier: mutableServiceTier,
+    });
+
+    const resolveVerifiedContextWindow = this.deps.resolveVerifiedContextWindow;
+    const verifiedModelContextWindow = (
+      providerId: string | null | undefined,
+      modelId: string | undefined,
+    ): number | undefined => {
+      if (!modelId) return undefined;
+      const value = resolveVerifiedContextWindow?.(providerId, modelId);
+      return typeof value === 'number' && Number.isInteger(value) && value > 0
+        ? value
+        : undefined;
+    };
+    const markThreadModelContextWindowApplied = (
+      workspaceConfig: Pick<ThreadStartParams, 'config'>,
+    ): void => {
+      const value = workspaceConfig.config?.model_context_window;
+      appliedThreadModelContextWindow =
+        typeof value === 'number' && Number.isInteger(value) && value > 0
+          ? value
+          : undefined;
+      hasAppliedThreadModelContextWindow = true;
+    };
+
+    function currentThreadWorkspaceConfig(
+      route: CodexRouteSnapshot = currentRouteSnapshot(),
+    ): Pick<
       ThreadStartParams,
       | 'approvalPolicy'
       | 'approvalsReviewer'
@@ -5179,6 +5241,10 @@ export class CodexAgent extends BaseAgent {
       | 'config'
     > {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+      const modelContextWindow = verifiedModelContextWindow(
+        route.providerId,
+        route.catalogModel ?? route.model,
+      );
       const config = {
         ...capabilityRoutingConfig,
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig() : {}),
@@ -5194,6 +5260,9 @@ export class CodexAgent extends BaseAgent {
             }
           : {}),
         ...(reviewMode ? {} : host.getSessionMcpConfig(opts.sessionInstanceId)),
+        ...(modelContextWindow !== undefined
+          ? { model_context_window: modelContextWindow }
+          : {}),
       };
       const shared = {
         approvalPolicy,
@@ -5216,7 +5285,9 @@ export class CodexAgent extends BaseAgent {
       return { ...shared, sandbox };
     }
 
-    function currentTurnWorkspaceConfig(): Pick<
+    function currentTurnWorkspaceConfig(
+      options?: { allowInactiveReadonlyProfile?: boolean },
+    ): Pick<
       TurnStartParams,
       | 'approvalPolicy'
       | 'approvalsReviewer'
@@ -5244,7 +5315,8 @@ export class CodexAgent extends BaseAgent {
       };
       if (
         shouldUseReadonlyReferencesProfile() &&
-        !activeTurnPermissionPolicy
+        !activeTurnPermissionPolicy &&
+        options?.allowInactiveReadonlyProfile !== true
       ) {
         // The profile was selected on thread/start or thread/resume. Repeating
         // the selector here makes Codex 0.145.0 reload its base config (which
@@ -5280,6 +5352,7 @@ export class CodexAgent extends BaseAgent {
     function collaborationModeForTurn(
       planThisTurn: boolean,
       continuePlanCycleThisTurn = planCycleActive,
+      route: Pick<CodexRouteSnapshot, 'model' | 'effort'> = currentRouteSnapshot(),
     ): CollaborationModeParam | undefined {
       // 只由「本 turn 意图(per-send 快照/消耗武装态的结果) + 进行中的循环」驱动,
       // **不**读武装态 mutablePlanMode —— 排队普通消息(快照 false)派发时武装态
@@ -5288,8 +5361,8 @@ export class CodexAgent extends BaseAgent {
         return {
           mode: 'plan',
           settings: {
-            model: mutableModel,
-            reasoning_effort: clampEffortForCodex(mutableModel, mutableEffort),
+            model: route.model,
+            reasoning_effort: clampEffortForCodex(route.model, route.effort),
             developer_instructions: null,
           },
         };
@@ -5299,8 +5372,8 @@ export class CodexAgent extends BaseAgent {
         return {
           mode: 'default',
           settings: {
-            model: mutableModel,
-            reasoning_effort: clampEffortForCodex(mutableModel, mutableEffort),
+            model: route.model,
+            reasoning_effort: clampEffortForCodex(route.model, route.effort),
             developer_instructions: developerInstructions,
           },
         };
@@ -5559,6 +5632,7 @@ export class CodexAgent extends BaseAgent {
           timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
         });
         assertCurrentHost('thread/resume');
+        markThreadModelContextWindowApplied(params);
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
         }
@@ -5640,6 +5714,7 @@ export class CodexAgent extends BaseAgent {
           timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
         });
         assertCurrentHost('thread/start');
+        markThreadModelContextWindowApplied(params);
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
         }
@@ -5759,10 +5834,12 @@ export class CodexAgent extends BaseAgent {
      */
     const replaceUnusedThreadWithCurrentProfile = async (
       signal?: AbortSignal,
+      route: CodexRouteSnapshot = currentRouteSnapshot(),
     ): Promise<void> => {
       const previousThreadId = threadId;
       const replacementProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
       const replacementServiceTierGeneration = serviceTierMutationGeneration;
+      const replacementThreadWorkspaceConfig = currentThreadWorkspaceConfig(route);
       const inheritedHostBindingLease = releaseHostBindingLease !== null;
       acquireHostBindingLeaseIfNeeded();
       try {
@@ -5772,11 +5849,11 @@ export class CodexAgent extends BaseAgent {
           signal,
           request: () => host.request<ThreadStartResponse>(Method.ThreadStart, {
             cwd: opts.workingDir,
-            ...currentThreadWorkspaceConfig(),
+            ...replacementThreadWorkspaceConfig,
             ...(sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
             ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
-            ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-            ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+            ...(route.model && route.model !== 'gpt-5' ? { model: route.model } : {}),
+            ...(route.serviceTier !== undefined ? { serviceTier: route.serviceTier } : {}),
             ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
           }),
           onLateResolve: async (lateResp) => {
@@ -5794,6 +5871,7 @@ export class CodexAgent extends BaseAgent {
           },
         });
         assertCurrentHost('read-only reference profile replacement');
+        markThreadModelContextWindowApplied(replacementThreadWorkspaceConfig);
         const nextThreadId = resp.thread.id;
         if (closed) {
           await unsubscribeDetachedThread(
@@ -5847,7 +5925,10 @@ export class CodexAgent extends BaseAgent {
             ? { threadId, historyHasProductPrompt: true }
             : undefined;
         }
-        readonlyReferencesProfileActive = replacementProfileFingerprint !== null;
+        // Record the profile that was actually sent with this replacement, not
+        // a newer mutable reference-directory selection made while thread/start
+        // was in flight.
+        readonlyReferencesProfileActive = 'permissions' in replacementThreadWorkspaceConfig;
         readonlyReferencesProfileFingerprint = readonlyReferencesProfileActive
           ? replacementProfileFingerprint
           : null;
@@ -5871,6 +5952,7 @@ export class CodexAgent extends BaseAgent {
      */
     const ensureReadonlyReferencesProfileForNextTurn = (
       signal?: AbortSignal,
+      route: CodexRouteSnapshot = currentRouteSnapshot(),
     ): Promise<void> | null => {
       const desiredFingerprint = currentReadonlyReferencesProfileFingerprint();
       if (
@@ -5885,10 +5967,10 @@ export class CodexAgent extends BaseAgent {
             readonlyReferencesProfileFingerprint === targetFingerprint
           ) return;
           if (!threadMayHaveRollout) {
-            await replaceUnusedThreadWithCurrentProfile(signal);
+            await replaceUnusedThreadWithCurrentProfile(signal, route);
             continue;
           }
-          const resumeThreadWorkspaceConfig = currentThreadWorkspaceConfig();
+          const resumeThreadWorkspaceConfig = currentThreadWorkspaceConfig(route);
           const resumeProfileFingerprint = targetFingerprint;
           const resumeServiceTierGeneration = serviceTierMutationGeneration;
           assertCurrentHost('read-only reference profile refresh');
@@ -5903,15 +5985,15 @@ export class CodexAgent extends BaseAgent {
                 cwd: opts.workingDir,
                 ...resumeThreadWorkspaceConfig,
                 ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
-                ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-                ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+                ...(route.model && route.model !== 'gpt-5' ? { model: route.model } : {}),
+                ...(route.serviceTier !== undefined ? { serviceTier: route.serviceTier } : {}),
               }),
             });
           } catch (e) {
             if (!/no rollout found/i.test(String(e))) throw e;
             if (signal?.aborted) throw new Error('Codex send cancelled before acceptance');
             threadMayHaveRollout = false;
-            await replaceUnusedThreadWithCurrentProfile(signal);
+            await replaceUnusedThreadWithCurrentProfile(signal, route);
             continue;
           }
           assertCurrentHost('read-only reference profile refresh');
@@ -5924,6 +6006,7 @@ export class CodexAgent extends BaseAgent {
             void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
           }
           codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
+          markThreadModelContextWindowApplied(resumeThreadWorkspaceConfig);
           readonlyReferencesProfileActive = 'permissions' in resumeThreadWorkspaceConfig;
           readonlyReferencesProfileFingerprint = readonlyReferencesProfileActive
             ? resumeProfileFingerprint
@@ -5935,6 +6018,138 @@ export class CodexAgent extends BaseAgent {
           });
         }
       })();
+    };
+
+    const reapplyThreadModelContextWindow = async (
+      route: CodexRouteSnapshot = currentRouteSnapshot(),
+    ): Promise<void> => {
+      if (!threadId || closed) return;
+      const workspaceConfig = currentThreadWorkspaceConfig(route);
+      const targetWindow = workspaceConfig.config?.model_context_window;
+      if (hasAppliedThreadModelContextWindow && appliedThreadModelContextWindow === targetWindow) {
+        pendingThreadModelContextWindowReapply = false;
+        return;
+      }
+      if (!threadMayHaveRollout) {
+        await replaceUnusedThreadWithCurrentProfile(undefined, route);
+        pendingThreadModelContextWindowReapply = false;
+        return;
+      }
+
+      const reapplyThreadId = threadId;
+      const serviceTierGeneration = serviceTierMutationGeneration;
+      assertCurrentHost('thread config reapply after model switch');
+      await host.unsubscribeThread(reapplyThreadId);
+      if (closed) return;
+      try {
+        const resp = await requestProfileLifecycle<ThreadResumeResponse>({
+          action: 'refresh',
+          request: () => host.request<ThreadResumeResponse>(Method.ThreadResume, {
+            threadId: reapplyThreadId,
+            ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
+            cwd: opts.workingDir,
+            ...workspaceConfig,
+            ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
+            ...(route.model && route.model !== 'gpt-5' ? { model: route.model } : {}),
+            ...(route.serviceTier !== undefined ? { serviceTier: route.serviceTier } : {}),
+          }),
+        });
+        assertCurrentHost('thread config reapply after model switch');
+        if (resp.thread.id !== reapplyThreadId) {
+          throw new Error(
+            `Codex thread/resume returned ${resp.thread.id} while reapplying ${reapplyThreadId}`,
+          );
+        }
+        markThreadModelContextWindowApplied(workspaceConfig);
+        if (
+          Object.hasOwn(resp, 'serviceTier')
+          && serviceTierGeneration === serviceTierMutationGeneration
+        ) {
+          mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+        } else if (serviceTierGeneration !== serviceTierMutationGeneration) {
+          void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
+        }
+        codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
+        readonlyReferencesProfileActive = 'permissions' in workspaceConfig;
+        threadMayHaveRollout = true;
+        pendingThreadModelContextWindowReapply = false;
+      } catch (error) {
+        if (/no rollout found/i.test(String(error))) {
+          threadMayHaveRollout = false;
+          await replaceUnusedThreadWithCurrentProfile(undefined, route);
+          pendingThreadModelContextWindowReapply = false;
+          return;
+        }
+        throw error;
+      }
+    };
+
+    const schedulePendingThreadModelContextWindowReapply = (): void => {
+      if (
+        !pendingThreadModelContextWindowReapply
+        || closed
+        || isTurnInFlight
+        || isTurnStartPending
+      ) return;
+      void enqueueModelChange(() => reapplyThreadModelContextWindow()).catch((error) => {
+        if (!closed) pendingThreadModelContextWindowReapply = true;
+        log.warn('deferred Codex thread context window reapply failed', {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
+
+    const captureTurnRoute = async (
+      signal?: AbortSignal,
+    ): Promise<{
+      route: CodexRouteSnapshot;
+      turnWorkspaceConfig: ReturnType<typeof currentTurnWorkspaceConfig>;
+      threadWorkspaceConfig: ReturnType<typeof currentThreadWorkspaceConfig>;
+      threadProfileFingerprint: string | null;
+    }> => {
+      while (turnRouteAdmissionGate) await turnRouteAdmissionGate;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      turnRouteAdmissionGate = gate;
+      const admissionTurnWorkspaceConfig = currentTurnWorkspaceConfig({
+        allowInactiveReadonlyProfile: true,
+      });
+      const admissionUsesReadonlyProfile =
+        shouldUseReadonlyReferencesProfile() && !activeTurnPermissionPolicy;
+      try {
+        const queuedChanges = modelChangeChain;
+        await queuedChanges;
+        if (pendingThreadModelContextWindowReapply) {
+          await reapplyThreadModelContextWindow();
+        }
+        const route = currentRouteSnapshot();
+        const profileRefresh = ensureReadonlyReferencesProfileForNextTurn(signal, route);
+        if (profileRefresh) await profileRefresh;
+        const threadWorkspaceConfig = currentThreadWorkspaceConfig(route);
+        const threadProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
+        const preparedTurnWorkspaceConfig = currentTurnWorkspaceConfig();
+        const turnWorkspaceConfig = {
+          ...preparedTurnWorkspaceConfig,
+          approvalPolicy: admissionTurnWorkspaceConfig.approvalPolicy,
+          ...(admissionTurnWorkspaceConfig.approvalsReviewer
+            ? { approvalsReviewer: admissionTurnWorkspaceConfig.approvalsReviewer }
+            : {}),
+          ...(admissionTurnWorkspaceConfig.runtimeWorkspaceRoots
+            ? { runtimeWorkspaceRoots: admissionTurnWorkspaceConfig.runtimeWorkspaceRoots }
+            : {}),
+        };
+        if (!admissionTurnWorkspaceConfig.approvalsReviewer) {
+          delete (turnWorkspaceConfig as { approvalsReviewer?: unknown }).approvalsReviewer;
+        }
+        if (admissionUsesReadonlyProfile) {
+          delete (turnWorkspaceConfig as { sandboxPolicy?: unknown }).sandboxPolicy;
+        }
+        return { route, turnWorkspaceConfig, threadWorkspaceConfig, threadProfileFingerprint };
+      } finally {
+        if (turnRouteAdmissionGate === gate) turnRouteAdmissionGate = null;
+        release();
+      }
     };
 
     // ── dispatchInteraction + pendingApprovals (Claude 同款 dismissAllPending 模式) ──
@@ -10461,6 +10676,7 @@ export class CodexAgent extends BaseAgent {
           return;
         }
         handleTurnCompleted(params);
+        schedulePendingThreadModelContextWindowReapply();
       },
       itemStarted: (params) => {
         // 血缘不能跟着 turn 对账队列一起迟到:AppServerHost 只为未知 child 缓冲 5s。
@@ -11284,24 +11500,17 @@ export class CodexAgent extends BaseAgent {
           source: 'codex',
         });
 
-        // Phase 3: 把 mutable 配置每 turn 透传 — server 接受 per-turn 覆盖。
-        // **关键**: 无引用目录时用 sandboxPolicy: SandboxPolicy；有引用目录时继承
-        // thread/start / thread/resume 已激活的 named permissions profile。profile
-        // selector 不能在 turn/start 重复发送，见 ensureReadonlyReferencesProfileForNextTurn。
-        // effort 同理: 协议层只能在 turn/start 透传 (v2.rs:5800), thread/start 不接;
-        // 用户在 session 创建时选的 effort 也是靠 first turn/start 这里传过去才生效。
-        let turnWorkspaceConfig: ReturnType<typeof currentTurnWorkspaceConfig>;
-        let turnThreadWorkspaceConfig: ReturnType<typeof currentThreadWorkspaceConfig>;
-        let turnThreadProfileFingerprint: string | null;
+        // Permission tightening may arrive while route/profile admission is still
+        // preparing the send. Seed the unattended marker from the admission-time
+        // mode so a pending Full-access turn is still interrupted when its id arrives;
+        // the authoritative approval policy is recalculated below before turn/start.
+        turnLaunchedUnattended = mutablePermissionMode === 'bypassPermissions';
+
+        // Admit the route before asynchronous Skill/input preparation. Model
+        // changes queued afterwards are deliberately for the next turn.
+        let turnRouteSnapshot: Awaited<ReturnType<typeof captureTurnRoute>>;
         try {
-          const profileRefresh = ensureReadonlyReferencesProfileForNextTurn(sendOpts?.signal);
-          if (profileRefresh) await profileRefresh;
-          turnWorkspaceConfig = currentTurnWorkspaceConfig();
-          // A stale-daemon retry must hydrate the exact thread-level profile
-          // that matches this turn, not mutable settings changed while the
-          // original turn/start RPC was pending.
-          turnThreadWorkspaceConfig = currentThreadWorkspaceConfig();
-          turnThreadProfileFingerprint = currentReadonlyReferencesProfileFingerprint();
+          turnRouteSnapshot = await captureTurnRoute(sendOpts?.signal);
         } catch (e) {
           isTurnStartPending = false;
           endPlanCycleAfterPreStartFailure('read-only reference profile refresh failed');
@@ -11326,6 +11535,12 @@ export class CodexAgent extends BaseAgent {
           if (sendOpts?.throwOnStartFailure) throw new Error(message);
           return;
         }
+        const {
+          route: turnRoute,
+          turnWorkspaceConfig,
+          threadWorkspaceConfig: turnThreadWorkspaceConfig,
+          threadProfileFingerprint: turnThreadProfileFingerprint,
+        } = turnRouteSnapshot;
         const { approvalPolicy, approvalsReviewer } = turnWorkspaceConfig;
         // 记录本 turn 是否由无人值守策略发射。普通降级路由显式使用 user reviewer,
         // 与 Ask 权限等价；policy turn 则以 untrusted + read-only 发射，并由 host
@@ -11372,25 +11587,29 @@ export class CodexAgent extends BaseAgent {
           }
         }
         // sticky 语义要求进过 plan 的线程后续持续复位, 见 collaborationModeForTurn。
-        const collaborationMode = collaborationModeForTurn(requestedPlanTurn, continuePlanCycleThisTurn);
+        const collaborationMode = collaborationModeForTurn(
+          requestedPlanTurn,
+          continuePlanCycleThisTurn,
+          turnRoute,
+        );
         const turnStartsInPlanMode = collaborationMode?.mode === 'plan';
         const turnParams: TurnStartParams = {
           threadId,
           input: turnInput,
           ...turnWorkspaceConfig,
-          effort: clampEffortForCodex(mutableModel, mutableEffort),
+          effort: clampEffortForCodex(turnRoute.model, turnRoute.effort),
           // 强制 reasoning summary='auto' — 不依赖用户 ~/.codex/config.toml 写没写
           // model_reasoning_summary, 让 thinking 文本在所有用户机器上一致流式出。
           // (v2.rs:5801-5803 turn/start 的 summary 会 override server config)
           summary: 'auto',
-          ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-          ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+          ...(turnRoute.model && turnRoute.model !== 'gpt-5' ? { model: turnRoute.model } : {}),
+          ...(turnRoute.serviceTier !== undefined ? { serviceTier: turnRoute.serviceTier } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
         // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
-        activeTurnModel = mutableCatalogModel;
-        activeTurnProviderId = mutableProviderId;
+        activeTurnModel = turnRoute.catalogModel;
+        activeTurnProviderId = turnRoute.providerId;
         const markTurnConfigAccepted = (): void => {
           threadMayHaveRollout = true;
           if (turnParams.collaborationMode?.mode === 'plan') {
@@ -11778,7 +11997,6 @@ export class CodexAgent extends BaseAgent {
               // 无需在这里管理新返回的 subscription 句柄。
               assertCurrentHost('thread/resume retry subscribe');
               host.subscribeThread(threadId, handlers);
-              const resumeModel = mutableModel;
               const resumeServiceTierGeneration = serviceTierMutationGeneration;
               const resumeParams: ThreadResumeParams = {
                 threadId,
@@ -11786,47 +12004,23 @@ export class CodexAgent extends BaseAgent {
                 cwd: opts.workingDir,
                 ...turnThreadWorkspaceConfig,
                 ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
-                ...(resumeModel && resumeModel !== 'gpt-5' ? { model: resumeModel } : {}),
-                ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+                ...(turnRoute.model && turnRoute.model !== 'gpt-5' ? { model: turnRoute.model } : {}),
+                ...(turnRoute.serviceTier !== undefined ? { serviceTier: turnRoute.serviceTier } : {}),
                 ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
               };
               const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
               });
-              if (mutableModel === resumeModel && resumeModel === 'gpt-5' && resumeResp.model) {
-                mutableModel = resumeResp.model;
-                // 与 thread/start 的哨兵解析同理:'gpt-5' 是占位、不是目录条目, 解析出的真实
-                // id 才能用来查窗口上限。漏掉这行会让恢复后的 turn 一直按 'gpt-5' 去查(查不到
-                // → 不收敛), 这也是本文件第三处哨兵解析, 三处必须一致。
-                mutableCatalogModel = resumeResp.model;
-              }
+              markThreadModelContextWindowApplied(turnThreadWorkspaceConfig);
               if (
                 Object.hasOwn(resumeResp, 'serviceTier') &&
                 resumeServiceTierGeneration === serviceTierMutationGeneration
               ) {
-                mutableServiceTier = normalizeServiceTier(resumeResp.serviceTier) ?? null;
+                const acceptedServiceTier = normalizeServiceTier(resumeResp.serviceTier) ?? null;
+                mutableServiceTier = acceptedServiceTier;
+                turnParams.serviceTier = acceptedServiceTier;
               } else if (resumeServiceTierGeneration !== serviceTierMutationGeneration) {
                 void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
-              }
-              turnParams.effort = clampEffortForCodex(mutableModel, mutableEffort);
-              if (mutableModel && mutableModel !== 'gpt-5') {
-                turnParams.model = mutableModel;
-              } else {
-                delete turnParams.model;
-              }
-              // 恢复路径可能把 'gpt-5' 哨兵解析成具体路由模型 —— 重投的 turn 用的是新值,
-              // 窗口归属必须跟着改写走, 否则查不到目录条目、沿用 app-server 的基础模型窗口。
-              activeTurnModel = mutableCatalogModel;
-              activeTurnProviderId = mutableProviderId;
-              if (mutableServiceTier !== undefined) {
-                turnParams.serviceTier = mutableServiceTier ?? null;
-              } else {
-                delete turnParams.serviceTier;
-              }
-              if (turnParams.collaborationMode) {
-                turnParams.collaborationMode.settings.model = mutableModel;
-                turnParams.collaborationMode.settings.reasoning_effort =
-                  clampEffortForCodex(mutableModel, mutableEffort);
               }
               readonlyReferencesProfileActive = 'permissions' in turnThreadWorkspaceConfig;
               readonlyReferencesProfileFingerprint = readonlyReferencesProfileActive
@@ -12290,16 +12484,33 @@ export class CodexAgent extends BaseAgent {
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
       async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
         if (reviewMode) return;
+        const deferReapplyForCurrentTurn = isTurnInFlight || isTurnStartPending;
+        return enqueueModelChange(async () => {
         // provider 可能在 model 不变时单独切换(同一 id 换路由), 所以先记 provider 再做 model 去重。
         // 窗口上限按 (provider, model) 解析, 漏掉这一步会让后续 turn 拿新模型去问旧路由。
         const prevProviderId = mutableProviderId;
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         if (newModel === mutableModel) {
           if (mutableProviderId !== prevProviderId) {
-            autoReviewDecisionCache.clear();
-            autoReviewUnavailableNotice.reset();
-            autoReviewConfirmUndeliveredNotice.reset();
-            refreshCodexAutoReviewerRoute(threadId);
+            try {
+              autoReviewDecisionCache.clear();
+              autoReviewUnavailableNotice.reset();
+              autoReviewConfirmUndeliveredNotice.reset();
+              refreshCodexAutoReviewerRoute(threadId);
+              const targetWindow = currentThreadWorkspaceConfig().config?.model_context_window;
+              if (!hasAppliedThreadModelContextWindow || targetWindow !== appliedThreadModelContextWindow) {
+                if (deferReapplyForCurrentTurn || isTurnInFlight || isTurnStartPending) {
+                  pendingThreadModelContextWindowReapply = true;
+                } else {
+                  await reapplyThreadModelContextWindow();
+                }
+              }
+            } catch (error) {
+              mutableProviderId = prevProviderId;
+              pendingThreadModelContextWindowReapply = true;
+              refreshCodexAutoReviewerRoute(threadId);
+              throw error;
+            }
           }
           return;
         }
@@ -12327,10 +12538,18 @@ export class CodexAgent extends BaseAgent {
         mutableCatalogModel = newModel;
         try {
           refreshCodexAutoReviewerRoute(threadId);
-          // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
-          // 首个 thread/start 携带。沿用 turn/start 的 'gpt-5'=server 默认哨兵约定 (省略),
-          // 避免把占位 model id 发给 server。失败时 turn/start 透传仍是兜底。
-          if (newModel && newModel !== 'gpt-5') await pushThreadSettings({ model: newModel });
+          const targetWindow = currentThreadWorkspaceConfig().config?.model_context_window;
+          const needsReapply = !hasAppliedThreadModelContextWindow
+            || targetWindow !== appliedThreadModelContextWindow;
+          if (needsReapply) {
+            if (deferReapplyForCurrentTurn || isTurnInFlight || isTurnStartPending) {
+              pendingThreadModelContextWindowReapply = true;
+            } else {
+              await reapplyThreadModelContextWindow();
+            }
+          } else if (newModel && newModel !== 'gpt-5') {
+            await pushThreadSettings({ model: newModel });
+          }
         } catch (e) {
           // 抛回调用方前把三个快照恢复原值。host 的 applyRuntimeSetModelChange 在异常分支
           // 会把 session 的 provider route 恢复成旧值; 我们这边若留着新值, 下一 turn 就会
@@ -12344,8 +12563,11 @@ export class CodexAgent extends BaseAgent {
           mutableModel = prevModel;
           mutableCatalogModel = prevCatalogModel;
           modelSwitchRecord = prevSwitchRecord;
+          pendingThreadModelContextWindowReapply = true;
+          refreshCodexAutoReviewerRoute(threadId);
           throw e;
         }
+        });
       },
 
       async setEffort(newEffort: Effort) {
