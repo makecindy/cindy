@@ -587,6 +587,35 @@ function summarizeRunningWorkflow(taskUpdates: ReadonlyMap<string, AgentTaskUpda
 
 const EMPTY_UNREAD_FAILED_RUN_IDS: string[] = [];
 
+export async function applyWritableDirsUpdate(input: {
+  next: string[];
+  previous: string[];
+  activate: (dirs: string[]) => Promise<unknown>;
+  persist?: (dirs: string[]) => Promise<unknown>;
+  refresh: () => Promise<void>;
+}): Promise<string[]> {
+  const accepted = await input.activate(input.next);
+  const applied = Array.isArray(accepted) && accepted.every((dir) => typeof dir === 'string')
+    ? accepted
+    : input.next;
+  if (input.persist) {
+    try {
+      await input.persist(applied);
+    } catch (persistError) {
+      // Runtime already accepted the grant. Restore the persisted/UI baseline before surfacing
+      // the failure so a DB error cannot leave invisible write access active until restart.
+      try {
+        await input.activate(input.previous);
+      } finally {
+        await input.refresh();
+      }
+      throw persistError;
+    }
+  }
+  await input.refresh();
+  return applied;
+}
+
 export function CCAgentSessionView({
   sessionIdProp,
   routeOwner,
@@ -2773,27 +2802,26 @@ export function CCAgentSessionView({
   const handleWritableDirsChange = useCallback(
     async (next: string[]) => {
       if (!sessionId) return;
-      let applied = next;
       try {
-        const accepted = await makerApiFor(sessionId).setWritableDirs(sessionId, next);
-        if (Array.isArray(accepted)) applied = accepted;
+        await applyWritableDirsUpdate({
+          next,
+          previous: session?.writableDirs ?? [],
+          activate: (dirs) => makerApiFor(sessionId).setWritableDirs(sessionId, dirs),
+          ...(!getSessionDeviceId(sessionId)
+            ? {
+                persist: (dirs: string[]) =>
+                  sessionService.update(sessionId, { writableDirs: dirs }),
+              }
+            : {}),
+          refresh: refreshServerSession,
+        });
       } catch (err) {
-        log.warn('writableDirs closure push failed', err);
+        log.warn('writableDirs update failed', err);
         toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
         return;
       }
-      if (!getSessionDeviceId(sessionId)) {
-        try {
-          await sessionService.update(sessionId, { writableDirs: applied });
-        } catch (err) {
-          log.warn('writableDirs DB update failed', err);
-          toast.error(t('ccAgent.layout.extraDirsSaveFailed'));
-          return;
-        }
-      }
-      await refreshServerSession();
     },
-    [sessionId, refreshServerSession, t],
+    [sessionId, session?.writableDirs, refreshServerSession, t],
   );
 
   // /issue 命令的 composer 附件不随命令 payload 走 main IPC 往返 —— AttachedFile 是
