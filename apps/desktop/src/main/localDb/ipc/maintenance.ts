@@ -147,7 +147,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
                    ), 0)
               FROM messages message
               JOIN target_sessions target ON target.id = message.session_id) AS estimatedMessageBytes`,
-        [scannedAt, archivedBeforeMs, includeActiveTasks ? 1 : 0, archivedBeforeMs],
+        [archivedBeforeMs, archivedBeforeMs, includeActiveTasks ? 1 : 0, archivedBeforeMs],
       );
       assertOwnerCurrent(owner);
       const dbFilePath = deps.getCurrentDbPath();

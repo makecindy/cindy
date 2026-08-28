@@ -144,6 +144,7 @@ function createCleanupFixture(): void {
   `);
   for (const [id, status, updatedAt] of [
     ['deleted-old', 'deleted', 500],
+    ['deleted-recent', 'deleted', 1_500],
     ['deleted-new', 'deleted', 2_500],
     ['archived-boundary', 'archived', 1_000],
     ['archived-new', 'archived', 1_001],
@@ -306,8 +307,9 @@ describe('runDbSlimmingMaintenance', () => {
         'message-active-updated-after-scan',
         'message-archived-new',
         'message-deleted-new',
+        'message-deleted-recent',
       ]);
-      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 5 });
+      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 6 });
       expect(
         db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
       ).toEqual([
@@ -316,6 +318,7 @@ describe('runDbSlimmingMaintenance', () => {
         { message_id: 'message-active-updated-after-scan' },
         { message_id: 'message-archived-new' },
         { message_id: 'message-deleted-new' },
+        { message_id: 'message-deleted-recent' },
       ]);
       expect(db.prepare('SELECT count(*) AS count FROM messages_fts_delete_audit').get()).toEqual({
         count: 0,
@@ -331,6 +334,7 @@ describe('runDbSlimmingMaintenance', () => {
         { message_id: 'message-active-updated-after-scan' },
         { message_id: 'message-archived-new' },
         { message_id: 'message-deleted-new' },
+        { message_id: 'message-deleted-recent' },
       ]);
       expect(db.prepare('SELECT count(*) AS count FROM subagent_runs').get()).toEqual({ count: 2 });
       expect(db.prepare('SELECT count(*) AS count FROM subagent_run_aliases').get()).toEqual({ count: 2 });
@@ -388,7 +392,7 @@ describe('runDbSlimmingMaintenance', () => {
     }
   });
 
-  it('cleans only active tasks older than the selected cutoff and their associated history', async () => {
+  it('cleans only tasks older than the selected cutoff and keeps every recent status intact', async () => {
     createCleanupFixture();
     const cleanedTurnChangeSetDir = path.join(tmpDir, 'turn-change-sets', 'active-old');
     const retainedTurnChangeSetDir = path.join(
@@ -441,8 +445,9 @@ describe('runDbSlimmingMaintenance', () => {
         'message-active-updated-after-scan',
         'message-archived-new',
         'message-deleted-new',
+        'message-deleted-recent',
       ]);
-      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 4 });
+      expect(db.prepare('SELECT count(*) AS count FROM messages_fts').get()).toEqual({ count: 5 });
       expect(
         db.prepare('SELECT message_id FROM messages_fts_rows ORDER BY message_id').all(),
       ).toEqual([
@@ -450,8 +455,9 @@ describe('runDbSlimmingMaintenance', () => {
         { message_id: 'message-active-updated-after-scan' },
         { message_id: 'message-archived-new' },
         { message_id: 'message-deleted-new' },
+        { message_id: 'message-deleted-recent' },
       ]);
-      expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 8 });
+      expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 9 });
       expect(
         db.prepare('SELECT session_id FROM session_pr_refs ORDER BY session_id').all(),
       ).toEqual([
@@ -513,6 +519,17 @@ describe('runDbSlimmingMaintenance', () => {
         list_message_count: 1,
         summary: 'summary',
       });
+      expect(
+        db.prepare(`
+          SELECT status, updated_at, list_preview, list_message_count
+            FROM sessions WHERE id = 'deleted-recent'
+        `).get(),
+      ).toEqual({
+        status: 'deleted',
+        updated_at: 1_500,
+        list_preview: 'stale preview',
+        list_message_count: 1,
+      });
     } finally {
       db.close();
     }
@@ -571,7 +588,7 @@ describe('runDbSlimmingMaintenance', () => {
       fileMustExist: true,
     });
     try {
-      expect(backup.prepare('SELECT count(*) AS count FROM messages').get()).toEqual({ count: 7 });
+      expect(backup.prepare('SELECT count(*) AS count FROM messages').get()).toEqual({ count: 8 });
     } finally {
       backup.close();
     }

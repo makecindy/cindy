@@ -597,7 +597,7 @@ function compactWorkingCopy(
            OR (? = 1 AND status = 'active' AND updated_at <= ?))
           AND EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id)`,
     ).run(
-      request.scannedAt,
+      request.archivedBeforeMs,
       request.archivedBeforeMs,
       request.includeActiveTasks === true ? 1 : 0,
       request.archivedBeforeMs,

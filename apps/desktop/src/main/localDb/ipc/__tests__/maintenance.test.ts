@@ -101,7 +101,7 @@ describe('local database maintenance IPC', () => {
 
     expect(scan).toMatchObject({ includeActiveTasks: false, activeTaskCount: 0 });
     expect(queryOne).toHaveBeenLastCalledWith(expect.stringContaining("status = 'active'"), [
-      scan.scannedAt,
+      scan.archivedBeforeMs,
       scan.archivedBeforeMs,
       0,
       scan.archivedBeforeMs,
@@ -115,7 +115,7 @@ describe('local database maintenance IPC', () => {
     expect(queryOne).toHaveBeenCalledTimes(1);
   });
 
-  it('applies the selected age cutoff to active tasks and carries its scope into the marker', async () => {
+  it('applies the selected age cutoff to every task status and carries its scope into the marker', async () => {
     const harness = createHarness();
     harness.queryOne.mockResolvedValueOnce({
       activeTaskCount: 4,
@@ -133,7 +133,7 @@ describe('local database maintenance IPC', () => {
     expect(scan).toMatchObject({ includeActiveTasks: true, activeTaskCount: 4 });
     expect(harness.queryOne).toHaveBeenLastCalledWith(
       expect.stringContaining("status = 'active'"),
-      [scan.scannedAt, scan.archivedBeforeMs, 1, scan.archivedBeforeMs],
+      [scan.archivedBeforeMs, scan.archivedBeforeMs, 1, scan.archivedBeforeMs],
     );
 
     await expect(
