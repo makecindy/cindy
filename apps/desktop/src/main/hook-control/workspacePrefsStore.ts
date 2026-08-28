@@ -174,12 +174,15 @@ function mergeDirtyRowWithServer(
   localRow: WorkspacePrefsEntry,
   serverRow: WorkspacePrefsEntry | undefined,
 ): WorkspacePrefsEntry {
-  if (localRow.dirtyPatch === undefined || serverRow === undefined) return localRow;
+  if (localRow.dirtyPatch === undefined) return localRow;
   const merged: WorkspacePrefsEntry = {
-    ...serverRow,
     channel: localRow.channel,
     teamId: localRow.teamId,
     workspace: localRow.workspace,
+    model: serverRow?.model ?? null,
+    effort: serverRow?.effort ?? null,
+    agentKind: serverRow?.agentKind ?? null,
+    permissionMode: serverRow?.permissionMode ?? null,
     rev: rowRev(localRow),
     dirty: true,
     dirtyPatch: localRow.dirtyPatch,
@@ -521,6 +524,29 @@ export function applyIncomingServerWorkspacePrefs(
 export interface WorkspacePrefsMirrorCandidate {
   prefs: HookWorkspacePrefs;
   rev: number;
+}
+
+/**
+ * 完整行写回期间若撞上更新的 server 快照，本机 dirty 行已经合并了该快照。
+ * 固定当前完整行，避免重试拉到刚被旧写回覆盖的 server 行后再次丢掉新字段。
+ */
+export function pinWorkspacePrefForMirrorRetry(
+  channel: HookPrefsChannel,
+  teamId: string | null,
+  workspace: string,
+): void {
+  const fp = filePath();
+  const store = readStore(fp);
+  const current = store.entries.find((row) => sameKey(row, channel, teamId, workspace));
+  if (!current || !isDirtyRow(current) || current.dirtyPatch === undefined) return;
+  const pinned = { ...current };
+  delete pinned.dirtyPatch;
+  writeStore(fp, {
+    ...store,
+    entries: store.entries.map((row) =>
+      sameKey(row, channel, teamId, workspace) ? pinned : row,
+    ),
+  });
 }
 
 /**

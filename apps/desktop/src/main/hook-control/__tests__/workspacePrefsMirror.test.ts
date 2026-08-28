@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { HookWorkspacePrefs } from '../../../shared/hookControlIpc.js';
+
 const tmp = vi.hoisted(() => ({ dir: '' }));
 
 vi.mock('../../im/ownerScopedStorage.js', () => ({
@@ -223,6 +225,106 @@ describe('workspacePrefsMirror', () => {
       permissionMode: 'ask',
     });
     expect(setRemotePrefs).not.toHaveBeenCalled();
+  });
+
+  it('逐行写回期间收到主动快照时重新拉取并发送最新候选', async () => {
+    reconcileWorkspacePrefsForMirror('slack', []);
+    setWorkspacePref('slack', null, 'chat', { model: 'local-chat' });
+    setWorkspacePref('slack', null, 'repo', { model: 'local-repo' });
+
+    let generation = 0;
+    let releaseFirstWrite!: () => void;
+    const firstWritePending = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    const latestSnapshot = {
+      bound: true,
+      prefs: [
+        {
+          workspace: 'chat',
+          model: 'remote-chat',
+          effort: 'high',
+          agentKind: 'claude-code',
+          permissionMode: 'ask',
+          teamId: null,
+        },
+        {
+          workspace: 'repo',
+          model: 'remote-repo',
+          effort: 'medium',
+          agentKind: 'codex',
+          permissionMode: 'full',
+          teamId: null,
+        },
+      ],
+    };
+    let remotePrefs: HookWorkspacePrefs[] = [];
+    const getRemotePrefs = vi.fn(async () => ({ bound: true, prefs: remotePrefs }));
+    const setRemotePrefs = vi.fn<WorkspacePrefsMirrorDeps['setRemotePrefs']>(async (
+      _channel,
+      workspace,
+      patch,
+      teamId,
+    ) => {
+      if (setRemotePrefs.mock.calls.length === 1) await firstWritePending;
+      const current = remotePrefs.find(
+        (row) => row.workspace === workspace && (row.teamId ?? null) === teamId,
+      );
+      const next = {
+        workspace,
+        model: patch.model ?? null,
+        effort: patch.effort ?? null,
+        agentKind: patch.agentKind ?? null,
+        permissionMode: patch.permissionMode ?? null,
+        teamId,
+      };
+      remotePrefs = [...remotePrefs.filter((row) => row !== current), next];
+    });
+    const mirror = createWorkspacePrefsMirror({
+      getLiveBindingKey: () => 'slack:T1',
+      isMirrorTargetCurrent: () => true,
+      getRemoteSnapshotGeneration: () => generation,
+      getRemotePrefs,
+      setRemotePrefs,
+      onLocalPrefsChanged: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    const flight = mirror('slack');
+    await vi.waitFor(() => expect(setRemotePrefs).toHaveBeenCalledTimes(1));
+
+    applyIncomingServerWorkspacePrefs('slack', latestSnapshot.prefs);
+    remotePrefs = latestSnapshot.prefs;
+    generation += 1;
+    releaseFirstWrite();
+    await flight;
+
+    expect(getRemotePrefs).toHaveBeenCalledTimes(2);
+    expect(setRemotePrefs).toHaveBeenCalledTimes(3);
+    expect(setRemotePrefs).toHaveBeenNthCalledWith(
+      2,
+      'slack',
+      'chat',
+      {
+        model: 'local-chat',
+        effort: 'high',
+        agentKind: 'claude-code',
+        permissionMode: 'ask',
+      },
+      null,
+    );
+    expect(setRemotePrefs).toHaveBeenNthCalledWith(
+      3,
+      'slack',
+      'repo',
+      {
+        model: 'local-repo',
+        effort: 'medium',
+        agentKind: 'codex',
+        permissionMode: 'full',
+      },
+      null,
+    );
   });
 
   it('首次快照到达前的 partial patch 会先补齐远端未改字段再镜像', async () => {

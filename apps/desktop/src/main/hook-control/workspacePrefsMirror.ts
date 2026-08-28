@@ -6,6 +6,7 @@ import type {
 import {
   isWorkspacePrefsMirrorCandidateCurrent,
   markWorkspacePrefMirrored,
+  pinWorkspacePrefForMirrorRetry,
   reconcileWorkspacePrefsForMirror,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
@@ -52,9 +53,10 @@ export function createWorkspacePrefsMirror(
     while (true) {
       const requestedGeneration = triggerGeneration(channel);
       const bindingKey = deps.getLiveBindingKey(channel);
+      let snapshotGeneration: number | null = null;
       try {
         if (bindingKey === null) return;
-        const snapshotGeneration = deps.getRemoteSnapshotGeneration(channel);
+        snapshotGeneration = deps.getRemoteSnapshotGeneration(channel);
         const remote: HookPrefsView = await deps.getRemotePrefs(channel);
         if (
           requestedGeneration !== triggerGeneration(channel) ||
@@ -73,6 +75,7 @@ export function createWorkspacePrefsMirror(
           const teamId = candidate.prefs.teamId ?? null;
           if (
             requestedGeneration !== triggerGeneration(channel) ||
+            snapshotGeneration !== deps.getRemoteSnapshotGeneration(channel) ||
             bindingKey !== deps.getLiveBindingKey(channel)
           ) {
             restart = true;
@@ -82,8 +85,14 @@ export function createWorkspacePrefsMirror(
           if (!isWorkspacePrefsMirrorCandidateCurrent(channel, candidate)) continue;
           const row = candidate.prefs;
           await deps.setRemotePrefs(channel, row.workspace, completePatch(row), teamId);
+          const snapshotChanged =
+            snapshotGeneration !== deps.getRemoteSnapshotGeneration(channel);
+          if (snapshotChanged) {
+            pinWorkspacePrefForMirrorRetry(channel, teamId, row.workspace);
+          }
           if (
             requestedGeneration !== triggerGeneration(channel) ||
+            snapshotChanged ||
             bindingKey !== deps.getLiveBindingKey(channel)
           ) {
             restart = true;
@@ -91,12 +100,20 @@ export function createWorkspacePrefsMirror(
           }
           markWorkspacePrefMirrored(channel, teamId, row.workspace, candidate.rev);
         }
-        if (restart || requestedGeneration !== triggerGeneration(channel)) continue;
+        if (
+          restart ||
+          requestedGeneration !== triggerGeneration(channel) ||
+          snapshotGeneration !== deps.getRemoteSnapshotGeneration(channel)
+        ) {
+          continue;
+        }
         deps.onLocalPrefsChanged(channel);
         return;
       } catch (error) {
         if (
           requestedGeneration !== triggerGeneration(channel) ||
+          (snapshotGeneration !== null &&
+            snapshotGeneration !== deps.getRemoteSnapshotGeneration(channel)) ||
           bindingKey !== deps.getLiveBindingKey(channel)
         ) {
           continue;
