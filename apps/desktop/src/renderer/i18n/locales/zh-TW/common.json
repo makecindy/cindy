@@ -10850,6 +10850,29 @@
         "success": "訂單 ID 已複製",
         "failed": "複製訂單 ID 失敗，請再試一次"
       },
+      "invoice": {
+        "action": "申請開票",
+        "title": "申請開票",
+        "description": "請將以下資訊寄送至客服信箱 {{email}}，以申請開立發票。",
+        "requiredInfo": "郵件中請提供以下資訊：",
+        "emailSubject": "申請開立訂單 {{orderId}} 的發票",
+        "emailBody": "您好，\n\n我想申請開立以下訂單的發票：\n\n────────────────────\n訂單號：{{orderId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n開票金額：{{amount}}\n發票抬頭：\n聯絡人：\n聯絡電話：\n信箱：\n────────────────────\n\n謝謝。",
+        "sendAction": "寄送開票申請",
+        "emailCopied": "客服信箱已複製",
+        "emailCopyFailed": "複製客服信箱失敗，請再試一次",
+        "sendFailed": "無法開啟郵件應用程式，請手動寄送郵件至 {{email}}。",
+        "notAvailable": "暫無資訊",
+        "fields": {
+          "orderId": "訂單號",
+          "application": "應用程式",
+          "paymentMethod": "付款方式",
+          "amount": "開票金額",
+          "invoiceTitle": "發票抬頭",
+          "contact": "聯絡人",
+          "phone": "聯絡電話",
+          "email": "信箱"
+        }
+      },
       "states": {
         "completed": "已完成",
         "awaitingPayment": "待支付",

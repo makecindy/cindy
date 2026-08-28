@@ -10858,6 +10858,29 @@
         "success": "주문 ID를 복사했습니다",
         "failed": "주문 ID를 복사하지 못했습니다. 다시 시도해 주세요."
       },
+      "invoice": {
+        "action": "세금계산서 신청",
+        "title": "세금계산서 신청",
+        "description": "세금계산서 발급을 신청하려면 다음 정보를 {{email}}로 보내 주세요.",
+        "requiredInfo": "이메일에 다음 정보를 포함해 주세요:",
+        "emailSubject": "주문 {{orderId}} 세금계산서 발급 신청",
+        "emailBody": "안녕하세요.\n\n다음 주문에 대한 세금계산서 발급을 신청합니다.\n\n────────────────────\n주문 ID: {{orderId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n발행 금액: {{amount}}\n청구서 제목: \n담당자: \n전화번호: \n이메일: \n────────────────────\n\n감사합니다.",
+        "sendAction": "세금계산서 신청 보내기",
+        "emailCopied": "고객센터 이메일을 복사했습니다",
+        "emailCopyFailed": "고객센터 이메일을 복사하지 못했습니다. 다시 시도해 주세요.",
+        "sendFailed": "이메일 앱을 열 수 없습니다. {{email}}로 직접 이메일을 보내 주세요.",
+        "notAvailable": "정보 없음",
+        "fields": {
+          "orderId": "주문 ID",
+          "application": "애플리케이션",
+          "paymentMethod": "결제 수단",
+          "amount": "발행 금액",
+          "invoiceTitle": "청구서 제목",
+          "contact": "담당자",
+          "phone": "전화번호",
+          "email": "이메일"
+        }
+      },
       "states": {
         "completed": "완료",
         "awaitingPayment": "결제 대기",

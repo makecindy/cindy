@@ -7,6 +7,8 @@
 
 import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
+export const BILLING_SUPPORT_EMAIL = 'xd-billing@xd.com';
+
 export const BILLING_INVOKE = {
   GET_BALANCE: 'billing:get-balance',
   GET_CREDIT_USAGE: 'billing:get-credit-usage',

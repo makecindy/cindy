@@ -10875,6 +10875,29 @@
         "success": "Order ID copied",
         "failed": "Order ID wasn’t copied — try again"
       },
+      "invoice": {
+        "action": "Request Invoice",
+        "title": "Request an Invoice",
+        "description": "Please email the following information to {{email}} to request an invoice.",
+        "requiredInfo": "Please include these details in your email:",
+        "emailSubject": "Invoice request for order {{orderId}}",
+        "emailBody": "Hello,\n\nI would like to request an invoice for the following order:\n\n────────────────────\nOrder ID: {{orderId}}\nApplication: {{application}}\nPayment method: {{paymentMethod}}\nInvoice amount: {{amount}}\nInvoice title: \nContact person: \nPhone number: \nEmail: \n────────────────────\n\nThank you.",
+        "sendAction": "Send Invoice Request",
+        "emailCopied": "Support email copied",
+        "emailCopyFailed": "Support email wasn’t copied — try again",
+        "sendFailed": "Couldn’t open your email app. Please email {{email}} manually.",
+        "notAvailable": "Not available",
+        "fields": {
+          "orderId": "Order ID",
+          "application": "Application",
+          "paymentMethod": "Payment method",
+          "amount": "Invoice amount",
+          "invoiceTitle": "Invoice title",
+          "contact": "Contact person",
+          "phone": "Phone number",
+          "email": "Email"
+        }
+      },
       "states": {
         "completed": "Completed",
         "awaitingPayment": "Awaiting payment",

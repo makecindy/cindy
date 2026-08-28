@@ -10858,6 +10858,29 @@
         "success": "注文 ID をコピーしました",
         "failed": "注文 ID をコピーできませんでした。もう一度お試しください。"
       },
+      "invoice": {
+        "action": "請求書を申請",
+        "title": "請求書を申請",
+        "description": "請求書の発行を申請するには、以下の情報を {{email}} までメールでお送りください。",
+        "requiredInfo": "メールには以下の情報を記載してください：",
+        "emailSubject": "注文 {{orderId}} の請求書発行申請",
+        "emailBody": "こんにちは。\n\n以下の注文について請求書の発行を申請します。\n\n────────────────────\n注文 ID：{{orderId}}\nアプリケーション：{{application}}\n支払い方法：{{paymentMethod}}\n請求金額：{{amount}}\n請求書宛名：\n担当者名：\n電話番号：\nメールアドレス：\n────────────────────\n\nよろしくお願いいたします。",
+        "sendAction": "請求書の申請を送信",
+        "emailCopied": "サポートメールアドレスをコピーしました",
+        "emailCopyFailed": "サポートメールアドレスをコピーできませんでした。もう一度お試しください。",
+        "sendFailed": "メールアプリを開けませんでした。{{email}} まで手動でメールをお送りください。",
+        "notAvailable": "情報なし",
+        "fields": {
+          "orderId": "注文 ID",
+          "application": "アプリケーション",
+          "paymentMethod": "支払い方法",
+          "amount": "請求金額",
+          "invoiceTitle": "請求書宛名",
+          "contact": "担当者名",
+          "phone": "電話番号",
+          "email": "メールアドレス"
+        }
+      },
       "states": {
         "completed": "完了",
         "awaitingPayment": "支払い待ち",

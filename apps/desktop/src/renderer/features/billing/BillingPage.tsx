@@ -3,13 +3,14 @@ import * as Dialog from '@radix-ui/react-dialog';
 import {
   ArrowRight,
   Check,
+  CircleDollarSign,
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  CircleDollarSign,
   Copy,
   CreditCard,
   ExternalLink,
+  Mail,
   PackageOpen,
   RefreshCcw,
   X,
@@ -30,6 +31,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
+import { BILLING_SUPPORT_EMAIL } from '../../../shared/billing';
 import type {
   BillingCatalog,
   BillingCatalogOffer,
@@ -109,6 +111,8 @@ const SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: BillingSubscription['status'][] =
 const SUBSCRIPTION_CANCELLABLE_STATUSES = SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
 
 const PLAN_CHANGE_ENTRY_STATUSES: BillingSubscription['status'][] = ['ACTIVE'];
+const INVOICE_REQUIRED_FIELDS = ['invoiceTitle', 'contact', 'phone', 'email'] as const;
+const GMAIL_COMPOSE_URL = 'https://mail.google.com/mail/?view=cm&fs=1';
 
 /**
  * 订单记录默认只列最近 10 笔。这一组回答的是「上次充了多少、那笔没付成的还在不在」,
@@ -1773,6 +1777,7 @@ function OrderHistoryCard({
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const [invoiceOrder, setInvoiceOrder] = useState<BillingPaymentOrder | null>(null);
   const copyOrderId = async (orderId: string) => {
     try {
       await navigator.clipboard.writeText(orderId);
@@ -1859,14 +1864,224 @@ function OrderHistoryCard({
               >
                 {t(orderStatusLabelKey(order))}
               </span>
+              {phaseForOrder(order) === 'COMPLETED' && (
+                <button
+                  type="button"
+                  onClick={() => setInvoiceOrder(order)}
+                  className="h-7 shrink-0 select-none rounded-full border border-[var(--border-default)] px-2.5 text-10 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  {t('billing.orders.invoice.action')}
+                </button>
+              )}
             </div>
           </div>
         ))}
       </div>
+      <InvoiceRequestDialog order={invoiceOrder} onClose={() => setInvoiceOrder(null)} />
     </section>
   );
 }
 
+function InvoiceRequestDialog({
+  order,
+  onClose,
+}: {
+  order: BillingPaymentOrder | null;
+  onClose: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const paymentMethod = order?.paymentAction
+    ? t(`billing.paymentActions.${order.paymentAction.type}`)
+    : t('billing.orders.invoice.notAvailable');
+  const buildInvoiceEmail = () => {
+    if (!order) return null;
+    const subject = t('billing.orders.invoice.emailSubject', { orderId: order.orderId });
+    const body = t('billing.orders.invoice.emailBody', {
+      orderId: order.orderId,
+      application: 'Cindy',
+      paymentMethod,
+      amount: formatMoney(order.amount, order.currency, billingLocale),
+    });
+    return { subject, body };
+  };
+  const invoiceEmail = buildInvoiceEmail();
+  const invoiceMailto =
+    invoiceEmail === null
+      ? ''
+      : `mailto:${BILLING_SUPPORT_EMAIL}?${new URLSearchParams(invoiceEmail).toString()}`;
+  const gmailComposeUrl =
+    invoiceEmail === null
+      ? ''
+      : `${GMAIL_COMPOSE_URL}&${new URLSearchParams({
+          to: BILLING_SUPPORT_EMAIL,
+          su: invoiceEmail.subject,
+          body: invoiceEmail.body,
+        }).toString()}`;
+  const description = t('billing.orders.invoice.description', {
+    email: BILLING_SUPPORT_EMAIL,
+  });
+  const [descriptionBeforeEmail, descriptionAfterEmail] = description.split(
+    BILLING_SUPPORT_EMAIL,
+  );
+  const copySupportEmail = async () => {
+    try {
+      await navigator.clipboard.writeText(BILLING_SUPPORT_EMAIL);
+      toast.success(t('billing.orders.invoice.emailCopied'));
+    } catch {
+      toast.error(t('billing.orders.invoice.emailCopyFailed'));
+    }
+  };
+  const openGmailFallback = async () => {
+    if (!gmailComposeUrl) return false;
+    try {
+      const result = await window.electronAPI.openExternal(gmailComposeUrl);
+      return result.success;
+    } catch {
+      return false;
+    }
+  };
+  const showSendFailed = () => {
+    toast.error(t('billing.orders.invoice.sendFailed', { email: BILLING_SUPPORT_EMAIL }));
+  };
+  const sendInvoiceRequest = () => {
+    if (!order || !invoiceMailto) return;
+    void window.electronAPI
+      .openExternal(invoiceMailto)
+      .then(async (result) => {
+        if (result.success) {
+          onClose();
+          return;
+        }
+        if (await openGmailFallback()) {
+          onClose();
+          return;
+        }
+        showSendFailed();
+      })
+      .catch(async () => {
+        if (await openGmailFallback()) {
+          onClose();
+          return;
+        }
+        showSendFailed();
+      });
+  };
+
+  return (
+    <Dialog.Root open={order !== null} onOpenChange={(open) => !open && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+        <Dialog.Content
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            cancelButtonRef.current?.focus();
+          }}
+          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,480px)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-none focus:outline-none"
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-5 py-4">
+            <div>
+              <Dialog.Title className="text-16 font-medium tracking-[-0.01em]">
+                {t('billing.orders.invoice.title')}
+              </Dialog.Title>
+              <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                {descriptionBeforeEmail}
+                <button
+                  type="button"
+                  onClick={() => void copySupportEmail()}
+                  className="font-mono text-[var(--text-primary)] underline decoration-[var(--border-default)] underline-offset-2 transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  {BILLING_SUPPORT_EMAIL}
+                </button>
+                {descriptionAfterEmail}
+              </Dialog.Description>
+            </div>
+          </div>
+
+          {order && (
+            <div className="px-5 py-4">
+              <div className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
+                <InvoiceInfoRow
+                  label={t('billing.orders.invoice.fields.orderId')}
+                  value={order.orderId}
+                  mono
+                />
+                <InvoiceInfoRow
+                  label={t('billing.orders.invoice.fields.application')}
+                  value="Cindy"
+                />
+                <InvoiceInfoRow
+                  label={t('billing.orders.invoice.fields.paymentMethod')}
+                  value={paymentMethod}
+                />
+                <InvoiceInfoRow
+                  label={t('billing.orders.invoice.fields.amount')}
+                  value={formatMoney(order.amount, order.currency, billingLocale)}
+                />
+              </div>
+
+              <div className="mt-5 py-3">
+                <p className="text-12 leading-5 text-[var(--text-primary)]">
+                  {t('billing.orders.invoice.requiredInfo')}
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-12 leading-5 text-[var(--text-primary)]">
+                  {INVOICE_REQUIRED_FIELDS.map((field) => (
+                    <li key={field}>{t(`billing.orders.invoice.fields.${field}`)}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 border-t border-[var(--border-default)] px-5 py-3">
+            <Dialog.Close asChild>
+              <button
+                type="button"
+                ref={cancelButtonRef}
+                className="h-8 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {t('billing.actions.close')}
+              </button>
+            </Dialog.Close>
+            <button
+              type="button"
+              onClick={sendInvoiceRequest}
+              className="flex h-8 items-center gap-1.5 rounded-full bg-[var(--text-primary)] px-3.5 text-12 font-medium text-[var(--surface)] transition-colors hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              <Mail aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.8} />
+              {t('billing.orders.invoice.sendAction')}
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function InvoiceInfoRow({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-3 px-3.5 py-2.5 text-12">
+      <span className="text-[var(--text-primary)]">{label}</span>
+      <span
+        className={cn(
+          'min-w-0 break-all text-right text-[var(--text-primary)]',
+          mono && 'font-mono text-11',
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
 function GrantAmount({ label, amount }: { label: string; amount: string }) {
   const { i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;

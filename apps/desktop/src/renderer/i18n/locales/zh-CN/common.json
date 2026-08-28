@@ -10850,6 +10850,29 @@
         "success": "订单 ID 已复制",
         "failed": "复制订单 ID 失败，请重试"
       },
+      "invoice": {
+        "action": "申请开票",
+        "title": "申请开票",
+        "description": "请将以下信息发送至客服邮箱 {{email}}，以申请开具发票。",
+        "requiredInfo": "邮件中请提供以下信息：",
+        "emailSubject": "申请开具订单 {{orderId}} 的发票",
+        "emailBody": "您好，\n\n我想申请开具以下订单的发票：\n\n────────────────────\n订单号：{{orderId}}\n应用：{{application}}\n支付方式：{{paymentMethod}}\n开票金额：{{amount}}\n发票抬头：\n联系人：\n联系电话：\n邮箱：\n────────────────────\n\n谢谢。",
+        "sendAction": "发送开票申请",
+        "emailCopied": "客服邮箱已复制",
+        "emailCopyFailed": "复制客服邮箱失败，请重试",
+        "sendFailed": "无法打开邮件应用，请手动发送邮件至 {{email}}。",
+        "notAvailable": "暂无信息",
+        "fields": {
+          "orderId": "订单号",
+          "application": "应用",
+          "paymentMethod": "支付方式",
+          "amount": "开票金额",
+          "invoiceTitle": "发票抬头",
+          "contact": "联系人",
+          "phone": "联系电话",
+          "email": "邮箱"
+        }
+      },
       "states": {
         "completed": "已完成",
         "awaitingPayment": "待支付",
