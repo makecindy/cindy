@@ -15,6 +15,10 @@ export interface SnippetPart {
 export function parseSnippetMarkup(snippet: string | null | undefined): SnippetPart[] | null {
   if (snippet == null || snippet === '') return null;
   const parts = snippet.split(/(<\/?mark>)/g);
+  const hasMarkup = parts.some((part) => part === '<mark>' || part === '</mark>');
+  // 侧栏 preview/snippet 是原文切片，没有哨兵协议。没有 <mark> 时原样返回，
+  // 不能把字面量 &lt; 解成 <。
+  if (!hasMarkup) return [{ text: snippet, marked: false }];
   const out: SnippetPart[] = [];
   let marked = false;
   for (const part of parts) {

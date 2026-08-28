@@ -25,8 +25,15 @@ describe('parseSnippetMarkup', () => {
   });
 
   it('先还原 &amp; 再还原 &lt;，原文 &lt; 显示为字面量 &lt;', () => {
-    expect(parseSnippetMarkup('a &amp; b &amp;lt; c')).toEqual([
-      { text: 'a & b &lt; c', marked: false },
+    expect(parseSnippetMarkup('a &amp; b &amp;lt; c <mark>x</mark>')).toEqual([
+      { text: 'a & b &lt; c ', marked: false },
+      { text: 'x', marked: true },
+    ]);
+  });
+
+  it('没有 <mark> 哨兵时不解码实体，侧栏原文 &lt; 保持原样', () => {
+    expect(parseSnippetMarkup('see &lt;tag&gt; here')).toEqual([
+      { text: 'see &lt;tag&gt; here', marked: false },
     ]);
   });
 });
