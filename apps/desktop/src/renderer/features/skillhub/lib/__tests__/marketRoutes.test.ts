@@ -53,15 +53,13 @@ describe('market route scope', () => {
     expect(previewSource).not.toContain('previewMarket');
   });
 
-  it('locks the host catalog scroll surface while the preview is open', () => {
+  it('wires the host catalog scroll surface into the preview panel', () => {
     const homeSource = readFileSync(resolve(skillhubDir, 'SkillhubHomeView.tsx'), 'utf8');
     const listSource = readFileSync(resolve(skillhubDir, 'SkillhubMarketListView.tsx'), 'utf8');
     const previewSource = readFileSync(resolve(skillhubDir, 'SkillhubMarketPreviewPanel.tsx'), 'utf8');
 
     expect(previewSource).toContain('scrollLockRef');
-    expect(previewSource).toContain("container.style.overflowY = 'hidden'");
-    expect(previewSource).toContain('previousOverflowY');
-    expect(previewSource).toContain('container.style.overflowY = previousOverflowY');
+    expect(previewSource).toContain('useSkillhubPreviewScrollLock');
     expect(homeSource).toContain('ref={skillhubScrollRef}');
     expect(homeSource).toContain('scrollLockRef={skillhubScrollRef}');
     expect(listSource).toContain('scrollLockRef={marketScrollRef}');

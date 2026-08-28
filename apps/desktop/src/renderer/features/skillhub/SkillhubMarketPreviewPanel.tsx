@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -38,6 +37,7 @@ import { MarketPreviewTree } from './components/MarketPreviewTree';
 import { ManageMenu, type MarketCardManageAction } from './components/MarketCard';
 import { ScanResultDialog } from './ScanResultDialog';
 import type { ScanResultPayload } from './PublishDialog';
+import { useSkillhubPreviewScrollLock } from './lib/useSkillhubPreviewScrollLock';
 
 interface SkillhubMarketPreviewPanelProps {
   skill: MarketSkill | null;
@@ -164,20 +164,7 @@ export function SkillhubMarketPreviewPanel({
 
   const tree = useMemo(() => buildPreviewTree(files), [files]);
 
-  // The preview is an in-place drawer rather than a Radix Dialog, so it does
-  // not provide scroll locking for its host automatically. Preserve the host's
-  // inline value so closing the preview cannot clobber another scroll policy.
-  useLayoutEffect(() => {
-    if (!panelOpen) return undefined;
-    const container = scrollLockRef.current;
-    if (!container) return undefined;
-
-    const previousOverflowY = container.style.overflowY;
-    container.style.overflowY = 'hidden';
-    return () => {
-      container.style.overflowY = previousOverflowY;
-    };
-  }, [panelOpen, scrollLockRef]);
+  useSkillhubPreviewScrollLock(panelOpen, scrollLockRef);
 
   return (
     <>
