@@ -151,6 +151,7 @@ describe('withCodexUpstreamRecording', () => {
     headers: threadId ? { 'thread-id': threadId } : {},
   }) as never;
 
+  // Linux CI shard 下本文件首次 resetModules + import SUT 经常超过默认 5s；断言未变。
   it('records the override upstream origin for the request thread', async () => {
     const host = await freshCodexProxyHost();
     host.resetCodexThreadUpstreamForTest();
@@ -654,6 +655,30 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   ])('enables image_url for Kimi Code coding-plan route: %s / %s (#2732)', async (upstream, model) => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+  });
+
+  it.each([
+    ['cindy-local-ollama', 'http://127.0.0.1:11434/v1'],
+    ['my-custom-ollama', 'http://127.0.0.1:11434/v1'],
+    ['my-custom-ollama', 'http://localhost:8080/v1'],
+    ['my-custom-lmstudio', 'http://[::1]:1234/v1'],
+  ])('coalesces leading system for loopback chat upstreams: %s / %s (#3531)', async (providerId, upstream) => {
+    // 本地模板运行器(Qwen3 系 Jinja 模板)硬校验 system 在首,消息中段的
+    // system/developer 直接 500;回环上游一律 coalesce,不再限 Qwen3.8 白名单。
+    const { chatBridgeSystemMessagePolicyForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeSystemMessagePolicyForRoute(providerId, upstream)).toBe('coalesce-leading');
+  });
+
+  it.each([
+    // 远程供应商保持 preserve 缺省:coalesce 会把 developer 并成 system,对
+    // 原生区分 developer 的云端兼容层是语义变更。127.example.com 是合法公网
+    // 域名,不得按前缀误判为 loopback。
+    ['my-custom-remote', 'https://api.example.com/v1'],
+    ['my-custom-remote', 'https://127.example.com/v1'],
+    ['my-custom-remote', 'not-a-url'],
+  ])('keeps preserve for non-loopback chat upstreams: %s / %s (#3531)', async (providerId, upstream) => {
+    const { chatBridgeSystemMessagePolicyForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeSystemMessagePolicyForRoute(providerId, upstream)).toBeUndefined();
   });
 
   it.each([

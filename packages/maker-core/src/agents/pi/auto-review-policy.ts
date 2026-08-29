@@ -39,6 +39,8 @@ export interface PiAutoReviewContext {
   workspaceRoots: string[];
   /** 可读根:工作区 + Pi 附加只读引用目录。写操作仍只看 workspaceRoots。 */
   readRoots?: string[];
+  /** 工作目录与用户明确授权的附加可写目录。 */
+  writableRoots?: string[];
 }
 
 /** 给当前模型 reviewer 的完整 MCP/未知工具证据；输入来自 JSON RPC，可安全序列化。 */
@@ -151,5 +153,9 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
 }
 
 export function classifyPiToolForAutoReview(ctx: PiAutoReviewContext): PiAutoReviewVerdict {
-  return reviewAction(normalizePiToolForAutoReview(ctx), ctx.readRoots ?? ctx.workspaceRoots);
+  return reviewAction(
+    normalizePiToolForAutoReview(ctx),
+    ctx.readRoots ?? ctx.workspaceRoots,
+    { writableRoots: ctx.writableRoots ?? ctx.workspaceRoots },
+  );
 }

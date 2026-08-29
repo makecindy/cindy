@@ -28,6 +28,7 @@ import {
   createToolUseProviderSpecificFieldsRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
+  compactOversizedImageHistory,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
   sanitizeXaiModelInputFromBody,
@@ -110,6 +111,7 @@ import {
   isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
+import { createPiResponsesVerbosityTransform } from './pi-responses-verbosity.js';
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
 // (agent-*.ndjson, source=proxy)。child(sub) 会继续保持 'cc-proxy/sub' 前缀, routing 一致。
@@ -664,6 +666,14 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 函数形态:model-access 凭据同步可能在 proxy 启动(splash)后才把 endpoint
       // 换成下发值;每请求现取才能保证与当前 key 同租户(proxy 内部按值 memoize)。
       upstream: () => claudeUpstreamEndpoint(),
+      // Claude/PI 历史会把图片 base64 累积进下一次请求。仅当请求超过
+      // 32 MiB 时才打开有界 ingress，并优先压缩旧的 tool_result 图片；
+      // 原始媒体仍保留在媒体库，当前用户消息中的图片不被删除。
+      oversizedRequestCompactor: (body, _ctx, targetBytes) =>
+        typeof body === 'object' && body !== null && !Array.isArray(body)
+          ? compactOversizedImageHistory(body as Record<string, unknown>, targetBytes)
+          : null,
+      oversizedRequestIngressBytes: 64 * 1024 * 1024,
       // 'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway 换 key)。
       // 'gateway' 模式恒返 null,字节级行为与扩展前一致。
       routingTransform: createModelRoutingTransform(),
@@ -703,6 +713,9 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         }),
       ),
       transformRequest: [
+        // Pi 的通用 openai-responses adapter 不发送 text.verbosity；只对 Cindy
+        // codex/gpt-5* 网关路由补 low。显式值优先，第三方兼容端点不碰。
+        createPiResponsesVerbosityTransform(getPiProxySessionProvider),
         // 子代理 usage 在请求阶段预留 taskId，后续用同一 reqId 关联响应，避免响应乱序交换归因。
         createClaudeSubagentUsageRequestTransform(),
         // 开头:fast mode 请求侧核验(passthrough 不改写,放最前先记 cc 实际发出的 speed/beta)。

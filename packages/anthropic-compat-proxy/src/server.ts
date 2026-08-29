@@ -49,6 +49,7 @@ import type {
   RecoveryRule,
   RequestTransform,
   RequestTransformCtx,
+  OversizedRequestCompactor,
   ResponseObserver,
   ResponseObserverSink,
   ResponseTransform,
@@ -59,6 +60,9 @@ import type {
 // 留 32MB 给极端的长上下文 + 大附件;超出回 413,避免内存被打爆。
 // 调用方可用 ProxyOptions.maxRequestBodyBytes 覆盖(codex 全量重发历史的场景需要更大)。
 const DEFAULT_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
+// Oversized compaction is intentionally bounded.  A request beyond this
+// ingress window is rejected without buffering it into memory.
+const MAX_REQUEST_INGRESS_BYTES = 64 * 1024 * 1024;
 
 // 413 响应写回后,等客户端读到响应自行断开的宽限期;超时强制 destroy 防连接悬挂。
 const REQUEST_TOO_LARGE_DRAIN_TIMEOUT_MS = 10 * 1000;
@@ -621,6 +625,7 @@ function respondRequestTooLarge(opts: {
   /** Content-Length 预检命中时的声明字节数;流式守卫命中时为 null。 */
   declaredBytes: number | null;
   receivedBytes: number;
+  reason?: 'request_body_too_large';
 }): void {
   const { req, res, logger } = opts;
   logger.warn?.('✖ request body exceeds proxy limit → 413', {
@@ -635,6 +640,7 @@ function respondRequestTooLarge(opts: {
   const payload = Buffer.from(JSON.stringify({
     error: {
       type: 'proxy_error',
+      reason: opts.reason ?? 'request_body_too_large',
       message: `request body too large: ${opts.declaredBytes ?? `>${opts.receivedBytes}`} bytes exceeds proxy limit of ${opts.limitBytes} bytes`,
     },
   }));
@@ -682,16 +688,19 @@ async function runTransforms(
   transforms: RequestTransform[],
   ctx: RequestTransformCtx,
   logger: ProxyLogger,
+  preParsed?: unknown,
 ): Promise<Buffer | null> {
   if (transforms.length === 0) return null;
   if (!contentType.toLowerCase().startsWith('application/json')) return null;
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawBody.toString('utf8'));
-  } catch (err) {
-    logger.warn?.('json parse failed, falling back to passthrough', { err: String(err) });
-    return null;
+  let parsed: unknown = preParsed;
+  if (preParsed === undefined) {
+    try {
+      parsed = JSON.parse(rawBody.toString('utf8'));
+    } catch (err) {
+      logger.warn?.('json parse failed, falling back to passthrough', { err: String(err) });
+      return null;
+    }
   }
 
   let current: unknown = parsed;
@@ -1636,6 +1645,28 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const logger = opts.logger ?? {};
   const host = opts.host ?? '127.0.0.1';
   const maxBodyBytes = opts.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
+  const oversizedRequestCompactor: OversizedRequestCompactor | undefined = opts.oversizedRequestCompactor;
+  // Treat a malformed ingress override as unset.  Letting NaN reach the
+  // stream guard would make `total > NaN` false forever and turn the bounded
+  // ingress into an unbounded read.
+  const configuredOversizedIngressBytes = opts.oversizedRequestIngressBytes;
+  const oversizedIngressOverride =
+    typeof configuredOversizedIngressBytes === 'number'
+      && Number.isFinite(configuredOversizedIngressBytes)
+      && configuredOversizedIngressBytes > 0
+      ? configuredOversizedIngressBytes
+      : undefined;
+  const oversizedIngressBytes = oversizedRequestCompactor
+    ? maxBodyBytes >= MAX_REQUEST_INGRESS_BYTES
+      ? maxBodyBytes
+      : Math.max(
+        maxBodyBytes,
+        Math.min(
+          MAX_REQUEST_INGRESS_BYTES,
+          oversizedIngressOverride ?? maxBodyBytes * 2,
+        ),
+      )
+    : maxBodyBytes;
   // 入站请求 body dump 默认关(仅显式诊断时开):高并发下 64KiB×每请求的日志
   // 构造/落盘/终端镜像会占满宿主 main event loop,详见 ProxyOptions 注释。
   const dumpRequestBody = opts.debugDumpRequestBody === true;
@@ -1791,6 +1822,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const requestCtx: RequestTransformCtx = { reqId, method, url, headers };
     const threadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
     const contentType = headers['content-type'] ?? '';
+    // The compactor only understands JSON request histories.  Keep the normal
+    // hard limit for other media types so enabling it cannot accidentally make
+    // binary/form uploads consume the larger ingress window.
+    const requestIngressBytes =
+      oversizedRequestCompactor && contentType.toLowerCase().startsWith('application/json')
+        ? oversizedIngressBytes
+        : maxBodyBytes;
 
     // 非 POST / 没 body(GET / HEAD / DELETE 等)→ 不收集 stream,但仍跑一次路由决策:
     // 这类请求没有 body,routingTransform 以 `undefined` body 调用,可据 method/url/headers 路由
@@ -1858,7 +1896,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 只有 chunked 上传才落到 collectRequestBody 的流式守卫)。
     // 注意读原始 req.headers —— flattenRequestHeaders 会剥掉 content-length(转发时重算)。
     const declaredBytes = Number(req.headers['content-length'] ?? '');
-    if (Number.isFinite(declaredBytes) && declaredBytes > maxBodyBytes) {
+    if (Number.isFinite(declaredBytes) && declaredBytes > requestIngressBytes) {
       respondRequestTooLarge({
         req, res, logger, reqId, method, url, headers,
         limitBytes: maxBodyBytes,
@@ -1870,7 +1908,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
 
     let rawBody: Buffer;
     try {
-      rawBody = await collectRequestBody(req, maxBodyBytes);
+      rawBody = await collectRequestBody(req, requestIngressBytes);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'REQUEST_TOO_LARGE') {
@@ -1917,19 +1955,77 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。
     // parsedBody 复用路由阶段的解析结果,不二次 parse。
     if (decision?.localHandler) {
+      // PI native subscription handlers also receive provider-native JSON and
+      // can carry the same accumulated vision history as forwarded requests.
+      // Apply the bounded compactor before the local-handler hard-limit check;
+      // non-JSON or unparseable bodies still retain the historical 413 path.
+      let localRawBody = rawBody;
+      let localParsedBody = rawParsed;
+      if (rawBody.length > maxBodyBytes && oversizedRequestCompactor) {
+        const originalLocalBodyBytes = rawBody.length;
+        const compactStartedAt = Date.now();
+        let oversizedParsed: unknown = rawParsed;
+        if (oversizedParsed === undefined && contentType.toLowerCase().startsWith('application/json')) {
+          try {
+            oversizedParsed = JSON.parse(rawBody.toString('utf8'));
+          } catch {
+            oversizedParsed = undefined;
+          }
+        }
+        if (oversizedParsed !== undefined) {
+          try {
+            const compacted = oversizedRequestCompactor(oversizedParsed, requestCtx, maxBodyBytes);
+            const compactedBody = isPromiseLike<unknown | null>(compacted)
+              ? await compacted
+              : compacted;
+            if (compactedBody !== null && compactedBody !== undefined) {
+              const serialized = JSON.stringify(compactedBody);
+              if (typeof serialized !== 'string') throw new Error('compactor returned a non-serializable body');
+              localRawBody = Buffer.from(serialized, 'utf8');
+              // Do not retain the original oversized Buffer through local
+              // handler execution; compaction already produced the bytes the
+              // handler will consume.
+              rawBody = localRawBody;
+              localParsedBody = compactedBody;
+              logger.info?.('oversized request body compacted before local dispatch', {
+                reqId,
+                originalBytes: originalLocalBodyBytes,
+                compactedBytes: localRawBody.length,
+                compactionMs: Date.now() - compactStartedAt,
+              });
+            }
+          } catch (err) {
+            logger.warn?.('oversized request compactor failed; enforcing hard limit', {
+              reqId,
+              originalBytes: originalLocalBodyBytes,
+              compactionMs: Date.now() - compactStartedAt,
+              err: String(err),
+            });
+          }
+        }
+      }
+      if (localRawBody.length > maxBodyBytes) {
+        respondRequestTooLarge({
+          req, res, logger, reqId, method, url, headers,
+          limitBytes: maxBodyBytes,
+          declaredBytes: Number.isFinite(declaredBytes) ? declaredBytes : null,
+          receivedBytes: localRawBody.length,
+        });
+        return;
+      }
       if (logger.isDebugEnabled?.()) {
         logger.debug?.('▶ inbound request from client', {
           reqId,
           method,
           upstreamBase: 'local-handler',
           url,
-          bytes: rawBody.length,
-          ...(dumpRequestBody ? { body: dumpBody(rawBody, DEBUG_REQUEST_DUMP_MAX_BYTES) } : {}),
+          bytes: localRawBody.length,
+          ...(dumpRequestBody ? { body: dumpBody(localRawBody, DEBUG_REQUEST_DUMP_MAX_BYTES) } : {}),
         });
       }
       await runLocalHandler(
         decision.localHandler,
-        { rawBody, parsedBody: rawParsed, ctx: requestCtx, res },
+        { rawBody: localRawBody, parsedBody: localParsedBody, ctx: requestCtx, res },
         logger,
         reqId,
       );
@@ -1958,9 +2054,63 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       ...requestCtx,
       upstreamBase: formatUpstreamBase(route.target),
     };
+    const originalRawBodyBytes = rawBody.length;
+    let bodyForTransforms = rawBody;
+    let parsedForTransforms: unknown = undefined;
+    if (rawBody.length > maxBodyBytes && oversizedRequestCompactor) {
+      const compactStartedAt = Date.now();
+      let oversizedParsed: unknown = rawParsed;
+      if (oversizedParsed === undefined && contentType.toLowerCase().startsWith('application/json')) {
+        try {
+          oversizedParsed = JSON.parse(rawBody.toString('utf8'));
+        } catch {
+          oversizedParsed = undefined;
+        }
+      }
+      if (oversizedParsed !== undefined) {
+        // Reuse the parsed object even when the image compactor is a no-op;
+        // this avoids a second JSON.parse for the regular transform chain.
+        parsedForTransforms = oversizedParsed;
+        try {
+          const compacted = oversizedRequestCompactor(oversizedParsed, transformCtx, maxBodyBytes);
+          const compactedBody = isPromiseLike<unknown | null>(compacted)
+            ? await compacted
+            : compacted;
+          if (compactedBody !== null && compactedBody !== undefined) {
+            const serialized = JSON.stringify(compactedBody);
+            if (typeof serialized !== 'string') throw new Error('compactor returned a non-serializable body');
+            bodyForTransforms = Buffer.from(serialized, 'utf8');
+            parsedForTransforms = compactedBody;
+            // No later stage needs the pre-compaction bytes. Releasing that
+            // reference avoids retaining two large Buffers through forwarding.
+            rawBody = bodyForTransforms;
+            logger.info?.('oversized request body compacted before forwarding', {
+              reqId,
+              originalBytes: originalRawBodyBytes,
+              compactedBytes: bodyForTransforms.length,
+              compactionMs: Date.now() - compactStartedAt,
+            });
+          }
+        } catch (err) {
+          logger.warn?.('oversized request compactor failed; enforcing hard limit', {
+            reqId,
+            originalBytes: originalRawBodyBytes,
+            compactionMs: Date.now() - compactStartedAt,
+            err: String(err),
+          });
+        }
+      }
+    }
     let transformed: Buffer | null;
     try {
-      transformed = await runTransforms(rawBody, contentType, transforms, transformCtx, logger);
+      transformed = await runTransforms(
+        bodyForTransforms,
+        contentType,
+        transforms,
+        transformCtx,
+        logger,
+        parsedForTransforms,
+      );
     } catch (err) {
       transformsCompleted = true;
       notifyTransformSettlement();
@@ -1976,9 +2126,18 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     }
     transformsCompleted = true;
     notifyTransformSettlement();
-    const outBody = transformed ?? rawBody;
+    const outBody = transformed ?? bodyForTransforms;
+    if (outBody.length > maxBodyBytes) {
+      respondRequestTooLarge({
+        req, res, logger, reqId, method, url, headers,
+        limitBytes: maxBodyBytes,
+        declaredBytes: Number.isFinite(declaredBytes) ? declaredBytes : null,
+        receivedBytes: outBody.length,
+      });
+      return;
+    }
 
-    let parsedForRewrite: unknown = rawParsed;
+    let parsedForRewrite: unknown = rawParsed ?? parsedForTransforms;
     if (parsedForRewrite === undefined && contentType.toLowerCase().startsWith('application/json')) {
       try {
         parsedForRewrite = JSON.parse(rawBody.toString('utf8'));
@@ -2039,7 +2198,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         reqId,
         method,
         url,
-        originalBytes: rawBody.length,
+        originalBytes: originalRawBodyBytes,
         outBytes: outBody.length,
       });
     }

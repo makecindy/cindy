@@ -79,6 +79,51 @@ function loadBashIsolationHelper(
   ) => Record<string, string | undefined>;
 }
 
+function loadFileWriteTargetHelper(): (targetPath: string) => string | null {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function resolveFileWriteTargetPath');
+  const end = source.indexOf('function reviewAncestorsWithin', start);
+  if (start < 0 || end <= start) throw new Error('file-write target helper was not found');
+  const executableSource = [
+    source.slice(start, end),
+    '(globalThis as any).resolveFileWriteTargetPath = resolveFileWriteTargetPath;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = { path, lstatSync, realpathSync };
+  runInNewContext(compiled, context);
+  return context.resolveFileWriteTargetPath as (targetPath: string) => string | null;
+}
+
+function loadWritableRootResolver(
+  workingDir: string,
+): (writableRoots: string[]) => string[] | null {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function resolveWritableRootsForHost');
+  const end = source.indexOf('function reviewAncestorsWithin', start);
+  if (start < 0 || end <= start) throw new Error('writable-root resolver was not found');
+  const executableSource = [
+    source.slice(start, end),
+    '(globalThis as any).resolveWritableRootsForHost = resolveWritableRootsForHost;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = {
+    process: { cwd: () => workingDir },
+    realpathSync,
+  };
+  runInNewContext(compiled, context);
+  return context.resolveWritableRootsForHost as (writableRoots: string[]) => string[] | null;
+}
+
 function loadBashPackageHomeHelper(): {
   resolveBashPackageHome: () => string | undefined;
   env: Record<string, string | undefined>;
@@ -1279,6 +1324,76 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "if (permission.mode === 'bypassPermissions') return;",
     );
+  });
+
+  it('hard-blocks writes only in read-only reference roots, not external writable roots', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const readOnlyGate = source.indexOf('permission.readOnlyRoots.some((root) =>');
+    const credentialGate = source.indexOf("if (event.toolName === 'bash' && commandReadsProcessEnviron", readOnlyGate);
+    expect(readOnlyGate).toBeGreaterThan(-1);
+    expect(credentialGate).toBeGreaterThan(readOnlyGate);
+    expect(source.slice(readOnlyGate, credentialGate)).not.toContain('permission.writableRoots');
+    expect(source).toContain('resolvedWritePath: writeTargetResolved');
+    expect(source).toContain(
+      'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',
+    );
+    expect(source).toContain('event.input.path = writeTargetResolved');
+    expect(source).toContain('Cindy could not verify the real file-write target.');
+  });
+
+  it('resolves existing and not-yet-created write targets through an authorized-root link', () => {
+    const resolveTarget = loadFileWriteTargetHelper();
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'cindy-pi-write-target-'));
+    try {
+      const authorized = path.join(tempRoot, 'authorized');
+      const outside = path.join(tempRoot, 'outside');
+      const outsideNested = path.join(outside, 'nested');
+      mkdirSync(authorized);
+      mkdirSync(outsideNested, { recursive: true });
+      const existing = path.join(outside, 'existing.txt');
+      writeFileSync(existing, 'outside');
+      const linkedDir = path.join(authorized, 'linked');
+      symlinkSync(outside, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
+
+      expect(resolveTarget(path.join(linkedDir, 'existing.txt'))).toBe(realpathSync(existing));
+      expect(resolveTarget(path.join(linkedDir, 'nested', 'new.txt'))).toBe(
+        path.join(realpathSync(outsideNested), 'new.txt'),
+      );
+
+      // Windows junction creation requires an existing target. Unix symlinks let
+      // this case prove that an unresolvable ancestor fails closed.
+      if (process.platform !== 'win32') {
+        const dangling = path.join(authorized, 'dangling');
+        symlinkSync(path.join(tempRoot, 'missing-target'), dangling, 'dir');
+        expect(resolveTarget(dangling)).toBeNull();
+        expect(resolveTarget(path.join(dangling, 'new.txt'))).toBeNull();
+      }
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves the workspace and writable roots in the write executor filesystem', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'cindy-pi-writable-root-'));
+    try {
+      const realWorkspace = path.join(tempRoot, 'real-workspace');
+      const realOutput = path.join(tempRoot, 'real-output');
+      const workspaceLink = path.join(tempRoot, 'workspace-link');
+      const outputLink = path.join(tempRoot, 'output-link');
+      mkdirSync(realWorkspace);
+      mkdirSync(realOutput);
+      symlinkSync(realWorkspace, workspaceLink, process.platform === 'win32' ? 'junction' : 'dir');
+      symlinkSync(realOutput, outputLink, process.platform === 'win32' ? 'junction' : 'dir');
+      const resolveRoots = loadWritableRootResolver(workspaceLink);
+
+      expect([...resolveRoots([outputLink])!]).toEqual([
+        realpathSync(realWorkspace),
+        realpathSync(realOutput),
+      ]);
+      expect(resolveRoots([path.join(tempRoot, 'missing-root')])).toBeNull();
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('checks the Review deny-by-default boundary before ordinary permission handling', () => {

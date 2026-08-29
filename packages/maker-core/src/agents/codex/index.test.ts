@@ -599,6 +599,7 @@ describe('CodexAgent permissions', () => {
       'bypassPermissions',
     ]);
     expect(agent.capabilities.extraDirs).toEqual({ supported: true });
+    expect(agent.capabilities.writableDirs).toEqual({ supported: true });
     expect(agent.capabilities.turnPermissionPolicy).toEqual({
       supported: { supported: true },
       unsupportedPermissionModes: ['bypassPermissions'],
@@ -2479,6 +2480,212 @@ describe('CodexAgent capability routing', () => {
 
 describe('CodexAgent reference directories', () => {
   const profileName = 'cindy-readonly-references';
+
+  it('marks only explicitly writable additional roots as write in the thread profile', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { codexHome: '/tmp/mock-codex-home' });
+    const handle = await agent.startSession({
+      sessionId: 'session-writable-dirs',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      extraDirs: ['/reference'],
+      writableDirs: ['/shared-output'],
+    });
+    const [, startParams] = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    ) as [string, Record<string, unknown>];
+    expect(startParams.runtimeWorkspaceRoots).toEqual(['/repo', '/reference', '/shared-output']);
+    const profile = (
+      startParams.config as Record<string, { filesystem: Record<string, unknown> }>
+    )[`permissions.${profileName}`];
+    expect(profile.filesystem['/reference']).toBeUndefined();
+    expect(profile.filesystem['/shared-output']).toBe('write');
+    await handle.close();
+  });
+
+  it('refreshes the thread profile when writable roots are replaced or revoked', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      return undefined;
+    }, { codexHome: '/tmp/mock-codex-home' });
+    const handle = await agent.startSession({
+      sessionId: 'session-writable-dirs-refresh',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      writableDirs: ['/output-a'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.send({ type: 'user', content: 'write the first output' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setWritableDirs?.(['/output-b']);
+    await handle.send({ type: 'user', content: 'write the replacement output' });
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    const [, replacementResume] = resumeCalls[0] as [string, Record<string, unknown>];
+    const replacementProfile = (
+      replacementResume.config as Record<string, { filesystem: Record<string, unknown> }>
+    )[`permissions.${profileName}`];
+    expect(replacementProfile.filesystem['/output-a']).toBeUndefined();
+    expect(replacementProfile.filesystem['/output-b']).toBe('write');
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-2', status: 'completed' },
+    });
+
+    await handle.setWritableDirs?.([]);
+    await handle.send({ type: 'user', content: 'continue without external output' });
+    const [, revokedResume] = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    )[1] as [string, Record<string, unknown>];
+    expect('permissions' in revokedResume).toBe(false);
+    expect(revokedResume.sandbox).toBe('workspace-write');
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    expect(turnCalls[2]?.[1]).toMatchObject({
+      runtimeWorkspaceRoots: ['/repo'],
+      sandboxPolicy: {
+        type: 'workspaceWrite',
+        writableRoots: ['/tmp/mock-codex-home/memories'],
+      },
+    });
+    await handle.close();
+  });
+
+  it.each(['auto', 'ask'] as const)(
+    'interrupts an active %s turn when an activated writable root is revoked',
+    async (permissionMode) => {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-revoke-${permissionMode}` } };
+        if (method === Method.TurnInterrupt) return {};
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: `session-active-writable-revoke-${permissionMode}`,
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode,
+        writableDirs: ['/output-a'],
+      });
+
+      await handle.send({ type: 'user', content: 'write output' });
+      await handle.setWritableDirs?.(['/output-b']);
+
+      expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+        threadId: 'start-thread-id',
+        turnId: `turn-revoke-${permissionMode}`,
+      });
+      await handle.close();
+    },
+  );
+
+  it('does not interrupt an active turn when writable roots are only added or reordered', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-writable-expand' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-writable-expand',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+      writableDirs: ['/output-a', '/output-b'],
+    });
+
+    await handle.send({ type: 'user', content: 'write output' });
+    await handle.setWritableDirs?.(['/output-b', '/output-a', '/output-c']);
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('interrupts a pending Ask turn once its id arrives after writable-root revocation', async () => {
+    const turnStartGate = deferred<{ turn: { id: string } }>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return turnStartGate.promise;
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-pending-writable-revoke',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+      writableDirs: ['/output-a'],
+    });
+
+    const sendPromise = handle.send({ type: 'user', content: 'write output' });
+    await handle.setWritableDirs?.([]);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+
+    turnStartGate.resolve({ turn: { id: 'turn-pending-writable-revoke' } });
+    await sendPromise;
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+      threadId: 'start-thread-id',
+      turnId: 'turn-pending-writable-revoke',
+    });
+    await handle.close();
+  });
+
+  it('does not interrupt a pending turn when every revoked root is re-granted before its id arrives', async () => {
+    const turnStartGate = deferred<{ turn: { id: string } }>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return turnStartGate.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-pending-writable-regrant',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+      writableDirs: ['/output-a'],
+    });
+
+    const sendPromise = handle.send({ type: 'user', content: 'write output' });
+    await handle.setWritableDirs?.([]);
+    await handle.setWritableDirs?.(['/output-a', '/output-b']);
+    turnStartGate.resolve({ turn: { id: 'turn-pending-writable-regrant' } });
+    await sendPromise;
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('does not interrupt a Full access turn when removing an inactive named-profile root', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-full-access-writable-revoke' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-full-access-writable-revoke',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+      writableDirs: ['/output-a'],
+    });
+
+    await handle.send({ type: 'user', content: 'write output' });
+    await handle.setWritableDirs?.([]);
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+    await handle.close();
+  });
 
   it('keeps the thread-level reference profile active without repeating it on turn/start', async () => {
     const agent = new CodexAgent(createDeps());
@@ -12612,6 +12819,111 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('reviews real approvals with separate read-only and external writable roots', async () => {
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({
+      verdict: 'block' as const,
+      reason: 'read-only reference',
+    }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-external-writable-review',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      extraDirs: ['/reference'],
+      writableDirs: ['/shared-output'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
+    if (!handlers.fileChangeApproval) throw new Error('expected fileChangeApproval');
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'writable-pwd',
+      command: 'pwd',
+      cwd: '/shared-output',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewer).not.toHaveBeenCalled();
+    await expect(handlers.fileChangeApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'writable-file-change',
+      grantRoot: '/shared-output',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewer).not.toHaveBeenCalled();
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'readonly-pwd',
+      command: 'pwd',
+      cwd: '/reference',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoots: ['/repo', '/reference', '/shared-output'],
+      writableRoots: ['/repo', '/shared-output'],
+      action: { kind: 'exec', command: 'pwd', cwd: '/reference' },
+    }));
+    await expect(handlers.fileChangeApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'readonly-file-change',
+      grantRoot: '/reference',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).toHaveBeenCalledWith(expect.objectContaining({
+      writableRoots: ['/repo', '/shared-output'],
+      action: { kind: 'file-write', path: '/reference' },
+    }));
+
+    await handle.setWritableDirs!(['/replacement-output']);
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'replacement-writable-pwd',
+      command: 'pwd',
+      cwd: '/replacement-output',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-external-writable',
+      itemId: 'revoked-writable-pwd',
+      command: 'pwd',
+      cwd: '/shared-output',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).toHaveBeenCalledTimes(3);
+    await handle.close();
+  });
+
+  it('requires direct confirmation when a remote destructive path has no execution-host realpath evidence', async () => {
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' as const }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-destructive-review',
+      model: 'gpt-5.4',
+      workingDir: '/remote/repo',
+      remoteHostId: 'remote-host-1',
+      permissionMode: 'auto',
+    });
+    handle.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'deny' }));
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-remote-rm',
+      itemId: 'remote-rm',
+      command: 'rm -rf build',
+      cwd: '/remote/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('falls back to user approvals on XD without interrupting when the UI switches to Ask', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
@@ -12739,9 +13051,10 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const handlers = host.getThreadHandlers();
     if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
-    const resolver = vi.fn(async (): Promise<InteractionDecision> => (
-      { kind: 'permission', behavior: 'allow' }
-    ));
+    const resolver = vi.fn(async (request: InteractionRequest): Promise<InteractionDecision> => {
+      void request;
+      return { kind: 'permission', behavior: 'allow' };
+    });
     handle.setInteractionResolver(resolver);
 
     // 灰区不会自动弹窗；只有 lightweight reviewer 明确返回 ask 才转发用户。
@@ -13153,6 +13466,47 @@ describe('CodexAgent MCP thread context hooks', () => {
     await expect(pendingFull).resolves.toEqual({ decision: 'accept' });
     expect(fullResolver).not.toHaveBeenCalled();
     await fullHandle.close();
+  });
+
+  it('discards an in-flight allow when external directory permissions change', async () => {
+    const pendingReview = deferred<{ verdict: 'allow' }>();
+    const reviewer = vi.fn(() => pendingReview.promise);
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-auto-review-late-directory-revoke',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      writableDirs: ['/shared-output'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    const resolver = vi.fn(async (request: InteractionRequest): Promise<InteractionDecision> => {
+      void request;
+      return { kind: 'permission', behavior: 'allow' };
+    });
+    handle.setInteractionResolver(resolver);
+
+    const approval = handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-late-directory-revoke',
+      itemId: 'cmd-late-directory-revoke',
+      command: 'rm -rf build',
+      cwd: '/shared-output',
+    });
+    await waitForExpectation(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.setWritableDirs!([]);
+    pendingReview.resolve({ verdict: 'allow' });
+
+    await expect(approval).resolves.toEqual({ decision: 'accept' });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'permission',
+      suggestions: undefined,
+    });
+    await handle.close();
   });
 
   it('auto-approves safe fallback commands via the Cindy auto-review core without prompting', async () => {
@@ -17578,6 +17932,75 @@ describe('CodexAgent MCP thread context hooks', () => {
       orcaWorkflowId: 'workflow-1',
       orcaLeadSessionId: 'session-vendor-options-update',
     });
+    await handle.close();
+  });
+});
+
+describe('CodexAgent final assistant result', () => {
+  it('uses final_answer for done.result and falls back to the last unphased message', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        turnSeq += 1;
+        return { turn: { id: `turn-final-${turnSeq}` } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-final-assistant-result',
+      model: 'gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemCompleted || !handlers.turnCompleted) {
+      throw new Error('expected item and turn handlers');
+    }
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    await handle.send({ type: 'user', content: 'first' });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-final-1',
+      item: { id: 'commentary-1', type: 'agentMessage', text: 'Working…', phase: 'commentary' },
+    });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-final-1',
+      item: { id: 'answer-1', type: 'agentMessage', text: 'Concise answer.', phase: 'final_answer' },
+    });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-final-1',
+      item: { id: 'legacy-tail-1', type: 'agentMessage', text: 'unphased tail' },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-final-1', status: 'completed' },
+    });
+    await waitForExpectation(() => {
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { result?: string } | undefined)?.result).toBe('Concise answer.');
+    });
+
+    await handle.send({ type: 'user', content: 'second' });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-final-2',
+      item: { id: 'legacy-answer-2', type: 'agentMessage', text: 'Legacy concise answer.' },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-final-2', status: 'completed' },
+    });
+    await waitForExpectation(() => {
+      const done = events.filter((event) => event.type === 'done');
+      expect((done[1]?.data as { result?: string } | undefined)?.result).toBe('Legacy concise answer.');
+    });
+
     await handle.close();
   });
 });

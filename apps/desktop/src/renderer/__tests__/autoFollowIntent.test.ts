@@ -26,6 +26,7 @@ import {
   resolveNearBottomOnScroll,
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
+  resolveWindowCoverageLossAction,
   selectTailUserMessageId,
   isVerticalScrollbarPress,
   shouldRepinOnDownIntent,
@@ -711,6 +712,30 @@ describe('resolveSendWindowHandoff', () => {
   });
 });
 
+describe('resolveWindowCoverageLossAction', () => {
+  it('hands an automatically expanded window back to the tail when append breaks coverage', () => {
+    expect(
+      resolveWindowCoverageLossAction({
+        hasWindowAnchor: true,
+        wasCoveringEnd: true,
+        windowCoversEnd: false,
+        wasFollowingTail: true,
+      }),
+    ).toBe('handoff-to-tail');
+  });
+
+  it('preserves an active history anchor when append breaks coverage away from the tail', () => {
+    expect(
+      resolveWindowCoverageLossAction({
+        hasWindowAnchor: true,
+        wasCoveringEnd: true,
+        windowCoversEnd: false,
+        wasFollowingTail: false,
+      }),
+    ).toBe('preserve-anchor');
+  });
+});
+
 describe('resolveLastUserMessageObservation', () => {
   it('seeds a restored user tail hydrated after mount without treating it as a send', () => {
     expect(
@@ -780,6 +805,9 @@ describe('MessageStream send-window handoff wiring', () => {
   it('clears any anchored window on a local send and only defers pin for stale slices', () => {
     const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8');
     expect(source).toContain('resolveSendWindowHandoff({');
+    expect(source).toContain('resolveWindowCoverageLossAction({');
+    expect(source).toContain("if (coverageLossAction === 'handoff-to-tail')");
+    expect(source).toContain("if (coverageLossAction === 'preserve-anchor')");
     expect(source).toContain('if (windowHandoff.clearWindowAnchor)');
     expect(source).toContain('if (decision.pinToBottom && !windowHandoff.deferPinToNextRender)');
     expect(source).not.toContain('realTailUserSendOutsideWindow');

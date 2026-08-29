@@ -12,9 +12,13 @@
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
 | [`design-decision-log.md`](./design-decision-log.md) | 全局设计决策史台账：被推翻的方案、勘误过程、backlog（已收录原 `DESIGN.md §13` G1–G4 归档与 §15 决策史全量） | 决策台账（只增不改；与 `DESIGN.md` 冲突时以 `DESIGN.md` 为准） |
 | [`README.md`](./README.md) | 本目录使用规则 | 说明 |
+| [`gamepad-silhouette-authoring.md`](./gamepad-silhouette-authoring.md) | 设置页手柄线稿交稿约定：画板网格、长弧画法、外壳/按键分家、热区与按下填充；附 Xbox Series 现稿 | 作者交稿约定 |
+| [`xbox-series-gamepad.silhouette.svg`](./xbox-series-gamepad.silhouette.svg) | 设置页 Xbox Series 线稿现稿（与 `XboxGamepadLayout.tsx` 同坐标） | 样板图 |
+| [`playstation-dualsense-gamepad.silhouette.svg`](./playstation-dualsense-gamepad.silhouette.svg) | 设置页 DualSense 线稿现稿（与 `PlayStationGamepadLayout.tsx` 同坐标） | 样板图 |
 
 ## 版本记录
 
+- **2026-08-24（手柄线稿交稿）**：新增 [`gamepad-silhouette-authoring.md`](./gamepad-silhouette-authoring.md)，把设置页 Xbox 手柄图的画法收成同事交稿约定（同网格、长弧、键壳分家、热区与填充）。
 - **2026-08-06（资源用量进程类别色）**：按用户对资源用量面板“icon 改为彩色”的走查要求，`DESIGN.md §2 / §10` 登记仅限 14px 进程类型 glyph 的六色 Light / Dark 调色板；颜色只编码任务 Agent、控制面服务、主进程、Renderer、GPU、Utility 类别，不表达健康或运行状态，行背景、文字、指标与操作继续保持中性。对应 token 加入外部主题导入保护，防类别色随导入主题漂移；该例外不得扩散到其它表格或进程 UI。
 - **2026-08-03（排版立法：字重四档 + 桌面字号白名单，issue #1505 PR1）**：`DESIGN.md §3` 字重梯由「仅 400/500」修订为 400/500/600/700 四档（600 = 限量强调收编存量 72 处 semibold（生产代码口径）；700 仅限豁免域；800 及中间值全禁；与手机端 `fontWeight` token 对齐），§3 Principles / §7 Don'ts / §9 Iteration Guide 三处「never bold」表述同步改写；§3 新增四个小节——「字重阶梯」（含 CJK 伪粗体注记：中文层级不得依赖 600 vs 700）、「桌面 UI 字号白名单」（UI 段 {10–16} + 标题段 {18,20,24,28}，禁任意值 `text-[Npx]` 与小数；语义别名只收编 `xs/sm/base/lg`，源码侧禁止 `xl` 及以上，配置侧遗留项不在本轮删除范围；**四个权威来源的镜像关系已由 PR #1553 建立，另有 tailwind-merge 字号去重消费端单独校验**）、「排版豁免登记表」（登录品牌画布 / markdown `<strong>` / hljs 移植 / 外部页注入 / 手机 WebView 生成器 / 紧凑模式派生值）、「排版 non-goals」（line-height 混轨等本轮明确不治理）。走查数据、三项拍板与后续施工计划见 [`design-decision-log.md`](./design-decision-log.md)「2026-08-03」条与 issue #1505。
 - **2026-07-29（修正：手机端功能区落位回新稿标注值）**：手机短屏 / 长屏的 `loginY` 由 main 原值 694 / 933 改回新稿标注值 **622 / 827**；短屏以下（dh<1334）改为 `min(622, max(0, dh-640))`——保留紧凑底距 18 再钳到短屏档落位（**不是**把锚常量改成 `dh-712`：那会让 dh∈[712,1222) 全段字标被面板压盖，review 实算 dh=1000 压 40 设计px）。起因：2026-07-28 剥离手机端跳过登录时把功能区落位一并退回 main，却保留了已换新稿的品牌簇，两半拼接使「字标底↔面板顶」间距变成 **92 / 131.65** 设计px（稿内为 20 / 25.65），实机肉眼可见一条空白。修正后间距回到稿值；面板 500→440 少掉的 60 落到底部留白（90 / 175，比稿内多 60）——审图拍板「方案 B」，未采纳「品牌簇整体下移 60」的方案 A。`DESIGN.md §16.2` 表与「60 去向」条目、§16 末尾勘误块 (6) 已就地更新；`loginSkinLayout.test.ts` 新增三条不变式：「间距上界不变式」（等于稿值，替代原先只判不重叠的下界）、「锚常量连续性不变式」（dh=1334 上下不跳变）、「间距不变式（短屏以下分支）」（dh∈[850,1334) 采样点面板顶不得压到字标底），防再次只改一半、也防窄屏压盖回归。pad 竖屏不受影响（无新稿帧、品牌簇未换基准，保持 621 / 158）。

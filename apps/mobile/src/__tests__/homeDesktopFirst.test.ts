@@ -318,9 +318,9 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('if (isAccessRevokedError(error) || isDeviceOfflineError(error)) return false;');
     expect(source).toContain("if (text.includes('REMOTE_DISABLED')) return false;");
     expect(source).toContain('return true;');
-    expect(source).toContain('const [list, activeSessions, activeSessionSnapshotEpoch]');
+    expect(source).toMatch(/const \[\s*list,\s*activeSessions,\s*activeSessionSnapshotEpoch,/);
     expect(source).toContain('remoteSessionStore.captureActiveSessionSnapshotEpoch()');
-    expect(source).toContain('return [list, activeSessions, activeSessionSnapshotEpoch] as const;');
+    expect(source).toMatch(/return \[\s*list,\s*activeSessions,\s*activeSessionSnapshotEpoch,/);
     expect(source).toContain('activeSessionSnapshotEpoch,');
     expect(source).toContain('remoteScheduleEventStore.subscribe(() => {');
     expect(source).toContain('const snapshot = remoteScheduleEventStore.getSnapshot(deviceId)');
@@ -475,20 +475,50 @@ describe('mobile home desktop-first surface', () => {
     expect(stylesSource).not.toContain('automationGroupChildrenCindy');
   });
 
-  it('keeps presence updates local and refreshes full home sync on every reconnect', () => {
+  it('keeps presence global while reconnecting only the visible Home sync scope', () => {
     const source = readSource('app/devices/index.tsx');
 
     expect(source).toContain('void loadHome({ visible: false });');
     expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
     expect(source).toContain('await syncInFlightRef.current;');
     expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
+    expect(source).toMatch(/startBoundedStartupRead<HomeViewPreferences \| null>\(\s*readHomeViewPreferences\(\)/);
+    const preferenceHydration = source.slice(
+      source.indexOf('// 冷启动恢复上次的首页视图偏好'),
+      source.indexOf('// 卸载时取消所有延后中的 schedule-index hydration'),
+    );
+    expect(preferenceHydration).toContain('homeAccountGenerationRef.current !== expectedAccountGeneration');
+    expect(preferenceHydration).toContain('if (!cancelled) setHomeViewPreferencesHydrated(true);');
     expect(source).toContain('const deviceIdentityCachePersistPendingRef = useRef(false);');
-    // 重连(connectionEpoch 变化)必须无条件全量刷新:presence 只在变化时广播、无全量重放,
-    // 后台漏掉的上/下线事件只能靠重连重拉 REST 快照兜底,不能再用 hydrated 标记门控挡掉。
+    // 重连(connectionEpoch 变化)必须无条件重拉全量设备 REST:presence 只在变化时广播、无全量重放,
+    // 后台漏掉的上/下线事件只能靠重连快照兜底；每设备列表 fan-out 再按可见 scope 收窄。
     // homeListCacheHydrated 是一次性 gate(缓存种入完成后永久为 true,种入失败也置 true),
     // 只影响首次触发顺序(缓存先画、fresh 后覆盖),不会挡掉任何一次重连刷新。
     expect(source).not.toContain('homeSessionHydratedRef');
-    expect(source).toContain('}, [connectionEpoch, deviceIdentityCacheReady, homeListCacheHydrated, loadHome]);');
+    expect(source).toContain('!homeViewPreferencesHydrated');
+    expect(source).toContain('}, [connectionEpoch, deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);');
+    expect(source).toContain('resolveHomeDeviceSyncIds(');
+    expect(source).toContain('reconcileHomeDeviceSyncScope(syncDeviceIds);');
+    expect(source).toContain('runHomeDeviceSyncBatch(syncRows');
+    expect(source).toContain('while (syncInFlightRef.current)');
+    expect(source).toContain("unsubscribe(HOME_LIST_SUBSCRIPTION_OWNER, deviceId, ['sessions'])");
+    expect(source).toContain('homeSyncGenerationByDeviceRef');
+    expect(source).toContain('diffHomeDeviceSyncScope(homeSyncTargetDeviceIdsRef.current, desiredDeviceIds)');
+    expect(source).toContain('isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)');
+    expect(source).toContain('homeHydrateInFlightByDeviceRef');
+    expect(source).toContain('existing.homeSyncGeneration === expectedHomeSyncGeneration');
+    expect(source).toContain('if (options.trailingIfInFlight) existing.rerunRequested = true;');
+    expect(source).toContain('trailingIfInFlight: true');
+    expect(source).toContain('captureDeviceSessionListMutationEpoch(');
+    expect(source).toContain('isDeviceSessionListMutationEpochCurrent(');
+    expect(source).toContain('needsRerun: true');
+    expect(source).toContain('homeDeviceSyncLimiterRef.current.run');
+    const hydrateSource = source.slice(
+      source.indexOf('const hydrateDeviceSessions = useCallback'),
+      source.indexOf('const probeRevokedDeviceAccess'),
+    );
+    expect(hydrateSource).not.toContain('releaseHomeListOwner(');
+    expect(source).toContain('homeSyncGeneration: expectedHomeSyncGeneration');
     // REST 快照与飞行期间的 presence 补丁按新鲜度合并,防止过期快照把刚上线的设备改回离线。
     expect(source).toContain('mergeDeviceViewsWithFreshPresence(');
     expect(source).toContain('markPresenceFresh(presenceFreshnessRef.current, lastPresenceSnapshot.deviceId);');

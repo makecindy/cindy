@@ -150,7 +150,9 @@ describe('XboxGamepadHost', () => {
     await flush();
     for (const delay of [1_000, 2_000, 4_000]) {
       const current = spawnHelper.mock.results.at(-1)?.value as ReturnType<typeof fakeChild>;
-      (current.stdout as PassThrough).write(`${JSON.stringify({ kind: 'presence', present: false })}\n`);
+      (current.stdout as PassThrough).write(
+        `${JSON.stringify({ kind: 'presence', present: false })}\n`,
+      );
       current.emit('exit', 1, null);
       await flush();
       await vi.advanceTimersByTimeAsync(delay);
@@ -250,8 +252,24 @@ describe('Xbox gamepad helper packaging contract', () => {
       'utf8',
     );
     expect(source).toContain('func controllerTransport(for controller: GCController)');
+    expect(source).toContain('IOHIDManagerSetDeviceMatchingMultiple');
+    expect(source).toContain('0x054C');
+    expect(source).toContain('0x057E');
     expect(source).not.toContain('func microsoftControllerTransport()');
     expect(source).not.toContain('if sawUsb { return "usb" }');
+  });
+
+  it('attaches any extended gamepad instead of filtering to Xbox', () => {
+    const source = readFileSync(
+      new URL('../../../../native/xbox-gamepad/macos-xbox-gamepad-helper.swift', import.meta.url),
+      'utf8',
+    );
+    expect(source).toContain('func isSupportedGamepad');
+    expect(source).toContain('func resolveGamepadFamily');
+    expect(source).toContain('for controller in all where isSupportedGamepad(controller)');
+    expect(source).toContain('return "generic"');
+    expect(source).not.toContain('func isXboxController');
+    expect(source).not.toContain('all.first(where: isXboxController)');
   });
 
   it('compiles the helper for macOS 11 so GameController Xbox APIs are available', () => {

@@ -137,6 +137,8 @@ export interface PiTranslateContext {
    * 不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
    */
   finalAssistantText: string;
+  /** Latest assistant stop reason for classifying the settled turn outcome. */
+  finalAssistantStopReason: string | null;
   /**
    * Pi 会先用 message_end(stopReason=error) 报 provider 错误，之后仍可能自动重试。
    * 暂存到 agent_settled 再终态上报，避免一次可恢复错误提前收口整个 turn。
@@ -205,6 +207,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     thinkingBlocks: new Map(),
     streamStopTokenByIndex: new Map(),
     finalAssistantText: '',
+    finalAssistantStopReason: null,
     turnWallClockStartedAt: 0,
     generationDurationMs: 0,
     generationOpenAt: 0,
@@ -644,6 +647,7 @@ export function translatePiEvent(
       ctx.pendingPriceVariants = [];
       ctx.turnSettled = false;
       ctx.finalAssistantText = '';
+      ctx.finalAssistantStopReason = null;
       ctx.pendingAssistantError = null;
       ctx.turnWallClockStartedAt = Date.now();
       ctx.generationDurationMs = 0;
@@ -715,6 +719,9 @@ export function translatePiEvent(
         ctx.generationTimingReliable = false;
       }
       const fullText = assistantTextOf(message);
+      ctx.finalAssistantStopReason = typeof message.stopReason === 'string'
+        ? message.stopReason
+        : null;
       const hostInitiatedAbort = message.stopReason === 'aborted'
         && isCurrentTurnHostAbortRequested(ctx);
       const transientAssistantFailure = !hostInitiatedAbort
@@ -898,9 +905,13 @@ export function translatePiEvent(
       ctx.isStreaming = false;
       ctx.pendingPriceVariants = [];
       stopPiGenerationHeartbeat(ctx);
-      const pendingAssistantError = isCurrentTurnHostAbortRequested(ctx)
-        ? null
-        : ctx.pendingAssistantError;
+      const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
+      const pendingAssistantError = hostAbortRequested ? null : ctx.pendingAssistantError;
+      const outcome = pendingAssistantError
+        ? 'failed'
+        : hostAbortRequested || ctx.finalAssistantStopReason === 'aborted'
+          ? 'cancelled'
+          : 'completed';
       ctx.pendingAssistantError = null;
       clearPiHostAbortRequests(ctx);
       if (pendingAssistantError) {
@@ -920,7 +931,8 @@ export function translatePiEvent(
           // 本 turn 最终 assistant 回复文本。与 CC/Codex 的 done.data.result 对齐:
           // register.ts 的 will-assistant-message 出口钩子与 Orca worker 终态 finalText
           // 都读 done.data.result,不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
-          result: ctx.finalAssistantText,
+          result: outcome === 'completed' ? ctx.finalAssistantText : '',
+          status: outcome,
           // ghost 订阅 did-turn-end 的 usage 上报(subscriptionGateway.normalizeTurnUsage
           // 认 camelCase);与 CC/Codex 的 done.usage 对齐,让插件能显示 pi turn 的用量。
           usage: {
