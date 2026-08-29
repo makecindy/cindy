@@ -344,12 +344,16 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
         ctxWith({
           'x-cindy-pi-session-id': 'sess-pi',
           'x-cindy-pi-session-token': 'gateway-session-secret',
+          ...(url.includes('/v1beta/')
+            ? { 'x-goog-api-key': 'cindy-pi-provider-auth-placeholder' }
+            : {}),
         }, url),
       );
 
       await expect(Promise.resolve(decision)).resolves.toEqual({
         headerOverride,
         headerDelete: [
+          ...(url.includes('/v1beta/') ? ['x-goog-api-key'] : []),
           'x-cindy-pi-session-id',
           'x-cindy-pi-session-token',
           'x-cindy-pi-provider-id',

@@ -232,6 +232,27 @@ export function piGatewayRequestAgent(
   }
 }
 
+function sanitizePiGatewayDecision(
+  decision: RoutingDecision | null,
+  requestUrl: string,
+): RoutingDecision | null {
+  if (!decision) return null;
+  let pathname: string;
+  try {
+    pathname = new URL(requestUrl, 'http://127.0.0.1').pathname;
+  } catch {
+    return decision;
+  }
+  if (!pathname.includes('/v1beta/')) return decision;
+  // Pi must populate Google's SDK header to satisfy its local model schema, but for Cindy Gateway
+  // that value is only a process placeholder (or the Gateway bearer key), never a Google API key.
+  // Strip it before forwarding so the authenticated Gateway route is the sole credential source.
+  return {
+    ...decision,
+    headerDelete: [...new Set([...(decision.headerDelete ?? []), 'x-goog-api-key'])],
+  };
+}
+
 function unavailablePiProviderRoute(providerId: string): RoutingDecision {
   return {
     localHandler: async ({ res }) => {
@@ -461,8 +482,9 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (subagentRoute && isPiGatewayRequest) {
       // A `cindy` child route is provider-null by design. Route it by the request API instead of
       // accidentally inheriting the parent session provider.
-      return (
-        gatewayDefaultRouteDecision(requestAgent, gatewayKey) ?? unavailablePiProviderRoute('xd')
+      return sanitizePiGatewayDecision(
+        gatewayDefaultRouteDecision(requestAgent, gatewayKey) ?? unavailablePiProviderRoute('xd'),
+        ctx.url,
       );
     }
 
@@ -483,7 +505,7 @@ export function createModelRoutingTransform(): RoutingTransform {
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
       const perSession = resolveSessionRouteDecision(sessionId, requestAgent, gatewayKey, wireModel);
-      const recordSelectedRoute = <T extends object | null>(route: T): T => {
+      const recordSelectedRoute = (route: RoutingDecision | null): RoutingDecision | null => {
         if (
           requestAgent === 'claude-code'
           && route
@@ -495,7 +517,7 @@ export function createModelRoutingTransform(): RoutingTransform {
             selectedProviderId === 'xd' ? 'gateway' : 'subscription',
           );
         }
-        return route;
+        return isPiGatewayRequest ? sanitizePiGatewayDecision(route, ctx.url) : route;
       };
       if (perSession instanceof Promise) return perSession.then(recordSelectedRoute);
       if (perSession) return recordSelectedRoute(perSession);
@@ -601,7 +623,7 @@ export function createModelRoutingTransform(): RoutingTransform {
       if (decision) {
         // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
         recordResolvedDefaultRoute('gateway');
-        return decision;
+        return isPiGatewayRequest ? sanitizePiGatewayDecision(decision, ctx.url) : decision;
       }
       if (apiKeyHeader !== null) {
         // 占位 key 且无网关 key:保持改动前行为(passthrough,上游 401)——下方的
