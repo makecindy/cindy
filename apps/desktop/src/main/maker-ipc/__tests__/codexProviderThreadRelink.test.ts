@@ -51,7 +51,7 @@ describe('relinkCodexProviderThread', () => {
       target,
     },
     {
-      name: 'OpenAI to implicit XD',
+      name: 'OpenAI to implicit XD fixed-effort model',
       source: {
         ...source,
         sdkSessionId: 'thread-openai',
@@ -61,7 +61,7 @@ describe('relinkCodexProviderThread', () => {
       target: {
         model: 'codex/gpt-5.6-sol',
         providerId: null,
-        effort: 'xhigh',
+        effort: null,
         fastMode: true,
       },
     },

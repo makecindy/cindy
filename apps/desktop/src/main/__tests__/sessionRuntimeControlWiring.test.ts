@@ -305,10 +305,10 @@ describe('session runtime control wiring', () => {
     expect(targetRoute).toContain('requiresCodexThreadRelink');
     expect(targetRoute).toContain('? {');
     expect(targetRoute).toContain(
-      'effort: atomicSelection?.effort ?? runtimeStatus.effort',
+      'effort: atomicSelection ? atomicSelection.effort : runtimeStatus.effort',
     );
     expect(targetRoute).toContain(
-      'fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode',
+      'fastMode: atomicSelection ? atomicSelection.fastMode : runtimeStatus.fastMode',
     );
     expect(targetRoute).not.toContain('requiresCodexThreadRelink && atomicSelection');
   });

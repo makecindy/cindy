@@ -15168,8 +15168,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? {
             model,
             providerId: targetProviderId,
-            effort: atomicSelection?.effort ?? runtimeStatus.effort,
-            fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
+            effort: atomicSelection ? atomicSelection.effort : runtimeStatus.effort,
+            fastMode: atomicSelection ? atomicSelection.fastMode : runtimeStatus.fastMode,
           }
         : undefined;
       const relinkCodexThread = targetCodexRoute
