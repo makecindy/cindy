@@ -164,8 +164,8 @@ export function setClaudeProxySessionIdResolver(
 
 // owner-boundary 探针 —— 由 host 注入 isAppSessionBoundaryPending。pending 期间
 // canUseCindyGateway=false,网关 key 读出来是 null;订阅桥仍会经 getGrokAccessToken /
-// getChatgptBridgeAuth 读 getActiveAppSession()(commit 前是上一任 owner)。finalize 对
-// pending 一律 503,不豁免 localHandler。
+// getChatgptBridgeAuth 读 getActiveAppSession()(commit 前是上一任 owner)。决策、
+// localHandler 入口/catch、引擎 dispatch 再校验都读同一条探针,不豁免任何出站。
 let _isOwnerBoundaryPending: () => boolean = () => false;
 export function setClaudeProxyOwnerBoundaryPendingChecker(fn: () => boolean): void {
   _isOwnerBoundaryPending = fn;
@@ -273,6 +273,33 @@ function ownerBoundaryPendingRoute(): RoutingDecision {
     'owner_boundary_pending',
     'App session is switching; retry after the owner boundary settles.',
   );
+}
+
+/** localHandler 入口 + catch 再看一眼:挡 finalize 之后、真正发凭证之前的 await。 */
+function withOwnerBoundaryDispatchGate(
+  resolved: RoutingDecision | null,
+): RoutingDecision | null {
+  if (isOwnerBoundaryPending()) return ownerBoundaryPendingRoute();
+  const inner = resolved?.localHandler;
+  if (!inner) return resolved;
+  return {
+    ...resolved,
+    localHandler: async (args) => {
+      if (isOwnerBoundaryPending()) {
+        await ownerBoundaryPendingRoute().localHandler?.(args);
+        return;
+      }
+      try {
+        await inner(args);
+      } catch (err) {
+        if (!args.res.headersSent && isOwnerBoundaryPending()) {
+          await ownerBoundaryPendingRoute().localHandler?.(args);
+          return;
+        }
+        throw err;
+      }
+    },
+  };
 }
 
 function routingTemporarilyUnavailableRoute(): RoutingDecision {
@@ -709,8 +736,14 @@ export function createModelRoutingTransform(): RoutingTransform {
       // beginAppSessionBoundary 的 fail-closed:teardown 期间 getActiveAppSession() 仍是
       // 上一任 owner。订阅桥 / PI 原生转发 / oauth headerOverride 都会读那份凭证,不能
       // 因为 localHandler 不是「默认上游透传」就放行。
+      //
+      // 决策时检查挡不住 finalize 之后的 await(token refresh / request transform /
+      // outbound resolver)。localHandler 在这里再包一层入口+catch;转发路径靠引擎
+      // revalidateBeforeDispatch。两条路同一条 isOwnerBoundaryPending()。
       if (isOwnerBoundaryPending()) return ownerBoundaryPendingRoute();
-      return refuseUnsafePlaceholderPassthrough(stripInternalPiHeaders(resolved), ctx);
+      return withOwnerBoundaryDispatchGate(
+        refuseUnsafePlaceholderPassthrough(stripInternalPiHeaders(resolved), ctx),
+      );
     };
     try {
       const decision = route(body, ctx);
@@ -749,6 +782,8 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway 换 key)。
       // 'gateway' 模式恒返 null,字节级行为与扩展前一致。
       routingTransform: createModelRoutingTransform(),
+      revalidateBeforeDispatch: () =>
+        isOwnerBoundaryPending() ? ownerBoundaryPendingRoute() : null,
       // 只读响应观察器(组合三个,互不感知):
       //   - fast mode 链路核验:tee SSE 抽上游 usage.speed(debug-gated);
       //   - 订阅余量旁路:读 anthropic-ratelimit-unified-* headers(仅订阅直连响应,

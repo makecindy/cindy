@@ -294,7 +294,7 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
   async function invokeLocalHandler(decision: Awaited<ReturnType<ReturnType<typeof createModelRoutingTransform>>>) {
     const writeHead = vi.fn();
     const end = vi.fn();
-    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    await decision?.localHandler?.({ res: { writeHead, end, headersSent: false } } as never);
     return { writeHead, end };
   }
 
@@ -399,6 +399,27 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
         }),
       ),
     );
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('finalize 之后、localHandler 调用前才 pending → 503,不读旧 owner OAuth', async () => {
+    gatewayKey = null;
+    let pending = false;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => pending);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'xai/grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    expect(decision?.localHandler).toEqual(expect.any(Function));
+    pending = true;
     const { writeHead, end } = await invokeLocalHandler(decision);
     expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
       'retry-after': '1',

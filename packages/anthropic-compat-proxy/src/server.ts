@@ -1723,6 +1723,40 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     };
   };
 
+  /**
+   * 凭证出站前的最后一道同步门。host 用它在 await 之后再看一眼 owner-boundary:
+   * 返回 localHandler 则改道本地响应,不再 forward。hook 抛错也 fail-closed,避免
+   * 把决策时选中的 headerOverride / 占位 key 打出去。
+   */
+  const applyDispatchGate = (
+    decision: RoutingDecision | null,
+    reqId: number,
+  ): RoutingDecision | null => {
+    const hook = opts.revalidateBeforeDispatch;
+    if (!hook) return decision;
+    try {
+      return hook(decision) ?? decision;
+    } catch (err) {
+      logger.warn?.('revalidateBeforeDispatch threw; refusing dispatch', {
+        reqId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return {
+        localHandler: async ({ res }) => {
+          if (res.headersSent) return;
+          res.writeHead(503, {
+            'content-type': 'application/json',
+            'cache-control': 'no-store',
+            'retry-after': '1',
+          });
+          res.end(JSON.stringify({
+            error: { type: 'proxy_error', message: 'dispatch revalidation failed' },
+          }));
+        },
+      };
+    }
+  };
+
   // 出站代理:CONNECT 隧道 agent 按代理地址缓存(keep-alive 连接池),随 dispose 销毁。
   const outboundAgentPool = new OutboundProxyAgentPool();
 
@@ -1846,6 +1880,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           logger.warn?.('routingTransform threw, using default upstream', { reqId, err: String(err) });
         }
       }
+      decision = applyDispatchGate(decision, reqId);
       // 本地 handler 命中:不转发上游,由 handler 直接写回响应(见 LocalRequestHandler 契约)。
       if (decision?.localHandler) {
         logger.debug?.('▶ inbound request from client', { reqId, method, upstreamBase: 'local-handler', url, bytes: 0 });
@@ -1868,6 +1903,17 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           bytes: 0,
         });
       }
+      const outbound = await resolveOutboundForTarget(route.target, reqId);
+      decision = applyDispatchGate(decision, reqId);
+      if (decision?.localHandler) {
+        await runLocalHandler(
+          decision.localHandler,
+          { rawBody: Buffer.alloc(0), parsedBody: undefined, ctx: requestCtx, res },
+          logger,
+          reqId,
+        );
+        return;
+      }
       forward(
         route.target,
         method,
@@ -1885,7 +1931,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         opts.responseObserver,
         opts.transformResponse,
         '',
-        await resolveOutboundForTarget(route.target, reqId),
+        outbound,
         route.pathOverride,
       );
       return;
@@ -1951,6 +1997,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         logger.warn?.('routingTransform threw, using default upstream', { reqId, err: String(err) });
       }
     }
+    decision = applyDispatchGate(decision, reqId);
 
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。
     // parsedBody 复用路由阶段的解析结果,不二次 parse。
@@ -2203,6 +2250,18 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       });
     }
 
+    const outbound = await resolveOutboundForTarget(route.target, reqId);
+    decision = applyDispatchGate(decision, reqId);
+    if (decision?.localHandler) {
+      await runLocalHandler(
+        decision.localHandler,
+        { rawBody, parsedBody: rawParsed, ctx: requestCtx, res },
+        logger,
+        reqId,
+      );
+      return;
+    }
+
     forward(
       route.target,
       method,
@@ -2220,7 +2279,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       opts.responseObserver,
       opts.transformResponse,
       extractBodyModel(rawBody),
-      await resolveOutboundForTarget(route.target, reqId),
+      outbound,
       route.pathOverride,
       responseToolUseIds,
       threadMintedIdCache,

@@ -32,6 +32,7 @@ import {
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
+import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { bindNativeProviderAuth, isNativeProviderAuthBound, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
 import type { XaiBridgeAuthRecoveryOutcome } from './xai-bridge-auth-invalidation.js';
 
@@ -768,17 +769,28 @@ async function refreshIfNeeded(current: GrokTokenBlob): Promise<GrokTokenBlob> {
   return (await refreshBlob(current, false)).blob;
 }
 
+const OWNER_BOUNDARY_PENDING_ERROR =
+  'App session is switching; retry after the owner boundary settles.';
+
+function throwIfAppSessionBoundaryPending(): void {
+  if (isAppSessionBoundaryPending()) throw new Error(OWNER_BOUNDARY_PENDING_ERROR);
+}
+
 /**
  * 取当前可用的 xAI access_token(过期则先刷新)。bridge 的 buildHeaders 调用。
  * 未登录 / 刷新后仍无 token → 抛错(bridge 据此回 502)。
+ * owner-boundary pending 时抛同一句话:CC proxy wrap 会把它收成 503,而不是带着
+ * 上一任 owner 的 token 出站。peekGrokAccessToken 只读、不抛,失效等值用。
  */
 export async function getGrokAccessToken(): Promise<string> {
+  throwIfAppSessionBoundaryPending();
   if (!isNativeProviderAuthBound('xai')) {
     throw new Error('xAI OAuth is not bound to the active data owner');
   }
   const blob = readBlob();
   if (!blob) throw new Error('xAI 未登录:请先在「设置 → 模型供应商」登录 xAI(SuperGrok)');
   const fresh = await refreshIfNeeded(blob);
+  throwIfAppSessionBoundaryPending();
   if (!fresh.access_token) throw new Error('xAI access_token 不可用,请重新登录');
   return fresh.access_token;
 }

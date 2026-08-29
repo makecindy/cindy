@@ -1078,6 +1078,77 @@ describe('anthropic-compat-proxy routingTransform', () => {
     expect(custom.paths).toHaveLength(0);
   });
 
+  it('revalidateBeforeDispatch can divert a localHandler after routingTransform', async () => {
+    let innerRan = false;
+    proxy = await createAnthropicCompatProxy({
+      upstream: () => '',
+      transformRequest: [],
+      routingTransform: () => ({
+        localHandler: async ({ res }) => {
+          innerRan = true;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ from: 'inner' }));
+        },
+      }),
+      revalidateBeforeDispatch: () => ({
+        localHandler: async ({ res }) => {
+          res.writeHead(503, {
+            'content-type': 'application/json',
+            'retry-after': '1',
+          });
+          res.end(JSON.stringify({
+            error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+          }));
+        },
+      }),
+    });
+
+    const result = await post(proxy.url, { model: 'subscription-direct-model' });
+    expect(result.status).toBe(503);
+    expect(JSON.parse(result.text)).toEqual({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+    expect(innerRan).toBe(false);
+  });
+
+  it('revalidates after async request transforms and does not forward', async () => {
+    const custom = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    let pending = false;
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [async () => {
+        pending = true;
+        return null;
+      }],
+      routingTransform: () => ({ headerOverride: { authorization: 'Bearer previous-owner' } }),
+      revalidateBeforeDispatch: () => (pending
+        ? {
+          localHandler: async ({ res }) => {
+            res.writeHead(503, {
+              'content-type': 'application/json',
+              'retry-after': '1',
+            });
+            res.end(JSON.stringify({
+              error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+            }));
+          },
+        }
+        : null),
+    });
+
+    const result = await post(proxy.url, { model: 'claude-haiku-4-5-20251001' });
+    expect(result.status).toBe(503);
+    expect(JSON.parse(result.text)).toEqual({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+    expect(custom.bodies).toHaveLength(0);
+  });
+
   it('runs a local handler without resolving an unavailable default upstream', async () => {
     proxy = await createAnthropicCompatProxy({
       upstream: () => '',
