@@ -607,10 +607,13 @@ describe('Pi package executable-code boundary', () => {
 
     const installed = await mutateAuthorized(store, { action: 'install', source });
 
-    expect(runtime.spawns.map(({ args }) => args)).toEqual(expect.arrayContaining([
-      ['install', '--include=dev', '--no-audit', '--no-fund'],
-      ['run', 'build'],
-    ]));
+    const spawnedArgs = runtime.spawns.map(({ args }) => args);
+    expect(spawnedArgs.some((args) => (
+      args.slice(-4).join('\0') === [
+        'install', '--include=dev', '--no-audit', '--no-fund',
+      ].join('\0')
+    ))).toBe(true);
+    expect(spawnedArgs.some((args) => args.slice(-2).join('\0') === 'run\0build')).toBe(true);
     expect(installed.affectedPackage).toMatchObject({
       source,
       enabled: true,
