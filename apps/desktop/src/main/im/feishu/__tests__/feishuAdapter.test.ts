@@ -462,6 +462,21 @@ describe('feishu group lane adapter hooks', () => {
     expect(fetchChatHistoryPage).not.toHaveBeenCalled();
   });
 
+  it('prepareAgentTurnText: 精确回复扫描把正文换行规整成空格, 保持每行一条消息', async () => {
+    scopeMocks.utilityText.mockClear();
+    scopeMocks.utilityText.mockResolvedValueOnce({ ok: true, text: 'NONE' });
+    await adapter.prepareAgentTurnText?.(
+      groupEvent({
+        text: '继续这个',
+        replyContext: { author: 'Cindy', text: '第一段\n[图片]\n第二段' },
+      }),
+    );
+
+    const scanPrompt = String(scopeMocks.utilityText.mock.calls[0]?.[1] ?? '');
+    const listed = scanPrompt.split('[待检查的消息(每行: messageId | 正文)]\n')[1]?.split('\n\n')[0];
+    expect(listed).toBe('quoted_reply | [Cindy] 第一段 [图片] 第二段');
+  });
+
   /**
    * 会话里只看会话(产品裁决)。
    *

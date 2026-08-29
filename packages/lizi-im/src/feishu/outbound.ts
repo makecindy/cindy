@@ -978,12 +978,13 @@ function renderReplyMessageText(
 
 function replaceFetchedMentions(
   text: string,
-  mentions: Array<{ key: string; name: string }> | undefined,
+  mentions: Array<{ key: string; name?: unknown }> | undefined,
 ): string {
   let out = text;
   for (const mention of mentions ?? []) {
     if (!mention.key) continue;
-    const name = mention.name.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 64);
+    const rawName = typeof mention.name === 'string' ? mention.name : '';
+    const name = rawName.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 64);
     out = out.split(mention.key).join(`@${name || 'user'}`);
   }
   return out;

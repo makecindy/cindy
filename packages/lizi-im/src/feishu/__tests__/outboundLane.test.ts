@@ -51,7 +51,7 @@ const larkMocks = vi.hoisted(() => {
           deleted?: boolean;
           body?: { content: string };
           sender?: { sender_type: string; sender_name?: string };
-          mentions?: Array<{ key: string; name: string }>;
+          mentions?: Array<{ key: string; name?: unknown }>;
         }>;
       };
     }> {
@@ -232,6 +232,28 @@ describe('feishu outbound lane routing', () => {
     expect(larkMocks.getMessage).toHaveBeenCalledWith({
       params: { user_id_type: 'open_id', with_sender_name: true },
       path: { message_id: 'om_parent' },
+    });
+  });
+
+  it('replaces mention placeholders even when name is missing or not a string', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: 'om_parent_nameless',
+            chat_id: 'oc_group1',
+            msg_type: 'text',
+            body: { content: JSON.stringify({ text: 'hi @_user_1 @_user_2' }) },
+            sender: { sender_type: 'user', sender_name: 'Alice' },
+            mentions: [{ key: '@_user_1' }, { key: '@_user_2', name: 42 }],
+          },
+        ],
+      },
+    });
+
+    await expect(outbound.resolveReplyMessage('om_parent_nameless', 'oc_group1')).resolves.toEqual({
+      replyContext: { author: 'Alice', text: 'hi @user @user' },
     });
   });
 
