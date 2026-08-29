@@ -9,7 +9,7 @@ import { registerCjkSeg } from '../localDb/registerCjkSeg';
 import { repairMessagesFtsRows } from '../localDb/messagesFtsRowsRepair';
 
 const { default: migration } = (await import(
-  '../../../drizzle/scripts/0099_segment_messages_fts_cjk'
+  '../../../drizzle/scripts/0100_segment_messages_fts_cjk'
 )) as { default: { run: (db: Database.Database) => void } };
 
 const FTS_ROLE_WHITELIST = "('user', 'assistant', 'ask_user', 'plan_review')";
@@ -91,7 +91,7 @@ function matchIds(db: Database.Database, query: string): string[] {
     .map((row) => String((row as { message_id: unknown }).message_id));
 }
 
-describe('0099 segment messages_fts CJK', () => {
+describe('0100 segment messages_fts CJK', () => {
   it('把连续汉字拆成按字 token，二字词可命中', () => {
     const db = setupLegacyDb();
     insertMessage(db, 'm1', 'user', '登录报错了');

@@ -698,8 +698,15 @@
     {
       "idx": 99,
       "version": "6",
-      "when": 1787906938422,
-      "tag": "0099_segment_messages_fts_cjk",
+      "when": 1787938177701,
+      "tag": "0099_boring_champions",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "6",
+      "when": 1787992937440,
+      "tag": "0100_segment_messages_fts_cjk",
       "breakpoints": true
     }
   ]

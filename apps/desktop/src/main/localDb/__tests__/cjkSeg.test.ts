@@ -153,7 +153,7 @@ describe('buildSnippetFromContent', () => {
 describe('cjkSeg 跨副本一致性', () => {
   it('0099 companion 内嵌快照与正本输出一致', async () => {
     const { default: migration } = (await import(
-      '../../../../drizzle/scripts/0099_segment_messages_fts_cjk'
+      '../../../../drizzle/scripts/0100_segment_messages_fts_cjk'
     )) as { default: { run: (db: Database.Database) => void } };
     const db = new Database(':memory:');
     try {

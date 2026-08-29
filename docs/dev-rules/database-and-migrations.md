@@ -107,7 +107,7 @@ companion CommonJS 格式和历史 runtime identity 冻结；不能用单独 typ
 - 多步骤写操作需要原子性时使用已有命名事务／worker transaction，不在 Renderer 拼装
   数据库流程。
 - **新客户端写 `messages` 的连接必须先注册 `cjk_seg`。** SQLite 自定义函数是连接级的，
-  不进 schema。0099 起持久 `messages_fts` insert/update 触发器只写原文，并在
+  不进 schema。0100 起持久 `messages_fts` insert/update 触发器只写原文，并在
   `cjk_seg` 已注册时跳过；新连接打开后由 `registerCjkSeg` 挂 TEMP 触发器按字写入。
   旧客户端看不到 TEMP、也不会注册该函数，插入仍成功，只是新行不再按字切。生产
   worker、migration runner、漂移修复都经由 `createBetterSqliteDatabase` /
