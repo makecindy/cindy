@@ -128,6 +128,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   private readonly mirrorChatId?: string;
   private readonly mirrorKey?: string;
   private readonly allowedFileRoots: readonly string[];
+  private readonly inboundEpoch?: number;
   /**
    * 工具结果(tool_result_full event)带过来的图片 absPath, finalize 时跟文本里
    * xdt-image markdown 链接一起 upload + 拼到 card 末尾。host 主进程负责把
@@ -143,12 +144,14 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     mirrorChatId?: string,
     mirrorKey?: string,
     allowedFileRoots: readonly string[] = [],
+    inboundEpoch?: number,
   ) {
     this.messageId = messageId;
     this.openId = openId;
     this.mirrorChatId = mirrorChatId;
     this.mirrorKey = mirrorKey;
     this.allowedFileRoots = allowedFileRoots;
+    this.inboundEpoch = inboundEpoch;
     // `initial` is what's currently DISPLAYED in feishu (e.g. "🧠 思考中...").
     // `buffer` is what we've ACCUMULATED to display — starts empty so the
     // first real append() *replaces* the placeholder rather than appending
@@ -387,7 +390,8 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   private async sendOrScheduleMirror(result: FinalCardResult): Promise<void> {
     const key = this.mirrorKey;
     if (!this.mirrorChatId || !key) return;
-    await sendOrScheduleMirror(key, () => this.mirrorFinalResult(result));
+    if (this.inboundEpoch === undefined) return;
+    await sendOrScheduleMirror(key, () => this.mirrorFinalResult(result), this.inboundEpoch);
   }
 
   private async mirrorFinalResult(result: FinalCardResult): Promise<void> {
@@ -417,6 +421,7 @@ export async function start(
     mirrorChatId?: string;
     mirrorKey?: string;
     allowedFileRoots?: readonly string[];
+    inboundEpoch?: number;
   },
 ): Promise<StreamingTextHandle> {
   // 群主流 @ 开话题时, 开场白卡就是本轮流式卡(openThread 已用它开好话题) —
@@ -430,6 +435,7 @@ export async function start(
       opts?.mirrorChatId,
       opts?.mirrorKey,
       opts?.allowedFileRoots,
+      opts?.inboundEpoch,
     );
   }
   const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial));
@@ -440,6 +446,7 @@ export async function start(
     opts?.mirrorChatId,
     opts?.mirrorKey,
     opts?.allowedFileRoots,
+    opts?.inboundEpoch,
   );
 }
 
@@ -496,12 +503,14 @@ async function sendMirroredFiles(
 async function sendOrScheduleMirror(
   mirrorKey: string,
   send: () => Promise<void>,
+  inboundEpoch: number,
 ): Promise<void> {
-  const epoch = getAccountEpoch();
+  if (getAccountEpoch() !== inboundEpoch) return;
   const pinned = getBoundClient();
+  if (!pinned) return;
   const runPinned = async (): Promise<void> => {
-    if (!pinned || getAccountEpoch() !== epoch) return;
-    await runWithPinnedAccount({ client: pinned, epoch }, send);
+    if (getAccountEpoch() !== inboundEpoch) return;
+    await runWithPinnedAccount({ client: pinned, epoch: inboundEpoch }, send);
   };
   if (await waitForMirrorConfirmation(mirrorKey)) {
     await runPinned();
@@ -525,6 +534,7 @@ export async function mirrorFinal(
   text: string,
   extraImageAbsPaths: readonly string[] = [],
   allowedFileRoots: readonly string[] = [],
+  inboundEpoch: number,
 ): Promise<void> {
   const send = async (): Promise<void> => {
     const imageUrls = collectXdtImageUrls(text);
@@ -588,5 +598,5 @@ export async function mirrorFinal(
     if (!isPinnedAccountCurrent()) return;
     await sendMirroredFiles(chatId, mirrorKey, fileLinks, allowedFileRoots);
   };
-  await sendOrScheduleMirror(mirrorKey, send);
+  await sendOrScheduleMirror(mirrorKey, send, inboundEpoch);
 }

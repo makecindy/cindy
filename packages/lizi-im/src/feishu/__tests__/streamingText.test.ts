@@ -136,6 +136,7 @@ describe('feishu streaming text', () => {
     const handle = await start('g/oc_group/omt_topic', undefined, {
       mirrorChatId: 'oc_group',
       mirrorKey: 'a'.repeat(64),
+      inboundEpoch: 1,
     });
     await handle.finalize('最终正文');
 
@@ -153,6 +154,7 @@ describe('feishu streaming text', () => {
     const handle = await start('g/oc_group/omt_topic', undefined, {
       mirrorChatId: 'oc_group',
       mirrorKey: 'b'.repeat(64),
+      inboundEpoch: 1,
     });
 
     await expect(handle.finalize('最终正文')).resolves.toBeUndefined();
@@ -168,6 +170,7 @@ describe('feishu streaming text', () => {
     const handle = await start('g/oc_group/omt_topic', undefined, {
       mirrorChatId: 'oc_group',
       mirrorKey: 'c'.repeat(64),
+      inboundEpoch: 1,
     });
     await handle.finalize('迟到镜像');
 
@@ -190,6 +193,8 @@ describe('feishu streaming text', () => {
       'g'.repeat(64),
       '终态正文',
       ['C:\\cindy-media\\ok.png', 'C:\\cindy-media\\missing.png'],
+      [],
+      1,
     );
 
     expect(mocks.sendCardToChat).toHaveBeenCalledTimes(1);
@@ -210,6 +215,7 @@ describe('feishu streaming text', () => {
       `终态正文 ![坏](xdt-image://blob/missing.png)\n[report.txt](xdt-file://${allowedFile})`,
       [],
       [root],
+      1,
     );
 
     expect(mocks.sendCardToChat).toHaveBeenCalledTimes(1);
@@ -227,6 +233,8 @@ describe('feishu streaming text', () => {
       'h'.repeat(64),
       '见 ![图](xdt-image://blob/same.png)',
       [absPath],
+      [],
+      1,
     );
 
     expect(mocks.uploadImage.mock.calls.filter(([p]) => p === absPath)).toHaveLength(1);
@@ -245,6 +253,7 @@ describe('feishu streaming text', () => {
       `[report.txt](xdt-file://${allowedFile})`,
       [],
       [root],
+      1,
     );
 
     expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
@@ -262,7 +271,7 @@ describe('feishu streaming text', () => {
       deferred = run;
     });
 
-    await mirrorFinal('oc_group', 'k'.repeat(64), '终态正文');
+    await mirrorFinal('oc_group', 'k'.repeat(64), '终态正文', [], [], 1);
     expect(deferred).toBeDefined();
     expect(mocks.sendCardToChat).not.toHaveBeenCalled();
 
@@ -287,6 +296,7 @@ describe('feishu streaming text', () => {
     const handle = await start('g/oc_group/omt_topic', undefined, {
       mirrorChatId: 'oc_group',
       mirrorKey: 'l'.repeat(64),
+      inboundEpoch: 1,
     });
     await handle.finalize('话题终态');
     expect(deferred).toBeDefined();
@@ -303,6 +313,44 @@ describe('feishu streaming text', () => {
     expect(mocks.sendFileToChat).not.toHaveBeenCalled();
   });
 
+  it('drops a parent-chat mirror when credentials rebind before terminal schedule', async () => {
+    mocks.getAccountEpoch.mockReturnValue(2);
+    mocks.getBoundClient.mockReturnValue({ pinned: false });
+
+    await mirrorFinal('oc_group', 'm'.repeat(64), '终态正文', [], [], 1);
+
+    expect(mocks.sendCardToChat).not.toHaveBeenCalled();
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    expect(waitForMirrorConfirmation).not.toHaveBeenCalled();
+    expect(scheduleMirrorOnConfirmation).not.toHaveBeenCalled();
+  });
+
+  it('drops a handle parent-chat mirror when credentials rebind before finalize', async () => {
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'n'.repeat(64),
+      inboundEpoch: 1,
+    });
+    mocks.getAccountEpoch.mockReturnValue(2);
+    mocks.getBoundClient.mockReturnValue({ pinned: false });
+    await handle.finalize('话题终态');
+
+    expect(mocks.patchCardRaw).toHaveBeenCalled();
+    expect(mocks.sendCardToChat).not.toHaveBeenCalled();
+    expect(scheduleMirrorOnConfirmation).not.toHaveBeenCalled();
+  });
+
+  it('does not parent-chat mirror a streaming handle without inbound epoch', async () => {
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'o'.repeat(64),
+    });
+    await handle.finalize('话题终态');
+
+    expect(mocks.patchCardRaw).toHaveBeenCalled();
+    expect(mocks.sendCardToChat).not.toHaveBeenCalled();
+  });
+
   it('catches late-confirmation one-shot mirror failures instead of unhandledRejection', async () => {
     vi.mocked(waitForMirrorConfirmation).mockResolvedValueOnce(false);
     let deferred: (() => void) | undefined;
@@ -317,7 +365,7 @@ describe('feishu streaming text', () => {
     };
     process.on('unhandledRejection', onUnhandled);
     try {
-      await mirrorFinal('oc_group', 'f'.repeat(64), '早期拒绝终态');
+      await mirrorFinal('oc_group', 'f'.repeat(64), '早期拒绝终态', [], [], 1);
       expect(deferred).toBeDefined();
       deferred?.();
       await Promise.resolve();
@@ -335,6 +383,7 @@ describe('feishu streaming text', () => {
       mirrorChatId: 'oc_group',
       mirrorKey: 'd'.repeat(64),
       allowedFileRoots: [path.join(os.tmpdir(), 'cindy-feishu-allowed-missing')],
+      inboundEpoch: 1,
     });
     await handle.finalize(`见 [secret](xdt-file://${path.join(os.tmpdir(), 'cindy-secret.txt')})`);
 
@@ -351,6 +400,7 @@ describe('feishu streaming text', () => {
       mirrorChatId: 'oc_group',
       mirrorKey: 'e'.repeat(64),
       allowedFileRoots: [root],
+      inboundEpoch: 1,
     });
     await handle.finalize(`见 [report.txt](xdt-file://${allowedFile})`);
 

@@ -497,6 +497,7 @@ describe('messageHandler !stop routing', () => {
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-throw',
     };
     const errorText = slackUi.agent.sendInternalError('provider exploded');
@@ -513,6 +514,7 @@ describe('messageHandler !stop routing', () => {
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-stop',
     };
     deliver(makeEvent({ text: '!stop', finalReplyMirror: mirror }));
@@ -529,6 +531,7 @@ describe('messageHandler !stop routing', () => {
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-unsupported',
     };
     const unsupported = [{ type: 'audio', label: '语音（暂不支持）' }] as IMMessageEvent['unsupported'];
@@ -546,6 +549,7 @@ describe('messageHandler !stop routing', () => {
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-ctr',
     };
     deliver(makeEvent({ text: '帮我看看', finalReplyMirror: mirror }));
@@ -566,6 +570,7 @@ describe('messageHandler !stop routing', () => {
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-slash-error',
     };
     const errorText = slackUi.agent.sendInternalError('list projects failed');
@@ -589,6 +594,7 @@ describe('messageHandler !stop routing', () => {
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-slash-ok',
     };
     deliver(makeEvent({ text: '/help', finalReplyMirror: mirror }));

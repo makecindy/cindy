@@ -177,6 +177,11 @@ export interface IMFinalReplyMirror {
   chatId: string;
   idempotencyKey: string;
   /**
+   * Feishu account generation captured at inbound. Terminal parent-chat
+   * mirrors drop if credentials rebind before the answer is copied.
+   */
+  accountEpoch: number;
+  /**
    * Host-approved directory roots for parent-chat file copies. Missing or empty
    * means fail-closed: the card still mirrors, local files do not.
    */

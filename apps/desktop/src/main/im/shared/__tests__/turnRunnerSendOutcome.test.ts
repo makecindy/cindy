@@ -432,6 +432,7 @@ interface TurnOverrides {
     kind: 'parent-chat';
     chatId: string;
     idempotencyKey: string;
+    accountEpoch: number;
   };
 }
 
@@ -1800,6 +1801,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-busy',
     };
 
@@ -2664,6 +2666,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-auth',
     };
     const expected = ui.agent.authMissing?.({
@@ -2695,6 +2698,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-stream-done',
     };
     const h = setupSession(async () => ({ accepted: true }));
@@ -2738,6 +2742,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-extra-image',
     };
     const h = setupSession(async () => ({ accepted: true }));
@@ -2799,6 +2804,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
+      accountEpoch: 1,
       idempotencyKey: 'mirror-interact',
     };
     const h = setupSession(async () => ({ accepted: true }));

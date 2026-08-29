@@ -26,6 +26,7 @@ const mocks = {
   bindClient: vi.fn(),
   unbindClient: vi.fn(),
   getBoundClient: vi.fn(() => null),
+  getAccountEpoch: vi.fn(() => 1),
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
   replyText: vi.fn(async () => ({ messageId: 'om_reply' })),
   // 返回 degraded = 开话题失败(降级回群 lane), 单测按用例覆盖。
@@ -86,6 +87,7 @@ vi.doMock('../outbound.js', () => ({
   bindClient: mocks.bindClient,
   unbindClient: mocks.unbindClient,
   getBoundClient: mocks.getBoundClient,
+  getAccountEpoch: mocks.getAccountEpoch,
   sendText: mocks.sendText,
   replyText: mocks.replyText,
   openThread: mocks.openThread,
@@ -268,6 +270,7 @@ describe('feishu group thread routing', () => {
       kind: 'parent-chat',
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
+      accountEpoch: 1,
     });
     expect(mocks.openThread).not.toHaveBeenCalled();
   });
@@ -307,6 +310,7 @@ describe('feishu group thread routing', () => {
       kind: 'parent-chat',
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
+      accountEpoch: 1,
     });
     expect(mocks.openThread).toHaveBeenCalledTimes(1);
     expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_bot_opener');
@@ -347,6 +351,7 @@ describe('feishu group thread routing', () => {
       kind: 'parent-chat',
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
+      accountEpoch: 1,
     });
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
   });
@@ -388,6 +393,7 @@ describe('feishu group thread routing', () => {
       kind: 'parent-chat',
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
+      accountEpoch: 1,
     });
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
 
@@ -718,6 +724,7 @@ describe('feishu group thread routing', () => {
       kind: 'parent-chat',
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
+      accountEpoch: 1,
     });
     vi.useRealTimers();
   });

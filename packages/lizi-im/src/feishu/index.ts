@@ -446,6 +446,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
             mirrorChatId: mirror.chatId,
             mirrorKey: mirror.idempotencyKey,
             allowedFileRoots: mirror.allowedFileRoots,
+            inboundEpoch: mirror.accountEpoch,
           }
         : undefined,
     );
@@ -464,6 +465,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         text,
         opts?.mediaAbsPaths,
         mirror.allowedFileRoots,
+        mirror.accountEpoch,
       );
     } catch (err) {
       this.log.warn(

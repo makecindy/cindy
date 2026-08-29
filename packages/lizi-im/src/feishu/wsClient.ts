@@ -1677,6 +1677,7 @@ async function processClaimedMessage(
             kind: 'parent-chat' as const,
             chatId,
             idempotencyKey: finalReplyMirrorKey,
+            accountEpoch: outbound.getAccountEpoch(),
           },
         }
       : {}),

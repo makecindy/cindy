@@ -67,6 +67,7 @@ vi.doMock('../outbound.js', () => ({
   bindClient: mocks.bindClient,
   unbindClient: mocks.unbindClient,
   getBoundClient: mocks.getBoundClient,
+  getAccountEpoch: () => 1,
   sendText: mocks.sendText,
 }));
 
