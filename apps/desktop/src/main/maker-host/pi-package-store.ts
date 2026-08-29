@@ -96,7 +96,10 @@ let lastNotifiedRuntimeChangeToken: string | null | undefined;
 let changeTokenReadInFlight: Promise<void> | undefined;
 let changeTokenReadQueued = false;
 const changeTokenWatchListener = () => void observePiPackageChangeToken();
-const PACKAGE_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
+// Remove userinfo before token projection. The authority match is deliberately
+// quote-tolerant because apostrophes and JSON quotes can occur around valid URLs.
+const PACKAGE_URL_USERINFO_PATTERN = /((?:git:)?[a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
+const PACKAGE_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/\S+/gi;
 
 export function onPiPackagesChanged(
   listener: (origin: PiPackagesChangeOrigin) => void,
@@ -2095,7 +2098,7 @@ async function resolvePackageMutationTarget(
 }
 
 function projectPackageSource(source: string): PackageSourceProjection {
-  const gitPrefix = source.startsWith('git:') ? 'git:' : '';
+  const gitPrefix = source.match(/^git:/i)?.[0] ?? '';
   const urlSource = gitPrefix ? source.slice(gitPrefix.length) : source;
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(urlSource)) {
     return {
@@ -2131,7 +2134,11 @@ function projectPackageSource(source: string): PackageSourceProjection {
 }
 
 function redactPackageCommandMessage(message: string): string {
-  return message.replace(PACKAGE_URL_PATTERN, (source) => projectPackageSource(source).displaySource);
+  const withoutUserinfo = message.replace(PACKAGE_URL_USERINFO_PATTERN, '$1');
+  return withoutUserinfo.replace(
+    PACKAGE_URL_PATTERN,
+    (source) => projectPackageSource(source).displaySource,
+  );
 }
 
 function packageDisplayNameFallback(source: string, installedRoot: string): string {

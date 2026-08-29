@@ -3457,15 +3457,31 @@ describe('Pi package executable-code boundary', () => {
   });
 
   it('redacts unsafe saved URLs from Pi package command failures', async () => {
-    runtime.stderr = 'Failed to load https://user:secret@example.com/acme/package.git?token=private#fragment';
+    runtime.stderr = "Failed to load GIT:https://user:sec'ret@example.com/acme/package.git?token=private#fragment";
     runtime.exitCode = 1;
     const store = await import('../pi-package-store.js');
 
     const failure = await store.listPiPackages().catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain('https://example.com/acme/package.git');
-    expect((failure as Error).message).not.toContain('secret');
+    expect((failure as Error).message).toContain('GIT:https://example.com/acme/package.git');
+    expect((failure as Error).message).not.toContain("sec'ret");
+    expect((failure as Error).message).not.toContain("'ret@example.com");
     expect((failure as Error).message).not.toContain('private');
+  });
+
+  it('redacts every credential in compact multi-URL command failures', async () => {
+    runtime.stderr = 'Failed ["https://u1:first-secret@one.example/a","https://u2:second-secret@two.example/b?token=query-secret"]';
+    runtime.exitCode = 1;
+    const store = await import('../pi-package-store.js');
+
+    const failure = await store.listPiPackages().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).not.toContain('u1');
+    expect(message).not.toContain('first-secret');
+    expect(message).not.toContain('u2');
+    expect(message).not.toContain('second-secret');
+    expect(message).not.toContain('query-secret');
   });
 
   it('keeps an oversized-manifest inspection warning advisory', async () => {

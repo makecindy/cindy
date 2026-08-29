@@ -639,6 +639,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       'credential-secret',
     ],
     [
+      'apostrophe credentials',
+      "https://us'er:sec'ret@example.com/pkg.git",
+      'https://example.com/pkg.git',
+      "'er:sec'ret@example.com/pkg.git",
+    ],
+    [
+      'embedded credentials',
+      'https://u1:embedded-secret@one.example/a","https://u2:embedded-secret@two.example/b',
+      'https://one.example/a%22,%22https://two.example/b',
+      'embedded-secret',
+    ],
+    [
       'query',
       'https://example.com/pkg.git?token=query-secret',
       'https://example.com/pkg.git',

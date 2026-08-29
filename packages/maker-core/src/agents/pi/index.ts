@@ -676,7 +676,7 @@ function resolvePiManagedPackageSource(source: string, workingDir: string): stri
   return relative ? resolveRelativeLocalSource(source) : source;
 }
 
-const PI_RECEIPT_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
+const PI_RECEIPT_URL_USERINFO_PATTERN = /((?:git:)?[a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
 
 function publicPiManagedPackageSource(source: string): string {
   const filePrefix = source.match(/^file:/i)?.[0] ?? '';
@@ -687,9 +687,15 @@ function publicPiManagedPackageSource(source: string): string {
     const basename = path.posix.basename(publicLocalValue.replace(/\\/g, '/'));
     return `${filePrefix}${basename || 'Pi extension'}`;
   }
-  const sanitized = source.replace(PI_RECEIPT_URL_PATTERN, (raw) => {
-    const gitPrefix = raw.startsWith('git:') ? 'git:' : '';
-    const urlValue = gitPrefix ? raw.slice(gitPrefix.length) : raw;
+  // This is the exact source, not prose. Remove every embedded authority's
+  // userinfo first, then give the complete value to URL so legal punctuation
+  // (including apostrophes) cannot split credentials before sanitization.
+  const sourceWithoutUserinfo = source.replace(PI_RECEIPT_URL_USERINFO_PATTERN, '$1');
+  const gitPrefix = sourceWithoutUserinfo.match(/^git:/i)?.[0] ?? '';
+  const urlValue = gitPrefix
+    ? sourceWithoutUserinfo.slice(gitPrefix.length)
+    : sourceWithoutUserinfo;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(urlValue)) {
     try {
       const parsed = new URL(urlValue);
       parsed.username = '';
@@ -701,11 +707,13 @@ function publicPiManagedPackageSource(source: string): string {
       const scheme = urlValue.match(/^([a-z][a-z0-9+.-]*):\/\//i)?.[1] ?? 'url';
       return `${gitPrefix}${scheme}://[redacted-source]`;
     }
-  });
+  }
   // Pi also accepts non-URL source forms. Query/fragment payloads are never
   // needed in public receipts; preserve the package/version prefix only.
-  const suffixIndex = sanitized.search(/[?#]/);
-  return suffixIndex < 0 ? sanitized : sanitized.slice(0, suffixIndex);
+  const suffixIndex = sourceWithoutUserinfo.search(/[?#]/);
+  return suffixIndex < 0
+    ? sourceWithoutUserinfo
+    : sourceWithoutUserinfo.slice(0, suffixIndex);
 }
 
 function publicPiManagedPackageCommand(command: ParsedPiManagedPackageCommand): string {
