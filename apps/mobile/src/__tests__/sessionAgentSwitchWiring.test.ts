@@ -37,8 +37,12 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const selectComposerFlatModel'),
       source.indexOf('const browseComposerModelAgent'),
     );
-    expect(rowSelector).toMatch(/currentSession\.contextTokens,\s+row\.model\.contextWindow/);
-    expect(flatSelector).toMatch(/currentSession\?\.contextTokens,\s+option\.contextWindow/);
+    expect(rowSelector).toMatch(
+      /currentSession\.contextTokens,\s+row\.model\.contextWindow,\s+currentSession\.remoteHostId/,
+    );
+    expect(flatSelector).toMatch(
+      /currentSession\?\.contextTokens,\s+option\.contextWindow,\s+currentSession\?\.remoteHostId/,
+    );
     expect(rowSelector).toContain('next.model !== currentSession.model');
     expect(flatSelector).toContain('option.id !== currentSession?.model');
     expect(rowSelector.indexOf('confirmMobileModelWindowSwitch')).toBeLessThan(

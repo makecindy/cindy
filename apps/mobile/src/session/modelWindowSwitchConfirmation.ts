@@ -17,12 +17,14 @@ function formatTokens(value: number): string {
 }
 
 /**
- * Matches Desktop's explicit-confirmation boundary: only overflow (usage >= target
- * window) prompts. Unknown values and ordinary low-pressure switches keep existing semantics.
+ * Matches Desktop's switch boundary: pressured SSH sessions (usage >= 90% of the
+ * target) are blocked, while local overflow requires confirmation. Unknown values
+ * and ordinary low-pressure switches keep existing semantics.
  */
 export function confirmMobileModelWindowSwitch(
   contextTokens: number | null | undefined,
   targetContextWindow: number | null | undefined,
+  remoteHostId: string | null | undefined,
   showAlert: ShowAlert = Alert.alert,
 ): Promise<boolean> {
   if (
@@ -31,16 +33,19 @@ export function confirmMobileModelWindowSwitch(
     contextTokens <= 0 ||
     typeof targetContextWindow !== "number" ||
     !Number.isFinite(targetContextWindow) ||
-    targetContextWindow <= 0 ||
-    contextTokens < targetContextWindow
+    targetContextWindow <= 0
   ) {
     return Promise.resolve(true);
   }
 
+  const ratio = contextTokens / targetContextWindow;
+  const pressuredRemote = !!remoteHostId && ratio >= 0.9;
+  if (!pressuredRemote && ratio < 1) return Promise.resolve(true);
+
   const vars = {
     used: formatTokens(contextTokens),
     total: formatTokens(targetContextWindow),
-    pct: Math.round((contextTokens / targetContextWindow) * 100),
+    pct: Math.round(ratio * 100),
   };
   return new Promise((resolve) => {
     let settled = false;
@@ -50,19 +55,35 @@ export function confirmMobileModelWindowSwitch(
       resolve(confirmed);
     };
     showAlert(
-      i18n.t("models.contextWindowSwitch.title"),
-      i18n.t("models.contextWindowSwitch.description", vars),
-      [
-        {
-          text: i18n.t("models.contextWindowSwitch.cancel"),
-          style: "cancel",
-          onPress: () => finish(false),
-        },
-        {
-          text: i18n.t("models.contextWindowSwitch.confirm"),
-          onPress: () => finish(true),
-        },
-      ],
+      i18n.t(
+        pressuredRemote
+          ? "models.contextWindowSwitch.remoteTitle"
+          : "models.contextWindowSwitch.title",
+      ),
+      i18n.t(
+        pressuredRemote
+          ? "models.contextWindowSwitch.remoteDescription"
+          : "models.contextWindowSwitch.description",
+        vars,
+      ),
+      pressuredRemote
+        ? [
+            {
+              text: i18n.t("models.contextWindowSwitch.cancel"),
+              onPress: () => finish(false),
+            },
+          ]
+        : [
+            {
+              text: i18n.t("models.contextWindowSwitch.cancel"),
+              style: "cancel",
+              onPress: () => finish(false),
+            },
+            {
+              text: i18n.t("models.contextWindowSwitch.confirm"),
+              onPress: () => finish(true),
+            },
+          ],
       { cancelable: true, onDismiss: () => finish(false) },
     );
   });

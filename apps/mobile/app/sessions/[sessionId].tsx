@@ -8006,6 +8006,7 @@ export default function SessionScreen() {
         !(await confirmMobileModelWindowSwitch(
           currentSession.contextTokens,
           row.model.contextWindow,
+          currentSession.remoteHostId,
         ))
       ) {
         return;
@@ -8054,6 +8055,7 @@ export default function SessionScreen() {
         !(await confirmMobileModelWindowSwitch(
           currentSession?.contextTokens,
           option.contextWindow,
+          currentSession?.remoteHostId,
         ))
       ) {
         return;
