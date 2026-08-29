@@ -2070,9 +2070,11 @@ function isLocalPackageSource(source: string): boolean {
 }
 
 async function canonicalLocalPackageSource(source: string): Promise<string | undefined> {
-  if (!isLocalPackageSource(source)) return undefined;
+  const fileSource = /^file:(.*)$/i.exec(source)?.[1];
+  const localSource = fileSource ?? source;
+  if (!isLocalPackageSource(localSource)) return undefined;
   try {
-    return await fs.realpath(path.resolve(packageHome(), source));
+    return await fs.realpath(path.resolve(packageHome(), localSource));
   } catch {
     return undefined;
   }
@@ -2633,6 +2635,13 @@ function sourceAliases(source: string): string[] {
     : [source, `npm:${source}`];
 }
 
+async function sourceAliasesWithCanonical(source: string): Promise<string[]> {
+  const aliases = new Set(sourceAliases(source));
+  const canonical = await canonicalLocalPackageSource(source);
+  if (canonical) aliases.add(canonical);
+  return [...aliases];
+}
+
 function mutationCommandSource(
   requestedSource: string,
   installed: InspectedPackage | undefined,
@@ -2738,10 +2747,12 @@ export async function mutatePiPackage(
         }
       }
       affectedSource = affected?.rawSource ?? previous?.rawSource ?? source;
-      const installAliases = [
-        ...sourceAliases(source),
-        ...(previous ? sourceAliases(previous.rawSource) : []),
-      ];
+      const installAliases = [...new Set((await Promise.all([
+        sourceAliasesWithCanonical(requestedSource),
+        sourceAliasesWithCanonical(source),
+        ...(previous ? [sourceAliasesWithCanonical(previous.rawSource)] : []),
+        ...(affected ? [sourceAliasesWithCanonical(affected.rawSource)] : []),
+      ])).flat())];
       // Explicit reinstall means enabled only after its precise aliases leave
       // the durable disable ledger. Retry once for transient filesystem faults;
       // a persistent failure must not produce a false enabled receipt.

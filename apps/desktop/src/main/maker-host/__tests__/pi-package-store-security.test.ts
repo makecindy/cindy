@@ -2083,6 +2083,37 @@ describe('Pi package executable-code boundary', () => {
     expect(installSpawn?.args).toContain('--no-approve');
   });
 
+  it('clears a relative disable alias when the same local package is reinstalled by absolute path', async () => {
+    const relativeSource = './same-directory/relative-package';
+    const sibling = './same-directory/sibling-package';
+    const created = await createPackage({ source: relativeSource });
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const absoluteSource = path.join(stateDir, 'same-directory', 'relative-package');
+    await fs.mkdir(path.dirname(absoluteSource), { recursive: true });
+    await fs.rename(created.root, absoluteSource);
+    runtime.listOutput = `User packages:\n  ${relativeSource}\n    ${absoluteSource}\n`;
+    await fs.mkdir(stateDir, { recursive: true });
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [relativeSource, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    const store = await import('../pi-package-store.js');
+
+    await expect(mutateAuthorized(store, {
+      action: 'install',
+      source: absoluteSource,
+    })).resolves.toMatchObject({
+      affectedPackage: { source: relativeSource, enabled: true },
+    });
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([sibling]);
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([absoluteSource]);
+  });
+
   it.each([
     ['transient I/O', 'EIO'],
     ['permission', 'EACCES'],
