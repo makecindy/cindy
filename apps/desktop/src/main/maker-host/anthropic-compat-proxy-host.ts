@@ -39,6 +39,7 @@ import {
   stripNonAnthropicFields,
   stripToolUseProviderSpecificFields,
   type ProxyHandle,
+  type RequestTransformCtx,
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
@@ -50,6 +51,10 @@ import {
   getPiNativeSubscriptionHandler,
   getResponsesBridgeHandler,
 } from './anthropic-responses-bridge-host.js';
+import {
+  OWNER_BOUNDARY_PENDING_ERROR,
+  isOwnerBoundaryPendingError,
+} from './owner-boundary-error.js';
 import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
 import {
   isExclusiveXaiModelId,
@@ -141,12 +146,46 @@ export function setClaudeProxyOAuthSpawnChecker(fn: () => boolean): void {
 // x-claude-code-session-id(= cc sdkSessionId)反解成 xdt sessionId 提供。返回 null = 该
 // sdkSessionId 当前无对应活跃会话。routingTransform 据此查该会话显式选定的供应商做统一路由;
 // 未注入 / 查不到 / 该会话没选供应商 → 回落 spawn-aware 默认路由(与未升级行为字节级一致)。
+//
+// 热路径必须永不抛:ipcMaker 在 owner boundary 会抛 PRECONDITION_FAILED,proxy 引擎捕获后
+// fail-open 默认 LiteLLM,provider-oauth 占位 key 原样上游 → 确定性 401。setter 内吞掉异常,
+// 当作「会话未反解」;真正的 fail-closed 在 routingTransform 收口(boundary pending → 503,
+// 含订阅桥;非 boundary 的占位透传合同不变)。
 let _resolveCcSessionId: ((sdkSessionId: string) => string | null) | null = null;
 export function setClaudeProxySessionIdResolver(
   fn: (sdkSessionId: string) => string | null,
 ): void {
-  _resolveCcSessionId = fn;
+  _resolveCcSessionId = (sdkSessionId) => {
+    try {
+      return fn(sdkSessionId);
+    } catch (err) {
+      log.warn('cc session resolver threw; treating as unresolved', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  };
 }
+
+// owner-boundary 探针 —— 由 host 注入 isAppSessionBoundaryPending。pending 期间
+// canUseCindyGateway=false,网关 key 读出来是 null;订阅桥仍会经 getGrokAccessToken /
+// getChatgptBridgeAuth 读 getActiveAppSession()(commit 前是上一任 owner)。决策、
+// localHandler 入口/catch、引擎 dispatch 再校验都读同一条探针,不豁免任何出站。
+let _isOwnerBoundaryPending: () => boolean = () => false;
+export function setClaudeProxyOwnerBoundaryPendingChecker(fn: () => boolean): void {
+  _isOwnerBoundaryPending = fn;
+}
+
+// owner scope key —— 由 host 注入 activeOwnerScopeKey。pending 布尔值挡不住
+// 「切换在 await 里完整开始并结束」:两端 pending 都是 false,但 generation 已经变了。
+// 与 pending 合成同一条 ownerBoundDispatchUnsafe;不另造 generation 子系统。
+// 未注入时恒返空串,既有 pending-only 单测行为不变。
+let _readOwnerScopeKey: () => string = () => '';
+export function setClaudeProxyOwnerScopeKeyReader(fn: () => string): void {
+  _readOwnerScopeKey = fn;
+}
+
+const ownerScopeAtRequestStart = new WeakMap<RequestTransformCtx, string | null>();
 
 // 订阅直连的 model 前缀判据(chatgpt/ / xai/)统一走 shared/subscriptionModels 的
 // isSubscriptionDirectModel —— 路由(此处把这些前缀路由到 bridge)与 turn-cost 记账 gate
@@ -213,6 +252,137 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
     if (k.toLowerCase() === lower && typeof v === 'string' && v.length > 0) return v;
   }
   return null;
+}
+
+function isOwnerBoundaryPending(): boolean {
+  try {
+    return _isOwnerBoundaryPending();
+  } catch {
+    // 探针自己抛 = 凭证/归属无法安全确定,按 pending fail-closed。
+    return true;
+  }
+}
+
+function readOwnerScopeKey(): string | null {
+  try {
+    return _readOwnerScopeKey();
+  } catch {
+    return null;
+  }
+}
+
+/** 第一次写入为准:引擎在 collectRequestBody 前就盖章,body 期间切账号不得改基线。 */
+function stampOwnerScope(ctx: RequestTransformCtx): string | null {
+  const existing = ownerScopeAtRequestStart.get(ctx);
+  if (existing !== undefined) return existing;
+  const key = readOwnerScopeKey();
+  ownerScopeAtRequestStart.set(ctx, key);
+  return key;
+}
+
+/** pending,或这条请求开始后 owner generation 已经变了。 */
+function ownerBoundDispatchUnsafe(ctx?: RequestTransformCtx): boolean {
+  if (isOwnerBoundaryPending()) return true;
+  const start = ctx ? stampOwnerScope(ctx) : readOwnerScopeKey();
+  if (start === null) return true;
+  const now = readOwnerScopeKey();
+  return now === null || now !== start;
+}
+
+function retryableLocalRoute(code: string, message: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: code,
+          code,
+          message,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'retry-after': '1',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+function ownerBoundaryPendingRoute(): RoutingDecision {
+  return retryableLocalRoute(
+    'owner_boundary_pending',
+    OWNER_BOUNDARY_PENDING_ERROR,
+  );
+}
+
+/** localHandler 入口 + catch 再看一眼:挡 finalize 之后、真正发凭证之前的 await。 */
+function withOwnerBoundaryDispatchGate(
+  resolved: RoutingDecision | null,
+  ctx: RequestTransformCtx,
+): RoutingDecision | null {
+  if (ownerBoundDispatchUnsafe(ctx)) return ownerBoundaryPendingRoute();
+  const inner = resolved?.localHandler;
+  if (!inner) return resolved;
+  return {
+    ...resolved,
+    localHandler: async (args) => {
+      if (ownerBoundDispatchUnsafe(ctx)) {
+        await ownerBoundaryPendingRoute().localHandler?.(args);
+        return;
+      }
+      try {
+        await inner(args);
+      } catch (err) {
+        if (!args.res.headersSent && (
+          isOwnerBoundaryPendingError(err) || ownerBoundDispatchUnsafe(ctx)
+        )) {
+          await ownerBoundaryPendingRoute().localHandler?.(args);
+          return;
+        }
+        throw err;
+      }
+    },
+  };
+}
+
+function routingTemporarilyUnavailableRoute(): RoutingDecision {
+  return retryableLocalRoute(
+    'routing_temporarily_unavailable',
+    'Claude proxy routing is temporarily unavailable; retry shortly.',
+  );
+}
+
+function carriesProviderAuthPlaceholder(headers: Readonly<Record<string, string>>): boolean {
+  return headerValue(headers, 'x-api-key') === CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
+}
+
+/** null / 只删头 / 空决策 = 仍打默认 LiteLLM。订阅桥、换 key、换上游都不是这条。 */
+function isDefaultUpstreamPassthrough(decision: RoutingDecision | null): boolean {
+  if (!decision) return true;
+  if (decision.localHandler) return false;
+  if (decision.upstreamOverride) return false;
+  if (decision.headerOverride && Object.keys(decision.headerOverride).length > 0) return false;
+  return true;
+}
+
+function refuseUnsafePlaceholderPassthrough(
+  decision: RoutingDecision | null,
+  ctx: RequestTransformCtx,
+): RoutingDecision | null {
+  if (!isDefaultUpstreamPassthrough(decision)) return decision;
+  if (!carriesProviderAuthPlaceholder(ctx.headers)) return decision;
+  if (!ownerBoundDispatchUnsafe(ctx)) return decision;
+  log.warn('owner boundary pending with provider-oauth placeholder; refusing default upstream');
+  return ownerBoundaryPendingRoute();
+}
+
+function routingTransformThrew(err: unknown, ctx: RequestTransformCtx): RoutingDecision {
+  log.warn('routingTransform threw; refusing default upstream', {
+    err: err instanceof Error ? err.message : String(err),
+  });
+  return ownerBoundDispatchUnsafe(ctx) ? ownerBoundaryPendingRoute() : routingTemporarilyUnavailableRoute();
 }
 
 function unavailablePiProviderRoute(providerId: string): RoutingDecision {
@@ -586,15 +756,15 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
   };
   return (body, ctx) => {
-    const decision = route(body, ctx);
+    stampOwnerScope(ctx);
     const hasInternalPiHeader =
       headerValue(ctx.headers, 'x-cindy-pi-session-id') !== null
       || headerValue(ctx.headers, 'x-cindy-pi-session-token') !== null
       || headerValue(ctx.headers, 'x-cindy-pi-provider-id') !== null;
-    if (!hasInternalPiHeader) return decision;
     const stripInternalPiHeaders = (
       resolved: RoutingDecision | null,
     ): RoutingDecision | null => {
+      if (!hasInternalPiHeader) return resolved;
       if (resolved?.localHandler) return resolved;
       return {
         ...(resolved ?? {}),
@@ -608,9 +778,30 @@ export function createModelRoutingTransform(): RoutingTransform {
         ],
       };
     };
-    return decision instanceof Promise
-      ? decision.then(stripInternalPiHeaders)
-      : stripInternalPiHeaders(decision);
+    const finalize = (resolved: RoutingDecision | null): RoutingDecision | null => {
+      // beginAppSessionBoundary 的 fail-closed:teardown 期间 getActiveAppSession() 仍是
+      // 上一任 owner。订阅桥 / PI 原生转发 / oauth headerOverride 都会读那份凭证,不能
+      // 因为 localHandler 不是「默认上游透传」就放行。
+      //
+      // 决策时检查挡不住 finalize 之后的 await(token refresh / request transform /
+      // outbound resolver / 透明重试)。localHandler 在这里再包一层入口+catch;转发
+      // 路径靠引擎 revalidateBeforeDispatch(请求开始、routing 后、outbound 后、重试前)。
+      // pending 与 activeOwnerScopeKey 合成同一条 ownerBoundDispatchUnsafe:
+      // 切换在 await 里完整完成时两端 pending 都是 false。
+      if (ownerBoundDispatchUnsafe(ctx)) return ownerBoundaryPendingRoute();
+      return withOwnerBoundaryDispatchGate(
+        refuseUnsafePlaceholderPassthrough(stripInternalPiHeaders(resolved), ctx),
+        ctx,
+      );
+    };
+    try {
+      const decision = route(body, ctx);
+      return decision instanceof Promise
+        ? decision.then(finalize, (err: unknown) => routingTransformThrew(err, ctx))
+        : finalize(decision);
+    } catch (err) {
+      return routingTransformThrew(err, ctx);
+    }
   };
 }
 
@@ -640,6 +831,8 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway 换 key)。
       // 'gateway' 模式恒返 null,字节级行为与扩展前一致。
       routingTransform: createModelRoutingTransform(),
+      revalidateBeforeDispatch: (_decision, ctx) =>
+        ownerBoundDispatchUnsafe(ctx) ? ownerBoundaryPendingRoute() : null,
       // 只读响应观察器(组合三个,互不感知):
       //   - fast mode 链路核验:tee SSE 抽上游 usage.speed(debug-gated);
       //   - 订阅余量旁路:读 anthropic-ratelimit-unified-* headers(仅订阅直连响应,

@@ -43,6 +43,12 @@ import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { XAI_X_SEARCH_TOOL_TYPE, xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import {
+  OWNER_BOUNDARY_PENDING_ERROR,
+  OwnerBoundaryPendingError,
+  isOwnerBoundaryPendingError,
+} from './owner-boundary-error.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 
 const zstdCompressAsync = promisify(zstdCompress);
@@ -229,10 +235,19 @@ export const invalidateChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
   },
 });
 
+function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeAtStart) {
+    throw new OwnerBoundaryPendingError();
+  }
+}
+
 /** 经 adapter 判连接态 → 读 codex-home/auth.json → 必要时刷新 → 返回 token 与可选 account id。 */
 export async function getChatgptBridgeAuth(): Promise<{ accessToken: string; accountId: string | null }> {
+  const scopeAtStart = activeOwnerScopeKey();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   const now = Date.now();
   if (_authCache && now - _authCache.readAt < AUTH_CACHE_TTL_MS && !isExpired(_authCache.accessToken)) {
+    throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
     return _authCache;
   }
   // 连接态门:adapter 返回 null = 已登出 / 服务端已判失效(provider UI 显示未连接)。
@@ -240,17 +255,20 @@ export async function getChatgptBridgeAuth(): Promise<{ accessToken: string; acc
   // chatgpt/ 请求会继续用被断开(甚至被判坏)的账号。非 null 时 adapter 的 reconcile 已保证
   // codex-home/auth.json 是权威文件(必要时从 ~/.codex 硬链),后续读写只针对它。
   const adapterToken = await desktopCodexAuthAdapter.getAccessToken();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (adapterToken == null) {
     _authCache = null;
     throw new Error('OpenAI(ChatGPT 订阅)未连接或凭证已失效:请在「设置 → 模型供应商」登录');
   }
   const authPath = codexHomeAuthPath();
   let obj = await readAuthFile(authPath);
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (!obj?.tokens?.access_token) {
     _authCache = null;
     throw new Error('codex auth.json 无有效 access_token:请重新登录 OpenAI');
   }
   obj = await refreshIfNeeded(authPath, obj);
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   const accessToken = obj.tokens?.access_token;
   const accountId = obj.tokens ? accountIdFrom(obj.tokens) : null;
   if (!accessToken) {
@@ -681,7 +699,9 @@ export function getPiNativeSubscriptionHandler(
     const controller = new AbortController();
     const abortOnClose = (): void => controller.abort();
     res.once('close', abortOnClose);
+    const scopeAtStart = activeOwnerScopeKey();
     try {
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       let accessToken: string;
       let headers: Record<string, string>;
       if (providerId === 'openai') {
@@ -726,6 +746,7 @@ export function getPiNativeSubscriptionHandler(
           contentEncoding = undefined;
         }
       }
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
 
       const response = await deps.fetch(upstream.url, {
@@ -765,6 +786,22 @@ export function getPiNativeSubscriptionHandler(
       // which destroys the client response so PI observes a transport failure
       // instead of accepting a cleanly-ended truncated stream.
       if (res.headersSent) throw err;
+      if (isOwnerBoundaryPendingError(err)) {
+        res.writeHead(503, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+          'retry-after': '1',
+        });
+        res.end(JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'owner_boundary_pending',
+            code: 'owner_boundary_pending',
+            message: OWNER_BOUNDARY_PENDING_ERROR,
+          },
+        }));
+        return;
+      }
       const detail = describeErrorChain(err);
       const providerLabel = providerId === 'xai' ? 'xAI/Grok' : 'OpenAI/ChatGPT';
       log.warn('PI native subscription forwarding failed', {
