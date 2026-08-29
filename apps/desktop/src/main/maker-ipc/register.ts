@@ -53,7 +53,6 @@ import {
   isTurnContinuationBoundaryEvent,
 } from '@cindy/maker-shared/turn-continuation';
 import {
-  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
@@ -903,7 +902,6 @@ import {
   getPendingSessionRuntimeMutation,
   getSessionRuntimeControlSnapshot,
   isPendingSessionRuntimeRouteExplicit,
-  markPendingSessionRuntimeConfirmationRequired,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
@@ -11070,8 +11068,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     fastExplicit?: boolean;
     /** False only for Agent axis-only patches; model/provider routing stays untouched. */
     routeExplicit?: boolean;
-    /** Exact destructive window confirmation preserved across deferred settlement. */
-    confirmedContextWindow?: number;
   };
   let applySessionRuntimeSelection: (
     sessionId: string,
@@ -11093,7 +11089,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): void => {
     if (settlingSessionRuntimeControls.has(sessionId)) return;
     const pending = getPendingSessionRuntimeMutation(sessionId);
-    if (!pending || pending.confirmationRequired) return;
+    if (!pending) return;
     settlingSessionRuntimeControls.add(sessionId);
     void (async () => {
       try {
@@ -11112,30 +11108,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             effortExplicit: pending.profile.effort !== null,
             fastExplicit: true,
             routeExplicit: isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation),
-            confirmedContextWindow: pending.confirmedContextWindow,
           },
         );
-        const requiredWindow = result.contextWindowConfirmationRequired;
-        const authoritativeTokens = result.contextTokensForConfirmation;
         if (
-          typeof requiredWindow === 'number' &&
-          typeof authoritativeTokens === 'number'
+          result.contextWindowConfirmationRequired !== undefined ||
+          result.contextTokensForConfirmation !== undefined
         ) {
-          const marked = markPendingSessionRuntimeConfirmationRequired(
-            sessionId,
-            pending.generation,
-            { contextWindow: requiredWindow, contextTokens: authoritativeTokens },
-          );
-          if (marked) await broadcastSessionRuntimeProjection(sessionId);
-          log.info('pending session runtime requires final-window confirmation', {
-            sessionId,
-            reason,
-            generation: pending.generation,
-            requiredWindow,
-            authoritativeTokens,
-            marked,
-          });
-          return;
+          throw new Error('deferred model-window selection requires unsupported confirmation');
         }
         log.info('pending session runtime settled', {
           sessionId,
@@ -14972,9 +14951,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) {
       throwIpcError('INVALID_PARAMS', 'selection must contain effort + fastMode');
     }
-    const confirmedContextWindow =
-      (selection as { confirmedContextWindow?: unknown } | undefined)?.confirmedContextWindow ??
-      internalOptions.confirmedContextWindow;
+    const confirmedContextWindow = (selection as { confirmedContextWindow?: unknown } | undefined)
+      ?.confirmedContextWindow;
     if (
       confirmedContextWindow !== undefined &&
       (typeof confirmedContextWindow !== 'number' ||
@@ -14983,24 +14961,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) {
       throwIpcError('INVALID_PARAMS', 'confirmedContextWindow must be a positive integer');
     }
-    const windowConfirmationCapability = (
-      selection as { modelWindowConfirmationCapability?: unknown } | undefined
-    )?.modelWindowConfirmationCapability;
-    const remoteControllerSupportsWindowConfirmation =
-      isDeviceLinkInvoke() &&
-      deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1);
-    const trustedRemoteWindowConfirmation =
-      !isDeviceLinkInvoke() ||
-      (windowConfirmationCapability === CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1 &&
-        remoteControllerSupportsWindowConfirmation);
-    if (
-      isDeviceLinkInvoke() &&
-      confirmedContextWindow !== undefined &&
-      !trustedRemoteWindowConfirmation
-    ) {
+    if (isDeviceLinkInvoke() && confirmedContextWindow !== undefined) {
       throwIpcError(
         'PRECONDITION_FAILED',
-        'remote controller cannot confirm a destructive model-window rebuild',
+        'remote model-window confirmation is unsupported; runtime selection was not changed',
       );
     }
     let atomicSelection = selection as
@@ -15208,10 +15172,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               source: internalOptions.source === 'fallback' ? 'fallback' : 'agent',
               previousProfile: internalOptions.previousProfile,
               deferred: true,
-              confirmedContextWindow:
-                confirmedContextWindow !== undefined && trustedRemoteWindowConfirmation
-                  ? confirmedContextWindow
-                  : undefined,
               profile: {
                 agentKind: maker.getSession(sessionId)?.agentKind ?? meta.agentKind,
                 model,
@@ -15374,12 +15334,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (
           isDeviceLinkInvoke() &&
           !targetDoesNotShrink &&
-          remoteTargetAssessment.level === 'overflow' &&
-          (!trustedRemoteWindowConfirmation || confirmedContextWindow !== verifiedTargetWindow)
+          (remoteTargetAssessment.level === 'danger' ||
+            remoteTargetAssessment.level === 'overflow')
         ) {
           throwIpcError(
             'PRECONDITION_FAILED',
-            'remote controller must explicitly confirm the verified overflow window',
+            'remote model-window rebuild is unsupported; runtime selection was not changed',
           );
         }
         if (targetContextWindow > 0 && !targetDoesNotShrink) {
@@ -15399,8 +15359,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 contextWindow: targetContextWindow,
                 recheckTargetPressure: true,
                 confirmedTargetPressure:
-                  trustedRemoteWindowConfirmation &&
-                  confirmedContextWindow === targetContextWindow,
+                  !isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow,
                 onConfirmationRequired: (contextTokens) => {
                   confirmationContextTokens = contextTokens;
                 },
@@ -15432,6 +15391,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
             }
             restoreControlStores();
+            if (isDeviceLinkInvoke()) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'remote model-window confirmation is unsupported; runtime selection was not changed',
+              );
+            }
             if (!confirmationContextTokens || confirmationContextTokens <= 0) {
               throwIpcError(
                 'PRECONDITION_FAILED',
@@ -15659,18 +15624,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             );
           }
           if (
-            isDeviceLinkInvoke() &&
-            confirmedContextWindow !== undefined &&
-            confirmedContextWindow !== finalPiWindow
-          ) {
-            await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-            restoreControlStores();
-            throwIpcError(
-              'PRECONDITION_FAILED',
-              'remote controller confirmation does not match the verified final Pi window',
-            );
-          }
-          if (
             typeof verifiedCurrentWindow === 'number' &&
             finalPiWindow < verifiedCurrentWindow
           ) {
@@ -15680,8 +15633,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 contextWindow: finalPiWindow,
                 recheckTargetPressure: true,
                 confirmedTargetPressure:
-                  trustedRemoteWindowConfirmation &&
-                  confirmedContextWindow === finalPiWindow,
+                  !isDeviceLinkInvoke() && confirmedContextWindow === finalPiWindow,
                 onConfirmationRequired: (contextTokens) => {
                   finalPressureContextTokens = contextTokens;
                 },
@@ -15691,10 +15643,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               assertRuntimeOwnerCurrent();
               await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
               restoreControlStores();
-              if (isDeviceLinkInvoke() && !remoteControllerSupportsWindowConfirmation) {
+              if (isDeviceLinkInvoke()) {
                 throwIpcError(
                   'PRECONDITION_FAILED',
-                  'remote controller must confirm the verified final Pi overflow window',
+                  'remote model-window confirmation is unsupported; runtime selection was not changed',
                 );
               }
               return {
@@ -15852,10 +15804,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             source: internalOptions.source,
             previousProfile: internalOptions.previousProfile,
             deferred: response.deferred,
-            confirmedContextWindow:
-              confirmedContextWindow !== undefined && trustedRemoteWindowConfirmation
-                ? confirmedContextWindow
-                : undefined,
             profile: {
               agentKind: maker.getSession(sessionId)?.agentKind ?? meta?.agentKind ?? 'claude-code',
               model,

@@ -506,36 +506,26 @@ describe('session runtime control wiring', () => {
     expect(unknownPreparation).toContain('maker.closeSession(sessionId)');
   });
 
-  it('requires negotiated, exact remote confirmation before an overflow rebuild', () => {
+  it('fails closed for remote danger, overflow, and confirmation payloads', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
 
-    expect(deviceLinkHostSource).toContain(
-      'CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,',
+    expect(setModel).not.toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
+    expect(deviceLinkHostSource).not.toContain(
+      'CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1',
     );
-    expect(setModel).toContain(
-      'remoteControllerSupportsWindowConfirmation =\n      isDeviceLinkInvoke() &&',
-    );
+    expect(setModel).toContain("remoteTargetAssessment.level === 'danger'");
     expect(setModel).toContain("remoteTargetAssessment.level === 'overflow'");
-    expect(setModel).toContain('confirmedContextWindow !== verifiedTargetWindow');
     expect(setModel).toContain(
-      'remote controller must explicitly confirm the verified overflow window',
-    );
-    expect(setModel).not.toContain(
-      "internalOptions.source !== 'user' ||\n                  isDeviceLinkInvoke() ||",
+      'remote model-window rebuild is unsupported; runtime selection was not changed',
     );
     expect(setModel).toContain(
-      'remote controller confirmation does not match the verified final Pi window',
+      'remote model-window confirmation is unsupported; runtime selection was not changed',
     );
-    expect(setModel).toContain(
-      'isDeviceLinkInvoke() && !remoteControllerSupportsWindowConfirmation',
-    );
-    expect(setModel).toContain(
-      'remote controller must confirm the verified final Pi overflow window',
-    );
+    expect(setModel).toContain('!isDeviceLinkInvoke() && confirmedContextWindow ===');
   });
 
   it('lets cold remote Pi use persisted low-pressure facts before rejecting rebuild support', () => {
@@ -550,7 +540,9 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('maker.getSession(sessionId)?.getUsageSnapshot?.().contextWindow');
     expect(setModel).toContain('verifiedCurrentWindow = rehydratedCurrentWindow');
     expect(setModel).toContain('verifiedTargetWindow >= verifiedCurrentWindow');
-    expect(setModel).toContain('!targetDoesNotShrink &&\n          remoteTargetAssessment.level');
+    expect(setModel).toContain(
+      "!targetDoesNotShrink &&\n          (remoteTargetAssessment.level === 'danger' ||",
+    );
     expect(setModel).toContain('targetContextWindow > 0 && !targetDoesNotShrink');
     expect(setModel).toContain('runtimeStatus.remoteHostId && isSessionInTurn(sessionId)');
     expect(setModel).toContain('busy remote task cannot change runtime selection');
@@ -573,9 +565,6 @@ describe('session runtime control wiring', () => {
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
     const finalWindow = setModel.indexOf('const finalPiWindow =');
     const runtimeCommit = setModel.indexOf('let generation: number;');
-    const finalMismatch = setModel.indexOf(
-      'remote controller confirmation does not match the verified final Pi window',
-    );
     const finalPreparation = setModel.indexOf('const finalPreparation =');
     const smallerFinalWindow = setModel.indexOf('finalPiWindow < verifiedCurrentWindow');
 
@@ -591,9 +580,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('targetContextWindow = confirmedContextWindow ?? targetContextWindow');
     expect(setModel).toContain('confirmedContextWindow === targetContextWindow');
     expect(setModel).toContain('confirmedContextWindow === finalPiWindow');
-    expect(finalMismatch).toBeGreaterThan(finalWindow);
-    expect(finalMismatch).toBeLessThan(smallerFinalWindow);
-    expect(finalMismatch).toBeLessThan(finalPreparation);
+    expect(finalPreparation).toBeGreaterThan(smallerFinalWindow);
     expect(setModel).toContain("finalPreparation === 'rebuilt'");
   });
 
@@ -624,26 +611,19 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('runtime model context snapshot refresh failed');
   });
 
-  it('preserves explicit final-window confirmation across deferred settlement', () => {
+  it('cancels deferred selection when final-window pressure would need confirmation', () => {
     const settle = handlerBody(
       registerSource,
       'const settlePendingSessionRuntimeControl =',
       'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
     );
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
 
-    expect(settle).toContain('if (!pending || pending.confirmationRequired) return;');
-    expect(settle).toContain('confirmedContextWindow: pending.confirmedContextWindow');
-    expect(settle).toContain('markPendingSessionRuntimeConfirmationRequired(');
-    expect(settle).toContain('{ contextWindow: requiredWindow, contextTokens: authoritativeTokens }');
+    expect(settle).toContain('if (!pending) return;');
+    expect(settle).toContain('deferred model-window selection requires unsupported confirmation');
+    expect(settle).toContain('cancelPendingSessionRuntimeMutation(sessionId, pending.generation)');
     expect(settle).toContain('await broadcastSessionRuntimeProjection(sessionId)');
-    expect(setModel).toContain('internalOptions.confirmedContextWindow');
-    expect(setModel).toContain('confirmedContextWindow === finalPiWindow');
-    expect(setModel).not.toContain("internalOptions.source !== 'user' ||");
+    expect(settle).not.toContain('markPendingSessionRuntimeConfirmationRequired(');
+    expect(settle).not.toContain('confirmedContextWindow: pending.confirmedContextWindow');
   });
 
   it('composes later partial runtime changes on the accepted pending profile', () => {
