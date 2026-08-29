@@ -36,6 +36,12 @@
       "ultra": "極致"
     }
   },
+  "contextWindowSwitch": {
+    "title": "此模型無法容納目前對話",
+    "description": "目前對話已使用 {{used}}，超過新模型可容納的 {{total}}（約 {{pct}}%）。若繼續切換，Cindy 會先產生簡短摘要再繼續；對話記錄仍會保留，但不會再逐字傳給新模型。",
+    "cancel": "保留目前模型",
+    "confirm": "切換並繼續"
+  },
   "agentSwitch": {
     "browseAccessibility": "瀏覽 {{agent}} 模型",
     "confirmTitle": "切換到 {{agent}}？",

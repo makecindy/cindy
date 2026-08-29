@@ -36,6 +36,12 @@
       "ultra": "极致"
     }
   },
+  "contextWindowSwitch": {
+    "title": "这个模型装不下当前对话",
+    "description": "当前对话已使用 {{used}}，超过新模型可容纳的 {{total}}（约 {{pct}}%）。继续切换时，Cindy 会先生成简短摘要再继续；对话记录仍会保留，但不会再逐字传给新模型。",
+    "cancel": "保留当前模型",
+    "confirm": "切换并继续"
+  },
   "agentSwitch": {
     "browseAccessibility": "浏览 {{agent}} 模型",
     "confirmTitle": "切换到 {{agent}}？",

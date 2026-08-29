@@ -36,6 +36,12 @@
       "ultra": "究極"
     }
   },
+  "contextWindowSwitch": {
+    "title": "このモデルには現在の会話が収まりません",
+    "description": "現在の会話はすでに {{used}} を使用しており、新しいモデルの上限 {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy は短い要約を作成して続行します。会話履歴は残りますが、すべてがそのまま新しいモデルに渡されるわけではありません。",
+    "cancel": "現在のモデルを維持",
+    "confirm": "切り替えて続行"
+  },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} のモデルを表示",
     "confirmTitle": "{{agent}} に切り替えますか?",

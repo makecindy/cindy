@@ -65,6 +65,10 @@ describe('agent capabilities shared model', () => {
       'claude-sonnet-4-6',
       'claude-haiku-4-6',
     ]);
+    expect(capabilities?.availableModels.map((item) => item.contextWindow)).toEqual([
+      200_000,
+      200_000,
+    ]);
     // 已知档 id 在 normalize 单点换成中文词表名(被控端给的英文 displayName 被覆盖)。
     expect(capabilities?.effortLevels.map((item) => item.label)).toEqual([
       '低',

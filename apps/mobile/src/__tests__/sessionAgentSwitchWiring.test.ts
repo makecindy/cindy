@@ -26,4 +26,26 @@ describe('session Agent switch UI wiring', () => {
     expect(source).toContain('selectedProviderId={modelSheetSelection.providerId}');
     expect(source).toContain('agentKind={agentSwitchIntent.targetAgentKind}');
   });
+
+  it('confirms overflow before either same-Agent model selection writes through', () => {
+    const source = readSource('app/sessions/[sessionId].tsx');
+    const rowSelector = source.slice(
+      source.indexOf('const selectComposerModelRow'),
+      source.indexOf('const selectComposerFlatModel'),
+    );
+    const flatSelector = source.slice(
+      source.indexOf('const selectComposerFlatModel'),
+      source.indexOf('const browseComposerModelAgent'),
+    );
+    expect(rowSelector).toMatch(/currentSession\.contextTokens,\s+row\.model\.contextWindow/);
+    expect(flatSelector).toMatch(/currentSession\?\.contextTokens,\s+option\.contextWindow/);
+    expect(rowSelector).toContain('next.model !== currentSession.model');
+    expect(flatSelector).toContain('option.id !== currentSession?.model');
+    expect(rowSelector.indexOf('confirmMobileModelWindowSwitch')).toBeLessThan(
+      rowSelector.indexOf('maker.setModel'),
+    );
+    expect(flatSelector.indexOf('confirmMobileModelWindowSwitch')).toBeLessThan(
+      flatSelector.indexOf('maker.setModel'),
+    );
+  });
 });

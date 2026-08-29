@@ -287,6 +287,7 @@ import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-sha
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
+import { confirmMobileModelWindowSwitch } from '@/session/modelWindowSwitchConfirmation';
 import { confirmMobileSessionAgentSwitch } from '@/session/sessionAgentSwitchConfirmation';
 import {
   mobileAgentLabel,
@@ -7999,26 +8000,37 @@ export default function SessionScreen() {
       });
       return;
     }
-    void runControlAction(async () => {
-      await maker.setModel(sessionId, next.model, next.providerId);
-      if (next.effort && next.effort !== modelSheetSelection.effort) {
-        await maker.setEffort(sessionId, next.effort);
+    void (async () => {
+      if (
+        next.model !== currentSession.model &&
+        !(await confirmMobileModelWindowSwitch(
+          currentSession.contextTokens,
+          row.model.contextWindow,
+        ))
+      ) {
+        return;
       }
-      // 只按值变化写穿,不做 fastEditable 门控:切到不支持 fast 的模型时
-      // resolveRowSelection 已算出 fastMode=false,门控会跳过清零、让服务端残留 true。
-      if (next.fastMode !== modelSheetSelection.fastMode) {
-        await maker.setFastMode(sessionId, next.fastMode);
-      }
-    }, {
-      // 乐观 patch:原子切换的三个维度一次上屏。
-      model: next.model,
-      providerId: next.providerId,
-      ...(next.effort ? { effort: next.effort } : {}),
-      fastMode: next.fastMode,
-      ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
-      // 多步 RPC(setModel → setEffort → setFastMode)可能部分成功,失败时回读权威
-      // 会话收敛而非本地回滚,避免手机显示与远端已生效状态脱节(codex review R16)。
-    }, { recover: 'refetch' });
+      await runControlAction(async () => {
+        await maker.setModel(sessionId, next.model, next.providerId);
+        if (next.effort && next.effort !== modelSheetSelection.effort) {
+          await maker.setEffort(sessionId, next.effort);
+        }
+        // 只按值变化写穿,不做 fastEditable 门控:切到不支持 fast 的模型时
+        // resolveRowSelection 已算出 fastMode=false,门控会跳过清零、让服务端残留 true。
+        if (next.fastMode !== modelSheetSelection.fastMode) {
+          await maker.setFastMode(sessionId, next.fastMode);
+        }
+      }, {
+        // 乐观 patch:原子切换的三个维度一次上屏。
+        model: next.model,
+        providerId: next.providerId,
+        ...(next.effort ? { effort: next.effort } : {}),
+        fastMode: next.fastMode,
+        ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
+        // 多步 RPC(setModel → setEffort → setFastMode)可能部分成功,失败时回读权威
+        // 会话收敛而非本地回滚,避免手机显示与远端已生效状态脱节(codex review R16)。
+      }, { recover: 'refetch' });
+    })();
   }, [
     agentSwitchIntent,
     canUseRemoteSessionControls,
@@ -8036,11 +8048,22 @@ export default function SessionScreen() {
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
     if (!canUseRemoteSessionControls || modelSheetAgentKind !== sessionAgentKind) return;
-    void runControlAction(() => maker.setModel(sessionId, option.id), {
-      model: option.id,
-      ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
-    });
-  }, [agentSwitchIntent, canUseRemoteSessionControls, maker, modelSheetAgentKind, runControlAction, sessionAgentKind, sessionId]);
+    void (async () => {
+      if (
+        option.id !== currentSession?.model &&
+        !(await confirmMobileModelWindowSwitch(
+          currentSession?.contextTokens,
+          option.contextWindow,
+        ))
+      ) {
+        return;
+      }
+      await runControlAction(() => maker.setModel(sessionId, option.id), {
+        model: option.id,
+        ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
+      });
+    })();
+  }, [agentSwitchIntent, canUseRemoteSessionControls, currentSession, maker, modelSheetAgentKind, runControlAction, sessionAgentKind, sessionId]);
   const browseComposerModelAgent = useCallback(async (next: MobileSessionAgentKind) => {
     if (next === modelSheetAgentKind) return true;
     if (next !== sessionAgentKind) {

@@ -36,6 +36,12 @@
       "ultra": "Ultra"
     }
   },
+  "contextWindowSwitch": {
+    "title": "This model can't fit the current conversation",
+    "description": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won't all be passed through verbatim.",
+    "cancel": "Keep this model",
+    "confirm": "Switch and continue"
+  },
   "agentSwitch": {
     "browseAccessibility": "Browse {{agent}} models",
     "confirmTitle": "Switch to {{agent}}?",

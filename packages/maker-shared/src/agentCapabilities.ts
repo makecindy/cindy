@@ -6,6 +6,8 @@ export interface MobileModelOption {
   effortDisplayNames: Record<string, string>;
   defaultEffort: string | null;
   supportsFastMode: boolean;
+  /** Host-advertised catalog window when available; omitted by older Desktop versions. */
+  contextWindow?: number;
   /** 区域门控后的新任务默认标记。 */
   newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
 }
@@ -304,6 +306,12 @@ function normalizeModelOption(value: unknown): MobileModelOption | null {
       typeof entry[1] === 'string',
     ))
     : {};
+  const contextWindow =
+    typeof value.contextWindow === 'number' &&
+    Number.isFinite(value.contextWindow) &&
+    value.contextWindow > 0
+      ? value.contextWindow
+      : undefined;
   const newSessionDefault = Array.isArray(value.newSessionDefault)
     ? [...new Set(value.newSessionDefault.filter(
       (item): item is 'claude-code' | 'codex' | 'pi' =>
@@ -320,6 +328,7 @@ function normalizeModelOption(value: unknown): MobileModelOption | null {
     effortDisplayNames,
     defaultEffort: readString(value.defaultEffort),
     supportsFastMode: value.supportsFastMode === true,
+    ...(contextWindow ? { contextWindow } : {}),
     ...(newSessionDefault.length > 0 ? { newSessionDefault } : {}),
   };
 }
