@@ -26,6 +26,18 @@
       "note": "Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。"
     },
     {
+      "id": "use-my-browser-logins",
+      "status": "proposed",
+      "en": "Use my browser logins",
+      "translations": {
+        "zh-CN": "使用我的浏览器登录态",
+        "zh-TW": "使用我的瀏覽器登入態",
+        "ja": "ブラウザのログイン状態を使う",
+        "ko": "내 브라우저 로그인 사용"
+      },
+      "note": "设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。"
+    },
+    {
       "id": "harness",
       "status": "proposed",
       "en": "Harness",

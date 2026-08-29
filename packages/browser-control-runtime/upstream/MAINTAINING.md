@@ -9,6 +9,8 @@
 
 默认行为:启动**一个专属、持久、headed 的自动化浏览器**(profile 名 "Cindy"),登录态长期保留,与用户日常 Chrome 互不影响。
 
+用户可在设置 → 自动操作打开「使用我的浏览器登录态」(默认关)。打开后,host 在 `start` 前把系统 Chrome / Edge / Brave **当前 `profile.last_used`** 的 Cookies / Login Data 等 SQLite 库拷进 `browser-runtime/browser/Cindy-real/user-data/Default`(vendored `--user-data-dir` 是 `…/Cindy-real/user-data`),并把 dest `Local State` 的 `last_used` / `last_active_profiles` / `profiles_order` **改写成 Default**(原样拷贝会让 Chrome 打开空的 `Profile N`,窗口看起来已登出)。Chrome 右上角 chip **始终显示 `Cindy`**:磁盘目录必须叫 `Cindy-real`(不能叠到隔离身份 `Cindy` 上),host 通过 `displayName: "Cindy"` 传给 runtime,`launchOpenClawChrome` 用它 decorate,而不是用 map key。再用**同一只浏览器二进制**启动该目录。不 attach 日常 Chrome(Chrome 136+ 会拒绝调试默认 user-data-dir)。关掉开关即删除 `Cindy-real`,`Cindy` 隔离身份不动。失败必须 fail-closed,禁止启动一个看起来在浏览、其实全是登出的窗口。快照当凭证:不要写进日志正文、backup、device-link 或 worktree;`status` 只暴露 `{ enabled, applied, source }`,不暴露路径。快照实现在 `apps/desktop/src/main/mcp-integrations/browser-real-profile/`;chip 名例外见 `sync.mjs` 对 `chrome.ts` 的 LOCAL_PATCH。
+
 ## 2. 三层架构 + 文件清单
 
 ```
@@ -46,13 +48,16 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browse
 | # | 症状 | 根因 | 铁律 |
 |---|---|---|---|
 | 1 | config 不生效 / profile 显示上游默认名 | 见 §3,`getRuntimeConfigSourceSnapshot` 返回了 wrapper | 该 shim 必须返回 `OpenClawConfig \| null` |
-| 2 | 数据目录落到 `~/.xdt-maker` 而非 Electron `userData` | `CONFIG_DIR` 是 `shim/_local/text-utils.ts` 里**模块加载即求值**的 const,读 `XDT_BROWSER_RUNTIME_DIR` | 必须在 **import runtime 之前**设好 env——靠 `browser.ts` 顶部 `import './browser-runtime-env.js'` 保持**第一行**,别重排 import(无 import-order autofix) |
+| 2 | 数据目录落到 `~/.xdt-maker` 而非 Electron `userData` | Vite 把 `@cindy/browser-control-runtime` `require()` 进 main 入口 chunk 顶部,`CONFIG_DIR` 在 `index.ts` 设置 `XDT_BROWSER_RUNTIME_DIR` **之前**就求值成 `~/.xdt-maker`。从包入口 barrel 引入刷新函数还会提前求值 `paths.ts`,`DEFAULT_INBOUND_MEDIA_DIR` 冻在旧根,随后 `saveMediaBuffer` 写到刷新后的目录、上传校验按旧 inbound root 拒绝 | `index.ts` 在最后一次 `app.setPath('userData')` 之后 pin env,并从 **`@cindy/browser-control-runtime/config-dir`** 调用 `refreshBrowserRuntimeConfigDir()`(不要从包入口 barrel 引入,那会把 generated `paths.ts` 拉进入口 chunk)。单测 `browserRuntimeDirStartup.test.ts` 锁顺序与 import 路径。`browser.ts` 顶部 `import './browser-runtime-env.js'` 仍是 vitest/非打包路径的兜底,别重排 |
 | 3 | `profile must define cdpPort or cdpUrl` | vendored 只给"名叫上游默认名"的 profile 自动分配 CDP 端口;自定义名的托管 profile 不会 | 自定义托管 profile 必须显式给 `cdpPort`(现用 18800,vendored 端口段起点) |
 | 4 | 明明给了中性/白色,Chrome 工具栏却是浑浊蓝绿 | Chrome 把 profile `color` 当 **Material-You 种子色**生成色板,不是字面色;中性/近黑种子被它和成灰蓝 | 用**高饱和**色做种子(现 `#00D9C5` TapTap teal);想要纯灰度做不到(灰度开关在不可改的 vendored decorate 里) |
-| 5 | 「打开 Agent 专用浏览器」每次开两个标签页 | `start` 本身已带初始标签页,再 `open` 在冷启动时会和它抢 | `openBrowserForLogin` 只 `start` + 尽力 `focus`,**绝不** `open` |
+| 5 | 「打开 Agent 专用浏览器」每次开两个标签页 | `start` 本身已带初始标签页;冷启动 `GET /tabs` 在 CDP 未就绪时返回 empty,再 `open` 就会和 Chrome 自己的第一页抢 | `openBrowserForLogin` 只 `start` + 尽力 `focus`,**绝不** `open`。空 tabs 是「还没连上 CDP」,不是缺窗口 |
 | 6 | profile 没有自定义头像 | Chrome 只认内置头像 / Google 账号头像,不能塞本地图 | 已知限制,接受;别为它改 vendored decorate |
 | 7 | 改了 `browser-workflow.md` 但 agent 还按旧文案 | 这份 md 经 `?raw` 静态打进**进程内** MCP server;且 agent 只在调 `list_tools` 时读 rules | 改完要 **(a) 重启桌面端**(main/package 改动不热更)+ **(b) 开新 agent 会话**(老会话 context 里是旧 rules) |
 | 8 | 远端 Codex 会话里浏览器不可用 | lizi MCP 桥接只对**本地** Codex 生效(见 §7) | 不是 bug;所有 `lizi_*` 工具对远端 Codex 都一样 |
+| 9 | 开了「使用我的浏览器登录态」但窗口仍是登出 | 快照把 `last_used` 的 cookie 放进 dest `Default`,却原样拷了 `Local State`;Chrome 按 `last_used` 打开空的 `Profile N` | 写入 dest `Local State` 时必须把 `last_used` / `last_active_profiles` / `profiles_order` 改成 `Default`,`info_cache` 只留 Default(元数据从源 last_used 挪过来),并删掉 dest 里其它 `Profile N` |
+| 10 | Chrome 右上角 chip 显示 `Cindy-real` / 源 profile 名 | 磁盘 key 必须是 `Cindy-real`;vendored decorate 默认用 `profile.name`(map key)。host 只改 Local State 不够,下次 launch 会盖回去 | `profiles[Cindy-real].displayName = "Cindy"`;`launchOpenClawChrome` 用 `displayName ?? name` decorate。快照写入时也把 `info_cache.Default.name` 写成 `Cindy` |
+| 11 | 已有完全磁盘访问仍弹「需要完全磁盘访问权限」 | 第一次 enable 在 macOS 无条件跑 `guideFullDiskAccessAfterReadDenied` | 同意拷贝之后先 `probeSourceRead`(只 open 源 Local State / Cookies,不拷贝、不回路径);`readable: true` 就跳过。真正快照 `REAL_PROFILE_READ_DENIED` 仍弹。不自动打开系统设置 |
 
 ## 5. UI 开关模型(设置 →「自动操作」)
 
@@ -81,7 +86,7 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 ```
 
 - 版本锁:`upstream/browser-runtime.lock.json`(pinned commit + fs-safe 版本 + content hash)。
-- `_generated/**` 整体重生成,**永不手改**;要改行为改 `src/shim/*` 或 `sync.mjs`(vendor 集合 / import 重写)。
+- `_generated/**` 整体重生成,**永不手改**;要改行为改 `src/shim/*` 或 `sync.mjs`(vendor 集合 / import 重写 / `LOCAL_PATCHES`)。chip `displayName` 就是这种 LOCAL_PATCH,下次 sync 会按 `sync.mjs` 重新打上。
 - shim 导出契约在 `upstream/shim-spec.md`;sync 后若多出新的 `openclaw/plugin-sdk/*` import,补对应 shim。
 - 安全:SSRF / 路径包含的**决策逻辑是 vendored 的**,`src/shim/ssrf-runtime.ts` 只重写了组合这些原语的 fetch 外壳;`ssrf-guard.test.ts` 断言拦截 cloud-metadata / 私网 IP 的"牙齿"还在,削弱会挂 CI。
 - 同步后回归一遍 §4 的坑(尤其 #1 配置应用、#3 cdpPort),再跑 `runtime-config-application.test.ts` + @cindy/mcps browser 测试 + desktop `browserAvailability` 测试。

@@ -459,6 +459,8 @@ import {
   sealAssistantBlockForLateFinal,
   markAutoResumeOutcome,
   onTurnErrorEvent,
+  releaseReservedTurnErrorPersistId,
+  reserveTurnErrorPersistId,
   prepareSyntheticToolEventForBroadcast,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
@@ -706,6 +708,7 @@ import {
   type OrcaWorkerEffort,
   type SendToWorkerResult,
   type WorkerQueuedMessageControlResult,
+  type WorkerTerminalTurnCapture,
 } from './orcaTeamService.js';
 import {
   createOrcaWorkerCreationService,
@@ -1004,6 +1007,7 @@ import {
 import { readSilentStopAutoResumeSettings } from '../maker-host/silent-stop-auto-resume-store.js';
 import {
   AutoResumeBookkeeping,
+  shouldSkipOrcaWorkerTerminal,
   type SuppressedTurnError,
   type SuppressedTurnErrorOwner,
 } from './autoResumeBookkeeping.js';
@@ -1073,6 +1077,8 @@ async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<bo
   }
 }
 const workerTurnStartSequencer = createWorkerTurnStartSequencer(log);
+// session event wiring 是模块级函数；service 在 registerMakerIpc 内构造后注入给事件回调。
+let orcaTeamServiceForEvents: OrcaTeamService | null = null;
 // silent-stop 自动续跑守卫(决策语义与防死循环不变量见 silentStopAutoResume.ts 文件头)。
 // 纯内存、app 级单例:额度按 sessionId 记账,kill switch 每次决策时现读(改配置即生效)。
 const silentStopAutoResumeGuard = new SilentStopAutoResumeGuard({
@@ -1224,6 +1230,24 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
   persistSuppressedError: (sessionId, detail) => onTurnErrorEvent(sessionId, detail, null),
   surfaceSuppressedError: (sessionId, detail) =>
     surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail),
+  // L3：auto-resume 放弃后，用当初压住的 capture 恰好一次收口 Orca status / auto-bridge。
+  // L2 flush/discard 不会走到这里，避免「还在重试却已经把异常终止桥给 Lead」。
+  finalizeOrcaSuppressedTerminal: (sessionId, payload) => {
+    void (async () => {
+      try {
+        await workerTurnStartSequencer.waitForStart(sessionId);
+        await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
+          sessionId,
+          status: payload.status,
+          finalText: payload.finalText,
+          diagnostic: payload.diagnostic,
+          capture: payload.capture as WorkerTerminalTurnCapture | undefined,
+        });
+      } catch {
+        /* non-fatal */
+      }
+    })();
+  },
   markOutcome: (sessionId, clientId, outcome) => {
     void markAutoResumeOutcome(sessionId, clientId, outcome);
   },
@@ -2004,8 +2028,6 @@ interface EnableOrcaOptions {
 }
 
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
-// session event wiring 是模块级函数；service 在 registerMakerIpc 内构造后注入给事件回调。
-let orcaTeamServiceForEvents: OrcaTeamService | null = null;
 
 function markWorkerManualInterruptIfKnown(
   sessionId: string,
@@ -4120,6 +4142,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           autoResumeBookkeeping.discardReplacementProvenByProviderEvent(session.id);
           // 新 turn 启动: 上一轮未配对的失败记账交接 id 已无归属, 丢弃防错配。
           pendingFailedTurnAssistantPersistId.delete(session.id);
+          // Tokenless status(true) can be a delayed tail of the failed turn.
+          // Only a token-bearing running event proves a new attempt started.
+          if (typeof event.turnAttemptToken === 'number') {
+            autoResumeBookkeeping.clearFailedTurnCompletionTail(session.id);
+          }
           // 记录 turn 开始时刻，供 onTurnErrorEvent 判断 error 是否属于 /clear 之前的旧 turn。
           noteTurnStarted(session.id, event.turnAttemptToken);
           noteSubagentObservationTurnStarted(session.id);
@@ -4330,8 +4357,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // F1-a Phase 2: assistant 文本持久化收口 main 单点(根除多窗各落一份的重复)。
       // 在 onEvent 同步路径只做 O(1):为在飞 assistant 分配 / 复用 persistId、累积全文,
       // 把 persistId 盖进广播 payload 让 renderer 在途气泡用同一 id;真正落库走模块内
-      // 异步队列、不在此同步执行(规则19 热路径)。其它消息类型的 persistId 暂为
-      // undefined,renderer 继续走原逻辑(后续 Phase 收口 tool_use / tool_result 等)。
+      // 异步队列、不在此同步执行(规则19 热路径)。终止型 error 同样在广播前预留 persistId
+      // (O(1) createId,不 flush、不写库),让 live 横幅与事后 error 行绑定同一 id。
       const eventAgentMeta = (event as { agentMeta?: AgentMeta | null }).agentMeta ?? null;
       // 跟踪会话最近一次非空 agentMeta(镜像 renderer state.lastAgentMeta),给 interaction
       // 边界 flush 当兜底锚点,保 agent_meta 不丢(rewind/fork)。
@@ -4464,12 +4491,38 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         !isContinuationBoundary && (event.type === 'done' || isTerminalTurnErrorEvent(event))
           ? orcaTeamServiceForEvents?.captureWorkerTerminalTurn(session.id)
           : undefined;
+      // 与下方 autoResumeSuppressesPersist 同判据,但必须在广播前就算出来:
+      // 热路径测试以 `const autoResumeSuppressesPersist` 为 flush 边界,不能把那条
+      // const 提前。预留 persistId 只看这份,真正写库仍走广播后的那份。
+      const autoResumeWouldSuppressPersist =
+        event.type === 'error' &&
+        (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
+          agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
       const suppressOverflowBroadcast =
         !session.remoteHostId &&
         event.type === 'error' &&
         isTerminalTurnErrorEvent(event) &&
         (isContextOverflowErrorData(event.data) ||
           isOversizedHistoryErrorData(event.data));
+      if (
+        event.type === 'error' &&
+        isTerminalTurnErrorEvent(event) &&
+        !isPlannedUpgradeClose &&
+        !isRemoteAuthRetry &&
+        !isGatewayProxyTokenRecovery &&
+        !autoResumeWouldSuppressPersist &&
+        !suppressOverflowBroadcast
+      ) {
+        persistId = reserveTurnErrorPersistId(
+          session.id,
+          attributedEvent.data as {
+            message?: unknown;
+            reason?: unknown;
+            sdkError?: unknown;
+          } | null,
+          eventAgentMeta,
+        );
+      }
       if (suppressOverflowBroadcast) {
         overflowSuppressedBroadcasts.set(session.id, {
           sessionId: session.id,
@@ -4541,6 +4594,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           if (turnAssistantPersistId) {
             pendingFailedTurnAssistantPersistId.set(session.id, turnAssistantPersistId);
           }
+          // persistId 只覆盖有 assistant 行的失败轮。零输出 / 纯 tool 轮没有 id，
+          // 用户接手还会 flush 掉 suppressed entry 并清 pending。这条 tail 活过
+          // flush，按失败轮 generation 配对；不同代的 done 不得当成这条尾巴。
+          if (!isContinuationBoundary && typeof event.sessionTurnGeneration === 'number') {
+            autoResumeBookkeeping.noteFailedTurnCompletionTail(
+              session.id,
+              event.sessionTurnGeneration,
+            );
+          }
         } else {
           // done: 优先本事件 consume 的 id, 失败 turn 场景回收交接的 id;
           // 无论用没用到都清掉, 防残留错配下一轮。
@@ -4589,10 +4651,34 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // error 行早就落库了、压不回去,接管成功后历史里会同时留下错误卡与重连行(codex P1)。
         // 所以决策未定时也一并压住(isAutoResumeDeferred),由 coordinator 在三个「最终没接管」
         // 的出口回调 onResumableTurnErrorDiscarded 让它补落。
+        const workerTerminalDoneData = event.data as {
+          result?: unknown;
+          message?: unknown;
+          sdkError?: unknown;
+          reason?: unknown;
+          error?: { message?: unknown };
+        } | null;
+        const workerTerminalFinalText =
+          typeof workerTerminalDoneData?.result === 'string' &&
+          workerTerminalDoneData.result.length > 0
+            ? workerTerminalDoneData.result
+            : '';
+        const workerTerminalDiagnostic = isTerminalTurnErrorEvent(event)
+          ? [
+              workerTerminalDoneData?.message,
+              workerTerminalDoneData?.sdkError,
+              workerTerminalDoneData?.reason,
+              workerTerminalDoneData?.error?.message,
+            ].find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          : undefined;
         const autoResumeSuppressesPersist =
           event.type === 'error' &&
           (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
             agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
+        // Only skip handleWorkerTerminalTurn after the Orca payload is actually
+        // hanging on the suppressed-error owner. stashOrca 失败必须立刻收口，
+        // 否则 worker 会永远停在 running。
+        let deferredOrcaWorkerTerminal = false;
         const overflowClaim =
           event.type === 'error' &&
           !session.remoteHostId &&
@@ -4608,20 +4694,30 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (overflowClaim === 'claimed') {
           const overflowErrorData = attributedEvent.data;
           const surfaceOverflowFailure = (): void => {
+            const overflowErrorPayload = overflowErrorData as {
+              message?: unknown;
+              reason?: unknown;
+              sdkError?: unknown;
+            } | null;
+            const overflowPersistId = reserveTurnErrorPersistId(
+              session.id,
+              overflowErrorPayload,
+              eventAgentMeta,
+            );
             const stashed = overflowSuppressedBroadcasts.get(session.id);
             overflowSuppressedBroadcasts.delete(session.id);
             if (stashed) {
-              broadcastToAllWindows(MAKER_PUSH.EVENT, stashed);
+              broadcastToAllWindows(MAKER_PUSH.EVENT, {
+                ...stashed,
+                persistId: overflowPersistId ?? stashed.persistId,
+              });
               handleAgentIslandEventAfterBroadcast(session, stashed.event);
             }
             onTurnErrorEvent(
               session.id,
-              overflowErrorData as {
-                message?: unknown;
-                reason?: unknown;
-                sdkError?: unknown;
-              } | null,
+              overflowErrorPayload,
               eventAgentMeta,
+              overflowPersistId,
             );
           };
           void contextOverflowRolloverHolder
@@ -4642,6 +4738,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             });
         } else if (overflowClaim === 'in-flight') {
           // 同一 turn 的重复终态 error：继续压住，避免污染历史。
+          if (persistId) releaseReservedTurnErrorPersistId(session.id, persistId);
         } else if (
           event.type === 'error' &&
           !isPlannedUpgradeClose &&
@@ -4657,7 +4754,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               sdkError?: unknown;
             } | null,
             eventAgentMeta,
+            persistId,
           );
+        } else if (persistId) {
+          releaseReservedTurnErrorPersistId(session.id, persistId);
         }
         // 压住的错误详情必须在这里存一份:决策推迟场景下 onResumableTurnError 还没被调用过
         // (它自己那份 set 发生在接管成立时),不存就无从补落。同 clientId 内容,覆盖无害。
@@ -4668,6 +4768,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             agentInputCoordinatorHolder?.getAutoResumeAttemptToken(session.id) ?? null,
             agentInputCoordinatorHolder?.getAutoResumeDeferredOwner(session.id) ?? null,
           );
+          // Orca terminal 与 error 行共用同一条 owner：L2 不 bridge / 不标 error，
+          // L3 surface 时用这份 capture 恰好一次收口。
+          if (isTerminalTurnErrorEvent(event)) {
+            deferredOrcaWorkerTerminal = autoResumeBookkeeping.stashOrcaSuppressedTerminal(
+              session.id,
+              {
+                status: 'error',
+                finalText: workerTerminalFinalText,
+                diagnostic: workerTerminalDiagnostic,
+                capture: workerTerminalCapture,
+              },
+            );
+          }
         } else if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
           // replacement 可在 sendToAgent 返回前同步失败并让 coordinator 的 activeTurn
           // 失效；这个新终态已经取代旧中断，按 dispatch phase 直接清旧 owner。
@@ -4772,37 +4885,38 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           }
         }
         // Worker turn 结束后交给 OrcaTeamService 处理 DB status、广播与 auto-bridge。
-        if (!isContinuationBoundary) {
+        // L2（auto-resume 仍拥有这次失败）不得在这里收口：否则 Lead 会先收到「异常终止」，
+        // 而聊天里还在显示自动重试。Codex/Claude 失败轮随后的 unclaimed done 同样不是
+        // 产品终态。L3 由 AutoResumeBookkeeping 的 surface 路径补调。
+        const isFailedTurnCompletionTail =
+          event.type === 'done' &&
+          !isContinuationBoundary &&
+          autoResumeBookkeeping.consumeFailedTurnCompletionTail(
+            session.id,
+            event.sessionTurnGeneration,
+          );
+        if (
+          !shouldSkipOrcaWorkerTerminal({
+            isContinuationBoundary,
+            stashedThisErrorEvent: deferredOrcaWorkerTerminal,
+            eventType: event.type,
+            isPairedFailedTurnDone,
+            isFailedTurnCompletionTail,
+            hasSuppressedError: autoResumeBookkeeping.hasSuppressedError(session.id),
+            isAutoResumePending:
+              agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true,
+            isAutoResumeDeferred:
+              agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true,
+          })
+        ) {
           void (async () => {
             try {
-              const doneData = event.data as {
-                result?: unknown;
-                message?: unknown;
-                sdkError?: unknown;
-                reason?: unknown;
-                error?: { message?: unknown };
-              } | null;
-              const finalText =
-                typeof doneData?.result === 'string' && doneData.result.length > 0
-                  ? doneData.result
-                  : '';
-              const diagnostic = isTerminalTurnErrorEvent(event)
-                ? [
-                    doneData?.message,
-                    doneData?.sdkError,
-                    doneData?.reason,
-                    doneData?.error?.message,
-                  ].find(
-                    (value): value is string =>
-                      typeof value === 'string' && value.trim().length > 0,
-                  )
-                : undefined;
               await workerTurnStartSequencer.waitForStart(session.id);
               await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
                 sessionId: session.id,
                 status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
-                finalText,
-                diagnostic,
+                finalText: workerTerminalFinalText,
+                diagnostic: workerTerminalDiagnostic,
                 capture: workerTerminalCapture,
               });
             } catch {
@@ -5929,11 +6043,9 @@ async function confirmReviewExternalArtifacts(
 ): Promise<boolean> {
   const parent = BrowserWindow.fromWebContents(event.sender);
   if (!parent || parent.isDestroyed()) return false;
-  return showReviewArtifactConfirmWindow(
-    parent,
-    buildReviewArtifactConfirmationDialog(items, t),
-    { log },
-  );
+  return showReviewArtifactConfirmWindow(parent, buildReviewArtifactConfirmationDialog(items, t), {
+    log,
+  });
 }
 
 export interface RegisterMakerIpcOptions {
@@ -6068,8 +6180,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // submit_github_issue 工具的 main 侧提交服务(确认桥 → serverApiFetch)。
-  initGithubIssueSubmit(issueConfirmBridge, (sessionId) =>
-    turnModelPromiseBySession.get(sessionId) ?? readSessionModelForUsage(sessionId),
+  initGithubIssueSubmit(
+    issueConfirmBridge,
+    (sessionId) => turnModelPromiseBySession.get(sessionId) ?? readSessionModelForUsage(sessionId),
   );
   initRenameSessionsConfirm(renameSessionsConfirmBridge);
 
@@ -7557,9 +7670,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               ? `model "${model}" has been retired from the catalog`
               : verdict.reason === 'payment-required'
                 ? `model "${model}" requires paid access`
-              : verdict.reason === 'exclusive-source-unavailable'
-                ? `model "${model}" requires SuperGrok (xAI) and cannot use the default gateway`
-                : `model "${model}" is disabled in settings`,
+                : verdict.reason === 'exclusive-source-unavailable'
+                  ? `model "${model}" requires SuperGrok (xAI) and cannot use the default gateway`
+                  : `model "${model}" is disabled in settings`,
       );
     }
     return verdict.kind === 'reroute' ? verdict.providerId : undefined;
@@ -12012,7 +12125,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .limit(1);
       return row ?? null;
     },
-    tryStripOversizedCodexHistory: async ({ sessionId, threadId, model, providerId, workingDir }) => {
+    tryStripOversizedCodexHistory: async ({
+      sessionId,
+      threadId,
+      model,
+      providerId,
+      workingDir,
+    }) => {
       const ownerScope = captureDataOwnerBroadcastScope();
       const dbSnapshot = getCurrentDbClientSnapshot();
       let committed = false;
@@ -12046,8 +12165,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return 'stale';
         }
         const now = Date.now();
-        const write = await dbSnapshot.client
-          .drizzle.update(sessions)
+        const write = await dbSnapshot.client.drizzle
+          .update(sessions)
           .set({ sdkSessionId: forked.newSdkSessionId, updatedAt: now })
           .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, threadId)))
           .run();
@@ -14476,8 +14595,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentMetaRaw != null && typeof agentMetaRaw === 'object'
           ? (agentMetaRaw as AgentMeta)
           : null;
-      onTurnErrorEvent(sid, errData, agentMeta);
+      const persistId = onTurnErrorEvent(sid, errData, agentMeta);
       getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);
+      return persistId;
     },
   );
 

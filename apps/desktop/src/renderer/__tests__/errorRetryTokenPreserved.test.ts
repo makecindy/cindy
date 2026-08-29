@@ -100,6 +100,7 @@ describe('handleStreamEvent — terminal error keeps the projection retry token'
     const before = {
       ...EMPTY_SESSION_STATE,
       errorRetryText: PROJECTION_TOKEN,
+      errorPersistId: 'old-persist',
       isStreaming: true,
     };
 
@@ -110,6 +111,48 @@ describe('handleStreamEvent — terminal error keeps the projection retry token'
     } as Parameters<typeof handleStreamEvent>[1]);
 
     expect(next.errorRetryText).toBeNull();
+    expect(next.errorPersistId).toBeNull();
     expect(next.recoverableError).toBe('transient');
+  });
+
+  it('copies persistId from the terminal error event', () => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      { ...terminalError(), persistId: 'err_persist_1' },
+    );
+
+    expect(next.error).toBe('Request timed out');
+    expect(next.errorPersistId).toBe('err_persist_1');
+    // persistId 只绑定即将落库的 error 行，不是 Retry 依据。
+    expect(next.errorRetryText).toBeNull();
+  });
+
+  it('keeps an existing persistId when a duplicate terminal event omits it', () => {
+    const before = {
+      ...EMPTY_SESSION_STATE,
+      error: 'Request timed out',
+      errorPersistId: 'err_persist_1',
+      isStreaming: true,
+    };
+
+    const next = handleStreamEvent(before, terminalError());
+
+    expect(next.errorPersistId).toBe('err_persist_1');
+  });
+
+  it('replaces the binding when a later terminal event carries a new persistId', () => {
+    const before = {
+      ...EMPTY_SESSION_STATE,
+      error: 'old error',
+      errorPersistId: 'old-id',
+      isStreaming: true,
+    };
+
+    const next = handleStreamEvent(before, {
+      ...terminalError(),
+      persistId: 'err_persist_2',
+    });
+
+    expect(next.errorPersistId).toBe('err_persist_2');
   });
 });

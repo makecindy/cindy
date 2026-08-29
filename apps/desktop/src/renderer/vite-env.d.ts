@@ -54,6 +54,7 @@ type ProviderRoutingPayload = import('@cindy/model-providers').Provider['routing
 type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type BrowserBackendHealth = import('../shared/browserBackend').BrowserBackendHealth;
 type BrowserBackendRecoveryResult = import('../shared/browserBackend').BrowserBackendRecoveryResult;
+type BrowserBackendSourceReadAccess = import('../shared/browserBackend').BrowserBackendSourceReadAccess;
 type DesktopAccountDeletionConfirmInput =
   import('../shared/authIpc').DesktopAccountDeletionConfirmInput;
 type DesktopAccountDeletionAvailabilityResult =
@@ -715,7 +716,8 @@ interface CCAgentStreamEvent {
    * F1-a: 由 main 端 messagePersistBroadcaster 为这条消息分配的稳定 persistId,
    * 经 maker:event payload 透传。renderer 用它当在途气泡 clientId(不再自造随机),
    * 让 main 落库后的 onCreated(同 id)命中 dedup,把在途气泡替换为权威行而非新增。
-   * Phase 2 仅对 assistant 'text' 事件下发;其它类型暂为 undefined。
+   * assistant 'text' 与终止型 error 都会下发(error 为广播前预留的 persistId);
+   * 其它类型暂为 undefined。
    */
   persistId?: string;
   /**
@@ -1859,15 +1861,21 @@ interface ElectronAPI {
   };
 
   xboxGamepad: {
-    getState: () => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
+    getState: () => Promise<import('../shared/xboxGamepad').GamepadAccessoriesState>;
     setSettings: (
+      family: import('../shared/xboxGamepad').GamepadFamily,
       patch: import('../shared/xboxGamepad').XboxGamepadSettingsPatch,
-    ) => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
-    resetSettings: () => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
-    probe: () => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
-    setLayoutPreviewActive: (active: boolean) => Promise<void>;
+    ) => Promise<import('../shared/xboxGamepad').GamepadAccessoriesState>;
+    resetSettings: (
+      family: import('../shared/xboxGamepad').GamepadFamily,
+    ) => Promise<import('../shared/xboxGamepad').GamepadAccessoriesState>;
+    probe: () => Promise<import('../shared/xboxGamepad').GamepadAccessoriesState>;
+    setLayoutPreviewActive: (
+      active: boolean,
+      family?: import('../shared/xboxGamepad').GamepadFamily,
+    ) => Promise<void>;
     onStateChanged: (
-      callback: (state: import('../shared/xboxGamepad').XboxGamepadState) => void,
+      callback: (state: import('../shared/xboxGamepad').GamepadAccessoriesState) => void,
     ) => () => void;
     onPreviewInput: (
       callback: (input: import('../shared/xboxGamepad').XboxGamepadPreviewInput) => void,
@@ -4723,6 +4731,7 @@ interface ElectronAPI {
       active: 'external' | 'rsb-webview';
       systemDefault: 'external' | 'rsb-webview';
       isOverride: boolean;
+      useRealProfile: boolean;
     }>;
     setKind: (kind: 'external' | 'rsb-webview') => Promise<{
       ok: true;
@@ -4731,6 +4740,8 @@ interface ElectronAPI {
     reset: () => Promise<{ ok: true; active: 'external' | 'rsb-webview' }>;
     getHealth: () => Promise<BrowserBackendHealth>;
     recover: () => Promise<BrowserBackendRecoveryResult>;
+    setUseRealProfile: (enabled: boolean) => Promise<{ ok: true; enabled: boolean }>;
+    probeSourceRead: () => Promise<BrowserBackendSourceReadAccess>;
   };
 
   // ── Dialog（v0.6 新增） ────────────────────────────────────────────────────
@@ -5420,7 +5431,7 @@ interface ElectronAPI {
         sessionId: string,
         errData: Record<string, unknown> | null,
         agentMeta?: import('@/lib/ccAgent.types').AgentMeta | null,
-      ) => Promise<void>;
+      ) => Promise<string | undefined>;
       remove: (
         sessionId: string,
         clientId: string,

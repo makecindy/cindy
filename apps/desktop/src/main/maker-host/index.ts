@@ -763,23 +763,9 @@ export function getMaker(): Maker {
 
     const resolveIOSSimulatorAccess = (context?: IOSSimulatorMcpCallContext) => {
       const workingDir = context?.workingDir?.trim() || null;
-      const pluginAccess = getIOSSimulatorPluginAccessDecision(workingDir);
-      if (!pluginAccess.allowed) return pluginAccess;
-      if (!pluginRegistry.isEnabled('ios-simulator', workingDir ?? undefined)) {
-        return {
-          allowed: false as const,
-          errorCode: 'IOS_SIMULATOR_DISABLED' as const,
-          message:
-            'The embedded iOS Simulator capability is disabled for the current project. Enable it in the project plugin settings before retrying the embedded tool; other iOS workflows are unaffected.',
-          data: {
-            reason: 'disabled-in-workdir',
-            action: 'enable-plugin',
-            pluginId: 'ios-simulator',
-            pluginName: 'iOS Simulator',
-          },
-        };
-      }
-      return { allowed: true as const };
+      // Product access is the installed plugin (enable + workdir disable).
+      // Leftover Tools-page `builtinTools['ios-simulator']` must not gate runtime.
+      return getIOSSimulatorPluginAccessDecision(workingDir);
     };
 
     const makerMemoryProviderDeps = {

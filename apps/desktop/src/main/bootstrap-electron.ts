@@ -5929,6 +5929,7 @@ const registerIpcHandlers = () => {
   const allowedSystemSettingsUrls = new Set([
     'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
     'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
   ]);
 
   // Open external URL in system default browser, plus a small allowlist of

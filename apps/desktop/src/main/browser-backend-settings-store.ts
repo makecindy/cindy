@@ -79,10 +79,17 @@ const log = desktopMakerLogger.child('browser-backend-settings-store');
 
 export interface BrowserBackendSettings {
   kind: BackendKind;
+  /**
+   * Consent to copy the user's Chromium-family logins into a Cindy-managed
+   * snapshot profile (`Cindy-real`). Default off. Turning this back off deletes
+   * the snapshot; the isolated `Cindy` profile is left alone.
+   */
+  useRealProfile: boolean;
 }
 
 const DEFAULTS: BrowserBackendSettings = {
   kind: 'external',
+  useRealProfile: false,
 };
 
 const VALID_KINDS: readonly BackendKind[] = ['external', 'rsb-webview'];
@@ -98,7 +105,8 @@ function normalize(raw: unknown): BrowserBackendSettings {
     typeof r.kind === 'string' && (VALID_KINDS as string[]).includes(r.kind)
       ? (r.kind as BackendKind)
       : DEFAULTS.kind;
-  return { kind };
+  const useRealProfile = r.useRealProfile === true;
+  return { kind, useRealProfile };
 }
 
 const store = createOverrideSettingsFile<BrowserBackendSettings>({
@@ -120,6 +128,11 @@ export function readBrowserBackendSettingsState(): OverrideSettingsState<Browser
 export function writeBrowserBackendKind(kind: BackendKind): void {
   store.writePatch({ kind });
   log.info('browser-backend kind written', { kind });
+}
+
+export function writeBrowserUseRealProfile(useRealProfile: boolean): void {
+  store.writePatch({ useRealProfile });
+  log.info('browser-backend useRealProfile written', { useRealProfile });
 }
 
 /** Reset = clear user override, fall back to current system default. */
