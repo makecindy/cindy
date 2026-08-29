@@ -97,6 +97,8 @@ describe('mobile message media thumbnail wiring', () => {
     expect(lightboxSource).toContain('Gesture.Pinch()');
     // 单击关闭必须限制位移:RNGH Tap 默认 maxDist 无限,短拖松手会关 lightbox
     expect(lightboxSource).toContain('maxDistance(LIGHTBOX_TAP_MAX_DISTANCE)');
+    // 自然尺寸到达后按新 contain 边界立刻重钳位移,不把 letterbox 估算的旧平移留到下次拖动
+    expect(lightboxSource).toContain('reclampLightboxPan(');
     // 分享按产品决策走系统分享单;expo-sharing 必须动态 import(旧构建缺原生模块)
     const screenShare = screenSource.includes("await import('expo-sharing')");
     expect(screenShare).toBe(true);

@@ -19,6 +19,7 @@ import {
   lightboxPanOverflow,
   lightboxPinchOrigin,
   nextDoubleTapScale,
+  reclampLightboxPan,
   shouldCloseLightboxOnTap,
   shouldDismissLightbox,
 } from '@/session/imageLightboxModel';
@@ -49,6 +50,14 @@ describe('imageLightboxModel', () => {
     expect(clampLightboxTranslation(250, 400, 2, 400)).toBe(200);
     // 自然尺寸未知时退回容器
     expect(lightboxContainedSize(400, 800, 0, 0)).toEqual({ width: 400, height: 800 });
+  });
+
+  it('reclamps leftover pan when contain size shrinks after natural size arrives', () => {
+    // 未知尺寸按 400×800 铺满,2x 后 Y 仍能平移 80;横图 onLoad 后显示 400×200,Y 溢出变 0
+    expect(clampLightboxTranslation(80, 800, 2, 800)).toBe(80);
+    expect(reclampLightboxPan(0, 80, 400, 800, 2, 400, 200)).toEqual({ x: 0, y: 0 });
+    // 旋转 / 变窄时 X 同样立刻收回,不把旧位移留到下一次拖动
+    expect(reclampLightboxPan(250, 0, 400, 800, 2, 400, 800)).toEqual({ x: 200, y: 0 });
   });
 
   it('bakes pinch origin into translation so resetting origin does not jump', () => {

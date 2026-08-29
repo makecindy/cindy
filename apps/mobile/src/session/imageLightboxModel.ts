@@ -83,6 +83,27 @@ export function clampLightboxTranslation(
   return value;
 }
 
+/**
+ * 显示尺寸变化后(自然尺寸到达 / 旋转)按新 contain 边界重钳位移。
+ * 未知尺寸按铺满容器估算,横图 onLoad 后高变小,旧位移必须立刻收回,
+ * 不能等下次拖动手才跳回边界。
+ */
+export function reclampLightboxPan(
+  translateX: number,
+  translateY: number,
+  containerWidth: number,
+  containerHeight: number,
+  scale: number,
+  displayedWidth: number,
+  displayedHeight: number,
+): { x: number; y: number } {
+  'worklet';
+  return {
+    x: clampLightboxTranslation(translateX, containerWidth, scale, displayedWidth),
+    y: clampLightboxTranslation(translateY, containerHeight, scale, displayedHeight),
+  };
+}
+
 /** 捏合焦点相对容器中心,作为 scale 的 transform origin。 */
 export function lightboxPinchOrigin(focal: number, containerSize: number): number {
   'worklet';

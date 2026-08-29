@@ -64,6 +64,7 @@ import {
   lightboxPinchOrigin,
   LIGHTBOX_TAP_MAX_DISTANCE,
   nextDoubleTapScale,
+  reclampLightboxPan,
   shouldCloseLightboxOnTap,
   shouldDismissLightbox,
 } from '@/session/imageLightboxModel';
@@ -827,6 +828,22 @@ const LightboxPage = memo(function LightboxPage({
     );
     displayedW.value = size.width;
     displayedH.value = size.height;
+    // 捏合中 onChange 每帧按新 displayed 钳;不能改 savedTranslate,否则下一帧
+    // 会用被改过的起点 + 焦点增量跳一下。
+    if (pinchBusy.value) return;
+    const next = reclampLightboxPan(
+      translateX.value,
+      translateY.value,
+      width,
+      height,
+      scale.value,
+      size.width,
+      size.height,
+    );
+    translateX.value = next.x;
+    translateY.value = next.y;
+    savedTranslateX.value = next.x;
+    savedTranslateY.value = next.y;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [naturalSize, width, height]);
 
