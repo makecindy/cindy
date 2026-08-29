@@ -1780,7 +1780,7 @@ function snapshotUnavailableWarningForPackage(
   return warning;
 }
 
-async function readNativePackageObjectSpecs(): Promise<Map<string, Record<string, unknown>>> {
+async function readNativePackageObjectSpecs(): Promise<Map<string, Record<string, unknown>> | null> {
   try {
     const home = await fs.realpath(packageHome());
     const { text } = await readUtf8FileBounded(
@@ -1796,7 +1796,7 @@ async function readNativePackageObjectSpecs(): Promise<Map<string, Record<string
       return typeof spec.source === 'string' ? [[spec.source, spec] as const] : [];
     }));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Map();
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
 }
@@ -1812,28 +1812,24 @@ export async function resolveManagedPiNativePackagePaths(): Promise<PiNativePack
     readStateWithoutBlockingPi(),
   ]);
   const disabled = new Set(state.disabledSources);
-  let objectSpecs = new Map<string, Record<string, unknown>>();
+  let objectSpecs: Map<string, Record<string, unknown>> | null = null;
   try {
     objectSpecs = await readNativePackageObjectSpecs();
-  } catch (error) {
+  } catch {
     log.warn('Pi package filter settings unavailable', {
-      message: error instanceof Error ? error.message : String(error),
+      failureCategory: 'state-unavailable',
     });
   }
   // Feed Pi installed roots while preserving any native object-form filters.
   // Pi then owns resource discovery without reinstalling the package.
   const entries = parsePiPackageListOutput(stdout).flatMap((pkg): PiNativePackageEntry[] => {
     if (!pkg.installedPath || disabled.has(pkg.source)) return [];
-    const spec = objectSpecs.get(pkg.source);
+    const spec = objectSpecs?.get(pkg.source);
     if (spec) return [{ ...spec, source: pkg.installedPath }];
-    // Never widen a package that Pi explicitly reports as filtered if its
-    // native filter object cannot be recovered.
-    if (pkg.filtered) {
-      log.warn('filtered Pi package omitted because its native filter spec is unavailable', {
-        source: projectPackageSource(pkg.source).displaySource,
-      });
-      return [];
-    }
+    // Never silently drop or widen a natively filtered package. If its exact
+    // filter cannot be recovered, fail startup with the existing actionable
+    // package-state error instead of pretending the installed package vanished.
+    if (pkg.filtered) throw new PiPackageStateUnavailableError();
     return [pkg.installedPath];
   });
   return entries.filter((entry, index) => (
@@ -2751,6 +2747,7 @@ export async function mutatePiPackage(
     throw new Error('Relative local Pi package sources require a task working directory');
   }
   let mutationMayHaveChangedState = false;
+  let runtimeInvalidationPublished = false;
   try {
     return await enqueueMutation(async () => {
     // Renderer rows with credential/query/fragment-bearing sources carry only a
@@ -2770,13 +2767,26 @@ export async function mutatePiPackage(
     // package shape therefore cannot delay or veto the upstream command.
     const inspectedBeforeMutation: InspectedPackage[] = [];
     let affectedSource: string | undefined;
+    const runNativeMutationCommand = async (args: string[]): Promise<void> => {
+      try {
+        await runPiPackageCommand(args);
+        mutationMayHaveChangedState = true;
+      } catch (error) {
+        mutationMayHaveChangedState = piPackageMutationFailureCategory(error) === 'native-command-failed';
+        throw error;
+      }
+    };
+    const publishRuntimeInvalidation = async (): Promise<void> => {
+      if (runtimeInvalidationPublished) return;
+      await publishPiPackagesChanged({ invalidateCache: false, runtimeInvalidation: true });
+      runtimeInvalidationPublished = true;
+    };
     if (request.action === 'install') {
-      mutationMayHaveChangedState = true;
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       // The package command may run dependency and build scripts. Keep the old
       // optional snapshot identity until that command succeeds. Native Pi
       // enablement never depends on this Cindy metadata.
-      await runPiPackageCommand(['install', source, '--no-approve']);
+      await runNativeMutationCommand(['install', source, '--no-approve']);
       invalidateInspectionCache();
       let inspectedAfterInstall: InspectedPackage[] = [];
       try {
@@ -2848,14 +2858,15 @@ export async function mutatePiPackage(
           message: error instanceof Error ? error.message : String(error),
         });
       }
+      await publishRuntimeInvalidation();
     } else if (request.action === 'remove') {
-      mutationMayHaveChangedState = true;
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
-      await runPiPackageCommand([
+      await runNativeMutationCommand([
         'remove',
         mutationCommandSource(source, previous),
         '--no-approve',
       ]);
+      await publishRuntimeInvalidation();
       try {
         const state = await requireState();
         const removedSources = new Set([
@@ -2879,7 +2890,6 @@ export async function mutatePiPackage(
         });
       }
     } else if (request.action === 'update') {
-      mutationMayHaveChangedState = true;
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       const updateAliases = [
         ...sourceAliases(source),
@@ -2892,11 +2902,12 @@ export async function mutatePiPackage(
       // Keep the last optional snapshot identity until Pi's update command
       // succeeds. Cindy may retire a stale snapshot after byte changes, but
       // must not reinterpret that as disabling the native Pi package.
-      await runPiPackageCommand([
+      await runNativeMutationCommand([
         'update',
         mutationCommandSource(source, previous),
         '--no-approve',
       ]);
+      await publishRuntimeInvalidation();
       try {
         await revokeExtensionApproval(updateAliases);
       } catch (error) {
@@ -2998,6 +3009,7 @@ export async function mutatePiPackage(
         ),
         snapshotUnavailableRoots: state.snapshotUnavailableRoots,
       });
+      await publishRuntimeInvalidation();
     }
     invalidateInspectionCache();
     let result: PiPackageListResult;
@@ -3035,7 +3047,7 @@ export async function mutatePiPackage(
         packages: [...result.packages, fallback],
         affectedPackage: fallback,
       };
-      await publishPiPackagesChanged({ invalidateCache: false, runtimeInvalidation: true });
+      await publishRuntimeInvalidation();
       return mutationResult;
     }
     if (request.action === 'set-enabled' && request.enabled === true) {
@@ -3054,14 +3066,14 @@ export async function mutatePiPackage(
       }
     }
     const mutationResult = { ...result, changed: true, ...(affectedPackage ? { affectedPackage } : {}) };
-    await publishPiPackagesChanged({ invalidateCache: false, runtimeInvalidation: true });
+    await publishRuntimeInvalidation();
     return mutationResult;
   }, async () => {
     // Any action may already have changed Pi's package tree or Cindy's state
     // before a later CLI/inspection step reports failure. Persist the shared
     // change token before releasing the cross-process lock, then refresh every
     // open Settings view and command palette.
-      if (mutationMayHaveChangedState) {
+      if (mutationMayHaveChangedState && !runtimeInvalidationPublished) {
         await publishPiPackagesChanged({ runtimeInvalidation: true });
       }
     });

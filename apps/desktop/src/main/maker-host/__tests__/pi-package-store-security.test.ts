@@ -482,6 +482,24 @@ describe('Pi package executable-code boundary', () => {
     expect(store.piPackageMutationMayHaveChangedState(commandFailure)).toBe(true);
   });
 
+  it.each([
+    ['install', 'npm ERR! code ETARGET No matching version found'],
+    ['update', 'getaddrinfo ENOTFOUND registry.example'],
+    ['remove', 'npm ERR! code E404 package not found'],
+  ] as const)('does not request runtime convergence for a deterministic %s failure', async (
+    action,
+    stderr,
+  ) => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    runtime.exitCode = 1;
+    runtime.stderr = stderr;
+
+    const failure = await mutateAuthorized(store, { action, source }).catch((error: unknown) => error);
+
+    expect(store.piPackageMutationMayHaveChangedState(failure)).toBe(false);
+  });
+
   it('keeps native package enablement independent from optional snapshot approval metadata', async () => {
     const { root, source } = await createPackage();
     await fs.mkdir(path.join(root, 'skills', 'sample'), { recursive: true });
@@ -577,6 +595,37 @@ describe('Pi package executable-code boundary', () => {
 
     await mutateAuthorized(store, { action: 'set-enabled', source, enabled: false });
     await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([]);
+  });
+
+  it.each([
+    ['invalid', '{"packages":'],
+    ['oversized', 'x'.repeat(1_048_577)],
+  ])('fails explicitly instead of dropping a filtered package when settings are %s', async (
+    label,
+    settingsContents,
+  ) => {
+    const { root, source } = await createPackage({ source: `npm:filtered-${label}` });
+    runtime.listOutput = `User packages:\n  ${source} (filtered)\n    ${root}\n`;
+    const packageHome = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(packageHome, { recursive: true });
+    await fs.writeFile(path.join(packageHome, 'settings.json'), settingsContents);
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).rejects.toThrow('state is unavailable');
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi package filter settings unavailable',
+      { failureCategory: 'state-unavailable' },
+    );
+  });
+
+  it('keeps an unfiltered native package when optional filter settings are unavailable', async () => {
+    const { root } = await createPackage({ source: 'npm:unfiltered-settings-failure' });
+    const settingsFile = path.join(runtime.userData, 'pi-package-home', 'settings.json');
+    await fs.mkdir(path.dirname(settingsFile), { recursive: true });
+    await fs.writeFile(settingsFile, '{"packages":');
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
   });
 
   it('preserves Pi object-form resource filters when projecting an installed root', async () => {
@@ -2429,6 +2478,30 @@ describe('Pi package executable-code boundary', () => {
     unsubscribe();
     await mutateAuthorized(store, { action: 'update', source });
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['remove', { action: 'remove' as const }],
+    ['disable', { action: 'set-enabled' as const, enabled: false }],
+  ])('publishes the %s runtime fence before starting slow result projection', async (
+    _label,
+    request,
+  ) => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    let listStartedAfterFence = false;
+    runtime.spawnHook = (args) => {
+      if (args.includes('list')) listStartedAfterFence = listener.mock.calls.length > 0;
+    };
+    try {
+      await mutateAuthorized(store, { ...request, source });
+      expect(listStartedAfterFence).toBe(true);
+      expect(listener).toHaveBeenCalledWith('local');
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('uses one shared cross-process lock for every package mutation action', async () => {
