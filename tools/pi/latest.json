@@ -1,38 +1,38 @@
 {
-  "version": "0.84.3",
-  "tag_name": "v0.84.3",
-  "name": "v0.84.3",
-  "published_at": "2026-08-24T11:09:57Z",
+  "version": "0.84.4",
+  "tag_name": "v0.84.4",
+  "name": "v0.84.4",
+  "published_at": "2026-08-28T22:08:23Z",
   "runtimeAssets": {
     "darwin-arm64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.3/pi-darwin-arm64.tar.gz",
-      "sha256": "0120c9f99ea05fe801e6e7c2c9d91dd65636563ca0803711b37b9f32920d4b63",
-      "size": 30919980
+      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.4/pi-darwin-arm64.tar.gz",
+      "sha256": "c68e3ac4d05b4e282aaab2e6c76f161d3e9e68f19a22e38913cbfaadb6c800f0",
+      "size": 30928407
     },
     "darwin-x64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.3/pi-darwin-x64.tar.gz",
-      "sha256": "b99706b3254faaf3695395ecb69cb7e1f4d4822bd3f832e6d1f2636d896b6bde",
-      "size": 33434213
+      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.4/pi-darwin-x64.tar.gz",
+      "sha256": "7a042d6413065421387001a4986190a1a03186c95a695f4dee0bdc76e60de8f7",
+      "size": 33440191
     },
     "linux-x64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.3/pi-linux-x64.tar.gz",
-      "sha256": "6f8bb67c21bc6b8a8a106d354f56d7fd4a190a3cd8ad3a32db45f6d281a5d008",
-      "size": 42458773
+      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.4/pi-linux-x64.tar.gz",
+      "sha256": "c2f3c3e6a1850bd87654cc3ca8811013272397c3d042a4e2a64c43ee1b423972",
+      "size": 42464648
     },
     "linux-arm64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.3/pi-linux-arm64.tar.gz",
-      "sha256": "e7cd48cd6f64b708e8459a890882b1007332f6e6b876fe1fd5c5203abd0addb7",
-      "size": 42521548
+      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.4/pi-linux-arm64.tar.gz",
+      "sha256": "135580f6b942151646e67b8b866d987d28ce3cff5a497030775ddd29659f943d",
+      "size": 42529658
     },
     "win32-x64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.3/pi-windows-x64.zip",
-      "sha256": "636a56f546c8bb1f2cb327964b7afbd9302efcd45c1704922a097cd8bd935fb9",
-      "size": 44900235
+      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.4/pi-windows-x64.zip",
+      "sha256": "03b2318774f18721e959d9f8f3340a9f942e7aa516fb7030d3007a12a40a4a97",
+      "size": 44907374
     },
     "win32-arm64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.3/pi-windows-arm64.zip",
-      "sha256": "d0f28a5bbeddcaee25fb7f4d8c70917d2c287d02b815614382aac9ac55a8fe39",
-      "size": 43448675
+      "url": "https://github.com/earendil-works/pi/releases/download/v0.84.4/pi-windows-arm64.zip",
+      "sha256": "6b2726efc34a9158ab06bf7b981f7bcccf15de9ea236a3f4ef7a894a78aa386e",
+      "size": 43455125
     }
   }
 }

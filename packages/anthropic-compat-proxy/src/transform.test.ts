@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createThreadStripController } from './thread-strip-controller.js';
 import {
+  compactOversizedImageHistory,
   createActiveStripTransform,
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
@@ -37,6 +38,94 @@ const ctx: RequestTransformCtx = {
   url: '/v1/responses',
   headers: { 'thread-id': 'thread-a' },
 };
+
+describe('compactOversizedImageHistory', () => {
+  it('drops old tool-result images first while preserving the newest user image', () => {
+    const body = {
+      model: 'claude-test',
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_result', content: [{ type: 'image', source: { type: 'base64', data: 'a'.repeat(4000) } }] }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'image', source: { type: 'base64', data: 'b'.repeat(3000) } }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'inspect this' }, { type: 'image', source: { type: 'base64', data: 'c'.repeat(3000) } }],
+        },
+      ],
+    } as Record<string, unknown>;
+    const originalBytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+    const compacted = compactOversizedImageHistory(body, originalBytes - 2500);
+    expect(compacted).toBe(body);
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const oldToolContent = (messages[0].content as Array<Record<string, unknown>>)[0];
+    expect((oldToolContent.content as Array<Record<string, unknown>>)[0].type).toBe('text');
+    expect((messages[1].content as Array<Record<string, unknown>>)[0].type).toBe('image');
+    expect((messages[2].content as Array<Record<string, unknown>>)[1].type).toBe('image');
+  });
+
+  it('preserves the current prompt image when a trailing tool_result also has role user', () => {
+    const body = {
+      model: 'claude-test',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'continue inspecting the image' },
+            { type: 'image', source: { type: 'base64', data: 'prompt-image'.repeat(500) } },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tool-1', name: 'inspect', input: {} }],
+        },
+        {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'tool-1',
+            content: [{ type: 'image', source: { type: 'base64', data: 'tool-image'.repeat(500) } }],
+          }],
+        },
+      ],
+    } as Record<string, unknown>;
+    const bytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+    compactOversizedImageHistory(body, bytes - 2_500);
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const promptContent = messages[0].content as Array<Record<string, unknown>>;
+    const toolResult = (messages[2].content as Array<Record<string, unknown>>)[0];
+    expect(promptContent[1].type).toBe('image');
+    expect((toolResult.content as Array<Record<string, unknown>>)[0].type).toBe('text');
+  });
+
+  it('fails closed when the only image is in the current user message', () => {
+    const body = {
+      model: 'claude-test',
+      messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', data: 'x'.repeat(5000) } }] }],
+    } as Record<string, unknown>;
+    const bytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+    expect(compactOversizedImageHistory(body, bytes - 1)).toBeNull();
+  });
+
+  it('handles Responses input_image history and keeps the newest user item', () => {
+    const body = {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${'a'.repeat(4000)}` }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${'b'.repeat(4000)}` }] },
+      ],
+    } as Record<string, unknown>;
+    const bytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+    compactOversizedImageHistory(body, bytes - 2500);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect((input[0].content as Array<Record<string, unknown>>)[0].type).toBe('input_text');
+    expect((input[1].content as Array<Record<string, unknown>>)[0].type).toBe('input_image');
+  });
+});
 
 describe('stripEncryptedContentFromBody', () => {
   it('drops ciphertext from intermediate agent messages while preserving readable progress and completion', () => {

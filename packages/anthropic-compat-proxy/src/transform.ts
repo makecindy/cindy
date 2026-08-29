@@ -11,6 +11,8 @@
  * 留证据。不要凭"它跟 gpt-5.4 应该一样" 之类的推测扩。
  */
 
+import { Buffer } from 'node:buffer';
+
 import { DEFAULT_THREAD_ID_HEADERS, selectedHeaderValue } from './headers.js';
 import type { ThreadStripController } from './thread-strip-controller.js';
 import type { RecoveryRule, RequestTransform, RequestTransformCtx } from './types.js';
@@ -1153,6 +1155,164 @@ export function replaceToolResultImagesWithNotice(
 
   if (replaced === 0) return null; // cache 安全契约:无改动 → null → 字节透传
   return { ...body, messages: nextMessages };
+}
+
+/**
+ * Compact image-heavy conversation history for a request that already crossed
+ * the proxy's hard body limit.
+ *
+ * This is deliberately a synchronous, local-only pass.  The newest user
+ * message is kept intact so the current prompt/image is never silently
+ * removed.  Older tool-result images are dropped first, followed by older
+ * conversation images.  The original media remains in the media library; the
+ * request-local replacement is only a small, explicit text notice.
+ *
+ * The function mutates the parsed request object in place (the proxy has
+ * already paid the JSON.parse cost for an oversized request) and returns it
+ * only when at least one image was replaced.  `targetBytes` is used as a
+ * cheap estimate while selecting candidates; the proxy performs the final
+ * serialized-byte check after all regular transforms have run.
+ */
+const OVERSIZED_IMAGE_OMITTED_TEXT =
+  '[Earlier image omitted to keep this request within the provider size limit. '
+  + 'Do not infer its contents; ask the user to resend it if it is needed.]';
+
+interface OversizedImageCandidate {
+  container: unknown[];
+  index: number;
+  replacement: Record<string, string>;
+  /** Tool-result images are lower-value history and are removed first. */
+  priority: number;
+  /** Older messages are removed before newer messages. */
+  age: number;
+}
+
+function jsonByteLength(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+function collectOversizedAnthropicImages(
+  messages: unknown[],
+  candidates: OversizedImageCandidate[],
+): void {
+  let latestUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!isPlainObject(message) || message.role !== 'user') continue;
+    // Anthropic represents tool results as `role: user` messages too.  A
+    // trailing tool_result therefore must not hide the actual prompt message
+    // whose images are still part of the current turn.  Treat a user message
+    // as a prompt when it has any non-tool_result block (plain text content is
+    // a prompt as well); tool_result-only messages remain compactable history.
+    const content = message.content;
+    const isPrompt = !Array.isArray(content)
+      || content.some((block) => !isPlainObject(block) || block.type !== 'tool_result');
+    if (isPrompt) {
+      latestUserIndex = i;
+      break;
+    }
+  }
+
+  const scan = (content: unknown[], messageIndex: number, inToolResult: boolean): void => {
+    for (let index = 0; index < content.length; index += 1) {
+      const block = content[index];
+      if (!isPlainObject(block)) continue;
+      if (block.type === 'image') {
+        // Preserve every image in the newest user message, including images
+        // nested in its tool_result content.
+        if (messageIndex === latestUserIndex) continue;
+        candidates.push({
+          container: content,
+          index,
+          replacement: { type: 'text', text: OVERSIZED_IMAGE_OMITTED_TEXT },
+          priority: inToolResult ? 0 : 1,
+          age: messageIndex,
+        });
+        continue;
+      }
+      if (block.type === 'tool_result' && Array.isArray(block.content)) {
+        scan(block.content, messageIndex, true);
+      }
+    }
+  };
+
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+    const message = messages[messageIndex];
+    if (!isPlainObject(message) || !Array.isArray(message.content)) continue;
+    scan(message.content, messageIndex, false);
+  }
+}
+
+function collectOversizedResponsesImages(
+  input: unknown[],
+  candidates: OversizedImageCandidate[],
+): void {
+  let latestUserIndex = -1;
+  for (let i = input.length - 1; i >= 0; i -= 1) {
+    const item = input[i];
+    if (isPlainObject(item) && item.type === 'message' && item.role === 'user') {
+      latestUserIndex = i;
+      break;
+    }
+  }
+
+  for (let itemIndex = 0; itemIndex < input.length; itemIndex += 1) {
+    const item = input[itemIndex];
+    if (!isPlainObject(item)) continue;
+    const content = Array.isArray(item.content) ? item.content : null;
+    if (!content) continue;
+    for (let index = 0; index < content.length; index += 1) {
+      const block = content[index];
+      if (!isPlainObject(block) || block.type !== 'input_image') continue;
+      if (itemIndex === latestUserIndex) continue;
+      candidates.push({
+        container: content,
+        index,
+        replacement: { type: 'input_text', text: OVERSIZED_IMAGE_OMITTED_TEXT },
+        priority: 1,
+        age: itemIndex,
+      });
+    }
+  }
+}
+
+export function compactOversizedImageHistory(
+  body: Record<string, unknown>,
+  targetBytes: number,
+): Record<string, unknown> | null {
+  if (!Number.isFinite(targetBytes) || targetBytes <= 0) return null;
+
+  const candidates: OversizedImageCandidate[] = [];
+  if (Array.isArray(body.messages)) {
+    collectOversizedAnthropicImages(body.messages, candidates);
+  }
+  if (Array.isArray(body.input)) {
+    collectOversizedResponsesImages(body.input, candidates);
+  }
+  // Avoid serializing a potentially huge text-only history: the common
+  // oversized-text case has no safe image candidate to compact.
+  if (candidates.length === 0) return null;
+
+  let estimatedBytes: number;
+  try {
+    estimatedBytes = jsonByteLength(body);
+  } catch {
+    return null;
+  }
+  if (estimatedBytes <= targetBytes) return null;
+
+  candidates.sort((a, b) => a.priority - b.priority || a.age - b.age);
+  let replaced = 0;
+  for (const candidate of candidates) {
+    const previousBytes = jsonByteLength(candidate.container[candidate.index]);
+    const replacementBytes = jsonByteLength(candidate.replacement);
+    candidate.container[candidate.index] = candidate.replacement;
+    estimatedBytes += replacementBytes - previousBytes;
+    replaced += 1;
+    if (estimatedBytes <= targetBytes) break;
+  }
+
+  return replaced > 0 ? body : null;
 }
 
 /** glm-5.2 (智谱,官方仅文本/代码模态) —— 直通与网关两条路由同一 model id。 */
