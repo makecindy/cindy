@@ -2146,7 +2146,10 @@ export function whenTurnErrorPersisted(sessionId: string, persistId: string): Pr
 
 export function onTurnErrorEvent(
   sessionId: string,
-  data: { message?: unknown; reason?: unknown; sdkError?: unknown } | null | undefined,
+  data:
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | null
+    | undefined,
   agentMeta: AgentMeta | null = null,
   reservedPersistId?: string,
 ): string | undefined {
