@@ -566,20 +566,32 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it('routes chat-requested Pi extension installs into the host-managed store', async () => {
+  it('publishes a durable tool receipt before retiring the successful caller', async () => {
     const mutatePiManagedPackage = vi.fn(async () => ({
       changed: true,
-      affectedPackage: { source: 'npm:context-mode', enabled: false },
+      affectedPackage: { source: 'npm:context-mode', enabled: true },
     }));
     const deps = buildDeps();
-    const onPiManagedPackageMutationSettled = vi.fn(async () => undefined);
+    let handle!: Awaited<ReturnType<PiAgent['startSession']>>;
+    const onPiManagedPackageMutationSettled = vi.fn(async () => handle.close());
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
     deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
-    const handle = await new PiAgent(deps).startSession({
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: 'Confirm',
+      cancel: 'Cancel',
+      mutationFailed: 'Pi extension operation failed.',
+      mutationSuccess: {
+        install: 'Pi extension installed and enabled. Start a new Pi task to use it.',
+        update: 'Pi extension updated. Start a new Pi task to use it.',
+        remove: 'Pi extension removed.',
+      },
+    });
+    handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-session',
       workingDir: cwd,
       model: 'm',
     });
+    const events = handle.events()[Symbol.asyncIterator]();
     try {
       handle.setInteractionResolver?.(
         vi.fn(async () => ({
@@ -599,10 +611,21 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         ok: true,
         result: {
           changed: true,
-          affectedPackage: { source: 'npm:context-mode', enabled: false },
+          affectedPackage: { source: 'npm:context-mode', enabled: true },
         },
       });
       await vi.waitFor(() => expect(onPiManagedPackageMutationSettled).toHaveBeenCalledOnce());
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('Pi extension installed')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      expect(visibleReceipt).toContain('Start a new Pi task to use it.');
+      expect(visibleReceipt).toContain('"ok":true');
     } finally {
       await handle.close();
     }

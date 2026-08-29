@@ -834,6 +834,24 @@ function piManagedPackageVisibleReceipt(
   return build(compactPiManagedPackageReceipt(receipt)).slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_PROMPT_LENGTH);
 }
 
+function piManagedPackageToolVisibleReceipt(
+  action: ParsedPiManagedPackageCommand['action'],
+  result: Record<string, unknown>,
+  strings: PiExtensionUiStrings,
+): string {
+  const build = (receipt: Record<string, unknown>): string => [
+    strings.mutationSuccess[action],
+    '```json',
+    JSON.stringify(receipt),
+    '```',
+  ].join('\n');
+  const receipt = { ok: true, result };
+  const full = build(receipt);
+  return full.length <= MAX_PI_EXTENSION_NOTIFICATION_LENGTH
+    ? full
+    : build(compactPiManagedPackageReceipt(receipt));
+}
+
 function boundedPiManagedPackageToolResult(
   result: unknown,
   requestedSource: string,
@@ -6489,7 +6507,7 @@ export class PiAgent extends BaseAgent {
             proc.send({ type: 'extension_ui_response', id, cancelled: true });
             return;
           }
-          let result: unknown;
+          let result: Record<string, unknown>;
           try {
             result = boundedPiManagedPackageToolResult(
               await mutate({
@@ -6522,10 +6540,20 @@ export class PiAgent extends BaseAgent {
             }
             return;
           }
+          const responseValue = JSON.stringify({ ok: true, result });
+          // Publish a host-owned transcript receipt before retiring local Pi
+          // runtimes. Pi RPC has no response acknowledgement, so relying only
+          // on extension_ui_response can close the tool caller before its turn
+          // consumes the successful result.
+          context.emitExtensionNotification(piManagedPackageToolVisibleReceipt(
+            action,
+            result,
+            resolvePiExtensionUiStrings(this.deps),
+          ));
           proc.send({
             type: 'extension_ui_response',
             id,
-            value: JSON.stringify({ ok: true, result }),
+            value: responseValue,
           });
           notifyPiManagedPackageMutationSettled(this.deps);
         } catch (error) {
