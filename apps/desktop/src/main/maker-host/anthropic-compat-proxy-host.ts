@@ -28,6 +28,7 @@ import {
   createToolUseProviderSpecificFieldsRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
+  compactOversizedImageHistory,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
   sanitizeXaiModelInputFromBody,
@@ -628,6 +629,14 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 函数形态:model-access 凭据同步可能在 proxy 启动(splash)后才把 endpoint
       // 换成下发值;每请求现取才能保证与当前 key 同租户(proxy 内部按值 memoize)。
       upstream: () => claudeUpstreamEndpoint(),
+      // Claude/PI 历史会把图片 base64 累积进下一次请求。仅当请求超过
+      // 32 MiB 时才打开有界 ingress，并优先压缩旧的 tool_result 图片；
+      // 原始媒体仍保留在媒体库，当前用户消息中的图片不被删除。
+      oversizedRequestCompactor: (body, _ctx, targetBytes) =>
+        typeof body === 'object' && body !== null && !Array.isArray(body)
+          ? compactOversizedImageHistory(body as Record<string, unknown>, targetBytes)
+          : null,
+      oversizedRequestIngressBytes: 64 * 1024 * 1024,
       // 'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway 换 key)。
       // 'gateway' 模式恒返 null,字节级行为与扩展前一致。
       routingTransform: createModelRoutingTransform(),

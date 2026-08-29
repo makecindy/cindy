@@ -3966,9 +3966,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Ghost card-action 后台活动),判定与 fail-closed 口径都在 main 侧一处
    * (relaunchBusyActivity.ts)—— renderer 逐个枚举来源会漏,漏了就是静默打断用户任务。
    * 供 UpdateBanner 决定「直接重启」还是「先弹中断警告」。
+   * `silent: true` 只关掉 busy 时的「manual relaunch」INFO(横幅延后轮询用);
+   * 判定本身不变。
    */
-  anyActivityBlockingRelaunch: (): Promise<boolean> =>
-    ipcRenderer.invoke('update-relaunch:blocking-activity'),
+  anyActivityBlockingRelaunch: (opts?: { silent?: boolean }): Promise<boolean> =>
+    ipcRenderer.invoke('update-relaunch:blocking-activity', opts),
 
   /**
    * Tell the main process to apply the downloaded update and relaunch.

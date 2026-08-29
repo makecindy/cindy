@@ -6,6 +6,10 @@
  * of the already-ready patch (status === 'superseding'). Sits between the upper
  * content slot and UserInfoSection in the Sidebar shell.
  *
+ * 自动弹出前先问「有没有任务在跑」(与「立即重启」二次确认同一条探针)。有任务时展开态
+ * 不占侧栏,只留头像行火焰;收起态那颗小火焰本身就是最小化提醒,继续留着。全部停下后再
+ * 弹出完整横幅。用户点 X 关掉的不自动恢复。
+ *
  * 点「立即重启」不再无条件多要一次确认:先查「有没有任务在跑」(逻辑 turn + turn 已结束但
  * 仍在调模型的后台活动,两个来源都要看),**只有真的有任务时**才就地切换成确认态,确认没有
  * 就直接重启。原先那句「应用会自动重启」的中性二次确认纯属多一次点击、不带信息,已退役。
@@ -47,6 +51,7 @@ import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
+import { useDeferUpdateBannerWhileBusy } from '@/hooks/useDeferUpdateBannerWhileBusy';
 import { useLocale } from '@/hooks/useLocale';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tip } from '@/components/ui/tooltip';
@@ -68,9 +73,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   const { status, version, errorCode } = useUpdateStatus();
   const { effectiveLocale } = useLocale();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
-  // status/version 变化时下面 effect 会自动 restore,新一版更新到达时 banner
-  // 重新出现,不会被上一版的 dismiss 状态吞掉。
-  const { dismissed, dismiss, restore, isNewUpdateAfterDismiss } = useUpdateBannerDismiss();
+  // 新一版更新到达时 useDeferUpdateBannerWhileBusy 会清掉上一版的决定并重新探针。
+  const { dismissed, dismiss, reason } = useUpdateBannerDismiss();
+  const hideUntilBusyDecision = useDeferUpdateBannerWhileBusy(status, version);
   // 就地中断警告态:只在点击入口时探到「有任务在跑」才进入。
   const [confirming, setConfirming] = useState(false);
   // 入口点击的 busy 探针在飞标记 —— 防重入。探针是一次 IPC round trip(毫秒级),所以
@@ -134,16 +139,6 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 会真的把 app 重启掉 —— 这条 cleanup 不是防 React 警告,是防意外重启。
   useEffect(() => () => { relaunchEpochRef.current += 1; }, []);
 
-  // 新更新到达时自动 restore:isNewUpdateAfterDismiss 先检查当前 status 是否为
-  // active update 态(ready / superseding),再对比 dismiss 时的快照——两个条件
-  // 都满足才 restore(),从而避免 remount 时 useUpdateStatus() 经历 idle→ready
-  // 的初始水合过程中误触 restore。
-  useEffect(() => {
-    if (isNewUpdateAfterDismiss(status, version ?? null)) {
-      restore();
-    }
-  }, [status, version, restore, isNewUpdateAfterDismiss]);
-
   // 焦点管理:进入确认态 → 聚焦「取消」(安全默认 + 键盘可达);主动取消退出确认态 →
   // 把焦点还给入口「立即重启」按钮,避免焦点掉到 body。
   useEffect(() => {
@@ -202,10 +197,20 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // dialogs. Everything else hides the banner.
   if (status !== 'ready' && !isPreparing && !isTranslocated && !isSpawnFailed) return null;
 
-  // 用户主动 dismiss 后隐藏 banner —— 只作用于 ready/superseding,error 态
-  // 只弹 modal 与 dismiss 无关。dismiss 逻辑在 handleDismiss 里把 confirming 一并
-  // 复位,这里只负责渲染分支。
-  if (dismissed && (status === 'ready' || isPreparing)) return null;
+  // 展开态的完整横幅:用户关掉、有任务在跑、或探针还没给出「弹出 / 让路」决定时
+  // 都不渲染,避免闪一下再收成火焰。收起态那颗小火焰本身就是最小化提醒,busy
+  // 让路和探针空窗都要留着;只有用户点过 X 才连它一起藏。
+  //
+  // 不会跟 UserInfoSection 头像行火焰叠两颗:Sidebar 把 UserInfoSection.isCollapsed
+  // 绑在 isRail 上,rail 分支只渲染头像、没有火焰;展开态本组件在 hideExpandedBanner
+  // 时 return null,只留头像行那颗。busy 时若把折叠火焰也藏掉,rail 会完全没入口。
+  const hideExpandedBanner =
+    hideUntilBusyDecision
+    || (dismissed && (status === 'ready' || isPreparing));
+  if (!isCollapsed && hideExpandedBanner) return null;
+  if (isCollapsed && dismissed && reason === 'user' && (status === 'ready' || isPreparing)) {
+    return null;
+  }
 
   const handleRelaunch = () => {
     const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
