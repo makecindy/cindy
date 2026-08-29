@@ -59,6 +59,8 @@ import {
   isTurnContinuationBoundaryEvent,
 } from '@cindy/maker-shared/turn-continuation';
 import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource, SerializedAttachedFile } from '@/lib/fileTypes';
 import type {
@@ -505,6 +507,8 @@ export interface ChatMessage {
    * 里的原始 message 文案。live 报错仍走 ErrorBanner(store.error),与本字段无关。
    */
   errorReason?: string;
+  /** Structured details for a tool-loop terminal error. */
+  toolLoop?: ToolLoopErrorDetails;
   /**
    * 产生这条 error 行的 provider(错误发生时刻的快照,main 侧 onTurnErrorEvent
    * 从 session-provider-store 同步取值落进 content.providerId)。错误分类必须绑
@@ -2368,8 +2372,10 @@ export interface SessionChatState {
    * 当前 terminal error 的稳定 reason key(maker-core/main 下发,如
    * 'silent-stop-exhausted')。ErrorBanner 据此渲染专用 action(「继续」按钮);
    * 仅在 error 非空时有意义,error 被清/被无 reason 的错误覆盖时同步清。
-   */
+  */
   errorReason?: string | null;
+  /** Structured details for a tool-loop terminal error; null when no such error is active. */
+  toolLoop?: ToolLoopErrorDetails | null;
   recoverableError: string | null;
   /**
    * 输入投影自带的 recovery 镜像（main 的 retry 权威状态）。renderer 侧人工
@@ -2687,6 +2693,7 @@ export type SessionChatLightState = Pick<
   | 'error'
   | 'usageLimitRecovery'
   | 'errorReason'
+  | 'toolLoop'
   | 'recoverableError'
   | 'errorRetryText'
   | 'errorPersistId'
@@ -2747,6 +2754,7 @@ function createInitialState(): SessionChatState {
     error: null,
     usageLimitRecovery: null,
     errorReason: null,
+    toolLoop: null,
     recoverableError: null,
     inputRecovery: null,
     activeTurnRetryText: null,
@@ -2824,6 +2832,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   error: null,
   usageLimitRecovery: null,
   errorReason: null,
+  toolLoop: null,
   recoverableError: null,
   inputRecovery: null,
   activeTurnRetryText: null,
@@ -4225,6 +4234,11 @@ function applyInputProjection(
       : projection.error === s.error
         ? s.usageLimitRecovery
         : extractUsageLimitRecoveryHint({ message: projection.error });
+    const projectionErrorReason =
+      projection.error && typeof projection.errorReason === 'string' && projection.errorReason.length > 0
+        ? projection.errorReason
+        : null;
+    const projectionToolLoop = parseToolLoopErrorDetails(projection.toolLoop) ?? null;
     return {
       ...s,
       messages,
@@ -4238,8 +4252,10 @@ function applyInputProjection(
       error: projection.error,
       usageLimitRecovery,
       // projection 覆盖 error(dispatch 失败等,无 reason 语义)→ reason 一并清,
-      // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。
-      errorReason: null,
+      // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。结构化字段同样
+      // 只在 error 仍存在时保留，并经过 parser 进行远端边界校验。
+      errorReason: projectionErrorReason,
+      toolLoop: projectionToolLoop,
       // 进入凭证切换等待态时同步清 stale recoverableError:等待中的消息永不 dispatch,
       // 没有 stream/turn-done 事件替它清 —— 残留会让视图的 error(=recoverableError
       // 回落)遮住等待横幅,复现"静默排队"(review P2 2026-07-04)。
@@ -4982,14 +4998,29 @@ export function handleStreamEvent(
         isFullText?: boolean;
       };
 
+      // Main assigns a fresh persistId when the provider starts a distinct assistant item.
+      // Seal the preceding bubble before applying the new item's deltas/full-text calibration.
+      const itemBoundary = Boolean(
+        event.persistId &&
+        state.streamingClientId &&
+        event.persistId !== state.streamingClientId,
+      );
+      const textState = itemBoundary ? finalizeStreamingInState(state) : state;
+
       if (isFinal) {
         // Confirmation of streamed text, or a non-streaming final burst.
-        if (!state.streamingClientId && text) {
+        if (!textState.streamingClientId && text) {
           // Guard: if the last message is an assistant with identical content,
           // this is a duplicate isFinal event from the SDK — skip it.
-          const last = state.messages[state.messages.length - 1];
-          if (last && last.role === 'assistant' && last.content === text && !last.isStreaming) {
-            return state;
+          const last = textState.messages[textState.messages.length - 1];
+          if (
+            last &&
+            last.role === 'assistant' &&
+            last.content === text &&
+            !last.isStreaming &&
+            (!event.persistId || last.clientId === event.persistId)
+          ) {
+            return textState;
           }
 
           // F1-a: clientId 用 main 下发的 persistId(落库由 main 单点做,见
@@ -4998,10 +5029,10 @@ export function handleStreamEvent(
           const clientId = event.persistId ?? crypto.randomUUID();
 
           return {
-            ...state,
-            lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
+            ...textState,
+            lastAgentMeta: incomingMeta ?? textState.lastAgentMeta,
             messages: [
-              ...state.messages,
+              ...textState.messages,
               {
                 clientId,
                 role: 'assistant',
@@ -5024,18 +5055,21 @@ export function handleStreamEvent(
           assistantMetaFields.parentToolUseId !== undefined ||
           assistantMetaFields.turnCompleted === true;
         const shouldCalibrateText = Boolean(
-          isFullText === true && text && state.streamingClientId && text !== state.streamingText,
+          isFullText === true &&
+          text &&
+          textState.streamingClientId &&
+          text !== textState.streamingText,
         );
-        if (!incomingMeta && !hasAssistantFields && !shouldCalibrateText) return state;
+        if (!incomingMeta && !hasAssistantFields && !shouldCalibrateText) return textState;
         return {
-          ...state,
+          ...textState,
           ...(shouldCalibrateText ? { streamingText: text } : {}),
           ...(incomingMeta ? { lastAgentMeta: incomingMeta } : {}),
-          ...((hasAssistantFields || shouldCalibrateText) && state.streamingClientId
+          ...((hasAssistantFields || shouldCalibrateText) && textState.streamingClientId
             ? {
                 messages: replaceMessage(
-                  state.messages,
-                  (m) => m.clientId === state.streamingClientId,
+                  textState.messages,
+                  (m) => m.clientId === textState.streamingClientId,
                   (m) => ({
                     ...m,
                     ...(shouldCalibrateText ? { content: text } : {}),
@@ -5048,16 +5082,16 @@ export function handleStreamEvent(
       }
 
       // Delta update
-      if (!state.streamingClientId) {
+      if (!textState.streamingClientId) {
         // F1-a: 在途流式气泡用 main 下发的 persistId 当 clientId(贯穿本 block 所有 delta),
         // 让该 block 最终由 main 落库后的 onCreated 同 id 命中 dedup。
         const clientId = event.persistId ?? crypto.randomUUID();
         return {
-          ...state,
+          ...textState,
           streamingClientId: clientId,
           streamingText: text,
           messages: [
-            ...state.messages,
+            ...textState.messages,
             {
               clientId,
               role: 'assistant',
@@ -5070,13 +5104,13 @@ export function handleStreamEvent(
         };
       }
 
-      const nextText = state.streamingText + text;
-      const id = state.streamingClientId;
+      const nextText = textState.streamingText + text;
+      const id = textState.streamingClientId;
       return {
-        ...state,
+        ...textState,
         streamingText: nextText,
         messages: replaceMessage(
-          state.messages,
+          textState.messages,
           (m) => m.clientId === id,
           (m) => ({ ...m, content: nextText }),
         ),
@@ -5436,6 +5470,10 @@ export function handleStreamEvent(
       // F1-a: assistant 文本落库已收口 main(messagePersistBroadcaster 在 done 边界
       // flushAssistantBlock),renderer 这里只做 UI 收尾(finalize 在飞气泡)。
       const finalized = finalizeStreamingInState(state);
+      // A terminal tool-loop error may be followed by the SDK's done event.
+      // Keep its structured details for the live banner while the terminal
+      // error remains visible; a clean done must still clear stale details.
+      const preservedToolLoop = finalized.error !== null ? state.toolLoop : null;
 
       // Side-effect (titleUpdateCallbacks) is fired by the stream handler in
       // `initGlobalListeners`, not from inside this reducer — reducers stay pure.
@@ -5510,6 +5548,7 @@ export function handleStreamEvent(
         streamingText: '',
         isStreaming: false,
         recoverableError: null,
+        toolLoop: preservedToolLoop,
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
@@ -5547,12 +5586,15 @@ export function handleStreamEvent(
         reason,
         errorStatus,
         imageCount,
+        toolLoop: toolLoopRaw,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
         imageCount?: number;
+        toolLoop?: unknown;
       };
+      const toolLoop = parseToolLoopErrorDetails(toolLoopRaw);
       // 视觉桥用户提示（正在识别 / fallback / 不可用）：toast 展示，完全不改 turn 状态
       // （不设 recoverableError、不阻断开流），零阻断。用 isVisionBridgeReason 三重校验
       // （source==='vision-bridge' + isTerminal:false + reason 枚举）——普通 agent / 远程
@@ -5635,6 +5677,7 @@ export function handleStreamEvent(
             error: null,
             usageLimitRecovery: null,
             errorReason: null,
+            toolLoop: null,
             recoverableError: null,
             errorRetryText: null,
             errorPersistId: null,
@@ -5659,6 +5702,7 @@ export function handleStreamEvent(
           // 重试进度, 而重投恰恰只在**非终止**态发生 —— 清掉就等于 UI 侧只能回退
           // 文案匹配。其它非终止 error 仍不带 reason, 行为不变。
           errorReason: reason ?? null,
+          toolLoop: null,
           recoverableError: errMsg,
           errorRetryText: null,
           errorPersistId: null,
@@ -5717,6 +5761,8 @@ export function handleStreamEvent(
             : extractUsageLimitRecoveryHint(event.data),
         errorReason:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (reason ?? null),
+        toolLoop:
+          isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (toolLoop ?? null),
         recoverableError: null,
         errorRetryText: derivedRetryText ?? preservedRetryText,
         // persistId 只绑定即将落库的 error 行,不是重试依据。新事件带来非空 id
@@ -6191,6 +6237,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     streamingText: '',
     isStreaming: false,
     recoverableError: null,
+    toolLoop: null,
     activeTurnRetryText: null,
     errorRetryText: null,
     errorPersistId: null,
@@ -6443,6 +6490,7 @@ function handleStatusUpdate(
     error: isTurnStart ? null : state.error,
     usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
+    toolLoop: isTurnStart ? null : state.toolLoop,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
     errorPersistId: isTurnStart ? null : state.errorPersistId,
     recoverableError: isTurnComplete ? null : state.recoverableError,
@@ -6781,6 +6829,10 @@ function enqueueTextDeltaPayload(
       !sameLiveIngressScope(existing.ingress, ingress))
   ) {
     discardPendingTextDelta(sessionId);
+    existing = undefined;
+  }
+  if (existing?.persistId && persistId && existing.persistId !== persistId) {
+    flushPendingTextDelta(sessionId);
     existing = undefined;
   }
   if (existing) {
@@ -8693,6 +8745,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     error: state.error,
     usageLimitRecovery: state.usageLimitRecovery,
     errorReason: state.errorReason,
+    toolLoop: state.toolLoop,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
     errorPersistId: state.errorPersistId,
@@ -8740,6 +8793,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.error === b.error &&
     a.usageLimitRecovery === b.usageLimitRecovery &&
     a.errorReason === b.errorReason &&
+    a.toolLoop === b.toolLoop &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
     a.errorPersistId === b.errorPersistId &&
@@ -9113,6 +9167,7 @@ function syncActiveTurnsFromMain(): void {
             error: null,
             usageLimitRecovery: null,
             errorReason: null,
+            toolLoop: null,
             recoverableError: null,
             activeTurnRetryText: null,
             errorRetryText: null,
@@ -9930,6 +9985,7 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
           error: decodeRemoteErrorMessage(error instanceof Error ? error.message : String(error)),
           usageLimitRecovery: null,
           errorReason: null,
+          toolLoop: null,
           recoverableError: null,
           errorRetryText: null,
         }
@@ -13547,6 +13603,7 @@ function clearError(sessionId: string): void {
       error: null,
       usageLimitRecovery: null,
       errorReason: null,
+      toolLoop: null,
       recoverableError: null,
       errorRetryText: null,
       errorPersistId: null,
@@ -13682,6 +13739,7 @@ function continueAfterSilentStop(sessionId: string): void {
         error: null,
         usageLimitRecovery: null,
         errorReason: null,
+        toolLoop: null,
         errorRetryText: null,
         errorPersistId: null,
       }));
@@ -13893,6 +13951,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       error: null,
       usageLimitRecovery: null,
       errorReason: null,
+      toolLoop: null,
       recoverableError: null,
       activeTurnRetryText: null,
       errorRetryText: null,
@@ -16178,6 +16237,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       >;
       const message = typeof c.message === 'string' ? c.message : '';
       const reason = typeof c.reason === 'string' ? c.reason : undefined;
+      const toolLoop = parseToolLoopErrorDetails(c.toolLoop);
       const errorProviderId =
         typeof c.providerId === 'string' && c.providerId ? c.providerId : undefined;
       return {
@@ -16186,6 +16246,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         content: message,
         isStreaming: false,
         ...(reason ? { errorReason: reason } : {}),
+        ...(toolLoop ? { toolLoop } : {}),
         // 错误发生时的 provider 快照:恢复后的分类按它走,不用当前 session.providerId。
         ...(errorProviderId ? { errorProviderId } : {}),
         // interrupted-turn-resume:「忽略」的持久化标记(updateContent 写入)。

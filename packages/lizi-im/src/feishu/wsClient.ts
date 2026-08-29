@@ -65,6 +65,7 @@ import {
 import { getLog } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
 import type { BotCredentials, FeishuConnectionStatus } from './internal-types.js';
+import type { IMMessageEvent } from '../types.js';
 
 // ── module state ──────────────────────────────────────────────────────────────
 
@@ -258,6 +259,7 @@ interface UnconfirmedOpenRetry {
   text: string;
   attachments: Awaited<ReturnType<typeof downloadAttachments>>['attachments'];
   unsupported: ReturnType<typeof parseIncoming>['unsupported'];
+  replyContext?: NonNullable<IMMessageEvent['replyContext']>;
   raw: RawMessageEvent;
   attempt: number;
   /** 迟到话题已接管路由: 只恢复 UUID 并撤回开场白, 不再派 turn。 */
@@ -481,6 +483,7 @@ async function retryUnconfirmedOpen(
           },
         }
       : {}),
+    ...(entry.replyContext ? { replyContext: entry.replyContext } : {}),
     attachments: entry.attachments,
     unsupported: entry.unsupported,
     raw: entry.raw,
@@ -1457,6 +1460,7 @@ async function processClaimedMessage(
 ): Promise<void> {
   const log = getLog();
   const { messageId, chatId, isGroup, senderOpenId } = base;
+  const incomingThreadId = isGroup ? data.message?.thread_id : undefined;
   // 上游(handleIncomingMessage)已做过非空门, 这里保留可选链防御:
   // 提取分支后 data.message 的窄化不跨函数传递。
   const msgType = data.message?.message_type ?? '';
@@ -1572,6 +1576,15 @@ async function processClaimedMessage(
     return;
   }
 
+  // 飞书普通「回复某条消息」只在 parent_id 表达引用关系;root_id 也会出现在
+  // 话题链路,不能拿它判普通回复。严格限定群主流(!thread_id),确保已有话题
+  // @bot 与普通群主流 @bot 不经过新增 REST/上下文路径。
+  const parentMessageId = data.message?.parent_id;
+  const resolvedReply =
+    isGroup && !incomingThreadId && parentMessageId
+      ? await outbound.resolveReplyMessage(parentMessageId, chatId)
+      : null;
+
   // 入站门禁复查: 附件下载等 await 期间连接可能已 stop()/换账号换代 — 不复查
   // 会把旧连接的轮次推进新连接的编排状态(锚点污染/跨账号出站)。
   if (!isActiveConnection(generation, botAppId)) {
@@ -1592,7 +1605,6 @@ async function processClaimedMessage(
   let laneUserId: string | null = null;
   let groupContextLane: { chatId: string; threadId: string } | undefined;
   if (isGroup) {
-    const incomingThreadId = data.message?.thread_id;
     if (incomingThreadId) {
       laneUserId = encodeLaneUserId(chatId, incomingThreadId);
       outbound.pushReplyAnchor(laneUserId, messageId);
@@ -1688,6 +1700,7 @@ async function processClaimedMessage(
           text,
           attachments,
           unsupported,
+          ...(resolvedReply ? { replyContext: resolvedReply.replyContext } : {}),
           raw: data,
           attempt: 0,
           commitUnpairedFlat,
@@ -1775,6 +1788,7 @@ async function processClaimedMessage(
           },
         }
       : {}),
+    ...(resolvedReply ? { replyContext: resolvedReply.replyContext } : {}),
     attachments,
     unsupported,
     raw: data,

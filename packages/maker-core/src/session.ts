@@ -43,7 +43,7 @@ import type {
   RewindFilesResult,
   SendOrigin,
 } from './types/events.js';
-import { isTerminalAgentErrorEvent } from './types/events.js';
+import { isTerminalAgentErrorEvent, parseToolLoopErrorDetails } from './types/events.js';
 import type { ContextUsageData } from './types/context-usage.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
@@ -432,6 +432,7 @@ export class Session {
     reason?: string;
     sdkError?: string;
     errorStatus?: number;
+    toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
   } | null = null;
   /** Survives N+1 reservation clearing the current snapshot; leftover done must not adopt. */
   private lastObservedTerminalGeneration: number | null = null;
@@ -576,6 +577,7 @@ export class Session {
     reason?: string;
     sdkError?: string;
     errorStatus?: number;
+    toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
   } {
     if (
       this.turnGeneration <= 0 ||
@@ -600,6 +602,9 @@ export class Session {
         ...(typeof this.terminalEventObservedErrorSignals?.errorStatus === 'number'
           ? { errorStatus: this.terminalEventObservedErrorSignals.errorStatus }
           : {}),
+        ...(this.terminalEventObservedErrorSignals?.toolLoop
+          ? { toolLoop: this.terminalEventObservedErrorSignals.toolLoop }
+          : {}),
       };
     }
     return { kind: 'done', generation: this.turnGeneration };
@@ -611,6 +616,7 @@ export class Session {
       reason?: string;
       sdkError?: string;
       errorStatus?: number;
+      toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
     } | null;
   } {
     const errorData = (listenerEvent.data ?? null) as {
@@ -618,12 +624,14 @@ export class Session {
       reason?: unknown;
       sdkError?: unknown;
       errorStatus?: unknown;
+      toolLoop?: unknown;
     } | null;
     const errorMessage = errorData?.message;
     const signals: {
       reason?: string;
       sdkError?: string;
       errorStatus?: number;
+      toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
     } = {};
     if (typeof errorData?.reason === 'string' && errorData.reason.length > 0) {
       signals.reason = errorData.reason;
@@ -634,10 +642,17 @@ export class Session {
     if (typeof errorData?.errorStatus === 'number' && Number.isFinite(errorData.errorStatus)) {
       signals.errorStatus = errorData.errorStatus;
     }
+    const toolLoop = parseToolLoopErrorDetails(errorData?.toolLoop);
+    if (toolLoop) signals.toolLoop = toolLoop;
     return {
       message: typeof errorMessage === 'string' && errorMessage.length > 0 ? errorMessage : null,
       signals:
-        signals.reason || signals.sdkError || signals.errorStatus !== undefined ? signals : null,
+        signals.reason ||
+        signals.sdkError ||
+        signals.errorStatus !== undefined ||
+        signals.toolLoop
+          ? signals
+          : null,
     };
   }
 
@@ -670,6 +685,7 @@ export class Session {
       reason?: string;
       sdkError?: string;
       errorStatus?: number;
+      toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
     } | null;
   } | null {
     const snapshot = this.terminalObservedDuringReservation;

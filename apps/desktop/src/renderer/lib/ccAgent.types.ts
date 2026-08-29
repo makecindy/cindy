@@ -5,6 +5,7 @@ import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
@@ -373,5 +374,7 @@ export interface Message {
    * null = 切换功能上线前的老消息(回落 session.agentKind)。
    */
   agentKind?: 'cc' | 'codex' | 'pi' | null;
+  /** Structured guard details for a persisted tool-loop terminal error. */
+  toolLoop?: ToolLoopErrorDetails;
   createdAt: string; // ISO 8601
 }

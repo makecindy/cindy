@@ -300,6 +300,70 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('return withSendToSessionLock(sessionId, applyLocked);');
   });
 
+  it('maps every Codex relink failure to the structured IPC error protocol', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const relinkBoundary = setModel.slice(
+      setModel.indexOf('const relinkCodexThread ='),
+      setModel.indexOf('const rebuildLiveOrcaWorker'),
+    );
+    expect(relinkBoundary).toContain(
+      "throwIpcError(\n                'PRECONDITION_FAILED'",
+    );
+    expect(relinkBoundary).toContain('.catch((error) => {');
+    expect(relinkBoundary).toContain('reserveCodexForkCleanup(');
+    expect(relinkBoundary).toContain('...(cleanup ? { cleanup } : {})');
+    expect(relinkBoundary).toContain('if (isIpcError(error)) throw error;');
+    expect(relinkBoundary).toContain(
+      "throwIpcError('INTERNAL', 'Failed to rebuild Codex provider thread')",
+    );
+    expect(relinkBoundary).not.toContain('throw new Error');
+  });
+
+  it('relinks legacy provider selections with the persisted effort and Fast axes', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const targetRoute = setModel.slice(
+      setModel.indexOf('const targetCodexRoute:'),
+      setModel.indexOf('const relinkCodexThread ='),
+    );
+    expect(targetRoute).toContain('requiresCodexThreadRelink');
+    expect(targetRoute).toContain('? {');
+    expect(targetRoute).toContain(
+      'effort: atomicSelection ? atomicSelection.effort : runtimeStatus.effort',
+    );
+    expect(targetRoute).toContain(
+      'fastMode: atomicSelection ? atomicSelection.fastMode : runtimeStatus.fastMode',
+    );
+    expect(targetRoute).not.toContain('requiresCodexThreadRelink && atomicSelection');
+  });
+
+  it('derives the Codex relink boundary from effective credential identities', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const relinkGate = setModel.slice(
+      setModel.indexOf('const hasPersistedLocalCodexThread ='),
+      setModel.indexOf('const targetCodexRoute:'),
+    );
+    expect(relinkGate).toContain('decideCodexProviderThreadRelink(');
+    expect(relinkGate).toContain(
+      '{ model: runtimeStatus.model, providerId: runtimeStatus.providerId }',
+    );
+    expect(relinkGate).toContain('{ model, providerId: targetProviderId }');
+    expect(relinkGate).toContain("relinkDecision === 'unresolved'");
+    expect(relinkGate).toContain("relinkDecision === 'relink'");
+    expect(relinkGate).toContain("throwIpcError(\n          'PRECONDITION_FAILED'");
+  });
+
   it('rejects terminal tasks before effort or Fast mutations recreate runtime state', () => {
     const effort = handlerBody(
       registerSource,

@@ -6523,6 +6523,7 @@ const MessageItem = memo(function MessageItem({
           message={message.content}
           reason={message.errorReason}
           providerId={message.errorProviderId}
+          toolLoop={message.toolLoop}
         />
       );
     case 'thinking':

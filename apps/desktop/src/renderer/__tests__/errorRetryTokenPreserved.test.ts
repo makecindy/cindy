@@ -155,4 +155,83 @@ describe('handleStreamEvent — terminal error keeps the projection retry token'
 
     expect(next.errorPersistId).toBe('err_persist_2');
   });
+
+  it('projects structured tool-loop details from terminal guard errors', () => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: {
+          message: 'tool loop stopped',
+          reason: 'tool_use_loop_detected',
+          isTerminal: true,
+          toolLoop: { kind: 'contract', count: 3 },
+        },
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    expect(next.toolLoop).toEqual({ kind: 'contract', count: 3 });
+  });
+
+  it('preserves tool-loop details when the trailing done event follows the terminal error', () => {
+    const afterError = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: {
+          message: 'tool loop stopped',
+          reason: 'tool_use_loop_detected',
+          isTerminal: true,
+          toolLoop: { kind: 'contract', count: 3 },
+        },
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    const afterDone = handleStreamEvent(afterError, {
+      sessionId: SESSION_ID,
+      type: 'done',
+      data: {},
+    } as Parameters<typeof handleStreamEvent>[1]);
+
+    expect(afterDone.error).toBe('tool loop stopped');
+    expect(afterDone.toolLoop).toEqual({ kind: 'contract', count: 3 });
+  });
+
+  it('clears stale tool-loop details on a clean done event', () => {
+    const next = handleStreamEvent(
+      {
+        ...EMPTY_SESSION_STATE,
+        error: null,
+        toolLoop: { kind: 'contract', count: 3 },
+        isStreaming: true,
+      },
+      {
+        sessionId: SESSION_ID,
+        type: 'done',
+        data: {},
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    expect(next.toolLoop).toBeNull();
+  });
+
+  it('rejects malformed tool-loop details before they reach renderer state', () => {
+    const next = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, isStreaming: true },
+      {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: {
+          message: 'tool loop stopped',
+          reason: 'tool_use_loop_detected',
+          isTerminal: true,
+          toolLoop: { kind: 'missing_required_field', count: 3 },
+        },
+      } as Parameters<typeof handleStreamEvent>[1],
+    );
+
+    expect(next.toolLoop).toBeNull();
+  });
 });

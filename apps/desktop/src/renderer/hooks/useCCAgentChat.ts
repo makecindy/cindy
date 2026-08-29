@@ -58,6 +58,7 @@ import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projec
 import { createLogger } from '@/lib/logger';
 import { isRemoteSessionSticky } from '@/lib/makerTransport';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 const log = createLogger('UseCCAgentChat');
 
@@ -183,6 +184,8 @@ interface UseCCAgentChatReturn {
   /** 当前 terminal error 的稳定 reason key(如 'silent-stop-exhausted');ErrorBanner
    *  据此渲染专用 action。仅 error 非空时有意义。 */
   errorReason: string | null;
+  /** Structured details for a tool-loop terminal error, when available. */
+  toolLoop: ToolLoopErrorDetails | null;
   /** error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):ErrorBanner
    *  网络分支据此显示「正在自动重试…」而非「可点击重试」。 */
   errorIsRecoverable: boolean;
@@ -859,6 +862,7 @@ export function useCCAgentChat(
         : lightState.recoverableError != null
           ? (lightState.errorReason ?? null)
           : null,
+    toolLoop: lightState.error ? (lightState.toolLoop ?? null) : null,
     // 当前 error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):
     // ErrorBanner 网络分支据此显示「正在自动重试…」而非「可点击重试」。
     errorIsRecoverable: !lightState.error && lightState.recoverableError != null,

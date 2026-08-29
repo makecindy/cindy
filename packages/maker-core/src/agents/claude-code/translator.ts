@@ -188,6 +188,8 @@ export interface RuntimeState {
   activeUsagePriceVariantByParent: Map<string, 'standard' | 'priority'>;
   /** Price variant captured for the next request before its message_start arrives. */
   pendingUsagePriceVariantByParent: Map<string, 'standard' | 'priority'>;
+  /** Monotonic ids for user messages carrying tool_result blocks, used to keep one assistant batch together. */
+  toolResultBatchSeq: number;
   usageSegmentSeq: number;
   generation: ClaudeGenerationState;
 }
@@ -210,6 +212,7 @@ export function newRuntimeState(): RuntimeState {
     activeUsageSegmentByParent: new Map(),
     activeUsagePriceVariantByParent: new Map(),
     pendingUsagePriceVariantByParent: new Map(),
+    toolResultBatchSeq: 0,
     usageSegmentSeq: 0,
     generation: newClaudeGenerationState(),
   };
@@ -428,25 +431,32 @@ export function extractAssistantMeta(rawMsg: unknown): Record<string, unknown> {
 // TaskOutput 读取的是任务/agent 输出，不等同于终端工具结果。
 const TERMINAL_OUTPUT_TOOL_NAMES = new Set(['Bash', 'PowerShell']);
 
+interface ToolResultPair {
+  toolUseId: string;
+  fullText: string;
+  isError: boolean;
+}
+
 function normalizeToolResultFullText(
-  pair: { toolUseId: string; fullText: string },
+  pair: ToolResultPair,
   rt: RuntimeState,
-): { toolUseId: string; fullText: string } {
+): ToolResultPair {
   const toolName = rt.toolUseIdToName.get(pair.toolUseId);
   if (!toolName || !TERMINAL_OUTPUT_TOOL_NAMES.has(toolName)) return pair;
   return {
     toolUseId: pair.toolUseId,
     fullText: stripTerminalControlSequences(pair.fullText),
+    isError: pair.isError,
   };
 }
 
 function extractToolResultFullText(
   message: { content?: unknown } | undefined,
   rt: RuntimeState,
-): Array<{ toolUseId: string; fullText: string }> {
+): ToolResultPair[] {
   if (!message?.content || typeof message.content === 'string') return [];
   if (!Array.isArray(message.content)) return [];
-  const out: Array<{ toolUseId: string; fullText: string }> = [];
+  const out: ToolResultPair[] = [];
   for (const block of message.content as unknown[]) {
     const pair = readToolResultFullText(block);
     if (pair) {
@@ -457,9 +467,9 @@ function extractToolResultFullText(
   return out;
 }
 
-function readToolResultFullText(blockRaw: unknown): { toolUseId: string; fullText: string } | null {
+function readToolResultFullText(blockRaw: unknown): ToolResultPair | null {
   if (!blockRaw || typeof blockRaw !== 'object') return null;
-  const b = blockRaw as { type?: unknown; tool_use_id?: unknown; content?: unknown };
+  const b = blockRaw as { type?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown };
   if (b.type !== 'tool_result') return null;
   if (typeof b.tool_use_id !== 'string' || b.tool_use_id.length === 0) return null;
   const inner = b.content;
@@ -476,7 +486,7 @@ function readToolResultFullText(blockRaw: unknown): { toolUseId: string; fullTex
     }
     fullText = parts.join('\n');
   }
-  return { toolUseId: b.tool_use_id, fullText };
+  return { toolUseId: b.tool_use_id, fullText, isError: b.is_error === true };
 }
 
 /**
@@ -655,9 +665,18 @@ interface TranslateContext {
    * upstream-response-idle watchdog: user 含 tool_result 时出队, 配对 onToolUseStart。
    * 不要复用 extractToolResultFullText — 那里 fullText.length>0 过滤会漏空内容 result
    * (Bash 无 stdout / Write 成功 / MCP return null), 导致 pendingToolIds 永远漏减,
-   * watchdog 整 turn 失效。parentToolUseId 与 tool_use 同源，用于隔离并发 subagent。
+   * watchdog 整 turn 失效。isError 来自 SDK tool_result.is_error；只有明确失败的结果
+   * 才能进入契约错误熔断。toolResultBatchId 标识同一 user tool-result 消息，使并行
+   * 工具调用不会在模型看到错误前被当成多轮重试。parentToolUseId 与 tool_use 同源，
+   * 用于隔离并发 subagent。
    */
-  onToolResultDone?: (toolUseId: string, output: string, parentToolUseId?: string) => void;
+  onToolResultDone?: (
+    toolUseId: string,
+    output: string,
+    parentToolUseId?: string,
+    isError?: boolean,
+    toolResultBatchId?: string,
+  ) => void;
   onSubagentTaskLaunched?: (task: {
     taskId: string;
     parentToolUseId: string;
@@ -731,6 +750,12 @@ export function translateSdkMessage(
       const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
         ? msg.parent_tool_use_id
         : undefined;
+      const content = msg.message?.content;
+      const hasToolResult = Array.isArray(content)
+        && content.some((blockRaw) => readToolResultFullText(blockRaw) !== null);
+      const toolResultBatchId = hasToolResult
+        ? `tool-result-batch-${++ctx.rt.toolResultBatchSeq}`
+        : undefined;
       const fullPairs = extractToolResultFullText(msg.message, ctx.rt);
       for (const pair of fullPairs) {
         queue.push({
@@ -791,7 +816,6 @@ export function translateSdkMessage(
       }
       // 单独遍历: 不能复用 extractToolResultFullText, 见 onToolResultDone JSDoc。
       const completedToolUseIds = new Set(fullPairs.map((pair) => pair.toolUseId));
-      const content = msg.message?.content;
       if (ctx.onToolResultDone) {
         if (Array.isArray(content)) {
           for (const blockRaw of content as unknown[]) {
@@ -799,7 +823,13 @@ export function translateSdkMessage(
             const pair = rawPair ? normalizeToolResultFullText(rawPair, ctx.rt) : null;
             if (!pair) continue;
             completedToolUseIds.add(pair.toolUseId);
-            ctx.onToolResultDone(pair.toolUseId, pair.fullText, parentToolUseId);
+            ctx.onToolResultDone(
+              pair.toolUseId,
+              pair.fullText,
+              parentToolUseId,
+              pair.isError,
+              toolResultBatchId,
+            );
           }
         }
       } else if (Array.isArray(content)) {

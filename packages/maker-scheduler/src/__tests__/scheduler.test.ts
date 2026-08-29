@@ -634,6 +634,58 @@ describe('Scheduler', () => {
     expect(h.fireCalls[0].schedule.targetSessionId).toBe('sess-existing');
   });
 
+  it('pre-bind fire failure persists targetSessionId and emits it on failed (runNow)', async () => {
+    h = makeHarness({
+      validateTargetSession: async (_id, op) => {
+        if (op === 'fire') throw new Error('target session rejected');
+      },
+    });
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      targetSessionId: 'session-bound',
+    });
+    const failedEvents: Array<{ type: string; sessionId?: string; error: string }> = [];
+    h.scheduler.on('failed', (e) => failedEvents.push(e));
+
+    const { runId } = await h.scheduler.runNow(sch.id);
+    const run = (await h.scheduler.listRuns(sch.id)).find((item) => item.id === runId);
+
+    expect(h.fireCalls).toHaveLength(0);
+    expect(run?.status).toBe('failed');
+    expect(run?.sessionId).toBe('session-bound');
+    expect(failedEvents).toEqual([
+      {
+        type: 'failed',
+        scheduleId: sch.id,
+        runId,
+        error: 'target session rejected',
+        sessionId: 'session-bound',
+      },
+    ]);
+  });
+
+  it('pre-bind fire failure persists targetSessionId on the cron path too', async () => {
+    h = makeHarness({
+      validateTargetSession: async (_id, op) => {
+        if (op === 'fire') throw new Error('target session rejected');
+      },
+    });
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      targetSessionId: 'session-bound',
+    });
+    const failedEvents: Array<{ sessionId?: string }> = [];
+    h.scheduler.on('failed', (e) => failedEvents.push(e));
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    await h.scheduler.tick();
+
+    const runs = await h.scheduler.listRuns(sch.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].status).toBe('failed');
+    expect(runs[0].sessionId).toBe('session-bound');
+    expect(failedEvents[0]?.sessionId).toBe('session-bound');
+  });
+
   it('emits fired/completed/changed events', async () => {
     const events: Array<{ type: string; scheduleId: string }> = [];
     h.scheduler.on('fired', (e) => events.push({ type: e.type, scheduleId: e.scheduleId }));

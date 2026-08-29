@@ -473,7 +473,16 @@ export function CCAgentSidebarUpper() {
     [searchProjectSessions, hiddenProjectKeys, localPlatform],
   );
   const attentionNotifications = useSessionAttentionSnapshot();
-  const scheduleSessionIndex = useAutomationScheduleSessionIndex();
+  // Sidebar is rendered outside the :sessionId route, so useParams won't work.
+  // Use useMatch to extract the active session id from the URL.
+  const match = useMatch('/cc-agent/:sessionId');
+  const orcaMatch = useMatch('/cc-agent/orca/:sessionId');
+  const filesMatch = useMatch('/cc-agent/files/:sessionId');
+  const activeSessionId = orcaMatch?.params.sessionId ?? match?.params.sessionId;
+  const filesSessionId = filesMatch?.params.sessionId;
+  // files 路由下用户注视的就是该会话(ExpandedView 的 viewedSessionId 同一口径),
+  // 可见成功同样不该给它点 done 角标。
+  const scheduleSessionIndex = useAutomationScheduleSessionIndex(activeSessionId ?? filesSessionId);
   // 侧栏右侧 urgent 红点的"额外"来源:定时任务未读且失败(status != 'success')。
   // sessionAttentionStore 只跟踪 chat 内 attention;schedule 未读通过 sidebarNotifications
   // 合并进 hasAttentionNotification,但 attentionKind 缺失导致默认走绿(见 SessionItem
@@ -488,17 +497,9 @@ export function CCAgentSidebarUpper() {
   }, [scheduleSessionIndex]);
   const navigate = useNavigate();
 
-  // Sidebar is rendered outside the :sessionId route, so useParams won't work.
-  // Use useMatch to extract the active session id from the URL.
-  const match = useMatch('/cc-agent/:sessionId');
-  const orcaMatch = useMatch('/cc-agent/orca/:sessionId');
-  const activeSessionId = orcaMatch?.params.sessionId ?? match?.params.sessionId;
-
   // Workdir-browse mode (skillhub Market sidebar pattern). When the user
   // clicked the file-text button on a Project, we swap sidebar contents to
   // the lazy file tree of that session's workdir.
-  const filesMatch = useMatch('/cc-agent/files/:sessionId');
-  const filesSessionId = filesMatch?.params.sessionId;
   const filesSession = useMemo(
     () => resolveDocModeFilesSession(allSessionsForAttention, filesSessionId),
     [allSessionsForAttention, filesSessionId],

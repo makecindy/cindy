@@ -25,6 +25,9 @@ import { learnApiFor } from './learnTransport';
 import { getSessionDeviceId, remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
+import { ERROR_REASON_I18N_KEYS } from '@/components/chat/errorReasonI18n';
+import { getToolLoopI18nKey } from '@/components/chat/toolLoopI18n';
+import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
 
 /** 首次跳转登记(模块级,跨组件重挂存活):自动带用户去蒸馏会话只发生一次。
  *  用 ref 会在"用户切回原会话 → 卡片重挂"时归零,把用户再次强行拽走
@@ -84,6 +87,16 @@ export function LearnStatusCard({ data, contextSessionId }: LearnStatusCardProps
   if (!runId || !run) return null;
 
   const isRunning = run.status === 'collecting' || run.status === 'distilling';
+  const errorI18nKey = run.errorReason ? ERROR_REASON_I18N_KEYS[run.errorReason] : undefined;
+  const toolLoop = parseToolLoopErrorDetails(run.toolLoop);
+  const toolLoopI18nKey = run.errorReason === 'tool_use_loop_detected'
+    ? getToolLoopI18nKey(toolLoop)
+    : undefined;
+  const errorText = toolLoopI18nKey && toolLoop
+    ? t(toolLoopI18nKey, { count: toolLoop.count })
+    : errorI18nKey
+      ? t(errorI18nKey)
+      : run.error;
 
   const handleCancel = async (): Promise<void> => {
     try {
@@ -145,8 +158,8 @@ export function LearnStatusCard({ data, contextSessionId }: LearnStatusCardProps
       </p>
 
       {/* failed 的错误;或上一轮对话改坏了提案(旧版保留)的提示 */}
-      {run.error && (run.status === 'failed' || run.status === 'awaiting-review') && (
-        <p className="mt-1.5 pl-[23px] text-xs text-[var(--error-fg)]">{run.error}</p>
+      {errorText && (run.status === 'failed' || run.status === 'awaiting-review') && (
+        <p className="mt-1.5 pl-[23px] text-xs text-[var(--error-fg)]">{errorText}</p>
       )}
 
       {run.status === 'awaiting-review' && (

@@ -17,6 +17,9 @@ import type { MobileGoalStatus } from '@cindy/maker-shared/device-link-contract'
  */
 export const GOAL_OVERLOAD_LAST_REASON = 'model service at capacity';
 
+/** Stable Goal projection reason for a tool-loop terminal error. */
+export const GOAL_TOOL_LOOP_LAST_REASON = 'tool_use_loop_detected';
+
 /**
  * 状态标签映射。值用 getter 惰性求值(i18n.t 在访问时调用,不冻结语言),
  * 既保留 `GOAL_STATUS_LABEL[status]` 索引用法给外部调用方,又跟随语言切换。
@@ -56,6 +59,9 @@ export function goalReasonText(lastReason?: string | null): string | null {
   if (!lastReason) return null;
   if (lastReason === GOAL_OVERLOAD_LAST_REASON) {
     return i18n.t('interaction.contextSheet.goalCapacityHint');
+  }
+  if (lastReason === GOAL_TOOL_LOOP_LAST_REASON) {
+    return i18n.t('session.tail.toolUseLoopDetected');
   }
   return lastReason;
 }

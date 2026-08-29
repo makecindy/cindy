@@ -795,6 +795,10 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_ISOLATED_AUTH', env.XDT_ISOLATED_AUTH],
     // CDP 端口覆写(bootstrap-electron 消费): 并行多开沙箱时给后起实例换端口。
     ['XDT_CDP_PORT', env.XDT_CDP_PORT],
+    // 一次性 Grok wire 归因探针(dev-only;正常环境不设置,不产生额外日志)。
+    ['XDT_WIRE_DIAGNOSTICS', env.XDT_WIRE_DIAGNOSTICS],
+    // 一次性 Grok strict tool spike(dev-only;必须与 wire probe 一起显式开启)。
+    ['XDT_WIRE_DIAGNOSTICS_STRICT', env.XDT_WIRE_DIAGNOSTICS_STRICT],
     ['CINDY_IOS_SIMULATOR_NATIVE_H264', env.CINDY_IOS_SIMULATOR_NATIVE_H264],
     ['CINDY_IOS_SIMULATOR_NATIVE_HID', env.CINDY_IOS_SIMULATOR_NATIVE_HID],
     ['XDT_TAPDB_DEV', env.XDT_TAPDB_DEV],

@@ -2129,6 +2129,14 @@ function applyRemoteTextEvent(
     && hasAuthoritativePendingAssembly;
   if (rejectsBeforeClientIdMutation) return false;
 
+  const previousStreamingClientId = streamingAssistantClientIds.get(sessionId);
+  const normalizedPersistId = persistId?.trim();
+  const itemBoundaryClientId = normalizedPersistId
+    && previousStreamingClientId
+    && !isGeneratedStreamingClientId(previousStreamingClientId)
+    && previousStreamingClientId !== normalizedPersistId
+    ? previousStreamingClientId
+    : undefined;
   const clientIdResolution = streamingClientIdFor(sessionId, persistId);
   const { clientId } = clientIdResolution;
   const previousStreamingDeviceId = streamingAssistantDeviceId(sessionId, clientId);
@@ -2163,6 +2171,9 @@ function applyRemoteTextEvent(
       )
     );
   if (rejectsNonAuthoritativeTransportReplay) return clientIdResolution.changed;
+  const itemBoundaryChanged = itemBoundaryClientId
+    ? finalizeRemoteStreamingMessageByClientId(sessionId, itemBoundaryClientId)
+    : false;
   const resetsTransportAssembly = previousStreamingDeviceId !== undefined
     && deviceId !== undefined
     && previousStreamingDeviceId !== deviceId
@@ -2226,7 +2237,7 @@ function applyRemoteTextEvent(
     ) {
       rememberStreamingAssistantDeviceId(sessionId, clientId, deviceId);
     }
-    return changed || clientIdResolution.changed;
+    return changed || clientIdResolution.changed || itemBoundaryChanged;
   }
 
   const currentText = existing ? contentToPreview(existing.content) : '';
@@ -2304,7 +2315,7 @@ function applyRemoteTextEvent(
   ) {
     rememberStreamingAssistantDeviceId(sessionId, clientId, deviceId);
   }
-  return changed || clientIdResolution.changed;
+  return changed || clientIdResolution.changed || itemBoundaryChanged;
 }
 
 function isRemoteTextDeltaEvent(event: Record<string, unknown>): boolean {
@@ -2415,6 +2426,28 @@ function clearTextDeltaFlushTimer(): void {
 function discardPendingTextDelta(sessionId: string): void {
   pendingTextDeltaBatches.delete(sessionId);
   if (pendingTextDeltaBatches.size === 0) clearTextDeltaFlushTimer();
+}
+
+function finalizeRemoteStreamingMessageByClientId(
+  sessionId: string,
+  clientId: string,
+): boolean {
+  const existing = messages.get(sessionId);
+  if (!existing) return false;
+  let changed = false;
+  const next = existing.map((message) => {
+    if (
+      message.role !== 'assistant'
+      || message.agentMeta?.isStreaming !== true
+      || (message.id !== clientId && message.clientId !== clientId)
+    ) return message;
+    changed = true;
+    return { ...message, agentMeta: clearStreamingMeta(message.agentMeta) };
+  });
+  if (!changed) return false;
+  messages.set(sessionId, next);
+  bumpMessageVersion();
+  return true;
 }
 
 function finalizeRemoteStreamingMessages(

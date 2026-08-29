@@ -67,6 +67,7 @@ import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-obser
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
+import { parseToolLoopErrorDetails, type ToolLoopErrorDetails } from '@cindy/maker-core';
 
 const log = createLogger('messagePersistBroadcaster');
 
@@ -74,6 +75,8 @@ const log = createLogger('messagePersistBroadcaster');
 interface AssistantBlock {
   persistId: string;
   text: string;
+  /** Provider message identity; a changed identity is an assistant block boundary. */
+  agentMessageId?: string;
   agentMeta: AgentMeta | null;
   createdAt: number;
 }
@@ -82,6 +85,7 @@ const assistantBlocks = new Map<string, AssistantBlock>();
 interface SealedAssistantLateFinalCandidate {
   persistId: string;
   text: string;
+  agentMessageId?: string;
   requestId?: string;
   uuid?: string;
 }
@@ -96,7 +100,15 @@ const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFin
 function matchesSealedAssistantIdentity(
   candidate: SealedAssistantLateFinalCandidate,
   agentMeta: AgentMeta | null,
+  agentMessageId: string | undefined,
 ): boolean {
+  if (
+    candidate.agentMessageId !== undefined &&
+    agentMessageId !== undefined &&
+    candidate.agentMessageId !== agentMessageId
+  ) {
+    return false;
+  }
   if (!agentMeta) return false;
   if (candidate.requestId !== undefined && agentMeta.requestId !== undefined) {
     return candidate.requestId === agentMeta.requestId;
@@ -280,14 +292,23 @@ export function setLastAssistantTranscriptUuid(sessionId: string, uuid: string |
  * 第二行、renderer DUP-SKIP 只挡显示不挡库 → 重开会话 assistant 翻倍(正是本 MR 要消灭
  * 的重复行)。
  *
- * 只去重"相邻且内容完全相同"的 assistant:任何其它消息(tool_use / tool_result / thinking /
- * ask_user / plan_review)入队都会刷新这条记录 → role 不再是 assistant,从而"中间夹了别的
- * 消息"的两条相同文本不会被误删(与 renderer messages[last] 语义 1:1,避免误吞合法重复回复)。
+ * 只去重"相邻、内容相同且 provider item 身份相同"的 assistant:任何其它消息
+ * (tool_use / tool_result / thinking / ask_user / plan_review)入队都会刷新这条记录；不同
+ * agentMessageId 即使文本相同也必须保留为两条消息。
  */
-const lastPersistedMsgBySession = new Map<string, { role: string; text: string; persistId: string }>();
+const lastPersistedMsgBySession = new Map<
+  string,
+  { role: string; text: string; persistId: string; agentMessageId?: string }
+>();
 
-function notePersistedMessage(sessionId: string, role: string, persistId: string, text = ''): void {
-  lastPersistedMsgBySession.set(sessionId, { role, text, persistId });
+function notePersistedMessage(
+  sessionId: string,
+  role: string,
+  persistId: string,
+  text = '',
+  agentMessageId?: string,
+): void {
+  lastPersistedMsgBySession.set(sessionId, { role, text, persistId, agentMessageId });
 }
 
 /**
@@ -554,6 +575,7 @@ function enqueuePersistAssistant(
   content: string,
   agentMeta: AgentMeta | null,
   createdAt: number,
+  agentMessageId?: string,
 ): void {
   noteAssistantTranscriptUuid(sessionId, agentMeta);
   enqueueVisibleDbMessage(`assistant:${sessionId}:${clientId}`, sessionId, {
@@ -563,7 +585,7 @@ function enqueuePersistAssistant(
     agentMeta: agentMeta ?? null,
     createdAt,
   });
-  notePersistedMessage(sessionId, 'assistant', clientId, content);
+  notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
   lastAssistantPersistIdBySession.set(sessionId, clientId);
   if (
     isTopLevelTitleAssistant(
@@ -1775,12 +1797,25 @@ export function resetTurnPersistState(sessionId: string): void {
  */
 export function onAssistantTextEvent(
   sessionId: string,
-  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown },
+  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown },
   agentMeta: AgentMeta | null,
 ): string | undefined {
   const rawText = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
   const isFullText = data.isFullText === true;
+  const agentMessageId =
+    typeof data.agentMessageId === 'string' && data.agentMessageId
+      ? data.agentMessageId
+      : undefined;
+
+  const activeBlock = assistantBlocks.get(sessionId);
+  if (
+    activeBlock?.agentMessageId &&
+    agentMessageId &&
+    activeBlock.agentMessageId !== agentMessageId
+  ) {
+    flushAssistantBlock(sessionId);
+  }
 
   if (isFinal) {
     const visible = stripInternalWebCitations(rawText);
@@ -1788,7 +1823,7 @@ export function onAssistantTextEvent(
     if (
       lateFinalCandidate &&
       visible.length > 0 &&
-      matchesSealedAssistantIdentity(lateFinalCandidate, agentMeta) &&
+      matchesSealedAssistantIdentity(lateFinalCandidate, agentMeta, agentMessageId) &&
       (isFullText ||
         visible === lateFinalCandidate.text ||
         visible.startsWith(lateFinalCandidate.text))
@@ -1841,11 +1876,23 @@ export function onAssistantTextEvent(
       // persistId、不再 create,把重复行挡在 main 落库层。中间夹过别的消息则 last.role
       // 不是 assistant,不会误删合法的相同文本回复。
       const last = lastPersistedMsgBySession.get(sessionId);
-      if (last && last.role === 'assistant' && last.text === visible) {
+      if (
+        last &&
+        last.role === 'assistant' &&
+        last.text === visible &&
+        (!agentMessageId || last.agentMessageId === agentMessageId)
+      ) {
         return last.persistId;
       }
       const persistId = createId();
-      enqueuePersistAssistant(sessionId, persistId, visible, agentMeta, Date.now());
+      enqueuePersistAssistant(
+        sessionId,
+        persistId,
+        visible,
+        agentMeta,
+        Date.now(),
+        agentMessageId,
+      );
       return persistId;
     }
     return undefined;
@@ -1854,7 +1901,13 @@ export function onAssistantTextEvent(
   // delta: accumulate the raw snapshot; strip only the completed block.
   let block = assistantBlocks.get(sessionId);
   if (!block) {
-    block = { persistId: createId(), text: rawText, agentMeta, createdAt: Date.now() };
+    block = {
+      persistId: createId(),
+      text: rawText,
+      agentMessageId,
+      agentMeta,
+      createdAt: Date.now(),
+    };
     assistantBlocks.set(sessionId, block);
   } else {
     block.text += rawText;
@@ -1881,7 +1934,12 @@ export function flushAssistantBlock(
 function flushAssistantBlockInternal(
   sessionId: string,
   agentMetaFallback: AgentMeta | null,
-): { persistId: string; text: string; agentMeta: AgentMeta | null } | undefined {
+): {
+  persistId: string;
+  text: string;
+  agentMessageId?: string;
+  agentMeta: AgentMeta | null;
+} | undefined {
   const block = assistantBlocks.get(sessionId);
   if (!block) return undefined;
   assistantBlocks.delete(sessionId);
@@ -1890,8 +1948,20 @@ function flushAssistantBlockInternal(
   // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
   // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
   const meta = block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  enqueuePersistAssistant(sessionId, block.persistId, visible, meta, block.createdAt);
-  return { persistId: block.persistId, text: visible, agentMeta: meta };
+  enqueuePersistAssistant(
+    sessionId,
+    block.persistId,
+    visible,
+    meta,
+    block.createdAt,
+    block.agentMessageId,
+  );
+  return {
+    persistId: block.persistId,
+    text: visible,
+    ...(block.agentMessageId ? { agentMessageId: block.agentMessageId } : {}),
+    agentMeta: meta,
+  };
 }
 
 /**
@@ -1912,6 +1982,7 @@ export function sealAssistantBlockForLateFinal(
   sealedAssistantLateFinalBySession.set(sessionId, {
     persistId: flushed.persistId,
     text: flushed.text,
+    ...(flushed.agentMessageId ? { agentMessageId: flushed.agentMessageId } : {}),
     ...(requestId ? { requestId } : {}),
     ...(uuid ? { uuid } : {}),
   });
@@ -2037,7 +2108,7 @@ function dropSessionTurnErrorReservations(sessionId: string): void {
  * whenTurnErrorPersisted(等到写入、跳过或释放,不以墙钟超时当作已落库)再按同一
  * id 标记 ignored。
  *
- * content 存结构化 { message, reason?, sdkError? }:reason 是 maker-core 的稳定
+ * content 存结构化 { message, reason?, sdkError?, toolLoop? }:reason 是 maker-core 的稳定
  * key('empty-response' / 'turn-failed' 等),renderer 渲染时按它走 i18n(规则 18),
  * message 是给非 renderer 消费方(IM / orca / 旧版本客户端)的兜底文案。
  */
@@ -2106,7 +2177,10 @@ function lookupTurnErrorPersistId(
  */
 export function reserveTurnErrorPersistId(
   sessionId: string,
-  data: { message?: unknown; reason?: unknown; sdkError?: unknown } | null | undefined,
+  data:
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | null
+    | undefined,
   agentMeta: AgentMeta | null = null,
 ): string | undefined {
   const message = typeof data?.message === 'string' ? redactSensitiveText(data.message) : '';
@@ -2142,7 +2216,10 @@ export function whenTurnErrorPersisted(sessionId: string, persistId: string): Pr
 
 export function onTurnErrorEvent(
   sessionId: string,
-  data: { message?: unknown; reason?: unknown; sdkError?: unknown } | null | undefined,
+  data:
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | null
+    | undefined,
   agentMeta: AgentMeta | null = null,
   reservedPersistId?: string,
 ): string | undefined {
@@ -2200,6 +2277,8 @@ export function onTurnErrorEvent(
   if (typeof data?.sdkError === 'string' && data.sdkError) {
     content.sdkError = redactSensitiveText(data.sdkError);
   }
+  const toolLoop = parseToolLoopErrorDetails(data?.toolLoop);
+  if (toolLoop) content.toolLoop = toolLoop satisfies ToolLoopErrorDetails;
   // 错误来源 provider 的**同步**快照(session-provider-store 内存态):错误分类必须
   // 绑定到错误发生时的 provider —— session.providerId 可在任务中途切换并持久化,
   // 恢复历史错误时用它会把别家 provider 的 insufficient_quota 误判成 Cindy AI 余额
