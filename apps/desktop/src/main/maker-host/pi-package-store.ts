@@ -586,26 +586,13 @@ async function requireState(): Promise<PiPackageState> {
   return result.state;
 }
 
-const PENDING_ENABLE_CANCEL_PREFIX = 'cindy-internal:pending-enable-cancelled:';
-
-function pendingEnableCancellation(source: string): string {
-  return `${PENDING_ENABLE_CANCEL_PREFIX}${createHash('sha256').update(source).digest('hex')}`;
-}
-
-function pendingEnableIsCancelled(state: PiPackageState, source: string): boolean {
-  return state.disabledSources.includes(pendingEnableCancellation(source));
-}
-
 async function readStateWithoutBlockingPi(): Promise<PiPackageState> {
   const result = await readState();
   if (result.ok) {
     const pending = await readPendingEnabledSources();
     return {
       ...result.state,
-      disabledSources: result.state.disabledSources.filter((source) => (
-        !source.startsWith(PENDING_ENABLE_CANCEL_PREFIX)
-        && (!pending.has(source) || pendingEnableIsCancelled(result.state, source))
-      )),
+      disabledSources: result.state.disabledSources.filter((source) => !pending.has(source)),
     };
   }
   // Cindy's optional projection must never turn a valid native Pi package
@@ -677,9 +664,7 @@ async function reconcilePendingEnabledSources(): Promise<void> {
   const pending = await readPendingEnabledSources();
   if (pending.size === 0) return;
   const state = await requireState();
-  const disabledSources = state.disabledSources.filter((source) => (
-    !pending.has(source) || pendingEnableIsCancelled(state, source)
-  ));
+  const disabledSources = state.disabledSources.filter((source) => !pending.has(source));
   if (disabledSources.length !== state.disabledSources.length) {
     await writeState({ ...state, disabledSources });
   }
@@ -2981,24 +2966,30 @@ export async function mutatePiPackage(
         // Preserve a fingerprint when available only for Cindy's optional
         // snapshot metadata; absence or mismatch is never an enable blocker.
         disabled.delete(affectedSource);
-        for (const alias of toggleAliases) disabled.delete(pendingEnableCancellation(alias));
         if (target?.contentFingerprint
           && target.view.resources.some((resource) => resource.kind === 'extension')) {
           approved.add(affectedSource);
           approvedFingerprints[affectedSource] = target.contentFingerprint;
         }
       } else {
+        // Remove only the target aliases from a previous install reconciliation
+        // before persisting the explicit toggle. No cancellation/replace state
+        // is introduced; failure leaves the operation unsuccessful.
+        mutationMayHaveChangedState = true;
+        const pending = await readPendingEnabledSources();
+        for (const alias of toggleAliases) pending.delete(alias);
+        try {
+          await writePendingEnabledSources(pending);
+        } catch {
+          throw new PiPackageStateUnavailableError();
+        }
         disabled.add(affectedSource);
-        // A durable cancellation marker makes this explicit disable win even
-        // if removing an older pending-enable journal fails. It is hashed so a
-        // credential-bearing source is not duplicated into another state key.
-        for (const alias of toggleAliases) disabled.add(pendingEnableCancellation(alias));
       }
       // writeState atomically replaces the state file. Mark the mutation before
       // entering that durable write so a successful write followed by a failed
       // inspection still invalidates caches and notifies every open Renderer.
       mutationMayHaveChangedState = true;
-      const nextState = (): PiPackageState => ({
+      await writeState({
         version: STATE_VERSION,
         disabledSources: [...disabled].sort(),
         approvedExtensionSources: [...approved].sort(),
@@ -3007,18 +2998,6 @@ export async function mutatePiPackage(
         ),
         snapshotUnavailableRoots: state.snapshotUnavailableRoots,
       });
-      await writeState(nextState());
-      if (!request.enabled) {
-        const pending = await readPendingEnabledSources();
-        for (const alias of toggleAliases) pending.delete(alias);
-        try {
-          await writePendingEnabledSources(pending);
-        } catch {
-          throw new PiPackageStateUnavailableError();
-        }
-        for (const alias of toggleAliases) disabled.delete(pendingEnableCancellation(alias));
-        await writeState(nextState());
-      }
     }
     invalidateInspectionCache();
     let result: PiPackageListResult;
