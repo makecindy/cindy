@@ -5142,6 +5142,16 @@ export function getGhostLibrarySlot(): GhostLibrarySlot {
       workerScriptPath: defaultLibraryDbWorkerPath,
       betterSqliteModulePath: () => resolveBetterSqliteModuleEntry() ?? 'better-sqlite3',
       log,
+      showItemInFolder: (absPath) => {
+        shell.showItemInFolder(absPath);
+      },
+      showSaveDialog: async (opts) => {
+        const win = BrowserWindow.getFocusedWindow();
+        const picked = win
+          ? await dialog.showSaveDialog(win, { defaultPath: opts.defaultPath })
+          : await dialog.showSaveDialog({ defaultPath: opts.defaultPath });
+        return { canceled: picked.canceled, filePath: picked.filePath };
+      },
     });
     // 面板只读投影(cindy-ghost://<id>/library/<relPath>)的解析器:与电子脑
     // read 同源校验(binding 根 + vault 路径纪律),失败折叠 404。

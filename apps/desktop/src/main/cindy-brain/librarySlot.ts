@@ -60,6 +60,10 @@ export interface GhostLibrarySlotDeps {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
   };
+  /** 在 Finder/Explorer 显示库内已有文件(生产接 shell.showItemInFolder)。 */
+  showItemInFolder?(absPath: string): void;
+  /** 系统另存为(生产接 dialog.showSaveDialog)。 */
+  showSaveDialog?(opts: { defaultPath: string }): Promise<{ canceled: boolean; filePath?: string }>;
 }
 
 const fail = (errorCode: string, message: string): GhostPipeLibraryResult => ({ ok: false, errorCode, message });
@@ -337,6 +341,31 @@ export class GhostLibrarySlot {
         const r = await vault.rename({ from: req.from, to: req.to, overwrite: req.overwrite });
         if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
         return { ok: true, op: 'rename', from: r.from, to: r.to };
+      }
+      case 'reveal': {
+        if (typeof req.path !== 'string' || !req.path) {
+          return fail('PATH_INVALID', 'reveal 需要库内相对路径');
+        }
+        const abs = await vault.resolveExistingFile(req.path);
+        if (!abs) return fail('NOT_FOUND', `库内没有这个文件:${req.path}`);
+        if (!this.deps.showItemInFolder) return fail('UNSUPPORTED', '当前宿主不能在文件夹中显示');
+        this.deps.showItemInFolder(abs);
+        return { ok: true, op: 'reveal', path: req.path };
+      }
+      case 'saveAs': {
+        if (typeof req.path !== 'string' || !req.path) {
+          return fail('PATH_INVALID', 'saveAs 需要库内相对路径');
+        }
+        const abs = await vault.resolveExistingFile(req.path);
+        if (!abs) return fail('NOT_FOUND', `库内没有这个文件:${req.path}`);
+        if (!this.deps.showSaveDialog) return fail('UNSUPPORTED', '当前宿主不能弹出另存为');
+        const rawName = typeof req.name === 'string' ? req.name.trim() : '';
+        const base = path.basename(rawName || path.basename(abs) || 'export.bin');
+        const picked = await this.deps.showSaveDialog({ defaultPath: base });
+        if (picked.canceled || !picked.filePath) return { ok: true, op: 'saveAs', cancelled: true };
+        await fs.promises.copyFile(abs, picked.filePath);
+        const st = await fs.promises.stat(picked.filePath);
+        return { ok: true, op: 'saveAs', cancelled: false, path: picked.filePath, bytes: st.size };
       }
       case 'db.open': {
         const resolved = await this.resolveDbPath(session, req.dbPath);

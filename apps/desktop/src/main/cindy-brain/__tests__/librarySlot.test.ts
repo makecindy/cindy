@@ -3,7 +3,7 @@
  * read/rename/delete)、db 子集(经进程内 core)、binding 漂移 → unavailable、
  * owner scope 切换后旧会话作废且写入落新根。注入 deps + tmpdir,零 Electron。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -45,6 +45,8 @@ describe('GhostLibrarySlot', () => {
   let scopeKey: string | null = 'local:owner-a:1';
   let ghost: InstalledGhost;
   let slot: GhostLibrarySlot;
+  let showItemInFolder: ReturnType<typeof vi.fn>;
+  let showSaveDialog: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-library-slot-'));
@@ -72,7 +74,11 @@ describe('GhostLibrarySlot', () => {
       getDiskFreeBytes: async () => 1024 ** 4,
       workerScriptPath: () => path.join(tmp, 'unused-worker.js'),
       betterSqliteModulePath: () => 'better-sqlite3',
+      showItemInFolder: (...args: unknown[]) => showItemInFolder(...args),
+      showSaveDialog: (...args: unknown[]) => showSaveDialog(...args),
     };
+    showItemInFolder = vi.fn();
+    showSaveDialog = vi.fn(async () => ({ canceled: true }));
     slot = new GhostLibrarySlot(deps);
   });
 
@@ -209,4 +215,51 @@ describe('GhostLibrarySlot', () => {
     if (!r.ok || r.op !== 'read') throw new Error(JSON.stringify(r));
     expect(r.content).toBe('owner-b');
   });
+
+  it('reveal: 在文件夹中显示库内已有文件',
+    async () => {
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd' });
+      const r = await slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/a.psd' });
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.op !== 'reveal') throw new Error(JSON.stringify(r));
+      expect(showItemInFolder).toHaveBeenCalledTimes(1);
+      const abs = String(showItemInFolder.mock.calls[0]?.[0] ?? '');
+      expect(abs.endsWith(`${path.sep}exports${path.sep}a.psd`)).toBe(true);
+    },
+  );
+
+  it('reveal: 库内没有该文件 → NOT_FOUND,不调用 Finder',
+    async () => {
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+      const r = await slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/missing.psd' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errorCode).toBe('NOT_FOUND');
+      expect(showItemInFolder).not.toHaveBeenCalled();
+    },
+  );
+
+  it('saveAs: 用户取消不复制;确认则拷到所选路径',
+    async () => {
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+      await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd-bytes' });
+      showSaveDialog.mockResolvedValueOnce({ canceled: true });
+      const cancelled = await slot.handleLibraryRequest(GHOST_ID, {
+        op: 'saveAs', path: 'exports/a.psd', name: 'layers.psd',
+      });
+      expect(cancelled).toEqual({ ok: true, op: 'saveAs', cancelled: true });
+
+      const dest = path.join(tmp, 'Desktop', 'out.psd');
+      await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+      showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dest });
+      const saved = await slot.handleLibraryRequest(GHOST_ID, {
+        op: 'saveAs', path: 'exports/a.psd', name: 'layers.psd',
+      });
+      expect(saved.ok).toBe(true);
+      if (!saved.ok || saved.op !== 'saveAs' || saved.cancelled) throw new Error(JSON.stringify(saved));
+      expect(saved.path).toBe(dest);
+      expect(saved.bytes).toBeGreaterThan(0);
+      expect(fs.readFileSync(dest, 'utf8')).toBe('psd-bytes');
+    },
+  );
 });

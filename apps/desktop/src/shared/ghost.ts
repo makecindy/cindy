@@ -8246,6 +8246,8 @@ export const GHOST_LIBRARY_OPS = [
   'db.backup',
   'db.check',
   'db.userVersion',
+  'reveal',
+  'saveAs',
 ] as const;
 export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
 
@@ -8285,6 +8287,8 @@ export interface GhostPipeLibraryRequest {
   /** read 分段。 */
   offset?: number;
   length?: number;
+  /** saveAs: 另存为建议文件名(仅 basename)。 */
+  name?: string;
 }
 
 /**
@@ -8342,6 +8346,9 @@ export type GhostPipeLibraryResult =
   | { ok: true; op: 'db.backup'; backedUp: boolean }
   | { ok: true; op: 'db.check'; healthy: boolean; detail: string }
   | { ok: true; op: 'db.userVersion'; version: number | null }
+  | { ok: true; op: 'reveal'; path: string }
+  | { ok: true; op: 'saveAs'; cancelled: true }
+  | { ok: true; op: 'saveAs'; cancelled: false; path: string; bytes: number }
   | { ok: false; errorCode: string; message: string };
 
 /** Library 概览(ghosts:library-overview IPC 载荷;设置页插件详情消费)。 */
