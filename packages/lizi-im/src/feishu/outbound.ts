@@ -965,7 +965,6 @@ export interface ResolvedReplyMessage {
 }
 
 function renderReplyMessageText(
-  msgType: string,
   parsed: ReturnType<typeof parseIncoming>,
 ): string {
   const parts: string[] = [];
@@ -974,7 +973,6 @@ function renderReplyMessageText(
     parts.push(attachment.kind === 'image' ? '[图片]' : `[文件: ${attachment.fileName}]`);
   }
   for (const unsupported of parsed.unsupported) parts.push(`[${unsupported.label}]`);
-  if (parts.length === 0 && msgType === 'interactive') parts.push('[卡片消息]');
   return parts.join('\n').trim();
 }
 
@@ -1026,7 +1024,7 @@ export async function resolveReplyMessage(
 
     const parsed = parseIncoming(item.msg_type ?? '', item.body?.content ?? '');
     const text = replaceFetchedMentions(
-      renderReplyMessageText(item.msg_type ?? '', parsed),
+      renderReplyMessageText(parsed),
       item.mentions,
     );
     if (!text) return null;
@@ -1106,12 +1104,17 @@ export async function fetchChatHistoryPage(args: {
     const rawContent = item.body?.content ?? '';
     let text = '';
     let attachments: AttachmentRef[] = [];
-    if (msgType === 'text' || msgType === 'post' || msgType === 'image' || msgType === 'file') {
+    if (
+      msgType === 'text' ||
+      msgType === 'post' ||
+      msgType === 'image' ||
+      msgType === 'file' ||
+      msgType === 'interactive' ||
+      msgType === 'card'
+    ) {
       const parsed = parseIncoming(msgType, rawContent);
       text = parsed.text;
       attachments = parsed.attachments;
-    } else if (msgType === 'interactive') {
-      text = '[卡片消息]';
     } else {
       continue; // audio/media/sticker 等对上下文无意义, 跳过
     }

@@ -2,6 +2,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 5_000;
 const HELPER_EXIT_TIMEOUT_MS = 2_000;
+/** PowerShell Add-Type compile on a loaded Windows runner often exceeds 1s. */
+const HELPER_STARTUP_SLACK_MS = 15_000;
 const MAX_HELPER_OUTPUT_BYTES = 16 * 1024;
 
 const WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT = String.raw`
@@ -114,7 +116,7 @@ function waitForFirstLine(
     const timer = setTimeout(() => {
       finish(() => reject(new Error('timed out acquiring Windows packaged-instance barrier')));
       child.kill();
-    }, timeoutMs + 1_000);
+    }, timeoutMs + HELPER_STARTUP_SLACK_MS);
     const onStdout = (chunk: Buffer | string): void => {
       stdout += chunk.toString();
       if (stdout.length > MAX_HELPER_OUTPUT_BYTES) {

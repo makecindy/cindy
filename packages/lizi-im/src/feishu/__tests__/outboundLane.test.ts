@@ -256,6 +256,60 @@ describe('feishu outbound lane routing', () => {
     });
   });
 
+  it('extracts markdown from a replied bot v2 interactive card', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: 'om_parent_card',
+            chat_id: 'oc_group1',
+            msg_type: 'interactive',
+            body: {
+              content: JSON.stringify({
+                schema: '2.0',
+                config: { update_multi: true },
+                body: {
+                  elements: [{ tag: 'markdown', content: '这是上一条完整答案' }],
+                },
+              }),
+            },
+            sender: { sender_type: 'app', sender_name: 'Cindy' },
+          },
+        ],
+      },
+    });
+
+    await expect(outbound.resolveReplyMessage('om_parent_card', 'oc_group1')).resolves.toEqual({
+      replyContext: {
+        author: 'Cindy',
+        text: '这是上一条完整答案',
+        isBot: true,
+      },
+    });
+  });
+
+  it('returns null for an interactive parent whose card text cannot be recovered', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: 'om_parent_template',
+            chat_id: 'oc_group1',
+            msg_type: 'interactive',
+            body: {
+              content: JSON.stringify({ type: 'template', data: { template_id: 'ctp_x' } }),
+            },
+            sender: { sender_type: 'app', sender_name: 'Cindy' },
+          },
+        ],
+      },
+    });
+
+    await expect(outbound.resolveReplyMessage('om_parent_template', 'oc_group1')).resolves.toBeNull();
+  });
+
   it('drops a reply parent that does not belong to the triggering chat', async () => {
     larkMocks.getMessage.mockResolvedValueOnce({
       code: 0,
