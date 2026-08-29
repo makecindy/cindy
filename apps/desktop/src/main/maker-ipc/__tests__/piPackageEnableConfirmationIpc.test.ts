@@ -10,50 +10,33 @@ function mutationHandlerSource(): string {
   return source.slice(start, end);
 }
 
-describe('Pi package enable confirmation IPC contract', () => {
-  it('rejects untrusted Renderer events before inspecting payload or package identity', () => {
+describe('Pi package Settings authorization IPC contract', () => {
+  it('rejects untrusted Renderer events before inspecting the payload', () => {
     const handler = mutationHandlerSource();
     const trustGuard = handler.indexOf('assertTrustedAppRendererEvent(event);');
     const payloadRead = handler.indexOf('const payload = requireObject(raw);');
-    const identityCapture = handler.indexOf('capturePiPackageEnableIdentity(request.source)');
 
     expect(trustGuard).toBeGreaterThanOrEqual(0);
     expect(trustGuard).toBeLessThan(payloadRead);
-    expect(trustGuard).toBeLessThan(identityCapture);
   });
 
-  it('shows the Main-inspected package label and fingerprint before binding that fingerprint', () => {
+  it('uses the trusted Settings action as authorization without a second content decision', () => {
     const handler = mutationHandlerSource();
-    const identityCapture = handler.indexOf('capturePiPackageEnableIdentity(request.source)');
-    const inspectedLabel = handler.indexOf("message: enableIdentity?.displayLabel ?? ''");
-    const nativeDialog = handler.indexOf('dialog.showMessageBox');
-    const decisionGate = handler.indexOf('if (decision.response !== 0)');
-    const grantIssue = handler.indexOf('issuePiPackageMutationGrant(request, grantBinding)');
+    const grantIssue = handler.indexOf('issuePiPackageMutationGrant(request)');
 
-    expect(identityCapture).toBeGreaterThanOrEqual(0);
-    expect(inspectedLabel).toBeGreaterThan(identityCapture);
-    expect(nativeDialog).toBeGreaterThan(inspectedLabel);
-    expect(decisionGate).toBeGreaterThan(nativeDialog);
-    expect(grantIssue).toBeGreaterThan(decisionGate);
-    expect(handler).toContain(
-      'expectedPackageFingerprint: enableIdentity.expectedPackageFingerprint',
-    );
+    expect(grantIssue).toBeGreaterThanOrEqual(0);
+    expect(handler).not.toContain('capturePiPackageEnableIdentity');
+    expect(handler).not.toContain('expectedPackageFingerprint');
+    expect(handler).not.toContain('dialog.showMessageBox');
+    expect(handler).not.toContain('MUTATION_CANCELLED');
     expect(handler).not.toContain('payload.name');
     expect(handler).not.toContain('payload.version');
   });
 
-  it('uses one Main-owned display escape for every Renderer-provided mutation source', () => {
+  it('binds every granted mutation to the exact validated request', () => {
     const handler = mutationHandlerSource();
-    const displayEscape = handler.indexOf(
-      'const source = escapePiPackageNativeDialogText(request.source);',
-    );
-    const nativeDialog = handler.indexOf('dialog.showMessageBox');
-    const grantIssue = handler.indexOf('issuePiPackageMutationGrant(request, grantBinding)');
-
-    expect(displayEscape).toBeGreaterThanOrEqual(0);
-    expect(displayEscape).toBeLessThan(nativeDialog);
-    expect(grantIssue).toBeGreaterThan(nativeDialog);
+    expect(handler).toContain('issuePiPackageMutationGrant(request)');
+    expect(handler).toContain('result = await mutatePiPackage(');
     expect(handler).not.toContain('request.source.trim()');
-    expect(handler).toContain('mutatePiPackage(request, issuePiPackageMutationGrant(request, grantBinding))');
   });
 });

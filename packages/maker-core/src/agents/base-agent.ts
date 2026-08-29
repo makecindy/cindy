@@ -543,10 +543,9 @@ export interface AgentDeps {
   resolvePiAgentHome?: (remoteHostId?: string | null) => string | undefined;
 
   /**
-   * Pi-only: Cindy-owned packages explicitly enabled for a new runtime on this device.
-   * The host owns package installation, compatibility inspection, persistence,
-   * and path confinement. Device-link remote control still executes on this host
-   * and therefore uses these resources. SSH remoteHostId and Review runtimes do not.
+   * Pi-only: advisory metadata for Cindy UI/command projection. This resolver
+   * may inspect or snapshot known resources, but its result is never the launch
+   * allowlist; resolvePiNativePackagePaths preserves Pi-native discovery.
    */
   resolvePiManagedPackageResources?: (options?: { snapshotRoot: string }) => Promise<{
     extensions: string[];
@@ -556,9 +555,16 @@ export interface AgentDeps {
   }>;
 
   /**
-   * Pi-only: mutate Cindy's host-owned Pi extension store. This is deliberately
-   * separate from the Pi CLI so chat requests cannot fall through to the
-   * user's ~/.pi directory or bypass Cindy's inspection/approval state.
+   * Pi-only: installed local package roots that Pi must discover natively.
+   * Cindy inspection metadata is advisory; a host analyzer that does not
+   * understand a valid future package shape must not remove Pi functionality.
+   */
+  resolvePiNativePackagePaths?: () => Promise<string[]>;
+
+  /**
+   * Pi-only: mutate the shared package home through Pi's own package CLI.
+   * Host routing binds an exact user/tool action but must not add a second
+   * compatibility, fingerprint, or content-approval decision.
    */
   mutatePiManagedPackage?: (request: PiManagedPackageMutationRequest) => Promise<unknown>;
 

@@ -3,7 +3,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createIpcError } from '../../../../shared/ipc-errors';
 import type { PiPackageView } from '../../../../shared/piPackages';
 
 vi.mock('react-i18next', () => ({
@@ -148,7 +147,16 @@ describe('PiPackagesSection interaction state machine', () => {
 
   it('routes install directly into the Main-owned confirmation flow and keeps retry state on failure', async () => {
     const firstMutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
-    const enabledPackage = { ...packageView(1), enabled: true };
+    const enabledPackage: PiPackageView = {
+      ...packageView(1),
+      enabled: true,
+      resources: [{
+        kind: 'extension',
+        name: 'extensions/index-1.ts',
+        compatibility: 'partial',
+        compatibilityIssues: ['status-display'],
+      }],
+    };
     const mutatePiPackage = vi
       .fn()
       .mockImplementationOnce(() => firstMutation.promise)
@@ -197,6 +205,7 @@ describe('PiPackagesSection interaction state machine', () => {
     expect(toastMocks.success).toHaveBeenCalledWith(
       'settings.piPackages.success.installEnabled',
     );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
   it('does not claim enablement when an installed package remains disabled', async () => {
@@ -224,14 +233,12 @@ describe('PiPackagesSection interaction state machine', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
 
     await waitFor(() =>
-      expect(toastMocks.success).toHaveBeenCalledWith('settings.piPackages.success.install'),
+      expect(toastMocks.error).toHaveBeenCalledWith('settings.piPackages.operationFailed'),
     );
-    expect(toastMocks.success).not.toHaveBeenCalledWith(
-      'settings.piPackages.success.installEnabled',
-    );
+    expect(toastMocks.success).not.toHaveBeenCalled();
   });
 
-  it('routes remove directly into the Main-owned confirmation flow and retries after failure', async () => {
+  it('routes remove directly to Main without a dialog and retries after failure', async () => {
     const firstMutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const mutatePiPackage = vi
       .fn()
@@ -269,36 +276,12 @@ describe('PiPackagesSection interaction state machine', () => {
       action: 'remove',
       source: 'npm:sample-extension-1',
     });
+    expect(toastMocks.success).toHaveBeenLastCalledWith(
+      'settings.piPackages.success.settingsRemove',
+    );
   });
 
-  it('treats a cancelled Main confirmation as a quiet retryable user decision', async () => {
-    const mutatePiPackage = vi.fn(async () => {
-      throw createIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
-    });
-    installElectronApi({
-      listPiPackages: vi.fn(async () => ({ available: true, packages: [] })),
-      mutatePiPackage,
-    });
-    render(<PiPackagesSection />);
-    await screen.findByText('settings.piPackages.empty');
-
-    const input = screen.getByPlaceholderText('settings.piPackages.sourcePlaceholder');
-    fireEvent.change(input, { target: { value: 'npm:cancelled-extension' } });
-    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
-
-    await waitFor(() => {
-      expect(
-        (screen.getByRole('button', { name: 'settings.piPackages.install' }) as HTMLButtonElement)
-          .disabled,
-      ).toBe(false);
-    });
-    expect((input as HTMLInputElement).value).toBe('npm:cancelled-extension');
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(toastMocks.error).not.toHaveBeenCalled();
-    expect(toastMocks.success).not.toHaveBeenCalled();
-  });
-
-  it('routes enable directly into the Main-owned confirmation flow and shows progress', async () => {
+  it('routes enable directly to Main without a dialog and shows progress', async () => {
     const mutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const { mutatePiPackage } = installElectronApi({
       listPiPackages: vi.fn(async () => ({
@@ -328,6 +311,35 @@ describe('PiPackagesSection interaction state machine', () => {
       expect(
         screen.queryByRole('status', { name: 'settings.piPackages.operationInProgress' }),
       ).toBeNull(),
+    );
+  });
+
+  it('disables directly without a dialog and reports immediate runtime revocation', async () => {
+    const enabledPackage = { ...packageView(1), enabled: true };
+    const disabledPackage = { ...enabledPackage, enabled: false };
+    const { mutatePiPackage } = installElectronApi({
+      listPiPackages: vi.fn(async () => ({
+        available: true,
+        packages: [enabledPackage],
+      })),
+      mutatePiPackage: vi.fn(async () => ({
+        available: true,
+        packages: [disabledPackage],
+      })),
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-1');
+
+    fireEvent.click(screen.getByRole('switch'));
+
+    await waitFor(() => expect(mutatePiPackage).toHaveBeenCalledWith({
+      action: 'set-enabled',
+      source: 'npm:sample-extension-1',
+      enabled: false,
+    }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(toastMocks.success).toHaveBeenLastCalledWith(
+      'settings.piPackages.success.settingsDisable',
     );
   });
 

@@ -552,19 +552,19 @@ import {
   mergePiPackageCommands,
   shouldListPiPackageCommands,
   type PiPackageMutationRequest,
+  type PiPackageMutationResult,
 } from '../../shared/piPackages.js';
 import {
-  capturePiPackageEnableIdentity,
   listManagedPiPromptCommands,
   listPiPackages,
   mutatePiPackage,
   onPiPackagesChanged,
 } from '../maker-host/pi-package-store.js';
+import { invalidateLocalPiPackageRuntimes } from '../maker-host/pi-package-runtime-invalidation.js';
 import {
   issuePiPackageMutationGrant,
   piPackageMutationNeedsGrant,
 } from '../maker-host/pi-package-mutation-grant.js';
-import { escapePiPackageNativeDialogText } from '../maker-host/pi-package-native-dialog.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   triggerClaudeSubscriptionUsageRefresh,
@@ -7053,69 +7053,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
     return runPiPackageMutationIpcBoundary(
       async () => {
-        if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
-
-        const enableIdentity =
-          request.action === 'set-enabled' && request.enabled === true
-            ? await capturePiPackageEnableIdentity(request.source)
-            : undefined;
-        const grantBinding = enableIdentity
-          ? { expectedPackageFingerprint: enableIdentity.expectedPackageFingerprint }
-          : undefined;
-
-        const source = escapePiPackageNativeDialogText(request.source);
-        const copy =
-          request.action === 'set-enabled'
-            ? {
-                title: t('settings.piPackages.extensionApprovalTitle'),
-                message: enableIdentity?.displayLabel ?? '',
-                detail: t('settings.piPackages.extensionApprovalDescription'),
-                confirm: t('settings.piPackages.approveAndEnable'),
-              }
-            : request.action === 'remove'
-              ? {
-                  title: t('settings.piPackages.uninstallTitle'),
-                  message: t('settings.piPackages.uninstallTitle'),
-                  detail: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
-                  confirm: t('settings.piPackages.confirmUninstall'),
-                }
-              : request.action === 'update'
-                ? {
-                    title: t('settings.piPackages.updateConfirmTitle'),
-                    message: t('settings.piPackages.updateConfirmTitle'),
-                    detail: t('settings.piPackages.updateConfirmDescription').replace(
-                      '{{source}}',
-                      source,
-                    ),
-                    confirm: t('settings.piPackages.confirmUpdate'),
-                  }
-                : {
-                    title: t('settings.piPackages.confirmTitle'),
-                    message: t('settings.piPackages.confirmTitle'),
-                    detail: t('settings.piPackages.confirmDescription').replace(
-                      '{{source}}',
-                      source,
-                    ),
-                    confirm: t('settings.piPackages.confirmInstall'),
-                  };
-        const owner = BrowserWindow.fromWebContents(event.sender);
-        const options = {
-          type: 'warning' as const,
-          title: copy.title,
-          message: copy.message,
-          detail: copy.detail,
-          buttons: [copy.confirm, t('settings.piPackages.cancel')],
-          defaultId: 1,
-          cancelId: 1,
-          noLink: true,
-        };
-        const decision = owner
-          ? await dialog.showMessageBox(owner, options)
-          : await dialog.showMessageBox(options);
-        if (decision.response !== 0) {
-          throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
+        let result: PiPackageMutationResult;
+        try {
+          if (!piPackageMutationNeedsGrant(request)) {
+            result = await mutatePiPackage(request);
+          } else {
+            // The trusted Settings action is the user's authorization. Keep the
+            // one-shot Main grant bound to this exact request, with no second
+            // fingerprint, compatibility, or content-approval decision.
+            result = await mutatePiPackage(
+              request,
+              issuePiPackageMutationGrant(request),
+            );
+          }
+        } catch (error) {
+          // A failed install/update/remove may still have changed bytes or
+          // approval state. Stop old snapshots before returning failure so the
+          // Settings projection cannot say disabled while tools keep running.
+          if (request.action !== 'set-enabled' || request.enabled === false) {
+            await invalidateLocalPiPackageRuntimes(maker);
+          }
+          throw error;
         }
-        return mutatePiPackage(request, issuePiPackageMutationGrant(request, grantBinding));
+        if (request.action === 'remove'
+          || (request.action === 'set-enabled' && request.enabled === false)) {
+          // Revocation is immediate: old startup snapshots must not keep the
+          // removed/disabled extension alive after Settings reports success.
+          await invalidateLocalPiPackageRuntimes(maker);
+        }
+        return result;
       },
       t('settings.piPackages.operationFailed'),
       (error) => {

@@ -99,7 +99,10 @@ import {
 } from './active-catalog.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
-import { resolveManagedPiPackageResources } from './pi-package-store.js';
+import {
+  resolveManagedPiNativePackagePaths,
+  resolveManagedPiPackageResources,
+} from './pi-package-store.js';
 import { mutateAuthorizedPiManagedPackage } from './pi-managed-package-mutation.js';
 
 const log = createLogger('pi-host');
@@ -1649,13 +1652,14 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       return path.join(app.getPath('userData'), 'pi-agent-home');
     },
     resolvePiManagedPackageResources: resolveManagedPiPackageResources,
+    resolvePiNativePackagePaths: resolveManagedPiNativePackagePaths,
     mutatePiManagedPackage: mutateAuthorizedPiManagedPackage,
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),
       cancel: t('settings.piPackages.cancel'),
       mutationFailed: t('settings.piPackages.operationFailed'),
       mutationSuccess: {
-        install: t('settings.piPackages.success.install'),
+        install: t('settings.piPackages.success.installEnabled'),
         update: t('settings.piPackages.success.update'),
         remove: t('settings.piPackages.success.remove'),
       },

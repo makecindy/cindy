@@ -3,8 +3,8 @@
  *
  * Pi's own package CLI owns source parsing, downloads, dependency installation,
  * updates, and removal. Cindy gives it an isolated PI_CODING_AGENT_DIR under
- * userData, then inspects the installed package roots for the explicit resource
- * paths that may be projected into a normal local Pi runtime.
+ * userData. Normal local runtimes receive installed roots as native Pi package
+ * settings; Cindy inspection supplies advisory UI metadata, never an allowlist.
  */
 
 import { spawn } from 'node:child_process';
@@ -43,9 +43,7 @@ import {
   consumePiPackageMutationGrant,
   piPackageMutationNeedsGrant,
   type PiPackageMutationGrant,
-  type PiPackageMutationGrantBinding,
 } from './pi-package-mutation-grant.js';
-import { escapePiPackageNativeDialogText } from './pi-package-native-dialog.js';
 import { killProcessTree } from '../scheduler-host/proc-util.js';
 
 const log = createLogger('pi-package-store');
@@ -88,9 +86,6 @@ let changeTokenReadInFlight: Promise<void> | undefined;
 let changeTokenReadQueued = false;
 const changeTokenWatchListener = () => void observePiPackageChangeToken();
 const PACKAGE_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
-const INSTALL_LIFECYCLE_SCRIPTS = new Set([
-  'preinstall', 'install', 'postinstall', 'prepare', 'prepublish', 'prepublishOnly',
-]);
 
 export function onPiPackagesChanged(listener: () => void): () => void {
   changeListeners.add(listener);
@@ -240,6 +235,10 @@ interface InspectedPackage {
   view: PiPackageView;
   launch: PiManagedPackageResources;
   promptCommands: Array<{ name: string; description: string }>;
+  /** Manifest explicitly declares Extension entries, but none exist after dependency install. */
+  missingDeclaredExtensions?: boolean;
+  /** User-authorized package build script available to repair missing generated entries. */
+  buildScript?: string;
   /** Canonical installed path, retained even while the package is disabled. */
   installedRoot?: string;
   /** Complete content identity of the exact root that a session would copy. */
@@ -251,12 +250,6 @@ interface InspectedPackage {
 interface PackageSourceProjection {
   displaySource: string;
   unsafe: boolean;
-}
-
-interface FreshExtensionApprovalIdentity {
-  closureFingerprint: string;
-  installedRoot: string;
-  snapshotRoot: string;
 }
 
 interface InspectionBudget {
@@ -464,6 +457,16 @@ async function requireState(): Promise<PiPackageState> {
   return result.state;
 }
 
+async function readStateWithoutBlockingPi(): Promise<PiPackageState> {
+  const result = await readState();
+  if (result.ok) return result.state;
+  // Cindy's optional projection must never turn a valid native Pi package
+  // operation into a failure. A corrupt projection loses only Cindy-specific
+  // toggles; Pi's own package settings remain the source of install truth.
+  log.warn('ignoring unavailable Cindy Pi package projection for native parity');
+  return emptyState();
+}
+
 async function writeState(state: PiPackageState): Promise<void> {
   await fs.mkdir(packageHome(), { recursive: true, mode: 0o700 });
   const target = statePath();
@@ -507,18 +510,16 @@ function truncateDisplayField(value: string, maxBytes: number): string {
   return `${truncated}${DISPLAY_TRUNCATION_MARKER}`;
 }
 
-export async function runPiPackageCommand(
+async function runPackageProcess(
+  binaryPath: string,
   args: string[],
-  timeoutMs = COMMAND_TIMEOUT_MS,
+  cwd: string,
+  timeoutMs: number,
   options: RunPiPackageCommandOptions = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  const binaryPath = getReadyBinaryPath('pi');
-  if (!binaryPath) throw new Error('Pi is not installed in Cindy');
-  await fs.mkdir(packageHome(), { recursive: true, mode: 0o700 });
-
   return new Promise((resolve, reject) => {
     const child = spawn(binaryPath, args, {
-      cwd: packageHome(),
+      cwd,
       shell: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -529,11 +530,12 @@ export async function runPiPackageCommand(
         NO_COLOR: '1',
         GIT_TERMINAL_PROMPT: '0',
         npm_config_yes: 'true',
-        // Pi's package manager does not currently pass --ignore-scripts.
-        // Keep install/update from executing arbitrary package lifecycle hooks;
-        // extension code has a separate post-inspection approval boundary.
-        npm_config_ignore_scripts: 'true',
-        NPM_CONFIG_IGNORE_SCRIPTS: 'true',
+        // This process exists only after the user explicitly requested the
+        // exact package mutation. Do not inherit a parent-level scripts ban:
+        // Git packages may need lifecycle hooks to install native dependencies
+        // before their declared Extension entry can be built.
+        npm_config_ignore_scripts: 'false',
+        NPM_CONFIG_IGNORE_SCRIPTS: 'false',
       },
     });
     let stdout = '';
@@ -615,6 +617,17 @@ export async function runPiPackageCommand(
       )));
     });
   });
+}
+
+export async function runPiPackageCommand(
+  args: string[],
+  timeoutMs = COMMAND_TIMEOUT_MS,
+  options: RunPiPackageCommandOptions = {},
+): Promise<{ stdout: string; stderr: string }> {
+  const binaryPath = getReadyBinaryPath('pi');
+  if (!binaryPath) throw new Error('Pi is not installed in Cindy');
+  await fs.mkdir(packageHome(), { recursive: true, mode: 0o700 });
+  return runPackageProcess(binaryPath, args, packageHome(), timeoutMs, options);
 }
 
 function parsePiVersionOutput(output: string): string | undefined {
@@ -739,12 +752,6 @@ function normalizeManifestEntries(value: unknown, fallback: string[]): string[] 
     entries.push(entry);
   }
   return entries;
-}
-
-function hasDisabledInstallLifecycleScript(scripts: Record<string, unknown> | undefined): boolean {
-  return Boolean(scripts && Object.entries(scripts).some(([name, command]) => (
-    INSTALL_LIFECYCLE_SCRIPTS.has(name) && typeof command === 'string' && command.trim().length > 0
-  )));
 }
 
 function globMatcher(pattern: string): (value: string) => boolean {
@@ -1069,6 +1076,15 @@ function resourceView(kind: Exclude<PiPackageResourceKind, 'extension'>, file: s
   };
 }
 
+function unknownExtensionResourceView(file: string): PiPackageResourceView {
+  return {
+    kind: 'extension',
+    name: truncateDisplayField(path.basename(file), MAX_DISPLAY_NAME_BYTES),
+    compatibility: 'unknown',
+    compatibilityIssues: ['analysis-incomplete'],
+  };
+}
+
 async function extensionResourceView(root: string, file: string): Promise<PiPackageResourceView> {
   try {
     const analysis = await analyzePiExtensionCompatibility(file, root);
@@ -1082,12 +1098,7 @@ async function extensionResourceView(root: string, file: string): Promise<PiPack
       ...(analysis.detectedApis.length > 0 ? { detectedApis: analysis.detectedApis } : {}),
     };
   } catch {
-    return {
-      kind: 'extension',
-      name: truncateDisplayField(path.basename(file), MAX_DISPLAY_NAME_BYTES),
-      compatibility: 'unknown',
-      compatibilityIssues: ['analysis-incomplete'],
-    };
+    return unknownExtensionResourceView(file);
   }
 }
 
@@ -1145,14 +1156,6 @@ function hasApprovedExtensionFingerprint(
     && state.approvedExtensionFingerprints[source] === fingerprint;
 }
 
-function hasToggleableResources(resources: PiPackageResourceView[]): boolean {
-  return resources.some((resource) => (
-    resource.kind === 'extension'
-    || resource.kind === 'skill'
-    || resource.kind === 'prompt'
-  ));
-}
-
 async function inspectPackage(
   pkg: ListedPackage,
   state: PiPackageState,
@@ -1163,22 +1166,22 @@ async function inspectPackage(
     extensions: [], skills: [], promptTemplates: [], packageRoots: [],
   };
   const { displaySource, unsafe } = projectPackageSource(pkg.source);
+  const explicitlyDisabled = state.disabledSources.includes(pkg.source);
   if (unsafe) {
     return {
       rawSource: pkg.source,
       view: {
         source: displaySource,
         name: displaySource,
-        enabled: false,
-        manageable: false,
+        enabled: Boolean(pkg.installedPath) && !explicitlyDisabled,
         resources: [],
         warning: 'unsafe-source',
       },
       launch: empty,
       promptCommands: [],
+      ...(pkg.installedPath ? { installedRoot: pkg.installedPath } : {}),
     };
   }
-  const explicitlyDisabled = state.disabledSources.includes(pkg.source);
   if (!pkg.installedPath) {
     return {
       rawSource: pkg.source,
@@ -1293,14 +1296,16 @@ async function inspectPackage(
     ]);
     assertInspectionBudget(budget);
     if (extensions.length > MAX_EXTENSION_FILES) throw new PiPackageInspectionLimitError();
-    // Babel parsing happens in Electron's main process. Keep analysis
-    // sequential and re-check the package-wide wall-clock budget between
-    // entries so a package cannot fan out thousands of CPU-heavy parses.
+    // Compatibility parsing is advisory and must never decide whether code is
+    // installable. Keep it sequential and bounded; once its package-wide time
+    // allowance is spent, project remaining entries as unknown rather than
+    // failing inspection or withholding launch resources.
     const extensionResources: PiPackageResourceView[] = [];
+    const compatibilityDeadline = Date.now() + MAX_INSPECTION_MS;
     for (const file of extensions) {
-      assertInspectionBudget(budget);
-      extensionResources.push(await extensionResourceView(root, file));
-      assertInspectionBudget(budget);
+      extensionResources.push(Date.now() < compatibilityDeadline
+        ? await extensionResourceView(root, file)
+        : unknownExtensionResourceView(file));
     }
     const resources: PiPackageResourceView[] = [
       ...extensionResources,
@@ -1334,11 +1339,9 @@ async function inspectPackage(
     const promptCommands = enabled
       ? await Promise.all(prompts.map((file) => promptCommand(file, budget, root)))
       : [];
-    const warning = hasDisabledInstallLifecycleScript(manifest.scripts)
-      ? 'lifecycle-scripts-disabled' as const
-        : resources.length === 0
-          ? 'no-resources' as const
-          : undefined;
+    const warning = resources.length === 0
+      ? 'no-resources' as const
+      : undefined;
     return {
       rawSource: pkg.source,
       view: {
@@ -1360,6 +1363,14 @@ async function inspectPackage(
         ? { extensions, skills, promptTemplates: prompts, packageRoots: [launchRoot] }
         : empty,
       promptCommands,
+      ...(Array.isArray(declared?.extensions)
+        && declared.extensions.length > 0
+        && extensions.length === 0
+        ? { missingDeclaredExtensions: true as const }
+        : {}),
+      ...(typeof manifest.scripts?.build === 'string' && manifest.scripts.build.trim()
+        ? { buildScript: manifest.scripts.build.trim() }
+        : {}),
       installedRoot: root,
       ...(contentFingerprint ? { contentFingerprint } : {}),
       ...(staleApproval ? { staleApproval: true } : {}),
@@ -1384,7 +1395,9 @@ async function inspectPackage(
       },
       launch: empty,
       promptCommands: [],
-      ...(installedRoot ? { installedRoot } : {}),
+      ...(installedRoot || pkg.installedPath
+        ? { installedRoot: installedRoot ?? pkg.installedPath }
+        : {}),
     };
   }
 }
@@ -1426,6 +1439,7 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
         },
         launch: { extensions: [], skills: [], promptTemplates: [], packageRoots: [] },
         promptCommands: [],
+        ...(pkg.installedPath ? { installedRoot: pkg.installedPath } : {}),
       });
       continue;
     }
@@ -1496,89 +1510,43 @@ async function inspectAllPackagesFreshUnderMutationLock(): Promise<InspectedPack
   return inspectAllPackages();
 }
 
+async function projectNativePackageViews(
+  inspected: InspectedPackage[],
+): Promise<PiPackageView[]> {
+  const state = await readStateWithoutBlockingPi();
+  const disabled = new Set(state.disabledSources);
+  return inspected.map((pkg) => {
+    const warning = snapshotUnavailableWarningForPackage(pkg) ?? pkg.view.warning;
+    const {
+      requiresExtensionApproval: _ignoredApproval,
+      manageable: _ignoredManageable,
+      canToggle,
+      ...view
+    } = pkg.view;
+    // Pi's list output is the install truth. Cindy inspection, compatibility,
+    // fingerprint, or snapshot failures stay advisory and cannot disable it.
+    const installed = Boolean(pkg.installedRoot);
+    return {
+      ...view,
+      enabled: installed && !disabled.has(pkg.rawSource),
+      ...(!installed && canToggle === false ? { canToggle: false as const } : {}),
+      ...(warning ? { warning } : {}),
+    };
+  });
+}
+
 async function listPiPackagesNow(): Promise<PiPackageListResult> {
   if (!getReadyBinaryPath('pi')) return { available: false, packages: [] };
   const inspected = await inspectAllPackages();
   return {
     available: true,
-    packages: inspected.map((pkg) => {
-      const warning = snapshotUnavailableWarningForPackage(pkg);
-      return warning ? { ...pkg.view, enabled: false, canToggle: false, warning } : pkg.view;
-    }),
+    packages: await projectNativePackageViews(inspected),
   };
 }
 
 export async function listPiPackages(): Promise<PiPackageListResult> {
   await mutationTail;
   return listPiPackagesNow();
-}
-
-export interface PiPackageEnableIdentity {
-  displayLabel: string;
-  expectedPackageFingerprint: string;
-}
-
-function nativeConfirmationField(value: string, maxBytes: number): string {
-  return truncateDisplayField(
-    escapePiPackageNativeDialogText(value).replace(/\s+/g, ' '),
-    maxBytes,
-  );
-}
-
-function piPackageEnableDisplayLabel(
-  target: InspectedPackage,
-  packageFingerprint: string,
-): string {
-  let name = nativeConfirmationField(target.view.name, MAX_DISPLAY_NAME_BYTES);
-  if (
-    !name
-    || path.isAbsolute(name)
-    || path.win32.isAbsolute(name)
-    || name.includes('/')
-    || name.includes('\\')
-  ) {
-    name = nativeConfirmationField(
-      target.installedRoot ? path.basename(target.installedRoot) : 'Pi extension',
-      MAX_DISPLAY_NAME_BYTES,
-    ) || 'Pi extension';
-  }
-  const rawVersion = target.view.version
-    ? nativeConfirmationField(target.view.version, MAX_DISPLAY_VERSION_BYTES)
-    : '';
-  const version = rawVersion
-    && !path.isAbsolute(rawVersion)
-    && !path.win32.isAbsolute(rawVersion)
-    && !rawVersion.includes('/')
-    && !rawVersion.includes('\\')
-    ? rawVersion
-    : '';
-  const packageLabel = version ? `${name} (${version})` : name;
-  return `${packageLabel}\nSHA-256: ${packageFingerprint}`;
-}
-
-/**
- * Captures the Main-inspected package identity shown before enabling it. The
- * later mutation must match the same content fingerprint again under the
- * shared lock; Renderer-provided display fields never enter this object.
- */
-export async function capturePiPackageEnableIdentity(source: string): Promise<PiPackageEnableIdentity> {
-  const normalizedSource = requireSource(source);
-  return enqueueMutation(async () => {
-    await requireState();
-    const inspected = await inspectAllPackagesFreshUnderMutationLock();
-    const target = await findAffectedInspectedPackage(inspected, normalizedSource);
-    if (!target) throw new Error('Pi package is not installed');
-    if (!hasToggleableResources(target.view.resources)) {
-      throw new Error('Pi package has no launchable resources');
-    }
-    if (!target.contentFingerprint) {
-      throw new Error('Pi package fingerprint is unavailable');
-    }
-    return {
-      displayLabel: piPackageEnableDisplayLabel(target, target.contentFingerprint),
-      expectedPackageFingerprint: target.contentFingerprint,
-    };
-  });
 }
 
 async function persistSnapshotUnavailableProjection(
@@ -1616,6 +1584,26 @@ function snapshotUnavailableWarningForPackage(
     if (candidate) warning = candidate;
   }
   return warning;
+}
+
+export async function resolveManagedPiNativePackagePaths(): Promise<string[]> {
+  if (!getReadyBinaryPath('pi')) return [];
+  const [{ stdout }, state] = await Promise.all([
+    runPiPackageCommand(
+      ['list', '--no-approve'],
+      COMMAND_TIMEOUT_MS,
+      { requireCompleteStdout: true },
+    ),
+    readStateWithoutBlockingPi(),
+  ]);
+  const disabled = new Set(state.disabledSources);
+  // Feed Pi the installed roots as local package entries in each runtime's
+  // settings.json. Pi then performs its own package/resource discovery, so a
+  // future manifest shape or a Cindy inspection failure cannot remove native
+  // functionality. Source strings remain store metadata; no reinstall occurs.
+  return [...new Set(parsePiPackageListOutput(stdout)
+    .filter((pkg) => pkg.installedPath && !disabled.has(pkg.source))
+    .map((pkg) => pkg.installedPath!))];
 }
 
 export async function resolveManagedPiPackageResources(
@@ -1798,18 +1786,9 @@ function requireSource(value: unknown): string {
   if (!source || source.startsWith('-') || source.length > MAX_SOURCE_LENGTH || /[\r\n\0]/.test(source)) {
     throw new Error('Invalid Pi package source');
   }
-  const urlSource = source.startsWith('git:') ? source.slice(4) : source;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(urlSource)) {
-    let parsed: URL;
-    try {
-      parsed = new URL(urlSource);
-    } catch {
-      throw new Error('Invalid Pi package source URL');
-    }
-    if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-      throw new Error('Pi package source URLs must not contain embedded credentials or query data');
-    }
-  }
+  // Preserve explicit source syntax exactly as Pi accepts it. Cindy may redact
+  // credentials or query data in UI/log projections, but must not reject a
+  // source that the native `pi install` command can consume.
   return normalizeRequestedPackageSource(source);
 }
 
@@ -2385,33 +2364,17 @@ async function revokeExtensionApproval(sources: Iterable<string>): Promise<void>
 }
 
 /**
- * One confirmed install/update is enough to run the affected package.
- * Sibling npm packages share one copy-root, so their fingerprints change when
- * another package is added. Rebase only identities that still matched before
- * the mutation; stale or uninspectable approvals must remain fail closed.
+ * Preserve optional snapshot metadata when Cindy can compute it. This helper
+ * never decides native package enablement and never scans sibling dependency
+ * closures before allowing a Pi command to run.
  */
 async function persistEnabledExtensionApprovals(options: {
-  inspected: InspectedPackage[];
-  rebaseSources: ReadonlySet<string>;
   enable?: InspectedPackage;
 }): Promise<void> {
   const state = await requireState();
   const disabled = new Set(state.disabledSources);
   const approved = new Set(state.approvedExtensionSources);
   const fingerprints = { ...state.approvedExtensionFingerprints };
-  const inspectedBySource = new Map(
-    options.inspected.map((pkg) => [pkg.rawSource, pkg]),
-  );
-
-  for (const source of approved) {
-    const pkg = inspectedBySource.get(source);
-    if (!options.rebaseSources.has(source) || !pkg?.contentFingerprint) {
-      approved.delete(source);
-      delete fingerprints[source];
-      continue;
-    }
-    fingerprints[source] = pkg.contentFingerprint;
-  }
 
   if (options.enable) {
     const pkg = options.enable;
@@ -2454,133 +2417,40 @@ function mutationCommandSource(
     : requestedSource;
 }
 
-async function resolveClosureDependency(
-  packageRoot: string,
-  name: string,
-  nodeModulesRoot: string,
-): Promise<string | undefined> {
-  if (!/^(?:@[^/\\\0]+\/)?[^/\\\0]+$/.test(name)
-    || name.split('/').some((part) => part === '.' || part === '..')) {
-    throw new Error('Invalid npm dependency name');
-  }
-  const candidates = new Set<string>();
-  let cursor = packageRoot;
-  for (;;) {
-    candidates.add(path.basename(cursor) === 'node_modules'
-      ? path.join(cursor, name)
-      : path.join(cursor, 'node_modules', name));
-    if (cursor === nodeModulesRoot) break;
-    const parent = path.dirname(cursor);
-    if (parent === cursor || !isWithinConfinement(nodeModulesRoot, parent)) break;
-    cursor = parent;
-  }
-  for (const candidate of candidates) {
-    try {
-      const { canonicalPath, stat } = await resolveStablePackagePath(candidate,
-        'Pi extension dependency changed while proving approval identity');
-      if (!stat.isDirectory() || !isWithinConfinement(nodeModulesRoot, canonicalPath)) {
-        throw new Error('Pi extension dependency escaped the shared npm root');
-      }
-      return canonicalPath;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  }
-  return undefined;
-}
-
-async function fingerprintExtensionClosure(
-  installedRoot: string,
-  snapshotRoot: string,
-): Promise<string> {
-  const nodeModulesRoot = await fs.realpath(path.join(snapshotRoot, 'node_modules'));
-  if (!isWithinConfinement(nodeModulesRoot, installedRoot)) {
-    throw new Error('Pi extension escaped the shared npm root');
-  }
-  const pending = [installedRoot];
-  const roots = new Set<string>();
-  let metadataBytes = 0;
-  while (pending.length > 0) {
-    if (roots.size >= MAX_INSPECTION_ENTRIES) throw new PiPackageInspectionLimitError();
-    const root = await fs.realpath(pending.shift()!);
-    if (roots.has(root)) continue;
-    roots.add(root);
-    const manifestResult = await readUtf8FileBounded(
-      path.join(root, 'package.json'), MAX_PACKAGE_JSON_BYTES, root);
-    metadataBytes += manifestResult.bytes;
-    if (metadataBytes > MAX_INSPECTION_METADATA_BYTES) throw new PiPackageInspectionLimitError();
-    const manifest = JSON.parse(manifestResult.text) as PackageManifest;
-    const dependencyNames = new Set(Object.keys({ ...manifest.peerDependencies,
-      ...manifest.optionalDependencies, ...manifest.dependencies }));
-    for (const name of [...dependencyNames].sort()) {
-      const dependency = await resolveClosureDependency(root, name, nodeModulesRoot);
-      if (dependency && !roots.has(dependency)) pending.push(dependency);
-    }
-  }
-
-  const selectedRoots: string[] = [];
-  for (const root of [...roots].sort((left, right) => left.length - right.length)) {
-    if (!selectedRoots.some((ancestor) => isWithinConfinement(ancestor, root))) selectedRoots.push(root);
-  }
-  const aggregate = createSnapshotBudgetCounters(DEFAULT_SNAPSHOT_LIMITS);
-  const hash = createHash('sha256');
-  updatePackageFingerprintField(hash, 'cindy-pi-extension-closure-v1');
-  for (const root of selectedRoots.sort()) {
-    updatePackageFingerprintField(hash, path.relative(snapshotRoot, root));
-    updatePackageFingerprintField(hash, await fingerprintPiPackageTree(
-      root, DEFAULT_SNAPSHOT_LIMITS, aggregate));
-  }
-  return hash.digest('hex');
-}
-
-async function captureExtensionApprovalIdentities(
-  packages: InspectedPackage[],
-): Promise<Map<string, FreshExtensionApprovalIdentity>> {
-  const identities = new Map<string, FreshExtensionApprovalIdentity>();
-  for (const pkg of packages) {
-    if (!pkg.contentFingerprint || !pkg.installedRoot) continue;
-    try {
-      const snapshotRoot = await snapshotRootForInstalledPackage(pkg.rawSource, pkg.installedRoot);
-      const closureFingerprint = snapshotRoot === pkg.installedRoot
-        ? pkg.contentFingerprint
-        : await fingerprintExtensionClosure(pkg.installedRoot, snapshotRoot);
-      if (await fingerprintPiPackageTree(snapshotRoot) !== pkg.contentFingerprint) continue;
-      identities.set(pkg.rawSource, {
-        closureFingerprint,
-        installedRoot: pkg.installedRoot,
-        snapshotRoot,
-      });
-    } catch {
-      // Unprovable closures are not eligible for rebasing.
-    }
-  }
-  return identities;
-}
-
-async function unchangedExtensionClosureSources(
-  before: ReadonlyMap<string, FreshExtensionApprovalIdentity>,
-  inspectedAfter: InspectedPackage[],
-): Promise<Set<string>> {
-  const after = await captureExtensionApprovalIdentities(
-    inspectedAfter.filter((pkg) => before.has(pkg.rawSource)));
-  return new Set([...before].filter(([source, identity]) => {
-    const current = after.get(source);
-    return current?.installedRoot === identity.installedRoot
-      && current.snapshotRoot === identity.snapshotRoot
-      && current.closureFingerprint === identity.closureFingerprint;
-  }).map(([source]) => source));
+async function buildMissingDeclaredPiExtensions(pkg: InspectedPackage): Promise<boolean> {
+  if (!pkg.missingDeclaredExtensions || !pkg.buildScript || !pkg.installedRoot) return false;
+  const npmExecutable = process.platform === 'win32'
+    ? (process.env.ComSpec || 'cmd.exe')
+    : 'npm';
+  const npmPrefix = process.platform === 'win32'
+    ? ['/d', '/s', '/c', 'npm']
+    : [];
+  // Git sources commonly omit generated build output. This is optional
+  // convenience under the user's explicit install authorization; failure is
+  // advisory because Pi's own successful install remains the result truth.
+  await runPackageProcess(
+    npmExecutable,
+    [...npmPrefix, 'install', '--include=dev', '--no-audit', '--no-fund'],
+    pkg.installedRoot,
+    COMMAND_TIMEOUT_MS,
+  );
+  await runPackageProcess(
+    npmExecutable,
+    [...npmPrefix, 'run', 'build'],
+    pkg.installedRoot,
+    COMMAND_TIMEOUT_MS,
+  );
+  return true;
 }
 
 export async function mutatePiPackage(
   request: PiPackageMutationRequest,
   grant?: PiPackageMutationGrant,
 ): Promise<PiPackageMutationResult> {
-  let grantBinding: Readonly<PiPackageMutationGrantBinding> = {};
   if (piPackageMutationNeedsGrant(request)) {
-    // The grant is an in-process, one-shot capability issued only after Main
-    // observed a real user decision (or an exact whole user command). Renderer
-    // booleans and Full Access never cross this boundary.
-    grantBinding = consumePiPackageMutationGrant(request, grant);
+    // The one-shot grant binds the exact user/tool action to this mutation. It
+    // is not a second package-compatibility or content-approval gate.
+    consumePiPackageMutationGrant(request, grant);
   }
   const source = requireSource(request.source);
   if (request.action === 'install' && isRelativeLocalPiPackageSource(source)) {
@@ -2588,48 +2458,62 @@ export async function mutatePiPackage(
   }
   let mutationMayHaveChangedState = false;
   return enqueueMutation(async () => {
-    // Never mutate the package tree or replace the durable preference file if
-    // the existing state cannot be read. Otherwise a transient read failure
-    // could erase explicit disables after a successful package command.
-    await requireState();
-    // Every mutation starts from one fresh projection acquired after the
-    // shared cross-process lock. A packaged/dev/--passive peer may have
-    // installed, removed, updated, or changed approval state since this
-    // process populated its cache; no mutation may persist decisions derived
-    // from that lock-external snapshot.
-    const inspectedBeforeMutation = await inspectAllPackagesFreshUnderMutationLock();
-    const preMutationFreshApprovals = await captureExtensionApprovalIdentities(
-      inspectedBeforeMutation.filter((pkg) => (
-        pkg.view.requiresExtensionApproval !== true
-        && pkg.view.resources.some((resource) => resource.kind === 'extension')
-      )),
-    );
+    // Cindy projection state is optional metadata. Native Pi package commands
+    // run before any Cindy inspection; an analyzer timeout or unknown future
+    // package shape therefore cannot delay or veto the upstream command.
+    const inspectedBeforeMutation: InspectedPackage[] = [];
     let affectedSource: string | undefined;
     if (request.action === 'install') {
       mutationMayHaveChangedState = true;
-      // Reinstalling an existing source can replace executable code. Revoke
-      // before invoking Pi so even a partially failed install cannot inherit a
-      // stale approval on the next runtime. A successful install is itself the
-      // user decision to enable the new bytes.
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
-      await revokeExtensionApproval([
-        ...sourceAliases(source),
-        ...(previous ? sourceAliases(previous.rawSource) : []),
-      ]);
-      invalidateInspectionCache();
+      // The package command may run dependency and build scripts. Keep the old
+      // optional snapshot identity until that command succeeds. Native Pi
+      // enablement never depends on this Cindy metadata.
       await runPiPackageCommand(['install', source, '--no-approve']);
       invalidateInspectionCache();
-      const inspectedAfterInstall = await inspectAllPackages();
-      const affected = await findAffectedInspectedPackage(inspectedAfterInstall, source);
-      affectedSource = affected?.rawSource;
-      await persistEnabledExtensionApprovals({
-        inspected: inspectedAfterInstall,
-        rebaseSources: await unchangedExtensionClosureSources(
-          preMutationFreshApprovals,
-          inspectedAfterInstall,
-        ),
-        ...(affected ? { enable: affected } : {}),
-      });
+      let inspectedAfterInstall: InspectedPackage[] = [];
+      try {
+        inspectedAfterInstall = await inspectAllPackages();
+      } catch (error) {
+        log.warn('Pi package installed; Cindy post-install analysis unavailable', {
+          source,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      let affected = await findAffectedInspectedPackage(inspectedAfterInstall, source);
+      if (affected?.missingDeclaredExtensions) {
+        const buildTarget = affected;
+        // Best-effort convenience for Git packages that omit generated output.
+        // Pi already accepted the install, so a Cindy-added build attempt may
+        // improve it but can never reverse that native success.
+        try {
+          if (await buildMissingDeclaredPiExtensions(buildTarget)) {
+            invalidateInspectionCache();
+            inspectedAfterInstall = await inspectAllPackages();
+            affected = await findAffectedInspectedPackage(inspectedAfterInstall, source);
+          }
+        } catch (error) {
+          log.warn('optional Pi package build assistance failed', {
+            source: buildTarget.view.source,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      affectedSource = affected?.rawSource ?? previous?.rawSource ?? source;
+      try {
+        await revokeExtensionApproval([
+          ...sourceAliases(source),
+          ...(previous ? sourceAliases(previous.rawSource) : []),
+        ]);
+        await persistEnabledExtensionApprovals({
+          ...(affected ? { enable: affected } : {}),
+        });
+      } catch (error) {
+        log.warn('Pi package installed but Cindy projection refresh failed', {
+          source,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     } else if (request.action === 'remove') {
       mutationMayHaveChangedState = true;
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
@@ -2638,21 +2522,28 @@ export async function mutatePiPackage(
         mutationCommandSource(source, previous),
         '--no-approve',
       ]);
-      const state = await requireState();
-      const removedSources = new Set([
-        ...sourceAliases(source),
-        ...(previous ? sourceAliases(previous.rawSource) : []),
-      ]);
-      await writeState({
-        version: STATE_VERSION,
-        disabledSources: state.disabledSources.filter((item) => !removedSources.has(item)),
-        approvedExtensionSources: state.approvedExtensionSources.filter((item) => !removedSources.has(item)),
-        approvedExtensionFingerprints: Object.fromEntries(
-          Object.entries(state.approvedExtensionFingerprints)
-            .filter(([item]) => !removedSources.has(item)),
-        ),
-        snapshotUnavailableRoots: state.snapshotUnavailableRoots,
-      });
+      try {
+        const state = await readStateWithoutBlockingPi();
+        const removedSources = new Set([
+          ...sourceAliases(source),
+          ...(previous ? sourceAliases(previous.rawSource) : []),
+        ]);
+        await writeState({
+          version: STATE_VERSION,
+          disabledSources: state.disabledSources.filter((item) => !removedSources.has(item)),
+          approvedExtensionSources: state.approvedExtensionSources.filter((item) => !removedSources.has(item)),
+          approvedExtensionFingerprints: Object.fromEntries(
+            Object.entries(state.approvedExtensionFingerprints)
+              .filter(([item]) => !removedSources.has(item)),
+          ),
+          snapshotUnavailableRoots: state.snapshotUnavailableRoots,
+        });
+      } catch (error) {
+        log.warn('Pi package removed but Cindy projection cleanup failed', {
+          source,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     } else if (request.action === 'update') {
       mutationMayHaveChangedState = true;
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
@@ -2660,63 +2551,86 @@ export async function mutatePiPackage(
         ...sourceAliases(source),
         ...(previous ? sourceAliases(previous.rawSource) : []),
       ];
-      const stateBeforeUpdate = await requireState();
+      const stateBeforeUpdate = await readStateWithoutBlockingPi();
       const wasExplicitlyDisabled = updateAliases.some((item) => (
         stateBeforeUpdate.disabledSources.includes(item)
       ));
-      await revokeExtensionApproval(updateAliases);
-      invalidateInspectionCache();
+      // Keep the last optional snapshot identity until Pi's update command
+      // succeeds. Cindy may retire a stale snapshot after byte changes, but
+      // must not reinterpret that as disabling the native Pi package.
       await runPiPackageCommand([
         'update',
         mutationCommandSource(source, previous),
         '--no-approve',
       ]);
+      try {
+        await revokeExtensionApproval(updateAliases);
+      } catch (error) {
+        log.warn('Pi package updated but Cindy approval projection could not be refreshed', {
+          source,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       invalidateInspectionCache();
-      const inspectedAfterUpdate = await inspectAllPackages();
-      const affected = await findAffectedInspectedPackage(inspectedAfterUpdate, source);
+      let inspectedAfterUpdate: InspectedPackage[] = [];
+      try {
+        inspectedAfterUpdate = await inspectAllPackages();
+      } catch (error) {
+        log.warn('Pi package updated; Cindy post-update analysis unavailable', {
+          source,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      let affected = await findAffectedInspectedPackage(inspectedAfterUpdate, source);
+      if (affected?.missingDeclaredExtensions) {
+        const buildTarget = affected;
+        try {
+          if (await buildMissingDeclaredPiExtensions(buildTarget)) {
+            invalidateInspectionCache();
+            inspectedAfterUpdate = await inspectAllPackages();
+            affected = await findAffectedInspectedPackage(inspectedAfterUpdate, source);
+          }
+        } catch (error) {
+          log.warn('optional Pi package update build assistance failed', {
+            source: buildTarget.view.source,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       affectedSource = affected?.rawSource ?? previous?.rawSource ?? source;
       // A confirmed update is enough to keep running the new bytes, unless the
       // user had already turned this package off.
-      await persistEnabledExtensionApprovals({
-        inspected: inspectedAfterUpdate,
-        rebaseSources: await unchangedExtensionClosureSources(
-          preMutationFreshApprovals,
-          inspectedAfterUpdate,
-        ),
-        ...(!wasExplicitlyDisabled && affected ? { enable: affected } : {}),
-      });
+      try {
+        await persistEnabledExtensionApprovals({
+          ...(!wasExplicitlyDisabled && affected ? { enable: affected } : {}),
+        });
+      } catch (error) {
+        log.warn('Pi package updated but Cindy projection refresh failed', {
+          source,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     } else if (request.action === 'set-enabled') {
       if (typeof request.enabled !== 'boolean') throw new Error('enabled must be a boolean');
       const target = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
-      if (!target) throw new Error('Pi package is not installed');
-      affectedSource = target.rawSource;
-      const state = await requireState();
+      affectedSource = target?.rawSource ?? source;
+      const state = await readStateWithoutBlockingPi();
       const disabled = new Set(state.disabledSources);
       const approved = new Set(state.approvedExtensionSources);
       const approvedFingerprints = { ...state.approvedExtensionFingerprints };
       if (request.enabled) {
-        if (!hasToggleableResources(target.view.resources)) {
-          throw new Error('Pi package has no launchable resources');
+        // The precise Settings click is authorization. Pi, not Cindy's
+        // inspector or fingerprint format, decides whether the package loads.
+        // Preserve a fingerprint when available only for Cindy's optional
+        // snapshot metadata; absence or mismatch is never an enable blocker.
+        disabled.delete(affectedSource);
+        if (target?.contentFingerprint
+          && target.view.resources.some((resource) => resource.kind === 'extension')) {
+          approved.add(affectedSource);
+          approvedFingerprints[affectedSource] = target.contentFingerprint;
         }
-        if (
-          !Object.hasOwn(grantBinding, 'expectedPackageFingerprint')
-          || grantBinding.expectedPackageFingerprint !== (target.contentFingerprint ?? null)
-        ) {
-          throw new Error('Pi extension package changed after authorization');
-        }
-        if (target.view.resources.some((resource) => resource.kind === 'extension')) {
-          if (!target.contentFingerprint) {
-            throw new Error('Pi extension package fingerprint is unavailable');
-          }
-          approved.add(target.rawSource);
-          approvedFingerprints[target.rawSource] = target.contentFingerprint;
-        } else {
-          approved.delete(target.rawSource);
-          delete approvedFingerprints[target.rawSource];
-        }
-        disabled.delete(target.rawSource);
       } else {
-        disabled.add(target.rawSource);
+        disabled.add(affectedSource);
       }
       // writeState atomically replaces the state file. Mark the mutation before
       // entering that durable write so a successful write followed by a failed
@@ -2733,10 +2647,55 @@ export async function mutatePiPackage(
       });
     }
     invalidateInspectionCache();
-    const result = await listPiPackagesNow();
+    let result: PiPackageListResult;
+    try {
+      result = await listPiPackagesNow();
+    } catch (error) {
+      log.warn('Pi package mutation succeeded; Cindy list projection unavailable', {
+        action: request.action,
+        source,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      result = { available: true, packages: [] };
+    }
     const affectedPackage = affectedSource
       ? findAffectedPiPackage(result.packages, affectedSource)
       : findAffectedPiPackage(result.packages, source);
+    if (request.action === 'install' && affectedPackage?.enabled !== true) {
+      // Native Pi already accepted the package. Keep a useful receipt even if
+      // Cindy could not project its new/unknown manifest shape.
+      const fallbackSource = projectPackageSource(source).displaySource;
+      const fallback: PiPackageView = {
+        source: fallbackSource,
+        name: fallbackSource,
+        enabled: true,
+        resources: [],
+        warning: 'inspection-failed',
+      };
+      const mutationResult = {
+        ...result,
+        changed: true,
+        packages: [...result.packages, fallback],
+        affectedPackage: fallback,
+      };
+      await publishPiPackagesChanged({ invalidateCache: false });
+      return mutationResult;
+    }
+    if (request.action === 'set-enabled' && request.enabled === true) {
+      // Persist optional snapshot metadata only after the user-visible enable
+      // result is already determined from Pi's installed package state. Any
+      // inspection/fingerprint failure is swallowed and cannot veto enablement.
+      try {
+        const inspected = await inspectAllPackages();
+        const target = await findAffectedInspectedPackage(inspected, affectedSource ?? source);
+        if (target) await persistEnabledExtensionApprovals({ enable: target });
+      } catch (error) {
+        log.warn('Pi package enabled; optional Cindy snapshot metadata unavailable', {
+          source,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     const mutationResult = { ...result, changed: true, ...(affectedPackage ? { affectedPackage } : {}) };
     await publishPiPackagesChanged({ invalidateCache: false });
     return mutationResult;

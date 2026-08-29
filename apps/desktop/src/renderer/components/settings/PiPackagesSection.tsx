@@ -9,16 +9,11 @@ import type {
   PiPackageRuntimeRequirement,
   PiPackageView,
 } from '@/../shared/piPackages';
-import {
-  isRelativeLocalPiPackageSource,
-  shouldShowPiPackagePostMutationNotice,
-} from '@/../shared/piPackages';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { isRelativeLocalPiPackageSource } from '@/../shared/piPackages';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { extractIpcError } from '@/utils/ipcError';
 import { SettingsTextInput } from './SettingsTextInput';
 
 const CARD_CLASS = cn(
@@ -136,7 +131,6 @@ export function PiPackagesSection() {
   const [packages, setPackages] = useState<PiPackageView[]>([]);
   const [available, setAvailable] = useState(true);
   const [loadState, setLoadState] = useState<PiPackagesLoadState>('loading');
-  const [compatibilityNotice, setCompatibilityNotice] = useState<PiPackageView | null>(null);
   const [busy, setBusy] = useState<PiPackageBusyOperation | null>(null);
   const [expandedSources, setExpandedSources] = useState<Set<string>>(() => new Set());
   const mountedRef = useRef(false);
@@ -198,25 +192,28 @@ export function PiPackagesSection() {
         setLoadState('ready');
         setAvailable(result.available);
         setPackages(result.packages);
-        if (action === 'install') setSource('');
-        if (
-          (action === 'install' || action === 'update') &&
-          result.affectedPackage &&
-          shouldShowPiPackagePostMutationNotice(result.affectedPackage)
-        ) {
-          setCompatibilityNotice(result.affectedPackage);
-        }
+        if (action === 'install' && result.affectedPackage?.enabled) setSource('');
+      }
+      // Installation success means installed and enabled. Keep this Renderer
+      // assertion even though Main enforces the same invariant so an older or
+      // malformed receipt can never produce a false success toast.
+      if (action === 'install' && result.affectedPackage?.enabled !== true) {
+        toast.error(t('settings.piPackages.operationFailed'));
+        return false;
       }
       // Toasts are app-level feedback: even if the user leaves this panel while
       // the host mutation is running, they still need the final outcome.
       const successKey =
         action === 'install' && result.affectedPackage?.enabled
           ? 'settings.piPackages.success.installEnabled'
-          : `settings.piPackages.success.${action}`;
+          : action === 'remove'
+            ? 'settings.piPackages.success.settingsRemove'
+            : action === 'set-enabled' && options?.enabled === false
+              ? 'settings.piPackages.success.settingsDisable'
+              : `settings.piPackages.success.${action}`;
       toast.success(t(successKey));
       return true;
-    } catch (error) {
-      if (extractIpcError(error)?.code === 'MUTATION_CANCELLED') return false;
+    } catch {
       toast.error(t('settings.piPackages.operationFailed'));
       return false;
     } finally {
@@ -238,17 +235,6 @@ export function PiPackagesSection() {
       return next;
     });
   };
-  const closeCompatibilityNoticeUnlessMutating = (open: boolean) => {
-    if (!open && !mutationInFlightRef.current) setCompatibilityNotice(null);
-  };
-  const disableCompatibilityNoticePackage = async () => {
-    const notice = compatibilityNotice;
-    if (!notice?.enabled) return;
-    if (await runMutation('set-enabled', notice.source, { enabled: false })) {
-      if (mountedRef.current) setCompatibilityNotice(null);
-    }
-  };
-
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1">
@@ -488,71 +474,6 @@ export function PiPackagesSection() {
           })}
         </div>
       </section>
-
-      <ConfirmDialog
-        open={compatibilityNotice !== null}
-        onOpenChange={closeCompatibilityNoticeUnlessMutating}
-        title={t('settings.piPackages.compatibilityNoticeTitle')}
-        description={t('settings.piPackages.compatibilityNoticeDescription', {
-          name: compatibilityNotice?.name ?? '',
-        })}
-        content={
-          compatibilityNotice ? (
-            <div className="flex flex-col gap-2">
-              {compatibilityNotice.warning && (
-                <div className="rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5 text-12 text-[var(--confirm-desc)]">
-                  {t(`settings.piPackages.warning.${compatibilityNotice.warning}`)}
-                </div>
-              )}
-              {compatibilityNotice.requiresExtensionApproval && (
-                <div className="rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-                  <p className="text-12 font-medium text-[var(--confirm-title)]">
-                    {t('settings.piPackages.extensionApprovalTitle')}
-                  </p>
-                  <p className="mt-1 text-11 leading-[1.45] text-[var(--confirm-desc)]">
-                    {t('settings.piPackages.extensionApprovalDescription')}
-                  </p>
-                </div>
-              )}
-              {compatibilityNotice.runtimeRequirements?.map((requirement) => (
-                <RuntimeRequirementDetails
-                  key={`${requirement.packageName}:${requirement.range}`}
-                  requirement={requirement}
-                />
-              ))}
-              {compatibilityNotice.resources
-                .filter((resource) => resource.compatibility !== 'supported')
-                .map((resource, index) => (
-                  <ResourceCompatibilityDetails
-                    key={`${resource.kind}:${resource.name}:${index}`}
-                    resource={resource}
-                  />
-                ))}
-              <p className="mt-1 text-11 leading-[1.45] text-[var(--confirm-desc)]">
-                {t('settings.piPackages.parserDisclaimer')}
-              </p>
-            </div>
-          ) : undefined
-        }
-        maxWidth={520}
-        describeContent
-        confirmText={
-          compatibilityNotice?.enabled
-            ? t('settings.piPackages.keepEnabled')
-            : t('settings.piPackages.done')
-        }
-        cancelText={t('settings.piPackages.keepDisabled')}
-        showCancel={false}
-        tertiaryText={
-          !compatibilityNotice?.requiresExtensionApproval && compatibilityNotice?.enabled
-            ? t('settings.piPackages.disableAfterInstall')
-            : undefined
-        }
-        loading={busy?.action === 'set-enabled'}
-        onConfirm={() => setCompatibilityNotice(null)}
-        onCancel={() => setCompatibilityNotice(null)}
-        onTertiary={() => void disableCompatibilityNoticePackage()}
-      />
     </div>
   );
 }

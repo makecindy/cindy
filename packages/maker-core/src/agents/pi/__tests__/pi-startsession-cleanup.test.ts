@@ -1880,8 +1880,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(repeatedArgValues(args, '--extension')).toEqual([
       // 轮 40-w4-t15:argv 里的 extension 路径是 posix join(远端派生路径统一
       // POSIX),对比也用 posix —— 平台 path.join 在 Windows 拼反斜杠不匹配。
-      path.posix.join(configHome, 'extensions', 'cindy-bridge.ts'),
-      path.posix.join(configHome, 'extensions', 'cindy-subagent.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-subagent.ts'),
     ]);
     await vi.waitFor(() => {
       expect(handle.getRuntimeCapabilities?.()?.projectResources).toEqual({
@@ -2134,15 +2134,18 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const packageExtension = path.join(agentHome, 'managed-packages', 'extension.ts');
     const packageSkill = path.join(agentHome, 'managed-packages', 'skill-one');
     const packagePrompt = path.join(agentHome, 'managed-packages', 'prompt-one.md');
+    const packageRoot = path.dirname(packageExtension);
     const resolvePiManagedPackageResources = vi.fn(async () => ({
       extensions: [packageExtension],
       skills: [{ path: packageSkill, name: 'package-skill' }],
       promptTemplates: [packagePrompt],
-      packageRoots: [path.dirname(packageExtension)],
+      packageRoots: [packageRoot],
     }));
+    const resolvePiNativePackagePaths = vi.fn(async () => [packageRoot]);
     const agent = new PiAgent(buildDeps({
       resolvePiProjectTrustInput,
       resolvePiManagedPackageResources,
+      resolvePiNativePackagePaths,
     }));
     const [approvedHandle, reviewHandle] = await Promise.all([
       agent.startSession({ sessionId: 'approved', workingDir: cwd, model: 'm' }),
@@ -2167,29 +2170,26 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     );
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--skill')).toEqual([
       stagedSkillPath(approvedHome, 0, skillPath),
-      packageSkill,
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--skill')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--extension')).toEqual([
-      path.posix.join(approvedHome, 'extensions', 'cindy-bridge.ts'),
-      path.posix.join(approvedHome, 'extensions', 'cindy-subagent.ts'),
-      packageExtension,
+      path.posix.join(approvedHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(approvedHome, 'internal-extensions', 'cindy-subagent.ts'),
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--extension')).toEqual([
-      path.posix.join(reviewHome, 'extensions', 'cindy-bridge.ts'),
+      path.posix.join(reviewHome, 'internal-extensions', 'cindy-bridge.ts'),
     ]);
-    expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--prompt-template')).toEqual([
-      packagePrompt,
-    ]);
+    expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--prompt-template')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--prompt-template')).toEqual([]);
     expect(resolvePiProjectTrustInput).toHaveBeenCalledOnce();
     expect(resolvePiProjectTrustInput).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'approved',
     }));
     expect(resolvePiManagedPackageResources).toHaveBeenCalledOnce();
-    expect(resolvePiManagedPackageResources).toHaveBeenCalledWith({
-      snapshotRoot: path.join(approvedHome, 'managed-packages'),
-    });
+    expect(resolvePiManagedPackageResources).toHaveBeenCalledWith();
+    expect(resolvePiNativePackagePaths).toHaveBeenCalledOnce();
+    expect(JSON.parse(readFileSync(path.join(approvedHome, 'settings.json'), 'utf8')))
+      .toMatchObject({ packages: [packageRoot] });
     await vi.waitFor(() => {
       expect(approvedHandle.getRuntimeCapabilities?.()?.projectResources).toMatchObject({
         status: 'approved', approvalRevision: 'rev-approved-only', requestedSkillCount: 1,

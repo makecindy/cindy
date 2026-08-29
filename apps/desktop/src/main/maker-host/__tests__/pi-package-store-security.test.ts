@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  mkdirSync,
   mkdtempSync,
   promises as fs,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -36,6 +38,7 @@ const runtime = vi.hoisted(() => ({
   spawns: [] as Array<{ args: string[]; env: Record<string, string | undefined>; detached?: boolean }>,
   holdMutationCommand: false,
   pendingClose: null as null | ((code: number) => void),
+  spawnHook: null as null | ((args: string[]) => void),
 }));
 
 const processRuntime = vi.hoisted(() => ({
@@ -125,6 +128,7 @@ vi.mock('node:child_process', () => ({
     };
     queueMicrotask(() => {
       if (runtime.holdMutationCommand && !args.includes('list')) return;
+      runtime.spawnHook?.(args);
       const outcome = args.includes('list') ? runtime.listOutcomes.shift() : undefined;
       if (args.includes('list')) {
         for (const handler of stdoutHandlers) {
@@ -205,6 +209,7 @@ beforeEach(async () => {
   runtime.spawns = [];
   runtime.holdMutationCommand = false;
   runtime.pendingClose = null;
+  runtime.spawnHook = null;
   processRuntime.killTree.mockReset();
   processRuntime.pendingTreeSettled = null;
   lockRuntime.calls = [];
@@ -225,13 +230,7 @@ async function mutateAuthorized(
   request: import('../../../shared/piPackages.js').PiPackageMutationRequest,
 ) {
   const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
-  const identity = request.action === 'set-enabled' && request.enabled === true
-    ? await store.capturePiPackageEnableIdentity(request.source)
-    : undefined;
-  const binding = identity
-    ? { expectedPackageFingerprint: identity.expectedPackageFingerprint }
-    : undefined;
-  return store.mutatePiPackage(request, issuePiPackageMutationGrant(request, binding));
+  return store.mutatePiPackage(request, issuePiPackageMutationGrant(request));
 }
 
 describe('Pi package executable-code boundary', () => {
@@ -462,7 +461,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.mutatePiPackage(request, fresh)).rejects.toThrow(/invalid or expired/i);
   });
 
-  it('holds Extension packages disabled until explicit approval and re-enables them after a confirmed update', async () => {
+  it('keeps native package enablement independent from optional snapshot approval metadata', async () => {
     const { root, source } = await createPackage();
     await fs.mkdir(path.join(root, 'skills', 'sample'), { recursive: true });
     await fs.writeFile(
@@ -479,8 +478,7 @@ describe('Pi package executable-code boundary', () => {
     const initial = await store.listPiPackages();
     expect(initial.packages[0]).toMatchObject({
       source,
-      enabled: false,
-      requiresExtensionApproval: true,
+      enabled: true,
     });
     await expect(
       store.mutatePiPackage({
@@ -536,7 +534,7 @@ describe('Pi package executable-code boundary', () => {
     ])).resolves.toEqual(frozenResources);
   });
 
-  it('enables an Extension package from the same confirmed install', async () => {
+  it('enables an Extension package from the same authorized install', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
 
@@ -550,6 +548,101 @@ describe('Pi package executable-code boundary', () => {
     expect(installed.packages).toMatchObject([{ source, enabled: true }]);
   });
 
+  it('feeds installed roots to Pi native discovery without requiring Cindy approval', async () => {
+    const { root, source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
+
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: false });
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([]);
+  });
+
+  it('keeps compatibility analysis informational during install', async () => {
+    const { root, source } = await createPackage();
+    await fs.writeFile(path.join(root, 'extensions', 'index.ts'), `
+      export default function setup(pi: any) {
+        pi.on('session_start', (_event: unknown, ctx: any) => {
+          ctx.ui.setStatus('compatibility-note', 'still launchable');
+        });
+      }
+    `);
+    const store = await import('../pi-package-store.js');
+
+    const installed = await mutateAuthorized(store, { action: 'install', source });
+
+    expect(installed.affectedPackage).toMatchObject({
+      source,
+      enabled: true,
+      resources: expect.arrayContaining([expect.objectContaining({
+        kind: 'extension',
+        compatibility: 'partial',
+        compatibilityIssues: ['status-display'],
+      })]),
+    });
+  });
+
+  it('builds a Git-style package when its declared Extension output is absent', async () => {
+    const { root, source } = await createPackage();
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: 'generated-extension',
+      version: '1.0.0',
+      pi: {
+        extensions: ['./build/adapters/pi/extension.js'],
+        skills: ['./skills'],
+      },
+      scripts: { build: 'node build.mjs' },
+    }));
+    await fs.rm(path.join(root, 'extensions'), { recursive: true, force: true });
+    await fs.rm(path.join(root, 'prompts'), { recursive: true, force: true });
+    await fs.mkdir(path.join(root, 'skills', 'generated'), { recursive: true });
+    await fs.writeFile(path.join(root, 'skills', 'generated', 'SKILL.md'), '# Generated\n');
+    runtime.spawnHook = (args) => {
+      if (args[0] !== 'run' || args[1] !== 'build') return;
+      const entry = path.join(root, 'build', 'adapters', 'pi', 'extension.js');
+      mkdirSync(path.dirname(entry), { recursive: true });
+      writeFileSync(entry, 'export default function setup() {}\n');
+    };
+    const store = await import('../pi-package-store.js');
+
+    const installed = await mutateAuthorized(store, { action: 'install', source });
+
+    expect(runtime.spawns.map(({ args }) => args)).toEqual(expect.arrayContaining([
+      ['install', '--include=dev', '--no-audit', '--no-fund'],
+      ['run', 'build'],
+    ]));
+    expect(installed.affectedPackage).toMatchObject({
+      source,
+      enabled: true,
+      resources: expect.arrayContaining([expect.objectContaining({ kind: 'extension' })]),
+    });
+  });
+
+  it('keeps Pi install success when optional generated-Extension build assistance fails', async () => {
+    const { root, source } = await createPackage();
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: 'broken-generated-extension',
+      version: '1.0.0',
+      pi: {
+        extensions: ['./build/adapters/pi/extension.js'],
+        skills: ['./skills'],
+      },
+      scripts: { build: 'node build.mjs' },
+    }));
+    await fs.rm(path.join(root, 'extensions'), { recursive: true, force: true });
+    await fs.rm(path.join(root, 'prompts'), { recursive: true, force: true });
+    await fs.mkdir(path.join(root, 'skills', 'generated'), { recursive: true });
+    await fs.writeFile(path.join(root, 'skills', 'generated', 'SKILL.md'), '# Generated\n');
+    const store = await import('../pi-package-store.js');
+
+    await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
+      affectedPackage: { source, enabled: true },
+    });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: true }],
+    });
+  });
+
   it('keeps an explicitly disabled Extension package disabled after a confirmed update', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
@@ -561,7 +654,6 @@ describe('Pi package executable-code boundary', () => {
     expect(updated.affectedPackage).toMatchObject({
       source,
       enabled: false,
-      requiresExtensionApproval: true,
     });
   });
 
@@ -623,7 +715,7 @@ describe('Pi package executable-code boundary', () => {
     expect(installed.packages.every((pkg) => pkg.requiresExtensionApproval !== true)).toBe(true);
   });
 
-  it('does not reapprove a sibling whose scoped hoisted dependency changes during install', async () => {
+  it('does not scan or revoke sibling package identities before a native install', async () => {
     const firstSource = 'npm:@scope/stale-shared-extension';
     const secondSource = 'npm:new-shared-extension';
     const npmRoot = path.join(runtime.userData, 'pi-package-home', 'npm');
@@ -693,8 +785,7 @@ describe('Pi package executable-code boundary', () => {
     expect(installed.packages).toEqual(expect.arrayContaining([
       expect.objectContaining({
         source: firstSource,
-        enabled: false,
-        requiresExtensionApproval: true,
+        enabled: true,
       }),
       expect.objectContaining({ source: secondSource, enabled: true }),
     ]));
@@ -705,8 +796,8 @@ describe('Pi package executable-code boundary', () => {
       approvedExtensionSources: string[];
       approvedExtensionFingerprints: Record<string, string>;
     };
-    expect(state.approvedExtensionSources).toEqual([secondSource]);
-    expect(Object.keys(state.approvedExtensionFingerprints)).toEqual([secondSource]);
+    expect(state.approvedExtensionSources).toEqual([firstSource, secondSource]);
+    expect(Object.keys(state.approvedExtensionFingerprints)).toEqual([firstSource, secondSource]);
   });
 
   it.skipIf(process.platform === 'win32')(
@@ -743,45 +834,12 @@ describe('Pi package executable-code boundary', () => {
     },
   );
 
-  it('builds a bounded Main-inspected enable identity without exposing local paths', async () => {
-    const { root, source } = await createPackage();
-    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
-      name: `trusted\n\u202E${'名'.repeat(400)}/../../private`,
-      version: `1.2.3\r\u2066${'v'.repeat(400)}`,
-      pi: { extensions: ['./extensions'], prompts: ['./prompts'] },
-    }));
-    const store = await import('../pi-package-store.js');
-
-    const before = await store.capturePiPackageEnableIdentity(source);
-    expect(before.displayLabel).not.toContain(root);
-    expect(before.displayLabel).not.toContain('\r');
-    expect(before.displayLabel).not.toContain('\u202E');
-    expect(before.displayLabel).not.toContain('\u2066');
-    expect(before.displayLabel.split('\n')).toHaveLength(2);
-    expect(before.displayLabel.split('\n')[0]).toContain(path.basename(root).slice(0, 24));
-    expect(before.expectedPackageFingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(before.displayLabel).toContain(
-      `SHA-256: ${before.expectedPackageFingerprint}`,
-    );
-    expect(Buffer.byteLength(before.displayLabel, 'utf8')).toBeLessThanOrEqual(466);
-    await fs.writeFile(
-      path.join(root, 'extensions', 'index.ts'),
-      'export default function spoofedReplacement() {}',
-    );
-    const after = await store.capturePiPackageEnableIdentity(source);
-
-    expect(before.displayLabel.split('\n')[0]).toBe(after.displayLabel.split('\n')[0]);
-    expect(before.expectedPackageFingerprint).not.toBe(after.expectedPackageFingerprint);
-    expect(after.displayLabel).toContain(`SHA-256: ${after.expectedPackageFingerprint}`);
-  });
-
-  it('rejects an enable grant when another instance replaces package bytes after confirmation', async () => {
+  it('does not let package byte changes add a second decision to a precise enable action', async () => {
     const { root, source } = await createPackage();
     const firstStore = await import('../pi-package-store.js');
-    const { expectedPackageFingerprint } = await firstStore.capturePiPackageEnableIdentity(source);
     const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
     const request = { action: 'set-enabled' as const, source, enabled: true };
-    const grant = issuePiPackageMutationGrant(request, { expectedPackageFingerprint });
+    const grant = issuePiPackageMutationGrant(request);
 
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
@@ -791,11 +849,11 @@ describe('Pi package executable-code boundary', () => {
     );
     await secondStore.listPiPackages();
 
-    await expect(firstStore.mutatePiPackage(request, grant)).rejects.toThrow(
-      /changed after authorization/i,
-    );
+    await expect(firstStore.mutatePiPackage(request, grant)).resolves.toMatchObject({
+      affectedPackage: { source, enabled: true },
+    });
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -869,7 +927,7 @@ describe('Pi package executable-code boundary', () => {
         packageRoots: [],
       });
     await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -936,7 +994,7 @@ describe('Pi package executable-code boundary', () => {
       packageRoots: [],
     });
     await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -1010,7 +1068,7 @@ describe('Pi package executable-code boundary', () => {
       packageRoots: [],
     });
     await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -1070,8 +1128,7 @@ describe('Pi package executable-code boundary', () => {
       await expect(store.listPiPackages()).resolves.toMatchObject({
         packages: [{
           source: packageFile,
-          enabled: false,
-          canToggle: false,
+          enabled: true,
           warning: 'inspection-failed',
         }],
       });
@@ -1120,7 +1177,7 @@ describe('Pi package executable-code boundary', () => {
       await expect(store.listPiPackages()).resolves.toMatchObject({
         packages: [{
           source: packageFile,
-          enabled: false,
+          enabled: true,
         }],
       });
     } finally {
@@ -1345,7 +1402,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { source: sources[0], enabled: true },
-        { source: sources[1], enabled: false, warning: 'inspection-limit' },
+        { source: sources[1], enabled: true, warning: 'inspection-limit' },
       ],
     });
   });
@@ -1407,7 +1464,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { source: first.source, enabled: true },
-        { source: second.source, enabled: false, warning: 'inspection-limit' },
+        { source: second.source, enabled: true, warning: 'inspection-limit' },
       ],
     });
     const state = JSON.parse(await fs.readFile(
@@ -1478,8 +1535,8 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { source: packages[0]!.source, enabled: true },
-        { source: packages[1]!.source, enabled: false, warning: 'inspection-limit' },
-        { source: packages[2]!.source, enabled: false, warning: 'inspection-limit' },
+        { source: packages[1]!.source, enabled: true, warning: 'inspection-limit' },
+        { source: packages[2]!.source, enabled: true, warning: 'inspection-limit' },
       ],
     });
   });
@@ -1570,8 +1627,8 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { enabled: true },
-        { enabled: false, warning: 'inspection-limit' },
-        { enabled: false, warning: 'inspection-limit' },
+        { enabled: true, warning: 'inspection-limit' },
+        { enabled: true, warning: 'inspection-limit' },
       ],
     });
     const state = JSON.parse(await fs.readFile(
@@ -1655,7 +1712,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [
         { source: ancestorRoot, enabled: true },
-        { source: descendantRoot, enabled: false, warning: 'inspection-limit' },
+        { source: descendantRoot, enabled: true, warning: 'inspection-limit' },
       ],
     });
     const state = JSON.parse(await fs.readFile(
@@ -1665,7 +1722,7 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([]);
   });
 
-  it('keeps a snapshot timeout disabled across cache expiry until staging succeeds', async () => {
+  it('keeps a snapshot timeout advisory across cache expiry until staging succeeds', async () => {
     const { root, source } = await createPackage();
     const now = Date.now();
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
@@ -1695,7 +1752,7 @@ describe('Pi package executable-code boundary', () => {
         // failure instead of rebuilding an enabled view from raw inspection.
         nowSpy.mockReturnValue(now + 2_000);
         await expect(store.listPiPackages()).resolves.toMatchObject({
-          packages: [{ source, enabled: false, warning: 'inspection-limit' }],
+          packages: [{ source, enabled: true, warning: 'inspection-limit' }],
         });
         await expect(store.listManagedPiPromptCommands()).resolves.toEqual([]);
 
@@ -1763,7 +1820,7 @@ describe('Pi package executable-code boundary', () => {
       });
       await vi.waitFor(() => expect(secondListener).toHaveBeenCalled(), { timeout: 2_000 });
       await expect(secondStore.listPiPackages()).resolves.toMatchObject({
-        packages: [{ source, enabled: false, warning: 'inspection-limit' }],
+        packages: [{ source, enabled: true, warning: 'inspection-limit' }],
       });
 
       const firstListener = vi.fn();
@@ -1882,7 +1939,7 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
-  it('preserves v1 disabled sources while migrating approval state and blocks lifecycle scripts', async () => {
+  it('preserves v1 disabled sources while migrating approval state and lets confirmed installs build', async () => {
     const { source } = await createPackage();
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     await fs.mkdir(stateDir, { recursive: true });
@@ -1918,15 +1975,15 @@ describe('Pi package executable-code boundary', () => {
 
     await mutateAuthorized(store, { action: 'install', source });
     const installSpawn = runtime.spawns.find(({ args }) => args.includes('install'));
-    expect(installSpawn?.env.npm_config_ignore_scripts).toBe('true');
-    expect(installSpawn?.env.NPM_CONFIG_IGNORE_SCRIPTS).toBe('true');
+    expect(installSpawn?.env.npm_config_ignore_scripts).toBe('false');
+    expect(installSpawn?.env.NPM_CONFIG_IGNORE_SCRIPTS).toBe('false');
     expect(installSpawn?.args).toContain('--no-approve');
   });
 
   it.each([
     ['transient I/O', 'EIO'],
     ['permission', 'EACCES'],
-  ])('fails closed without replacing disabled state after a %s read failure', async (_label, code) => {
+  ])('keeps native package projection enabled through a %s Cindy-state read failure', async (_label, code) => {
     const { source } = await createSkillOnlyPackage('npm:disabled-skill-package');
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     const stateFile = path.join(stateDir, 'cindy-package-state.json');
@@ -1954,8 +2011,7 @@ describe('Pi package executable-code boundary', () => {
       await expect(store.listPiPackages()).resolves.toMatchObject({
         packages: [{
           source,
-          enabled: false,
-          canToggle: false,
+          enabled: true,
           warning: 'inspection-failed',
           resources: [expect.objectContaining({ kind: 'skill' })],
         }],
@@ -1967,14 +2023,14 @@ describe('Pi package executable-code boundary', () => {
         action: 'set-enabled',
         source,
         enabled: false,
-      })).rejects.toThrow('Pi extension state is unavailable');
+      })).resolves.toMatchObject({ changed: true });
     } finally {
       readSpy.mockRestore();
     }
     await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(persistedState);
   });
 
-  it('fails closed and preserves a corrupt state file instead of treating it as empty', async () => {
+  it('does not let corrupt Cindy state block native package enablement or a later precise toggle', async () => {
     const { source } = await createSkillOnlyPackage('npm:corrupt-state-skill-package');
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     const stateFile = path.join(stateDir, 'cindy-package-state.json');
@@ -1986,8 +2042,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source,
-        enabled: false,
-        canToggle: false,
+        enabled: true,
         warning: 'inspection-failed',
       }],
     });
@@ -2000,8 +2055,8 @@ describe('Pi package executable-code boundary', () => {
       action: 'set-enabled',
       source,
       enabled: false,
-    })).rejects.toThrow('Pi extension state is unavailable');
-    await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(corruptState);
+    })).resolves.toMatchObject({ changed: true });
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toContain(source);
   });
 
   it('keeps a valid disabled Skill package disabled with its state readable', async () => {
@@ -2167,7 +2222,7 @@ describe('Pi package executable-code boundary', () => {
     expect(lockRuntime.maxActive).toBe(1);
   });
 
-  it('rejects a stale disable after another shared-userData instance removes the package', async () => {
+  it('does not turn a stale disable action into an irreversible package error', async () => {
     const { source } = await createPackage();
     const installedList = runtime.listOutput;
     const firstStore = await import('../pi-package-store.js');
@@ -2188,23 +2243,19 @@ describe('Pi package executable-code boundary', () => {
       action: 'set-enabled',
       source,
       enabled: false,
-    })).rejects.toThrow(/not installed/);
+    })).resolves.toMatchObject({ changed: true });
 
     const state = JSON.parse(await fs.readFile(
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',
     )) as { disabledSources: string[] };
-    expect(state.disabledSources).toEqual([]);
+    expect(state.disabledSources).toEqual([source]);
   });
 
   it('re-inspects approval state under the shared lock before staging a session snapshot', async () => {
     const { root, source } = await createPackage();
     const firstStore = await import('../pi-package-store.js');
-    await mutateAuthorized(firstStore, {
-      action: 'set-enabled',
-      source,
-      enabled: true,
-    });
+    await mutateAuthorized(firstStore, { action: 'install', source });
     const canonicalRoot = await fs.realpath(root);
     await expect(firstStore.resolveManagedPiPackageResources()).resolves.toMatchObject({
       extensions: [path.join(canonicalRoot, 'extensions', 'index.ts')],
@@ -2230,8 +2281,31 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
-  it('refreshes open settings when a failed update has already revoked approval', async () => {
+  it('preserves approval after an unchanged failed install', async () => {
     const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source,
+      enabled: true,
+    });
+
+    runtime.listOutcomes = [{ stdout: runtime.listOutput, exitCode: 0 }];
+    runtime.exitCode = 1;
+    runtime.stderr = 'install failed';
+    await expect(mutateAuthorized(store, { action: 'install', source })).rejects.toThrow(
+      /install failed/,
+    );
+
+    runtime.exitCode = 0;
+    runtime.stderr = '';
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: true }],
+    });
+  });
+
+  it('preserves approval after an unchanged failed update and rejects later byte changes', async () => {
+    const { root, source } = await createPackage();
     const store = await import('../pi-package-store.js');
     await mutateAuthorized(store, {
       action: 'set-enabled',
@@ -2252,7 +2326,23 @@ describe('Pi package executable-code boundary', () => {
     runtime.exitCode = 0;
     runtime.stderr = '';
     await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
+    });
+
+    await fs.writeFile(
+      path.join(root, 'extensions', 'index.ts'),
+      'export default function changedAfterFailedUpdate() {}',
+    );
+    await expect(store.resolveManagedPiPackageResources({
+      snapshotRoot: path.join(runtime.userData, 'failed-update-changed-snapshot'),
+    })).resolves.toEqual({
+      extensions: [],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [],
+    });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: true }],
     });
     unsubscribe();
   });
@@ -2272,7 +2362,7 @@ describe('Pi package executable-code boundary', () => {
       action: 'set-enabled',
       source,
       enabled: true,
-    })).rejects.toThrow(/list failed after state write/);
+    })).resolves.toMatchObject({ changed: true });
     expect(listener).toHaveBeenCalledTimes(1);
 
     const state = JSON.parse(await fs.readFile(
@@ -2292,7 +2382,7 @@ describe('Pi package executable-code boundary', () => {
     unsubscribe();
   });
 
-  it('revokes approval when Pi normalizes an absolute local package source', async () => {
+  it('passes Pi’s stored local source syntax back to native update and remove', async () => {
     const { root } = await createPackage();
     const normalizedSource = path.relative(
       path.join(runtime.userData, 'pi-package-home'),
@@ -2319,25 +2409,28 @@ describe('Pi package executable-code boundary', () => {
 
     await mutateAuthorized(store, { action: 'update', source: normalizedSource });
     await mutateAuthorized(store, { action: 'remove', source: normalizedSource });
-    const canonicalRoot = await fs.realpath(root);
     expect(runtime.spawns.find(({ args }) => args.includes('update'))?.args)
-      .toContain(canonicalRoot);
+      .toContain(normalizedSource);
     expect(runtime.spawns.find(({ args }) => args.includes('remove'))?.args)
-      .toContain(canonicalRoot);
+      .toContain(normalizedSource);
   });
 
-  it('rejects URL sources that would persist embedded credentials', async () => {
+  it('passes Pi-supported credentialed URL syntax through while redacting receipts', async () => {
     const store = await import('../pi-package-store.js');
-    await expect(
-      mutateAuthorized(store, {
-        action: 'install',
-        source: 'https://user:secret@example.com/acme/package.git',
-      }),
-    ).rejects.toThrow(/credentials/);
-    expect(runtime.spawns).toEqual([]);
+    const source = 'https://user:secret@example.com/acme/package.git';
+    await expect(mutateAuthorized(store, {
+      action: 'install',
+      source,
+    })).resolves.toMatchObject({
+      affectedPackage: {
+        source: 'https://example.com/acme/package.git',
+        enabled: true,
+      },
+    });
+    expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
   });
 
-  it('quarantines oversized data-only and mixed package roots without dropping valid packages', async () => {
+  it('reports oversized Cindy analysis without disabling Pi-native package roots', async () => {
     const createLaunchPackage = async (
       source: string,
       kind: 'skill' | 'mixed',
@@ -2411,13 +2504,13 @@ describe('Pi package executable-code boundary', () => {
         { source: validSource, enabled: true },
         {
           source: oversizedDataSource,
-          enabled: false,
+          enabled: true,
           warning: 'inspection-limit',
           resources: [],
         },
         {
           source: oversizedMixedSource,
-          enabled: false,
+          enabled: true,
           warning: 'inspection-limit',
           resources: [],
         },
@@ -2463,20 +2556,18 @@ describe('Pi package executable-code boundary', () => {
       {
         source: '../direct.ts',
         name: 'direct.ts',
-        enabled: false,
-        requiresExtensionApproval: true,
+        enabled: true,
         resources: [{ kind: 'extension', name: 'direct.ts' }],
       },
       {
         source: '../convention',
-        enabled: false,
-        requiresExtensionApproval: true,
+        enabled: true,
         resources: [{ kind: 'extension', name: 'index.ts' }],
       },
     ]);
   });
 
-  it('keeps non-extension single files disabled and rejects enable attempts', async () => {
+  it('lets Pi decide how to handle a natively installed unknown single-file package', async () => {
     const directFileRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-data-file-'));
     roots.push(directFileRoot);
     const directFile = path.join(directFileRoot, 'README.md');
@@ -2488,21 +2579,17 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source,
-        enabled: false,
-        canToggle: false,
+        enabled: true,
         resources: [],
         warning: 'no-resources',
       }],
     });
-    await expect(store.capturePiPackageEnableIdentity(source)).rejects.toThrow(
-      /no launchable resources/i,
-    );
     const request = { action: 'set-enabled' as const, source, enabled: true };
     const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
     await expect(store.mutatePiPackage(
       request,
-      issuePiPackageMutationGrant(request, { expectedPackageFingerprint: null }),
-    )).rejects.toThrow(/no launchable resources/i);
+      issuePiPackageMutationGrant(request),
+    )).resolves.toMatchObject({ affectedPackage: { source, enabled: true } });
   });
 
   it('does not project convention resources that resolve outside the package root', async () => {
@@ -2527,7 +2614,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source: '../confined',
-        enabled: false,
+        enabled: true,
         resources: [],
         warning: 'no-resources',
       }],
@@ -2597,21 +2684,18 @@ describe('Pi package executable-code boundary', () => {
       packages: [
         {
           source: 'npm:empty-package',
-          enabled: false,
-          canToggle: false,
+          enabled: true,
           resources: [],
           warning: 'no-resources',
         },
         {
           source: 'npm:theme-package',
-          enabled: false,
-          canToggle: false,
+          enabled: true,
           resources: [{ kind: 'theme', compatibility: 'unsupported' }],
         },
         {
           source: 'npm:filtered-package',
-          enabled: false,
-          canToggle: false,
+          enabled: true,
           resources: [],
           warning: 'no-resources',
         },
@@ -2635,7 +2719,7 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
-  it('keeps theme-only packages disabled because Cindy does not load Pi TUI themes', async () => {
+  it('lets Pi load theme-only packages despite Cindy TUI compatibility limits', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-theme-only-'));
     roots.push(root);
     const source = 'npm:theme-only';
@@ -2652,8 +2736,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source,
-        enabled: false,
-        canToggle: false,
+        enabled: true,
         resources: [{
           kind: 'theme',
           name: 'night.json',
@@ -2670,15 +2753,15 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
-  it('keeps disabled lifecycle scripts visible as a compatibility warning', async () => {
+  it('does not warn that lifecycle scripts were blocked after confirmed installs allow them', async () => {
     const { source } = await createPackage({ lifecycleScript: true });
     const store = await import('../pi-package-store.js');
-    await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, warning: 'lifecycle-scripts-disabled' }],
-    });
+    const listed = await store.listPiPackages();
+    expect(listed.packages).toMatchObject([{ source }]);
+    expect(listed.packages[0]).not.toHaveProperty('warning');
   });
 
-  it('redacts and disables unsafe URL sources already persisted by Pi', async () => {
+  it('redacts sensitive URL fields without disabling a source accepted by Pi', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-unsafe-source-'));
     roots.push(root);
     const unsafeSource = 'git:https://user:secret@example.com/acme/package.git?token=private#fragment';
@@ -2689,8 +2772,7 @@ describe('Pi package executable-code boundary', () => {
     expect(result.packages).toEqual([{
       source: 'git:https://example.com/acme/package.git',
       name: 'git:https://example.com/acme/package.git',
-      enabled: false,
-      manageable: false,
+      enabled: true,
       resources: [],
       warning: 'unsafe-source',
     }]);
@@ -2715,14 +2797,13 @@ describe('Pi package executable-code boundary', () => {
     expect((failure as Error).message).not.toContain('private');
   });
 
-  it('fails closed with an inspection-limit warning for oversized manifests', async () => {
+  it('keeps an oversized-manifest inspection warning advisory', async () => {
     const { source } = await createPackage({ oversizedManifest: true });
     const store = await import('../pi-package-store.js');
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source,
-        enabled: false,
-        canToggle: false,
+        enabled: true,
         warning: 'inspection-limit',
         resources: [],
       }],
@@ -2748,7 +2829,6 @@ describe('Pi package executable-code boundary', () => {
     expect(result.packages[128]).toMatchObject({
       source: 'npm:package-128',
       enabled: false,
-      canToggle: false,
       warning: 'inspection-limit',
     });
     expect(result.packages[129]?.warning).toBe('inspection-limit');

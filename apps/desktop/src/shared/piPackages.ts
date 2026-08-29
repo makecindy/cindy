@@ -86,8 +86,7 @@ export interface PiPackageView {
     | 'inspection-failed'
     | 'inspection-limit'
     | 'unsupported-filter'
-    | 'unsafe-source'
-    | 'lifecycle-scripts-disabled';
+    | 'unsafe-source';
 }
 
 export interface PiPackageListResult {
@@ -140,10 +139,6 @@ export function hasPiPackageCompatibilityWarning(pkg: PiPackageView): boolean {
   return pkg.warning !== undefined
     || pkg.resources.some((resource) => resource.compatibility !== 'supported')
     || pkg.runtimeRequirements?.some((requirement) => requirement.compatible !== true) === true;
-}
-
-export function shouldShowPiPackagePostMutationNotice(pkg: PiPackageView): boolean {
-  return pkg.requiresExtensionApproval === true || hasPiPackageCompatibilityWarning(pkg);
 }
 
 export interface PiPackageSlashCommand {

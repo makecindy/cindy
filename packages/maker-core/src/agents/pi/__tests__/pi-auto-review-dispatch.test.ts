@@ -469,6 +469,40 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.env.no_proxy).toBeUndefined();
   });
 
+  it('lets Pi discover user-installed packages natively instead of gating them on Cindy metadata', async () => {
+    const packageRoot = path.join(agentHome, 'future-pi-package-shape');
+    mkdirSync(packageRoot, { recursive: true });
+    const deps = buildDeps();
+    deps.resolvePiNativePackagePaths = async () => [packageRoot];
+    deps.resolvePiManagedPackageResources = async () => ({
+      extensions: [],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [],
+    });
+
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'native-package-discovery',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      expect(captured.args).not.toContain('--no-extensions');
+      expect(captured.args).not.toContain(packageRoot);
+      const runtimeHome = captured.env.PI_CODING_AGENT_DIR!;
+      expect(JSON.parse(readFileSync(path.join(runtimeHome, 'settings.json'), 'utf8')))
+        .toMatchObject({ packages: [packageRoot] });
+      const extensionPaths = captured.args.flatMap((arg, index) => (
+        arg === '--extension' ? [captured.args[index + 1]] : []
+      ));
+      expect(extensionPaths.some((entry) => (
+        entry?.includes(`${path.sep}internal-extensions${path.sep}`)
+      ))).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('asks the host to launch a durable runner without treating the app executable as Node', async () => {
     const previousNode = process.env.ELECTRON_RUN_AS_NODE;
     const previousLegacy = process.env.CINDY_PI_SUBAGENT_NODE;
@@ -1184,8 +1218,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         source: 'npm:context-mode',
         name: 'context-mode',
         version: '1.0.169',
-        enabled: false,
-        requiresExtensionApproval: true,
+        enabled: true,
         resources: [
           {
             kind: 'extension',
@@ -1218,6 +1251,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt?.message).toContain('[Cindy internal Pi extension operation receipt]');
       expect(prompt?.message).toContain('"compatibility":"partial"');
       expect(prompt?.message).toContain('"status-display"');
+      expect(prompt?.message).toContain('installed and enabled');
+      expect(prompt?.message).toContain('Do not enumerate non-blocking compatibility notices');
+      expect(prompt?.message).not.toContain('Settings > General');
       expect(prompt?.message).toContain('Do not run bash');
     } finally {
       await handle.close();
@@ -2007,9 +2043,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
       const configHome = captured.env.PI_CODING_AGENT_DIR;
       expect(configHome).toBeTruthy();
-      expect(readdirSync(path.join(configHome!, 'extensions')).sort()).toEqual(['cindy-bridge.ts']);
+      expect(readdirSync(path.join(configHome!, 'internal-extensions')).sort()).toEqual(['cindy-bridge.ts']);
       const extensionPaths = captured.args.flatMap((arg, index) => (arg === '--extension' ? [captured.args[index + 1]] : []));
-      expect(extensionPaths).toEqual([path.posix.join(configHome!, 'extensions', 'cindy-bridge.ts')]);
+      expect(extensionPaths).toEqual([path.posix.join(configHome!, 'internal-extensions', 'cindy-bridge.ts')]);
 
       const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
       expect(permissionFile).toBeTruthy();
@@ -2328,7 +2364,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await start();
     const { readFileSync } = await import('node:fs');
     const configHome = captured.env.PI_CODING_AGENT_DIR as string;
-    const bridge = readFileSync(path.join(configHome, 'extensions', 'cindy-bridge.ts'), 'utf8');
+    const bridge = readFileSync(path.join(configHome, 'internal-extensions', 'cindy-bridge.ts'), 'utf8');
     expect(bridge).toContain('createBashTool,');
     expect(bridge).toContain('createFindTool,');
     expect(bridge).toContain('createGrepTool,');
