@@ -241,9 +241,13 @@ manifest 的 `tool` 槽只回答"这个插件**能**暴露哪些工具"。装入
 
 三条不变量，改这套东西前先确认它们仍然成立：
 
-1. **默认必须是 `needs-approval`。** 配置缺失、文件损坏、读不出来、拿不到
-   `ghost_id`/`tool` 坐标，全部落回默认。免审批只能来自用户显式选择，任何
-   fallback 都不得放宽。
+1. **默认必须是 `needs-approval`。** 配置缺失、拿不到 `ghost_id`/`tool` 坐标，
+   全部落回默认。免审批只能来自用户显式选择，任何 fallback 都不得放宽。
+   **不可读必须 fail closed。** 配置文件存在但读不出来（JSON 损坏、权限/锁定
+   失败）时，不得当作空配置继续派发：`ghostToolPermissionsStore` 保留原文件，
+   `resolveToolApprovalMode` 抛出 unreadable 错误，`pipeDispatcher.callGhostTool`
+   与 `ghost_call` 统一返回 `PERMISSION_DENIED`；读取路径每次强制重试，故障消失
+   后自动恢复，不依赖 mtime 变化。
 2. **`always-allow` 只免掉工具审批卡，免不掉文件交接卡。** 工作目录外的文件／目录
    过户是另一条独立闸门（`mcp-integrations/ghost.ts` 的 `requestGrantConfirm`，
    见下节 4）。2026-08 曾把 `always-allow` 接进 `requestGrantConfirm` 造成越权放行，

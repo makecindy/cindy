@@ -159,6 +159,46 @@ describe('createOverrideSettingsFile', () => {
     }
   });
 
+  it('retries an unreadable file even when its mtime does not change', () => {
+    const { dir, file, store } = createTempStore(undefined, {
+      preserveUnreadableFile: true,
+    });
+    try {
+      fs.writeFileSync(file, '{"limit":broken}', 'utf-8');
+      store.invalidateIfChanged();
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(store.getReadStatus()).toBe('unreadable');
+
+      // Repair the content while forcing the mtime back to the same value,
+      // simulating a transient lock/permission fix that mtime alone cannot see.
+      const before = fs.statSync(file);
+      fs.writeFileSync(file, JSON.stringify({ limit: 42 }), 'utf-8');
+      fs.utimesSync(file, before.atime, before.mtime);
+
+      store.invalidateIfChanged();
+      expect(store.read().limit).toBe(42);
+      expect(store.getReadStatus()).toBe('readable');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('warns only once for the same unreadable file while retrying', () => {
+    const { dir, file, store, log } = createTempStore(undefined, {
+      preserveUnreadableFile: true,
+    });
+    try {
+      fs.writeFileSync(file, '{"limit":broken}', 'utf-8');
+      store.invalidateIfChanged();
+      expect(store.read()).toEqual(DEFAULTS);
+      store.invalidateIfChanged();
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(log.warn).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['a non-object root', 'null', undefined],
     ['an oversized file', '{"limit":8}', 4],

@@ -76,6 +76,11 @@ export function createOverrideSettingsFile<T>(options: {
   let cachedResolvedPath: string | null = null;
   /** 缓存装载时文件的 mtimeMs;null = 装载时文件不存在(默认态)。 */
   let cachedFileMtimeMs: number | null = null;
+  /**
+   * 最近一次已经告警过的 unreadable 文件指纹(path:mtime)。
+   * 同一文件反复读取失败时只告警一次；修复成功或路径切换后复位。
+   */
+  let lastUnreadableWarnKey: string | null = null;
 
   const defaults = (): T =>
     clone(typeof options.defaults === 'function' ? (options.defaults as () => T)() : options.defaults);
@@ -108,6 +113,7 @@ export function createOverrideSettingsFile<T>(options: {
         }
         const overrides = isLoggableObject(parsed) ? parsed : {};
         cachedFileMtimeMs = stat.mtimeMs;
+        lastUnreadableWarnKey = null;
         cached = {
           value: options.normalize({ ...defaults(), ...overrides }),
           isCustomized: Object.keys(overrides).length > 0,
@@ -129,12 +135,19 @@ export function createOverrideSettingsFile<T>(options: {
       }
     } catch (err) {
       if (options.preserveUnreadableFile) readStatus = 'unreadable';
-      options.log.warn(`${options.label} settings read failed; falling back to defaults`, {
-        ...(options.logReadErrorDetails === false
-          ? {}
-          : { error: err instanceof Error ? err.message : String(err) }),
-        path: file,
-      });
+      // 同一 unreadable 文件只在首次发现或内容变化时告警；瞬时锁/权限修复后
+      // mtime 可能不变，但 unreadable 缓存不再可信，读取路径会强制重试，不能靠
+      // 重复告警来判断恢复。
+      const unreadableWarnKey = `${file}:${statFileMtimeMs() ?? 'nostat'}`;
+      if (unreadableWarnKey !== lastUnreadableWarnKey) {
+        options.log.warn(`${options.label} settings read failed; falling back to defaults`, {
+          ...(options.logReadErrorDetails === false
+            ? {}
+            : { error: err instanceof Error ? err.message : String(err) }),
+          path: file,
+        });
+        lastUnreadableWarnKey = unreadableWarnKey;
+      }
       if (!options.preserveUnreadableFile) {
         try {
           fs.unlinkSync(file);
@@ -144,8 +157,8 @@ export function createOverrideSettingsFile<T>(options: {
       }
     }
 
-    // 保留坏文件时记住它的 mtime，避免每次读取重复解析/刷日志；用户修复后
-    // invalidateIfChanged 会看到 mtime 变化并自动重试。
+    // unreadable 缓存只作为下一次读取前的临时快照；invalidateIfChanged 会
+    // 无条件丢弃它并强制重试，mtime 只用于告警去重，不参与恢复判定。
     cachedFileMtimeMs = readStatus === 'unreadable' ? statFileMtimeMs() : null;
     cached = {
       value: defaults(),
@@ -161,6 +174,14 @@ export function createOverrideSettingsFile<T>(options: {
   function invalidateIfChanged(): void {
     invalidateIfPathChanged();
     if (!cached) return;
+    // unreadable 缓存不可信：Windows AV/编辑器瞬时锁、权限修复都可能不改变
+    // mtime，仅靠 mtime 会把一次临时故障固化成整个进程生命周期内的拒绝。
+    // 每次读取都强制重试，让状态在故障消失后自行恢复。
+    if (cached.readStatus === 'unreadable') {
+      cached = null;
+      cachedFileMtimeMs = null;
+      return;
+    }
     if (statFileMtimeMs() !== cachedFileMtimeMs) {
       cached = null;
       cachedFileMtimeMs = null;
