@@ -6815,26 +6815,35 @@ export function ChatInput({
             const useAtomicSelection =
               expectedAgentSwitchRevision !== undefined || remoteAtomicModelSelectionSupported;
             try {
-              const remoteSetModelResult = await remoteMaker.setModel(
-                sessionId,
-                newModelId,
-                selectedProviderId,
-                expectedAgentSwitchRevision,
-                useAtomicSelection
-                  ? ({
-                      effort: newEffort,
-                      fastMode: restoredFast,
-                      ...(confirmedRemoteContextWindow
-                        ? {
-                            confirmedContextWindow: confirmedRemoteContextWindow,
-                            modelWindowConfirmationCapability:
-                              CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
-                          }
-                        : {}),
-                    } as { effort: string; fastMode: boolean })
-                  : undefined,
-              );
-              if (remoteSetModelResult?.superseded) {
+              const { accepted, result: remoteSetModelResult } =
+                await setModelWithFinalWindowConfirmation(
+                  newModelId,
+                  selectedProviderId,
+                  (confirmedFinalWindow) => {
+                    const confirmedContextWindow =
+                      confirmedFinalWindow ?? confirmedRemoteContextWindow;
+                    return remoteMaker.setModel(
+                      sessionId,
+                      newModelId,
+                      selectedProviderId,
+                      expectedAgentSwitchRevision,
+                      useAtomicSelection
+                        ? ({
+                            effort: newEffort,
+                            fastMode: restoredFast,
+                            ...(confirmedContextWindow
+                              ? {
+                                  confirmedContextWindow,
+                                  modelWindowConfirmationCapability:
+                                    CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
+                                }
+                              : {}),
+                          } as { effort: string; fastMode: boolean })
+                        : undefined,
+                    );
+                  },
+                );
+              if (!accepted || remoteSetModelResult?.superseded) {
                 if (isSourceSessionCurrent()) setPendingRemoteSwitch(null);
                 return false;
               }
@@ -7368,26 +7377,35 @@ export function ChatInput({
         const useAtomicSelection =
           expectedAgentSwitchRevision !== undefined || remoteAtomicModelSelectionSupported;
         try {
-          const remoteSetModelResult = await remoteMaker.setModel(
-            sessionId,
-            targetModel,
-            newProviderId,
-            expectedAgentSwitchRevision,
-            useAtomicSelection
-              ? ({
-                  effort: targetEffort,
-                  fastMode: restoredFast,
-                  ...(confirmedRemoteContextWindow
-                    ? {
-                        confirmedContextWindow: confirmedRemoteContextWindow,
-                        modelWindowConfirmationCapability:
-                          CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
-                      }
-                    : {}),
-                } as { effort: string; fastMode: boolean })
-              : undefined,
-          );
-          if (remoteSetModelResult?.superseded) {
+          const { accepted, result: remoteSetModelResult } =
+            await setModelWithFinalWindowConfirmation(
+              targetModel,
+              newProviderId,
+              (confirmedFinalWindow) => {
+                const confirmedContextWindow =
+                  confirmedFinalWindow ?? confirmedRemoteContextWindow;
+                return remoteMaker.setModel(
+                  sessionId,
+                  targetModel,
+                  newProviderId,
+                  expectedAgentSwitchRevision,
+                  useAtomicSelection
+                    ? ({
+                        effort: targetEffort,
+                        fastMode: restoredFast,
+                        ...(confirmedContextWindow
+                          ? {
+                              confirmedContextWindow,
+                              modelWindowConfirmationCapability:
+                                CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
+                            }
+                          : {}),
+                      } as { effort: string; fastMode: boolean })
+                    : undefined,
+                );
+              },
+            );
+          if (!accepted || remoteSetModelResult?.superseded) {
             if (isSourceSessionCurrent()) {
               setPendingRemoteSwitch(null);
               setSelectedProviderId(initialProviderId ?? null);

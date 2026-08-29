@@ -14959,12 +14959,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const windowConfirmationCapability = (
       selection as { modelWindowConfirmationCapability?: unknown } | undefined
     )?.modelWindowConfirmationCapability;
+    const remoteControllerSupportsWindowConfirmation =
+      isDeviceLinkInvoke() &&
+      deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1);
     const trustedRemoteWindowConfirmation =
       !isDeviceLinkInvoke() ||
       (windowConfirmationCapability === CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1 &&
-        deviceLinkInvokeControllerSupports(
-          CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
-        ));
+        remoteControllerSupportsWindowConfirmation);
     if (
       isDeviceLinkInvoke() &&
       confirmedContextWindow !== undefined &&
@@ -15254,26 +15255,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // A destructive native-context rebuild may use only a route-verified window.
         targetContextWindow = verifiedTargetWindow ?? undefined;
         if (
-          isDeviceLinkInvoke() &&
-          confirmedContextWindow !== undefined &&
-          confirmedContextWindow !== targetContextWindow
-        ) {
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'remote controller confirmation does not match the verified target window',
-          );
-        }
-        if (
           confirmedContextWindow !== undefined &&
           targetContextWindow !== undefined &&
-          confirmedContextWindow > targetContextWindow
+          (confirmedContextWindow > targetContextWindow ||
+            (isDeviceLinkInvoke() &&
+              runtimeAgentKind !== 'pi' &&
+              confirmedContextWindow !== targetContextWindow))
         ) {
           throwIpcError(
-            'INVALID_PARAMS',
-            'confirmedContextWindow exceeds the verified catalog window',
+            isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : 'INVALID_PARAMS',
+            'confirmedContextWindow does not match the verified target window',
           );
         }
-        targetContextWindow = confirmedContextWindow ?? targetContextWindow;
+        // A remote Pi confirmation may name the smaller window verified by the
+        // previous final get_state. Re-run the catalog-window preflight first;
+        // only the next final Pi verification may consume that confirmation.
+        if (!isDeviceLinkInvoke()) {
+          targetContextWindow = confirmedContextWindow ?? targetContextWindow;
+        }
         if (!targetContextWindow || targetContextWindow <= 0) {
           throwIpcError(
             'PRECONDITION_FAILED',
@@ -15542,6 +15541,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               'Pi did not expose its verified final context window; runtime selection was not accepted',
             );
           }
+          if (
+            isDeviceLinkInvoke() &&
+            confirmedContextWindow !== undefined &&
+            confirmedContextWindow !== finalPiWindow
+          ) {
+            await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+            restoreControlStores();
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'remote controller confirmation does not match the verified final Pi window',
+            );
+          }
           if (finalPiWindow < targetContextWindow) {
             let finalPressureContextTokens: number | undefined;
             const finalPreparation =
@@ -15561,7 +15572,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               assertRuntimeOwnerCurrent();
               await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
               restoreControlStores();
-              if (isDeviceLinkInvoke()) {
+              if (isDeviceLinkInvoke() && !remoteControllerSupportsWindowConfirmation) {
                 throwIpcError(
                   'PRECONDITION_FAILED',
                   'remote controller must confirm the verified final Pi overflow window',

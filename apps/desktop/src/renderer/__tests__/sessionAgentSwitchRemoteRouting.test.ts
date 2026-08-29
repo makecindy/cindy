@@ -967,7 +967,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('effort: targetEffort,');
     expect(source).toContain('fastMode: restoredFast,');
     expect(source).toContain('if (!useAtomicSelection) {');
-    expect(source).toContain('if (remoteSetModelResult?.superseded) {');
+    expect(source).toContain('if (!accepted || remoteSetModelResult?.superseded) {');
     expect(source).toContain('if (setModelResult?.superseded) {');
     expect(source).toContain('result.sameEngineRevision,');
   });

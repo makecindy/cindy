@@ -55,10 +55,11 @@ describe('ChatInput model source switching wiring', () => {
     const modelChange = chatInputSource.slice(modelStart, providerStart);
     const providerChange = chatInputSource.slice(providerStart);
     for (const route of [modelChange, providerChange]) {
-      expect(route).toContain('confirmedContextWindow: confirmedRemoteContextWindow');
+      expect(route).toContain('await setModelWithFinalWindowConfirmation(');
+      expect(route).toContain('confirmedFinalWindow ?? confirmedRemoteContextWindow');
       expect(route).toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
       expect(route.indexOf("typeof proceed === 'number'")).toBeLessThan(
-        route.indexOf('confirmedContextWindow: confirmedRemoteContextWindow'),
+        route.indexOf('confirmedFinalWindow ?? confirmedRemoteContextWindow'),
       );
     }
   });
@@ -76,6 +77,7 @@ describe('ChatInput model source switching wiring', () => {
       /confirmModelSwitchContextGuard\(\s*modelId,\s*undefined,\s*providerId,\s*requiredWindow,/,
     );
     expect(helper).toContain('result = await invoke(requiredWindow)');
+    expect(chatInputSource.split('await setModelWithFinalWindowConfirmation(')).toHaveLength(5);
     expect(chatInputSource).toContain('? { confirmedContextWindow }');
   });
 

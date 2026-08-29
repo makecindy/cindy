@@ -2586,6 +2586,26 @@ describe('远程 set-* 持久化回流', () => {
     expect(persist).toHaveBeenCalledWith('sess-1', { model: 'claude-x' });
   });
 
+  it('set-model 最终窗口待确认时不提前持久化 model/provider', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    const confirmation = {
+      deferred: false,
+      superseded: false,
+      contextWindowConfirmationRequired: 272_000,
+      contextTokensForConfirmation: 244_800,
+    };
+    registry.register('maker:set-model', () => confirmation);
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'small-pi-model', 'pi-provider'],
+    });
+
+    expect(r).toEqual({ ok: true, result: confirmation });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it('set-model 持久化 trim 后的 providerId', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);

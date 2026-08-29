@@ -361,7 +361,7 @@ describe('createContextOverflowRollover', () => {
     );
   });
 
-  it.each([250_000, 300_000])(
+  it.each([244_800, 300_000])(
     'requires confirmation at %i tokens before rebuilding pressure revealed by Pi final-window verification',
     async (contextTokens) => {
       const deps = makeDeps([msg('user', '继续', 'u1')]);

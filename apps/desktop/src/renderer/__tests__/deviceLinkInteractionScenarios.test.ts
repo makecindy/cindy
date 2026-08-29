@@ -960,7 +960,7 @@ describe('远程交互接线不变式', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const start = src.indexOf('if (sourceRemoteDeviceId) {');
     expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, start + 3400);
+    const body = src.slice(start, start + 4400);
     const atomic = body.indexOf('effort: newEffort,', body.indexOf('useAtomicSelection'));
     const fallback = body.indexOf('if (!useAtomicSelection) {');
     const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');

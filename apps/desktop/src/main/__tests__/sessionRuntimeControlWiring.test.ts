@@ -505,16 +505,21 @@ describe('session runtime control wiring', () => {
       'CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,',
     );
     expect(setModel).toContain(
-      'deviceLinkInvokeControllerSupports(\n          CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1',
+      'remoteControllerSupportsWindowConfirmation =\n      isDeviceLinkInvoke() &&',
     );
     expect(setModel).toContain("remoteTargetAssessment.level === 'overflow'");
-    expect(setModel).toContain('confirmedContextWindow !== targetContextWindow');
     expect(setModel).toContain('confirmedContextWindow !== verifiedTargetWindow');
     expect(setModel).toContain(
       'remote controller must explicitly confirm the verified overflow window',
     );
     expect(setModel).not.toContain(
       "internalOptions.source !== 'user' ||\n                  isDeviceLinkInvoke() ||",
+    );
+    expect(setModel).toContain(
+      'remote controller confirmation does not match the verified final Pi window',
+    );
+    expect(setModel).toContain(
+      'isDeviceLinkInvoke() && !remoteControllerSupportsWindowConfirmation',
     );
     expect(setModel).toContain(
       'remote controller must confirm the verified final Pi overflow window',
@@ -530,6 +535,11 @@ describe('session runtime control wiring', () => {
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
     const finalWindow = setModel.indexOf('const finalPiWindow =');
     const runtimeCommit = setModel.indexOf('let generation: number;');
+    const finalMismatch = setModel.indexOf(
+      'remote controller confirmation does not match the verified final Pi window',
+    );
+    const finalPreparation = setModel.indexOf('const finalPreparation =');
+    const smallerFinalWindow = setModel.indexOf('if (finalPiWindow < targetContextWindow)');
 
     expect(finalWindow).toBeGreaterThan(apply);
     expect(finalWindow).toBeLessThan(runtimeCommit);
@@ -539,9 +549,13 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('contextTokensForConfirmation: finalPressureContextTokens');
     expect(setModel).toContain('finalPressureContextTokens = contextTokens');
     expect(setModel).toContain('runtimeRouteChanged || confirmedContextWindow !== undefined');
+    expect(setModel).toContain('if (!isDeviceLinkInvoke()) {');
     expect(setModel).toContain('targetContextWindow = confirmedContextWindow ?? targetContextWindow');
     expect(setModel).toContain('{ recheckTargetPressure: true, confirmedTargetPressure: true }');
     expect(setModel).toContain('confirmedContextWindow === finalPiWindow');
+    expect(finalMismatch).toBeGreaterThan(finalWindow);
+    expect(finalMismatch).toBeLessThan(smallerFinalWindow);
+    expect(finalMismatch).toBeLessThan(finalPreparation);
     expect(setModel).toContain("finalPreparation === 'rebuilt'");
   });
 
