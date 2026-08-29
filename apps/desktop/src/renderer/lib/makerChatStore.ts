@@ -3389,6 +3389,10 @@ function _purgeSession(sessionId: string): void {
   _cacheHydrateSuppressed.delete(sessionId);
   _lastViewedAt.delete(sessionId);
   _lastInboundEventAt.delete(sessionId);
+  _pendingErrorClearOnLeave.delete(sessionId);
+  _deferredTurnErrorPersist.delete(sessionId);
+  _liveErrorEpoch.delete(sessionId);
+  _staleDeferredErrorPersistIds.delete(sessionId);
   const i = _accessOrder.indexOf(sessionId);
   if (i !== -1) _accessOrder.splice(i, 1);
 }
@@ -3572,6 +3576,16 @@ const _activeViewSessions = new Map<string, number>();
 const _pendingErrorClearOnLeave = new Set<string>();
 /** Deferred persist IPC in flight: live 横幅点关闭/重试时还没有 persistId,等它回来再 dismiss。 */
 const _deferredTurnErrorPersist = new Map<string, Promise<string | undefined>>();
+/**
+ * 当前 live 终态错误的代次。error 从有到无、从无到有、或换成另一条文案时 +1。
+ * 迟到的 deferred IPC / 脏信号必须对上这一代,才能绑 persistId 或清 live 横幅。
+ */
+const _liveErrorEpoch = new Map<string, number>();
+/**
+ * 本窗口 deferred IPC 带回、但已对不上当前代次的 persistId。
+ * 脏信号不带 renderer epoch(跨窗口对不上),用这份名单拒绝把 A 绑到 B。
+ */
+const _staleDeferredErrorPersistIds = new Map<string, Set<string>>();
 
 /** Terminal error 后、配对 done 到达前，凭据刷新必须等 host 空闲。 */
 const GATEWAY_PROXY_TOKEN_TURN_SETTLE_MS = 5_000;
@@ -3634,6 +3648,8 @@ function persistTurnErrorDeferredTracked(
   errData: Record<string, unknown> | null,
   agentMeta: AgentMeta | null = null,
 ): void {
+  // 必须在 live error 已经 setState 之后调用,这样抓到的是这一代横幅的 epoch。
+  const epoch = _liveErrorEpoch.get(sessionId) ?? 0;
   let pending: Promise<string | undefined>;
   pending = makerApiFor(sessionId)
     .input.persistTurnErrorDeferred(sessionId, errData, agentMeta)
@@ -3642,7 +3658,15 @@ function persistTurnErrorDeferredTracked(
       // IPC 回执只表示已入队并登记了 persistId,不是 createMessage 成功。
       // 先绑定身份再摘掉 pending,点关闭/重试才能 dismiss 同一行;
       // 历史失效与后台清 live 仍等 local-db:session:error-persisted。
-      if (id) bindLiveErrorPersistId(sessionId, id);
+      // 代次已变(用户已进入下一轮横幅)则丢弃,避免把 A 的 id 绑到 B。
+      if (id) {
+        if ((_liveErrorEpoch.get(sessionId) ?? 0) !== epoch) {
+          const stale = _staleDeferredErrorPersistIds.get(sessionId) ?? new Set();
+          stale.add(id);
+          _staleDeferredErrorPersistIds.set(sessionId, stale);
+        }
+        bindLiveErrorPersistId(sessionId, id, epoch);
+      }
       if (_deferredTurnErrorPersist.get(sessionId) === pending) {
         _deferredTurnErrorPersist.delete(sessionId);
       }
@@ -3658,9 +3682,10 @@ function persistTurnErrorDeferredTracked(
   _deferredTurnErrorPersist.set(sessionId, pending);
 }
 
-function bindLiveErrorPersistId(sessionId: string, persistId: string): void {
+function bindLiveErrorPersistId(sessionId: string, persistId: string, epoch?: number): void {
   const state = sessions.get(sessionId);
   if (!state?.error || state.errorPersistId) return;
+  if (epoch !== undefined && (_liveErrorEpoch.get(sessionId) ?? 0) !== epoch) return;
   setState(sessionId, (s) => ({
     ...s,
     errorPersistId: s.error && !s.errorPersistId ? persistId : s.errorPersistId,
@@ -3670,12 +3695,30 @@ function bindLiveErrorPersistId(sessionId: string, persistId: string): void {
 function applyErrorPersistedDirtySignal(sessionId: string, persistId?: string): void {
   const state = sessions.get(sessionId);
   if (!state) return;
+  if (
+    persistId &&
+    !state.errorPersistId &&
+    state.error &&
+    !_deferredTurnErrorPersist.has(sessionId) &&
+    !_staleDeferredErrorPersistIds.get(sessionId)?.has(persistId)
+  ) {
+    // 本窗口没有 in-flight deferred(设备互联控制端只收到脏信号):绑到当前未绑定横幅。
+    // 本窗口刚拒绝过的迟到 persistId 不算控制端信号,不能绑到下一轮错误。
+    bindLiveErrorPersistId(sessionId, persistId);
+  }
+  const latest = sessions.get(sessionId) ?? state;
+  if (persistId && latest.errorPersistId !== persistId) {
+    // 上一轮错误的写成功:不能绑到或清掉当前横幅。历史仍可能因那一行落库而脏。
+    if (!_activeViewSessions.has(sessionId) && latest.historyLoaded) {
+      setState(sessionId, (s) => (s.historyLoaded ? { ...s, historyLoaded: false } : s));
+    }
+    return;
+  }
   if (_activeViewSessions.has(sessionId)) {
     // Keep live banner during active view; invalidate + clear on leave so the
     // persisted card can appear the next time the user enters without having
     // clicked. Click (retry/close) is what disposes — leave does not.
     _pendingErrorClearOnLeave.add(sessionId);
-    if (persistId) bindLiveErrorPersistId(sessionId, persistId);
     return;
   }
   setState(sessionId, (s) => ({
@@ -3777,6 +3820,9 @@ function setState(
   const prev = getOrCreateState(sessionId);
   const next = updater(prev);
   if (next === prev) return;
+  if (prev.error !== next.error) {
+    _liveErrorEpoch.set(sessionId, (_liveErrorEpoch.get(sessionId) ?? 0) + 1);
+  }
   const previousIssueRequestId = prev.pendingIssueConfirm?.requestId;
   if (previousIssueRequestId && next.pendingIssueConfirm?.requestId !== previousIssueRequestId) {
     clearIssueConfirmDraft(sessionId, previousIssueRequestId);
@@ -4038,6 +4084,12 @@ function applyInputProjection(
     }
   }
   let settlingClientIds: string[] = [];
+  const deferredPersistFromProjection: {
+    payload: {
+      data: Record<string, unknown> | null;
+      agentMeta: Record<string, unknown> | null;
+    } | null;
+  } = { payload: null };
   setState(projection.sessionId, (s) => {
     // DB created 可能先于 projection 回来；正式消息已经占据 transcript 的同一
     // clientId 位置时，不要让稍晚的旧 pendingQueue 再造一行重复队列项。
@@ -4096,11 +4148,11 @@ function applyInputProjection(
         ? s._authRetryPersistOnProjectionError
         : null;
     if (authRetryProjectionError) {
-      persistTurnErrorDeferredTracked(
-        projection.sessionId,
-        authRetryProjectionError.data,
-        (authRetryProjectionError.agentMeta as AgentMeta | null) ?? null,
-      );
+      // 等这次 setState 把 live error 装上并 bump epoch 后再 persist,否则抓到的是上一代。
+      deferredPersistFromProjection.payload = {
+        data: authRetryProjectionError.data,
+        agentMeta: authRetryProjectionError.agentMeta,
+      };
     }
     // 视觉连续性兜底: sendMessage 在"agent 空闲假设"下会乐观把 user 气泡
     // (isPendingPersist) 提前 push 进 messages。如果某条乐观气泡的 clientId 仍停在
@@ -4205,6 +4257,13 @@ function applyInputProjection(
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
   });
+  if (deferredPersistFromProjection.payload) {
+    persistTurnErrorDeferredTracked(
+      projection.sessionId,
+      deferredPersistFromProjection.payload.data,
+      (deferredPersistFromProjection.payload.agentMeta as AgentMeta | null) ?? null,
+    );
+  }
   for (const clientId of settlingClientIds) {
     scheduleRemoteOptimisticSettlingRetirement(projection.sessionId, clientId);
   }
@@ -7054,6 +7113,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // CCAgentStreamEvent.agentMeta 让 handleStreamEvent 落库 messages.agent_meta 行,
     // fork / rewind 反向找 prior assistant 锚点要靠这个字段。
     // Legacy CC/XD remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
+    let persistDeferredAfterDispatch = false;
     if (event.type === 'error') {
       const errData =
         (event.data as {
@@ -7222,6 +7282,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
               }
             } catch {
               if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+              const terminalErrorEvent = {
+                sessionId,
+                type: 'error',
+                data: event.data,
+              } as CCAgentStreamEvent;
+              supersedeInputProjectionOnTerminalEvent(sessionId, terminalErrorEvent);
+              setState(sessionId, (s) => handleStreamEvent(s, terminalErrorEvent));
               if (
                 isCindyGatewayProxyTokenInvalid ||
                 (preSnap.remoteHostId && preSnap.agentKind === 'claude-code')
@@ -7232,13 +7299,6 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
                   event.agentMeta ?? null,
                 );
               }
-              const terminalErrorEvent = {
-                sessionId,
-                type: 'error',
-                data: event.data,
-              } as CCAgentStreamEvent;
-              supersedeInputProjectionOnTerminalEvent(sessionId, terminalErrorEvent);
-              setState(sessionId, (s) => handleStreamEvent(s, terminalErrorEvent));
             } finally {
               if (isDataOwnerGenerationCurrent(dataOwnerAtIngress)) {
                 setState(sessionId, (s) => ({ ...s, _authRetryInFlight: false }));
@@ -7265,15 +7325,18 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           (isAuthError && preSnap.remoteHostId && preSnap.agentKind === 'claude-code')) &&
         !preSnap._authRetryInFlight
       ) {
-        persistTurnErrorDeferredTracked(
-          sessionId,
-          event.data as Record<string, unknown> | null,
-          event.agentMeta ?? null,
-        );
+        persistDeferredAfterDispatch = true;
       }
     }
 
     dispatchStreamEventPayload(sessionId, event, persistId, resolvedContent, deferNotification);
+    if (persistDeferredAfterDispatch) {
+      persistTurnErrorDeferredTracked(
+        sessionId,
+        event.data as Record<string, unknown> | null,
+        event.agentMeta ?? null,
+      );
+    }
 
     // done / error 副作用 (从老 stream listener 搬过来)
     if (isProductTurnDoneEvent(event)) {
@@ -8569,6 +8632,8 @@ function __teardownGlobalListeners(): void {
   pendingMessageCreatedPatches.clear();
   _pendingErrorClearOnLeave.clear();
   _deferredTurnErrorPersist.clear();
+  _liveErrorEpoch.clear();
+  _staleDeferredErrorPersistIds.clear();
   remotePresenceOnlineByDevice.clear();
   resetRemoteDataOwnerPushFence();
   const remoteOptimisticSessionIds = new Set([
