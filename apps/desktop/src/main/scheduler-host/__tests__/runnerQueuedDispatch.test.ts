@@ -746,6 +746,46 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.listenerCount()).toBe(0);
   });
 
+  it('cancels recovery and aborts the replacement after an idle coordinator dispatch', async () => {
+    const original = createSessionHarness(async () => ({ accepted: true }));
+    const replacement = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({
+      busy: false,
+      acceptBeforeEnqueueResolves: true,
+      autoResumePending: () => true,
+    });
+    const { runner, replaceLiveSession } = createRunnerHarness(original.session, queue.deps);
+    const ctx = createFireContext();
+
+    const firePromise = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(original.listenerCount()).toBe(1));
+    expect(queue.enqueueCalls).toHaveLength(1);
+    expect(original.send).not.toHaveBeenCalled();
+    original.emit({
+      type: 'error',
+      data: { message: 'backend unreachable', isTerminal: true },
+      source: 'claude-code',
+    });
+    await Promise.resolve();
+    original.emitStatus('closed');
+    replaceLiveSession(replacement.session);
+    expect(replacement.listenerCount()).toBe(1);
+
+    ctx.abortController.abort();
+
+    await expect(firePromise).rejects.toThrow(/aborted/i);
+    expect(queue.cancelAutoResumeCalls).toEqual([
+      { sessionId: SESSION_ID, runId: 'run-q1' },
+    ]);
+    expect(
+      (replacement.session as unknown as { abort: ReturnType<typeof vi.fn> }).abort,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      (original.session as unknown as { abort: ReturnType<typeof vi.fn> }).abort,
+    ).not.toHaveBeenCalled();
+    expect(replacement.listenerCount()).toBe(0);
+  });
+
   it('does not let the previous auto-resume claim hide a deterministic error from the resumed turn', async () => {
     let autoResumePending = true;
     const harness = createSessionHarness(async () => ({ accepted: true }));
