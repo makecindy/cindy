@@ -208,8 +208,8 @@ interface TurnState {
   presenter: TurnPresenter;
   /** Managed images discovered in tool output for durable text channels. */
   mediaAbsPaths: string[];
-  /** Current session root used to confine model-authored local file links. */
-  workingDir: string;
+  /** Empty for SSH sessions: remote paths must never be opened through local fs. */
+  allowedFileRoots: string[];
   done: boolean;
   /** 过程区耗时刷新的低频 ticker(首个 tool_use 启动, 收口清除)。 */
   activityTicker: ReturnType<typeof setInterval> | null;
@@ -658,6 +658,7 @@ export function createTurnRunner(
             permissionMode: row.permissionMode,
             fastMode: row.fastMode,
             sdkSessionId: row.sdkSessionId,
+            remoteHostId: row.remoteHostId ?? null,
             providerId: row.providerId ?? null,
           },
           attached: true,
@@ -740,7 +741,10 @@ export function createTurnRunner(
           }
           await mirrorEarlyRejectReply(
             args.finalReplyMirror
-              ? { ...args.finalReplyMirror, allowedFileRoots: [row.workingDir] }
+              ? {
+                  ...args.finalReplyMirror,
+                  allowedFileRoots: row.remoteHostId ? [] : [row.workingDir],
+                }
               : undefined,
             text,
           );
@@ -799,7 +803,10 @@ export function createTurnRunner(
       userId,
       scopeKey: target.scopeKey,
       finalReplyMirror: args.finalReplyMirror
-        ? { ...args.finalReplyMirror, allowedFileRoots: [row.workingDir] }
+        ? {
+            ...args.finalReplyMirror,
+            allowedFileRoots: row.remoteHostId ? [] : [row.workingDir],
+          }
         : undefined,
       initialMessageText: text,
       streamingHandle: null,
@@ -807,7 +814,7 @@ export function createTurnRunner(
       streamingStartFailed: false,
       presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
-      workingDir: row.workingDir,
+      allowedFileRoots: row.remoteHostId ? [] : [row.workingDir],
       done: false,
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,
@@ -1374,6 +1381,7 @@ export function createTurnRunner(
         fastMode: row.fastMode,
         // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
         providerId: row.providerId,
+        remoteHostId: row.remoteHostId ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
         vendorOptions: state.attached
           ? undefined
@@ -1599,6 +1607,7 @@ export function createTurnRunner(
       fastMode: row.fastMode,
       // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
       providerId: row.providerId,
+      remoteHostId: row.remoteHostId ?? undefined,
       // 行总是先由 repo 建好, maker 复用已有 row 时该 title 不会生效 —
       // 仅作防御兜底(原 feishu 实现传 '飞书会话' 字面量, 语义等价)。
       title: attached ? undefined : adapter.sessions.defaultTitle(userId),
@@ -2201,6 +2210,7 @@ export function createTurnRunner(
    * materializeTurnLocalImages 会按真实路径去重并清理正文引用，渠道最终只发一份。
    */
   function handleToolResultFullEvent(turn: TurnState, event: AgentEvent): void {
+    if (turn.allowedFileRoots.length === 0) return;
     const data = event.data as { fullText?: unknown } | null;
     if (!data || typeof data.fullText !== 'string') return;
     const urls = extractRenderableXdtImageUrls(data.fullText);
@@ -2843,7 +2853,7 @@ export function createTurnRunner(
             terminal: turn.terminalKind,
             threadTs: turn.scopeKey,
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
-            allowedFileRoots: [turn.workingDir],
+            allowedFileRoots: turn.allowedFileRoots,
             ...(turn.terminalErrorCode ? { errorCode: turn.terminalErrorCode } : {}),
           });
         }
@@ -3106,7 +3116,13 @@ export function createTurnRunner(
   }
 
   async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
-    if (output.kind !== 'chunked-text' || !turn.presenter.wholeText().includes('![')) return;
+    if (
+      output.kind !== 'chunked-text' ||
+      turn.allowedFileRoots.length === 0 ||
+      !turn.presenter.wholeText().includes('![')
+    ) {
+      return;
+    }
     try {
       const materialized = await materializeLocalMarkdownImages({
         text: turn.presenter.wholeText(),

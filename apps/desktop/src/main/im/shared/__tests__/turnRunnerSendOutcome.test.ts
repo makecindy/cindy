@@ -378,6 +378,7 @@ function setupSession(sendImpl: Parameters<typeof createSessionHarness>[0]): Ses
 
 function setupAttachedSession(
   sendImpl: Parameters<typeof createSessionHarness>[0],
+  options: { remoteHostId?: string | null } = {},
 ): SessionHarness {
   const sessionId = 'desktop-attached-session';
   const h = createSessionHarness(sendImpl, sessionId);
@@ -392,6 +393,7 @@ function setupAttachedSession(
       permissionMode: 'bypassPermissions',
       fastMode: false,
       sdkSessionId: null,
+      remoteHostId: options.remoteHostId ?? null,
       providerId: null,
     },
   ]);
@@ -2772,6 +2774,40 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       },
       expect.stringContaining('here is the image'),
       { mediaAbsPaths: [extraAbsPath] },
+    );
+  });
+
+  it('never treats SSH workdir or media paths as local parent-chat files', async () => {
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-remote-safe',
+    };
+    const h = setupAttachedSession(async () => ({ accepted: true }), {
+      remoteHostId: 'ssh-host-1',
+    });
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({
+      type: 'tool_result_full',
+      data: {
+        fullText: JSON.stringify({ xdt_image_url: 'xdt-image:///remote/project/tool.png' }),
+      },
+    });
+    h.emit({ type: 'text', data: { text: 'remote final', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
+    expect(mocks.materializeLocalMarkdownImages).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
+      { ...mirror, allowedFileRoots: [] },
+      expect.stringContaining('remote final'),
     );
   });
 

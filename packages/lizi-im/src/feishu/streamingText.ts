@@ -41,7 +41,6 @@ import {
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
 import { getLog } from './moduleScope.js';
 import { scheduleMirrorOnConfirmation, waitForMirrorConfirmation } from './dualDelivery.js';
-import { resolveAllowedOutboundFile } from '../allowedFiles.js';
 import { messages as transportMessages } from './messages.js';
 import type { StreamingTextHandle } from '../types.js';
 // xdt-* 引用解析抽到渠道无关模块(slack streamingText 共用同一套语义)
@@ -492,21 +491,14 @@ async function sendMirroredFiles(
   const log = getLog();
   const delivered = await Promise.all(
     fileLinks.map(async (link, index) => {
-      const allowed = await resolveAllowedOutboundFile(link.absPath, allowedFileRoots);
-      if (!allowed) {
-        log.warn(
-          '[feishu/streamingText] parent-chat mirror file skipped (outside allowed roots)',
-        );
-        return false;
-      }
+      if (!isPinnedAccountCurrent()) return false;
       try {
-        if (!isPinnedAccountCurrent()) return false;
         const sent = await sendFileToChat(
           chatId,
-          allowed.absPath,
+          link.absPath,
+          allowedFileRoots,
           link.alt || undefined,
           mirrorUuid(key, `f${index}`),
-          allowed.handle,
         );
         if (!sent.ok) {
           log.warn(
@@ -524,8 +516,6 @@ async function sendMirroredFiles(
           }`,
         );
         return false;
-      } finally {
-        await allowed.handle.close().catch(() => undefined);
       }
     }),
   );
