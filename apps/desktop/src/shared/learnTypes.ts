@@ -6,6 +6,8 @@
  * 引擎实现在 apps/desktop/src/main/learn-host/。
  */
 
+import type { ToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
+
 /** 触发来源:聊天 /learn 自由文本 | skill hub 详情页按钮 | 会话内(预留)。 */
 export type LearnSourceKind = 'freetext' | 'hub' | 'session';
 
@@ -85,6 +87,10 @@ export interface LearnRunPublic {
   usedSessionEvidence: boolean;
   /** failed 时的错误说明(已脱敏,不含 prompt 原文)。 */
   error?: string;
+  /** failed 时的稳定错误原因,供 renderer 选择本地化文案。 */
+  errorReason?: string;
+  /** failed 时的工具循环结构化详情;旧版 run 可能没有该字段。 */
+  toolLoop?: ToolLoopErrorDetails;
   /** 蒸馏 session 的最终 assistant 文本(空产出 failed 时展示给用户)。 */
   assistantText?: string;
   /** 产物扫描发现的疑似敏感内容类别(不阻断,审查 UI 高亮提示)。 */
