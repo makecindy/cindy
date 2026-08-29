@@ -2121,6 +2121,34 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await waitFor(() => !existsSync(home2));
   });
 
+  it.each([
+    ['failure', 'pi list failed at /private/package-home'],
+    ['timeout', 'pi list timed out after 30000ms'],
+  ])('fails local startup explicitly when native package projection has a %s', async (_kind, detail) => {
+    const resolvePiNativePackagePaths = vi.fn(async () => {
+      throw new Error(detail);
+    });
+    const agent = new PiAgent(buildDeps({ resolvePiNativePackagePaths }));
+
+    await expect(agent.startSession({
+      sessionId: 'native-package-projection-failed',
+      workingDir: cwd,
+      model: 'm',
+    })).rejects.toThrow(
+      'Package state is unavailable. Restart Cindy and try again.',
+    );
+    expect(resolvePiNativePackagePaths).toHaveBeenCalledOnce();
+    expect(knobs.spawnedArgs).toEqual([]);
+    const reviewHandle = await agent.startSession({
+      sessionId: 'native-package-review',
+      workingDir: cwd,
+      model: 'm',
+      reviewMode: true,
+    });
+    expect(resolvePiNativePackagePaths).toHaveBeenCalledOnce();
+    await reviewHandle.close();
+  });
+
   it('keeps an approved session isolated from a concurrent Review session', async () => {
     const skillPath = path.join(cwd, '.pi', 'skills', 'approved-only');
     mkdirSync(skillPath, { recursive: true });

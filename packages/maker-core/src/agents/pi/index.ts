@@ -2691,12 +2691,17 @@ export class PiAgent extends BaseAgent {
             packages: nativePackagePaths,
           });
         } catch (error) {
-          // Do not substitute Cindy's static analyzer as an allowlist. Surface
-          // the host failure, while keeping ordinary Pi startup available.
+          // Do not substitute Cindy's static analyzer as an allowlist or launch
+          // with an empty package projection. That would silently drop native
+          // Pi packages while claiming the task started normally.
           this.deps.logger.warn('pi native package projection unavailable', {
             sessionId: opts.sessionId ?? null,
             message: error instanceof Error ? error.message : String(error),
           });
+          const strings = resolvePiExtensionUiStrings(this.deps);
+          throw new Error(
+            strings.mutationFailure?.['state-unavailable'] ?? strings.mutationFailed,
+          );
         }
       }
       if (this.deps.resolvePiManagedPackageResources) {
