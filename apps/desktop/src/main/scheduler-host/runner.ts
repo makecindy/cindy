@@ -15,8 +15,8 @@
  *   3. workingDir：useWorktree=true 走 workdir-resolver 建 ephemeral worktree
  *      （绝不手动注册清理，maker-host:116-122 onClose 会自动清）
  *   4. maker.createSession（heartbeat 模式不传 title，让现有 row 标题保留）
- *   5. 一次性 listener：onEvent 收 done/error 任一立刻 unsubscribe
- *      （硬规则：listener 加 session 不加 maker；done/error 后立刻 unsub 防泄漏）
+ *   5. 一次性 turn listener：监听当前 Session 实例；自动恢复重建同一业务 Session 时，
+ *      经 Maker 生命周期事件把 listener 重绑到新实例，done/error 后统一 unsubscribe。
  *   6. session.send（硬规则：send 后**不要**立刻 closeSession，会切断后续事件）
  *   7. 收到 done/error 后组装 ScheduleRun，主动调 notifier.notify
  *      （Phase 1 changelog L1141 方案 A：runner 内部主动 notify，
@@ -2372,17 +2372,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * 不再按静默时长猜完成。
    */
   private createTurnCompletionWaiter(
-    session: Pick<Awaited<ReturnType<Maker['createSession']>>, 'id' | 'onEvent'> & {
-      beginTurnContinuationWait?: (continuationId?: number) => TurnContinuationState | null;
-      onTurnContinuationChange?: (
-        listener: (continuationId: number, state: TurnContinuationState) => void,
-      ) => () => void;
-      onStatusChange?: (
-        listener: (status: 'active' | 'aborting' | 'closed' | 'error') => void,
-      ) => () => void;
-    },
+    initialSession: Session,
     options: TurnCompletionWaiterOptions,
   ): TurnCompletionWaiter {
+    const sessionId = initialSession.id;
     let assistantText = '';
     let stopped = false;
     let stopListeningTurn: (() => void) | undefined;
@@ -2392,8 +2385,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       let pendingSettleUnsub: (() => void) | undefined;
       let pendingContinuationUnsub: (() => void) | undefined;
       let autoResumeFailureUnsub: (() => void) | undefined;
+      let makerLifecycleUnsub: (() => void) | undefined;
       let off: () => void = () => undefined;
       let offStatus: () => void = () => undefined;
+      let currentSession: Session | null = null;
       let settled = false;
       const clearInterruptedDoneTimer = (): void => {
         if (interruptedDoneTimer) {
@@ -2403,19 +2398,27 @@ export class MakerScheduleRunner implements ScheduleRunner {
       };
       const isCurrentAutoResumePending = (): boolean =>
         this.deps.schedulerQueue?.isAutoResumePending?.(
-          session.id,
+          sessionId,
           options.origin.runId,
         ) === true;
+      const clearSessionListeners = (): void => {
+        pendingContinuationUnsub?.();
+        pendingContinuationUnsub = undefined;
+        off();
+        off = () => undefined;
+        offStatus();
+        offStatus = () => undefined;
+        currentSession = null;
+      };
       const cleanup = (): void => {
         clearInterruptedDoneTimer();
         pendingSettleUnsub?.();
         pendingSettleUnsub = undefined;
-        pendingContinuationUnsub?.();
-        pendingContinuationUnsub = undefined;
         autoResumeFailureUnsub?.();
         autoResumeFailureUnsub = undefined;
-        off();
-        offStatus();
+        makerLifecycleUnsub?.();
+        makerLifecycleUnsub = undefined;
+        clearSessionListeners();
         stopListeningTurn = undefined;
       };
       const finish = (): void => {
@@ -2430,11 +2433,29 @@ export class MakerScheduleRunner implements ScheduleRunner {
         cleanup();
         reject(err);
       };
-      offStatus = session.onStatusChange?.((status) => {
+
+      const onSessionStatus = (
+        owner: Session,
+        status: 'active' | 'aborting' | 'closed' | 'error',
+      ): void => {
+        if (owner !== currentSession) return;
         if (status !== 'closed' && status !== 'error') return;
+        if (isCurrentAutoResumePending()) {
+          // AutoResumeBookkeeping owns the retry decision. A dead provider instance is
+          // therefore not the logical run terminal: detach from it and wait for Maker's
+          // existing same-id lazy rebuild. No second recovery state or timer lives here.
+          clearSessionListeners();
+          this.deps.logger.info?.(
+            '[runner] scheduler session instance ended during auto-resume; waiting for replacement',
+            { sessionId, runId: options.origin.runId, status },
+          );
+          return;
+        }
         fail(new Error(`scheduler session ended without a terminal event (${status})`));
-      }) ?? (() => undefined);
-      off = session.onEvent((ev: AgentEvent) => {
+      };
+
+      const onSessionEvent = (owner: Session, ev: AgentEvent): void => {
+        if (owner !== currentSession) return;
         // 一个绑定会话可能在自动续跑退避期间被用户接管。waiter 只消费本 run
         // 的 scheduler turn（初始派发与 autoResume 都保留同一 origin）；其它 run、
         // 手动消息与 /compact 的事件既不能刷新本 run 的存活时间，也不能改写结果。
@@ -2484,7 +2505,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           const continuationId = ev.turnContinuationId;
           const continuationState = continuationId === undefined
             ? null
-            : session.beginTurnContinuationWait?.(continuationId) ?? null;
+            : owner.beginTurnContinuationWait?.(continuationId) ?? null;
           if (continuationState === 'cancelled') {
             // Provider already observed an explicit stop/teardown. Session
             // gets a separate ordered boundary; this run can settle now.
@@ -2495,7 +2516,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             // 当前 SDK turn 已结束，但 provider 确认 wake 任务会自动续开下一
             // turn —— 不定格，等待续 turn 自己的 done。
             pendingContinuationUnsub?.();
-            pendingContinuationUnsub = session.onTurnContinuationChange?.(
+            pendingContinuationUnsub = owner.onTurnContinuationChange?.(
               (changedContinuationId, state) => {
                 if (
                   state !== 'cancelled' ||
@@ -2510,17 +2531,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
             );
             this.deps.logger.info?.(
               '[runner] turn done with pending provider continuation; deferring run finalization',
-              { sessionId: session.id },
+              { sessionId },
             );
             return;
           }
           if (isSilentStopDone) {
             this.deps.logger.info?.(
               '[runner] silent-stop done deferred; waiting for auto-resume or settled',
-              { sessionId: session.id },
+              { sessionId },
             );
             pendingSettleUnsub?.();
-            pendingSettleUnsub = onSilentStopSettled(session.id, (_sid, reason) => {
+            pendingSettleUnsub = onSilentStopSettled(sessionId, (_sid, reason) => {
               pendingSettleUnsub?.();
               pendingSettleUnsub = undefined;
               if (reason === 'exhausted') {
@@ -2549,9 +2570,34 @@ export class MakerScheduleRunner implements ScheduleRunner {
             if (!claimed) fail(new Error(error));
           });
         }
-      });
+      };
+
+      const bindSession = (nextSession: Session): void => {
+        if (settled || nextSession.id !== sessionId || currentSession === nextSession) return;
+        clearSessionListeners();
+        currentSession = nextSession;
+        offStatus =
+          nextSession.onStatusChange?.((status) => onSessionStatus(nextSession, status)) ??
+          (() => undefined);
+        off = nextSession.onEvent((event) => onSessionEvent(nextSession, event));
+      };
+
+      // Maker is already the source of truth for same-business-id Session replacement.
+      // Subscribe before the turn can fail so a fast lazy rebuild cannot be missed.
+      makerLifecycleUnsub =
+        this.deps.maker.on?.((event) => {
+          if (
+            event.type !== 'session:created' ||
+            event.session.id !== sessionId ||
+            !isCurrentAutoResumePending()
+          ) {
+            return;
+          }
+          bindSession(event.session);
+        }) ?? (() => undefined);
+      bindSession(initialSession);
       autoResumeFailureUnsub = this.deps.schedulerQueue?.onAutoResumeFailed?.(
-        session.id,
+        sessionId,
         options.origin.runId,
         () => fail(new Error('scheduled task auto-resume failed')),
       );
