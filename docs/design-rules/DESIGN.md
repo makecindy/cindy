@@ -18,7 +18,7 @@ What makes this system distinctive is the combination of a single geometric sans
 - Inter as the single sans family, carrying both display headlines and body text
 - Tight border-radius system: 8px (inner controls) / 12px (containers) / 9999px (pill) — three values, nothing else
 - Zero shadows in the base language — depth comes from background color shifts and 1px borders (narrow token-gated exceptions live in §10)
-- Pill-shaped geometry on all filled interactive elements (buttons, tabs, single-line inputs, tags); textareas use the 8px inner-control radius (§5)
+- Pill-shaped geometry on all interactive elements (buttons, tabs, single-line inputs, tags) — the only exemption is registered bare text buttons (§5); textareas use the 8px inner-control radius (§5)
 - No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
 - Extreme content restraint — each surface presents one clear idea
 
@@ -267,7 +267,7 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 - Base unit: 8px
 - Scale: 4px, 6px, 8px, 10px, 12px, 14px, 16px, 20px, 24px, 32px, 40px, 48px
-- Button padding: 10px 24px (consistent across all filled buttons; bare text buttons follow their component entry, not this padding)
+- Button padding: 10px 24px (consistent across all buttons; bare text buttons follow their component entry, not this padding)
 - Container padding: dialogs 16px (`p-4`, see §4 Dialog & Modal); dropdown panels 6–8px (see §4 Select & Dropdown)
 
 ### Layout Structure (App)
@@ -286,7 +286,7 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 Three tiers — **these three only** (wording hardened 2026-08-29, designer ruling — see `design-decision-log.md` 08-29). **Tier assignment is a single decision tree in this §5 section; §4 component entries, the §7 Do/Don't lists and the §9 iteration guide restate it for convenience — when wording drifts, this section wins:**
 
-- **Pill (9999px)**: **every filled button is a pill — no exceptions.** Anything that commits a decision or triggers an action wears the pill: buttons (permission approve/deny included), tabs, single-line inputs, tags, badges. The only buttons exempt from the pill shape are **bare text buttons with no background of their own** (wizard back-navigation "← 上一步", the §16.3 login text-button category): they have no fill to round, so they carry no radius at all — they are text, not a filled button. Register any new bare-text-button usage in the component entry that introduces it.
+- **Pill (9999px)**: **every button is a pill — the only exemption is registered bare text buttons.** Anything that commits a decision or triggers an action wears the pill: buttons (permission approve/deny included), tabs, single-line inputs, tags, badges — including buttons with transparent or outlined fills (dialog secondary/cancel are pills with a transparent fill; a control's fill style never changes its tier). The exemption is exactly **bare text buttons with no background of their own** (wizard back-navigation "← 上一步", the §16.3 login text-button category): they have no shape to round — text, not a button-shaped control — so they carry no radius at all. Register any new bare-text-button usage in the component entry that introduces it.
 - **Container (12px)**: the box that holds content — code blocks, cards, panels, dialogs. Implemented as Tailwind `rounded-xl` (12px).
 - **Inner control (8px)**: multi-line inputs (textarea) — **always 8px, whether the textarea sits inside a visible container or is the outermost control of a form area** — plus selected/hover row highlights in dropdowns/menus and small in-block cells nested inside a container. Implemented as Tailwind `rounded-lg` (8px).
 
@@ -309,7 +309,7 @@ _No 4px / 6px / 10px, and no arbitrary radii. **4px is not a tier**: existing `r
 ### Do
 
 - Use Surface (`#f8f8f6` Light / `#1f1f1e` Dark) as the page background — every page starts here
-- Use pill-shaped (9999px) radius on all filled interactive elements — buttons, tabs, single-line inputs, tags (bare text buttons carry no radius — §5 exemption)
+- Use pill-shaped (9999px) radius on all interactive elements — buttons, tabs, single-line inputs, tags (registered bare text buttons are the only exemption — §5)
 - Use 12px radius on all non-interactive containers — code blocks, cards, panels
 - Use 8px radius for multi-line inputs (textarea, always) and non-button inner controls — dropdown/menu row highlights, in-block cells (see §5)
 - Keep the palette strictly grayscale — chromatic color only via the sanctioned semantic set in §2, always through tokens
@@ -317,7 +317,7 @@ _No 4px / 6px / 10px, and no arbitrary radii. **4px is not a tier**: existing `r
 - Maintain zero shadows — depth comes from borders and background shifts only
 - Keep content density low — each section should present one clear idea
 - Use monospace for terminal commands and code — it's primary content, not decoration
-- Keep all filled buttons at 10px 24px padding with pill shape — consistency is absolute (bare text buttons are the §5 exemption: no background, no radius, no pill padding)
+- Keep all buttons at 10px 24px padding with pill shape — consistency is absolute (registered bare text buttons are the §5 exemption: no background, no radius, no pill padding)
 
 ### Don't
 

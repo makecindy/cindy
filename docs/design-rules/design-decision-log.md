@@ -49,6 +49,15 @@
   all buttons」两处绝对表述收窄为「filled buttons」，裸文字按钮不受 pill padding
   约束、按其组件条目执行；§5 Pill 档首句同步由「every button」改「every filled
   button」。（同上条落点）
+  追加修正（第三轮 review 指出 (4) 的「filled」限定误伤透明控件）：(5) **撤销
+  「filled」反向排除措辞**——透明填充 / 仅描边的交互控件（对话框 secondary/cancel
+  透明填充按钮、inactive tab、composer chip 静止态 borderless）都保留胶囊，「fill
+  样式从不改变档位」。豁免改回**直接正向表述**：唯一豁免 = 已登记的裸文字按钮，
+  §1 / §5 Pill 档（首句恢复「every button」，豁免句同步改为「no shape to
+  round」）/ §5 Spacing / §7 Do 共五处统一为「all (buttons|interactive
+  elements) + registered bare text buttons are the only exemption」；(4) 中「filled
+  buttons」字样随本轮撤销作废，裸文字按钮不受 pill padding 约束的实质不变。
+  （同上条落点）
 
 - **08-16** **登录：唯一 SSO 不再经过 method-choice（拍板人 = 用户）**——
   用户已经从登录首页选了企业 SSO（组织标识探测），或邮箱 / 组织探测结果只剩
