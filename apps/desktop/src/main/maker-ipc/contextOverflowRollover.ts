@@ -557,10 +557,22 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     }
     const live = deps.getLiveSession(sessionId);
     const liveUsage = live?.getUsageSnapshot?.();
-    const contextTokens =
+    const persistedContextTokens =
+      typeof sessionRow.contextTokens === 'number' &&
+      Number.isFinite(sessionRow.contextTokens) &&
+      sessionRow.contextTokens >= 0
+        ? sessionRow.contextTokens
+        : 0;
+    const liveContextTokens =
       liveUsage && Number.isFinite(liveUsage.contextTokens) && liveUsage.contextTokens >= 0
         ? liveUsage.contextTokens
-        : (sessionRow.contextTokens ?? 0);
+        : null;
+    // A freshly/lazily attached runtime reports the placeholder 0 before any usage.
+    // Only persisted 0 confirms that zero is authoritative; a positive live value is authoritative itself.
+    const contextTokens =
+      liveContextTokens !== null && (liveContextTokens > 0 || persistedContextTokens === 0)
+        ? liveContextTokens
+        : persistedContextTokens;
     const reportedCurrentWindow =
       liveUsage && Number.isFinite(liveUsage.contextWindow) && liveUsage.contextWindow > 0
         ? liveUsage.contextWindow

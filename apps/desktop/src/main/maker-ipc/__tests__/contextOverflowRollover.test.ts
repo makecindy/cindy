@@ -327,6 +327,76 @@ describe('createContextOverflowRollover', () => {
     },
   );
 
+  it('falls back to persisted usage when a lazy live snapshot still reports placeholder zero', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      contextTokens: 300_000,
+      contextWindow: 500_000,
+    });
+    deps.getLiveSession.mockReturnValue({
+      isTurnRunning: () => false,
+      getUsageSnapshot: () => ({ contextTokens: 0, contextWindow: 500_000 }),
+    });
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+    ).resolves.toBe('rebuilt');
+    expect(deps.closeSession).toHaveBeenCalledWith('s1');
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1',
+      expect.any(String),
+      expect.objectContaining({ reason: 'model-window-switch' }),
+    );
+  });
+
+  it('keeps a persisted and live zero as authoritative empty usage', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      contextTokens: 0,
+      contextWindow: 500_000,
+    });
+    deps.getLiveSession.mockReturnValue({
+      isTurnRunning: () => false,
+      getUsageSnapshot: () => ({ contextTokens: 0, contextWindow: 500_000 }),
+    });
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+    ).resolves.toBe('not-needed');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [244_799, 'not-needed', false],
+    [244_800, 'rebuilt', true],
+  ] as const)(
+    'uses authoritative positive live usage %i at the 90%% boundary',
+    async (contextTokens, expected, rebuilt) => {
+      const deps = makeDeps([msg('user', '继续', 'u1')]);
+      deps.getSessionRow.mockResolvedValue({
+        ...(await deps.getSessionRow()),
+        contextTokens: 300_000,
+        contextWindow: 500_000,
+      });
+      deps.getLiveSession.mockReturnValue({
+        isTurnRunning: () => false,
+        getUsageSnapshot: () => ({ contextTokens, contextWindow: 500_000 }),
+      });
+      const rollover = createContextOverflowRollover(deps);
+
+      await expect(
+        rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+      ).resolves.toBe(expected);
+      expect(deps.closeSession).toHaveBeenCalledTimes(rebuilt ? 1 : 0);
+      expect(deps.commitRebuild).toHaveBeenCalledTimes(rebuilt ? 1 : 0);
+    },
+  );
+
   it('does not retire the native session below the target pressure line', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
