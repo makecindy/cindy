@@ -738,7 +738,7 @@ describe('shouldSkipOrcaWorkerTerminal', () => {
     const h = createHarness();
     h.book.stashSuppressedError('s1', { message: 'network blip' });
     h.book.stashOrcaSuppressedTerminal('s1', createOrcaTerminal());
-    h.book.noteFailedTurnCompletionTail('s1');
+    h.book.noteFailedTurnCompletionTail('s1', 5);
 
     // User enqueue: force-flush drops the suppressed entry / Orca payload, no finalize.
     expect(h.book.supersedeUnclaimedErrorForUserIntervention('s1')).toBe(true);
@@ -746,7 +746,7 @@ describe('shouldSkipOrcaWorkerTerminal', () => {
     expect(h.orcaFinalized).toEqual([]);
     expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(true);
 
-    const isFailedTurnCompletionTail = h.book.consumeFailedTurnCompletionTail('s1');
+    const isFailedTurnCompletionTail = h.book.consumeFailedTurnCompletionTail('s1', 5);
     expect(isFailedTurnCompletionTail).toBe(true);
     expect(
       shouldSkipOrcaWorkerTerminal({
@@ -763,17 +763,40 @@ describe('shouldSkipOrcaWorkerTerminal', () => {
 
   it('does not skip a later product done after a new attempt starts', () => {
     const h = createHarness();
-    h.book.noteFailedTurnCompletionTail('s1');
+    h.book.noteFailedTurnCompletionTail('s1', 5);
     h.book.clearFailedTurnCompletionTail('s1');
-    expect(h.book.consumeFailedTurnCompletionTail('s1')).toBe(false);
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 6)).toBe(false);
     expect(shouldSkipOrcaWorkerTerminal(idle)).toBe(false);
+  });
+
+  it('does not skip a later-generation done when the failed turn never emitted a paired done', () => {
+    const h = createHarness();
+    h.book.noteFailedTurnCompletionTail('s1', 5);
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 6)).toBe(false);
+    expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(false);
+    expect(shouldSkipOrcaWorkerTerminal(idle)).toBe(false);
+  });
+
+  it('keeps the current tail when an older stray done arrives first', () => {
+    const h = createHarness();
+    h.book.noteFailedTurnCompletionTail('s1', 5);
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 4)).toBe(false);
+    expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(true);
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 5)).toBe(true);
+  });
+
+  it('does not treat an unstamped done as the failed-turn tail', () => {
+    const h = createHarness();
+    h.book.noteFailedTurnCompletionTail('s1', 5);
+    expect(h.book.consumeFailedTurnCompletionTail('s1')).toBe(false);
+    expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(true);
   });
 
   it('teardown drops an unconsumed tail so session-id reuse cannot steal a done', () => {
     const h = createHarness();
-    h.book.noteFailedTurnCompletionTail('s1');
+    h.book.noteFailedTurnCompletionTail('s1', 5);
     h.book.teardown('s1');
     expect(h.book.hasFailedTurnCompletionTail('s1')).toBe(false);
-    expect(h.book.consumeFailedTurnCompletionTail('s1')).toBe(false);
+    expect(h.book.consumeFailedTurnCompletionTail('s1', 5)).toBe(false);
   });
 });

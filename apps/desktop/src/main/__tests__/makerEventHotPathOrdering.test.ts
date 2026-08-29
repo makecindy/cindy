@@ -399,7 +399,8 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('stashedThisErrorEvent: deferredOrcaWorkerTerminal');
     expect(source).toContain('isPairedFailedTurnDone,');
     expect(source).toContain('isFailedTurnCompletionTail,');
-    expect(source).toContain('autoResumeBookkeeping.consumeFailedTurnCompletionTail(session.id)');
+    expect(source).toContain('autoResumeBookkeeping.consumeFailedTurnCompletionTail(');
+    expect(source).toContain('event.sessionTurnGeneration');
     expect(source).toContain(
       'hasSuppressedError: autoResumeBookkeeping.hasSuppressedError(session.id)',
     );
@@ -555,9 +556,8 @@ describe('maker:event hot path ordering', () => {
     );
     expect(boundaryBlock).toContain('pendingFailedTurnAssistantPersistId.get(session.id)');
     expect(boundaryBlock).toContain('isPairedFailedTurnDone = true');
-    expect(boundaryBlock).toContain(
-      'autoResumeBookkeeping.noteFailedTurnCompletionTail(session.id)',
-    );
+    expect(boundaryBlock).toContain('autoResumeBookkeeping.noteFailedTurnCompletionTail(');
+    expect(boundaryBlock).toContain('event.sessionTurnGeneration');
     expectOrder(
       boundaryBlock,
       'isPairedFailedTurnDone = true',
@@ -577,11 +577,7 @@ describe('maker:event hot path ordering', () => {
       'persistId = reserveTurnErrorPersistId(',
       'broadcastToAllWindows(MAKER_PUSH.EVENT',
     );
-    expectOrder(
-      wireSessionSource,
-      'broadcastToAllWindows(MAKER_PUSH.EVENT',
-      'onTurnErrorEvent(',
-    );
+    expectOrder(wireSessionSource, 'broadcastToAllWindows(MAKER_PUSH.EVENT', 'onTurnErrorEvent(');
     expect(wireSessionSource).toContain('const autoResumeWouldSuppressPersist');
     const persistBoundaryStart = wireSessionSource.indexOf(
       'let turnAssistantPersistId: string | undefined;',

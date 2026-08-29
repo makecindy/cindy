@@ -127,13 +127,16 @@ export class AutoResumeBookkeeping {
   >();
 
   /**
-   * 失败轮随后那条 unclaimed `done` 的 session 级尾巴。
+   * 失败轮随后那条 unclaimed `done` 的 session 级尾巴，按失败轮的
+   * `sessionTurnGeneration` 配对。
    *
    * 独立于 suppressed-error entry 与 persist-id pairing：零输出 / 纯 tool 轮没有
    * assistant persist id，用户接手还会 force-flush 掉 entry 并清 pending。这条
-   * 标记必须活到配对 done 被消费；新 attempt 的 token-bearing running 才丢掉它。
+   * 标记必须活到**同一代**配对 done 被消费；新 attempt 的 token-bearing running
+   * 才丢掉它。不同代的 `done`（普通用户 / Orca 新 turn，常常没有
+   * `turnAttemptToken`）不是这条尾巴，不得 skip。
    */
-  private readonly failedTurnCompletionTails = new Set<string>();
+  private readonly failedTurnCompletionTails = new Map<string, number>();
 
   /** 排期令牌自增源（全局单调；只用来判「是不是我那次」，跨会话共享无妨）。 */
   private scheduleSeq = 0;
@@ -451,14 +454,27 @@ export class AutoResumeBookkeeping {
     return this.suppressedErrors.has(sessionId);
   }
 
-  /** Product terminal error（非 continuation）记下随后那条 unclaimed done。 */
-  noteFailedTurnCompletionTail(sessionId: string): void {
-    this.failedTurnCompletionTails.add(sessionId);
+  /** Product terminal error（非 continuation）记下随后那条同一代 unclaimed done。 */
+  noteFailedTurnCompletionTail(sessionId: string, generation: number): void {
+    this.failedTurnCompletionTails.set(sessionId, generation);
   }
 
-  /** 配对 done 消费这条尾巴；没有尾巴时返回 false，不得误伤后续产品 done。 */
-  consumeFailedTurnCompletionTail(sessionId: string): boolean {
-    return this.failedTurnCompletionTails.delete(sessionId);
+  /**
+   * 只有 `done` 的 generation 与记下的失败轮相同才消费。
+   * 更大的 generation 是后续产品 turn：丢掉陈旧尾巴并返回 false。
+   * 更小的 generation 是迟到的旧 done：保留当前尾巴。
+   * 未盖 generation 的 done 不能当配对证明，也不当产品 turn 清尾巴。
+   */
+  consumeFailedTurnCompletionTail(sessionId: string, generation?: number): boolean {
+    const noted = this.failedTurnCompletionTails.get(sessionId);
+    if (noted === undefined) return false;
+    if (typeof generation !== 'number') return false;
+    if (generation === noted) {
+      this.failedTurnCompletionTails.delete(sessionId);
+      return true;
+    }
+    if (generation > noted) this.failedTurnCompletionTails.delete(sessionId);
+    return false;
   }
 
   /** 新 attempt 已证明启动，或会话拆除：丢掉未消费的尾巴。 */
@@ -828,8 +844,9 @@ function sameSuppressedTurnErrorOwner(
  *
  * Codex / Claude 失败轮是 terminal error 后再发 unclaimed `done`。error 上的
  * `deferredOrcaWorkerTerminal` 是局部变量，done 到达时已经重置；必须看同轮 pairing、
- * 仍在的 suppressed-error owner、auto-resume pending/deferred，以及活过 flush 的
- * 失败轮 completion tail（零输出轮没有 persist id，用户接手会清掉前几项）。
+ * 仍在的 suppressed-error owner、auto-resume pending/deferred，以及活过 flush、
+ * 且 generation 对得上的失败轮 completion tail（零输出轮没有 persist id，用户
+ * 接手会清掉前几项；不同代的 done 不能靠这条尾巴 skip）。
  */
 export interface OrcaWorkerTerminalSkipInput {
   isContinuationBoundary: boolean;

@@ -4596,9 +4596,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           }
           // persistId 只覆盖有 assistant 行的失败轮。零输出 / 纯 tool 轮没有 id，
           // 用户接手还会 flush 掉 suppressed entry 并清 pending。这条 tail 活过
-          // flush，只在配对 done 或新 attempt 启动时消费/丢弃。
-          if (!isContinuationBoundary) {
-            autoResumeBookkeeping.noteFailedTurnCompletionTail(session.id);
+          // flush，按失败轮 generation 配对；不同代的 done 不得当成这条尾巴。
+          if (!isContinuationBoundary && typeof event.sessionTurnGeneration === 'number') {
+            autoResumeBookkeeping.noteFailedTurnCompletionTail(
+              session.id,
+              event.sessionTurnGeneration,
+            );
           }
         } else {
           // done: 优先本事件 consume 的 id, 失败 turn 场景回收交接的 id;
@@ -4888,7 +4891,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const isFailedTurnCompletionTail =
           event.type === 'done' &&
           !isContinuationBoundary &&
-          autoResumeBookkeeping.consumeFailedTurnCompletionTail(session.id);
+          autoResumeBookkeeping.consumeFailedTurnCompletionTail(
+            session.id,
+            event.sessionTurnGeneration,
+          );
         if (
           !shouldSkipOrcaWorkerTerminal({
             isContinuationBoundary,

@@ -332,7 +332,9 @@ describe('interrupted continuation enqueue contract', () => {
     expect(terminalBlock).toMatch(/stashedThisErrorEvent:\s*deferredOrcaWorkerTerminal/);
     expect(terminalBlock).toMatch(/isPairedFailedTurnDone/);
     expect(terminalBlock).toMatch(/isFailedTurnCompletionTail/);
-    expect(terminalBlock).toMatch(/consumeFailedTurnCompletionTail\(session\.id\)/);
+    expect(terminalBlock).toMatch(
+      /consumeFailedTurnCompletionTail\(\s*session\.id,\s*event\.sessionTurnGeneration/,
+    );
     expect(terminalBlock).toMatch(
       /hasSuppressedError:\s*autoResumeBookkeeping\.hasSuppressedError/,
     );
@@ -340,9 +342,11 @@ describe('interrupted continuation enqueue contract', () => {
     expect(terminalBlock).toMatch(/isAutoResumeDeferred:/);
     expect(terminalBlock).toMatch(/handleWorkerTerminalTurn\(/);
 
-    expect(registerSource).toMatch(/noteFailedTurnCompletionTail\(session\.id\)/);
+    expect(registerSource).toMatch(
+      /noteFailedTurnCompletionTail\(\s*session\.id,\s*event\.sessionTurnGeneration/,
+    );
     const noteTailStart = registerSource.indexOf(
-      'autoResumeBookkeeping.noteFailedTurnCompletionTail(session.id)',
+      'autoResumeBookkeeping.noteFailedTurnCompletionTail(',
     );
     expect(noteTailStart).toBeGreaterThan(-1);
     const persistIdIf = registerSource.lastIndexOf('if (turnAssistantPersistId)', noteTailStart);
