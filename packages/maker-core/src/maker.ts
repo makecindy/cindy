@@ -1102,6 +1102,21 @@ export class Maker {
   }
 
   /**
+   * Register an optional agent after Maker construction.
+   *
+   * Hosts may provision optional runtimes asynchronously (for example after a
+   * transient network failure during startup). Registration is intentionally
+   * additive and idempotent so existing sessions and agent instances remain
+   * untouched.
+   */
+  registerAgent(kind: AgentKind, agent: BaseAgent): boolean {
+    if (this.shutdownStarted) return false;
+    if (this.agents[kind]) return false;
+    this.agents[kind] = agent;
+    return true;
+  }
+
+  /**
    * Agent 内置 command (palette 'agent-builtin' 类目) —— 同步硬编码白名单。
    * 见 agents/<kind>/commands.ts。
    */

@@ -238,7 +238,9 @@ export function Sidebar({
         )}
 
         {/* Update banner: shown only when a verified update is ready
-          peek 抽屉视同展开(否则横幅在抽屉里消失,与「预览完整列表」语义相悖)。 */}
+          peek 抽屉视同展开(否则横幅在抽屉里消失,与「预览完整列表」语义相悖)。
+          最小化入口互斥:展开态 busy 让路时本组件不渲染、头像行火焰涂黑;rail 时
+          UserInfoSection 只回头像,折叠火焰就是那条提醒。 */}
         <UpdateBanner
           isCollapsed={(isCollapsed && !isPeek) || isRail}
           onOpenVersionNotice={onOpenVersionNotice}

@@ -6275,11 +6275,16 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
     expect(ok).toBe(true);
 
-    h.coordinator.onTurnEvent(sid, 'error', 'terminal after persist failure');
+    h.coordinator.onTurnEvent(sid, 'error', 'terminal after persist failure', {
+      reason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    });
     await flush();
 
     const projection = latestProjection(h.projections);
     expect(projection.error).toBe('Failed to persist user message: db down');
+    expect(projection.errorReason).toBeUndefined();
+    expect(projection.toolLoop).toBeUndefined();
     expect(projection.recovery).toBeNull();
     expect(projection.errorRetryText).toBeNull();
   });

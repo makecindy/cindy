@@ -215,7 +215,10 @@
       "projectOrderActivity": "By recent activity",
       "projectOrderManual": "Manual",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
-      "statusHeading": "Status"
+      "statusHeading": "Status",
+      "showDeviceTasks": "Show tasks",
+      "openDevice": "Open",
+      "renameDevice": "Rename"
     },
     "search": {
       "placeholder": "Search titles or content…",

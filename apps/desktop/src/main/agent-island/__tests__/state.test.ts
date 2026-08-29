@@ -289,6 +289,30 @@ describe('Agent Island display state', () => {
     expect(display.sessions.map((session) => session.sessionId)).toEqual(['ask', 'err', 'done']);
   });
 
+  it('localizes tool-loop terminal details in the Agent Island projection', () => {
+    const state = createAgentIslandState();
+    setAgentIslandStrings(state, {
+      ...DEFAULT_AGENT_ISLAND_STRINGS,
+      error: 'Localized error',
+    });
+
+    applyAgentIslandEvent(
+      state,
+      { sessionId: 'tool-loop', title: 'Tool loop', agentKind: 'claude-code' },
+      terminalErrorEvent(
+        '上游模型 claude 连续 3 次 Edit 调用因同类参数错误(missing_required_field)被拒',
+        'tool_use_loop_detected',
+      ),
+      1_000,
+    );
+
+    const session = buildAgentIslandDisplayState(state, 1_001).sessions[0];
+    expect(session?.detail).toBe('Localized error');
+    expect(session?.activityLines).toContainEqual(
+      expect.objectContaining({ kind: 'status', text: 'Localized error' }),
+    );
+  });
+
   it('builds a CodeIsland-style recent activity preview per session', () => {
     const state = createAgentIslandState();
 

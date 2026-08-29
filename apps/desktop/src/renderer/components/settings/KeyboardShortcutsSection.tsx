@@ -51,6 +51,11 @@ import { useXboxGamepad } from '@/hooks/useXboxGamepad';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { WorkLouderCodexEntry, WorkLouderCodexSettings } from './WorkLouderCodexSettings';
+import {
+  GAMEPAD_FAMILIES,
+  VISIBLE_GAMEPAD_FAMILIES,
+  type GamepadFamily,
+} from '../../../shared/xboxGamepad';
 import { XboxGamepadEntry, XboxGamepadSettings } from './XboxGamepadSettings';
 
 const log = createLogger('settings:keyboard-shortcuts');
@@ -62,7 +67,7 @@ function shouldShowHardwareOutside(device: {
   return device.present === true || device.enabled === true;
 }
 
-type HardwarePane = 'list' | 'accessories' | 'worklouder' | 'xbox';
+type HardwarePane = 'list' | 'accessories' | 'worklouder' | GamepadFamily;
 
 function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
   const { t } = useTranslation();
@@ -114,16 +119,31 @@ export function KeyboardShortcutsSection() {
   const [hardwarePane, setHardwarePane] = useState<HardwarePane>('list');
   const [hardwareReturnTo, setHardwareReturnTo] = useState<'list' | 'accessories'>('list');
   const workLouder = useWorkLouderCodex({ watchConnection: true });
-  const xboxGamepad = useXboxGamepad({ watchConnection: true });
+  const xboxGamepad = useXboxGamepad({ family: 'xbox', watchConnection: true });
+  const playstationGamepad = useXboxGamepad({ family: 'playstation', watchConnection: true });
+  const nintendoGamepad = useXboxGamepad({ family: 'nintendo', watchConnection: true });
+  const genericGamepad = useXboxGamepad({ family: 'generic', watchConnection: true });
+  const gamepads = {
+    xbox: xboxGamepad,
+    playstation: playstationGamepad,
+    nintendo: nintendoGamepad,
+    generic: genericGamepad,
+  };
   const workLouderConnected = shouldShowHardwareOutside({
     present: workLouder.state?.devicePresent,
     enabled: workLouder.state?.settings.deviceEnabled,
   });
-  const xboxConnected = shouldShowHardwareOutside({
-    present: xboxGamepad.state?.devicePresent,
-    enabled: xboxGamepad.state?.settings.deviceEnabled,
-  });
-  const hasAccessories = !workLouderConnected || !xboxConnected;
+  const gamepadConnected = Object.fromEntries(
+    GAMEPAD_FAMILIES.map((family) => [
+      family,
+      shouldShowHardwareOutside({
+        present: gamepads[family].state?.devicePresent,
+        enabled: gamepads[family].state?.settings.deviceEnabled,
+      }),
+    ]),
+  ) as Record<GamepadFamily, boolean>;
+  const hasAccessories =
+    !workLouderConnected || VISIBLE_GAMEPAD_FAMILIES.some((family) => !gamepadConnected[family]);
   const showAccessoriesEntry = hasAccessories;
   const [error, setError] = useState<RecordingError | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -146,9 +166,9 @@ export function KeyboardShortcutsSection() {
     setHardwareReturnTo(from);
     setHardwarePane('worklouder');
   };
-  const openXbox = (from: 'list' | 'accessories') => {
+  const openGamepad = (family: GamepadFamily, from: 'list' | 'accessories') => {
     setHardwareReturnTo(from);
-    setHardwarePane('xbox');
+    setHardwarePane(family);
   };
 
   const mutationErrorMessage = useCallback(
@@ -325,8 +345,13 @@ export function KeyboardShortcutsSection() {
   if (hardwarePane === 'worklouder') {
     return <WorkLouderCodexSettings onBack={() => setHardwarePane(hardwareReturnTo)} />;
   }
-  if (hardwarePane === 'xbox') {
-    return <XboxGamepadSettings onBack={() => setHardwarePane(hardwareReturnTo)} />;
+  if ((GAMEPAD_FAMILIES as readonly string[]).includes(hardwarePane)) {
+    return (
+      <XboxGamepadSettings
+        family={hardwarePane as GamepadFamily}
+        onBack={() => setHardwarePane(hardwareReturnTo)}
+      />
+    );
   }
   if (hardwarePane === 'accessories' && hasAccessories) {
     return (
@@ -360,14 +385,16 @@ export function KeyboardShortcutsSection() {
               onOpen={() => openWorkLouder('accessories')}
             />
           )}
-          {!xboxConnected && (
+          {VISIBLE_GAMEPAD_FAMILIES.filter((family) => !gamepadConnected[family]).map((family) => (
             <XboxGamepadEntry
-              state={xboxGamepad.state}
-              loading={xboxGamepad.loading}
+              key={family}
+              family={family}
+              state={gamepads[family].state}
+              loading={gamepads[family].loading}
               grouped
-              onOpen={() => openXbox('accessories')}
+              onOpen={() => openGamepad(family, 'accessories')}
             />
-          )}
+          ))}
         </div>
       </div>
     );
@@ -398,13 +425,15 @@ export function KeyboardShortcutsSection() {
           onOpen={() => openWorkLouder('list')}
         />
       )}
-      {xboxConnected && (
+      {VISIBLE_GAMEPAD_FAMILIES.filter((family) => gamepadConnected[family]).map((family) => (
         <XboxGamepadEntry
-          state={xboxGamepad.state}
-          loading={xboxGamepad.loading}
-          onOpen={() => openXbox('list')}
+          key={family}
+          family={family}
+          state={gamepads[family].state}
+          loading={gamepads[family].loading}
+          onOpen={() => openGamepad(family, 'list')}
         />
-      )}
+      ))}
       {showAccessoriesEntry && <AccessoriesEntry onOpen={() => setHardwarePane('accessories')} />}
 
       <div

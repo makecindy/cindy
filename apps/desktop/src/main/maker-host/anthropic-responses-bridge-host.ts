@@ -43,6 +43,12 @@ import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { XAI_X_SEARCH_TOOL_TYPE, xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import {
+  OWNER_BOUNDARY_PENDING_ERROR,
+  OwnerBoundaryPendingError,
+  isOwnerBoundaryPendingError,
+} from './owner-boundary-error.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 
 const zstdCompressAsync = promisify(zstdCompress);
@@ -229,10 +235,19 @@ export const invalidateChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
   },
 });
 
+function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeAtStart) {
+    throw new OwnerBoundaryPendingError();
+  }
+}
+
 /** 经 adapter 判连接态 → 读 codex-home/auth.json → 必要时刷新 → 返回 token 与可选 account id。 */
 export async function getChatgptBridgeAuth(): Promise<{ accessToken: string; accountId: string | null }> {
+  const scopeAtStart = activeOwnerScopeKey();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   const now = Date.now();
   if (_authCache && now - _authCache.readAt < AUTH_CACHE_TTL_MS && !isExpired(_authCache.accessToken)) {
+    throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
     return _authCache;
   }
   // 连接态门:adapter 返回 null = 已登出 / 服务端已判失效(provider UI 显示未连接)。
@@ -240,17 +255,20 @@ export async function getChatgptBridgeAuth(): Promise<{ accessToken: string; acc
   // chatgpt/ 请求会继续用被断开(甚至被判坏)的账号。非 null 时 adapter 的 reconcile 已保证
   // codex-home/auth.json 是权威文件(必要时从 ~/.codex 硬链),后续读写只针对它。
   const adapterToken = await desktopCodexAuthAdapter.getAccessToken();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (adapterToken == null) {
     _authCache = null;
     throw new Error('OpenAI(ChatGPT 订阅)未连接或凭证已失效:请在「设置 → 模型供应商」登录');
   }
   const authPath = codexHomeAuthPath();
   let obj = await readAuthFile(authPath);
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (!obj?.tokens?.access_token) {
     _authCache = null;
     throw new Error('codex auth.json 无有效 access_token:请重新登录 OpenAI');
   }
   obj = await refreshIfNeeded(authPath, obj);
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   const accessToken = obj.tokens?.access_token;
   const accountId = obj.tokens ? accountIdFrom(obj.tokens) : null;
   if (!accessToken) {
@@ -293,6 +311,12 @@ function xaiProviderConfig(): BridgeProviderConfig {
     maxOutputTokensSupported: true,
     // grok-code-fast / grok-build 系列不支持 reasoningEffort(实测 400),其余 grok 模型支持。
     supportsReasoning: (model) => !(model.startsWith('grok-code') || model.startsWith('grok-build')),
+    // Grok 工具参数保真度不足(2026-08 实锤:单 session 16 次 Edit 缺 file_path 的 malformed
+    // 重试风暴)。xAI 文档(docs.x.ai structured-outputs)称 tool calling 的 strict 隐式恒为
+    // true,因此这里的显式声明预期是 no-op —— 保留它是意图声明 + 上游语义变化时的保护;
+    // 真正承重的止损是 maker-core ToolLoopGuard 的契约错误层。逐工具兼容检查与回落由
+    // bridge 层负责,不合规 schema(Edit 的可选 replace_all、复杂 MCP 关键字)保持 strict:false。
+    strictFunctionTools: () => true,
     // Grok 的 X 实时视野来自 xAI 服务端工具 x_search:不声明就搜不了 X(见 xai-server-side-tools.ts)。
     serverSideTools: xaiServerSideTools,
     buildHeaders: async () => ({
@@ -328,6 +352,11 @@ export function getResponsesBridgeHandler(): ResponsesBridgeHandler | null {
       // 订阅直连的上游(chatgpt.com / api.x.ai)由 handler 自己发出,不经 compat-proxy
       // 的转发层,拿不到那边的出站代理;必须显式注入(见 outbound-fetch.ts)。
       fetchImpl: outboundFetch,
+      // 一次性 Grok wire 归因取证开关;默认关闭,避免正常 agent 流量产生额外诊断日志。
+      wireDiagnostics: process.env.XDT_WIRE_DIAGNOSTICS === '1',
+      // dev-only strict spike(证据路径):生产控制面是上面 provider 配置的
+      // strictFunctionTools,此开关只供诊断实例叠加验证,不得当生产开关用。
+      wireDiagnosticsStrict: process.env.XDT_WIRE_DIAGNOSTICS_STRICT === '1',
     });
   } catch (err) {
     _handler = null;
@@ -670,7 +699,9 @@ export function getPiNativeSubscriptionHandler(
     const controller = new AbortController();
     const abortOnClose = (): void => controller.abort();
     res.once('close', abortOnClose);
+    const scopeAtStart = activeOwnerScopeKey();
     try {
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       let accessToken: string;
       let headers: Record<string, string>;
       if (providerId === 'openai') {
@@ -715,6 +746,7 @@ export function getPiNativeSubscriptionHandler(
           contentEncoding = undefined;
         }
       }
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
 
       const response = await deps.fetch(upstream.url, {
@@ -754,6 +786,22 @@ export function getPiNativeSubscriptionHandler(
       // which destroys the client response so PI observes a transport failure
       // instead of accepting a cleanly-ended truncated stream.
       if (res.headersSent) throw err;
+      if (isOwnerBoundaryPendingError(err)) {
+        res.writeHead(503, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+          'retry-after': '1',
+        });
+        res.end(JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'owner_boundary_pending',
+            code: 'owner_boundary_pending',
+            message: OWNER_BOUNDARY_PENDING_ERROR,
+          },
+        }));
+        return;
+      }
       const detail = describeErrorChain(err);
       const providerLabel = providerId === 'xai' ? 'xAI/Grok' : 'OpenAI/ChatGPT';
       log.warn('PI native subscription forwarding failed', {

@@ -64,6 +64,17 @@ describe('decideNextGoalState', () => {
     expect(d.lastReason).toContain('boom');
   });
 
+  it('projects a tool-loop terminal error as a stable reason', () => {
+    const d = decideNextGoalState(BASE, outcome({
+      errored: true,
+      errorMessage: '上游模型疑似陷入死循环: missing_required_field',
+      errorReason: 'tool_use_loop_detected',
+    }));
+    expect(d.status).toBe('blocked');
+    expect(d.lastReason).toBe('tool_use_loop_detected');
+    expect(d.lastReason).not.toContain('missing_required_field');
+  });
+
   it('pauses (not blocks) when the turn was aborted by the user', () => {
     const d = decideNextGoalState(BASE, outcome({ errored: true, errorMessage: 'AbortError: aborted' }));
     expect(d.status).toBe('paused');
@@ -4176,6 +4187,20 @@ describe('GoalController', () => {
     expect(st?.usageResetAt).toBe(1000 + 60_000); // now() + OVERLOAD_RESUME_DELAY_MS
     expect(st?.lastReason).toBe('model service at capacity');
     expect(h.session.sends).toHaveLength(1); // 不立即续轮
+  });
+
+  it('persists a stable reason for a tool-loop terminal error', async () => {
+    await startGoal(h);
+    h.session.emitErrorTurn({
+      message: '上游模型疑似陷入死循环: missing_required_field',
+      reason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('blocked');
+    expect(st?.lastReason).toBe('tool_use_loop_detected');
+    expect(st?.lastReason).not.toContain('missing_required_field');
   });
 
   it('prefers the overload window over the account snapshot for a 529 turn error', async () => {

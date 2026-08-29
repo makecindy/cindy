@@ -25,9 +25,54 @@ import {
   buildMobileClientPromptNote,
   shouldPrependMobileClientPromptNote,
 } from './mobileClientPromptNote.js';
+import { excludeDirectoryGrantConflicts, validateExtraDirs } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
+
+export interface BootstrapDirectoryGrantDeps {
+  readPersistedWritableDirs(sessionId: string): Promise<string[]>;
+  persistExistingSession(
+    sessionId: string,
+    patch: { extraDirs: string[]; writableDirs: string[] },
+  ): Promise<void>;
+}
+
+function sameDirectoryList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/**
+ * Apply the exact directory-grant subset that a session may start with. Existing local
+ * session rows are narrowed before the runtime is created, so a failed persist cannot
+ * leave a stale grant waiting to be reactivated on the next lazy bootstrap.
+ */
+export async function prepareDirectoryGrantsForBootstrap(
+  opts: CreateOpts,
+  deps: BootstrapDirectoryGrantDeps,
+): Promise<void> {
+  const requestedExtraDirs = opts.extraDirs ?? [];
+  // Writable roots are a Main-owned persisted grant. CREATE_SESSION and lazy SEND payloads are
+  // renderer/device-link controlled, so bootstrap must replace them with SQLite truth.
+  const requestedWritableDirs =
+    typeof opts.id === 'string' && opts.id
+      ? await deps.readPersistedWritableDirs(opts.id)
+      : [];
+  const extraValidation = await validateExtraDirs(requestedExtraDirs, opts.workingDir);
+  const writableValidation = await validateExtraDirs(requestedWritableDirs, opts.workingDir);
+  const extraDirs = extraValidation.valid;
+  const writableDirs = await excludeDirectoryGrantConflicts(writableValidation.valid, extraDirs);
+
+  if (opts.extraDirs !== undefined || extraDirs.length > 0) opts.extraDirs = extraDirs;
+  if (opts.writableDirs !== undefined || writableDirs.length > 0) opts.writableDirs = writableDirs;
+
+  const changed =
+    !sameDirectoryList(requestedExtraDirs, extraDirs) ||
+    !sameDirectoryList(requestedWritableDirs, writableDirs);
+  if (!changed || opts.remoteHostId || typeof opts.id !== 'string' || !opts.id) return;
+
+  await deps.persistExistingSession(opts.id, { extraDirs, writableDirs });
+}
 
 type IpcUserMessage =
   string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
@@ -135,6 +180,7 @@ export interface MakerSendTransactionDeps {
   buildCreateOptsWithStderr(opts: CreateOpts): CreateOpts;
   synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: CreateOpts): Promise<boolean>;
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
+  readSessionWritableDirsFromDb?(sessionId: string): Promise<string[]>;
   withRehydrateCloseSuppressed<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
   bootstrapSession(opts: CreateOpts): Promise<{
     session: MakerSendTransactionSession;
@@ -386,15 +432,27 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     opts: CreateOpts,
     source: 'lazy-create' | 'active-orca-rehydrate',
   ): Promise<void> {
-    if (opts.extraDirs !== undefined) return;
-    try {
-      const row = await deps.readSessionExtraDirsFromDb(sessionId);
-      if (row.length > 0) opts.extraDirs = row;
-    } catch (err) {
-      deps.log.warn(`${source}: read extra_dirs from DB failed (non-fatal)`, {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
+    if (opts.extraDirs === undefined) {
+      try {
+        const row = await deps.readSessionExtraDirsFromDb(sessionId);
+        if (row.length > 0) opts.extraDirs = row;
+      } catch (err) {
+        deps.log.warn(`${source}: read extra_dirs from DB failed (non-fatal)`, {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (opts.writableDirs === undefined) {
+      try {
+        const row = (await deps.readSessionWritableDirsFromDb?.(sessionId)) ?? [];
+        if (row.length > 0) opts.writableDirs = row;
+      } catch (err) {
+        deps.log.warn(`${source}: read writable_dirs from DB failed (non-fatal)`, {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 
@@ -945,9 +1003,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           throwOnStartFailure: so.throwOnStartFailure,
           turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
-          ...(so.onVendorTurnReserved
-            ? { onTurnReserved: so.onVendorTurnReserved }
-            : {}),
+          ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
           ...(so.origin ? { origin: so.origin } : {}),

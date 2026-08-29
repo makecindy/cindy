@@ -3,7 +3,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 
-import { useAutomationScheduleSessionIndex } from '@/features/cc-agent/hooks/useAutomationScheduleSessionIndex';
+import {
+  resetAutomationScheduleOptimisticUnreadForTests,
+  useAutomationScheduleSessionIndex,
+} from '@/features/cc-agent/hooks/useAutomationScheduleSessionIndex';
 import {
   addSessionAttention,
   clearSessionAttentionMany,
@@ -23,6 +26,7 @@ let scheduleEventListener: ((event: SchedulerEvent) => void) | null = null;
 beforeEach(() => {
   scheduleEventListener = null;
   resetSilencedSessionDoneStoreForTests();
+  resetAutomationScheduleOptimisticUnreadForTests();
   vi.stubGlobal('electronAPI', {
     maker: {
       schedule: {
@@ -43,6 +47,7 @@ beforeEach(() => {
 afterEach(() => {
   clearSessionAttentionMany(['session-1']);
   resetSilencedSessionDoneStoreForTests();
+  resetAutomationScheduleOptimisticUnreadForTests();
   vi.unstubAllGlobals();
 });
 
@@ -203,12 +208,25 @@ describe('useAutomationScheduleSessionIndex silence events', () => {
  * 固定时长)都被证明会误判,见 silencedSessionDoneStore 的文件头注释。
  */
 describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
-  function stubApiWithRuns(runs: unknown[], inflightRunIds: string[] = []): void {
+  function stubApiWithRuns(
+    runs: unknown[],
+    inflightRunIds: string[] = [],
+    inflightPolicies: unknown[] = [],
+  ): void {
     vi.stubGlobal('electronAPI', {
       maker: {
         schedule: {
-          listSidebarIndexRuns: vi.fn().mockResolvedValue({ runs, inflightRunIds }),
-          onEvent: vi.fn(() => () => undefined),
+          listSidebarIndexRuns: vi.fn().mockResolvedValue({
+            runs,
+            inflightRunIds,
+            inflightPolicies,
+          }),
+          onEvent: vi.fn((listener: (event: SchedulerEvent) => void) => {
+            scheduleEventListener = listener;
+            return () => {
+              scheduleEventListener = null;
+            };
+          }),
         },
       },
       notificationMarkSessionAttention: vi.fn().mockResolvedValue(undefined),
@@ -264,9 +282,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
   it('clears markers whose run already reached a terminal status', async () => {
     vi.useFakeTimers();
     try {
-      stubApiWithRuns([
-        indexRun({ runId: 'run-lost', status: 'success' }),
-      ]);
+      stubApiWithRuns([indexRun({ runId: 'run-lost', status: 'success' })]);
       // 标记建立后 completed / failed 事件都没送到(广播断链、或事件早于消费方挂载)。
       markNextSessionDoneSilenced('run-lost', 'session-1');
       markNextSessionTerminalNotificationOwnedByScheduler('run-lost', 'session-1');
@@ -301,7 +317,10 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
       const listSidebarIndexRuns = vi
         .fn()
         .mockRejectedValueOnce(new Error('scheduler not ready'))
-        .mockResolvedValue({ runs: [indexRun({ runId: 'run-lost', status: 'success' })], inflightRunIds: [] });
+        .mockResolvedValue({
+          runs: [indexRun({ runId: 'run-lost', status: 'success' })],
+          inflightRunIds: [],
+        });
       vi.stubGlobal('electronAPI', {
         maker: { schedule: { listSidebarIndexRuns, onEvent: vi.fn(() => () => undefined) } },
         notificationMarkSessionAttention: vi.fn().mockResolvedValue(undefined),
@@ -345,7 +364,10 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
         .mockRejectedValueOnce(new Error('e2'))
         .mockRejectedValueOnce(new Error('e3'))
         .mockRejectedValueOnce(new Error('e4'))
-        .mockResolvedValue({ runs: [indexRun({ runId: 'run-lost', status: 'success' })], inflightRunIds: [] });
+        .mockResolvedValue({
+          runs: [indexRun({ runId: 'run-lost', status: 'success' })],
+          inflightRunIds: [],
+        });
       vi.stubGlobal('electronAPI', {
         maker: { schedule: { listSidebarIndexRuns, onEvent: vi.fn(() => () => undefined) } },
         notificationMarkSessionAttention: vi.fn().mockResolvedValue(undefined),
@@ -498,14 +520,208 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     renderHook(() => useAutomationScheduleSessionIndex());
     // 等 refresh 落地后再断言，否则可能在对账发生前就通过。
     await waitFor(() => {
-      expect(
-        vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns),
-      ).toHaveBeenCalled();
+      expect(vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns)).toHaveBeenCalled();
     });
     await act(async () => {
       await Promise.resolve();
     });
 
     expect(isSessionDoneSilenced('session-1')).toBe(true);
+  });
+
+  it('rebuilds never-built silenced markers from inflight policies', async () => {
+    stubApiWithRuns(
+      [],
+      ['run-live'],
+      [{ runId: 'run-live', sessionId: 'session-1', silenced: true }],
+    );
+
+    renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(isSessionDoneSilenced('session-1')).toBe(true);
+    });
+    expect(isSessionTerminalNotificationOwnedByScheduler('session-1')).toBe(true);
+  });
+
+  it('restores recently-read silent success from the sidebar snapshot', async () => {
+    stubApiWithRuns([
+      indexRun({
+        runId: 'run-fresh',
+        status: 'success',
+        readAt: Date.now() - 500,
+      }),
+    ]);
+
+    renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(isSessionDoneSilenced('session-1')).toBe(true);
+    });
+  });
+
+  it('overlays optimistic unread and points done attention on a visible success', async () => {
+    const oldRun = indexRun({
+      runId: 'run-old',
+      status: 'success',
+      readAt: 20,
+    });
+    stubApiWithRuns([oldRun], [], []);
+    vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns)
+      .mockResolvedValueOnce({
+        runs: [oldRun],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      })
+      .mockResolvedValue({
+        runs: [
+          oldRun,
+          indexRun({
+            runId: 'run-new',
+            status: 'success',
+            readAt: undefined,
+            firedAt: 30,
+          }),
+        ],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      });
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toBeTruthy();
+    });
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'completed',
+        scheduleId: 'schedule-1',
+        runId: 'run-new',
+        sessionId: 'session-1',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.get('session-1')?.unreadRunIds).toContain('run-new');
+    });
+    expect(hasSessionAttention('session-1')).toBe(true);
+  });
+
+  it('drops optimistic unread when the snapshot no longer has that run and it is not in-flight', async () => {
+    stubApiWithRuns([
+      indexRun({
+        runId: 'run-old',
+        status: 'success',
+        readAt: 20,
+      }),
+    ]);
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toBeTruthy();
+    });
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'completed',
+        scheduleId: 'schedule-1',
+        runId: 'run-gone',
+        sessionId: 'session-1',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.get('session-1')?.unreadRunIds ?? []).not.toContain('run-gone');
+    });
+  });
+
+  it('does not point done attention for the session currently being viewed', async () => {
+    stubApiWithRuns([
+      indexRun({
+        runId: 'run-old',
+        status: 'success',
+        readAt: 20,
+      }),
+    ]);
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex('session-1'));
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toBeTruthy();
+    });
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'completed',
+        scheduleId: 'schedule-1',
+        runId: 'run-new',
+        sessionId: 'session-1',
+      });
+    });
+
+    expect(hasSessionAttention('session-1')).toBe(false);
+  });
+
+  it('overlays failed unread without pointing done, and ignores aborted', async () => {
+    const oldRun = indexRun({
+      runId: 'run-old',
+      status: 'success',
+      readAt: 20,
+    });
+    const failedRun = indexRun({
+      runId: 'run-failed',
+      status: 'failed',
+      readAt: undefined,
+      firedAt: 40,
+    });
+    stubApiWithRuns([oldRun]);
+    vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns)
+      .mockResolvedValueOnce({
+        runs: [oldRun],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      })
+      .mockResolvedValueOnce({
+        runs: [oldRun],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      })
+      .mockResolvedValue({
+        runs: [oldRun, failedRun],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      });
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toBeTruthy();
+    });
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'failed',
+        scheduleId: 'schedule-1',
+        runId: 'run-aborted',
+        sessionId: 'session-1',
+        error: 'aborted',
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.get('session-1')?.unreadFailedRunIds ?? []).not.toContain('run-aborted');
+    expect(hasSessionAttention('session-1')).toBe(false);
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'failed',
+        scheduleId: 'schedule-1',
+        runId: 'run-failed',
+        sessionId: 'session-1',
+        error: 'boom',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.get('session-1')?.unreadFailedRunIds).toContain('run-failed');
+    });
+    expect(hasSessionAttention('session-1')).toBe(false);
   });
 });

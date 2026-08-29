@@ -2769,11 +2769,16 @@
     },
     "linkOpen": {
       "title": "링크 열기 방식",
-      "description": "메시지의 링크나 HTML 파일을 왼쪽 클릭했을 때 기본으로 여는 위치입니다.",
-      "card": {
-        "label": "기본 열기 위치",
-        "description": "링크를 마우스 오른쪽 버튼으로 클릭하면 언제든 다른 방식을 선택할 수 있습니다.",
-        "ariaLabel": "링크 기본 열기 위치 선택"
+      "description": "메시지에서 웹이나 로컬 링크를 왼쪽 클릭했을 때 기본으로 여는 위치입니다. 오른쪽 클릭으로 다른 방식도 고를 수 있습니다.",
+      "web": {
+        "label": "외부 웹페이지",
+        "description": "인터넷상의 웹 링크입니다.",
+        "ariaLabel": "외부 웹페이지 기본 열기 위치 선택"
+      },
+      "local": {
+        "label": "내부 웹페이지",
+        "description": "이 컴퓨터의 HTML 파일과 localhost 주소입니다.",
+        "ariaLabel": "내부 웹페이지 기본 열기 위치 선택"
       },
       "options": {
         "sidebar": "내장 사이드바 브라우저",
@@ -2974,10 +2979,30 @@
           "disabled": "브라우저 자동화 비활성화됨",
           "toggleFailed": "브라우저 자동화 전환 실패",
           "openedForLogin": "자동화 브라우저를 열었습니다. 필요한 사이트에 로그인하세요",
-          "openForLoginFailed": "브라우저를 열지 못했습니다"
+          "openForLoginFailed": "브라우저를 열지 못했습니다",
+          "foreignInstance": "다른 Cindy 창이 이미 Agent 전용 브라우저를 사용 중입니다. 그 창을 종료한 뒤 다시 시도하세요."
         },
         "openForLogin": "Agent 전용 브라우저 열기",
         "openForLoginHint": "에이전트 전용 독립 브라우저입니다. 설치된 Chrome을 사용하지만 프로필이 완전히 분리되어 있어(오른쪽 위에 “Cindy”로 표시) 평소 Chrome의 탭·북마크·로그인 상태에 전혀 영향을 주지 않습니다. 에이전트가 이 브라우저에서 사용자를 대신해 페이지를 열고 읽고 클릭하고 스크린샷을 찍습니다. 로그인이 필요한 사이트는 위의 “Agent 전용 브라우저 열기”에서 한 번 로그인하면 로그인 상태가 유지되어, 이후 에이전트가 사용자 명의로 계속 작업할 수 있습니다."
+      },
+      "realProfile": {
+        "title": "내 브라우저 로그인 사용",
+        "description": "Chrome, Edge, Brave에 로그인한 계정으로 사이트에 접근합니다.",
+        "toggleAria": "내 브라우저 로그인 사용",
+        "unavailableEmbedded": "독립 외부 브라우저에서만 사용할 수 있습니다. 사이드바 내장 브라우저는 Chrome 로그인 파일을 읽지 못합니다.",
+        "confirmTitle": "Agent가 브라우저 로그인을 사용하도록 할까요?",
+        "confirmDescription": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. 언제든 끌 수 있으며 복사본은 삭제됩니다.",
+        "confirmDescriptionMac": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. Chrome 로그인 파일을 읽으려면 ‘전체 디스크 접근 권한’도 필요합니다. 언제든 끌 수 있으며, 복사본은 삭제됩니다.",
+        "confirm": "내 로그인 사용",
+        "readDeniedTitle": "전체 디스크 접근 권한이 필요합니다",
+        "readDeniedDescription": "Chrome 로그인 파일을 읽으려면 시스템이 Cindy를 허용해야 합니다. 개인 정보 보호 및 보안 → 전체 디스크 접근 권한에서 Cindy를 켠 다음 다시 시도하세요.",
+        "openFullDiskAccess": "시스템 설정 열기",
+        "readDeniedLater": "나중에",
+        "toast": {
+          "enabled": "Agent 전용 브라우저가 Chrome 로그인을 사용합니다",
+          "disabled": "복사한 로그인을 삭제했고 Agent 브라우저는 다시 격리됩니다",
+          "failed": "브라우저 로그인 설정을 바꾸지 못했습니다"
+        }
       },
       "browserBackend": {
         "title": "자동화 브라우저 대상",
@@ -4164,6 +4189,92 @@
           "leftStick": "왼쪽 스틱",
           "rightStick": "오른쪽 스틱"
         },
+        "familyControls": {
+          "xbox": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Xbox",
+            "ls": "왼쪽 스틱 클릭",
+            "rs": "오른쪽 스틱 클릭",
+            "dpadUp": "십자키 위",
+            "dpadDown": "십자키 아래",
+            "dpadLeft": "십자키 왼쪽",
+            "dpadRight": "십자키 오른쪽",
+            "leftStick": "왼쪽 스틱",
+            "rightStick": "오른쪽 스틱"
+          },
+          "playstation": {
+            "a": "✕",
+            "b": "○",
+            "x": "□",
+            "y": "△",
+            "lb": "L1",
+            "rb": "R1",
+            "lt": "L2",
+            "rt": "R2",
+            "view": "Create",
+            "menu": "Options",
+            "xbox": "PS",
+            "ls": "왼쪽 스틱 클릭",
+            "rs": "오른쪽 스틱 클릭",
+            "dpadUp": "십자키 위",
+            "dpadDown": "십자키 아래",
+            "dpadLeft": "십자키 왼쪽",
+            "dpadRight": "십자키 오른쪽",
+            "leftStick": "왼쪽 스틱",
+            "rightStick": "오른쪽 스틱"
+          },
+          "nintendo": {
+            "a": "B",
+            "b": "A",
+            "x": "Y",
+            "y": "X",
+            "lb": "L",
+            "rb": "R",
+            "lt": "ZL",
+            "rt": "ZR",
+            "view": "−",
+            "menu": "+",
+            "xbox": "HOME",
+            "ls": "왼쪽 스틱 클릭",
+            "rs": "오른쪽 스틱 클릭",
+            "dpadUp": "십자키 위",
+            "dpadDown": "십자키 아래",
+            "dpadLeft": "십자키 왼쪽",
+            "dpadRight": "십자키 오른쪽",
+            "leftStick": "왼쪽 스틱",
+            "rightStick": "오른쪽 스틱"
+          },
+          "generic": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "홈",
+            "ls": "왼쪽 스틱 클릭",
+            "rs": "오른쪽 스틱 클릭",
+            "dpadUp": "십자키 위",
+            "dpadDown": "십자키 아래",
+            "dpadLeft": "십자키 왼쪽",
+            "dpadRight": "십자키 오른쪽",
+            "leftStick": "왼쪽 스틱",
+            "rightStick": "오른쪽 스틱"
+          }
+        },
         "actions": {
           "none": "지정 안 함",
           "voice": "음성 입력",
@@ -4206,6 +4317,57 @@
           "bluetooth": "블루투스",
           "battery": "{{percent}}%",
           "charging": "충전 중 {{percent}}%"
+        }
+      },
+      "playstationGamepad": {
+        "title": "PlayStation 컨트롤러",
+        "openAria": "PlayStation 컨트롤러 설정 열기",
+        "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
+        "connection": {
+          "toggle": { "aria": "Cindy가 앞에 있을 때 PlayStation 컨트롤러를 사용합니다" },
+          "descriptions": {
+            "connecting": "Cindy가 PlayStation 컨트롤러를 찾고 있습니다.",
+            "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
+            "disabled": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "present": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "not-detected": "USB 또는 Bluetooth로 DualSense 또는 DualShock를 연결하세요.",
+            "error": "Cindy가 컨트롤러를 읽지 못해 다시 시도하고 있습니다.",
+            "unavailable": "이 컴퓨터는 아직 PlayStation 컨트롤러를 읽을 수 없습니다."
+          }
+        }
+      },
+      "nintendoGamepad": {
+        "title": "Switch 컨트롤러",
+        "openAria": "Switch 컨트롤러 설정 열기",
+        "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
+        "connection": {
+          "toggle": { "aria": "Cindy가 앞에 있을 때 Switch 컨트롤러를 사용합니다" },
+          "descriptions": {
+            "connecting": "Cindy가 Switch 컨트롤러를 찾고 있습니다.",
+            "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
+            "disabled": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "present": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "not-detected": "USB 또는 Bluetooth로 Switch Pro 또는 Joy-Con을 연결하세요.",
+            "error": "Cindy가 컨트롤러를 읽지 못해 다시 시도하고 있습니다.",
+            "unavailable": "이 컴퓨터는 아직 Switch 컨트롤러를 읽을 수 없습니다."
+          }
+        }
+      },
+      "genericGamepad": {
+        "title": "일반 컨트롤러",
+        "openAria": "일반 컨트롤러 설정 열기",
+        "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
+        "connection": {
+          "toggle": { "aria": "Cindy가 앞에 있을 때 일반 컨트롤러를 사용합니다" },
+          "descriptions": {
+            "connecting": "Cindy가 컨트롤러를 찾고 있습니다.",
+            "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
+            "disabled": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "present": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "not-detected": "USB 또는 Bluetooth로 컨트롤러를 연결하세요.",
+            "error": "Cindy가 컨트롤러를 읽지 못해 다시 시도하고 있습니다.",
+            "unavailable": "이 컴퓨터는 아직 컨트롤러를 읽을 수 없습니다."
+          }
         }
       }
     },
@@ -9699,7 +9861,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "{{appName}}에 피드백을 제출하고 싶습니다. 정보가 충분하고 명확한 GitHub issue로 정리하도록 도와주세요: 버그인지 기능 제안인지 확인하고, 빠진 정보나 모호한 부분만 질문해 주세요. 사용자가 제공한 인용문과 예시는 기본적으로 요약하거나 일반화하고 개인, 대화 또는 업무 맥락을 식별할 수 있는 정보를 그대로 복사하지 마세요. 버그라면 증상, 재현 단계, 기대 동작과 실제 동작, 재현 빈도, 시도한 해결 방법을 최대한 확인하고, 사용자가 동의한 경우에만 민감 정보를 제거한 진단 요약을 포함해 주세요. 비밀번호, 토큰, 이메일 주소, 개인 경로, 관련 없는 파일 내용은 포함하지 마세요. 기능 제안이라면 사용 시나리오, 현재 문제와 원하는 결과를 확인해 주세요. 정보가 충분해지면 cindy_helper의 call_tool로 submit_github_issue 도구를 호출해 제출해 주세요(category=feedback, 먼저 list_tools로 매개변수를 확인할 수 있습니다. 제출 전에 확인 카드가 표시됩니다). GitHub 플러그인이나 계정 설정은 필요하지 않습니다. 기본적으로 Cindy 공식 봇이 제출하며, 사용 가능한 GitHub 계정이 있을 때만 확인 카드에 추가 제출 계정으로 표시됩니다. 생성 후 issue 번호와 링크를 알려 주고, Cindy가 오픈 소스이며 소스에서 재현·수정·테스트·기능 개발을 함께 진행할 수 있다고 안내해 주세요. 제출에 실패하면 이유를 그대로 알려주세요.{{details}}",
+      "instruction": "{{appName}}에 피드백을 제출하고 싶습니다. 명확한 GitHub issue로 정리하도록 도와주세요: 버그인지 제안인지 파악하고, 실제로 부족한 것만 질문하세요. 고정 설문은 쓰지 마세요. 일반적인 제안에 버그 체크리스트를 들이대지 말고, 실행 환경과 무관하면 Harness, 모델, 추론 강도는 묻지 마세요. 사용자가 제공한 인용문과 예시는 기본적으로 요약하거나 일반화하고 개인, 대화 또는 업무 맥락을 식별할 수 있는 정보를 그대로 복사하지 마세요. 이 채팅의 이미지는 GitHub에 업로드되지 않으니 「스크린샷을 첨부함」이라고 쓰지 말고, 화면에 보이는 내용을 글로 설명해 주세요. 사용자가 동의한 경우에만 민감 정보를 제거한 진단 요약을 포함해 주세요. 비밀번호, 토큰, 이메일 주소, 개인 경로, 관련 없는 파일 내용은 포함하지 마세요. 기능 제안이라면 눈에 보이는 사용 장면과 요청을 쓰고, 요청하지 않는 한 저장소 경로, 구현안, 인수 조건은 쓰지 마세요. 정보가 충분해지면 cindy_helper의 call_tool로 submit_github_issue 도구를 호출해 제출해 주세요(category=feedback, 먼저 list_tools로 매개변수를 확인할 수 있습니다. 제출 전에 확인 카드가 표시됩니다). GitHub 플러그인이나 계정 설정은 필요하지 않습니다. 기본적으로 Cindy 공식 봇이 제출하며, 사용 가능한 GitHub 계정이 있을 때만 확인 카드에 추가 제출 계정으로 표시됩니다. 생성 후 issue 번호와 링크를 알려 주고, Cindy가 오픈 소스이며 소스에서 재현·수정·테스트·기능 개발을 함께 진행할 수 있다고 안내해 주세요. 제출에 실패하면 이유를 그대로 알려주세요.{{details}}",
       "detailsPrefix": "\n초기 설명: {{details}}"
     },
     "confirm": {
@@ -9719,8 +9881,8 @@
       "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
       "anonymous": "익명",
       "useAnonymous": "익명 서명 사용",
-      "envLine": "제출 시 자동으로 첨부됩니다: 클라이언트 {{appVersion}} · {{platform}} {{arch}}({{osVersion}}) · 표시 언어 {{uiLanguage}}",
-      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
+      "envLine": "제출 클라이언트 환경(제출 시 자동 첨부): 클라이언트 {{appVersion}} · {{platform}} {{arch}}({{osVersion}}) · 표시 언어 {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (지금 이 세션)",
       "regionLine": "지역: {{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -10398,7 +10560,12 @@
       "codexHistoryOversizedRemote": "기록에 과대한 이미지가 있어 원격 압축을 끝낼 수 없습니다. Codex를 실행 중인 기기에서 이 작업을 연 뒤 다시 보내세요. Cindy가 이미지를 생략하고 계속합니다.",
       "codexCompactionNotConverging": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 공간을 차지하는 것은 대화가 아니라 압축으로 줄일 수 없는 시스템 프롬프트와 도구 정의인 경우가 대부분입니다. 새 세션을 시작하세요.",
       "codexCompactionNotConvergingModelSwitch": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 이 세션은 도중에 모델을 변경했고, Codex는 변경 전 모델의 컨텍스트 한도로 계속 판단하고 있습니다. 원래 모델로 되돌리거나 새 세션을 시작하세요.",
-      "turnNoEventTimeout": "이번 턴에서 오랫동안 아무런 진행이 없어(모델·도구·백그라운드 프로세스 모두 무응답) 무한 대기를 막기 위해 자동으로 중단했습니다. 다음 메시지를 보내 계속할 수 있습니다."
+      "turnNoEventTimeout": "이번 턴에서 오랫동안 아무런 진행이 없어(모델·도구·백그라운드 프로세스 모두 무응답) 무한 대기를 막기 위해 자동으로 중단했습니다. 다음 메시지를 보내 계속할 수 있습니다.",
+      "toolUseLoopDetected": "모델이 도구 호출을 너무 많이 반복하여 무한 루프를 방지하기 위해 이번 턴을 중지했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+      "toolUseLoopDetectedWithCount": "모델이 잘못된 도구 호출을 반복하여 무한 루프를 방지하기 위해 {{count}}회 실패 후 이번 턴을 중지했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+      "toolUseLoopDetectedConsecutiveWithCount": "모델이 동일한 도구 호출을 {{count}}회 반복하여 무한 루프를 막기 위해 이번 턴을 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+      "toolUseLoopDetectedPingPongWithCount": "모델이 여러 도구 호출 사이를 오가며 반복하여 이번 턴에서 {{count}}회의 호출을 감지한 뒤 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+      "toolUseLoopDetectedRotationWithCount": "모델이 여러 도구 호출을 계속 순환하여 이번 턴에서 {{count}}회의 호출을 감지한 뒤 중단했습니다. 새 메시지를 보내 계속할 수 있습니다."
     },
     "validation": {
       "feishuFieldsRequired": "App ID와 App Secret 둘 다 입력해야 합니다",
@@ -10537,7 +10704,7 @@
   "extraDirs": {
     "menuAria": "작업 메뉴",
     "tooltipEmpty": "더 많은 작업",
-    "tooltipCount": "참조 디렉터리 {{count}}개",
+    "tooltipCount": "추가 디렉터리 {{count}}개",
     "addFiles": "파일, 이미지 또는 동영상 추가…",
     "pluginsTitle": "설치된 플러그인",
     "pluginDisabled": "비활성화됨",
@@ -10546,10 +10713,16 @@
     "sectionTitle": "참조 디렉터리(읽기 전용)",
     "empty": "아직 참조 디렉터리가 없습니다",
     "add": "디렉터리 추가…",
+    "addReadOnly": "읽기 전용 디렉터리 추가…",
+    "addWritable": "읽기·쓰기 디렉터리 추가…",
+    "writableSectionTitle": "읽기·쓰기 디렉터리",
+    "writableEmpty": "아직 읽기·쓰기 디렉터리가 없습니다",
     "atLimit": "최대 {{max}}개 도달",
     "remove": "{{name}} 제거",
     "parentConfirmTitle": "상위 디렉터리를 추가할까요?",
     "parentConfirmDescription": "선택한 디렉터리는 현재 작업 디렉터리의 상위 또는 조상 디렉터리입니다. Agent가 작업 디렉터리 밖의 내용까지 볼 수 있어 표시 범위가 넓어집니다.\n\n그래도 추가할까요?\n\n{{path}}",
+    "writableParentConfirmTitle": "상위 디렉터리 읽기·쓰기를 허용할까요?",
+    "writableParentConfirmDescription": "선택한 디렉터리는 현재 작업 디렉터리의 상위 또는 조상 디렉터리입니다. Agent가 그 안의 파일을 읽고, 만들고, 수정하고, 삭제할 수 있습니다.\n\n그래도 허용할까요?\n\n{{path}}",
     "parentConfirmAccept": "그래도 추가",
     "parentConfirmCancel": "취소"
   },

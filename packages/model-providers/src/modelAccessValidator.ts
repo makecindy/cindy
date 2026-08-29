@@ -577,7 +577,19 @@ function modelEntryError(
         isModelEffort(value.defaultEffort) ? value.defaultEffort : null,
       );
       if (error) return error;
-      if (isPlainObject(override) && override.wireProtocol !== undefined) {
+      if (
+        agent === 'pi' &&
+        isPlainObject(override) &&
+        override.wireProtocol !== undefined &&
+        (typeof override.wireProtocol !== 'string' || override.wireProtocol.trim().length === 0)
+      ) {
+        return `${path}.perAgent.pi.wireProtocol must be a non-empty string when present`;
+      }
+      if (
+        agent !== 'pi' &&
+        isPlainObject(override) &&
+        override.wireProtocol !== undefined
+      ) {
         if (!isModelAccessWireProtocol(override.wireProtocol)) {
           return `${path}.perAgent.${agent}.wireProtocol must be a supported wire protocol`;
         }
@@ -593,6 +605,10 @@ function modelEntryError(
     schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
   ) {
     for (const agent of supportedAgents) {
+      // Pi accepts a missing/future string here because Cindy Server and the local Pi catalog are
+      // higher authorities; an unsupported last-priority Gateway hint only closes that model route.
+      // Claude and Codex have no such fallback and remain strict contract requirements.
+      if (agent === 'pi') continue;
       const override = isPlainObject(value.perAgent) ? value.perAgent[agent] : undefined;
       if (!isPlainObject(override) || !isModelAccessWireProtocol(override.wireProtocol)) {
         return `${path}.perAgent.${agent}.wireProtocol is required when ${path}.agents includes ${agent}`;

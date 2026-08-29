@@ -3506,6 +3506,57 @@ describe('AgentIslandService native publishing', () => {
     }
   });
 
+  it('keeps a silenced run quiet across intermediate agent dones without scheduler completed', async () => {
+    vi.useFakeTimers();
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+        void frameOrFrames;
+        return state.visible;
+      });
+      const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, publish, playSound },
+      });
+      syncEnabledForTest(service, publish);
+      service.setSoundSettings({
+        enabled: true,
+        sounds: {
+          ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+          start: customSound('start.wav'),
+          complete: customSound('complete.wav'),
+        },
+      });
+      playSound.mockClear();
+
+      service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'silent run');
+      service.handleScheduleEvent({
+        type: 'silenced',
+        scheduleId: 'schedule-1',
+        runId: 'run-1',
+        sessionId: 's1',
+      });
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+      expect(playSound).not.toHaveBeenCalledWith(customSound('complete.wav'));
+      expect(publish.mock.calls.at(-1)?.[0].displayPolicy).toBe('closed');
+      playSound.mockClear();
+
+      // 续 turn / 后台 subagent 完成后再起一轮。没有 scheduler completed，
+      // 不能因为中间那次 done 就把静默当成已经收口。
+      service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'continued work');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+
+      expect(playSound).not.toHaveBeenCalledWith(customSound('complete.wav'));
+      const lastState = publish.mock.calls.at(-1)?.[0];
+      expect(lastState?.pillSnapshot.unreadCompletedCount).toBe(0);
+      expect(lastState?.displayPolicy).toBe('closed');
+      vi.runOnlyPendingTimers();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('suppresses a silenced scheduler completion even when the early silenced event was missed', async () => {
     vi.useFakeTimers();
     try {

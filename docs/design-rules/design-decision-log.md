@@ -12,6 +12,116 @@
 
 ## 2026-08
 
+- **08-29** **圆角三档写死：按钮一律胶囊、4px 不入档（拍板人 = 用户）**——
+  背景：设计系统改造调研发现 PermissionPrompt 混用 `rounded-[8px]`×4 /
+  `rounded-[4px]`×4 / `rounded-[12px]`×1，与 §5 三档冲突；全仓走查
+  `rounded-[4px]` 生产存量共 30 处（2026-08-29 快照，不止权限弹窗，是普遍债；
+  仅为字面量语法局部计数，裸 `rounded` / `rounded-sm` 等价写法见下方口径块
+  与补充裁决 (6)）。
+  计数口径（`design-governance.md` §9 计数纪律，均为当日快照）：
+
+  ```bash
+  # PermissionPrompt 内圆角分布（2026-08-29 快照：8px×4 / 4px×4 / 12px×1）
+  git grep -o 'rounded-\[8px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
+  git grep -o 'rounded-\[4px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
+  git grep -o 'rounded-\[12px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
+  # 全仓 rounded-[4px] 存量（2026-08-29 快照：30；字面量语法，全 renderer 无 tests/vendor 命中）
+  git grep -o "rounded-\[4px\]" -- apps/desktop/src/renderer | wc -l
+  # 解析后等价 4px 的其它写法（2026-08-29 快照；生产代码 = pathspec 排除 tests/vendor）。
+  # 数值依据：tailwind.config.ts 的 borderRadius.lg/md/sm 基于 var(--radius) 派生；
+  # --radius 由 theme-service 运行时注入（colors.ts registerColor('radius', 0.5rem)
+  # → serializeThemeCss 写入 :root，dark 主题经 resolveThemeValue 回退 light 默认），
+  # 故 rounded-sm = calc(0.5rem − 4px) = 4px、rounded-md = calc(0.5rem − 2px) = 6px，
+  # 裸 rounded = Tailwind DEFAULT 0.25rem = 4px。
+  # ⚠ 上述求值以「主题未覆盖 colors.radius」为前提：resolveThemeValue 优先读
+  # theme.colors[id]，本地主题 JSON 手写 colors.radius（如 '1rem'）会整体平移
+  # rounded-sm/md 的 computed 值（sm 变 12px、md 变 14px）——外部主题导入的
+  # 108-token allowlist 不含 radius，但本地主题无白名单过滤。按类名的档位分类
+  # 只对内置 / 未覆盖 radius 的主题成立；「radius 是否冻结为不可覆盖不变量」
+  # 登记为待裁决项（见下方补充裁决 (7)），裁决前 DS-7 棘轮按类名建基线、
+  # 以默认主题 computed 值为准。
+  # 裸 rounded 计数限定「字符串字面量内的独立 token」（PCRE 词边界 + 前瞻排除
+  # rounded-* 变体；grep -v 排除 `${rounded}` 模板插值）——旧口径曾把注释与局部
+  # 变量名（如 turnUsageTooltip.ts 的 const rounded）计入 80，属假阳性，已修正为 58。
+  # DS-6 迁移与 DS-7 棘轮的基线按三语法合计（30+58+11）建立；此为静态扫描近似，
+  # 棘轮落地时应以 AST / 编译产物扫描为准。
+  git grep -oP "[\"'\`][^\"'\`]*\brounded\b(?![-a-zA-Z\[])[^\"'\`]*[\"'\`]" -- apps/desktop/src/renderer ':!*/__tests__/*' ':!*.test.*' ':!*/vendor/*' | grep -v '\${rounded' | wc -l    # 裸 rounded：58
+  git grep -oP "[\"'\`][^\"'\`]*\brounded-sm\b(?![-a-zA-Z\[])[^\"'\`]*[\"'\`]" -- apps/desktop/src/renderer ':!*/__tests__/*' ':!*.test.*' ':!*/vendor/*' | wc -l                                 # rounded-sm：11
+  # 同为非档位值的 rounded-md（6px，亦不入 §5 三档；供 DS-7 棘轮一并建基线）
+  git grep -oP "[\"'\`][^\"'\`]*\brounded-md\b(?![-a-zA-Z\[])[^\"'\`]*[\"'\`]" -- apps/desktop/src/renderer ':!*/__tests__/*' ':!*.test.*' ':!*/vendor/*' | grep -v '\${rounded' | wc -l   # rounded-md：196
+  ```
+
+  裁决四条：(1) **三档不变、不加档**，把 §5 的软表述写死——会提交决定 / 触发动作
+  的按钮**一律胶囊**（权限允许/拒绝按钮包含在内），原「only for small interactive
+  pieces that cannot wear the pill」的主观逃生口删除；(2) 8px 档的判据改为
+  「套在盒子里、自己不是按钮」（textarea、菜单行高亮、块内小格照旧合法）；
+  (3) **4px 不入档**：存量登记为债、随设计系统迁移逐步偿还，新代码禁止再写
+  （机器拦截随棘轮 PR 落地，此前靠 review 按 §5 执行）；(4) **「看起来小」不是
+  改档的理由**——元素按「是什么」（按钮 / 盒子 / 盒内非按钮）定档，不按尺寸。
+  2026-07-28 已登记的 status micro-cells 2px 窄豁免（非交互、≤8px、仅状态）
+  维持不变，不因本裁决扩大或收回。**尚未裁决、随 Permission 迁移再关**：允许 /
+  拒绝按钮的视觉主次、危险授权样式、Desktop 与 Mobile 权限弹窗几何是否一致。
+  （→ `DESIGN.md §5` Border Radius Scale；治理合同
+  [`design-governance.md`](./design-governance.md) §10 待裁决登记表「PermissionPrompt
+  圆角」行已随本裁决改为已关闭；迁移执行 = 设计系统路线图 DS-6 / 棘轮 = DS-7，
+  见 `design-governance.md` §12）
+- **08-29（补充裁决，随 #3619 review 落定）** **圆角判据二则收口：textarea 单一
+  归档、裸文字按钮豁免（拍板人 = 用户）**——review 指出 §4/§5/§7/§9 四处对
+  textarea 的判据互相冲突（「盒内非按钮」vs「无条件 8px」vs「所有交互元素胶囊」），
+  以及 §5「every button is a pill — no exceptions」与 §4 向导「← 上一步」裸文字
+  按钮互相矛盾。两条收口：(1) **textarea 一律 8px**——不设嵌套前提，嵌在 12px
+  容器内或作为表单最外层控件都是同一档（胶囊对高框体会变形，8px 是其唯一档位）；
+  §5 判据句同步改写，§4/§7/§9 摘要句逐一对齐，并声明 §5 为唯一裁决源、摘要句
+  漂移时以 §5 为准。(2) **无自身背景的裸文字按钮豁免胶囊**——「← 上一步」与
+  §16.3 登录文字按钮这类只有文字、没有可圆角的填充底色的按钮不带任何圆角；
+  豁免随组件条目登记（§4 向导条目已写明），新增裸文字按钮用法须在引入它的
+  组件条目登记。`AddProviderWizard.tsx` 现行实现（无圆角文字按钮）与裁决一致，
+  无需迁移。（→ `DESIGN.md §5` / §4 Inputs & Forms / §4 Multi-step dialogs / §7 / §9）
+  追加两处（第二轮 review 指出同节残留）：(3) §5 判据分类句由三分类
+  「button / box / nested non-button」扩为四分类「button / box / textarea（一律
+  8px）/ nested non-button」，独立 textarea 不再落在分类缝隙里；(4) §7「Keep all
+  buttons at 10px 24px padding with pill shape」与 §5 Spacing「consistent across
+  all buttons」两处绝对表述收窄为「filled buttons」，裸文字按钮不受 pill padding
+  约束、按其组件条目执行；§5 Pill 档首句同步由「every button」改「every filled
+  button」。（同上条落点）
+  追加修正（第三轮 review 指出 (4) 的「filled」限定误伤透明控件）：(5) **撤销
+  「filled」反向排除措辞**——透明填充 / 仅描边的交互控件（对话框 secondary/cancel
+  透明填充按钮、inactive tab、composer chip 静止态 borderless）都保留胶囊，「fill
+  样式从不改变档位」。豁免改回**直接正向表述**：唯一豁免 = 已登记的裸文字按钮，
+  §1 / §5 Pill 档（首句恢复「every button」，豁免句同步改为「no shape to
+  round」）/ §5 Spacing / §7 Do 共五处统一为「all (buttons|interactive
+  elements) + registered bare text buttons are the only exemption」；(4) 中「filled
+  buttons」字样随本轮撤销作废，裸文字按钮不受 pill padding 约束的实质不变。
+  （同上条落点）
+  追加修正（第五轮 review 指出 4px 计数口径漏等价写法；第六轮 review 指出注入链
+  未交代、裸 rounded 计数混入非样式文本）：(6) **「4px 不入档」的禁令覆盖所有解析后
+  等价于 4px 的写法**——本仓 `tailwind.config.ts` 只覆盖 `borderRadius.lg/md/sm`
+  （基于 `var(--radius)` 派生），裸 `rounded`（Tailwind DEFAULT 0.25rem）与
+  `rounded-sm`（8px−4px）同样解析为 4px，与 `rounded-[4px]` 同属禁止档位的等价
+  语法；`rounded-md`（8px−2px=6px）亦不入三档。**`--radius` 的数值依据**：该变量
+  不在任何静态 CSS 文件中，由 `theme-service.ts` 运行时注入——`colors.ts`
+  `registerColor('radius', { light: '0.5rem' })` 经 `serializeThemeCss` 写入
+  `:root`（dark 主题经 `resolveThemeValue` 回退 light 默认，值不变），故
+  `rounded-sm`/`rounded-md` 的 `calc(var(--radius) ± Npx)` 在运行时有效求值。
+  主裁决「全仓 30 处」只是 `rounded-[4px]` 字面量语法的局部计数——生产代码中
+  裸 `rounded` 另有 58 处（字符串字面量内独立 token 口径；旧口径 80 曾混入注释与
+  局部变量名假阳性，如 `turnUsageTooltip.ts` 的 `const rounded`、
+  `AppearanceSection.tsx` 注释行，已修正）、`rounded-sm` 11 处（计数命令见上方
+  口径块）；DS-6 迁移与 DS-7 棘轮建基线时必须按三种 4px 等价语法合计（30+58+11）
+  建立，并把 `rounded-md` 的 196 处一并纳入非档位值清理范围，不得只按 30 建基线。
+  静态计数是近似口径，棘轮落地时应以 AST / 编译产物扫描复核。§5 行内数字句同步补
+  「in ANY of its equivalent spellings」限定并指向口径块。（同上条落点）
+  追加（第七轮 review 指出主题覆盖可平移派生值）：(7) **`rounded-sm`/`rounded-md`
+  的档位分类以「主题未覆盖 `colors.radius`」为前提**——`resolveThemeValue` 优先读
+  `theme.colors[id]`，本地主题 JSON 手写 `colors.radius`（如 `'1rem'`）会把
+  `rounded-sm` 平移到 12px、`rounded-md` 到 14px（外部主题导入的 108-token
+  allowlist 不含 radius，本地主题无白名单过滤）。口径块已补 ⚠ 前提说明；DS-7
+  棘轮按类名建基线、以默认主题 computed 值为准。**待裁决（随 DS-7 棘轮设计一并关）**：
+  `radius` 是否冻结为不可覆盖的主题不变量（冻结则类名分类对全部主题成立；不冻结则
+  棘轮须按 computed value 分类或豁免覆盖主题）——冻结涉及 `local-themes-normalize`
+  加白名单与既有本地主题兼容（治理合同兼容红线：用户主题不改写磁盘），属代码改动，
+  不随本纯文档 PR 落地。（同上条落点）
+
 - **08-16** **登录：唯一 SSO 不再经过 method-choice（拍板人 = 用户）**——
   用户已经从登录首页选了企业 SSO（组织标识探测），或邮箱 / 组织探测结果只剩
   一条 SSO、没有个人邮箱验证码替补时，再出「选择登录方式」是假选择（截图上只剩

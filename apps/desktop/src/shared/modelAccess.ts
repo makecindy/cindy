@@ -99,8 +99,12 @@ export interface ModelAccessAgentOverride {
   defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
-  /** v3/v4 runtime transport; required by the contract for every listed Agent. */
-  wireProtocol?: 'anthropic-messages' | 'openai-responses';
+  /** v3+ runtime transport; Pi accepts every native API while Claude/Codex stay fixed. */
+  wireProtocol?:
+    | 'anthropic-messages'
+    | 'openai-responses'
+    | 'openai-completions'
+    | 'google-generative-ai';
 }
 
 export interface ModelGroupTieredPricing {
