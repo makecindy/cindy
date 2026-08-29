@@ -156,7 +156,7 @@ export function PiPackagesSection() {
       setLoadState('ready');
     } catch {
       if (!mountedRef.current || generation !== loadGenerationRef.current) return;
-      if (!hasLoadedRef.current) setLoadState('error');
+      setLoadState('error');
       toast.error(tRef.current('settings.piPackages.operationFailed'));
     }
   }, []);
@@ -193,9 +193,11 @@ export function PiPackagesSection() {
         // authoritative mutation receipt when it eventually resolves.
         loadGenerationRef.current += 1;
         hasLoadedRef.current = true;
-        setLoadState('ready');
-        setAvailable(result.available);
-        setPackages(result.packages);
+        setLoadState(result.projectionUnavailable ? 'error' : 'ready');
+        if (!result.projectionUnavailable) {
+          setAvailable(result.available);
+          setPackages(result.packages);
+        }
         if (action === 'install' && result.affectedPackage?.enabled) setSource('');
       }
       // Installation success means installed and enabled. Keep this Renderer
@@ -216,6 +218,9 @@ export function PiPackagesSection() {
               ? 'settings.piPackages.success.settingsDisable'
               : `settings.piPackages.success.${action}`;
       toast.success(t(successKey));
+      if (result.projectionUnavailable) {
+        toast.error(t('settings.piPackages.failure.stateUnavailable'));
+      }
       return true;
     } catch {
       toast.error(t('settings.piPackages.operationFailed'));

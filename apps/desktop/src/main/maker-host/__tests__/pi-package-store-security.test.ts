@@ -336,19 +336,29 @@ describe('Pi package executable-code boundary', () => {
     expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThan(128 * 1_024);
   });
 
-  it('rejects a truncated Pi package list instead of parsing its retained tail', async () => {
+  it('keeps a valid native roster above the diagnostic stdout limit actionable', async () => {
     const entries: string[] = ['User packages:'];
+    const rootsBySource = new Map<string, string>();
     for (let index = 0; index < 128; index += 1) {
-      entries.push(
-        `  npm:package-${index}-${'s'.repeat(1_024)}`,
-        `    /managed/package-${index}/${'p'.repeat(1_024)}`,
-      );
+      const source = `npm:package-${index}-${'s'.repeat(1_024)}`;
+      const installedRoot = `/managed/package-${index}/${'p'.repeat(1_024)}`;
+      rootsBySource.set(source, installedRoot);
+      entries.push(`  ${source}`, `    ${installedRoot}`);
     }
     runtime.listOutput = `${entries.join('\n')}\n`;
     expect(Buffer.byteLength(runtime.listOutput, 'utf8')).toBeGreaterThan(128 * 1_024);
     const store = await import('../pi-package-store.js');
 
-    await expect(store.listPiPackages()).rejects.toThrow(/list output exceeded the safe limit/i);
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      available: true,
+      packages: expect.arrayContaining([
+        expect.objectContaining({ source: [...rootsBySource.keys()][0] }),
+        expect.objectContaining({ source: [...rootsBySource.keys()][127] }),
+      ]),
+    });
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual(
+      [...rootsBySource.values()],
+    );
   });
 
   it.each(['darwin'] as const)(
@@ -2185,16 +2195,36 @@ describe('Pi package executable-code boundary', () => {
       snapshotUnavailableRoots: {},
     }));
     const store = await import('../pi-package-store.js');
-
-    await expect(mutateAuthorized(store, {
-      action: 'install',
-      source: absoluteSource,
-    })).resolves.toMatchObject({
-      affectedPackage: { source: relativeSource, enabled: true },
+    runtime.listOutcomes = Array.from({ length: 4 }, () => ({
+      stderr: 'projection unavailable',
+      exitCode: 1,
+    }));
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(stateFile)) {
+        throw Object.assign(new Error('simulated state EIO'), { code: 'EIO' });
+      }
+      return originalRename(from, to);
     });
-    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
-    expect(state.disabledSources).toEqual([sibling]);
+    try {
+      await expect(mutateAuthorized(store, {
+        action: 'install',
+        source: absoluteSource,
+      })).resolves.toMatchObject({
+        projectionUnavailable: true,
+        affectedPackage: { source: absoluteSource, enabled: true },
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+    let state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([relativeSource, sibling]);
+    runtime.listOutcomes = [];
     await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([absoluteSource]);
+
+    await mutateAuthorized(store, { action: 'install', source: absoluteSource });
+    state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([sibling]);
   });
 
   it.each([
@@ -2257,7 +2287,7 @@ describe('Pi package executable-code boundary', () => {
     expect(publications).not.toContain('fragment-secret');
     expect(loggerRuntime.warn).toHaveBeenCalledWith(
       'Pi package installed; enable-ledger reconciliation deferred',
-      expect.objectContaining({ failure: 'state-unavailable' }),
+      { action: 'install', failureCategory: 'state-unavailable' },
     );
   });
 
@@ -2309,6 +2339,39 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([sibling]);
     await expect(fs.stat(path.join(stateDir, 'cindy-package-pending-enable.json')))
       .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['EIO', 'EACCES'])('does not overwrite unreadable pending-enable siblings after %s', async (code) => {
+    const { source } = await createSkillOnlyPackage(`npm:pending-read-${code.toLowerCase()}`);
+    const sibling = 'npm:sibling-pending-enable';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(pendingFile, JSON.stringify([source, sibling]));
+    const originalReadFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, 'readFile').mockImplementation((async (
+      target: Parameters<typeof fs.readFile>[0],
+      options?: Parameters<typeof fs.readFile>[1],
+    ) => {
+      if (path.resolve(String(target)) === path.resolve(pendingFile)) {
+        throw Object.assign(new Error(`private host path ${code}`), { code });
+      }
+      return originalReadFile(target, options as never);
+    }) as typeof fs.readFile);
+    const store = await import('../pi-package-store.js');
+    try {
+      await expect(store.mutatePiPackage({
+        action: 'set-enabled', source, enabled: false,
+      })).rejects.toThrow('state is unavailable');
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(JSON.parse(await fs.readFile(pendingFile, 'utf8'))).toEqual([source, sibling]);
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi pending enable reconciliation unavailable',
+      { failureCategory: 'state-unavailable' },
+    );
+    expect(JSON.stringify(loggerRuntime.warn.mock.calls)).not.toContain('private host path');
   });
 
   it('lets an explicit disable cancel a pending reinstall enable without changing siblings', async () => {
@@ -2867,23 +2930,51 @@ describe('Pi package executable-code boundary', () => {
     unsubscribe();
   });
 
+  it('keeps native install success explicit when the fresh roster is unavailable', async () => {
+    const { source } = await createSkillOnlyPackage('npm:native-success-projection-unavailable');
+    runtime.listOutcomes = Array.from({ length: 4 }, () => ({
+      stderr: 'private projection failure',
+      exitCode: 1,
+    }));
+    const store = await import('../pi-package-store.js');
+
+    await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
+      changed: true,
+      available: false,
+      projectionUnavailable: true,
+      affectedPackage: { source, enabled: true },
+    });
+    expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
+    const logs = JSON.stringify(loggerRuntime.warn.mock.calls);
+    expect(logs).toContain('projection-unavailable');
+    expect(logs).not.toContain('private projection failure');
+  });
+
   it('refreshes open settings when set-enabled persists but the follow-up list fails', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
     const listener = vi.fn();
     const unsubscribe = store.onPiPackagesChanged(listener);
     runtime.listOutcomes = [
-      { stdout: runtime.listOutput, exitCode: 0 },
-      { stdout: runtime.listOutput, exitCode: 0 },
       { stderr: 'list failed after state write', exitCode: 1 },
     ];
 
-    await expect(mutateAuthorized(store, {
+    const receipt = await mutateAuthorized(store, {
       action: 'set-enabled',
       source,
       enabled: true,
-    })).resolves.toMatchObject({ changed: true });
+    });
+    expect(receipt).toMatchObject({
+      changed: true,
+      available: false,
+      packages: [],
+      projectionUnavailable: true,
+    });
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi package mutation succeeded; Cindy list projection unavailable',
+      { action: 'set-enabled', failureCategory: 'projection-unavailable' },
+    );
 
     const state = JSON.parse(await fs.readFile(
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
@@ -3356,10 +3447,13 @@ describe('Pi package executable-code boundary', () => {
 
     await mutateAuthorized(store, { action: 'install', source: unsafeSource });
 
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi package installed; Cindy post-install analysis unavailable',
+      { action: 'install', failureCategory: 'projection-unavailable' },
+    );
     const warnings = JSON.stringify(loggerRuntime.warn.mock.calls);
-    expect(warnings).toContain('git:https://example.com/acme/package.git');
-    expect(warnings).not.toContain('secret');
-    expect(warnings).not.toContain('private');
+    expect(warnings).not.toContain('user:secret');
+    expect(warnings).not.toContain('token=private');
   });
 
   it('redacts unsafe saved URLs from Pi package command failures', async () => {

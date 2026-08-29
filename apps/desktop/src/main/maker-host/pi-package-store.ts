@@ -12,6 +12,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs, unwatchFile, watchFile, type Stats } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 import type {
   PiManagedPackageMutationFailureCode,
@@ -586,13 +587,31 @@ async function requireState(): Promise<PiPackageState> {
   return result.state;
 }
 
+async function disabledSourcesWithoutPendingAliases(
+  disabledSources: string[],
+  pending: ReadonlySet<string>,
+): Promise<string[]> {
+  const pendingAliases = new Set((await Promise.all(
+    [...pending].map((source) => sourceAliasesWithCanonical(source)),
+  )).flat());
+  const remaining: string[] = [];
+  for (const source of disabledSources) {
+    const aliases = await sourceAliasesWithCanonical(source);
+    if (!aliases.some((alias) => pendingAliases.has(alias))) remaining.push(source);
+  }
+  return remaining;
+}
+
 async function readStateWithoutBlockingPi(): Promise<PiPackageState> {
   const result = await readState();
   if (result.ok) {
     const pending = await readPendingEnabledSources();
     return {
       ...result.state,
-      disabledSources: result.state.disabledSources.filter((source) => !pending.has(source)),
+      disabledSources: await disabledSourcesWithoutPendingAliases(
+        result.state.disabledSources,
+        pending,
+      ),
     };
   }
   // An unavailable disable ledger cannot be projected as an empty ledger: that
@@ -626,9 +645,13 @@ async function readPendingEnabledSources(): Promise<Set<string>> {
     ))) throw new Error('Invalid pending Pi enable reconciliation');
     for (const source of parsed) pending.add(source);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.warn('Pi pending enable reconciliation unavailable');
-    }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return pending;
+    // A partial read cannot safely feed any read-modify-write caller: replacing
+    // the journal would lose unseen sibling reconciliations after a restart.
+    log.warn('Pi pending enable reconciliation unavailable', {
+      failureCategory: 'state-unavailable',
+    });
+    throw new PiPackageStateUnavailableError();
   }
   return pending;
 }
@@ -668,7 +691,10 @@ async function reconcilePendingEnabledSources(): Promise<void> {
   const pending = await readPendingEnabledSources();
   if (pending.size === 0) return;
   const state = await requireState();
-  const disabledSources = state.disabledSources.filter((source) => !pending.has(source));
+  const disabledSources = await disabledSourcesWithoutPendingAliases(
+    state.disabledSources,
+    pending,
+  );
   if (disabledSources.length !== state.disabledSources.length) {
     await writeState({ ...state, disabledSources });
   }
@@ -684,8 +710,8 @@ function boundedAppend(current: string, chunk: Buffer): string {
 }
 
 interface RunPiPackageCommandOptions {
-  /** Reject successful commands whose stdout could not be retained in full. */
-  requireCompleteStdout?: boolean;
+  /** Incremental native projection; returned diagnostic stdout remains bounded. */
+  onStdoutChunk?: (chunk: Buffer) => void;
 }
 
 function truncateDisplayField(value: string, maxBytes: number): string {
@@ -732,8 +758,6 @@ async function runPackageProcess(
       },
     });
     let stdout = '';
-    let stdoutBytes = 0;
-    let stdoutTruncated = false;
     let stderr = '';
     let settled = false;
     let timedOut = false;
@@ -777,8 +801,7 @@ async function runPackageProcess(
       });
     }, timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => {
-      stdoutBytes += chunk.length;
-      stdoutTruncated = stdoutTruncated || stdoutBytes > MAX_COMMAND_OUTPUT_BYTES;
+      options.onStdoutChunk?.(chunk);
       stdout = boundedAppend(stdout, chunk);
     });
     child.stderr.on('data', (chunk: Buffer) => { stderr = boundedAppend(stderr, chunk); });
@@ -799,13 +822,8 @@ async function runPackageProcess(
       settled = true;
       clearCommandTimers();
       if (code === 0) {
-        if (options.requireCompleteStdout && stdoutTruncated) {
-          reject(new Error('Pi package list output exceeded the safe limit'));
-          return;
-        }
         resolve({ stdout, stderr });
-      }
-      else reject(new Error(redactPackageCommandMessage(
+      } else reject(new Error(redactPackageCommandMessage(
         (stderr || stdout || `Pi package command failed (${code ?? 'unknown'})`).trim(),
       )));
     });
@@ -848,20 +866,47 @@ async function getCurrentPiVersion(): Promise<string | undefined> {
   return currentPiVersionPromise;
 }
 
+function appendPiPackageListLine(
+  rawLine: string,
+  packages: ListedPackage[],
+  current: ListedPackage | null,
+): ListedPackage | null {
+  if (!rawLine.trim() || /^(User|Project) packages:$/.test(rawLine.trim())) return current;
+  const sourceMatch = rawLine.match(/^\s{2}(\S.*?)( \(filtered\))?\s*$/);
+  if (sourceMatch?.[1]) {
+    const next = { source: sourceMatch[1], ...(sourceMatch[2] ? { filtered: true } : {}) };
+    packages.push(next);
+    return next;
+  }
+  const pathMatch = rawLine.match(/^\s{4}(\S.*)\s*$/);
+  if (current && pathMatch?.[1]) current.installedPath = pathMatch[1];
+  return current;
+}
+
 export function parsePiPackageListOutput(output: string): ListedPackage[] {
   const packages: ListedPackage[] = [];
   let current: ListedPackage | null = null;
   for (const rawLine of output.split(/\r?\n/)) {
-    if (!rawLine.trim() || /^(User|Project) packages:$/.test(rawLine.trim())) continue;
-    const sourceMatch = rawLine.match(/^\s{2}(\S.*?)( \(filtered\))?\s*$/);
-    if (sourceMatch?.[1]) {
-      current = { source: sourceMatch[1], ...(sourceMatch[2] ? { filtered: true } : {}) };
-      packages.push(current);
-      continue;
-    }
-    const pathMatch = rawLine.match(/^\s{4}(\S.*)\s*$/);
-    if (current && pathMatch?.[1]) current.installedPath = pathMatch[1];
+    current = appendPiPackageListLine(rawLine, packages, current);
   }
+  return packages;
+}
+
+async function runPiPackageListCommand(): Promise<ListedPackage[]> {
+  const decoder = new StringDecoder('utf8');
+  const packages: ListedPackage[] = [];
+  let current: ListedPackage | null = null;
+  let pendingLine = '';
+  const consume = (text: string, complete = false): void => {
+    const lines = `${pendingLine}${text}`.split(/\r?\n/);
+    pendingLine = complete ? '' : lines.pop() ?? '';
+    for (const line of lines) current = appendPiPackageListLine(line, packages, current);
+    if (complete && pendingLine) current = appendPiPackageListLine(pendingLine, packages, current);
+  };
+  await runPiPackageCommand(['list', '--no-approve'], COMMAND_TIMEOUT_MS, {
+    onStdoutChunk: (chunk) => consume(decoder.write(chunk)),
+  });
+  consume(decoder.end(), true);
   return packages;
 }
 
@@ -1597,12 +1642,8 @@ async function inspectPackage(
 }
 
 async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
-  const [{ stdout }, stateResult] = await Promise.all([
-    runPiPackageCommand(
-      ['list', '--no-approve'],
-      COMMAND_TIMEOUT_MS,
-      { requireCompleteStdout: true },
-    ),
+  const [listed, stateResult] = await Promise.all([
+    runPiPackageListCommand(),
     readState(),
   ]);
   // Snapshot failures are shared package-store state, not a property of one
@@ -1613,7 +1654,6 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
   if (stateResult.ok) {
     applySharedSnapshotUnavailableRoots(state.snapshotUnavailableRoots);
   }
-  const listed = parsePiPackageListOutput(stdout);
   const startedAt = Date.now();
   const inspected: InspectedPackage[] = [];
   const fingerprintCache = new Map<string, Promise<string>>();
@@ -1807,12 +1847,8 @@ async function readNativePackageObjectSpecs(): Promise<Map<string, Record<string
 
 export async function resolveManagedPiNativePackagePaths(): Promise<PiNativePackageEntry[]> {
   if (!getReadyBinaryPath('pi')) return [];
-  const [{ stdout }, state] = await Promise.all([
-    runPiPackageCommand(
-      ['list', '--no-approve'],
-      COMMAND_TIMEOUT_MS,
-      { requireCompleteStdout: true },
-    ),
+  const [listed, state] = await Promise.all([
+    runPiPackageListCommand(),
     readStateWithoutBlockingPi(),
   ]);
   const disabled = new Set(state.disabledSources);
@@ -1826,7 +1862,7 @@ export async function resolveManagedPiNativePackagePaths(): Promise<PiNativePack
   }
   // Feed Pi installed roots while preserving any native object-form filters.
   // Pi then owns resource discovery without reinstalling the package.
-  const entries = parsePiPackageListOutput(stdout).flatMap((pkg): PiNativePackageEntry[] => {
+  const entries = listed.flatMap((pkg): PiNativePackageEntry[] => {
     if (!pkg.installedPath || disabled.has(pkg.source)) return [];
     const spec = objectSpecs?.get(pkg.source);
     if (spec) return [{ ...spec, source: pkg.installedPath }];
@@ -2050,12 +2086,8 @@ async function resolvePackageMutationTarget(
     || !/^[a-f0-9]{64}$/.test(digest)) {
     throw new Error('Invalid Pi package mutation target');
   }
-  const { stdout } = await runPiPackageCommand(
-    ['list', '--no-approve'],
-    COMMAND_TIMEOUT_MS,
-    { requireCompleteStdout: true },
-  );
-  const match = parsePiPackageListOutput(stdout).find((pkg) => (
+  const listed = await runPiPackageListCommand();
+  const match = listed.find((pkg) => (
     packageMutationTarget(pkg.source) === mutationTarget
   ));
   if (!match) throw new Error('Pi package mutation target is no longer installed');
@@ -2610,14 +2642,34 @@ export function piPackageMutationMayHaveChangedState(error: unknown): boolean {
     && packageMutationMayHaveChangedErrors.has(error);
 }
 
+async function expandAliasesWithDisabledSources(sources: Iterable<string>): Promise<string[]> {
+  const expanded = new Set(sources);
+  const targetAliases = new Set((await Promise.all(
+    [...expanded].map((source) => sourceAliasesWithCanonical(source)),
+  )).flat());
+  const state = await requireState();
+  for (const disabledSource of state.disabledSources) {
+    const aliases = await sourceAliasesWithCanonical(disabledSource);
+    if (aliases.some((alias) => targetAliases.has(alias))) expanded.add(disabledSource);
+  }
+  return [...expanded];
+}
+
 async function clearDisabledPackageSources(sources: Iterable<string>): Promise<void> {
-  const targets = new Set(sources);
-  if (targets.size === 0) return;
+  const requestedTargets = [...new Set(sources)];
+  if (requestedTargets.length === 0) return;
+  const targets = new Set((await Promise.all(
+    requestedTargets.map((source) => sourceAliasesWithCanonical(source)),
+  )).flat());
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const state = await requireState();
-      const disabledSources = state.disabledSources.filter((source) => !targets.has(source));
+      const disabledSources: string[] = [];
+      for (const source of state.disabledSources) {
+        const aliases = await sourceAliasesWithCanonical(source);
+        if (!aliases.some((alias) => targets.has(alias))) disabledSources.push(source);
+      }
       if (disabledSources.length === state.disabledSources.length) return;
       await writeState({ ...state, disabledSources });
       return;
@@ -2810,10 +2862,10 @@ export async function mutatePiPackage(
       let inspectedAfterInstall: InspectedPackage[] = [];
       try {
         inspectedAfterInstall = await inspectAllPackages();
-      } catch (error) {
+      } catch {
         log.warn('Pi package installed; Cindy post-install analysis unavailable', {
-          source: logSource,
-          message: error instanceof Error ? error.message : String(error),
+          action: 'install',
+          failureCategory: 'projection-unavailable',
         });
       }
       let affected = await findAffectedInspectedPackage(inspectedAfterInstall, source);
@@ -2842,28 +2894,30 @@ export async function mutatePiPackage(
         ...(previous ? [sourceAliasesWithCanonical(previous.rawSource)] : []),
         ...(affected ? [sourceAliasesWithCanonical(affected.rawSource)] : []),
       ])).flat())];
+      let effectiveInstallAliases = installAliases;
       // Explicit reinstall means enabled only after its precise aliases leave
       // the durable disable ledger. Retry once for transient filesystem faults;
       // a persistent failure must not produce a false enabled receipt.
       try {
-        await clearDisabledPackageSources(installAliases);
+        effectiveInstallAliases = await expandAliasesWithDisabledSources(installAliases);
+        await clearDisabledPackageSources(effectiveInstallAliases);
         const pending = await readPendingEnabledSources();
-        for (const alias of installAliases) pending.delete(alias);
+        for (const alias of effectiveInstallAliases) pending.delete(alias);
         await writePendingEnabledSources(pending);
       } catch (error) {
         // Pi install already succeeded. Persist an effective enable journal so
         // every Main instance and the next runtime can honor that native result
         // without erasing sibling disables; a later mutation reconciles it.
         try {
-          await persistPendingEnabledSources(installAliases);
+          await persistPendingEnabledSources(effectiveInstallAliases);
         } catch {
           // Keep the effective overlay in this Main even if the journal itself
           // is temporarily unwritable. Native Pi success is never rewritten.
-          for (const alias of installAliases) pendingEnabledSources.add(alias);
+          for (const alias of effectiveInstallAliases) pendingEnabledSources.add(alias);
         }
         log.warn('Pi package installed; enable-ledger reconciliation deferred', {
-          source: logSource,
-          failure: 'state-unavailable',
+          action: 'install',
+          failureCategory: 'state-unavailable',
         });
       }
       try {
@@ -2939,10 +2993,10 @@ export async function mutatePiPackage(
       let inspectedAfterUpdate: InspectedPackage[] = [];
       try {
         inspectedAfterUpdate = await inspectAllPackages();
-      } catch (error) {
+      } catch {
         log.warn('Pi package updated; Cindy post-update analysis unavailable', {
-          source: logSource,
-          message: error instanceof Error ? error.message : String(error),
+          action: 'update',
+          failureCategory: 'projection-unavailable',
         });
       }
       let affected = await findAffectedInspectedPackage(inspectedAfterUpdate, source);
@@ -3032,15 +3086,16 @@ export async function mutatePiPackage(
     }
     invalidateInspectionCache();
     let result: PiPackageListResult;
+    let projectionUnavailable = false;
     try {
       result = await listPiPackagesNow();
-    } catch (error) {
+    } catch {
       log.warn('Pi package mutation succeeded; Cindy list projection unavailable', {
         action: request.action,
-        source: logSource,
-        message: error instanceof Error ? error.message : String(error),
+        failureCategory: 'projection-unavailable',
       });
-      result = { available: true, packages: [] };
+      result = { available: false, packages: [] };
+      projectionUnavailable = true;
     }
     const affectedLookupSource = affectedSource ?? source;
     const affectedPackage = findAffectedPiPackage(result.packages, affectedLookupSource)
@@ -3065,6 +3120,7 @@ export async function mutatePiPackage(
         changed: true,
         packages: [...result.packages, fallback],
         affectedPackage: fallback,
+        ...(projectionUnavailable ? { projectionUnavailable: true as const } : {}),
       };
       await publishRuntimeInvalidation();
       return mutationResult;
@@ -3084,7 +3140,12 @@ export async function mutatePiPackage(
         });
       }
     }
-    const mutationResult = { ...result, changed: true, ...(affectedPackage ? { affectedPackage } : {}) };
+    const mutationResult = {
+      ...result,
+      changed: true,
+      ...(affectedPackage ? { affectedPackage } : {}),
+      ...(projectionUnavailable ? { projectionUnavailable: true as const } : {}),
+    };
     await publishRuntimeInvalidation();
     return mutationResult;
   }, async () => {

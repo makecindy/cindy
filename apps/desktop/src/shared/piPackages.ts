@@ -137,6 +137,8 @@ export interface PiPackageMutationRequest {
 export interface PiPackageMutationResult extends PiPackageListResult {
   changed: boolean;
   affectedPackage?: PiPackageView;
+  /** The mutation succeeded, but packages is not an authoritative full roster. */
+  projectionUnavailable?: true;
 }
 
 export function hasPiPackageCompatibilityWarning(pkg: PiPackageView): boolean {
