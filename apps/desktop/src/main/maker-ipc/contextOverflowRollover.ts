@@ -334,6 +334,7 @@ export interface ContextOverflowRolloverDeps {
     isTurnRunning(): boolean;
     getUsageSnapshot?(): { contextTokens: number; contextWindow: number; needsRollover?: boolean };
   } | null | undefined;
+  rehydrateColdPiRuntimeForWindowVerification?(sessionId: string): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
   drainPersistQueue(): Promise<void>;
   commitRebuild(
@@ -557,8 +558,30 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (!sessionRow || sessionRow.status === 'deleted' || !sessionRow.sdkSessionId) {
       return 'not-needed';
     }
-    const live = deps.getLiveSession(sessionId);
+    let live = deps.getLiveSession(sessionId);
+    let rehydratedColdPi = false;
+    if (sessionRow.agentKind === 'pi' && !live) {
+      if (sessionRow.remoteHostId) return 'remote-unsupported';
+      if (!deps.rehydrateColdPiRuntimeForWindowVerification) return 'unknown-context';
+      try {
+        await deps.rehydrateColdPiRuntimeForWindowVerification(sessionId);
+      } catch (error) {
+        deps.log.warn('cold Pi runtime window verification failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return 'unknown-context';
+      }
+      live = deps.getLiveSession(sessionId);
+      rehydratedColdPi = true;
+    }
     const liveUsage = live?.getUsageSnapshot?.();
+    if (
+      rehydratedColdPi &&
+      (!liveUsage || !Number.isFinite(liveUsage.contextWindow) || liveUsage.contextWindow <= 0)
+    ) {
+      return 'unknown-context';
+    }
     const persistedContextTokens =
       typeof sessionRow.contextTokens === 'number' &&
       Number.isFinite(sessionRow.contextTokens) &&
@@ -585,15 +608,12 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       sessionRow.providerId,
       sessionRow.agentKind,
     );
-    // Pi snapshots come from post-reload get_state verification and are persisted
-    // at turn end. Never replace that runtime fact with a stale catalog window,
-    // including after restart when no live handle exists.
+    // Cold Pi rows may contain either a catalog value or a runtime-verified value in
+    // the same legacy column. Rehydration above makes get_state the cold-path source.
     const piRuntimeWindow =
       liveUsage && Number.isFinite(liveUsage.contextWindow) && liveUsage.contextWindow > 0
         ? liveUsage.contextWindow
-        : Number.isFinite(sessionRow.contextWindow) && (sessionRow.contextWindow ?? 0) > 0
-          ? (sessionRow.contextWindow ?? 0)
-          : 0;
+        : (sessionRow.contextWindow ?? 0);
     const currentContextWindow =
       sessionRow.agentKind === 'pi'
         ? piRuntimeWindow

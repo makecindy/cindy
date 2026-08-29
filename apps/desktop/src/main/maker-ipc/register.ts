@@ -8774,6 +8774,51 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   }
 
+  async function rehydrateColdPiRuntimeForWindowVerification(sessionId: string): Promise<void> {
+    if (maker.getSession(sessionId)) return;
+    const [row] = await getDbClient()
+      .drizzle.select()
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (
+      !row ||
+      row.agentKind !== 'pi' ||
+      row.remoteHostId ||
+      !row.sdkSessionId ||
+      !row.workingDir
+    ) {
+      throw new Error(`session ${sessionId} cannot rehydrate a local Pi runtime for verification`);
+    }
+    const createOpts = buildCreateOptsWithStderr({
+      id: sessionId,
+      agentKind: 'pi',
+      workingDir: row.workingDir,
+      model: row.model,
+      providerId: row.providerId,
+      effort: (row.effort ?? undefined) as CreateOpts['effort'],
+      fastMode: !!row.fastMode,
+      permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
+      planMode: !!row.planModeEnabled,
+      title: row.title ?? undefined,
+      resumeSessionId: row.sdkSessionId,
+      orcaRole: row.orcaRole ?? undefined,
+    });
+    const workDirExists = await checkWorkDirExists(
+      sessionId,
+      createOpts.workingDir,
+      createOpts.agentKind,
+      createOpts.remoteHostId,
+    );
+    if (!workDirExists) {
+      throw new Error(`working directory is missing for session ${sessionId}`);
+    }
+    await synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
+    const extraDirs = await readSessionExtraDirsFromDb(sessionId);
+    if (extraDirs.length > 0) createOpts.extraDirs = extraDirs;
+    await bootstrapSession(createOpts);
+  }
+
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
     withSessionLock: withSendToSessionLock,
     // 停用轴边界裁决:目标路由被停用 → 抛错;隐式默认落点被停用 → 返回启用替代来源。
@@ -12087,6 +12132,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     findLatestUser: findLatestUserMessageForRebuild,
     findLatestRebuildMeta: findLatestContextRebuildMeta,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
+    rehydrateColdPiRuntimeForWindowVerification,
     closeSession: (sessionId) => maker.closeSession(sessionId),
     drainPersistQueue,
     commitRebuild: async (sessionId, handoff, meta) => {

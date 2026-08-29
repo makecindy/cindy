@@ -471,6 +471,25 @@ describe('session runtime control wiring', () => {
     expect(fallback).toContain('profiles.control.generation,');
   });
 
+  it('rehydrates a cold Pi runtime before model-window assessment', () => {
+    const rehydrate = handlerBody(
+      registerSource,
+      'async function rehydrateColdPiRuntimeForWindowVerification(',
+      'const agentSwitchDeps:',
+    );
+    const rolloverWiring = handlerBody(
+      registerSource,
+      'contextOverflowRolloverHolder = createContextOverflowRollover({',
+      'registerMakerSessionSendHandler(makerSessionRegistry,',
+    );
+
+    expect(rehydrate).toContain("row.agentKind !== 'pi'");
+    expect(rehydrate).toContain('resumeSessionId: row.sdkSessionId');
+    expect(rehydrate).toContain('await bootstrapSession(createOpts)');
+    expect(rehydrate).not.toContain('.send(');
+    expect(rolloverWiring).toContain('rehydrateColdPiRuntimeForWindowVerification,');
+  });
+
   it('rechecks Pi pressure against the final verified runtime window before commit', () => {
     const setModel = handlerBody(
       registerSource,
