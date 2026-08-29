@@ -52,47 +52,52 @@ const DESKTOP_TO_KIND: Record<string, ChromiumKind | 'other'> = {
   'org.mozilla.firefox.desktop': 'other',
 };
 
+function pathFor(platform: NodeJS.Platform) {
+  return platform === 'win32' ? path.win32 : path.posix;
+}
+
 export function userDataDirFor(
   kind: ChromiumKind,
   platform: NodeJS.Platform,
   home: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  const osPath = pathFor(platform);
   if (platform === 'darwin') {
-    const support = path.join(home, 'Library', 'Application Support');
+    const support = osPath.join(home, 'Library', 'Application Support');
     switch (kind) {
       case 'chrome':
-        return path.join(support, 'Google', 'Chrome');
+        return osPath.join(support, 'Google', 'Chrome');
       case 'edge':
-        return path.join(support, 'Microsoft Edge');
+        return osPath.join(support, 'Microsoft Edge');
       case 'brave':
-        return path.join(support, 'BraveSoftware', 'Brave-Browser');
+        return osPath.join(support, 'BraveSoftware', 'Brave-Browser');
       case 'chromium':
-        return path.join(support, 'Chromium');
+        return osPath.join(support, 'Chromium');
     }
   }
   if (platform === 'win32') {
-    const local = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const local = env.LOCALAPPDATA || osPath.join(home, 'AppData', 'Local');
     switch (kind) {
       case 'chrome':
-        return path.join(local, 'Google', 'Chrome', 'User Data');
+        return osPath.join(local, 'Google', 'Chrome', 'User Data');
       case 'edge':
-        return path.join(local, 'Microsoft', 'Edge', 'User Data');
+        return osPath.join(local, 'Microsoft', 'Edge', 'User Data');
       case 'brave':
-        return path.join(local, 'BraveSoftware', 'Brave-Browser', 'User Data');
+        return osPath.join(local, 'BraveSoftware', 'Brave-Browser', 'User Data');
       case 'chromium':
-        return path.join(local, 'Chromium', 'User Data');
+        return osPath.join(local, 'Chromium', 'User Data');
     }
   }
   switch (kind) {
     case 'chrome':
-      return path.join(home, '.config', 'google-chrome');
+      return osPath.join(home, '.config', 'google-chrome');
     case 'edge':
-      return path.join(home, '.config', 'microsoft-edge');
+      return osPath.join(home, '.config', 'microsoft-edge');
     case 'brave':
-      return path.join(home, '.config', 'BraveSoftware', 'Brave-Browser');
+      return osPath.join(home, '.config', 'BraveSoftware', 'Brave-Browser');
     case 'chromium':
-      return path.join(home, '.config', 'chromium');
+      return osPath.join(home, '.config', 'chromium');
   }
 }
 

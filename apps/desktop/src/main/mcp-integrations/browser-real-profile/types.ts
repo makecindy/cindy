@@ -13,7 +13,8 @@ export type RealProfileErrorCode =
   | 'PROFILE_LOCKED'
   | 'NO_AUTH_DB'
   | 'HEADLESS_FORBIDDEN'
-  | 'COPY_FAILED';
+  | 'COPY_FAILED'
+  | 'STOP_FAILED';
 
 export class RealProfileError extends Error {
   readonly code: RealProfileErrorCode;

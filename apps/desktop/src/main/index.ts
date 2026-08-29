@@ -6,7 +6,7 @@ import path from 'node:path';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
-import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime';
+import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/config-dir';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';

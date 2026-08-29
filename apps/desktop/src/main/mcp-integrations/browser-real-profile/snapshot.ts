@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { backup, DatabaseSync } from 'node:sqlite';
 
 import { MANAGED_PROFILE, REAL_MANAGED_PROFILE } from '../browser-managed-config.js';
 import { REAL_PROFILE_READ_DENIED } from '../../../shared/browserBackend.js';
@@ -293,16 +294,15 @@ function publishStagedSnapshot(options: {
 async function copySqliteDatabase(src: string, dest: string): Promise<void> {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   removeSqliteAndSidecars(dest);
-  const sqlite = await import('node:sqlite');
-  if (typeof sqlite.backup !== 'function') {
+  if (typeof backup !== 'function') {
     throw new Error('sqlite backup API unavailable');
   }
-  const source = new sqlite.DatabaseSync(src, { readOnly: true, timeout: 5000 });
+  const source = new DatabaseSync(src, { readOnly: true, timeout: 5000 });
   try {
     // Node 24 / Electron 41: backup is module-level `backup(sourceDb, dest)`.
     // DatabaseSync#backup does not exist; copyFile + WAL sidecars is not a
     // consistent snapshot while the source Chrome is open.
-    await sqlite.backup(source, dest);
+    await backup(source, dest);
   } finally {
     source.close();
   }

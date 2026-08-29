@@ -42,6 +42,7 @@ import {
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
 import {
+  assertManagedBrowserStopped,
   cleanupCopiedLoginsThen,
   FOREIGN_AGENT_BROWSER_ERROR,
   probeOsSourceProfileReadAccess,
@@ -271,24 +272,22 @@ export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<vo
 }
 
 async function stopExternalRuntimeIfUsed(): Promise<void> {
-  try {
-    const status = await vendoredRuntime.call({ action: 'status' });
-    const running =
-      status.data !== null &&
-      typeof status.data === 'object' &&
-      (status.data as { running?: unknown }).running === true;
-    if (!running) return;
-    await externalRuntime.call({ action: 'stop' });
-  } catch (err) {
-    logger.warn(`stop before real-profile toggle failed: ${String(err)}`);
-  }
+  const status = await vendoredRuntime.call({ action: 'status' });
+  const running =
+    status.ok &&
+    status.data !== null &&
+    typeof status.data === 'object' &&
+    (status.data as { running?: unknown }).running === true;
+  const stop = running ? await externalRuntime.call({ action: 'stop' }) : null;
+  assertManagedBrowserStopped({ status, stop });
 }
 
 /**
  * Persist consent, stop the managed Chrome so the next start can switch
  * directories, and delete the snapshot when consent is revoked. Disable only
  * persists after the Cindy-real copy is gone; a cleanup failure keeps the
- * switch on so the user can retry.
+ * switch on so the user can retry. An unsuccessful or unverifiable stop also
+ * aborts so POSIX open handles cannot keep copied cookies after unlink.
  */
 export async function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
   await stopExternalRuntimeIfUsed();

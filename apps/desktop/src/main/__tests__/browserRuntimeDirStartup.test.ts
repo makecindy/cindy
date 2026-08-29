@@ -24,6 +24,7 @@ describe('browser runtime dir startup pin', () => {
     expect(refreshIdx).toBeGreaterThan(pinIdx);
     expect(bootstrapIdx).toBeGreaterThan(refreshIdx);
     expect(indexSource).toContain("if (!process.env.XDT_BROWSER_RUNTIME_DIR)");
-    expect(indexSource).toContain("from '@cindy/browser-control-runtime'");
+    expect(indexSource).toContain("from '@cindy/browser-control-runtime/config-dir'");
+    expect(indexSource).not.toMatch(/from ['"]@cindy\/browser-control-runtime['"]/);
   });
 });

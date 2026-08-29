@@ -78,9 +78,15 @@ describe('resolveSourceBrowser', () => {
 });
 
 describe('userDataDirFor', () => {
-  it('resolves the macOS Chrome user-data directory', () => {
+  it('resolves Chromium user-data directories with the target OS separators', () => {
     expect(userDataDirFor('chrome', 'darwin', '/Users/dash')).toBe(
       '/Users/dash/Library/Application Support/Google/Chrome',
     );
+    expect(userDataDirFor('chrome', 'linux', '/home/dash')).toBe('/home/dash/.config/google-chrome');
+    expect(
+      userDataDirFor('chrome', 'win32', 'C:\\Users\\dash', {
+        LOCALAPPDATA: 'C:\\Users\\dash\\AppData\\Local',
+      }),
+    ).toBe('C:\\Users\\dash\\AppData\\Local\\Google\\Chrome\\User Data');
   });
 });
