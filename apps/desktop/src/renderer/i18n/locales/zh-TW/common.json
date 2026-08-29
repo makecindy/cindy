@@ -9691,7 +9691,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認反饋型別(bug 還是功能建議)，並追問必要細節(現象、復現步驟或使用場景、期望行為)；整理時預設概括或泛化使用者提供的原話與範例，不要直接複製可識別個人、對話或業務的資訊；資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
+      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認這是缺陷還是建議，缺什麼問什麼，不要套固定問卷。普通建議不必按缺陷清單追問，和環境無關不必追問 Harness、模型或推理強度。整理時預設概括或泛化使用者提供的原話與範例，不要直接複製可識別個人、對話或業務的資訊；對話裡的圖不會傳到 GitHub，不要寫「已提供截圖」，用文字描述即可；功能建議不要寫倉庫路徑、實作方案或驗收清單。資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
       "detailsPrefix": "\n我的初始描述：{{details}}"
     },
     "confirm": {
@@ -9711,8 +9711,8 @@
       "publicNameHint": "該署名會公開顯示在 Issue 正文中",
       "anonymous": "匿名",
       "useAnonymous": "使用匿名署名",
-      "envLine": "提交時將自動附加：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 介面語言 {{uiLanguage}}",
-      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
+      "envLine": "提交客戶端環境（提交時自動附加）：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 介面語言 {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（目前任務）",
       "regionLine": "版本區域：{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",

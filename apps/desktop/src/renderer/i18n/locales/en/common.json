@@ -9715,7 +9715,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a complete, clear GitHub issue: confirm whether it is a bug or feature request, and ask only for missing or ambiguous details. Summarize or generalize user-provided quotes and examples by default instead of copying information that could identify a person, conversation, or business context. For bugs, collect the symptoms, reproduction steps, expected and actual behavior, frequency, attempted fixes, and—only with my consent—redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, clarify the use case, current pain point, and desired outcome. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
+      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a clear GitHub issue: figure out whether it is a bug or a suggestion, and ask only what is actually missing—do not run a fixed questionnaire. Ordinary suggestions do not need a bug checklist; skip Harness, model, and Effort questions when they are unrelated. Summarize or generalize user-provided quotes and examples by default instead of copying information that could identify a person, conversation, or business context. Screenshots in this chat are not uploaded to GitHub—never write that screenshots were attached; describe what they showed instead. With my consent, include redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, write the visible use case and ask; do not write repo paths, implementation plans, or acceptance checklists unless I ask. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
       "detailsPrefix": "\nMy initial description: {{details}}"
     },
     "confirm": {
@@ -9735,8 +9735,8 @@
       "publicNameHint": "This attribution will appear publicly in the Issue body",
       "anonymous": "Anonymous",
       "useAnonymous": "Use Anonymous Attribution",
-      "envLine": "Attached automatically on submit: client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
-      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
+      "envLine": "Submitting client environment (attached automatically on submit): client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (this session)",
       "regionLine": "Build region: {{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
