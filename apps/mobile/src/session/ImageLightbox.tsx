@@ -834,8 +834,8 @@ const LightboxPage = memo(function LightboxPage({
     // 捏合中 onChange 每帧按新 displayed 钳;不能改 savedTranslate,否则下一帧
     // 会用被改过的起点 + 焦点增量跳一下。
     if (pinchBusy.value) return;
-    // 双击 withTiming 还在跑:重钳的是目标(saved),不是动画中间值。把中间值
-    // 写进 translate/saved 会取消动画,点击点漂向中心,scale 却继续飞向 2.5x。
+    // 双击动画中只改 saved;live 仍归原 withTiming,结束回调再贴齐。
+    // 中途另起 withTiming 会跟 scale 抢默认时长:缩放先到、点击点随后横漂。
     if (doubleTapBusy.value) {
       const next = reclampLightboxPan(
         savedTranslateX.value,
@@ -846,14 +846,8 @@ const LightboxPage = memo(function LightboxPage({
         size.width,
         size.height,
       );
-      if (next.x === savedTranslateX.value && next.y === savedTranslateY.value) return;
       savedTranslateX.value = next.x;
       savedTranslateY.value = next.y;
-      translateX.value = withTiming(next.x);
-      translateY.value = withTiming(next.y, undefined, (finished) => {
-        'worklet';
-        if (finished) doubleTapBusy.value = 0;
-      });
       return;
     }
     const next = reclampLightboxPan(
@@ -1070,7 +1064,11 @@ const LightboxPage = memo(function LightboxPage({
         doubleTapBusy.value = 1;
         const clearDoubleTapBusy = (finished?: boolean) => {
           'worklet';
-          if (finished) doubleTapBusy.value = 0;
+          if (!finished || !doubleTapBusy.value) return;
+          doubleTapBusy.value = 0;
+          // 尺寸变化只改过 saved:与 scale 同一拍结束时把 live 收到新 contain 边界。
+          translateX.value = savedTranslateX.value;
+          translateY.value = savedTranslateY.value;
         };
         if (!isLightboxZoomed(next)) {
           scale.value = withTiming(1);

@@ -65,6 +65,7 @@ describe('imageLightboxModel', () => {
   it('distinguishes reclamping the double-tap target from an in-flight intermediate', () => {
     // 双击目标 150,动画走到 80 时竖图 overflow 仍是 200:钳中间值会把目标改成 80
     // (动画停早,点击点漂向中心)。动画中必须钳 saved 目标,不能钳 live。
+    // 调用方不得用这个新目标另起 withTiming:那会跟仍在跑的 scale 抢默认时长。
     expect(reclampLightboxPan(80, 0, 400, 800, 2, 400, 800)).toEqual({ x: 80, y: 0 });
     expect(reclampLightboxPan(150, 0, 400, 800, 2, 400, 800)).toEqual({ x: 150, y: 0 });
   });
