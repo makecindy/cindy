@@ -243,12 +243,22 @@ function contextRebuild(db: Database.Database, args: unknown): void {
     payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
       ? null
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
+  const routeModel = payload.routeModel === undefined ? null : expectString(payload.routeModel, 'routeModel');
+  const hasRoute = routeModel !== null;
+  const routeProviderId = nullableString(payload.routeProviderId);
+  const routeEffort = hasRoute ? expectString(payload.routeEffort, 'routeEffort') : null;
+  const routeContextWindow = payload.routeContextWindow === undefined
+    ? null
+    : expectNumber(payload.routeContextWindow, 'routeContextWindow');
+  if (hasRoute && (typeof payload.routeFastMode !== 'boolean' || !routeContextWindow || routeContextWindow <= 0)) {
+    throw invalidArgs('atomic context rebuild route is incomplete');
+  }
   const transaction = db.transaction(() => {
     const sessionResult = db
       .prepare(
-        'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+        'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL, model = CASE WHEN ? THEN ? ELSE model END, provider_id = CASE WHEN ? THEN ? ELSE provider_id END, effort = CASE WHEN ? THEN ? ELSE effort END, fast_mode = CASE WHEN ? THEN ? ELSE fast_mode END, context_window = CASE WHEN ? THEN ? ELSE context_window END WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
       )
-      .run(updatedAt, sessionId, expectedClearedAt);
+      .run(updatedAt, hasRoute ? 1 : 0, routeModel, hasRoute ? 1 : 0, routeProviderId, hasRoute ? 1 : 0, routeEffort, hasRoute ? 1 : 0, payload.routeFastMode === true ? 1 : 0, hasRoute ? 1 : 0, routeContextWindow, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {
       throw Object.assign(new Error(`Session missing or clear-boundary changed: ${sessionId}`), {
         code: 'PRECONDITION_FAILED',

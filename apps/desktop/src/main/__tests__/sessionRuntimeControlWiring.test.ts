@@ -229,6 +229,29 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('wakeSessionInputAfterCredentialSwitch(sessionId);');
   });
 
+  it('persists a rebuilt model route in the same SQLite transaction as its boundary', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(registerSource).toContain("getDbClient().tx('context.rebuild' as string");
+    expect(registerSource).toContain('routeModel: route.model');
+    expect(registerSource).toContain('routeProviderId: route.providerId');
+    expect(registerSource).toContain('routeContextWindow: route.contextWindow');
+    expect(setModel).toContain('withAtomicModelWindowRoute(targetContextWindow');
+    expect(setModel).toContain('withAtomicModelWindowRoute(finalPiWindow');
+    expect(setModel).toContain('modelWindowRoutePersistedAtomically = modelWindowRebuilt');
+    expect(setModel).toContain("atomicSelection?.effort ?? previousRuntime.effort ?? 'high'");
+    expect(registerSource).toContain('contextTokens: 0');
+    expect(registerSource).toContain('context rebuild projection failed after atomic commit');
+    expect(setModel).toContain(
+      "patch.effort = atomicSelection.effort ?? previousRuntime.effort ?? 'high'",
+    );
+    expect(setModel).toContain('atomicSelection !== undefined\n                    ? atomicSelection.effort');
+    expect(setModel).toContain('if (!modelWindowRoutePersistedAtomically) {');
+  });
+
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
       registerSource,
