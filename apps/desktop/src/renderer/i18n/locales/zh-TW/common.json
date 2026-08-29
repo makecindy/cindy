@@ -9711,7 +9711,7 @@
       "publicNameHint": "該署名會公開顯示在 Issue 正文中",
       "anonymous": "匿名",
       "useAnonymous": "使用匿名署名",
-      "envLine": "提交客戶端環境：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 介面語言 {{uiLanguage}}",
+      "envLine": "提交客戶端環境（提交時自動附加）：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 介面語言 {{uiLanguage}}",
       "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（目前任務）",
       "regionLine": "版本區域：{{region}}",
       "regionCodeCn": "CN",
