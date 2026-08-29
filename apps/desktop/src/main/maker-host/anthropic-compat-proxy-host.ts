@@ -181,7 +181,7 @@ export function setClaudeProxyOwnerScopeKeyReader(fn: () => string): void {
   _readOwnerScopeKey = fn;
 }
 
-const ownerScopeAtRoutingStart = new WeakMap<RequestTransformCtx, string | null>();
+const ownerScopeAtRequestStart = new WeakMap<RequestTransformCtx, string | null>();
 
 // 订阅直连的 model 前缀判据(chatgpt/ / xai/)统一走 shared/subscriptionModels 的
 // isSubscriptionDirectModel —— 路由(此处把这些前缀路由到 bridge)与 turn-cost 记账 gate
@@ -267,11 +267,12 @@ function readOwnerScopeKey(): string | null {
   }
 }
 
+/** 第一次写入为准:引擎在 collectRequestBody 前就盖章,body 期间切账号不得改基线。 */
 function stampOwnerScope(ctx: RequestTransformCtx): string | null {
-  const existing = ownerScopeAtRoutingStart.get(ctx);
+  const existing = ownerScopeAtRequestStart.get(ctx);
   if (existing !== undefined) return existing;
   const key = readOwnerScopeKey();
-  ownerScopeAtRoutingStart.set(ctx, key);
+  ownerScopeAtRequestStart.set(ctx, key);
   return key;
 }
 
@@ -777,9 +778,10 @@ export function createModelRoutingTransform(): RoutingTransform {
       // 因为 localHandler 不是「默认上游透传」就放行。
       //
       // 决策时检查挡不住 finalize 之后的 await(token refresh / request transform /
-      // outbound resolver)。localHandler 在这里再包一层入口+catch;转发路径靠引擎
-      // revalidateBeforeDispatch。pending 与 activeOwnerScopeKey 合成同一条
-      // ownerBoundDispatchUnsafe:切换在 await 里完整完成时两端 pending 都是 false。
+      // outbound resolver / 透明重试)。localHandler 在这里再包一层入口+catch;转发
+      // 路径靠引擎 revalidateBeforeDispatch(请求开始、routing 后、outbound 后、重试前)。
+      // pending 与 activeOwnerScopeKey 合成同一条 ownerBoundDispatchUnsafe:
+      // 切换在 await 里完整完成时两端 pending 都是 false。
       if (ownerBoundDispatchUnsafe(ctx)) return ownerBoundaryPendingRoute();
       return withOwnerBoundaryDispatchGate(
         refuseUnsafePlaceholderPassthrough(stripInternalPiHeaders(resolved), ctx),

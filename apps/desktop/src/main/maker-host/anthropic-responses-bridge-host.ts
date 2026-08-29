@@ -697,7 +697,9 @@ export function getPiNativeSubscriptionHandler(
     const controller = new AbortController();
     const abortOnClose = (): void => controller.abort();
     res.once('close', abortOnClose);
+    const scopeAtStart = activeOwnerScopeKey();
     try {
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       let accessToken: string;
       let headers: Record<string, string>;
       if (providerId === 'openai') {
@@ -742,6 +744,7 @@ export function getPiNativeSubscriptionHandler(
           contentEncoding = undefined;
         }
       }
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
 
       const response = await deps.fetch(upstream.url, {
@@ -781,6 +784,22 @@ export function getPiNativeSubscriptionHandler(
       // which destroys the client response so PI observes a transport failure
       // instead of accepting a cleanly-ended truncated stream.
       if (res.headersSent) throw err;
+      if (err instanceof Error && err.message === OWNER_BOUNDARY_PENDING_ERROR) {
+        res.writeHead(503, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+          'retry-after': '1',
+        });
+        res.end(JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'owner_boundary_pending',
+            code: 'owner_boundary_pending',
+            message: OWNER_BOUNDARY_PENDING_ERROR,
+          },
+        }));
+        return;
+      }
       const detail = describeErrorChain(err);
       const providerLabel = providerId === 'xai' ? 'xAI/Grok' : 'OpenAI/ChatGPT';
       log.warn('PI native subscription forwarding failed', {

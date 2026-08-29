@@ -261,10 +261,15 @@ export interface ProxyOptions {
    */
   routingTransform?: RoutingTransform;
   /**
-   * 可选: 真正 dispatch 前的同步再校验。在 `routingTransform` 之后调用一次,以及在
-   * 任何异步 transform / outbound 解析之后、`runLocalHandler` / `forward` 之前再调用一次。
-   * 第二次调用传入与 `routingTransform` 相同的 `ctx`,host 可对照请求开始时捕获的
-   * owner scope / generation —— pending 布尔值挡不住「切换在 await 里完整完成」。
+   * 可选: 真正 dispatch 前的同步再校验。调用点:
+   *   1. 请求开始、`collectRequestBody` 之前(此时 decision 为 null)—— host 在这里
+   *      按 `ctx` 盖章 owner scope;pending 为真则直接 503,不再等 body / 跑路由;
+   *   2. `routingTransform` 之后一次;
+   *   3. 任何异步 transform / outbound 解析之后、`runLocalHandler` / `forward` 之前;
+   *   4. 可恢复 400/422 透明重试递归 `forward` 之前。
+   * 后续调用传入与 `routingTransform` 相同的 `ctx`,host 对照请求开始时捕获的
+   * owner scope / generation —— pending 布尔值挡不住「切换在 await 里完整完成」,
+   * 盖章若拖到 routingTransform,也挡不住 body 上传期间的完整切换。
    *
    * 返回非 null = 替换当前决策(典型:改成 localHandler 503,拒绝带着过期归属的凭证出站);
    * 返回 null = 保持已解析的路由,包括已经算好的 forward target。不要用它改上游。
