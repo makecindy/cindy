@@ -314,6 +314,7 @@ import {
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
+  resolveWindowCoverageLossAction,
   selectTailUserMessageId,
   readFollowLatestRequestKey,
   shouldBumpSendFollowCancelOnScroll,
@@ -4063,14 +4064,27 @@ export function MessageStream({
   const anchoredForwardItemsRef = useRef(anchoredForwardItems);
   anchoredForwardItemsRef.current = anchoredForwardItems;
 
-  // render-window-bidirectional P1 fix: 新消息导致锚定窗口不再覆盖末尾时，
-  // 重置 near-bottom 以触发未读提示（覆盖末尾→清锚回默认窗的逻辑在 handleScroll 里）。
+  // 新 item 导致锚定窗口不再覆盖末尾时，先保留此前的跟随意图：自动补历史建立的
+  // 锚点只是实现细节，用户仍在跟随就清锚回默认尾窗；用户已经离底才保留历史窗口。
   const prevWindowCoversEndRef = useRef(windowCoversEnd);
   useLayoutEffect(() => {
     const wasCovering = prevWindowCoversEndRef.current;
     prevWindowCoversEndRef.current = windowCoversEnd;
 
-    if (firstVisibleItemKey !== null && wasCovering && !windowCoversEnd) {
+    const coverageLossAction = resolveWindowCoverageLossAction({
+      hasWindowAnchor: firstVisibleItemKey !== null,
+      wasCoveringEnd: wasCovering,
+      windowCoversEnd,
+      wasFollowingTail: isNearBottomRef.current,
+    });
+    if (coverageLossAction === 'handoff-to-tail') {
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      setUnreadCount(0);
+      setFirstVisibleItemKey(null);
+      return;
+    }
+    if (coverageLossAction === 'preserve-anchor') {
       isNearBottomRef.current = false;
       setIsNearBottom(false);
       return;
