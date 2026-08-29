@@ -121,6 +121,16 @@ export function bakeLightboxOrigin(translate: number, origin: number, scale: num
 }
 
 /**
+ * bake 的逆运算:已有缩放时再设 origin,从 translate 扣掉 origin*(1-scale),
+ * 画面公式不变。二次捏合若不补偿,imageStyle 会立刻加上 origin*(1-scale) 跳一下,
+ * 结束时 bake 还会把这次跳变写进位移。
+ */
+export function compensateLightboxOrigin(translate: number, origin: number, scale: number): number {
+  'worklet';
+  return translate - origin * (1 - scale);
+}
+
+/**
  * 双击目标平移:点击点在缩放到 targetScale 后仍停在原处;缩回 1x 时归零。
  */
 export function lightboxDoubleTapTranslate(

@@ -6,6 +6,7 @@ import {
   LIGHTBOX_TAP_MAX_DISTANCE,
   bakeLightboxOrigin,
   canShareLightboxImage,
+  compensateLightboxOrigin,
   clampLightboxScale,
   clampLightboxTranslation,
   isLightboxZoomed,
@@ -65,6 +66,14 @@ describe('imageLightboxModel', () => {
     // translate 40, origin 100, scale 2 → 40 + 100 * (1-2) = -60
     expect(bakeLightboxOrigin(40, 100, 2)).toBe(-60);
     expect(bakeLightboxOrigin(-60, 0, 2)).toBe(-60);
+  });
+
+  it('compensates translation when applying a pinch origin onto an existing scale', () => {
+    // 双击 2.5x 后 translate=-150;再在 origin=100 处捏合,补偿后画面公式不变
+    expect(compensateLightboxOrigin(-150, 100, LIGHTBOX_DOUBLE_TAP_SCALE)).toBe(0);
+    expect(bakeLightboxOrigin(0, 100, LIGHTBOX_DOUBLE_TAP_SCALE)).toBe(-150);
+    // 1x 时 origin 项为 0,补偿是空操作
+    expect(compensateLightboxOrigin(0, 100, 1)).toBe(0);
   });
 
   it('double-tap zooms into the tap point and resets when returning to 1x', () => {

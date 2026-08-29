@@ -30,7 +30,7 @@ import {
 import { Text } from '@/components/AppText';
 import { MessageSquarePlus, Pen, Share as ShareIcon, Undo2, X } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
-import { fontWeight, iconSize, iconStroke, radius, typeScale } from '@/theme';
+import { fontWeight, iconSize, iconStroke, motionDuration, radius, typeScale } from '@/theme';
 import { Gesture, GestureDetector, GestureHandlerRootView } from '@/platform/gestureHandler';
 import Animated, {
   runOnJS,
@@ -51,6 +51,7 @@ import {
 import {
   bakeLightboxOrigin,
   canShareLightboxImage,
+  compensateLightboxOrigin,
   clampLightboxScale,
   clampLightboxTranslation,
   isLightboxZoomed,
@@ -870,13 +871,13 @@ const LightboxPage = memo(function LightboxPage({
   const gesture = useMemo(() => {
     const hideChrome = () => {
       'worklet';
-      chromeHidden.value = withTiming(1, { duration: 120 });
+      chromeHidden.value = withTiming(1, { duration: motionDuration.instant });
       runOnJS(onChromeBusy)(true);
     };
     const maybeShowChrome = () => {
       'worklet';
       if (pinchBusy.value || panBusy.value) return;
-      chromeHidden.value = withTiming(0, { duration: 160 });
+      chromeHidden.value = withTiming(0, { duration: motionDuration.fast });
       runOnJS(onChromeBusy)(false);
     };
     const bakePinchOrigin = () => {
@@ -915,27 +916,40 @@ const LightboxPage = memo(function LightboxPage({
         // 会被 pagingEnabled 的 FlatList 抢走,当前页直接滑走。
         runOnJS(reportZoomed)(true);
         savedScale.value = scale.value;
-        savedTranslateX.value = translateX.value;
-        savedTranslateY.value = translateY.value;
         originX.value = lightboxPinchOrigin(event.focalX, width);
         originY.value = lightboxPinchOrigin(event.focalY, height);
+        // 已放大时 origin 会立刻贡献 origin*(1-scale);扣掉等量位移,二次捏合不跳。
+        translateX.value = compensateLightboxOrigin(translateX.value, originX.value, scale.value);
+        translateY.value = compensateLightboxOrigin(translateY.value, originY.value, scale.value);
+        savedTranslateX.value = translateX.value;
+        savedTranslateY.value = translateY.value;
         startFocalX.value = event.focalX;
         startFocalY.value = event.focalY;
       })
       .onChange((event) => {
         scale.value = clampLightboxScale(savedScale.value * event.scale);
         if (annotating) return;
-        translateX.value = clampLightboxTranslation(
+        // 钳的是画面中心(bake 后),再补偿回带 origin 的 translate,避免二次捏合
+        // 补偿后的 raw 越出 1x 原点边界、第一帧 clamp 把图弹回去。
+        const visualX = bakeLightboxOrigin(
           savedTranslateX.value + (event.focalX - startFocalX.value),
-          width,
+          originX.value,
           scale.value,
-          displayedW.value,
         );
-        translateY.value = clampLightboxTranslation(
+        const visualY = bakeLightboxOrigin(
           savedTranslateY.value + (event.focalY - startFocalY.value),
-          height,
+          originY.value,
           scale.value,
-          displayedH.value,
+        );
+        translateX.value = compensateLightboxOrigin(
+          clampLightboxTranslation(visualX, width, scale.value, displayedW.value),
+          originX.value,
+          scale.value,
+        );
+        translateY.value = compensateLightboxOrigin(
+          clampLightboxTranslation(visualY, height, scale.value, displayedH.value),
+          originY.value,
+          scale.value,
         );
       })
       .onFinalize(() => {
