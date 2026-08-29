@@ -115,6 +115,7 @@ describe('UpdateBanner busy defer', () => {
 
     expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
     await waitFor(() => expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1));
+    expect(anyActivityBlockingRelaunch).toHaveBeenCalledWith({ silent: true });
 
     settle(false);
     expect(await screen.findByRole('button', { name: EXPANDED })).toBeTruthy();
@@ -145,6 +146,7 @@ describe('UpdateBanner busy defer', () => {
     expect(await screen.findByRole('button', { name: COLLAPSED })).toBeTruthy();
     await waitFor(() => expect(getUpdateBannerDismissState().reason).toBe('busy'));
     expect(screen.getByRole('button', { name: COLLAPSED })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
   });
 
   it('falls back to hiding the expanded banner when the busy probe throws', async () => {

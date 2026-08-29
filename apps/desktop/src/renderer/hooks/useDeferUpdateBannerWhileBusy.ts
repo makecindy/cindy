@@ -15,10 +15,15 @@ import {
  * 不枚举活动来源。有任务(或探针失败,fail closed)→ 只留头像行火焰入口;全部停下
  * 后再弹出。用户点 X 关掉的不在这条自动恢复里。
  *
+ * 这条 IPC 是为点击「立即重启」设计的一次性探针(含 PI 目录同步扫描),不是廉价订阅。
+ * 要知道「任务何时停」必须再问同一条定义,但不能把它当成 2s 热循环,也不另做活动缓存
+ * 或事件总线。首次立刻问一次以免闪横幅;busy 之后才续询,间隔见
+ * UPDATE_BANNER_BUSY_POLL_MS;轮询带 silent,避免把延后展示打成「manual relaunch」INFO。
+ *
  * 返回值:当前这个版本还没做出弹出/让路决定时为 true,调用方据此先不渲染 banner,
  * 避免「闪一下完整横幅再收成火焰」。
  */
-export const UPDATE_BANNER_BUSY_POLL_MS = 2000;
+export const UPDATE_BANNER_BUSY_POLL_MS = 15_000;
 
 function isActiveUpdateStatus(status: string): boolean {
   return status === 'ready' || status === 'superseding';
@@ -26,7 +31,7 @@ function isActiveUpdateStatus(status: string): boolean {
 
 async function probeBusy(): Promise<boolean> {
   try {
-    return await window.electronAPI.anyActivityBlockingRelaunch();
+    return await window.electronAPI.anyActivityBlockingRelaunch({ silent: true });
   } catch {
     // 跟重启入口同一条 fail closed:拿不到可信答案就当有任务,不要突然弹出横幅。
     return true;

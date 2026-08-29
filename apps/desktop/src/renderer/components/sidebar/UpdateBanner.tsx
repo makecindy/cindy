@@ -200,6 +200,10 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 展开态的完整横幅:用户关掉、有任务在跑、或探针还没给出「弹出 / 让路」决定时
   // 都不渲染,避免闪一下再收成火焰。收起态那颗小火焰本身就是最小化提醒,busy
   // 让路和探针空窗都要留着;只有用户点过 X 才连它一起藏。
+  //
+  // 不会跟 UserInfoSection 头像行火焰叠两颗:Sidebar 把 UserInfoSection.isCollapsed
+  // 绑在 isRail 上,rail 分支只渲染头像、没有火焰;展开态本组件在 hideExpandedBanner
+  // 时 return null,只留头像行那颗。busy 时若把折叠火焰也藏掉,rail 会完全没入口。
   const hideExpandedBanner =
     hideUntilBusyDecision
     || (dismissed && (status === 'ready' || isPreparing));
