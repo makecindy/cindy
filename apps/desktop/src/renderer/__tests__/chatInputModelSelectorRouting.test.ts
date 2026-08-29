@@ -19,6 +19,28 @@ describe('ChatInput model source switching wiring', () => {
     expect(guard).not.toContain('compactionGetState');
   });
 
+  it('blocks pressured SSH model switches before any continue/confirm path', () => {
+    const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
+    const end = chatInputSource.indexOf('// session-agent-switch', start);
+    const guard = chatInputSource.slice(start, end);
+    const remoteBlock = guard.indexOf('remoteHostId &&');
+    const warningPath = guard.indexOf("verdict.level === 'warn'");
+    const confirmPath = guard.indexOf('return confirmDialog({');
+
+    expect(remoteBlock).toBeGreaterThan(-1);
+    expect(remoteBlock).toBeLessThan(warningPath);
+    expect(remoteBlock).toBeLessThan(confirmPath);
+    const blocked = guard.slice(remoteBlock, warningPath);
+    expect(blocked).toContain("verdict.level === 'danger' || verdict.level === 'overflow'");
+    expect(blocked).toContain('overflowDescriptionRemote');
+    expect(blocked).toContain('toast.error(');
+    expect(blocked).toContain('return false;');
+    const localConfirm = guard.slice(confirmPath);
+    expect(localConfirm).not.toContain('overflowDescriptionRemote');
+    expect(localConfirm).toContain('overflowDescription');
+    expect(localConfirm).toContain('confirmSwitch');
+  });
+
   it('lets a disconnected source reselect the highlighted fallback provider row', () => {
     const selectorStart = chatInputSource.lastIndexOf('<ModelSelector');
     expect(selectorStart).toBeGreaterThanOrEqual(0);

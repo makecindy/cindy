@@ -6059,22 +6059,26 @@ export function ChatInput({
         total: fmtTokens(targetContextWindow ?? 0),
         pct: verdict.projectedPct,
       };
+      if (
+        remoteHostId &&
+        (verdict.level === 'danger' || verdict.level === 'overflow')
+      ) {
+        toast.error(
+          t('newChat.chatInput.modelSwitchContextGuard.overflowDescriptionRemote', vars),
+          { duration: 5000 },
+        );
+        return false;
+      }
       if (verdict.level === 'warn' || verdict.level === 'danger') {
         toast.warning(t('newChat.chatInput.modelSwitchContextGuard.warnToast', vars), {
           duration: 4000,
         });
         return true;
       }
-      // overflow (≥100%): 弹确认。默认焦点保持在取消(Radix 默认)——
-      // 期望用户先取消回去压缩(点上下文圆环)或新开会话, "仍然切换"是次选。
+      // Local overflow (≥100%): host performs a bounded handoff before switching.
       return confirmDialog({
         title: t('newChat.chatInput.modelSwitchContextGuard.title'),
-        description: t(
-          remoteHostId
-            ? 'newChat.chatInput.modelSwitchContextGuard.overflowDescriptionRemote'
-            : 'newChat.chatInput.modelSwitchContextGuard.overflowDescription',
-          vars,
-        ),
+        description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', vars),
         confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
         cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
       });

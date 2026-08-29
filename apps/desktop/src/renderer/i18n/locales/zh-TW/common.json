@@ -7102,7 +7102,7 @@
         "title": "這個模型裝不下目前的對話",
         "warnToast": "這段對話已經用了 {{used}}，換過去大約會佔新模型容量（{{total}}）的 {{pct}}%",
         "overflowDescription": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。換過去後，Cindy 會先整理一份摘要再繼續；對話記錄還在，只是不會整段原樣帶給新模型。",
-        "overflowDescriptionRemote": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。遠端任務不會自動換窗，下一次傳送仍可能失敗。可以仍然切換，或留在目前模型。",
+        "overflowDescriptionRemote": "目前遠端任務的上下文已用 {{used}} / {{total}}（約 {{pct}}%），無法安全切換到這個小視窗模型。請保留目前模型，或新增任務後再選擇。",
         "confirmSwitch": "切換並繼續",
         "cancelSwitch": "先不換"
       },
