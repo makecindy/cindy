@@ -6874,10 +6874,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       > => ipcRenderer.invoke('maker:schedule:generate-pre-run-hook', params),
       listRuns: (id: string, limit?: number): Promise<unknown[]> =>
         ipcRenderer.invoke('maker:schedule:list-runs', id, limit),
-      // 回传 { runs, inflightRunIds }:后者是引擎内存里的权威 in-flight 集合,renderer 的
-      // 通知抑制标记对账靠它区分「runs 里查不到 = 跑完了」与「= 自删除后行已级联删除、
-      // run 仍在跑」。两者不是原子快照,不一致由消费方重查收口(见 main 侧 handler 注释)。
-      // runId 不是特权数据(renderer 的标记里就存着它)。
+      // 回传 { runs, inflightRunIds, inflightPolicies }:inflightRunIds 是引擎内存里的
+      // 权威 in-flight 集合,renderer 的通知抑制标记对账靠它区分「runs 里查不到 = 跑完了」
+      // 与「= 自删除后行已级联删除、run 仍在跑」。inflightPolicies 带每条 in-flight 的
+      // silenced / sessionId,用来重建从未建成的抑制标记。两者不是原子快照,不一致由
+      // 消费方重查收口(见 main 侧 handler 注释)。runId 不是特权数据。
       listSidebarIndexRuns: (): Promise<unknown> =>
         ipcRenderer.invoke('maker:schedule:list-sidebar-index-runs'),
       deleteRun: (runId: string): Promise<void> =>
@@ -6904,7 +6905,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
        * 订阅 Scheduler 事件。payload 形态:
        *   { type: 'fired',     scheduleId, runId, silent? }
        *   { type: 'completed', scheduleId, runId, sessionId }
-       *   { type: 'failed',    scheduleId, runId, error }
+       *   { type: 'failed',    scheduleId, runId, error, sessionId? }
        *   { type: 'changed',   scheduleId }
        *   { type: 'read',      scheduleId }   // 主进程在 markRunsRead 后广播
        */

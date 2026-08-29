@@ -762,7 +762,10 @@ import {
   persistedUserContentToWireMessage,
   shouldRebuildPiNativeSession,
 } from './contextOverflowRollover.js';
-import { classifyCodexHistoryOversized } from '../maker-host/codex-local-sessions.js';
+import {
+  classifyCodexHistoryOversized,
+  reserveCodexForkCleanup,
+} from '../maker-host/codex-local-sessions.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
@@ -896,6 +899,11 @@ import {
   applyRuntimeSetModelChange,
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
+import {
+  decideCodexProviderThreadRelink,
+  relinkCodexProviderThread,
+  type CodexProviderThreadRoute,
+} from './codexProviderThreadRelink.js';
 import {
   applyRuntimeSelectionAxesWithRecovery,
   commitRuntimeAxisAfterPersistence,
@@ -15086,7 +15094,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 状态可封住两种次序：本请求先拿锁时终态写等待并在之后清理 override；终态
       // 先拿锁时旧请求看到非 active，不能在 cleanup 后重新建立 pending/override。
       const [runtimeStatus] = await getDbClient()
-        .drizzle.select({ status: sessions.status, orcaRole: sessions.orcaRole })
+        .drizzle.select({
+          status: sessions.status,
+          orcaRole: sessions.orcaRole,
+          agentKind: sessions.agentKind,
+          remoteHostId: sessions.remoteHostId,
+          sdkSessionId: sessions.sdkSessionId,
+          model: sessions.model,
+          providerId: sessions.providerId,
+          effort: sessions.effort,
+          fastMode: sessions.fastMode,
+          workingDir: sessions.workingDir,
+        })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
@@ -15299,6 +15318,162 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         effectiveProviderId === undefined
           ? currentProviderId
           : (normalizeSessionProviderId(effectiveProviderId) ?? null);
+      const hasPersistedLocalCodexThread =
+        internalOptions.source === 'user' &&
+        !isDeviceLinkInvoke() &&
+        runtimeStatus.agentKind === 'codex' &&
+        !runtimeStatus.remoteHostId &&
+        !!runtimeStatus.sdkSessionId;
+      const relinkDecision = hasPersistedLocalCodexThread
+        ? decideCodexProviderThreadRelink(
+            { model: runtimeStatus.model, providerId: runtimeStatus.providerId },
+            { model, providerId: targetProviderId },
+          )
+        : 'not-applicable';
+      if (relinkDecision === 'unresolved') {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'Codex provider credential identity could not be resolved; retry with an explicit provider',
+        );
+      }
+      const requiresCodexThreadRelink = relinkDecision === 'relink';
+      const targetCodexRoute: CodexProviderThreadRoute | undefined = requiresCodexThreadRelink
+        ? {
+            model,
+            providerId: targetProviderId,
+            effort: atomicSelection ? atomicSelection.effort : runtimeStatus.effort,
+            fastMode: atomicSelection ? atomicSelection.fastMode : runtimeStatus.fastMode,
+          }
+        : undefined;
+      const relinkCodexThread = targetCodexRoute
+        ? async (): Promise<void> => {
+            const ownerScope = captureDataOwnerBroadcastScope();
+            const dbSnapshot = getCurrentDbClientSnapshot();
+            if (!dbSnapshot) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'Codex provider thread relink requires an active Profile database',
+              );
+            }
+            const relinked = await relinkCodexProviderThread(
+              {
+                readSource: async (targetSessionId) => {
+                  const [row] = await dbSnapshot.client.drizzle
+                    .select({
+                      sdkSessionId: sessions.sdkSessionId,
+                      workingDir: sessions.workingDir,
+                      model: sessions.model,
+                      providerId: sessions.providerId,
+                      effort: sessions.effort,
+                      fastMode: sessions.fastMode,
+                    })
+                    .from(sessions)
+                    .where(eq(sessions.id, targetSessionId))
+                    .limit(1);
+                  return row ?? null;
+                },
+                fork: async ({ sourceSdkSessionId, sourceModel, sourceProviderId, workingDir }) => {
+                  const forked = await maker.forkSdkSession('codex', {
+                    sourceSdkSessionId,
+                    model: sourceModel,
+                    providerId: sourceProviderId,
+                    upToMessageId: undefined,
+                    ...(workingDir ? { workingDir } : {}),
+                    stripEncryptedReasoning: true,
+                    remoteHostId: null,
+                  });
+                  if (forked.newSdkSessionId === sourceSdkSessionId) {
+                    throwIpcError('INTERNAL', 'Codex fork returned an invalid replacement thread');
+                  }
+                  const cleanup = reserveCodexForkCleanup(
+                    forked.newSdkSessionId,
+                    sourceSdkSessionId,
+                  );
+                  return {
+                    newSdkSessionId: forked.newSdkSessionId,
+                    ...(cleanup ? { cleanup } : {}),
+                  };
+                },
+                commit: async ({ sessionId: targetSessionId, source, newSdkSessionId, target }) => {
+                  if (
+                    !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
+                    getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
+                  ) {
+                    return false;
+                  }
+                  const now = Date.now();
+                  const sourceRouteConditions = [
+                    eq(sessions.id, targetSessionId),
+                    eq(sessions.sdkSessionId, source.sdkSessionId),
+                    eq(sessions.model, source.model),
+                    source.providerId === null
+                      ? isNull(sessions.providerId)
+                      : eq(sessions.providerId, source.providerId),
+                    source.effort === null
+                      ? isNull(sessions.effort)
+                      : eq(
+                          sessions.effort,
+                          source.effort as (typeof sessions.$inferSelect)['effort'],
+                        ),
+                    eq(sessions.fastMode, source.fastMode),
+                  ];
+                  const write = await dbSnapshot.client.drizzle
+                    .update(sessions)
+                    .set({
+                      sdkSessionId: newSdkSessionId,
+                      model: target.model,
+                      providerId: target.providerId,
+                      effort: target.effort as (typeof sessions.$inferInsert)['effort'],
+                      fastMode: target.fastMode,
+                      updatedAt: now,
+                    })
+                    .where(and(...sourceRouteConditions))
+                    .run();
+                  if (write.changes === 0) return false;
+                  broadcastSessionPatched(
+                    targetSessionId,
+                    {
+                      sdkSessionId: newSdkSessionId,
+                      model: target.model,
+                      providerId: target.providerId,
+                      effort: target.effort,
+                      fastMode: target.fastMode,
+                      updatedAt: new Date(now).toISOString(),
+                    },
+                    ownerScope,
+                  );
+                  return true;
+                },
+              },
+              { sessionId, target: targetCodexRoute },
+            ).catch((error) => {
+              if (isIpcError(error)) throw error;
+              if (
+                error instanceof Error &&
+                error.message.startsWith('Codex provider thread relink was superseded')
+              ) {
+                throwIpcError(
+                  'PRECONDITION_FAILED',
+                  'Codex provider thread changed during model switch; retry the selection',
+                );
+              }
+              throwIpcError('INTERNAL', 'Failed to rebuild Codex provider thread');
+            });
+            if (!relinked) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'Codex provider thread changed during model switch; retry the selection',
+              );
+            }
+            log.info('Codex provider thread and route committed atomically', {
+              sessionId,
+              fromThreadId: relinked.previousSdkSessionId,
+              toThreadId: relinked.newSdkSessionId,
+              providerId: targetCodexRoute.providerId,
+              model: targetCodexRoute.model,
+            });
+          }
+        : undefined;
       const rebuildLiveOrcaWorker =
         routeExplicit &&
         runtimeStatus.orcaRole === 'worker' &&
@@ -15426,6 +15601,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
               // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
               codexAuthInjection: getCodexProxyAuthInjectionState(),
+              requiresCodexThreadRelink,
+              ...(relinkCodexThread ? { relinkCodexThread } : {}),
               logger: log,
             })
           : { status: 'applied' as const };
@@ -15471,7 +15648,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             commitControlStores();
           }
         }
-        if (internalOptions.source === 'user' && (isDeviceLinkInvoke() || atomicSelection)) {
+        if (
+          internalOptions.source === 'user' &&
+          (isDeviceLinkInvoke() || atomicSelection) &&
+          result.persistedRoute !== true
+        ) {
           // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
           // 本地 renderer 的 sessionService.update 也有同一窗口。凡携带 selection 的
           // 新调用都由 host 在解锁前一次落定全部字段。

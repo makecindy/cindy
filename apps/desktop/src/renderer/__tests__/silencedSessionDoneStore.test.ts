@@ -15,6 +15,8 @@ import {
   reconcileRunMarkers,
   rememberScheduleRunSessionAttentionBaseline,
   resetSilencedSessionDoneStoreForTests,
+  restoreInflightRunMarkers,
+  restoreRecentlyReadSilentMarkers,
   scheduleClearSchedulerOwnedRun,
   scheduleClearSilencedRun,
 } from '@/lib/silencedSessionDoneStore';
@@ -347,6 +349,82 @@ describe('silencedSessionDoneStore', () => {
         vi.advanceTimersByTime(2001);
         expect(isSessionDoneSilenced('session-silenced')).toBe(false);
         expect(isSessionTerminalNotificationOwnedByScheduler('session-owned')).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not reset an existing linger countdown', () => {
+      vi.useFakeTimers();
+      try {
+        markNextSessionDoneSilenced('run-1', 'session-1');
+        scheduleClearSilencedRun('run-1', 2000);
+        vi.advanceTimersByTime(1500);
+        scheduleClearSilencedRun('run-1', 2000);
+        vi.advanceTimersByTime(501);
+        expect(isSessionDoneSilenced('session-1')).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('restores never-built silenced markers from inflight policies', () => {
+      restoreInflightRunMarkers(
+        [{ runId: 'run-live', sessionId: 'session-1', silenced: true }],
+        () => false,
+      );
+
+      expect(isSessionDoneSilenced('session-1')).toBe(true);
+      expect(isSessionTerminalNotificationOwnedByScheduler('session-1')).toBe(true);
+    });
+
+    it('drops a stale silenced marker when inflight policy says the run is no longer silent', () => {
+      markNextSessionDoneSilenced('run-1', 'session-1');
+      markNextSessionTerminalNotificationOwnedByScheduler('run-1', 'session-1');
+
+      restoreInflightRunMarkers(
+        [{ runId: 'run-1', sessionId: 'session-1', silenced: false }],
+        () => false,
+      );
+
+      expect(isSessionDoneSilenced('session-1')).toBe(false);
+      expect(isSessionTerminalNotificationOwnedByScheduler('session-1')).toBe(true);
+    });
+
+    it('cancels a mis-scheduled linger when the run is still in flight', () => {
+      vi.useFakeTimers();
+      try {
+        markNextSessionDoneSilenced('run-1', 'session-1');
+        scheduleClearSilencedRun('run-1', 2000);
+        restoreInflightRunMarkers(
+          [{ runId: 'run-1', sessionId: 'session-1', silenced: true }],
+          () => false,
+        );
+        vi.advanceTimersByTime(MARKER_TERMINAL_LINGER_MS + 1);
+        expect(isSessionDoneSilenced('session-1')).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('restores recently-read silent success only inside the linger window', () => {
+      vi.useFakeTimers();
+      try {
+        const now = 10_000;
+        restoreRecentlyReadSilentMarkers(
+          [
+            { runId: 'run-fresh', sessionId: 'session-fresh', status: 'success', readAt: now - 500 },
+            { runId: 'run-old', sessionId: 'session-old', status: 'success', readAt: 1 },
+          ],
+          now,
+          () => false,
+        );
+
+        expect(isSessionDoneSilenced('session-fresh')).toBe(true);
+        expect(isSessionDoneSilenced('session-old')).toBe(false);
+
+        vi.advanceTimersByTime(MARKER_TERMINAL_LINGER_MS + 1);
+        expect(isSessionDoneSilenced('session-fresh')).toBe(false);
       } finally {
         vi.useRealTimers();
       }

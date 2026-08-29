@@ -430,7 +430,6 @@ export class AgentIslandService {
       });
       if (!changed) return;
       this.mutedCompletionSoundSessionIds.add(sessionId);
-      this.scheduleSilencedRunClearForSession(sessionId, SILENCED_COMPLETION_CLEAR_MS);
       this.ensureMetadata(sessionId);
       this.clearStreamingPreviewPublishTimer();
       this.publish();
@@ -751,10 +750,9 @@ export class AgentIslandService {
       this.shouldDeferCompletion?.(hydrated.sessionId) === true &&
       // Thread 2 fix: silenced completions carry no attention/sound regardless of
       // queue state, so there is no need to defer them — apply with no-attention
-      // immediately.  Deferring a silenced event risks silencedSessionRunIds being
-      // cleared (after SILENCED_COMPLETION_CLEAR_MS) before notifyQueueEmptied
-      // fires, which would cause the replayed event to be treated as normal and
-      // show attention / play sound for a run that was explicitly silenced.
+      // immediately. Linger 只挂 scheduler 的 completed && silenced;中间 agent done
+      // 不得开 linger,否则续 turn 会清掉标记。这里仍跳过 defer,免得 completed 先到
+      // 排了 linger 后,队列排空重放时标记已退场、被当成普通完成。
       !this.isCompletionEventSilenced(hydrated.sessionId, event)
     ) {
       if (event.type === 'done') {
@@ -792,7 +790,6 @@ export class AgentIslandService {
     });
     if (suppressCompletionAttention) {
       this.mutedCompletionSoundSessionIds.add(hydrated.sessionId);
-      this.scheduleSilencedRunClearForSession(hydrated.sessionId, SILENCED_COMPLETION_CLEAR_MS);
     }
     if (!changed) return;
     this.ensureMetadata(hydrated.sessionId);
@@ -1387,12 +1384,6 @@ export class AgentIslandService {
     return this.silencedSessionRunIds.has(sessionId);
   }
 
-  private scheduleSilencedRunClearForSession(sessionId: string, delayMs: number): void {
-    const runId = this.silencedSessionRunIds.get(sessionId);
-    if (!runId) return;
-    this.scheduleSilencedRunClear(runId, delayMs);
-  }
-
   private hadAttentionBeforeSilencedRun(sessionId: string): boolean {
     const runId = this.silencedSessionRunIds.get(sessionId);
     return runId ? this.silencedRunHadAttention.get(runId) === true : false;
@@ -1409,7 +1400,7 @@ export class AgentIslandService {
 
   private scheduleSilencedRunClear(runId: string, delayMs: number): void {
     if (!this.silencedRunSessionIds.has(runId)) return;
-    this.clearSilencedRunTimer(runId);
+    if (this.silencedRunClearTimers.has(runId)) return;
     const timer = setTimeout(() => {
       this.silencedRunClearTimers.delete(runId);
       this.clearSilencedScheduleRun(runId);

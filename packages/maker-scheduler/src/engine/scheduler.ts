@@ -8,6 +8,7 @@ import type {
   SchedulerEvent,
   ScheduleFireSource,
   SchedulerInflightRun,
+  SchedulerInflightRunPolicy,
   SchedulerRuntimeSnapshot,
   SchedulerWaitingSchedule,
   ScheduleRunPhase,
@@ -765,6 +766,8 @@ export class Scheduler extends EventEmitter {
     let deferred = false;
     let deferRetryMs: number | undefined;
     let skipped = false;
+    // unregisterInflight 会清掉 session 映射,终态 emit 必须用 finally 之前捕获的值。
+    let knownSessionId: string | undefined;
     this.updateInflightAttempt(runId, 'running');
     try {
       if (schedule.targetSessionId) {
@@ -792,6 +795,7 @@ export class Scheduler extends EventEmitter {
       runError = err instanceof Error ? err.message : String(err);
       this.logger?.warn?.('schedule fire failed', { scheduleId: schedule.id, runId, error: runError });
     } finally {
+      knownSessionId = this.resolveTerminalSessionId(runId, sessionId, schedule.targetSessionId);
       this.unregisterInflight(schedule.id, runId);
       this.updateInflightAttempt(runId, 'finalizing');
     }
@@ -852,8 +856,13 @@ export class Scheduler extends EventEmitter {
         // 恰恰是最需要补发的场景,用户配了桌面/飞书通知却什么都收不到(第十八轮 P1)。
         // 通知权认领与终态落库是两件独立的事,不能让前者依赖后者成功。
         try {
-          await this.storage.updateRun(runId, { status: 'failed', finishedAt, errorMsg });
-          this.emitEvent({ type: 'failed', scheduleId: schedule.id, runId, error: errorMsg });
+          await this.storage.updateRun(runId, {
+            status: 'failed',
+            finishedAt,
+            errorMsg,
+            ...(knownSessionId ? { sessionId: knownSessionId } : {}),
+          });
+          this.emitFailed(schedule.id, runId, errorMsg, knownSessionId);
         } finally {
           // 补发判据只看 runner 有没有真的投过**失败**通知(onRunnerNotified),不再用
           // "有没有 runError"推断:守卫的 abort 可能落在前置检查 / 会话创建这类 setup
@@ -872,20 +881,17 @@ export class Scheduler extends EventEmitter {
           errorMsg: 'cancelled by user (schedule deleted or paused)',
           // 系统/用户主动收口,不是要处理的失败;生而已读,侧栏不涂红。
           readAt: finishedAt,
+          ...(knownSessionId ? { sessionId: knownSessionId } : {}),
         });
-        this.emitEvent({
-          type: 'failed',
-          scheduleId: schedule.id,
-          runId,
-          error: 'aborted',
-        });
+        this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
       } else if (runError !== undefined) {
         await this.storage.updateRun(runId, {
           status: 'failed',
           finishedAt,
           errorMsg: runError,
+          ...(knownSessionId ? { sessionId: knownSessionId } : {}),
         });
-        this.emitEvent({ type: 'failed', scheduleId: schedule.id, runId, error: runError });
+        this.emitFailed(schedule.id, runId, runError, knownSessionId);
       } else if (skipped) {
         // 前置检查拦截(preRunHook exit 2):run 记录保留为 'skipped'(与 deferred 的
         // "撤销不留痕"不同——跳过是本轮的最终结果,用户要能在历史里看到"这几轮是
@@ -1067,6 +1073,8 @@ export class Scheduler extends EventEmitter {
     let deferred = false;
     let deferRetryMs: number | undefined;
     let skipped = false;
+    // unregisterInflight 会清掉 session 映射,终态 emit 必须用 finally 之前捕获的值。
+    let knownSessionId: string | undefined;
     this.updateInflightAttempt(runId, 'running');
     try {
       if (schedule.targetSessionId) {
@@ -1093,6 +1101,7 @@ export class Scheduler extends EventEmitter {
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err);
     } finally {
+      knownSessionId = this.resolveTerminalSessionId(runId, runSessionId, schedule.targetSessionId);
       this.unregisterInflight(schedule.id, runId);
       this.updateInflightAttempt(runId, 'finalizing');
     }
@@ -1143,8 +1152,13 @@ export class Scheduler extends EventEmitter {
       // try/finally 的理由同 fireOneInner:落库失败不能把唯一的失败提醒一起吞掉。
       // 这里刻意不 catch —— runNow 是用户主动触发,落库失败照旧向调用方冒泡。
       try {
-        await this.storage.updateRun(runId, { status: 'failed', finishedAt, errorMsg });
-        this.emitEvent({ type: 'failed', scheduleId: schedule.id, runId, error: errorMsg });
+        await this.storage.updateRun(runId, {
+          status: 'failed',
+          finishedAt,
+          errorMsg,
+          ...(knownSessionId ? { sessionId: knownSessionId } : {}),
+        });
+        this.emitFailed(schedule.id, runId, errorMsg, knownSessionId);
       } finally {
         if (this.needsForcedFailureNotification(runId)) {
           void this.notifyForcedFailure(schedule.id, runId, errorMsg);
@@ -1156,15 +1170,17 @@ export class Scheduler extends EventEmitter {
         finishedAt,
         errorMsg: 'cancelled by user (schedule deleted or paused)',
         readAt: finishedAt,
+        ...(knownSessionId ? { sessionId: knownSessionId } : {}),
       });
-      this.emitEvent({ type: 'failed', scheduleId: schedule.id, runId, error: 'aborted' });
+      this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
     } else if (runError !== undefined) {
       await this.storage.updateRun(runId, {
         status: 'failed',
         finishedAt,
         errorMsg: runError,
+        ...(knownSessionId ? { sessionId: knownSessionId } : {}),
       });
-      this.emitEvent({ type: 'failed', scheduleId: schedule.id, runId, error: runError });
+      this.emitFailed(schedule.id, runId, runError, knownSessionId);
     } else if (skipped) {
       // 前置检查拦截:语义同 fireOne 的 skipped 分支(run 保留为 'skipped'、生而
       // 已读、不通知)。手动触发被 hook 拦下同样留痕,让用户点"立即运行"后能看到
@@ -1621,6 +1637,18 @@ export class Scheduler extends EventEmitter {
    */
   listInflightRunIds(): string[] {
     return [...this.inflightControllers.keys()];
+  }
+
+  /**
+   * 当前 in-flight run 的展示 / 通知策略快照。消费方在 hook 晚挂或事件丢失时用它
+   * 重建 silenced / schedulerOwned 标记;sessionId 尚未绑定时可为空。
+   */
+  listInflightRunPolicies(): SchedulerInflightRunPolicy[] {
+    return [...this.inflightControllers.keys()].map((runId) => ({
+      runId,
+      sessionId: this.runIdToSessionId.get(runId) ?? this.runIdToBoundSessionId.get(runId),
+      silenced: this.silencedRuns.has(runId),
+    }));
   }
 
   /**
@@ -2181,6 +2209,35 @@ export class Scheduler extends EventEmitter {
     this.emit(e.type, e);
   }
 
+  /**
+   * 终态归因用的 session。runner 回报优先,其次运行/绑定映射,最后才是 schedule
+   * 上的目标会话 —— 绑定前失败(目标会话校验拒绝等)没有映射,仍要把红点落到
+   * 用户绑定的那条任务上。空字符串视为没有回报,继续往下找。
+   */
+  private resolveTerminalSessionId(
+    runId: string,
+    resultSessionId?: string,
+    targetSessionId?: string,
+  ): string | undefined {
+    return (
+      resultSessionId ||
+      this.runIdToSessionId.get(runId) ||
+      this.runIdToBoundSessionId.get(runId) ||
+      targetSessionId ||
+      undefined
+    );
+  }
+
+  private emitFailed(scheduleId: string, runId: string, error: string, sessionId?: string): void {
+    this.emitEvent({
+      type: 'failed',
+      scheduleId,
+      runId,
+      error,
+      ...(sessionId ? { sessionId } : {}),
+    });
+  }
+
   private findInflightScheduleId(runId: string): string | undefined {
     for (const [scheduleId, runIds] of this.inflightByschedule) {
       if (runIds.has(runId)) return scheduleId;
@@ -2578,7 +2635,11 @@ export class Scheduler extends EventEmitter {
       set.delete(runId);
       if (set.size === 0) this.inflightByschedule.delete(scheduleId);
     }
-    const sessionId = this.runIdToSessionId.get(runId);
+    const sessionId = this.resolveTerminalSessionId(
+      runId,
+      undefined,
+      this.activeSchedules.get(scheduleId)?.targetSessionId,
+    );
     if (sessionId !== undefined) {
       if (this.sessionIdToRunId.get(sessionId) === runId) this.sessionIdToRunId.delete(sessionId);
       this.runIdToSessionId.delete(runId);
@@ -2605,7 +2666,7 @@ export class Scheduler extends EventEmitter {
     // nextFireAt 也没人补,而新任务照常放行(review #944 第十三轮 P1)。
     attempt.forceReleaseOwnsCleanup = true;
     try {
-      await this.finishForceReleasedRun(attempt, now, noProgressMs);
+      await this.finishForceReleasedRun(attempt, now, noProgressMs, sessionId);
     } finally {
       // 唯一的槽位释放出口(收口成功 / 落库失败 / 抛错都要走到)。
       attempt.forceReleaseOwnsCleanup = false;
@@ -2618,6 +2679,7 @@ export class Scheduler extends EventEmitter {
     attempt: InflightAttempt,
     now: number,
     noProgressMs: number,
+    sessionId?: string,
   ): Promise<void> {
     const { runId, scheduleId } = attempt;
     const errorMsg =
@@ -2632,6 +2694,7 @@ export class Scheduler extends EventEmitter {
         status: 'failed',
         finishedAt: now,
         errorMsg,
+        ...(sessionId ? { sessionId } : {}),
       })) !== null;
     } catch (err) {
       this.logger?.warn?.('scheduler: stalled run updateRun failed', { runId, error: String(err) });
@@ -2660,7 +2723,7 @@ export class Scheduler extends EventEmitter {
       }
       return;
     }
-    this.emitEvent({ type: 'failed', scheduleId, runId, error: errorMsg });
+    this.emitFailed(scheduleId, runId, errorMsg, sessionId);
     // 迟到 settle 的 runner 可能已经先投过失败通知(第十三轮起 attempt 在收口期间保留,
     // 所以 onRunnerNotified 的记录此刻是可读的)。两侧都自查才能做到"恰好一条":
     // runner 先投 → 这里跳过;这里先投 → runner 经 isRunAbandoned 跳过
