@@ -20,6 +20,10 @@ export interface PendingSessionRuntimeMutation {
   generation: number;
   source: SessionRuntimeMutationSource;
   profile: SessionRuntimeProfile;
+  /** Exact window explicitly confirmed before this deferred route was accepted. */
+  confirmedContextWindow?: number;
+  /** Final runtime pressure discovered only after the running turn settled. */
+  confirmationRequired?: { contextWindow: number; contextTokens: number };
 }
 
 export interface SessionRuntimeControlSnapshot {
@@ -250,6 +254,7 @@ export function acceptSessionRuntimeMutation(params: {
   profile: SessionRuntimeProfile;
   previousProfile?: SessionRuntimeProfile;
   deferred: boolean;
+  confirmedContextWindow?: number;
 }): number {
   const state = stateFor(params.sessionId);
   state.generation += 1;
@@ -257,6 +262,9 @@ export function acceptSessionRuntimeMutation(params: {
     generation: state.generation,
     source: params.source,
     profile: params.profile,
+    ...(params.confirmedContextWindow !== undefined
+      ? { confirmedContextWindow: params.confirmedContextWindow }
+      : {}),
   };
   state.pending = params.deferred ? accepted : null;
   state.pendingRouteExplicit = true;
@@ -283,14 +291,32 @@ export function recordFailedSessionRuntimeFallbackCandidate(
   return true;
 }
 
+export function markPendingSessionRuntimeConfirmationRequired(
+  sessionId: string,
+  generation: number,
+  confirmationRequired: { contextWindow: number; contextTokens: number },
+): boolean {
+  const state = states.get(sessionId);
+  const pending = state?.pending;
+  if (!state || !pending || pending.generation !== generation || state.generation !== generation) {
+    return false;
+  }
+  state.pending = { ...pending, confirmationRequired };
+  return true;
+}
+
 export function settlePendingSessionRuntimeMutation(
   sessionId: string,
   generation: number,
 ): boolean {
   const state = stateFor(sessionId);
   const pending = state.pending;
-  if (!pending || pending.generation !== generation || state.generation !== generation)
-    return false;
+  if (
+    !pending ||
+    pending.generation !== generation ||
+    state.generation !== generation ||
+    pending.confirmationRequired
+  ) return false;
   state.pending = null;
   state.pendingRouteExplicit = true;
   state.effectiveOverride = pending.profile;

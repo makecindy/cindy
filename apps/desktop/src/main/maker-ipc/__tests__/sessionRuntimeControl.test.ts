@@ -11,6 +11,7 @@ import {
   deferSessionRuntimeAxisMutation,
   getSessionRuntimeControlSnapshot,
   isPendingSessionRuntimeRouteExplicit,
+  markPendingSessionRuntimeConfirmationRequired,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
@@ -91,6 +92,32 @@ describe('session runtime control state', () => {
       pending: null,
       effectiveOverride: current,
     });
+  });
+
+  it('preserves explicit confirmation and stops settlement on newly discovered final pressure', () => {
+    const sessionId = 'runtime-final-window-confirmation';
+    const generation = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: current,
+      deferred: true,
+      confirmedContextWindow: 500_000,
+    });
+
+    expect(
+      markPendingSessionRuntimeConfirmationRequired(sessionId, generation, {
+        contextWindow: 272_000,
+        contextTokens: 244_800,
+      }),
+    ).toBe(true);
+    expect(getSessionRuntimeControlSnapshot(sessionId).pending).toMatchObject({
+      confirmedContextWindow: 500_000,
+      confirmationRequired: {
+        contextWindow: 272_000,
+        contextTokens: 244_800,
+      },
+    });
+    expect(settlePendingSessionRuntimeMutation(sessionId, generation)).toBe(false);
   });
 
   it('a user selection invalidates pending and fallback state', () => {

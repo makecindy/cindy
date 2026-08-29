@@ -903,6 +903,7 @@ import {
   getPendingSessionRuntimeMutation,
   getSessionRuntimeControlSnapshot,
   isPendingSessionRuntimeRouteExplicit,
+  markPendingSessionRuntimeConfirmationRequired,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
@@ -11069,6 +11070,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     fastExplicit?: boolean;
     /** False only for Agent axis-only patches; model/provider routing stays untouched. */
     routeExplicit?: boolean;
+    /** Exact destructive window confirmation preserved across deferred settlement. */
+    confirmedContextWindow?: number;
   };
   let applySessionRuntimeSelection: (
     sessionId: string,
@@ -11090,7 +11093,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): void => {
     if (settlingSessionRuntimeControls.has(sessionId)) return;
     const pending = getPendingSessionRuntimeMutation(sessionId);
-    if (!pending) return;
+    if (!pending || pending.confirmationRequired) return;
     settlingSessionRuntimeControls.add(sessionId);
     void (async () => {
       try {
@@ -11109,8 +11112,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             effortExplicit: pending.profile.effort !== null,
             fastExplicit: true,
             routeExplicit: isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation),
+            confirmedContextWindow: pending.confirmedContextWindow,
           },
         );
+        const requiredWindow = result.contextWindowConfirmationRequired;
+        const authoritativeTokens = result.contextTokensForConfirmation;
+        if (
+          typeof requiredWindow === 'number' &&
+          typeof authoritativeTokens === 'number'
+        ) {
+          const marked = markPendingSessionRuntimeConfirmationRequired(
+            sessionId,
+            pending.generation,
+            { contextWindow: requiredWindow, contextTokens: authoritativeTokens },
+          );
+          if (marked) await broadcastSessionRuntimeProjection(sessionId);
+          log.info('pending session runtime requires final-window confirmation', {
+            sessionId,
+            reason,
+            generation: pending.generation,
+            requiredWindow,
+            authoritativeTokens,
+            marked,
+          });
+          return;
+        }
         log.info('pending session runtime settled', {
           sessionId,
           reason,
@@ -14946,8 +14972,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) {
       throwIpcError('INVALID_PARAMS', 'selection must contain effort + fastMode');
     }
-    const confirmedContextWindow = (selection as { confirmedContextWindow?: unknown } | undefined)
-      ?.confirmedContextWindow;
+    const confirmedContextWindow =
+      (selection as { confirmedContextWindow?: unknown } | undefined)?.confirmedContextWindow ??
+      internalOptions.confirmedContextWindow;
     if (
       confirmedContextWindow !== undefined &&
       (typeof confirmedContextWindow !== 'number' ||
@@ -15181,6 +15208,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               source: internalOptions.source === 'fallback' ? 'fallback' : 'agent',
               previousProfile: internalOptions.previousProfile,
               deferred: true,
+              confirmedContextWindow:
+                confirmedContextWindow !== undefined && trustedRemoteWindowConfirmation
+                  ? confirmedContextWindow
+                  : undefined,
               profile: {
                 agentKind: maker.getSession(sessionId)?.agentKind ?? meta.agentKind,
                 model,
@@ -15631,9 +15662,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 contextWindow: finalPiWindow,
                 recheckTargetPressure: true,
                 confirmedTargetPressure:
-                  internalOptions.source !== 'user' ||
-                  (trustedRemoteWindowConfirmation &&
-                    confirmedContextWindow === finalPiWindow),
+                  trustedRemoteWindowConfirmation &&
+                  confirmedContextWindow === finalPiWindow,
                 onConfirmationRequired: (contextTokens) => {
                   finalPressureContextTokens = contextTokens;
                 },
@@ -15804,6 +15834,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             source: internalOptions.source,
             previousProfile: internalOptions.previousProfile,
             deferred: response.deferred,
+            confirmedContextWindow:
+              confirmedContextWindow !== undefined && trustedRemoteWindowConfirmation
+                ? confirmedContextWindow
+                : undefined,
             profile: {
               agentKind: maker.getSession(sessionId)?.agentKind ?? meta?.agentKind ?? 'claude-code',
               model,

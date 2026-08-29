@@ -622,6 +622,28 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('runtime model context snapshot refresh failed');
   });
 
+  it('preserves explicit final-window confirmation across deferred settlement', () => {
+    const settle = handlerBody(
+      registerSource,
+      'const settlePendingSessionRuntimeControl =',
+      'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
+    );
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+
+    expect(settle).toContain('if (!pending || pending.confirmationRequired) return;');
+    expect(settle).toContain('confirmedContextWindow: pending.confirmedContextWindow');
+    expect(settle).toContain('markPendingSessionRuntimeConfirmationRequired(');
+    expect(settle).toContain('{ contextWindow: requiredWindow, contextTokens: authoritativeTokens }');
+    expect(settle).toContain('await broadcastSessionRuntimeProjection(sessionId)');
+    expect(setModel).toContain('internalOptions.confirmedContextWindow');
+    expect(setModel).toContain('confirmedContextWindow === finalPiWindow');
+    expect(setModel).not.toContain("internalOptions.source !== 'user' ||");
+  });
+
   it('composes later partial runtime changes on the accepted pending profile', () => {
     expect(registerSource).toContain(
       'const routeExplicit = patch.model !== undefined || patch.providerId !== undefined;',
