@@ -116,6 +116,35 @@ describe('PiPackagesSection interaction state machine', () => {
     expect(listPiPackages).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps explicit install available when package projection fails to load', async () => {
+    const installedPackage = { ...packageView(1), enabled: true };
+    const { mutatePiPackage } = installElectronApi({
+      listPiPackages: vi.fn().mockRejectedValue(new Error('projection unavailable')),
+      mutatePiPackage: vi.fn(async () => ({
+        available: true,
+        packages: [installedPackage],
+        affectedPackage: installedPackage,
+      })),
+    });
+    render(<PiPackagesSection />);
+
+    await screen.findByRole('alert');
+    fireEvent.change(screen.getByPlaceholderText('settings.piPackages.sourcePlaceholder'), {
+      target: { value: 'npm:new-extension' },
+    });
+    const installButton = screen.getByRole('button', { name: 'settings.piPackages.install' });
+    expect((installButton as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(installButton);
+
+    await waitFor(() =>
+      expect(mutatePiPackage).toHaveBeenCalledWith({
+        action: 'install',
+        source: 'npm:new-extension',
+      }),
+    );
+  });
+
   it('preserves the complete roster and exposes retry when a background refresh fails', async () => {
     let changed: (() => void) | undefined;
     const listPiPackages = vi

@@ -279,7 +279,7 @@ export function PiPackagesSection() {
             />
             <button
               type="button"
-              disabled={loadState !== 'ready' || !available || !installSource || Boolean(busy)}
+              disabled={loadState === 'loading' || !available || !installSource || Boolean(busy)}
               onClick={() => {
                 if (isRelativeLocalPiPackageSource(installSource)) {
                   toast.error(t('settings.piPackages.relativePathUnsupported'));
