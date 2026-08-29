@@ -31,6 +31,7 @@ import type {
   Maker,
   SendOrigin,
   Session,
+  SessionProductTurnContinuation,
   SessionSendOptions,
   SessionSendResult,
   UserMessage,
@@ -530,6 +531,7 @@ import {
 } from '../usage/usageHistory.js';
 import {
   billingRouteForExplicitProvider,
+  billingRouteForClaudeSession,
   buildClaudeTurnUsageDetails,
   computePriceQuoteTurnMoney,
   isAnthropicModel,
@@ -540,6 +542,10 @@ import {
   sumTurnUsageSegments,
   type BillingRoute,
 } from '../usage/turnCostCalculator.js';
+import {
+  ClaudeTurnBillingSnapshotRegistry,
+  type ClaudeTurnBillingSnapshot,
+} from '../usage/claudeTurnBillingSnapshotRegistry.js';
 import {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
@@ -888,7 +894,13 @@ import {
   noteClaudeSessionTurnState,
   setClaudeBackgroundActivityBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
-import { readClaudeSessionRoute } from '../maker-host/claude-session-route-registry.js';
+import {
+  beginClaudeSessionTurnRoute,
+  clearClaudeSessionTurnRoute,
+  clearClaudeSessionTurnRoutes,
+  readClaudeSessionTurnRoute,
+  rollbackClaudeSessionTurnRoute,
+} from '../maker-host/claude-session-route-registry.js';
 import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
 import {
@@ -2748,6 +2760,87 @@ const turnModelPromiseBySession = new Map<string, Promise<string>>();
 /** Pi request pricing variant captured at product-turn start. */
 const turnPiFastModeBySession = new Map<string, boolean>();
 
+/** Request-owned Claude billing identity, staged before provider dispatch. */
+const turnClaudeBillingSnapshots = new ClaudeTurnBillingSnapshotRegistry();
+
+/** Billing attribution must follow the request that produced a done event, not a later route pick. */
+function captureClaudeTurnBillingSnapshot(session: WiredSession): ClaudeTurnBillingSnapshot {
+  const providerId = getSessionProvider(session.id);
+  const explicitProviderRoute = billingRouteForExplicitProvider(
+    providerId,
+    providerId
+      ? getActiveCatalog().providers.find((provider) => provider.id === providerId)?.access?.kind
+      : null,
+  );
+  const billingRoute = billingRouteForClaudeSession({
+    remote: session.remoteHostId !== null,
+    explicitProviderRoute,
+    subscriptionSession: explicitProviderRoute === 'subscription',
+    observedRoute: null,
+  });
+  return {
+    providerId,
+    billingRoute,
+    subscriptionSession: billingRoute === 'subscription',
+  };
+}
+
+/**
+ * A default local route is request-owned only after the loopback proxy's
+ * routingTransform records it. Resolve that truth at the usage boundary rather
+ * than freezing the previous request's session-level observation at dispatch.
+ */
+function resolveClaudeTurnBillingSnapshotAtUsage(
+  session: WiredSession,
+  turnGeneration: number,
+  snapshot: ClaudeTurnBillingSnapshot,
+): ClaudeTurnBillingSnapshot {
+  if (snapshot.providerId !== null || session.remoteHostId !== null) return snapshot;
+  const observedRoute = readClaudeSessionTurnRoute(session.id, turnGeneration);
+  const billingRoute = billingRouteForClaudeSession({
+    remote: false,
+    explicitProviderRoute: null,
+    subscriptionSession: observedRoute === 'subscription',
+    observedRoute,
+  });
+  const resolvedSnapshot = {
+    ...snapshot,
+    billingRoute,
+    subscriptionSession: billingRoute === 'subscription',
+  };
+  // A silent-stop replacement inherits the staged snapshot, not this function's
+  // temporary return value. Persist the proxy-resolved default route on the
+  // owning generation before its done event can retain it for the replacement.
+  turnClaudeBillingSnapshots.replace(session.id, turnGeneration, resolvedSnapshot);
+  return resolvedSnapshot;
+}
+
+function stageClaudeTurnBillingSnapshot(
+  session: WiredSession,
+  turnGeneration: number,
+  continuation: SessionProductTurnContinuation | null,
+): boolean {
+  if (session.agentKind !== 'claude-code') return false;
+  turnClaudeBillingSnapshots.stage(
+    session.id,
+    turnGeneration,
+    () => captureClaudeTurnBillingSnapshot(session),
+    continuation,
+  );
+  beginClaudeSessionTurnRoute(session.id, turnGeneration);
+  return true;
+}
+
+function rollbackClaudeTurnBillingSnapshot(sessionId: string, turnGeneration: number): void {
+  turnClaudeBillingSnapshots.rollback(sessionId, turnGeneration);
+  rollbackClaudeSessionTurnRoute(sessionId, turnGeneration);
+}
+
+function clearClaudeTurnBillingSnapshot(sessionId: string, turnGeneration: number): void {
+  turnClaudeBillingSnapshots.clear(sessionId, turnGeneration);
+  clearClaudeSessionTurnRoute(sessionId, turnGeneration);
+}
+
 /**
  * Zero-value marker for a future subscription turn that was deliberately not
  * priceable. daily_model_usage has no money-kind column, so approximate=true
@@ -3721,8 +3814,15 @@ async function settleSilentStopDone(
   sessionId: string,
   reason: 'exhausted' | 'skip' | 'send-failed',
   turnLeaseId: string,
+  turnGeneration: number,
 ): Promise<void> {
   silentStopTurnLeaseGate.settle(sessionId, turnLeaseId);
+  turnClaudeBillingSnapshots.releaseContinuation(sessionId, turnLeaseId);
+  // A silent-stop done keeps the completed request snapshot alive so the
+  // replacement request can inherit the same billing route. If recovery ends
+  // here instead, retire that completed generation without touching a newer
+  // user-started turn.
+  clearClaudeTurnBillingSnapshot(sessionId, turnGeneration);
   try {
     if (!(await sessionTurnLeaseTracker.markTurnEndedAndCheckIdle(sessionId, turnLeaseId))) {
       log.debug('ignored stale silent-stop settle after a newer turn started', {
@@ -3791,6 +3891,7 @@ async function handleSilentStopTurnEnd(
   session: NonNullable<ReturnType<Maker['getSession']>>,
   doneAt: number,
   turnLeaseId: string,
+  turnGeneration: number,
   turnOrigin?: SendOrigin,
 ): Promise<void> {
   if (!silentStopTurnLeaseGate.claim(session.id, turnLeaseId)) {
@@ -3804,7 +3905,7 @@ async function handleSilentStopTurnEnd(
     log.debug('silent-stop auto-resume skipped — coordinator has queued work', {
       sessionId: session.id,
     });
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId);
+    await settleSilentStopDone(session.id, 'skip', turnLeaseId, turnGeneration);
     return;
   }
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
@@ -3814,10 +3915,23 @@ async function handleSilentStopTurnEnd(
       // Mark it before send(), which may synchronously emit status events.
       productTurnWallClockTracker.preserveForContinuation(session.id);
       const clientId = randomUUID();
+      const billingContinuation = turnClaudeBillingSnapshots.claimContinuation(
+        session.id,
+        turnGeneration,
+        turnLeaseId,
+      );
+      if (!billingContinuation && session.agentKind === 'claude-code') {
+        log.warn('silent-stop billing continuation snapshot unavailable', {
+          sessionId: session.id,
+          turnGeneration,
+          turnLeaseId,
+        });
+      }
       const sendResult = await session.send(
         { type: 'user', content: SILENT_STOP_RESUME_PROMPT },
         {
           origin: turnOrigin,
+          ...(billingContinuation ? { productTurnContinuation: billingContinuation } : {}),
           onAccepted: async () => {
             await createDbMessage(session.id, {
               clientId,
@@ -3858,7 +3972,7 @@ async function handleSilentStopTurnEnd(
           reason: outcome.reason,
         });
         await surfaceSilentStopExhaustedBanner(session.id);
-        await settleSilentStopDone(session.id, 'exhausted', turnLeaseId);
+        await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, turnGeneration);
       } else {
         log.info('silent-stop auto-resume dispatched', { sessionId: session.id });
       }
@@ -3869,16 +3983,16 @@ async function handleSilentStopTurnEnd(
         error: err instanceof Error ? err.message : String(err),
       });
       await surfaceSilentStopExhaustedBanner(session.id);
-      await settleSilentStopDone(session.id, 'exhausted', turnLeaseId);
+      await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, turnGeneration);
     }
     return;
   }
   if (decision.action === 'exhausted') {
     await surfaceSilentStopExhaustedBanner(session.id);
-    await settleSilentStopDone(session.id, 'exhausted', turnLeaseId);
+    await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, turnGeneration);
   }
   if (decision.action === 'skip') {
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId);
+    await settleSilentStopDone(session.id, 'skip', turnLeaseId, turnGeneration);
   }
 }
 
@@ -3923,40 +4037,58 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   wiredSessionsById.set(session.id, registration);
 
   session.setTurnLifecycleObserver({
-    beforeProviderStart: async (turnGeneration) => {
-      if (session.remoteHostId) return;
-      // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
-      // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
-      const model = session.model;
-      if (model) {
-        const verdict = await verdictForModelRoute(
-          session.agentKind,
-          model,
-          getSessionProvider(session.id),
-        );
-        // beforeProviderStart 已经进入 Session 内部，无法再安全重建跨凭证形态的
-        // runtime。付费 reroute 不能当作 pass，否则 null-provider 仍会落到已锁定
-        // 的 XD 默认来源。普通停用/能力/独占 reroute 属于既有 best-effort 轴，
-        // 运行中会话按 model-route-guard 契约不在这里打断。
-        if (verdict.kind === 'reroute' && verdict.reason === 'payment-required') {
-          throwIpcError(
-            'INVALID_PARAMS',
-            `model "${model}" must switch to provider "${verdict.providerId}" before sending`,
-          );
-        }
-        if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
-          throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
-        }
-      }
-      silentStopTurnLeaseGate.supersede(session.id);
-      // Keep Review's exact-instance liveness listener lazy. PID-only turn
-      // leases remain fail-closed until this process actually starts Review.
-      await sessionTurnLeaseTracker.markTurnStarted(
-        session.id,
-        providerTurnLeaseId(session.instanceId, turnGeneration),
+    beforeProviderStart: async (turnGeneration, context) => {
+      // Capture synchronously while the send reservation still owns the route.
+      // A provider switch may run as soon as the send lock is released, before
+      // the first running event reaches Desktop. Only the guarded silent-stop
+      // replacement is the same product turn; tracker busy may instead be an
+      // older done awaiting fan-out, especially for remote sessions.
+      const capturedBillingSnapshot = stageClaudeTurnBillingSnapshot(
+        session,
+        turnGeneration,
+        context.productTurnContinuation,
       );
+      try {
+        if (session.remoteHostId) return;
+        // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
+        // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
+        const model = session.model;
+        if (model) {
+          const verdict = await verdictForModelRoute(
+            session.agentKind,
+            model,
+            getSessionProvider(session.id),
+          );
+          // beforeProviderStart 已经进入 Session 内部，无法再安全重建跨凭证形态的
+          // runtime。付费 reroute 不能当作 pass，否则 null-provider 仍会落到已锁定
+          // 的 XD 默认来源。普通停用/能力/独占 reroute 属于既有 best-effort 轴，
+          // 运行中会话按 model-route-guard 契约不在这里打断。
+          if (verdict.kind === 'reroute' && verdict.reason === 'payment-required') {
+            throwIpcError(
+              'INVALID_PARAMS',
+              `model "${model}" must switch to provider "${verdict.providerId}" before sending`,
+            );
+          }
+          if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
+            throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
+          }
+        }
+        silentStopTurnLeaseGate.supersede(session.id);
+        // Keep Review's exact-instance liveness listener lazy. PID-only turn
+        // leases remain fail-closed until this process actually starts Review.
+        await sessionTurnLeaseTracker.markTurnStarted(
+          session.id,
+          providerTurnLeaseId(session.instanceId, turnGeneration),
+        );
+      } catch (error) {
+        if (capturedBillingSnapshot) {
+          rollbackClaudeTurnBillingSnapshot(session.id, turnGeneration);
+        }
+        throw error;
+      }
     },
     onUndispatched: async (turnGeneration) => {
+      rollbackClaudeTurnBillingSnapshot(session.id, turnGeneration);
       if (session.remoteHostId) return;
       await sessionTurnLeaseTracker.markTurnEnded(
         session.id,
@@ -3989,6 +4121,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   registration.disposers.push(() => {
     session.setTurnLifecycleObserver(null);
     silentStopTurnLeaseGate.supersedeOwnedBy(session.id, `${session.instanceId}:`);
+    turnClaudeBillingSnapshots.clearSession(session.id);
+    clearClaudeSessionTurnRoutes(session.id);
     void sessionTurnLeaseTracker.markTurnEnded(session.id);
   });
 
@@ -4195,6 +4329,24 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           ) {
             turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));
           }
+          // Compatibility fallback for a running event that did not cross the
+          // wired Session dispatch observer (for example, a pre-wiring turn).
+          if (
+            !wasInTurn &&
+            event.source === 'claude-code' &&
+            turnClaudeBillingSnapshots.read(
+              session.id,
+              event.sessionTurnGeneration ?? session.getTurnGeneration(),
+            ) === null
+          ) {
+            const turnGeneration = event.sessionTurnGeneration ?? session.getTurnGeneration();
+            turnClaudeBillingSnapshots.stage(
+              session.id,
+              turnGeneration,
+              () => captureClaudeTurnBillingSnapshot(session),
+            );
+            beginClaudeSessionTurnRoute(session.id, turnGeneration);
+          }
           if (event.source === 'pi' && !turnPiFastModeBySession.has(session.id)) {
             turnPiFastModeBySession.set(session.id, getSessionFastMode(session.id));
           }
@@ -4284,6 +4436,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               session,
               silentStopDoneAt,
               silentStopTurnLeaseId!,
+              event.sessionTurnGeneration ?? session.getTurnGeneration(),
               silentStopTurnOrigin,
             );
           }, 1_500);
@@ -4982,9 +5135,24 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // (今日 / session / per-message / 按模型) 同源同值。
       // 守卫: index.ts:388 stream_end fallback / codex done 不带 total_cost_usd, typeof 检查会跳过。
       if (event.type === 'done' && event.source === 'claude-code') {
+        const claudeTurnGeneration = event.sessionTurnGeneration ?? session.getTurnGeneration();
+        const isClaudeSilentStopDone =
+          (event.data as { silentStop?: unknown } | null | undefined)?.silentStop === true;
         const modelPromise =
           turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
         turnModelPromiseBySession.delete(session.id);
+        const claudeBillingSnapshot = resolveClaudeTurnBillingSnapshotAtUsage(
+          session,
+          claudeTurnGeneration,
+          turnClaudeBillingSnapshots.read(session.id, claudeTurnGeneration) ??
+            captureClaudeTurnBillingSnapshot(session),
+        );
+        // Continuation-bearing done events close an SDK segment, not the product
+        // turn. Keep its request-owned route until the unclaimed terminal done;
+        // wasInTurn intentionally remains true, so no new start snapshot occurs.
+        if (!isContinuationBoundary && !isClaudeSilentStopDone) {
+          clearClaudeTurnBillingSnapshot(session.id, claudeTurnGeneration);
+        }
         const doneData = event.data as
           | {
               total_cost_usd?: unknown;
@@ -5116,30 +5284,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 由同一份解析结果驱动。价格表走 main 端内存 + 磁盘缓存, stale 快返并后台刷新。
           const deltas = modelUsageDeltas ?? [];
           void (async () => {
-            const sessionProviderForBilling = getSessionProvider(session.id);
-            const observedClaudeRoute =
-              sessionProviderForBilling == null ? readClaudeSessionRoute(session.id) : null;
-            const explicitProviderBillingRoute = billingRouteForExplicitProvider(
-              sessionProviderForBilling,
-              sessionProviderForBilling
-                ? getActiveCatalog().providers.find(
-                    (provider) => provider.id === sessionProviderForBilling,
-                  )?.access?.kind
-                : null,
-            );
-            const isClaudeSubscriptionSession =
-              !session.remoteHostId &&
-              (sessionProviderForBilling === 'anthropic' ||
-                (sessionProviderForBilling == null &&
-                  (observedClaudeRoute != null
-                    ? observedClaudeRoute === 'subscription'
-                    : !readClaudeApiKey())));
-            const billingRoute: BillingRoute = session.remoteHostId
-              ? 'unknown'
-              : isClaudeSubscriptionSession
-                ? 'subscription'
-                : (explicitProviderBillingRoute ??
-                  (observedClaudeRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
+            const sessionProviderForBilling = claudeBillingSnapshot.providerId;
+            const billingRoute = claudeBillingSnapshot.billingRoute;
+            const isClaudeSubscriptionSession = claudeBillingSnapshot.subscriptionSession;
             const pricing =
               billingRoute === 'xd-gateway'
                 ? await getGatewayModelPricingForModel()
@@ -5324,21 +5471,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               await recordUsageOnly();
               return;
             }
-            const providerId = getSessionProvider(session.id);
-            const observedRoute = providerId == null ? readClaudeSessionRoute(session.id) : null;
-            const explicitProviderRoute = billingRouteForExplicitProvider(
-              providerId,
-              providerId
-                ? getActiveCatalog().providers.find((provider) => provider.id === providerId)
-                    ?.access?.kind
-                : null,
-            );
-            const route: BillingRoute = session.remoteHostId
-              ? 'unknown'
-              : providerId === 'anthropic' || observedRoute === 'subscription'
-                ? 'subscription'
-                : (explicitProviderRoute ??
-                  (observedRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
+            const route = claudeBillingSnapshot.billingRoute;
             // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
             // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
             // 避免把订阅 SDK 自报 cost 误记进计费)。但显式 provider-api 是权威路由:
@@ -5957,6 +6090,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           lastReportedModelUsageBySession.delete(session.id);
           turnModelPromiseBySession.delete(session.id);
           turnPiFastModeBySession.delete(session.id);
+          turnClaudeBillingSnapshots.clearSession(session.id);
+          clearClaudeSessionTurnRoutes(session.id);
           productTurnWallClockTracker.clear(session.id);
           productTurnUsageTargetTracker.clear(session.id);
           claudeOutputLagTimingGuard.clear(session.id);

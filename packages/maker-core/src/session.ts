@@ -272,7 +272,17 @@ function appendManagedImageReferences(
   };
 }
 
+export interface SessionProductTurnContinuation {
+  readonly kind: 'silent-stop';
+  /** One-shot host claim; provider handles never receive it. */
+  readonly token: string;
+  /** Exact completed generation whose product-turn billing identity is inherited. */
+  readonly predecessorGeneration: number;
+}
+
 export interface SessionSendOptions extends SendOptions {
+  /** Host-only identity for an automatic replacement that remains in the same product turn. */
+  productTurnContinuation?: SessionProductTurnContinuation;
   /**
    * Turn reservation 建立后的原子准备钩子。
    *
@@ -307,7 +317,10 @@ export interface SessionSendOptions extends SendOptions {
 
 export interface SessionTurnLifecycleObserver {
   /** Awaited after option validation and before any provider-owned start hook or send. */
-  beforeProviderStart(turnGeneration: number): void | Promise<void>;
+  beforeProviderStart(
+    turnGeneration: number,
+    context: { productTurnContinuation: SessionProductTurnContinuation | null },
+  ): void | Promise<void>;
   /** Called when a prepared generation never crosses the provider dispatch boundary. */
   onUndispatched(turnGeneration: number): void | Promise<void>;
   /** Called before event listeners for a foreground unclaimed done or terminal error. */
@@ -700,6 +713,7 @@ export class Session {
       onAccepted,
       onDispatching,
       onTurnReserved,
+      productTurnContinuation,
       ...handleOpts
     } = opts ?? {};
     const cancelledBeforeReservation = (): SessionSendResult | null =>
@@ -807,7 +821,9 @@ export class Session {
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
       if (turnLifecycleObserver) {
-        await turnLifecycleObserver.beforeProviderStart(reservedTurnGeneration);
+        await turnLifecycleObserver.beforeProviderStart(reservedTurnGeneration, {
+          productTurnContinuation: productTurnContinuation ?? null,
+        });
         turnLifecyclePrepared = true;
       }
       if (beforeProviderStart) await beforeProviderStart();

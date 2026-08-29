@@ -2098,8 +2098,13 @@ describe('Session turn send guard', () => {
       logger: createLogger(),
     });
     session.setTurnLifecycleObserver({
-      beforeProviderStart: async (turnGeneration) => {
-        order.push(`host:${turnGeneration}`);
+      beforeProviderStart: async (turnGeneration, context) => {
+        const continuation = context.productTurnContinuation;
+        order.push(
+          continuation
+            ? `host:${turnGeneration}:${continuation.kind}:${continuation.predecessorGeneration}:${continuation.token}`
+            : `host:${turnGeneration}:none`,
+        );
       },
       onUndispatched: async (turnGeneration) => {
         order.push(`undispatched:${turnGeneration}`);
@@ -2109,6 +2114,11 @@ describe('Session turn send guard', () => {
 
     await expect(
       session.send('first', {
+        productTurnContinuation: {
+          kind: 'silent-stop',
+          token: 'claim-1',
+          predecessorGeneration: 0,
+        },
         beforeProviderStart: () => {
           order.push('caller');
         },
@@ -2119,7 +2129,12 @@ describe('Session turn send guard', () => {
       }),
     ).rejects.toThrow('persist failed');
 
-    expect(order).toEqual(['host:1', 'caller', 'accepted', 'undispatched:1']);
+    expect(order).toEqual([
+      'host:1:silent-stop:0:claim-1',
+      'caller',
+      'accepted',
+      'undispatched:1',
+    ]);
     expect(handle.send).not.toHaveBeenCalled();
   });
 

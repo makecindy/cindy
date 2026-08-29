@@ -1159,8 +1159,59 @@ describe('maker:event hot path ordering', () => {
 
     // 仅取 claude-code 块 (到 codex 块前)。
     const claudeDoneSource = wireSessionSource.slice(claudeDoneIndex, codexDoneIndex);
-    // 主路径:按真实 provider / billing route 取价，所有 sink 共用区域金额结果。
-    expect(claudeDoneSource).toContain('const billingRoute: BillingRoute = session.remoteHostId');
+    // provider / billing route 必须绑定 turn-start 请求，不能在 done 时读取用户刚切换的路由。
+    expect(source).toContain(
+      'const turnClaudeBillingSnapshots = new ClaudeTurnBillingSnapshotRegistry();',
+    );
+    const lifecycleObserverSource = wireSessionSource.slice(
+      wireSessionSource.indexOf('session.setTurnLifecycleObserver({'),
+      wireSessionSource.indexOf('// session-agent-switch:登记本会话当前引擎'),
+    );
+    expect(lifecycleObserverSource).toContain('stageClaudeTurnBillingSnapshot(');
+    expect(source).toContain('turnClaudeBillingSnapshots.claimContinuation(');
+    expect(source).toContain('productTurnContinuation: billingContinuation');
+    expect(lifecycleObserverSource).toContain('context.productTurnContinuation,');
+    expect(lifecycleObserverSource).not.toContain(
+      'sessionTurnActivityTracker.isSessionInTurn(session.id),',
+    );
+    expectOrder(
+      lifecycleObserverSource,
+      'stageClaudeTurnBillingSnapshot(',
+      'if (session.remoteHostId) return;',
+    );
+    expect(lifecycleObserverSource).toContain(
+      'rollbackClaudeTurnBillingSnapshot(session.id, turnGeneration);',
+    );
+    expect(wireSessionSource).toContain('turnClaudeBillingSnapshots.read(');
+    expect(wireSessionSource).toContain('captureClaudeTurnBillingSnapshot(session)');
+    expect(claudeDoneSource).toContain(
+      'turnClaudeBillingSnapshots.read(session.id, claudeTurnGeneration) ??',
+    );
+    expect(claudeDoneSource).toContain('resolveClaudeTurnBillingSnapshotAtUsage(');
+    expect(source).toContain(
+      'turnClaudeBillingSnapshots.replace(session.id, turnGeneration, resolvedSnapshot);',
+    );
+    expect(claudeDoneSource).toContain(
+      'clearClaudeTurnBillingSnapshot(session.id, claudeTurnGeneration);',
+    );
+    expect(claudeDoneSource).toContain('if (!isContinuationBoundary && !isClaudeSilentStopDone)');
+    const silentStopSettleSource = source.slice(
+      source.indexOf('async function settleSilentStopDone('),
+      source.indexOf('async function surfaceSilentStopExhaustedBanner('),
+    );
+    expect(silentStopSettleSource).toContain(
+      'clearClaudeTurnBillingSnapshot(sessionId, turnGeneration);',
+    );
+    expect(silentStopSettleSource).toContain(
+      'turnClaudeBillingSnapshots.releaseContinuation(sessionId, turnLeaseId);',
+    );
+    expect(claudeDoneSource).toContain(
+      'const sessionProviderForBilling = claudeBillingSnapshot.providerId;',
+    );
+    expect(claudeDoneSource).toContain('const billingRoute = claudeBillingSnapshot.billingRoute;');
+    expect(claudeDoneSource).not.toContain(
+      'const sessionProviderForBilling = getSessionProvider(session.id);',
+    );
     expect(claudeDoneSource).toContain("billingRoute === 'xd-gateway'");
     expect(claudeDoneSource).toContain('await getGatewayModelPricingForModel()');
     expect(claudeDoneSource).toContain(': getReferenceModelPricing();');
@@ -1191,12 +1242,19 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toMatch(
       /computePriceQuoteTurnMoney\(\s*m\.deltas,\s*getSubscriptionValuePriceFor\('claude-code', m\.model, pricing\),\s*currentLedgerCurrency\(\),\s*m\.segments,\s*\)/,
     );
-    // 订阅判定对齐 proxy 路由: 显式选 Anthropic, 或默认路由优先按 observed route, 未观察再回落无网关 key 启发式
-    expect(claudeDoneSource).toContain("sessionProviderForBilling === 'anthropic'");
-    expect(claudeDoneSource).toContain('const observedClaudeRoute =');
-    expect(claudeDoneSource).toContain('readClaudeSessionRoute(session.id)');
-    expect(claudeDoneSource).toContain("observedClaudeRoute === 'subscription'");
-    expect(claudeDoneSource).toContain(': !readClaudeApiKey()');
+    // 显式 provider 在 dispatch 前冻结；默认 provider 必须等当前请求经过 proxy
+    // routingTransform 后，才能读取 request-owned observed route。
+    const billingCaptureSource = source.slice(
+      source.indexOf('function captureClaudeTurnBillingSnapshot'),
+      source.indexOf('function stageClaudeTurnBillingSnapshot'),
+    );
+    expect(billingCaptureSource).toContain("subscriptionSession: billingRoute === 'subscription'");
+    expect(billingCaptureSource).toContain('const observedRoute =');
+    expect(billingCaptureSource).toContain(
+      'readClaudeSessionTurnRoute(session.id, turnGeneration)',
+    );
+    expect(billingCaptureSource).toContain("observedRoute === 'subscription'");
+    expect(billingCaptureSource).toContain('resolveClaudeTurnBillingSnapshotAtUsage(');
     // 纯订阅轮无 recordTurnSpend push, 模型行落库后重广播今日 spend 触发仪表盘刷新
     expect(claudeDoneSource).toContain(
       'void Promise.allSettled(modelUsageWrites).then(() => rebroadcastTodaySpend());',
