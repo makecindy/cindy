@@ -1003,6 +1003,7 @@ import {
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import { readInterruptedTurnAutoResumeSettings } from '../maker-host/interrupted-turn-auto-resume-store.js';
+import { isSuccessfulAssistantReplyDoneData } from '../cindy-brain/assistantReplyHook.js';
 import {
   broadcastGhostMessageBlocked,
   broadcastGhostMessageRewritten,
@@ -4738,7 +4739,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 意识时,派一个独立异步续跑跑裁决并原地更新那条消息(rewrite 换文本 /
         // render 换自绘卡)。同步守卫 hasEnabledGhostAssistantHook 保证无此类意识时
         // 不 schedule —— 与今天行为逐字节一致,零额外开销(规则 10 不碰热路径)。
-        if (event.type === 'done' && !isContinuationBoundary && turnAssistantPersistId) {
+        if (
+          event.type === 'done'
+          && !isContinuationBoundary
+          && !isPairedFailedTurnDone
+          && !isTerminalTurnErrorEvent(event)
+          && isSuccessfulAssistantReplyDoneData(event.data)
+          && turnAssistantPersistId
+        ) {
           const doneResult = (event.data as { result?: unknown } | null)?.result;
           const replyText = typeof doneResult === 'string' ? doneResult : '';
           if (replyText.length > 0 && hasEnabledGhostAssistantHook()) {

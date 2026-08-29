@@ -2,16 +2,28 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  getPiProxySessionProvider,
+  registerPiProxySession,
+  resetPiProxySessionsForTest,
+} from '../pi-proxy-session-auth.js';
 import { createPiResponsesVerbosityTransform } from '../pi-responses-verbosity.js';
 
 const CTX = {
   reqId: 1,
   method: 'POST',
   url: '/v1/responses',
-  headers: { 'x-cindy-pi-session-id': 'session-1' },
+  headers: {
+    'x-cindy-pi-session-id': 'session-1',
+    'x-cindy-pi-session-token': 'token-1',
+  },
 };
+
+afterEach(() => {
+  resetPiProxySessionsForTest();
+});
 
 describe('Pi Responses verbosity transform', () => {
   it('adds low for a Cindy Codex GPT-5 gateway request', () => {
@@ -23,7 +35,7 @@ describe('Pi Responses verbosity transform', () => {
       input: [],
       text: { verbosity: 'low' },
     });
-    expect(resolveProvider).toHaveBeenCalledWith('session-1');
+    expect(resolveProvider).toHaveBeenCalledWith('session-1', 'token-1');
   });
 
   it('preserves an explicit verbosity and other text options', () => {
@@ -47,6 +59,24 @@ describe('Pi Responses verbosity transform', () => {
       _label === 'third-party provider' ? 'custom-provider' : 'xd',
     );
     expect(transform(body, ctx)).toBeNull();
+  });
+
+  it('uses the provider frozen onto an authenticated subagent route', () => {
+    registerPiProxySession('session-1', 'subagent-token', () => 'xd', {
+      scope: 'subagent-route',
+    });
+    const transform = createPiResponsesVerbosityTransform(getPiProxySessionProvider);
+
+    expect(transform({ model: 'codex/gpt-5.6-sol' }, {
+      ...CTX,
+      headers: {
+        'x-cindy-pi-session-id': 'session-1',
+        'x-cindy-pi-session-token': 'subagent-token',
+      },
+    })).toEqual({
+      model: 'codex/gpt-5.6-sol',
+      text: { verbosity: 'low' },
+    });
   });
 
   it('keeps existing text options when adding the default', () => {
@@ -87,6 +117,7 @@ describe('Pi Responses verbosity transform', () => {
         headers: {
           'content-type': 'application/json',
           'x-cindy-pi-session-id': 'session-1',
+          'x-cindy-pi-session-token': 'token-1',
         },
         body: JSON.stringify({ model: 'codex/gpt-5.6-sol', input: [], stream: true }),
       });

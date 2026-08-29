@@ -431,7 +431,11 @@ describe('pi translator', () => {
         }),
       }),
     ]);
-    expect(events).toContainEqual(expect.objectContaining({ type: 'done', source: 'pi' }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'done',
+      source: 'pi',
+      data: expect.objectContaining({ result: '', status: 'failed' }),
+    }));
     expect(events.at(-1)).toEqual(expect.objectContaining({
       type: 'status',
       data: expect.objectContaining({ status: 'Done', isRunning: false }),
@@ -760,8 +764,10 @@ describe('pi translator', () => {
     translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
 
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
-    expect((events.find((event) => event.type === 'done')?.data as { result?: string }).result)
-      .toBe('partial answer');
+    expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+      result: '',
+      status: 'cancelled',
+    });
   });
 
   it('notifies Pi network auto-retries with the shared Reconnecting progress line', () => {
@@ -1423,7 +1429,7 @@ describe('pi translator', () => {
     );
     translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
     const done = events.find((e) => e.type === 'done');
-    expect((done!.data as { result?: unknown }).result).toBe('final answer');
+    expect(done!.data).toMatchObject({ result: 'final answer', status: 'completed' });
 
     // 新 turn:result 归零,不带上一 turn 的回复。
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);

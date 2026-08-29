@@ -7,6 +7,7 @@ import type {
 } from '@cindy/anthropic-compat-proxy';
 
 const PI_SESSION_ID_HEADER = 'x-cindy-pi-session-id';
+const PI_SESSION_TOKEN_HEADER = 'x-cindy-pi-session-token';
 const CODEX_GPT5_MODEL_RE = /^codex\/gpt-5(?:[.\-]|$)/;
 const RESPONSES_PATH_RE = /(?:^|\/)responses(?:\?|$)/;
 
@@ -30,17 +31,21 @@ function hasExplicitVerbosity(value: unknown): boolean {
  * OpenAI-compatible endpoints that may reject the OpenAI-only option.
  */
 export function createPiResponsesVerbosityTransform(
-  resolveProviderId: (sessionId: string) => string | null,
+  resolveProviderId: (sessionId: string, sessionToken: string | null) => string | null,
   defaultVerbosity: TextVerbosity = 'low',
 ): RequestTransform {
   return (body: unknown, ctx: RequestTransformCtx): unknown | null => {
     if (!RESPONSES_PATH_RE.test(ctx.url) || !isPlainObject(body)) return null;
 
     const sessionId = ctx.headers[PI_SESSION_ID_HEADER]?.trim();
+    const sessionToken = ctx.headers[PI_SESSION_TOKEN_HEADER]?.trim() || null;
     const model = typeof body.model === 'string' ? body.model.trim() : '';
     if (!sessionId || !CODEX_GPT5_MODEL_RE.test(model)) return null;
+    // Resolve from the authenticated Pi process binding. A subagent-route
+    // token may intentionally freeze a provider that differs from its mutable
+    // parent session selection.
     if (!isCindyProviderCodexRemoteCompactionRoute({
-      providerId: resolveProviderId(sessionId),
+      providerId: resolveProviderId(sessionId, sessionToken),
       model,
     })) return null;
     if (hasExplicitVerbosity(body.text)) return null;
