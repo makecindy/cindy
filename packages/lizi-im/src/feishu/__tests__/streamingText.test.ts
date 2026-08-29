@@ -656,6 +656,39 @@ describe('feishu streaming text', () => {
     expect(mocks.sendFileToChat).not.toHaveBeenCalled();
   });
 
+  it('does not reuse a file_key when the attested path no longer names the uploaded inode', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-leaf-allowed-'));
+    const secretRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-leaf-secret-'));
+    tempDirs.push(allowedRoot, secretRoot);
+    const decoy = path.join(allowedRoot, 'report.txt');
+    const secret = path.join(secretRoot, 'secret.txt');
+    await Promise.all([fs.writeFile(decoy, 'decoy'), fs.writeFile(secret, 'secret')]);
+    const secretStat = fsSync.statSync(secret);
+    const decoyReal = fsSync.realpathSync(decoy);
+    mocks.sendFile.mockResolvedValue({
+      ok: true,
+      messageId: 'om_primary_file',
+      reusableMessage: {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      uploadedSource: {
+        realPath: decoyReal,
+        dev: secretStat.dev,
+        ino: secretStat.ino,
+      },
+    });
+    const handle = await start('g/oc_group/omt_topic');
+
+    await handle.finalize(
+      `见 [report.txt](xdt-file://${decoy})`,
+      terminalMirror('x'.repeat(64), [allowedRoot]),
+    );
+
+    expect(mocks.sendFile).toHaveBeenCalled();
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+  });
+
   it('copies parent-chat files when the allowed root uses host filesystem case', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-case-'));
     tempDirs.push(root);

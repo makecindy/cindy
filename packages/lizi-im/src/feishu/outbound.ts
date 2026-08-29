@@ -970,6 +970,50 @@ interface OutboundFileSource {
   createReadStream(): fs.ReadStream;
 }
 
+function isSyntheticFdPath(resolved: string): boolean {
+  const normalized = resolved.replaceAll('\\', '/');
+  return /(?:^|\/)(?:proc\/self\/fd|dev\/fd)\/\d+$/.test(normalized);
+}
+
+function realPathIfInode(
+  candidate: string,
+  identity: { dev: number; ino: number },
+): string | null {
+  try {
+    const realPath = fs.realpathSync(candidate);
+    if (isSyntheticFdPath(realPath)) return null;
+    const leaf = fs.statSync(realPath);
+    if (leaf.dev === identity.dev && leaf.ino === identity.ino) return realPath;
+  } catch {
+    /* candidate no longer names this inode */
+  }
+  return null;
+}
+
+/**
+ * Canonical path for the opened handle. `realpathSync(absPath)` after open is
+ * a separate lookup: the Agent can retarget the path between those two calls.
+ * Bind via the fd where the OS exposes a real path, then accept absPath only
+ * if it still names this inode. Unbound → empty string (fail closed).
+ */
+function attestedRealPath(
+  fd: number,
+  absPath: string,
+  identity: { dev: number; ino: number },
+): string {
+  const fdHints =
+    process.platform === 'linux'
+      ? [`/proc/self/fd/${fd}`]
+      : process.platform === 'darwin'
+        ? [`/dev/fd/${fd}`]
+        : [];
+  for (const hint of fdHints) {
+    const bound = realPathIfInode(hint, identity);
+    if (bound) return bound;
+  }
+  return realPathIfInode(absPath, identity) ?? '';
+}
+
 async function sendFileToTarget(
   target: SendTarget,
   absPath: string,
@@ -987,12 +1031,7 @@ async function sendFileToTarget(
 
   try {
     const stat = await handle.stat();
-    let realPath: string;
-    try {
-      realPath = fs.realpathSync(absPath);
-    } catch {
-      realPath = absPath;
-    }
+    const realPath = attestedRealPath(handle.fd, absPath, stat);
     const result = await sendFileSourceToTarget(
       c,
       target,

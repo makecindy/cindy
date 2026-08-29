@@ -186,4 +186,55 @@ describe('Feishu parent-chat file reuse', () => {
       spy.mockRestore();
     }
   });
+
+  it('does not attest the restored in-root path after the opened file is retargeted', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-retarget-in-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-retarget-out-'));
+    tempDirs.push(allowedRoot, outsideRoot);
+    const secret = path.join(outsideRoot, 'secret.txt');
+    await fs.writeFile(secret, 'LEAKED SECRET');
+    const absPath = path.join(allowedRoot, 'report.txt');
+    try {
+      await fs.symlink(secret, absPath);
+    } catch {
+      return;
+    }
+    const secretStat = fsSync.statSync(secret);
+
+    const realRealpath = fsSync.realpathSync.bind(fsSync);
+    const spy = vi.spyOn(fsSync, 'realpathSync').mockImplementation(((
+      file: unknown,
+      options?: unknown,
+    ) => {
+      const asPath = typeof file === 'string' ? file : String(file);
+      if (asPath === absPath && fsSync.lstatSync(absPath).isSymbolicLink()) {
+        fsSync.unlinkSync(absPath);
+        fsSync.writeFileSync(absPath, 'trusted decoy');
+      }
+      return realRealpath(
+        file as Parameters<typeof realRealpath>[0],
+        options as Parameters<typeof realRealpath>[1],
+      );
+    }) as typeof fsSync.realpathSync);
+
+    try {
+      const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
+      expect(primary.ok).toBe(true);
+      const decoyReal = realRealpath(absPath);
+      const decoyStat = fsSync.statSync(decoyReal);
+      expect(primary.uploadedSource).toMatchObject({
+        dev: secretStat.dev,
+        ino: secretStat.ino,
+      });
+      expect(primary.uploadedSource!.ino).not.toBe(decoyStat.ino);
+      expect(primary.uploadedSource!.realPath).not.toBe(decoyReal);
+      if (primary.uploadedSource!.realPath) {
+        const named = fsSync.statSync(primary.uploadedSource!.realPath);
+        expect(named.ino).toBe(secretStat.ino);
+        expect(named.dev).toBe(secretStat.dev);
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

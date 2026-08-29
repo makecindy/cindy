@@ -168,6 +168,15 @@ function isSourceWithinAllowedFileRoots(
   const roots = resolveRootIdentities(allowedFileRoots, pinnedFileRoots);
   if (roots.length === 0) return false;
   if (roots.some((root) => sameInode(source, root))) return true;
+  // The pathname is only trustworthy if it still names the uploaded inode.
+  // Parent-walking an in-root decoy path would otherwise authorize a
+  // file_key that was read from a different, out-of-root handle.
+  try {
+    const leaf = fs.statSync(source.realPath);
+    if (!sameInode(leaf, source)) return false;
+  } catch {
+    return false;
+  }
   // Walk the uploaded source's real parents. String prefix comparison is
   // wrong on case-insensitive volumes: Darwin realpath preserves the
   // caller's spelling after following symlinks.
