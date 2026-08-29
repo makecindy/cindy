@@ -510,6 +510,36 @@ describe('createContextOverflowRollover', () => {
     expect(deps.setPendingHandoff).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [0, 'not-needed'],
+    [244_799, 'not-needed'],
+    [244_800, 'remote-unsupported'],
+  ] as const)(
+    'uses persisted cold SSH Pi usage %i before deciding remote rebuild support',
+    async (contextTokens, expected) => {
+      const deps = makeDeps([msg('user', '继续', 'u1')]);
+      deps.getSessionRow.mockResolvedValue({
+        ...(await deps.getSessionRow()),
+        agentKind: 'pi',
+        remoteHostId: 'remote-1',
+        sdkSessionId: '/tmp/remote-cold-pi-session.jsonl',
+        contextTokens,
+        contextWindow: 500_000,
+        model: 'wide-model',
+      });
+      deps.getLiveSession.mockReturnValue(undefined);
+      const rollover = createContextOverflowRollover(deps);
+
+      await expect(
+        rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+      ).resolves.toBe(expected);
+      expect(deps.rehydrateColdPiRuntimeForWindowVerification).not.toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    },
+  );
+
   it('falls back to persisted usage when a lazy live snapshot still reports placeholder zero', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({

@@ -558,10 +558,27 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (!sessionRow || sessionRow.status === 'deleted' || !sessionRow.sdkSessionId) {
       return 'not-needed';
     }
+    const persistedContextTokens =
+      typeof sessionRow.contextTokens === 'number' &&
+      Number.isFinite(sessionRow.contextTokens) &&
+      sessionRow.contextTokens >= 0
+        ? sessionRow.contextTokens
+        : 0;
     let live = deps.getLiveSession(sessionId);
     let rehydratedColdPi = false;
     if (sessionRow.agentKind === 'pi' && !live) {
-      if (sessionRow.remoteHostId) return 'remote-unsupported';
+      if (sessionRow.remoteHostId) {
+        // A cold SSH runtime cannot be rehydrated locally. Persisted usage is still
+        // sufficient to allow an empty/low-pressure switch or reject a required rebuild.
+        const requiresRemoteRebuild = shouldHandoffAfterContextAssessment(
+          assessModelSwitchContext({
+            contextTokens: persistedContextTokens,
+            targetContextWindow: target.contextWindow,
+            autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+          }),
+        );
+        return requiresRemoteRebuild ? 'remote-unsupported' : 'not-needed';
+      }
       if (!deps.rehydrateColdPiRuntimeForWindowVerification) return 'unknown-context';
       try {
         await deps.rehydrateColdPiRuntimeForWindowVerification(sessionId);
@@ -582,12 +599,6 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     ) {
       return 'unknown-context';
     }
-    const persistedContextTokens =
-      typeof sessionRow.contextTokens === 'number' &&
-      Number.isFinite(sessionRow.contextTokens) &&
-      sessionRow.contextTokens >= 0
-        ? sessionRow.contextTokens
-        : 0;
     const liveContextTokens =
       liveUsage && Number.isFinite(liveUsage.contextTokens) && liveUsage.contextTokens >= 0
         ? liveUsage.contextTokens
