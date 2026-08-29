@@ -932,6 +932,95 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('≥2 控制端共享同一被控端:一个停止 ACK 只复位该 peer,邻居 link 与在途请求零感知', async () => {
+    // 故障半径要求的拓扑是「多个控制端共用一台被控桌面」,不是「一个控制端连两台桌面」。
+    // 本用例站在被控 Desktop:ctrl-silent 永不 ACK,ctrl-healthy 的在途 invoke 必须仍能完成,
+    // 且共享 WSS 不得被拆掉。
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 60_000,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    const inboundInvokes: Envelope[] = [];
+    h.client.onFrame((env) => {
+      if (env.kind === 'invoke' && env.src === 'ctrl-healthy') inboundInvokes.push(env);
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    await establishInboundReliableLink(h, 'silent-controller-stream', 1, 'ctrl-silent');
+    await establishInboundReliableLink(h, 'healthy-controller-stream', 1, 'ctrl-healthy');
+    const socket = h.current();
+    const socketCount = h.sockets.length;
+
+    h.client.sendInvokeResult('ctrl-silent', 'silent-req', { ok: true, result: ['silent'] });
+    h.client.sendInvokeResult('ctrl-healthy', 'healthy-inflight', { ok: true, result: ['healthy'] });
+    const healthyFrame = socket.sent
+      .filter((env) => env.kind === 'invoke-result' && env.dst === 'ctrl-healthy')
+      .at(-1)!;
+    const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'ctrl-healthy',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: healthyMeta.streamId,
+          ackSeq: healthyMeta.seq,
+        },
+      },
+    });
+
+    socket.push(encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'healthy-followup',
+      src: 'ctrl-healthy',
+      payload: { channel: 'local-db:sessions:list', args: [10] },
+    }, 'healthy-controller-stream', 1)[0]);
+    await tick();
+    expect(inboundInvokes).toHaveLength(1);
+
+    await vi.waitFor(() => {
+      expect(socket.sent.some((env) => (
+        env.kind === 'link-close'
+        && env.dst === 'ctrl-silent'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))).toBe(true);
+    });
+    expect(h.client.isLinkReady('ctrl-silent')).toBe(false);
+    expect(h.client.isLinkReady('ctrl-healthy')).toBe(true);
+    expect(socket.terminated).toBe(false);
+    expect(socket.closed).toBeNull();
+    expect(h.sockets).toHaveLength(socketCount);
+
+    h.client.sendInvokeResult('ctrl-healthy', 'healthy-followup', { ok: true, result: ['followup'] });
+    const followupFrame = socket.sent
+      .filter((env) => env.kind === 'invoke-result' && env.id === 'healthy-followup')
+      .at(-1)!;
+    const followupMeta = parseTransportPayload(followupFrame.payload)!.meta;
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'ctrl-healthy',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: followupMeta.streamId,
+          ackSeq: followupMeta.seq,
+        },
+      },
+    });
+    expect(h.client.isLinkReady('ctrl-healthy')).toBe(true);
+    expect(h.client.getReliableSendQueueDepth('ctrl-healthy')).toBe(0);
+    h.client.stop();
+  });
+
   it('入站 link 的可靠重试耗尽只重置该 peer link:relay 连接不拆,发 transport-timeout link-close,重开后 live 帧按原 seq 重放', async () => {
     const warn = vi.fn();
     const h = makeHarness({
