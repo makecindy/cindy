@@ -552,7 +552,6 @@ import {
   mergePiPackageCommands,
   shouldListPiPackageCommands,
   type PiPackageMutationRequest,
-  type PiPackageMutationResult,
 } from '../../shared/piPackages.js';
 import {
   listManagedPiPromptCommands,
@@ -7046,42 +7045,59 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (payload.enabled !== undefined && typeof payload.enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
     }
+    if (payload.mutationTarget !== undefined
+      && (typeof payload.mutationTarget !== 'string'
+        || !/^cindy-pi-package:[a-f0-9]{64}$/.test(payload.mutationTarget))) {
+      throwIpcError('INVALID_PARAMS', 'invalid Pi extension mutation target');
+    }
     const request: PiPackageMutationRequest = {
       action,
       source: payload.source,
+      ...(typeof payload.mutationTarget === 'string'
+        ? { mutationTarget: payload.mutationTarget }
+        : {}),
       ...(typeof payload.enabled === 'boolean' ? { enabled: payload.enabled } : {}),
     };
     return runPiPackageMutationIpcBoundary(
       async () => {
-        let result: PiPackageMutationResult;
+        const invalidateRuntimes = async (): Promise<void> => {
+          try {
+            const invalidation = await invalidateLocalPiPackageRuntimes(maker);
+            if (invalidation.failedSessionIds.length > 0) {
+              log.warn('Pi package changed but some local runtimes did not close', {
+                failedSessionIds: invalidation.failedSessionIds,
+              });
+            }
+          } catch (error) {
+            // The package mutation is already committed. Runtime convergence is
+            // best-effort follow-up and must not rewrite native Pi success as a
+            // contradictory mutation failure.
+            log.warn('Pi package changed but local runtime invalidation failed', {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        };
         try {
-          if (!piPackageMutationNeedsGrant(request)) {
-            result = await mutatePiPackage(request);
-          } else {
-            // The trusted Settings action is the user's authorization. Keep the
-            // one-shot Main grant bound to this exact request, with no second
-            // fingerprint, compatibility, or content-approval decision.
-            result = await mutatePiPackage(
-              request,
-              issuePiPackageMutationGrant(request),
-            );
-          }
+          const result = !piPackageMutationNeedsGrant(request)
+            ? await mutatePiPackage(request)
+            : await mutatePiPackage(
+                request,
+                // The trusted Settings action is the user's one authorization;
+                // this grant binds only the exact request.
+                issuePiPackageMutationGrant(request),
+              );
+          // Pi discovers packages at process start. Every successful roster
+          // mutation must retire old local ordinary runtimes, including install,
+          // update, and enable—not only revocation.
+          await invalidateRuntimes();
+          return result;
         } catch (error) {
-          // A failed install/update/remove may still have changed bytes or
-          // approval state. Stop old snapshots before returning failure so the
-          // Settings projection cannot say disabled while tools keep running.
-          if (request.action !== 'set-enabled' || request.enabled === false) {
-            await invalidateLocalPiPackageRuntimes(maker);
-          }
+          // A failed native command may still have changed bytes before its
+          // failure surfaced. Retire stale snapshots, but preserve the original
+          // mutation error even if runtime cleanup also fails.
+          await invalidateRuntimes();
           throw error;
         }
-        if (request.action === 'remove'
-          || (request.action === 'set-enabled' && request.enabled === false)) {
-          // Revocation is immediate: old startup snapshots must not keep the
-          // removed/disabled extension alive after Settings reports success.
-          await invalidateLocalPiPackageRuntimes(maker);
-        }
-        return result;
       },
       t('settings.piPackages.operationFailed'),
       (error) => {

@@ -555,6 +555,19 @@ const DEFAULT_PI_EXTENSION_UI_STRINGS: PiExtensionUiStrings = {
   },
 };
 
+function notifyPiManagedPackageMutationSettled(deps: AgentDeps): void {
+  const callback = deps.onPiManagedPackageMutationSettled;
+  if (!callback) return;
+  void callback().catch((error) => {
+    // Native mutation success/failure has already been sent to the caller. A
+    // runtime convergence problem is host diagnostics, never a rewritten
+    // package receipt.
+    deps.logger.warn('Pi package runtime invalidation failed after receipt', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 function resolvePiExtensionUiStrings(deps: AgentDeps): PiExtensionUiStrings {
   try {
     const strings = deps.getPiExtensionUiStrings?.();
@@ -4376,11 +4389,13 @@ export class PiAgent extends BaseAgent {
       if (!command) return { text, accepted: false };
       const uiStrings = resolvePiExtensionUiStrings(this.deps);
       let outcome: PiManagedPackageCommandOutcome;
+      let mutationAttempted = false;
       if (!command.source || command.source.length > MAX_PI_MANAGED_PACKAGE_SOURCE_LENGTH) {
         outcome = { ok: false, error: uiStrings.mutationFailed };
       } else {
         try {
           const resolvedSource = resolvePiManagedPackageSource(command.source, opts.workingDir);
+          mutationAttempted = true;
           outcome = {
             ok: true,
             result: await this.deps.mutatePiManagedPackage!({
@@ -4421,6 +4436,7 @@ export class PiAgent extends BaseAgent {
         },
         source: 'pi',
       });
+      if (mutationAttempted) notifyPiManagedPackageMutationSettled(this.deps);
       return {
         text: piManagedPackageReceiptPrompt(command, outcome),
         accepted: true,
@@ -6463,6 +6479,7 @@ export class PiAgent extends BaseAgent {
                 error: resolvePiExtensionUiStrings(this.deps).mutationFailed,
               }),
             });
+            notifyPiManagedPackageMutationSettled(this.deps);
             return;
           }
           proc.send({
@@ -6470,6 +6487,7 @@ export class PiAgent extends BaseAgent {
             id,
             value: JSON.stringify({ ok: true, result }),
           });
+          notifyPiManagedPackageMutationSettled(this.deps);
         } catch (error) {
           proc.send({
             type: 'extension_ui_response',

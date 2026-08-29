@@ -2023,14 +2023,14 @@ describe('Pi package executable-code boundary', () => {
         action: 'set-enabled',
         source,
         enabled: false,
-      })).resolves.toMatchObject({ changed: true });
+      })).rejects.toThrow('state is unavailable');
     } finally {
       readSpy.mockRestore();
     }
     await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(persistedState);
   });
 
-  it('does not let corrupt Cindy state block native package enablement or a later precise toggle', async () => {
+  it('does not let corrupt Cindy state block native loading or get overwritten by a toggle', async () => {
     const { source } = await createSkillOnlyPackage('npm:corrupt-state-skill-package');
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     const stateFile = path.join(stateDir, 'cindy-package-state.json');
@@ -2055,8 +2055,8 @@ describe('Pi package executable-code boundary', () => {
       action: 'set-enabled',
       source,
       enabled: false,
-    })).resolves.toMatchObject({ changed: true });
-    await expect(fs.readFile(stateFile, 'utf8')).resolves.toContain(source);
+    })).rejects.toThrow('state is unavailable');
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(corruptState);
   });
 
   it('keeps a valid disabled Skill package disabled with its state readable', async () => {
@@ -2771,6 +2771,7 @@ describe('Pi package executable-code boundary', () => {
     const result = await store.listPiPackages();
     expect(result.packages).toEqual([{
       source: 'git:https://example.com/acme/package.git',
+      mutationTarget: expect.stringMatching(/^cindy-pi-package:[a-f0-9]{64}$/),
       name: 'git:https://example.com/acme/package.git',
       enabled: true,
       resources: [],
@@ -2778,6 +2779,20 @@ describe('Pi package executable-code boundary', () => {
     }]);
     expect(JSON.stringify(result)).not.toContain('secret');
     expect(JSON.stringify(result)).not.toContain('private');
+    await expect(store.mutatePiPackage({
+      action: 'set-enabled',
+      source: result.packages[0]!.source,
+      mutationTarget: result.packages[0]!.mutationTarget!,
+      enabled: false,
+    })).resolves.toMatchObject({
+      changed: true,
+      affectedPackage: { enabled: false },
+    });
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([unsafeSource]);
     await expect(store.resolveManagedPiPackageResources({
       snapshotRoot: path.join(runtime.userData, 'unsafe-snapshot'),
     })).resolves.toEqual({

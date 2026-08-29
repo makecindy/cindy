@@ -35,12 +35,15 @@ describe('Pi package runtime invalidation', () => {
       closeSession,
     };
 
-    await expect(invalidateLocalPiPackageRuntimes(maker)).resolves.toEqual(['local-pi']);
+    await expect(invalidateLocalPiPackageRuntimes(maker)).resolves.toEqual({
+      requestedSessionIds: ['local-pi'],
+      failedSessionIds: [],
+    });
     expect(getSessionMeta).toHaveBeenCalledTimes(3);
     expect(closeSession).toHaveBeenCalledWith('local-pi', 'requested');
   });
 
-  it('waits for close failures instead of reporting a false successful switch', async () => {
+  it('reports close failures without rewriting an already committed package mutation', async () => {
     const maker: InvalidationMaker = {
       listActiveSessions: () => [session('local-pi', 'pi')],
       getSessionMeta: vi.fn(async () => ({
@@ -57,6 +60,9 @@ describe('Pi package runtime invalidation', () => {
       }),
     };
 
-    await expect(invalidateLocalPiPackageRuntimes(maker)).rejects.toThrow('close failed');
+    await expect(invalidateLocalPiPackageRuntimes(maker)).resolves.toEqual({
+      requestedSessionIds: ['local-pi'],
+      failedSessionIds: ['local-pi'],
+    });
   });
 });

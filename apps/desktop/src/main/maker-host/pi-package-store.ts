@@ -57,6 +57,7 @@ const COMMAND_FORCE_SETTLE_MS = 1_000;
 const PACKAGE_MUTATION_LOCK_WAIT_MS = COMMAND_TIMEOUT_MS + 60_000;
 const MAX_COMMAND_OUTPUT_BYTES = 128 * 1024;
 const MAX_SOURCE_LENGTH = 2_048;
+const PACKAGE_MUTATION_TARGET_PREFIX = 'cindy-pi-package:';
 const MAX_DISPLAY_NAME_BYTES = 256;
 const MAX_DISPLAY_VERSION_BYTES = 128;
 const MAX_DISPLAY_DESCRIPTION_BYTES = 1_024;
@@ -1172,6 +1173,7 @@ async function inspectPackage(
       rawSource: pkg.source,
       view: {
         source: displaySource,
+        mutationTarget: packageMutationTarget(pkg.source),
         name: displaySource,
         enabled: Boolean(pkg.installedPath) && !explicitlyDisabled,
         resources: [],
@@ -1431,9 +1433,10 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
         rawSource: pkg.source,
         view: {
           source: displaySource,
+          ...(unsafe ? { mutationTarget: packageMutationTarget(pkg.source) } : {}),
           name: displaySource,
           enabled: false,
-          ...(unsafe ? { manageable: false as const } : { canToggle: false as const }),
+          ...(!unsafe ? { canToggle: false as const } : {}),
           resources: [],
           warning: unsafe ? 'unsafe-source' : 'inspection-limit',
         },
@@ -1799,6 +1802,32 @@ function normalizeRequestedPackageSource(source: string): string {
   const unscoped = /^[a-z0-9][a-z0-9._-]*(?:@[^/@\s]+)?$/i;
   const scoped = /^@[^/@\s]+\/[a-z0-9][a-z0-9._-]*(?:@[^/@\s]+)?$/i;
   return unscoped.test(source) || scoped.test(source) ? `npm:${source}` : source;
+}
+
+function packageMutationTarget(source: string): string {
+  return `${PACKAGE_MUTATION_TARGET_PREFIX}${createHash('sha256').update(source).digest('hex')}`;
+}
+
+async function resolvePackageMutationTarget(
+  source: string,
+  mutationTarget: string | undefined,
+): Promise<string> {
+  if (!mutationTarget) return source;
+  const digest = mutationTarget.slice(PACKAGE_MUTATION_TARGET_PREFIX.length);
+  if (!mutationTarget.startsWith(PACKAGE_MUTATION_TARGET_PREFIX)
+    || !/^[a-f0-9]{64}$/.test(digest)) {
+    throw new Error('Invalid Pi package mutation target');
+  }
+  const { stdout } = await runPiPackageCommand(
+    ['list', '--no-approve'],
+    COMMAND_TIMEOUT_MS,
+    { requireCompleteStdout: true },
+  );
+  const match = parsePiPackageListOutput(stdout).find((pkg) => (
+    packageMutationTarget(pkg.source) === mutationTarget
+  ));
+  if (!match) throw new Error('Pi package mutation target is no longer installed');
+  return match.source;
 }
 
 function projectPackageSource(source: string): PackageSourceProjection {
@@ -2452,12 +2481,16 @@ export async function mutatePiPackage(
     // is not a second package-compatibility or content-approval gate.
     consumePiPackageMutationGrant(request, grant);
   }
-  const source = requireSource(request.source);
-  if (request.action === 'install' && isRelativeLocalPiPackageSource(source)) {
+  const requestedSource = requireSource(request.source);
+  if (request.action === 'install' && isRelativeLocalPiPackageSource(requestedSource)) {
     throw new Error('Relative local Pi package sources require a task working directory');
   }
   let mutationMayHaveChangedState = false;
   return enqueueMutation(async () => {
+    // Renderer rows with credential/query/fragment-bearing sources carry only a
+    // one-way opaque target. Resolve it from Pi's current native list inside the
+    // mutation lock so the secret source never crosses into Renderer state.
+    const source = await resolvePackageMutationTarget(requestedSource, request.mutationTarget);
     // Cindy projection state is optional metadata. Native Pi package commands
     // run before any Cindy inspection; an analyzer timeout or unknown future
     // package shape therefore cannot delay or veto the upstream command.
@@ -2614,7 +2647,10 @@ export async function mutatePiPackage(
       if (typeof request.enabled !== 'boolean') throw new Error('enabled must be a boolean');
       const target = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       affectedSource = target?.rawSource ?? source;
-      const state = await readStateWithoutBlockingPi();
+      // A toggle is Cindy-owned state, unlike Pi's native install/update/remove.
+      // Never replace a corrupt or temporarily unreadable disable ledger from an
+      // empty fallback, which could silently re-enable sibling packages.
+      const state = await requireState();
       const disabled = new Set(state.disabledSources);
       const approved = new Set(state.approvedExtensionSources);
       const approvedFingerprints = { ...state.approvedExtensionFingerprints };
@@ -2658,15 +2694,19 @@ export async function mutatePiPackage(
       });
       result = { available: true, packages: [] };
     }
-    const affectedPackage = affectedSource
-      ? findAffectedPiPackage(result.packages, affectedSource)
-      : findAffectedPiPackage(result.packages, source);
+    const affectedLookupSource = affectedSource ?? source;
+    const affectedPackage = findAffectedPiPackage(result.packages, affectedLookupSource)
+      ?? result.packages.find((pkg) => (
+        pkg.mutationTarget === packageMutationTarget(affectedLookupSource)
+      ));
     if (request.action === 'install' && affectedPackage?.enabled !== true) {
       // Native Pi already accepted the package. Keep a useful receipt even if
       // Cindy could not project its new/unknown manifest shape.
-      const fallbackSource = projectPackageSource(source).displaySource;
+      const fallbackProjection = projectPackageSource(source);
+      const fallbackSource = fallbackProjection.displaySource;
       const fallback: PiPackageView = {
         source: fallbackSource,
+        ...(fallbackProjection.unsafe ? { mutationTarget: packageMutationTarget(source) } : {}),
         name: fallbackSource,
         enabled: true,
         resources: [],

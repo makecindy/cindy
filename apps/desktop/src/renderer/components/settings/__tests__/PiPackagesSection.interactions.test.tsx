@@ -281,6 +281,27 @@ describe('PiPackagesSection interaction state machine', () => {
     );
   });
 
+  it('uses a Main-owned opaque target for a redacted package source', async () => {
+    const redactedPackage = {
+      ...packageView(1),
+      source: 'git:https://example.com/acme/package.git',
+      mutationTarget: `cindy-pi-package:${'a'.repeat(64)}`,
+    };
+    const { mutatePiPackage } = installElectronApi({
+      listPiPackages: vi.fn(async () => ({ available: true, packages: [redactedPackage] })),
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.updateAria' }));
+
+    await waitFor(() => expect(mutatePiPackage).toHaveBeenCalledWith({
+      action: 'update',
+      source: redactedPackage.source,
+      mutationTarget: redactedPackage.mutationTarget,
+    }));
+  });
+
   it('routes enable directly to Main without a dialog and shows progress', async () => {
     const mutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const { mutatePiPackage } = installElectronApi({

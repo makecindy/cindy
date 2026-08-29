@@ -70,6 +70,8 @@ export interface PiPackageRuntimeRequirement {
 
 export interface PiPackageView {
   source: string;
+  /** Main-owned opaque target when the displayed source is deliberately redacted. */
+  mutationTarget?: string;
   name: string;
   version?: string;
   enabled: boolean;
@@ -127,6 +129,8 @@ export function isRelativeLocalPiPackageSource(value: string): boolean {
 export interface PiPackageMutationRequest {
   action: PiPackageMutationAction;
   source: string;
+  /** Main-owned opaque identity for a deliberately redacted persisted source. */
+  mutationTarget?: string;
   enabled?: boolean;
 }
 

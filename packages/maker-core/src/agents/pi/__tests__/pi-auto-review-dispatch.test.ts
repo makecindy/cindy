@@ -496,7 +496,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         arg === '--extension' ? [captured.args[index + 1]] : []
       ));
       expect(extensionPaths.some((entry) => (
-        entry?.includes(`${path.sep}internal-extensions${path.sep}`)
+        entry?.replaceAll('\\', '/').includes('/internal-extensions/')
       ))).toBe(true);
     } finally {
       await handle.close();
@@ -571,7 +571,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       affectedPackage: { source: 'npm:context-mode', enabled: false },
     }));
     const deps = buildDeps();
+    const onPiManagedPackageMutationSettled = vi.fn(async () => undefined);
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-session',
       workingDir: cwd,
@@ -599,6 +601,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           affectedPackage: { source: 'npm:context-mode', enabled: false },
         },
       });
+      await vi.waitFor(() => expect(onPiManagedPackageMutationSettled).toHaveBeenCalledOnce());
     } finally {
       await handle.close();
     }
@@ -1230,7 +1233,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
     }));
     const deps = buildDeps();
+    const onPiManagedPackageMutationSettled = vi.fn(async () => undefined);
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-command-session',
       workingDir: cwd,
@@ -1255,6 +1260,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt?.message).toContain('Do not enumerate non-blocking compatibility notices');
       expect(prompt?.message).not.toContain('Settings > General');
       expect(prompt?.message).toContain('Do not run bash');
+      await vi.waitFor(() => expect(onPiManagedPackageMutationSettled).toHaveBeenCalledOnce());
     } finally {
       await handle.close();
     }

@@ -9,9 +9,14 @@ import type { Maker } from '@cindy/maker-core';
  * Remote and Review runtimes never load this local managed-package roster and
  * are deliberately outside this invalidation boundary.
  */
+export interface PiPackageRuntimeInvalidationResult {
+  requestedSessionIds: string[];
+  failedSessionIds: string[];
+}
+
 export async function invalidateLocalPiPackageRuntimes(
   maker: Pick<Maker, 'listActiveSessions' | 'getSessionMeta' | 'closeSession'>,
-): Promise<string[]> {
+): Promise<PiPackageRuntimeInvalidationResult> {
   const candidates = maker.listActiveSessions().filter((session) => session.agentKind === 'pi');
   const eligible = (await Promise.all(candidates.map(async (session) => ({
     session,
@@ -21,6 +26,14 @@ export async function invalidateLocalPiPackageRuntimes(
   // Queue every close before awaiting convergence. One slow process must not
   // leave sibling Pi runtimes running the extension merely because it happened
   // to appear earlier in the session map.
-  await Promise.all(eligible.map(({ session }) => maker.closeSession(session.id, 'requested')));
-  return eligible.map(({ session }) => session.id);
+  const requestedSessionIds = eligible.map(({ session }) => session.id);
+  const outcomes = await Promise.allSettled(
+    requestedSessionIds.map((sessionId) => maker.closeSession(sessionId, 'requested')),
+  );
+  return {
+    requestedSessionIds,
+    failedSessionIds: outcomes.flatMap((outcome, index) => (
+      outcome.status === 'rejected' ? [requestedSessionIds[index]!] : []
+    )),
+  };
 }

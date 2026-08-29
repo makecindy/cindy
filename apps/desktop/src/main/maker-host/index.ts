@@ -111,6 +111,7 @@ import {
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
+import { invalidateLocalPiPackageRuntimes } from './pi-package-runtime-invalidation.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -1858,6 +1859,16 @@ export function getMaker(): Maker {
       },
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
+      onPiManagedPackageMutationSettled: async () => {
+        const maker = _maker;
+        if (!maker) return;
+        const invalidation = await invalidateLocalPiPackageRuntimes(maker);
+        if (invalidation.failedSessionIds.length > 0) {
+          throw new Error(
+            `failed to retire ${invalidation.failedSessionIds.length} local Pi runtime(s)`,
+          );
+        }
+      },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
       resolvePiVisionBridgeEnv: (model) =>

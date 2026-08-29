@@ -882,6 +882,7 @@ export interface BuildPiAgentOpts {
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  onPiManagedPackageMutationSettled?: AgentDeps['onPiManagedPackageMutationSettled'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
@@ -1654,6 +1655,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiManagedPackageResources: resolveManagedPiPackageResources,
     resolvePiNativePackagePaths: resolveManagedPiNativePackagePaths,
     mutatePiManagedPackage: mutateAuthorizedPiManagedPackage,
+    onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled,
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),
       cancel: t('settings.piPackages.cancel'),

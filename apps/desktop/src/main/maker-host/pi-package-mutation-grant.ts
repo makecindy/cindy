@@ -31,6 +31,7 @@ export function consumePiPackageMutationGrant(
     !stored ||
     stored.request.action !== request.action ||
     stored.request.source !== request.source ||
+    stored.request.mutationTarget !== request.mutationTarget ||
     stored.request.enabled !== request.enabled
   ) {
     throw new Error('Invalid or expired Pi extension mutation authorization');

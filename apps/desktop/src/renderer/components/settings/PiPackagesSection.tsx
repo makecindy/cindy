@@ -173,7 +173,7 @@ export function PiPackagesSection() {
   const runMutation = async (
     action: PiPackageMutationAction,
     packageSource: string,
-    options?: { enabled?: boolean },
+    options?: { enabled?: boolean; mutationTarget?: string },
   ): Promise<boolean> => {
     if (mutationInFlightRef.current) return false;
     mutationInFlightRef.current = true;
@@ -341,6 +341,9 @@ export function PiPackagesSection() {
 
         <div className={packages.length > 0 ? CARD_CLASS : undefined}>
           {packages.map((pkg) => {
+            const mutationTargetOption = pkg.mutationTarget
+              ? { mutationTarget: pkg.mutationTarget }
+              : {};
             const packageBusy = busy?.source === pkg.source;
             const packageManageable = pkg.manageable !== false;
             const packageCanToggle = packageManageable && pkg.canToggle !== false;
@@ -406,14 +409,17 @@ export function PiPackagesSection() {
                     checked={pkg.enabled}
                     disabled={Boolean(busy) || !packageCanToggle}
                     onCheckedChange={(enabled) => {
-                      void runMutation('set-enabled', pkg.source, { enabled });
+                      void runMutation('set-enabled', pkg.source, {
+                        ...mutationTargetOption,
+                        enabled,
+                      });
                     }}
                     aria-label={t('settings.piPackages.toggleAria', { name: pkg.name })}
                   />
                   <button
                     type="button"
                     disabled={Boolean(busy) || !packageManageable}
-                    onClick={() => void runMutation('update', pkg.source)}
+                    onClick={() => void runMutation('update', pkg.source, mutationTargetOption)}
                     aria-label={t('settings.piPackages.updateAria', { name: pkg.name })}
                     aria-busy={packageBusy && busy?.action === 'update'}
                     className={ICON_ACTION_CLASS}
@@ -423,7 +429,7 @@ export function PiPackagesSection() {
                   <button
                     type="button"
                     disabled={Boolean(busy) || !packageManageable}
-                    onClick={() => void runMutation('remove', pkg.source)}
+                    onClick={() => void runMutation('remove', pkg.source, mutationTargetOption)}
                     aria-label={t('settings.piPackages.removeAria', { name: pkg.name })}
                     aria-busy={packageBusy && busy?.action === 'remove'}
                     className={ICON_ACTION_CLASS}

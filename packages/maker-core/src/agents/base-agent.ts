@@ -569,6 +569,13 @@ export interface AgentDeps {
   mutatePiManagedPackage?: (request: PiManagedPackageMutationRequest) => Promise<unknown>;
 
   /**
+   * Pi-only: best-effort host callback after a package mutation receipt has
+   * been queued/sent. Desktop uses it to retire every stale local ordinary Pi
+   * runtime without rewriting an already committed native mutation result.
+   */
+  onPiManagedPackageMutationSettled?: () => Promise<void>;
+
+  /**
    * Pi-only: host-localized copy for extension dialogs and deterministic
    * mutation receipts. The same strings flow through Desktop and attached IM
    * interaction surfaces, so maker-core never hard-codes one UI language.

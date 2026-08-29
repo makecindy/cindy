@@ -36,7 +36,14 @@ describe('Pi package Settings authorization IPC contract', () => {
   it('binds every granted mutation to the exact validated request', () => {
     const handler = mutationHandlerSource();
     expect(handler).toContain('issuePiPackageMutationGrant(request)');
-    expect(handler).toContain('result = await mutatePiPackage(');
+    expect(handler).toContain('const result = !piPackageMutationNeedsGrant(request)');
     expect(handler).not.toContain('request.source.trim()');
+  });
+
+  it('retires stale local Pi runtimes after every attempted mutation without rewriting receipts', () => {
+    const handler = mutationHandlerSource();
+    expect(handler).toContain('await invalidateRuntimes();');
+    expect(handler).toContain('best-effort follow-up');
+    expect(handler).not.toContain("request.action === 'remove'");
   });
 });
