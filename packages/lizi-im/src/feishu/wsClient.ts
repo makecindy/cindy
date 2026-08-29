@@ -1484,6 +1484,7 @@ async function processClaimedMessage(
   let commitUnpairedFlat: (() => boolean) | undefined;
   let isUnpairedFlatTakenOver: (() => boolean) | undefined;
   let abandonUnpairedFlat: (() => void) | undefined;
+  let commitTopic: (() => boolean) | undefined;
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
     if (!mentionsSelf(data.message?.mentions, botOpenId)) return;
@@ -1528,6 +1529,7 @@ async function processClaimedMessage(
       commitUnpairedFlat = paired.commitUnpairedFlat;
       isUnpairedFlatTakenOver = paired.isUnpairedFlatTakenOver;
       abandonUnpairedFlat = paired.abandonUnpairedFlat;
+      commitTopic = paired.commitTopic;
     }
   } else {
     // TOFU: first p2p sender becomes owner. Send welcome and continue
@@ -1788,6 +1790,10 @@ async function processClaimedMessage(
     outbound.getAccountEpoch(),
     finalReplyMirrorConfirmed,
   );
+  if (commitTopic && !commitTopic()) {
+    log.info('[feishu/wsClient] elected topic aborted: another topic delivery already committed');
+    return;
+  }
   feishuEvents.emit('message', {
     channelName: 'feishu',
     senderId: laneUserId ?? senderOpenId,

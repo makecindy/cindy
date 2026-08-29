@@ -24,6 +24,7 @@
  * `[name](xdt-file:///abs/path)`).
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -122,6 +123,8 @@ async function uploadExtraImageKeys(absPaths: readonly string[]): Promise<string
 
 interface FinalCardResult {
   card: unknown;
+  /** Parent-chat copy. Differs from `card` when local media must not be mirrored. */
+  mirrorCard: unknown;
   reusableFiles: ReusableMirroredFile[];
   fileOnly: boolean;
 }
@@ -131,17 +134,45 @@ interface ReusableMirroredFile {
   sourceIndex: number;
 }
 
-function isLexicallyWithinAllowedFileRoots(
+function sameInode(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function isWithinAllowedFileRoots(
   absPath: string,
   allowedFileRoots: readonly string[],
 ): boolean {
-  const target = path.resolve(absPath);
+  let targetReal: string;
+  let targetStat: fs.Stats;
+  try {
+    targetReal = fs.realpathSync(absPath);
+    targetStat = fs.statSync(targetReal);
+  } catch {
+    return false;
+  }
   return allowedFileRoots.some((root) => {
     if (!root.trim()) return false;
-    const base = path.resolve(root);
-    if (target === base) return true;
-    const prefix = base.endsWith(path.sep) ? base : `${base}${path.sep}`;
-    return target.startsWith(prefix);
+    let baseStat: fs.Stats;
+    try {
+      baseStat = fs.statSync(fs.realpathSync(root));
+    } catch {
+      return false;
+    }
+    if (sameInode(targetStat, baseStat)) return true;
+    // Walk the uploaded source's real parents. String prefix comparison is
+    // wrong on case-insensitive volumes: Darwin realpath preserves the
+    // caller's spelling after following symlinks.
+    let current = targetReal;
+    for (;;) {
+      const parent = path.dirname(current);
+      if (parent === current) return false;
+      current = parent;
+      try {
+        if (sameInode(fs.statSync(current), baseStat)) return true;
+      } catch {
+        return false;
+      }
+    }
   });
 }
 
@@ -349,7 +380,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
             if (
               sent.ok &&
               sent.reusableMessage &&
-              isLexicallyWithinAllowedFileRoots(
+              isWithinAllowedFileRoots(
                 link.absPath,
                 finalReplyMirror?.allowedFileRoots ?? [],
               )
@@ -400,7 +431,30 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           ? buildMixedMarkdownCardV2(visibleText, imageMap, extraImageKeys)
           : buildMarkdownCardV2(visibleText),
       );
-      mirrorResult = { card, reusableFiles, fileOnly };
+      const allowLocalMedia = allowLocalMediaRoots(finalReplyMirror?.allowedFileRoots ?? []);
+      let mirrorCard = card;
+      let mirroredFiles = reusableFiles;
+      let mirroredFileOnly = fileOnly;
+      if (!allowLocalMedia) {
+        const skippedLocalMedia =
+          this.extraImageAbsPaths.length > 0 || imageUrls.length > 0 || fileLinks.length > 0;
+        const mirrorText = stripXdtImageLinks(stripXdtFileLinks(text)).trim();
+        mirroredFiles = [];
+        mirroredFileOnly = false;
+        if (skippedLocalMedia && mirrorText.length === 0) {
+          mirrorCard = buildMarkdownCardV2(transportMessages.streaming.deliveryFailed);
+        } else {
+          mirrorCard = buildMarkdownCardV2(
+            mirrorText.length > 0 ? mirrorText : transportMessages.streaming.emptyReply,
+          );
+        }
+      }
+      mirrorResult = {
+        card,
+        mirrorCard,
+        reusableFiles: mirroredFiles,
+        fileOnly: mirroredFileOnly,
+      };
       await patchCardRaw(this.messageId, card);
       primaryCardPatched = true;
       this.flushed = this.buffer;
@@ -483,7 +537,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       return;
     }
     try {
-      await sendCardToChat(chatId, result.card, mirrorUuid(key, 'card'));
+      await sendCardToChat(chatId, result.mirrorCard, mirrorUuid(key, 'card'));
     } catch (err) {
       log.warn(
         `[feishu/streamingText] parent-chat mirror card failed (non-fatal): ${

@@ -63,6 +63,12 @@ function terminalMirror(key: string, allowedFileRoots?: string[]) {
   };
 }
 
+function flipPathCase(value: string): string {
+  return value.replace(/[a-zA-Z]/g, (char) =>
+    char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase(),
+  );
+}
+
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -329,6 +335,21 @@ describe('feishu streaming text', () => {
     );
   });
 
+  it('does not copy local images on the streaming-handle parent-chat mirror when allowedFileRoots is empty', async () => {
+    mocks.resolveMediaUrl.mockReturnValue('/cindy-media/secret.png');
+    mocks.uploadImage.mockResolvedValue('img_secret');
+    const handle = await start('g/oc_group/omt_topic');
+
+    await handle.finalize(
+      '正文 ![图](xdt-image://blob/secret.png)',
+      terminalMirror('t'.repeat(64), []),
+    );
+
+    expect(mocks.patchCardRaw).toHaveBeenCalled();
+    expect(mocks.sendCardToChat).toHaveBeenCalledTimes(1);
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe('正文');
+  });
+
   it('fails closed for one-shot file-only replies without a primary upload key', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-fileonly-'));
     tempDirs.push(root);
@@ -567,6 +588,53 @@ describe('feishu streaming text', () => {
 
     expect(mocks.sendCardToChat).toHaveBeenCalled();
     expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+  });
+
+  it('does not copy a parent-chat file whose real path escapes allowedFileRoots via symlink', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-symlink-allowed-'));
+    const secretRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-symlink-secret-'));
+    tempDirs.push(allowedRoot, secretRoot);
+    const secretFile = path.join(secretRoot, 'secret.txt');
+    await fs.writeFile(secretFile, 'secret');
+    const link = path.join(allowedRoot, 'link.txt');
+    await fs.symlink(secretFile, link);
+    const handle = await start('g/oc_group/omt_topic');
+
+    await handle.finalize(
+      `见 [secret](xdt-file://${link})`,
+      terminalMirror('y'.repeat(64), [allowedRoot]),
+    );
+
+    expect(mocks.sendFile).toHaveBeenCalled();
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+  });
+
+  it('copies parent-chat files when the allowed root uses host filesystem case', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-case-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'Report.txt');
+    await fs.writeFile(allowedFile, 'report');
+    const flipped = flipPathCase(root);
+    if (flipped === root) return;
+    try {
+      await fs.access(flipped);
+    } catch {
+      return;
+    }
+    const handle = await start('g/oc_group/omt_topic');
+    await handle.finalize(
+      `见 [Report.txt](xdt-file://${allowedFile})`,
+      terminalMirror('z'.repeat(64), [flipped]),
+    );
+
+    expect(mocks.sendFileToChat).toHaveBeenCalledWith(
+      'oc_group',
+      {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      `${'z'.repeat(32)}-f0`,
+    );
   });
 
   it('copies parent-chat files that stay inside allowedFileRoots', async () => {

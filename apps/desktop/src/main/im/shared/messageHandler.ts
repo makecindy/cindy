@@ -455,6 +455,16 @@ export function createMessageHandler(
         log.info(`drop inbound message after account boundary closed channel=${channel}`);
         return;
       }
+      let releaseQueuedMirror: (() => void) | undefined;
+      if (event.finalReplyMirror) {
+        try {
+          const release = richIm?.retainFinalReplyMirror?.(event.finalReplyMirror);
+          if (typeof release === 'function') releaseQueuedMirror = release;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`retainFinalReplyMirror at enqueue failed (non-fatal): ${msg}`);
+        }
+      }
       // threadScoped 渠道: 同 thread 串行、跨 thread 并行(scopeKey 进锁键);
       // feishu scopeKey 恒 undefined — 键多一个冒号后缀, 行为不变。
       const key = `${event.contextId}:${event.senderId}:${threadScoped ? (event.scopeKey ?? '') : ''}`;
@@ -468,6 +478,11 @@ export function createMessageHandler(
             processOne(im, event, accountGeneration),
           ).catch((err) => {
             if (isImAccountScopeClosedError(err)) {
+              try {
+                releaseQueuedMirror?.();
+              } catch {
+                /* best-effort */
+              }
               log.info(`drop inbound message from stale account generation channel=${channel}`);
               return;
             }

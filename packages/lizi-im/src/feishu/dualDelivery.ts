@@ -60,6 +60,12 @@ export type DualDeliveryDecision =
       isUnpairedFlatTakenOver?: () => boolean;
       /** Release an uncommitted flat route that will never emit an Agent turn. */
       abandonUnpairedFlat?: () => void;
+      /**
+       * Uncommitted elected-topic routes call this when the Agent event is
+       * actually about to emit. `false` means a previous topic delivery already
+       * committed — abort instead of starting a second turn.
+       */
+      commitTopic?: () => boolean;
     }
   | { kind: 'suppress-main-copy' };
 
@@ -71,6 +77,7 @@ interface RecentFlatRecord {
 const pending = new Map<string, PendingLogicalSend>();
 const recentThreads = new Map<string, number>();
 const recentFlats = new Map<string, RecentFlatRecord>();
+const topicLeases = new Map<string, RecentFlatRecord>();
 const confirmed = new Map<string, number>();
 const deferredMirrors = new Map<string, Array<() => void>>();
 /** Confirmation records retained until the elected Agent turn reaches a terminal mirror path. */
@@ -173,6 +180,47 @@ function commitUnpairedFlatRoute(key: string, rec: RecentFlatRecord): boolean {
 
 function isUnpairedFlatTakenOver(rec: RecentFlatRecord): boolean {
   return rec.state === 'taken-over';
+}
+
+function pruneTopicLeases(now: number): void {
+  for (const [key, rec] of topicLeases) {
+    if (rec.state === 'pending') continue;
+    if (now - rec.ts > LATE_COPY_TTL_MS) topicLeases.delete(key);
+  }
+  if (topicLeases.size <= MAX_RECENT) return;
+  for (const [key, rec] of topicLeases) {
+    if (topicLeases.size <= MAX_RECENT) break;
+    if (rec.state === 'pending') continue;
+    topicLeases.delete(key);
+  }
+}
+
+function rememberTopicLease(key: string, now: number): RecentFlatRecord {
+  const rec: RecentFlatRecord = { ts: now, state: 'pending' };
+  topicLeases.delete(key);
+  topicLeases.set(key, rec);
+  pruneTopicLeases(now);
+  return rec;
+}
+
+function commitTopicRoute(key: string, rec: RecentFlatRecord): boolean {
+  if (rec.state !== 'pending') return false;
+  rec.state = 'committed';
+  rec.ts = Date.now();
+  if (topicLeases.get(key) === rec) {
+    topicLeases.delete(key);
+    topicLeases.set(key, rec);
+    pruneTopicLeases(rec.ts);
+  }
+  return true;
+}
+
+function topicRouteCallbacks(key: string): { commitTopic: () => boolean } {
+  const existing = topicLeases.get(key);
+  const lease = existing?.state === 'pending' ? existing : rememberTopicLease(key, Date.now());
+  return {
+    commitTopic: () => commitTopicRoute(key, lease),
+  };
 }
 
 function abandonUnpairedFlatRoute(key: string, rec: RecentFlatRecord): void {
@@ -291,10 +339,22 @@ export async function coordinateDualDelivery(
   const now = Date.now();
   pruneTtlMap(recentThreads, now);
   pruneRecentFlats(now);
+  pruneTopicLeases(now);
   pruneConfirmed(now);
-  // Once a logical send has paired, every later delivery for the same exact
-  // key is a duplicate even when Feishu assigns it a fresh message_id.
-  if (confirmed.has(key)) return { kind: 'suppress-main-copy' };
+  // Once a logical send has paired, later flats are duplicates even when
+  // Feishu assigns a fresh message_id. An elected topic that never committed
+  // (inbound claim abandon / reconnect retry) must still be allowed to emit.
+  if (confirmed.has(key)) {
+    if (input.threadId) {
+      const lease = topicLeases.get(key);
+      if (lease?.state === 'pending') {
+        return dispatchWithMirror(key, {
+          commitTopic: () => commitTopicRoute(key, lease),
+        });
+      }
+    }
+    return { kind: 'suppress-main-copy' };
+  }
   if (!input.threadId && recentThreads.has(key)) {
     recentThreads.delete(key);
     confirmLogicalSend(key, now);
@@ -313,7 +373,7 @@ export async function coordinateDualDelivery(
     recentFlats.set(key, recentFlat);
     confirmLogicalSend(key, now);
     rememberRecent(recentThreads, key, now);
-    return dispatchWithMirror(key);
+    return dispatchWithMirror(key, topicRouteCallbacks(key));
   }
   if (!input.threadId && recentFlat) {
     if (recentFlat.state === 'abandoned') {
@@ -336,7 +396,7 @@ export async function coordinateDualDelivery(
     // copy that arrived first is already parked on `entry.decision`; a later
     // flat copy is suppressed through `recentThreads`. A late topic after an
     // unpaired flat takes over unless that flat has already committed.
-    return dispatchWithMirror(key);
+    return dispatchWithMirror(key, topicRouteCallbacks(key));
   }
 
   entry.flatMessageIds.add(input.messageId);
@@ -421,6 +481,7 @@ export function resetDualDeliveryForTest(): void {
   pending.clear();
   recentThreads.clear();
   recentFlats.clear();
+  topicLeases.clear();
   confirmed.clear();
   deferredMirrors.clear();
   liveMirrorConfirmations.clear();

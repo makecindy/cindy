@@ -35,7 +35,7 @@ describe('Feishu native thread/main dual delivery', () => {
     const topic = await coordinateDualDelivery(input());
 
     await expect(flat).resolves.toEqual({ kind: 'suppress-main-copy' });
-    expect(topic).toEqual({
+    expect(topic).toMatchObject({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
       alreadyConfirmed: true,
@@ -109,6 +109,46 @@ describe('Feishu native thread/main dual delivery', () => {
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(false);
   });
 
+  it('allows an elected topic retry before the topic route commits', async () => {
+    const topic = await coordinateDualDelivery(input());
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    expect(topic).toMatchObject({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+      commitTopic: expect.any(Function),
+    });
+
+    const retry = await coordinateDualDelivery(
+      input({ messageId: 'om_topic_retry', threadId: 'omt_topic' }),
+    );
+    expect(retry).toMatchObject({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+      alreadyConfirmed: true,
+      commitTopic: expect.any(Function),
+    });
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat_retry', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+  });
+
+  it('suppresses a later topic retry after the elected topic route commits', async () => {
+    const topic = await coordinateDualDelivery(input());
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    if (topic.kind !== 'dispatch' || !topic.commitTopic) {
+      throw new Error('elected topic must expose commitTopic');
+    }
+    expect(topic.commitTopic()).toBe(true);
+
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_topic_retry' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+  });
+
   it('suppresses fresh flat message ids after the logical send is confirmed', async () => {
     vi.useFakeTimers();
     const topic = await coordinateDualDelivery(input());
@@ -122,7 +162,7 @@ describe('Feishu native thread/main dual delivery', () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(duplicate).resolves.toEqual({ kind: 'suppress-main-copy' });
-    expect(topic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(topic).toMatchObject({ kind: 'dispatch', mirrorKey: expect.any(String) });
   });
 
   it('dispatches an unpaired flat group message after the bounded wait', async () => {
@@ -155,7 +195,7 @@ describe('Feishu native thread/main dual delivery', () => {
       throw new Error('elected flat must expose commitUnpairedFlat');
     }
 
-    await expect(coordinateDualDelivery(input())).resolves.toEqual({
+    await expect(coordinateDualDelivery(input())).resolves.toMatchObject({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
       alreadyConfirmed: true,
@@ -215,7 +255,7 @@ describe('Feishu native thread/main dual delivery', () => {
     }
 
     const topic = await coordinateDualDelivery(input());
-    expect(topic).toEqual({
+    expect(topic).toMatchObject({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
       alreadyConfirmed: true,
@@ -240,7 +280,7 @@ describe('Feishu native thread/main dual delivery', () => {
     );
     const lateTopic = await coordinateDualDelivery(input());
 
-    expect(lateTopic).toEqual({
+    expect(lateTopic).toMatchObject({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
       alreadyConfirmed: true,
@@ -272,7 +312,7 @@ describe('Feishu native thread/main dual delivery', () => {
       input({ createTime: 'capacity-0', messageId: 'om_capacity_topic' }),
     );
 
-    expect(lateTopic).toEqual({
+    expect(lateTopic).toMatchObject({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
       alreadyConfirmed: true,
@@ -296,7 +336,7 @@ describe('Feishu native thread/main dual delivery', () => {
     flatDecision.abandonUnpairedFlat();
     expect(flatDecision.commitUnpairedFlat()).toBe(false);
     const topic = await coordinateDualDelivery(input());
-    expect(topic).toEqual({
+    expect(topic).toMatchObject({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
       alreadyConfirmed: true,
@@ -413,7 +453,7 @@ describe('Feishu native thread/main dual delivery', () => {
     const first = await coordinateDualDelivery(
       input({ createTime: '1', messageId: 'om_t0', threadId: 'omt_0' }),
     );
-    expect(first).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(first).toMatchObject({ kind: 'dispatch', mirrorKey: expect.any(String) });
 
     for (let i = 1; i <= pendingCap; i++) {
       await coordinateDualDelivery(
@@ -456,7 +496,7 @@ describe('Feishu native thread/main dual delivery', () => {
     const lateTopic = await coordinateDualDelivery(
       input({ createTime: '1', messageId: 'om_t0', threadId: 'omt_0' }),
     );
-    expect(lateTopic).toEqual({
+    expect(lateTopic).toMatchObject({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
       alreadyConfirmed: true,
