@@ -2521,6 +2521,72 @@ describe('Pi package executable-code boundary', () => {
     expect(tokens.every((token) => token.startsWith('runtime:'))).toBe(true);
   });
 
+  it('observes a runtime edge when legacy and view token reads fail independently', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyToken = path.join(tokenDir, 'cindy-package-change-token');
+    const viewToken = path.join(tokenDir, 'cindy-package-view-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if ([legacyToken, viewToken].includes(path.resolve(String(target)))) {
+        throw Object.assign(new Error('secret-token at /private/host/path'), { code: 'EACCES' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await fs.writeFile(runtimeToken, 'runtime:isolated-edge\n');
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      const logged = JSON.stringify(loggerRuntime.warn.mock.calls);
+      expect(logged).not.toContain('secret-token');
+      expect(logged).not.toContain('/private/host/path');
+      expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ failureCategory: 'access-denied' }),
+      );
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['runtime', 'cindy-package-runtime-change-token', 'runtime:next', 'external-runtime'],
+    ['legacy', 'cindy-package-change-token', 'runtime:legacy-next', 'external-runtime'],
+    ['view', 'cindy-package-view-change-token', 'view:next', 'external'],
+  ] as const)('observes an independent %s token change', async (
+    _kind,
+    filename,
+    nextToken,
+    expectedOrigin,
+  ) => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(path.join(tokenDir, 'cindy-package-runtime-change-token'), 'runtime:base\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), 'runtime:base\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:base\n'),
+    ]);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await fs.writeFile(path.join(tokenDir, filename), `${nextToken}\n`);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith(expectedOrigin), {
+        timeout: 2_000,
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('propagates package and approval changes to another shared-userData instance', async () => {
     const { root, source } = await createPackage();
     const firstStore = await import('../pi-package-store.js');

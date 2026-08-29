@@ -136,35 +136,75 @@ async function readPiPackageChangeToken(tokenPath: string): Promise<string | nul
   }
 }
 
+function changeTokenReadFailureCategory(error: unknown): 'access-denied' | 'io-failure' | 'invalid-token' | 'unavailable' {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (code === 'EACCES' || code === 'EPERM') return 'access-denied';
+  if (code === 'EIO') return 'io-failure';
+  if (error instanceof Error && error.message === 'Pi package change token is invalid') return 'invalid-token';
+  return 'unavailable';
+}
+
 function observePiPackageChangeToken(): Promise<void> {
   if (changeTokenReadInFlight) {
     changeTokenReadQueued = true;
     return changeTokenReadInFlight;
   }
-  const pending = Promise.all([
+  const pending = Promise.allSettled([
     readPiPackageChangeToken(runtimeChangeTokenPath()),
     readPiPackageChangeToken(changeTokenPath()),
     readPiPackageChangeToken(viewChangeTokenPath()),
-  ]).then(([runtimeToken, legacyToken, viewToken]) => {
-    if (
-      lastObservedRuntimeChangeToken === undefined
-      || lastObservedLegacyChangeToken === undefined
-      || lastObservedViewChangeToken === undefined
-    ) {
-      lastObservedRuntimeChangeToken = runtimeToken;
-      lastObservedLegacyChangeToken = legacyToken;
-      lastObservedViewChangeToken = viewToken;
-      lastNotifiedRuntimeChangeToken = runtimeToken
-        ?? (legacyToken?.startsWith('view:') ? null : legacyToken);
-      return;
+  ]).then(([runtimeResult, legacyResult, viewResult]) => {
+    for (const [tokenKind, result] of [
+      ['runtime', runtimeResult],
+      ['legacy', legacyResult],
+      ['view', viewResult],
+    ] as const) {
+      if (result.status === 'rejected') {
+        log.warn('Pi package change token read failed', {
+          tokenKind,
+          failureCategory: changeTokenReadFailureCategory(result.reason),
+        });
+      }
     }
-    const runtimeChanged = runtimeToken !== lastObservedRuntimeChangeToken;
-    const legacyChanged = legacyToken !== lastObservedLegacyChangeToken;
-    const viewChanged = viewToken !== lastObservedViewChangeToken;
+
+    let runtimeChanged = false;
+    let legacyChanged = false;
+    let viewChanged = false;
+    let runtimeToken: string | null = null;
+    let legacyToken: string | null = null;
+    let viewToken: string | null = null;
+    if (runtimeResult.status === 'fulfilled') {
+      runtimeToken = runtimeResult.value;
+      if (lastObservedRuntimeChangeToken === undefined) {
+        lastObservedRuntimeChangeToken = runtimeToken;
+        if (lastNotifiedRuntimeChangeToken === undefined) lastNotifiedRuntimeChangeToken = runtimeToken;
+      } else {
+        runtimeChanged = runtimeToken !== lastObservedRuntimeChangeToken;
+        lastObservedRuntimeChangeToken = runtimeToken;
+      }
+    }
+    if (legacyResult.status === 'fulfilled') {
+      legacyToken = legacyResult.value;
+      if (lastObservedLegacyChangeToken === undefined) {
+        lastObservedLegacyChangeToken = legacyToken;
+        if (lastNotifiedRuntimeChangeToken === undefined) {
+          lastNotifiedRuntimeChangeToken = legacyToken?.startsWith('view:') ? null : legacyToken;
+        }
+      } else {
+        legacyChanged = legacyToken !== lastObservedLegacyChangeToken;
+        lastObservedLegacyChangeToken = legacyToken;
+      }
+    }
+    if (viewResult.status === 'fulfilled') {
+      viewToken = viewResult.value;
+      if (lastObservedViewChangeToken === undefined) {
+        lastObservedViewChangeToken = viewToken;
+      } else {
+        viewChanged = viewToken !== lastObservedViewChangeToken;
+        lastObservedViewChangeToken = viewToken;
+      }
+    }
     if (!runtimeChanged && !legacyChanged && !viewChanged) return;
-    lastObservedRuntimeChangeToken = runtimeToken;
-    lastObservedLegacyChangeToken = legacyToken;
-    lastObservedViewChangeToken = viewToken;
     invalidateInspectionCache();
     const runtimeCandidate = runtimeChanged && runtimeToken
       ? runtimeToken
@@ -177,9 +217,9 @@ function observePiPackageChangeToken(): Promise<void> {
     } else if (viewChanged || (legacyChanged && legacyToken?.startsWith('view:'))) {
       notifyPiPackagesChanged('external');
     }
-  }).catch((error) => {
+  }).catch(() => {
     log.warn('Pi package change token observation failed', {
-      message: error instanceof Error ? error.message : String(error),
+      failureCategory: 'observer-failed',
     });
   }).finally(() => {
     if (changeTokenReadInFlight === pending) changeTokenReadInFlight = undefined;
