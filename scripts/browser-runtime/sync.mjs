@@ -371,6 +371,11 @@ const LOCAL_PATCHES = {
   const allowIpv6UniqueLocalRange = rawPolicy?.allowIpv6UniqueLocalRange;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
   const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
+  // LOCAL PATCH (Cindy, via sync.mjs): preserve the exact-origin allowlist
+  // used by the sandboxed local HTML preview server. Vendored SsrFPolicy
+  // supports allowedOrigins (promote only the matching request origin's
+  // hostname), but the resolver must not drop it on the floor.
+  const allowedOrigins = normalizeStringList(rawPolicy?.allowedOrigins);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const hasExplicitFakeIpSetting =
@@ -383,7 +388,8 @@ const LOCAL_PATCHES = {
     !hasExplicitPrivateSetting &&
     !hasExplicitFakeIpSetting &&
     !allowedHostnames &&
-    !hostnameAllowlist
+    !hostnameAllowlist &&
+    !allowedOrigins
   ) {
     // Keep the default policy object present so CDP guards still enforce
     // fail-closed private-network checks on unconfigured installs.
@@ -400,6 +406,7 @@ const LOCAL_PATCHES = {
     ...(allowIpv6UniqueLocalRange !== undefined ? { allowIpv6UniqueLocalRange } : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+    ...(allowedOrigins ? { allowedOrigins } : {}),
   };
 }`,
     },
@@ -433,6 +440,82 @@ const LOCAL_PATCHES = {
         '            legacyCdpUrl,\n' +
         '          ),\n' +
         '        );',
+    },
+  ],
+  'extension/src/browser/navigation-guard.ts': [
+    {
+      desc: 'resolve exact-origin allowlist per request URL in the navigation guard (allowedOrigins only promotes the matching origin\'s hostname; redirects/subframes re-evaluate with their own URL)',
+      find:
+        'import {\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../infra/net/ssrf.js";',
+      replace:
+        'import {\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  resolveSsrFPolicyForUrl,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../infra/net/ssrf.js";',
+    },
+    {
+      desc: 'apply resolveSsrFPolicyForUrl before the private-network gates in assertBrowserNavigationAllowed',
+      find:
+        '  let parsed: URL;\n' +
+        '  try {\n' +
+        '    parsed = new URL(rawUrl);\n' +
+        '  } catch {\n' +
+        '    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);\n' +
+        '  }\n' +
+        '\n' +
+        '  if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {',
+      replace:
+        '  let parsed: URL;\n' +
+        '  try {\n' +
+        '    parsed = new URL(rawUrl);\n' +
+        '  } catch {\n' +
+        '    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);\n' +
+        '  }\n' +
+        '\n' +
+        '  // LOCAL PATCH (Cindy, via sync.mjs): promote exact-origin allowlist entries\n' +
+        '  // (scheme+host+port) into the hostname allowlist for THIS request URL only.\n' +
+        '  // Redirect chains and subframe navigations re-enter this function with their\n' +
+        '  // own URL, so the origin-scoped trust cannot leak to other ports or hosts.\n' +
+        '  opts.ssrfPolicy = resolveSsrFPolicyForUrl(parsed, opts.ssrfPolicy);\n' +
+        '\n' +
+        '  if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {',
+    },
+  ],
+  'extension/src/infra/net/ssrf.ts': [
+    {
+      desc: 're-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)',
+      find:
+        'export {\n' +
+        '  SsrFBlockedError,\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../../sdk-security-runtime.js";',
+      replace:
+        'export {\n' +
+        '  SsrFBlockedError,\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  resolveSsrFPolicyForUrl,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../../sdk-security-runtime.js";',
+    },
+  ],
+  'extension/src/sdk-security-runtime.ts': [
+    {
+      desc: 're-export resolveSsrFPolicyForUrl from the shim so the navigation guard can promote exact-origin allowlist entries',
+      find: '  resolvePinnedHostnameWithPolicy,\n',
+      replace: '  resolvePinnedHostnameWithPolicy,\n  resolveSsrFPolicyForUrl,\n',
     },
   ],
 };

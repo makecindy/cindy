@@ -153,6 +153,7 @@ export function createLiziMcpProviders(
           name: 'cindy_browser',
           instance: createBrowserMcpServer({
             ...baseDeps,
+            getSessionContext: () => resolveLiziMcpSessionContext(ctx),
             getRuntime: () => {
               const inner = baseDeps.getRuntime();
               return {

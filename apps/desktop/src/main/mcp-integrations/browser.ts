@@ -39,6 +39,8 @@ import {
 } from '../rsb-browser-bridge/active-session.js';
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
+import { createLocalPreviewServer } from './local-html-preview-server.js';
+import { setBrowserControlRuntimeConfig } from '@cindy/browser-control-runtime';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 
@@ -48,6 +50,18 @@ const logger = createLogger('mcp/cindy_browser');
 
 /** 翻转前(≤2026-07-17)创建的受管 profile 目录名,仅用于就地改名自愈。 */
 const LEGACY_MANAGED_PROFILE = 'XDMaker';
+
+// Sandboxed local HTML preview: serves workspace-local HTML over a tokenized
+// loopback origin (localhost) so the managed browser can screenshot/verify
+// agent-generated pages without opening file:// or general localhost navigation.
+// The SSRF policy only ever sees the one exact origin this server listens on
+// (granted via applyPreviewOrigins after a successful bind, revoked on error/close).
+const localPreviewServer = createLocalPreviewServer({
+  logger,
+  applyPreviewOrigins: (previewOrigins) => {
+    setBrowserControlRuntimeConfig(buildManagedConfig({ previewOrigins }));
+  },
+});
 
 /**
  * 就地改名自愈:同一 userData 下存在翻转前的 `browser/XDMaker` 而无 `browser/Cindy`
@@ -240,6 +254,11 @@ export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<vo
   const changed = await backendController.setKind(kind);
   if (!changed) return;
   writeBrowserBackendKind(kind);
+  // Switching away from the managed browser: revoke the preview origin grant
+  // and close the listener so the SSRF policy no longer trusts the port.
+  if (kind !== 'external') {
+    localPreviewServer.dispose();
+  }
 }
 
 /**
@@ -256,6 +275,7 @@ export function getBrowserMcpDeps(): {
   logger: typeof logger;
   getUserRecipes(): Promise<UserRecipesResult>;
   saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
+  createLocalPreviewUrl?: (input: { workingDir: string; localPath: string; sessionId?: string }) => Promise<{ url: string }>;
 } {
   return {
     // L2 user-recipe layer (userData/browser-recipes); merged over the bundled
@@ -270,6 +290,26 @@ export function getBrowserMcpDeps(): {
     supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
     supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
     logger,
+    // Sandboxed local HTML preview: tokenized loopback origin, fail-closed.
+    // Only available on the managed browser backend; RSB webview does not support it.
+    // Evaluated lazily at call time so a backend switch is reflected immediately.
+    createLocalPreviewUrl: async (input) => {
+      if (backendController.kind !== 'external') {
+        throw new Error('本地预览仅在托管浏览器后端可用（当前为侧栏后端）');
+      }
+      const result = await localPreviewServer.createPreviewUrl(input);
+      // Re-check after the await. Issuing a preview spans filesystem
+      // validation and a listener bind, and the backend can be switched in
+      // between; the server refuses to re-grant an origin across a dispose on
+      // its own, but the switch can also land after it has legitimately
+      // finished. Either way a preview must not be handed out for a backend
+      // that does not support it.
+      if (backendController.kind !== 'external') {
+        localPreviewServer.dispose();
+        throw new Error('本地预览仅在托管浏览器后端可用（当前为侧栏后端）');
+      }
+      return result;
+    },
   };
 }
 
@@ -428,6 +468,10 @@ export async function openBrowserForLogin(): Promise<void> {
  * not run on the auto-update relaunch path; stale-lock recovery covers that case.
  */
 export function disposeBrowserRuntime(): Promise<void> {
+  // Revoke the preview origin grant and close the preview listener BEFORE
+  // stopping the runtime: a freed port must never remain trusted by the SSRF
+  // policy after the preview server is gone.
+  localPreviewServer.dispose();
   // Always stop the vendored Chrome directly, NOT through the active controller.
   // The controller may currently point at RsbWebviewBackend, whose dispose only
   // releases control listeners and does not own the external Chrome process. If
