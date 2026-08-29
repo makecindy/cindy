@@ -101,6 +101,22 @@ test('isValidDirDist: requires the manifest and every sidecar asset, not just th
   assert.equal(isValidDirDist(dir, binPath), false);
 });
 
+test('isValidDirDist: required runtime assets must also be present', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-dirdist-required-'));
+  const binPath = path.join(dir, 'pi');
+  fs.writeFileSync(binPath, Buffer.alloc(4096, 1));
+  fs.mkdirSync(path.join(dir, 'theme'));
+  for (const name of ['dark.json', 'light.json', 'theme-schema.json']) {
+    fs.writeFileSync(path.join(dir, 'theme', name), '{}');
+  }
+  writeDirDistManifest(dir);
+
+  const required = ['theme/dark.json', 'theme/light.json', 'theme/theme-schema.json'];
+  assert.equal(isValidDirDist(dir, binPath, required), true);
+  fs.rmSync(path.join(dir, 'theme', 'light.json'));
+  assert.equal(isValidDirDist(dir, binPath, required), false);
+});
+
 test('verifyDirDistManifest: rejects size drift, empty manifests, and malformed entries', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-dirdist-verify-'));
   fs.writeFileSync(path.join(dir, 'pi'), Buffer.alloc(4096, 1));

@@ -64,6 +64,21 @@ export interface RequestTransform {
 }
 
 /**
+ * A bounded, request-local compactor used only when the inbound body is over
+ * the normal forwarding limit.  It must be deterministic and must not perform
+ * network or filesystem I/O.  Returning null means that no safe compaction was
+ * possible; the regular transform chain still gets a chance to reduce the
+ * body, after which the hard limit is enforced.
+ */
+export interface OversizedRequestCompactor {
+  (
+    body: unknown,
+    ctx: RequestTransformCtx,
+    targetBytes: number,
+  ): unknown | null | Promise<unknown | null>;
+}
+
+/**
  * 本地 handler —— 路由决策命中 `localHandler` 时,代理**不转发上游**,由 handler 直接消费
  * 请求并把响应写回 `res`(典型:协议翻译,如 Anthropic Messages ↔ OpenAI Responses)。
  *
@@ -269,6 +284,17 @@ export interface ProxyOptions {
    * 注意: body 会整段缓冲进内存并 JSON.parse,该值同时就是单请求的内存 / 解析停顿预算。
    */
   maxRequestBodyBytes?: number;
+  /**
+   * Optional compactor for bodies that exceed maxRequestBodyBytes.  Enabling
+   * this also permits a bounded ingress window so the compactor can inspect a
+   * request before the hard limit is applied.  Requests within the normal
+   * limit do not enter this path.  When routing selects a local handler, the
+   * same compaction result is passed to that handler before its hard-limit
+   * check.
+   */
+  oversizedRequestCompactor?: OversizedRequestCompactor;
+  /** Maximum bytes accepted for an oversized request before compaction. */
+  oversizedRequestIngressBytes?: number;
   /**
    * 可选: 出站(上游方向)代理解析器。per-request 以最终上游 origin 现取:
    *   - `http://` 代理地址 = 经该代理转发(https 上游走 CONNECT 隧道、http 上游走绝对形式)

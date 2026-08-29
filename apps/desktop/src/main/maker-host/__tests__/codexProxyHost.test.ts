@@ -151,6 +151,7 @@ describe('withCodexUpstreamRecording', () => {
     headers: threadId ? { 'thread-id': threadId } : {},
   }) as never;
 
+  // Linux CI shard 下本文件首次 resetModules + import SUT 经常超过默认 5s；断言未变。
   it('records the override upstream origin for the request thread', async () => {
     const host = await freshCodexProxyHost();
     host.resetCodexThreadUpstreamForTest();

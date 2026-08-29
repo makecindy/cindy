@@ -8,15 +8,26 @@ import {
   createWorkLouderCodexDefaultSettings,
 } from '../../../../shared/workLouderCodex';
 import {
-  XBOX_GAMEPAD_EMPTY_DEVICE,
+  emptyGamepadDevice,
   createXboxGamepadDefaultSettings,
+  type GamepadFamily,
 } from '../../../../shared/xboxGamepad';
 
 const mocks = vi.hoisted(() => ({
   workLouderPresent: false as boolean | null,
   workLouderEnabled: false,
-  xboxPresent: false as boolean | null,
-  xboxEnabled: false,
+  present: {
+    xbox: false as boolean | null,
+    playstation: false as boolean | null,
+    nintendo: false as boolean | null,
+    generic: false as boolean | null,
+  },
+  enabled: {
+    xbox: false,
+    playstation: false,
+    nintendo: false,
+    generic: false,
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -72,15 +83,15 @@ vi.mock('@/hooks/useWorkLouderCodex', () => ({
 }));
 
 vi.mock('@/hooks/useXboxGamepad', () => ({
-  useXboxGamepad: () => ({
+  useXboxGamepad: ({ family = 'xbox' }: { family?: GamepadFamily } = {}) => ({
     state: {
-      connectionStatus: mocks.xboxPresent === true ? 'connected' : 'not-detected',
-      devicePresent: mocks.xboxPresent,
-      deviceName: mocks.xboxPresent === true ? 'Xbox Wireless Controller' : null,
-      device: { ...XBOX_GAMEPAD_EMPTY_DEVICE },
+      connectionStatus: mocks.present[family] === true ? 'connected' : 'not-detected',
+      devicePresent: mocks.present[family],
+      deviceName: mocks.present[family] === true ? family : null,
+      device: emptyGamepadDevice(family),
       settings: {
         ...createXboxGamepadDefaultSettings(),
-        deviceEnabled: mocks.xboxEnabled,
+        deviceEnabled: mocks.enabled[family],
       },
     },
     loading: false,
@@ -94,12 +105,25 @@ vi.mock('@/hooks/useXboxGamepad', () => ({
 
 import { KeyboardShortcutsSection } from '../KeyboardShortcutsSection';
 
+const GAMEPAD_OPEN = {
+  xbox: 'settings.shortcuts.xboxGamepad.openAria',
+  playstation: 'settings.shortcuts.playstationGamepad.openAria',
+  nintendo: 'settings.shortcuts.nintendoGamepad.openAria',
+  generic: 'settings.shortcuts.genericGamepad.openAria',
+} as const;
+
 describe('KeyboardShortcutsSection accessories', () => {
   beforeEach(() => {
     mocks.workLouderPresent = false;
     mocks.workLouderEnabled = false;
-    mocks.xboxPresent = false;
-    mocks.xboxEnabled = false;
+    mocks.present.xbox = false;
+    mocks.present.playstation = false;
+    mocks.present.nintendo = false;
+    mocks.present.generic = false;
+    mocks.enabled.xbox = false;
+    mocks.enabled.playstation = false;
+    mocks.enabled.nintendo = false;
+    mocks.enabled.generic = false;
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -119,26 +143,23 @@ describe('KeyboardShortcutsSection accessories', () => {
     expect(
       screen.queryByRole('button', { name: 'settings.shortcuts.workLouderCodex.openAria' }),
     ).toBeNull();
-    expect(
-      screen.queryByRole('button', { name: 'settings.shortcuts.xboxGamepad.openAria' }),
-    ).toBeNull();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.accessories.openAria' }));
     expect(
       screen.getByRole('button', { name: 'settings.shortcuts.workLouderCodex.openAria' }),
     ).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'settings.shortcuts.xboxGamepad.openAria' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.playstation })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
   });
 
   it('shows a detected device here and keeps the rest behind Accessories', () => {
-    mocks.xboxPresent = true;
+    mocks.present.xbox = true;
     render(<KeyboardShortcutsSection />);
 
-    expect(
-      screen.getByRole('button', { name: 'settings.shortcuts.xboxGamepad.openAria' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeTruthy();
     expect(
       screen.queryByRole('button', { name: 'settings.shortcuts.workLouderCodex.openAria' }),
     ).toBeNull();
@@ -147,18 +168,17 @@ describe('KeyboardShortcutsSection accessories', () => {
     expect(
       screen.getByRole('button', { name: 'settings.shortcuts.workLouderCodex.openAria' }),
     ).toBeTruthy();
-    expect(
-      screen.queryByRole('button', { name: 'settings.shortcuts.xboxGamepad.openAria' }),
-    ).toBeNull();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeNull();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.playstation })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
   });
 
   it('shows an enabled device here even when it is not detected', () => {
-    mocks.xboxEnabled = true;
+    mocks.enabled.xbox = true;
     render(<KeyboardShortcutsSection />);
 
-    expect(
-      screen.getByRole('button', { name: 'settings.shortcuts.xboxGamepad.openAria' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeTruthy();
     expect(
       screen.queryByRole('button', { name: 'settings.shortcuts.workLouderCodex.openAria' }),
     ).toBeNull();
@@ -167,15 +187,33 @@ describe('KeyboardShortcutsSection accessories', () => {
 
   it('hides Accessories when every hardware device is connected', () => {
     mocks.workLouderPresent = true;
-    mocks.xboxPresent = true;
+    mocks.present.xbox = true;
+    mocks.present.playstation = true;
+    mocks.present.nintendo = true;
+    mocks.present.generic = true;
     render(<KeyboardShortcutsSection />);
 
     expect(screen.queryByTestId('settings-shortcuts-accessories')).toBeNull();
     expect(
       screen.getByRole('button', { name: 'settings.shortcuts.workLouderCodex.openAria' }),
     ).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'settings.shortcuts.xboxGamepad.openAria' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.playstation })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
+  });
+
+  it('does not surface Switch or generic accessories even when they are present', () => {
+    mocks.present.nintendo = true;
+    mocks.present.generic = true;
+    mocks.enabled.nintendo = true;
+    mocks.enabled.generic = true;
+    render(<KeyboardShortcutsSection />);
+
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.accessories.openAria' }));
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
+    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
   });
 });

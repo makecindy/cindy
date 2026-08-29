@@ -40,7 +40,9 @@ describe('maker:event hot path ordering', () => {
   it('rewires a replacement Session instance that retains the same business id', () => {
     const wireSessionSource = extractWireSessionSource();
 
-    expect(source).toContain('const wiredSessionsById = new Map<string, WiredSessionRegistration>();');
+    expect(source).toContain(
+      'const wiredSessionsById = new Map<string, WiredSessionRegistration>();',
+    );
     expect(wireSessionSource).toContain('if (existing?.session === session)');
     expect(wireSessionSource).toContain('for (const dispose of existing.disposers) dispose();');
     expect(wireSessionSource).toContain('existing.session.setInteractionListener(null);');
@@ -132,16 +134,21 @@ describe('maker:event hot path ordering', () => {
         .map((match) => match.index)
         .filter((index): index is number => typeof index === 'number');
       expect(indices.length, `${sideEffect} should be present`).toBeGreaterThan(0);
-      expect(indices.every((index) => index > broadcastIndex), `${sideEffect} must be after EVENT broadcast`).toBe(true);
+      expect(
+        indices.every((index) => index > broadcastIndex),
+        `${sideEffect} must be after EVENT broadcast`,
+      ).toBe(true);
     }
-    expect(wireSessionSource.slice(0, broadcastIndex)).not.toContain('handleAgentEvent(sessionMetaForIsland');
+    expect(wireSessionSource.slice(0, broadcastIndex)).not.toContain(
+      'handleAgentEvent(sessionMetaForIsland',
+    );
   });
 
   it('tracks Claude wall clock across continuation segments and only consumes it at product completion', () => {
     const wireSessionSource = extractWireSessionSource();
 
     expect(wireSessionSource).toContain(
-      "const startedProductTurn = productTurnWallClockTracker.start(session.id);",
+      'const startedProductTurn = productTurnWallClockTracker.start(session.id);',
     );
     expect(wireSessionSource).toContain(
       'if (startedProductTurn) productTurnUsageTargetTracker.clear(session.id);',
@@ -162,9 +169,7 @@ describe('maker:event hot path ordering', () => {
     const wireSessionSource = extractWireSessionSource();
 
     expect(wireSessionSource).toContain('assistant_message_id?: unknown;');
-    expect(wireSessionSource).toContain(
-      "typeof doneData?.assistant_message_id === 'string'",
-    );
+    expect(wireSessionSource).toContain("typeof doneData?.assistant_message_id === 'string'");
     expect(wireSessionSource).toContain('? doneData.assistant_message_id');
     expect(wireSessionSource).toContain('doneData?.is_error !== true');
   });
@@ -189,9 +194,9 @@ describe('maker:event hot path ordering', () => {
       'sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(session.id);',
       'notifyGoalIdleAfterTurnSettled(session.id);',
     );
-    expect(
-      [...terminalIdleBlock.matchAll(/notifyGoalIdleAfterTurnSettled\(session\.id\);/g)],
-    ).toHaveLength(1);
+    expect([
+      ...terminalIdleBlock.matchAll(/notifyGoalIdleAfterTurnSettled\(session\.id\);/g),
+    ]).toHaveLength(1);
   });
 
   it('wakes deferred Goal resumes after direct-abort and authoritative-idle reconciliation', () => {
@@ -269,14 +274,16 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('does not latch product-turn bookkeeping on background status events', () => {
-    const statusStart = source.indexOf('if (event.type === \'status\') {');
+    const statusStart = source.indexOf("if (event.type === 'status') {");
     const statusEnd = source.indexOf("if (event.type === 'done')", statusStart);
     const statusSource = source.slice(statusStart, statusEnd);
     expect(statusStart).toBeGreaterThanOrEqual(0);
     expect(statusEnd).toBeGreaterThan(statusStart);
     expect(statusSource).toContain("data.isRunning === true && event.turnScope !== 'background'");
     expect(statusSource).toContain("event.turnScope !== 'background'");
-    expect(statusSource).toContain('sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning)');
+    expect(statusSource).toContain(
+      'sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning)',
+    );
   });
 
   it('persists a terminal Codex plan before clearing its turn-owned lookup maps', () => {
@@ -286,7 +293,10 @@ describe('maker:event hot path ordering', () => {
       'markTurnEndedAfterPersistDrain(session.id);',
       persistIndex,
     );
-    const resetIndex = wireSessionSource.indexOf('resetTurnPersistState(session.id);', barrierIndex);
+    const resetIndex = wireSessionSource.indexOf(
+      'resetTurnPersistState(session.id);',
+      barrierIndex,
+    );
 
     expect(persistIndex).toBeGreaterThanOrEqual(0);
     expect(barrierIndex).toBeGreaterThan(persistIndex);
@@ -308,9 +318,13 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('function isRemoteAuthRetryErrorEvent(');
     expect(source).toContain("if (session.agentKind === 'codex') return false;");
     expect(source).toContain('service.deferRemoteAuthRetryError(meta, event);');
-    expect(wireSessionSource).toContain('isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);');
+    expect(wireSessionSource).toContain(
+      'isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);',
+    );
     expect(deferredHandler).toBeTruthy();
-    expect(deferredHandler).toContain('getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);');
+    expect(deferredHandler).toContain(
+      'getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);',
+    );
     expect(deferredHandler).toContain('return persistId;');
     expectOrder(
       deferredHandler ?? '',
@@ -331,12 +345,18 @@ describe('maker:event hot path ordering', () => {
     expect(handler).toBeTruthy();
     if (!handler) return;
 
-    expectOrder(handler, 'service.deferRemoteAuthRetryError(meta, event);', 'const terminalError =');
-    expect(handler).toContain('agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true');
-    expect(handler).toContain('agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true');
-    expect(handler).toContain(
-      'autoResumeBookkeeping.shouldSuppressAgentIslandError(session.id)',
+    expectOrder(
+      handler,
+      'service.deferRemoteAuthRetryError(meta, event);',
+      'const terminalError =',
     );
+    expect(handler).toContain(
+      'agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true',
+    );
+    expect(handler).toContain(
+      'agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true',
+    );
+    expect(handler).toContain('autoResumeBookkeeping.shouldSuppressAgentIslandError(session.id)');
     expect(handler).toContain(
       'autoResumeBookkeeping.shouldSuppressAgentIslandCompletionTail(session.id)',
     );
@@ -348,7 +368,7 @@ describe('maker:event hot path ordering', () => {
     expect(handler).not.toContain('suppressErrorSound');
 
     expect(source).toContain('surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail)');
-    expect(source).toContain("data: { ...detail, isTerminal: true }");
+    expect(source).toContain('data: { ...detail, isTerminal: true }');
     expect(source).toContain(
       'autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId, source);',
     );
@@ -370,17 +390,32 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'autoResumeBookkeeping.discardReplacementProvenByProviderEvent(session.id);',
     );
-    expect(source).not.toContain(
-      'autoResumeBookkeeping.discardSuppressedError(sessionId);',
+    expect(source).not.toContain('autoResumeBookkeeping.discardSuppressedError(sessionId);');
+    expect(source).toContain(
+      'deferredOrcaWorkerTerminal = autoResumeBookkeeping.stashOrcaSuppressedTerminal(',
+    );
+    expect(source).toContain('finalizeOrcaSuppressedTerminal: (sessionId, payload) => {');
+    expect(source).toContain('shouldSkipOrcaWorkerTerminal({');
+    expect(source).toContain('stashedThisErrorEvent: deferredOrcaWorkerTerminal');
+    expect(source).toContain('isPairedFailedTurnDone,');
+    expect(source).toContain('isFailedTurnCompletionTail,');
+    expect(source).toContain('autoResumeBookkeeping.consumeFailedTurnCompletionTail(');
+    expect(source).toContain('event.sessionTurnGeneration');
+    expect(source).toContain(
+      'hasSuppressedError: autoResumeBookkeeping.hasSuppressedError(session.id)',
     );
   });
 
   it('only status/done/error paths request idle restore', () => {
     const wireSessionSource = extractWireSessionSource();
-    const statusIdleAssignments = [...wireSessionSource.matchAll(/shouldMarkTurnStatusIdleAfterBroadcast = true;/g)]
+    const statusIdleAssignments = [
+      ...wireSessionSource.matchAll(/shouldMarkTurnStatusIdleAfterBroadcast = true;/g),
+    ]
       .map((match) => match.index)
       .filter((index): index is number => typeof index === 'number');
-    const terminalIdleAssignments = [...wireSessionSource.matchAll(/shouldMarkTurnTerminalIdleAfterBroadcast = true;/g)]
+    const terminalIdleAssignments = [
+      ...wireSessionSource.matchAll(/shouldMarkTurnTerminalIdleAfterBroadcast = true;/g),
+    ]
       .map((match) => match.index)
       .filter((index): index is number => typeof index === 'number');
 
@@ -392,23 +427,34 @@ describe('maker:event hot path ordering', () => {
     // 赋值误判成"脱离 done 路径"。
     const CONTEXT_LOOKBACK = 1_400;
     const statusContexts = statusIdleAssignments.map((index) =>
-      wireSessionSource.slice(Math.max(0, index - CONTEXT_LOOKBACK), index + 'shouldMarkTurnStatusIdleAfterBroadcast = true;'.length),
+      wireSessionSource.slice(
+        Math.max(0, index - CONTEXT_LOOKBACK),
+        index + 'shouldMarkTurnStatusIdleAfterBroadcast = true;'.length,
+      ),
     );
     const terminalContexts = terminalIdleAssignments.map((index) =>
-      wireSessionSource.slice(Math.max(0, index - CONTEXT_LOOKBACK), index + 'shouldMarkTurnTerminalIdleAfterBroadcast = true;'.length),
+      wireSessionSource.slice(
+        Math.max(0, index - CONTEXT_LOOKBACK),
+        index + 'shouldMarkTurnTerminalIdleAfterBroadcast = true;'.length,
+      ),
     );
 
-    expect(statusContexts.some((context) => context.includes('data.isRunning === false'))).toBe(true);
-    expect(terminalContexts.some((context) => context.includes("event.type === 'done'"))).toBe(true);
-    expect(terminalContexts.some((context) => context.includes('isTerminalTurnErrorEvent(event)'))).toBe(true);
-    expect([...statusContexts, ...terminalContexts].join('\n')).not.toContain("event.type === 'error'");
+    expect(statusContexts.some((context) => context.includes('data.isRunning === false'))).toBe(
+      true,
+    );
+    expect(terminalContexts.some((context) => context.includes("event.type === 'done'"))).toBe(
+      true,
+    );
+    expect(
+      terminalContexts.some((context) => context.includes('isTerminalTurnErrorEvent(event)')),
+    ).toBe(true);
+    expect([...statusContexts, ...terminalContexts].join('\n')).not.toContain(
+      "event.type === 'error'",
+    );
     // Keep a direct structural guard too: each terminal idle assignment must
     // remain inside its corresponding done/error branch.
     expect(
-      wireSessionSource.lastIndexOf(
-        "if (event.type === 'done') {",
-        terminalIdleAssignments[0],
-      ),
+      wireSessionSource.lastIndexOf("if (event.type === 'done') {", terminalIdleAssignments[0]),
     ).toBeGreaterThanOrEqual(0);
     expect(
       wireSessionSource.lastIndexOf(
@@ -428,7 +474,9 @@ describe('maker:event hot path ordering', () => {
   it('fires git snapshots only from post-broadcast product-terminal done events', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
-    const snapshotIndex = wireSessionSource.indexOf('void gitSnapshotCoordinator?.onTurnEnd(session.id);');
+    const snapshotIndex = wireSessionSource.indexOf(
+      'void gitSnapshotCoordinator?.onTurnEnd(session.id);',
+    );
     const doneBlockIndex = wireSessionSource.indexOf(
       "if (event.type === 'done' && !isContinuationBoundary) {",
       broadcastIndex,
@@ -443,8 +491,12 @@ describe('maker:event hot path ordering', () => {
 
   it('uses status turn-start snapshots only as a fallback when no baseline is pending', () => {
     const wireSessionSource = extractWireSessionSource();
-    const turnStartIndex = wireSessionSource.indexOf('gitSnapshotCoordinator?.onTurnStart(session.id);');
-    const pendingCheckIndex = wireSessionSource.indexOf('gitSnapshotCoordinator?.hasPendingTurnStart(session.id)');
+    const turnStartIndex = wireSessionSource.indexOf(
+      'gitSnapshotCoordinator?.onTurnStart(session.id);',
+    );
+    const pendingCheckIndex = wireSessionSource.indexOf(
+      'gitSnapshotCoordinator?.hasPendingTurnStart(session.id)',
+    );
 
     expect(turnStartIndex).toBeGreaterThanOrEqual(0);
     expect(pendingCheckIndex).toBeGreaterThanOrEqual(0);
@@ -454,7 +506,9 @@ describe('maker:event hot path ordering', () => {
   it('clears pending git snapshot baselines only after terminal error broadcast', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
-    const abortIndex = wireSessionSource.indexOf('gitSnapshotCoordinator?.onTurnAbort(session.id);');
+    const abortIndex = wireSessionSource.indexOf(
+      'gitSnapshotCoordinator?.onTurnAbort(session.id);',
+    );
     const beforeBroadcast = wireSessionSource.slice(0, broadcastIndex);
     const abortContext = wireSessionSource.slice(Math.max(0, abortIndex - 140), abortIndex + 80);
 
@@ -465,26 +519,49 @@ describe('maker:event hot path ordering', () => {
 
   it('writes one durable Assistant boundary for both success and terminal error', () => {
     const wireSessionSource = extractWireSessionSource();
-    const boundaryStart = wireSessionSource.indexOf('let turnAssistantPersistId: string | undefined;');
-    const boundaryEnd = wireSessionSource.indexOf('const autoResumeSuppressesPersist', boundaryStart);
+    const boundaryStart = wireSessionSource.indexOf(
+      'let turnAssistantPersistId: string | undefined;',
+    );
+    const boundaryEnd = wireSessionSource.indexOf(
+      'const autoResumeSuppressesPersist',
+      boundaryStart,
+    );
     const boundaryBlock = wireSessionSource.slice(boundaryStart, boundaryEnd);
 
     expect(boundaryStart).toBeGreaterThanOrEqual(0);
     expect(boundaryEnd).toBeGreaterThan(boundaryStart);
-    expectOrder(boundaryBlock, 'flushAssistantBlock(session.id, eventAgentMeta);', 'consumeLastAssistantPersistId(session.id);');
-    expectOrder(boundaryBlock, 'consumeLastAssistantPersistId(session.id);', 'consumeLastTopLevelAssistantPersistId(session.id);');
-    expectOrder(boundaryBlock, 'consumeLastTopLevelAssistantPersistId(session.id);', 'flushOrphanToolResults(session.id, eventAgentMeta);');
+    expectOrder(
+      boundaryBlock,
+      'flushAssistantBlock(session.id, eventAgentMeta);',
+      'consumeLastAssistantPersistId(session.id);',
+    );
+    expectOrder(
+      boundaryBlock,
+      'consumeLastAssistantPersistId(session.id);',
+      'consumeLastTopLevelAssistantPersistId(session.id);',
+    );
+    expectOrder(
+      boundaryBlock,
+      'consumeLastTopLevelAssistantPersistId(session.id);',
+      'flushOrphanToolResults(session.id, eventAgentMeta);',
+    );
     expect(boundaryBlock).toContain("event.type === 'done'");
     expect(boundaryBlock).toContain("event.source !== 'codex'");
     expect(boundaryBlock).toContain('isSuccessfulCodexDoneEventData(event.data)');
-    expect(boundaryBlock).toContain('markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId)');
-    expect(boundaryBlock).toContain('markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId)');
+    expect(boundaryBlock).toContain(
+      'markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId)',
+    );
+    expect(boundaryBlock).toContain(
+      'markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId)',
+    );
     expect(boundaryBlock).toContain('pendingFailedTurnAssistantPersistId.get(session.id)');
     expect(boundaryBlock).toContain('isPairedFailedTurnDone = true');
+    expect(boundaryBlock).toContain('autoResumeBookkeeping.noteFailedTurnCompletionTail(');
+    expect(boundaryBlock).toContain('event.sessionTurnGeneration');
     expectOrder(
       boundaryBlock,
       'isPairedFailedTurnDone = true',
-      "else if (!isPairedFailedTurnDone)",
+      'else if (!isPairedFailedTurnDone)',
     );
     expectOrder(
       boundaryBlock,
@@ -500,11 +577,7 @@ describe('maker:event hot path ordering', () => {
       'persistId = reserveTurnErrorPersistId(',
       'broadcastToAllWindows(MAKER_PUSH.EVENT',
     );
-    expectOrder(
-      wireSessionSource,
-      'broadcastToAllWindows(MAKER_PUSH.EVENT',
-      'onTurnErrorEvent(',
-    );
+    expectOrder(wireSessionSource, 'broadcastToAllWindows(MAKER_PUSH.EVENT', 'onTurnErrorEvent(');
     expect(wireSessionSource).toContain('const autoResumeWouldSuppressPersist');
     const persistBoundaryStart = wireSessionSource.indexOf(
       'let turnAssistantPersistId: string | undefined;',
@@ -524,9 +597,15 @@ describe('maker:event hot path ordering', () => {
       'getAgentIslandService()?.isInteractionCurrent(',
     );
     const flushIndex = interactionListenerSource.indexOf('flushAssistantBlock(session.id);');
-    const broadcastIndex = interactionListenerSource.indexOf('broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST');
-    const pendingIndex = interactionListenerSource.indexOf('pendingInteractionResolvers.set(req.requestId, entry);');
-    const islandIndex = interactionListenerSource.indexOf('handleAgentIslandInteractionAfterBroadcast(');
+    const broadcastIndex = interactionListenerSource.indexOf(
+      'broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST',
+    );
+    const pendingIndex = interactionListenerSource.indexOf(
+      'pendingInteractionResolvers.set(req.requestId, entry);',
+    );
+    const islandIndex = interactionListenerSource.indexOf(
+      'handleAgentIslandInteractionAfterBroadcast(',
+    );
 
     expect(epochCaptureIndex).toBeGreaterThanOrEqual(0);
     expect(currentEpochCheckIndex).toBeGreaterThan(epochCaptureIndex);
@@ -534,13 +613,19 @@ describe('maker:event hot path ordering', () => {
     expect(pendingIndex).toBeGreaterThan(flushIndex);
     expect(broadcastIndex).toBeGreaterThan(pendingIndex);
     expect(islandIndex).toBeGreaterThan(broadcastIndex);
-    expect(interactionListenerSource.slice(0, broadcastIndex)).not.toContain('handleInteractionRequest(');
-    expect(source).toContain('Agent Island interaction update failed after maker interaction broadcast');
+    expect(interactionListenerSource.slice(0, broadcastIndex)).not.toContain(
+      'handleInteractionRequest(',
+    );
+    expect(source).toContain(
+      'Agent Island interaction update failed after maker interaction broadcast',
+    );
   });
 
   it('clears git snapshot coordinator state when sessions close', () => {
     const wireSessionSource = extractWireSessionSource();
-    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+    const closedBlock = wireSessionSource.slice(
+      wireSessionSource.indexOf("if (status === 'closed') {"),
+    );
 
     expect(closedBlock).toContain('gitSnapshotCoordinator?.onSessionClosed(session.id);');
     expectOrder(
@@ -552,15 +637,15 @@ describe('maker:event hot path ordering', () => {
 
   it('preserves coordinator input boundary inside the rehydrate suppression window (#1930)', () => {
     const wireSessionSource = extractWireSessionSource();
-    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+    const closedBlock = wireSessionSource.slice(
+      wireSessionSource.indexOf("if (status === 'closed') {"),
+    );
 
     // rehydrate / 凭证切换 close-rebuild 期间同一逻辑会话进程内重建:窗口内
     // onSessionClosed 传 preserveInputBoundary(true)保留 input boundary(不 abort
     // 驱动本次重建的 signal → #1930),但**其余清理必须照常执行**(不能整体跳过
     // onSessionClosed,否则 rebuild 失败/close 后不 rebuild 时 coordinator 残留)。
-    expect(closedBlock).toContain(
-      'agentInputCoordinatorHolder?.onSessionClosed(session.id, {',
-    );
+    expect(closedBlock).toContain('agentInputCoordinatorHolder?.onSessionClosed(session.id, {');
     expect(closedBlock).toContain(
       'preserveInputBoundary: rehydrateCloseSuppression.isSuppressed(session.id),',
     );
@@ -573,9 +658,13 @@ describe('maker:event hot path ordering', () => {
 
   it('preserves only a waiting Codex reconnect-stall retry across its exact provider rebuild', () => {
     const wireSessionSource = extractWireSessionSource();
-    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+    const closedBlock = wireSessionSource.slice(
+      wireSessionSource.indexOf("if (status === 'closed') {"),
+    );
 
-    expect(source).toContain('const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();');
+    expect(source).toContain(
+      'const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();',
+    );
     expect(source).toContain("if (signals.reason === 'codex_reconnect_stalled') {");
     expect(source).toContain(
       'pendingCodexReconnectStalledRebuilds.set(runtimeSession, decision.attemptToken);',
@@ -599,18 +688,24 @@ describe('maker:event hot path ordering', () => {
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {
     const wireSessionSource = extractWireSessionSource();
-    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+    const closedBlock = wireSessionSource.slice(
+      wireSessionSource.indexOf("if (status === 'closed') {"),
+    );
     const closeSessionHandler = source.match(
       /ipcMain\.handle\(MAKER_INVOKE\.CLOSE_SESSION,[\s\S]*?\n {2}\}\);/,
     )?.[0];
 
-    expect(closedBlock).toContain("handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');");
+    expect(closedBlock).toContain(
+      "handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');",
+    );
     expectOrder(
       closedBlock,
       "cleanupPendingInteractionsForSession(session.id, 'session_closed');",
       "handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');",
     );
-    expect(source).toContain('Agent Island session close cleanup failed after mandatory session cleanup');
+    expect(source).toContain(
+      'Agent Island session close cleanup failed after mandatory session cleanup',
+    );
     expect(closeSessionHandler).toBeTruthy();
     expect(closeSessionHandler).not.toContain('handleSessionClosed');
   });
@@ -655,16 +750,8 @@ describe('maker:event hot path ordering', () => {
       'if (!sess) {',
     );
     expect(directAbortSource).not.toContain('const sess = maker.getSession(sessionId);');
-    expectOrder(
-      directAbortSource,
-      'if (!sess) {',
-      'handleAgentIslandSessionStopped(sess);',
-    );
-    expectOrder(
-      directAbortSource,
-      'handleAgentIslandSessionStopped(sess);',
-      'await sess.abort();',
-    );
+    expectOrder(directAbortSource, 'if (!sess) {', 'handleAgentIslandSessionStopped(sess);');
+    expectOrder(directAbortSource, 'handleAgentIslandSessionStopped(sess);', 'await sess.abort();');
     expect(directAbortSource).toContain(
       'const directAbortBoundary = beginDirectAbortReconciliation(sessionId, sess);',
     );
@@ -707,16 +794,23 @@ describe('maker:event hot path ordering', () => {
 
   it('tears down every automatic recovery path before an explicit Stop aborts the session', () => {
     const resetStart = source.indexOf('function resetAutomaticRecoveryForExplicitStop(');
-    const resetEnd = source.indexOf('\n}\n\nfunction settleUndispatchedAutoResumeOutcome', resetStart) + 2;
+    const resetEnd =
+      source.indexOf('\n}\n\nfunction settleUndispatchedAutoResumeOutcome', resetStart) + 2;
     const resetSource = source.slice(resetStart, resetEnd);
     const coordinatorAbortStart = source.indexOf('abortSession: async (sessionId) => {');
     const coordinatorAbortEnd = source.indexOf('\n    isTurnRunning:', coordinatorAbortStart);
     const coordinatorAbortSource = source.slice(coordinatorAbortStart, coordinatorAbortEnd);
     const inputStopStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.INPUT_STOP');
-    const inputStopEnd = source.indexOf('\n  ipcMain.handle(MAKER_INVOKE.INPUT_RESUME', inputStopStart);
+    const inputStopEnd = source.indexOf(
+      '\n  ipcMain.handle(MAKER_INVOKE.INPUT_RESUME',
+      inputStopStart,
+    );
     const inputStopSource = source.slice(inputStopStart, inputStopEnd);
     const directAbortStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.ABORT_SESSION');
-    const directAbortEnd = source.indexOf('\n  ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION', directAbortStart);
+    const directAbortEnd = source.indexOf(
+      '\n  ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION',
+      directAbortStart,
+    );
     const directAbortSource = source.slice(directAbortStart, directAbortEnd);
     const goalPauseStart = source.indexOf('async function pauseGoalBeforeExplicitStop(');
     const goalPauseEnd = source.indexOf('\n}\n// (Option B)', goalPauseStart) + 2;
@@ -746,9 +840,9 @@ describe('maker:event hot path ordering', () => {
     );
     // no-session 分支会先 await goalPause 后返回；有 live session 时真正的 abort 必须
     // 立即启动，只在 abort/reconcile 之后读取 Goal 持久化结果。
-    expect(directAbortSource.indexOf('const settledGoalPause = await goalPauseResult;')).toBeGreaterThan(
-      directAbortSource.indexOf('await sess.abort();'),
-    );
+    expect(
+      directAbortSource.indexOf('const settledGoalPause = await goalPauseResult;'),
+    ).toBeGreaterThan(directAbortSource.indexOf('await sess.abort();'));
     expectOrder(
       inputStopSource,
       'resetAutomaticRecoveryForExplicitStop(sid);',
@@ -763,7 +857,9 @@ describe('maker:event hot path ordering', () => {
     expect(goalPauseStart).toBeGreaterThanOrEqual(0);
     expect(goalPauseSource).toContain('catch (err)');
     expect(goalPauseSource).toContain('await Promise.resolve(observer(sessionId));');
-    expect(goalPauseSource).toContain("log.error('goal pause persistence failed during explicit stop'");
+    expect(goalPauseSource).toContain(
+      "log.error('goal pause persistence failed during explicit stop'",
+    );
     expect(goalPauseSource).toContain(
       "throwIpcError('INTERNAL', 'Failed to persist the stopped Goal state');",
     );
@@ -771,8 +867,16 @@ describe('maker:event hot path ordering', () => {
     expect(goalPauseSource).not.toContain('Promise.race');
     expect(goalPauseSource).not.toContain('setTimeout');
     expect(directAbortSource).toContain('const goalPauseResult = goalPause.then(');
-    expectOrder(directAbortSource, 'await sess.abort();', 'const settledGoalPause = await goalPauseResult;');
-    expectOrder(directAbortSource, 'if (abortFailed)', 'if (!settledGoalPause.ok) throw settledGoalPause.error;');
+    expectOrder(
+      directAbortSource,
+      'await sess.abort();',
+      'const settledGoalPause = await goalPauseResult;',
+    );
+    expectOrder(
+      directAbortSource,
+      'if (abortFailed)',
+      'if (!settledGoalPause.ok) throw settledGoalPause.error;',
+    );
   });
 
   it('commits a Goal state update before its post-write readback', () => {
@@ -790,7 +894,10 @@ describe('maker:event hot path ordering', () => {
 
   it('uses the wired Session snapshot while reconciling owner-boundary aborts', () => {
     const stableLookupStart = source.indexOf('const lookupStableSessionForTurnBoundary =');
-    const stableLookupEnd = source.indexOf('\n  const getStableSessionForTurnBoundary =', stableLookupStart);
+    const stableLookupEnd = source.indexOf(
+      '\n  const getStableSessionForTurnBoundary =',
+      stableLookupStart,
+    );
     const stableLookupSource = source.slice(stableLookupStart, stableLookupEnd);
     const reconcileStart = source.indexOf('const sealLostTerminalPersistState =');
     const reconcileEnd = source.indexOf('\n\n  const inputCoordinator:', reconcileStart);
@@ -801,24 +908,46 @@ describe('maker:event hot path ordering', () => {
     expect(stableLookupSource).toContain('wiredSessionsById.get(sessionId)?.session');
     expectOrder(
       stableLookupSource,
-      'if (wired) return { status: \'found\', session: wired };',
-      'return sess ? { status: \'found\', session: sess } : { status: \'missing\' };',
+      "if (wired) return { status: 'found', session: wired };",
+      "return sess ? { status: 'found', session: sess } : { status: 'missing' };",
     );
     expect(stableLookupSource).toContain("return { status: 'unavailable' };");
-    expect(source).toContain(
-      "return lookup.status === 'found' ? lookup.session : null;",
-    );
+    expect(source).toContain("return lookup.status === 'found' ? lookup.session : null;");
 
     expect(reconcileStart).toBeGreaterThanOrEqual(0);
     expect(reconcileEnd).toBeGreaterThan(reconcileStart);
     expect(reconcileSource).toContain('if (!liveSessionIdle) return false;');
-    expect(reconcileSource).not.toContain('if (!trackerStale && !hadZombieInteraction) return false;');
-    expect(reconcileSource).toContain('confirmed live session idle during turn-boundary reconciliation');
-    expectOrder(reconcileSource, 'sealAssistantBlockForLateFinal(sessionId, null);', 'consumeLastAssistantPersistId(sessionId);');
-    expectOrder(reconcileSource, 'consumeLastAssistantPersistId(sessionId);', 'consumeLastTopLevelAssistantPersistId(sessionId);');
-    expectOrder(reconcileSource, 'consumeLastTopLevelAssistantPersistId(sessionId);', 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)');
-    expectOrder(reconcileSource, 'sealLostTerminalPersistState(sessionId);', 'sessionTurnActivityTracker.deleteSession(sessionId);');
-    expectOrder(reconcileSource, 'clearCodexPlanRowsForSession(sessionId);', 'resetTurnPersistState(sessionId);');
+    expect(reconcileSource).not.toContain(
+      'if (!trackerStale && !hadZombieInteraction) return false;',
+    );
+    expect(reconcileSource).toContain(
+      'confirmed live session idle during turn-boundary reconciliation',
+    );
+    expectOrder(
+      reconcileSource,
+      'sealAssistantBlockForLateFinal(sessionId, null);',
+      'consumeLastAssistantPersistId(sessionId);',
+    );
+    expectOrder(
+      reconcileSource,
+      'consumeLastAssistantPersistId(sessionId);',
+      'consumeLastTopLevelAssistantPersistId(sessionId);',
+    );
+    expectOrder(
+      reconcileSource,
+      'consumeLastTopLevelAssistantPersistId(sessionId);',
+      'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)',
+    );
+    expectOrder(
+      reconcileSource,
+      'sealLostTerminalPersistState(sessionId);',
+      'sessionTurnActivityTracker.deleteSession(sessionId);',
+    );
+    expectOrder(
+      reconcileSource,
+      'clearCodexPlanRowsForSession(sessionId);',
+      'resetTurnPersistState(sessionId);',
+    );
   });
 
   it('keeps direct abort reconciliation fail-closed across owner replacement and new turns', () => {
@@ -829,21 +958,33 @@ describe('maker:event hot path ordering', () => {
     const helperEnd = source.indexOf('\n\n  const inputCoordinator:', helperStart);
     const helperSource = source.slice(helperStart, helperEnd);
     const wireSessionSource = extractWireSessionSource();
-    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+    const closedBlock = wireSessionSource.slice(
+      wireSessionSource.indexOf("if (status === 'closed') {"),
+    );
 
-    expect(source).toContain('const sessionTurnBoundaryGenerationById = new Map<string, number>();');
-    expect(source).toContain('const directAbortReconcileBoundaries = new Map<string, DirectAbortReconcileBoundary>();');
+    expect(source).toContain(
+      'const sessionTurnBoundaryGenerationById = new Map<string, number>();',
+    );
+    expect(source).toContain(
+      'const directAbortReconcileBoundaries = new Map<string, DirectAbortReconcileBoundary>();',
+    );
     expect(closeBoundaryStart).toBeGreaterThanOrEqual(0);
     expect(closeBoundaryEnd).toBeGreaterThan(closeBoundaryStart);
     expect(closeBoundarySource).toContain('boundary.session !== session');
     expect(closeBoundarySource).toContain(
       'currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation',
     );
-    expect(helperSource).toContain('wiredSessionsById.get(sessionId)?.session !== boundary.session');
-    expect(helperSource).toContain('currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation');
+    expect(helperSource).toContain(
+      'wiredSessionsById.get(sessionId)?.session !== boundary.session',
+    );
+    expect(helperSource).toContain(
+      'currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation',
+    );
     expect(helperSource).toContain('direct-abort-retry');
     expect(helperSource).toContain('cancelDirectAbortReconciliation(sessionId, boundary);');
-    expect(wireSessionSource).toContain('if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);');
+    expect(wireSessionSource).toContain(
+      'if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);',
+    );
     expectOrder(
       closedBlock,
       'const closedDirectAbortBoundary = getDirectAbortBoundaryForClosingSession(',
@@ -862,9 +1003,9 @@ describe('maker:event hot path ordering', () => {
       'if (closedDirectAbortBoundary) {',
     );
     expect(closedBlock).toContain('notifyGoalIdleAfterTurnSettled(session.id);');
-    expect(
-      closedBlock.indexOf('notifyGoalIdleAfterTurnSettled(session.id);'),
-    ).toBeGreaterThan(closedBlock.indexOf('sessionTurnBoundaryGenerationById.delete(session.id);'));
+    expect(closedBlock.indexOf('notifyGoalIdleAfterTurnSettled(session.id);')).toBeGreaterThan(
+      closedBlock.indexOf('sessionTurnBoundaryGenerationById.delete(session.id);'),
+    );
   });
 
   it('cancels deferred Goal resumes when non-abort session teardown supersedes them', () => {
@@ -899,22 +1040,32 @@ describe('maker:event hot path ordering', () => {
 
   it('keeps Codex subscription value out of real session cost totals', () => {
     const wireSessionSource = extractWireSessionSource();
-    const codexDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'codex'");
+    const codexDoneIndex = wireSessionSource.indexOf(
+      "event.type === 'done' && event.source === 'codex'",
+    );
     expect(codexDoneIndex).toBeGreaterThanOrEqual(0);
 
     const codexDoneSource = wireSessionSource.slice(codexDoneIndex);
     expect(codexDoneSource).toContain('const sessionProvider = getSessionProvider(session.id);');
-    expect(codexDoneSource).toContain('const isRemoteCodexSession = Boolean(session.remoteHostId);');
-    expect(codexDoneSource).toContain('const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();');
+    expect(codexDoneSource).toContain(
+      'const isRemoteCodexSession = Boolean(session.remoteHostId);',
+    );
+    expect(codexDoneSource).toContain(
+      'const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();',
+    );
     expect(wireSessionSource).toContain('!turnModelPromiseBySession.has(session.id)');
-    expect(wireSessionSource).toContain('turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));');
+    expect(wireSessionSource).toContain(
+      'turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));',
+    );
     expect(codexDoneSource).toMatch(
       /const modelPromise\s*=\s*turnModelPromiseBySession\.get\(session\.id\)\s*\?\?\s*readSessionModelForUsage\(session\.id\);/,
     );
     expect(codexDoneSource).toContain('turnModelPromiseBySession.delete(session.id);');
     expect(codexDoneSource).not.toContain('hasCodexOAuthLogin()');
     expect(codexDoneSource).toContain('promptTokens + completionTokens + cachedTokens');
-    expect(codexDoneSource).not.toContain('promptTokens + completionTokens + reasoningTokens + cachedTokens');
+    expect(codexDoneSource).not.toContain(
+      'promptTokens + completionTokens + reasoningTokens + cachedTokens',
+    );
     expect(codexDoneSource).toContain('const isCustomProviderRoute =');
     expect(codexDoneSource).toContain('isUserProviderSession(session.id)');
     expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\('codex\/'\);/);
@@ -922,10 +1073,8 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
     expect(codexDoneSource).toContain('const hasEffectiveGatewayRoute =');
     expect(codexDoneSource).toContain('!isCustomProviderRoute');
-    expect(codexDoneSource).toContain('(sessionProvider === \'xd\' && hasGatewayKey)');
-    expect(codexDoneSource).toMatch(
-      /const isSubscriptionValue\s*=\s*isRemoteCodexSession\s*\|\|/,
-    );
+    expect(codexDoneSource).toContain("(sessionProvider === 'xd' && hasGatewayKey)");
+    expect(codexDoneSource).toMatch(/const isSubscriptionValue\s*=\s*isRemoteCodexSession\s*\|\|/);
     expect(codexDoneSource).toContain('isCodexXaiProviderRoute ||');
     // 用正则而非整串匹配:这段条件已按多行排版,单行字面量会因换行/缩进调整而假失败。
     // 要守的语义是——订阅计价只在「OpenAI 供应商 + oauth-bearer 注入 + 无生效网关路由」时成立。
@@ -980,7 +1129,9 @@ describe('maker:event hot path ordering', () => {
     const schedulerCostRecordIndex = codexDoneSource.indexOf('await recordSchedulerTurnCost({');
     expect(costRecordIndex).toBeGreaterThanOrEqual(0);
     expect(modelCostRecordIndex).toBeGreaterThanOrEqual(0);
-    expect(modelCostRecordIndex).toBeGreaterThan(codexDoneSource.indexOf('const pricing = isSubscriptionValue'));
+    expect(modelCostRecordIndex).toBeGreaterThan(
+      codexDoneSource.indexOf('const pricing = isSubscriptionValue'),
+    );
     expect(schedulerCostRecordIndex).toBeGreaterThan(costRecordIndex);
     expect(codexDoneSource).toContain('clientId: turnAssistantPersistId');
     expect(codexDoneSource).toContain('money,');
@@ -997,8 +1148,12 @@ describe('maker:event hot path ordering', () => {
 
   it('claude-code 费用按完整请求段定价，累计 cost 首帧只建基线', () => {
     const wireSessionSource = extractWireSessionSource();
-    const claudeDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'claude-code'");
-    const codexDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'codex'");
+    const claudeDoneIndex = wireSessionSource.indexOf(
+      "event.type === 'done' && event.source === 'claude-code'",
+    );
+    const codexDoneIndex = wireSessionSource.indexOf(
+      "event.type === 'done' && event.source === 'codex'",
+    );
     expect(claudeDoneIndex).toBeGreaterThanOrEqual(0);
     expect(codexDoneIndex).toBeGreaterThan(claudeDoneIndex);
 
@@ -1027,7 +1182,7 @@ describe('maker:event hot path ordering', () => {
       /model:\s*isClaudeSubscriptionValueRow \|\| isBridgeSubscriptionRow\s*\?\s*claudeSubscriptionUsageModelKey\(m\.model\)\s*:\s*m\.model,/,
     );
     expect(claudeDoneSource).toContain(
-      "isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)",
+      'isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)',
     );
     expect(claudeDoneSource).toContain(
       "m.source === 'subscription' && isSubscriptionDirectRoute(m.model)",
@@ -1040,12 +1195,8 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain("sessionProviderForBilling === 'anthropic'");
     expect(claudeDoneSource).toContain('const observedClaudeRoute =');
     expect(claudeDoneSource).toContain('readClaudeSessionRoute(session.id)');
-    expect(claudeDoneSource).toContain(
-      "observedClaudeRoute === 'subscription'",
-    );
-    expect(claudeDoneSource).toContain(
-      ': !readClaudeApiKey()',
-    );
+    expect(claudeDoneSource).toContain("observedClaudeRoute === 'subscription'");
+    expect(claudeDoneSource).toContain(': !readClaudeApiKey()');
     // 纯订阅轮无 recordTurnSpend push, 模型行落库后重广播今日 spend 触发仪表盘刷新
     expect(claudeDoneSource).toContain(
       'void Promise.allSettled(modelUsageWrites).then(() => rebroadcastTodaySpend());',
@@ -1102,7 +1253,9 @@ describe('maker:event hot path ordering', () => {
     if (!listenerSource) return;
 
     expect(listenerSource).toContain('let currentToken = _currentClaudeToken;');
-    expect(listenerSource).toContain('currentToken = readClaudeCredentialsInfo()?.accessToken ?? null;');
+    expect(listenerSource).toContain(
+      'currentToken = readClaudeCredentialsInfo()?.accessToken ?? null;',
+    );
     expectOrder(
       listenerSource,
       'currentToken = readClaudeCredentialsInfo()?.accessToken ?? null;',

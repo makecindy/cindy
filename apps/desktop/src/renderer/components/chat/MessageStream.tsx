@@ -314,6 +314,7 @@ import {
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
+  resolveWindowCoverageLossAction,
   selectTailUserMessageId,
   readFollowLatestRequestKey,
   shouldBumpSendFollowCancelOnScroll,
@@ -4063,14 +4064,27 @@ export function MessageStream({
   const anchoredForwardItemsRef = useRef(anchoredForwardItems);
   anchoredForwardItemsRef.current = anchoredForwardItems;
 
-  // render-window-bidirectional P1 fix: 新消息导致锚定窗口不再覆盖末尾时，
-  // 重置 near-bottom 以触发未读提示（覆盖末尾→清锚回默认窗的逻辑在 handleScroll 里）。
+  // 新 item 导致锚定窗口不再覆盖末尾时，先保留此前的跟随意图：自动补历史建立的
+  // 锚点只是实现细节，用户仍在跟随就清锚回默认尾窗；用户已经离底才保留历史窗口。
   const prevWindowCoversEndRef = useRef(windowCoversEnd);
   useLayoutEffect(() => {
     const wasCovering = prevWindowCoversEndRef.current;
     prevWindowCoversEndRef.current = windowCoversEnd;
 
-    if (firstVisibleItemKey !== null && wasCovering && !windowCoversEnd) {
+    const coverageLossAction = resolveWindowCoverageLossAction({
+      hasWindowAnchor: firstVisibleItemKey !== null,
+      wasCoveringEnd: wasCovering,
+      windowCoversEnd,
+      wasFollowingTail: isNearBottomRef.current,
+    });
+    if (coverageLossAction === 'handoff-to-tail') {
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      setUnreadCount(0);
+      setFirstVisibleItemKey(null);
+      return;
+    }
+    if (coverageLossAction === 'preserve-anchor') {
       isNearBottomRef.current = false;
       setIsNearBottom(false);
       return;
@@ -5687,6 +5701,12 @@ export function MessageStream({
       // 导航条目标要到 layout effect 才能确认仍存在且 DOM 已就绪，因此这里不能提前消费
       // focus 期间延期的删除补偿：先重放补偿，目标有效时后续导航再覆盖最终落点。
       cancelFocusJump();
+      // 点击本身就是离开尾部的明确意图，必须在 request 进入下一次 render 前同步写入。
+      // 否则同一批流式 append 的 coverage-loss layout effect 会先按旧跟随态清掉锚点，
+      // 当前窗口内、但默认尾窗外的目标会在后续 rail effect 滚动时被卸载。
+      restoringRef.current = false;
+      isNearBottomRef.current = false;
+      setIsNearBottom(false);
       railJumpSeqRef.current += 1;
       setRailJumpRequest({ id: clientId, seq: railJumpSeqRef.current });
     },
@@ -5716,11 +5736,8 @@ export function MessageStream({
     ) as HTMLElement | null;
     if (!el) return;
     lastAppliedRailJumpRef.current = railJumpRequest.seq;
-    // 从贴底态往上跳必须先解除 auto-follow 钉底,否则流式期间 pin effect 会把
-    // 视口拽回底部(focus-jump 同款处理;chip 不需要是因为它只在已上滚时出现)。
-    restoringRef.current = false;
-    isNearBottomRef.current = false;
-    setIsNearBottom(false);
+    // auto-follow 已由点击处理器在 request 进入 render 前解除，避免本轮更早的
+    // coverage-loss effect 清掉当前窗口内、默认尾窗外的导航目标。
     // smooth scroll 途经顶部区域时抑制 expandWindow/onLoadMore(chip-jump 协议,
     // 解抑靠用户 wheel/touch/keydown + 安全兜底 timer)。
     beginChipJump({

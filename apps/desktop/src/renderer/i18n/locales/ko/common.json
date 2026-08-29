@@ -4189,6 +4189,92 @@
           "leftStick": "왼쪽 스틱",
           "rightStick": "오른쪽 스틱"
         },
+        "familyControls": {
+          "xbox": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Xbox",
+            "ls": "왼쪽 스틱 클릭",
+            "rs": "오른쪽 스틱 클릭",
+            "dpadUp": "십자키 위",
+            "dpadDown": "십자키 아래",
+            "dpadLeft": "십자키 왼쪽",
+            "dpadRight": "십자키 오른쪽",
+            "leftStick": "왼쪽 스틱",
+            "rightStick": "오른쪽 스틱"
+          },
+          "playstation": {
+            "a": "✕",
+            "b": "○",
+            "x": "□",
+            "y": "△",
+            "lb": "L1",
+            "rb": "R1",
+            "lt": "L2",
+            "rt": "R2",
+            "view": "Create",
+            "menu": "Options",
+            "xbox": "PS",
+            "ls": "왼쪽 스틱 클릭",
+            "rs": "오른쪽 스틱 클릭",
+            "dpadUp": "십자키 위",
+            "dpadDown": "십자키 아래",
+            "dpadLeft": "십자키 왼쪽",
+            "dpadRight": "십자키 오른쪽",
+            "leftStick": "왼쪽 스틱",
+            "rightStick": "오른쪽 스틱"
+          },
+          "nintendo": {
+            "a": "B",
+            "b": "A",
+            "x": "Y",
+            "y": "X",
+            "lb": "L",
+            "rb": "R",
+            "lt": "ZL",
+            "rt": "ZR",
+            "view": "−",
+            "menu": "+",
+            "xbox": "HOME",
+            "ls": "왼쪽 스틱 클릭",
+            "rs": "오른쪽 스틱 클릭",
+            "dpadUp": "십자키 위",
+            "dpadDown": "십자키 아래",
+            "dpadLeft": "십자키 왼쪽",
+            "dpadRight": "십자키 오른쪽",
+            "leftStick": "왼쪽 스틱",
+            "rightStick": "오른쪽 스틱"
+          },
+          "generic": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "홈",
+            "ls": "왼쪽 스틱 클릭",
+            "rs": "오른쪽 스틱 클릭",
+            "dpadUp": "십자키 위",
+            "dpadDown": "십자키 아래",
+            "dpadLeft": "십자키 왼쪽",
+            "dpadRight": "십자키 오른쪽",
+            "leftStick": "왼쪽 스틱",
+            "rightStick": "오른쪽 스틱"
+          }
+        },
         "actions": {
           "none": "지정 안 함",
           "voice": "음성 입력",
@@ -4231,6 +4317,57 @@
           "bluetooth": "블루투스",
           "battery": "{{percent}}%",
           "charging": "충전 중 {{percent}}%"
+        }
+      },
+      "playstationGamepad": {
+        "title": "PlayStation 컨트롤러",
+        "openAria": "PlayStation 컨트롤러 설정 열기",
+        "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
+        "connection": {
+          "toggle": { "aria": "Cindy가 앞에 있을 때 PlayStation 컨트롤러를 사용합니다" },
+          "descriptions": {
+            "connecting": "Cindy가 PlayStation 컨트롤러를 찾고 있습니다.",
+            "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
+            "disabled": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "present": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "not-detected": "USB 또는 Bluetooth로 DualSense 또는 DualShock를 연결하세요.",
+            "error": "Cindy가 컨트롤러를 읽지 못해 다시 시도하고 있습니다.",
+            "unavailable": "이 컴퓨터는 아직 PlayStation 컨트롤러를 읽을 수 없습니다."
+          }
+        }
+      },
+      "nintendoGamepad": {
+        "title": "Switch 컨트롤러",
+        "openAria": "Switch 컨트롤러 설정 열기",
+        "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
+        "connection": {
+          "toggle": { "aria": "Cindy가 앞에 있을 때 Switch 컨트롤러를 사용합니다" },
+          "descriptions": {
+            "connecting": "Cindy가 Switch 컨트롤러를 찾고 있습니다.",
+            "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
+            "disabled": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "present": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "not-detected": "USB 또는 Bluetooth로 Switch Pro 또는 Joy-Con을 연결하세요.",
+            "error": "Cindy가 컨트롤러를 읽지 못해 다시 시도하고 있습니다.",
+            "unavailable": "이 컴퓨터는 아직 Switch 컨트롤러를 읽을 수 없습니다."
+          }
+        }
+      },
+      "genericGamepad": {
+        "title": "일반 컨트롤러",
+        "openAria": "일반 컨트롤러 설정 열기",
+        "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
+        "connection": {
+          "toggle": { "aria": "Cindy가 앞에 있을 때 일반 컨트롤러를 사용합니다" },
+          "descriptions": {
+            "connecting": "Cindy가 컨트롤러를 찾고 있습니다.",
+            "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
+            "disabled": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "present": "켜면 Cindy가 앞에 있을 때 컨트롤러를 듣습니다.",
+            "not-detected": "USB 또는 Bluetooth로 컨트롤러를 연결하세요.",
+            "error": "Cindy가 컨트롤러를 읽지 못해 다시 시도하고 있습니다.",
+            "unavailable": "이 컴퓨터는 아직 컨트롤러를 읽을 수 없습니다."
+          }
         }
       }
     },

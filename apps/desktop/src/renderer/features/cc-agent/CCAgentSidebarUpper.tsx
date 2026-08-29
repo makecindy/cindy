@@ -109,7 +109,10 @@ import {
 } from '@/lib/sessionAttentionStore';
 import { patchDraft as patchNewMakerDraft } from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
-import { requestConversationSearch, useConversationSearchRequest } from '@/state/conversationSearchRequest';
+import {
+  requestConversationSearch,
+  useConversationSearchRequest,
+} from '@/state/conversationSearchRequest';
 import { searchDevicesFromSwitcher } from '@/lib/conversationSearchFanout';
 
 import { emitRefresh, onPatch } from '@/lib/sessionsBus';
@@ -588,20 +591,22 @@ export function CCAgentSidebarUpper() {
       .filter((session) => !catalogSessions.some((active) => active.id === session.id))
       .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
     const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
-    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map((session) => {
-      const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
-      const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
-      const order = sidebarOrder.get(session.id);
-      const isActiveCatalog = session.status === 'active';
-      return {
-        id: session.id,
-        title: session.title ?? null,
-        pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
-        userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
-        ...(order === undefined ? {} : { sidebarOrder: order }),
-        ...(isActiveCatalog ? {} : { catalogEligible: false }),
-      };
-    });
+    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
+      (session) => {
+        const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
+        const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
+        const order = sidebarOrder.get(session.id);
+        const isActiveCatalog = session.status === 'active';
+        return {
+          id: session.id,
+          title: session.title ?? null,
+          pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
+          userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
+          ...(order === undefined ? {} : { sidebarOrder: order }),
+          ...(isActiveCatalog ? {} : { catalogEligible: false }),
+        };
+      },
+    );
     // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。
     const key = JSON.stringify(tasks);
     if (key === publishedTaskKeyRef.current) return;
@@ -883,9 +888,8 @@ function ExpandedView({
         const sessionIds = group.sessions.map((session) => session.id);
         clearSessionAttentionMany(sessionIds);
         try {
-          const { processed, failed } = await window.electronAPI.localDb.sessions.dismissPendingAlerts(
-            sessionIds,
-          );
+          const { processed, failed } =
+            await window.electronAPI.localDb.sessions.dismissPendingAlerts(sessionIds);
           clearSessionAttentionMany(processed, { intent: 'explicit' });
           if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
         } catch (e) {
@@ -1653,9 +1657,7 @@ function ExpandedView({
   );
 
   const visibleDialogues = useMemo(() => {
-    const sessions = vendorPredicate
-      ? groups.dialogues.filter(vendorPredicate)
-      : groups.dialogues;
+    const sessions = vendorPredicate ? groups.dialogues.filter(vendorPredicate) : groups.dialogues;
     if (filter.projectsAsSet === null) return sessions;
     return filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? sessions : [];
   }, [groups.dialogues, vendorPredicate, filter.projectsAsSet]);
@@ -1671,22 +1673,19 @@ function ExpandedView({
 
   const hostProjectSort = useMemo(() => {
     const scope = projectOrderWriteScopeForSelection(selectedMachineId);
-    const hostSnapshot = scope.kind === 'host' && scope.deviceId === null
-      ? localHostProjectOrder.snapshot
-      : scope.kind === 'host' && scope.deviceId
-        ? remoteHostProjectOrders.get(scope.deviceId)
-        : undefined;
-    const hostManual = scope.kind === 'host' && scope.deviceId === null
-      ? localHostProjectOrder.snapshot.manualProjectOrder
-      : scope.kind === 'host' && scope.deviceId
-        ? controllerManualOrderForDevice(scope.deviceId, hostSnapshot) ?? []
-        : [];
-    const displayed = resolveDisplayedProjectOrder(
-      scope,
-      hostSnapshot,
-      filter,
-      hostManual,
-    );
+    const hostSnapshot =
+      scope.kind === 'host' && scope.deviceId === null
+        ? localHostProjectOrder.snapshot
+        : scope.kind === 'host' && scope.deviceId
+          ? remoteHostProjectOrders.get(scope.deviceId)
+          : undefined;
+    const hostManual =
+      scope.kind === 'host' && scope.deviceId === null
+        ? localHostProjectOrder.snapshot.manualProjectOrder
+        : scope.kind === 'host' && scope.deviceId
+          ? (controllerManualOrderForDevice(scope.deviceId, hostSnapshot) ?? [])
+          : [];
+    const displayed = resolveDisplayedProjectOrder(scope, hostSnapshot, filter, hostManual);
     return {
       order: displayed.manualProjectOrder,
       projectOrder: displayed.projectOrder,
@@ -1723,12 +1722,7 @@ function ExpandedView({
       hostProjectSort.order,
       hostProjectSort.projectOrder,
     );
-  }, [
-    visibleProjects,
-    pinnedProjectKeys,
-    vendorPredicate,
-    hostProjectSort,
-  ]);
+  }, [visibleProjects, pinnedProjectKeys, vendorPredicate, hostProjectSort]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
   // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
@@ -1798,12 +1792,22 @@ function ExpandedView({
 
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorSessionId, setSelectionAnchorSessionId] = useState<string | null>(null);
-  // 这三个值 handleSessionClick 只在「点击那一刻」读一次。留在它的 deps 里会让
+  // 这几个值 handleSessionClick 只在「点击那一刻」读一次。留在它的 deps 里会让
   // 每次点击(:setSelectionAnchorSessionId 必触发)和每次切换都重建 handler,
   // 行的 onClick 跟着换引用 → 整表 memo 失效重画一遍(SessionItem.tsx 不变量 #3)。
   // 经 ref 读还顺带避开闭包陈旧:拿到的是最新值而非渲染时快照。
+  // attention / running / 未读集合更是:点进去会先清通知,若留在 deps 里,刚点的
+  // 那一下就会换掉整表 onClick,把「切任务」变成「全表重画」。
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
+  const urgentSetRef = useRef(urgentSet);
+  urgentSetRef.current = urgentSet;
+  const attentionKindsRef = useRef(attentionKinds);
+  attentionKindsRef.current = attentionKinds;
+  const runningSessionIdsRef = useRef(runningSessionIds);
+  runningSessionIdsRef.current = runningSessionIds;
+  const sidebarNotificationsRef = useRef(sidebarNotifications);
+  sidebarNotificationsRef.current = sidebarNotifications;
   // viewedSessionId 同理:handleActionClick 只在触发归档那一刻用它算重定向目标。
   const viewedSessionIdRef = useRef(viewedSessionId);
   viewedSessionIdRef.current = viewedSessionId;
@@ -2001,6 +2005,9 @@ function ExpandedView({
   );
 
   const pruneSelectionToRenderedRows = useCallback(() => {
+    if (selectedSessionIdsRef.current.size === 0 && selectionAnchorSessionIdRef.current == null) {
+      return;
+    }
     const renderedSessionIds = new Set(getVisibleSidebarSessionIds(sidebarScrollRef.current));
     setSelectedSessionIds((prev) => {
       const next = new Set([...prev].filter((id) => renderedSessionIds.has(id)));
@@ -2009,17 +2016,19 @@ function ExpandedView({
     setSelectionAnchorSessionId((prev) => (prev && renderedSessionIds.has(prev) ? prev : null));
   }, []);
 
+  // 只在真有多选集合时才盯 DOM。单击也会写下 selectionAnchorSessionId 当
+  // Shift 范围锚点,那不算多选;锚点失效时 Shift 点击会现场用可见行校验。
+  // 若把锚点算进去,首次点击后观察器会一直挂着,运行态/未读子节点增删又把
+  // getVisibleSidebarSessionIds 打回整表布局税。
+  const hasSidebarSelection = selectedSessionIds.size > 0;
   useEffect(() => {
-    pruneSelectionToRenderedRows();
-  });
-
-  useEffect(() => {
+    if (!hasSidebarSelection) return undefined;
     const root = sidebarScrollRef.current;
     if (!root) return undefined;
     const observer = new MutationObserver(pruneSelectionToRenderedRows);
     observer.observe(root, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [pruneSelectionToRenderedRows]);
+  }, [hasSidebarSelection, pruneSelectionToRenderedRows]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedSessionIds((prev) => (prev.size === 0 ? prev : new Set()));
@@ -2138,13 +2147,13 @@ function ExpandedView({
       setSelectionAnchorSessionId(id);
       // 清点会先于路由更新抹掉 attention。必须先按当前档位钉住,否则
       // ProjectsSection 首次 hold 只能读到 rest,刚打开的完成未读仍会立刻沉底。
-      const waiting = new Set(urgentSet);
-      for (const [sessionId, kind] of attentionKinds) {
+      const waiting = new Set(urgentSetRef.current);
+      for (const [sessionId, kind] of attentionKindsRef.current) {
         if (kind === 'awaiting' || kind === 'error') waiting.add(sessionId);
       }
       holdSidebarViewedPriority(id, {
-        runningSessionIds,
-        attentionSessionIds: sidebarNotifications,
+        runningSessionIds: runningSessionIdsRef.current,
+        attentionSessionIds: sidebarNotificationsRef.current,
         waitingSessionIds: waiting,
       });
       // F-SB-7: Clear done notification on click
@@ -2156,15 +2165,7 @@ function ExpandedView({
       const target = sessionsRef.current.find((s) => s.id === id);
       navigate(await resolveSessionRoute(id, target));
     },
-    [
-      navigate,
-      clearNotification,
-      markAutomationSessionRunsRead,
-      urgentSet,
-      attentionKinds,
-      runningSessionIds,
-      sidebarNotifications,
-    ],
+    [navigate, clearNotification, markAutomationSessionRunsRead],
   );
 
   /* ---- mod+1..9 快速切换对话 + 按住修饰键浮现序号徽标(复刻 Codex 桌面版) ----
@@ -3451,209 +3452,209 @@ function ExpandedView({
           ) : null}
           {/* 搜索时原列表只隐藏、不卸载:置顶段折叠等本地 state 才能保住。 */}
           <div hidden={searchActive} className="flex flex-col gap-2">
-          {remoteDeviceDirectoryStatus === 'error' && !hasVisibleSidebarContent ? (
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <RemoteSidebarLoadNotice
-                kind="devices"
-                status="error"
-                partial={false}
-                onRetry={retryDeviceLinkDeviceList}
-              />
-            </>
-          ) : remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <RemoteSidebarLoadNotice
-                kind="tasks"
-                status="error"
-                deviceLabel={failedRemoteDeviceLabel}
-                partial={false}
-              />
-            </>
-          ) : remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent ? (
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
-            </>
-          ) : remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent ? (
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <RemoteSidebarLoadNotice
-                kind="tasks"
-                status="loading"
-                deviceLabel={loadingRemoteDeviceLabel}
-                partial={false}
-              />
-            </>
-          ) : selectedMachineConnecting ? (
-            // 选中机器连接中:会话还没同步,显示「连接中」而非「暂无对话」。
-            // 范围标题恒在,可从菜单切回「所有 / 本机」,不会被困在占位页。
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
-                <span className="animate-pulse text-xs text-[var(--text-tertiary)]">
-                  {t('ccAgent.sidebar.machineSwitcher.connecting')}
-                </span>
-              </div>
-            </>
-          ) : (
-            <>
-              {remoteDeviceDirectoryStatus === 'error' && (
+            {remoteDeviceDirectoryStatus === 'error' && !hasVisibleSidebarContent ? (
+              <>
+                <MainListScopeHeader
+                  filter={filter}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  hasRemoteDevices={deviceGroupingAvailable}
+                />
                 <RemoteSidebarLoadNotice
                   kind="devices"
                   status="error"
-                  partial
+                  partial={false}
                   onRetry={retryDeviceLinkDeviceList}
                 />
-              )}
-              {remoteSessionBootstrapFailures.length > 0 && (
+              </>
+            ) : remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
+              <>
+                <MainListScopeHeader
+                  filter={filter}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  hasRemoteDevices={deviceGroupingAvailable}
+                />
                 <RemoteSidebarLoadNotice
                   kind="tasks"
                   status="error"
                   deviceLabel={failedRemoteDeviceLabel}
-                  partial
+                  partial={false}
                 />
-              )}
-              {/*
-               * 远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示。
-               * 这里可能已经有本地或旧的远程快照；把后台重拉提示插进普通文档流会让
-               * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。错误提示仍保留
-               * 在列表前，便于用户知道已有内容不是本轮权威结果。
-               */}
-              <PinnedSection
-                entries={visiblePinnedEntries}
-                allKnownProjects={visibleProjectUniverse}
-                renderProject={(
-                  project,
-                  displaySessions,
-                  parentSectionCollapsed,
-                  sessionVariant,
-                ) => (
-                  <ProjectNodeView
-                    project={project}
-                    displaySessions={displaySessions}
-                    sessionVariant={sessionVariant}
-                    statusFilter={filter.status}
-                    isCollapsed={collapse.collapsed.has(project.projectKey)}
-                    collapsedAttentionTone={
-                      collapse.collapsed.has(project.projectKey)
-                        ? collapsedAttentionToneFor(displaySessions ?? project.sessions)
-                        : null
-                    }
-                    parentSectionCollapsed={parentSectionCollapsed}
-                    activeSessionId={activeSessionId}
-                    runningSessionIds={displayRunningSessionIds}
-                    attachedSessionIds={attachedSessionIds}
-                    notifications={sidebarNotifications}
-                    scheduleSessionIndex={scheduleSessionIndex}
-                    selectedSessionIds={selectedSessionIds}
-                    disableSessionCollapse={false}
-                    onToggle={collapse.toggle}
-                    isProjectPinned
-                    onToggleProjectPin={handleToggleProjectPin}
-                    onRenameProject={handleProjectAliasChange}
-                    onRemoveFromSidebar={handleRemoveProjectFromSidebar}
-                    onSessionClick={handleSessionClick}
-                    onAction={handleActionClick}
-                    onRename={handleRename}
-                    onTogglePin={handleTogglePin}
-                    onMoveSession={handleMoveSession}
-                    projectOptions={projectPickerOptions}
-                    onScheduleAction={handleScheduleAction}
-                    onCreateInProject={handleCreateInProject}
-                    onOpenConversationSearch={handleOpenConversationSearch}
-                    onOpenInExplorer={handleOpenInExplorer}
-                    onLinkCodexProject={handleLinkCodexProject}
-                    linkingCodexProject={linkingCodexProject === project.projectKey}
-                    onBrowseFiles={handleBrowseFiles}
-                    onArchiveAll={handleArchiveAllInProject}
+              </>
+            ) : remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent ? (
+              <>
+                <MainListScopeHeader
+                  filter={filter}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  hasRemoteDevices={deviceGroupingAvailable}
+                />
+                <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
+              </>
+            ) : remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent ? (
+              <>
+                <MainListScopeHeader
+                  filter={filter}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  hasRemoteDevices={deviceGroupingAvailable}
+                />
+                <RemoteSidebarLoadNotice
+                  kind="tasks"
+                  status="loading"
+                  deviceLabel={loadingRemoteDeviceLabel}
+                  partial={false}
+                />
+              </>
+            ) : selectedMachineConnecting ? (
+              // 选中机器连接中:会话还没同步,显示「连接中」而非「暂无对话」。
+              // 范围标题恒在,可从菜单切回「所有 / 本机」,不会被困在占位页。
+              <>
+                <MainListScopeHeader
+                  filter={filter}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  hasRemoteDevices={deviceGroupingAvailable}
+                />
+                <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
+                  <span className="animate-pulse text-xs text-[var(--text-tertiary)]">
+                    {t('ccAgent.sidebar.machineSwitcher.connecting')}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                {remoteDeviceDirectoryStatus === 'error' && (
+                  <RemoteSidebarLoadNotice
+                    kind="devices"
+                    status="error"
+                    partial
+                    onRetry={retryDeviceLinkDeviceList}
                   />
                 )}
-                activeSessionId={activeSessionId}
-                runningSessionIds={displayRunningSessionIds}
-                attachedSessionIds={attachedSessionIds}
-                notifications={sidebarNotifications}
-                selectedSessionIds={selectedSessionIds}
-                onSessionClick={handleSessionClick}
-                onAction={handleActionClick}
-                onRename={handleRename}
-                onTogglePin={handleTogglePin}
-                onMoveSession={handleMoveSession}
-                projectOptions={projectPickerOptions}
-                onReorder={handlePinnedReorder}
-              />
-              {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
+                {remoteSessionBootstrapFailures.length > 0 && (
+                  <RemoteSidebarLoadNotice
+                    kind="tasks"
+                    status="error"
+                    deviceLabel={failedRemoteDeviceLabel}
+                    partial
+                  />
+                )}
+                {/*
+                 * 远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示。
+                 * 这里可能已经有本地或旧的远程快照；把后台重拉提示插进普通文档流会让
+                 * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。错误提示仍保留
+                 * 在列表前，便于用户知道已有内容不是本轮权威结果。
+                 */}
+                <PinnedSection
+                  entries={visiblePinnedEntries}
+                  allKnownProjects={visibleProjectUniverse}
+                  renderProject={(
+                    project,
+                    displaySessions,
+                    parentSectionCollapsed,
+                    sessionVariant,
+                  ) => (
+                    <ProjectNodeView
+                      project={project}
+                      displaySessions={displaySessions}
+                      sessionVariant={sessionVariant}
+                      statusFilter={filter.status}
+                      isCollapsed={collapse.collapsed.has(project.projectKey)}
+                      collapsedAttentionTone={
+                        collapse.collapsed.has(project.projectKey)
+                          ? collapsedAttentionToneFor(displaySessions ?? project.sessions)
+                          : null
+                      }
+                      parentSectionCollapsed={parentSectionCollapsed}
+                      activeSessionId={activeSessionId}
+                      runningSessionIds={displayRunningSessionIds}
+                      attachedSessionIds={attachedSessionIds}
+                      notifications={sidebarNotifications}
+                      scheduleSessionIndex={scheduleSessionIndex}
+                      selectedSessionIds={selectedSessionIds}
+                      disableSessionCollapse={false}
+                      onToggle={collapse.toggle}
+                      isProjectPinned
+                      onToggleProjectPin={handleToggleProjectPin}
+                      onRenameProject={handleProjectAliasChange}
+                      onRemoveFromSidebar={handleRemoveProjectFromSidebar}
+                      onSessionClick={handleSessionClick}
+                      onAction={handleActionClick}
+                      onRename={handleRename}
+                      onTogglePin={handleTogglePin}
+                      onMoveSession={handleMoveSession}
+                      projectOptions={projectPickerOptions}
+                      onScheduleAction={handleScheduleAction}
+                      onCreateInProject={handleCreateInProject}
+                      onOpenConversationSearch={handleOpenConversationSearch}
+                      onOpenInExplorer={handleOpenInExplorer}
+                      onLinkCodexProject={handleLinkCodexProject}
+                      linkingCodexProject={linkingCodexProject === project.projectKey}
+                      onBrowseFiles={handleBrowseFiles}
+                      onArchiveAll={handleArchiveAllInProject}
+                    />
+                  )}
+                  activeSessionId={activeSessionId}
+                  runningSessionIds={displayRunningSessionIds}
+                  attachedSessionIds={attachedSessionIds}
+                  notifications={sidebarNotifications}
+                  selectedSessionIds={selectedSessionIds}
+                  onSessionClick={handleSessionClick}
+                  onAction={handleActionClick}
+                  onRename={handleRename}
+                  onTogglePin={handleTogglePin}
+                  onMoveSession={handleMoveSession}
+                  projectOptions={projectPickerOptions}
+                  onReorder={handlePinnedReorder}
+                />
+                {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
-              <ProjectsSection
-                unclassified={visibleUnclassified}
-                projects={visibleProjectsWithVendor}
-                dialogues={visibleDialogues}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                allProjectKeysForOrder={gcProjectKeys}
-                filter={filter}
-                collapsed={collapse.collapsed}
-                isAllCollapsed={collapse.isAllCollapsed}
-                activeSessionId={activeSessionId}
-                viewedSessionId={viewedSessionId}
-                runningSessionIds={displayRunningSessionIds}
-                attachedSessionIds={attachedSessionIds}
-                notifications={sidebarNotifications}
-                scheduleSessionIndex={scheduleSessionIndex}
-                selectedSessionIds={selectedSessionIds}
-                onSessionClick={handleSessionClick}
-                onAction={handleActionClick}
-                onRename={handleRename}
-                onTogglePin={handleTogglePin}
-                onMoveSession={handleMoveSession}
-                projectOptions={projectPickerOptions}
-                onScheduleAction={handleScheduleAction}
-                onToggleProject={collapse.toggle}
-                onToggleProjectPin={handleToggleProjectPin}
-                onRenameProject={handleProjectAliasChange}
-                onRemoveFromSidebar={handleRemoveProjectFromSidebar}
-                onCollapseAll={collapse.collapseAll}
-                onExpandAll={collapse.expandAll}
-                onCreateProject={handleCreateProject}
-                onCreateInProject={handleCreateInProject}
-                onOpenConversationSearch={handleOpenConversationSearch}
-                onOpenInExplorer={handleOpenInExplorer}
-                onLinkCodexProject={handleLinkCodexProject}
-                linkingCodexProject={linkingCodexProject}
-                onBrowseFiles={handleBrowseFiles}
-                onArchiveAll={handleArchiveAllInProject}
-                remoteDeviceIndex={remoteDeviceIndex}
-                onCreateDialogue={handleCreateDialogue}
-                isCreateDialogueDisabled={dialogueCreatePending}
-              />
-            </>
-          )}
+                <ProjectsSection
+                  unclassified={visibleUnclassified}
+                  projects={visibleProjectsWithVendor}
+                  dialogues={visibleDialogues}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  allProjectKeysForOrder={gcProjectKeys}
+                  filter={filter}
+                  collapsed={collapse.collapsed}
+                  isAllCollapsed={collapse.isAllCollapsed}
+                  activeSessionId={activeSessionId}
+                  viewedSessionId={viewedSessionId}
+                  runningSessionIds={displayRunningSessionIds}
+                  attachedSessionIds={attachedSessionIds}
+                  notifications={sidebarNotifications}
+                  scheduleSessionIndex={scheduleSessionIndex}
+                  selectedSessionIds={selectedSessionIds}
+                  onSessionClick={handleSessionClick}
+                  onAction={handleActionClick}
+                  onRename={handleRename}
+                  onTogglePin={handleTogglePin}
+                  onMoveSession={handleMoveSession}
+                  projectOptions={projectPickerOptions}
+                  onScheduleAction={handleScheduleAction}
+                  onToggleProject={collapse.toggle}
+                  onToggleProjectPin={handleToggleProjectPin}
+                  onRenameProject={handleProjectAliasChange}
+                  onRemoveFromSidebar={handleRemoveProjectFromSidebar}
+                  onCollapseAll={collapse.collapseAll}
+                  onExpandAll={collapse.expandAll}
+                  onCreateProject={handleCreateProject}
+                  onCreateInProject={handleCreateInProject}
+                  onOpenConversationSearch={handleOpenConversationSearch}
+                  onOpenInExplorer={handleOpenInExplorer}
+                  onLinkCodexProject={handleLinkCodexProject}
+                  linkingCodexProject={linkingCodexProject}
+                  onBrowseFiles={handleBrowseFiles}
+                  onArchiveAll={handleArchiveAllInProject}
+                  remoteDeviceIndex={remoteDeviceIndex}
+                  onCreateDialogue={handleCreateDialogue}
+                  isCreateDialogueDisabled={dialogueCreatePending}
+                />
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -3882,10 +3883,7 @@ function CollapsedView({
         showDot={hasGhostUnread}
         onClick={() => navigateToView('plugins')}
       />
-      <GhostPanelRestoreEntry
-        variant="rail"
-        className={SIDEBAR_RAIL_ICON_BUTTON_CLASS}
-      />
+      <GhostPanelRestoreEntry variant="rail" className={SIDEBAR_RAIL_ICON_BUTTON_CLASS} />
       <ConversationSearchBox
         navigate={navigate}
         allKnownProjects={allSearchProjects}
@@ -4368,8 +4366,7 @@ function RailPanels({
     disabled = false,
     disabledReason?: string,
   ) => {
-    const label =
-      disabled && disabledReason ? `${actionLabel} — ${disabledReason}` : actionLabel;
+    const label = disabled && disabledReason ? `${actionLabel} — ${disabledReason}` : actionLabel;
 
     return (
       <Tip text={label} side="bottom">

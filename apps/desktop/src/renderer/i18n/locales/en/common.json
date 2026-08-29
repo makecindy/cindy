@@ -4190,6 +4190,92 @@
           "leftStick": "Left stick",
           "rightStick": "Right stick"
         },
+        "familyControls": {
+          "xbox": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Xbox",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          },
+          "playstation": {
+            "a": "✕",
+            "b": "○",
+            "x": "□",
+            "y": "△",
+            "lb": "L1",
+            "rb": "R1",
+            "lt": "L2",
+            "rt": "R2",
+            "view": "Create",
+            "menu": "Options",
+            "xbox": "PS",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          },
+          "nintendo": {
+            "a": "B",
+            "b": "A",
+            "x": "Y",
+            "y": "X",
+            "lb": "L",
+            "rb": "R",
+            "lt": "ZL",
+            "rt": "ZR",
+            "view": "−",
+            "menu": "+",
+            "xbox": "HOME",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          },
+          "generic": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Home",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          }
+        },
         "actions": {
           "none": "Unmapped",
           "voice": "Voice input",
@@ -4232,6 +4318,57 @@
           "bluetooth": "Bluetooth",
           "battery": "{{percent}}%",
           "charging": "Charging {{percent}}%"
+        }
+      },
+      "playstationGamepad": {
+        "title": "PlayStation controller",
+        "openAria": "Open PlayStation controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "connection": {
+          "toggle": { "aria": "Let this Cindy use a PlayStation controller while it is in the foreground" },
+          "descriptions": {
+            "connecting": "Cindy is looking for a PlayStation controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect a DualSense or DualShock with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read a PlayStation controller yet."
+          }
+        }
+      },
+      "nintendoGamepad": {
+        "title": "Switch controller",
+        "openAria": "Open Switch controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "connection": {
+          "toggle": { "aria": "Let this Cindy use a Switch controller while it is in the foreground" },
+          "descriptions": {
+            "connecting": "Cindy is looking for a Switch controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect a Switch Pro or Joy-Con with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read a Switch controller yet."
+          }
+        }
+      },
+      "genericGamepad": {
+        "title": "Generic controller",
+        "openAria": "Open generic controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "connection": {
+          "toggle": { "aria": "Let this Cindy use a generic controller while it is in the foreground" },
+          "descriptions": {
+            "connecting": "Cindy is looking for a controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect a controller with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read a controller yet."
+          }
         }
       }
     },

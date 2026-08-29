@@ -4181,6 +4181,92 @@
           "leftStick": "左摇杆",
           "rightStick": "右摇杆"
         },
+        "familyControls": {
+          "xbox": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Xbox",
+            "ls": "左摇杆按下",
+            "rs": "右摇杆按下",
+            "dpadUp": "方向键上",
+            "dpadDown": "方向键下",
+            "dpadLeft": "方向键左",
+            "dpadRight": "方向键右",
+            "leftStick": "左摇杆",
+            "rightStick": "右摇杆"
+          },
+          "playstation": {
+            "a": "✕",
+            "b": "○",
+            "x": "□",
+            "y": "△",
+            "lb": "L1",
+            "rb": "R1",
+            "lt": "L2",
+            "rt": "R2",
+            "view": "Create",
+            "menu": "Options",
+            "xbox": "PS",
+            "ls": "左摇杆按下",
+            "rs": "右摇杆按下",
+            "dpadUp": "方向键上",
+            "dpadDown": "方向键下",
+            "dpadLeft": "方向键左",
+            "dpadRight": "方向键右",
+            "leftStick": "左摇杆",
+            "rightStick": "右摇杆"
+          },
+          "nintendo": {
+            "a": "B",
+            "b": "A",
+            "x": "Y",
+            "y": "X",
+            "lb": "L",
+            "rb": "R",
+            "lt": "ZL",
+            "rt": "ZR",
+            "view": "−",
+            "menu": "+",
+            "xbox": "HOME",
+            "ls": "左摇杆按下",
+            "rs": "右摇杆按下",
+            "dpadUp": "方向键上",
+            "dpadDown": "方向键下",
+            "dpadLeft": "方向键左",
+            "dpadRight": "方向键右",
+            "leftStick": "左摇杆",
+            "rightStick": "右摇杆"
+          },
+          "generic": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "主页",
+            "ls": "左摇杆按下",
+            "rs": "右摇杆按下",
+            "dpadUp": "方向键上",
+            "dpadDown": "方向键下",
+            "dpadLeft": "方向键左",
+            "dpadRight": "方向键右",
+            "leftStick": "左摇杆",
+            "rightStick": "右摇杆"
+          }
+        },
         "actions": {
           "none": "未设置",
           "voice": "语音输入",
@@ -4223,6 +4309,57 @@
           "bluetooth": "蓝牙",
           "battery": "{{percent}}%",
           "charging": "充电中 {{percent}}%"
+        }
+      },
+      "playstationGamepad": {
+        "title": "PlayStation 手柄",
+        "openAria": "打开 PlayStation 手柄设置",
+        "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
+        "connection": {
+          "toggle": { "aria": "让这个 Cindy 在前台时使用 PlayStation 手柄" },
+          "descriptions": {
+            "connecting": "Cindy 正在查找 PlayStation 手柄。",
+            "connected": "Cindy 在前台时会监听这只手柄。",
+            "disabled": "启用后，Cindy 在前台时会监听手柄。",
+            "present": "启用后，Cindy 在前台时会监听手柄。",
+            "not-detected": "请用 USB 或蓝牙连接 DualSense 或 DualShock。",
+            "error": "Cindy 暂时无法读取手柄，正在重试。",
+            "unavailable": "这台电脑还不能读取 PlayStation 手柄。"
+          }
+        }
+      },
+      "nintendoGamepad": {
+        "title": "Switch 手柄",
+        "openAria": "打开 Switch 手柄设置",
+        "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
+        "connection": {
+          "toggle": { "aria": "让这个 Cindy 在前台时使用 Switch 手柄" },
+          "descriptions": {
+            "connecting": "Cindy 正在查找 Switch 手柄。",
+            "connected": "Cindy 在前台时会监听这只手柄。",
+            "disabled": "启用后，Cindy 在前台时会监听手柄。",
+            "present": "启用后，Cindy 在前台时会监听手柄。",
+            "not-detected": "请用 USB 或蓝牙连接 Switch Pro 或 Joy-Con。",
+            "error": "Cindy 暂时无法读取手柄，正在重试。",
+            "unavailable": "这台电脑还不能读取 Switch 手柄。"
+          }
+        }
+      },
+      "genericGamepad": {
+        "title": "通用手柄",
+        "openAria": "打开通用手柄设置",
+        "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
+        "connection": {
+          "toggle": { "aria": "让这个 Cindy 在前台时使用通用手柄" },
+          "descriptions": {
+            "connecting": "Cindy 正在查找手柄。",
+            "connected": "Cindy 在前台时会监听这只手柄。",
+            "disabled": "启用后，Cindy 在前台时会监听手柄。",
+            "present": "启用后，Cindy 在前台时会监听手柄。",
+            "not-detected": "请用 USB 或蓝牙连接手柄。",
+            "error": "Cindy 暂时无法读取手柄，正在重试。",
+            "unavailable": "这台电脑还不能读取手柄。"
+          }
         }
       }
     },
