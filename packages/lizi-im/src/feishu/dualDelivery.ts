@@ -182,14 +182,18 @@ function createPending(key: string): PendingLogicalSend {
   return entry;
 }
 
+function confirmLogicalSend(key: string, now: number): void {
+  confirmed.delete(key);
+  confirmed.set(key, now);
+  pruneConfirmed(now);
+  flushDeferredMirrors(key);
+}
+
 function confirmPair(key: string, entry: PendingLogicalSend): void {
   if (pending.get(key) === entry) pending.delete(key);
   clearTimeout(entry.timer);
-  confirmed.delete(key);
-  confirmed.set(key, Date.now());
-  pruneConfirmed(Date.now());
+  confirmLogicalSend(key, Date.now());
   entry.resolveDecision(true);
-  flushDeferredMirrors(key);
 }
 
 export async function coordinateDualDelivery(
@@ -204,23 +208,19 @@ export async function coordinateDualDelivery(
   pruneConfirmed(now);
   if (!input.threadId && recentThreads.has(key)) {
     recentThreads.delete(key);
-    confirmed.delete(key);
-    confirmed.set(key, now);
-    pruneConfirmed(now);
-    flushDeferredMirrors(key);
+    confirmLogicalSend(key, now);
     return { kind: 'suppress-main-copy' };
   }
   const recentFlat = recentFlats.get(key);
   if (input.threadId && recentFlat) {
     if (recentFlat.state === 'committed' || recentFlat.state === 'taken-over') {
+      confirmLogicalSend(key, now);
+      rememberRecent(recentThreads, key, now);
       return { kind: 'suppress-main-copy' };
     }
     recentFlat.state = 'taken-over';
-    confirmed.delete(key);
-    confirmed.set(key, now);
-    pruneConfirmed(now);
+    confirmLogicalSend(key, now);
     rememberRecent(recentThreads, key, now);
-    flushDeferredMirrors(key);
     return { kind: 'dispatch', mirrorKey: key };
   }
 
@@ -247,6 +247,7 @@ export async function coordinateDualDelivery(
     ? { kind: 'suppress-main-copy' }
     : {
         kind: 'dispatch',
+        mirrorKey: key,
         commitUnpairedFlat: () => commitUnpairedFlatRoute(key),
         isUnpairedFlatTakenOver: () => isUnpairedFlatTakenOver(key),
       };
@@ -261,8 +262,9 @@ export async function waitForMirrorConfirmation(mirrorKey: string): Promise<bool
 }
 
 /**
- * Run `send` if this logical send is already confirmed, or when a late main-feed
- * copy confirms it inside the late-copy TTL. No-ops once that window has expired.
+ * Run `send` if this logical send is already confirmed, or when a late pair
+ * (main-feed copy or committed-flat topic) confirms it inside the late-copy TTL.
+ * No-ops once that window has expired.
  */
 export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void): void {
   const now = Date.now();
@@ -273,7 +275,13 @@ export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void
     send();
     return;
   }
-  if (!pending.has(mirrorKey) && !recentThreads.has(mirrorKey)) return;
+  if (
+    !pending.has(mirrorKey) &&
+    !recentThreads.has(mirrorKey) &&
+    !recentFlats.has(mirrorKey)
+  ) {
+    return;
+  }
   const queued = deferredMirrors.get(mirrorKey) ?? [];
   queued.push(send);
   deferredMirrors.set(mirrorKey, queued);

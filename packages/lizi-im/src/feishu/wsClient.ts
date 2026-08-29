@@ -57,7 +57,7 @@ import * as storage from './storage.js';
 import { parseIncoming } from './incomingContent.js';
 import { downloadAttachments } from './attachmentDownloader.js';
 import { parseCardAction } from './cardActionParser.js';
-import { encodeLaneUserId } from './codec.js';
+import { decodeLaneUserId, encodeLaneUserId } from './codec.js';
 import {
   coordinateDualDelivery,
   resetDualDeliveryForTest,
@@ -1671,7 +1671,7 @@ async function processClaimedMessage(
         }
       : {}),
     ...(groupContextLane ? { groupContextLane } : {}),
-    ...(finalReplyMirrorKey && data.message?.thread_id
+    ...(finalReplyMirrorKey && decodeLaneUserId(laneUserId ?? '')?.threadId
       ? {
           finalReplyMirror: {
             kind: 'parent-chat' as const,

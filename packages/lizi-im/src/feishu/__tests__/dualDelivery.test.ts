@@ -51,7 +51,12 @@ describe('Feishu native thread/main dual delivery', () => {
     vi.useFakeTimers();
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
     await vi.advanceTimersByTimeAsync(1_000);
-    await expect(flat).resolves.toMatchObject({ kind: 'dispatch' });
+    const flatDecision = await flat;
+    expect(flatDecision).toMatchObject({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    if (flatDecision.kind !== 'dispatch' || !flatDecision.mirrorKey) {
+      throw new Error('unpaired flat must expose mirrorKey');
+    }
+    await expect(waitForMirrorConfirmation(flatDecision.mirrorKey)).resolves.toBe(false);
   });
 
   it('does not merge equal text from different create_time values', async () => {
@@ -117,15 +122,25 @@ describe('Feishu native thread/main dual delivery', () => {
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
     await vi.advanceTimersByTimeAsync(1_000);
     const flatDecision = await flat;
-    expect(flatDecision.kind).toBe('dispatch');
-    if (flatDecision.kind !== 'dispatch' || !flatDecision.commitUnpairedFlat) {
-      throw new Error('unpaired flat must expose commitUnpairedFlat');
+    expect(flatDecision).toMatchObject({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    if (
+      flatDecision.kind !== 'dispatch' ||
+      !flatDecision.mirrorKey ||
+      !flatDecision.commitUnpairedFlat
+    ) {
+      throw new Error('unpaired flat must expose mirrorKey and commitUnpairedFlat');
     }
     expect(flatDecision.commitUnpairedFlat()).toBe(true);
+
+    const scheduled = vi.fn();
+    scheduleMirrorOnConfirmation(flatDecision.mirrorKey, scheduled);
+    expect(scheduled).not.toHaveBeenCalled();
 
     await expect(coordinateDualDelivery(input())).resolves.toEqual({
       kind: 'suppress-main-copy',
     });
+    expect(scheduled).toHaveBeenCalledTimes(1);
+    await expect(waitForMirrorConfirmation(flatDecision.mirrorKey)).resolves.toBe(true);
   });
 
   it('suppresses a later main-feed copy after a late topic has taken over', async () => {
