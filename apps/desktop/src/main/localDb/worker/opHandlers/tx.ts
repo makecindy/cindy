@@ -230,7 +230,7 @@ function sessionAgentSwitchFallback(db: Database.Database, args: unknown): void 
   transaction();
 }
 
-/** 同一任务换干净原生会话：清 sdk_session_id + 追加隐藏 context_rebuild，不改可见消息。 */
+/** 同一任务换干净原生会话：清 SDK/旧用量 + 追加隐藏 context_rebuild，不改可见消息。 */
 function contextRebuild(db: Database.Database, args: unknown): void {
   const payload = asRecord(args, 'context.rebuild args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -246,7 +246,7 @@ function contextRebuild(db: Database.Database, args: unknown): void {
   const transaction = db.transaction(() => {
     const sessionResult = db
       .prepare(
-        'UPDATE sessions SET sdk_session_id = NULL, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+        'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
       )
       .run(updatedAt, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {
