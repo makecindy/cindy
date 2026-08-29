@@ -24,6 +24,8 @@
  * `[name](xdt-file:///abs/path)`).
  */
 
+import path from 'node:path';
+
 import {
   sendCardRaw,
   patchCardRaw,
@@ -37,6 +39,7 @@ import {
   getBoundClient,
   runWithPinnedAccount,
   isPinnedAccountCurrent,
+  type ReusableFeishuFileMessage,
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
 import { getLog } from './moduleScope.js';
@@ -114,8 +117,27 @@ async function uploadExtraImageKeys(absPaths: readonly string[]): Promise<string
 
 interface FinalCardResult {
   card: unknown;
-  fileLinks: ReturnType<typeof collectXdtFileLinks>;
+  reusableFiles: ReusableMirroredFile[];
   fileOnly: boolean;
+}
+
+interface ReusableMirroredFile {
+  message: ReusableFeishuFileMessage;
+  sourceIndex: number;
+}
+
+function isLexicallyWithinAllowedFileRoots(
+  absPath: string,
+  allowedFileRoots: readonly string[],
+): boolean {
+  const target = path.resolve(absPath);
+  return allowedFileRoots.some((root) => {
+    if (!root.trim()) return false;
+    const base = path.resolve(root);
+    if (target === base) return true;
+    const prefix = base.endsWith(path.sep) ? base : `${base}${path.sep}`;
+    return target.startsWith(prefix);
+  });
 }
 
 class FeishuStreamingTextHandle implements StreamingTextHandle {
@@ -312,19 +334,33 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
 
     // 2. Send xdt-file links as separate file messages.
     const fileLinks = collectXdtFileLinks(text);
+    let reusableFiles: ReusableMirroredFile[] = [];
     if (fileLinks.length > 0) {
       log.debug(`[feishu/streamingText] sending ${fileLinks.length} xdt-file(s)`);
-      await Promise.all(
-        fileLinks.map(async (link) => {
+      const results = await Promise.all(
+        fileLinks.map(async (link, sourceIndex) => {
           try {
-            await sendFile(this.openId, link.absPath, link.alt || undefined);
+            const sent = await sendFile(this.openId, link.absPath, link.alt || undefined);
+            // This path check only decides whether an existing Feishu upload
+            // key may be mirrored. It never authorizes another filesystem read.
+            if (
+              sent.ok &&
+              sent.reusableMessage &&
+              isLexicallyWithinAllowedFileRoots(link.absPath, this.allowedFileRoots)
+            ) {
+              return { message: sent.reusableMessage, sourceIndex };
+            }
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(
               `[feishu/streamingText] sendFile ${link.absPath} failed: ${msg}`,
             );
           }
+          return null;
         }),
+      );
+      reusableFiles = results.filter(
+        (message): message is ReusableMirroredFile => message !== null,
       );
     }
 
@@ -360,7 +396,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       await patchCardRaw(this.messageId, card);
       primaryCardPatched = true;
       this.flushed = this.buffer;
-      await this.sendOrScheduleMirror({ card, fileLinks, fileOnly });
+      await this.sendOrScheduleMirror({ card, reusableFiles, fileOnly });
     } catch (err) {
       if (primaryCardPatched) {
         log.warn(
@@ -402,12 +438,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     if (!chatId || !key) return;
     const log = getLog();
     if (result.fileOnly) {
-      const sentCount = await sendMirroredFiles(
-        chatId,
-        key,
-        result.fileLinks,
-        this.allowedFileRoots,
-      );
+      const sentCount = await sendMirroredFiles(chatId, key, result.reusableFiles);
       if (!isPinnedAccountCurrent()) return;
       const status =
         sentCount > 0
@@ -435,7 +466,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       return;
     }
     if (!isPinnedAccountCurrent()) return;
-    await sendMirroredFiles(chatId, key, result.fileLinks, this.allowedFileRoots);
+    await sendMirroredFiles(chatId, key, result.reusableFiles);
   }
 }
 
@@ -486,20 +517,17 @@ export async function patchMarkdown(messageId: string, markdown: string): Promis
 async function sendMirroredFiles(
   chatId: string,
   key: string,
-  fileLinks: ReturnType<typeof collectXdtFileLinks>,
-  allowedFileRoots: readonly string[],
+  files: readonly ReusableMirroredFile[],
 ): Promise<number> {
   const log = getLog();
   const delivered = await Promise.all(
-    fileLinks.map(async (link, index) => {
+    files.map(async ({ message, sourceIndex }) => {
       if (!isPinnedAccountCurrent()) return false;
       try {
         const sent = await sendFileToChat(
           chatId,
-          link.absPath,
-          allowedFileRoots,
-          link.alt || undefined,
-          mirrorUuid(key, `f${index}`),
+          message,
+          mirrorUuid(key, `f${sourceIndex}`),
         );
         if (!sent.ok) {
           log.warn(
@@ -614,13 +642,12 @@ export async function mirrorFinal(
     const hasImages = imageUrls.length > 0 || imageKeys.length > 0;
     const fileOnly = cardTextTrimmed.length === 0 && !hasImages && fileLinks.length > 0;
     if (fileOnly) {
-      const sentCount = await sendMirroredFiles(chatId, mirrorKey, fileLinks, allowedFileRoots);
       if (!isPinnedAccountCurrent()) return;
-      const status =
-        sentCount > 0
-          ? transportMessages.streaming.fileSentDone(sentCount)
-          : transportMessages.streaming.deliveryFailed;
-      await sendCardToChat(chatId, buildMarkdownCardV2(status), mirrorUuid(mirrorKey, 'card'));
+      await sendCardToChat(
+        chatId,
+        buildMarkdownCardV2(transportMessages.streaming.deliveryFailed),
+        mirrorUuid(mirrorKey, 'card'),
+      );
       return;
     }
     if (skippedLocalMedia && cardTextTrimmed.length === 0) {
@@ -645,8 +672,6 @@ export async function mirrorFinal(
         : buildMarkdownCardV2(visibleText),
     );
     await sendCardToChat(chatId, card, mirrorUuid(mirrorKey, 'card'));
-    if (!isPinnedAccountCurrent()) return;
-    await sendMirroredFiles(chatId, mirrorKey, fileLinks, allowedFileRoots);
   };
   await sendOrScheduleMirror(mirrorKey, send, inboundEpoch);
 }
