@@ -230,8 +230,9 @@ export function resolvePiRuntimeModelDescriptor(
 
 /** `cindy` provider 始终代表 XD Gateway；其能力描述符不得继承当前订阅/BYOM。 */
 export function resolvePiGatewayDescriptorProviderId(
-  _providerId: string | null | undefined,
+  providerId: string | null | undefined,
 ): string {
+  void providerId;
   return 'xd';
 }
 
