@@ -1272,6 +1272,39 @@ function isResponsesUserMessage(item: Record<string, unknown>): boolean {
   return item.role === 'user' && (item.type === 'message' || item.type === undefined);
 }
 
+function collectOversizedOpenAiChatImages(
+  messages: unknown[],
+  candidates: OversizedImageCandidate[],
+): void {
+  let latestUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (isPlainObject(message) && message.role === 'user') {
+      latestUserIndex = i;
+      break;
+    }
+  }
+
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+    const message = messages[messageIndex];
+    if (!isPlainObject(message) || !Array.isArray(message.content)) continue;
+    for (let index = 0; index < message.content.length; index += 1) {
+      const block = message.content[index];
+      if (!isPlainObject(block) || block.type !== 'image_url') continue;
+      // OpenAI Chat uses a normal role=user message for the current prompt;
+      // keep every image in that newest user message intact.
+      if (messageIndex === latestUserIndex) continue;
+      candidates.push({
+        container: message.content,
+        index,
+        replacement: { type: 'text', text: OVERSIZED_IMAGE_OMITTED_TEXT },
+        priority: 1,
+        age: messageIndex,
+      });
+    }
+  }
+}
+
 function collectOversizedResponsesImages(
   input: unknown[],
   candidates: OversizedImageCandidate[],
@@ -1314,6 +1347,7 @@ export function compactOversizedImageHistory(
   const candidates: OversizedImageCandidate[] = [];
   if (Array.isArray(body.messages)) {
     collectOversizedAnthropicImages(body.messages, candidates);
+    collectOversizedOpenAiChatImages(body.messages, candidates);
   }
   if (Array.isArray(body.input)) {
     collectOversizedResponsesImages(body.input, candidates);

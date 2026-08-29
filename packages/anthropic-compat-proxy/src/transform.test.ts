@@ -160,6 +160,36 @@ describe('compactOversizedImageHistory', () => {
     expect((input[0].content as Array<Record<string, unknown>>)[0].type).toBe('input_text');
     expect((input[1].content as Array<Record<string, unknown>>)[0].type).toBe('input_image');
   });
+
+  it('compacts older OpenAI Chat image_url blocks while keeping the newest user images', () => {
+    const body = {
+      model: 'grok-4',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'old image' },
+            { type: 'image_url', image_url: { url: `data:image/png;base64,${'a'.repeat(4000)}` } },
+          ],
+        },
+        { role: 'assistant', content: 'not the current prompt' },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'inspect the latest image' },
+            { type: 'image_url', image_url: { url: `data:image/png;base64,${'b'.repeat(4000)}` } },
+          ],
+        },
+      ],
+    } as Record<string, unknown>;
+    const bytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+    compactOversizedImageHistory(body, bytes - 2500);
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const oldContent = messages[0].content as Array<Record<string, unknown>>;
+    const currentContent = messages[2].content as Array<Record<string, unknown>>;
+    expect(oldContent[1].type).toBe('text');
+    expect(currentContent[1].type).toBe('image_url');
+  });
 });
 
 describe('stripEncryptedContentFromBody', () => {
