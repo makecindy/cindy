@@ -230,6 +230,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     worktreePath: row.worktreePath,
     usedProjectContext: !!row.usedProjectContext,
     extraDirs: safeParseStringArray(row.extraDirs),
+    writableDirs: safeParseStringArray(row.writableDirs),
     remoteHostId: row.remoteHostId ?? null,
     // interrupted-turn-resume:「疑似中断」判定的两个时间戳(unix ms 原样透出,
     // renderer 打开会话时比较 startedAt > endedAt,见 sessionActiveTurn.ts)。
@@ -319,6 +320,7 @@ export function sessionCreateToRow(
         parentSessionId?: string | null;
         forkedAtMessageId?: string | null;
         extraDirs?: string[];
+        writableDirs?: string[];
         /** Remote codex (P2): 远端 SSH host alias; null/undefined = 本地。 */
         remoteHostId?: string | null;
         /**
@@ -358,6 +360,7 @@ export function sessionCreateToRow(
     forkedAtMessageId: body?.forkedAtMessageId ?? null,
     worktreePath: null,
     extraDirs: safeStringify(body?.extraDirs ?? []),
+    writableDirs: safeStringify(body?.writableDirs ?? []),
     remoteHostId: normalizeRemoteHostId(body?.remoteHostId),
     // 显式来源:trim 后非空才入库,其余(undefined / null / 空串 / 纯空白)一律落 null,
     // 与 session-provider-store 的 null 语义对齐(null → 回落默认路由,字节级不变)。
@@ -397,6 +400,7 @@ export function sessionPatchToRow(
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
     extraDirs?: string[];
+    writableDirs?: string[];
   },
   opts?: { bumpUpdatedAt?: boolean },
 ): Partial<SessionInsert> {
@@ -422,6 +426,7 @@ export function sessionPatchToRow(
   if (patch.status !== undefined) out.status = patch.status;
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);
+  if (patch.writableDirs !== undefined) out.writableDirs = safeStringify(patch.writableDirs);
   if (opts?.bumpUpdatedAt !== false) out.updatedAt = Date.now();
   return out;
 }

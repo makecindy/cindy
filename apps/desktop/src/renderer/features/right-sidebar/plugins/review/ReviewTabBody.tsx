@@ -92,7 +92,13 @@ import type { ReviewState } from './index';
 import { getReviewDiffsExpanded, setReviewDiffsExpanded } from './diffExpansionPreference';
 import { PlainUnifiedDiff, type DiffViewMode } from './DiffViewer/PlainUnifiedDiff';
 import { MarkdownDiffPreview } from './DiffViewer/MarkdownDiffPreview';
-import { shouldVirtualizeFileList } from './DiffViewer/diffRows';
+import {
+  countDiffRows,
+  DIFF_ROW_VIRTUAL_THRESHOLD,
+  shouldVirtualizeDiffRows,
+  shouldVirtualizeFileList,
+} from './DiffViewer/diffRows';
+
 import {
   buildFilteredReviewFileTree,
   filterReviewFileJumpResults,
@@ -2916,6 +2922,22 @@ export interface WriteActionProps {
   onSectionDiscard?: () => void;
 }
 
+export function countEagerExpandedDiffRows(
+  diffs: readonly FileDiff[],
+  expandedSet: ReadonlySet<string>,
+  viewMode: DiffViewMode,
+): number {
+  if (shouldVirtualizeFileList(diffs.length)) return 0;
+  let count = 0;
+  for (const diff of diffs) {
+    if (!expandedSet.has(diff.id)) continue;
+    const rowCount = countDiffRows(diff.hunks, viewMode, DIFF_ROW_VIRTUAL_THRESHOLD);
+    if (!shouldVirtualizeDiffRows(rowCount)) count += rowCount;
+    if (shouldVirtualizeFileList(0, count)) break;
+  }
+  return count;
+}
+
 function DiffList({
   diffs,
   expandedSet,
@@ -2976,12 +2998,17 @@ function DiffList({
     (writeAction?.sectionAction && writeAction.onSectionAction) ||
     (writeAction?.sectionDiscardVisible && writeAction.onSectionDiscard),
   );
-  const virtualized = shouldVirtualizeFileList(diffs.length);
+  const eagerExpandedDiffRowCount = useMemo(
+    () => countEagerExpandedDiffRows(diffs, expandedSet, viewMode),
+    [diffs, expandedSet, viewMode],
+  );
+  const virtualizedByExpandedRows = shouldVirtualizeFileList(0, eagerExpandedDiffRowCount);
+  const virtualized = shouldVirtualizeFileList(diffs.length, eagerExpandedDiffRowCount);
   const fileVirtualizer = useVirtualizer({
     count: diffs.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) => (expandedSet.has(diffs[index]?.id) ? 360 : 45),
-    overscan: 8,
+    overscan: virtualizedByExpandedRows ? 2 : 8,
     getItemKey: (index) => diffs[index]?.id ?? index,
   });
   const fileTreeVisibility = getReviewFileTreeVisibility({

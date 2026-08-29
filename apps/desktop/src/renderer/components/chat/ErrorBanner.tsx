@@ -50,17 +50,21 @@ import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
 } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 interface ErrorBannerProps {
   error: string;
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
+  /** Structured details for a tool-loop terminal error (optional for legacy rows). */
+  toolLoop?: ToolLoopErrorDetails | null;
   retryText?: string | null;
   onRetry: (text: string) => void;
   onCancel?: () => void;
@@ -118,6 +122,7 @@ interface ErrorBannerProps {
 export function ErrorBanner({
   error,
   errorReason,
+  toolLoop,
   retryText,
   onRetry,
   onCancel,
@@ -274,6 +279,14 @@ export function ErrorBanner({
   const unwrappedDisplay = unwrapProviderErrorDisplay(error);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
+  const toolLoopI18nKey =
+    errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
+  const localizedReasonError =
+    toolLoopI18nKey && toolLoop
+      ? t(toolLoopI18nKey, { count: toolLoop.count })
+      : errorReasonI18nKey
+        ? t(errorReasonI18nKey)
+        : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
     agentKind === 'codex' && usageLimitRecovery?.isAccountUsageLimit === true;
@@ -450,7 +463,7 @@ export function ErrorBanner({
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = errorReasonI18nKey ? t(errorReasonI18nKey) : unwrappedDisplay;
+    displayError = localizedReasonError ?? unwrappedDisplay;
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance && !errorReasonI18nKey && unwrappedDisplay !== error;

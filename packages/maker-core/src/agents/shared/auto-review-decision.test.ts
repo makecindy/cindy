@@ -71,6 +71,28 @@ describe('resolveAutoReviewDecision', () => {
     expect(called).toBe(false);
   });
 
+  it('passes writable roots through the public request contract', async () => {
+    const delegate = vi.fn(async () => ({ verdict: 'block' as const, reason: 'read-only reference' }));
+    const writableRequest: AutoReviewRequest = {
+      ...request({ kind: 'file-write', path: '/shared-output/result.txt' }),
+      workspaceRoots: ['/repo', '/reference', '/shared-output'],
+      writableRoots: ['/repo', '/shared-output'],
+    };
+    await expect(resolveAutoReviewDecision(writableRequest, delegate))
+      .resolves.toEqual({ verdict: 'allow' });
+    expect(delegate).not.toHaveBeenCalled();
+
+    await expect(resolveAutoReviewDecision({
+      ...writableRequest,
+      action: { kind: 'file-write', path: '/reference/spec.md' },
+    }, delegate)).resolves.toEqual({ verdict: 'block', reason: 'read-only reference' });
+    expect(delegate).toHaveBeenCalledOnce();
+    expect(delegate).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoots: ['/repo', '/reference', '/shared-output'],
+      writableRoots: ['/repo', '/shared-output'],
+    }));
+  });
+
   it('keeps downloaded pipe execution out of model-only review', async () => {
     const delegate = vi.fn(async () => ({ verdict: 'allow' as const }));
     for (const command of [

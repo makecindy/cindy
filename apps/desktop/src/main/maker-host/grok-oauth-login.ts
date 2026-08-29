@@ -32,6 +32,8 @@ import {
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { OwnerBoundaryPendingError } from './owner-boundary-error.js';
 import { bindNativeProviderAuth, isNativeProviderAuthBound, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
 import type { XaiBridgeAuthRecoveryOutcome } from './xai-bridge-auth-invalidation.js';
 
@@ -768,17 +770,29 @@ async function refreshIfNeeded(current: GrokTokenBlob): Promise<GrokTokenBlob> {
   return (await refreshBlob(current, false)).blob;
 }
 
+function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeAtStart) {
+    throw new OwnerBoundaryPendingError();
+  }
+}
+
 /**
  * 取当前可用的 xAI access_token(过期则先刷新)。bridge 的 buildHeaders 调用。
- * 未登录 / 刷新后仍无 token → 抛错(bridge 据此回 502)。
+ * 未登录 / 刷新后仍无 token → 抛错(bridge 据此回 502 authentication_error)。
+ * owner-boundary pending 或 await 期间 owner generation 变了时抛 OwnerBoundaryPendingError:
+ * 订阅桥 catch 必须收成 503,不得写成 authentication_error。
+ * peekGrokAccessToken 只读、不抛,失效等值用。
  */
 export async function getGrokAccessToken(): Promise<string> {
+  const scopeAtStart = activeOwnerScopeKey();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (!isNativeProviderAuthBound('xai')) {
     throw new Error('xAI OAuth is not bound to the active data owner');
   }
   const blob = readBlob();
   if (!blob) throw new Error('xAI 未登录:请先在「设置 → 模型供应商」登录 xAI(SuperGrok)');
   const fresh = await refreshIfNeeded(blob);
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (!fresh.access_token) throw new Error('xAI access_token 不可用,请重新登录');
   return fresh.access_token;
 }

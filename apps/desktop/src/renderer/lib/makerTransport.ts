@@ -67,6 +67,7 @@ export interface RoutableMaker {
   rewindCommit: FullMaker['rewindCommit'];
   getContextUsage: FullMaker['getContextUsage'];
   setExtraDirs: FullMaker['setExtraDirs'];
+  setWritableDirs: FullMaker['setWritableDirs'];
   closeSession: FullMaker['closeSession'];
   // 手动压缩(pi 原生 compact,capability-aware 的 maker:compact-session):
   // 上下文环 / 会话菜单对 device-link 远程 pi 会话也要隧道到被控端执行
@@ -169,6 +170,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     rewindCommit: t('maker:rewind:commit') as FullMaker['rewindCommit'],
     getContextUsage: t('maker:get-context-usage') as FullMaker['getContextUsage'],
     setExtraDirs: t('maker:set-extra-dirs') as FullMaker['setExtraDirs'],
+    setWritableDirs: t('maker:set-writable-dirs') as FullMaker['setWritableDirs'],
     closeSession: t('maker:close-session') as FullMaker['closeSession'],
     compactSession: ((sessionId, instructions) =>
       invokeRemote(

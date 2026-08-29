@@ -57,6 +57,7 @@ function loadedState(
     device: {
       name: 'Xbox Wireless Controller',
       category: 'Xbox One',
+      family: 'xbox',
       transport: 'usb',
       batteryPercentage: 80,
       batteryState: 'discharging',
@@ -94,17 +95,42 @@ describe('XboxGamepadSettings', () => {
   });
 
   it('renders the controller while settings are still loading', () => {
-    expect(() => render(<XboxGamepadSettings onBack={vi.fn()} />)).not.toThrow();
+    expect(() => render(<XboxGamepadSettings family="xbox" onBack={vi.fn()} />)).not.toThrow();
     expect(screen.getByTestId('xbox-gamepad-layout')).toBeTruthy();
   });
 
   it('renders the controller when a live state is missing layout', () => {
     mocks.state = loadedState({ deviceEnabled: true } as XboxGamepadSettingsModel);
     mocks.loading = false;
-    expect(() => render(<XboxGamepadSettings onBack={vi.fn()} />)).not.toThrow();
+    expect(() => render(<XboxGamepadSettings family="xbox" onBack={vi.fn()} />)).not.toThrow();
     expect(screen.getByTestId('xbox-gamepad-layout')).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: /settings.shortcuts.xboxGamepad.controls.a/ }),
+      screen.getByRole('button', { name: /settings.shortcuts.xboxGamepad.familyControls.xbox.a/ }),
     ).toBeTruthy();
   });
+
+  it('draws a DualSense pad on the PlayStation accessory page', () => {
+    mocks.state = loadedState();
+    mocks.loading = false;
+    render(<XboxGamepadSettings family="playstation" onBack={vi.fn()} />);
+    expect(screen.getByTestId('playstation-gamepad-layout')).toBeTruthy();
+    expect(screen.queryByTestId('xbox-gamepad-layout')).toBeNull();
+  });
+
+  it('draws Switch chrome on the Nintendo accessory page', () => {
+    mocks.state = loadedState();
+    mocks.loading = false;
+    render(<XboxGamepadSettings family="nintendo" onBack={vi.fn()} />);
+    expect(screen.getByTestId('switch-gamepad-layout')).toBeTruthy();
+    expect(screen.queryByTestId('xbox-gamepad-layout')).toBeNull();
+  });
+
+  it('reuses the Xbox silhouette on the generic accessory page', () => {
+    mocks.state = loadedState();
+    mocks.loading = false;
+    render(<XboxGamepadSettings family="generic" onBack={vi.fn()} />);
+    expect(screen.getByTestId('xbox-gamepad-layout')).toBeTruthy();
+    expect(screen.getByText('settings.shortcuts.genericGamepad.title')).toBeTruthy();
+  });
 });
+

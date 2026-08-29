@@ -192,6 +192,8 @@ export const sessions = sqliteTable(
      * 反序列化由 mapper 兜底 (失败 fallback []), 不抛错。
      */
     extraDirs: text('extra_dirs').notNull().default('[]'),
+    /** Session 附加可读写目录(JSON 字符串数组)。旧会话默认空，不从 extra_dirs 提权。 */
+    writableDirs: text('writable_dirs').notNull().default('[]'),
     /**
      * 远端目标 host id (`@cindy/maker-remote-ssh` ConnectionPool 里的 alias)。
      * 非空 = 这个 session 跑在远端机器上 (agent 在远端、workingDir 是远端路径)。

@@ -104,6 +104,21 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     });
   });
 
+  it('restores bounded tool-loop details for localized history rendering', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('e-tool-loop', {
+        message: '内部熔断详情：missing_required_field',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      }),
+    ]);
+
+    expect(mapped[0]).toMatchObject({
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    });
+  });
+
   it('omits errorReason when the row has no reason key', () => {
     const mapped = makerChatStore.__mapServerMessagesForTest([
       errorRow('e2', { message: 'upstream exploded' }),

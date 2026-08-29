@@ -184,7 +184,7 @@ export function GlobalDropImportListener({
           } else if (res.kind === 'directory') {
             // 与 MainLayout 深链 'new-session' 分支同语义:旧目录的附加只读
             // 引用(extraDirs)对新目录无意义,一并清空。
-            patchDraft({ workingDir: path, extraDirs: [] });
+            patchDraft({ workingDir: path, extraDirs: [], writableDirs: [] });
             navigate('/cc-agent/new');
           }
         })

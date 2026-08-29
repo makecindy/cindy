@@ -65,7 +65,11 @@ export function extraDirBasename(p: string): string {
 
 export interface PickAndAddExtraDirOptions {
   extraDirs: readonly string[];
+  /** 另一授权组中的目录；用于总上限与跨组去重。 */
+  otherDirs?: readonly string[];
   workingDir?: string | null;
+  /** 本机可写目录由 Main picker 绑定到当前任务；只读引用目录不传。 */
+  writableGrantScope?: string;
   onChange: (next: string[]) => void | Promise<void>;
   /** ConfirmDialogProvider 的 confirm(父目录警告)。 */
   confirm: (opts: {
@@ -88,15 +92,19 @@ export interface PickAndAddExtraDirOptions {
  */
 export async function pickAndAddExtraDir({
   extraDirs,
+  otherDirs = [],
   workingDir,
+  writableGrantScope,
   onChange,
   confirm,
   parentDirectoryConfirm,
 }: PickAndAddExtraDirOptions): Promise<void> {
-  if (extraDirs.length >= MAX_EXTRA_DIRS) return;
+  if (extraDirs.length + otherDirs.length >= MAX_EXTRA_DIRS) return;
   let picked: string | null = null;
   try {
-    const r = await window.electronAPI.dialog.showOpenDirectory({});
+    const r = await window.electronAPI.dialog.showOpenDirectory(
+      writableGrantScope ? { writableGrantScope } : {},
+    );
     picked = r?.success ? r.path : null;
   } catch (e) {
     log.warn('showOpenDirectory failed', { error: String(e) });
@@ -106,7 +114,7 @@ export async function pickAndAddExtraDir({
   if (!normalizedPicked) return;
 
   // UX 预判: 完全重复 / 是 workingDir 子目录 → 静默忽略(main validator 也会兜)。
-  if (hasExtraDir(extraDirs, normalizedPicked)) return;
+  if (hasExtraDir([...extraDirs, ...otherDirs], normalizedPicked)) return;
   if (workingDir && isSelfOrSubdir(normalizedPicked, workingDir)) {
     log.debug('add: silently skipped (subdir of workingDir)', {
       picked: normalizedPicked,

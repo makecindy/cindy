@@ -5,11 +5,34 @@ import {
 } from './inputDevices';
 
 export const XBOX_GAMEPAD_DEVICE_ID = 'xbox-gamepad';
+export const PLAYSTATION_GAMEPAD_DEVICE_ID = 'playstation-gamepad';
+export const NINTENDO_GAMEPAD_DEVICE_ID = 'nintendo-gamepad';
+export const GENERIC_GAMEPAD_DEVICE_ID = 'generic-gamepad';
+
+const GAMEPAD_CAPABILITIES = [{ kind: 'commands' }, { kind: 'voice' }, { kind: 'stick' }] as const;
 
 export const XBOX_GAMEPAD_DEVICE: InputDeviceDescriptor = {
   id: XBOX_GAMEPAD_DEVICE_ID,
   label: 'Xbox',
-  capabilities: [{ kind: 'commands' }, { kind: 'voice' }, { kind: 'stick' }],
+  capabilities: GAMEPAD_CAPABILITIES,
+};
+
+export const PLAYSTATION_GAMEPAD_DEVICE: InputDeviceDescriptor = {
+  id: PLAYSTATION_GAMEPAD_DEVICE_ID,
+  label: 'PlayStation',
+  capabilities: GAMEPAD_CAPABILITIES,
+};
+
+export const NINTENDO_GAMEPAD_DEVICE: InputDeviceDescriptor = {
+  id: NINTENDO_GAMEPAD_DEVICE_ID,
+  label: 'Switch',
+  capabilities: GAMEPAD_CAPABILITIES,
+};
+
+export const GENERIC_GAMEPAD_DEVICE: InputDeviceDescriptor = {
+  id: GENERIC_GAMEPAD_DEVICE_ID,
+  label: 'Gamepad',
+  capabilities: GAMEPAD_CAPABILITIES,
 };
 
 export const XBOX_GAMEPAD_GET_STATE_CHANNEL = 'xbox-gamepad:get-state';
@@ -66,12 +89,7 @@ export interface XboxGamepadLayout {
 }
 
 export type XboxGamepadConnectionStatus =
-  | 'connecting'
-  | 'connected'
-  | 'not-detected'
-  | 'disabled'
-  | 'error'
-  | 'unavailable';
+  'connecting' | 'connected' | 'not-detected' | 'disabled' | 'error' | 'unavailable';
 
 export interface XboxGamepadSettings {
   deviceEnabled: boolean;
@@ -82,10 +100,18 @@ export type XboxGamepadSettingsPatch = Partial<XboxGamepadSettings>;
 
 export type XboxGamepadTransport = 'usb' | 'bluetooth' | 'unknown';
 export type XboxGamepadBatteryState = 'unknown' | 'discharging' | 'charging' | 'full';
+export const GAMEPAD_FAMILIES = ['xbox', 'playstation', 'nintendo', 'generic'] as const;
+export type GamepadFamily = (typeof GAMEPAD_FAMILIES)[number];
+/** Settings currently lists Xbox and PlayStation only. Nintendo / generic stay implemented. */
+export const VISIBLE_GAMEPAD_FAMILIES = [
+  'xbox',
+  'playstation',
+] as const satisfies readonly GamepadFamily[];
 
 export interface XboxGamepadDeviceInfo {
   name: string | null;
   category: string | null;
+  family: GamepadFamily;
   transport: XboxGamepadTransport;
   batteryPercentage: number | null;
   batteryState: XboxGamepadBatteryState;
@@ -94,10 +120,67 @@ export interface XboxGamepadDeviceInfo {
 export const XBOX_GAMEPAD_EMPTY_DEVICE: XboxGamepadDeviceInfo = {
   name: null,
   category: null,
+  family: 'xbox',
   transport: 'unknown',
   batteryPercentage: null,
   batteryState: 'unknown',
 };
+
+export function emptyGamepadDevice(family: GamepadFamily): XboxGamepadDeviceInfo {
+  return { ...XBOX_GAMEPAD_EMPTY_DEVICE, family };
+}
+
+export function isGamepadFamily(value: unknown): value is GamepadFamily {
+  return typeof value === 'string' && (GAMEPAD_FAMILIES as readonly string[]).includes(value);
+}
+
+/**
+ * Bindings stay on Apple/Xbox positions (A=bottom, B=right, X=left, Y=top).
+ * Family only changes the silhouette and the printed legends.
+ */
+export const GAMEPAD_DEVICES: Record<GamepadFamily, InputDeviceDescriptor> = {
+  xbox: XBOX_GAMEPAD_DEVICE,
+  playstation: PLAYSTATION_GAMEPAD_DEVICE,
+  nintendo: NINTENDO_GAMEPAD_DEVICE,
+  generic: GENERIC_GAMEPAD_DEVICE,
+};
+
+export function resolveGamepadFamily(input: {
+  family?: unknown;
+  name?: string | null;
+  category?: string | null;
+}): GamepadFamily {
+  if (isGamepadFamily(input.family)) return input.family;
+  const hay = `${input.name ?? ''} ${input.category ?? ''}`.toLowerCase();
+  if (
+    hay.includes('dualsense') ||
+    hay.includes('dualshock') ||
+    hay.includes('playstation') ||
+    hay.includes('sony') ||
+    /\bps[45]\b/.test(hay)
+  ) {
+    return 'playstation';
+  }
+  if (
+    hay.includes('nintendo') ||
+    hay.includes('switch') ||
+    hay.includes('joy-con') ||
+    hay.includes('joycon')
+  ) {
+    return 'nintendo';
+  }
+  // Wired Xbox pads often advertise USB product "Controller" and vendor Microsoft.
+  if (
+    hay.includes('xbox') ||
+    hay.includes('elite') ||
+    hay.includes('microsoft') ||
+    /\bseries [xs]\b/.test(hay) ||
+    (input.name ?? '').toLowerCase() === 'controller'
+  ) {
+    return 'xbox';
+  }
+  return 'generic';
+}
 
 export interface XboxGamepadState {
   connectionStatus: XboxGamepadConnectionStatus;
@@ -107,7 +190,10 @@ export interface XboxGamepadState {
   settings: XboxGamepadSettings;
 }
 
+export type GamepadAccessoriesState = Record<GamepadFamily, XboxGamepadState>;
+
 export interface XboxGamepadPreviewInput {
+  family: GamepadFamily;
   buttons: Record<XboxGamepadButtonId, boolean>;
   sticks: Record<XboxGamepadStickId, { x: number; y: number }>;
   triggers: { lt: number; rt: number };
@@ -174,6 +260,7 @@ export const XBOX_GAMEPAD_DEFAULT_SETTINGS: XboxGamepadSettings = {
 };
 
 export const XBOX_GAMEPAD_EMPTY_PREVIEW: XboxGamepadPreviewInput = {
+  family: 'xbox',
   buttons: Object.fromEntries(XBOX_GAMEPAD_BUTTON_IDS.map((id) => [id, false])) as Record<
     XboxGamepadButtonId,
     boolean
@@ -185,8 +272,14 @@ export const XBOX_GAMEPAD_EMPTY_PREVIEW: XboxGamepadPreviewInput = {
   triggers: { lt: 0, rt: 0 },
 };
 
+export function emptyGamepadPreview(family: GamepadFamily): XboxGamepadPreviewInput {
+  return { ...XBOX_GAMEPAD_EMPTY_PREVIEW, family };
+}
+
 export function isXboxGamepadButtonId(value: unknown): value is XboxGamepadButtonId {
-  return typeof value === 'string' && (XBOX_GAMEPAD_BUTTON_IDS as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' && (XBOX_GAMEPAD_BUTTON_IDS as readonly string[]).includes(value)
+  );
 }
 
 export function isXboxGamepadStickId(value: unknown): value is XboxGamepadStickId {
@@ -195,12 +288,15 @@ export function isXboxGamepadStickId(value: unknown): value is XboxGamepadStickI
 
 export function isXboxGamepadStickDirection(value: unknown): value is XboxGamepadStickDirection {
   return (
-    typeof value === 'string' && (XBOX_GAMEPAD_STICK_DIRECTIONS as readonly string[]).includes(value)
+    typeof value === 'string' &&
+    (XBOX_GAMEPAD_STICK_DIRECTIONS as readonly string[]).includes(value)
   );
 }
 
 export function isXboxGamepadStickMode(value: unknown): value is XboxGamepadStickMode {
-  return typeof value === 'string' && (XBOX_GAMEPAD_STICK_MODES as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' && (XBOX_GAMEPAD_STICK_MODES as readonly string[]).includes(value)
+  );
 }
 
 export function cloneXboxGamepadBinding(
@@ -213,7 +309,10 @@ export function cloneXboxGamepadLayout(layout: XboxGamepadLayout): XboxGamepadLa
   return {
     version: 1,
     buttons: Object.fromEntries(
-      XBOX_GAMEPAD_BUTTON_IDS.map((id) => [id, cloneXboxGamepadBinding(layout.buttons[id] ?? null)]),
+      XBOX_GAMEPAD_BUTTON_IDS.map((id) => [
+        id,
+        cloneXboxGamepadBinding(layout.buttons[id] ?? null),
+      ]),
     ) as XboxGamepadLayout['buttons'],
     sticks: Object.fromEntries(
       XBOX_GAMEPAD_STICK_IDS.map((id) => {
@@ -252,7 +351,12 @@ export function createXboxGamepadDefaultSettings(): XboxGamepadSettings {
 
 export function isXboxGamepadBinding(value: unknown): value is XboxGamepadBinding {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const record = value as { type?: unknown; commandId?: unknown; skillId?: unknown; name?: unknown };
+  const record = value as {
+    type?: unknown;
+    commandId?: unknown;
+    skillId?: unknown;
+    name?: unknown;
+  };
   if (record.type === 'command') return isInputDeviceCommandId(record.commandId);
   if (record.type === 'skill') {
     return (

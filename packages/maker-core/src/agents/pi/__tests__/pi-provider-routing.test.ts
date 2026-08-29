@@ -3089,6 +3089,31 @@ describe('Pi provider-aware model routing', () => {
     expect(JSON.parse(readFileSync(permFile, 'utf8'))).toEqual({
       mode: 'ask',
       readOnlyRoots: ['/reference-only'],
+      writableRoots: [],
+    });
+    await handle.close();
+  });
+
+  it('persists writable directory grants separately from read-only references', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'perm-writable-dirs',
+      workingDir: cwd,
+      model: 'local-model',
+      permissionMode: 'auto',
+      extraDirs: ['/reference-only'],
+      writableDirs: ['/shared-output'],
+    });
+    const permFile = runtimeFileOf('perm', 'perm-writable-dirs');
+    expect(JSON.parse(readFileSync(permFile, 'utf8'))).toMatchObject({
+      mode: 'auto',
+      readOnlyRoots: ['/reference-only'],
+      writableRoots: ['/shared-output'],
+    });
+    await handle.setWritableDirs?.(['/replacement-output']);
+    expect(JSON.parse(readFileSync(permFile, 'utf8'))).toMatchObject({
+      readOnlyRoots: ['/reference-only'],
+      writableRoots: ['/replacement-output'],
     });
     await handle.close();
   });

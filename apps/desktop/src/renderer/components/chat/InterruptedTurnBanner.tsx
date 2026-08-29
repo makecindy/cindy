@@ -35,6 +35,7 @@ import { AlertCircle, CirclePause, Play, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import { ErrorBanner } from './ErrorBanner';
 
 export function InterruptedTurnBanner({
@@ -151,7 +152,7 @@ export function UnreadFailedScheduleBanner({
 }
 
 /** ErrorBanner 的 retryText 只是显示 Retry 的非空 typed token,onRetry 忽略它。 */
-const ERROR_TAIL_RETRY_TOKEN = '__xdt_error_tail_continue__';
+export const ERROR_TAIL_RETRY_TOKEN = '__xdt_error_tail_continue__';
 
 export function ErrorTailErrorBanner({
   errorText,
@@ -169,6 +170,7 @@ export function ErrorTailErrorBanner({
   onForkStripEncrypted,
   forkStripEncryptedRunning,
   errorReason,
+  toolLoop,
   onSilentStopContinue,
   className,
   style,
@@ -192,6 +194,7 @@ export function ErrorTailErrorBanner({
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
   errorReason?: string | null;
+  toolLoop?: ToolLoopErrorDetails;
   onSilentStopContinue?: () => void;
   className?: string;
   style?: React.CSSProperties;
@@ -205,6 +208,7 @@ export function ErrorTailErrorBanner({
     <ErrorBanner
       error={errorText}
       errorReason={errorReason}
+      toolLoop={toolLoop}
       retryText={ERROR_TAIL_RETRY_TOKEN}
       onRetry={() => void onContinue()}
       onCancel={onDismiss}

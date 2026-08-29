@@ -125,15 +125,39 @@ describe('live stream interruption wiring', () => {
     );
     // 传的是 markHeldRemoteTopicsSubscribed 的返回值(仍被持有的那些),不是原始 toSend ——
     // 中途被释放的 topic 不算订阅生效。
-    expect(sendSubscribe).toContain('noteSessionLiveStreamsAcked(\n      markHeldRemoteTopicsSubscribed(');
+    expect(sendSubscribe).toMatch(/noteSessionLiveStreamsAcked\(\s*markHeldRemoteTopicsSubscribed\(/);
+    // scope 在 ensureOnline 等待期间变化时，已释放 topic 不能迟到发到主机；仍被其它 owner
+    // 持有的 topic 必须重新评估，不能和已释放 topic 一起饿死。
+    expect(sendSubscribe).toContain('.filter((topic) => registryRef.current.hasTopic(deviceId, topic))');
+    expect(sendSubscribe).toContain('toSend.every((topic) => registryRef.current.hasTopic(deviceId, topic))');
+    expect(sendSubscribe).toContain('if (!sent) {');
+    // 反向竞态同样要守住：快速释放后又切回时，旧 unsubscribe 在真正发帧前必须
+    // 剔除已经重新被 owner 持有的 topic，不能落在新 subscribe 后把实时流再关掉。
+    expect(source).toContain('(topic) => !registryRef.current.hasTopic(deviceId, topic)');
+    expect(source).toMatch(
+      /const toSend = shouldSendTopic \? topics\.filter\(shouldSendTopic\) : topics;[\s\S]*client\.invoke\(deviceId, \{\s*channel: DL_UNSUBSCRIBE_CHANNEL,\s*args: \[\{ topics: toSend \}\]/,
+    );
   });
 
   it('socket 掉线：整体失效（影响所有订阅）', () => {
-    const offlineBranch = source.slice(
-      source.indexOf("if (next !== 'online') {"),
-      source.indexOf('clearRehydrateRetry(true);', source.indexOf("if (next !== 'online') {")),
-    );
+    const offlineStart = source.indexOf("if (next !== 'online') {");
+    const offlineEnd = source.indexOf('// presence 是当前在线控制端收到的 delta', offlineStart);
+    expect(offlineStart).toBeGreaterThan(0);
+    expect(offlineEnd).toBeGreaterThan(offlineStart);
+    const offlineBranch = source.slice(offlineStart, offlineEnd);
     expect(offlineBranch).toContain('remoteSessionStore.noteLiveStreamInterrupted();');
+  });
+
+  it('peer ACK reset：无 durable owner 时仍保留独立 forced-open 恢复意图', () => {
+    expect(source).toContain('const forcedPeerRecoveryIntentRef = useRef(new PeerRecoveryOpenIntentRegistry());');
+    expect(source).toMatch(
+      /onPeerTransportReset[\s\S]*requestForcedPeerRecovery\(client, deviceId\)[\s\S]*rehydrateWithClient\(client, deviceId\)/,
+    );
+    expect(source).toContain('resolvePeerRecoveryPlan(');
+    expect(source).toContain('for (const deviceId of forcedPeerRecoveryIntentRef.current.deviceIds())');
+    expect(source).toContain('forcedPeerRecoveryIntentRef.current.complete(targetDeviceId, forcedGeneration)');
+    expect(source).toContain('client.hasPendingRequestsTo(deviceId)');
+    expect(source).toContain('!client.isOutboundExplicitlyClosed(deviceId)');
   });
 
   it('退后台释放 session 订阅：按被释放的会话失效', () => {

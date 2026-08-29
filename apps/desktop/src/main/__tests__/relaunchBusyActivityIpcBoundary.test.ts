@@ -16,6 +16,12 @@ const h = vi.hoisted(() => ({
   trusted: true,
   reads: 0,
   removed: [] as string[],
+  log: {
+    warn: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+  },
 }));
 
 // 仿 Electron 的真实行为:同一 channel 第二次 handle 直接抛。幂等注册要靠 removeHandler,
@@ -35,7 +41,7 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../logger', () => ({
-  createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() }),
+  createLogger: () => h.log,
 }));
 vi.mock('../security/trustedAppRenderer', () => ({
   assertTrustedAppRendererEvent: () => {
@@ -69,6 +75,7 @@ beforeEach(() => {
   h.trusted = true;
   h.reads = 0;
   h.removed = [];
+  h.log.info.mockClear();
 });
 
 describe('registerRelaunchBusyActivityIpc', () => {
@@ -94,6 +101,28 @@ describe('registerRelaunchBusyActivityIpc', () => {
 
     const handler = h.handlers.get(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL)!;
     await expect(handler(fakeEvent)).resolves.toBe(true);
+  });
+
+  it('busy 的手动查询打 INFO', async () => {
+    registerRelaunchBusyActivityIpc(countingSources(true));
+    const handler = h.handlers.get(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL)!;
+    await expect(handler(fakeEvent)).resolves.toBe(true);
+    expect(h.log.info).toHaveBeenCalledTimes(1);
+    expect(h.log.info.mock.calls[0]?.[0]).toBe('manual relaunch has live activity');
+  });
+
+  it('silent:true 的 busy 结果不打 INFO（横幅延后轮询）', async () => {
+    registerRelaunchBusyActivityIpc(countingSources(true));
+    const handler = h.handlers.get(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL)!;
+    await expect(handler(fakeEvent, { silent: true })).resolves.toBe(true);
+    expect(h.log.info).not.toHaveBeenCalled();
+  });
+
+  it('非 boolean true 的 silent 不当静默', async () => {
+    registerRelaunchBusyActivityIpc(countingSources(true));
+    const handler = h.handlers.get(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL)!;
+    await expect(handler(fakeEvent, { silent: 'true' })).resolves.toBe(true);
+    expect(h.log.info).toHaveBeenCalledTimes(1);
   });
 
   it('不可信 sender(WebView / 子 frame / 未登记窗口):拒绝，且一个来源都不读', async () => {

@@ -57,7 +57,11 @@ import {
   type RefreshFetchResult,
   type SessionExpiredReason,
 } from './authRefreshFailure';
-import { awaitWithStartupTimeout } from './authStartupGate';
+import {
+  awaitLoginProvidersWithPreparingGate,
+  awaitWithStartupTimeout,
+  mapLoginProvidersLoadFailure,
+} from './authStartupGate';
 import { syncCanaryFlagAfterAuth } from './canaryFlagSync';
 import {
   maybeEnableNonXdOrgBetaDefault,
@@ -4485,7 +4489,12 @@ async function loadLoginProviders(expectedLoginFlowEpoch = loginFlowEpoch): Prom
   pendingSsoVerificationTicket = null;
   pendingAccountDeletionRestored = false;
   pendingAuthRealm = null;
-  const providers = await createAuthClient(AUTH_REGION).getProviders();
+  // 与冷启动 splash 同一把闸:限时等待,超时先以 AUTH_SERVICE_UNAVAILABLE 解锁
+  // preparing UI,getProviders 继续后台跑;不 abort(net.fetch 本就可能无视 abort)。
+  const providers = await awaitLoginProvidersWithPreparingGate(
+    createAuthClient(AUTH_REGION).getProviders(),
+    log,
+  );
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
   providerConfig = providers;
   loginFlowState = reduceAuthFlow(loginFlowState, {
@@ -4534,13 +4543,13 @@ export async function getLoginState(): Promise<DesktopLoginActionResult> {
     if (loginFlowState) return { success: true, state: loginFlowState };
     return { success: true, state: await loadLoginProviders(expectedLoginFlowEpoch) };
   } catch (error) {
-    const code = error instanceof AuthApiError ? error.code : 'AUTH_SERVICE_UNAVAILABLE';
     if (loginFlowEpoch !== expectedLoginFlowEpoch) {
       return { success: false, code: 'AUTH_FLOW_SUPERSEDED', state: loginFlowState };
     }
-    log.warn(`load login providers failed code=${code}`);
-    loginFlowState = { step: 'error', code, recoverTo: 'identifier' };
-    return { success: false, code, state: loginFlowState };
+    const failure = mapLoginProvidersLoadFailure(error);
+    log.warn(`load login providers failed code=${failure.code}`);
+    loginFlowState = failure.state;
+    return failure;
   }
 }
 

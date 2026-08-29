@@ -8,6 +8,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./config-dir": "./src/shim/_local/text-utils.ts",
     "./ssrf-runtime": "./src/shim/ssrf-runtime.ts"
   },
   "scripts": {

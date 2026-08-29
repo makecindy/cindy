@@ -317,6 +317,19 @@ describe('MessageStream focus cancellation wiring', () => {
     expect(railJumpEffect).toContain('topOffset: NAV_RAIL_JUMP_TOP_OFFSET_PX');
   });
 
+  it('records navigation intent before requesting either a current-window or off-window target', () => {
+    const railJump = sourceBetween(
+      'const handleNavRailJump = useCallback(',
+      'useLayoutEffect(() => {\n    if (!railJumpRequest) return;',
+    );
+    const unpinIndex = railJump.indexOf('isNearBottomRef.current = false;');
+    const requestIndex = railJump.indexOf(
+      'setRailJumpRequest({ id: clientId, seq: railJumpSeqRef.current });',
+    );
+    expect(unpinIndex).toBeGreaterThanOrEqual(0);
+    expect(requestIndex).toBeGreaterThan(unpinIndex);
+  });
+
   it('re-resolves the saved target before consuming an earlier deferred deletion', () => {
     const settlement = sourceBetween(
       'const settleChipJump = useCallback(',

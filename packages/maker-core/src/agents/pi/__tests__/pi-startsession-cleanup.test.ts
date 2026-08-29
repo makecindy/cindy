@@ -12,7 +12,7 @@
  * resume 路径、启动 RPC 也不会即时拒),控制流本身才是被测对象。
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1657,6 +1657,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const run = pendingSubagentRun({
       toolName: 'write',
       input: { path: 'tmp/auto-safe.txt', content: 'safe' },
+      resolvedWritePath: path.join(cwd, 'tmp', 'auto-safe.txt'),
+      resolvedWritableRoots: [cwd],
     });
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
@@ -1675,6 +1677,112 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     ));
     expect(resolver).not.toHaveBeenCalled();
     await handle.close();
+  });
+
+  it('requires confirmation when an older durable bridge omits canonical writable roots', async () => {
+    const run = pendingSubagentRun({
+      toolName: 'write',
+      input: { path: 'tmp/legacy-safe.txt', content: 'legacy' },
+      resolvedWritePath: path.join(cwd, 'tmp', 'legacy-safe.txt'),
+    });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
+      ...opts(),
+      permissionMode: 'auto',
+    });
+    handle.setInteractionResolver(resolver);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: false }),
+    ));
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it('forces confirmation when a durable Subagent writable-root path resolves outside it', async () => {
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-writable-'));
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-outside-'));
+    const run = pendingSubagentRun({
+      toolName: 'write',
+      input: { path: path.join(writableDir, 'linked', 'result.txt'), content: 'unsafe' },
+      resolvedWritePath: path.join(outsideDir, 'result.txt'),
+      resolvedWritableRoots: [cwd, writableDir],
+    });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
+      ...opts(),
+      permissionMode: 'auto',
+      writableDirs: [writableDir],
+    });
+    handle.setInteractionResolver(resolver);
+
+    try {
+      await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+        expect.any(String),
+        run.taskId,
+        'approval',
+        expect.objectContaining({ confirmed: false }),
+      ));
+      expect(review).not.toHaveBeenCalled();
+      expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'write',
+        metadata: expect.objectContaining({ subagent: true }),
+      }));
+    } finally {
+      await handle.close();
+      rmSync(writableDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses Auto-review when a durable Subagent writable root is itself a link', async () => {
+    const realWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-real-writable-'));
+    const linkParent = mkdtempSync(path.join(tmpdir(), 'pi-subagent-linked-writable-'));
+    const linkedWritableDir = path.join(linkParent, 'output');
+    symlinkSync(
+      realWritableDir,
+      linkedWritableDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const run = pendingSubagentRun({
+      toolName: 'write',
+      input: { path: path.join(linkedWritableDir, 'result.txt'), content: 'safe' },
+      resolvedWritePath: path.join(realpathSync(realWritableDir), 'result.txt'),
+      resolvedWritableRoots: [cwd, realpathSync(realWritableDir)],
+    });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      permissionMode: 'auto',
+      writableDirs: [linkedWritableDir],
+    });
+    handle.setInteractionResolver(resolver);
+
+    try {
+      await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+        expect.any(String),
+        run.taskId,
+        'approval',
+        expect.objectContaining({ confirmed: true }),
+      ));
+      expect(resolver).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+      rmSync(linkParent, { recursive: true, force: true });
+      rmSync(realWritableDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps risky durable Subagent Auto actions behind the real Cindy prompt', async () => {
