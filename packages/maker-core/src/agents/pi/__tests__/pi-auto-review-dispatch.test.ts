@@ -2737,6 +2737,95 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(writableDir, { recursive: true, force: true });
   });
 
+  it('asks instead of auto-reviewing while writable directories are still being persisted', async () => {
+    const fsp = await import('node:fs');
+    const currentWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const nextWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const handle = await start('auto', review, false, undefined, {
+      writableDirs: [currentWritableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve; });
+    let releaseWrite!: () => void;
+    const blockedWrite = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const writeSpy = vi.spyOn(fsp.promises, 'writeFile').mockImplementationOnce(async () => {
+      markWriteStarted();
+      await blockedWrite;
+    });
+
+    const update = handle.setWritableDirs!([nextWritableDir]);
+    await writeStarted;
+    firePermissionRequest(
+      'pending-writable-persist',
+      'edit',
+      { path: path.join(nextWritableDir, 'pending.txt') },
+      {
+        resolvedWritePath: path.join(realpathSync(nextWritableDir), 'pending.txt'),
+        resolvedWritableRoots: [realpathSync(cwd), realpathSync(nextWritableDir)],
+      },
+    );
+    expect(await waitForResponse('pending-writable-persist')).toMatchObject({ confirmed: false });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+
+    releaseWrite();
+    await update;
+    writeSpy.mockRestore();
+    firePermissionRequest(
+      'persisted-writable',
+      'edit',
+      { path: path.join(nextWritableDir, 'persisted.txt') },
+      {
+        resolvedWritePath: path.join(realpathSync(nextWritableDir), 'persisted.txt'),
+        resolvedWritableRoots: [realpathSync(cwd), realpathSync(nextWritableDir)],
+      },
+    );
+    expect(await waitForResponse('persisted-writable')).toMatchObject({ confirmed: true });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+
+    await handle.close();
+    rmSync(currentWritableDir, { recursive: true, force: true });
+    rmSync(nextWritableDir, { recursive: true, force: true });
+  });
+
+  it('restores auto-review to the persisted writable roots after a directory write fails', async () => {
+    const fsp = await import('node:fs');
+    const persistedWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const failedWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const handle = await start('auto', review, false, undefined, {
+      writableDirs: [persistedWritableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    const writeSpy = vi.spyOn(fsp.promises, 'writeFile').mockRejectedValueOnce(new Error('transient EIO'));
+    await expect(handle.setWritableDirs!([failedWritableDir])).rejects.toThrow('transient EIO');
+    writeSpy.mockRestore();
+
+    firePermissionRequest(
+      'review-after-writable-rollback',
+      'bash',
+      { command: 'npm install left-pad', cwd: persistedWritableDir },
+      { resolvedCredentialPaths: [] },
+    );
+    expect(await waitForResponse('review-after-writable-rollback')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoots: [cwd, persistedWritableDir],
+      writableRoots: [cwd, persistedWritableDir],
+    }));
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.close();
+    rmSync(persistedWritableDir, { recursive: true, force: true });
+    rmSync(failedWritableDir, { recursive: true, force: true });
+  });
+
   it('auto mode silently approves first-party Subagent spawn through the source-aware envelope', async () => {
     const handle = await start('auto');
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));

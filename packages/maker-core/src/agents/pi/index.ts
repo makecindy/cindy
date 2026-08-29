@@ -2334,6 +2334,12 @@ export class PiAgent extends BaseAgent {
     let permissionWriteChain: Promise<void> = Promise.resolve();
     let permissionWriteGen = 0;
     let autoReviewDirectoryGeneration = 0;
+    const directoryPermissionsPendingPersistence = (): boolean => (
+      requestedPermissionSnapshot.readOnlyRoots.length !== mutableExtraDirs.length
+      || requestedPermissionSnapshot.readOnlyRoots.some((dir, index) => dir !== mutableExtraDirs[index])
+      || requestedPermissionSnapshot.writableRoots.length !== mutableWritableDirs.length
+      || requestedPermissionSnapshot.writableRoots.some((dir, index) => dir !== mutableWritableDirs[index])
+    );
     const writePermissionFile = (next: PermissionSnapshot): Promise<void> => {
       const directoryPermissionsChanged =
         requestedPermissionSnapshot.readOnlyRoots.length !== next.readOnlyRoots.length
@@ -2821,6 +2827,16 @@ export class PiAgent extends BaseAgent {
     const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
     const autoReviewConfirmUndeliveredNotice = createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
     const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
+      // Directory grants become active only after their permission snapshot is
+      // durable. While persistence is pending, neither the requested roots nor
+      // the old runtime roots are a complete authorization view, so fail closed
+      // instead of letting a reviewer decision bridge that transaction window.
+      if (directoryPermissionsPendingPersistence()) {
+        return Promise.resolve({
+          verdict: 'ask',
+          reason: 'Directory permissions are still being persisted.',
+        });
+      }
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
@@ -2841,6 +2857,7 @@ export class PiAgent extends BaseAgent {
       }
       return pending.then((decision) => (
         directoryGeneration === autoReviewDirectoryGeneration
+          && !directoryPermissionsPendingPersistence()
           ? decision
           : {
               verdict: 'ask',
