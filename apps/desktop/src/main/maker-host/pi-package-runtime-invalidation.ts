@@ -42,7 +42,8 @@ export async function invalidateLocalPiPackageRuntimes(
   const candidates = maker.listActiveSessions().filter((session) => session.agentKind === 'pi');
   const metadata = await Promise.all(candidates.map(async (session) => {
     try {
-      return { session, meta: await maker.getSessionMeta(session.id), failed: false as const };
+      const meta = await maker.getSessionMeta(session.id);
+      return { session, meta, failed: meta === null };
     } catch {
       // Isolate lookup failures per record. We cannot safely close an unknown
       // remote/Review session, but one bad record must not stop known-local
