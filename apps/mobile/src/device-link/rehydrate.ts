@@ -133,10 +133,10 @@ export async function rehydrateDeviceLinkPeer(
   };
 
   if (deps.isCancelled?.()) return { linkOpened, transientFailures };
-  // Any held topic implies a live peer route. A topic-only owner may never have called the
-  // public openLink API itself (Home/device list subscribes first), but after a reliable ACK
-  // reset its subscribe frame cannot leave the peer queue until link-open restores that route.
-  if (plan.openLink || plan.topics.length > 0) {
+  // Honor plan.openLink. Listing-only owners (Home `sessions`) subscribe without a control
+  // link so Desktop does not show「正在被控」. ACK-reset recovery already promotes the plan
+  // through resolvePeerRecoveryPlan when the peer queue actually needs a reopen.
+  if (plan.openLink) {
     // openLink 可能与页面请求共用一条在途请求;它必须连同底层请求真正创建时
     // 捕获的 epoch 一起复用,不能在 dedupe 时补拍一个更新的 epoch。
     const openLinkStep = deps.openLink(plan.deviceId);

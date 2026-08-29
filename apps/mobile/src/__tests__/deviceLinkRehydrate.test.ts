@@ -46,24 +46,41 @@ describe('rehydrateDeviceLinkTopics', () => {
       'subscribe:dev-1:session:s1,sessions',
       'rebuild:dev-1:s1',
       'reseed:dev-1',
-      'open:dev-2',
       'subscribe:dev-2:session:s2',
       'rebuild:dev-2:s2',
     ]);
   });
 
-  it('opens a topic-only peer before replaying its subscription', async () => {
+  it('does not open a listing-only peer while replaying its subscription', async () => {
     const { calls, harness } = deps();
 
-    await rehydrateDeviceLinkTopics([
+    const result = await rehydrateDeviceLinkPeer(
       { deviceId: 'dev-topic-only', openLink: false, topics: ['sessions'] },
-    ], harness);
+      harness,
+    );
 
     expect(calls).toEqual([
-      'open:dev-topic-only',
       'subscribe:dev-topic-only:sessions',
       'reseed:dev-topic-only',
     ]);
+    expect(harness.openLink).not.toHaveBeenCalled();
+    expect(result.linkOpened).toBe(false);
+  });
+
+  it('opens a listing peer only when the recovery plan asks for a control link', async () => {
+    const { calls, harness } = deps();
+
+    const result = await rehydrateDeviceLinkPeer(
+      { deviceId: 'dev-forced', openLink: true, topics: ['sessions'] },
+      harness,
+    );
+
+    expect(calls).toEqual([
+      'open:dev-forced',
+      'subscribe:dev-forced:sessions',
+      'reseed:dev-forced',
+    ]);
+    expect(result.linkOpened).toBe(true);
   });
 
   it('reports whether the peer link-open step actually succeeded', async () => {
