@@ -496,6 +496,50 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(view.container.firstElementChild).toBeNull();
   });
 
+  it('淡出期间开启 reduced-motion 时释放淡出锁并完成卸载', () => {
+    vi.useFakeTimers();
+    const previousMatchMedia = window.matchMedia;
+    let reducedMotion = false;
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    const mediaQuery = {
+      get matches() {
+        return reducedMotion;
+      },
+      media: '(prefers-reduced-motion: reduce)',
+      addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+        listeners.add(listener);
+      },
+      removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+        listeners.delete(listener);
+      },
+      addListener: (listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+      removeListener: (listener: (event: MediaQueryListEvent) => void) =>
+        listeners.delete(listener),
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+    window.matchMedia = vi.fn(() => mediaQuery) as unknown as typeof window.matchMedia;
+
+    try {
+      mocks.coverHeld = true;
+      const view = renderSplash('splash_done');
+      mocks.coverHeld = false;
+      view.rerender(<SplashScreen />);
+      expect(screen.getByTestId('splash-root').className).toContain('opacity-0');
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      reducedMotion = true;
+      act(() => {
+        for (const listener of listeners) listener({ matches: true } as MediaQueryListEvent);
+      });
+
+      expect(mocks.handoff.reportSplashExitCompleted).toHaveBeenCalledTimes(1);
+      expect(view.container.firstElementChild).toBeNull();
+    } finally {
+      window.matchMedia = previousMatchMedia;
+      vi.useRealTimers();
+    }
+  });
+
   it('shows startup database cleanup progress, time estimate, and a safe cancel action', async () => {
     const progress: DbSlimmingStartupProgress = {
       requestId: 'request-1',

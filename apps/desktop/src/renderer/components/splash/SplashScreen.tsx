@@ -201,17 +201,16 @@ export function SplashScreen() {
     realPhase !== 'fading_out' && realPhase !== 'splash_done' && realPhase !== 'splash_skipped';
 
   useEffect(() => {
-    if (
-      prevCoverHeldRef.current &&
-      !coverHeld &&
-      (realPhase === 'splash_done' || realPhase === 'splash_skipped')
-    ) {
-      // reduced-motion 把 --splash-fade-duration 置 0ms。再留 500ms 透明全屏层
-      // 会吞掉主界面刚露出时的点击(层未 pointer-events:none)。
-      if (reducedMotion) {
-        prevCoverHeldRef.current = coverHeld;
-        return;
-      }
+    const splashFinished = realPhase === 'splash_done' || realPhase === 'splash_skipped';
+    // If reduced-motion is enabled while the shell fade is in progress, the
+    // effect cleanup cancels its timer. Clear the in-flight fade explicitly so
+    // the Splash can still report completion and unmount.
+    if (reducedMotion && !coverHeld && splashFinished) {
+      setShellCoverFading(false);
+      prevCoverHeldRef.current = coverHeld;
+      return;
+    }
+    if (prevCoverHeldRef.current && !coverHeld && splashFinished) {
       setShellCoverFading(true);
       const timer = window.setTimeout(() => setShellCoverFading(false), 500);
       prevCoverHeldRef.current = coverHeld;
