@@ -7545,7 +7545,7 @@ export default function SessionScreen() {
    *    改为回读权威会话收敛乐观维度;回读也失败(多半同一网络故障)才退回本地回滚。
    */
   const runControlAction = useCallback(async (
-    action: () => Promise<void>,
+    action: () => Promise<void | boolean>,
     optimisticPatch?: Partial<RemoteSession>,
     opts?: { recover?: 'rollback' | 'refetch' },
   ) => {
@@ -7570,7 +7570,10 @@ export default function SessionScreen() {
       remoteSessionStore.applySessionPatch(deviceId, sessionId, optimisticPatch);
     }
     try {
-      await action();
+      const applied = await action();
+      if (applied === false && rollbackPatch && deviceId) {
+        remoteSessionStore.applySessionPatch(deviceId, sessionId, rollbackPatch);
+      }
     } catch (err) {
       if (rollbackPatch && optimisticPatch && deviceId) {
         let recovered = false;
@@ -7996,6 +7999,86 @@ export default function SessionScreen() {
     );
   }, [controlBusy, currentSession, remoteSessionRunning]);
 
+  const setComposerModelWithFinalWindowConfirmation = useCallback(async (args: {
+    model: string;
+    providerId?: string;
+    effort: string;
+    fastMode: boolean;
+    confirmedContextWindow?: number;
+  }): Promise<boolean> => {
+    const invoke = (confirmedContextWindow?: number) => maker.setModel(
+      sessionId,
+      args.model,
+      args.providerId,
+      confirmedContextWindow
+        ? {
+            contextWindow: confirmedContextWindow,
+            effort: args.effort,
+            fastMode: args.fastMode,
+          }
+        : undefined,
+    );
+    let result = await invoke(args.confirmedContextWindow);
+    const hasFinalPressure = result != null && (
+      result.contextWindowConfirmationRequired !== undefined
+      || result.contextTokensForConfirmation !== undefined
+    );
+    if (!hasFinalPressure) return true;
+    const requiredWindow = result?.contextWindowConfirmationRequired;
+    const authoritativeTokens = result?.contextTokensForConfirmation;
+    if (
+      currentSession?.remoteHostId
+      || typeof requiredWindow !== 'number'
+      || !Number.isFinite(requiredWindow)
+      || requiredWindow <= 0
+      || typeof authoritativeTokens !== 'number'
+      || !Number.isFinite(authoritativeTokens)
+      || authoritativeTokens < requiredWindow * 0.9
+    ) {
+      throw new Error('[PRECONDITION_FAILED] verified final Pi window confirmation is invalid');
+    }
+    const formatTokens = (value: number) => value >= 1_000_000
+      ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+      : `${Math.round(value / 1_000)}K`;
+    const accepted = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (confirmed: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(confirmed);
+      };
+      Alert.alert(
+        i18n.t('models.contextWindowSwitch.title'),
+        i18n.t('models.contextWindowSwitch.description', {
+          used: formatTokens(authoritativeTokens),
+          total: formatTokens(requiredWindow),
+          pct: Math.round((authoritativeTokens / requiredWindow) * 100),
+        }),
+        [
+          {
+            text: i18n.t('models.contextWindowSwitch.cancel'),
+            style: 'cancel',
+            onPress: () => finish(false),
+          },
+          {
+            text: i18n.t('models.contextWindowSwitch.confirm'),
+            onPress: () => finish(true),
+          },
+        ],
+        { cancelable: true, onDismiss: () => finish(false) },
+      );
+    });
+    if (!accepted) return false;
+    result = await invoke(requiredWindow);
+    if (
+      result?.contextWindowConfirmationRequired !== undefined
+      || result?.contextTokensForConfirmation !== undefined
+    ) {
+      throw new Error('[PRECONDITION_FAILED] verified final Pi window changed before retry');
+    }
+    return true;
+  }, [currentSession?.remoteHostId, maker, sessionId]);
+
   // 选行 = 原子切「来源 + 模型 + effort + fast」(effort 优先级与桌面同源:该 (来源,模型) 的
   // 会话镜像记忆 → 沿用当前档 → 模型默认;同模型换来源不沿用;fast 按镜像恢复、fastEditable 门控)。
   const selectComposerModelRow = useCallback((row: ProviderModelRow) => {
@@ -8037,18 +8120,14 @@ export default function SessionScreen() {
         }
       }
       await runControlAction(async () => {
-        await maker.setModel(
-          sessionId,
-          next.model,
-          next.providerId,
-          confirmedContextWindow
-            ? {
-                contextWindow: confirmedContextWindow,
-                effort: next.effort || 'medium',
-                fastMode: next.fastMode,
-              }
-            : undefined,
-        );
+        const applied = await setComposerModelWithFinalWindowConfirmation({
+          model: next.model,
+          providerId: next.providerId,
+          effort: next.effort || 'medium',
+          fastMode: next.fastMode,
+          confirmedContextWindow,
+        });
+        if (!applied) return false;
         if (next.effort && next.effort !== modelSheetSelection.effort) {
           await maker.setEffort(sessionId, next.effort);
         }
@@ -8081,6 +8160,7 @@ export default function SessionScreen() {
     sessionAgentKind,
     sessionId,
     sessionMirrorAccessors,
+    setComposerModelWithFinalWindowConfirmation,
     writeSessionAgentSwitchIntent,
   ]);
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
@@ -8102,25 +8182,35 @@ export default function SessionScreen() {
           confirmedContextWindow = option.contextWindow;
         }
       }
+      const targetEffort =
+        currentSession?.effort && option.efforts.includes(currentSession.effort)
+          ? currentSession.effort
+          : option.defaultEffort ?? option.efforts[0] ?? 'medium';
+      const targetFastMode =
+        modelSheetCapabilities?.hasFastMode === true && option.supportsFastMode
+          ? currentSession?.fastMode === true
+          : false;
       const confirmedOverflow = confirmedContextWindow
         ? {
             contextWindow: confirmedContextWindow,
-            effort:
-              currentSession?.effort && option.efforts.includes(currentSession.effort)
-                ? currentSession.effort
-                : option.defaultEffort ?? option.efforts[0] ?? 'medium',
-            fastMode:
-              modelSheetCapabilities?.hasFastMode === true && option.supportsFastMode
-                ? currentSession?.fastMode === true
-                : false,
+            effort: targetEffort,
+            fastMode: targetFastMode,
           }
         : undefined;
-      await runControlAction(() => maker.setModel(sessionId, option.id, undefined, confirmedOverflow), {
-        model: option.id,
-        ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
-      });
+      await runControlAction(
+        () => setComposerModelWithFinalWindowConfirmation({
+          model: option.id,
+          effort: targetEffort,
+          fastMode: targetFastMode,
+          confirmedContextWindow,
+        }),
+        {
+          model: option.id,
+          ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
+        },
+      );
     })();
-  }, [agentSwitchIntent, canUseRemoteSessionControls, confirmComposerModelWindowSwitch, currentSession, maker, modelSheetAgentKind, modelSheetCapabilities, runControlAction, sessionAgentKind, sessionId]);
+  }, [agentSwitchIntent, canUseRemoteSessionControls, confirmComposerModelWindowSwitch, currentSession, modelSheetAgentKind, modelSheetCapabilities, runControlAction, sessionAgentKind, setComposerModelWithFinalWindowConfirmation]);
   const browseComposerModelAgent = useCallback(async (next: MobileSessionAgentKind) => {
     if (next === modelSheetAgentKind) return true;
     if (next !== sessionAgentKind) {

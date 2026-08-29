@@ -314,8 +314,8 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
       result !== null &&
       typeof result === 'object' &&
       !Array.isArray(result) &&
-      typeof (result as { contextWindowConfirmationRequired?: unknown })
-        .contextWindowConfirmationRequired === 'number'
+      ('contextWindowConfirmationRequired' in result ||
+        'contextTokensForConfirmation' in result)
     ) {
       return;
     }

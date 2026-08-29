@@ -316,17 +316,16 @@ describe('mobile maker transport', () => {
     ]);
   });
 
-  it('fails closed when Pi reveals a new final-window confirmation after set-model', async () => {
-    const invoke: RemoteInvoke = async () => ({
+  it('returns Pi final-window confirmation data to the Mobile caller', async () => {
+    const finalPressure = {
       deferred: false,
       contextWindowConfirmationRequired: 272_000,
       contextTokensForConfirmation: 244_800,
-    }) as never;
+    };
+    const invoke: RemoteInvoke = async () => finalPressure as never;
     const maker = createMobileMakerTransport({ deviceId: 'dev-1', invoke });
 
-    await expect(maker.setModel('s1', 'pi-model')).rejects.toThrow(
-      'verified final Pi window requires a new explicit confirmation',
-    );
+    await expect(maker.setModel('s1', 'pi-model')).resolves.toEqual(finalPressure);
   });
 
   it('routes runtime controls and queue operations with stable channel names', async () => {

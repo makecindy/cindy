@@ -437,7 +437,12 @@ export interface MobileMakerTransport {
       effort: string;
       fastMode: boolean;
     },
-  ): Promise<void>;
+  ): Promise<{
+    deferred?: boolean;
+    superseded?: boolean;
+    contextWindowConfirmationRequired?: unknown;
+    contextTokensForConfirmation?: unknown;
+  } | undefined>;
   /** 登记跨 Agent 切换意图；真正切换在下一条消息发送时由 desktop main 执行。 */
   switchSessionAgent(
     sessionId: string,
@@ -691,8 +696,8 @@ export function createMobileMakerTransport({
     send: (sessionId, message, createOpts, sendOpts) =>
       call('maker:send', [sessionId, message, createOpts, sendOpts]),
     listActiveSessions: () => call('maker:list-active'),
-    setModel: async (sessionId, model, providerId, confirmedOverflow) => {
-      const result = await call<{ contextWindowConfirmationRequired?: unknown } | undefined>(
+    setModel: (sessionId, model, providerId, confirmedOverflow) =>
+      call(
         'maker:set-model',
         confirmedOverflow
           ? [
@@ -711,15 +716,7 @@ export function createMobileMakerTransport({
           : providerId
             ? [sessionId, model, providerId]
             : [sessionId, model],
-      );
-      // Mobile currently confirms only a route-catalog overflow before invoking.
-      // A smaller final Pi window is new pressure, not acceptance of this call.
-      if (typeof result?.contextWindowConfirmationRequired === 'number') {
-        throw new Error(
-          '[PRECONDITION_FAILED] verified final Pi window requires a new explicit confirmation',
-        );
-      }
-    },
+      ),
     switchSessionAgent: (
       sessionId,
       targetAgentKind,

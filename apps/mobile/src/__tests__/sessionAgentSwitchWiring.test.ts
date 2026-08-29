@@ -59,12 +59,8 @@ describe('session Agent switch UI wiring', () => {
       'next.model !== currentSession.model || next.providerId !== currentSession.providerId',
     );
     expect(flatSelector).toContain('option.id !== currentSession?.model');
-    expect(rowSelector.indexOf('confirmMobileModelWindowSwitch')).toBeLessThan(
-      rowSelector.indexOf('maker.setModel'),
-    );
-    expect(flatSelector.indexOf('confirmMobileModelWindowSwitch')).toBeLessThan(
-      flatSelector.indexOf('maker.setModel'),
-    );
+    expect(rowSelector).toContain('setComposerModelWithFinalWindowConfirmation({');
+    expect(flatSelector).toContain('setComposerModelWithFinalWindowConfirmation({');
     expect(rowSelector).toContain(
       'row.model.contextWindow < currentSession.contextWindow',
     );
@@ -77,7 +73,7 @@ describe('session Agent switch UI wiring', () => {
     expect(flatSelector).toContain(
       'currentSession.contextTokens >= option.contextWindow',
     );
-    expect(rowSelector).toContain('contextWindow: confirmedContextWindow');
+    expect(rowSelector).toContain('confirmedContextWindow,');
     expect(flatSelector).toContain('confirmedOverflow');
   });
 
@@ -95,8 +91,28 @@ describe('session Agent switch UI wiring', () => {
     expect(transport).toContain(
       'modelWindowConfirmationCapability:\n                  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1',
     );
-    expect(transport).toContain(
-      "typeof result?.contextWindowConfirmationRequired === 'number'",
+    expect(transport).not.toContain(
+      'verified final Pi window requires a new explicit confirmation',
     );
+  });
+
+  it('confirms authoritative Pi final-window pressure and retries the exact window', () => {
+    const source = readSource('app/sessions/[sessionId].tsx');
+    const helper = source.slice(
+      source.indexOf('const setComposerModelWithFinalWindowConfirmation'),
+      source.indexOf('// 选行 = 原子切', source.indexOf('const setComposerModelWithFinalWindowConfirmation')),
+    );
+
+    expect(helper).toContain('contextWindowConfirmationRequired');
+    expect(helper).toContain('contextTokensForConfirmation');
+    expect(helper).toContain('authoritativeTokens < requiredWindow * 0.9');
+    expect(helper).toContain('Alert.alert(');
+    expect(helper).toContain('used: formatTokens(authoritativeTokens)');
+    expect(helper).toContain('total: formatTokens(requiredWindow)');
+    expect(helper).toContain('(authoritativeTokens / requiredWindow) * 100');
+    expect(helper).toContain('result = await invoke(requiredWindow)');
+    expect(helper).toContain('verified final Pi window changed before retry');
+    expect(helper).toContain('if (!accepted) return false');
+    expect(source).toContain('applied === false && rollbackPatch && deviceId');
   });
 });
