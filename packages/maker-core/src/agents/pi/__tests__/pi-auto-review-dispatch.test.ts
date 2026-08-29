@@ -632,6 +632,95 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   it.each([
+    [
+      'credentials',
+      'https://user:credential-secret@example.com/pkg.git',
+      'https://example.com/pkg.git',
+      'credential-secret',
+    ],
+    [
+      'query',
+      'https://example.com/pkg.git?token=query-secret',
+      'https://example.com/pkg.git',
+      'query-secret',
+    ],
+    [
+      'fragment',
+      'https://example.com/pkg.git#fragment-secret',
+      'https://example.com/pkg.git',
+      'fragment-secret',
+    ],
+    ['normal', 'npm:context-mode', 'npm:context-mode', 'never-present-secret'],
+  ])('redacts %s from tool responses and durable host receipts', async (
+    kind,
+    source,
+    publicSource,
+    secret,
+  ) => {
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: '/Users/example/private/package-root',
+        name: '/Users/example/private/package-name',
+        enabled: true,
+        resources: [{
+          kind: 'extension',
+          name: '/Users/example/private/extension.ts',
+          compatibility: 'supported',
+        }],
+        runtimeRequirements: [{
+          packageName: 'https://user:runtime-secret@example.com/runtime',
+          range: source,
+          currentVersion: '/Users/example/private/version',
+          compatible: true,
+        }],
+      },
+    }));
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: 'Confirm',
+      cancel: 'Cancel',
+      mutationFailed: 'Failed',
+      mutationSuccess: { install: 'Installed', update: 'Updated', remove: 'Removed' },
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: `managed-package-redacted-${kind}`,
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+    try {
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({ kind: 'permission', behavior: 'allow' })) as never,
+      );
+      fireManagedPackageRequest(`pkg-redacted-${kind}`, 'install', source);
+      const response = await waitForResponse(`pkg-redacted-${kind}`);
+      const responseValue = String(response.value);
+      expect(JSON.parse(responseValue)).toMatchObject({
+        ok: true,
+        result: { affectedPackage: { source: publicSource, enabled: true } },
+      });
+
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('Installed')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      const published = `${responseValue}\n${visibleReceipt}`;
+      expect(published).not.toContain(secret);
+      expect(published).not.toContain('runtime-secret');
+      expect(published).not.toContain('/Users/example/private');
+      expect(published).toContain(publicSource);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
     ['spawn', "spawn /Users/example/private/pi ENOENT"],
     ['filesystem', "EACCES: open '/Users/example/Library/Application Support/Cindy/pi-package-home/state'"],
     ['inspection', "failed to inspect /private/tmp/secret-package/package.json"],

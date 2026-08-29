@@ -676,6 +676,32 @@ function resolvePiManagedPackageSource(source: string, workingDir: string): stri
   return relative ? resolveRelativeLocalSource(source) : source;
 }
 
+const PI_RECEIPT_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
+
+function publicPiManagedPackageSource(source: string): string {
+  const filePrefix = source.match(/^file:/i)?.[0] ?? '';
+  const localValue = filePrefix ? source.slice(filePrefix.length) : source;
+  if (path.isAbsolute(localValue) || path.win32.isAbsolute(localValue)) {
+    const basename = path.posix.basename(localValue.replace(/\\/g, '/'));
+    return `${filePrefix}${basename || 'Pi extension'}`;
+  }
+  return source.replace(PI_RECEIPT_URL_PATTERN, (raw) => {
+    const gitPrefix = raw.startsWith('git:') ? 'git:' : '';
+    const urlValue = gitPrefix ? raw.slice(gitPrefix.length) : raw;
+    try {
+      const parsed = new URL(urlValue);
+      parsed.username = '';
+      parsed.password = '';
+      parsed.search = '';
+      parsed.hash = '';
+      return `${gitPrefix}${parsed.toString()}`;
+    } catch {
+      const scheme = urlValue.match(/^([a-z][a-z0-9+.-]*):\/\//i)?.[1] ?? 'url';
+      return `${gitPrefix}${scheme}://[redacted-source]`;
+    }
+  });
+}
+
 function piManagedPackageResultSummary(
   result: unknown,
   requestedSource: string,
@@ -687,7 +713,12 @@ function piManagedPackageResultSummary(
     return { changed: record.changed === true };
   }
   const pkg = affected as Record<string, unknown>;
-  const shortString = (value: unknown, max = 512): string | undefined => (typeof value === 'string' ? value.slice(0, max) : undefined);
+  const shortString = (value: unknown, max = 512): string | undefined => (
+    typeof value === 'string'
+      ? publicPiManagedPackageSource(value).slice(0, max)
+      : undefined
+  );
+  const publicRequestedSource = publicPiManagedPackageSource(requestedSource);
   const packageName = (() => {
     const candidate = shortString(pkg.name);
     const scopedPackageName = candidate ? /^@[^/\\]+[/\\][^/\\]+$/.test(candidate) : false;
@@ -700,7 +731,7 @@ function piManagedPackageResultSummary(
     ) {
       return candidate;
     }
-    const requested = requestedSource.replace(/^file:/i, '').replace(/[\\/]+$/, '');
+    const requested = publicRequestedSource.replace(/^file:/i, '').replace(/[\\/]+$/, '');
     const basename = path.posix.basename(requested.replace(/\\/g, '/'));
     return shortString(basename && basename !== '.' && basename !== '..' ? basename : 'Pi extension');
   })();
@@ -741,9 +772,9 @@ function piManagedPackageResultSummary(
   return {
     changed: record.changed === true,
     affectedPackage: {
-      // The package store may report its host-resolved local path. Receipts are
-      // conversation data, so preserve only the spelling supplied by the user.
-      source: shortString(requestedSource),
+      // Receipts are transcript/model context. Preserve a stable public source,
+      // never URL credentials/query/fragment or a host-resolved absolute path.
+      source: shortString(publicRequestedSource),
       name: packageName,
       version: shortString(pkg.version, 128),
       enabled: pkg.enabled === true,
