@@ -15,7 +15,9 @@
 - **08-29** **圆角三档写死：按钮一律胶囊、4px 不入档（拍板人 = 用户）**——
   背景：设计系统改造调研发现 PermissionPrompt 混用 `rounded-[8px]`×4 /
   `rounded-[4px]`×4 / `rounded-[12px]`×1，与 §5 三档冲突；全仓走查
-  `rounded-[4px]` 生产存量共 30 处（2026-08-29 快照，不止权限弹窗，是普遍债）。
+  `rounded-[4px]` 生产存量共 30 处（2026-08-29 快照，不止权限弹窗，是普遍债；
+  仅为字面量语法局部计数，裸 `rounded` / `rounded-sm` 等价写法见下方口径块
+  与补充裁决 (6)）。
   计数口径（`design-governance.md` §9 计数纪律，均为当日快照）：
 
   ```bash
@@ -23,8 +25,16 @@
   git grep -o 'rounded-\[8px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
   git grep -o 'rounded-\[4px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
   git grep -o 'rounded-\[12px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
-  # 全仓 rounded-[4px] 生产存量（2026-08-29 快照：30）
+  # 全仓 rounded-[4px] 存量（2026-08-29 快照：30；字面量语法，全 renderer 无 tests/vendor 命中）
   git grep -o "rounded-\[4px\]" -- apps/desktop/src/renderer | wc -l
+  # 解析后等价 4px 的其它写法（2026-08-29 快照，生产代码 = 排除 __tests__/.test./vendor/；
+  # 裸 rounded 是 Tailwind DEFAULT 0.25rem=4px，rounded-sm 是 --radius(8px)-4px=4px，
+  # 两者与 rounded-[4px] 同为禁止档位的等价语法——「30」只是字面量语法的局部计数，
+  # DS-6 迁移与 DS-7 棘轮的基线必须按三语法合计（30+80+11）建立，不能只按 30）
+  git grep -oE "rounded[ ,)\"'?}]" -- apps/desktop/src/renderer | grep -vE '(__tests__|\.test\.|vendor/)' | wc -l   # 裸 rounded：80
+  git grep -oE "rounded-sm[ ,)\"'?}]" -- apps/desktop/src/renderer | grep -vE '(__tests__|\.test\.|vendor/)' | wc -l  # rounded-sm：11
+  # 同为非档位值的 rounded-md（--radius-2px=6px，亦不入 §5 三档；供 DS-7 棘轮一并建基线）
+  git grep -oE "rounded-md[ ,)\"'?}]" -- apps/desktop/src/renderer | grep -vE '(__tests__|\.test\.|vendor/)' | wc -l  # rounded-md：204
   ```
 
   裁决四条：(1) **三档不变、不加档**，把 §5 的软表述写死——会提交决定 / 触发动作
@@ -69,6 +79,16 @@
   elements) + registered bare text buttons are the only exemption」；(4) 中「filled
   buttons」字样随本轮撤销作废，裸文字按钮不受 pill padding 约束的实质不变。
   （同上条落点）
+  追加修正（第五轮 review 指出 4px 计数口径漏等价写法）：(6) **「4px 不入档」的
+  禁令覆盖所有解析后等价于 4px 的写法**——本仓 `tailwind.config.ts` 只覆盖
+  `borderRadius.lg/md/sm`（基于 `--radius`=0.5rem=8px 派生），裸 `rounded`（Tailwind
+  DEFAULT 0.25rem）与 `rounded-sm`（8px−4px）同样解析为 4px，与 `rounded-[4px]`
+  同属禁止档位的等价语法；`rounded-md`（8px−2px=6px）亦不入三档。主裁决「全仓 30 处」
+  只是 `rounded-[4px]` 字面量语法的局部计数——生产代码中裸 `rounded` 另有 80 处、
+  `rounded-sm` 11 处（计数命令见上方口径块）；DS-6 迁移与 DS-7 棘轮建基线时必须按
+  三种 4px 等价语法合计（30+80+11），并把 `rounded-md` 的 204 处一并纳入非档位值
+  清理范围，不得只按 30 建基线。§5 行内数字句同步补「in ANY of its equivalent
+  spellings」限定并指向口径块。（同上条落点）
 
 - **08-16** **登录：唯一 SSO 不再经过 method-choice（拍板人 = 用户）**——
   用户已经从登录首页选了企业 SSO（组织标识探测），或邮箱 / 组织探测结果只剩

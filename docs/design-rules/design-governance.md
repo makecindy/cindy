@@ -182,7 +182,7 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 
 | 事项 | 现状 | 裁决人 | 规则 |
 | --- | --- | --- | --- |
-| PermissionPrompt 圆角 | **已关闭（2026-08-29 裁决，#3619 回写）**：三档不变、按钮一律胶囊、8px = 盒内非按钮、4px 不入档（存量为债、新代码禁止）、「看起来小」不是改档理由。`DESIGN.md §5` 已加硬，全文归档于 [`design-decision-log.md`](./design-decision-log.md)「08-29」条 | 设计师 | 已按 `DESIGN.md §13` 机制回写并归档（与回写同一 PR 生效） |
+| PermissionPrompt 圆角 | **已关闭（2026-08-29 裁决，#3619 回写）**：三档不变、按钮一律胶囊（唯一豁免 = 已登记的裸文字按钮）、8px = textarea 一律 8px + 盒内非按钮、4px 不入档（含裸 `rounded` / `rounded-sm` 等价写法；存量为债、新代码禁止）、「看起来小」不是改档理由。`DESIGN.md §5` 已加硬，全文归档于 [`design-decision-log.md`](./design-decision-log.md)「08-29」条 | 设计师 | 已按 `DESIGN.md §13` 机制回写并归档（与回写同一 PR 生效） |
 | Permission 迁移余项 | 待裁决：允许/拒绝按钮的视觉主次、危险授权样式、Desktop 与 Mobile 权限弹窗几何是否一致 | 设计师 | 余项未关闭前，Permission 相关文件不得进入任何迁移 PR 的 diff（DS-6 前置）；结论同样回写 `DESIGN.md` 并归档 |
 
 ## 11. 存量门禁与文档处置表
