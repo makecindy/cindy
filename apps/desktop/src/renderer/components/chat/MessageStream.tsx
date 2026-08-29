@@ -5701,6 +5701,12 @@ export function MessageStream({
       // 导航条目标要到 layout effect 才能确认仍存在且 DOM 已就绪，因此这里不能提前消费
       // focus 期间延期的删除补偿：先重放补偿，目标有效时后续导航再覆盖最终落点。
       cancelFocusJump();
+      // 点击本身就是离开尾部的明确意图，必须在 request 进入下一次 render 前同步写入。
+      // 否则同一批流式 append 的 coverage-loss layout effect 会先按旧跟随态清掉锚点，
+      // 当前窗口内、但默认尾窗外的目标会在后续 rail effect 滚动时被卸载。
+      restoringRef.current = false;
+      isNearBottomRef.current = false;
+      setIsNearBottom(false);
       railJumpSeqRef.current += 1;
       setRailJumpRequest({ id: clientId, seq: railJumpSeqRef.current });
     },
@@ -5719,11 +5725,6 @@ export function MessageStream({
     if (!visibleRenderItems.some((item) => item.key === targetKey)) {
       // 目标在渲染窗口外:先把窗口锚到目标。本 effect 因 visibleRenderItems
       // 变化重跑,下一轮走下面的滚动分支(focus-jump 同款两段式)。
-      // 必须在建锚前同步解除跟随:下一轮更早执行的 coverage-loss effect 会读取
-      // 这份意图；仍为 true 会把刚建立的历史锚点当成自动扩窗并清回默认尾窗。
-      restoringRef.current = false;
-      isNearBottomRef.current = false;
-      setIsNearBottom(false);
       setFirstVisibleItemKey(targetKey);
       setAnchoredForwardItems(RENDER_WINDOW_FIRST_PAINT_ITEMS);
       return;
@@ -5735,11 +5736,8 @@ export function MessageStream({
     ) as HTMLElement | null;
     if (!el) return;
     lastAppliedRailJumpRef.current = railJumpRequest.seq;
-    // 从贴底态往上跳必须先解除 auto-follow 钉底,否则流式期间 pin effect 会把
-    // 视口拽回底部(focus-jump 同款处理;chip 不需要是因为它只在已上滚时出现)。
-    restoringRef.current = false;
-    isNearBottomRef.current = false;
-    setIsNearBottom(false);
+    // auto-follow 已由点击处理器在 request 进入 render 前解除，避免本轮更早的
+    // coverage-loss effect 清掉当前窗口内、默认尾窗外的导航目标。
     // smooth scroll 途经顶部区域时抑制 expandWindow/onLoadMore(chip-jump 协议,
     // 解抑靠用户 wheel/touch/keydown + 安全兜底 timer)。
     beginChipJump({
