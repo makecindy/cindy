@@ -3,11 +3,29 @@ import type { BrowserControlResult } from '@cindy/browser-control-runtime';
 import { RealProfileError } from './types.js';
 
 function isRunningFlag(data: unknown): boolean {
-  return data !== null && typeof data === 'object' && (data as { running?: unknown }).running === true;
+  return (
+    data !== null && typeof data === 'object' && (data as { running?: unknown }).running === true
+  );
 }
 
 function isStoppedFlag(data: unknown): boolean {
-  return data !== null && typeof data === 'object' && (data as { stopped?: unknown }).stopped === true;
+  return (
+    data !== null && typeof data === 'object' && (data as { stopped?: unknown }).stopped === true
+  );
+}
+
+/**
+ * Live-stop must not hot-reload managed identity. Crash restart already
+ * injected the remembered CDP port at module load; a live session still has
+ * `executablePath` + `cdpPort` from the last start. Rebuilding config with
+ * only `cdpPort` drops the source browser path, the vendored runtime treats
+ * that as a profile invariant change, kills the process, then returns
+ * `stopped: false`.
+ */
+export function managedConfigPatchBeforeStop(_input: {
+  rememberedCdpPort: number | null;
+}): { useRealProfile: true; cdpPort: number; executablePath?: string } | null {
+  return null;
 }
 
 /**

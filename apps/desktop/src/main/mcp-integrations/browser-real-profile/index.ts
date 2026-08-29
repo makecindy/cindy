@@ -16,7 +16,7 @@ export {
   resolveSourceBrowserFromOs,
   userDataDirFor,
 } from './source.js';
-export { assertManagedBrowserStopped } from './runtime-stop.js';
+export { assertManagedBrowserStopped, managedConfigPatchBeforeStop } from './runtime-stop.js';
 export {
   cleanupCopiedLoginsThen,
   cleanupRealProfileSnapshots,

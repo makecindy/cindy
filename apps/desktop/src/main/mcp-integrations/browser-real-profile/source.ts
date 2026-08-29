@@ -56,12 +56,47 @@ function pathFor(platform: NodeJS.Platform) {
   return platform === 'win32' ? path.win32 : path.posix;
 }
 
+function snapUserDataDir(
+  kind: ChromiumKind,
+  home: string,
+  executablePath: string | undefined,
+): string | null {
+  if (!executablePath?.startsWith('/snap/bin/')) return null;
+  const binary = executablePath.slice('/snap/bin/'.length);
+  if (!binary || binary.includes('/')) return null;
+  const osPath = path.posix;
+  switch (kind) {
+    case 'chrome':
+      if (binary !== 'google-chrome' && binary !== 'chrome') return null;
+      return osPath.join(home, 'snap', 'google-chrome', 'current', '.config', 'google-chrome');
+    case 'brave':
+      if (binary !== 'brave') return null;
+      return osPath.join(
+        home,
+        'snap',
+        'brave',
+        'current',
+        '.config',
+        'BraveSoftware',
+        'Brave-Browser',
+      );
+    case 'chromium':
+      if (binary !== 'chromium') return null;
+      return osPath.join(home, 'snap', 'chromium', 'common', 'chromium');
+    case 'edge':
+      return null;
+  }
+}
+
 export function userDataDirFor(
   kind: ChromiumKind,
   platform: NodeJS.Platform,
   home: string,
   env: NodeJS.ProcessEnv = process.env,
+  executablePath?: string,
 ): string {
+  const snapDir = snapUserDataDir(kind, home, executablePath);
+  if (snapDir) return snapDir;
   const osPath = pathFor(platform);
   if (platform === 'darwin') {
     const support = osPath.join(home, 'Library', 'Application Support');
@@ -151,13 +186,31 @@ export function executableCandidates(
   }
   switch (kind) {
     case 'chrome':
-      return ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/usr/bin/chrome'];
+      return [
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chrome',
+        '/opt/google/chrome/chrome',
+        '/snap/bin/google-chrome',
+      ];
     case 'edge':
       return ['/usr/bin/microsoft-edge', '/usr/bin/microsoft-edge-stable'];
     case 'brave':
-      return ['/usr/bin/brave-browser', '/usr/bin/brave'];
+      return [
+        '/usr/bin/brave-browser',
+        '/usr/bin/brave-browser-stable',
+        '/usr/bin/brave',
+        '/opt/brave.com/brave/brave-browser',
+        '/snap/bin/brave',
+      ];
     case 'chromium':
-      return ['/usr/bin/chromium-browser', '/usr/bin/chromium'];
+      return [
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/usr/lib/chromium/chromium',
+        '/usr/lib/chromium-browser/chromium-browser',
+        '/snap/bin/chromium',
+      ];
   }
 }
 
@@ -220,7 +273,7 @@ export function listInstalledChromium(options: {
     found.push({
       kind,
       executablePath,
-      userDataDir: userDataDirFor(kind, options.platform, options.home, env),
+      userDataDir: userDataDirFor(kind, options.platform, options.home, env, executablePath),
     });
   }
   return found;

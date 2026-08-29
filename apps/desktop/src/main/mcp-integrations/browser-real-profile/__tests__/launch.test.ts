@@ -110,7 +110,7 @@ describe('wrapRuntimeWithRealProfile', () => {
     expect(applyConfig).not.toHaveBeenCalled();
   });
 
-  it('relocates CDP when another instance occupies 18800 without a userDataDir', async () => {
+  it('keeps the isolated Cindy profile on the fixed CDP port', async () => {
     let started = 0;
     const inner = {
       async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
@@ -125,16 +125,18 @@ describe('wrapRuntimeWithRealProfile', () => {
       },
     };
     const applyConfig = vi.fn();
+    const pickCdpPort = vi.fn(async () => 18801);
     const wrapped = wrapRuntimeWithRealProfile(inner, {
       isEnabled: () => false,
       getRuntimeDir: () => '/Users/dash/Library/Application Support/Cindy-dev2/browser-runtime',
       applyConfig,
-      pickCdpPort: async () => 18801,
+      pickCdpPort,
     });
     const resultStart = await wrapped.call({ action: 'start' });
     expect(resultStart.ok).toBe(true);
     expect(started).toBe(1);
-    expect(applyConfig).toHaveBeenCalledWith({ useRealProfile: false, cdpPort: 18801 });
+    expect(pickCdpPort).not.toHaveBeenCalled();
+    expect(applyConfig).toHaveBeenCalledWith({ useRealProfile: false, cdpPort: 18800 });
   });
 
   it('cleans the snapshot and does not start a signed-out session on copy failure', async () => {
@@ -192,7 +194,7 @@ describe('wrapRuntimeWithRealProfile', () => {
     expect(applyConfig).toHaveBeenCalledWith({ useRealProfile: false, cdpPort: 18800 });
   });
 
-  it('launches on a free CDP port when another Cindy already holds 18800', async () => {
+  it('does not relocate isolated Cindy when leftover Chrome sits on 18800', async () => {
     let started = 0;
     const inner = {
       async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
@@ -210,16 +212,18 @@ describe('wrapRuntimeWithRealProfile', () => {
       },
     };
     const applyConfig = vi.fn();
+    const pickCdpPort = vi.fn(async () => 18801);
     const wrapped = wrapRuntimeWithRealProfile(inner, {
       isEnabled: () => false,
       getRuntimeDir: () => '/Users/dash/Library/Application Support/Cindy-dev2/browser-runtime',
       applyConfig,
-      pickCdpPort: async () => 18801,
+      pickCdpPort,
     });
     const resultStart = await wrapped.call({ action: 'start' });
     expect(resultStart.ok).toBe(true);
     expect(started).toBe(1);
-    expect(applyConfig).toHaveBeenCalledWith({ useRealProfile: false, cdpPort: 18801 });
+    expect(pickCdpPort).not.toHaveBeenCalled();
+    expect(applyConfig).toHaveBeenCalledWith({ useRealProfile: false, cdpPort: 18800 });
   });
 
   it('snapshots into this runtime when leftover Chrome sits under ~/.xdt-maker', async () => {
@@ -400,7 +404,9 @@ describe('withActiveBrowserProfile', () => {
   it('pins Cindy-real when consent is on and leaves an explicit profile alone', () => {
     expect(withActiveBrowserProfile({ action: 'start' }, true).profile).toBe('Cindy-real');
     expect(withActiveBrowserProfile({ action: 'start' }, false).profile).toBe('Cindy');
-    expect(withActiveBrowserProfile({ action: 'tabs', profile: 'Cindy' }, true).profile).toBe('Cindy');
+    expect(withActiveBrowserProfile({ action: 'tabs', profile: 'Cindy' }, true).profile).toBe(
+      'Cindy',
+    );
   });
 });
 

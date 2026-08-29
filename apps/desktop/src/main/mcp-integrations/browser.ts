@@ -44,6 +44,7 @@ import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js
 import {
   assertManagedBrowserStopped,
   cleanupCopiedLoginsThen,
+  managedConfigPatchBeforeStop,
   FOREIGN_AGENT_BROWSER_ERROR,
   probeOsSourceProfileReadAccess,
   readCopiedLoginsCdpPort,
@@ -275,11 +276,11 @@ export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<vo
 
 async function stopExternalRuntimeIfUsed(): Promise<void> {
   const useRealProfile = readBrowserBackendSettings().useRealProfile;
-  const remembered = useRealProfile ? readCopiedLoginsCdpPort(realProfileRuntimeDir()) : null;
-  if (remembered) {
-    setBrowserControlRuntimeConfig(
-      buildManagedConfig({ useRealProfile: true, cdpPort: remembered }),
-    );
+  const patch = managedConfigPatchBeforeStop({
+    rememberedCdpPort: useRealProfile ? readCopiedLoginsCdpPort(realProfileRuntimeDir()) : null,
+  });
+  if (patch) {
+    setBrowserControlRuntimeConfig(buildManagedConfig(patch));
   }
   const status = await vendoredRuntime.call({ action: 'status' });
   const running =

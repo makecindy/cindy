@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { BrowserControlResult } from '@cindy/browser-control-runtime';
 
-import { assertManagedBrowserStopped } from '../runtime-stop.js';
+import { assertManagedBrowserStopped, managedConfigPatchBeforeStop } from '../runtime-stop.js';
 import { RealProfileError } from '../types.js';
 
-function result(
-  action: 'status' | 'stop',
-  ok: boolean,
-  data?: unknown,
-): BrowserControlResult {
+function result(action: 'status' | 'stop', ok: boolean, data?: unknown): BrowserControlResult {
   return { ok, action, data };
 }
+
+describe('managedConfigPatchBeforeStop', () => {
+  it('never rebuilds config before stop, even when a relocated CDP port was remembered', () => {
+    expect(managedConfigPatchBeforeStop({ rememberedCdpPort: 18801 })).toBeNull();
+    expect(managedConfigPatchBeforeStop({ rememberedCdpPort: null })).toBeNull();
+  });
+});
 
 describe('assertManagedBrowserStopped', () => {
   it('allows the switch when status says the browser is not running', () => {

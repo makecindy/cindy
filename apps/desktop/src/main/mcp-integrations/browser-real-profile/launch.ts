@@ -214,6 +214,14 @@ async function startWithSnapshot(
   if (isRunning(status.data) && isOwnLiveManagedBrowser(status.data, runtimeDir)) {
     return inner.call(withActiveBrowserProfile(request, enabled));
   }
+
+  if (!enabled) {
+    if (runtimeDir) deps.cleanup(runtimeDir);
+    deps.applyConfig({ useRealProfile: false, cdpPort: MANAGED_CDP_PORT });
+    deps.setLastApplied(null);
+    return inner.call(withActiveBrowserProfile(request, false));
+  }
+
   let cdpPort = MANAGED_CDP_PORT;
   try {
     const pick = deps.pickCdpPort ?? ((preferred: number) => pickManagedCdpPort(preferred));
@@ -221,13 +229,6 @@ async function startWithSnapshot(
   } catch (err) {
     if (isRealProfileError(err)) return failure(request.action, err.code, err.message);
     return failure(request.action, FOREIGN_AGENT_BROWSER_ERROR, FOREIGN_AGENT_BROWSER_ERROR);
-  }
-
-  if (!enabled) {
-    if (runtimeDir) deps.cleanup(runtimeDir);
-    deps.applyConfig({ useRealProfile: false, cdpPort });
-    deps.setLastApplied(null);
-    return inner.call(withActiveBrowserProfile(request, false));
   }
 
   if (isHeadless(status.data)) {

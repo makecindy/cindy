@@ -100,6 +100,56 @@ describe('listInstalledChromium', () => {
     ]);
   });
 
+  it('finds Snap Brave / Chromium / Chrome and maps their profile dirs', () => {
+    const home = '/home/x';
+    const brave = '/snap/bin/brave';
+    const chromium = '/snap/bin/chromium';
+    const chromeSnap = '/snap/bin/google-chrome';
+    expect(
+      listInstalledChromium({
+        platform: 'linux',
+        home,
+        exists: (filePath) =>
+          filePath === brave || filePath === chromium || filePath === chromeSnap,
+      }),
+    ).toEqual([
+      {
+        kind: 'chrome',
+        executablePath: chromeSnap,
+        userDataDir: `${home}/snap/google-chrome/current/.config/google-chrome`,
+      },
+      {
+        kind: 'brave',
+        executablePath: brave,
+        userDataDir: `${home}/snap/brave/current/.config/BraveSoftware/Brave-Browser`,
+      },
+      {
+        kind: 'chromium',
+        executablePath: chromium,
+        userDataDir: `${home}/snap/chromium/common/chromium`,
+      },
+    ]);
+  });
+
+  it('prefers distro Chrome over Snap and keeps ~/.config user-data', () => {
+    const home = '/home/x';
+    const distro = '/usr/bin/google-chrome-stable';
+    const snap = '/snap/bin/google-chrome';
+    expect(
+      listInstalledChromium({
+        platform: 'linux',
+        home,
+        exists: (filePath) => filePath === distro || filePath === snap,
+      }),
+    ).toEqual([
+      {
+        kind: 'chrome',
+        executablePath: distro,
+        userDataDir: `${home}/.config/google-chrome`,
+      },
+    ]);
+  });
+
   it('finds Edge under LOCALAPPDATA on win32', () => {
     const home = 'C:\\Users\\x';
     const local = 'C:\\Users\\x\\AppData\\Local';
@@ -138,5 +188,11 @@ describe('userDataDirFor', () => {
         LOCALAPPDATA: 'C:\\Users\\dash\\AppData\\Local',
       }),
     ).toBe('C:\\Users\\dash\\AppData\\Local\\Google\\Chrome\\User Data');
+    expect(userDataDirFor('brave', 'linux', '/home/dash', {}, '/snap/bin/brave')).toBe(
+      '/home/dash/snap/brave/current/.config/BraveSoftware/Brave-Browser',
+    );
+    expect(userDataDirFor('brave', 'linux', '/home/dash', {}, '/usr/bin/brave')).toBe(
+      '/home/dash/.config/BraveSoftware/Brave-Browser',
+    );
   });
 });
