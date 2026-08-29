@@ -8,6 +8,7 @@
 | 文档 | 内容 | 角色 |
 |---|---|---|
 | [`DESIGN.md`](./DESIGN.md) | 权威视觉规范全文：视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）、登录链路（§16） | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
+| [`design-governance.md`](./design-governance.md) | 设计系统治理合同：四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图 | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
 | [`figma-component-spec.md`](./figma-component-spec.md) | 登录链路 Figma 组件与色彩速查手册：全组件逐态参数、nodeId 溯源、wave1–wave6 读取记录 | 权威（登录域逐参数） |
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
 | [`design-decision-log.md`](./design-decision-log.md) | 全局设计决策史台账：被推翻的方案、勘误过程、backlog（已收录原 `DESIGN.md §13` G1–G4 归档与 §15 决策史全量） | 决策台账（只增不改；与 `DESIGN.md` 冲突时以 `DESIGN.md` 为准） |
@@ -18,6 +19,7 @@
 
 ## 版本记录
 
+- **2026-08-29（设计系统治理合同）**：新建 [`design-governance.md`](./design-governance.md)，启动设计系统治理（九张主线 PR 的第一张，纯文档）。定案：四种真相边界（规则 = `DESIGN.md`、数值现阶段 = `colors.ts` / 目标 = `packages/design-tokens` DTCG、台账 = 未来的 `design-inventory.md`、视觉 = 真实运行截图）；Token 工具单选 Terrazzo（锁 2.7.1，推迟到生成切换才安装）、不采用 Style Dictionary；可见 PR 两级证据合同（静态守卫测试 + 真实 Cindy Light/Dark 截图）；PR 三类风险不混张；旧 Token ID 不删不改名、用户主题不改写磁盘两条兼容红线；PermissionPrompt 圆角混用（8px×4 / 4px×4 / 12px×1，2026-08-29 实测）登记为待裁决项，裁决未关闭前相关文件不进迁移 diff。存量门禁与文档逐项登记处置去向（含 `DESIGN.md §10` Tier-1 表与 `§16.1` 表「生成切换后由机器摘要替代、此前维持人工维护」）。本条目仅登记治理文件；`DESIGN.md` 正文零改动。
 - **2026-08-24（手柄线稿交稿）**：新增 [`gamepad-silhouette-authoring.md`](./gamepad-silhouette-authoring.md)，把设置页 Xbox 手柄图的画法收成同事交稿约定（同网格、长弧、键壳分家、热区与填充）。
 - **2026-08-06（资源用量进程类别色）**：按用户对资源用量面板“icon 改为彩色”的走查要求，`DESIGN.md §2 / §10` 登记仅限 14px 进程类型 glyph 的六色 Light / Dark 调色板；颜色只编码任务 Agent、控制面服务、主进程、Renderer、GPU、Utility 类别，不表达健康或运行状态，行背景、文字、指标与操作继续保持中性。对应 token 加入外部主题导入保护，防类别色随导入主题漂移；该例外不得扩散到其它表格或进程 UI。
 - **2026-08-03（排版立法：字重四档 + 桌面字号白名单，issue #1505 PR1）**：`DESIGN.md §3` 字重梯由「仅 400/500」修订为 400/500/600/700 四档（600 = 限量强调收编存量 72 处 semibold（生产代码口径）；700 仅限豁免域；800 及中间值全禁；与手机端 `fontWeight` token 对齐），§3 Principles / §7 Don'ts / §9 Iteration Guide 三处「never bold」表述同步改写；§3 新增四个小节——「字重阶梯」（含 CJK 伪粗体注记：中文层级不得依赖 600 vs 700）、「桌面 UI 字号白名单」（UI 段 {10–16} + 标题段 {18,20,24,28}，禁任意值 `text-[Npx]` 与小数；语义别名只收编 `xs/sm/base/lg`，源码侧禁止 `xl` 及以上，配置侧遗留项不在本轮删除范围；**四个权威来源的镜像关系已由 PR #1553 建立，另有 tailwind-merge 字号去重消费端单独校验**）、「排版豁免登记表」（登录品牌画布 / markdown `<strong>` / hljs 移植 / 外部页注入 / 手机 WebView 生成器 / 紧凑模式派生值）、「排版 non-goals」（line-height 混轨等本轮明确不治理）。走查数据、三项拍板与后续施工计划见 [`design-decision-log.md`](./design-decision-log.md)「2026-08-03」条与 issue #1505。
