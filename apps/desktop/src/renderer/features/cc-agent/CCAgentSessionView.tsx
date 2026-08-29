@@ -88,7 +88,6 @@ import {
 } from '@/components/chat/shareSelectionStore';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
-  ERROR_TAIL_RETRY_TOKEN,
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
   UnreadFailedScheduleBanner,
@@ -1558,7 +1557,6 @@ export function CCAgentSessionView({
     usageLimitRecovery,
     errorIsRecoverable,
     errorRetryText,
-    errorPersistId,
     disposedErrorPersistId,
     credentialSwitchWait,
     continuationInFlightClientId,
@@ -3569,31 +3567,11 @@ export function CCAgentSessionView({
   // 失败路径则天然保留红点,与仍在展示的横幅一致。
   const handleRetry = useCallback(() => {
     void rebuildClaudeSubscriptionSessionBeforeRetry(errorReason)
-      .then(async () => {
-        if (errorRetryText) {
-          await retryLastError();
-          return;
-        }
-        if (errorPersistId && sessionId) {
-          makerChatStore.disposeLiveErrorPersist(sessionId);
-          await makerChatStore.sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT);
-          clearError();
-          return;
-        }
-        await retryLastError();
-      })
+      .then(() => retryLastError())
       .catch((error) => {
         log.warn('retryLastError failed', error);
       });
-  }, [
-    clearError,
-    errorPersistId,
-    errorReason,
-    errorRetryText,
-    rebuildClaudeSubscriptionSessionBeforeRetry,
-    retryLastError,
-    sessionId,
-  ]);
+  }, [errorReason, rebuildClaudeSubscriptionSessionBeforeRetry, retryLastError]);
 
   const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
     if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
@@ -4611,7 +4589,7 @@ export function CCAgentSessionView({
                 error={error}
                 errorReason={errorReason}
                 isRecoverable={errorIsRecoverable}
-                retryText={errorRetryText ?? (errorPersistId ? ERROR_TAIL_RETRY_TOKEN : null)}
+                retryText={errorRetryText}
                 onRetry={handleRetry}
                 onSilentStopContinue={handleSilentStopContinue}
                 onContinueAfterUsageReset={

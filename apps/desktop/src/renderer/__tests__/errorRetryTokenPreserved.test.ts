@@ -123,6 +123,8 @@ describe('handleStreamEvent — terminal error keeps the projection retry token'
 
     expect(next.error).toBe('Request timed out');
     expect(next.errorPersistId).toBe('err_persist_1');
+    // persistId 只绑定即将落库的 error 行，不是 Retry 依据。
+    expect(next.errorRetryText).toBeNull();
   });
 
   it('does not keep a previous persistId when the terminal event has none', () => {
