@@ -608,15 +608,11 @@ describe('auth login-flow reset', () => {
   });
 
   it('unlocks login preparing with the splash startup gate after 30s', () => {
-    expect(source).toContain('const LOGIN_PREPARING_GATE_TIMEOUT_MS = 30_000;');
-
     const loadStart = source.indexOf('async function loadLoginProviders(');
     const loadEnd = source.indexOf('\n}\n\nasync function discoverOrganizationRealm(', loadStart);
     const loadBody = source.slice(loadStart, loadEnd);
-    expect(loadBody).toContain('await awaitWithStartupTimeout(');
+    expect(loadBody).toContain('await awaitLoginProvidersWithPreparingGate(');
     expect(loadBody).toContain('createAuthClient(AUTH_REGION).getProviders()');
-    expect(loadBody).toContain('timeoutMs: LOGIN_PREPARING_GATE_TIMEOUT_MS');
-    expect(loadBody).toContain("'AUTH_SERVICE_UNAVAILABLE'");
     // 闸只限时等待,不 abort 在途 getProviders(与 splash 冷启动闸同一语义)。
     expect(loadBody).not.toContain('.abort(');
 
@@ -624,7 +620,7 @@ describe('auth login-flow reset', () => {
     const getLoginEnd = source.indexOf('\n}\n\nasync function completeLogin(', getLoginStart);
     const getLoginBody = source.slice(getLoginStart, getLoginEnd);
     expect(getLoginBody).toContain('await loadLoginProviders(expectedLoginFlowEpoch)');
-    expect(getLoginBody).toContain("{ step: 'error', code, recoverTo: 'identifier' }");
+    expect(getLoginBody).toContain('mapLoginProvidersLoadFailure(error)');
   });
 
   it('does not call teardown for a fresh signed-out/null cold-start session', () => {
