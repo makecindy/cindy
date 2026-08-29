@@ -13,6 +13,7 @@ import { promises as fs, unwatchFile, watchFile, type Stats } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
+import type { PiNativePackageEntry } from '@cindy/maker-core';
 import { app } from 'electron';
 import matter from 'gray-matter';
 
@@ -1590,7 +1591,28 @@ function snapshotUnavailableWarningForPackage(
   return warning;
 }
 
-export async function resolveManagedPiNativePackagePaths(): Promise<string[]> {
+async function readNativePackageObjectSpecs(): Promise<Map<string, Record<string, unknown>>> {
+  try {
+    const home = await fs.realpath(packageHome());
+    const { text } = await readUtf8FileBounded(
+      path.join(home, 'settings.json'),
+      MAX_PACKAGE_JSON_BYTES,
+      home,
+    );
+    const parsed = JSON.parse(text) as { packages?: unknown };
+    if (!Array.isArray(parsed.packages)) return new Map();
+    return new Map(parsed.packages.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+      const spec = entry as Record<string, unknown>;
+      return typeof spec.source === 'string' ? [[spec.source, spec] as const] : [];
+    }));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Map();
+    throw error;
+  }
+}
+
+export async function resolveManagedPiNativePackagePaths(): Promise<PiNativePackageEntry[]> {
   if (!getReadyBinaryPath('pi')) return [];
   const [{ stdout }, state] = await Promise.all([
     runPiPackageCommand(
@@ -1601,13 +1623,33 @@ export async function resolveManagedPiNativePackagePaths(): Promise<string[]> {
     readStateWithoutBlockingPi(),
   ]);
   const disabled = new Set(state.disabledSources);
-  // Feed Pi the installed roots as local package entries in each runtime's
-  // settings.json. Pi then performs its own package/resource discovery, so a
-  // future manifest shape or a Cindy inspection failure cannot remove native
-  // functionality. Source strings remain store metadata; no reinstall occurs.
-  return [...new Set(parsePiPackageListOutput(stdout)
-    .filter((pkg) => pkg.installedPath && !disabled.has(pkg.source))
-    .map((pkg) => pkg.installedPath!))];
+  let objectSpecs = new Map<string, Record<string, unknown>>();
+  try {
+    objectSpecs = await readNativePackageObjectSpecs();
+  } catch (error) {
+    log.warn('Pi package filter settings unavailable', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  // Feed Pi installed roots while preserving any native object-form filters.
+  // Pi then owns resource discovery without reinstalling the package.
+  const entries = parsePiPackageListOutput(stdout).flatMap((pkg): PiNativePackageEntry[] => {
+    if (!pkg.installedPath || disabled.has(pkg.source)) return [];
+    const spec = objectSpecs.get(pkg.source);
+    if (spec) return [{ ...spec, source: pkg.installedPath }];
+    // Never widen a package that Pi explicitly reports as filtered if its
+    // native filter object cannot be recovered.
+    if (pkg.filtered) {
+      log.warn('filtered Pi package omitted because its native filter spec is unavailable', {
+        source: projectPackageSource(pkg.source).displaySource,
+      });
+      return [];
+    }
+    return [pkg.installedPath];
+  });
+  return entries.filter((entry, index) => (
+    entries.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(entry)) === index
+  ));
 }
 
 export async function resolveManagedPiPackageResources(

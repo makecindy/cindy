@@ -579,6 +579,31 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([]);
   });
 
+  it('preserves Pi object-form resource filters when projecting an installed root', async () => {
+    const { root, source } = await createPackage({ source: 'npm:filtered-package' });
+    runtime.listOutput = `User packages:\n  ${source} (filtered)\n    ${root}\n`;
+    const packageHome = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(packageHome, { recursive: true });
+    await fs.writeFile(path.join(packageHome, 'settings.json'), JSON.stringify({
+      packages: [{
+        source,
+        extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+        skills: [],
+        prompts: ['prompts/review.md'],
+      }],
+    }));
+    const store = await import('../pi-package-store.js');
+
+    const projected = await store.resolveManagedPiNativePackagePaths();
+    expect(loggerRuntime.warn.mock.calls).toEqual([]);
+    expect(projected).toEqual([{
+      source: root,
+      extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+      skills: [],
+      prompts: ['prompts/review.md'],
+    }]);
+  });
+
   it('keeps compatibility analysis informational during install', async () => {
     const { root, source } = await createPackage();
     await fs.writeFile(path.join(root, 'extensions', 'index.ts'), `

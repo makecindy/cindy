@@ -70,6 +70,7 @@ import {
   type PiExtraSpawnConfig,
   type PiExtensionUiStrings,
   type PiNativeModelSpec,
+  type PiNativePackageEntry,
   type PiNativeProviderSpec,
   type PiSubagentRunnerLaunchRequest,
   type PiSubagentRunnerProcess,
@@ -993,7 +994,7 @@ interface FailedPiStartupCleanup {
 export function buildPiSettingsJsonContent(
   contextWindow: number,
   piCompactionPct?: number,
-  packages: readonly string[] = [],
+  packages: readonly PiNativePackageEntry[] = [],
 ): string {
   const effectiveContextWindow = contextWindow > 0 ? contextWindow : 128_000;
   const reserveTokens = piCompactionPct === undefined
@@ -1374,7 +1375,7 @@ export class PiAgent extends BaseAgent {
   private buildCurrentPiSettingsJson(
     contextWindow?: number,
     piCompactionPct?: number,
-    packages: readonly string[] = [],
+    packages: readonly PiNativePackageEntry[] = [],
   ): string {
     return buildPiSettingsJsonContent(
       contextWindow && contextWindow > 0 ? contextWindow : 128_000,
@@ -1389,7 +1390,7 @@ export class PiAgent extends BaseAgent {
       fileOps?: PiRemoteFileOps;
       contextWindow?: number;
       piCompactionPct?: number;
-      packages?: readonly string[];
+      packages?: readonly PiNativePackageEntry[];
     } = {},
   ): Promise<void> {
     const settingsJsonPath = joinRemotePosixPath(agentHome, 'settings.json');
@@ -1426,8 +1427,8 @@ export class PiAgent extends BaseAgent {
       contextWindow?: number;
       /** Session-frozen Pi auto-compact percentage. Do not re-read the live getter. */
       piCompactionPct?: number;
-      /** Host-installed roots for Pi's own package discovery. */
-      packages?: readonly string[];
+      /** Host-installed roots/specs for Pi's own package discovery. */
+      packages?: readonly PiNativePackageEntry[];
     } = {},
   ): Promise<{
     gatewayImageInputByModel: Map<string, boolean>;
@@ -2657,7 +2658,7 @@ export class PiAgent extends BaseAgent {
       promptTemplates: string[];
       packageRoots: string[];
     } = { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
-    let nativePackagePaths: string[] = [];
+    let nativePackagePaths: PiNativePackageEntry[] = [];
     if (!reviewMode && !opts.remoteHostId) {
       if (this.deps.resolvePiNativePackagePaths) {
         try {
@@ -2688,6 +2689,10 @@ export class PiAgent extends BaseAgent {
       }
     }
 
+    const nativePackageRoots = nativePackagePaths.map((entry) => (
+      typeof entry === 'string' ? entry : entry.source
+    ));
+
     const args = [
       '--mode',
       'rpc',
@@ -2716,7 +2721,7 @@ export class PiAgent extends BaseAgent {
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     ctx.getPriceVariant = opts.getPriceVariant;
     const contextModeRoot = findContextModePackageRoot([
-      ...nativePackagePaths,
+      ...nativePackageRoots,
       ...managedPackageResources.packageRoots,
     ]);
     ctx.rewriteToolResultText = (text) => rewriteContextModeDoctorPath(text, contextModeRoot);
@@ -4342,7 +4347,7 @@ export class PiAgent extends BaseAgent {
       );
       const managedPackageCommandNames = identifyManagedPiPackageCommandNames(
         capturedManifest.commands,
-        [...nativePackagePaths, ...managedPackageResources.packageRoots],
+        [...nativePackageRoots, ...managedPackageResources.packageRoots],
       );
       const manifest = {
         ...capturedManifest,

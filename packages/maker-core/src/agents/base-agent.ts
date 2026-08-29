@@ -446,6 +446,8 @@ export interface TurnChangeCaptureHooks {
   }): void;
 }
 
+export type PiNativePackageEntry = string | ({ source: string } & Record<string, unknown>);
+
 export interface PiManagedPackageMutationRequest {
   action: 'install' | 'update' | 'remove';
   source: string;
@@ -572,7 +574,7 @@ export interface AgentDeps {
    * Cindy inspection metadata is advisory; a host analyzer that does not
    * understand a valid future package shape must not remove Pi functionality.
    */
-  resolvePiNativePackagePaths?: () => Promise<string[]>;
+  resolvePiNativePackagePaths?: () => Promise<PiNativePackageEntry[]>;
 
   /**
    * Pi-only: mutate the shared package home through Pi's own package CLI.

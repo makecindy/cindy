@@ -43,6 +43,32 @@ describe('Pi package runtime invalidation', () => {
     expect(closeSession).toHaveBeenCalledWith('local-pi', 'requested');
   });
 
+  it('still closes known-local siblings when one metadata lookup fails', async () => {
+    const closeSession = vi.fn(async () => undefined);
+    const maker: InvalidationMaker = {
+      listActiveSessions: () => [session('unknown-pi', 'pi'), session('local-pi', 'pi')],
+      getSessionMeta: vi.fn(async (id: string) => {
+        if (id === 'unknown-pi') throw new Error('metadata unavailable');
+        return {
+          id,
+          agentKind: 'pi' as const,
+          workDir: '/tmp',
+          title: 'Pi',
+          model: 'test',
+          createdAt: 1,
+          updatedAt: 1,
+        };
+      }),
+      closeSession,
+    };
+
+    await expect(invalidateLocalPiPackageRuntimes(maker)).resolves.toEqual({
+      requestedSessionIds: ['local-pi'],
+      failedSessionIds: ['unknown-pi'],
+    });
+    expect(closeSession).toHaveBeenCalledWith('local-pi', 'requested');
+  });
+
   it('reports close failures without rewriting an already committed package mutation', async () => {
     const maker: InvalidationMaker = {
       listActiveSessions: () => [session('local-pi', 'pi')],

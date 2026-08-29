@@ -18,10 +18,20 @@ export async function invalidateLocalPiPackageRuntimes(
   maker: Pick<Maker, 'listActiveSessions' | 'getSessionMeta' | 'closeSession'>,
 ): Promise<PiPackageRuntimeInvalidationResult> {
   const candidates = maker.listActiveSessions().filter((session) => session.agentKind === 'pi');
-  const eligible = (await Promise.all(candidates.map(async (session) => ({
-    session,
-    meta: await maker.getSessionMeta(session.id),
-  })))).filter(({ meta }) => meta && !meta.remoteHostId && !meta.reviewMode);
+  const metadata = await Promise.all(candidates.map(async (session) => {
+    try {
+      return { session, meta: await maker.getSessionMeta(session.id), failed: false as const };
+    } catch {
+      // Isolate lookup failures per record. We cannot safely close an unknown
+      // remote/Review session, but one bad record must not stop known-local
+      // siblings from converging.
+      return { session, meta: null, failed: true as const };
+    }
+  }));
+  const eligible = metadata.filter(({ meta }) => meta && !meta.remoteHostId && !meta.reviewMode);
+  const metadataFailedSessionIds = metadata.flatMap(({ session, failed }) => (
+    failed ? [session.id] : []
+  ));
 
   // Queue every close before awaiting convergence. One slow process must not
   // leave sibling Pi runtimes running the extension merely because it happened
@@ -32,8 +42,11 @@ export async function invalidateLocalPiPackageRuntimes(
   );
   return {
     requestedSessionIds,
-    failedSessionIds: outcomes.flatMap((outcome, index) => (
-      outcome.status === 'rejected' ? [requestedSessionIds[index]!] : []
-    )),
+    failedSessionIds: [
+      ...metadataFailedSessionIds,
+      ...outcomes.flatMap((outcome, index) => (
+        outcome.status === 'rejected' ? [requestedSessionIds[index]!] : []
+      )),
+    ],
   };
 }
