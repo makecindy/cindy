@@ -599,6 +599,18 @@ function collectRequestBody(req: IncomingMessage, maxBytes: number): Promise<Buf
   });
 }
 
+/** 丢弃未读完的请求体。early 503 必须先 drain 再结束响应,否则 Node 会 RST 客户端。 */
+function drainRequest(req: IncomingMessage): Promise<void> {
+  if (req.readableEnded || req.destroyed) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = (): void => resolve();
+    req.once('end', done);
+    req.once('close', done);
+    req.once('error', done);
+    req.resume();
+  });
+}
+
 /**
  * 请求 body 超限的统一收尾:先把**完整的 413 响应**写回、再让连接关闭,顺序不能反。
  * 历史实现是先 req.destroy() 再写 413 —— socket 已死,413 永远到不了客户端,
@@ -901,6 +913,9 @@ function forward(
   // 为 true 时启用 2xx 成功响应的流式有效性门(#2242):空 2xx / 非 SSE 2xx /
   // 零事件 SSE 不再原样透传给客户端,转成结构化 502。false 保持字节级透传。
   requestDeclaredStream = false,
+  // 透明重试前再跑同一条 dispatch gate。返回 false = 已改道(典型 503),
+  // 不得带着旧 headerOverride 再发一次。省略 = 与扩展前一样直接重发。
+  beforeRetry?: () => Promise<boolean>,
 ): void {
   // 客户端已断开(典型:400 缓冲期间断开后走到透明重试)——'close' 已经发过,
   // 下面挂的中断传播 listener 永远不会触发,直接不发起上游请求。
@@ -1147,29 +1162,55 @@ function forward(
               appliedRule.onRetry?.(threadId, model);
             }
           }
-          forward(
-            target,
-            method,
-            path,
-            headers,
-            retryBody,
-            clientRes,
-            logger,
-            recoveryRules,
-            reqId,
-            false,
-            overrideTarget,
-            headerOverride,
-            headerDelete,
-            responseObserver,
-            transformResponse,
-            clientModel,
-            outboundProxy,
-            pathOverride,
-            responseToolUseIds,
-            threadMintedIdCache,
-            requestDeclaredStream,
-          );
+          const retry = (): void => {
+            forward(
+              target,
+              method,
+              path,
+              headers,
+              retryBody,
+              clientRes,
+              logger,
+              recoveryRules,
+              reqId,
+              false,
+              overrideTarget,
+              headerOverride,
+              headerDelete,
+              responseObserver,
+              transformResponse,
+              clientModel,
+              outboundProxy,
+              pathOverride,
+              responseToolUseIds,
+              threadMintedIdCache,
+              requestDeclaredStream,
+              beforeRetry,
+            );
+          };
+          if (!beforeRetry) {
+            retry();
+            return;
+          }
+          void beforeRetry().then((proceed) => {
+            if (!proceed) return;
+            if (clientRes.destroyed) return;
+            retry();
+          }).catch((err) => {
+            logger.error?.('retry dispatch gate failed', {
+              reqId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+            if (clientRes.destroyed || clientRes.headersSent) return;
+            clientRes.writeHead(503, {
+              'content-type': 'application/json',
+              'cache-control': 'no-store',
+              'retry-after': '1',
+            });
+            clientRes.end(JSON.stringify({
+              error: { type: 'proxy_error', message: 'dispatch revalidation failed' },
+            }));
+          });
           return;
         }
         // 无规则命中: 把这条 400 原样回给客户端 + 记 warn 日志 (与下方非 2xx 分支同语义)。
@@ -1723,6 +1764,42 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     };
   };
 
+  /**
+   * 凭证出站前的同步门。请求开始(读 body 前)盖章,routing 后、异步 transform /
+   * outbound 后、透明重试前再看一眼 owner-boundary:返回 localHandler 则改道本地
+   * 响应,不再 forward。hook 抛错也 fail-closed,避免把决策时选中的 headerOverride /
+   * 占位 key 打出去。
+   */
+  const applyDispatchGate = (
+    decision: RoutingDecision | null,
+    reqId: number,
+    ctx: RequestTransformCtx,
+  ): RoutingDecision | null => {
+    const hook = opts.revalidateBeforeDispatch;
+    if (!hook) return decision;
+    try {
+      return hook(decision, ctx) ?? decision;
+    } catch (err) {
+      logger.warn?.('revalidateBeforeDispatch threw; refusing dispatch', {
+        reqId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return {
+        localHandler: async ({ res }) => {
+          if (res.headersSent) return;
+          res.writeHead(503, {
+            'content-type': 'application/json',
+            'cache-control': 'no-store',
+            'retry-after': '1',
+          });
+          res.end(JSON.stringify({
+            error: { type: 'proxy_error', message: 'dispatch revalidation failed' },
+          }));
+        },
+      };
+    }
+  };
+
   // 出站代理:CONNECT 隧道 agent 按代理地址缓存(keep-alive 连接池),随 dispose 销毁。
   const outboundAgentPool = new OutboundProxyAgentPool();
 
@@ -1830,12 +1907,40 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         ? oversizedIngressBytes
         : maxBodyBytes;
 
+    // 请求一开始就盖章:collectRequestBody 是第一段 await,拖到 routingTransform
+    // 会把 body 上传期间完成的 owner 切换当成「起始」scope。
+    let decision: RoutingDecision | null = applyDispatchGate(null, reqId, requestCtx);
+    const beforeRetry = async (): Promise<boolean> => {
+      const gated = applyDispatchGate(decision, reqId, requestCtx);
+      if (gated?.localHandler) {
+        await runLocalHandler(
+          gated.localHandler,
+          { rawBody: Buffer.alloc(0), parsedBody: undefined, ctx: requestCtx, res },
+          logger,
+          reqId,
+        );
+        return false;
+      }
+      return true;
+    };
+    if (decision?.localHandler) {
+      if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+        await drainRequest(req);
+      }
+      await runLocalHandler(
+        decision.localHandler,
+        { rawBody: Buffer.alloc(0), parsedBody: undefined, ctx: requestCtx, res },
+        logger,
+        reqId,
+      );
+      return;
+    }
+
     // 非 POST / 没 body(GET / HEAD / DELETE 等)→ 不收集 stream,但仍跑一次路由决策:
     // 这类请求没有 body,routingTransform 以 `undefined` body 调用,可据 method/url/headers 路由
     // 控制面请求(典型: codex models-manager 的 `GET /models` 轮询)。transform 对 undefined body
     // 应自行短路返回 null(= 默认上游 + 透传 headers,向后兼容)。
     if (method !== 'POST' && method !== 'PUT' && method !== 'PATCH') {
-      let decision: RoutingDecision | null = null;
       if (opts.routingTransform) {
         try {
           const maybeDecision = opts.routingTransform(undefined, requestCtx);
@@ -1846,6 +1951,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           logger.warn?.('routingTransform threw, using default upstream', { reqId, err: String(err) });
         }
       }
+      decision = applyDispatchGate(decision, reqId, requestCtx);
       // 本地 handler 命中:不转发上游,由 handler 直接写回响应(见 LocalRequestHandler 契约)。
       if (decision?.localHandler) {
         logger.debug?.('▶ inbound request from client', { reqId, method, upstreamBase: 'local-handler', url, bytes: 0 });
@@ -1868,6 +1974,17 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           bytes: 0,
         });
       }
+      const outbound = await resolveOutboundForTarget(route.target, reqId);
+      decision = applyDispatchGate(decision, reqId, requestCtx);
+      if (decision?.localHandler) {
+        await runLocalHandler(
+          decision.localHandler,
+          { rawBody: Buffer.alloc(0), parsedBody: undefined, ctx: requestCtx, res },
+          logger,
+          reqId,
+        );
+        return;
+      }
       forward(
         route.target,
         method,
@@ -1885,8 +2002,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         opts.responseObserver,
         opts.transformResponse,
         '',
-        await resolveOutboundForTarget(route.target, reqId),
+        outbound,
         route.pathOverride,
+        undefined,
+        undefined,
+        false,
+        beforeRetry,
       );
       return;
     }
@@ -1931,7 +2052,6 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 提前到 ▶ inbound 日志**之前**计算: 路由只依赖 rawBody / headers / contentType,与下方
     // runTransforms 的输出无关,提前是安全的; 这样 inbound 日志能直接打出本请求**最终**发往的
     // upstream(订阅直连 api.anthropic.com / 走网关 endpoint),而非静态默认上游。
-    let decision: RoutingDecision | null = null;
     let rawParsed: unknown = undefined;
     if (opts.routingTransform && contentType.toLowerCase().startsWith('application/json')) {
       try {
@@ -1951,6 +2071,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         logger.warn?.('routingTransform threw, using default upstream', { reqId, err: String(err) });
       }
     }
+    decision = applyDispatchGate(decision, reqId, requestCtx);
 
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。
     // parsedBody 复用路由阶段的解析结果,不二次 parse。
@@ -2203,6 +2324,18 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       });
     }
 
+    const outbound = await resolveOutboundForTarget(route.target, reqId);
+    decision = applyDispatchGate(decision, reqId, requestCtx);
+    if (decision?.localHandler) {
+      await runLocalHandler(
+        decision.localHandler,
+        { rawBody, parsedBody: rawParsed, ctx: requestCtx, res },
+        logger,
+        reqId,
+      );
+      return;
+    }
+
     forward(
       route.target,
       method,
@@ -2220,11 +2353,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       opts.responseObserver,
       opts.transformResponse,
       extractBodyModel(rawBody),
-      await resolveOutboundForTarget(route.target, reqId),
+      outbound,
       route.pathOverride,
       responseToolUseIds,
       threadMintedIdCache,
       requestDeclaredStream,
+      beforeRetry,
     );
   });
 

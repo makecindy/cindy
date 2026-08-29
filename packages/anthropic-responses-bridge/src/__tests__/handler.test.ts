@@ -496,6 +496,44 @@ describe('createResponsesHandler', () => {
     expect(r.text).toContain('authentication_error');
   });
 
+  it('buildHeaders 抛 owner-boundary pending → 503,不是 authentication_error,也不 fetch', async () => {
+    const fetchMock = vi.fn(async () => { throw new Error('should not fetch'); });
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = Object.assign(
+      new Error('App session is switching; retry after the owner boundary settles.'),
+      { name: 'OwnerBoundaryPendingError', code: 'owner_boundary_pending' },
+    );
+    const handler = createResponsesHandler({
+      providers: [providerConfig({ buildHeaders: async () => { throw pending; } })],
+    });
+    const r = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [] });
+    expect(r.status).toBe(503);
+    expect(r.headers['retry-after']).toBe('1');
+    expect(JSON.parse(r.text)).toMatchObject({
+      type: 'error',
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+    expect(r.text).not.toContain('authentication_error');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('xAI buildHeaders 抛同一条 pending 错误同样 503', async () => {
+    const fetchMock = vi.fn(async () => { throw new Error('should not fetch'); });
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = new Error('App session is switching; retry after the owner boundary settles.');
+    pending.name = 'OwnerBoundaryPendingError';
+    const handler = createResponsesHandler({
+      providers: [providerConfig({
+        prefix: 'xai/',
+        buildHeaders: async () => { throw pending; },
+      })],
+    });
+    const r = await invoke(handler, { model: 'xai/grok-4.6', messages: [] });
+    expect(r.status).toBe(503);
+    expect(JSON.parse(r.text).error.code).toBe('owner_boundary_pending');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('上游非 2xx → 先等待 provider 收口错误状态,再透传原始响应', async () => {
     const callbackFinished = vi.fn();
     const onUpstreamError = vi.fn(async () => {
