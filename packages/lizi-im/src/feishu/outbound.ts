@@ -20,6 +20,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 
@@ -926,8 +927,15 @@ export async function sendFileToChat(
   absPath: string,
   displayName: string | undefined,
   uuid: string,
+  handle?: FileHandle,
 ): Promise<SendFileResult> {
-  return sendFileToTarget({ kind: 'chat_id', id: chatId }, absPath, displayName, uuid);
+  return sendFileToTarget({ kind: 'chat_id', id: chatId }, absPath, displayName, uuid, handle);
+}
+
+function openOutboundFileStream(absPath: string, handle?: FileHandle): fs.ReadStream {
+  return handle
+    ? handle.createReadStream({ autoClose: false })
+    : fs.createReadStream(absPath);
 }
 
 async function sendFileToTarget(
@@ -935,21 +943,26 @@ async function sendFileToTarget(
   absPath: string,
   displayName?: string,
   uuid?: string,
+  handle?: FileHandle,
 ): Promise<SendFileResult> {
   const log = getLog();
   const c = ensureClient();
   const baseName = path.basename(absPath);
   const showName = displayName?.length ? displayName : baseName;
 
-  if (!fs.existsSync(absPath)) return { ok: false, reason: 'NOT_FOUND' };
-  const stat = fs.statSync(absPath);
+  let stat: fs.Stats;
+  try {
+    stat = handle ? await handle.stat() : fs.statSync(absPath);
+  } catch {
+    return { ok: false, reason: 'NOT_FOUND' };
+  }
   if (stat.size === 0) return { ok: false, reason: 'EMPTY' };
   if (stat.size > FEISHU_FILE_SIZE_LIMIT) return { ok: false, reason: 'TOO_LARGE' };
 
   // Image fast-path: if the file is a feishu-supported image type and within
   // the image-msg size cap, send as msg_type:image so it previews inline.
   if (isFeishuImageExt(absPath) && stat.size <= FEISHU_IMAGE_MAX_BYTES) {
-    return sendImageMessage(c, target, absPath, uuid);
+    return sendImageMessage(c, target, absPath, uuid, handle);
   }
 
   // 1. Upload to obtain file_key.
@@ -960,7 +973,7 @@ async function sendFileToTarget(
       data: {
         file_type: fileType,
         file_name: showName,
-        file: fs.createReadStream(absPath),
+        file: openOutboundFileStream(absPath, handle),
       },
     });
     const key = (res as { file_key?: string } | null)?.file_key;
@@ -1136,13 +1149,14 @@ async function sendImageMessage(
   target: SendTarget,
   absPath: string,
   uuid?: string,
+  handle?: FileHandle,
 ): Promise<SendFileResult> {
   const log = getLog();
   try {
     const upRes = await c.im.v1.image.create({
       data: {
         image_type: 'message',
-        image: fs.createReadStream(absPath),
+        image: openOutboundFileStream(absPath, handle),
       },
     });
     const imageKey = (upRes as { image_key?: string }).image_key;

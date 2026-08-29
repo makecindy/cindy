@@ -492,20 +492,21 @@ async function sendMirroredFiles(
   const log = getLog();
   const delivered = await Promise.all(
     fileLinks.map(async (link, index) => {
-      const safePath = await resolveAllowedOutboundFile(link.absPath, allowedFileRoots);
-      if (!safePath) {
+      const allowed = await resolveAllowedOutboundFile(link.absPath, allowedFileRoots);
+      if (!allowed) {
         log.warn(
           '[feishu/streamingText] parent-chat mirror file skipped (outside allowed roots)',
         );
         return false;
       }
-      if (!isPinnedAccountCurrent()) return false;
       try {
+        if (!isPinnedAccountCurrent()) return false;
         const sent = await sendFileToChat(
           chatId,
-          safePath,
+          allowed.absPath,
           link.alt || undefined,
           mirrorUuid(key, `f${index}`),
+          allowed.handle,
         );
         if (!sent.ok) {
           log.warn(
@@ -523,6 +524,8 @@ async function sendMirroredFiles(
           }`,
         );
         return false;
+      } finally {
+        await allowed.handle.close().catch(() => undefined);
       }
     }),
   );

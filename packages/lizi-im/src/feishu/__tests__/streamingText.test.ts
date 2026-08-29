@@ -502,6 +502,7 @@ describe('feishu streaming text', () => {
       await fs.realpath(allowedFile),
       'report.txt',
       `${'e'.repeat(32)}-f0`,
+      expect.objectContaining({ fd: expect.any(Number) }),
     );
   });
 });

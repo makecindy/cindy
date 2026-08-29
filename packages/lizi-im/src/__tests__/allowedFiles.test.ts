@@ -26,9 +26,9 @@ describe('resolveAllowedOutboundFile', () => {
       fs.writeFile(outsideFile, 'secret'),
     ]);
 
-    await expect(resolveAllowedOutboundFile(allowedFile, [root])).resolves.toBe(
-      await fs.realpath(allowedFile),
-    );
+    const allowed = await resolveAllowedOutboundFile(allowedFile, [root]);
+    expect(allowed?.absPath).toBe(await fs.realpath(allowedFile));
+    await allowed?.handle.close();
     await expect(resolveAllowedOutboundFile(outsideFile, [root])).resolves.toBeNull();
     await expect(resolveAllowedOutboundFile(allowedFile, [])).resolves.toBeNull();
   });
@@ -43,5 +43,40 @@ describe('resolveAllowedOutboundFile', () => {
     await expect(
       resolveAllowedOutboundFile(candidate, [root], realpath),
     ).resolves.toBeNull();
+  });
+
+  it('opens an in-root symlink at its canonical target', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-link-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    const linked = path.join(root, 'alias.txt');
+    await fs.writeFile(allowedFile, 'report');
+    await fs.symlink(allowedFile, linked);
+
+    const allowed = await resolveAllowedOutboundFile(linked, [root]);
+    expect(allowed?.absPath).toBe(await fs.realpath(allowedFile));
+    expect(await allowed?.handle.readFile({ encoding: 'utf8' })).toBe('report');
+    await allowed?.handle.close();
+  });
+
+  it('keeps the opened inode when the path is later replaced with an escaping symlink', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-toctou-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-toctou-out-'));
+    tempDirs.push(root, outside);
+    const allowedFile = path.join(root, 'report.txt');
+    const outsideFile = path.join(outside, 'secret.txt');
+    await Promise.all([
+      fs.writeFile(allowedFile, 'report'),
+      fs.writeFile(outsideFile, 'secret'),
+    ]);
+
+    const allowed = await resolveAllowedOutboundFile(allowedFile, [root]);
+    expect(allowed).not.toBeNull();
+    await fs.rm(allowedFile);
+    await fs.symlink(outsideFile, allowedFile);
+
+    expect(await allowed?.handle.readFile({ encoding: 'utf8' })).toBe('report');
+    await allowed?.handle.close();
+    await expect(resolveAllowedOutboundFile(allowedFile, [root])).resolves.toBeNull();
   });
 });
