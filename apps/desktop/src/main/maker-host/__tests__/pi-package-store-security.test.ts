@@ -689,7 +689,27 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
-  it('keeps Pi install success when optional generated-Extension build assistance fails', async () => {
+  it.each([
+    [
+      'npm install',
+      'install',
+      'getaddrinfo ENOTFOUND https://user:api-key@example.test/pkg?token=query-secret#fragment-secret /private/host/path',
+      'source-unavailable',
+    ],
+    [
+      'npm build',
+      'build',
+      'fetch failed https://user:password@example.test/pkg?token=query-secret#fragment-secret /private/host/path',
+      'source-unavailable',
+    ],
+    ['normal npm install', 'install', 'npm ERR! code ETARGET No matching version found', 'version-not-found'],
+    ['normal npm build', 'build', 'npm ERR! code E404 package not found', 'package-not-found'],
+  ])('keeps Pi install success and logs only a stable category after %s fails', async (
+    _label,
+    phase,
+    stderr,
+    failureCategory,
+  ) => {
     const { root, source } = await createPackage();
     await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
       name: 'broken-generated-extension',
@@ -704,14 +724,27 @@ describe('Pi package executable-code boundary', () => {
     await fs.rm(path.join(root, 'prompts'), { recursive: true, force: true });
     await fs.mkdir(path.join(root, 'skills', 'generated'), { recursive: true });
     await fs.writeFile(path.join(root, 'skills', 'generated', 'SKILL.md'), '# Generated\n');
+    runtime.spawnHook = (args) => {
+      const isTarget = phase === 'install'
+        ? args.slice(-4).join('\0') === 'install\0--include=dev\0--no-audit\0--no-fund'
+        : args.slice(-2).join('\0') === 'run\0build';
+      runtime.stderr = isTarget ? stderr : '';
+      runtime.exitCode = isTarget ? 1 : 0;
+    };
     const store = await import('../pi-package-store.js');
 
-    await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
-      affectedPackage: { source, enabled: true },
-    });
-    await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: true }],
-    });
+    const result = await mutateAuthorized(store, { action: 'install', source });
+
+    expect(result.affectedPackage).toMatchObject({ source, enabled: true });
+    const assistanceLog = loggerRuntime.warn.mock.calls.find(
+      ([message]) => message === 'optional Pi package build assistance failed',
+    );
+    expect(assistanceLog?.[1]).toEqual({ failureCategory, mayHaveChangedState: true });
+    const published = JSON.stringify({ logs: loggerRuntime.warn.mock.calls, result });
+    expect(published).not.toContain('api-key');
+    expect(published).not.toContain('query-secret');
+    expect(published).not.toContain('fragment-secret');
+    expect(published).not.toContain('/private/host/path');
   });
 
   it('keeps an explicitly disabled Extension package disabled after a confirmed update', async () => {

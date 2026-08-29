@@ -13,7 +13,10 @@ import { promises as fs, unwatchFile, watchFile, type Stats } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-import type { PiNativePackageEntry } from '@cindy/maker-core';
+import type {
+  PiManagedPackageMutationFailureCode,
+  PiNativePackageEntry,
+} from '@cindy/maker-core';
 import { app } from 'electron';
 import matter from 'gray-matter';
 
@@ -227,6 +230,23 @@ interface PiPackageState {
 type PiPackageStateReadResult =
   | { ok: true; state: PiPackageState }
   | { ok: false; error: unknown };
+
+export function piPackageMutationFailureCategory(
+  error: unknown,
+): PiManagedPackageMutationFailureCode {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (message.includes('state is unavailable')) return 'state-unavailable';
+  if (/\betarget\b|no matching version|version[^\n]*not found/.test(message)) {
+    return 'version-not-found';
+  }
+  if (/\be404\b|package[^\n]*not found|repository[^\n]*not found|404 not found/.test(message)) {
+    return 'package-not-found';
+  }
+  if (/\benotfound\b|\beai_again\b|\beconnrefused\b|\betimedout\b|network|fetch failed|could not resolve host|unable to access/.test(message)) {
+    return 'source-unavailable';
+  }
+  return 'native-command-failed';
+}
 
 class PiPackageStateUnavailableError extends Error {
   constructor() {
@@ -2756,8 +2776,8 @@ export async function mutatePiPackage(
           }
         } catch (error) {
           log.warn('optional Pi package build assistance failed', {
-            source: buildTarget.view.source,
-            message: error instanceof Error ? error.message : String(error),
+            failureCategory: piPackageMutationFailureCategory(error),
+            mayHaveChangedState: true,
           });
         }
       }
@@ -2881,8 +2901,8 @@ export async function mutatePiPackage(
           }
         } catch (error) {
           log.warn('optional Pi package update build assistance failed', {
-            source: buildTarget.view.source,
-            message: error instanceof Error ? error.message : String(error),
+            failureCategory: piPackageMutationFailureCategory(error),
+            mayHaveChangedState: true,
           });
         }
       }

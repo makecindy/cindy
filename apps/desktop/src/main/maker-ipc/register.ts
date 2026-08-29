@@ -558,6 +558,7 @@ import {
   listPiPackages,
   mutatePiPackage,
   onPiPackagesChanged,
+  piPackageMutationFailureCategory,
   piPackageMutationMayHaveChangedState,
 } from '../maker-host/pi-package-store.js';
 import {
@@ -7122,7 +7123,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (error) => {
         log.warn('Pi extension mutation failed', {
           action: request.action,
-          message: error instanceof Error ? error.message : String(error),
+          failureCategory: piPackageMutationFailureCategory(error),
+          mayHaveChangedState: piPackageMutationMayHaveChangedState(error),
         });
       },
     );

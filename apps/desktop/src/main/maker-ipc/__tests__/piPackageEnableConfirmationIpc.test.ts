@@ -40,6 +40,21 @@ describe('Pi package Settings authorization IPC contract', () => {
     expect(handler).not.toContain('request.source.trim()');
   });
 
+  it.each(['install', 'update'])('logs stable fields rather than raw %s stderr', (action) => {
+    const handler = mutationHandlerSource();
+    const logStart = handler.indexOf("log.warn('Pi extension mutation failed'");
+    const logEnd = handler.indexOf('\n        });', logStart);
+    const failureLog = handler.slice(logStart, logEnd);
+
+    expect(action).toMatch(/^(install|update)$/);
+    expect(failureLog).toContain('action: request.action');
+    expect(failureLog).toContain('failureCategory: piPackageMutationFailureCategory(error)');
+    expect(failureLog).toContain('mayHaveChangedState: piPackageMutationMayHaveChangedState(error)');
+    expect(failureLog).not.toContain('error.message');
+    expect(failureLog).not.toContain('String(error)');
+    expect(failureLog).not.toContain('message:');
+  });
+
   it('retires stale local Pi runtimes after every attempted mutation without rewriting receipts', () => {
     const handler = mutationHandlerSource();
     expect(handler).toContain('await invalidateRuntimes();');
