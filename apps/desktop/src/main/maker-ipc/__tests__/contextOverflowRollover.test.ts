@@ -271,6 +271,7 @@ describe('createContextOverflowRollover', () => {
       ),
       closeSession: vi.fn(async () => undefined),
       getAutoCompactThresholdPct: undefined as (() => number | undefined) | undefined,
+      resolveVerifiedWindow: vi.fn((): number | null => null),
       drainPersistQueue: vi.fn(async () => undefined),
       commitRebuild: vi.fn(async () => undefined),
       setPendingHandoff: vi.fn(),
@@ -326,6 +327,56 @@ describe('createContextOverflowRollover', () => {
       expect(deps.replayUserMessage).not.toHaveBeenCalled();
     },
   );
+
+  it('prefers the verified live Pi runtime window over a stale directory window', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      agentKind: 'pi',
+      contextTokens: 300_000,
+      contextWindow: 200_000,
+      model: 'runtime-wide-model',
+      providerId: 'xd',
+    });
+    deps.getLiveSession.mockReturnValue({
+      isTurnRunning: () => false,
+      getUsageSnapshot: () => ({ contextTokens: 300_000, contextWindow: 1_000_000 }),
+    });
+    deps.resolveVerifiedWindow.mockReturnValue(200_000);
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+    ).resolves.toBe('rebuilt');
+    expect(deps.resolveVerifiedWindow).toHaveBeenCalledWith(
+      'pi',
+      'runtime-wide-model',
+      'xd',
+    );
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1',
+      expect.any(String),
+      expect.objectContaining({ reason: 'model-window-switch' }),
+    );
+  });
+
+  it('keeps an unknown persisted current window fail-closed', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      contextTokens: 300_000,
+      contextWindow: 0,
+      model: 'unknown-model',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+    ).resolves.toBe('unknown-context');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
 
   it('rebuilds a pressured cold local session before its persisted SDK session can resume', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);

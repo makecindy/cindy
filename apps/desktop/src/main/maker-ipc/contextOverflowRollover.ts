@@ -583,11 +583,19 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       sessionRow.providerId,
       sessionRow.agentKind,
     );
-    const currentContextWindow = effectiveContextWindow(
-      sessionRow.model,
-      reportedCurrentWindow,
-      verifiedCurrentWindow,
-    );
+    // Pi's live window comes from its post-reload get_state verification. A stale
+    // catalog value must not overwrite that runtime fact during a later switch.
+    const currentContextWindow =
+      sessionRow.agentKind === 'pi' &&
+      liveUsage &&
+      Number.isFinite(liveUsage.contextWindow) &&
+      liveUsage.contextWindow > 0
+        ? liveUsage.contextWindow
+        : effectiveContextWindow(
+            sessionRow.model,
+            reportedCurrentWindow,
+            verifiedCurrentWindow,
+          );
     if (contextTokens > 0 && currentContextWindow <= 0) return 'unknown-context';
     if (
       !shouldRebuildForModelWindowSwitch({
