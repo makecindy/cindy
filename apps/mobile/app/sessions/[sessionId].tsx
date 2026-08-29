@@ -7986,7 +7986,13 @@ export default function SessionScreen() {
       await maker.setModel(sessionId, args.model, args.providerId);
       return true;
     } catch (err) {
-      if (!isPreconditionFailedRemoteError(err)) throw err;
+      const reason = formatRemoteError(err);
+      if (
+        !isPreconditionFailedRemoteError(err) ||
+        !reason.includes('remote model-window rebuild is unsupported')
+      ) {
+        throw err;
+      }
       Alert.alert(
         t('models.contextWindowSwitch.remoteTitle'),
         t('models.contextWindowSwitch.cancel'),

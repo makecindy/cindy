@@ -27,7 +27,7 @@ describe('session Agent switch UI wiring', () => {
     expect(source).toContain('agentKind={agentSwitchIntent.targetAgentKind}');
   });
 
-  it('sends one remote model request without confirmation UI or payload', () => {
+  it('sends one remote model request and isolates only rebuild-unsupported preconditions', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     const rowSelector = source.slice(
       source.indexOf('const selectComposerModelRow'),
@@ -55,10 +55,14 @@ describe('session Agent switch UI wiring', () => {
     expect(source).not.toContain('contextWindowConfirmationRequired');
     expect(source).not.toContain('contextTokensForConfirmation');
     expect(source).not.toContain('confirmedContextWindow');
-    expect(helper).toContain('if (!isPreconditionFailedRemoteError(err)) throw err;');
+    expect(helper).toContain('const reason = formatRemoteError(err);');
+    expect(helper).toContain('!isPreconditionFailedRemoteError(err) ||');
+    expect(helper).toContain("!reason.includes('remote model-window rebuild is unsupported')");
+    expect(helper).toContain(') {\n        throw err;\n      }');
+    expect(helper).not.toContain('Alert.alert(reason);');
     expect(helper).toContain("t('models.contextWindowSwitch.remoteTitle')");
     expect(helper).toContain("t('models.contextWindowSwitch.cancel')");
-    expect(helper).toContain('return false;');
+    expect(helper.match(/return false;/g)).toHaveLength(1);
     expect(helper).not.toContain('setError(');
     expect(controlAction).toContain('applied === false && rollbackPatch && deviceId');
     expect(controlAction).toContain('setError(formatRemoteError(err));');
