@@ -714,12 +714,17 @@ export class Maker {
 
     // 落地元数据 —— storage 已有同 id 的 row 时跳过 insert, 走 update 把 sdkSessionId 写回
     let meta: SessionMeta;
+    let existingRowBeforePersistence: SessionMeta | null = null;
+    let createdMetadata = false;
+    let updatedSdkSessionId = false;
     try {
-      const existingRow = opts.id ? await this.storage.get(opts.id) : null;
-      if (existingRow) {
-        meta = handle.id !== '<pending>' && existingRow.sdkSessionId !== handle.id
+      existingRowBeforePersistence = opts.id ? await this.storage.get(opts.id) : null;
+      if (existingRowBeforePersistence) {
+        updatedSdkSessionId = handle.id !== '<pending>'
+          && existingRowBeforePersistence.sdkSessionId !== handle.id;
+        meta = updatedSdkSessionId
           ? await this.storage.update(id, { sdkSessionId: handle.id })
-          : existingRow;
+          : existingRowBeforePersistence;
       } else {
         meta = await this.storage.create({
           id,
@@ -738,6 +743,7 @@ export class Maker {
           remoteHostId: opts.remoteHostId,
           sdkSessionId: handle.id !== '<pending>' ? handle.id : undefined,
         });
+        createdMetadata = true;
       }
     } catch (error) {
       // 轮 40-w4-t5 CRITICAL:agent-agnostic 回滚 —— startSession 成功后 storage
@@ -767,6 +773,67 @@ export class Maker {
       throw error;
     }
 
+    let startSucceededHookEntered = false;
+    const rollbackStaleLocalPiMetadata = async (): Promise<void> => {
+      const current = await this.storage.get(id);
+      if (createdMetadata) {
+        if (current?.createdAt === meta.createdAt && current.sdkSessionId === meta.sdkSessionId) {
+          await this.storage.delete(id);
+        }
+        return;
+      }
+      if (!updatedSdkSessionId || current?.sdkSessionId !== handle.id) return;
+      if (existingRowBeforePersistence?.sdkSessionId) {
+        await this.storage.update(id, {
+          sdkSessionId: existingRowBeforePersistence.sdkSessionId,
+        });
+      } else {
+        await this.storage.compareAndClearSdkSessionId(id, handle.id);
+      }
+    };
+    const rejectStaleLocalPiAfterPersistence = async (): Promise<never> => {
+      try {
+        await rollbackStaleLocalPiMetadata();
+      } catch (error) {
+        this.logger.error('failed to roll back stale local Pi task metadata', {
+          sessionId: id,
+          error: String(error),
+        });
+      }
+      let cleanupFailed = false;
+      try {
+        await handle.close({ reason: 'navigation' });
+      } catch (closeError) {
+        cleanupFailed = true;
+        this.failedHandleCleanups.set(id, {
+          handle,
+          promise: null,
+          ...(startSucceededHookEntered && this.lifecycleHooks.onClose
+            ? { onCleaned: () => void this.lifecycleHooks.onClose!(id) }
+            : {}),
+        });
+        this.logger.warn('failed to close stale local Pi handle after package mutation', {
+          sessionId: id,
+          error: String(closeError),
+        });
+      }
+      if (!cleanupFailed && startSucceededHookEntered && this.lifecycleHooks.onClose) {
+        await Promise.resolve(this.lifecycleHooks.onClose(id)).catch((error) => {
+          this.logger.warn('lifecycleHooks.onClose threw after stale Pi startup', {
+            sessionId: id,
+            error: String(error),
+          });
+        });
+      }
+      throw new Error('Local Pi runtime startup was invalidated by a package change; retry the task.');
+    };
+    if (
+      localPiPackageGeneration !== null
+      && localPiPackageGeneration !== this.localPiPackageRuntimeGeneration
+    ) {
+      return rejectStaleLocalPiAfterPersistence();
+    }
+
     const delivery = handle.codexProductPromptDelivery;
     if (
       opts.agentKind === 'codex' &&
@@ -791,6 +858,7 @@ export class Maker {
     }
 
     if (this.lifecycleHooks.onStartSucceeded) {
+      startSucceededHookEntered = true;
       try {
         await this.lifecycleHooks.onStartSucceeded(id, startOpts);
       } catch (err) {
@@ -799,6 +867,13 @@ export class Maker {
           error: String(err),
         });
       }
+    }
+
+    if (
+      localPiPackageGeneration !== null
+      && localPiPackageGeneration !== this.localPiPackageRuntimeGeneration
+    ) {
+      return rejectStaleLocalPiAfterPersistence();
     }
 
     const session = new Session({
