@@ -1382,6 +1382,58 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it('redacts private URL fields from deterministic command receipts', async () => {
+    const privateSource = 'https://alice:s3cr3t@packages.example/context-mode.git?token=query-secret#fragment-secret';
+    const publicSource = 'https://packages.example/context-mode.git';
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: privateSource,
+        name: 'context-mode',
+        version: '1.0.169',
+        enabled: true,
+      },
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-private-source-receipt-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send({
+        type: 'user',
+        content: `pi install ${privateSource}`,
+      });
+
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      const events = handle.events()[Symbol.asyncIterator]();
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('context-mode')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      const publications = `${prompt}\n${visibleReceipt}`;
+      expect(prompt).toContain(`Original user command: "pi install ${publicSource}"`);
+      expect(prompt).toContain(`Requested source: "${publicSource}"`);
+      expect(publications).toContain('"name":"context-mode"');
+      expect(publications).toContain('"version":"1.0.169"');
+      expect(publications).not.toContain('alice');
+      expect(publications).not.toContain('s3cr3t');
+      expect(publications).not.toContain('query-secret');
+      expect(publications).not.toContain('fragment-secret');
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('keeps host-resolved local paths out of deterministic IM and model receipts', async () => {
     const resolvedSource = path.join(cwd, 'extension');
     const mutatePiManagedPackage = vi.fn(async () => ({

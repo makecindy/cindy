@@ -681,11 +681,13 @@ const PI_RECEIPT_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
 function publicPiManagedPackageSource(source: string): string {
   const filePrefix = source.match(/^file:/i)?.[0] ?? '';
   const localValue = filePrefix ? source.slice(filePrefix.length) : source;
-  if (path.isAbsolute(localValue) || path.win32.isAbsolute(localValue)) {
-    const basename = path.posix.basename(localValue.replace(/\\/g, '/'));
+  const localSuffixIndex = localValue.search(/[?#]/);
+  const publicLocalValue = localSuffixIndex < 0 ? localValue : localValue.slice(0, localSuffixIndex);
+  if (path.isAbsolute(publicLocalValue) || path.win32.isAbsolute(publicLocalValue)) {
+    const basename = path.posix.basename(publicLocalValue.replace(/\\/g, '/'));
     return `${filePrefix}${basename || 'Pi extension'}`;
   }
-  return source.replace(PI_RECEIPT_URL_PATTERN, (raw) => {
+  const sanitized = source.replace(PI_RECEIPT_URL_PATTERN, (raw) => {
     const gitPrefix = raw.startsWith('git:') ? 'git:' : '';
     const urlValue = gitPrefix ? raw.slice(gitPrefix.length) : raw;
     try {
@@ -700,6 +702,17 @@ function publicPiManagedPackageSource(source: string): string {
       return `${gitPrefix}${scheme}://[redacted-source]`;
     }
   });
+  // Pi also accepts non-URL source forms. Query/fragment payloads are never
+  // needed in public receipts; preserve the package/version prefix only.
+  const suffixIndex = sanitized.search(/[?#]/);
+  return suffixIndex < 0 ? sanitized : sanitized.slice(0, suffixIndex);
+}
+
+function publicPiManagedPackageCommand(command: ParsedPiManagedPackageCommand): string {
+  const source = publicPiManagedPackageSource(command.source)
+    .slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
+  return `pi ${command.action} ${source}`
+    .slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
 }
 
 function piManagedPackageResultSummary(
@@ -853,7 +866,7 @@ function piManagedPackageVisibleReceipt(
     : outcome.cancelled
       ? strings.cancel
       : strings.mutationFailed;
-  const commandText = command.original.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
+  const commandText = publicPiManagedPackageCommand(command);
   const build = (value: Record<string, unknown>): string => [
     headline,
     '```json',
@@ -901,8 +914,9 @@ function piManagedPackageReceiptPrompt(
   outcome: PiManagedPackageCommandOutcome,
 ): string {
   const receipt = piManagedPackageReceiptPayload(command, outcome);
-  const original = command.original.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
-  const source = command.source.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
+  const original = publicPiManagedPackageCommand(command);
+  const source = publicPiManagedPackageSource(command.source)
+    .slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
   const build = (value: Record<string, unknown>): string =>
     [
       '[Cindy internal Pi extension operation receipt]',
