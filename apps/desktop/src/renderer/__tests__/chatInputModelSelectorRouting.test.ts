@@ -19,6 +19,24 @@ describe('ChatInput model source switching wiring', () => {
     expect(guard).not.toContain('compactionGetState');
   });
 
+  it('guards same-model provider route changes with the target provider window', () => {
+    const guardStart = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
+    const guardEnd = chatInputSource.indexOf('// session-agent-switch', guardStart);
+    const guard = chatInputSource.slice(guardStart, guardEnd);
+    expect(guard).toContain('resolveProviderModelContextWindow({');
+    expect(guard).toContain('providerId: targetRouteProviderId');
+
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const providerEnd = chatInputSource.indexOf('const handleProviderChange = useCallback(', providerStart);
+    const providerChange = chatInputSource.slice(providerStart, providerEnd);
+    expect(providerChange).toContain(
+      '(reconciledModelId !== activeModel || newProviderId !== effectiveSourceId)',
+    );
+    expect(providerChange).toMatch(
+      /confirmModelSwitchContextGuard\(\s*reconciledModelId,\s*sourceRemoteDeviceId,\s*newProviderId/,
+    );
+  });
+
   it('blocks pressured SSH model switches before any continue/confirm path', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);

@@ -2,7 +2,10 @@ import type { AgentKind, ProviderView } from '@cindy/model-providers';
 import { describe, expect, it } from 'vitest';
 
 import type { ModelDescriptor } from '@/hooks/useAgentCapabilities';
-import { resolveVisibleModelAgentKind } from '../providerModels';
+import {
+  resolveProviderModelContextWindow,
+  resolveVisibleModelAgentKind,
+} from '../providerModels';
 
 const model = (id: string): ModelDescriptor => ({
   id,
@@ -12,18 +15,23 @@ const model = (id: string): ModelDescriptor => ({
   defaultEffort: 'high',
 });
 
-const provider = (agent: AgentKind, models: ModelDescriptor[]): ProviderView =>
+const provider = (
+  agent: AgentKind,
+  models: ModelDescriptor[],
+  id: string = agent,
+): ProviderView =>
   ({
-    id: agent,
-    name: agent,
+    id,
+    name: id,
     connected: true,
     agents: [agent],
+    routing: { [agent]: {} },
     models: {
       [agent]: models.map((entry) => ({ ...entry, name: entry.displayName })),
     },
   }) as unknown as ProviderView;
 
-describe('resolveVisibleModelAgentKind', () => {
+describe('provider model routing helpers', () => {
   const claude = model('claude-opus-4-7');
   const codex = model('gpt-5.5');
 
@@ -62,6 +70,32 @@ describe('resolveVisibleModelAgentKind', () => {
         providers: [],
       }),
     ).toBe('claude-code');
+  });
+
+  it('resolves duplicate model ids by provider route instead of first-wins order', () => {
+    const wide = { ...model('shared-model'), contextWindow: 1_000_000 };
+    const narrow = { ...model('shared-model'), contextWindow: 200_000 };
+    const providers = [
+      provider('claude-code', [wide], 'wide-source'),
+      provider('claude-code', [narrow], 'narrow-source'),
+    ];
+
+    expect(
+      resolveProviderModelContextWindow({
+        providers,
+        providerId: 'wide-source',
+        modelId: 'shared-model',
+        agentKind: 'claude-code',
+      }),
+    ).toBe(1_000_000);
+    expect(
+      resolveProviderModelContextWindow({
+        providers,
+        providerId: 'narrow-source',
+        modelId: 'shared-model',
+        agentKind: 'claude-code',
+      }),
+    ).toBe(200_000);
   });
 
   it('honors an explicitly filtered agent', () => {

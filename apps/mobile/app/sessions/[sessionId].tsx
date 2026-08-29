@@ -8002,7 +8002,7 @@ export default function SessionScreen() {
     }
     void (async () => {
       if (
-        next.model !== currentSession.model &&
+        (next.model !== currentSession.model || next.providerId !== currentSession.providerId) &&
         !(await confirmMobileModelWindowSwitch(
           currentSession.contextTokens,
           row.model.contextWindow,

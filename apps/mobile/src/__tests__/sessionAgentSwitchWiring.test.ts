@@ -43,7 +43,9 @@ describe('session Agent switch UI wiring', () => {
     expect(flatSelector).toMatch(
       /currentSession\?\.contextTokens,\s+option\.contextWindow,\s+currentSession\?\.remoteHostId/,
     );
-    expect(rowSelector).toContain('next.model !== currentSession.model');
+    expect(rowSelector).toContain(
+      'next.model !== currentSession.model || next.providerId !== currentSession.providerId',
+    );
     expect(flatSelector).toContain('option.id !== currentSession?.model');
     expect(rowSelector.indexOf('confirmMobileModelWindowSwitch')).toBeLessThan(
       rowSelector.indexOf('maker.setModel'),

@@ -313,6 +313,7 @@ import {
   deriveModelsFromProviders,
   filterChatBridgedCodexProviders,
   resolveFastSupported,
+  resolveProviderModelContextWindow,
   resolveProviderModelEfforts,
 } from '@/lib/providerModels';
 import {
@@ -6035,14 +6036,37 @@ export function ChatInput({
    * fail-open: 占用未知(0)/ 目标窗口未知时不拦；三个 harness 的强制换窗线统一为 90%。
    */
   const confirmModelSwitchContextGuard = useCallback(
-    async (newModelId: string, sourceRemoteDeviceId?: string): Promise<boolean> => {
+    async (
+      newModelId: string,
+      sourceRemoteDeviceId?: string,
+      targetProviderId?: string | null,
+    ): Promise<boolean> => {
       if (!sessionId) return true;
       const contextTokens = makerChatStore.getSnapshot(sessionId).agentStatus.contextTokens;
       if (!contextTokens || contextTokens <= 0) return true;
-      // device-link 远程会话: 目标模型窗口必须查被控端能力缓存(模型 id 跨设备不唯一)。
-      // 优先复用操作开始时捕获的 device scope，relay origin 暂失时不能退回本机目录。
+      // 显式来源必须按完整 route 查窗口：同 model id 在不同 provider 可分别为 1M / 200K。
+      // 无来源的旧 flat 入口才沿用设备能力缓存的 model-id 回退。
       const remoteDeviceId = sourceRemoteDeviceId ?? getSessionDeviceId(sessionId) ?? undefined;
-      const targetContextWindow = getModelById(newModelId, remoteDeviceId)?.contextWindow;
+      const targetRouteProviderId =
+        targetProviderId !== undefined && currentModelAgentKind
+          ? effectiveSourceIdForModel(
+              providers,
+              targetProviderId,
+              newModelId,
+              currentModelAgentKind,
+            )
+          : null;
+      const targetContextWindow =
+        targetProviderId !== undefined
+          ? targetRouteProviderId && currentModelAgentKind
+            ? resolveProviderModelContextWindow({
+                providers,
+                providerId: targetRouteProviderId,
+                modelId: newModelId,
+                agentKind: currentModelAgentKind,
+              })
+            : undefined
+          : getModelById(newModelId, remoteDeviceId)?.contextWindow;
       const verdict = assessModelSwitchContext({
         contextTokens,
         targetContextWindow,
@@ -6083,7 +6107,7 @@ export function ChatInput({
         cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
       });
     },
-    [sessionId, remoteHostId, confirmDialog, t],
+    [sessionId, remoteHostId, confirmDialog, t, providers, currentModelAgentKind],
   );
 
   // session-agent-switch 意图制:选中「只属于另一家引擎」的模型 → 只向 main 登记
@@ -7180,12 +7204,17 @@ export function ChatInput({
       // 容量护栏(与 handleModelChange 同款): 切来源若连带换到更小窗口的模型
       // (典型: 官方 Claude 1M → 折扣 GPT 272K, 在选择器里是跨分组点击、走本路径而非
       // handleModelChange —— 2026-07-06 实测踩中), 同样要先过上下文容量确认。
-      // 同模型只切来源不拦: 窗口按 model id 取自目录, 来源不变窗口, 无新增风险。
+      // route 的任一维度变化都按目标来源窗口评估；同 model id 跨来源也可能是 1M → 200K。
       // 放在函数最前: 本地分支此前无任何乐观状态写入, 用户取消 = 零副作用直接 return。
-      if (sessionId && reconciledModelId && reconciledModelId !== activeModel) {
+      if (
+        sessionId &&
+        reconciledModelId &&
+        (reconciledModelId !== activeModel || newProviderId !== effectiveSourceId)
+      ) {
         const proceed = await confirmModelSwitchContextGuard(
           reconciledModelId,
           sourceRemoteDeviceId,
+          newProviderId,
         );
         if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
       }
@@ -7454,6 +7483,7 @@ export function ChatInput({
       fastMode,
       modelFastSupported,
       selectedProviderId,
+      effectiveSourceId,
       t,
       confirmModelSwitchContextGuard,
       performAgentSwitch,
