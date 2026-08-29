@@ -17,6 +17,10 @@ const knobs = vi.hoisted(() => ({
   runtimeProvider: "cindy",
   runtimeModel: "m",
   runtimeContextWindow: 200_000,
+  targetRuntimeContextWindow: 100_000,
+  setModelReportsContextWindow: true,
+  verifiedContextWindows: [] as number[],
+  closeCalls: 0,
   stateModelOverride: null as null | string,
   onEvent: null as
     null | ((event: { type: string; [key: string]: unknown }) => void),
@@ -62,7 +66,7 @@ vi.mock("../rpc-client.js", () => ({
             model: {
               provider: knobs.runtimeProvider,
               id: knobs.stateModelOverride ?? knobs.runtimeModel,
-              contextWindow: knobs.runtimeContextWindow,
+              contextWindow: knobs.verifiedContextWindows.shift() ?? knobs.runtimeContextWindow,
             },
           },
         };
@@ -80,8 +84,15 @@ vi.mock("../rpc-client.js", () => ({
       if (cmd.type === "set_model") {
         knobs.runtimeProvider = String(cmd.provider);
         knobs.runtimeModel = String(cmd.modelId);
-        knobs.runtimeContextWindow = knobs.runtimeModel === "n" ? 100_000 : 200_000;
-        return { success: true, data: { contextWindow: knobs.runtimeContextWindow } };
+        knobs.runtimeContextWindow = knobs.runtimeModel === "n"
+          ? knobs.targetRuntimeContextWindow
+          : 200_000;
+        return {
+          success: true,
+          data: knobs.setModelReportsContextWindow
+            ? { contextWindow: knobs.runtimeContextWindow }
+            : {},
+        };
       }
       if (cmd.type === "switch_session") {
         if (!knobs.switchSessionSuccess) {
@@ -97,6 +108,7 @@ vi.mock("../rpc-client.js", () => ({
     }
     send(): void {}
     async close(): Promise<void> {
+      knobs.closeCalls += 1;
       this.isClosed = true;
     }
   },
@@ -156,6 +168,10 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.runtimeProvider = "cindy";
     knobs.runtimeModel = "m";
     knobs.runtimeContextWindow = 200_000;
+    knobs.targetRuntimeContextWindow = 100_000;
+    knobs.setModelReportsContextWindow = true;
+    knobs.verifiedContextWindows = [];
+    knobs.closeCalls = 0;
     knobs.stateModelOverride = null;
     knobs.onEvent = null;
     agentHome = mkdtempSync(path.join(tmpdir(), "pi-native-ac-home-"));
@@ -411,6 +427,44 @@ describe("PiAgent native auto-compaction ownership", () => {
     expect(knobs.runtimeProvider).toBe("cindy");
     expect(knobs.runtimeModel).toBe("n");
     expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
+    await handle.close();
+  });
+
+  it("recomputes reserve tokens from the final verified runtime window", async () => {
+    const deps = buildDeps();
+    deps.runtimeConfig = {
+      ...deps.runtimeConfig,
+      autoCompactThresholdPct: 90,
+      piAutoCompactThresholdPct: 90,
+    };
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "s1",
+      workingDir: cwd,
+      model: "m",
+    });
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(20_000);
+
+    knobs.targetRuntimeContextWindow = 1_000_000;
+    knobs.setModelReportsContextWindow = false;
+    knobs.rpcCalls = [];
+    await handle.setModel!("n");
+
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(100_000);
+    expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
+    expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(3);
+    expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(2);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
+    await handle.close();
+  });
+
+  it("terminates when the runtime window changes again during settings verification", async () => {
+    const handle = await start();
+    knobs.targetRuntimeContextWindow = 1_000_000;
+    knobs.setModelReportsContextWindow = false;
+    knobs.verifiedContextWindows = [1_000_000, 500_000];
+
+    await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
+    expect(knobs.closeCalls).toBe(1);
     await handle.close();
   });
 

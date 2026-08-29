@@ -1258,7 +1258,7 @@ describe('Pi provider-aware model routing', () => {
     const settings = JSON.parse(
       readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'settings.json'), 'utf8'),
     ) as { compaction?: { reserveTokens?: number } };
-    expect(settings.compaction?.reserveTokens).toBe(25_000);
+    expect(settings.compaction?.reserveTokens).toBe(50_000);
     await handle.close();
   });
 
@@ -1538,6 +1538,15 @@ describe('Pi provider-aware model routing', () => {
 
   it('does not refresh when switching to a bundled inheritModels xAI model', async () => {
     let resolves = 0;
+    captured.requestHandler = async (command) => command.type === 'get_state'
+      ? {
+          success: true,
+          data: {
+            sessionFile: '/mock/s.jsonl',
+            model: { contextWindow: captured.runtimeModel === 'grok-4.5' ? 500_000 : 128_000 },
+          },
+        }
+      : { success: true, data: {} };
     const agent = new PiAgent({
       auth: {
         getState: async () => ({ authenticated: true, identity: 'user', authSource: 'oauth' as const }),
@@ -1602,6 +1611,15 @@ describe('Pi provider-aware model routing', () => {
 
   it('does not live-refresh xAI when the caller pins the gateway with providerId null', async () => {
     let resolves = 0;
+    captured.requestHandler = async (command) => command.type === 'get_state'
+      ? {
+          success: true,
+          data: {
+            sessionFile: '/mock/s.jsonl',
+            model: { contextWindow: captured.runtimeModel === 'xai/grok-4.6' ? 500_000 : 128_000 },
+          },
+        }
+      : { success: true, data: {} };
     const agent = new PiAgent({
       auth: {
         getState: async () => ({ authenticated: true, identity: 'user', authSource: 'oauth' as const }),
@@ -3689,7 +3707,13 @@ describe('Pi provider-aware model routing', () => {
     captured.requestHandler = async (command) => {
       if (command.type === 'set_model') forwardEvents.push('set_model');
       return command.type === 'get_state'
-        ? { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } }
+        ? {
+            success: true,
+            data: {
+              sessionFile: '/mock/s.jsonl',
+              model: { contextWindow: captured.runtimeModel === 'xai/grok-4.6' ? 500_000 : 200_000 },
+            },
+          }
         : { success: true, data: {} };
     };
     const agent = new PiAgent({

@@ -5064,13 +5064,42 @@ export class PiAgent extends BaseAgent {
                 `got ${String(verifiedModel?.provider)}/${String(verifiedModel?.id)})`,
             );
           }
+          const verifiedWindow = verifiedModel.contextWindow;
           if (
-            typeof verifiedModel.contextWindow === 'number' &&
-            Number.isFinite(verifiedModel.contextWindow) &&
-            verifiedModel.contextWindow > 0
+            typeof verifiedWindow !== 'number' ||
+            !Number.isFinite(verifiedWindow) ||
+            verifiedWindow <= 0
           ) {
-            ctx.contextWindow = verifiedModel.contextWindow;
+            throw new Error('pi: settings reload returned an invalid context window');
           }
+          if (verifiedWindow !== nextWindow) {
+            await this.writePiRuntimeSettings(configHome, {
+              fileOps,
+              contextWindow: verifiedWindow,
+              piCompactionPct: sessionPiAutoCompactPct,
+            });
+            const recalibrated = await proc.request({ type: 'switch_session', sessionPath: sdkSessionId });
+            if (!recalibrated.success) {
+              throw new Error(`pi: failed to reload recalibrated settings: ${recalibrated.error ?? 'unknown'}`);
+            }
+            const recalibratedModel = await proc.request({ type: 'set_model', provider, modelId: wireModel });
+            if (!recalibratedModel.success) {
+              throw new Error(`pi: failed to re-apply model after settings recalibration: ${recalibratedModel.error ?? 'unknown'}`);
+            }
+            const reverified = await proc.request({ type: 'get_state' });
+            const reverifiedModel = (reverified.data as {
+              model?: { provider?: unknown; id?: unknown; contextWindow?: unknown } | null;
+            } | undefined)?.model;
+            if (
+              !reverified.success ||
+              reverifiedModel?.provider !== provider ||
+              reverifiedModel.id !== wireModel ||
+              reverifiedModel.contextWindow !== verifiedWindow
+            ) {
+              throw new Error('pi: recalibrated settings did not match the verified runtime window');
+            }
+          }
+          ctx.contextWindow = verifiedWindow;
         } catch (err) {
           this.deps.logger.error('pi: compaction settings reload unconfirmed after model switch', {
             message: err instanceof Error ? err.message : String(err),
