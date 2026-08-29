@@ -37,7 +37,7 @@ describe('ChatInput model source switching wiring', () => {
     );
   });
 
-  it('attaches the negotiated exact window only after remote overflow confirmation', () => {
+  it('attaches the negotiated exact window after local or remote overflow confirmation', () => {
     const guardStart = chatInputSource.indexOf(
       'const confirmModelSwitchContextGuard = useCallback(',
     );
@@ -56,10 +56,31 @@ describe('ChatInput model source switching wiring', () => {
     const providerChange = chatInputSource.slice(providerStart);
     for (const route of [modelChange, providerChange]) {
       expect(route).toContain('await setModelWithFinalWindowConfirmation(');
-      expect(route).toContain('confirmedFinalWindow ?? confirmedRemoteContextWindow');
+      expect(route).toContain('confirmedFinalWindow ?? confirmedGuardContextWindow');
       expect(route).toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
       expect(route.indexOf("typeof proceed === 'number'")).toBeLessThan(
-        route.indexOf('confirmedFinalWindow ?? confirmedRemoteContextWindow'),
+        route.indexOf('confirmedFinalWindow ?? confirmedGuardContextWindow'),
+      );
+    }
+  });
+
+  it('passes the guard-confirmed window into both initial trusted local set-model calls', () => {
+    const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const providerEnd = chatInputSource.indexOf(
+      'const handleProviderChange = useCallback(',
+      providerStart,
+    );
+    const modelChange = chatInputSource.slice(modelStart, providerStart);
+    const providerChange = chatInputSource.slice(providerStart, providerEnd);
+
+    for (const route of [modelChange, providerChange]) {
+      expect(route).toContain("if (typeof proceed === 'number') confirmedGuardContextWindow = proceed;");
+      expect(route).toMatch(
+        /const confirmedContextWindow =\s*confirmedFinalWindow \?\? confirmedGuardContextWindow;\s*return window\.electronAPI\.maker\.setModel/,
+      );
+      expect(route.indexOf("if (!proceed ||")).toBeLessThan(
+        route.indexOf('window.electronAPI.maker.setModel('),
       );
     }
   });

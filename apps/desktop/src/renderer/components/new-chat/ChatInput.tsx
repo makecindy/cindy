@@ -6751,13 +6751,11 @@ export function ChatInput({
       const isSourceSessionCurrent = () =>
         isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current);
       // 容量护栏最先跑: 用户取消时直接 return, 不留任何副作用(effort 快照都不动)。
-      let confirmedRemoteContextWindow: number | undefined;
+      let confirmedGuardContextWindow: number | undefined;
       if (sessionId && newModelId !== activeModel) {
         const proceed = await confirmModelSwitchContextGuard(newModelId, sourceRemoteDeviceId);
         if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
-        if (sourceIsRemoteSession && typeof proceed === 'number') {
-          confirmedRemoteContextWindow = proceed;
-        }
+        if (typeof proceed === 'number') confirmedGuardContextWindow = proceed;
       }
       // 切换意图期:此时列表展示的是目标引擎(乐观翻转),改选模型 = 更新意图,
       // 绝不能走普通 SET_MODEL 链路(main 会清意图、renderer 乐观态失配)。
@@ -6832,7 +6830,7 @@ export function ChatInput({
                   selectedProviderId,
                   (confirmedFinalWindow) => {
                     const confirmedContextWindow =
-                      confirmedFinalWindow ?? confirmedRemoteContextWindow;
+                      confirmedFinalWindow ?? confirmedGuardContextWindow;
                     return remoteMaker.setModel(
                       sessionId,
                       newModelId,
@@ -6901,8 +6899,10 @@ export function ChatInput({
               await setModelWithFinalWindowConfirmation(
                 newModelId,
                 undefined,
-                (confirmedContextWindow) =>
-                  window.electronAPI.maker.setModel(
+                (confirmedFinalWindow) => {
+                  const confirmedContextWindow =
+                    confirmedFinalWindow ?? confirmedGuardContextWindow;
+                  return window.electronAPI.maker.setModel(
                     sessionId,
                     newModelId,
                     undefined,
@@ -6912,7 +6912,8 @@ export function ChatInput({
                       fastMode: restoredFast,
                       ...(confirmedContextWindow ? { confirmedContextWindow } : {}),
                     } as { effort: string; fastMode: boolean },
-                  ),
+                  );
+                },
               );
             if (!accepted) {
               rollbackModelAfterPersistFailure = null;
@@ -7307,7 +7308,7 @@ export function ChatInput({
       // handleModelChange —— 2026-07-06 实测踩中), 同样要先过上下文容量确认。
       // route 的任一维度变化都按目标来源窗口评估；同 model id 跨来源也可能是 1M → 200K。
       // 放在函数最前: 本地分支此前无任何乐观状态写入, 用户取消 = 零副作用直接 return。
-      let confirmedRemoteContextWindow: number | undefined;
+      let confirmedGuardContextWindow: number | undefined;
       if (
         sessionId &&
         reconciledModelId &&
@@ -7319,9 +7320,7 @@ export function ChatInput({
           newProviderId,
         );
         if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
-        if (sourceIsRemoteSession && typeof proceed === 'number') {
-          confirmedRemoteContextWindow = proceed;
-        }
+        if (typeof proceed === 'number') confirmedGuardContextWindow = proceed;
       }
       // 切换意图期:列表展示的是目标引擎(乐观翻转),(来源,模型) 改选 = 更新意图,
       // 不走普通 set-model 链路(main 会清意图、renderer 乐观态失配)。
@@ -7394,7 +7393,7 @@ export function ChatInput({
               newProviderId,
               (confirmedFinalWindow) => {
                 const confirmedContextWindow =
-                  confirmedFinalWindow ?? confirmedRemoteContextWindow;
+                  confirmedFinalWindow ?? confirmedGuardContextWindow;
                 return remoteMaker.setModel(
                   sessionId,
                   targetModel,
@@ -7489,8 +7488,10 @@ export function ChatInput({
             await setModelWithFinalWindowConfirmation(
               modelId,
               newProviderId,
-              (confirmedContextWindow) =>
-                window.electronAPI.maker.setModel(
+              (confirmedFinalWindow) => {
+                const confirmedContextWindow =
+                  confirmedFinalWindow ?? confirmedGuardContextWindow;
+                return window.electronAPI.maker.setModel(
                   sessionId,
                   modelId,
                   newProviderId,
@@ -7500,7 +7501,8 @@ export function ChatInput({
                     fastMode: restoredFast,
                     ...(confirmedContextWindow ? { confirmedContextWindow } : {}),
                   } as { effort: string; fastMode: boolean },
-                ),
+                );
+              },
             );
           if (!accepted) {
             rollbackProviderAfterPersistFailure = null;
