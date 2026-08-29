@@ -795,8 +795,7 @@ export class Scheduler extends EventEmitter {
       runError = err instanceof Error ? err.message : String(err);
       this.logger?.warn?.('schedule fire failed', { scheduleId: schedule.id, runId, error: runError });
     } finally {
-      knownSessionId =
-        sessionId ?? this.runIdToSessionId.get(runId) ?? this.runIdToBoundSessionId.get(runId);
+      knownSessionId = this.resolveTerminalSessionId(runId, sessionId, schedule.targetSessionId);
       this.unregisterInflight(schedule.id, runId);
       this.updateInflightAttempt(runId, 'finalizing');
     }
@@ -857,7 +856,12 @@ export class Scheduler extends EventEmitter {
         // 恰恰是最需要补发的场景,用户配了桌面/飞书通知却什么都收不到(第十八轮 P1)。
         // 通知权认领与终态落库是两件独立的事,不能让前者依赖后者成功。
         try {
-          await this.storage.updateRun(runId, { status: 'failed', finishedAt, errorMsg });
+          await this.storage.updateRun(runId, {
+            status: 'failed',
+            finishedAt,
+            errorMsg,
+            ...(knownSessionId ? { sessionId: knownSessionId } : {}),
+          });
           this.emitFailed(schedule.id, runId, errorMsg, knownSessionId);
         } finally {
           // 补发判据只看 runner 有没有真的投过**失败**通知(onRunnerNotified),不再用
@@ -877,6 +881,7 @@ export class Scheduler extends EventEmitter {
           errorMsg: 'cancelled by user (schedule deleted or paused)',
           // 系统/用户主动收口,不是要处理的失败;生而已读,侧栏不涂红。
           readAt: finishedAt,
+          ...(knownSessionId ? { sessionId: knownSessionId } : {}),
         });
         this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
       } else if (runError !== undefined) {
@@ -884,6 +889,7 @@ export class Scheduler extends EventEmitter {
           status: 'failed',
           finishedAt,
           errorMsg: runError,
+          ...(knownSessionId ? { sessionId: knownSessionId } : {}),
         });
         this.emitFailed(schedule.id, runId, runError, knownSessionId);
       } else if (skipped) {
@@ -1095,8 +1101,7 @@ export class Scheduler extends EventEmitter {
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err);
     } finally {
-      knownSessionId =
-        runSessionId ?? this.runIdToSessionId.get(runId) ?? this.runIdToBoundSessionId.get(runId);
+      knownSessionId = this.resolveTerminalSessionId(runId, runSessionId, schedule.targetSessionId);
       this.unregisterInflight(schedule.id, runId);
       this.updateInflightAttempt(runId, 'finalizing');
     }
@@ -1147,7 +1152,12 @@ export class Scheduler extends EventEmitter {
       // try/finally 的理由同 fireOneInner:落库失败不能把唯一的失败提醒一起吞掉。
       // 这里刻意不 catch —— runNow 是用户主动触发,落库失败照旧向调用方冒泡。
       try {
-        await this.storage.updateRun(runId, { status: 'failed', finishedAt, errorMsg });
+        await this.storage.updateRun(runId, {
+          status: 'failed',
+          finishedAt,
+          errorMsg,
+          ...(knownSessionId ? { sessionId: knownSessionId } : {}),
+        });
         this.emitFailed(schedule.id, runId, errorMsg, knownSessionId);
       } finally {
         if (this.needsForcedFailureNotification(runId)) {
@@ -1160,6 +1170,7 @@ export class Scheduler extends EventEmitter {
         finishedAt,
         errorMsg: 'cancelled by user (schedule deleted or paused)',
         readAt: finishedAt,
+        ...(knownSessionId ? { sessionId: knownSessionId } : {}),
       });
       this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
     } else if (runError !== undefined) {
@@ -1167,6 +1178,7 @@ export class Scheduler extends EventEmitter {
         status: 'failed',
         finishedAt,
         errorMsg: runError,
+        ...(knownSessionId ? { sessionId: knownSessionId } : {}),
       });
       this.emitFailed(schedule.id, runId, runError, knownSessionId);
     } else if (skipped) {
@@ -2197,6 +2209,25 @@ export class Scheduler extends EventEmitter {
     this.emit(e.type, e);
   }
 
+  /**
+   * 终态归因用的 session。runner 回报优先,其次运行/绑定映射,最后才是 schedule
+   * 上的目标会话 —— 绑定前失败(目标会话校验拒绝等)没有映射,仍要把红点落到
+   * 用户绑定的那条任务上。空字符串视为没有回报,继续往下找。
+   */
+  private resolveTerminalSessionId(
+    runId: string,
+    resultSessionId?: string,
+    targetSessionId?: string,
+  ): string | undefined {
+    return (
+      resultSessionId ||
+      this.runIdToSessionId.get(runId) ||
+      this.runIdToBoundSessionId.get(runId) ||
+      targetSessionId ||
+      undefined
+    );
+  }
+
   private emitFailed(scheduleId: string, runId: string, error: string, sessionId?: string): void {
     this.emitEvent({
       type: 'failed',
@@ -2604,7 +2635,11 @@ export class Scheduler extends EventEmitter {
       set.delete(runId);
       if (set.size === 0) this.inflightByschedule.delete(scheduleId);
     }
-    const sessionId = this.runIdToSessionId.get(runId) ?? this.runIdToBoundSessionId.get(runId);
+    const sessionId = this.resolveTerminalSessionId(
+      runId,
+      undefined,
+      this.activeSchedules.get(scheduleId)?.targetSessionId,
+    );
     if (sessionId !== undefined) {
       if (this.sessionIdToRunId.get(sessionId) === runId) this.sessionIdToRunId.delete(sessionId);
       this.runIdToSessionId.delete(runId);
@@ -2659,6 +2694,7 @@ export class Scheduler extends EventEmitter {
         status: 'failed',
         finishedAt: now,
         errorMsg,
+        ...(sessionId ? { sessionId } : {}),
       })) !== null;
     } catch (err) {
       this.logger?.warn?.('scheduler: stalled run updateRun failed', { runId, error: String(err) });

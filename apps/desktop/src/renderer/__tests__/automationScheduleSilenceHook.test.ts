@@ -282,9 +282,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
   it('clears markers whose run already reached a terminal status', async () => {
     vi.useFakeTimers();
     try {
-      stubApiWithRuns([
-        indexRun({ runId: 'run-lost', status: 'success' }),
-      ]);
+      stubApiWithRuns([indexRun({ runId: 'run-lost', status: 'success' })]);
       // 标记建立后 completed / failed 事件都没送到(广播断链、或事件早于消费方挂载)。
       markNextSessionDoneSilenced('run-lost', 'session-1');
       markNextSessionTerminalNotificationOwnedByScheduler('run-lost', 'session-1');
@@ -319,7 +317,10 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
       const listSidebarIndexRuns = vi
         .fn()
         .mockRejectedValueOnce(new Error('scheduler not ready'))
-        .mockResolvedValue({ runs: [indexRun({ runId: 'run-lost', status: 'success' })], inflightRunIds: [] });
+        .mockResolvedValue({
+          runs: [indexRun({ runId: 'run-lost', status: 'success' })],
+          inflightRunIds: [],
+        });
       vi.stubGlobal('electronAPI', {
         maker: { schedule: { listSidebarIndexRuns, onEvent: vi.fn(() => () => undefined) } },
         notificationMarkSessionAttention: vi.fn().mockResolvedValue(undefined),
@@ -363,7 +364,10 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
         .mockRejectedValueOnce(new Error('e2'))
         .mockRejectedValueOnce(new Error('e3'))
         .mockRejectedValueOnce(new Error('e4'))
-        .mockResolvedValue({ runs: [indexRun({ runId: 'run-lost', status: 'success' })], inflightRunIds: [] });
+        .mockResolvedValue({
+          runs: [indexRun({ runId: 'run-lost', status: 'success' })],
+          inflightRunIds: [],
+        });
       vi.stubGlobal('electronAPI', {
         maker: { schedule: { listSidebarIndexRuns, onEvent: vi.fn(() => () => undefined) } },
         notificationMarkSessionAttention: vi.fn().mockResolvedValue(undefined),
@@ -516,9 +520,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     renderHook(() => useAutomationScheduleSessionIndex());
     // 等 refresh 落地后再断言，否则可能在对账发生前就通过。
     await waitFor(() => {
-      expect(
-        vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns),
-      ).toHaveBeenCalled();
+      expect(vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns)).toHaveBeenCalled();
     });
     await act(async () => {
       await Promise.resolve();
@@ -557,13 +559,31 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
   });
 
   it('overlays optimistic unread and points done attention on a visible success', async () => {
-    stubApiWithRuns([
-      indexRun({
-        runId: 'run-old',
-        status: 'success',
-        readAt: 20,
-      }),
-    ]);
+    const oldRun = indexRun({
+      runId: 'run-old',
+      status: 'success',
+      readAt: 20,
+    });
+    stubApiWithRuns([oldRun], [], []);
+    vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns)
+      .mockResolvedValueOnce({
+        runs: [oldRun],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      })
+      .mockResolvedValue({
+        runs: [
+          oldRun,
+          indexRun({
+            runId: 'run-new',
+            status: 'success',
+            readAt: undefined,
+            firedAt: 30,
+          }),
+        ],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      });
 
     const { result } = renderHook(() => useAutomationScheduleSessionIndex());
     await waitFor(() => {
@@ -585,7 +605,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     expect(hasSessionAttention('session-1')).toBe(true);
   });
 
-  it('overlays failed unread without pointing done, and ignores aborted', async () => {
+  it('drops optimistic unread when the snapshot no longer has that run and it is not in-flight', async () => {
     stubApiWithRuns([
       indexRun({
         runId: 'run-old',
@@ -593,6 +613,81 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
         readAt: 20,
       }),
     ]);
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toBeTruthy();
+    });
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'completed',
+        scheduleId: 'schedule-1',
+        runId: 'run-gone',
+        sessionId: 'session-1',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.get('session-1')?.unreadRunIds ?? []).not.toContain('run-gone');
+    });
+  });
+
+  it('does not point done attention for the session currently being viewed', async () => {
+    stubApiWithRuns([
+      indexRun({
+        runId: 'run-old',
+        status: 'success',
+        readAt: 20,
+      }),
+    ]);
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex('session-1'));
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toBeTruthy();
+    });
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'completed',
+        scheduleId: 'schedule-1',
+        runId: 'run-new',
+        sessionId: 'session-1',
+      });
+    });
+
+    expect(hasSessionAttention('session-1')).toBe(false);
+  });
+
+  it('overlays failed unread without pointing done, and ignores aborted', async () => {
+    const oldRun = indexRun({
+      runId: 'run-old',
+      status: 'success',
+      readAt: 20,
+    });
+    const failedRun = indexRun({
+      runId: 'run-failed',
+      status: 'failed',
+      readAt: undefined,
+      firedAt: 40,
+    });
+    stubApiWithRuns([oldRun]);
+    vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns)
+      .mockResolvedValueOnce({
+        runs: [oldRun],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      })
+      .mockResolvedValueOnce({
+        runs: [oldRun],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      })
+      .mockResolvedValue({
+        runs: [oldRun, failedRun],
+        inflightRunIds: [],
+        inflightPolicies: [],
+      });
 
     const { result } = renderHook(() => useAutomationScheduleSessionIndex());
     await waitFor(() => {
