@@ -5719,6 +5719,11 @@ export function MessageStream({
     if (!visibleRenderItems.some((item) => item.key === targetKey)) {
       // 目标在渲染窗口外:先把窗口锚到目标。本 effect 因 visibleRenderItems
       // 变化重跑,下一轮走下面的滚动分支(focus-jump 同款两段式)。
+      // 必须在建锚前同步解除跟随:下一轮更早执行的 coverage-loss effect 会读取
+      // 这份意图；仍为 true 会把刚建立的历史锚点当成自动扩窗并清回默认尾窗。
+      restoringRef.current = false;
+      isNearBottomRef.current = false;
+      setIsNearBottom(false);
       setFirstVisibleItemKey(targetKey);
       setAnchoredForwardItems(RENDER_WINDOW_FIRST_PAINT_ITEMS);
       return;
