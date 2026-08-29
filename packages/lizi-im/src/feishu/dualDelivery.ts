@@ -222,7 +222,13 @@ function confirmLogicalSend(key: string, now: number): void {
 function confirmPair(key: string, entry: PendingLogicalSend): void {
   if (pending.get(key) === entry) pending.delete(key);
   clearTimeout(entry.timer);
-  confirmLogicalSend(key, Date.now());
+  const now = Date.now();
+  // Topic already dispatched. Keep a recent-thread tombstone so a later
+  // distinct-id main-feed copy cannot mint a second pending/Agent turn after
+  // `pending` is deleted. `confirmed` is the durable suppress key; the
+  // tombstone is consumed by the first extra flat like other late copies.
+  if (entry.threadMessageId) rememberRecent(recentThreads, key, now);
+  confirmLogicalSend(key, now);
   entry.resolveDecision(true);
 }
 
@@ -236,6 +242,10 @@ export async function coordinateDualDelivery(
   pruneTtlMap(recentThreads, now);
   pruneRecentFlats(now);
   pruneConfirmed(now);
+  if (!input.threadId && confirmed.has(key)) {
+    confirmLogicalSend(key, now);
+    return { kind: 'suppress-main-copy' };
+  }
   if (!input.threadId && recentThreads.has(key)) {
     recentThreads.delete(key);
     confirmLogicalSend(key, now);

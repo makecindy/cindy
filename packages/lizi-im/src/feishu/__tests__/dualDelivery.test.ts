@@ -47,6 +47,19 @@ describe('Feishu native thread/main dual delivery', () => {
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
   });
 
+  it('suppresses a later distinct-id main-feed copy after the pair is confirmed', async () => {
+    const topic = await coordinateDualDelivery(input());
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat_again', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+  });
+
   it('dispatches an unpaired flat group message after the bounded wait', async () => {
     vi.useFakeTimers();
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));

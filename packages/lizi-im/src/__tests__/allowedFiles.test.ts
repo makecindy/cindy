@@ -45,7 +45,30 @@ describe('resolveAllowedOutboundFile', () => {
     ).resolves.toBeNull();
   });
 
-  it('opens an in-root symlink at its canonical target', async () => {
+  it('rejects when a later realpath of the caller path escapes the root', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-recheck-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-recheck-out-'));
+    tempDirs.push(root, outside);
+    const allowedFile = path.join(root, 'report.txt');
+    const outsideFile = path.join(outside, 'secret.txt');
+    await Promise.all([
+      fs.writeFile(allowedFile, 'report'),
+      fs.writeFile(outsideFile, 'secret'),
+    ]);
+    const outsideReal = await fs.realpath(outsideFile);
+    let calls = 0;
+    const realpath = async (target: string): Promise<string> => {
+      calls += 1;
+      if (calls >= 3) return outsideReal;
+      return fs.realpath(target);
+    };
+
+    await expect(resolveAllowedOutboundFile(allowedFile, [root], realpath)).resolves.toBeNull();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'opens an in-root symlink at its canonical target',
+    async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-link-'));
     tempDirs.push(root);
     const allowedFile = path.join(root, 'report.txt');
@@ -59,7 +82,9 @@ describe('resolveAllowedOutboundFile', () => {
     await allowed?.handle.close();
   });
 
-  it('keeps the opened inode when the path is later replaced with an escaping symlink', async () => {
+  it.skipIf(process.platform === 'win32')(
+    'keeps the opened inode when the path is later replaced with an escaping symlink',
+    async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-toctou-'));
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-toctou-out-'));
     tempDirs.push(root, outside);
