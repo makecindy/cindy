@@ -27,17 +27,9 @@ function isPathWithin(
 }
 
 function isSameFile(left: BigIntStats, right: BigIntStats): boolean {
-  // Windows file indexes are not always populated. Fail closed on POSIX when
-  // either inode is 0; on win32 a pair of zeros is not identity — require
-  // matching size so an escaped open of a different file still fails.
-  if (left.ino === 0n || right.ino === 0n) {
-    return (
-      process.platform === 'win32' &&
-      left.ino === 0n &&
-      right.ino === 0n &&
-      left.size === right.size
-    );
-  }
+  // ino 0 means the platform did not give a file identity. Matching size is
+  // not identity — an ancestor swap can open an equal-sized escaped file.
+  if (left.ino === 0n || right.ino === 0n) return false;
   return left.dev === right.dev && left.ino === right.ino;
 }
 

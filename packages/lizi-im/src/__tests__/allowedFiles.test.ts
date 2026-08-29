@@ -157,4 +157,33 @@ describe('openAllowedOutboundFile', () => {
       }),
     ).resolves.toBeNull();
   });
+
+  it('rejects when file identity is missing even if sizes match', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-zero-root-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-zero-outside-'));
+    tempDirs.push(root, outside);
+    const candidate = path.join(root, 'report.txt');
+    const escaped = path.join(outside, 'secret.txt');
+    await Promise.all([fs.writeFile(candidate, 'same-size'), fs.writeFile(escaped, 'same-size')]);
+
+    const hideIdentity = <T extends { ino: bigint; dev: bigint }>(stats: T): T => ({
+      ...stats,
+      ino: 0n,
+      dev: 0n,
+    });
+
+    await expect(
+      openAllowedOutboundFile(candidate, [root], {
+        realpath: (target) => fs.realpath(target),
+        open: async () => {
+          const handle = await fs.open(escaped, 'r');
+          const originalStat = handle.stat.bind(handle);
+          handle.stat = (async (opts?: Parameters<typeof handle.stat>[0]) =>
+            hideIdentity(await originalStat(opts))) as typeof handle.stat;
+          return handle;
+        },
+        stat: async (target) => hideIdentity(await fs.stat(target, { bigint: true })),
+      }),
+    ).resolves.toBeNull();
+  });
 });
