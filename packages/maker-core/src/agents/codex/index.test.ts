@@ -17582,6 +17582,75 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 });
 
+describe('CodexAgent final assistant result', () => {
+  it('uses final_answer for done.result and falls back to the last unphased message', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        turnSeq += 1;
+        return { turn: { id: `turn-final-${turnSeq}` } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-final-assistant-result',
+      model: 'gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemCompleted || !handlers.turnCompleted) {
+      throw new Error('expected item and turn handlers');
+    }
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    await handle.send({ type: 'user', content: 'first' });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-final-1',
+      item: { id: 'commentary-1', type: 'agentMessage', text: 'Working…', phase: 'commentary' },
+    });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-final-1',
+      item: { id: 'answer-1', type: 'agentMessage', text: 'Concise answer.', phase: 'final_answer' },
+    });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-final-1',
+      item: { id: 'legacy-tail-1', type: 'agentMessage', text: 'unphased tail' },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-final-1', status: 'completed' },
+    });
+    await waitForExpectation(() => {
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { result?: string } | undefined)?.result).toBe('Concise answer.');
+    });
+
+    await handle.send({ type: 'user', content: 'second' });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-final-2',
+      item: { id: 'legacy-answer-2', type: 'agentMessage', text: 'Legacy concise answer.' },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-final-2', status: 'completed' },
+    });
+    await waitForExpectation(() => {
+      const done = events.filter((event) => event.type === 'done');
+      expect((done[1]?.data as { result?: string } | undefined)?.result).toBe('Legacy concise answer.');
+    });
+
+    await handle.close();
+  });
+});
+
 describe('CodexAgent yield continuation', () => {
   async function collectYieldEvents(handle: AgentSessionHandle): Promise<AgentEvent[]> {
     const events: AgentEvent[] = [];

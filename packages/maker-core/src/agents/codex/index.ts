@@ -145,6 +145,7 @@ import {
   translateAccountRateLimitsUpdated,
   translatePlanUpdatedNotification,
   extractRolloutUpdatePlanFunctionCallEvent,
+  finalizeCodexCitationText,
   readCodexSubagentSpawnRegistration,
   type CodexRuntimeState,
 } from './translator.js';
@@ -3525,6 +3526,10 @@ export class CodexAgent extends BaseAgent {
     // replacement continuation. The snapshot is per-turn and is discarded
     // with the turn's denial state at terminal completion.
     const observedModelItemIdsByTurn = new Map<string, Set<string>>();
+    // turn → assistant 正文候选。app-server 对新模型提供 phase，final_answer
+    // 优先；旧模型/旧 provider 不带 phase 时回退本 turn 最后一条 agentMessage。
+    // turn/completed 把选中的正文放进 done.result，供出口 hook 与 worker 终态消费。
+    const assistantReplyByTurn = new Map<string, { lastText: string; finalText?: string }>();
     // daemon 后端 retry-loop 的终局升级 (issue #677): 远端摸不到 Codex 后端时
     // daemon 无限 willRetry, turn 永不收口。同 turn 重试超阈值 → 合成终态错误,
     // 走与终态 error 完全相同的收口路径 (terminalErroredTurnIds + Done status)。
@@ -8841,6 +8846,9 @@ export class CodexAgent extends BaseAgent {
       // including the paths that defer UI settlement or return early. Item
       // history is only needed while approval attribution is still mutable.
       observedModelItemIdsByTurn.delete(turn.id);
+      const assistantReply = assistantReplyByTurn.get(turn.id);
+      assistantReplyByTurn.delete(turn.id);
+      const finalAssistantText = assistantReply?.finalText ?? assistantReply?.lastText ?? '';
       const interruptOrigin = turnInterruptOrigins.get(turn.id);
       turnInterruptOrigins.delete(turn.id);
       if (
@@ -9239,6 +9247,7 @@ export class CodexAgent extends BaseAgent {
           type: 'done',
           data: {
             type: 'codex/event/task_complete',
+            result: finalAssistantText,
             usage: codexDoneUsage,
             raw: turn,
             plan: latestPlanByTurn.get(turn.id) ?? null,
@@ -9332,6 +9341,19 @@ export class CodexAgent extends BaseAgent {
     const itemRepresentsModelWork = (item: { type?: unknown } | null | undefined): boolean => {
       const type = typeof item?.type === 'string' ? item.type : null;
       return type === null || !ITEM_TYPES_WITHOUT_MODEL_WORK.has(type);
+    };
+
+    const noteAssistantReplyCandidate = (
+      turnId: string,
+      item: { type?: unknown; text?: unknown; phase?: unknown } | null | undefined,
+    ): void => {
+      if (item?.type !== 'agentMessage' || typeof item.text !== 'string') return;
+      const text = finalizeCodexCitationText(item.text);
+      if (text.length === 0) return;
+      const current = assistantReplyByTurn.get(turnId) ?? { lastText: '' };
+      current.lastText = text;
+      if (item.phase === 'final_answer') current.finalText = text;
+      assistantReplyByTurn.set(turnId, current);
     };
 
     const noteObservedModelItem = (
@@ -10588,6 +10610,7 @@ export class CodexAgent extends BaseAgent {
           clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
           producedOutputTurnIds.add(params.turnId);
         }
+        noteAssistantReplyCandidate(params.turnId, params.item);
         completeActiveToolContext(params.item, params.turnId);
         rememberYieldedExecCells(params.turnId, params.item, 'completed');
         // This late item belongs to an already-terminal parent. The parent
