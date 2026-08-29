@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
+  cleanupCopiedLoginsThen,
   cleanupRealProfileSnapshots,
   isolatedProfileDestDir,
   lastUsedProfileName,
@@ -223,6 +224,68 @@ describe('snapshotRealProfile', () => {
     }
   });
 
+  it('replaces dest auth files and deletes leftovers absent from this snapshot', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(fs.existsSync(path.join(destDir, 'Default', 'Login Data'))).toBe(true);
+    expect(fs.existsSync(path.join(destDir, 'Default', 'Cookies'))).toBe(true);
+
+    const nextRoot = makeTempDir();
+    const userDataDir = path.join(nextRoot, 'Chrome');
+    const profileDir = path.join(userDataDir, 'Default');
+    fs.mkdirSync(path.join(profileDir, 'Network'), { recursive: true });
+    fs.writeFileSync(path.join(userDataDir, 'Local State'), '{"profile":{"last_used":"Default"}}');
+    writeSqlite(path.join(profileDir, 'Network', 'Cookies'), 'cookies', 'network-cookie');
+
+    await snapshotRealProfile({
+      source: {
+        kind: 'chrome',
+        executablePath: '/chrome',
+        userDataDir,
+      },
+      destDir,
+      platform: 'darwin',
+    });
+
+    expect(readSqlite(path.join(destDir, 'Default', 'Network', 'Cookies'), 'cookies')).toBe(
+      'network-cookie',
+    );
+    expect(fs.existsSync(path.join(destDir, 'Default', 'Cookies'))).toBe(false);
+    expect(fs.existsSync(path.join(destDir, 'Default', 'Login Data'))).toBe(false);
+  });
+
+  it('leaves dest unchanged when a later sqlite backup fails', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+    fs.mkdirSync(path.join(destDir, 'Default'), { recursive: true });
+    writeSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies', 'stale-cookie');
+    writeSqlite(path.join(destDir, 'Default', 'Login Data'), 'logins', 'stale-login');
+    // Cookies copies first; a corrupt Login Data fails the later backup.
+    fs.writeFileSync(path.join(source.userDataDir, 'Profile 6', 'Login Data'), 'not-a-sqlite-db');
+
+    await expect(snapshotRealProfile({ source, destDir, platform: 'darwin' })).rejects.toMatchObject({
+      code: 'COPY_FAILED',
+    });
+    expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe('stale-cookie');
+    expect(readSqlite(path.join(destDir, 'Default', 'Login Data'), 'logins')).toBe('stale-login');
+    expect(fs.existsSync(`${destDir}.staging`)).toBe(false);
+  });
+
+  it('uses sqlite backup so dest has no WAL sidecar from the source', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    const cookies = path.join(source.userDataDir, 'Profile 6', 'Cookies');
+    fs.writeFileSync(`${cookies}-wal`, 'wal-bytes');
+    fs.writeFileSync(`${cookies}-shm`, 'shm-bytes');
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(fs.existsSync(path.join(destDir, 'Default', 'Cookies-wal'))).toBe(false);
+    expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe('session-cookie');
+  });
+
   it('fails closed when cookie databases are missing', async () => {
     const root = makeTempDir();
     const userDataDir = path.join(root, 'Chrome');
@@ -320,6 +383,41 @@ describe('probeSourceProfileReadAccess', () => {
         },
       }),
     ).toEqual({ readable: true });
+  });
+});
+
+describe('cleanupCopiedLoginsThen', () => {
+  it('runs persist only after Cindy-real is gone', () => {
+    const runtimeDir = makeTempDir();
+    const profileDir = realProfileProfileDir(runtimeDir);
+    fs.mkdirSync(path.join(profileDir, 'user-data'), { recursive: true });
+    fs.writeFileSync(path.join(profileDir, 'user-data', 'Cookies'), 'copied');
+    const order: string[] = [];
+    cleanupCopiedLoginsThen(runtimeDir, () => {
+      order.push('persist');
+      expect(fs.existsSync(profileDir)).toBe(false);
+    });
+    expect(order).toEqual(['persist']);
+  });
+
+  it('does not persist when deleting the copy fails', () => {
+    const runtimeDir = makeTempDir();
+    const profileDir = realProfileProfileDir(runtimeDir);
+    fs.mkdirSync(profileDir, { recursive: true });
+    const persist = vi.fn();
+    const realRm = fs.rmSync.bind(fs);
+    vi.spyOn(fs, 'rmSync').mockImplementation(((target, opts) => {
+      if (path.resolve(String(target)) === path.resolve(profileDir)) {
+        throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      }
+      return realRm(target, opts);
+    }) as typeof fs.rmSync);
+    try {
+      expect(() => cleanupCopiedLoginsThen(runtimeDir, persist)).toThrow(/busy/);
+      expect(persist).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

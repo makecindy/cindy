@@ -22,7 +22,9 @@ export function BrowserRealProfileSubsection({
   onToggle,
 }: BrowserRealProfileSubsectionProps) {
   const { t } = useTranslation();
-  const disabled = pending || !available;
+  // Embedded backend cannot copy logins, but an already-on switch must stay
+  // revocable so the Cindy-real copy can still be deleted.
+  const disabled = pending || (!available && !enabled);
   return (
     <div className="border-t border-[var(--settings-theme-card-border)]">
       <div className="flex items-start justify-between gap-3 px-4 py-[14px]">
@@ -41,7 +43,7 @@ export function BrowserRealProfileSubsection({
           disabled={disabled}
           onCheckedChange={onToggle}
           aria-label={t('settings.computerUse.realProfile.toggleAria')}
-          className={cn('mt-0.5 shrink-0', !available && 'opacity-50')}
+          className={cn('mt-0.5 shrink-0', !available && !enabled && 'opacity-50')}
         />
       </div>
     </div>

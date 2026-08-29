@@ -50,6 +50,22 @@ describe('BrowserRealProfileSubsection', () => {
     expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
   });
 
+  it('lets the user turn the switch off when the embedded backend is active', () => {
+    const onToggle = vi.fn();
+    render(
+      <BrowserRealProfileSubsection
+        enabled
+        pending={false}
+        available={false}
+        onToggle={onToggle}
+      />,
+    );
+    const toggle = screen.getByRole('switch');
+    expect(toggle).toHaveProperty('disabled', false);
+    fireEvent.click(toggle);
+    expect(onToggle).toHaveBeenCalledWith(false);
+  });
+
   it('toggles on when the external backend is active', () => {
     const onToggle = vi.fn();
     render(

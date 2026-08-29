@@ -61,7 +61,7 @@ function asObject(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Overlay copies last_used cookies into dest `Default`. Chrome still honors
+ * Copies last_used cookies into dest `Default`. Chrome still honors
  * Local State `profile.last_used`, so a verbatim copy would open the original
  * folder (often an empty `Profile 2`) and look signed-out. Point every
  * selection field at Default and keep only that info_cache entry, taking
@@ -227,30 +227,84 @@ function secureDir(dir: string): void {
   }
 }
 
+const SQLITE_SIDECARS = ['-wal', '-shm', '-journal'] as const;
+
+const SNAPSHOT_PROFILE_RELATIVE_PATHS = [
+  ...AUTH_DB_RELATIVE_PATHS,
+  ...PLAIN_PROFILE_FILES,
+] as const;
+
+function stagingUserDataDir(destDir: string): string {
+  return `${destDir}.staging`;
+}
+
+function removeSqliteAndSidecars(filePath: string): void {
+  fs.rmSync(filePath, { force: true });
+  for (const suffix of SQLITE_SIDECARS) {
+    fs.rmSync(filePath + suffix, { force: true });
+  }
+}
+
+function publishStagedFile(src: string, dest: string): void {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  removeSqliteAndSidecars(dest);
+  fs.renameSync(src, dest);
+  for (const suffix of SQLITE_SIDECARS) {
+    const side = src + suffix;
+    if (fs.existsSync(side)) {
+      fs.renameSync(side, dest + suffix);
+    }
+  }
+}
+
+/**
+ * Swap this snapshot's auth files onto dest only after the staging tree is
+ * complete. Dest Cache / GPUCache stay; leftover Cookies vs Network/Cookies
+ * and Login Data from a previous source do not.
+ */
+function publishStagedSnapshot(options: {
+  stagingDir: string;
+  destDir: string;
+  copiedRelative: ReadonlySet<string>;
+}): void {
+  const { stagingDir, destDir, copiedRelative } = options;
+  secureDir(path.dirname(destDir));
+  secureDir(destDir);
+  const destProfileDir = path.join(destDir, 'Default');
+  secureDir(destProfileDir);
+  secureDir(path.join(destProfileDir, 'Network'));
+
+  publishStagedFile(path.join(stagingDir, 'Local State'), path.join(destDir, 'Local State'));
+
+  for (const relative of SNAPSHOT_PROFILE_RELATIVE_PATHS) {
+    const destFile = path.join(destProfileDir, relative);
+    const stagingFile = path.join(stagingDir, 'Default', relative);
+    if (copiedRelative.has(relative)) {
+      publishStagedFile(stagingFile, destFile);
+    } else {
+      removeSqliteAndSidecars(destFile);
+    }
+  }
+
+  pruneExtraChromeProfiles(destDir);
+  fs.rmSync(stagingDir, { recursive: true, force: true });
+}
+
 async function copySqliteDatabase(src: string, dest: string): Promise<void> {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  removeSqliteAndSidecars(dest);
+  const sqlite = await import('node:sqlite');
+  if (typeof sqlite.backup !== 'function') {
+    throw new Error('sqlite backup API unavailable');
+  }
+  const source = new sqlite.DatabaseSync(src, { readOnly: true, timeout: 5000 });
   try {
-    const sqlite = await import('node:sqlite');
-    const source = new sqlite.DatabaseSync(src, { readOnly: true, timeout: 5000 }) as {
-      backup?: (path: string) => Promise<unknown> | unknown;
-      close: () => void;
-    };
-    try {
-      if (typeof source.backup !== 'function') {
-        throw new Error('sqlite backup API unavailable');
-      }
-      await source.backup(dest);
-    } finally {
-      source.close();
-    }
-    return;
-  } catch {
-    await fs.promises.copyFile(src, dest);
-    for (const suffix of ['-wal', '-shm', '-journal'] as const) {
-      const side = src + suffix;
-      if (fs.existsSync(side)) {
-        await fs.promises.copyFile(side, dest + suffix);
-      }
-    }
+    // Node 24 / Electron 41: backup is module-level `backup(sourceDb, dest)`.
+    // DatabaseSync#backup does not exist; copyFile + WAL sidecars is not a
+    // consistent snapshot while the source Chrome is open.
+    await sqlite.backup(source, dest);
+  } finally {
+    source.close();
   }
 }
 
@@ -307,79 +361,88 @@ export async function snapshotRealProfile(options: {
     );
   }
 
-  secureDir(destDir);
-  secureDir(path.dirname(destDir));
-  const destProfileDir = path.join(destDir, 'Default');
-  secureDir(destProfileDir);
-  secureDir(path.join(destProfileDir, 'Network'));
+  const stagingDir = stagingUserDataDir(destDir);
+  fs.rmSync(stagingDir, { recursive: true, force: true });
 
-  const filesCopied: string[] = [];
-  let authDbCopied = 0;
+  try {
+    secureDir(path.dirname(destDir));
+    secureDir(stagingDir);
+    const stagingProfileDir = path.join(stagingDir, 'Default');
+    secureDir(stagingProfileDir);
+    secureDir(path.join(stagingProfileDir, 'Network'));
 
-  const destLocalState = path.join(destDir, 'Local State');
-  await fs.promises.writeFile(
-    destLocalState,
-    rewriteLocalStateForManagedDefault(localStateRaw, sourceProfile),
-    'utf8',
-  );
-  filesCopied.push('Local State');
+    const filesCopied: string[] = [];
+    const copiedRelative = new Set<string>();
+    let authDbCopied = 0;
 
-  for (const relative of AUTH_DB_RELATIVE_PATHS) {
-    const src = path.join(sourceProfileDir, relative);
-    if (!fs.existsSync(src)) continue;
-    const dest = path.join(destProfileDir, relative);
-    try {
-      await copyAuthFile(src, dest, true);
-      filesCopied.push(path.join('Default', relative));
-      authDbCopied += 1;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (isPermissionDenied(err) && platform !== 'win32') throwReadDenied();
-      if (platform === 'win32' && (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) {
+    await fs.promises.writeFile(
+      path.join(stagingDir, 'Local State'),
+      rewriteLocalStateForManagedDefault(localStateRaw, sourceProfile),
+      'utf8',
+    );
+    filesCopied.push('Local State');
+
+    for (const relative of AUTH_DB_RELATIVE_PATHS) {
+      const src = path.join(sourceProfileDir, relative);
+      if (!fs.existsSync(src)) continue;
+      const dest = path.join(stagingProfileDir, relative);
+      try {
+        await copyAuthFile(src, dest, true);
+        filesCopied.push(path.join('Default', relative));
+        copiedRelative.add(relative);
+        authDbCopied += 1;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (isPermissionDenied(err) && platform !== 'win32') throwReadDenied();
+        if (platform === 'win32' && (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) {
+          throw new RealProfileError(
+            'PROFILE_LOCKED',
+            'Chrome is locking its cookie database. Quit Chrome completely and try again.',
+          );
+        }
         throw new RealProfileError(
-          'PROFILE_LOCKED',
-          'Chrome is locking its cookie database. Quit Chrome completely and try again.',
+          'COPY_FAILED',
+          `Failed to copy ${relative} from the system browser profile.`,
         );
       }
+    }
+
+    const copiedCookie =
+      copiedRelative.has('Cookies') || copiedRelative.has(path.join('Network', 'Cookies'));
+    if (!copiedCookie || authDbCopied === 0) {
       throw new RealProfileError(
-        'COPY_FAILED',
-        `Failed to copy ${relative} from the system browser profile.`,
+        'NO_AUTH_DB',
+        'Could not copy cookie or login databases from the system browser profile.',
       );
     }
-  }
 
-  const copiedCookie = filesCopied.some(
-    (file) => file === path.join('Default', 'Cookies') || file === path.join('Default', 'Network', 'Cookies'),
-  );
-  if (!copiedCookie || authDbCopied === 0) {
-    throw new RealProfileError(
-      'NO_AUTH_DB',
-      'Could not copy cookie or login databases from the system browser profile.',
+    for (const relative of PLAIN_PROFILE_FILES) {
+      const src = path.join(sourceProfileDir, relative);
+      if (!fs.existsSync(src)) continue;
+      const dest = path.join(stagingProfileDir, relative);
+      await fs.promises.copyFile(src, dest);
+      filesCopied.push(path.join('Default', relative));
+      copiedRelative.add(relative);
+    }
+
+    publishStagedSnapshot({ stagingDir, destDir, copiedRelative });
+
+    await fs.promises.writeFile(
+      path.join(destDir, COMPLETE_MARKER),
+      JSON.stringify({ sourceProfile, sourceKind: options.source.kind }),
+      'utf8',
     );
+
+    return {
+      destDir,
+      sourceKind: options.source.kind,
+      sourceProfile,
+      filesCopied,
+    };
+  } catch (err) {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+    throw err;
   }
-
-  for (const relative of PLAIN_PROFILE_FILES) {
-    const src = path.join(sourceProfileDir, relative);
-    if (!fs.existsSync(src)) continue;
-    const dest = path.join(destProfileDir, relative);
-    await fs.promises.copyFile(src, dest);
-    filesCopied.push(path.join('Default', relative));
-  }
-
-  pruneExtraChromeProfiles(destDir);
-
-  await fs.promises.writeFile(
-    path.join(destDir, COMPLETE_MARKER),
-    JSON.stringify({ sourceProfile, sourceKind: options.source.kind }),
-    'utf8',
-  );
-
-  return {
-    destDir,
-    sourceKind: options.source.kind,
-    sourceProfile,
-    filesCopied,
-  };
 }
 
 export function cleanupRealProfileSnapshots(runtimeDir: string): void {
@@ -387,4 +450,13 @@ export function cleanupRealProfileSnapshots(runtimeDir: string): void {
   if (path.basename(profileDir) !== REAL_MANAGED_PROFILE) return;
   if (!fs.existsSync(profileDir)) return;
   fs.rmSync(profileDir, { recursive: true, force: true });
+}
+
+/**
+ * Delete the Cindy-real copy, then run `then`. If delete throws, `then` does
+ * not run — Settings must keep consent on so the user can retry.
+ */
+export function cleanupCopiedLoginsThen(runtimeDir: string | null, then: () => void): void {
+  if (runtimeDir) cleanupRealProfileSnapshots(runtimeDir);
+  then();
 }

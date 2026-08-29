@@ -42,7 +42,7 @@ import {
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
 import {
-  cleanupRealProfileSnapshots,
+  cleanupCopiedLoginsThen,
   FOREIGN_AGENT_BROWSER_ERROR,
   probeOsSourceProfileReadAccess,
   wrapRuntimeWithRealProfile,
@@ -286,14 +286,18 @@ async function stopExternalRuntimeIfUsed(): Promise<void> {
 
 /**
  * Persist consent, stop the managed Chrome so the next start can switch
- * directories, and delete the snapshot when consent is revoked.
+ * directories, and delete the snapshot when consent is revoked. Disable only
+ * persists after the Cindy-real copy is gone; a cleanup failure keeps the
+ * switch on so the user can retry.
  */
 export async function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
-  writeBrowserUseRealProfile(enabled);
   await stopExternalRuntimeIfUsed();
   if (!enabled) {
-    const runtimeDir = realProfileRuntimeDir();
-    if (runtimeDir) cleanupRealProfileSnapshots(runtimeDir);
+    cleanupCopiedLoginsThen(realProfileRuntimeDir(), () => {
+      writeBrowserUseRealProfile(false);
+    });
+  } else {
+    writeBrowserUseRealProfile(true);
   }
   setBrowserControlRuntimeConfig(buildManagedConfig({ useRealProfile: enabled }));
   return readBrowserBackendSettings().useRealProfile;

@@ -17,6 +17,7 @@ export {
   userDataDirFor,
 } from './source.js';
 export {
+  cleanupCopiedLoginsThen,
   cleanupRealProfileSnapshots,
   isolatedProfileDestDir,
   lastUsedProfileName,
