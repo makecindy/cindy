@@ -1,4 +1,7 @@
-import type { PiManagedPackageMutationRequest } from '@cindy/maker-core';
+import {
+  PiManagedPackageMutationFailedError,
+  type PiManagedPackageMutationRequest,
+} from '@cindy/maker-core';
 
 import type {
   PiPackageMutationRequest,
@@ -8,7 +11,10 @@ import {
   issuePiPackageMutationGrant,
   type PiPackageMutationGrant,
 } from './pi-package-mutation-grant.js';
-import { mutatePiPackage } from './pi-package-store.js';
+import {
+  mutatePiPackage,
+  piPackageMutationMayHaveChangedState,
+} from './pi-package-store.js';
 
 type ManagedMutationRequest = Pick<PiPackageMutationRequest, 'action' | 'source'>;
 
@@ -42,5 +48,14 @@ export async function mutateAuthorizedPiManagedPackage(
     throw new Error('Pi extension mutation is missing host-trusted authorization');
   }
 
-  return deps.mutate(storeRequest, deps.issueGrant(storeRequest));
+  try {
+    return await deps.mutate(storeRequest, deps.issueGrant(storeRequest));
+  } catch (error) {
+    // Preserve only the convergence bit across the maker-core boundary. Raw
+    // command/filesystem details remain Main-local and never enter receipts.
+    throw new PiManagedPackageMutationFailedError(
+      piPackageMutationMayHaveChangedState(error),
+      error,
+    );
+  }
 }

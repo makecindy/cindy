@@ -129,8 +129,12 @@ Cindy 对 Pi 的产品安全升级，更不能拿来扩大阻断范围。
    Pi 会话内分支。Pi 导航后必须通过 `session.treeRehydrate` 原子替换 SQLite 可见投影,旧行仅
    soft-hide;切换只改对话上下文,不得声称或尝试回滚工作区文件。
 8. **项目资源显式装配**:root、只读 subagent 与离线 fork 启动 Pi 时都必须显式传
-   `--no-approve --no-extensions`;root 仅用重复 `--extension` 回装 Cindy 自有 bridge/subagent
-   与 pinned plan-mode，并仅用重复 `--skill` 装配 host 从 PR3 approval snapshot 判定 eligible
+   `--no-approve`;没有 Cindy-managed 本机用户包根时同时传 `--no-extensions`。本机普通 runtime
+   存在明确安装且未停用的用户包根时，为保留 Pi 原生 package discovery 可以只省略
+   `--no-extensions`：包根只能来自 Main 生成的 runtime `settings.json`，`--no-approve` 仍是项目
+   `.pi/extensions` / `.pi/settings.json` 的硬门，不得因此传 `--approve` 或读取项目设置。root
+   仅用重复 `--extension` 回装 Cindy 自有 bridge/subagent 与 pinned plan-mode，并仅用重复
+   `--skill` 装配 host 从 PR3 approval snapshot 判定 eligible
    的项目 skill 目录。eligible canonical 目录必须先完整物化到当前会话 `configHome` 的非自动
    扫描目录，再把隔离快照路径交给 Pi；不得把仍可变化的项目原路径直接放进 argv。复制期间
    任一越界 symlink、特殊文件或路径替换会使整组 skills fail closed。不得读取/复制项目

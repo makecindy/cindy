@@ -1,7 +1,13 @@
+import { PiManagedPackageMutationFailedError } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
+
+const storeMocks = vi.hoisted(() => ({
+  mayHaveChangedState: vi.fn(() => false),
+}));
 
 vi.mock('../pi-package-store.js', () => ({
   mutatePiPackage: vi.fn(),
+  piPackageMutationMayHaveChangedState: storeMocks.mayHaveChangedState,
 }));
 
 vi.mock('../pi-package-mutation-grant.js', () => ({
@@ -58,6 +64,22 @@ describe('Pi managed package Main authorization', () => {
 
     expect(deps.issueGrant).toHaveBeenCalledWith({ action: 'update', source });
     expect(deps.mutate).toHaveBeenCalledWith({ action: 'update', source }, grant);
+  });
+
+  it('carries only the runtime-convergence bit across a failed host mutation', async () => {
+    const { deps } = buildDeps();
+    const rawError = new Error('private native failure');
+    vi.mocked(deps.mutate).mockRejectedValueOnce(rawError);
+    storeMocks.mayHaveChangedState.mockReturnValueOnce(true);
+
+    const failure = await mutateAuthorizedPiManagedPackage({
+      action: 'update',
+      source: 'npm:context-mode',
+      authorization: 'local-desktop-command',
+    }, deps).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PiManagedPackageMutationFailedError);
+    expect(failure).toMatchObject({ mayHaveChangedState: true, cause: rawError });
   });
 
   it('rejects authorization values outside the host-owned union at runtime', async () => {

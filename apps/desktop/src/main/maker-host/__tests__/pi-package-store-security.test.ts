@@ -41,6 +41,8 @@ const runtime = vi.hoisted(() => ({
   spawnHook: null as null | ((args: string[]) => void),
 }));
 
+const loggerRuntime = vi.hoisted(() => ({ warn: vi.fn() }));
+
 const processRuntime = vi.hoisted(() => ({
   killTree: vi.fn(),
   pendingTreeSettled: null as null | (() => void),
@@ -64,7 +66,7 @@ vi.mock('../../agent-binaries/index.js', () => ({
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({
-    trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(),
+    trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: loggerRuntime.warn, error: vi.fn(), fatal: vi.fn(),
     child() { return this; },
   }),
 }));
@@ -210,6 +212,7 @@ beforeEach(async () => {
   runtime.holdMutationCommand = false;
   runtime.pendingClose = null;
   runtime.spawnHook = null;
+  loggerRuntime.warn.mockReset();
   processRuntime.killTree.mockReset();
   processRuntime.pendingTreeSettled = null;
   lockRuntime.calls = [];
@@ -461,6 +464,24 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.mutatePiPackage(request, fresh)).rejects.toThrow(/invalid or expired/i);
   });
 
+  it('marks only failures that reached a native command or durable state write', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+
+    const validationFailure = await mutateAuthorized(store, {
+      action: 'install',
+      source: '-invalid',
+    }).catch((error: unknown) => error);
+    expect(store.piPackageMutationMayHaveChangedState(validationFailure)).toBe(false);
+
+    runtime.exitCode = 1;
+    const commandFailure = await mutateAuthorized(store, {
+      action: 'install',
+      source,
+    }).catch((error: unknown) => error);
+    expect(store.piPackageMutationMayHaveChangedState(commandFailure)).toBe(true);
+  });
+
   it('keeps native package enablement independent from optional snapshot approval metadata', async () => {
     const { root, source } = await createPackage();
     await fs.mkdir(path.join(root, 'skills', 'sample'), { recursive: true });
@@ -580,6 +601,28 @@ describe('Pi package executable-code boundary', () => {
         compatibilityIssues: ['status-display'],
       })]),
     });
+  });
+
+  it('clears an old explicit disable after reinstall even when post-install analysis fails', async () => {
+    const { source } = await createPackage();
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, 'npm:keep-disabled'],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    runtime.listOutcomes.push({ stderr: 'analysis unavailable', exitCode: 1 });
+    const store = await import('../pi-package-store.js');
+
+    await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
+      affectedPackage: { source, enabled: true },
+    });
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual(['npm:keep-disabled']);
   });
 
   it('builds a Git-style package when its declared Extension output is absent', async () => {
@@ -2062,6 +2105,21 @@ describe('Pi package executable-code boundary', () => {
     await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(corruptState);
   });
 
+  it('does not overwrite a corrupt disable ledger after native remove succeeds', async () => {
+    const { source } = await createSkillOnlyPackage('npm:remove-with-corrupt-state');
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const corruptState = '{"version":3,"disabledSources":[';
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, corruptState);
+    const store = await import('../pi-package-store.js');
+
+    await expect(mutateAuthorized(store, { action: 'remove', source })).resolves.toMatchObject({
+      changed: true,
+    });
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(corruptState);
+  });
+
   it('keeps a valid disabled Skill package disabled with its state readable', async () => {
     const { source } = await createSkillOnlyPackage('npm:valid-disabled-skill-package');
     const stateDir = path.join(runtime.userData, 'pi-package-home');
@@ -2801,6 +2859,25 @@ describe('Pi package executable-code boundary', () => {
     })).resolves.toEqual({
       extensions: [], skills: [], promptTemplates: [], packageRoots: [],
     });
+  });
+
+  it('redacts sensitive install sources from post-mutation Main warnings', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-log-redaction-'));
+    roots.push(root);
+    const unsafeSource = 'git:https://user:secret@example.com/acme/package.git?token=private#fragment';
+    runtime.listOutput = `User packages:\n  ${unsafeSource}\n    ${root}\n`;
+    runtime.listOutcomes.push({
+      stderr: `inspection failed for ${unsafeSource}`,
+      exitCode: 1,
+    });
+    const store = await import('../pi-package-store.js');
+
+    await mutateAuthorized(store, { action: 'install', source: unsafeSource });
+
+    const warnings = JSON.stringify(loggerRuntime.warn.mock.calls);
+    expect(warnings).toContain('git:https://example.com/acme/package.git');
+    expect(warnings).not.toContain('secret');
+    expect(warnings).not.toContain('private');
   });
 
   it('redacts unsafe saved URLs from Pi package command failures', async () => {

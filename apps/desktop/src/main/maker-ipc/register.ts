@@ -558,6 +558,7 @@ import {
   listPiPackages,
   mutatePiPackage,
   onPiPackagesChanged,
+  piPackageMutationMayHaveChangedState,
 } from '../maker-host/pi-package-store.js';
 import { invalidateLocalPiPackageRuntimes } from '../maker-host/pi-package-runtime-invalidation.js';
 import {
@@ -7092,10 +7093,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await invalidateRuntimes();
           return result;
         } catch (error) {
-          // A failed native command may still have changed bytes before its
-          // failure surfaced. Retire stale snapshots, but preserve the original
-          // mutation error even if runtime cleanup also fails.
-          await invalidateRuntimes();
+          // Retire snapshots only after the store reached a native command or
+          // durable write. Pure validation/state-read failures must not cancel
+          // unrelated running Pi tasks.
+          if (piPackageMutationMayHaveChangedState(error)) {
+            await invalidateRuntimes();
+          }
           throw error;
         }
       },

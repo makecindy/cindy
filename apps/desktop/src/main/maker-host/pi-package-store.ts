@@ -81,6 +81,7 @@ const DEFAULT_SNAPSHOT_LIMITS: PiPackageSnapshotLimits = {
 const STATE_VERSION = 3;
 const CHANGE_TOKEN_POLL_MS = 250;
 const changeListeners = new Set<() => void>();
+const packageMutationMayHaveChangedErrors = new WeakSet<object>();
 let changeTokenWatcherActive = false;
 let lastObservedChangeToken: string | null | undefined;
 let changeTokenReadInFlight: Promise<void> | undefined;
@@ -2370,6 +2371,21 @@ export async function stageManagedPackageSnapshot(
   }
 }
 
+export function piPackageMutationMayHaveChangedState(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && packageMutationMayHaveChangedErrors.has(error);
+}
+
+async function clearDisabledPackageSources(sources: Iterable<string>): Promise<void> {
+  const targets = new Set(sources);
+  if (targets.size === 0) return;
+  const state = await requireState();
+  const disabledSources = state.disabledSources.filter((source) => !targets.has(source));
+  if (disabledSources.length === state.disabledSources.length) return;
+  await writeState({ ...state, disabledSources });
+}
+
 async function revokeExtensionApproval(sources: Iterable<string>): Promise<void> {
   const targets = new Set(sources);
   if (targets.size === 0) return;
@@ -2486,11 +2502,13 @@ export async function mutatePiPackage(
     throw new Error('Relative local Pi package sources require a task working directory');
   }
   let mutationMayHaveChangedState = false;
-  return enqueueMutation(async () => {
+  try {
+    return await enqueueMutation(async () => {
     // Renderer rows with credential/query/fragment-bearing sources carry only a
     // one-way opaque target. Resolve it from Pi's current native list inside the
     // mutation lock so the secret source never crosses into Renderer state.
     const source = await resolvePackageMutationTarget(requestedSource, request.mutationTarget);
+    const logSource = projectPackageSource(source).displaySource;
     // Cindy projection state is optional metadata. Native Pi package commands
     // run before any Cindy inspection; an analyzer timeout or unknown future
     // package shape therefore cannot delay or veto the upstream command.
@@ -2509,7 +2527,7 @@ export async function mutatePiPackage(
         inspectedAfterInstall = await inspectAllPackages();
       } catch (error) {
         log.warn('Pi package installed; Cindy post-install analysis unavailable', {
-          source,
+          source: logSource,
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -2534,16 +2552,20 @@ export async function mutatePiPackage(
       }
       affectedSource = affected?.rawSource ?? previous?.rawSource ?? source;
       try {
-        await revokeExtensionApproval([
+        const installAliases = [
           ...sourceAliases(source),
           ...(previous ? sourceAliases(previous.rawSource) : []),
-        ]);
+        ];
+        // Explicit reinstall means enabled even when optional analysis cannot
+        // identify the package's current resource shape.
+        await clearDisabledPackageSources(installAliases);
+        await revokeExtensionApproval(installAliases);
         await persistEnabledExtensionApprovals({
           ...(affected ? { enable: affected } : {}),
         });
       } catch (error) {
         log.warn('Pi package installed but Cindy projection refresh failed', {
-          source,
+          source: logSource,
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -2556,7 +2578,7 @@ export async function mutatePiPackage(
         '--no-approve',
       ]);
       try {
-        const state = await readStateWithoutBlockingPi();
+        const state = await requireState();
         const removedSources = new Set([
           ...sourceAliases(source),
           ...(previous ? sourceAliases(previous.rawSource) : []),
@@ -2573,7 +2595,7 @@ export async function mutatePiPackage(
         });
       } catch (error) {
         log.warn('Pi package removed but Cindy projection cleanup failed', {
-          source,
+          source: logSource,
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -2600,7 +2622,7 @@ export async function mutatePiPackage(
         await revokeExtensionApproval(updateAliases);
       } catch (error) {
         log.warn('Pi package updated but Cindy approval projection could not be refreshed', {
-          source,
+          source: logSource,
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -2610,7 +2632,7 @@ export async function mutatePiPackage(
         inspectedAfterUpdate = await inspectAllPackages();
       } catch (error) {
         log.warn('Pi package updated; Cindy post-update analysis unavailable', {
-          source,
+          source: logSource,
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -2639,7 +2661,7 @@ export async function mutatePiPackage(
         });
       } catch (error) {
         log.warn('Pi package updated but Cindy projection refresh failed', {
-          source,
+          source: logSource,
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -2689,7 +2711,7 @@ export async function mutatePiPackage(
     } catch (error) {
       log.warn('Pi package mutation succeeded; Cindy list projection unavailable', {
         action: request.action,
-        source,
+        source: logSource,
         message: error instanceof Error ? error.message : String(error),
       });
       result = { available: true, packages: [] };
@@ -2731,7 +2753,7 @@ export async function mutatePiPackage(
         if (target) await persistEnabledExtensionApprovals({ enable: target });
       } catch (error) {
         log.warn('Pi package enabled; optional Cindy snapshot metadata unavailable', {
-          source,
+          source: logSource,
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -2744,8 +2766,14 @@ export async function mutatePiPackage(
     // before a later CLI/inspection step reports failure. Persist the shared
     // change token before releasing the cross-process lock, then refresh every
     // open Settings view and command palette.
-    if (mutationMayHaveChangedState) {
-      await publishPiPackagesChanged();
+      if (mutationMayHaveChangedState) {
+        await publishPiPackagesChanged();
+      }
+    });
+  } catch (error) {
+    if (mutationMayHaveChangedState && typeof error === 'object' && error !== null) {
+      packageMutationMayHaveChangedErrors.add(error);
     }
-  });
+    throw error;
+  }
 }

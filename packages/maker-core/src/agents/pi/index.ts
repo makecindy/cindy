@@ -58,6 +58,7 @@ import {
   BaseAgent,
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
+  PiManagedPackageMutationFailedError,
   PiNativeProviderProxyNotReadyError,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
@@ -2690,9 +2691,10 @@ export class PiAgent extends BaseAgent {
     const args = [
       '--mode',
       'rpc',
-      // Project-local trust remains explicit. User-installed package roots in
-      // this runtime's settings.json are discovered by Pi itself, preserving
-      // upstream behavior for manifest shapes Cindy does not understand.
+      // --no-approve remains the hard project-resource gate. Only a local
+      // runtime with Main-supplied user package roots omits --no-extensions, so
+      // Pi can discover those runtime-settings packages without trusting the
+      // task's .pi/extensions or .pi/settings.json.
       '--no-approve',
       ...(nativePackagePaths.length === 0 ? ['--no-extensions'] : []),
       '--session-dir',
@@ -4389,13 +4391,12 @@ export class PiAgent extends BaseAgent {
       if (!command) return { text, accepted: false };
       const uiStrings = resolvePiExtensionUiStrings(this.deps);
       let outcome: PiManagedPackageCommandOutcome;
-      let mutationAttempted = false;
+      let shouldInvalidateRuntimes = false;
       if (!command.source || command.source.length > MAX_PI_MANAGED_PACKAGE_SOURCE_LENGTH) {
         outcome = { ok: false, error: uiStrings.mutationFailed };
       } else {
         try {
           const resolvedSource = resolvePiManagedPackageSource(command.source, opts.workingDir);
-          mutationAttempted = true;
           outcome = {
             ok: true,
             result: await this.deps.mutatePiManagedPackage!({
@@ -4406,7 +4407,10 @@ export class PiAgent extends BaseAgent {
                 : 'local-desktop-command',
             }),
           };
+          shouldInvalidateRuntimes = true;
         } catch (error) {
+          shouldInvalidateRuntimes = error instanceof PiManagedPackageMutationFailedError
+            && error.mayHaveChangedState;
           if (error instanceof PiManagedPackageMutationCancelledError) {
             outcome = {
               ok: false,
@@ -4436,7 +4440,7 @@ export class PiAgent extends BaseAgent {
         },
         source: 'pi',
       });
-      if (mutationAttempted) notifyPiManagedPackageMutationSettled(this.deps);
+      if (shouldInvalidateRuntimes) notifyPiManagedPackageMutationSettled(this.deps);
       return {
         text: piManagedPackageReceiptPrompt(command, outcome),
         accepted: true,
@@ -6479,7 +6483,10 @@ export class PiAgent extends BaseAgent {
                 error: resolvePiExtensionUiStrings(this.deps).mutationFailed,
               }),
             });
-            notifyPiManagedPackageMutationSettled(this.deps);
+            if (error instanceof PiManagedPackageMutationFailedError
+              && error.mayHaveChangedState) {
+              notifyPiManagedPackageMutationSettled(this.deps);
+            }
             return;
           }
           proc.send({
