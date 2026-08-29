@@ -22,7 +22,7 @@ import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { zstdCompress, zstdDecompress } from 'node:zlib';
+import * as zlib from 'node:zlib';
 
 import {
   sanitizeXaiModelInputBody,
@@ -48,8 +48,12 @@ import { describeErrorChain } from '../utils/errorChain.js';
 // zstd was added to Node's zlib API after the minimum Node 22 version this
 // client supports. Keep the bridge importable on older supported runtimes;
 // zstd-encoded context-profile requests will pass through unchanged there.
-const zstdCompressAsync = typeof zstdCompress === 'function' ? promisify(zstdCompress) : null;
-const zstdDecompressAsync = typeof zstdDecompress === 'function' ? promisify(zstdDecompress) : null;
+// Named imports would fail at ESM link time on Node 22.12–22.14, so feature
+// detection must go through the namespace object.
+const zstdCompressAsync =
+  typeof zlib.zstdCompress === 'function' ? promisify(zlib.zstdCompress) : null;
+const zstdDecompressAsync =
+  typeof zlib.zstdDecompress === 'function' ? promisify(zlib.zstdDecompress) : null;
 
 const log = createMakerLogger('cc-bridge');
 
