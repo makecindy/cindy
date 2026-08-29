@@ -311,10 +311,16 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);');
     expect(deferredHandler).toBeTruthy();
     expect(deferredHandler).toContain('getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);');
+    expect(deferredHandler).toContain('return persistId;');
     expectOrder(
       deferredHandler ?? '',
       'onTurnErrorEvent(sid, errData, agentMeta);',
       'getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);',
+    );
+    expectOrder(
+      deferredHandler ?? '',
+      'getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);',
+      'return persistId;',
     );
   });
 

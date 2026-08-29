@@ -1989,16 +1989,17 @@ function resolveTurnErrorWaiter(sessionId: string, persistId: string): void {
 
 function dropSessionTurnErrorReservations(sessionId: string): void {
   const prefix = `${sessionId}:`;
-  for (const key of _turnErrorPersistWaiters.keys()) {
+  // 只解开尚未 enqueue 的预留。已入队的 waiter 必须等到 writeChain finally,
+  // 否则 dismiss 会在 createMessage 前得到 NOT_FOUND,迟到写入留下未忽略行。
+  for (const key of [..._reservedTurnErrorPersistIds]) {
     if (!key.startsWith(prefix)) continue;
-    _turnErrorPersistWaiters.get(key)?.resolve();
-    _turnErrorPersistWaiters.delete(key);
+    _reservedTurnErrorPersistIds.delete(key);
+    resolveTurnErrorWaiter(sessionId, key.slice(prefix.length));
   }
-  for (const key of _reservedTurnErrorPersistIds) {
-    if (key.startsWith(prefix)) _reservedTurnErrorPersistIds.delete(key);
-  }
-  for (const key of _consumedTurnErrorPersistIds) {
-    if (key.startsWith(prefix)) _consumedTurnErrorPersistIds.delete(key);
+  for (const key of [..._consumedTurnErrorPersistIds]) {
+    if (!_turnErrorPersistWaiters.has(key) && key.startsWith(prefix)) {
+      _consumedTurnErrorPersistIds.delete(key);
+    }
   }
 }
 
@@ -2097,7 +2098,8 @@ export function releaseReservedTurnErrorPersistId(sessionId: string, persistId: 
  * dismiss-error 在写库完成前点关闭时,先等这条预留 id 落库(或被释放)。
  * 没有 waiter(已写完/从未预留)立即返回。有 waiter 就必须等到写入、owner-scope
  * 跳过或 release —— 不能墙钟超时后按「已落库」去查询,否则会 NOT_FOUND,迟到的
- * 写入留下未忽略行,重启又弹出同一张卡。会话清理会解开仍在等的 waiter。
+ * 写入留下未忽略行,重启又弹出同一张卡。会话清理只解开尚未入队的预留 waiter;
+ * 已入队的等到 writeChain finally。
  */
 export function whenTurnErrorPersisted(sessionId: string, persistId: string): Promise<void> {
   const waiter = _turnErrorPersistWaiters.get(turnErrorPersistKey(sessionId, persistId));

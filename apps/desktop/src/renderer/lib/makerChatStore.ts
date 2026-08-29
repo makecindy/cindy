@@ -59,7 +59,7 @@ import {
   isTurnContinuationBoundaryEvent,
 } from '@cindy/maker-shared/turn-continuation';
 import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
-import type { MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
+import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource, SerializedAttachedFile } from '@/lib/fileTypes';
 import type {
   AgentInputCreateOpts,
@@ -3570,6 +3570,8 @@ const _activeViewSessions = new Map<string, number>();
 // On leave, history is invalidated and live error banner is cleared so the
 // reloaded history shows only the persisted ErrorMessageCard.
 const _pendingErrorClearOnLeave = new Set<string>();
+/** Deferred persist IPC in flight: live 横幅点关闭/重试时还没有 persistId,等它回来再 dismiss。 */
+const _deferredTurnErrorPersist = new Map<string, Promise<string | undefined>>();
 
 /** Terminal error 后、配对 done 到达前，凭据刷新必须等 host 空闲。 */
 const GATEWAY_PROXY_TOKEN_TURN_SETTLE_MS = 5_000;
@@ -3625,6 +3627,33 @@ function enterView(sessionId: string): () => void {
   _ensureDemoteTimer();
   scheduleIdlePlanDiscoveryIfNeeded(sessionId);
   return () => leaveView(sessionId);
+}
+
+function persistTurnErrorDeferredTracked(
+  sessionId: string,
+  errData: Record<string, unknown> | null,
+  agentMeta: AgentMeta | null = null,
+): void {
+  let pending: Promise<string | undefined>;
+  pending = makerApiFor(sessionId)
+    .input.persistTurnErrorDeferred(sessionId, errData, agentMeta)
+    .then((persistId) => {
+      if (_deferredTurnErrorPersist.get(sessionId) === pending) {
+        _deferredTurnErrorPersist.delete(sessionId);
+      }
+      if (typeof persistId === 'string' && persistId) {
+        applyErrorPersistedDirtySignal(sessionId, persistId);
+      }
+      return typeof persistId === 'string' && persistId ? persistId : undefined;
+    })
+    .catch((err: unknown) => {
+      if (_deferredTurnErrorPersist.get(sessionId) === pending) {
+        _deferredTurnErrorPersist.delete(sessionId);
+      }
+      log.warn('deferred turn error persist failed', err);
+      return undefined;
+    });
+  _deferredTurnErrorPersist.set(sessionId, pending);
 }
 
 function applyErrorPersistedDirtySignal(sessionId: string, persistId?: string): void {
@@ -4061,10 +4090,10 @@ function applyInputProjection(
         ? s._authRetryPersistOnProjectionError
         : null;
     if (authRetryProjectionError) {
-      void makerApiFor(projection.sessionId).input.persistTurnErrorDeferred(
+      persistTurnErrorDeferredTracked(
         projection.sessionId,
         authRetryProjectionError.data,
-        authRetryProjectionError.agentMeta,
+        (authRetryProjectionError.agentMeta as AgentMeta | null) ?? null,
       );
     }
     // 视觉连续性兜底: sendMessage 在"agent 空闲假设"下会乐观把 user 气泡
@@ -7191,7 +7220,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
                 isCindyGatewayProxyTokenInvalid ||
                 (preSnap.remoteHostId && preSnap.agentKind === 'claude-code')
               ) {
-                void makerApiFor(sessionId).input.persistTurnErrorDeferred(
+                persistTurnErrorDeferredTracked(
                   sessionId,
                   event.data as Record<string, unknown> | null,
                   event.agentMeta ?? null,
@@ -7230,7 +7259,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           (isAuthError && preSnap.remoteHostId && preSnap.agentKind === 'claude-code')) &&
         !preSnap._authRetryInFlight
       ) {
-        void makerApiFor(sessionId).input.persistTurnErrorDeferred(
+        persistTurnErrorDeferredTracked(
           sessionId,
           event.data as Record<string, unknown> | null,
           event.agentMeta ?? null,
@@ -8533,6 +8562,7 @@ function __teardownGlobalListeners(): void {
   pendingDeferredStateNotifications.clear();
   pendingMessageCreatedPatches.clear();
   _pendingErrorClearOnLeave.clear();
+  _deferredTurnErrorPersist.clear();
   remotePresenceOnlineByDevice.clear();
   resetRemoteDataOwnerPushFence();
   const remoteOptimisticSessionIds = new Set([
@@ -13402,11 +13432,22 @@ function popQueueTail(sessionId: string): boolean {
  */
 function disposeLiveErrorPersist(sessionId: string): void {
   const persistId = sessions.get(sessionId)?.errorPersistId;
-  if (!persistId) return;
-  setState(sessionId, (s) =>
-    s.disposedErrorPersistId === persistId ? s : { ...s, disposedErrorPersistId: persistId },
-  );
-  void dismissErrorTailMessage(sessionId, persistId);
+  if (persistId) {
+    setState(sessionId, (s) =>
+      s.disposedErrorPersistId === persistId ? s : { ...s, disposedErrorPersistId: persistId },
+    );
+    void dismissErrorTailMessage(sessionId, persistId);
+    return;
+  }
+  const pending = _deferredTurnErrorPersist.get(sessionId);
+  if (!pending) return;
+  void pending.then((id) => {
+    if (!id) return;
+    setState(sessionId, (s) =>
+      s.disposedErrorPersistId === id ? s : { ...s, disposedErrorPersistId: id },
+    );
+    void dismissErrorTailMessage(sessionId, id);
+  });
 }
 
 /**

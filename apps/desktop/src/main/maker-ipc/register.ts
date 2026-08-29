@@ -14468,8 +14468,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentMetaRaw != null && typeof agentMetaRaw === 'object'
           ? (agentMetaRaw as AgentMeta)
           : null;
-      onTurnErrorEvent(sid, errData, agentMeta);
+      const persistId = onTurnErrorEvent(sid, errData, agentMeta);
       getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);
+      return persistId;
     },
   );
 

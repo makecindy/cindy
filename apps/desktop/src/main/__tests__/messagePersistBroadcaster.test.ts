@@ -2831,6 +2831,48 @@ describe('reserveTurnErrorPersistId — 广播前预留与 waiter', () => {
     await whenTurnErrorPersisted(SESSION, reserved!);
     expect(createMessage).not.toHaveBeenCalled();
   });
+
+  it('会话清理不提前兑现已入队的 waiter，写完才 done', async () => {
+    const persistId = onTurnErrorEvent(SESSION, { message: 'queued-then-clear' });
+    expect(persistId).toBeTruthy();
+    let done = false;
+    const waiting = whenTurnErrorPersisted(SESSION, persistId!).then(() => {
+      done = true;
+    });
+    expect(done).toBe(false);
+
+    clearSessionPersistState(SESSION);
+    await Promise.resolve();
+    expect(done).toBe(false);
+    expect(createMessage).not.toHaveBeenCalled();
+
+    await flushWrites();
+    await waiting;
+    expect(done).toBe(true);
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createMessage).mock.calls[0][1]).toMatchObject({ clientId: persistId });
+  });
+
+  it('尚未入队的预留在会话清理后解开且不再写', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'reserved-then-clear' });
+    expect(reserved).toBeTruthy();
+    let done = false;
+    const waiting = whenTurnErrorPersisted(SESSION, reserved!).then(() => {
+      done = true;
+    });
+    expect(done).toBe(false);
+
+    clearSessionPersistState(SESSION);
+    await waiting;
+    expect(done).toBe(true);
+    expect(createMessage).not.toHaveBeenCalled();
+
+    expect(onTurnErrorEvent(SESSION, { message: 'reserved-then-clear' }, null, reserved)).toBe(
+      reserved,
+    );
+    await flushWrites();
+    expect(createMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () => {

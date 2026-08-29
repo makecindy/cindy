@@ -5413,7 +5413,7 @@ interface ElectronAPI {
         sessionId: string,
         errData: Record<string, unknown> | null,
         agentMeta?: import('@/lib/ccAgent.types').AgentMeta | null,
-      ) => Promise<void>;
+      ) => Promise<string | undefined>;
       remove: (
         sessionId: string,
         clientId: string,
