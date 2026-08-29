@@ -580,4 +580,30 @@ describe('feishu streaming text', () => {
       `${'e'.repeat(32)}-f0`,
     );
   });
+
+  it('copies parent-chat files when the mirror is armed only at terminal finalize', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-armed-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+    const handle = await start('g/oc_group/omt_topic');
+    handle.armFinalReplyMirror?.({
+      kind: 'parent-chat',
+      chatId: 'oc_group',
+      idempotencyKey: 'r'.repeat(64),
+      accountEpoch: 1,
+      allowedFileRoots: [root],
+      confirmed: true,
+    });
+    await handle.finalize(`见 [report.txt](xdt-file://${allowedFile})`);
+
+    expect(mocks.sendFileToChat).toHaveBeenCalledWith(
+      'oc_group',
+      {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      `${'r'.repeat(32)}-f0`,
+    );
+  });
 });

@@ -1555,6 +1555,40 @@ export function createTurnRunner(
     }
   }
 
+  /**
+   * Terminal streaming finalize. Parent-chat copies are armed here — not at
+   * `startStreamingText` — so permission / ask / plan `finalizeActiveStream`
+   * cannot reuse the same card UUID for a fragment.
+   *
+   * Returns true when the handle itself will copy the parent chat (reusable
+   * Feishu file keys live on that path). Callers must not also one-shot
+   * `mirrorFinalReply`, which has no upload key and would send deliveryFailed.
+   */
+  async function finalizeTurnStream(
+    turn: TurnState,
+    finalView: string,
+  ): Promise<boolean> {
+    const handle = turn.streamingHandle;
+    if (!handle) return false;
+    const mirror = turn.finalReplyMirror;
+    const mirroredByHandle = Boolean(handle.armFinalReplyMirror && mirror);
+    if (mirroredByHandle && mirror) {
+      handle.armFinalReplyMirror!(mirror);
+    }
+    try {
+      await handle.finalize(finalView);
+    } catch (err) {
+      if (output.kind === 'chunked-text') {
+        turn.terminalKind = 'error';
+        turn.terminalErrorCode = 'terminal_output_commit_failed';
+      }
+      log.warn(
+        `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return mirroredByHandle;
+  }
+
   async function handleSessionWiringBusy(userId: string, turn: TurnState): Promise<void> {
     log.info(`session wiring hit credential busy for userId=...${userId.slice(-8)}`);
     await completeTurnCallbackAfterAck(turn);
@@ -2937,22 +2971,14 @@ export function createTurnRunner(
     }
     if (turn.streamingHandle) {
       const finalView = composeStreamingView(turn) || '_(空回复)_';
-      try {
-        await turn.streamingHandle.finalize(finalView);
-      } catch (err) {
-        if (output.kind === 'chunked-text') {
-          turn.terminalKind = 'error';
-          turn.terminalErrorCode = 'terminal_output_commit_failed';
-        }
-        log.warn(
-          `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      const mirroredByHandle = await finalizeTurnStream(turn, finalView);
+      if (!mirroredByHandle) {
+        await mirrorTurnFinalReply(
+          turn.finalReplyMirror,
+          finalView,
+          turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
         );
       }
-      await mirrorTurnFinalReply(
-        turn.finalReplyMirror,
-        finalView,
-        turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-      );
     } else if (turn.presenter.wholeText().length === 0) {
       // No streamed text at all — send a one-shot text so the user knows the
       // turn ended. (Rare; normally agents emit at least one text block.)
@@ -3075,16 +3101,14 @@ export function createTurnRunner(
     if (turn?.streamingHandle) {
       const view = composeStreamingView(turn);
       const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
-      try {
-        await turn.streamingHandle.finalize(body);
-      } catch {
-        /* swallow */
+      const mirroredByHandle = await finalizeTurnStream(turn, body);
+      if (!mirroredByHandle) {
+        await mirrorTurnFinalReply(
+          turn.finalReplyMirror,
+          body,
+          turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
+        );
       }
-      await mirrorTurnFinalReply(
-        turn.finalReplyMirror,
-        body,
-        turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-      );
     } else {
       try {
         if (output.kind === 'chunked-text') {

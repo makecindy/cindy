@@ -2732,6 +2732,48 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(String(mocks.feishuIm.mirrorFinalReply.mock.calls[0][1])).toContain('final answer');
   });
 
+  it('arms the streaming handle at terminal finalize so parent-chat files reuse the upload key', async () => {
+    const handle = {
+      messageId: 'stream-armed',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+      armFinalReplyMirror: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-armed',
+    };
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({ type: 'text', data: { text: 'see the file', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    });
+    expect(handle.armFinalReplyMirror).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    expect(handle.armFinalReplyMirror).toHaveBeenCalledWith({
+      ...mirror,
+      allowedFileRoots: ['F:\\XDMaker'],
+    });
+    expect(handle.armFinalReplyMirror.mock.invocationCallOrder[0]).toBeLessThan(
+      handle.finalize.mock.invocationCallOrder[0],
+    );
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+  });
+
   it('mirrors side-channel tool images onto the parent-chat even when the final text omits them', async () => {
     const extraAbsPath = 'C:\\cindy-media\\tool-extra.png';
     mocks.resolveXdtImageUrl.mockReturnValue({ absPath: extraAbsPath });

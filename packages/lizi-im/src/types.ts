@@ -357,6 +357,12 @@ export interface StreamingTextHandle {
   replace(fullText: string): void;
   /** Replace card with `finalText` and stop throttling. */
   finalize(finalText: string): Promise<void>;
+  /**
+   * Attach a parent-chat copy just before the true terminal `finalize`.
+   * Start-of-turn streaming handles must not carry this — intermediate
+   * `finalize` before a permission / ask card would copy a fragment.
+   */
+  armFinalReplyMirror?(mirror: IMFinalReplyMirror): void;
   /** Cancel without finalising (still leaves the last rendered text on screen). */
   close(): void;
   /**

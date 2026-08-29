@@ -50,7 +50,7 @@ import {
 } from './dualDelivery.js';
 import { resolveFeishuMediaUrl } from './mediaCache.js';
 import { messages as transportMessages } from './messages.js';
-import type { StreamingTextHandle } from '../types.js';
+import type { IMFinalReplyMirror, StreamingTextHandle } from '../types.js';
 // xdt-* 引用解析抽到渠道无关模块(slack streamingText 共用同一套语义)
 import {
   stripXdtForStreaming,
@@ -153,11 +153,11 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   private pending: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private finalized = false;
-  private readonly mirrorChatId?: string;
-  private readonly mirrorKey?: string;
-  private readonly allowedFileRoots: readonly string[];
-  private readonly inboundEpoch?: number;
-  private readonly mirrorConfirmed: boolean;
+  private mirrorChatId?: string;
+  private mirrorKey?: string;
+  private allowedFileRoots: readonly string[];
+  private inboundEpoch?: number;
+  private mirrorConfirmed: boolean;
   /**
    * 工具结果(tool_result_full event)带过来的图片 absPath, finalize 时跟文本里
    * xdt-image markdown 链接一起 upload + 拼到 card 末尾。host 主进程负责把
@@ -189,6 +189,15 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     // to it (otherwise the placeholder permanently prefixes the message).
     this.buffer = '';
     this.flushed = initial;
+  }
+
+  armFinalReplyMirror(mirror: IMFinalReplyMirror): void {
+    if (this.finalized || mirror.kind !== 'parent-chat') return;
+    this.mirrorChatId = mirror.chatId;
+    this.mirrorKey = mirror.idempotencyKey;
+    this.allowedFileRoots = mirror.allowedFileRoots ?? [];
+    this.inboundEpoch = mirror.accountEpoch;
+    this.mirrorConfirmed = Boolean(mirror.confirmed);
   }
 
   append(delta: string): void {
