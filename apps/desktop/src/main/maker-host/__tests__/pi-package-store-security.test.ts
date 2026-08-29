@@ -2391,6 +2391,46 @@ describe('Pi package executable-code boundary', () => {
     unsubscribe();
   });
 
+  it('does not let an immediate view publication overwrite a peer runtime invalidation', async () => {
+    const { source } = await createPackage();
+    const firstStore = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = firstStore.onPiPackagesChanged(listener);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    vi.resetModules();
+    const secondStore = await import('../pi-package-store.js');
+    try {
+      await mutateAuthorized(secondStore, { action: 'update', source });
+      await secondStore.resolveManagedPiPackageResources({
+        snapshotRoot: path.join(runtime.userData, 'view-after-runtime-snapshot'),
+        snapshotLimits: {
+          maxEntries: 100,
+          maxBytes: 1024 * 1024,
+          maxDurationMs: 0,
+        },
+      });
+
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      await expect(fs.readFile(
+        path.join(runtime.userData, 'pi-package-home', 'cindy-package-runtime-change-token'),
+        'utf8',
+      )).resolves.toMatch(/^runtime:/);
+      await expect(fs.readFile(
+        path.join(runtime.userData, 'pi-package-home', 'cindy-package-change-token'),
+        'utf8',
+      )).resolves.toMatch(/^runtime:/);
+      await expect(fs.readFile(
+        path.join(runtime.userData, 'pi-package-home', 'cindy-package-view-change-token'),
+        'utf8',
+      )).resolves.toMatch(/^view:/);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('fails closed before touching the package tree when the shared lock is unavailable', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');

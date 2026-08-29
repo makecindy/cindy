@@ -85,7 +85,10 @@ export type PiPackagesChangeOrigin = 'local' | 'external' | 'external-runtime';
 const changeListeners = new Set<(origin: PiPackagesChangeOrigin) => void>();
 const packageMutationMayHaveChangedErrors = new WeakSet<object>();
 let changeTokenWatcherActive = false;
-let lastObservedChangeToken: string | null | undefined;
+let lastObservedRuntimeChangeToken: string | null | undefined;
+let lastObservedLegacyChangeToken: string | null | undefined;
+let lastObservedViewChangeToken: string | null | undefined;
+let lastNotifiedRuntimeChangeToken: string | null | undefined;
 let changeTokenReadInFlight: Promise<void> | undefined;
 let changeTokenReadQueued = false;
 const changeTokenWatchListener = () => void observePiPackageChangeToken();
@@ -114,9 +117,9 @@ function notifyPiPackagesChanged(origin: PiPackagesChangeOrigin): void {
   }
 }
 
-async function readPiPackageChangeToken(): Promise<string | null> {
+async function readPiPackageChangeToken(tokenPath: string): Promise<string | null> {
   try {
-    const handle = await fs.open(changeTokenPath(), 'r');
+    const handle = await fs.open(tokenPath, 'r');
     try {
       const stat = await handle.stat();
       if (stat.size > 512) throw new Error('Pi package change token is invalid');
@@ -135,17 +138,42 @@ function observePiPackageChangeToken(): Promise<void> {
     changeTokenReadQueued = true;
     return changeTokenReadInFlight;
   }
-  const pending = readPiPackageChangeToken().then((token) => {
-    if (lastObservedChangeToken === undefined) {
-      lastObservedChangeToken = token;
+  const pending = Promise.all([
+    readPiPackageChangeToken(runtimeChangeTokenPath()),
+    readPiPackageChangeToken(changeTokenPath()),
+    readPiPackageChangeToken(viewChangeTokenPath()),
+  ]).then(([runtimeToken, legacyToken, viewToken]) => {
+    if (
+      lastObservedRuntimeChangeToken === undefined
+      || lastObservedLegacyChangeToken === undefined
+      || lastObservedViewChangeToken === undefined
+    ) {
+      lastObservedRuntimeChangeToken = runtimeToken;
+      lastObservedLegacyChangeToken = legacyToken;
+      lastObservedViewChangeToken = viewToken;
+      lastNotifiedRuntimeChangeToken = runtimeToken
+        ?? (legacyToken?.startsWith('view:') ? null : legacyToken);
       return;
     }
-    if (token === lastObservedChangeToken) return;
-    lastObservedChangeToken = token;
+    const runtimeChanged = runtimeToken !== lastObservedRuntimeChangeToken;
+    const legacyChanged = legacyToken !== lastObservedLegacyChangeToken;
+    const viewChanged = viewToken !== lastObservedViewChangeToken;
+    if (!runtimeChanged && !legacyChanged && !viewChanged) return;
+    lastObservedRuntimeChangeToken = runtimeToken;
+    lastObservedLegacyChangeToken = legacyToken;
+    lastObservedViewChangeToken = viewToken;
     invalidateInspectionCache();
-    // Unprefixed tokens come from older Cindy versions. Conservatively treat
-    // them as runtime-affecting so mixed packaged/dev instances still converge.
-    notifyPiPackagesChanged(token?.startsWith('view:') ? 'external' : 'external-runtime');
+    const runtimeCandidate = runtimeChanged && runtimeToken
+      ? runtimeToken
+      : legacyChanged && legacyToken && !legacyToken.startsWith('view:')
+        ? legacyToken
+        : null;
+    if (runtimeCandidate && runtimeCandidate !== lastNotifiedRuntimeChangeToken) {
+      lastNotifiedRuntimeChangeToken = runtimeCandidate;
+      notifyPiPackagesChanged('external-runtime');
+    } else if (viewChanged || (legacyChanged && legacyToken?.startsWith('view:'))) {
+      notifyPiPackagesChanged('external');
+    }
   }).catch((error) => {
     log.warn('Pi package change token observation failed', {
       message: error instanceof Error ? error.message : String(error),
@@ -165,17 +193,25 @@ function startPiPackageChangeTokenWatcher(): void {
   if (changeTokenWatcherActive) return;
   changeTokenWatcherActive = true;
   void observePiPackageChangeToken();
-  watchFile(
+  for (const tokenPath of [
+    runtimeChangeTokenPath(),
     changeTokenPath(),
-    { interval: CHANGE_TOKEN_POLL_MS, persistent: false },
-    changeTokenWatchListener,
-  );
+    viewChangeTokenPath(),
+  ]) {
+    watchFile(
+      tokenPath,
+      { interval: CHANGE_TOKEN_POLL_MS, persistent: false },
+      changeTokenWatchListener,
+    );
+  }
 }
 
 function stopPiPackageChangeTokenWatcher(): void {
   if (!changeTokenWatcherActive) return;
   changeTokenWatcherActive = false;
+  unwatchFile(runtimeChangeTokenPath(), changeTokenWatchListener);
   unwatchFile(changeTokenPath(), changeTokenWatchListener);
+  unwatchFile(viewChangeTokenPath(), changeTokenWatchListener);
 }
 
 type SnapshotUnavailableWarning = 'inspection-failed' | 'inspection-limit';
@@ -318,13 +354,30 @@ function changeTokenPath(): string {
   return path.join(packageHome(), 'cindy-package-change-token');
 }
 
+function runtimeChangeTokenPath(): string {
+  return path.join(packageHome(), 'cindy-package-runtime-change-token');
+}
+
+function viewChangeTokenPath(): string {
+  return path.join(packageHome(), 'cindy-package-view-change-token');
+}
+
 async function persistPiPackageChangeToken(runtimeInvalidation: boolean): Promise<void> {
   const scope = runtimeInvalidation ? 'runtime' : 'view';
   const token = `${scope}:${Date.now()}-${process.pid}-${randomUUID()}`;
-  // Set the local baseline before the atomic publish. The local process emits
-  // synchronously below; its watcher must not duplicate the same refresh.
-  lastObservedChangeToken = token;
-  atomicWriteFileSync(changeTokenPath(), `${token}\n`);
+  // Set only the corresponding local baseline before atomic publication. A
+  // later view edge can no longer overwrite an unobserved runtime edge.
+  if (runtimeInvalidation) {
+    lastObservedRuntimeChangeToken = token;
+    lastObservedLegacyChangeToken = token;
+    lastNotifiedRuntimeChangeToken = token;
+    atomicWriteFileSync(runtimeChangeTokenPath(), `${token}\n`);
+    // Keep publishing runtime edges to the legacy file for older peers.
+    atomicWriteFileSync(changeTokenPath(), `${token}\n`);
+  } else {
+    lastObservedViewChangeToken = token;
+    atomicWriteFileSync(viewChangeTokenPath(), `${token}\n`);
+  }
 }
 
 async function publishPiPackagesChanged(
