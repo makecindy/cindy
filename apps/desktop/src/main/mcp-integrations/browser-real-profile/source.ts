@@ -105,17 +105,25 @@ export function executableCandidates(
   kind: ChromiumKind,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv = process.env,
+  home = os.homedir(),
 ): string[] {
   if (platform === 'darwin') {
+    const macApp = (appName: string, binary: string): string[] => {
+      const bundle = `${appName}.app/Contents/MacOS/${binary}`;
+      return [
+        `/Applications/${bundle}`,
+        path.posix.join(home, 'Applications', bundle),
+      ];
+    };
     switch (kind) {
       case 'chrome':
-        return ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'];
+        return macApp('Google Chrome', 'Google Chrome');
       case 'edge':
-        return ['/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'];
+        return macApp('Microsoft Edge', 'Microsoft Edge');
       case 'brave':
-        return ['/Applications/Brave Browser.app/Contents/MacOS/Brave Browser'];
+        return macApp('Brave Browser', 'Brave Browser');
       case 'chromium':
-        return ['/Applications/Chromium.app/Contents/MacOS/Chromium'];
+        return macApp('Chromium', 'Chromium');
     }
   }
   if (platform === 'win32') {
@@ -207,7 +215,9 @@ export function listInstalledChromium(options: {
   const env = options.env ?? process.env;
   const found: InstalledChromium[] = [];
   for (const kind of CHROMIUM_KINDS) {
-    const executablePath = executableCandidates(kind, options.platform, env).find(exists);
+    const executablePath = executableCandidates(kind, options.platform, env, options.home).find(
+      exists,
+    );
     if (!executablePath) continue;
     found.push({
       kind,

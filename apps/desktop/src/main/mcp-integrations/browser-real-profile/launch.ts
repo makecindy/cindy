@@ -142,7 +142,10 @@ export function wrapRuntimeWithRealProfile(
 
   return {
     async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
-      if (request.action === 'start') {
+      // Vendored open/tabs/snapshot/… call ensureBrowserAvailable() without
+      // /start. Consent-on sessions must snapshot before those implicit
+      // launches, or the next explicit start short-circuits on our live pid.
+      if (shouldPrepareCopiedLogins(request.action, deps.isEnabled())) {
         return startWithSnapshot(inner, request, {
           ...deps,
           resolveSource,
@@ -168,6 +171,14 @@ export function wrapRuntimeWithRealProfile(
   };
 }
 
+export function shouldPrepareCopiedLogins(
+  action: BrowserControlRequest['action'],
+  enabled: boolean,
+): boolean {
+  if (action === 'status' || action === 'stop') return false;
+  return action === 'start' || enabled;
+}
+
 async function startWithSnapshot(
   inner: Pick<BrowserControlRuntime, 'call'>,
   request: BrowserControlRequest,
@@ -191,8 +202,8 @@ async function startWithSnapshot(
     const pick = deps.pickCdpPort ?? ((preferred: number) => pickManagedCdpPort(preferred));
     cdpPort = await pick(MANAGED_CDP_PORT);
   } catch (err) {
-    if (isRealProfileError(err)) return failure(err.code, err.message);
-    return failure(FOREIGN_AGENT_BROWSER_ERROR, FOREIGN_AGENT_BROWSER_ERROR);
+    if (isRealProfileError(err)) return failure(request.action, err.code, err.message);
+    return failure(request.action, FOREIGN_AGENT_BROWSER_ERROR, FOREIGN_AGENT_BROWSER_ERROR);
   }
 
   if (!enabled) {
@@ -204,13 +215,14 @@ async function startWithSnapshot(
 
   if (isHeadless(status.data)) {
     return failure(
+      request.action,
       'HEADLESS_FORBIDDEN',
       'Real-profile browsing cannot run in headless mode (it would use a separate cookie store).',
     );
   }
 
   if (!runtimeDir) {
-    return failure('COPY_FAILED', 'Browser runtime directory is not configured.');
+    return failure(request.action, 'COPY_FAILED', 'Browser runtime directory is not configured.');
   }
 
   try {
@@ -229,9 +241,10 @@ async function startWithSnapshot(
   } catch (err) {
     deps.setLastApplied(null);
     if (isRealProfileError(err)) {
-      return failure(err.code, err.message);
+      return failure(request.action, err.code, err.message);
     }
     return failure(
+      request.action,
       'COPY_FAILED',
       err instanceof Error ? err.message : 'Failed to copy browser logins.',
     );
@@ -240,11 +253,15 @@ async function startWithSnapshot(
   return inner.call(withActiveBrowserProfile(request, true));
 }
 
-function failure(code: string, message: string): BrowserControlResult {
+function failure(
+  action: BrowserControlRequest['action'],
+  code: string,
+  message: string,
+): BrowserControlResult {
   void code;
   return {
     ok: false,
-    action: 'start',
+    action,
     errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
     message,
   };

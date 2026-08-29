@@ -26,7 +26,7 @@ describe('assertManagedBrowserStopped', () => {
     expect(() =>
       assertManagedBrowserStopped({
         status: result('status', true, { running: true }),
-        stop: result('stop', true),
+        stop: result('stop', true, { stopped: true }),
       }),
     ).not.toThrow();
   });
@@ -60,6 +60,26 @@ describe('assertManagedBrowserStopped', () => {
       assertManagedBrowserStopped({
         status: result('status', true, { running: true }),
         stop: null,
+      }),
+    ).toThrow(RealProfileError);
+  });
+
+  it('fails closed when stop is ok but did not actually stop the process', () => {
+    try {
+      assertManagedBrowserStopped({
+        status: result('status', true, { running: true }),
+        stop: result('stop', true, { stopped: false }),
+      });
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(RealProfileError);
+      expect(err).toMatchObject({ code: 'STOP_FAILED' });
+    }
+
+    expect(() =>
+      assertManagedBrowserStopped({
+        status: result('status', true, { running: true }),
+        stop: result('stop', true, {}),
       }),
     ).toThrow(RealProfileError);
   });

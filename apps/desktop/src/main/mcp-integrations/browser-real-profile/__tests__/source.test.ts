@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  listInstalledChromium,
   parseDefaultHandler,
   resolveSourceBrowser,
   userDataDirFor,
@@ -74,6 +75,26 @@ describe('resolveSourceBrowser', () => {
     expect(() => resolveSourceBrowser({ defaultKind: 'other', installed: [] })).toThrow(
       RealProfileError,
     );
+  });
+});
+
+describe('listInstalledChromium', () => {
+  it('finds Chrome under the user Applications folder on darwin', () => {
+    const home = '/Users/x';
+    const exe = `${home}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`;
+    expect(
+      listInstalledChromium({
+        platform: 'darwin',
+        home,
+        exists: (filePath) => filePath === exe,
+      }),
+    ).toEqual([
+      {
+        kind: 'chrome',
+        executablePath: exe,
+        userDataDir: `${home}/Library/Application Support/Google/Chrome`,
+      },
+    ]);
   });
 });
 

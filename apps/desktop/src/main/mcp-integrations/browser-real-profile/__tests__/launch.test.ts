@@ -5,6 +5,7 @@ import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser
 import {
   annotateStatusData,
   isOwnLiveManagedBrowser,
+  shouldPrepareCopiedLogins,
   withActiveBrowserProfile,
   wrapRuntimeWithRealProfile,
 } from '../launch.js';
@@ -307,6 +308,91 @@ describe('wrapRuntimeWithRealProfile', () => {
     const started = await wrapped.call({ action: 'start' });
     expect(started.ok).toBe(true);
     expect(startedProfile).toBe('Cindy-real');
+  });
+
+  it('snapshots before open so implicit ensureBrowserAvailable does not skip the copy', async () => {
+    let opened = 0;
+    const inner = {
+      async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
+        if (request.action === 'status') {
+          return result('status', { running: false });
+        }
+        if (request.action === 'open') {
+          opened += 1;
+          return result('open', { running: true });
+        }
+        return result(request.action, {});
+      },
+    };
+    const snapshot = vi.fn(async () => ({
+      destDir: '/runtime/browser/Cindy-real/user-data',
+      sourceKind: 'chrome' as const,
+      sourceProfile: 'Default',
+      filesCopied: ['Local State'],
+    }));
+    const applyConfig = vi.fn();
+    const wrapped = wrapRuntimeWithRealProfile(inner, {
+      isEnabled: () => true,
+      getRuntimeDir: () => '/runtime',
+      applyConfig,
+      resolveSource: () => chrome,
+      snapshot,
+      cleanup: vi.fn(),
+      platform: 'darwin',
+      pickCdpPort: pick18800,
+    });
+    const openedResult = await wrapped.call({ action: 'open', url: 'https://example.com' });
+    expect(openedResult.ok).toBe(true);
+    expect(opened).toBe(1);
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(applyConfig).toHaveBeenCalledWith({
+      useRealProfile: true,
+      executablePath: '/chrome',
+      cdpPort: 18800,
+    });
+  });
+
+  it('does not snapshot status or a consent-off open', async () => {
+    const snapshot = vi.fn();
+    const cleanup = vi.fn();
+    const applyConfig = vi.fn();
+    const inner = fakeInner({ running: false, starts: 0 });
+    const wrappedOn = wrapRuntimeWithRealProfile(inner, {
+      isEnabled: () => true,
+      getRuntimeDir: () => '/runtime',
+      applyConfig,
+      resolveSource: () => chrome,
+      snapshot,
+      cleanup,
+      pickCdpPort: pick18800,
+    });
+    await wrappedOn.call({ action: 'status' });
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(applyConfig).not.toHaveBeenCalled();
+
+    const wrappedOff = wrapRuntimeWithRealProfile(inner, {
+      isEnabled: () => false,
+      getRuntimeDir: () => '/runtime',
+      applyConfig,
+      snapshot,
+      cleanup,
+      pickCdpPort: pick18800,
+    });
+    await wrappedOff.call({ action: 'open', url: 'https://example.com' });
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(applyConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe('shouldPrepareCopiedLogins', () => {
+  it('gates every consent-on action except status and stop', () => {
+    expect(shouldPrepareCopiedLogins('start', false)).toBe(true);
+    expect(shouldPrepareCopiedLogins('open', false)).toBe(false);
+    expect(shouldPrepareCopiedLogins('open', true)).toBe(true);
+    expect(shouldPrepareCopiedLogins('tabs', true)).toBe(true);
+    expect(shouldPrepareCopiedLogins('status', true)).toBe(false);
+    expect(shouldPrepareCopiedLogins('stop', true)).toBe(false);
   });
 });
 
