@@ -20,7 +20,6 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
-import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 
@@ -31,6 +30,8 @@ import * as ownerGuard from './ownerGuard.js';
 import { parseIncoming } from './incomingContent.js';
 import type { AttachmentRef } from './incomingContent.js';
 import { messages as transportMessages } from './messages.js';
+import { openAllowedOutboundFile } from '../allowedFiles.js';
+import type { OpenedAllowedOutboundFile } from '../allowedFiles.js';
 import type { InteractiveCardSpec, SendFileResult } from '../types.js';
 import type { BotCredentials } from './internal-types.js';
 
@@ -925,17 +926,31 @@ export async function sendFile(
 export async function sendFileToChat(
   chatId: string,
   absPath: string,
+  allowedRoots: readonly string[],
   displayName: string | undefined,
   uuid: string,
-  handle?: FileHandle,
 ): Promise<SendFileResult> {
-  return sendFileToTarget({ kind: 'chat_id', id: chatId }, absPath, displayName, uuid, handle);
+  const opened = await openAllowedOutboundFile(absPath, allowedRoots);
+  if (!opened) return { ok: false, reason: 'NOT_FOUND' };
+  try {
+    return await sendOpenedFileToTarget(
+      { kind: 'chat_id', id: chatId },
+      opened,
+      displayName,
+      uuid,
+    );
+  } finally {
+    await opened.handle.close().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      getLog().warn(`[feishu/outbound] sendFileToChat close failed: ${msg}`);
+    });
+  }
 }
 
-function openOutboundFileStream(absPath: string, handle?: FileHandle): fs.ReadStream {
-  return handle
-    ? handle.createReadStream({ autoClose: false })
-    : fs.createReadStream(absPath);
+interface OutboundFileSource {
+  absPath: string;
+  size: number;
+  createReadStream(): fs.ReadStream;
 }
 
 async function sendFileToTarget(
@@ -943,37 +958,78 @@ async function sendFileToTarget(
   absPath: string,
   displayName?: string,
   uuid?: string,
-  handle?: FileHandle,
+): Promise<SendFileResult> {
+  const c = ensureClient();
+
+  if (!fs.existsSync(absPath)) return { ok: false, reason: 'NOT_FOUND' };
+  const stat = fs.statSync(absPath);
+  return sendFileSourceToTarget(
+    c,
+    target,
+    {
+      absPath,
+      size: stat.size,
+      createReadStream: () => fs.createReadStream(absPath),
+    },
+    displayName,
+    uuid,
+  );
+}
+
+async function sendOpenedFileToTarget(
+  target: SendTarget,
+  opened: OpenedAllowedOutboundFile,
+  displayName?: string,
+  uuid?: string,
+): Promise<SendFileResult> {
+  return sendFileSourceToTarget(
+    ensureClient(),
+    target,
+    {
+      absPath: opened.canonicalPath,
+      size: opened.size,
+      // Supplying the validated fd prevents a second path lookup. The outer
+      // `finally` owns the FileHandle lifecycle, so the stream must not close it.
+      createReadStream: () =>
+        fs.createReadStream(opened.canonicalPath, {
+          fd: opened.handle.fd,
+          autoClose: false,
+        }),
+    },
+    displayName,
+    uuid,
+  );
+}
+
+async function sendFileSourceToTarget(
+  c: Lark.Client,
+  target: SendTarget,
+  source: OutboundFileSource,
+  displayName?: string,
+  uuid?: string,
 ): Promise<SendFileResult> {
   const log = getLog();
-  const c = ensureClient();
-  const baseName = path.basename(absPath);
+  const baseName = path.basename(source.absPath);
   const showName = displayName?.length ? displayName : baseName;
 
-  let stat: fs.Stats;
-  try {
-    stat = handle ? await handle.stat() : fs.statSync(absPath);
-  } catch {
-    return { ok: false, reason: 'NOT_FOUND' };
-  }
-  if (stat.size === 0) return { ok: false, reason: 'EMPTY' };
-  if (stat.size > FEISHU_FILE_SIZE_LIMIT) return { ok: false, reason: 'TOO_LARGE' };
+  if (source.size === 0) return { ok: false, reason: 'EMPTY' };
+  if (source.size > FEISHU_FILE_SIZE_LIMIT) return { ok: false, reason: 'TOO_LARGE' };
 
   // Image fast-path: if the file is a feishu-supported image type and within
   // the image-msg size cap, send as msg_type:image so it previews inline.
-  if (isFeishuImageExt(absPath) && stat.size <= FEISHU_IMAGE_MAX_BYTES) {
-    return sendImageMessage(c, target, absPath, uuid, handle);
+  if (isFeishuImageExt(source.absPath) && source.size <= FEISHU_IMAGE_MAX_BYTES) {
+    return sendImageMessage(c, target, source.createReadStream, uuid);
   }
 
   // 1. Upload to obtain file_key.
   let fileKey: string;
   try {
-    const fileType = inferFeishuFileType(absPath);
+    const fileType = inferFeishuFileType(source.absPath);
     const res = await c.im.file.create({
       data: {
         file_type: fileType,
         file_name: showName,
-        file: openOutboundFileStream(absPath, handle),
+        file: source.createReadStream(),
       },
     });
     const key = (res as { file_key?: string } | null)?.file_key;
@@ -1147,16 +1203,15 @@ export async function getChatName(chatId: string): Promise<string | null> {
 async function sendImageMessage(
   c: Lark.Client,
   target: SendTarget,
-  absPath: string,
+  createReadStream: () => fs.ReadStream,
   uuid?: string,
-  handle?: FileHandle,
 ): Promise<SendFileResult> {
   const log = getLog();
   try {
     const upRes = await c.im.v1.image.create({
       data: {
         image_type: 'message',
-        image: openOutboundFileStream(absPath, handle),
+        image: createReadStream(),
       },
     });
     const imageKey = (upRes as { image_key?: string }).image_key;

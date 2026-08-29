@@ -47,17 +47,20 @@ describe('Feishu native thread/main dual delivery', () => {
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
   });
 
-  it('suppresses a later distinct-id main-feed copy after the pair is confirmed', async () => {
+  it('suppresses fresh flat message ids after the logical send is confirmed', async () => {
+    vi.useFakeTimers();
     const topic = await coordinateDualDelivery(input());
     await expect(
-      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+      coordinateDualDelivery(input({ messageId: 'om_flat_first', threadId: '' })),
     ).resolves.toEqual({ kind: 'suppress-main-copy' });
 
-    await expect(
-      coordinateDualDelivery(input({ messageId: 'om_flat_again', threadId: '' })),
-    ).resolves.toEqual({ kind: 'suppress-main-copy' });
-    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
-    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+    const duplicate = coordinateDualDelivery(
+      input({ messageId: 'om_flat_second', threadId: '' }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(duplicate).resolves.toEqual({ kind: 'suppress-main-copy' });
+    expect(topic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
   });
 
   it('dispatches an unpaired flat group message after the bounded wait', async () => {

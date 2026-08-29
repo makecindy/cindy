@@ -1,7 +1,7 @@
 import { constants as fsConstants } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
 import fs from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import type { Stats } from 'node:fs';
 import path from 'node:path';
 
 function isPathWithin(base: string, target: string): boolean {
@@ -13,94 +13,110 @@ function isPathWithin(base: string, target: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function sameFileIdentity(left: Stats, right: Stats): boolean {
-  // Windows file indexes are not always populated; skip identity when both are 0.
-  if (left.ino === 0 && right.ino === 0) return true;
+function isSameFile(left: BigIntStats, right: BigIntStats): boolean {
+  // Windows file indexes are not always populated. Fail closed on POSIX when
+  // either inode is 0; on win32 treat a pair of zeros as "identity unknown"
+  // and let the pre/post canonical-path checks carry the containment proof.
+  if (left.ino === 0n || right.ino === 0n) {
+    return process.platform === 'win32' && left.ino === 0n && right.ino === 0n;
+  }
   return left.dev === right.dev && left.ino === right.ino;
 }
 
-function nofollowReadFlags(): number | null {
-  const nofollow = fsConstants.O_NOFOLLOW;
-  if (typeof nofollow !== 'number') return null;
-  return fsConstants.O_RDONLY | nofollow;
-}
-
-async function openConfinedRead(targetReal: string): Promise<FileHandle> {
-  // Windows maps O_NOFOLLOW to FILE_FLAG_OPEN_REPARSE_POINT, which makes
-  // ordinary temp files fail or report as non-files. Bind identity with
-  // lstat/fstat + a second realpath instead of that flag.
-  const flags = process.platform === 'win32' ? null : nofollowReadFlags();
-  if (flags !== null) return await fs.open(targetReal, flags);
-  return await fs.open(targetReal, 'r');
-}
-
-async function openedPathStaysInRoot(
-  handle: FileHandle,
-  rootReal: string,
-  fallbackPath: string,
-): Promise<string | null> {
-  if (process.platform === 'linux') {
-    try {
-      const fdPath = await fs.readlink(`/proc/self/fd/${handle.fd}`);
-      if (!isPathWithin(rootReal, fdPath)) return null;
-      return fdPath;
-    } catch {
-      // /proc may be unavailable; fall through to the caller path.
-    }
-  }
-  if (!isPathWithin(rootReal, fallbackPath)) return null;
-  return fallbackPath;
-}
-
-export interface AllowedOutboundFile {
-  absPath: string;
+export interface OpenedAllowedOutboundFile {
+  /** Canonical path is metadata only. Uploads must read from `handle`. */
+  canonicalPath: string;
   handle: FileHandle;
+  size: number;
 }
+
+interface AllowedOutboundFileSystem {
+  realpath(target: string): Promise<string>;
+  open(target: string): Promise<FileHandle>;
+  stat(target: string): Promise<BigIntStats>;
+}
+
+const defaultFileSystem: AllowedOutboundFileSystem = {
+  realpath: (target) => fs.realpath(target),
+  open: (target) => {
+    const nofollow = fsConstants.O_NOFOLLOW;
+    // Windows maps O_NOFOLLOW to FILE_FLAG_OPEN_REPARSE_POINT, which makes
+    // ordinary files fail or report as non-files. Bind identity with the
+    // pre/post realpath + dev/ino checks instead of that flag.
+    if (process.platform === 'win32' || typeof nofollow !== 'number') {
+      return fs.open(target, 'r');
+    }
+    return fs.open(target, fsConstants.O_RDONLY | nofollow);
+  },
+  stat: (target) => fs.stat(target, { bigint: true }),
+};
 
 /**
- * Resolve a model-authored attachment only when both its lexical path and
- * canonical target stay under a host-approved root. The returned handle is
- * opened with `O_NOFOLLOW` on that canonical path when the platform supports
- * it, then re-checked against the still-canonical object so an ancestor
- * directory swap after `realpath()` cannot upload a root-escape. Caller must
- * close the handle.
+ * Open a model-authored attachment only when both its lexical path and the
+ * opened file identity stay under a host-approved root.
+ *
+ * The pre/post canonical checks plus `dev`/`ino` comparison close the race
+ * between path validation and `open()`. Callers must upload from `handle` and
+ * close it in a `finally`; reopening `canonicalPath` would reintroduce TOCTOU.
  */
-export async function resolveAllowedOutboundFile(
+export async function openAllowedOutboundFile(
   absPath: string,
   allowedRoots: readonly string[],
-  realpath: (target: string) => Promise<string> = fs.realpath,
-): Promise<AllowedOutboundFile | null> {
+  fileSystem: AllowedOutboundFileSystem = defaultFileSystem,
+): Promise<OpenedAllowedOutboundFile | null> {
   const targetAbs = path.resolve(absPath);
   for (const root of allowedRoots) {
     if (!root.trim()) continue;
     const rootAbs = path.resolve(root);
     if (!isPathWithin(rootAbs, targetAbs)) continue;
+
+    let handle: FileHandle | null = null;
+    let keepHandle = false;
     try {
-      const [rootReal, targetReal] = await Promise.all([
-        realpath(rootAbs),
-        realpath(targetAbs),
+      const [rootRealBefore, targetRealBefore] = await Promise.all([
+        fileSystem.realpath(rootAbs),
+        fileSystem.realpath(targetAbs),
       ]);
-      if (!isPathWithin(rootReal, targetReal)) continue;
-      const expected = await fs.lstat(targetReal);
-      if (expected.isSymbolicLink() || !expected.isFile()) continue;
-      const handle = await openConfinedRead(targetReal);
-      let handedOff = false;
-      try {
-        const opened = await handle.stat();
-        if (!opened.isFile() || !sameFileIdentity(expected, opened)) continue;
-        const stillReal = await realpath(targetAbs);
-        if (!isPathWithin(rootReal, stillReal)) continue;
-        const stillStat = await fs.lstat(stillReal);
-        if (!stillStat.isFile() || !sameFileIdentity(opened, stillStat)) continue;
-        const confinedPath = await openedPathStaysInRoot(handle, rootReal, stillReal);
-        if (!confinedPath) continue;
-        handedOff = true;
-        return { absPath: confinedPath, handle };
-      } finally {
-        if (!handedOff) await handle.close().catch(() => undefined);
+      if (!isPathWithin(rootRealBefore, targetRealBefore)) continue;
+
+      const rootStatBefore = await fileSystem.stat(rootRealBefore);
+      if (!rootStatBefore.isDirectory()) continue;
+
+      handle = await fileSystem.open(targetRealBefore);
+      const openedStat = await handle.stat({ bigint: true });
+      if (!openedStat.isFile()) continue;
+
+      const [rootRealAfter, targetRealAfter] = await Promise.all([
+        fileSystem.realpath(rootAbs),
+        fileSystem.realpath(targetAbs),
+      ]);
+      if (!isPathWithin(rootRealAfter, targetRealAfter)) continue;
+
+      const [rootStatAfter, targetStatAfter] = await Promise.all([
+        fileSystem.stat(rootRealAfter),
+        fileSystem.stat(targetRealAfter),
+      ]);
+      if (
+        !rootStatAfter.isDirectory() ||
+        !targetStatAfter.isFile() ||
+        !isSameFile(rootStatBefore, rootStatAfter) ||
+        !isSameFile(openedStat, targetStatAfter)
+      ) {
+        continue;
       }
+
+      keepHandle = true;
+      return {
+        canonicalPath: targetRealAfter,
+        handle,
+        size: Number(openedStat.size),
+      };
     } catch {
-      // Missing, unreadable, symlink swap, or cyclic paths fail closed.
+      // Missing, unreadable, cyclic, or concurrently replaced paths fail closed.
+    } finally {
+      if (handle && !keepHandle) {
+        await handle.close().catch(() => undefined);
+      }
     }
   }
   return null;

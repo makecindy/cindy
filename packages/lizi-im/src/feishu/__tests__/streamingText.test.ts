@@ -271,6 +271,7 @@ describe('feishu streaming text', () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-file-missing-'));
     tempDirs.push(root);
     const missingFile = path.join(root, 'missing.txt');
+    mocks.sendFileToChat.mockResolvedValueOnce({ ok: false, reason: 'NOT_FOUND' });
 
     await mirrorFinal(
       'oc_group',
@@ -281,7 +282,7 @@ describe('feishu streaming text', () => {
       1,
     );
 
-    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    expect(mocks.sendFileToChat).toHaveBeenCalledOnce();
     expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
       messages.streaming.deliveryFailed,
     );
@@ -293,6 +294,7 @@ describe('feishu streaming text', () => {
     tempDirs.push(allowedRoot, outsideRoot);
     const outsideFile = path.join(outsideRoot, 'secret.txt');
     await fs.writeFile(outsideFile, 'secret');
+    mocks.sendFileToChat.mockResolvedValueOnce({ ok: false, reason: 'NOT_FOUND' });
 
     await mirrorFinal(
       'oc_group',
@@ -303,7 +305,7 @@ describe('feishu streaming text', () => {
       1,
     );
 
-    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    expect(mocks.sendFileToChat).toHaveBeenCalledOnce();
     expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
       messages.streaming.deliveryFailed,
     );
@@ -315,9 +317,8 @@ describe('feishu streaming text', () => {
     const firstFile = path.join(root, 'first.txt');
     const secondFile = path.join(root, 'second.txt');
     await Promise.all([fs.writeFile(firstFile, 'first'), fs.writeFile(secondFile, 'second')]);
-    const firstRealPath = await fs.realpath(firstFile);
     mocks.sendFileToChat.mockImplementation(async (_chatId: string, absPath: string) =>
-      absPath === firstRealPath
+      absPath === firstFile
         ? { ok: true, messageId: 'om_first' }
         : { ok: false, reason: 'upload rejected' },
     );
@@ -472,6 +473,7 @@ describe('feishu streaming text', () => {
   });
 
   it('does not copy parent-chat files outside allowedFileRoots', async () => {
+    mocks.sendFileToChat.mockResolvedValueOnce({ ok: false, reason: 'NOT_FOUND' });
     const handle = await start('g/oc_group/omt_topic', undefined, {
       mirrorChatId: 'oc_group',
       mirrorKey: 'd'.repeat(64),
@@ -481,7 +483,7 @@ describe('feishu streaming text', () => {
     await handle.finalize(`见 [secret](xdt-file://${path.join(os.tmpdir(), 'cindy-secret.txt')})`);
 
     expect(mocks.sendCardToChat).toHaveBeenCalled();
-    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    expect(mocks.sendFileToChat).toHaveBeenCalledOnce();
   });
 
   it('copies parent-chat files that stay inside allowedFileRoots', async () => {
@@ -499,10 +501,10 @@ describe('feishu streaming text', () => {
 
     expect(mocks.sendFileToChat).toHaveBeenCalledWith(
       'oc_group',
-      await fs.realpath(allowedFile),
+      allowedFile,
+      [root],
       'report.txt',
       `${'e'.repeat(32)}-f0`,
-      expect.objectContaining({ fd: expect.any(Number) }),
     );
   });
 });
