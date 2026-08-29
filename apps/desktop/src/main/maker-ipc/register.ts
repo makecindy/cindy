@@ -882,7 +882,7 @@ import {
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
 import {
-  isXdOpenAiCodexProviderTransition,
+  decideCodexProviderThreadRelink,
   relinkCodexProviderThread,
   type CodexProviderThreadRoute,
 } from './codexProviderThreadRelink.js';
@@ -15145,22 +15145,33 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         effectiveProviderId === undefined
           ? currentProviderId
           : (normalizeSessionProviderId(effectiveProviderId) ?? null);
-      const requiresCodexThreadRelink =
+      const hasPersistedLocalCodexThread =
         internalOptions.source === 'user' &&
         !isDeviceLinkInvoke() &&
         runtimeStatus.agentKind === 'codex' &&
         !runtimeStatus.remoteHostId &&
-        !!runtimeStatus.sdkSessionId &&
-        isXdOpenAiCodexProviderTransition(runtimeStatus.providerId, targetProviderId);
-      const targetCodexRoute: CodexProviderThreadRoute | undefined =
-        requiresCodexThreadRelink
-          ? {
-              model,
-              providerId: targetProviderId,
-              effort: atomicSelection?.effort ?? runtimeStatus.effort,
-              fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
-            }
-          : undefined;
+        !!runtimeStatus.sdkSessionId;
+      const relinkDecision = hasPersistedLocalCodexThread
+        ? decideCodexProviderThreadRelink(
+            { model: runtimeStatus.model, providerId: runtimeStatus.providerId },
+            { model, providerId: targetProviderId },
+          )
+        : 'not-applicable';
+      if (relinkDecision === 'unresolved') {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'Codex provider credential identity could not be resolved; retry with an explicit provider',
+        );
+      }
+      const requiresCodexThreadRelink = relinkDecision === 'relink';
+      const targetCodexRoute: CodexProviderThreadRoute | undefined = requiresCodexThreadRelink
+        ? {
+            model,
+            providerId: targetProviderId,
+            effort: atomicSelection?.effort ?? runtimeStatus.effort,
+            fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
+          }
+        : undefined;
       const relinkCodexThread = targetCodexRoute
         ? async (): Promise<void> => {
             const ownerScope = captureDataOwnerBroadcastScope();

@@ -302,7 +302,8 @@ describe('session runtime control wiring', () => {
       setModel.indexOf('const targetCodexRoute:'),
       setModel.indexOf('const relinkCodexThread ='),
     );
-    expect(targetRoute).toContain('requiresCodexThreadRelink\n          ? {');
+    expect(targetRoute).toContain('requiresCodexThreadRelink');
+    expect(targetRoute).toContain('? {');
     expect(targetRoute).toContain(
       'effort: atomicSelection?.effort ?? runtimeStatus.effort',
     );
@@ -310,6 +311,26 @@ describe('session runtime control wiring', () => {
       'fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode',
     );
     expect(targetRoute).not.toContain('requiresCodexThreadRelink && atomicSelection');
+  });
+
+  it('derives the Codex relink boundary from effective credential identities', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const relinkGate = setModel.slice(
+      setModel.indexOf('const hasPersistedLocalCodexThread ='),
+      setModel.indexOf('const targetCodexRoute:'),
+    );
+    expect(relinkGate).toContain('decideCodexProviderThreadRelink(');
+    expect(relinkGate).toContain(
+      '{ model: runtimeStatus.model, providerId: runtimeStatus.providerId }',
+    );
+    expect(relinkGate).toContain('{ model, providerId: targetProviderId }');
+    expect(relinkGate).toContain("relinkDecision === 'unresolved'");
+    expect(relinkGate).toContain("relinkDecision === 'relink'");
+    expect(relinkGate).toContain("throwIpcError(\n          'PRECONDITION_FAILED'");
   });
 
   it('rejects terminal tasks before effort or Fast mutations recreate runtime state', () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  decideCodexProviderThreadRelink,
   isXdOpenAiCodexProviderTransition,
   relinkCodexProviderThread,
 } from '../codexProviderThreadRelink.js';
@@ -29,9 +30,70 @@ describe('isXdOpenAiCodexProviderTransition', () => {
     expect(isXdOpenAiCodexProviderTransition(null, 'openai')).toBe(false);
     expect(isXdOpenAiCodexProviderTransition('openai', 'openai')).toBe(false);
   });
+
+  it('recognizes implicit XD Codex routes after credential identity resolution', () => {
+    const implicitXd = { providerId: null, model: 'codex/gpt-5.6-sol' };
+    const subscription = { providerId: 'openai', model: 'gpt-5.6-sol' };
+
+    expect(decideCodexProviderThreadRelink(implicitXd, subscription)).toBe('relink');
+    expect(decideCodexProviderThreadRelink(subscription, implicitXd)).toBe('relink');
+    expect(
+      decideCodexProviderThreadRelink({ providerId: null, model: 'ambiguous-model' }, subscription),
+    ).toBe('unresolved');
+  });
 });
 
 describe('relinkCodexProviderThread', () => {
+  it.each([
+    {
+      name: 'implicit XD to OpenAI',
+      source: { ...source, providerId: null, model: 'codex/gpt-5.6-sol' },
+      target,
+    },
+    {
+      name: 'OpenAI to implicit XD',
+      source: {
+        ...source,
+        sdkSessionId: 'thread-openai',
+        providerId: 'openai',
+        model: 'gpt-5.6-sol',
+      },
+      target: {
+        model: 'codex/gpt-5.6-sol',
+        providerId: null,
+        effort: 'xhigh',
+        fastMode: true,
+      },
+    },
+  ])('forks and CAS-commits the complete route for $name', async ({ source, target }) => {
+    const fork = vi.fn(async () => ({ newSdkSessionId: 'thread-replacement' }));
+    const commit = vi.fn(async () => true);
+
+    expect(decideCodexProviderThreadRelink(source, target)).toBe('relink');
+    await expect(
+      relinkCodexProviderThread(
+        { readSource: vi.fn(async () => source), fork, commit },
+        { sessionId: 'session-implicit-provider', target },
+      ),
+    ).resolves.toEqual({
+      previousSdkSessionId: source.sdkSessionId,
+      newSdkSessionId: 'thread-replacement',
+    });
+
+    expect(fork).toHaveBeenCalledWith({
+      sourceSdkSessionId: source.sdkSessionId,
+      sourceModel: source.model,
+      sourceProviderId: source.providerId,
+      workingDir: source.workingDir,
+    });
+    expect(commit).toHaveBeenCalledWith({
+      sessionId: 'session-implicit-provider',
+      source,
+      newSdkSessionId: 'thread-replacement',
+      target,
+    });
+  });
+
   it('forks with source credentials and CAS-commits the full target route', async () => {
     const fork = vi.fn(async () => ({ newSdkSessionId: 'thread-openai' }));
     const commit = vi.fn(async () => true);

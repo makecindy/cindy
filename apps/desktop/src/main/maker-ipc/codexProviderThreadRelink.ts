@@ -5,6 +5,8 @@
  * complete target runtime route are then committed by one caller-provided CAS.
  */
 
+import { resolveAgentCredentialMode } from '@cindy/maker-core';
+
 export interface CodexProviderThreadRoute {
   model: string;
   providerId: string | null;
@@ -40,6 +42,33 @@ export function isXdOpenAiCodexProviderTransition(
   const source = sourceProviderId?.trim() || null;
   const target = targetProviderId?.trim() || null;
   return (source === 'xd' && target === 'openai') || (source === 'openai' && target === 'xd');
+}
+
+export type CodexProviderThreadRelinkDecision = 'relink' | 'not-applicable' | 'unresolved';
+
+export function decideCodexProviderThreadRelink(
+  source: Pick<CodexProviderThreadRoute, 'model' | 'providerId'>,
+  target: Pick<CodexProviderThreadRoute, 'model' | 'providerId'>,
+): CodexProviderThreadRelinkDecision {
+  const sourceMode = resolveAgentCredentialMode({ agentKind: 'codex', ...source });
+  const targetMode = resolveAgentCredentialMode({ agentKind: 'codex', ...target });
+  const toProviderIdentity = (mode: typeof sourceMode): 'xd' | 'openai' | null => {
+    if (mode === 'gateway-key') return 'xd';
+    if (mode === 'oauth-bearer') return 'openai';
+    return null;
+  };
+  const involvesXdOpenAiBoundary = [sourceMode, targetMode].some(
+    (mode) => mode === 'gateway-key' || mode === 'oauth-bearer',
+  );
+  if (involvesXdOpenAiBoundary && (sourceMode === undefined || targetMode === undefined)) {
+    return 'unresolved';
+  }
+  return isXdOpenAiCodexProviderTransition(
+    toProviderIdentity(sourceMode),
+    toProviderIdentity(targetMode),
+  )
+    ? 'relink'
+    : 'not-applicable';
 }
 
 export async function relinkCodexProviderThread(
