@@ -355,6 +355,10 @@ export class ToolLoopGuard {
   private beginContractBatch(batchId: string): void {
     if (this.activeContractBatchId === batchId) return;
 
+    // A batch-id stream and the legacy no-id stream must never share a streak.
+    // Reset the compatibility counters when a new batch becomes authoritative.
+    this.lastContractKey = null;
+    this.contractStreak = 0;
     this.previousContractKeys = this.activeContractKeys;
     this.activeContractKeys = new Set<string>();
     // A key only remains eligible to continue if it occurred in the immediately

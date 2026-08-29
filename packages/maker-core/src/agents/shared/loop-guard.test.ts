@@ -396,6 +396,26 @@ describe('ToolLoopGuard', () => {
       contractCategory: 'missing_required_field',
     });
   });
+
+  it('批次标识流与旧版无批次调用不串用契约 streak', () => {
+    const g = new ToolLoopGuard();
+
+    expect(feed(g, 'legacy-a', 'Edit', { old_string: 'a' }, MISSING, true).kind).toBe('ok');
+    expect(feed(g, 'legacy-b', 'Edit', { old_string: 'b' }, MISSING, true).kind).toBe('ok');
+
+    expect(feed(g, 'batch-a', 'Edit', { old_string: 'c' }, MISSING, true, 'batch-a').kind).toBe('ok');
+    expect(feed(g, 'batch-b', 'Edit', { old_string: 'd' }, MISSING, true, 'batch-b').kind).toBe('ok');
+
+    // Switching back to the legacy callback shape starts a fresh streak rather
+    // than inheriting the two legacy failures from before the batch stream.
+    expect(feed(g, 'legacy-c', 'Edit', { old_string: 'e' }, MISSING, true).kind).toBe('ok');
+    expect(feed(g, 'legacy-d', 'Edit', { old_string: 'f' }, MISSING, true).kind).toBe('ok');
+    expect(feed(g, 'legacy-e', 'Edit', { old_string: 'g' }, MISSING, true)).toMatchObject({
+      kind: 'hard',
+      reason: 'contract',
+      count: 3,
+    });
+  });
 });
 
 describe('classifyToolContractError', () => {
