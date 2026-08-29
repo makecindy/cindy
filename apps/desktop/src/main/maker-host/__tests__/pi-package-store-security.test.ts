@@ -728,6 +728,34 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
+  it('does not re-enable a disabled package when its pre-update state read is uncertain', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: false });
+    const stateFile = path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json');
+    const originalReadFile = fs.readFile.bind(fs);
+    let failedOnce = false;
+    const readSpy = vi.spyOn(fs, 'readFile').mockImplementation((async (
+      target: Parameters<typeof fs.readFile>[0],
+      options?: Parameters<typeof fs.readFile>[1],
+    ) => {
+      if (!failedOnce && path.resolve(String(target)) === path.resolve(stateFile)) {
+        failedOnce = true;
+        throw Object.assign(new Error('simulated EIO'), { code: 'EIO' });
+      }
+      return originalReadFile(target, options as never);
+    }) as typeof fs.readFile);
+    try {
+      await expect(mutateAuthorized(store, { action: 'update', source })).resolves.toMatchObject({
+        affectedPackage: { source, enabled: false },
+      });
+    } finally {
+      readSpy.mockRestore();
+    }
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source]);
+  });
+
   it('does not disable an already-enabled npm Extension when another package is installed', async () => {
     const firstSource = 'npm:first-shared-extension';
     const secondSource = 'npm:second-shared-extension';
@@ -2845,6 +2873,29 @@ describe('Pi package executable-code boundary', () => {
     const listed = await store.listPiPackages();
     expect(listed.packages).toMatchObject([{ source }]);
     expect(listed.packages[0]).not.toHaveProperty('warning');
+  });
+
+  it('uses an opaque mutation target whenever a multibyte source is display-truncated', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-long-source-'));
+    roots.push(root);
+    const source = `npm:${'包'.repeat(800)}`;
+    runtime.listOutput = `User packages:\n  ${source}\n    ${root}\n`;
+    const store = await import('../pi-package-store.js');
+
+    const listed = await store.listPiPackages();
+    expect(listed.packages[0]?.source).not.toBe(source);
+    expect(listed.packages[0]?.mutationTarget).toMatch(/^cindy-pi-package:[a-f0-9]{64}$/);
+    await expect(store.mutatePiPackage({
+      action: 'set-enabled',
+      source: listed.packages[0]!.source,
+      mutationTarget: listed.packages[0]!.mutationTarget,
+      enabled: false,
+    })).resolves.toMatchObject({ affectedPackage: { enabled: false } });
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source]);
   });
 
   it('redacts sensitive URL fields without disabling a source accepted by Pi', async () => {

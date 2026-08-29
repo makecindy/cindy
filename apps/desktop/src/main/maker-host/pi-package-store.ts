@@ -1522,6 +1522,8 @@ async function projectNativePackageViews(
   const disabled = new Set(state.disabledSources);
   return inspected.map((pkg) => {
     const warning = snapshotUnavailableWarningForPackage(pkg) ?? pkg.view.warning;
+    const mutationTarget = pkg.view.mutationTarget
+      ?? (pkg.view.source !== pkg.rawSource ? packageMutationTarget(pkg.rawSource) : undefined);
     const {
       requiresExtensionApproval: _ignoredApproval,
       manageable: _ignoredManageable,
@@ -1533,6 +1535,7 @@ async function projectNativePackageViews(
     const installed = Boolean(pkg.installedRoot);
     return {
       ...view,
+      ...(mutationTarget ? { mutationTarget } : {}),
       enabled: installed && !disabled.has(pkg.rawSource),
       ...(!installed && canToggle === false ? { canToggle: false as const } : {}),
       ...(warning ? { warning } : {}),
@@ -2648,10 +2651,10 @@ export async function mutatePiPackage(
         ...sourceAliases(source),
         ...(previous ? sourceAliases(previous.rawSource) : []),
       ];
-      const stateBeforeUpdate = await readStateWithoutBlockingPi();
-      const wasExplicitlyDisabled = updateAliases.some((item) => (
-        stateBeforeUpdate.disabledSources.includes(item)
-      ));
+      const stateBeforeUpdate = await readState();
+      const wasExplicitlyDisabled = stateBeforeUpdate.ok
+        ? updateAliases.some((item) => stateBeforeUpdate.state.disabledSources.includes(item))
+        : null;
       // Keep the last optional snapshot identity until Pi's update command
       // succeeds. Cindy may retire a stale snapshot after byte changes, but
       // must not reinterpret that as disabling the native Pi package.
@@ -2699,7 +2702,7 @@ export async function mutatePiPackage(
       // user had already turned this package off.
       try {
         await persistEnabledExtensionApprovals({
-          ...(!wasExplicitlyDisabled && affected ? { enable: affected } : {}),
+          ...(wasExplicitlyDisabled === false && affected ? { enable: affected } : {}),
         });
       } catch (error) {
         log.warn('Pi package updated but Cindy projection refresh failed', {
@@ -2770,7 +2773,7 @@ export async function mutatePiPackage(
       const fallbackSource = fallbackProjection.displaySource;
       const fallback: PiPackageView = {
         source: fallbackSource,
-        ...(fallbackProjection.unsafe ? { mutationTarget: packageMutationTarget(source) } : {}),
+        ...(fallbackSource !== source ? { mutationTarget: packageMutationTarget(source) } : {}),
         name: fallbackSource,
         enabled: true,
         resources: [],
