@@ -148,7 +148,12 @@ function isUnpairedFlatTakenOver(rec: RecentFlatRecord): boolean {
 function abandonUnpairedFlatRoute(key: string, rec: RecentFlatRecord): void {
   if (rec.state !== 'pending') return;
   rec.state = 'abandoned';
-  if (recentFlats.get(key) === rec) recentFlats.delete(key);
+  rec.ts = Date.now();
+  if (recentFlats.get(key) === rec) {
+    recentFlats.delete(key);
+    recentFlats.set(key, rec);
+    pruneRecentFlats(rec.ts);
+  }
   deferredMirrors.delete(key);
 }
 
@@ -266,10 +271,14 @@ export async function coordinateDualDelivery(
     return { kind: 'dispatch', mirrorKey: key };
   }
   if (!input.threadId && recentFlat) {
-    // A live or committed flat route already owns this logical send. Feishu
-    // retries normally keep the same message id and are stopped upstream, but
-    // a second flat id must not mint a parallel route lease here.
-    return { kind: 'suppress-main-copy' };
+    if (recentFlat.state === 'abandoned') {
+      recentFlats.delete(key);
+    } else {
+      // A live or committed flat route already owns this logical send. Feishu
+      // retries normally keep the same message id and are stopped upstream, but
+      // a second flat id must not mint a parallel route lease here.
+      return { kind: 'suppress-main-copy' };
+    }
   }
 
   let entry = pending.get(key);

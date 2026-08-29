@@ -205,7 +205,7 @@ describe('Feishu native thread/main dual delivery', () => {
     expect(flatDecision.commitUnpairedFlat()).toBe(false);
   });
 
-  it('releases an explicitly abandoned flat route lease', async () => {
+  it('keeps an abandoned flat observable so a late topic confirms its mirror', async () => {
     vi.useFakeTimers();
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
     await vi.advanceTimersByTimeAsync(1_000);
@@ -220,10 +220,41 @@ describe('Feishu native thread/main dual delivery', () => {
 
     flatDecision.abandonUnpairedFlat();
     expect(flatDecision.commitUnpairedFlat()).toBe(false);
-    await expect(coordinateDualDelivery(input())).resolves.toEqual({
+    const topic = await coordinateDualDelivery(input());
+    expect(topic).toEqual({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
     });
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+
+    const scheduled = vi.fn();
+    scheduleMirrorOnConfirmation(topic.mirrorKey, scheduled);
+    expect(scheduled).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a fresh flat retry acquire a new route lease after abandonment', async () => {
+    vi.useFakeTimers();
+    const firstFlat = coordinateDualDelivery(input({ messageId: 'om_flat_first', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const firstDecision = await firstFlat;
+    if (firstDecision.kind !== 'dispatch' || !firstDecision.abandonUnpairedFlat) {
+      throw new Error('unpaired flat must expose abandonUnpairedFlat');
+    }
+    firstDecision.abandonUnpairedFlat();
+
+    const retry = coordinateDualDelivery(input({ messageId: 'om_flat_retry', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const retryDecision = await retry;
+    expect(retryDecision).toMatchObject({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+      commitUnpairedFlat: expect.any(Function),
+    });
+    if (retryDecision.kind !== 'dispatch' || !retryDecision.commitUnpairedFlat) {
+      throw new Error('retried flat must expose a fresh route lease');
+    }
+    expect(retryDecision.commitUnpairedFlat()).toBe(true);
   });
 
   it('suppresses a late topic after the unpaired flat has committed its route', async () => {
