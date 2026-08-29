@@ -498,12 +498,13 @@ describe('session runtime control wiring', () => {
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
-    const unknownPreparation = setModel.slice(
-      setModel.indexOf("if (preparation === 'unknown-context')"),
-      setModel.indexOf("if (preparation === 'in-flight')"),
+    const rehydrateCall = setModel.indexOf(
+      'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
     );
-    expect(unknownPreparation).toContain('!previousRuntime.hadLiveSession');
-    expect(unknownPreparation).toContain('maker.closeSession(sessionId)');
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    expect(rehydrateCall).toBeGreaterThan(-1);
+    expect(rehydrateCall).toBeLessThan(apply);
+    expect(setModel).toContain('Pi current runtime could not be verified');
   });
 
   it('fails closed for remote danger, overflow, and confirmation payloads', () => {
@@ -528,35 +529,24 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('!isDeviceLinkInvoke() && confirmedContextWindow ===');
   });
 
-  it('lets cold remote Pi use persisted low-pressure facts before rejecting rebuild support', () => {
+  it('fails closed before switching a busy or unverifiable cold remote Pi runtime', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
 
-    expect(setModel).toContain('liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextWindow');
-    expect(setModel).toContain("verifiedCurrentWindow = runtimeAgentKind === 'pi'");
-    expect(setModel).toContain('maker.getSession(sessionId)?.getUsageSnapshot?.().contextWindow');
-    expect(setModel).toContain('verifiedCurrentWindow = rehydratedCurrentWindow');
-    expect(setModel).toContain('verifiedTargetWindow >= verifiedCurrentWindow');
-    expect(setModel).toContain(
-      "!targetDoesNotShrink &&\n          (remoteTargetAssessment.level === 'danger' ||",
-    );
-    expect(setModel).toContain('targetContextWindow > 0 && !targetDoesNotShrink');
-    expect(setModel).toContain('runtimeStatus.remoteHostId && isSessionInTurn(sessionId)');
-    expect(setModel).toContain('busy remote task cannot change runtime selection');
-    expect(setModel).toContain("runtimeAgentKind !== 'pi' && !verifiedCurrentWindow");
+    expect(setModel.indexOf('busy Pi task cannot change runtime selection')).toBeLessThan(apply);
+    expect(
+      setModel.indexOf('cold remote Pi runtime cannot verify the target window'),
+    ).toBeLessThan(apply);
     expect(setModel).toContain('model window switch context is unknown; runtime selection was not changed');
-    expect(setModel).toContain("runtimeAgentKind === 'pi' &&\n            !runtimeStatus.remoteHostId");
-    expect(setModel).not.toContain(
-      'remote model window switch context is unknown; runtime selection was not changed',
-    );
-    expect(setModel).toContain('finalPiWindow < verifiedCurrentWindow');
+    expect(setModel).toContain('finalPiWindow < verifiedCurrentWindow!');
     expect(setModel).not.toContain('finalPiWindow < targetContextWindow');
   });
 
-  it('rechecks Pi pressure against the final verified runtime window before commit', () => {
+  it('switches and verifies Pi before deciding whether the actual window needs rebuild', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -565,9 +555,18 @@ describe('session runtime control wiring', () => {
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
     const finalWindow = setModel.indexOf('const finalPiWindow =');
     const runtimeCommit = setModel.indexOf('let generation: number;');
-    const finalPreparation = setModel.indexOf('const finalPreparation =');
-    const smallerFinalWindow = setModel.indexOf('finalPiWindow < verifiedCurrentWindow');
+    const finalPreparation = setModel.indexOf('let finalPreparation:');
+    const smallerFinalWindow = setModel.indexOf('finalPiWindow < verifiedCurrentWindow!');
+    const preflightPreparation = setModel.indexOf(
+      'preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(',
+    );
 
+    const piPreflightGuard = setModel.lastIndexOf(
+      "runtimeAgentKind !== 'pi'",
+      preflightPreparation,
+    );
+    expect(piPreflightGuard).toBeGreaterThan(-1);
+    expect(preflightPreparation - piPreflightGuard).toBeLessThan(700);
     expect(finalWindow).toBeGreaterThan(apply);
     expect(finalWindow).toBeLessThan(runtimeCommit);
     expect(setModel).toContain('recheckTargetPressure: true');
@@ -576,6 +575,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('contextTokensForConfirmation: finalPressureContextTokens');
     expect(setModel).toContain('finalPressureContextTokens = contextTokens');
     expect(setModel).toContain('runtimeRouteChanged || confirmedContextWindow !== undefined');
+    expect(setModel).toContain('targetContextWindow = finalPiWindow');
     expect(setModel).toContain("if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {");
     expect(setModel).toContain('targetContextWindow = confirmedContextWindow ?? targetContextWindow');
     expect(setModel).toContain('confirmedContextWindow === targetContextWindow');

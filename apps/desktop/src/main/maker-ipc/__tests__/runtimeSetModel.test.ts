@@ -891,6 +891,41 @@ describe('applyRuntimeSetModelChange', () => {
     expect(wakeSessionInputQueue).toHaveBeenCalledOnce();
   });
 
+  it('lets the Pi guard reject an incompatible runtime replacement before route side effects', async () => {
+    const sessionId = rememberSession('runtime-set-model-pi-replacement-guard');
+    setSessionProvider(sessionId, 'openai');
+    const closeSession = vi.fn(async () => {});
+    const clearPendingCredentialSwitch = vi.fn();
+    const wakeSessionInputQueue = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'chatgpt/gpt-5.5',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      assertSessionCloseSupported: () => { throw new Error('replacement unsupported'); },
+      clearPendingCredentialSwitch,
+      wakeSessionInputQueue,
+    })).rejects.toThrow('replacement unsupported');
+
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(clearPendingCredentialSwitch).not.toHaveBeenCalled();
+    expect(wakeSessionInputQueue).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('openai');
+  });
+
   it('rebuilds an idle Orca Worker instead of hot-switching its live model', async () => {
     const sessionId = rememberSession('runtime-set-model-orca-worker-rebuild');
     setSessionProvider(sessionId, 'xd');

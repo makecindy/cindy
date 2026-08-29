@@ -15225,7 +15225,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         setSessionEffort(sessionId, previousRuntime.effort);
         setSessionFastMode(sessionId, previousRuntime.fastMode);
       };
-      const liveSessionBeforeRouteChange = maker.getSession(sessionId);
+      let liveSessionBeforeRouteChange = maker.getSession(sessionId);
       const persistedSessionMeta = liveSessionBeforeRouteChange
         ? null
         : await maker.getSessionMeta(sessionId);
@@ -15238,11 +15238,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         effectiveProviderId === undefined
           ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
           : (normalizeSessionProviderId(effectiveProviderId) ?? null);
-      const currentRuntimeModel =
+      let currentRuntimeModel =
         liveSessionBeforeRouteChange?.model ?? persistedSessionMeta?.model;
-      const runtimeRouteChanged =
+      let runtimeRouteChanged =
         currentRuntimeModel !== undefined &&
         (currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId);
+      if (runtimeAgentKind === 'pi' && runtimeRouteChanged) {
+        if (isSessionInTurn(sessionId)) {
+          throwIpcError('PRECONDITION_FAILED', 'busy Pi task cannot change runtime selection');
+        }
+        if (!liveSessionBeforeRouteChange && runtimeStatus.remoteHostId) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'cold remote Pi runtime cannot verify the target window; runtime selection was not changed',
+          );
+        }
+        if (!liveSessionBeforeRouteChange) {
+          try {
+            await rehydrateColdPiRuntimeForWindowVerification(sessionId);
+          } catch {
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'Pi current runtime could not be verified; runtime selection was not changed',
+            );
+          }
+          liveSessionBeforeRouteChange = maker.getSession(sessionId);
+          if (!liveSessionBeforeRouteChange) {
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'Pi current runtime could not be verified; runtime selection was not changed',
+            );
+          }
+          currentRuntimeModel = liveSessionBeforeRouteChange.model;
+          runtimeRouteChanged =
+            currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
+        }
+      }
       let targetContextWindow: number | undefined;
       let verifiedCurrentWindow: number | undefined;
       let modelWindowRebuilt = false;
@@ -15296,7 +15327,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {
           targetContextWindow = confirmedContextWindow ?? targetContextWindow;
         }
-        if (!targetContextWindow || targetContextWindow <= 0) {
+        if (
+          (!targetContextWindow || targetContextWindow <= 0) &&
+          (runtimeAgentKind !== 'pi' || isDeviceLinkInvoke() || !!runtimeStatus.remoteHostId)
+        ) {
           throwIpcError(
             'PRECONDITION_FAILED',
             'target model context window is unknown; runtime selection was not changed',
@@ -15320,7 +15354,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const contextTokens = liveUsageIsAuthoritative
           ? verifiedLiveContextTokens
           : (persistedContextTokens ?? 0);
-        if (!contextTokensKnown || (runtimeAgentKind !== 'pi' && !verifiedCurrentWindow)) {
+        if (!contextTokensKnown || !verifiedCurrentWindow) {
           throwIpcError(
             'PRECONDITION_FAILED',
             'model window switch context is unknown; runtime selection was not changed',
@@ -15342,7 +15376,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             'remote model-window rebuild is unsupported; runtime selection was not changed',
           );
         }
-        if (targetContextWindow > 0 && !targetDoesNotShrink) {
+        if (
+          runtimeAgentKind !== 'pi' &&
+          typeof targetContextWindow === 'number' &&
+          targetContextWindow > 0 &&
+          !targetDoesNotShrink
+        ) {
           if (!contextOverflowRolloverHolder) {
             throwIpcError(
               'PRECONDITION_FAILED',
@@ -15356,7 +15395,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(
               sessionId,
               {
-                contextWindow: targetContextWindow,
+                contextWindow: targetContextWindow!,
                 recheckTargetPressure: true,
                 confirmedTargetPressure:
                   !isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow,
@@ -15439,29 +15478,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           assertRuntimeOwnerCurrent();
           modelWindowRebuilt = preparation === 'rebuilt';
-          if (
-            runtimeAgentKind === 'pi' &&
-            !runtimeStatus.remoteHostId &&
-            !modelWindowRebuilt &&
-            verifiedCurrentWindow === undefined
-          ) {
-            const rehydratedCurrentWindow =
-              maker.getSession(sessionId)?.getUsageSnapshot?.().contextWindow;
-            if (
-              typeof rehydratedCurrentWindow !== 'number' ||
-              !Number.isFinite(rehydratedCurrentWindow) ||
-              rehydratedCurrentWindow <= 0
-            ) {
-              if (!previousRuntime.hadLiveSession && maker.getSession(sessionId)) {
-                await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-              }
-              throwIpcError(
-                'PRECONDITION_FAILED',
-                'Pi did not expose its verified current context window; runtime selection was not changed',
-              );
-            }
-            verifiedCurrentWindow = rehydratedCurrentWindow;
-          }
           if (
             modelWindowRebuilt &&
             effectiveProviderId === undefined &&
@@ -15581,6 +15597,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                   }
                 : {}),
               forceSessionRebuild: rebuildLiveOrcaWorker,
+              ...(runtimeAgentKind === 'pi' && runtimeRouteChanged
+                ? {
+                    assertSessionCloseSupported: () => {
+                      throwIpcError(
+                        'PRECONDITION_FAILED',
+                        'Pi target route requires an unsupported runtime replacement; runtime selection was not changed',
+                      );
+                    },
+                  }
+                : {}),
               isSessionInTurn,
               registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
               clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
@@ -15608,12 +15634,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const piSessionAfterRouteChange = maker.getSession(sessionId);
         if (
           runtimeAgentKind === 'pi' &&
-          piSessionAfterRouteChange &&
           runtimeRouteChanged &&
           result.status !== 'deferred' &&
-          !modelWindowRebuilt &&
-          targetContextWindow
+          !modelWindowRebuilt
         ) {
+          if (!piSessionAfterRouteChange) {
+            restoreControlStores();
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'Pi target runtime could not be verified; runtime selection was not accepted',
+            );
+          }
           const finalPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;
           if (typeof finalPiWindow !== 'number' || finalPiWindow <= 0) {
             await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
@@ -15623,22 +15654,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               'Pi did not expose its verified final context window; runtime selection was not accepted',
             );
           }
-          if (
-            typeof verifiedCurrentWindow === 'number' &&
-            finalPiWindow < verifiedCurrentWindow
-          ) {
+          targetContextWindow = finalPiWindow;
+          if (finalPiWindow < verifiedCurrentWindow!) {
+            if (!contextOverflowRolloverHolder) {
+              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+              restoreControlStores();
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'model window switch protection is unavailable; runtime selection was not changed',
+              );
+            }
             let finalPressureContextTokens: number | undefined;
-            const finalPreparation =
-              await contextOverflowRolloverHolder!.prepareModelWindowSwitch(sessionId, {
-                contextWindow: finalPiWindow,
-                recheckTargetPressure: true,
-                confirmedTargetPressure:
-                  !isDeviceLinkInvoke() && confirmedContextWindow === finalPiWindow,
-                onConfirmationRequired: (contextTokens) => {
-                  finalPressureContextTokens = contextTokens;
-                },
-                assertCanCommit: assertRuntimeOwnerCurrent,
-              });
+            let finalPreparation: ModelWindowSwitchPreparationResult;
+            try {
+              finalPreparation =
+                await contextOverflowRolloverHolder.prepareModelWindowSwitch(sessionId, {
+                  contextWindow: finalPiWindow,
+                  recheckTargetPressure: true,
+                  confirmedTargetPressure:
+                    !isDeviceLinkInvoke() && confirmedContextWindow === finalPiWindow,
+                  onConfirmationRequired: (contextTokens) => {
+                    finalPressureContextTokens = contextTokens;
+                  },
+                  assertCanCommit: assertRuntimeOwnerCurrent,
+                });
+            } catch (error) {
+              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId))
+                .catch((closeError) => {
+                  log.warn('failed to close Pi after final-window preparation failed', {
+                    sessionId,
+                    error: closeError instanceof Error ? closeError.message : String(closeError),
+                  });
+                });
+              restoreControlStores();
+              throw error;
+            }
             if (finalPreparation === 'confirmation-required') {
               assertRuntimeOwnerCurrent();
               await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));

@@ -55,6 +55,8 @@ export interface ApplyRuntimeSetModelChangeInput {
    * 形态相同，也必须沿用 credential-switch 的 idle close / busy defer 边界。
    */
   forceSessionRebuild?: boolean;
+  /** Fail closed before an otherwise-required runtime replacement mutates route state. */
+  assertSessionCloseSupported?: () => void;
   isSessionInTurn?: (sessionId: string) => boolean;
   /**
    * 会话自己正在跑 turn 时的延迟生效登记(PendingCredentialSwitchService.register)。
@@ -204,6 +206,7 @@ export async function applyRuntimeSetModelChange(
   }
 
   if (sess && shouldCloseSession) {
+    input.assertSessionCloseSupported?.();
     if (isSelfBusy() && input.registerPendingCredentialSwitch) {
       await input.registerPendingCredentialSwitch(sessionId, {
         model,

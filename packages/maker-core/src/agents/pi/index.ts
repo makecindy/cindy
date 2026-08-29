@@ -5008,7 +5008,6 @@ export class PiAgent extends BaseAgent {
       // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
       autoReviewConfirmUndeliveredNotice.reset();
-      const previousWindow = ctx.contextWindow;
       const data = (resp.data ?? {}) as { contextWindow?: number };
       const setModelReportedWindow =
         typeof data.contextWindow === 'number' && data.contextWindow > 0
@@ -5022,9 +5021,10 @@ export class PiAgent extends BaseAgent {
           ?.contextWindow ??
         ctx.contextWindow;
       if (nextWindow > 0) ctx.contextWindow = nextWindow;
-      // A missing set_model window leaves the catalog estimate unverified even when
-      // it equals the prior window. Reload and read get_state before allowing use.
-      if (setModelReportedWindow === null || (nextWindow > 0 && nextWindow !== previousWindow)) {
+      // Always reload and read get_state after set_model. The catalog and even the
+      // set_model response can disagree with the materialized runtime window; callers
+      // must not decide whether to destroy native context until this verification ends.
+      {
         try {
           if (!Number.isFinite(nextWindow) || nextWindow <= 0) {
             throw new Error('pi: model switch returned no verifiable context window');

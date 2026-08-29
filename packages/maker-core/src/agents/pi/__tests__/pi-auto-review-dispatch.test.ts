@@ -53,6 +53,10 @@ const captured = vi.hoisted(() => ({
   onAfterSetModel: null as null | (() => void),
   // 卡住 set_model 的回包,让测试能在"RPC 在飞"的那一刻观察盘上的路由快照。
   holdSetModel: null as null | Promise<void>,
+  launchProvider: null as string | null,
+  launchModel: null as string | null,
+  runtimeProvider: null as string | null,
+  runtimeModel: null as string | null,
   closed: false,
 }));
 
@@ -65,6 +69,12 @@ vi.mock('../transport.js', () => ({
     // spawn 参数断言移到 transport 工厂(spawn 行为在 stdio transport)。
     captured.args = opts.args;
     captured.env = opts.env;
+    const providerIndex = opts.args.indexOf('--provider');
+    const modelIndex = opts.args.indexOf('--model');
+    captured.launchProvider = providerIndex >= 0 ? (opts.args[providerIndex + 1] ?? null) : null;
+    captured.launchModel = modelIndex >= 0 ? (opts.args[modelIndex + 1] ?? null) : null;
+    captured.runtimeProvider = captured.launchProvider;
+    captured.runtimeModel = captured.launchModel;
     opts.onProcessSpawned?.(1234);
     return {
       writeLine: async () => {},
@@ -101,7 +111,14 @@ vi.mock('../rpc-client.js', () => ({
         return { success: false };
       }
       if (cmd.type === 'set_model') {
+        captured.runtimeProvider = typeof cmd.provider === 'string' ? cmd.provider : null;
+        captured.runtimeModel = typeof cmd.modelId === 'string' ? cmd.modelId : null;
         return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (cmd.type === 'switch_session') {
+        captured.runtimeProvider = captured.launchProvider;
+        captured.runtimeModel = captured.launchModel;
+        return { success: true, data: {} };
       }
       if (cmd.type === 'prompt' && captured.failPrompt) {
         return { command: 'prompt', success: false };
@@ -123,7 +140,11 @@ vi.mock('../rpc-client.js', () => ({
           captured.failNextGetState = false;
           throw new Error('pi rpc timeout after 5000ms: get_state');
         }
-        return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 },
+        return { success: true, data: { sessionFile: '/mock/session.jsonl', model: {
+              provider: captured.runtimeProvider,
+              id: captured.runtimeModel,
+              contextWindow: 200000,
+            },
             isStreaming: false,
             isCompacting: false,
             pendingMessageCount: 0,
@@ -194,6 +215,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.onPrompt = null;
     captured.onAfterSetModel = null;
     captured.holdSetModel = null;
+    captured.launchProvider = null;
+    captured.launchModel = null;
+    captured.runtimeProvider = null;
+    captured.runtimeModel = null;
     captured.closed = false;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-cwd-'));
@@ -2288,9 +2313,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     release();
     await Promise.all([first, second]);
 
-    // 两次切换按调用序抵达 pi,终态是最后一次、且已确认。
+    // 两次切换按调用序抵达 Pi；每次 settings reload 都重放同一路由后才确认终态。
     const setModelCalls = captured.requests.filter((r) => r.type === 'set_model');
-    expect(setModelCalls.map((r) => r.modelId)).toEqual(['m-first', 'm-second']);
+    expect(setModelCalls.map((r) => r.modelId)).toEqual([
+      'm-first', 'm-first', 'm-second', 'm-second',
+    ]);
     const after = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
     expect(after.model).toBe('m-second');
     expect(after.pending).toBeUndefined();

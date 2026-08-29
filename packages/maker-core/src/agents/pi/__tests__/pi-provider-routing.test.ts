@@ -2534,6 +2534,48 @@ describe('Pi provider-aware model routing', () => {
     resolvePiNativeProviders,
   });
 
+  it('reads back the Pi route even when set_model reports the catalog-sized window', async () => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return {
+          success: true,
+          data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === 'set_model') {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      return { success: true, data: {} };
+    };
+    const models: readonly ModelDescriptor[] = [
+      { id: 'model-a', displayName: 'A', contextWindow: 200_000, efforts: [], defaultEffort: null },
+      { id: 'model-b', displayName: 'B', contextWindow: 200_000, efforts: [], defaultEffort: null },
+    ];
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-completions',
+        models: [{ id: 'model-a' }, { id: 'model-b' }],
+      }],
+      env: {},
+    }), models));
+    const handle = await agent.startSession({
+      sessionId: 'verify-same-sized-target',
+      workingDir: cwd,
+      model: 'model-a',
+      providerId: 'native-a',
+    });
+
+    captured.requests.length = 0;
+    await handle.setModel!('model-b', { providerId: 'native-a' });
+    expect(captured.requests.map((request) => request.type)).toEqual([
+      'set_model',
+      'switch_session',
+      'set_model',
+      'get_state',
+    ]);
+    await handle.close();
+  });
+
   function installPlanModeExtension(): void {
     const extension = path.join(path.dirname(path.join(agentHome, 'pi')), 'examples', 'extensions', 'plan-mode', 'index.ts');
     mkdirSync(path.dirname(extension), { recursive: true });
