@@ -26,8 +26,22 @@
   2026-07-28 已登记的 status micro-cells 2px 窄豁免（非交互、≤8px、仅状态）
   维持不变，不因本裁决扩大或收回。**尚未裁决、随 Permission 迁移再关**：允许 /
   拒绝按钮的视觉主次、危险授权样式、Desktop 与 Mobile 权限弹窗几何是否一致。
-  （→ `DESIGN.md §5` Border Radius Scale；治理合同 `design-governance.md` §10
-  待裁决表圆角部分关闭；迁移执行 = 设计系统路线图 DS-6 / 棘轮 = DS-7）
+  （→ `DESIGN.md §5` Border Radius Scale；治理合同
+  [`design-governance.md`](./design-governance.md) §10 待裁决登记表「PermissionPrompt
+  圆角」行已随本裁决改为已关闭；迁移执行 = 设计系统路线图 DS-6 / 棘轮 = DS-7，
+  见 `design-governance.md` §12）
+- **08-29（补充裁决，随 #3619 review 落定）** **圆角判据二则收口：textarea 单一
+  归档、裸文字按钮豁免（拍板人 = 用户）**——review 指出 §4/§5/§7/§9 四处对
+  textarea 的判据互相冲突（「盒内非按钮」vs「无条件 8px」vs「所有交互元素胶囊」），
+  以及 §5「every button is a pill — no exceptions」与 §4 向导「← 上一步」裸文字
+  按钮互相矛盾。两条收口：(1) **textarea 一律 8px**——不设嵌套前提，嵌在 12px
+  容器内或作为表单最外层控件都是同一档（胶囊对高框体会变形，8px 是其唯一档位）；
+  §5 判据句同步改写，§4/§7/§9 摘要句逐一对齐，并声明 §5 为唯一裁决源、摘要句
+  漂移时以 §5 为准。(2) **无自身背景的裸文字按钮豁免胶囊**——「← 上一步」与
+  §16.3 登录文字按钮这类只有文字、没有可圆角的填充底色的按钮不带任何圆角；
+  豁免随组件条目登记（§4 向导条目已写明），新增裸文字按钮用法须在引入它的
+  组件条目登记。`AddProviderWizard.tsx` 现行实现（无圆角文字按钮）与裁决一致，
+  无需迁移。（→ `DESIGN.md §5` / §4 Inputs & Forms / §4 Multi-step dialogs / §7 / §9）
 
 - **08-16** **登录：唯一 SSO 不再经过 method-choice（拍板人 = 用户）**——
   用户已经从登录首页选了企业 SSO（组织标识探测），或邮箱 / 组织探测结果只剩

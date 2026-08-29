@@ -18,7 +18,7 @@ What makes this system distinctive is the combination of a single geometric sans
 - Inter as the single sans family, carrying both display headlines and body text
 - Tight border-radius system: 8px (inner controls) / 12px (containers) / 9999px (pill) — three values, nothing else
 - Zero shadows in the base language — depth comes from background color shifts and 1px borders (narrow token-gated exceptions live in §10)
-- Pill-shaped geometry on all interactive elements (buttons, tabs, inputs, tags)
+- Pill-shaped geometry on all filled interactive elements (buttons, tabs, single-line inputs, tags); textareas use the 8px inner-control radius (§5)
 - No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
 - Extreme content restraint — each surface presents one clear idea
 
@@ -230,7 +230,7 @@ input/text
   placeholder --text-placeholder  #c4c4c4 / #525252
 ```
 
-- **Multi-line inputs (textarea) cannot wear the pill** (tall frames deform it) — use the 8px inner-control radius instead (§5 three-tier scale).
+- **Multi-line inputs (textarea) take the 8px inner-control radius — never the pill** (tall frames deform it), whether nested in a container or standing alone in a form (§5 three-tier scale; single rule, no nesting condition).
 - Placeholders must **read as clearly empty** — Silver (`#a3a3a3`) is too prominent against either Card surface (≈5:1 Dark / ≈2.6:1 Light) and reads as real input; forbidden. **Every input surface's placeholder (chat / ask / settings / plan-action-fb) resolves to `--text-placeholder`** (2026-06 G3, archived in `design-decision-log.md`); non-default themes express their own placeholder color by overriding `text-placeholder`.
 
 ### Select & Dropdown
@@ -251,7 +251,7 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 - **Buttons**: pill (9999px); primary = solid CTA (`--confirm-btn-primary-*`), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
 - **Focus on open**: lands on the dialog's **primary input or primary button**, never defaults to Cancel (see §14.2 + ConfirmDialog's `autoFocusConfirm` / `onOpenAutoFocus`).
 - **Closing affordance** (made explicit 2026-07-30, scope clarified 2026-07-31): **dismissible** dialogs (wizards, catalogs, forms — anything a user may abandon freely) close via the footer Cancel button, Esc, and a scrim click, and carry **no top-right × close icon** — a × coexisting with Cancel is a spec violation, not a convenience. Confirm-tier dialogs built on AlertDialog (ConfirmDialog) intentionally do **not** close on scrim click (a deliberate mis-tap guard) — that behavior stays. Known legacy debt: CustomProviderDialog still ships a top-right × predating this rule — migrate it the next time that dialog is touched; do not copy the pattern into new dialogs.
-- **Multi-step dialogs / wizards** (registered 2026-07-30, first consumer: Add-Provider wizard): the step indicator lives in the header row (round numbered chips — current step solid `--accent-cta-bg` with `--surface-on-card` text, completed steps ✓ on `--surface-chip`, upcoming outlined `--border-default`). Footer: **back navigation ("← 上一步") is a left-aligned text button** (`--text-secondary`, 13px/500) — navigation is not a commit action and must not sit inside the right-aligned pill group; commit actions (取消 / 下一步 / 完成) remain right-aligned pills per the button rule above. Catalog/list steps put the scrollable region between **two full-width 1px `--border-default` hairlines**, with permanent entries (e.g. 自定义端点) pinned below the scroll region, always visible. Width matches the custom-provider form dialog (600px, `min(600px, 100vw-32px)`) so the two provider dialogs read as one family; height is capped at `min(640px, 85vh)` — on large displays a catalog dialog must not stretch toward full-screen height (2026-07-30 ruling).
+- **Multi-step dialogs / wizards** (registered 2026-07-30, first consumer: Add-Provider wizard): the step indicator lives in the header row (round numbered chips — current step solid `--accent-cta-bg` with `--surface-on-card` text, completed steps ✓ on `--surface-chip`, upcoming outlined `--border-default`). Footer: **back navigation ("← 上一步") is a left-aligned bare text button** (`--text-secondary`, 13px/500, no background — the §5 bare-text-button exemption, no radius) — navigation is not a commit action and must not sit inside the right-aligned pill group; commit actions (取消 / 下一步 / 完成) remain right-aligned pills per the button rule above. Catalog/list steps put the scrollable region between **two full-width 1px `--border-default` hairlines**, with permanent entries (e.g. 自定义端点) pinned below the scroll region, always visible. Width matches the custom-provider form dialog (600px, `min(600px, 100vw-32px)`) so the two provider dialogs read as one family; height is capped at `min(640px, 85vh)` — on large displays a catalog dialog must not stretch toward full-screen height (2026-07-30 ruling).
 
 ### Tabs
 
@@ -284,11 +284,11 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 ### Border Radius Scale
 
-Three tiers — **these three only** (wording hardened 2026-08-29, designer ruling — see `design-decision-log.md` 08-29):
+Three tiers — **these three only** (wording hardened 2026-08-29, designer ruling — see `design-decision-log.md` 08-29). **Tier assignment is a single decision tree in this §5 section; §4 component entries, the §7 Do/Don't lists and the §9 iteration guide restate it for convenience — when wording drifts, this section wins:**
 
-- **Pill (9999px)**: **every button is a pill — no exceptions.** Anything that commits a decision or triggers an action wears the pill: buttons (permission approve/deny included), tabs, single-line inputs, tags, badges.
+- **Pill (9999px)**: **every button is a pill — no exceptions.** Anything that commits a decision or triggers an action wears the pill: buttons (permission approve/deny included), tabs, single-line inputs, tags, badges. The only buttons exempt from the pill shape are **bare text buttons with no background of their own** (wizard back-navigation "← 上一步", the §16.3 login text-button category): they have no fill to round, so they carry no radius at all — they are text, not a filled button. Register any new bare-text-button usage in the component entry that introduces it.
 - **Container (12px)**: the box that holds content — code blocks, cards, panels, dialogs. Implemented as Tailwind `rounded-xl` (12px).
-- **Inner control (8px)**: pieces nested inside a container that are **not themselves buttons** — multi-line inputs (textarea), selected/hover row highlights in dropdowns/menus, small in-block cells. Implemented as Tailwind `rounded-lg` (8px).
+- **Inner control (8px)**: multi-line inputs (textarea) — **always 8px, whether the textarea sits inside a visible container or is the outermost control of a form area** — plus selected/hover row highlights in dropdowns/menus and small in-block cells nested inside a container. Implemented as Tailwind `rounded-lg` (8px).
 
 _No 4px / 6px / 10px, and no arbitrary radii. **4px is not a tier**: existing `rounded-[4px]` usages (30 production occurrences on 2026-08-29 — `git grep -o "rounded-\[4px\]" -- apps/desktop/src/renderer | wc -l`) are registered debt to be migrated by the design-system roadmap, and **new code must not introduce it**. Do not add tiers, and **"it looks small" is never a reason to move an element down a tier** — an element's tier follows what it IS (button / box / nested non-button), not its size. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container to nest cleanly (hence 8, not 12) — a pill there becomes a lozenge, 12px looks bloated._
 
@@ -309,9 +309,9 @@ _No 4px / 6px / 10px, and no arbitrary radii. **4px is not a tier**: existing `r
 ### Do
 
 - Use Surface (`#f8f8f6` Light / `#1f1f1e` Dark) as the page background — every page starts here
-- Use pill-shaped (9999px) radius on all interactive elements — buttons, tabs, inputs, tags
+- Use pill-shaped (9999px) radius on all filled interactive elements — buttons, tabs, single-line inputs, tags (bare text buttons carry no radius — §5 exemption)
 - Use 12px radius on all non-interactive containers — code blocks, cards, panels
-- Use 8px radius only for inner controls that can't be a pill — multi-line inputs, dropdown/menu rows (see §5)
+- Use 8px radius for multi-line inputs (textarea, always) and non-button inner controls — dropdown/menu row highlights, in-block cells (see §5)
 - Keep the palette strictly grayscale — chromatic color only via the sanctioned semantic set in §2, always through tokens
 - Use Inter at weight 400 / 500 for display headings (per the §3 Hierarchy rows) — hierarchy comes from size + weight, not typeface switching
 - Maintain zero shadows — depth comes from borders and background shifts only
@@ -372,7 +372,7 @@ Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait
 
 1. Focus on ONE component at a time
 2. Keep all values grayscale — "Stone (#737373)" not "use a light color"
-3. Always specify radius from the three tiers — pill (9999px) / container (12px) / inner control (8px, only for textareas & dropdown rows). Nothing else.
+3. Always specify radius from the three tiers — pill (9999px) / container (12px) / inner control (8px — textareas always, dropdown rows & non-button inner cells). Nothing else.
 4. Shadows are always zero — never add them
 5. Weight is 400/500 for everyday chrome, 600 for rationed emphasis — 700 never appears in new UI (registered exemption domains in §3 only)
 6. If something feels too decorated, remove it — less is always more
