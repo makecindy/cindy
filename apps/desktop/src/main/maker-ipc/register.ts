@@ -12035,13 +12035,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return sendToAgentAcceptedUnlocked(...args);
     });
   };
-  const atomicModelWindowRouteBySession = new Map<string, {
-    model: string;
-    providerId: string | null;
-    effort: NonNullable<SessionRuntimeProfile['effort']>;
-    fastMode: boolean;
-    contextWindow: number;
-  }>();
   contextOverflowRolloverHolder = createContextOverflowRollover({
     getSessionRow: async (sessionId) => {
       const [row] = await getDbClient()
@@ -12176,54 +12169,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     closeSession: (sessionId) => maker.closeSession(sessionId),
     drainPersistQueue,
     commitRebuild: async (sessionId, handoff, meta) => {
-      const route = atomicModelWindowRouteBySession.get(sessionId);
-      let updatedAt: number;
-      if (route && meta.reason === 'model-window-switch') {
-        updatedAt = Date.now();
-        await getDbClient().tx('context.rebuild' as string, {
-          sessionId,
-          markerId: createId(),
-          markerClientId: `context-rebuild:${createId()}`,
-          markerContent: JSON.stringify({ handoff, consumed: false, ...meta }),
-          markerCreatedAt: updatedAt,
-          updatedAt,
-          expectedClearedAt: meta.expectedClearedAt ?? null,
-          routeModel: route.model,
-          routeProviderId: route.providerId,
-          routeEffort: route.effort,
-          routeFastMode: route.fastMode,
-          routeContextWindow: route.contextWindow,
-        });
-      } else {
-        ({ updatedAt } = await commitContextRebuild(sessionId, handoff, meta));
-      }
-      try {
-        broadcastSessionPatched(sessionId, {
-          sdkSessionId: null,
-          contextTokens: 0,
-          updatedAt: new Date(updatedAt).toISOString(),
-          ...(route ?? {}),
-        });
-      } catch (error) {
-        log.warn('context rebuild projection failed after atomic commit', {
-          sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      try {
-        await createDbMessage(sessionId, {
-          clientId: `context-rebuild-card:${createId()}`,
-          role: 'assistant',
-          content: '',
-          agentKind: meta.sourceAgentKind ?? 'cc',
-          agentMeta: { contextRebuild: { reason: meta.reason, handoff } } as AgentMeta,
-        });
-      } catch (error) {
-        log.warn('context rebuild card persist failed after atomic commit', {
-          sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      const { updatedAt } = await commitContextRebuild(sessionId, handoff, meta);
+      const [sessionKindRow] = await getDbClient()
+        .drizzle.select({ agentKind: sessions.agentKind })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      const cardAgentKind =
+        sessionKindRow?.agentKind === 'codex'
+          ? 'codex'
+          : sessionKindRow?.agentKind === 'pi'
+            ? 'pi'
+            : 'cc';
+      broadcastSessionPatched(sessionId, {
+        sdkSessionId: null,
+        updatedAt: new Date(updatedAt).toISOString(),
+      });
+      await createDbMessage(sessionId, {
+        clientId: `context-rebuild-card:${createId()}`,
+        role: 'assistant',
+        content: '',
+        agentKind: cardAgentKind,
+        agentMeta: { contextRebuild: { reason: meta.reason, handoff } } as AgentMeta,
+      });
     },
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
@@ -15318,24 +15286,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let targetContextWindow: number | undefined;
       let verifiedCurrentWindow: number | undefined;
       let modelWindowRebuilt = false;
-      let modelWindowRoutePersistedAtomically = false;
-      const withAtomicModelWindowRoute = async <T>(
-        contextWindow: number,
-        operation: () => Promise<T>,
-      ): Promise<T> => {
-        atomicModelWindowRouteBySession.set(sessionId, {
-          model,
-          providerId: targetRouteProviderId,
-          effort: atomicSelection?.effort ?? previousRuntime.effort ?? 'high',
-          fastMode: atomicSelection?.fastMode ?? previousRuntime.fastMode,
-          contextWindow,
-        });
-        try {
-          return await operation();
-        } finally {
-          atomicModelWindowRouteBySession.delete(sessionId);
-        }
-      };
       if (runtimeAgentKind && (runtimeRouteChanged || confirmedContextWindow !== undefined)) {
         const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>
           resolveVerifiedContextWindow(
@@ -15443,25 +15393,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           let confirmationContextTokens: number | undefined;
           let preparation: ModelWindowSwitchPreparationResult;
           try {
-            preparation = await withAtomicModelWindowRoute(targetContextWindow, () =>
-              contextOverflowRolloverHolder!.prepareModelWindowSwitch(
-                sessionId,
-                {
-                  contextWindow: targetContextWindow!,
-                  recheckTargetPressure: true,
-                  confirmedTargetPressure:
-                    trustedRemoteWindowConfirmation &&
-                    confirmedContextWindow === targetContextWindow,
-                  onConfirmationRequired: (contextTokens) => {
-                    confirmationContextTokens = contextTokens;
-                  },
-                  assertCanCommit: assertRuntimeOwnerCurrent,
-                  beforeClose: () => {
-                    clearPendingCredentialSwitchForSession(sessionId, { wake: false });
-                    pendingClearedForWindowRebuild = true;
-                  },
+            preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(
+              sessionId,
+              {
+                contextWindow: targetContextWindow,
+                recheckTargetPressure: true,
+                confirmedTargetPressure:
+                  trustedRemoteWindowConfirmation &&
+                  confirmedContextWindow === targetContextWindow,
+                onConfirmationRequired: (contextTokens) => {
+                  confirmationContextTokens = contextTokens;
                 },
-              ),
+                assertCanCommit: assertRuntimeOwnerCurrent,
+                beforeClose: () => {
+                  clearPendingCredentialSwitchForSession(sessionId, { wake: false });
+                  pendingClearedForWindowRebuild = true;
+                },
+              },
             );
           } catch (error) {
             if (
@@ -15526,7 +15474,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           assertRuntimeOwnerCurrent();
           modelWindowRebuilt = preparation === 'rebuilt';
-          modelWindowRoutePersistedAtomically = modelWindowRebuilt;
           if (
             runtimeAgentKind === 'pi' &&
             !runtimeStatus.remoteHostId &&
@@ -15728,19 +15675,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             finalPiWindow < verifiedCurrentWindow
           ) {
             let finalPressureContextTokens: number | undefined;
-            const finalPreparation = await withAtomicModelWindowRoute(finalPiWindow, () =>
-              contextOverflowRolloverHolder!.prepareModelWindowSwitch(sessionId, {
-                  contextWindow: finalPiWindow,
-                  recheckTargetPressure: true,
-                  confirmedTargetPressure:
-                    trustedRemoteWindowConfirmation &&
-                    confirmedContextWindow === finalPiWindow,
-                  onConfirmationRequired: (contextTokens) => {
-                    finalPressureContextTokens = contextTokens;
-                  },
-                  assertCanCommit: assertRuntimeOwnerCurrent,
-                }),
-            );
+            const finalPreparation =
+              await contextOverflowRolloverHolder!.prepareModelWindowSwitch(sessionId, {
+                contextWindow: finalPiWindow,
+                recheckTargetPressure: true,
+                confirmedTargetPressure:
+                  trustedRemoteWindowConfirmation &&
+                  confirmedContextWindow === finalPiWindow,
+                onConfirmationRequired: (contextTokens) => {
+                  finalPressureContextTokens = contextTokens;
+                },
+                assertCanCommit: assertRuntimeOwnerCurrent,
+              });
             if (finalPreparation === 'confirmation-required') {
               assertRuntimeOwnerCurrent();
               await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
@@ -15759,7 +15705,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
             if (finalPreparation === 'rebuilt') {
               modelWindowRebuilt = true;
-              modelWindowRoutePersistedAtomically = true;
               targetContextWindow = finalPiWindow;
             } else if (finalPreparation !== 'not-needed') {
               await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
@@ -15818,16 +15763,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             );
           }
           if (atomicSelection) {
-            patch.effort = atomicSelection.effort ?? previousRuntime.effort ?? 'high';
+            patch.effort = atomicSelection.effort;
             patch.fastMode = atomicSelection.fastMode;
           }
           if (modelWindowRebuilt && targetContextWindow) {
             patch.contextWindow = targetContextWindow;
           }
           try {
-            if (!modelWindowRoutePersistedAtomically) {
-              await persistSessionFields(sessionId, patch);
-            }
+            await persistSessionFields(sessionId, patch);
           } catch (persistenceError) {
             // The live route and host stores are applied before SQLite so the
             // harness can switch atomically. If SQLite rejects, unwind every
@@ -15986,11 +15929,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                     ? getSessionProvider(sessionId)
                     : (normalizeSessionProviderId(effectiveProviderId) ?? null),
                 effort:
-                  atomicSelection !== undefined
-                    ? atomicSelection.effort
-                    : (getSessionEffort(sessionId) as SessionRuntimeProfile['effort'] | undefined) ??
-                      projectionMeta?.effort ??
-                      null,
+                  atomicSelection?.effort ??
+                  (getSessionEffort(sessionId) as SessionRuntimeProfile['effort'] | undefined) ??
+                  projectionMeta?.effort ??
+                  null,
                 fastMode: atomicSelection?.fastMode ?? getSessionFastMode(sessionId),
               }
             : undefined;

@@ -1954,48 +1954,6 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
-  it.each([false, true])(
-    'context.rebuild atomically commits or rolls back its model route (inline=%s)',
-    async (useInlineWorker) => {
-      await withClient(async (client) => {
-        await seedSession(client, 's1', { contextTokens: 245_000, contextWindow: 500_000 });
-        await client.exec(
-          'UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ?, effort = ?, fast_mode = ? WHERE id = ?',
-          ['native-old', 'wide', 'xd', 'medium', 0, 's1'],
-        );
-        const routeArgs = {
-          sessionId: 's1', markerId: 'atomic-route', markerClientId: 'atomic-route',
-          markerContent: '{"reason":"model-window-switch"}', markerCreatedAt: 1000, updatedAt: 1000,
-          routeModel: 'small', routeProviderId: 'anthropic', routeEffort: 'high',
-          routeFastMode: true, routeContextWindow: 200_000,
-        };
-        await client.tx('context.rebuild' as string, routeArgs);
-        await expect(client.queryOne(
-          'SELECT sdk_session_id, context_tokens, context_window, model, provider_id, effort, fast_mode FROM sessions WHERE id = ?',
-          ['s1'],
-        )).resolves.toEqual({
-          sdk_session_id: null, context_tokens: 0, context_window: 200_000,
-          model: 'small', provider_id: 'anthropic', effort: 'high', fast_mode: 1,
-        });
-
-        await client.exec(
-          'UPDATE sessions SET sdk_session_id = ?, context_tokens = ?, context_window = ?, model = ?, provider_id = ?, effort = ?, fast_mode = ? WHERE id = ?',
-          ['native-old', 245_000, 500_000, 'wide', 'xd', 'medium', 0, 's1'],
-        );
-        await expect(client.tx('context.rebuild' as string, {
-          ...routeArgs, markerClientId: 'duplicate-client', routeModel: 'must-rollback', updatedAt: 2000,
-        })).rejects.toBeTruthy();
-        await expect(client.queryOne(
-          'SELECT sdk_session_id, context_tokens, context_window, model, provider_id, effort, fast_mode FROM sessions WHERE id = ?',
-          ['s1'],
-        )).resolves.toEqual({
-          sdk_session_id: 'native-old', context_tokens: 245_000, context_window: 500_000,
-          model: 'wide', provider_id: 'xd', effort: 'medium', fast_mode: 0,
-        });
-      }, { useInlineWorker });
-    },
-  );
-
   it('session.agentSwitchFallback missing boundary rolls back sdk id clear', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');

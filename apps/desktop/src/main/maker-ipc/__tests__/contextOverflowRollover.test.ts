@@ -512,24 +512,6 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
-  it('does not publish a rebuilt state when the atomic route transaction fails', async () => {
-    const deps = makeDeps([msg('user', '继续', 'u1')]);
-    deps.getSessionRow.mockResolvedValue({
-      ...(await deps.getSessionRow()),
-      contextTokens: 300_000,
-      contextWindow: 500_000,
-    });
-    deps.commitRebuild.mockRejectedValue(new Error('SQLITE_FULL'));
-    const rollover = createContextOverflowRollover(deps);
-
-    await expect(
-      rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
-    ).rejects.toThrow('SQLITE_FULL');
-    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
-    expect(deps.onRebuilt).not.toHaveBeenCalled();
-    expect(deps.replayUserMessage).not.toHaveBeenCalled();
-  });
-
   it('rebuilds a pressured cold local session before its persisted SDK session can resume', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
