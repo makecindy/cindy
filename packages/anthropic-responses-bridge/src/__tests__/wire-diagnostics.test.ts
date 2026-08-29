@@ -108,6 +108,26 @@ function addDownstreamCall(probe: WireDiagnosticsSession, args: string): void {
   });
 }
 
+function addUnrecognizedToolCalls(probe: WireDiagnosticsSession, name: string, args: string): void {
+  probe.recordUpstreamEvent({
+    type: 'response.output_item.done',
+    output_index: 0,
+    item: { type: 'function_call', name, call_id: 'call-unknown', arguments: args },
+  });
+  probe.recordDownstreamEvent({
+    event: 'content_block_start',
+    data: {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'tool_use', id: 'call-unknown', name, input: {} },
+    },
+  });
+  probe.recordDownstreamEvent({
+    event: 'content_block_stop',
+    data: { type: 'content_block_stop', index: 0 },
+  });
+}
+
 function comparison(entries: Array<{ message: string; meta?: Record<string, unknown> }>): Record<string, unknown> {
   const entry = entries.find(({ message }) => message === 'wire diagnostics: bridge comparison');
   expect(entry?.meta).toBeDefined();
@@ -214,5 +234,29 @@ describe('WireDiagnosticsSession', () => {
     expect(input.extraKeyCount).toBe(1);
     expect(input.extraKeys).toBeUndefined();
     expect(JSON.stringify(entries)).not.toContain('user/private/path');
+  });
+
+  it('hashes unrecognized tool names in every wire record', () => {
+    const { logger, entries } = capture();
+    const probe = new WireDiagnosticsSession(logger, meta);
+    const { request, responses } = requestAndResponseTools();
+    probe.recordRequest(request, responses);
+
+    const secretName = '/Users/dash/private/credential-value';
+    const args = JSON.stringify({ file_path: '/tmp/file.txt', old_string: 'old', new_string: 'new' });
+    addUnrecognizedToolCalls(probe, secretName, args);
+    probe.finish({ status: 200, reason: 'stream-finished' });
+
+    const serialized = JSON.stringify(entries);
+    expect(serialized).not.toContain(secretName);
+    expect(serialized).toMatch(/\(unrecognized:[a-f0-9]{64}\)/);
+
+    const upstream = entries.find(({ message }) => message === 'wire diagnostics: upstream function_call')!.meta!;
+    const downstream = entries.find(({ message }) => message === 'wire diagnostics: downstream tool_use')!.meta!;
+    const item = (comparison(entries).comparisons as Array<Record<string, unknown>>)[0];
+    expect(upstream.tool).toMatch(/^\(unrecognized:[a-f0-9]{64}\)$/);
+    expect(downstream.tool).toMatch(/^\(unrecognized:[a-f0-9]{64}\)$/);
+    expect(item.upstreamTool).toBe(upstream.tool);
+    expect(item.downstreamTool).toBe(downstream.tool);
   });
 });

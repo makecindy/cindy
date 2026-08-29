@@ -95,6 +95,11 @@ function hashJson(value: unknown): string {
   return hashText(serialized);
 }
 
+function safeToolName(name: string | undefined, declaredTools: ReadonlyMap<string, unknown>): string {
+  if (name === undefined) return '(missing)';
+  return declaredTools.has(name) ? name : `(unrecognized:${hashText(name)})`;
+}
+
 function jsonShape(value: unknown): JsonShape {
   if (value === undefined) return 'undefined';
   if (value === null) return 'null';
@@ -224,12 +229,13 @@ function collectToolUses(
       if (!isPlainObject(block) || block.type !== 'tool_use') continue;
       count += 1;
       if (items.length >= MAX_HISTORY_TOOL_USES) continue;
+      const name = typeof block.name === 'string' ? block.name : undefined;
       items.push({
-        name: typeof block.name === 'string' ? block.name : '(missing)',
+        name: safeToolName(name, schemaByTool),
         idSha256: typeof block.id === 'string' ? hashText(block.id) : hashText(''),
         input: summarizeJsonValue(
           block.input,
-          schemaByTool.get(typeof block.name === 'string' ? block.name : ''),
+          schemaByTool.get(name ?? ''),
         ),
       });
     }
@@ -409,8 +415,8 @@ export class WireDiagnosticsSession {
         && sourceRaw.length > 0 && sourceRaw === targetRaw;
       comparisons.push({
         ordinal: i,
-        upstreamTool: source?.name ?? '(missing)',
-        downstreamTool: target?.name ?? '(missing)',
+        upstreamTool: safeToolName(source?.name, this.requiredByTool),
+        downstreamTool: safeToolName(target?.name, this.requiredByTool),
         upstreamCallIdSha256: source?.callIdSha256,
         downstreamCallIdSha256: target?.idSha256,
         sameCallIdentity: !!source && !!target && callKey(source) === callKey(target),
@@ -457,7 +463,7 @@ export class WireDiagnosticsSession {
     this.emit('wire diagnostics: upstream function_call', {
       ...this.meta,
       outputIndex: state.outputIndex,
-      tool: state.name ?? '(missing)',
+      tool: safeToolName(state.name, this.requiredByTool),
       callIdSha256: state.callIdSha256,
       argumentsDelta: summaryForCall(state.deltaArguments, schema, state.deltaOverflow),
       argumentsDone: state.argumentsDone === undefined
@@ -479,7 +485,7 @@ export class WireDiagnosticsSession {
     this.emit('wire diagnostics: downstream tool_use', {
       ...this.meta,
       blockIndex: state.blockIndex,
-      tool: state.name ?? '(missing)',
+      tool: safeToolName(state.name, this.requiredByTool),
       idSha256: state.idSha256,
       arguments: summaryForCall(state.arguments, schema, state.overflow),
     });
