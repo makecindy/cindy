@@ -1897,7 +1897,7 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('context.rebuild appends markers instead of deleting earlier rebuild boundaries', async () => {
+  it.each([false, true])('context.rebuild resets usage and appends markers (inline=%s)', async (useInlineWorker) => {
     await withClient(async (client) => {
       await seedSession(client, 's1', { contextTokens: 245_000, contextWindow: 500_000 });
       await client.exec(
@@ -1951,7 +1951,7 @@ describe('db worker tx handlers', () => {
         list_preview: 'keep me',
         list_message_count: null,
       });
-    });
+    }, { useInlineWorker });
   });
 
   it('session.agentSwitchFallback missing boundary rolls back sdk id clear', async () => {
