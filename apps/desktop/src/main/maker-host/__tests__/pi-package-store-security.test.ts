@@ -2086,6 +2086,76 @@ describe('Pi package executable-code boundary', () => {
   it.each([
     ['transient I/O', 'EIO'],
     ['permission', 'EACCES'],
+  ])('reconciles a reinstall after a recoverable %s disable-ledger write failure', async (_label, code) => {
+    const { source } = await createSkillOnlyPackage('npm:reinstalled-disabled-package');
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    const originalRename = fs.rename.bind(fs);
+    let injected = false;
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (!injected && path.resolve(String(to)) === path.resolve(stateFile)) {
+        injected = true;
+        throw Object.assign(new Error(`simulated ${code}`), { code });
+      }
+      return originalRename(from, to);
+    });
+    try {
+      const store = await import('../pi-package-store.js');
+      await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
+        affectedPackage: { source, enabled: true },
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+    expect(injected).toBe(true);
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([sibling]);
+  });
+
+  it('does not report a reinstall enabled while disable-ledger reconciliation keeps failing', async () => {
+    const { source } = await createSkillOnlyPackage('npm:persistently-disabled-package');
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(stateFile)) {
+        throw Object.assign(new Error('simulated EACCES'), { code: 'EACCES' });
+      }
+      return originalRename(from, to);
+    });
+    try {
+      const store = await import('../pi-package-store.js');
+      await expect(mutateAuthorized(store, { action: 'install', source }))
+        .rejects.toThrow('state is unavailable');
+      expect(runtime.spawns.some(({ args }) => args.includes('install'))).toBe(true);
+    } finally {
+      renameSpy.mockRestore();
+    }
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source, sibling]);
+  });
+
+  it.each([
+    ['transient I/O', 'EIO'],
+    ['permission', 'EACCES'],
   ])('keeps native package projection enabled through a %s Cindy-state read failure', async (_label, code) => {
     const { source } = await createSkillOnlyPackage('npm:disabled-skill-package');
     const stateDir = path.join(runtime.userData, 'pi-package-home');

@@ -2433,10 +2433,19 @@ export function piPackageMutationMayHaveChangedState(error: unknown): boolean {
 async function clearDisabledPackageSources(sources: Iterable<string>): Promise<void> {
   const targets = new Set(sources);
   if (targets.size === 0) return;
-  const state = await requireState();
-  const disabledSources = state.disabledSources.filter((source) => !targets.has(source));
-  if (disabledSources.length === state.disabledSources.length) return;
-  await writeState({ ...state, disabledSources });
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const state = await requireState();
+      const disabledSources = state.disabledSources.filter((source) => !targets.has(source));
+      if (disabledSources.length === state.disabledSources.length) return;
+      await writeState({ ...state, disabledSources });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 async function revokeExtensionApproval(sources: Iterable<string>): Promise<void> {
@@ -2604,20 +2613,29 @@ export async function mutatePiPackage(
         }
       }
       affectedSource = affected?.rawSource ?? previous?.rawSource ?? source;
+      const installAliases = [
+        ...sourceAliases(source),
+        ...(previous ? sourceAliases(previous.rawSource) : []),
+      ];
+      // Explicit reinstall means enabled only after its precise aliases leave
+      // the durable disable ledger. Retry once for transient filesystem faults;
+      // a persistent failure must not produce a false enabled receipt.
       try {
-        const installAliases = [
-          ...sourceAliases(source),
-          ...(previous ? sourceAliases(previous.rawSource) : []),
-        ];
-        // Explicit reinstall means enabled even when optional analysis cannot
-        // identify the package's current resource shape.
         await clearDisabledPackageSources(installAliases);
+      } catch (error) {
+        log.warn('Pi package installed but Cindy enable projection failed', {
+          source: logSource,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        throw new PiPackageStateUnavailableError();
+      }
+      try {
         await revokeExtensionApproval(installAliases);
         await persistEnabledExtensionApprovals({
           ...(affected ? { enable: affected } : {}),
         });
       } catch (error) {
-        log.warn('Pi package installed but Cindy projection refresh failed', {
+        log.warn('Pi package installed but optional Cindy snapshot metadata refresh failed', {
           source: logSource,
           message: error instanceof Error ? error.message : String(error),
         });
