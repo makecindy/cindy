@@ -1,5 +1,9 @@
 import { PiManagedPackageMutationFailedError } from '@cindy/maker-core';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
 
 const storeMocks = vi.hoisted(() => ({
   mayHaveChangedState: vi.fn(() => false),
@@ -11,7 +15,7 @@ vi.mock('../pi-package-store.js', () => ({
 }));
 
 vi.mock('../../logger.js', () => ({
-  createLogger: () => ({ warn: vi.fn() }),
+  createLogger: () => ({ warn: loggerMocks.warn }),
 }));
 
 vi.mock('../pi-package-mutation-grant.js', () => ({
@@ -33,6 +37,10 @@ function buildDeps() {
 }
 
 describe('Pi managed package Main authorization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it.each([
     'local-desktop-command',
     'authenticated-im-command',
@@ -104,6 +112,34 @@ describe('Pi managed package Main authorization', () => {
       source: 'npm:context-mode',
       authorization: 'local-desktop-command',
     }, deps)).rejects.toMatchObject({ failureCode });
+  });
+
+  it.each([
+    ['credentials', 'https://user:secret@example.com/pkg.git'],
+    ['query', 'https://example.com/pkg.git?token=query-secret'],
+    ['fragment', 'https://example.com/pkg.git#fragment-secret'],
+  ])('never persists raw %s details from a failed wrapper mutation', async (_kind, source) => {
+    const { deps } = buildDeps();
+    const rawMessage = `npm failed while fetching ${source}`;
+    vi.mocked(deps.mutate).mockRejectedValueOnce(new Error(rawMessage));
+
+    await expect(mutateAuthorizedPiManagedPackage({
+      action: 'install',
+      source,
+      authorization: 'local-desktop-command',
+    }, deps)).rejects.toBeInstanceOf(PiManagedPackageMutationFailedError);
+
+    const logged = JSON.stringify(loggerMocks.warn.mock.calls);
+    expect(logged).not.toContain(source);
+    expect(logged).not.toContain(rawMessage);
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      'Pi managed package native mutation failed',
+      {
+        action: 'install',
+        failureCode: 'native-command-failed',
+        mayHaveChangedState: false,
+      },
+    );
   });
 
   it('rejects authorization values outside the host-owned union at runtime', async () => {

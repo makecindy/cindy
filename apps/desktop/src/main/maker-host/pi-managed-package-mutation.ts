@@ -71,15 +71,16 @@ export async function mutateAuthorizedPiManagedPackage(
     return await deps.mutate(storeRequest, deps.issueGrant(storeRequest));
   } catch (error) {
     const failureCode = classifyMutationFailure(error);
+    const mayHaveChangedState = piPackageMutationMayHaveChangedState(error);
+    // This wrapper can receive raw Pi/npm/Git stderr containing source
+    // credentials. Persist only stable recovery metadata, never Error.message.
     log.warn('Pi managed package native mutation failed', {
       action: request.action,
       failureCode,
-      message: error instanceof Error ? error.message : String(error),
+      mayHaveChangedState,
     });
-    // Preserve only stable recovery metadata across the maker-core boundary.
-    // Raw command/filesystem details remain Main-local and never enter receipts.
     throw new PiManagedPackageMutationFailedError(
-      piPackageMutationMayHaveChangedState(error),
+      mayHaveChangedState,
       failureCode,
     );
   }
