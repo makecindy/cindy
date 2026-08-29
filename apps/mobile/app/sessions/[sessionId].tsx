@@ -7976,6 +7976,26 @@ export default function SessionScreen() {
     void runGoalAction(() => maker.goal.clear(sessionId), null);
   }, [maker, runGoalAction, sessionId]);
 
+  const confirmComposerModelWindowSwitch = useCallback(async (targetContextWindow?: number) => {
+    const contextTokens = currentSession?.contextTokens;
+    const currentContextWindow = currentSession?.contextWindow;
+    const hasVerifiedWindows =
+      typeof currentContextWindow === 'number' && Number.isFinite(currentContextWindow) && currentContextWindow > 0
+      && typeof targetContextWindow === 'number' && Number.isFinite(targetContextWindow) && targetContextWindow > 0;
+    const hasVerifiedUsage =
+      typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens > 0;
+    if (
+      currentSession?.remoteHostId
+      && (controlBusy || remoteSessionRunning || !hasVerifiedWindows || !hasVerifiedUsage)
+    ) return false;
+    if (hasVerifiedWindows && targetContextWindow >= currentContextWindow) return true;
+    return confirmMobileModelWindowSwitch(
+      contextTokens,
+      targetContextWindow,
+      currentSession?.remoteHostId,
+    );
+  }, [controlBusy, currentSession, remoteSessionRunning]);
+
   // 选行 = 原子切「来源 + 模型 + effort + fast」(effort 优先级与桌面同源:该 (来源,模型) 的
   // 会话镜像记忆 → 沿用当前档 → 模型默认;同模型换来源不沿用;fast 按镜像恢复、fastEditable 门控)。
   const selectComposerModelRow = useCallback((row: ProviderModelRow) => {
@@ -8003,16 +8023,14 @@ export default function SessionScreen() {
     void (async () => {
       let confirmedContextWindow: number | undefined;
       if (next.model !== currentSession.model || next.providerId !== currentSession.providerId) {
-        const confirmed = await confirmMobileModelWindowSwitch(
-          currentSession.contextTokens,
-          row.model.contextWindow,
-          currentSession.remoteHostId,
-        );
+        const confirmed = await confirmComposerModelWindowSwitch(row.model.contextWindow);
         if (!confirmed) return;
         if (
           !currentSession.remoteHostId &&
           typeof currentSession.contextTokens === 'number' &&
+          typeof currentSession.contextWindow === 'number' &&
           typeof row.model.contextWindow === 'number' &&
+          row.model.contextWindow < currentSession.contextWindow &&
           currentSession.contextTokens >= row.model.contextWindow
         ) {
           confirmedContextWindow = row.model.contextWindow;
@@ -8053,6 +8071,7 @@ export default function SessionScreen() {
   }, [
     agentSwitchIntent,
     canUseRemoteSessionControls,
+    confirmComposerModelWindowSwitch,
     currentSession,
     maker,
     modelSheetAgentKind,
@@ -8070,16 +8089,14 @@ export default function SessionScreen() {
     void (async () => {
       let confirmedContextWindow: number | undefined;
       if (option.id !== currentSession?.model) {
-        const confirmed = await confirmMobileModelWindowSwitch(
-          currentSession?.contextTokens,
-          option.contextWindow,
-          currentSession?.remoteHostId,
-        );
+        const confirmed = await confirmComposerModelWindowSwitch(option.contextWindow);
         if (!confirmed) return;
         if (
           !currentSession?.remoteHostId &&
           typeof currentSession?.contextTokens === 'number' &&
+          typeof currentSession.contextWindow === 'number' &&
           typeof option.contextWindow === 'number' &&
+          option.contextWindow < currentSession.contextWindow &&
           currentSession.contextTokens >= option.contextWindow
         ) {
           confirmedContextWindow = option.contextWindow;
@@ -8103,7 +8120,7 @@ export default function SessionScreen() {
         ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
       });
     })();
-  }, [agentSwitchIntent, canUseRemoteSessionControls, currentSession, maker, modelSheetAgentKind, modelSheetCapabilities, runControlAction, sessionAgentKind, sessionId]);
+  }, [agentSwitchIntent, canUseRemoteSessionControls, confirmComposerModelWindowSwitch, currentSession, maker, modelSheetAgentKind, modelSheetCapabilities, runControlAction, sessionAgentKind, sessionId]);
   const browseComposerModelAgent = useCallback(async (next: MobileSessionAgentKind) => {
     if (next === modelSheetAgentKind) return true;
     if (next !== sessionAgentKind) {

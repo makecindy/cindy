@@ -37,11 +37,23 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const selectComposerFlatModel'),
       source.indexOf('const browseComposerModelAgent'),
     );
-    expect(rowSelector).toMatch(
-      /currentSession\.contextTokens,\s+row\.model\.contextWindow,\s+currentSession\.remoteHostId/,
+    const remoteGuard = source.slice(
+      source.indexOf('const confirmComposerModelWindowSwitch'),
+      source.indexOf('// 选行 = 原子切', source.indexOf('const confirmComposerModelWindowSwitch')),
     );
-    expect(flatSelector).toMatch(
-      /currentSession\?\.contextTokens,\s+option\.contextWindow,\s+currentSession\?\.remoteHostId/,
+    expect(rowSelector).toContain(
+      'confirmComposerModelWindowSwitch(row.model.contextWindow)',
+    );
+    expect(flatSelector).toContain(
+      'confirmComposerModelWindowSwitch(option.contextWindow)',
+    );
+    expect(remoteGuard).toContain('currentSession?.contextWindow');
+    expect(remoteGuard).toContain(
+      'controlBusy || remoteSessionRunning || !hasVerifiedWindows || !hasVerifiedUsage',
+    );
+    expect(remoteGuard).toContain('targetContextWindow >= currentContextWindow');
+    expect(remoteGuard.indexOf('remoteSessionRunning')).toBeLessThan(
+      remoteGuard.indexOf('targetContextWindow >= currentContextWindow'),
     );
     expect(rowSelector).toContain(
       'next.model !== currentSession.model || next.providerId !== currentSession.providerId',
@@ -54,7 +66,13 @@ describe('session Agent switch UI wiring', () => {
       flatSelector.indexOf('maker.setModel'),
     );
     expect(rowSelector).toContain(
+      'row.model.contextWindow < currentSession.contextWindow',
+    );
+    expect(rowSelector).toContain(
       'currentSession.contextTokens >= row.model.contextWindow',
+    );
+    expect(flatSelector).toContain(
+      'option.contextWindow < currentSession.contextWindow',
     );
     expect(flatSelector).toContain(
       'currentSession.contextTokens >= option.contextWindow',

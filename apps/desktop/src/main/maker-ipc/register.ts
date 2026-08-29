@@ -15009,6 +15009,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .drizzle.select({
           status: sessions.status,
           orcaRole: sessions.orcaRole,
+          remoteHostId: sessions.remoteHostId,
           contextTokens: sessions.contextTokens,
         })
         .from(sessions)
@@ -15162,6 +15163,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const pendingAxisPatch = routeExplicit
         ? axisPatch
         : await resolvePendingRuntimeAxisPatch(sessionId, axisPatch);
+      if (runtimeStatus.remoteHostId && isSessionInTurn(sessionId)) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'busy remote task cannot change runtime selection',
+        );
+      }
       if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId)) {
         const meta = await maker.getSessionMeta(sessionId);
         if (!meta) return { deferred: false, superseded: true };
@@ -15237,20 +15244,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         currentRuntimeModel !== undefined &&
         (currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId);
       let targetContextWindow: number | undefined;
+      let verifiedCurrentWindow: number | undefined;
       let modelWindowRebuilt = false;
       if (runtimeAgentKind && (runtimeRouteChanged || confirmedContextWindow !== undefined)) {
+        const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>
+          resolveVerifiedContextWindow(
+            getActiveCatalog(),
+            runtimeAgentKind,
+            pid,
+            modelId,
+          );
         const verifiedTargetWindow = lookupVerifiedContextWindow(
-          (_agentKind, modelId, pid) =>
-            resolveVerifiedContextWindow(
-              getActiveCatalog(),
-              runtimeAgentKind,
-              pid,
-              modelId,
-            ),
+          resolveRouteWindow,
           model,
           targetRouteProviderId,
           runtimeAgentKind,
         );
+        const catalogCurrentWindow = lookupVerifiedContextWindow(
+          resolveRouteWindow,
+          currentRuntimeModel,
+          currentProviderId,
+          runtimeAgentKind,
+        ) ?? undefined;
+        const liveCurrentWindow = liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextWindow;
+        // Pi's effective window is a runtime route fact; catalog/persisted values may be larger.
+        verifiedCurrentWindow = runtimeAgentKind === 'pi'
+          ? typeof liveCurrentWindow === 'number' && Number.isFinite(liveCurrentWindow) && liveCurrentWindow > 0
+            ? liveCurrentWindow
+            : undefined
+          : catalogCurrentWindow;
+        const targetDoesNotShrink =
+          typeof verifiedCurrentWindow === 'number' &&
+          typeof verifiedTargetWindow === 'number' &&
+          verifiedTargetWindow >= verifiedCurrentWindow;
         // Materialized/user-provider catalog windows can be display-only fallbacks.
         // A destructive native-context rebuild may use only a route-verified window.
         targetContextWindow = verifiedTargetWindow ?? undefined;
@@ -15280,16 +15306,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         }
         const persistedContextTokens =
-          typeof runtimeStatus.contextTokens === 'number' && runtimeStatus.contextTokens > 0
+          typeof runtimeStatus.contextTokens === 'number' &&
+          Number.isFinite(runtimeStatus.contextTokens) &&
+          runtimeStatus.contextTokens >= 0
             ? runtimeStatus.contextTokens
-            : 0;
+            : null;
         const liveContextTokens = liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextTokens;
-        const contextTokens =
-          typeof liveContextTokens === 'number' &&
-          Number.isFinite(liveContextTokens) &&
-          (liveContextTokens > 0 || persistedContextTokens === 0)
+        const verifiedLiveContextTokens =
+          typeof liveContextTokens === 'number' && Number.isFinite(liveContextTokens)
             ? liveContextTokens
-            : persistedContextTokens;
+            : null;
+        const contextTokens =
+          verifiedLiveContextTokens !== null &&
+          (verifiedLiveContextTokens > 0 || persistedContextTokens === 0)
+            ? verifiedLiveContextTokens
+            : (persistedContextTokens ?? 0);
+        if (
+          runtimeStatus.remoteHostId &&
+          (!verifiedCurrentWindow ||
+            (persistedContextTokens === null &&
+              (verifiedLiveContextTokens === null || verifiedLiveContextTokens <= 0)))
+        ) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'remote model window switch context is unknown; runtime selection was not changed',
+          );
+        }
         const remoteTargetAssessment = assessModelSwitchContext({
           contextTokens,
           targetContextWindow: verifiedTargetWindow ?? undefined,
@@ -15297,6 +15339,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
         if (
           isDeviceLinkInvoke() &&
+          !targetDoesNotShrink &&
           remoteTargetAssessment.level === 'overflow' &&
           (!trustedRemoteWindowConfirmation || confirmedContextWindow !== verifiedTargetWindow)
         ) {
@@ -15305,7 +15348,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             'remote controller must explicitly confirm the verified overflow window',
           );
         }
-        if (targetContextWindow > 0) {
+        if (targetContextWindow > 0 && !targetDoesNotShrink) {
           if (!contextOverflowRolloverHolder) {
             throwIpcError(
               'PRECONDITION_FAILED',
@@ -15358,6 +15401,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             );
           }
           if (preparation === 'unknown-context') {
+            if (!previousRuntime.hadLiveSession && maker.getSession(sessionId)) {
+              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+            }
             throwIpcError(
               'PRECONDITION_FAILED',
               'current context window is unknown; runtime selection was not changed',
@@ -15371,6 +15417,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           assertRuntimeOwnerCurrent();
           modelWindowRebuilt = preparation === 'rebuilt';
+          if (
+            runtimeAgentKind === 'pi' &&
+            !modelWindowRebuilt &&
+            verifiedCurrentWindow === undefined
+          ) {
+            const rehydratedCurrentWindow =
+              maker.getSession(sessionId)?.getUsageSnapshot?.().contextWindow;
+            if (
+              typeof rehydratedCurrentWindow !== 'number' ||
+              !Number.isFinite(rehydratedCurrentWindow) ||
+              rehydratedCurrentWindow <= 0
+            ) {
+              if (!previousRuntime.hadLiveSession && maker.getSession(sessionId)) {
+                await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+              }
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'Pi did not expose its verified current context window; runtime selection was not changed',
+              );
+            }
+            verifiedCurrentWindow = rehydratedCurrentWindow;
+          }
           if (
             modelWindowRebuilt &&
             effectiveProviderId === undefined &&
@@ -15553,7 +15621,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               'remote controller confirmation does not match the verified final Pi window',
             );
           }
-          if (finalPiWindow < targetContextWindow) {
+          if (
+            typeof verifiedCurrentWindow === 'number' &&
+            finalPiWindow < verifiedCurrentWindow
+          ) {
             let finalPressureContextTokens: number | undefined;
             const finalPreparation =
               await contextOverflowRolloverHolder!.prepareModelWindowSwitch(sessionId, {

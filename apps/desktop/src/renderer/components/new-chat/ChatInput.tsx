@@ -6046,9 +6046,9 @@ export function ChatInput({
       requireDestructiveConfirmation = false,
     ): Promise<boolean | number> => {
       if (!sessionId) return true;
-      const contextTokens =
-        verifiedContextTokens ?? makerChatStore.getSnapshot(sessionId).agentStatus.contextTokens;
-      if (!contextTokens || contextTokens <= 0) return true;
+      const agentStatus = makerChatStore.getSnapshot(sessionId).agentStatus;
+      const contextTokens = verifiedContextTokens ?? agentStatus.contextTokens;
+      const currentContextWindow = agentStatus.contextWindow;
       // 显式来源必须按完整 route 查窗口：同 model id 在不同 provider 可分别为 1M / 200K。
       // 无来源的旧 flat 入口才沿用设备能力缓存的 model-id 回退。
       const remoteDeviceId = sourceRemoteDeviceId ?? getSessionDeviceId(sessionId) ?? undefined;
@@ -6073,6 +6073,17 @@ export function ChatInput({
               })
             : undefined
           : getModelById(newModelId, remoteDeviceId)?.contextWindow);
+      const hasVerifiedWindows =
+        Number.isFinite(currentContextWindow) && currentContextWindow > 0 &&
+        typeof targetContextWindow === 'number' &&
+        Number.isFinite(targetContextWindow) && targetContextWindow > 0;
+      const hasVerifiedUsage = Number.isFinite(contextTokens) && contextTokens > 0;
+      if (remoteHostId && agentStatus.isRunning) return false;
+      // 同窗或扩窗不需要 handoff；本地与 SSH 都保留普通切换。
+      if (hasVerifiedWindows && targetContextWindow >= currentContextWindow) return true;
+      // SSH 不做远端 handoff。缩窗判据的任一事实未知时继续关闭。
+      if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;
+      if (!contextTokens || contextTokens <= 0) return true;
       const verdict = assessModelSwitchContext({
         contextTokens,
         targetContextWindow,

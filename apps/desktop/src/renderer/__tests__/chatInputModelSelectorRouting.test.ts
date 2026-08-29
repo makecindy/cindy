@@ -81,15 +81,22 @@ describe('ChatInput model source switching wiring', () => {
     expect(chatInputSource).toContain('? { confirmedContextWindow }');
   });
 
-  it('blocks pressured SSH model switches before any continue/confirm path', () => {
+  it('blocks only pressured SSH window shrinks before any continue/confirm path', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);
     const guard = chatInputSource.slice(start, end);
-    const remoteBlock = guard.indexOf('remoteHostId &&');
+    const remoteGuard = guard.indexOf('const hasVerifiedWindows =');
+    const remoteBlock = guard.indexOf("verdict.level === 'danger' || verdict.level === 'overflow'");
     const warningPath = guard.indexOf("verdict.level === 'warn'");
     const confirmPath = guard.indexOf('const accepted = await confirmDialog({');
 
-    expect(remoteBlock).toBeGreaterThan(-1);
+    expect(remoteGuard).toBeGreaterThan(-1);
+    expect(remoteGuard).toBeLessThan(remoteBlock);
+    const shrinkGate = guard.slice(remoteGuard, remoteBlock);
+    expect(shrinkGate).toContain('agentStatus.isRunning');
+    expect(shrinkGate).toContain('targetContextWindow >= currentContextWindow');
+    expect(shrinkGate).toContain('!hasVerifiedWindows || !hasVerifiedUsage');
+    expect(shrinkGate).toContain('return true;');
     expect(remoteBlock).toBeLessThan(warningPath);
     expect(remoteBlock).toBeLessThan(confirmPath);
     const blocked = guard.slice(remoteBlock, warningPath);
