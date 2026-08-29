@@ -117,7 +117,12 @@ describe('parseModelsSyncPayload', () => {
     expect(lastKnownGood).toEqual([{ id: 'last-known-model' }]);
   });
 
-  it.each(['openai-responses', 'anthropic-messages'] as const)(
+  it.each([
+    'anthropic-messages',
+    'openai-responses',
+    'openai-completions',
+    'google-generative-ai',
+  ] as const)(
     'reads v5 Pi %s routing and filters future agent kinds without rejecting the catalog',
     (piWireProtocol) => {
       const payload = {

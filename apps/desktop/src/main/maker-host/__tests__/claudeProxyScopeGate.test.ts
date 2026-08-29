@@ -45,6 +45,7 @@ vi.mock('../claude-fast-mode-log', () => ({
 
 import {
   createModelRoutingTransform,
+  piGatewayRequestAgent,
   setClaudeProxyGatewayKeyReader,
   setClaudeProxyOwnerBoundaryPendingChecker,
   setClaudeProxyOwnerScopeKeyReader,
@@ -61,6 +62,17 @@ import {
   registerPiProxySession,
   resetPiProxySessionsForTest,
 } from '../pi-proxy-session-auth';
+
+describe('Pi Gateway request front door', () => {
+  it.each([
+    ['/v1/messages', 'claude-code'],
+    ['/v1/responses', 'codex'],
+    ['/v1/chat/completions', 'codex'],
+    ['/v1beta/models/gemini-3.6-flash:streamGenerateContent', 'codex'],
+  ] as const)('routes %s through the Gateway %s credential surface', (url, agent) => {
+    expect(piGatewayRequestAgent(url)).toBe(agent);
+  });
+});
 
 const SESSION_HEADER = { 'x-claude-code-session-id': 'sdk-grok' };
 
@@ -509,6 +521,90 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
       },
       headerDelete: [
         'x-api-key',
+        'x-cindy-pi-session-id',
+        'x-cindy-pi-session-token',
+        'x-cindy-pi-provider-id',
+      ],
+    });
+  });
+
+  it.each([
+    ['/v1/messages', { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' }],
+    ['/v1/responses', { authorization: 'Bearer sk-gw' }],
+    ['/v1/chat/completions', { authorization: 'Bearer sk-gw' }],
+    ['/v1beta/models/google/gemini-3.6-flash:streamGenerateContent', { authorization: 'Bearer sk-gw' }],
+  ] as const)(
+    'routes a cindy Gateway Pi request on %s through the matching Claude/Codex surface',
+    async (url, headerOverride) => {
+      setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+      setSessionProvider('sess-pi', 'xd');
+      registerPiProxySession('sess-pi', 'gateway-session-secret', () => null);
+      const decision = createModelRoutingTransform()(
+        { model: 'gateway-model' },
+        ctxWith({
+          'x-cindy-pi-session-id': 'sess-pi',
+          'x-cindy-pi-session-token': 'gateway-session-secret',
+          ...(url.includes('/v1beta/')
+            ? { 'x-goog-api-key': 'cindy-pi-provider-auth-placeholder' }
+            : {}),
+        }, url),
+      );
+
+      await expect(Promise.resolve(decision)).resolves.toEqual({
+        headerOverride,
+        headerDelete: [
+          ...(url.includes('/v1beta/') ? ['x-goog-api-key'] : []),
+          'x-cindy-pi-session-id',
+          'x-cindy-pi-session-token',
+          'x-cindy-pi-provider-id',
+        ],
+      });
+    },
+  );
+
+  it('strips Google placeholder auth even when the live Gateway key is temporarily unavailable', async () => {
+    setClaudeProxyGatewayKeyReader(() => null);
+    setSessionProvider('sess-pi', 'xd');
+    registerPiProxySession('sess-pi', 'gateway-session-secret', () => null);
+    const decision = createModelRoutingTransform()(
+      { model: 'google/gemini-3.6-flash' },
+      ctxWith({
+        'x-cindy-pi-session-id': 'sess-pi',
+        'x-cindy-pi-session-token': 'gateway-session-secret',
+        'x-goog-api-key': 'stale-gateway-key',
+      }, '/v1beta/models/google/gemini-3.6-flash:streamGenerateContent'),
+    );
+
+    await expect(Promise.resolve(decision)).resolves.toEqual({
+      headerDelete: [
+        'x-goog-api-key',
+        'x-cindy-pi-session-id',
+        'x-cindy-pi-session-token',
+        'x-cindy-pi-provider-id',
+      ],
+    });
+  });
+
+  it('routes a provider-null cindy Subagent by its API instead of inheriting the Anthropic parent', async () => {
+    setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+    setSessionProvider('sess-pi', 'anthropic');
+    registerPiProxySession(
+      'sess-pi',
+      'gateway-subagent-secret',
+      () => null,
+      { scope: 'subagent-route' },
+    );
+    const decision = createModelRoutingTransform()(
+      { model: 'moonshotai/kimi-k3' },
+      ctxWith({
+        'x-cindy-pi-session-id': 'sess-pi',
+        'x-cindy-pi-session-token': 'gateway-subagent-secret',
+      }, '/v1/chat/completions'),
+    );
+
+    await expect(Promise.resolve(decision)).resolves.toEqual({
+      headerOverride: { authorization: 'Bearer sk-gw' },
+      headerDelete: [
         'x-cindy-pi-session-id',
         'x-cindy-pi-session-token',
         'x-cindy-pi-provider-id',

@@ -1833,8 +1833,8 @@ export function getMaker(): Maker {
           localOverrides: getLocalCatalogOverridesSnapshot(),
         }),
       resolvePiGatewayModelDescriptor: (providerId, modelId) => {
-        // `cindy` / null 是 Pi 的默认 gateway 路由；其 wire 由 v3 XD runtime plan
-        // 决定，因此描述符也必须锁定 XD，不能让复合 `cindy` 按目录顺序命中同 id 订阅模型。
+        // `cindy` 始终是 XD Gateway 路由；其成员、能力与显式 API 都由 Model Access
+        // 决定，不能随当前订阅/BYOM provider 命中同 id 的另一条目录记录。
         return resolvePiRuntimeModelDescriptor(
           getDesktopSelectableCatalog(),
           resolvePiGatewayDescriptorProviderId(providerId),

@@ -38,9 +38,10 @@ import {
   resolvePiBundledApiByModelId,
   resolvePiBundledModelById,
   resolvePiCindyGatewayModelApi,
+  resolvePiCindyGatewayModelSpec,
   type PiBundledModelInfo,
 } from '../pi-host.js';
-import { setXdGatewayModels } from '../active-catalog.js';
+import { setActiveCatalog, setXdGatewayModels } from '../active-catalog.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
 
@@ -67,31 +68,152 @@ const piBundledModel = (
 });
 
 afterEach(() => {
+  setActiveCatalog(BUNDLED_CATALOG);
   setXdGatewayModels([]);
 });
 
 describe('resolvePiCindyGatewayModelApi', () => {
-  it('uses the exact XD model protocol even while the session is on a BYOM provider', () => {
+  it('keeps a Registry-linked Cindy Server protocol above local and Gateway metadata', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.presets = [
+      ...(catalog.presets ?? []),
+      {
+        id: 'server-moonshot-test',
+        name: 'Server Moonshot Test',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://server.example/anthropic',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'kimi-k3', name: 'Kimi K3' }],
+          },
+        },
+      },
+    ];
+    catalog.modelRegistry = {
+      schemaVersion: 2,
+      updatedAt: '2026-08-29T00:00:00.000Z',
+      models: [
+        {
+          id: 'canonical/kimi-k3',
+          name: 'Kimi K3',
+          routes: [
+            { providerId: 'xd', modelId: 'moonshot/kimi-k3', agents: ['claude-code', 'codex'] },
+            {
+              providerId: 'server-moonshot-test',
+              modelId: 'kimi-k3',
+              agents: ['claude-code', 'codex'],
+            },
+          ],
+        },
+      ],
+    };
+    setActiveCatalog(catalog, { authorityCatalog: catalog });
     setXdGatewayModels([
       {
-        id: 'gateway-messages',
-        agents: ['pi'],
-        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
-      },
-      {
-        id: 'gateway-responses',
+        id: 'moonshot/kimi-k3',
         agents: ['pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
       },
     ]);
 
-    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'gateway-messages')).toBe(
+    expect(resolvePiCindyGatewayModelApi('xd', 'moonshot/kimi-k3')).toBe(
       'anthropic-messages',
     );
-    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'gateway-responses')).toBe(
+    expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3')).toEqual({
+      api: 'anthropic-messages',
+    });
+  });
+
+  it('uses the exact local Pi API regardless of Gateway hints or selected BYOM provider', () => {
+    setXdGatewayModels([
+      {
+        id: 'claude-opus-5',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'gpt-5.6-sol',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
+      },
+    ]);
+
+    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'claude-opus-5')).toBe(
+      'anthropic-messages',
+    );
+    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'gpt-5.6-sol')).toBe(
       'openai-responses',
     );
   });
+
+  it('uses static client config, but never Desktop-probed metadata, for a remote Pi executable', () => {
+    setXdGatewayModels([
+      {
+        id: 'moonshot/kimi-k3',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+    ]);
+
+    expect(resolvePiCindyGatewayModelApi('xd', 'moonshot/kimi-k3', { remote: true })).toBe(
+      'openai-completions',
+    );
+    expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3', { remote: true })).toMatchObject({
+      api: 'openai-completions',
+      compat: {
+        maxTokensField: 'max_tokens',
+        thinkingFormat: 'openai',
+        requiresReasoningContentOnAssistantMessages: true,
+        deferredToolsMode: 'kimi',
+      },
+    });
+  });
+
+  it('keeps local Kimi Completions authoritative over the Gateway hint', () => {
+    setXdGatewayModels([
+      {
+        id: 'moonshot/kimi-k3',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+    ]);
+
+    expect(resolvePiCindyGatewayModelApi('xd', 'moonshot/kimi-k3')).toBe(
+      'openai-completions',
+    );
+    expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3')).toMatchObject({
+      api: 'openai-completions',
+      compat: {
+        maxTokensField: 'max_tokens',
+        thinkingFormat: 'openai',
+        requiresReasoningContentOnAssistantMessages: true,
+        deferredToolsMode: 'kimi',
+      },
+    });
+  });
+
+  it.each([undefined, 'openai-completions'] as const)(
+    'uses local Kimi compat when the Gateway hint is %s',
+    (wireProtocol) => {
+      setXdGatewayModels([
+        {
+          id: 'moonshot/kimi-k3',
+          agents: ['claude-code', 'codex', 'pi'],
+          ...(wireProtocol ? { perAgent: { pi: { wireProtocol } } } : {}),
+        },
+      ]);
+
+      expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3')).toMatchObject({
+        api: 'openai-completions',
+        compat: {
+          maxTokensField: 'max_tokens',
+          thinkingFormat: 'openai',
+          requiresReasoningContentOnAssistantMessages: true,
+          deferredToolsMode: 'kimi',
+        },
+      });
+    },
+  );
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
@@ -348,16 +470,16 @@ describe('buildPiNativeProvidersFromConfigs', () => {
   });
 
   const bundledPiPath = path.join(process.cwd(), 'apps/pi-bin/darwin-arm64/pi');
-  it('caches a null fallback when the PI probe temp directory cannot be created', async () => {
+  it('retries a transient null PI probe instead of caching it for the process lifetime', async () => {
     const binaryPath = path.join(process.cwd(), 'pi-temp-dir-probe-failure');
     const mkdtempSpy = vi
       .spyOn(fsp, 'mkdtemp')
-      .mockRejectedValueOnce(new Error('temporary directory unavailable'));
+      .mockRejectedValue(new Error('temporary directory unavailable'));
 
     try {
       await expect(readPiBundledModels(binaryPath)).resolves.toBeNull();
       await expect(readPiBundledModels(binaryPath)).resolves.toBeNull();
-      expect(mkdtempSpy).toHaveBeenCalledTimes(1);
+      expect(mkdtempSpy).toHaveBeenCalledTimes(2);
     } finally {
       mkdtempSpy.mockRestore();
     }
@@ -369,7 +491,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const catalog = await readPiBundledModels(bundledPiPath);
     expect(catalog?.get('openai-codex')?.get('gpt-5.6-sol')?.api).toBe('openai-codex-responses');
     expect(catalog?.get('xai')?.get('grok-4.5')?.api).toBe('openai-responses');
-    expect(catalog?.get('xai')?.get('grok-build-0.1')?.api).toBe('openai-completions');
+    expect(catalog?.get('xai')?.get('grok-build-0.1')?.api).toBe('openai-responses');
     const anthropicModels = [...(catalog?.get('anthropic')?.values() ?? [])];
     expect(anthropicModels.length).toBeGreaterThan(0);
     expect(anthropicModels.every((model) => model.api === 'anthropic-messages')).toBe(true);
@@ -377,6 +499,33 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(catalog?.get('zai')?.get('glm-5.2')).toMatchObject({
       api: 'openai-completions',
       baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+    });
+  });
+
+  it.skipIf(
+    process.platform !== 'darwin' || process.arch !== 'arm64' || !existsSync(bundledPiPath),
+  )('uses the exact Pi binary to enrich first-party Gateway profiles without remote API input', async () => {
+    await readPiBundledModels(bundledPiPath);
+    setXdGatewayModels([
+      { id: 'claude-opus-5', agents: ['pi'] },
+      { id: 'gpt-5.6-sol', agents: ['pi'] },
+      { id: 'google/gemini-3.7-flash', agents: ['pi'] },
+    ]);
+
+    expect(resolvePiCindyGatewayModelSpec('xd', 'claude-opus-5')).toMatchObject({
+      api: 'anthropic-messages',
+      compat: { forceAdaptiveThinking: true, supportsStrictTools: true },
+    });
+    expect(resolvePiCindyGatewayModelSpec('xd', 'gpt-5.6-sol')).toMatchObject({
+      api: 'openai-responses',
+      compat: {
+        supportsOpenAIGrammarTools: true,
+        supportsAdditionalTools: true,
+        supportsToolSearch: true,
+      },
+    });
+    expect(resolvePiCindyGatewayModelSpec('xd', 'google/gemini-3.7-flash')).toMatchObject({
+      api: 'google-generative-ai',
     });
   });
 
@@ -1101,7 +1250,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(provider?.models[0]?.api).toBeUndefined();
   });
 
-  it('preserves PI bundled metadata when a daily annotation corrects an existing protocol', () => {
+  it('drops PI bundled serializer metadata when a daily annotation corrects the protocol', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const xai = catalog.providers.find((provider) => provider.id === 'xai')!;
     xai.models.pi = [
@@ -1131,12 +1280,60 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(provider?.models[0]).toMatchObject({
       wireId: 'grok-corrected',
       api: 'openai-responses',
-      name: 'PI Bundled Name',
-      contextWindow: 500_000,
-      maxTokens: 64_000,
-      cost: bundled.cost,
-      compat: bundled.compat,
+      name: 'Daily Name',
+      contextWindow: 1_000_000,
+      reasoning: true,
+      thinkingLevelMap: {
+        minimal: null,
+        low: null,
+        medium: null,
+        high: 'high',
+        xhigh: null,
+        max: null,
+      },
     });
+    expect(provider?.models[0]?.maxTokens).toBeUndefined();
+    expect(provider?.models[0]?.cost).toBeUndefined();
+    expect(provider?.models[0]?.compat).toBeUndefined();
+    expect(provider?.models[0]?.headers).toBeUndefined();
+  });
+
+  it('does not apply official Responses metadata to an xAI protocol correction to Completions', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const xai = catalog.providers.find((provider) => provider.id === 'xai')!;
+    xai.models.pi = [
+      {
+        id: 'xai/grok-4.6',
+        name: 'Corrected Grok 4.6',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+        piApi: 'openai-completions',
+      },
+    ];
+    const bundled = piBundledModel('grok-4.6', 'openai-responses', {
+      thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' },
+      compat: { supportsReasoningEffort: true },
+    });
+
+    const model = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([['xai', new Map([[bundled.id, bundled]])]]),
+    ).providers.find((candidate) => candidate.id === 'xai')?.models[0];
+
+    expect(model).toMatchObject({
+      api: 'openai-completions',
+      thinkingLevelMap: {
+        minimal: null,
+        low: null,
+        medium: null,
+        high: 'high',
+        xhigh: null,
+        max: null,
+      },
+    });
+    expect(model?.compat).toBeUndefined();
   });
 
   it('maps each explicitly configured wire protocol to the Pi API form', () => {
