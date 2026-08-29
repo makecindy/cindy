@@ -46,6 +46,7 @@ vi.mock('../claude-fast-mode-log', () => ({
 import {
   createModelRoutingTransform,
   setClaudeProxyGatewayKeyReader,
+  setClaudeProxyOwnerBoundaryPendingChecker,
   setClaudeProxySessionIdResolver,
 } from '../anthropic-compat-proxy-host';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store';
@@ -81,6 +82,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
   afterEach(() => {
     clearSessionProvider('sess-grok');
     setPendingCredentialSwitchReader(() => undefined);
+    setClaudeProxyOwnerBoundaryPendingChecker(() => false);
   });
 
   it('订阅直连目标也在进入 bridge 前拦截 pending switch', async () => {
@@ -259,6 +261,115 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
         { model: 'x-ai/grok-4.6' },
         ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
       ),
+    );
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
+    });
+  });
+});
+
+describe('cc routingTransform — owner boundary 不得把占位 key fail-open 到 LiteLLM', () => {
+  const PLACEHOLDER = 'xdt-provider-auth-placeholder-key';
+  const throwingResolver = () => {
+    throw new Error('[PRECONDITION_FAILED] App session is switching; retry after the owner boundary settles.');
+  };
+
+  let gatewayKey: string | null;
+
+  beforeEach(() => {
+    resetClaudeSessionRouteRegistryForTest();
+    gatewayKey = 'sk-gw';
+    setClaudeProxyGatewayKeyReader(() => gatewayKey);
+    setClaudeProxySessionIdResolver(throwingResolver);
+    setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setPendingCredentialSwitchReader(() => undefined);
+  });
+
+  afterEach(() => {
+    setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setPendingCredentialSwitchReader(() => undefined);
+  });
+
+  async function invokeLocalHandler(decision: Awaited<ReturnType<ReturnType<typeof createModelRoutingTransform>>>) {
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    return { writeHead, end };
+  }
+
+  it('resolver 抛 PRECONDITION_FAILED 时 xai/grok-4.6 仍走订阅桥/拒绝,不 passthrough', async () => {
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'xai/grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    expect(decision?.localHandler).toEqual(expect.any(Function));
+    expect(decision).not.toEqual(expect.objectContaining({
+      headerOverride: expect.anything(),
+    }));
+  });
+
+  it('boundary pending + 占位 key + 非订阅模型 → 503 Retry-After,不是 null', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'claude-haiku-4-5-20251001' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    expect(decision).not.toBeNull();
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('boundary pending + 占位 key + 无 body(GET) → 503,不打默认上游', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        undefined,
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }, '/v1/models'),
+      ),
+    );
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('boundary pending 时订阅前缀模型仍优先走 SuperGrok,不因缺 session 改 503', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'xai/grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    expect(decision?.localHandler).toEqual(expect.any(Function));
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    if (writeHead.mock.calls.length > 0) {
+      expect(writeHead.mock.calls[0][0]).not.toBe(503);
+      expect(JSON.parse(end.mock.calls[0][0])).not.toMatchObject({
+        error: { code: 'owner_boundary_pending' },
+      });
+    }
+  });
+
+  it('resolver 抛错但有网关 key 时分类器仍换 key(#831),不 passthrough 占位', () => {
+    const decision = createModelRoutingTransform()(
+      { model: 'claude-haiku-4-5-20251001' },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
     );
     expect(decision).toEqual({
       headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },

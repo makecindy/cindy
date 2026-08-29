@@ -141,11 +141,31 @@ export function setClaudeProxyOAuthSpawnChecker(fn: () => boolean): void {
 // x-claude-code-session-id(= cc sdkSessionId)反解成 xdt sessionId 提供。返回 null = 该
 // sdkSessionId 当前无对应活跃会话。routingTransform 据此查该会话显式选定的供应商做统一路由;
 // 未注入 / 查不到 / 该会话没选供应商 → 回落 spawn-aware 默认路由(与未升级行为字节级一致)。
+//
+// 热路径必须永不抛:ipcMaker 在 owner boundary 会抛 PRECONDITION_FAILED,proxy 引擎捕获后
+// fail-open 默认 LiteLLM,provider-oauth 占位 key 原样上游 → 确定性 401。setter 内吞掉异常,
+// 当作「会话未反解」;真正的 fail-closed 在 routingTransform 收口(占位 key + boundary → 503)。
 let _resolveCcSessionId: ((sdkSessionId: string) => string | null) | null = null;
 export function setClaudeProxySessionIdResolver(
   fn: (sdkSessionId: string) => string | null,
 ): void {
-  _resolveCcSessionId = fn;
+  _resolveCcSessionId = (sdkSessionId) => {
+    try {
+      return fn(sdkSessionId);
+    } catch (err) {
+      log.warn('cc session resolver threw; treating as unresolved', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  };
+}
+
+// owner-boundary 探针 —— 由 host 注入 isAppSessionBoundaryPending。pending 期间
+// canUseCindyGateway=false,网关 key 读出来是 null,不能据此把占位 key passthrough 给 LiteLLM。
+let _isOwnerBoundaryPending: () => boolean = () => false;
+export function setClaudeProxyOwnerBoundaryPendingChecker(fn: () => boolean): void {
+  _isOwnerBoundaryPending = fn;
 }
 
 // 订阅直连的 model 前缀判据(chatgpt/ / xai/)统一走 shared/subscriptionModels 的
@@ -213,6 +233,81 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
     if (k.toLowerCase() === lower && typeof v === 'string' && v.length > 0) return v;
   }
   return null;
+}
+
+function isOwnerBoundaryPending(): boolean {
+  try {
+    return _isOwnerBoundaryPending();
+  } catch {
+    // 探针自己抛 = 凭证/归属无法安全确定,按 pending fail-closed。
+    return true;
+  }
+}
+
+function retryableLocalRoute(code: string, message: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: code,
+          code,
+          message,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'retry-after': '1',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+function ownerBoundaryPendingRoute(): RoutingDecision {
+  return retryableLocalRoute(
+    'owner_boundary_pending',
+    'App session is switching; retry after the owner boundary settles.',
+  );
+}
+
+function routingTemporarilyUnavailableRoute(): RoutingDecision {
+  return retryableLocalRoute(
+    'routing_temporarily_unavailable',
+    'Claude proxy routing is temporarily unavailable; retry shortly.',
+  );
+}
+
+function carriesProviderAuthPlaceholder(headers: Readonly<Record<string, string>>): boolean {
+  return headerValue(headers, 'x-api-key') === CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
+}
+
+/** null / 只删头 / 空决策 = 仍打默认 LiteLLM。订阅桥、换 key、换上游都不是这条。 */
+function isDefaultUpstreamPassthrough(decision: RoutingDecision | null): boolean {
+  if (!decision) return true;
+  if (decision.localHandler) return false;
+  if (decision.upstreamOverride) return false;
+  if (decision.headerOverride && Object.keys(decision.headerOverride).length > 0) return false;
+  return true;
+}
+
+function refuseUnsafePlaceholderPassthrough(
+  decision: RoutingDecision | null,
+  ctx: { headers: Readonly<Record<string, string>> },
+): RoutingDecision | null {
+  if (!isDefaultUpstreamPassthrough(decision)) return decision;
+  if (!carriesProviderAuthPlaceholder(ctx.headers)) return decision;
+  if (!isOwnerBoundaryPending()) return decision;
+  log.warn('owner boundary pending with provider-oauth placeholder; refusing default upstream');
+  return ownerBoundaryPendingRoute();
+}
+
+function routingTransformThrew(err: unknown): RoutingDecision {
+  log.warn('routingTransform threw; refusing default upstream', {
+    err: err instanceof Error ? err.message : String(err),
+  });
+  return isOwnerBoundaryPending() ? ownerBoundaryPendingRoute() : routingTemporarilyUnavailableRoute();
 }
 
 function unavailablePiProviderRoute(providerId: string): RoutingDecision {
@@ -586,15 +681,14 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
   };
   return (body, ctx) => {
-    const decision = route(body, ctx);
     const hasInternalPiHeader =
       headerValue(ctx.headers, 'x-cindy-pi-session-id') !== null
       || headerValue(ctx.headers, 'x-cindy-pi-session-token') !== null
       || headerValue(ctx.headers, 'x-cindy-pi-provider-id') !== null;
-    if (!hasInternalPiHeader) return decision;
     const stripInternalPiHeaders = (
       resolved: RoutingDecision | null,
     ): RoutingDecision | null => {
+      if (!hasInternalPiHeader) return resolved;
       if (resolved?.localHandler) return resolved;
       return {
         ...(resolved ?? {}),
@@ -608,9 +702,16 @@ export function createModelRoutingTransform(): RoutingTransform {
         ],
       };
     };
-    return decision instanceof Promise
-      ? decision.then(stripInternalPiHeaders)
-      : stripInternalPiHeaders(decision);
+    const finalize = (resolved: RoutingDecision | null): RoutingDecision | null =>
+      refuseUnsafePlaceholderPassthrough(stripInternalPiHeaders(resolved), ctx);
+    try {
+      const decision = route(body, ctx);
+      return decision instanceof Promise
+        ? decision.then(finalize, (err: unknown) => routingTransformThrew(err))
+        : finalize(decision);
+    } catch (err) {
+      return routingTransformThrew(err);
+    }
   };
 }
 
