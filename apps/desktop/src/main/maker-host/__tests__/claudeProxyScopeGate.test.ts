@@ -47,6 +47,7 @@ import {
   createModelRoutingTransform,
   setClaudeProxyGatewayKeyReader,
   setClaudeProxyOwnerBoundaryPendingChecker,
+  setClaudeProxyOwnerScopeKeyReader,
   setClaudeProxySessionIdResolver,
 } from '../anthropic-compat-proxy-host';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store';
@@ -83,6 +84,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     clearSessionProvider('sess-grok');
     setPendingCredentialSwitchReader(() => undefined);
     setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setClaudeProxyOwnerScopeKeyReader(() => '');
   });
 
   it('订阅直连目标也在进入 bridge 前拦截 pending switch', async () => {
@@ -282,11 +284,13 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
     setClaudeProxyGatewayKeyReader(() => gatewayKey);
     setClaudeProxySessionIdResolver(throwingResolver);
     setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setClaudeProxyOwnerScopeKeyReader(() => '');
     setPendingCredentialSwitchReader(() => undefined);
   });
 
   afterEach(() => {
     setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setClaudeProxyOwnerScopeKeyReader(() => '');
     setPendingCredentialSwitchReader(() => undefined);
     resetPiProxySessionsForTest();
   });
@@ -420,6 +424,28 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
     );
     expect(decision?.localHandler).toEqual(expect.any(Function));
     pending = true;
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('finalize 之后 owner scope 变了但 pending 仍 false → 503,不读旧 owner OAuth', async () => {
+    gatewayKey = null;
+    let scopeKey = 'cloud:owner-a:1';
+    setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setClaudeProxyOwnerScopeKeyReader(() => scopeKey);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'xai/grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    expect(decision?.localHandler).toEqual(expect.any(Function));
+    scopeKey = 'cloud:owner-b:2';
     const { writeHead, end } = await invokeLocalHandler(decision);
     expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
       'retry-after': '1',

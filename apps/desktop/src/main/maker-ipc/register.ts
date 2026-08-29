@@ -59,6 +59,7 @@ import {
 import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import {
+  activeOwnerScopeKey,
   getActiveAppSession,
   getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
@@ -882,6 +883,7 @@ import {
 } from '../maker-host/model-route-guard-live.js';
 import {
   setClaudeProxyOwnerBoundaryPendingChecker,
+  setClaudeProxyOwnerScopeKeyReader,
   setClaudeProxySessionIdResolver,
 } from '../maker-host/anthropic-compat-proxy-host.js';
 import {
@@ -7019,6 +7021,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 热路径禁止把 ipcMaker 的 PRECONDITION_FAILED 抛进 proxy:owner boundary 期间抛错会被
   // 引擎 fail-open 成默认 LiteLLM,provider-oauth 占位 key 原样上游 → 确定性 401。
   setClaudeProxyOwnerBoundaryPendingChecker(isAppSessionBoundaryPending);
+  setClaudeProxyOwnerScopeKeyReader(activeOwnerScopeKey);
   setClaudeProxySessionIdResolver((sdkSessionId) => {
     try {
       if (isAppSessionBoundaryPending()) return null;

@@ -1731,11 +1731,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const applyDispatchGate = (
     decision: RoutingDecision | null,
     reqId: number,
+    ctx: RequestTransformCtx,
   ): RoutingDecision | null => {
     const hook = opts.revalidateBeforeDispatch;
     if (!hook) return decision;
     try {
-      return hook(decision) ?? decision;
+      return hook(decision, ctx) ?? decision;
     } catch (err) {
       logger.warn?.('revalidateBeforeDispatch threw; refusing dispatch', {
         reqId,
@@ -1880,7 +1881,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           logger.warn?.('routingTransform threw, using default upstream', { reqId, err: String(err) });
         }
       }
-      decision = applyDispatchGate(decision, reqId);
+      decision = applyDispatchGate(decision, reqId, requestCtx);
       // 本地 handler 命中:不转发上游,由 handler 直接写回响应(见 LocalRequestHandler 契约)。
       if (decision?.localHandler) {
         logger.debug?.('▶ inbound request from client', { reqId, method, upstreamBase: 'local-handler', url, bytes: 0 });
@@ -1904,7 +1905,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         });
       }
       const outbound = await resolveOutboundForTarget(route.target, reqId);
-      decision = applyDispatchGate(decision, reqId);
+      decision = applyDispatchGate(decision, reqId, requestCtx);
       if (decision?.localHandler) {
         await runLocalHandler(
           decision.localHandler,
@@ -1997,7 +1998,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         logger.warn?.('routingTransform threw, using default upstream', { reqId, err: String(err) });
       }
     }
-    decision = applyDispatchGate(decision, reqId);
+    decision = applyDispatchGate(decision, reqId, requestCtx);
 
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。
     // parsedBody 复用路由阶段的解析结果,不二次 parse。
@@ -2251,7 +2252,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     }
 
     const outbound = await resolveOutboundForTarget(route.target, reqId);
-    decision = applyDispatchGate(decision, reqId);
+    decision = applyDispatchGate(decision, reqId, requestCtx);
     if (decision?.localHandler) {
       await runLocalHandler(
         decision.localHandler,

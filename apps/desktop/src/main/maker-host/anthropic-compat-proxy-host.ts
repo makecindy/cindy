@@ -39,6 +39,7 @@ import {
   stripNonAnthropicFields,
   stripToolUseProviderSpecificFields,
   type ProxyHandle,
+  type RequestTransformCtx,
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
@@ -171,6 +172,17 @@ export function setClaudeProxyOwnerBoundaryPendingChecker(fn: () => boolean): vo
   _isOwnerBoundaryPending = fn;
 }
 
+// owner scope key —— 由 host 注入 activeOwnerScopeKey。pending 布尔值挡不住
+// 「切换在 await 里完整开始并结束」:两端 pending 都是 false,但 generation 已经变了。
+// 与 pending 合成同一条 ownerBoundDispatchUnsafe;不另造 generation 子系统。
+// 未注入时恒返空串,既有 pending-only 单测行为不变。
+let _readOwnerScopeKey: () => string = () => '';
+export function setClaudeProxyOwnerScopeKeyReader(fn: () => string): void {
+  _readOwnerScopeKey = fn;
+}
+
+const ownerScopeAtRoutingStart = new WeakMap<RequestTransformCtx, string | null>();
+
 // 订阅直连的 model 前缀判据(chatgpt/ / xai/)统一走 shared/subscriptionModels 的
 // isSubscriptionDirectModel —— 路由(此处把这些前缀路由到 bridge)与 turn-cost 记账 gate
 // 必须同源,否则漂移 = 路由当订阅直连、记账当真实计费(计费错算)。
@@ -247,6 +259,31 @@ function isOwnerBoundaryPending(): boolean {
   }
 }
 
+function readOwnerScopeKey(): string | null {
+  try {
+    return _readOwnerScopeKey();
+  } catch {
+    return null;
+  }
+}
+
+function stampOwnerScope(ctx: RequestTransformCtx): string | null {
+  const existing = ownerScopeAtRoutingStart.get(ctx);
+  if (existing !== undefined) return existing;
+  const key = readOwnerScopeKey();
+  ownerScopeAtRoutingStart.set(ctx, key);
+  return key;
+}
+
+/** pending,或这条请求开始后 owner generation 已经变了。 */
+function ownerBoundDispatchUnsafe(ctx?: RequestTransformCtx): boolean {
+  if (isOwnerBoundaryPending()) return true;
+  const start = ctx ? stampOwnerScope(ctx) : readOwnerScopeKey();
+  if (start === null) return true;
+  const now = readOwnerScopeKey();
+  return now === null || now !== start;
+}
+
 function retryableLocalRoute(code: string, message: string): RoutingDecision {
   return {
     localHandler: async ({ res }) => {
@@ -278,21 +315,22 @@ function ownerBoundaryPendingRoute(): RoutingDecision {
 /** localHandler 入口 + catch 再看一眼:挡 finalize 之后、真正发凭证之前的 await。 */
 function withOwnerBoundaryDispatchGate(
   resolved: RoutingDecision | null,
+  ctx: RequestTransformCtx,
 ): RoutingDecision | null {
-  if (isOwnerBoundaryPending()) return ownerBoundaryPendingRoute();
+  if (ownerBoundDispatchUnsafe(ctx)) return ownerBoundaryPendingRoute();
   const inner = resolved?.localHandler;
   if (!inner) return resolved;
   return {
     ...resolved,
     localHandler: async (args) => {
-      if (isOwnerBoundaryPending()) {
+      if (ownerBoundDispatchUnsafe(ctx)) {
         await ownerBoundaryPendingRoute().localHandler?.(args);
         return;
       }
       try {
         await inner(args);
       } catch (err) {
-        if (!args.res.headersSent && isOwnerBoundaryPending()) {
+        if (!args.res.headersSent && ownerBoundDispatchUnsafe(ctx)) {
           await ownerBoundaryPendingRoute().localHandler?.(args);
           return;
         }
@@ -324,20 +362,20 @@ function isDefaultUpstreamPassthrough(decision: RoutingDecision | null): boolean
 
 function refuseUnsafePlaceholderPassthrough(
   decision: RoutingDecision | null,
-  ctx: { headers: Readonly<Record<string, string>> },
+  ctx: RequestTransformCtx,
 ): RoutingDecision | null {
   if (!isDefaultUpstreamPassthrough(decision)) return decision;
   if (!carriesProviderAuthPlaceholder(ctx.headers)) return decision;
-  if (!isOwnerBoundaryPending()) return decision;
+  if (!ownerBoundDispatchUnsafe(ctx)) return decision;
   log.warn('owner boundary pending with provider-oauth placeholder; refusing default upstream');
   return ownerBoundaryPendingRoute();
 }
 
-function routingTransformThrew(err: unknown): RoutingDecision {
+function routingTransformThrew(err: unknown, ctx: RequestTransformCtx): RoutingDecision {
   log.warn('routingTransform threw; refusing default upstream', {
     err: err instanceof Error ? err.message : String(err),
   });
-  return isOwnerBoundaryPending() ? ownerBoundaryPendingRoute() : routingTemporarilyUnavailableRoute();
+  return ownerBoundDispatchUnsafe(ctx) ? ownerBoundaryPendingRoute() : routingTemporarilyUnavailableRoute();
 }
 
 function unavailablePiProviderRoute(providerId: string): RoutingDecision {
@@ -711,6 +749,7 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
   };
   return (body, ctx) => {
+    stampOwnerScope(ctx);
     const hasInternalPiHeader =
       headerValue(ctx.headers, 'x-cindy-pi-session-id') !== null
       || headerValue(ctx.headers, 'x-cindy-pi-session-token') !== null
@@ -739,19 +778,21 @@ export function createModelRoutingTransform(): RoutingTransform {
       //
       // 决策时检查挡不住 finalize 之后的 await(token refresh / request transform /
       // outbound resolver)。localHandler 在这里再包一层入口+catch;转发路径靠引擎
-      // revalidateBeforeDispatch。两条路同一条 isOwnerBoundaryPending()。
-      if (isOwnerBoundaryPending()) return ownerBoundaryPendingRoute();
+      // revalidateBeforeDispatch。pending 与 activeOwnerScopeKey 合成同一条
+      // ownerBoundDispatchUnsafe:切换在 await 里完整完成时两端 pending 都是 false。
+      if (ownerBoundDispatchUnsafe(ctx)) return ownerBoundaryPendingRoute();
       return withOwnerBoundaryDispatchGate(
         refuseUnsafePlaceholderPassthrough(stripInternalPiHeaders(resolved), ctx),
+        ctx,
       );
     };
     try {
       const decision = route(body, ctx);
       return decision instanceof Promise
-        ? decision.then(finalize, (err: unknown) => routingTransformThrew(err))
+        ? decision.then(finalize, (err: unknown) => routingTransformThrew(err, ctx))
         : finalize(decision);
     } catch (err) {
-      return routingTransformThrew(err);
+      return routingTransformThrew(err, ctx);
     }
   };
 }
@@ -782,8 +823,8 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway 换 key)。
       // 'gateway' 模式恒返 null,字节级行为与扩展前一致。
       routingTransform: createModelRoutingTransform(),
-      revalidateBeforeDispatch: () =>
-        isOwnerBoundaryPending() ? ownerBoundaryPendingRoute() : null,
+      revalidateBeforeDispatch: (_decision, ctx) =>
+        ownerBoundDispatchUnsafe(ctx) ? ownerBoundaryPendingRoute() : null,
       // 只读响应观察器(组合三个,互不感知):
       //   - fast mode 链路核验:tee SSE 抽上游 usage.speed(debug-gated);
       //   - 订阅余量旁路:读 anthropic-ratelimit-unified-* headers(仅订阅直连响应,

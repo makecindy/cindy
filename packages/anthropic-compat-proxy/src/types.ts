@@ -263,6 +263,8 @@ export interface ProxyOptions {
   /**
    * 可选: 真正 dispatch 前的同步再校验。在 `routingTransform` 之后调用一次,以及在
    * 任何异步 transform / outbound 解析之后、`runLocalHandler` / `forward` 之前再调用一次。
+   * 第二次调用传入与 `routingTransform` 相同的 `ctx`,host 可对照请求开始时捕获的
+   * owner scope / generation —— pending 布尔值挡不住「切换在 await 里完整完成」。
    *
    * 返回非 null = 替换当前决策(典型:改成 localHandler 503,拒绝带着过期归属的凭证出站);
    * 返回 null = 保持已解析的路由,包括已经算好的 forward target。不要用它改上游。
@@ -270,6 +272,7 @@ export interface ProxyOptions {
    */
   revalidateBeforeDispatch?: (
     decision: RoutingDecision | null,
+    ctx?: RequestTransformCtx,
   ) => RoutingDecision | null;
   /**
    * 可选响应观察器。默认关闭;开启后只能 tee 响应 chunk 做轻量 metadata 解析,

@@ -43,7 +43,7 @@ import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { XAI_X_SEARCH_TOOL_TYPE, xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
-import { isAppSessionBoundaryPending } from '../appSessionState.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 
 const zstdCompressAsync = promisify(zstdCompress);
@@ -233,16 +233,19 @@ export const invalidateChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
 const OWNER_BOUNDARY_PENDING_ERROR =
   'App session is switching; retry after the owner boundary settles.';
 
-function throwIfAppSessionBoundaryPending(): void {
-  if (isAppSessionBoundaryPending()) throw new Error(OWNER_BOUNDARY_PENDING_ERROR);
+function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeAtStart) {
+    throw new Error(OWNER_BOUNDARY_PENDING_ERROR);
+  }
 }
 
 /** 经 adapter 判连接态 → 读 codex-home/auth.json → 必要时刷新 → 返回 token 与可选 account id。 */
 export async function getChatgptBridgeAuth(): Promise<{ accessToken: string; accountId: string | null }> {
-  throwIfAppSessionBoundaryPending();
+  const scopeAtStart = activeOwnerScopeKey();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   const now = Date.now();
   if (_authCache && now - _authCache.readAt < AUTH_CACHE_TTL_MS && !isExpired(_authCache.accessToken)) {
-    throwIfAppSessionBoundaryPending();
+    throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
     return _authCache;
   }
   // 连接态门:adapter 返回 null = 已登出 / 服务端已判失效(provider UI 显示未连接)。
@@ -250,20 +253,20 @@ export async function getChatgptBridgeAuth(): Promise<{ accessToken: string; acc
   // chatgpt/ 请求会继续用被断开(甚至被判坏)的账号。非 null 时 adapter 的 reconcile 已保证
   // codex-home/auth.json 是权威文件(必要时从 ~/.codex 硬链),后续读写只针对它。
   const adapterToken = await desktopCodexAuthAdapter.getAccessToken();
-  throwIfAppSessionBoundaryPending();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (adapterToken == null) {
     _authCache = null;
     throw new Error('OpenAI(ChatGPT 订阅)未连接或凭证已失效:请在「设置 → 模型供应商」登录');
   }
   const authPath = codexHomeAuthPath();
   let obj = await readAuthFile(authPath);
-  throwIfAppSessionBoundaryPending();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (!obj?.tokens?.access_token) {
     _authCache = null;
     throw new Error('codex auth.json 无有效 access_token:请重新登录 OpenAI');
   }
   obj = await refreshIfNeeded(authPath, obj);
-  throwIfAppSessionBoundaryPending();
+  throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   const accessToken = obj.tokens?.access_token;
   const accountId = obj.tokens ? accountIdFrom(obj.tokens) : null;
   if (!accessToken) {

@@ -1149,6 +1149,52 @@ describe('anthropic-compat-proxy routingTransform', () => {
     expect(custom.bodies).toHaveLength(0);
   });
 
+  it('revalidates when owner scope changes during async transforms even if pending stays false', async () => {
+    const custom = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    let ownerScope = 'cloud:owner-a:1';
+    const ownerScopeByCtx = new WeakMap<object, string>();
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [async () => {
+        ownerScope = 'cloud:owner-b:2';
+        return null;
+      }],
+      routingTransform: (_body, ctx) => {
+        ownerScopeByCtx.set(ctx, ownerScope);
+        return { headerOverride: { authorization: 'Bearer previous-owner' } };
+      },
+      revalidateBeforeDispatch: (_decision, ctx) => {
+        const start = ctx ? ownerScopeByCtx.get(ctx) : undefined;
+        if (start !== undefined && start !== ownerScope) {
+          return {
+            localHandler: async ({ res }) => {
+              res.writeHead(503, {
+                'content-type': 'application/json',
+                'retry-after': '1',
+              });
+              res.end(JSON.stringify({
+                error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+              }));
+            },
+          };
+        }
+        return null;
+      },
+    });
+
+    const result = await post(proxy.url, { model: 'claude-haiku-4-5-20251001' });
+    expect(result.status).toBe(503);
+    expect(JSON.parse(result.text)).toEqual({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+    expect(custom.bodies).toHaveLength(0);
+  });
+
   it('runs a local handler without resolving an unavailable default upstream', async () => {
     proxy = await createAnthropicCompatProxy({
       upstream: () => '',
