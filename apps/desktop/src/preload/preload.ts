@@ -66,9 +66,10 @@ import {
   XBOX_GAMEPAD_SET_LAYOUT_PREVIEW_CHANNEL,
   XBOX_GAMEPAD_SET_SETTINGS_CHANNEL,
   XBOX_GAMEPAD_STATE_CHANGED_CHANNEL,
+  type GamepadAccessoriesState,
+  type GamepadFamily,
   type XboxGamepadPreviewInput,
   type XboxGamepadSettingsPatch,
-  type XboxGamepadState,
 } from '../shared/xboxGamepad';
 import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
@@ -1660,16 +1661,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   xboxGamepad: {
-    getState: (): Promise<XboxGamepadState> => ipcRenderer.invoke(XBOX_GAMEPAD_GET_STATE_CHANNEL),
-    setSettings: (patch: XboxGamepadSettingsPatch): Promise<XboxGamepadState> =>
-      ipcRenderer.invoke(XBOX_GAMEPAD_SET_SETTINGS_CHANNEL, patch),
-    resetSettings: (): Promise<XboxGamepadState> =>
-      ipcRenderer.invoke(XBOX_GAMEPAD_RESET_SETTINGS_CHANNEL),
-    probe: (): Promise<XboxGamepadState> => ipcRenderer.invoke(XBOX_GAMEPAD_PROBE_CHANNEL),
-    setLayoutPreviewActive: (active: boolean): Promise<void> =>
-      ipcRenderer.invoke(XBOX_GAMEPAD_SET_LAYOUT_PREVIEW_CHANNEL, active),
-    onStateChanged: (callback: (state: XboxGamepadState) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, state: XboxGamepadState): void => {
+    getState: (): Promise<GamepadAccessoriesState> =>
+      ipcRenderer.invoke(XBOX_GAMEPAD_GET_STATE_CHANNEL),
+    setSettings: (
+      family: GamepadFamily,
+      patch: XboxGamepadSettingsPatch,
+    ): Promise<GamepadAccessoriesState> =>
+      ipcRenderer.invoke(XBOX_GAMEPAD_SET_SETTINGS_CHANNEL, family, patch),
+    resetSettings: (family: GamepadFamily): Promise<GamepadAccessoriesState> =>
+      ipcRenderer.invoke(XBOX_GAMEPAD_RESET_SETTINGS_CHANNEL, family),
+    probe: (): Promise<GamepadAccessoriesState> => ipcRenderer.invoke(XBOX_GAMEPAD_PROBE_CHANNEL),
+    setLayoutPreviewActive: (active: boolean, family?: GamepadFamily): Promise<void> =>
+      ipcRenderer.invoke(
+        XBOX_GAMEPAD_SET_LAYOUT_PREVIEW_CHANNEL,
+        family === undefined ? active : { active, family },
+      ),
+    onStateChanged: (callback: (state: GamepadAccessoriesState) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        state: GamepadAccessoriesState,
+      ): void => {
         callback(state);
       };
       ipcRenderer.on(XBOX_GAMEPAD_STATE_CHANGED_CHANNEL, listener);

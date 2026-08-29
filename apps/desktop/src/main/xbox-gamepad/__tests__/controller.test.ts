@@ -33,7 +33,7 @@ describe('XboxGamepadController', () => {
     expect(dispatch).not.toHaveBeenCalled();
     expect(preview).not.toHaveBeenCalled();
 
-    controller.applySettings(enabledSettings());
+    controller.applySettings('xbox', enabledSettings());
     controller.handleHostMessage({
       kind: 'frame',
       buttons: { ...XBOX_GAMEPAD_EMPTY_FRAME.buttons, a: true },
@@ -64,7 +64,7 @@ describe('XboxGamepadController', () => {
       isCindyFrontmost: () => true,
       dispatch,
     });
-    controller.applySettings(enabledSettings());
+    controller.applySettings('xbox', enabledSettings());
     controller.handleHostMessage({
       kind: 'frame',
       buttons: XBOX_GAMEPAD_EMPTY_FRAME.buttons,
@@ -89,15 +89,14 @@ describe('XboxGamepadController', () => {
       isCindyFrontmost: () => true,
       dispatch: vi.fn(),
     });
-    controller.applySettings(enabledSettings());
+    controller.applySettings('xbox', enabledSettings());
 
     controller.handleHostMessage({ kind: 'host-error', message: 'swiftc failed' });
-    expect(controller.getState().connectionStatus).toBe('error');
-    expect(controller.getState().devicePresent).toBe(false);
+    expect(controller.getState('xbox').connectionStatus).toBe('error');
+    expect(controller.getState('xbox').devicePresent).toBe(false);
 
-    // A later presence report means the helper recovered.
     controller.handleHostMessage({ kind: 'presence', present: true, name: 'Xbox' });
-    expect(controller.getState().connectionStatus).toBe('connected');
+    expect(controller.getState('xbox').connectionStatus).toBe('connected');
   });
 
   it('surfaces transport and battery from the helper presence report', () => {
@@ -114,17 +113,63 @@ describe('XboxGamepadController', () => {
       batteryPercentage: 64,
       batteryState: 'discharging',
     });
-    expect(controller.getState().device).toEqual({
+    expect(controller.getState('xbox').device).toEqual({
       name: 'Xbox Wireless Controller',
       category: 'Xbox One',
+      family: 'xbox',
       transport: 'bluetooth',
       batteryPercentage: 64,
       batteryState: 'discharging',
     });
     controller.handleHostMessage({ kind: 'presence', present: false });
-    expect(controller.getState().device.transport).toBe('unknown');
-    expect(controller.getState().device.batteryPercentage).toBeNull();
+    expect(controller.getState('xbox').device.transport).toBe('unknown');
+    expect(controller.getState('xbox').device.batteryPercentage).toBeNull();
+    expect(controller.getState('xbox').device.family).toBe('xbox');
   });
+
+  it('keeps DualSense and Switch on their own accessories', () => {
+    const controller = new XboxGamepadController({
+      isCindyFrontmost: () => true,
+      dispatch: vi.fn(),
+    });
+    controller.handleHostMessage({
+      kind: 'presence',
+      present: true,
+      name: 'DualSense Wireless Controller',
+      category: 'DualSense',
+      family: 'playstation',
+    });
+    expect(controller.getState('playstation').devicePresent).toBe(true);
+    expect(controller.getState('xbox').devicePresent).toBeNull();
+
+    controller.handleHostMessage({
+      kind: 'presence',
+      present: true,
+      name: 'Pro Controller',
+      category: 'Nintendo Switch',
+    });
+    expect(controller.getState('nintendo').devicePresent).toBe(true);
+    expect(controller.getState('playstation').devicePresent).toBe(true);
+    expect(controller.getState('xbox').devicePresent).toBeNull();
+    expect(controller.getState('generic').devicePresent).toBeNull();
+  });
+
+  it('keeps unrecognized pads on the generic accessory', () => {
+    const controller = new XboxGamepadController({
+      isCindyFrontmost: () => true,
+      dispatch: vi.fn(),
+    });
+    controller.handleHostMessage({
+      kind: 'presence',
+      present: true,
+      name: '8BitDo Pro 2',
+      category: 'Extended Gamepad',
+    });
+    expect(controller.getState('generic').devicePresent).toBe(true);
+    expect(controller.getState('generic').device.family).toBe('generic');
+    expect(controller.getState('xbox').devicePresent).toBeNull();
+  });
+
   it('previews input without dispatching while the layout editor is open', () => {
     const dispatch = vi.fn();
     const preview = vi.fn();
@@ -133,14 +178,14 @@ describe('XboxGamepadController', () => {
       dispatch,
       preview,
     });
-    controller.applySettings(enabledSettings());
+    controller.applySettings('xbox', enabledSettings());
     controller.handleHostMessage({
       kind: 'frame',
       buttons: XBOX_GAMEPAD_EMPTY_FRAME.buttons,
       axes: XBOX_GAMEPAD_EMPTY_FRAME.axes,
       triggers: XBOX_GAMEPAD_EMPTY_FRAME.triggers,
     });
-    controller.setLayoutPreviewActive(true);
+    controller.setLayoutPreviewActive(true, 'xbox');
     dispatch.mockClear();
     preview.mockClear();
 
@@ -152,7 +197,7 @@ describe('XboxGamepadController', () => {
     });
     expect(dispatch).not.toHaveBeenCalled();
     expect(preview).toHaveBeenCalledWith(
-      expect.objectContaining({ buttons: expect.objectContaining({ a: true }) }),
+      expect.objectContaining({ family: 'xbox', buttons: expect.objectContaining({ a: true }) }),
     );
   });
 
@@ -163,7 +208,7 @@ describe('XboxGamepadController', () => {
       dispatch: vi.fn(),
       preview,
     });
-    controller.applySettings(enabledSettings());
+    controller.applySettings('xbox', enabledSettings());
     controller.handleHostMessage({
       kind: 'frame',
       buttons: { ...XBOX_GAMEPAD_EMPTY_FRAME.buttons, a: true },

@@ -6,6 +6,7 @@ import {
 import {
   XBOX_GAMEPAD_BUTTON_IDS,
   XBOX_GAMEPAD_STICK_IDS,
+  type GamepadFamily,
   type XboxGamepadBinding,
   type XboxGamepadButtonId,
   type XboxGamepadLayout,
@@ -107,8 +108,12 @@ export function xboxGamepadHoldReleases(
   return actions;
 }
 
-export function xboxGamepadPreviewFromFrame(frame: XboxGamepadFrame) {
+export function xboxGamepadPreviewFromFrame(
+  frame: XboxGamepadFrame,
+  family: GamepadFamily = 'xbox',
+) {
   return {
+    family,
     buttons: { ...frame.buttons },
     sticks: {
       left: { x: frame.axes.lx, y: frame.axes.ly },

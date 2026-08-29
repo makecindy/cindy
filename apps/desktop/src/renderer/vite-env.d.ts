@@ -1859,15 +1859,21 @@ interface ElectronAPI {
   };
 
   xboxGamepad: {
-    getState: () => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
+    getState: () => Promise<import('../shared/xboxGamepad').GamepadAccessoriesState>;
     setSettings: (
+      family: import('../shared/xboxGamepad').GamepadFamily,
       patch: import('../shared/xboxGamepad').XboxGamepadSettingsPatch,
-    ) => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
-    resetSettings: () => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
-    probe: () => Promise<import('../shared/xboxGamepad').XboxGamepadState>;
-    setLayoutPreviewActive: (active: boolean) => Promise<void>;
+    ) => Promise<import('../shared/xboxGamepad').GamepadAccessoriesState>;
+    resetSettings: (
+      family: import('../shared/xboxGamepad').GamepadFamily,
+    ) => Promise<import('../shared/xboxGamepad').GamepadAccessoriesState>;
+    probe: () => Promise<import('../shared/xboxGamepad').GamepadAccessoriesState>;
+    setLayoutPreviewActive: (
+      active: boolean,
+      family?: import('../shared/xboxGamepad').GamepadFamily,
+    ) => Promise<void>;
     onStateChanged: (
-      callback: (state: import('../shared/xboxGamepad').XboxGamepadState) => void,
+      callback: (state: import('../shared/xboxGamepad').GamepadAccessoriesState) => void,
     ) => () => void;
     onPreviewInput: (
       callback: (input: import('../shared/xboxGamepad').XboxGamepadPreviewInput) => void,
