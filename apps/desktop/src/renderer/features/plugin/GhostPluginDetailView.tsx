@@ -743,11 +743,18 @@ function PolicyStatusIcon({ policy }: { policy: GlobalToolPolicy }) {
   );
 }
 
-function readToolPermissions(ghostId: string): GhostToolPermissionConfig {
+function readToolPermissions(ghostId: string): {
+  config: GhostToolPermissionConfig;
+  readStatus: 'missing' | 'readable' | 'unreadable';
+} {
   try {
-    return window.electronAPI.ghosts.toolPermissionsSync(ghostId)?.config ?? {};
+    const result = window.electronAPI.ghosts.toolPermissionsSync(ghostId);
+    return {
+      config: result?.config ?? {},
+      readStatus: result?.readStatus ?? 'missing',
+    };
   } catch {
-    return {};
+    return { config: {}, readStatus: 'unreadable' };
   }
 }
 
@@ -762,15 +769,22 @@ export function ToolsSection({
   const [expanded, setExpanded] = useState(true);
   // 配置与它属于哪个插件一起存。详情页换插件时组件位置不变、不会重挂,只靠
   // useState 初始化器会一直显示上一个插件的授权档位,并以它为基准覆盖写入。
-  const [loaded, setLoaded] = useState<{ ghostId: string; config: GhostToolPermissionConfig }>(
-    () => ({ ghostId, config: readToolPermissions(ghostId) }),
-  );
+  const [loaded, setLoaded] = useState<{
+    ghostId: string;
+    config: GhostToolPermissionConfig;
+    readStatus: 'missing' | 'readable' | 'unreadable';
+  }>(() => {
+    const snapshot = readToolPermissions(ghostId);
+    return { ghostId, config: snapshot.config, readStatus: snapshot.readStatus };
+  });
   if (loaded.ghostId !== ghostId) {
     // React 官方的「prop 变化时调整 state」写法:本轮渲染输出被丢弃,立刻带新
     // state 重渲染,不会有一帧串味。
-    setLoaded({ ghostId, config: readToolPermissions(ghostId) });
+    const snapshot = readToolPermissions(ghostId);
+    setLoaded({ ghostId, config: snapshot.config, readStatus: snapshot.readStatus });
   }
   const config = loaded.config;
+  const permissionsUnreadable = loaded.readStatus === 'unreadable';
   // 连续快速点击时,后一次点击的 handler 闭包里还是上一次渲染的 config,直接以它
   // 为基准会把前一次的改动覆盖掉。ref 始终指向最新值,handler 按它算增量。
   // (副作用不能塞进 setState updater:StrictMode 下 updater 会跑两遍,IPC 写会重发。)
@@ -800,7 +814,7 @@ export function ToolsSection({
     // 仍是"上一个插件"的值——把它当成新 ghostId 的确认基准存进去，会让
     // 这个新插件的失败回滚退到上一个插件的档位上。现读一次盘，保证拿到
     // 的确实是这个新插件自己的配置。
-    confirmedConfigRef.current = { ghostId, config: readToolPermissions(ghostId), sequence: 0 };
+    confirmedConfigRef.current = { ghostId, config: readToolPermissions(ghostId).config, sequence: 0 };
   }
   // 界面当前显示的是哪个序号的配置。每次新点击都无条件抢占(用户最新的
   // 动作永远优先可见);一次失败回滚之后，界面显示的就是 confirmedConfigRef
@@ -814,9 +828,16 @@ export function ToolsSection({
    * "已阻止"而实际没拦,所以不能 fire-and-forget。
    */
   const persist = (next: GhostToolPermissionConfig) => {
+    if (permissionsUnreadable) {
+      // 配置文件的当前内容还没读出来，UI 显示的是默认快照。此时保存会把
+      // 这份快照当成基准覆盖写回，可能把恢复后的真实策略(如 blocked)降级
+      // 成 needs-approval。禁止编辑，直到读取恢复。
+      toast.error(t('settings.ghosts.detail.toolPermissionUnavailable'));
+      return;
+    }
     const sequence = ++persistSequenceRef.current;
     configRef.current = next;
-    setLoaded({ ghostId, config: next });
+    setLoaded((current) => ({ ...current, ghostId, config: next }));
     displaySequenceRef.current = sequence;
     void window.electronAPI.ghosts.setToolPermissions(ghostId, next).then(
       () => {
@@ -832,7 +853,7 @@ export function ToolsSection({
         // 却留着界面显示错误的旧策略。
         if (sequence >= displaySequenceRef.current) {
           configRef.current = next;
-          setLoaded((current) => (current.ghostId === ghostId ? { ghostId, config: next } : current));
+          setLoaded((current) => (current.ghostId === ghostId ? { ...current, config: next } : current));
           displaySequenceRef.current = sequence;
         }
       },
@@ -844,7 +865,7 @@ export function ToolsSection({
         const rollbackTo = confirmedConfigRef.current.config;
         configRef.current = rollbackTo;
         setLoaded((current) =>
-          current.ghostId === ghostId ? { ghostId, config: rollbackTo } : current,
+          current.ghostId === ghostId ? { ...current, config: rollbackTo } : current,
         );
         // 回滚之后界面显示的就是"已确认"的那个版本，把显示序号同步过去——
         // 后面如果有更早发起、但更晚落定的成功追上来，才能判断该不该把它
@@ -914,10 +935,12 @@ export function ToolsSection({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
+              disabled={permissionsUnreadable}
               className={cn(
                 DETAIL_SURFACE_CLASS,
                 DETAIL_SURFACE_INTERACTIVE_CLASS,
                 'inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-13 font-medium text-[var(--text-primary)]',
+                permissionsUnreadable && 'opacity-50 cursor-not-allowed',
               )}
             >
               <PolicyStatusIcon policy={currentGlobalPolicy} />
@@ -959,6 +982,12 @@ export function ToolsSection({
         {t('settings.ghosts.detail.chooseToolPermission')}
       </p>
 
+      {permissionsUnreadable ? (
+        <p className="mt-2 rounded-lg bg-[var(--warning-bg)] px-3 py-2 text-12 text-[var(--warning-fg)]">
+          {t('settings.ghosts.detail.toolPermissionUnavailable')}
+        </p>
+      ) : null}
+
       {expanded ? (
         <div id="ghost-tools-list" className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-2')}>
           {tools.map((tool) => {
@@ -968,6 +997,7 @@ export function ToolsSection({
                 key={tool.name}
                 tool={tool}
                 mode={mode}
+                disabled={permissionsUnreadable}
                 onChangeMode={(nextMode) => handleSetToolMode(tool.name, nextMode)}
               />
             );
@@ -981,10 +1011,12 @@ export function ToolsSection({
 function ToolPermissionRow({
   tool,
   mode,
+  disabled = false,
   onChangeMode,
 }: {
   tool: GhostToolDecl;
   mode: ToolApprovalMode;
+  disabled?: boolean;
   onChangeMode: (mode: ToolApprovalMode) => void;
 }) {
   const { t } = useTranslation();
@@ -993,6 +1025,7 @@ function ToolPermissionRow({
       className={cn(
         DETAIL_SURFACE_CLASS,
         'flex flex-col gap-2 rounded-xl p-3.5 sm:flex-row sm:items-center sm:justify-between',
+        disabled && 'opacity-50',
       )}
     >
       <div className="min-w-0 flex-1 pr-2">
@@ -1025,6 +1058,7 @@ function ToolPermissionRow({
               aria-label={label}
               aria-pressed={active}
               title={label}
+              disabled={disabled}
               onClick={() => onChangeMode(policy)}
               className={cn(
                 'flex h-7 items-center justify-center rounded-full px-2.5 text-12 font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',

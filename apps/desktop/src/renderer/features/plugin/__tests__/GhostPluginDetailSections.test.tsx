@@ -29,6 +29,8 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.toolPermissionGroup': `Permission for Tool ${String(options?.name ?? '')}`,
         'settings.ghosts.detail.toolPermissionSaveFailed':
           "Couldn't save the tool permission. Please try again.",
+        'settings.ghosts.detail.toolPermissionUnavailable':
+          'Tool permissions are temporarily unavailable. Please try again later.',
         'settings.ghosts.detail.noToolDescription': 'No description',
         'settings.ghosts.detail.permissionsTitle': 'Permissions',
         'settings.ghosts.detail.viewAllPermissions': 'See All',
@@ -1134,6 +1136,7 @@ describe('Ghost plugin detail sections', () => {
 
   function stubToolPermissionApi(overrides?: {
     config?: Record<string, unknown> | ((id: string) => Record<string, unknown>);
+    readStatus?: 'missing' | 'readable' | 'unreadable';
     setToolPermissions?: (id: string, config: unknown) => Promise<unknown>;
   }) {
     const setToolPermissions = vi.fn(
@@ -1148,6 +1151,7 @@ describe('Ghost plugin detail sections', () => {
               typeof overrides?.config === 'function'
                 ? overrides.config(id)
                 : (overrides?.config ?? {}),
+            readStatus: overrides?.readStatus ?? 'readable',
           }),
           setToolPermissions,
         },
@@ -1280,6 +1284,20 @@ describe('Ghost plugin detail sections', () => {
     };
     expect(saved.tools).not.toHaveProperty('removed_tool');
     expect(Object.keys(saved.tools ?? {})).toEqual(sevenTools.map((tool) => tool.name));
+  });
+
+  it('disables tool permission editing when the config file is unreadable', () => {
+    stubToolPermissionApi({ readStatus: 'unreadable' });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    expect(screen.getByText('Tool permissions are temporarily unavailable. Please try again later.')).toBeTruthy();
+    const buttons = screen.getAllByRole('button', { name: /Always allow|Needs approval|Blocked/ });
+    for (const button of buttons) {
+      expect(button).toHaveProperty('disabled', true);
+    }
+    // 不可读状态下点击不会触发保存。
+    fireEvent.click(buttons[0]);
+    expect(window.electronAPI.ghosts.setToolPermissions).not.toHaveBeenCalled();
   });
 
   it('collapses the tool list without losing the global policy control', () => {

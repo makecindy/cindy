@@ -850,59 +850,59 @@
         "chatAttachmentsClearConfirmDescription": "Only files in the message attachment cache directory will be deleted; the message database will not be queried. Some attachments in message history may become unavailable, and this cannot be undone.",
         "chatAttachmentsClearConfirmButton": "Clear attachment cache",
         "chatAttachmentsCleared": "Message attachment cache cleaned up",
-          "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
-          "dbSlimmingBackupDirectoryDialogTitle": "Choose database cleanup backup folder",
-          "dbSlimmingLabel": "Database cleanup",
-          "dbSlimmingDescription": "Scan history in soft-deleted and archived tasks not updated for the selected period, with an option to include active tasks. After confirmation, Cindy restarts and compacts the database before opening it. Files and generated media on disk are not deleted.",
-          "dbSlimmingScanButton": "Scan database",
-          "dbSlimmingScanLoading": "Scanning the database…",
-          "dbSlimmingScanResultTitle": "Database scan results",
-          "dbSlimmingExecutionLoading": "Preparing database cleanup. Cindy will restart shortly…",
-          "dbSlimmingArchiveAgeLabel": "Clean tasks not updated for more than",
-          "dbSlimmingArchiveAgeOption7Days": "7 days",
-          "dbSlimmingArchiveAgeOption1": "1 month",
-          "dbSlimmingArchiveAgeOption3": "3 months",
-          "dbSlimmingArchiveAgeOption6": "6 months",
-          "dbSlimmingIncludeActiveLabel": "Clean active task history",
-          "dbSlimmingIncludeActiveDescription": "Also clean history from active tasks older than the selected period",
-          "dbSlimmingIncludeActiveConfirmTitle": "Include active tasks in database cleanup?",
-          "dbSlimmingIncludeActiveConfirmDescription": "An active task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, active, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible active tasks and their Agent context will be reset; task entries remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
-          "dbSlimmingIncludeActiveConfirmButton": "Include active tasks",
-          "dbSlimmingIncludeActiveCancelButton": "Keep active tasks",
-          "dbSlimmingBackupLabel": "Back up database before cleanup",
-          "dbSlimmingBackupDefaultLocation": "Database folder (keeps only the latest cleanup backup)",
-          "dbSlimmingUseDefaultDirectoryButton": "Use default folder",
-          "dbSlimmingChooseDirectoryButton": "Choose backup folder",
-          "dbSlimmingBackupDirectoryFailed": "Could not choose a backup folder. Try again.",
-          "dbSlimmingScanFailed": "Could not scan the database. Try again.",
-          "dbSlimmingScheduleFailed": "Could not schedule database cleanup. Scan again and retry.",
-          "dbSlimmingBackupMissing": "The latest cleanup backup could not be found.",
-          "dbSlimmingBackupOpenFailed": "Could not open the cleanup backup location. Try again.",
-          "dbSlimmingReportTasks": "Will clean {{deleted}} soft-deleted tasks and {{archived}} archived tasks",
-          "dbSlimmingReportTasksWithActive": "Will clean {{active}} active tasks, {{deleted}} soft-deleted tasks, and {{archived}} archived tasks",
-          "dbSlimmingReportMessages": "Estimated message content to clean: {{count}} messages (about {{size}})",
-          "dbSlimmingReportSpace": "Database: {{database}}; temporary space needed: at least {{temporary}}; available: {{free}}",
-          "dbSlimmingSpaceUnknown": "unknown",
-          "dbSlimmingInsufficientSpace": "There is not enough disk space to safely create a working copy and compact the database.",
-          "dbSlimmingConfirmButton": "Confirm database cleanup",
-          "dbSlimmingConfirmTitle": "Restart and clean up the database?",
-          "dbSlimmingConfirmDescriptionWithBackup": "Cindy will restart gracefully, then back up, clean history, compact, and verify the database before opening it. Data is cleaned only after the backup is written and verified.",
-          "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy will restart gracefully, then clean and compact the database before opening it. No backup will be created, and cleaned history cannot be recovered.",
-          "dbSlimmingRestartButton": "Restart and clean up database",
-          "dbSlimmingResultCompleted": "Removed {{messages}} messages from {{tasks}} tasks and reduced the database by {{size}}.",
-          "dbSlimmingOpenBackupButton": "Open cleanup backup",
-          "dbSlimmingToastCompleted": "Database cleanup complete; freed {{size}}",
-          "dbSlimmingHistoryCleared": "History has been cleared",
-          "dbSlimmingFailure": {
-            "backup-failed": "The database backup could not be created or retained. No history was cleaned.",
-            "cleanup-failed": "Database cleanup did not finish. The original database is unchanged.",
-            "database-in-use": "Another instance is using the database, so cleanup was not run.",
-            "insufficient-space": "There was not enough disk space to clean up the database.",
-            "integrity-check-failed": "The database integrity check failed. The original database was restored.",
-            "replacement-failed": "The compacted database could not be installed. The original database was restored.",
-            "recovery-failed": "Database recovery failed. Cindy stopped opening the database to protect the original data.",
-            "unknown": "Database cleanup did not finish. Try again."
-          },
+        "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
+        "dbSlimmingBackupDirectoryDialogTitle": "Choose database cleanup backup folder",
+        "dbSlimmingLabel": "Database cleanup",
+        "dbSlimmingDescription": "Scan history in soft-deleted and archived tasks not updated for the selected period, with an option to include active tasks. After confirmation, Cindy restarts and compacts the database before opening it. Files and generated media on disk are not deleted.",
+        "dbSlimmingScanButton": "Scan database",
+        "dbSlimmingScanLoading": "Scanning the database…",
+        "dbSlimmingScanResultTitle": "Database scan results",
+        "dbSlimmingExecutionLoading": "Preparing database cleanup. Cindy will restart shortly…",
+        "dbSlimmingArchiveAgeLabel": "Clean tasks not updated for more than",
+        "dbSlimmingArchiveAgeOption7Days": "7 days",
+        "dbSlimmingArchiveAgeOption1": "1 month",
+        "dbSlimmingArchiveAgeOption3": "3 months",
+        "dbSlimmingArchiveAgeOption6": "6 months",
+        "dbSlimmingIncludeActiveLabel": "Clean active task history",
+        "dbSlimmingIncludeActiveDescription": "Also clean history from active tasks older than the selected period",
+        "dbSlimmingIncludeActiveConfirmTitle": "Include active tasks in database cleanup?",
+        "dbSlimmingIncludeActiveConfirmDescription": "An active task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, active, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible active tasks and their Agent context will be reset; task entries remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
+        "dbSlimmingIncludeActiveConfirmButton": "Include active tasks",
+        "dbSlimmingIncludeActiveCancelButton": "Keep active tasks",
+        "dbSlimmingBackupLabel": "Back up database before cleanup",
+        "dbSlimmingBackupDefaultLocation": "Database folder (keeps only the latest cleanup backup)",
+        "dbSlimmingUseDefaultDirectoryButton": "Use default folder",
+        "dbSlimmingChooseDirectoryButton": "Choose backup folder",
+        "dbSlimmingBackupDirectoryFailed": "Could not choose a backup folder. Try again.",
+        "dbSlimmingScanFailed": "Could not scan the database. Try again.",
+        "dbSlimmingScheduleFailed": "Could not schedule database cleanup. Scan again and retry.",
+        "dbSlimmingBackupMissing": "The latest cleanup backup could not be found.",
+        "dbSlimmingBackupOpenFailed": "Could not open the cleanup backup location. Try again.",
+        "dbSlimmingReportTasks": "Will clean {{deleted}} soft-deleted tasks and {{archived}} archived tasks",
+        "dbSlimmingReportTasksWithActive": "Will clean {{active}} active tasks, {{deleted}} soft-deleted tasks, and {{archived}} archived tasks",
+        "dbSlimmingReportMessages": "Estimated message content to clean: {{count}} messages (about {{size}})",
+        "dbSlimmingReportSpace": "Database: {{database}}; temporary space needed: at least {{temporary}}; available: {{free}}",
+        "dbSlimmingSpaceUnknown": "unknown",
+        "dbSlimmingInsufficientSpace": "There is not enough disk space to safely create a working copy and compact the database.",
+        "dbSlimmingConfirmButton": "Confirm database cleanup",
+        "dbSlimmingConfirmTitle": "Restart and clean up the database?",
+        "dbSlimmingConfirmDescriptionWithBackup": "Cindy will restart gracefully, then back up, clean history, compact, and verify the database before opening it. Data is cleaned only after the backup is written and verified.",
+        "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy will restart gracefully, then clean and compact the database before opening it. No backup will be created, and cleaned history cannot be recovered.",
+        "dbSlimmingRestartButton": "Restart and clean up database",
+        "dbSlimmingResultCompleted": "Removed {{messages}} messages from {{tasks}} tasks and reduced the database by {{size}}.",
+        "dbSlimmingOpenBackupButton": "Open cleanup backup",
+        "dbSlimmingToastCompleted": "Database cleanup complete; freed {{size}}",
+        "dbSlimmingHistoryCleared": "History has been cleared",
+        "dbSlimmingFailure": {
+          "backup-failed": "The database backup could not be created or retained. No history was cleaned.",
+          "cleanup-failed": "Database cleanup did not finish. The original database is unchanged.",
+          "database-in-use": "Another instance is using the database, so cleanup was not run.",
+          "insufficient-space": "There was not enough disk space to clean up the database.",
+          "integrity-check-failed": "The database integrity check failed. The original database was restored.",
+          "replacement-failed": "The compacted database could not be installed. The original database was restored.",
+          "recovery-failed": "Database recovery failed. Cindy stopped opening the database to protect the original data.",
+          "unknown": "Database cleanup did not finish. Try again."
+        },
         "cleanupLabel": "Disk cleanup",
         "cleanupDescription": "Scans for media files no session references anymore, oversized caches, and obsolete folders. Shows the numbers first and deletes only after you confirm; images in composer drafts and queued messages are protected automatically.",
         "scanButton": "Scan",
@@ -1882,11 +1882,21 @@
           "qwen38-27b": {
             "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
           },
-          "gpt-oss-20b": { "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines." },
-          "gemma4-e2b": { "blurb": "Smallest Gemma 4. Light machines, with vision." },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 small. Light daily use, with vision." },
-          "gemma4-12b": { "blurb": "Gemma 4 mid-size. Steadier chat and multimodal." },
-          "gemma4-31b": { "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory." },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines."
+          },
+          "gemma4-e2b": {
+            "blurb": "Smallest Gemma 4. Light machines, with vision."
+          },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 small. Light daily use, with vision."
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 mid-size. Steadier chat and multimodal."
+          },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory."
+          },
           "gemma4-26b": {
             "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
           },
@@ -4674,7 +4684,8 @@
         "collapseTools": "Collapse Tools",
         "viewAllPermissions": "See All",
         "permissionsDialogDescription": "All {{count}} permissions requested by this Plugin",
-        "closeDialog": "Close Dialog"
+        "closeDialog": "Close Dialog",
+        "toolPermissionUnavailable": "Tool permissions are temporarily unavailable. Please try again later."
       },
       "contents": {
         "mainView": "Main view",
@@ -5098,7 +5109,6 @@
     "expandControlledNotice": "Expand remote control notice: {{label}}",
     "versionMismatch": "Version mismatch with the other device; some features may be limited"
   },
-
   "accountDeletion": {
     "entryButton": "Delete account",
     "entryAria": "Delete the current account",
@@ -8050,8 +8060,19 @@
       "showMore": "Show {{count}} more",
       "showLess": "Show less",
       "artifactLabel": "Artifact",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
-      "summary": { "pages": "{{count}} pages", "slides": "{{count}} slides", "sheets": "{{count}} sheets", "rows": "{{count}} rows", "bytes": "{{count}}" }
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
+      "summary": {
+        "pages": "{{count}} pages",
+        "slides": "{{count}} slides",
+        "sheets": "{{count}} sheets",
+        "rows": "{{count}} rows",
+        "bytes": "{{count}}"
+      }
     },
     "turnChanges": {
       "title": "Changed {{count}} files",
@@ -8956,7 +8977,15 @@
           "5": "Friday",
           "6": "Saturday"
         },
-        "short": { "0": "Su", "1": "Mo", "2": "Tu", "3": "We", "4": "Th", "5": "Fr", "6": "Sa" }
+        "short": {
+          "0": "Su",
+          "1": "Mo",
+          "2": "Tu",
+          "3": "We",
+          "4": "Th",
+          "5": "Fr",
+          "6": "Sa"
+        }
       },
       "time": {
         "last": "Last {{value}}",

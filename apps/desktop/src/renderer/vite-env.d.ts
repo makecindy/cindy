@@ -1323,7 +1323,12 @@ interface ElectronAPI {
       config: Record<string, unknown> | null,
     ) => Promise<{ config: Record<string, unknown> }>;
     /** 插件工具粒度授权配置:首帧同步读。 */
-    toolPermissionsSync: (id: string) => { config: import('../shared/ghost').GhostToolPermissionConfig };
+    toolPermissionsSync: (
+      id: string,
+    ) => {
+      config: import('../shared/ghost').GhostToolPermissionConfig;
+      readStatus: 'missing' | 'readable' | 'unreadable';
+    };
     setToolPermissions: (
       id: string,
       config: import('../shared/ghost').GhostToolPermissionConfig | null,

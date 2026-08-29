@@ -120,6 +120,28 @@ const store = createOverrideSettingsFile<GhostToolPermissionsData>({
 
 /** 读取指定插件的工具粒度授权配置。 */
 export function readGhostToolPermissions(ghostId: string): GhostToolPermissionConfig {
+  return readGhostToolPermissionsWithStatus(ghostId).config;
+}
+
+/**
+ * 读取配置并返回底层文件状态，供需要区分「默认配置」与「文件暂时不可读」的
+ * 调用方使用（如插件详情页：不可读时应禁止编辑，而不是显示一份可被覆盖写回
+ * 的默认快照）。
+ */
+export function readGhostToolPermissionsWithStatus(ghostId: string): {
+  config: GhostToolPermissionConfig;
+  readStatus: 'missing' | 'readable' | 'unreadable';
+} {
+  const config = readGhostToolPermissionsInternal(ghostId);
+  return { config, readStatus: store.getReadStatus() };
+}
+
+/** 暴露底层文件状态，供 IPC 在已读取配置后附带返回。 */
+export function getGhostToolPermissionsReadStatus(): 'missing' | 'readable' | 'unreadable' {
+  return store.getReadStatus();
+}
+
+function readGhostToolPermissionsInternal(ghostId: string): GhostToolPermissionConfig {
   store.invalidateIfChanged();
   const permissions = store.read().permissions;
   // 与 resolveModeFromConfig 同口径:只认自有键。permissions 正常路径已是

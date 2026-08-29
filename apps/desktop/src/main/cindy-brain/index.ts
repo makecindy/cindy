@@ -242,6 +242,7 @@ import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
 import {
+  getGhostToolPermissionsReadStatus,
   readGhostToolPermissions,
   resolveToolApprovalMode,
   undeclaredToolPermissionKeys,
@@ -7245,17 +7246,20 @@ export function registerGhostIpc(): void {
   // 默认的 needs-approval,不构成任何放宽。
   ipcMain.on('ghosts:tool-permissions', (event, ghostId: unknown) => {
     let config: GhostToolPermissionConfig = {};
+    let readStatus: 'missing' | 'readable' | 'unreadable' = 'missing';
     try {
       if (isTrustedAppRendererEvent(event) && typeof ghostId === 'string') {
         config = readGhostToolPermissions(ghostId);
+        readStatus = getGhostToolPermissionsReadStatus();
       }
     } catch (error) {
       // 读盘异常同样不能把 renderer 卡死;空配置 = 界面显示默认档位。
       log.warn('ghost tool permissions 读取失败', {
         error: error instanceof Error ? error.message : String(error),
       });
+      readStatus = 'unreadable';
     }
-    event.returnValue = { config };
+    event.returnValue = { config, readStatus };
   });
   ipcMain.handle('ghosts:tool-permissions:set', (event, ghostId: unknown, config: unknown) => {
     assertTrustedAppRendererEvent(event);

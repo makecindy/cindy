@@ -1189,8 +1189,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ config: Record<string, unknown> }> =>
       ipcRenderer.invoke('ghosts:errand-prefs:set', id, config),
     /** 插件工具粒度授权配置(sendSync 确保首帧同帧渲染)。 */
-    toolPermissionsSync: (id: string): { config: GhostToolPermissionConfig } =>
-      ipcRenderer.sendSync('ghosts:tool-permissions', id),
+    toolPermissionsSync: (
+      id: string,
+    ): {
+      config: GhostToolPermissionConfig;
+      readStatus: 'missing' | 'readable' | 'unreadable';
+    } => ipcRenderer.sendSync('ghosts:tool-permissions', id),
     setToolPermissions: (
       id: string,
       config: GhostToolPermissionConfig | null,
