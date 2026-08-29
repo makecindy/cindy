@@ -1163,8 +1163,9 @@ export function replaceToolResultImagesWithNotice(
  *
  * This is deliberately a synchronous, local-only pass.  The newest user
  * message is kept intact so the current prompt/image is never silently
- * removed.  Older tool-result images are dropped first, followed by older
- * conversation images.  The original media remains in the media library; the
+ * removed.  Older history images are dropped before the newest tool-result
+ * image, with the current prompt always protected.  The original media
+ * remains in the media library; the
  * request-local replacement is only a small, explicit text notice.
  *
  * The function mutates the parsed request object in place (the proxy has
