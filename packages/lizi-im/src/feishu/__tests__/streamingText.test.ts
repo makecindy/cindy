@@ -301,83 +301,6 @@ describe('feishu streaming text', () => {
     );
   });
 
-  it('exposes primary upload refs when the handle itself does not mirror', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-consume-refs-'));
-    tempDirs.push(root);
-    const allowedFile = path.join(root, 'report.txt');
-    await fs.writeFile(allowedFile, 'report');
-    const handle = await start('g/oc_group/omt_topic', undefined, {
-      allowedFileRoots: [root],
-    });
-
-    await handle.finalize(`[report.txt](xdt-file://${allowedFile})`);
-
-    expect(handle.consumeReusableOutboundFiles?.()).toEqual([
-      {
-        msgType: 'file',
-        content: JSON.stringify({ file_key: 'file-key' }),
-        sourceIndex: 0,
-      },
-    ]);
-    expect(handle.consumeReusableOutboundFiles?.()).toEqual([]);
-    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
-  });
-
-  it('does not expose primary upload refs when the handle already mirrored them', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-internal-refs-'));
-    tempDirs.push(root);
-    const allowedFile = path.join(root, 'report.txt');
-    await fs.writeFile(allowedFile, 'report');
-    const handle = await start('g/oc_group/omt_topic', undefined, {
-      mirrorChatId: 'oc_group',
-      mirrorKey: 'v'.repeat(64),
-      allowedFileRoots: [root],
-      inboundEpoch: 1,
-    });
-
-    await handle.finalize(`[report.txt](xdt-file://${allowedFile})`);
-
-    expect(handle.consumeReusableOutboundFiles?.()).toEqual([]);
-    expect(mocks.sendFileToChat).toHaveBeenCalledOnce();
-  });
-
-  it('reuses one-shot parent-chat file refs without reopening the source', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-oneshot-reuse-'));
-    tempDirs.push(root);
-    const allowedFile = path.join(root, 'report.txt');
-    await fs.writeFile(allowedFile, 'report');
-
-    await mirrorFinal(
-      'oc_group',
-      'w'.repeat(64),
-      `[report.txt](xdt-file://${allowedFile})`,
-      [],
-      [root],
-      1,
-      false,
-      [
-        {
-          msgType: 'file',
-          content: JSON.stringify({ file_key: 'file-key' }),
-          sourceIndex: 0,
-        },
-      ],
-    );
-
-    expect(mocks.sendFile).not.toHaveBeenCalled();
-    expect(mocks.sendFileToChat).toHaveBeenCalledWith(
-      'oc_group',
-      {
-        msgType: 'file',
-        content: JSON.stringify({ file_key: 'file-key' }),
-      },
-      `${'w'.repeat(32)}-f0`,
-    );
-    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
-      messages.streaming.fileSentDone(1),
-    );
-  });
-
   it('fails closed for one-shot file-only replies without a primary upload key', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-fileonly-'));
     tempDirs.push(root);
@@ -655,6 +578,32 @@ describe('feishu streaming text', () => {
         content: JSON.stringify({ file_key: 'file-key' }),
       },
       `${'e'.repeat(32)}-f0`,
+    );
+  });
+
+  it('copies parent-chat files when the mirror is armed only at terminal finalize', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-armed-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+    const handle = await start('g/oc_group/omt_topic');
+    handle.armFinalReplyMirror?.({
+      kind: 'parent-chat',
+      chatId: 'oc_group',
+      idempotencyKey: 'r'.repeat(64),
+      accountEpoch: 1,
+      allowedFileRoots: [root],
+      confirmed: true,
+    });
+    await handle.finalize(`见 [report.txt](xdt-file://${allowedFile})`);
+
+    expect(mocks.sendFileToChat).toHaveBeenCalledWith(
+      'oc_group',
+      {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      `${'r'.repeat(32)}-f0`,
     );
   });
 });

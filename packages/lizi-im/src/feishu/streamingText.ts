@@ -50,7 +50,7 @@ import {
 } from './dualDelivery.js';
 import { resolveFeishuMediaUrl } from './mediaCache.js';
 import { messages as transportMessages } from './messages.js';
-import type { ReusableOutboundFileRef, StreamingTextHandle } from '../types.js';
+import type { IMFinalReplyMirror, StreamingTextHandle } from '../types.js';
 // xdt-* 引用解析抽到渠道无关模块(slack streamingText 共用同一套语义)
 import {
   stripXdtForStreaming,
@@ -153,11 +153,11 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   private pending: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private finalized = false;
-  private readonly mirrorChatId?: string;
-  private readonly mirrorKey?: string;
-  private readonly allowedFileRoots: readonly string[];
-  private readonly inboundEpoch?: number;
-  private readonly mirrorConfirmed: boolean;
+  private mirrorChatId?: string;
+  private mirrorKey?: string;
+  private allowedFileRoots: readonly string[];
+  private inboundEpoch?: number;
+  private mirrorConfirmed: boolean;
   /**
    * 工具结果(tool_result_full event)带过来的图片 absPath, finalize 时跟文本里
    * xdt-image markdown 链接一起 upload + 拼到 card 末尾。host 主进程负责把
@@ -165,7 +165,6 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
    * 不参与 namespace 路由(@cindy/im 包对 lizi-art / 其它 host 命名空间不感知)。
    */
   private extraImageAbsPaths: string[] = [];
-  private reusableFiles: ReusableMirroredFile[] = [];
 
   constructor(
     messageId: string,
@@ -190,6 +189,15 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     // to it (otherwise the placeholder permanently prefixes the message).
     this.buffer = '';
     this.flushed = initial;
+  }
+
+  armFinalReplyMirror(mirror: IMFinalReplyMirror): void {
+    if (this.finalized || mirror.kind !== 'parent-chat') return;
+    this.mirrorChatId = mirror.chatId;
+    this.mirrorKey = mirror.idempotencyKey;
+    this.allowedFileRoots = mirror.allowedFileRoots ?? [];
+    this.inboundEpoch = mirror.accountEpoch;
+    this.mirrorConfirmed = Boolean(mirror.confirmed);
   }
 
   append(delta: string): void {
@@ -244,17 +252,6 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     // dedupe by absPath — model 偶尔在同一 turn 多条 tool_result 重复同一张图
     if (this.extraImageAbsPaths.includes(absPath)) return;
     this.extraImageAbsPaths.push(absPath);
-  }
-
-  consumeReusableOutboundFiles(): ReusableOutboundFileRef[] {
-    if (this.mirrorChatId && this.mirrorKey) return [];
-    const files = this.reusableFiles;
-    this.reusableFiles = [];
-    return files.map(({ message, sourceIndex }) => ({
-      msgType: message.msgType,
-      content: message.content,
-      sourceIndex,
-    }));
   }
 
   // ── intermediate (throttled) patch ────────────────────────────────────────
@@ -380,7 +377,6 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       reusableFiles = results.filter(
         (message): message is ReusableMirroredFile => message !== null,
       );
-      this.reusableFiles = reusableFiles;
     }
 
     // 3. Strip xdt-file from card text (delivered separately, no placeholder).
@@ -626,21 +622,6 @@ async function sendOrScheduleMirror(
   if (!deferred) release();
 }
 
-function toReusableMirroredFiles(
-  files: readonly ReusableOutboundFileRef[],
-): ReusableMirroredFile[] {
-  const out: ReusableMirroredFile[] = [];
-  for (const file of files) {
-    if (file.msgType !== 'file' && file.msgType !== 'image') continue;
-    if (!file.content) continue;
-    out.push({
-      message: { msgType: file.msgType, content: file.content },
-      sourceIndex: file.sourceIndex,
-    });
-  }
-  return out;
-}
-
 /** One-shot mirror used when the primary streaming surface failed to start. */
 export async function mirrorFinal(
   chatId: string,
@@ -650,9 +631,7 @@ export async function mirrorFinal(
   allowedFileRoots: readonly string[] = [],
   inboundEpoch: number,
   alreadyConfirmed = false,
-  reusableFiles: readonly ReusableOutboundFileRef[] = [],
 ): Promise<void> {
-  const mirroredFiles = toReusableMirroredFiles(reusableFiles);
   const send = async (): Promise<void> => {
     // Empty roots is the SSH fail-closed signal from turnRunner. Do not resolve
     // xdt-image / cindy-media URLs or extra absPaths through local media stores.
@@ -707,13 +686,11 @@ export async function mirrorFinal(
     const fileOnly = cardTextTrimmed.length === 0 && !hasImages && fileLinks.length > 0;
     if (fileOnly) {
       if (!isPinnedAccountCurrent()) return;
-      const sentCount = await sendMirroredFiles(chatId, mirrorKey, mirroredFiles);
-      if (!isPinnedAccountCurrent()) return;
-      const status =
-        sentCount > 0
-          ? transportMessages.streaming.fileSentDone(sentCount)
-          : transportMessages.streaming.deliveryFailed;
-      await sendCardToChat(chatId, buildMarkdownCardV2(status), mirrorUuid(mirrorKey, 'card'));
+      await sendCardToChat(
+        chatId,
+        buildMarkdownCardV2(transportMessages.streaming.deliveryFailed),
+        mirrorUuid(mirrorKey, 'card'),
+      );
       return;
     }
     if (skippedLocalMedia && cardTextTrimmed.length === 0) {
@@ -738,8 +715,6 @@ export async function mirrorFinal(
         : buildMarkdownCardV2(visibleText),
     );
     await sendCardToChat(chatId, card, mirrorUuid(mirrorKey, 'card'));
-    if (!isPinnedAccountCurrent()) return;
-    await sendMirroredFiles(chatId, mirrorKey, mirroredFiles);
   };
   await sendOrScheduleMirror(mirrorKey, send, inboundEpoch, alreadyConfirmed);
 }

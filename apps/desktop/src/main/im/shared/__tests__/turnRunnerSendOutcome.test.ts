@@ -2732,28 +2732,21 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(String(mocks.feishuIm.mirrorFinalReply.mock.calls[0][1])).toContain('final answer');
   });
 
-  it('passes primary streaming file refs into the terminal parent-chat mirror', async () => {
-    const reusableFiles = [
-      {
-        msgType: 'file',
-        content: JSON.stringify({ file_key: 'file-key' }),
-        sourceIndex: 0,
-      },
-    ];
+  it('arms the streaming handle at terminal finalize so parent-chat files reuse the upload key', async () => {
     const handle = {
-      messageId: 'stream-file-refs',
+      messageId: 'stream-armed',
       append: vi.fn(),
       replace: vi.fn(),
       finalize: vi.fn(),
       close: vi.fn(),
-      consumeReusableOutboundFiles: vi.fn(() => reusableFiles),
+      armFinalReplyMirror: vi.fn(),
     };
     mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
     const mirror = {
       kind: 'parent-chat' as const,
       chatId: 'oc_group',
       accountEpoch: 1,
-      idempotencyKey: 'mirror-file-refs',
+      idempotencyKey: 'mirror-armed',
     };
     const h = setupSession(async () => ({ accepted: true }));
     const onTurnComplete = vi.fn();
@@ -2763,24 +2756,22 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await waitForAssertion(() => {
       expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
     });
+    expect(handle.armFinalReplyMirror).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+
     h.emit({ type: 'done', data: {} });
     await waitForAssertion(() => {
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
       expect(handle.finalize).toHaveBeenCalledTimes(1);
-      expect(handle.consumeReusableOutboundFiles).toHaveBeenCalledTimes(1);
-      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
     });
-    expect(handle.consumeReusableOutboundFiles.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(handle.armFinalReplyMirror).toHaveBeenCalledWith({
+      ...mirror,
+      allowedFileRoots: ['F:\\XDMaker'],
+    });
+    expect(handle.armFinalReplyMirror.mock.invocationCallOrder[0]).toBeLessThan(
       handle.finalize.mock.invocationCallOrder[0],
     );
-    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
-      {
-        ...mirror,
-        allowedFileRoots: ['F:\\XDMaker'],
-      },
-      expect.stringContaining('see the file'),
-      { reusableFiles },
-    );
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
   });
 
   it('mirrors side-channel tool images onto the parent-chat even when the final text omits them', async () => {

@@ -24,7 +24,6 @@ import type {
   IMMessageEvent,
   IMStatus,
   InteractiveCardSpec,
-  ReusableOutboundFileRef,
   SendFileResult,
   StreamingTextHandle,
 } from '../types.js';
@@ -457,7 +456,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   async mirrorFinalReply(
     mirror: IMFinalReplyMirror,
     text: string,
-    opts?: { mediaAbsPaths?: string[]; reusableFiles?: readonly ReusableOutboundFileRef[] },
+    opts?: { mediaAbsPaths?: string[] },
   ): Promise<void> {
     if (mirror.kind !== 'parent-chat') return;
     try {
@@ -469,7 +468,6 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         mirror.allowedFileRoots,
         mirror.accountEpoch,
         mirror.confirmed,
-        opts?.reusableFiles,
       );
     } catch (err) {
       this.log.warn(
