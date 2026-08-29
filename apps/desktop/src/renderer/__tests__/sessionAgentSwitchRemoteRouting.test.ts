@@ -963,8 +963,9 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain(
       'expectedAgentSwitchRevision !== undefined || remoteAtomicModelSelectionSupported',
     );
-    expect(source).toContain('? { effort: newEffort, fastMode: restoredFast }');
-    expect(source).toContain('? { effort: targetEffort, fastMode: restoredFast }');
+    expect(source).toContain('effort: newEffort,');
+    expect(source).toContain('effort: targetEffort,');
+    expect(source).toContain('fastMode: restoredFast,');
     expect(source).toContain('if (!useAtomicSelection) {');
     expect(source).toContain('if (remoteSetModelResult?.superseded) {');
     expect(source).toContain('if (setModelResult?.superseded) {');

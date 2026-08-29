@@ -118,6 +118,10 @@ export const CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 = 'provider-logo-kinds
 export const CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1 =
   'set-model-explicit-provider-null-v1';
 
+/** 控制端会为有损模型换窗携带用户明确确认过的精确窗口。 */
+export const CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1 =
+  'model-window-confirmation-v1';
+
 /**
  * 控制端能消费 `maker:event:batch` 微批帧(拆包后逐条按原路消费)。
  * 被控端只对声明了本能力的控制端发批,未声明者照旧逐帧转发——旧控制端

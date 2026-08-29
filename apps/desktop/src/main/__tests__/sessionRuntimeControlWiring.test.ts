@@ -11,6 +11,10 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const deviceLinkHostSource = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8').replace(
+  /\r\n?/g,
+  '\n',
+);
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -488,6 +492,33 @@ describe('session runtime control wiring', () => {
     expect(rehydrate).toContain('await bootstrapSession(createOpts)');
     expect(rehydrate).not.toContain('.send(');
     expect(rolloverWiring).toContain('rehydrateColdPiRuntimeForWindowVerification,');
+  });
+
+  it('requires negotiated, exact remote confirmation before an overflow rebuild', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+
+    expect(deviceLinkHostSource).toContain(
+      'CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,',
+    );
+    expect(setModel).toContain(
+      'deviceLinkInvokeControllerSupports(\n          CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1',
+    );
+    expect(setModel).toContain("remoteTargetAssessment.level === 'overflow'");
+    expect(setModel).toContain('confirmedContextWindow !== targetContextWindow');
+    expect(setModel).toContain('confirmedContextWindow !== verifiedTargetWindow');
+    expect(setModel).toContain(
+      'remote controller must explicitly confirm the verified overflow window',
+    );
+    expect(setModel).not.toContain(
+      "internalOptions.source !== 'user' ||\n                  isDeviceLinkInvoke() ||",
+    );
+    expect(setModel).toContain(
+      'remote controller must confirm the verified final Pi overflow window',
+    );
   });
 
   it('rechecks Pi pressure against the final verified runtime window before commit', () => {

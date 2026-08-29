@@ -15,6 +15,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Folder, MessageSquarePlus, Mic, Pen, TriangleAlert, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1 } from '@cindy/device-link';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
@@ -6043,7 +6044,7 @@ export function ChatInput({
       verifiedTargetContextWindow?: number,
       verifiedContextTokens?: number,
       requireDestructiveConfirmation = false,
-    ): Promise<boolean> => {
+    ): Promise<boolean | number> => {
       if (!sessionId) return true;
       const contextTokens =
         verifiedContextTokens ?? makerChatStore.getSnapshot(sessionId).agentStatus.contextTokens;
@@ -6108,12 +6109,13 @@ export function ChatInput({
         return true;
       }
       // Local overflow (≥100%): host performs a bounded handoff before switching.
-      return confirmDialog({
+      const accepted = await confirmDialog({
         title: t('newChat.chatInput.modelSwitchContextGuard.title'),
         description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', vars),
         confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
         cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
       });
+      return accepted && targetContextWindow ? targetContextWindow : accepted;
     },
     [sessionId, remoteHostId, confirmDialog, t, providers, currentModelAgentKind],
   );
@@ -6738,9 +6740,13 @@ export function ChatInput({
       const isSourceSessionCurrent = () =>
         isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current);
       // 容量护栏最先跑: 用户取消时直接 return, 不留任何副作用(effort 快照都不动)。
+      let confirmedRemoteContextWindow: number | undefined;
       if (sessionId && newModelId !== activeModel) {
         const proceed = await confirmModelSwitchContextGuard(newModelId, sourceRemoteDeviceId);
         if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
+        if (sourceIsRemoteSession && typeof proceed === 'number') {
+          confirmedRemoteContextWindow = proceed;
+        }
       }
       // 切换意图期:此时列表展示的是目标引擎(乐观翻转),改选模型 = 更新意图,
       // 绝不能走普通 SET_MODEL 链路(main 会清意图、renderer 乐观态失配)。
@@ -6814,7 +6820,19 @@ export function ChatInput({
                 newModelId,
                 selectedProviderId,
                 expectedAgentSwitchRevision,
-                useAtomicSelection ? { effort: newEffort, fastMode: restoredFast } : undefined,
+                useAtomicSelection
+                  ? ({
+                      effort: newEffort,
+                      fastMode: restoredFast,
+                      ...(confirmedRemoteContextWindow
+                        ? {
+                            confirmedContextWindow: confirmedRemoteContextWindow,
+                            modelWindowConfirmationCapability:
+                              CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
+                          }
+                        : {}),
+                    } as { effort: string; fastMode: boolean })
+                  : undefined,
               );
               if (remoteSetModelResult?.superseded) {
                 if (isSourceSessionCurrent()) setPendingRemoteSwitch(null);
@@ -7269,6 +7287,7 @@ export function ChatInput({
       // handleModelChange —— 2026-07-06 实测踩中), 同样要先过上下文容量确认。
       // route 的任一维度变化都按目标来源窗口评估；同 model id 跨来源也可能是 1M → 200K。
       // 放在函数最前: 本地分支此前无任何乐观状态写入, 用户取消 = 零副作用直接 return。
+      let confirmedRemoteContextWindow: number | undefined;
       if (
         sessionId &&
         reconciledModelId &&
@@ -7280,6 +7299,9 @@ export function ChatInput({
           newProviderId,
         );
         if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
+        if (sourceIsRemoteSession && typeof proceed === 'number') {
+          confirmedRemoteContextWindow = proceed;
+        }
       }
       // 切换意图期:列表展示的是目标引擎(乐观翻转),(来源,模型) 改选 = 更新意图,
       // 不走普通 set-model 链路(main 会清意图、renderer 乐观态失配)。
@@ -7351,7 +7373,19 @@ export function ChatInput({
             targetModel,
             newProviderId,
             expectedAgentSwitchRevision,
-            useAtomicSelection ? { effort: targetEffort, fastMode: restoredFast } : undefined,
+            useAtomicSelection
+              ? ({
+                  effort: targetEffort,
+                  fastMode: restoredFast,
+                  ...(confirmedRemoteContextWindow
+                    ? {
+                        confirmedContextWindow: confirmedRemoteContextWindow,
+                        modelWindowConfirmationCapability:
+                          CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
+                      }
+                    : {}),
+                } as { effort: string; fastMode: boolean })
+              : undefined,
           );
           if (remoteSetModelResult?.superseded) {
             if (isSourceSessionCurrent()) {

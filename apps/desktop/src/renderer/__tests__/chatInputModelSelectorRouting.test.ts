@@ -37,6 +37,32 @@ describe('ChatInput model source switching wiring', () => {
     );
   });
 
+  it('attaches the negotiated exact window only after remote overflow confirmation', () => {
+    const guardStart = chatInputSource.indexOf(
+      'const confirmModelSwitchContextGuard = useCallback(',
+    );
+    const guardEnd = chatInputSource.indexOf(
+      'const setModelWithFinalWindowConfirmation',
+      guardStart,
+    );
+    const guard = chatInputSource.slice(guardStart, guardEnd);
+    expect(guard).toContain(
+      'return accepted && targetContextWindow ? targetContextWindow : accepted',
+    );
+
+    const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const modelChange = chatInputSource.slice(modelStart, providerStart);
+    const providerChange = chatInputSource.slice(providerStart);
+    for (const route of [modelChange, providerChange]) {
+      expect(route).toContain('confirmedContextWindow: confirmedRemoteContextWindow');
+      expect(route).toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
+      expect(route.indexOf("typeof proceed === 'number'")).toBeLessThan(
+        route.indexOf('confirmedContextWindow: confirmedRemoteContextWindow'),
+      );
+    }
+  });
+
   it('confirms pressure first revealed by Pi final-window verification before retrying', () => {
     const helperStart = chatInputSource.indexOf(
       'const setModelWithFinalWindowConfirmation = useCallback(',
@@ -59,7 +85,7 @@ describe('ChatInput model source switching wiring', () => {
     const guard = chatInputSource.slice(start, end);
     const remoteBlock = guard.indexOf('remoteHostId &&');
     const warningPath = guard.indexOf("verdict.level === 'warn'");
-    const confirmPath = guard.indexOf('return confirmDialog({');
+    const confirmPath = guard.indexOf('const accepted = await confirmDialog({');
 
     expect(remoteBlock).toBeGreaterThan(-1);
     expect(remoteBlock).toBeLessThan(warningPath);

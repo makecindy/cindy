@@ -53,6 +53,7 @@ import {
   isTurnContinuationBoundaryEvent,
 } from '@cindy/maker-shared/turn-continuation';
 import {
+  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
@@ -79,6 +80,10 @@ import {
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
 import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.js';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
+import {
+  assessModelSwitchContext,
+  MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+} from '../../shared/modelSwitchAssessment.js';
 import type { DesktopCommandContext } from '../commands/index.js';
 import { getDesktopCommandRegistry } from '../commands/index.js';
 import {
@@ -14951,6 +14956,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) {
       throwIpcError('INVALID_PARAMS', 'confirmedContextWindow must be a positive integer');
     }
+    const windowConfirmationCapability = (
+      selection as { modelWindowConfirmationCapability?: unknown } | undefined
+    )?.modelWindowConfirmationCapability;
+    const trustedRemoteWindowConfirmation =
+      !isDeviceLinkInvoke() ||
+      (windowConfirmationCapability === CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1 &&
+        deviceLinkInvokeControllerSupports(
+          CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
+        ));
+    if (
+      isDeviceLinkInvoke() &&
+      confirmedContextWindow !== undefined &&
+      !trustedRemoteWindowConfirmation
+    ) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'remote controller cannot confirm a destructive model-window rebuild',
+      );
+    }
     let atomicSelection = selection as
       { effort: SessionRuntimeProfile['effort']; fastMode: boolean } | undefined;
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
@@ -14981,7 +15005,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 状态可封住两种次序：本请求先拿锁时终态写等待并在之后清理 override；终态
       // 先拿锁时旧请求看到非 active，不能在 cleanup 后重新建立 pending/override。
       const [runtimeStatus] = await getDbClient()
-        .drizzle.select({ status: sessions.status, orcaRole: sessions.orcaRole })
+        .drizzle.select({
+          status: sessions.status,
+          orcaRole: sessions.orcaRole,
+          contextTokens: sessions.contextTokens,
+        })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
@@ -15226,6 +15254,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // A destructive native-context rebuild may use only a route-verified window.
         targetContextWindow = verifiedTargetWindow ?? undefined;
         if (
+          isDeviceLinkInvoke() &&
+          confirmedContextWindow !== undefined &&
+          confirmedContextWindow !== targetContextWindow
+        ) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'remote controller confirmation does not match the verified target window',
+          );
+        }
+        if (
           confirmedContextWindow !== undefined &&
           targetContextWindow !== undefined &&
           confirmedContextWindow > targetContextWindow
@@ -15240,6 +15278,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           throwIpcError(
             'PRECONDITION_FAILED',
             'target model context window is unknown; runtime selection was not changed',
+          );
+        }
+        const persistedContextTokens =
+          typeof runtimeStatus.contextTokens === 'number' && runtimeStatus.contextTokens > 0
+            ? runtimeStatus.contextTokens
+            : 0;
+        const liveContextTokens = liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextTokens;
+        const contextTokens =
+          typeof liveContextTokens === 'number' &&
+          Number.isFinite(liveContextTokens) &&
+          (liveContextTokens > 0 || persistedContextTokens === 0)
+            ? liveContextTokens
+            : persistedContextTokens;
+        const remoteTargetAssessment = assessModelSwitchContext({
+          contextTokens,
+          targetContextWindow: verifiedTargetWindow ?? undefined,
+          autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+        });
+        if (
+          isDeviceLinkInvoke() &&
+          remoteTargetAssessment.level === 'overflow' &&
+          (!trustedRemoteWindowConfirmation || confirmedContextWindow !== verifiedTargetWindow)
+        ) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'remote controller must explicitly confirm the verified overflow window',
           );
         }
         if (targetContextWindow > 0) {
@@ -15486,8 +15550,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 recheckTargetPressure: true,
                 confirmedTargetPressure:
                   internalOptions.source !== 'user' ||
-                  isDeviceLinkInvoke() ||
-                  confirmedContextWindow === finalPiWindow,
+                  (trustedRemoteWindowConfirmation &&
+                    confirmedContextWindow === finalPiWindow),
                 onConfirmationRequired: (contextTokens) => {
                   finalPressureContextTokens = contextTokens;
                 },
@@ -15497,6 +15561,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               assertRuntimeOwnerCurrent();
               await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
               restoreControlStores();
+              if (isDeviceLinkInvoke()) {
+                throwIpcError(
+                  'PRECONDITION_FAILED',
+                  'remote controller must confirm the verified final Pi overflow window',
+                );
+              }
               return {
                 ...response,
                 contextWindowConfirmationRequired: finalPiWindow,
