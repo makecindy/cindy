@@ -265,6 +265,9 @@ interface UnconfirmedOpenRetry {
   /** 未配对群副本: 恢复链真正要派 turn 时才提交路由。 */
   commitUnpairedFlat?: () => boolean;
   isUnpairedFlatTakenOver?: () => boolean;
+  /** 双投镜像身份与入站账号代次必须跨延迟恢复链保留。 */
+  mirrorKey?: string;
+  mirrorAccountEpoch?: number;
 }
 
 const unconfirmedOpenRetries = new Map<string, UnconfirmedOpenRetry>();
@@ -424,6 +427,16 @@ async function retryUnconfirmedOpen(
     text: entry.text,
     speaker: { id: entry.senderOpenId, name: '', isOwner: true },
     ...(groupContextLane ? { groupContextLane } : {}),
+    ...(entry.mirrorKey && entry.mirrorAccountEpoch !== undefined
+      ? {
+          finalReplyMirror: {
+            kind: 'parent-chat' as const,
+            chatId: entry.chatId,
+            idempotencyKey: entry.mirrorKey,
+            accountEpoch: entry.mirrorAccountEpoch,
+          },
+        }
+      : {}),
     attachments: entry.attachments,
     unsupported: entry.unsupported,
     raw: entry.raw,
@@ -1617,6 +1630,12 @@ async function processClaimedMessage(
           attempt: 0,
           commitUnpairedFlat,
           isUnpairedFlatTakenOver,
+          ...(finalReplyMirrorKey
+            ? {
+                mirrorKey: finalReplyMirrorKey,
+                mirrorAccountEpoch: outbound.getAccountEpoch(),
+              }
+            : {}),
         });
         return;
       }

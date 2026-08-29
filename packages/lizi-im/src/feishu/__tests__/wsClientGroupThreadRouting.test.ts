@@ -363,6 +363,51 @@ describe('feishu group thread routing', () => {
     vi.useRealTimers();
   });
 
+  it('recovered unconfirmed flat keeps its mirror when the native topic arrives afterward', async () => {
+    vi.useFakeTimers();
+    mocks.openThread
+      .mockResolvedValueOnce({ kind: 'unconfirmed' })
+      .mockResolvedValueOnce({
+        kind: 'opened',
+        messageId: 'om_bot_recovered_committed',
+        threadId: 'omt_bot_recovered_committed',
+      });
+    const events = collectMessages();
+    await connect();
+    const topic = groupTopicMessage('恢复提交后迟到话题', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000008000';
+    topic.message.message_id = 'om_topic_after_recovered_commit';
+    const flat = groupMainFlowMessage(
+      '恢复提交后迟到话题',
+      'om_flat_recovered_committed',
+    ) as { message: Record<string, unknown> };
+    flat.message.create_time = '1788000008000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flatHandling;
+    expect(events).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_bot_recovered_committed');
+    expect(events[0]?.finalReplyMirror).toEqual({
+      kind: 'parent-chat',
+      chatId: 'oc_chat1',
+      idempotencyKey: expect.any(String),
+      accountEpoch: 1,
+    });
+
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+
+    expect(events).toHaveLength(1);
+    expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it('orphaned unpaired flat stays takeable so a late topic still dispatches', async () => {
     vi.useFakeTimers();
     mocks.openThread.mockResolvedValueOnce({
