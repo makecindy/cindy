@@ -271,6 +271,7 @@ describe('feishu group thread routing', () => {
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
       accountEpoch: 1,
+      confirmed: true,
     });
     expect(mocks.openThread).not.toHaveBeenCalled();
   });
@@ -312,6 +313,7 @@ describe('feishu group thread routing', () => {
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
       accountEpoch: 1,
+      confirmed: true,
     });
     expect(mocks.openThread).toHaveBeenCalledTimes(1);
     expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_bot_opener');
@@ -556,6 +558,7 @@ describe('feishu group thread routing', () => {
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
       accountEpoch: 1,
+      confirmed: true,
     });
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
   });
@@ -598,6 +601,7 @@ describe('feishu group thread routing', () => {
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
       accountEpoch: 1,
+      confirmed: true,
     });
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
 
@@ -929,6 +933,7 @@ describe('feishu group thread routing', () => {
       chatId: 'oc_chat1',
       idempotencyKey: expect.any(String),
       accountEpoch: 1,
+      confirmed: true,
     });
     vi.useRealTimers();
   });

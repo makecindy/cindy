@@ -76,6 +76,11 @@ const mocks = vi.hoisted(() => ({
   generateAndPersistFbotTitle: vi.fn(),
   desktopSessionRows: vi.fn(),
   materializeLocalMarkdownImages: vi.fn(),
+  pinAllowedFileRoot: vi.fn(async (root: string) =>
+    root.trim()
+      ? { path: root, canonicalPath: root, dev: 1n, ino: 1n }
+      : null,
+  ),
 }));
 
 vi.mock('../../../logger', () => ({
@@ -173,6 +178,14 @@ vi.mock('../fbotTitle', () => ({
   FBOT_DRAFT_TITLE: 'FBot · New',
   generateAndPersistFbotTitle: mocks.generateAndPersistFbotTitle,
 }));
+
+vi.mock('@cindy/im', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/im')>();
+  return {
+    ...actual,
+    pinAllowedFileRoot: mocks.pinAllowedFileRoot,
+  };
+});
 
 import { createTurnRunner, type ImTurnRunner } from '../turnRunner';
 import {
@@ -1814,7 +1827,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       threadTs: undefined,
     });
     expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
-      { ...mirror, allowedFileRoots: ['F:\\XDMaker'] },
+      {
+        ...mirror,
+        allowedFileRoots: ['F:\\XDMaker'],
+        pinnedFileRoots: [{ path: 'F:\\XDMaker', canonicalPath: 'F:\\XDMaker', dev: 1n, ino: 1n }],
+      },
       ui.agent.credentialBusy,
     );
   });
@@ -2725,6 +2742,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.mirrorFinalReply.mock.calls[0][0]).toEqual({
       ...mirror,
       allowedFileRoots: ['F:\\XDMaker'],
+      pinnedFileRoots: [{ path: 'F:\\XDMaker', canonicalPath: 'F:\\XDMaker', dev: 1n, ino: 1n }],
     });
     expect(String(mocks.feishuIm.mirrorFinalReply.mock.calls[0][1])).toContain('final answer');
   });
@@ -2771,6 +2789,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       {
         ...mirror,
         allowedFileRoots: ['F:\\XDMaker'],
+        pinnedFileRoots: [{ path: 'F:\\XDMaker', canonicalPath: 'F:\\XDMaker', dev: 1n, ino: 1n }],
       },
       expect.stringContaining('here is the image'),
       { mediaAbsPaths: [extraAbsPath] },
@@ -2806,7 +2825,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
     expect(mocks.materializeLocalMarkdownImages).not.toHaveBeenCalled();
     expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
-      { ...mirror, allowedFileRoots: [] },
+      { ...mirror, allowedFileRoots: [], pinnedFileRoots: [] },
       expect.stringContaining('remote final'),
     );
   });

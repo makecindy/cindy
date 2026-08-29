@@ -24,7 +24,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../outbound.js', () => mocks);
 vi.mock('../dualDelivery.js', () => ({
   waitForMirrorConfirmation: vi.fn(async () => true),
-  scheduleMirrorOnConfirmation: vi.fn(),
+  scheduleMirrorOnConfirmation: vi.fn(() => false),
+  releaseMirrorConfirmation: vi.fn(),
 }));
 vi.mock('../moduleScope.js', () => ({
   getLog: () => ({ debug: vi.fn(), error: vi.fn(), warn: vi.fn() }),
@@ -166,6 +167,7 @@ describe('feishu streaming text', () => {
     vi.mocked(waitForMirrorConfirmation).mockResolvedValueOnce(false);
     vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
       run();
+      return true;
     });
     const handle = await start('g/oc_group/omt_topic', undefined, {
       mirrorChatId: 'oc_group',
@@ -179,6 +181,18 @@ describe('feishu streaming text', () => {
       'oc_group',
       expect.anything(),
       `${'c'.repeat(32)}-card`,
+    );
+  });
+
+  it('mirrors immediately when inbound pairing was already confirmed', async () => {
+    await mirrorFinal('oc_group', 'p'.repeat(64), '终态正文', [], [], 1, [], true);
+
+    expect(waitForMirrorConfirmation).not.toHaveBeenCalled();
+    expect(scheduleMirrorOnConfirmation).not.toHaveBeenCalled();
+    expect(mocks.sendCardToChat).toHaveBeenCalledWith(
+      'oc_group',
+      expect.anything(),
+      `${'p'.repeat(32)}-card`,
     );
   });
 
@@ -401,6 +415,7 @@ describe('feishu streaming text', () => {
     let deferred: (() => void) | undefined;
     vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
       deferred = run;
+      return true;
     });
 
     await mirrorFinal('oc_group', 'k'.repeat(64), '终态正文', [], [], 1);
@@ -424,6 +439,7 @@ describe('feishu streaming text', () => {
     let deferred: (() => void) | undefined;
     vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
       deferred = run;
+      return true;
     });
     const handle = await start('g/oc_group/omt_topic', undefined, {
       mirrorChatId: 'oc_group',
@@ -488,6 +504,7 @@ describe('feishu streaming text', () => {
     let deferred: (() => void) | undefined;
     vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
       deferred = run;
+      return true;
     });
     mocks.sendCardToChat.mockRejectedValueOnce(new Error('group unavailable'));
 

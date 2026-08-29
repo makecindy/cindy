@@ -31,7 +31,7 @@ import { parseIncoming } from './incomingContent.js';
 import type { AttachmentRef } from './incomingContent.js';
 import { messages as transportMessages } from './messages.js';
 import { openAllowedOutboundFile } from '../allowedFiles.js';
-import type { OpenedAllowedOutboundFile } from '../allowedFiles.js';
+import type { AllowedOutboundRoot, OpenedAllowedOutboundFile } from '../allowedFiles.js';
 import type {
   IMMessageEvent,
   InteractiveCardSpec,
@@ -930,7 +930,7 @@ export async function sendFile(
 export async function sendFileToChat(
   chatId: string,
   absPath: string,
-  allowedRoots: readonly string[],
+  allowedRoots: readonly AllowedOutboundRoot[],
   displayName: string | undefined,
   uuid: string,
 ): Promise<SendFileResult> {

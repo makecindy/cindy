@@ -4,6 +4,16 @@ import fs from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
+import type { IMPinnedFileRoot } from './types.js';
+
+export type { IMPinnedFileRoot };
+
+export type AllowedOutboundRoot = string | IMPinnedFileRoot;
+
+function allowedRootPath(root: AllowedOutboundRoot): string {
+  return typeof root === 'string' ? root : root.path;
+}
+
 function isPathWithin(
   base: string,
   target: string,
@@ -62,6 +72,34 @@ const defaultFileSystem: AllowedOutboundFileSystem = {
 };
 
 /**
+ * Capture the approved directory identity before an Agent turn. A later
+ * `realpath()` of the same path is not trustable: the Agent can replace the
+ * directory with a symlink/junction whose new target would otherwise look
+ * like the approved root.
+ */
+export async function pinAllowedFileRoot(
+  root: string,
+  fileSystem: AllowedOutboundFileSystem = defaultFileSystem,
+): Promise<IMPinnedFileRoot | null> {
+  if (!root.trim()) return null;
+  try {
+    const rootAbs = path.resolve(root);
+    const canonicalPath = await fileSystem.realpath(rootAbs);
+    const stats = await fileSystem.stat(canonicalPath);
+    if (!stats.isDirectory() || stats.ino === 0n) return null;
+    return { path: rootAbs, canonicalPath, dev: stats.dev, ino: stats.ino };
+  } catch {
+    return null;
+  }
+}
+
+function pinnedRootMatches(root: AllowedOutboundRoot, stats: BigIntStats): boolean {
+  if (typeof root === 'string') return true;
+  if (root.ino === 0n || stats.ino === 0n) return false;
+  return root.dev === stats.dev && root.ino === stats.ino;
+}
+
+/**
  * Open a model-authored attachment only when both its lexical path and the
  * opened file identity stay under a host-approved root.
  *
@@ -73,13 +111,14 @@ const defaultFileSystem: AllowedOutboundFileSystem = {
  */
 export async function openAllowedOutboundFile(
   absPath: string,
-  allowedRoots: readonly string[],
+  allowedRoots: readonly AllowedOutboundRoot[],
   fileSystem: AllowedOutboundFileSystem = defaultFileSystem,
 ): Promise<OpenedAllowedOutboundFile | null> {
   const targetAbs = path.resolve(absPath);
   for (const root of allowedRoots) {
-    if (!root.trim()) continue;
-    const rootAbs = path.resolve(root);
+    const rootPath = allowedRootPath(root);
+    if (!rootPath.trim()) continue;
+    const rootAbs = path.resolve(rootPath);
     if (!isPathWithin(rootAbs, targetAbs, { foldCase: true })) continue;
 
     let handle: FileHandle | null = null;
@@ -96,6 +135,7 @@ export async function openAllowedOutboundFile(
         fileSystem.stat(targetRealBefore),
       ]);
       if (!rootStatBefore.isDirectory() || !targetStatBefore.isFile()) continue;
+      if (!pinnedRootMatches(root, rootStatBefore)) continue;
 
       handle = await fileSystem.open(targetRealBefore);
       const openedStat = await handle.stat({ bigint: true });

@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { openAllowedOutboundFile } from '../allowedFiles.js';
+import { openAllowedOutboundFile, pinAllowedFileRoot } from '../allowedFiles.js';
 
 const tempDirs: string[] = [];
 
@@ -186,4 +186,42 @@ describe('openAllowedOutboundFile', () => {
       }),
     ).resolves.toBeNull();
   });
+
+  it('accepts a pinned root whose live identity still matches', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-pin-ok-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+    const pinned = await pinAllowedFileRoot(root);
+    expect(pinned).not.toBeNull();
+
+    const opened = await openAllowedOutboundFile(allowedFile, [pinned!]);
+    expect(opened?.canonicalPath).toBe(await fs.realpath(allowedFile));
+    await expect(opened?.handle.readFile({ encoding: 'utf8' })).resolves.toBe('report');
+    await opened?.handle.close();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects when a pinned root is replaced by a symlink to an escaped directory',
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-pin-swap-'));
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-pin-outside-'));
+      tempDirs.push(root, outside);
+      const allowedFile = path.join(root, 'report.txt');
+      const escapedFile = path.join(outside, 'secret.txt');
+      await Promise.all([
+        fs.writeFile(allowedFile, 'report'),
+        fs.writeFile(escapedFile, 'secret'),
+      ]);
+      const pinned = await pinAllowedFileRoot(root);
+      expect(pinned).not.toBeNull();
+
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.symlink(outside, root, 'dir');
+
+      await expect(
+        openAllowedOutboundFile(path.join(root, 'secret.txt'), [pinned!]),
+      ).resolves.toBeNull();
+    },
+  );
 });
