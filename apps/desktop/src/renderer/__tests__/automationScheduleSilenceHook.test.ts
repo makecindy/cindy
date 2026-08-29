@@ -3,7 +3,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 
-import { useAutomationScheduleSessionIndex } from '@/features/cc-agent/hooks/useAutomationScheduleSessionIndex';
+import {
+  resetAutomationScheduleOptimisticUnreadForTests,
+  useAutomationScheduleSessionIndex,
+} from '@/features/cc-agent/hooks/useAutomationScheduleSessionIndex';
 import {
   addSessionAttention,
   clearSessionAttentionMany,
@@ -23,6 +26,7 @@ let scheduleEventListener: ((event: SchedulerEvent) => void) | null = null;
 beforeEach(() => {
   scheduleEventListener = null;
   resetSilencedSessionDoneStoreForTests();
+  resetAutomationScheduleOptimisticUnreadForTests();
   vi.stubGlobal('electronAPI', {
     maker: {
       schedule: {
@@ -43,6 +47,7 @@ beforeEach(() => {
 afterEach(() => {
   clearSessionAttentionMany(['session-1']);
   resetSilencedSessionDoneStoreForTests();
+  resetAutomationScheduleOptimisticUnreadForTests();
   vi.unstubAllGlobals();
 });
 
@@ -203,12 +208,25 @@ describe('useAutomationScheduleSessionIndex silence events', () => {
  * 固定时长)都被证明会误判,见 silencedSessionDoneStore 的文件头注释。
  */
 describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
-  function stubApiWithRuns(runs: unknown[], inflightRunIds: string[] = []): void {
+  function stubApiWithRuns(
+    runs: unknown[],
+    inflightRunIds: string[] = [],
+    inflightPolicies: unknown[] = [],
+  ): void {
     vi.stubGlobal('electronAPI', {
       maker: {
         schedule: {
-          listSidebarIndexRuns: vi.fn().mockResolvedValue({ runs, inflightRunIds }),
-          onEvent: vi.fn(() => () => undefined),
+          listSidebarIndexRuns: vi.fn().mockResolvedValue({
+            runs,
+            inflightRunIds,
+            inflightPolicies,
+          }),
+          onEvent: vi.fn((listener: (event: SchedulerEvent) => void) => {
+            scheduleEventListener = listener;
+            return () => {
+              scheduleEventListener = null;
+            };
+          }),
         },
       },
       notificationMarkSessionAttention: vi.fn().mockResolvedValue(undefined),
@@ -507,5 +525,108 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     });
 
     expect(isSessionDoneSilenced('session-1')).toBe(true);
+  });
+
+  it('rebuilds never-built silenced markers from inflight policies', async () => {
+    stubApiWithRuns(
+      [],
+      ['run-live'],
+      [{ runId: 'run-live', sessionId: 'session-1', silenced: true }],
+    );
+
+    renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(isSessionDoneSilenced('session-1')).toBe(true);
+    });
+    expect(isSessionTerminalNotificationOwnedByScheduler('session-1')).toBe(true);
+  });
+
+  it('restores recently-read silent success from the sidebar snapshot', async () => {
+    stubApiWithRuns([
+      indexRun({
+        runId: 'run-fresh',
+        status: 'success',
+        readAt: Date.now() - 500,
+      }),
+    ]);
+
+    renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(isSessionDoneSilenced('session-1')).toBe(true);
+    });
+  });
+
+  it('overlays optimistic unread and points done attention on a visible success', async () => {
+    stubApiWithRuns([
+      indexRun({
+        runId: 'run-old',
+        status: 'success',
+        readAt: 20,
+      }),
+    ]);
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toBeTruthy();
+    });
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'completed',
+        scheduleId: 'schedule-1',
+        runId: 'run-new',
+        sessionId: 'session-1',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.get('session-1')?.unreadRunIds).toContain('run-new');
+    });
+    expect(hasSessionAttention('session-1')).toBe(true);
+  });
+
+  it('overlays failed unread without pointing done, and ignores aborted', async () => {
+    stubApiWithRuns([
+      indexRun({
+        runId: 'run-old',
+        status: 'success',
+        readAt: 20,
+      }),
+    ]);
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toBeTruthy();
+    });
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'failed',
+        scheduleId: 'schedule-1',
+        runId: 'run-aborted',
+        sessionId: 'session-1',
+        error: 'aborted',
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.get('session-1')?.unreadFailedRunIds ?? []).not.toContain('run-aborted');
+    expect(hasSessionAttention('session-1')).toBe(false);
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'failed',
+        scheduleId: 'schedule-1',
+        runId: 'run-failed',
+        sessionId: 'session-1',
+        error: 'boom',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.get('session-1')?.unreadFailedRunIds).toContain('run-failed');
+    });
+    expect(hasSessionAttention('session-1')).toBe(false);
   });
 });

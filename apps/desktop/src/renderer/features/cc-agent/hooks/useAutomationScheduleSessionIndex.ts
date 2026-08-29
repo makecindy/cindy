@@ -4,7 +4,9 @@ import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import {
+  addSessionAttention,
   clearSessionAttention,
+  getSessionAttentionKind,
   hasSessionAttention,
 } from '@/lib/sessionAttentionStore';
 import type { RunLivenessStatus } from '@/lib/silencedSessionDoneStore';
@@ -20,6 +22,8 @@ import {
   MARKER_TERMINAL_LINGER_MS,
   reconcileRunMarkers,
   rememberScheduleRunSessionAttentionBaseline,
+  restoreInflightRunMarkers,
+  restoreRecentlyReadSilentMarkers,
   scheduleClearSchedulerOwnedRun,
   scheduleClearSilencedRun,
 } from '@/lib/silencedSessionDoneStore';
@@ -33,6 +37,54 @@ const log = createLogger('AutomationScheduleSessionIndex');
 /** 侧栏 hook 写入、会话视图只读。避免每个聊天窗再跑一遍全量 listSidebarIndexRuns。 */
 let publishedIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
 const publishedIndexListeners = new Set<() => void>();
+
+type OptimisticUnreadKind = 'success' | 'failed';
+interface OptimisticUnread {
+  sessionId: string;
+  runId: string;
+  kind: OptimisticUnreadKind;
+}
+
+/**
+ * `completed` / `failed` 到 sidebar 快照落地之间的乐观未读。
+ * 不给尚不在 index 的 session 建空 scheduleName stub —— attention 已经够绿/红。
+ */
+const optimisticUnreads = new Map<string, OptimisticUnread>();
+
+export function resetAutomationScheduleOptimisticUnreadForTests(): void {
+  optimisticUnreads.clear();
+}
+
+function rememberOptimisticUnread(
+  sessionId: string,
+  runId: string,
+  kind: OptimisticUnreadKind,
+): void {
+  if (!sessionId || !runId) return;
+  optimisticUnreads.set(runId, { sessionId, runId, kind });
+}
+
+function forgetOptimisticUnreadsPresentInRuns(runIds: Iterable<string>): void {
+  for (const runId of runIds) {
+    optimisticUnreads.delete(runId);
+  }
+}
+
+function applyOptimisticUnreads(next: Map<string, AutomationScheduleSessionInfo>): void {
+  for (const overlay of optimisticUnreads.values()) {
+    const existing = next.get(overlay.sessionId);
+    if (!existing) continue;
+    if (!existing.unreadRunIds.includes(overlay.runId)) {
+      existing.unreadRunIds.push(overlay.runId);
+    }
+    if (overlay.kind === 'failed' && !existing.unreadFailedRunIds.includes(overlay.runId)) {
+      existing.unreadFailedRunIds.push(overlay.runId);
+      existing.latestUnreadFailedRunId = overlay.runId;
+    }
+    existing.hasUnreadRun = existing.unreadRunIds.length > 0;
+    existing.hasUnreadFailedRun = existing.unreadFailedRunIds.length > 0;
+  }
+}
 
 function publishIndex(next: ReadonlyMap<string, AutomationScheduleSessionInfo>): void {
   publishedIndex = next;
@@ -95,8 +147,17 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
     const seq = refreshSeqRef.current + 1;
     refreshSeqRef.current = seq;
     try {
-      const { runs, inflightRunIds } = await loadScheduleSidebarIndexSnapshot();
+      const { runs, inflightRunIds, inflightPolicies } = await loadScheduleSidebarIndexSnapshot();
       if (refreshSeqRef.current !== seq || cancelledRef.current) return;
+
+      forgetOptimisticUnreadsPresentInRuns(runs.map((run) => run.runId));
+      restoreInflightRunMarkers(inflightPolicies, hasSessionAttention);
+      restoreRecentlyReadSilentMarkers(
+        runs,
+        Date.now(),
+        hasSessionAttention,
+        new Set(inflightRunIds),
+      );
 
       // 抑制标记的事件丢失自愈:这份列表包含所有 running run,以及每个 session 的最新
       // 映射和未读终态 run,据它清掉「已终态」和「已不存在」的
@@ -153,6 +214,7 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
           hasUnreadFailedRun: unreadFailedRunIds.length > 0,
         });
       }
+      applyOptimisticUnreads(next);
       setIndex(next);
       publishIndex(next);
       retryAttemptRef.current = 0;
@@ -233,8 +295,22 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
         scheduleClearSilencedRun(event.runId, MARKER_TERMINAL_LINGER_MS);
       } else if (event.type === 'completed') {
         clearSilencedRun(event.runId);
+        if (event.sessionId) {
+          rememberOptimisticUnread(event.sessionId, event.runId, 'success');
+          const kind = getSessionAttentionKind(event.sessionId);
+          if (kind !== 'error' && kind !== 'awaiting') {
+            addSessionAttention(event.sessionId, 'done');
+          }
+        }
       } else if (event.type === 'failed' || event.type === 'deferred') {
         clearSilencedRun(event.runId);
+        if (
+          event.type === 'failed' &&
+          event.sessionId &&
+          event.error !== 'aborted'
+        ) {
+          rememberOptimisticUnread(event.sessionId, event.runId, 'failed');
+        }
       }
       // completed / failed 可能早于 React transition effect 消费终态，延迟清理；
       // deferred / skipped 没有可接管的 session 终态，立即释放，避免误伤后续 turn。

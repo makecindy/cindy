@@ -203,7 +203,9 @@ export function useSessionRunningStatus(
         // silencedSessionDoneStore 的文件头注释。
         const isSilencedDone = !hasError && isSessionDoneSilenced(sessionId);
         // Scheduler 已按 schedule.notify 接管这次终态的桌面 / 飞书通知。这里只
-        // 抑制 callback，侧栏 / Dock attention 仍按普通 done/error 逻辑保留。
+        // 抑制 callback。成功绿点改认 schedule 未读,不再从这条 running→done 点
+        // `done` attention;失败红点仍立即挂。debounce 落地还会再读一次标记,
+        // 免得 silenced 落在 500ms 窗口里。
         const notificationOwnedByScheduler =
           isSessionTerminalNotificationOwnedByScheduler(sessionId);
         // error 立刻处理:队列会被 abort,不存在"下一条自动接着跑"的场景;红角标 +
@@ -252,16 +254,20 @@ export function useSessionRunningStatus(
               cur.hasPendingPermission ||
               cur.hasPendingPlanReview ||
               cur.hasPendingPluginSetup);
+          // silenced 可能在 debounce 窗口内才到:转换当时没静默、进了 debounce,落地必须再读。
+          if (!hasTerminalError && isSessionDoneSilenced(sessionId)) return;
+          const ownedNow = isSessionTerminalNotificationOwnedByScheduler(sessionId);
           if (
             !wasActiveAtCompletion &&
             !isActive &&
             !isRunning &&
             !hasTerminalError &&
-            !stillPending
+            !stillPending &&
+            !ownedNow
           ) {
             addSessionAttention(sessionId, 'done');
           }
-          if (!notificationOwnedByScheduler && !hasTerminalError) {
+          if (!ownedNow && !hasTerminalError) {
             onSessionDoneRef.current?.(sessionId);
           }
         }, QUEUE_DEBOUNCE_MS);
