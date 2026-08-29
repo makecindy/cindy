@@ -1617,8 +1617,9 @@ export function getCindyGhostsMcpDeps(
         }
         const currentTools = currentVisibility.ghost.manifest.tools;
         if (
-          !isGrantOnly &&
-          !(currentTools ?? []).some((candidate) => candidate.name === tool)
+          (!isGrantOnly &&
+            !(currentTools ?? []).some((candidate) => candidate.name === tool)) ||
+          (isGrantOnly && (currentTools ?? []).length === 0)
         ) {
           return {
             ok: false,
@@ -1650,10 +1651,14 @@ export function getCindyGhostsMcpDeps(
       let mergedArgs = args;
       // Runtime setup gate: the shared visibility check above runs before any
       // durable attachment grant, directory ticket, sandbox, card call, or dispatch.
-      // grant_only never dispatches and intentionally ignores its tool field.
+      // grant_only never dispatches and intentionally ignores its tool field, but it
+      // still requires a plugin that declares at least one tool; otherwise the
+      // ghost-grant refs written below would be accepted by ghostCanRead without
+      // any user-approved tool path ever existing.
       if (
-        !grantOnly &&
-        !(target.manifest.tools ?? []).some((candidate) => candidate.name === tool)
+        (!grantOnly &&
+          !(target.manifest.tools ?? []).some((candidate) => candidate.name === tool)) ||
+        (grantOnly && (target.manifest.tools ?? []).length === 0)
       ) {
         return {
           ok: false,

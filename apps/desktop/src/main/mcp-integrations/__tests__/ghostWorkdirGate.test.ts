@@ -1236,6 +1236,25 @@ describe('ghost_call 兜底拒绝', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it('grant_only 对未声明任何工具的插件在任何授权副作用前拒绝', async () => {
+    const file = path.join(outsideDir, 'no-tools-grant-only.png');
+    fs.writeFileSync(file, 'no-tools-grant-only');
+    listMock.mockReturnValue([chipGhost('art', ['tool'], { tools: [] })]);
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'ignored-tool',
+      args: {},
+      attachments: [file],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(ledgerRefs).toEqual([]);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it('普通附件确认期间目标插件消失时不留下持久授权', async () => {
     const file = path.join(outsideDir, 'plugin-removed-during-confirm.png');
     fs.writeFileSync(file, 'plugin-removed-before-commit');
