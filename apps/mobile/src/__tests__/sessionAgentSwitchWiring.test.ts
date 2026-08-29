@@ -53,5 +53,32 @@ describe('session Agent switch UI wiring', () => {
     expect(flatSelector.indexOf('confirmMobileModelWindowSwitch')).toBeLessThan(
       flatSelector.indexOf('maker.setModel'),
     );
+    expect(rowSelector).toContain(
+      'currentSession.contextTokens >= row.model.contextWindow',
+    );
+    expect(flatSelector).toContain(
+      'currentSession.contextTokens >= option.contextWindow',
+    );
+    expect(rowSelector).toContain('contextWindow: confirmedContextWindow');
+    expect(flatSelector).toContain('confirmedOverflow');
+  });
+
+  it('negotiates and sends the append-only model-window confirmation capability', () => {
+    const context = readSource('src/device-link/DeviceLinkContext.tsx');
+    const transport = readSource('src/device-link/mobileMakerTransport.ts');
+    const capabilities = context.slice(
+      context.indexOf('const CONTROLLER_CAPABILITIES = ['),
+      context.indexOf('];', context.indexOf('const CONTROLLER_CAPABILITIES = [')),
+    );
+
+    expect(capabilities).toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
+    expect(context).toContain('capabilities: CONTROLLER_CAPABILITIES');
+    expect(transport).toContain('confirmedContextWindow: confirmedOverflow.contextWindow');
+    expect(transport).toContain(
+      'modelWindowConfirmationCapability:\n                  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1',
+    );
+    expect(transport).toContain(
+      "typeof result?.contextWindowConfirmationRequired === 'number'",
+    );
   });
 });

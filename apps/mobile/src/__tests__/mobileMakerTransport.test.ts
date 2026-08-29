@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   REMOTE_INVOKE_ALLOWLIST,
 } from '@cindy/device-link';
@@ -283,6 +284,49 @@ describe('mobile maker transport', () => {
         args: ['req-1', decision],
       },
     ]);
+  });
+
+  it('adds exact overflow confirmation only to the explicit atomic set-model call', async () => {
+    const { calls, maker } = harness();
+
+    await maker.setModel('s1', 'small-model', undefined, {
+      contextWindow: 200_000,
+      effort: 'high',
+      fastMode: false,
+    });
+
+    expect(calls).toEqual([
+      {
+        deviceId: 'dev-1',
+        channel: 'maker:set-model',
+        args: [
+          's1',
+          'small-model',
+          undefined,
+          undefined,
+          {
+            effort: 'high',
+            fastMode: false,
+            confirmedContextWindow: 200_000,
+            modelWindowConfirmationCapability:
+              CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('fails closed when Pi reveals a new final-window confirmation after set-model', async () => {
+    const invoke: RemoteInvoke = async () => ({
+      deferred: false,
+      contextWindowConfirmationRequired: 272_000,
+      contextTokensForConfirmation: 244_800,
+    }) as never;
+    const maker = createMobileMakerTransport({ deviceId: 'dev-1', invoke });
+
+    await expect(maker.setModel('s1', 'pi-model')).rejects.toThrow(
+      'verified final Pi window requires a new explicit confirmation',
+    );
   });
 
   it('routes runtime controls and queue operations with stable channel names', async () => {

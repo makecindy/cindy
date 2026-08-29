@@ -20,7 +20,10 @@ import {
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   MOBILE_REMOTE_INVOKE_CHANNELS,
 } from '@cindy/maker-shared/device-link-contract';
-import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
+import {
+  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+} from '@cindy/device-link';
 import type {
   MobileGoalLimitsInput,
   MobileGoalStatusPayload,
@@ -425,7 +428,16 @@ export interface MobileMakerTransport {
    * 切模型。可选第 3 参 providerId = 同时切来源(被控端按其路由 + 持久化 provider_id)。
    * 不传 providerId = 老 2 参语义,不动会话当前来源选择。
    */
-  setModel(sessionId: string, model: string, providerId?: string): Promise<void>;
+  setModel(
+    sessionId: string,
+    model: string,
+    providerId?: string,
+    confirmedOverflow?: {
+      contextWindow: number;
+      effort: string;
+      fastMode: boolean;
+    },
+  ): Promise<void>;
   /** 登记跨 Agent 切换意图；真正切换在下一条消息发送时由 desktop main 执行。 */
   switchSessionAgent(
     sessionId: string,
@@ -679,8 +691,35 @@ export function createMobileMakerTransport({
     send: (sessionId, message, createOpts, sendOpts) =>
       call('maker:send', [sessionId, message, createOpts, sendOpts]),
     listActiveSessions: () => call('maker:list-active'),
-    setModel: (sessionId, model, providerId) =>
-      call('maker:set-model', providerId ? [sessionId, model, providerId] : [sessionId, model]),
+    setModel: async (sessionId, model, providerId, confirmedOverflow) => {
+      const result = await call<{ contextWindowConfirmationRequired?: unknown } | undefined>(
+        'maker:set-model',
+        confirmedOverflow
+          ? [
+              sessionId,
+              model,
+              providerId,
+              undefined,
+              {
+                effort: confirmedOverflow.effort,
+                fastMode: confirmedOverflow.fastMode,
+                confirmedContextWindow: confirmedOverflow.contextWindow,
+                modelWindowConfirmationCapability:
+                  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
+              },
+            ]
+          : providerId
+            ? [sessionId, model, providerId]
+            : [sessionId, model],
+      );
+      // Mobile currently confirms only a route-catalog overflow before invoking.
+      // A smaller final Pi window is new pressure, not acceptance of this call.
+      if (typeof result?.contextWindowConfirmationRequired === 'number') {
+        throw new Error(
+          '[PRECONDITION_FAILED] verified final Pi window requires a new explicit confirmation',
+        );
+      }
+    },
     switchSessionAgent: (
       sessionId,
       targetAgentKind,

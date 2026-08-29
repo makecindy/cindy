@@ -8001,18 +8001,36 @@ export default function SessionScreen() {
       return;
     }
     void (async () => {
-      if (
-        (next.model !== currentSession.model || next.providerId !== currentSession.providerId) &&
-        !(await confirmMobileModelWindowSwitch(
+      let confirmedContextWindow: number | undefined;
+      if (next.model !== currentSession.model || next.providerId !== currentSession.providerId) {
+        const confirmed = await confirmMobileModelWindowSwitch(
           currentSession.contextTokens,
           row.model.contextWindow,
           currentSession.remoteHostId,
-        ))
-      ) {
-        return;
+        );
+        if (!confirmed) return;
+        if (
+          !currentSession.remoteHostId &&
+          typeof currentSession.contextTokens === 'number' &&
+          typeof row.model.contextWindow === 'number' &&
+          currentSession.contextTokens >= row.model.contextWindow
+        ) {
+          confirmedContextWindow = row.model.contextWindow;
+        }
       }
       await runControlAction(async () => {
-        await maker.setModel(sessionId, next.model, next.providerId);
+        await maker.setModel(
+          sessionId,
+          next.model,
+          next.providerId,
+          confirmedContextWindow
+            ? {
+                contextWindow: confirmedContextWindow,
+                effort: next.effort || 'medium',
+                fastMode: next.fastMode,
+              }
+            : undefined,
+        );
         if (next.effort && next.effort !== modelSheetSelection.effort) {
           await maker.setEffort(sessionId, next.effort);
         }
@@ -8050,22 +8068,42 @@ export default function SessionScreen() {
     setModelSheetOpen(false);
     if (!canUseRemoteSessionControls || modelSheetAgentKind !== sessionAgentKind) return;
     void (async () => {
-      if (
-        option.id !== currentSession?.model &&
-        !(await confirmMobileModelWindowSwitch(
+      let confirmedContextWindow: number | undefined;
+      if (option.id !== currentSession?.model) {
+        const confirmed = await confirmMobileModelWindowSwitch(
           currentSession?.contextTokens,
           option.contextWindow,
           currentSession?.remoteHostId,
-        ))
-      ) {
-        return;
+        );
+        if (!confirmed) return;
+        if (
+          !currentSession?.remoteHostId &&
+          typeof currentSession?.contextTokens === 'number' &&
+          typeof option.contextWindow === 'number' &&
+          currentSession.contextTokens >= option.contextWindow
+        ) {
+          confirmedContextWindow = option.contextWindow;
+        }
       }
-      await runControlAction(() => maker.setModel(sessionId, option.id), {
+      const confirmedOverflow = confirmedContextWindow
+        ? {
+            contextWindow: confirmedContextWindow,
+            effort:
+              currentSession?.effort && option.efforts.includes(currentSession.effort)
+                ? currentSession.effort
+                : option.defaultEffort ?? option.efforts[0] ?? 'medium',
+            fastMode:
+              modelSheetCapabilities?.hasFastMode === true && option.supportsFastMode
+                ? currentSession?.fastMode === true
+                : false,
+          }
+        : undefined;
+      await runControlAction(() => maker.setModel(sessionId, option.id, undefined, confirmedOverflow), {
         model: option.id,
         ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
       });
     })();
-  }, [agentSwitchIntent, canUseRemoteSessionControls, currentSession, maker, modelSheetAgentKind, runControlAction, sessionAgentKind, sessionId]);
+  }, [agentSwitchIntent, canUseRemoteSessionControls, currentSession, maker, modelSheetAgentKind, modelSheetCapabilities, runControlAction, sessionAgentKind, sessionId]);
   const browseComposerModelAgent = useCallback(async (next: MobileSessionAgentKind) => {
     if (next === modelSheetAgentKind) return true;
     if (next !== sessionAgentKind) {
