@@ -9,6 +9,7 @@ import {
   compensateLightboxOrigin,
   clampLightboxScale,
   clampLightboxTranslation,
+  clampLightboxVisualPan,
   isLightboxZoomed,
   lightboxBackgroundOpacity,
   lightboxContainedSize,
@@ -74,6 +75,18 @@ describe('imageLightboxModel', () => {
     expect(bakeLightboxOrigin(0, 100, LIGHTBOX_DOUBLE_TAP_SCALE)).toBe(-150);
     // 1x 时 origin 项为 0,补偿是空操作
     expect(compensateLightboxOrigin(0, 100, 1)).toBe(0);
+  });
+
+  it('clamps baked visual pan then compensates when origin is nonzero', () => {
+    // origin=0: bake/补偿恒等,与直接钳 raw 相同
+    expect(clampLightboxVisualPan(250, 0, 0, 0, 400, 800, 2, 400, 800)).toEqual({ x: 200, y: 0 });
+    // origin=100, scale=2: visual = T + 100*(1-2) = T-100。T=-200 钳 raw 看似贴边,
+    // 画面却在 -300,越出 overflow 200。只修捏合、不修标注 pan 的半边修法过不了这条。
+    expect(clampLightboxTranslation(-200, 400, 2, 400)).toBe(-200);
+    expect(clampLightboxVisualPan(-200, 0, 100, 0, 400, 800, 2, 400, 800)).toEqual({ x: -100, y: 0 });
+    expect(bakeLightboxOrigin(-100, 100, 2)).toBe(-200);
+    // 画面未越界时 raw 保持不动
+    expect(clampLightboxVisualPan(250, 0, 100, 0, 400, 800, 2, 400, 800)).toEqual({ x: 250, y: 0 });
   });
 
   it('double-tap zooms into the tap point and resets when returning to 1x', () => {

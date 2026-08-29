@@ -131,6 +131,47 @@ export function compensateLightboxOrigin(translate: number, origin: number, scal
 }
 
 /**
+ * 画面中心(bake 后)钳进 contain 边界,再补偿回带 origin 的 raw translate。
+ * origin≠0 时钳 raw 会让画面越出边界,松手 bake 再弹回。origin=0 时 bake/补偿
+ * 是恒等,与直接钳 translate 相同——浏览捏合与标注双指平移共用这一条。
+ */
+export function clampLightboxVisualPan(
+  translateX: number,
+  translateY: number,
+  originX: number,
+  originY: number,
+  containerWidth: number,
+  containerHeight: number,
+  scale: number,
+  displayedWidth: number,
+  displayedHeight: number,
+): { x: number; y: number } {
+  'worklet';
+  return {
+    x: compensateLightboxOrigin(
+      clampLightboxTranslation(
+        bakeLightboxOrigin(translateX, originX, scale),
+        containerWidth,
+        scale,
+        displayedWidth,
+      ),
+      originX,
+      scale,
+    ),
+    y: compensateLightboxOrigin(
+      clampLightboxTranslation(
+        bakeLightboxOrigin(translateY, originY, scale),
+        containerHeight,
+        scale,
+        displayedHeight,
+      ),
+      originY,
+      scale,
+    ),
+  };
+}
+
+/**
  * 双击目标平移:点击点在缩放到 targetScale 后仍停在原处;缩回 1x 时归零。
  */
 export function lightboxDoubleTapTranslate(

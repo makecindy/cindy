@@ -54,6 +54,7 @@ import {
   compensateLightboxOrigin,
   clampLightboxScale,
   clampLightboxTranslation,
+  clampLightboxVisualPan,
   isLightboxZoomed,
   lightboxBackgroundOpacity,
   lightboxContainedSize,
@@ -932,28 +933,20 @@ const LightboxPage = memo(function LightboxPage({
       .onChange((event) => {
         scale.value = clampLightboxScale(savedScale.value * event.scale);
         if (annotating) return;
-        // 钳的是画面中心(bake 后),再补偿回带 origin 的 translate,避免二次捏合
-        // 补偿后的 raw 越出 1x 原点边界、第一帧 clamp 把图弹回去。
-        const visualX = bakeLightboxOrigin(
+        // 画面中心钳制,再补偿回 raw。origin≠0 时不能钳 raw。
+        const next = clampLightboxVisualPan(
           savedTranslateX.value + (event.focalX - startFocalX.value),
-          originX.value,
-          scale.value,
-        );
-        const visualY = bakeLightboxOrigin(
           savedTranslateY.value + (event.focalY - startFocalY.value),
-          originY.value,
-          scale.value,
-        );
-        translateX.value = compensateLightboxOrigin(
-          clampLightboxTranslation(visualX, width, scale.value, displayedW.value),
           originX.value,
-          scale.value,
-        );
-        translateY.value = compensateLightboxOrigin(
-          clampLightboxTranslation(visualY, height, scale.value, displayedH.value),
           originY.value,
+          width,
+          height,
           scale.value,
+          displayedW.value,
+          displayedH.value,
         );
+        translateX.value = next.x;
+        translateY.value = next.y;
       })
       .onFinalize(() => {
         if (!pinchBusy.value) return;
@@ -977,18 +970,21 @@ const LightboxPage = memo(function LightboxPage({
         savedTranslateY.value = translateY.value;
       })
       .onChange((event) => {
-        translateX.value = clampLightboxTranslation(
+        // 标注双指 pan 与 off-center pinch Simultaneous,origin 常非 0;
+        // 浏览单指 pan 的 origin 已 bake 归零,helper 退化为钳 raw。
+        const next = clampLightboxVisualPan(
           translateX.value + event.changeX,
-          width,
-          scale.value,
-          displayedW.value,
-        );
-        translateY.value = clampLightboxTranslation(
           translateY.value + event.changeY,
+          originX.value,
+          originY.value,
+          width,
           height,
           scale.value,
+          displayedW.value,
           displayedH.value,
         );
+        translateX.value = next.x;
+        translateY.value = next.y;
       })
       .onFinalize(() => {
         savedTranslateX.value = translateX.value;
