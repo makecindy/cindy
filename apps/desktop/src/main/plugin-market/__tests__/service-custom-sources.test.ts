@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,6 +35,7 @@ const runtime = vi.hoisted(() => ({
   pendingCalls: false,
   runningErrand: false,
   cindyWork: false,
+  generatedInstallDirs: [] as string[],
   boundaryPending: false,
   pluginApiBaseUrl: 'https://plugin.test.invalid' as string | null,
   session: {
@@ -87,11 +89,41 @@ vi.mock('../../cindy-brain/index.js', () => ({
   installOrUpdateMarketGhostPackage: async (
     filePath: string,
     options: {
-      afterCommitInLock?: (installed: unknown) => void | Promise<void>;
+      afterCommitInLock?: (
+        installed: { manifest: Record<string, unknown>; dir: string },
+        evidence: {
+          rawManifestSha256: string;
+          legacyManifestDigest: string;
+          canonicalManifest: Record<string, unknown>;
+        },
+      ) => void | Promise<void>;
     },
   ) => {
     const installed = await runtime.install(filePath, options);
-    await options.afterCommitInLock?.(installed);
+    let bytes: Buffer;
+    try {
+      bytes = fs.readFileSync(path.join(installed.dir, 'ghost.json'));
+    } catch {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-installed-'));
+      runtime.generatedInstallDirs.push(dir);
+      bytes = Buffer.from(JSON.stringify(installed.manifest));
+      fs.writeFileSync(path.join(dir, 'ghost.json'), bytes);
+      installed.dir = dir;
+      const runtimeGhost = runtime.ghosts.find(
+        (ghost) => ghost.manifest.id === installed.manifest.id,
+      );
+      if (runtimeGhost) runtimeGhost.dir = dir;
+    }
+    await options.afterCommitInLock?.(installed, {
+      rawManifestSha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+      legacyManifestDigest: ghostManifestDigest(
+        ghostManifestToLegacyV2DigestFormat(
+          installed.manifest,
+          JSON.parse(bytes.toString('utf8')) as unknown,
+        ),
+      ),
+      canonicalManifest: installed.manifest,
+    });
     return installed;
   },
   hasPendingGhostCalls: vi.fn(() => runtime.pendingCalls),
@@ -108,7 +140,11 @@ vi.mock('../download.js', () => ({
 import { downloadVerifiedPlugin } from '../download.js';
 import type { VisiblePluginDetail, VisiblePluginSummary } from '@cindy/plugin-protocol';
 
-import { GHOST_ICON_MAX_BYTES, type GhostManifest } from '../../../shared/ghost';
+import {
+  GHOST_ICON_MAX_BYTES,
+  ghostManifestToLegacyV2DigestFormat,
+  type GhostManifest,
+} from '../../../shared/ghost';
 import {
   customMarketPluginId,
   customMarketReleaseId,
@@ -141,6 +177,9 @@ afterEach(() => {
   runtime.pendingCalls = false;
   runtime.runningErrand = false;
   runtime.cindyWork = false;
+  for (const dir of runtime.generatedInstallDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   runtime.boundaryPending = false;
   runtime.pluginApiBaseUrl = 'https://plugin.test.invalid';
   runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
@@ -2185,9 +2224,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
         allowSourceReplacement: true,
       }),
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
-    expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
-      manifestCap: ghostManifest('server-plugin'),
-    });
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('manifestCap');
     expect(h.ledger.installationForGhost('server-plugin')).toMatchObject({
       pluginId: item.id,
       source: 'market',

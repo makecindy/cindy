@@ -281,6 +281,19 @@ export class GhostPanelWindowsController {
 
   // ── 生命周期 ────────────────────────────────────────────────────────
 
+  /**
+   * data owner 真变化时同步销毁旧 owner 的所有独立窗口。
+   * 把既有面板收口回 docked/closed，避免新 owner 失去正常 UI 入口。
+   */
+  closeForOwnerChange(): void {
+    const { windows } = this.deps.settings.read();
+    this.destroyAllWindows();
+    for (const ghostId of Object.keys(windows)) {
+      this.deps.settings.patchEntry(ghostId, { detached: false, lastOpen: false });
+    }
+    this.broadcast();
+  }
+
   /** 主窗口销毁时回收所有隐藏窗口;controller 仍可随下一扇主窗重新预热。 */
   destroyAllWindows(): void {
     for (const [id, slot] of this.slots) {

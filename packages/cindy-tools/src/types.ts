@@ -334,6 +334,7 @@ export type CindyMediaCapability =
 /** 当前 Agent 专用的永久 media 工具与 Host 之间的稳定请求面。插件运行时代码不调用。 */
 export type CindyMediaToolRequest =
   | { action: 'list_models'; capability?: CindyMediaCapability }
+  | { action: 'resolve_local_path'; url: string }
   | {
       action: 'prepare';
       /** 精确执行来源；插件配置返回 providerId 时必须原样传入。 */
@@ -446,6 +447,8 @@ export interface CindyGhostsMcpDeps {
     id: string;
     name: string;
     description?: string;
+    /** 省略时由正式版 Host 使用自身版本；开发构建必须明确填写。 */
+    minCindyVersion?: string;
   }): Promise<CindyForgeScaffoldResult>;
   /**
    * 把一个源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件；

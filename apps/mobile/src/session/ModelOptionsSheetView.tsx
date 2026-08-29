@@ -7,27 +7,40 @@
  * **非选中行** → 写注入记忆(草稿 = draftModelMemory / 会话 = sessionModelMirror 写穿被控端)。
  * effort 点击后停留(可连续调 Fast),返回/把手下拉由浮窗层负责。
  */
-import { Pressable, StyleSheet, Switch, View } from 'react-native';
-import { useTranslation } from 'react-i18next';
-import { Text } from '@/components/AppText';
-import { Check } from 'lucide-react-native';
+import { Pressable, StyleSheet, View } from "react-native";
+import { useTranslation } from "react-i18next";
+import { Text } from "@/components/AppText";
+import { Check } from "lucide-react-native";
+import { NativeSwitch } from "@/platform/chrome";
 
-import type { MobileAgentCapabilities } from '@/session/agentCapabilities';
-import type { MobileModelPricingMap } from '@/device-link/mobileMakerTransport';
-import type { ProviderView } from '@cindy/model-providers/registry';
-import type { AgentKind } from '@cindy/model-providers/types';
-import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
-import { useDraftModelMemoryVersion } from '@/session/draftModelMemory';
-import { useSessionModelMirrorVersion } from '@/session/sessionModelMirror';
+import type { MobileAgentCapabilities } from "@/session/agentCapabilities";
+import type { MobileModelPricingMap } from "@/device-link/mobileMakerTransport";
+import type { ProviderView } from "@cindy/model-providers/registry";
+import type { AgentKind } from "@cindy/model-providers/types";
+import type { MobileModelMemoryAccessors } from "@/session/draftModelMemory";
+import { useDraftModelMemoryVersion } from "@/session/draftModelMemory";
+import { useSessionModelMirrorVersion } from "@/session/sessionModelMirror";
 import {
   buildRowMetaLine,
   effortLabelFor,
   rowEffortOf,
   rowFastOn,
   type PickerRowModel,
-} from '@/session/modelPickerRows';
-import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+} from "@/session/modelPickerRows";
+import {
+  iconSize,
+  iconStroke,
+  useTheme,
+  useThemedStyles,
+  type ThemeColors,
+} from "@/theme";
+import {
+  fontWeight,
+  lineHeight,
+  radius,
+  spacing,
+  typeScale,
+} from "@/theme/tokens";
 
 export interface ModelOptionsSheetViewProps {
   /** 目标行模型(SheetSurface 标题已是 displayName,这里只消费元数据)。 */
@@ -66,9 +79,9 @@ const makeStyles = (c: ThemeColors) =>
     // 与推理强度选项行同一水平内边距(effortOptionRow 的 pill 内距):
     // label 与选项文字左对齐,Switch 与选项行的 Check 右对齐。
     fastRow: {
-      alignItems: 'center',
-      flexDirection: 'row',
-      justifyContent: 'space-between',
+      alignItems: "center",
+      flexDirection: "row",
+      justifyContent: "space-between",
       minHeight: 48,
       paddingHorizontal: spacing.sm,
     },
@@ -88,9 +101,9 @@ const makeStyles = (c: ThemeColors) =>
       paddingTop: spacing.lg,
     },
     effortOptionRow: {
-      alignItems: 'center',
+      alignItems: "center",
       borderRadius: radius.pill,
-      flexDirection: 'row',
+      flexDirection: "row",
       gap: spacing.sm,
       minHeight: 48,
       paddingHorizontal: spacing.sm,
@@ -124,18 +137,23 @@ export function ModelOptionsSheetView({
   fastEditable,
   pricing = null,
   disabled = false,
-  testID = 'modelOptions',
+  testID = "modelOptions",
 }: ModelOptionsSheetViewProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 非选中行的写入落在记忆 store(不回流 props)—— 订阅版本号即时刷新当前值显示。
-  const storeVersion = useDraftModelMemoryVersion() + useSessionModelMirrorVersion();
+  const storeVersion =
+    useDraftModelMemoryVersion() + useSessionModelMirrorVersion();
   void storeVersion;
 
   const metaLine = buildRowMetaLine({
     provider,
-    model: { id: model.id, contextWindow, supportsFastMode: model.supportsFastMode },
+    model: {
+      id: model.id,
+      contextWindow,
+      supportsFastMode: model.supportsFastMode,
+    },
     pricing,
   });
   const currentEffort = rowEffortOf({
@@ -161,30 +179,38 @@ export function ModelOptionsSheetView({
       onChangeSelectedEffort?.(effort);
       return;
     }
-    if (providerId) modelMemory?.setEffort(agentKind, providerId, model.id, effort);
+    if (providerId)
+      modelMemory?.setEffort(agentKind, providerId, model.id, effort);
   };
   const setFast = (enabled: boolean): void => {
     if (selected) {
       void onChangeSelectedFastMode?.(enabled);
       return;
     }
-    if (providerId) modelMemory?.setFast(agentKind, providerId, model.id, enabled);
+    if (providerId)
+      modelMemory?.setFast(agentKind, providerId, model.id, enabled);
   };
 
   const hasEfforts = model.efforts.length > 0;
 
   return (
     <View testID={testID}>
-      {metaLine ? <Text style={styles.metaLine} testID={`${testID}.meta`}>{metaLine}</Text> : null}
+      {metaLine ? (
+        <Text style={styles.metaLine} testID={`${testID}.meta`}>
+          {metaLine}
+        </Text>
+      ) : null}
       {fastEditable ? (
         <View style={styles.fastRow}>
-          <Text style={styles.fastRowLabel}>{t('models.options.fastMode')}</Text>
-          <Switch
-            accessibilityLabel={t('models.options.fastModeAccessibility', { model: displayName })}
+          <Text style={styles.fastRowLabel}>
+            {t("models.options.fastMode")}
+          </Text>
+          <NativeSwitch
+            accessibilityLabel={t("models.options.fastMode")}
             disabled={disabled}
             onValueChange={setFast}
+            seedColor={colors.cta}
             testID={`${testID}.fastToggle`}
-            trackColor={{ false: colors.borderStrong, true: colors.cta }}
             value={fastOn}
           />
         </View>
@@ -192,13 +218,18 @@ export function ModelOptionsSheetView({
       {fastEditable && hasEfforts ? <View style={styles.divider} /> : null}
       {hasEfforts ? (
         <>
-          <Text style={styles.sectionLabel}>{t('models.options.reasoningEffort')}</Text>
+          <Text style={styles.sectionLabel}>
+            {t("models.options.reasoningEffort")}
+          </Text>
           {model.efforts.map((effortId) => {
             const effortSelected = effortId === currentEffort;
             const label = effortLabelFor(model, effortId, capabilities);
             return (
               <Pressable
-                accessibilityLabel={t('models.options.reasoningEffortAccessibility', { label })}
+                accessibilityLabel={t(
+                  "models.options.reasoningEffortAccessibility",
+                  { label },
+                )}
                 accessibilityRole="button"
                 accessibilityState={{ selected: effortSelected, disabled }}
                 disabled={disabled}
@@ -211,9 +242,15 @@ export function ModelOptionsSheetView({
                 ]}
                 testID={`${testID}.effortOption`}
               >
-                <Text numberOfLines={1} style={styles.effortOptionText}>{label}</Text>
+                <Text numberOfLines={1} style={styles.effortOptionText}>
+                  {label}
+                </Text>
                 {effortSelected ? (
-                  <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} />
+                  <Check
+                    color={colors.textPrimary}
+                    size={iconSize.lg}
+                    strokeWidth={iconStroke.medium}
+                  />
                 ) : null}
               </Pressable>
             );

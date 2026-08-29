@@ -1,9 +1,7 @@
 import {
   GHOST_LOCALES,
-  GHOST_MANIFEST_V3_MIN_CINDY_VERSION,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_OAUTH_SCOPES_MAX,
-  compareCindyVersions,
   isValidCindyVersion,
   type GhostLocale,
   type GhostManifestLocales,
@@ -43,7 +41,7 @@ export const GHOST_MANIFEST_MAX_BYTES = 256 * 1024;
 export const GHOST_INSTALL_MANIFEST_MAX_BYTES = 256 * 1024;
 
 /** ghost.json 的 description / whenToUse 字符上限，正本在 plugin-protocol。 */
-export { GHOST_MANIFEST_SUMMARY_MAX_CHARS, GHOST_MANIFEST_V3_MIN_CINDY_VERSION };
+export { GHOST_MANIFEST_SUMMARY_MAX_CHARS };
 
 /** 意识文件扩展名。 */
 export const CINDY_FILE_EXT = '.cindy';
@@ -56,16 +54,17 @@ export const GHOST_SCHEME = 'cindy-ghost';
 
 /**
  * 意识沙箱的 session 分区前缀。无 `persist:` 前缀 = 纯内存分区,熄灯即蒸发。
- * 面板 webview 与离屏沙箱窗口共用同一分区规则(同一意识 = 同一间房)。
+ * Renderer 只用它声明待附加的意识 id；Main 验明当前 owner 后会覆盖成真正的
+ * owner-scoped partition，不能把这里的 claim 当成最终 Electron session 边界。
  */
 export const GHOST_PARTITION_PREFIX = 'cindy-ghost-';
 
-/** 某段意识的 session 分区名。 */
+/** Renderer 的意识 WebView attach claim；Main 放行前会覆盖成 owner 分区。 */
 export function ghostPartition(id: string): string {
   return `${GHOST_PARTITION_PREFIX}${id}`;
 }
 
-/** 从分区名解析意识 id;不是意识分区(或 id 非法)返回 null。 */
+/** 从 Renderer claim 解析意识 id；不是合法 claim 返回 null。 */
 export function parseGhostPartition(partition: unknown): string | null {
   if (typeof partition !== 'string' || !partition.startsWith(GHOST_PARTITION_PREFIX)) return null;
   const id = partition.slice(GHOST_PARTITION_PREFIX.length);
@@ -867,8 +866,10 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   `gh auth token`,不可用时回落到同 key 经 /secrets 保存的 PAT。两种值都
  *   只在 networkSlot 请求 GitHub API 时注入,不进入插件、Renderer、KV 或日志。
  * - 'oidc-token':值 = Cindy 为当前企业 Membership 签发的短时 Connection
- *   JWT。新授权只有当前组织的 Plugin Market organization 安装记录和 manifest
- *   digest 校验通过时才会签发；升级前已有的 agent-forge receipt 保留只读兼容。
+ *   JWT。当前组织的可信市场安装，或企业作者通过 ghost_forge_install 明确安装且
+ *   id 命中本组织登记前缀时可签发；手动导入默认不取得该资格。点名例外：
+ *   ghostId 精确等于 mivo-canvas 的组织成员本地安装，在已装清单声明的精确
+ *   oidc-token host 仅为 mivo-canvas.dsworks.cn 时可签发；其它本地插件、其它精确 host 仍不签发，已有市场记录（含 installed:false）仍走 digest。市场账本损坏不得当成无记录。
  *   Host 根据当前组织和插件 id 推导 audience，插件不能声明或读取。
  *   令牌只在 networkSlot 发请求时注入，且永不进入 Node Worker。
  *
@@ -3730,15 +3731,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   if (raw.minCindyVersion !== undefined && !isValidCindyVersion(raw.minCindyVersion)) {
     return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
   }
-  if (
-    prepared.schemaVersion === 3 &&
-    compareCindyVersions(raw.minCindyVersion as string, GHOST_MANIFEST_V3_MIN_CINDY_VERSION) === -1
-  ) {
-    return {
-      ok: false,
-      reason: `schemaVersion 3 的 minCindyVersion 不能低于 ${GHOST_MANIFEST_V3_MIN_CINDY_VERSION}`,
-    };
-  }
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。
   if (raw.kind !== undefined && raw.kind !== 'chip') {
@@ -6096,10 +6088,24 @@ export function ghostManifestToLegacyV2DigestFormat(
     source.schemaVersion === 2 &&
     Array.isArray(source.slots)
   ) {
-    return withLegacyAuthorSlots({
+    const legacy = withLegacyAuthorSlots({
       ...manifest,
       slots: source.slots.map((slot) => (slot === 'model' ? 'cindy' : slot)),
     });
+    // Reproduce the released v0.1.61 normalized output exactly. Its validator
+    // omitted card unless externalLinks was true, and omitted false agent flags;
+    // current validators may synthesize empty capability objects from slots.
+    const sourceCard = isPlainObject(source.card) ? source.card : null;
+    if (sourceCard?.externalLinks === true) legacy.card = { externalLinks: true };
+    else delete legacy.card;
+    const sourceAgent = isPlainObject(source.agent) ? source.agent : null;
+    const legacyAgent: Record<string, true> = {};
+    for (const field of ['background', 'errand', 'schedule'] as const) {
+      if (sourceAgent?.[field] === true) legacyAgent[field] = true;
+    }
+    if (Object.keys(legacyAgent).length > 0) legacy.agent = legacyAgent;
+    else delete legacy.agent;
+    return legacy;
   }
   return withLegacyAuthorSlots(manifest);
 }

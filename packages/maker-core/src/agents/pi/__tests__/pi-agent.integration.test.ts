@@ -9,6 +9,7 @@
  * (CI / 未装 pi 的环境不红)。
  */
 
+import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import {
   chmodSync,
@@ -262,35 +263,6 @@ function responsesStreamBody(text: string, model: string): string {
   ]);
 }
 
-/** 最小 OpenAI Chat Completions SSE 流：验证 PI 内置模型表的 completions 分配。 */
-function chatCompletionsStreamBody(text: string, model: string): string {
-  return [
-    `data: ${JSON.stringify({
-      id: 'chatcmpl_pi_native_1',
-      object: 'chat.completion.chunk',
-      created: 1,
-      model,
-      choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
-    })}\n\n`,
-    `data: ${JSON.stringify({
-      id: 'chatcmpl_pi_native_1',
-      object: 'chat.completion.chunk',
-      created: 1,
-      model,
-      choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
-    })}\n\n`,
-    `data: ${JSON.stringify({
-      id: 'chatcmpl_pi_native_1',
-      object: 'chat.completion.chunk',
-      created: 1,
-      model,
-      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    })}\n\n`,
-    'data: [DONE]\n\n',
-  ].join('');
-}
-
 /** 让"模型"发起一次工具调用的 SSE 流(stop_reason=tool_use)。 */
 function anthropicToolUseBody(toolName: string, input: Record<string, unknown>): string {
   return sse([
@@ -400,6 +372,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: (request) => {
+        const child = spawn(process.execPath, [request.runnerFile, request.configFile], {
+          cwd: request.cwd,
+          env: request.env,
+          detached: true,
+          windowsHide: true,
+          stdio: 'ignore',
+        });
+        child.unref();
+        return child as never;
+      },
       resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
@@ -670,7 +653,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'uses PI bundled xAI APIs as the baseline for Responses and Chat Completions models',
+    'uses PI bundled xAI Responses API as the baseline for native models',
     { timeout: 60_000 },
     async () => {
       const deps = buildDeps();
@@ -752,8 +735,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await run(
         'itest-native-xai-completions',
         'xai/grok-build-0.1',
-        chatCompletionsStreamBody('pong from xai completions', 'grok-build-0.1'),
-        '/v1/chat/completions',
+        responsesStreamBody('pong from xai responses', 'grok-build-0.1'),
+        '/v1/responses',
       );
     },
   );

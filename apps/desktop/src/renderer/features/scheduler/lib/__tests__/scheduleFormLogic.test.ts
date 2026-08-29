@@ -448,8 +448,11 @@ describe('buildScheduleInput — 非 heartbeat 分支(行为锁定,不动 create
     expect(hasKey(input, 'effort')).toBe(false);
   });
 
-  it('空 providerId 不带 key(= 原生默认来源,no-break);显式值才带', () => {
-    expect(hasKey(buildScheduleInput(makeForm()), 'providerId')).toBe(false);
+  it('空 providerId 恒带 key 且值为 undefined（编辑回原生默认来源 → patch 清列）', () => {
+    const unpinned = buildScheduleInput(makeForm());
+    expect(hasKey(unpinned, 'providerId')).toBe(true);
+    expect(unpinned.providerId).toBeUndefined();
+
     const pinned = buildScheduleInput(makeForm({ providerId: 'anthropic' }));
     expect(pinned.providerId).toBe('anthropic');
   });

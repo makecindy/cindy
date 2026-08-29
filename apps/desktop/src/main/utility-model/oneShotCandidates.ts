@@ -17,7 +17,10 @@ import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.j
 // undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
 import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
-import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import {
+  getActiveCatalog,
+  isXdGatewayPaymentRequiredRoute,
+} from '../maker-host/active-catalog.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
@@ -34,6 +37,34 @@ import type {
 } from '../../shared/utilityTextResult.js';
 
 const log = createLogger('utility-model:one-shot');
+
+const XD_UTILITY_ROUTE_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+
+/**
+ * Utility profiles call the XD chat-completions endpoint directly and therefore
+ * have no Session agent rail. A v5 paid deny on any advertised rail is enough
+ * to block the same gateway model id here; availability is account/model scoped.
+ */
+function isXdUtilityModelPaymentRequired(model: string): boolean {
+  return XD_UTILITY_ROUTE_AGENTS.some((agent) =>
+    isXdGatewayPaymentRequiredRoute(model, agent),
+  );
+}
+
+/**
+ * Shared live entitlement predicate for direct utility consumers. Only XD
+ * LiteLLM routes use the Cindy account catalog; Codex and custom BYOK routes
+ * keep their own credential plane. Organization catalogs are not subject to
+ * personal free/paid gating and arrive as not_applicable with every visible
+ * model available, so they never create this deny state.
+ */
+export function isUtilityRoutePaymentRequired(profile: {
+  transport?: string;
+  model: string;
+}): boolean {
+  return profile.transport === 'litellm-chat-completions'
+    && isXdUtilityModelPaymentRequired(profile.model);
+}
 
 /**
  * 实现了 `Agent.oneShot` 的 agent 集合(当前 claude-code / codex)。PiAgent 继承 BaseAgent
@@ -220,6 +251,15 @@ async function resolveUtilityTextCandidates(
       isModelDisabled(disableOverrides, routeProviderId, profile.model)
     ) {
       log.debug('utility text candidate skipped: disabled in settings', {
+        providerId: routeProviderId,
+        profileId: profile.id,
+        model: profile.model,
+      });
+      attempts.push(skippedAttempt(profile, 'model_unavailable'));
+      continue;
+    }
+    if (isUtilityRoutePaymentRequired(profile)) {
+      log.debug('utility text candidate skipped: paid XD route unavailable', {
         providerId: routeProviderId,
         profileId: profile.id,
         model: profile.model,
@@ -499,6 +539,12 @@ async function requestDefaultUtilityText(
       // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
       // 记 model_unavailable 落到下一候选。
       if (isUtilityRouteDisabled(candidate.profile)) {
+        attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+        continue;
+      }
+      // 前一个 fallback 候选可能运行数十秒；在每个 XD 候选真正执行前重读
+      // owner-scoped v5 deny，避免订阅状态/模型目录刚变化后继续向网关下单。
+      if (isUtilityRoutePaymentRequired(candidate.profile)) {
         attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
         continue;
       }
@@ -1169,6 +1215,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         timeoutMs: opts?.timeoutMs,
         reasoningEffort: opts?.reasoningEffort,
         signal: opts?.signal,
+        routeStillAllowed: () => !isUtilityRoutePaymentRequired(profile),
       }),
     },
   };
@@ -1183,6 +1230,8 @@ async function requestLiteLlmText(input: {
   timeoutMs?: number;
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   signal?: AbortSignal;
+  /** Synchronous owner entitlement fence immediately before the HTTP request. */
+  routeStillAllowed?: () => boolean;
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 20_000;
@@ -1191,6 +1240,9 @@ async function requestLiteLlmText(input: {
   else input.signal?.addEventListener('abort', abortFromParent, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    if (input.routeStillAllowed && !input.routeStillAllowed()) {
+      throw new UtilityTextExecutionError({ reason: 'request_failed' });
+    }
     const response = await undiciFetch(joinProxyPath(input.baseUrl, '/v1/chat/completions'), {
       method: 'POST',
       signal: controller.signal,

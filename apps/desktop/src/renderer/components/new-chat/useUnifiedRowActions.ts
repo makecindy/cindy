@@ -388,6 +388,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       fast: false,
       favoriteUid: null,
       rowModelId: args.anchor.modelId,
+      resetToRecommended: true,
     });
   };
 
@@ -669,11 +670,30 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 推荐档一律取 M1 已解析的那一份(`UnifiedAgentCapability.defaultEffort`,缺省回落
     // 已经在那边应用过),不在这里另推一遍 —— 两处各推必然漂移。
     const defaultEffort = entry.capabilities[recommendedAgent]?.defaultEffort ?? null;
-    // 恢复推荐是把**推荐引擎**那一格收回默认,故按推荐引擎的 wire id 写(与该行当前
-    // 生效引擎的 wire id 可能不是同一个 id)。
+    // 推荐格与当前生效格的 wire id 可能不同；恢复时两格都要删，避免跨引擎残留继续
+    // 被 hasAnyProviderModelOverride 识别成用户配置。
     const recommendedWireId = wireModelIdOf(entry, recommendedAgent);
 
-    /** 「跟随推荐」的持久化部分:删 override + **删掉**推荐引擎那一格的深度 / Fast 记忆。 */
+    const memorySlots = [
+      {
+        agent: config.agent,
+        wireModelId: config.wireModelId ?? anchor.modelId,
+        defaultEffort: entry.capabilities[config.agent]?.defaultEffort ?? null,
+      },
+      {
+        agent: recommendedAgent,
+        wireModelId: recommendedWireId,
+        defaultEffort,
+      },
+    ].filter(
+      (slot, index, slots) =>
+        slots.findIndex(
+          (candidate) =>
+            candidate.agent === slot.agent && candidate.wireModelId === slot.wireModelId,
+        ) === index,
+    );
+
+    /** 「跟随推荐」的持久化部分:删 override + 删掉当前与推荐引擎两格的深度 / Fast 记忆。 */
     const resetStoredConfig = (): void => {
       clearModelEngineOverride(anchor.providerId, anchor.modelId);
       // ★ 删,不是写快照(2026-08-17 review H3)。记忆表是 override 表:表里没有该键
@@ -682,30 +702,48 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // clearModelEngineOverride 的语义(configuration-and-overrides §4)自相矛盾。
       // 没有删除入口的注入方(device-link 被控端镜像:隧道协议没有「删除」那一笔)退回
       // 既有的快照写法,行为与改动前一致。
-      if (modelMemory?.clearEffort) {
-        modelMemory.clearEffort(recommendedAgent, anchor.providerId, recommendedWireId);
-      } else if (defaultEffort) {
-        modelMemory?.setEffort(
-          recommendedAgent,
-          anchor.providerId,
-          recommendedWireId,
-          defaultEffort,
-        );
+      for (const slot of memorySlots) {
+        if (modelMemory?.clearEffort) {
+          modelMemory.clearEffort(slot.agent, anchor.providerId, slot.wireModelId);
+        } else if (slot.defaultEffort) {
+          modelMemory?.setEffort(
+            slot.agent,
+            anchor.providerId,
+            slot.wireModelId,
+            slot.defaultEffort,
+          );
+        }
       }
       // Fast 无条件收回:`config.fast` 是**当前生效引擎**那一格的值,拿它当门会漏掉「行现在
       // 落在 codex(Fast 关),推荐引擎槽里还留着上次开的 Fast」这一路 —— 恢复推荐后行会
-      // 当场翻回带 ⚡ 的样子。清的槽与上面的深度一样按推荐引擎 + 推荐引擎 wire id 走。
+      // 当场翻回带 ⚡ 的样子。当前格与推荐格都按各自 wire id 收回。
       // 记忆表缺省即「关」,所以删除与写 false 的显示等价,但删除不会把「关」固化成用户配置。
-      if (modelMemory?.clearFast) {
-        modelMemory.clearFast(recommendedAgent, anchor.providerId, recommendedWireId);
-      } else {
-        modelMemory?.setFast(recommendedAgent, anchor.providerId, recommendedWireId, false);
+      for (const slot of memorySlots) {
+        if (modelMemory?.clearFast) {
+          modelMemory.clearFast(slot.agent, anchor.providerId, slot.wireModelId);
+        } else {
+          modelMemory?.setFast(slot.agent, anchor.providerId, slot.wireModelId, false);
+        }
       }
     };
 
     // 非 live 行:改的只是「下次选它用什么」,清记忆就够了。
     if (!isLiveRow(entry, config)) {
       resetStoredConfig();
+      return;
+    }
+
+    // 本地/被控端草稿没有会话运行态；即使推荐引擎没变，也必须走草稿整行直通。
+    // 走 effort/Fast live 回调会先把推荐档重新写进记忆并再次打上 tuning custom，随后
+    // resetStoredConfig 虽删掉记忆键，却没有入口撤销草稿层的 custom lock。
+    if (!inSession) {
+      resetStoredConfig();
+      applyDefaultsToDraft({
+        anchor,
+        engine: recommendedEngine,
+        wireModelId: recommendedWireId,
+        effort: defaultEffort,
+      });
       return;
     }
 
@@ -746,14 +784,6 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       });
       return;
     }
-    // 草稿换引擎无损:先落 override / 记忆,再把推荐引擎的整份配置按既有选中链路写回草稿。
-    resetStoredConfig();
-    applyDefaultsToDraft({
-      anchor,
-      engine: recommendedEngine,
-      wireModelId: recommendedWireId,
-      effort: defaultEffort,
-    });
   };
 
   const addFavorite: UnifiedRowActions['addFavorite'] = (anchor, config) => {

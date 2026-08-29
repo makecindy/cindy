@@ -14,6 +14,8 @@ export interface GhostExternalLinkNavigationDeps {
   openExternal(url: string): Promise<void>;
   translate(key: string): string;
   logger: GhostExternalLinkNavigationLogger;
+  /** Captured attach owner is still the committed active owner. */
+  isOwnerActive(): boolean;
 }
 
 export interface GhostExternalLinkNavigationParams {
@@ -39,6 +41,7 @@ async function openExternalBestEffort(
   url: string,
   deps: GhostExternalLinkNavigationDeps,
 ): Promise<void> {
+  if (!deps.isOwnerActive()) return;
   try {
     await deps.openExternal(url);
   } catch (error) {
@@ -61,6 +64,7 @@ export async function runGhostExternalLinkNavigation(
   params: GhostExternalLinkNavigationParams,
   deps: GhostExternalLinkNavigationDeps,
 ): Promise<void> {
+  if (!deps.isOwnerActive()) return;
   const outcome = deps.gate.request({
     ghostId: params.ghostId,
     url: params.url,
@@ -82,6 +86,7 @@ export async function runGhostExternalLinkNavigation(
   const confirmedUrl = outcome.url;
   let shouldOpen = false;
   try {
+    if (!deps.isOwnerActive()) return;
     if (!guestStillBelongsToHost(params.guestContents, params.hostContents)) return;
     const owner = deps.resolveOwner(params.hostContents);
     if (!owner || owner.isDestroyed()) return;
@@ -102,6 +107,7 @@ export async function runGhostExternalLinkNavigation(
         noLink: true,
       }));
     } catch (error) {
+      if (!deps.isOwnerActive()) return;
       deps.logger.warn('ghost external link confirmation failed', {
         ghostId: params.ghostId,
         error: errorMessage(error),
@@ -109,6 +115,7 @@ export async function runGhostExternalLinkNavigation(
       return;
     }
     if (response !== 0) return;
+    if (!deps.isOwnerActive()) return;
     if (!guestStillBelongsToHost(params.guestContents, params.hostContents)) return;
     if (owner.isDestroyed()) return;
     if (!deps.gate.isGhostAvailable(params.ghostId)) return;

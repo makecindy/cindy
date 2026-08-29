@@ -363,13 +363,11 @@ export interface CodexExtraSpawnConfig {
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   codexProxyActive?: boolean;
   /**
-   * spawn args 中定义的「OpenAI 身份」provider id(name 逐字为 "OpenAI",
-   * codex 据 name 判定 supports_remote_compaction)。仅 oauth-bearer spawn 下发。
-   * CodexAgent 只对 ChatGPT 订阅直连路由的 thread 在 thread/start|resume 传
-   * modelProvider=该 id,启用 OpenAI 远端压缩;其余 thread 保持默认 provider
-   * (本地压缩)—— 网关 / xAI / 自定义供应商上游不实现远端压缩,错配是硬失败。
+   * ChatGPT 订阅直连的内部 OpenAI transport identity，仅 oauth-bearer spawn 下发。
    */
   codexRemoteCompactionProviderId?: string;
+  /** Cindy Provider codex/* 的内部 OpenAI transport identity；固定走 HTTP。 */
+  codexCindyRemoteCompactionProviderId?: string;
 }
 
 export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
@@ -475,6 +473,27 @@ export interface PiExtensionUiStrings {
   mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
 }
 
+export interface PiSubagentRunnerProcess {
+  readonly pid?: number;
+  readonly killed: boolean;
+  once(event: 'spawn', listener: () => void): this;
+  once(event: 'error', listener: (error: Error) => void): this;
+  once(
+    event: 'exit' | 'close',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): this;
+  kill(signal?: NodeJS.Signals): boolean;
+}
+
+export interface PiSubagentRunnerLaunchRequest {
+  runId: string;
+  runDir: string;
+  runnerFile: string;
+  configFile: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}
+
 export interface AgentDeps {
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
@@ -549,6 +568,15 @@ export interface AgentDeps {
    * interaction surfaces, so maker-core never hard-codes one UI language.
    */
   getPiExtensionUiStrings?: () => PiExtensionUiStrings;
+
+  /**
+   * Pi-only: start a durable Subagent runner through a host-supported Node
+   * process boundary. Desktop injects Electron utilityProcess; maker-core never
+   * assumes that the application executable can run JavaScript.
+   */
+  spawnPiSubagentRunner?: (
+    request: PiSubagentRunnerLaunchRequest,
+  ) => PiSubagentRunnerProcess;
 
   /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new
@@ -1645,6 +1673,8 @@ export interface AgentSessionHandle {
    * 这是 thread 级冻结身份，不随 thread/settings/update 的模型切换改变。
    */
   readonly codexThreadModelProviderId?: string;
+  /** Codex-only: 当前 host 的独立 Subagent 路由是否兼容 Cindy Codex 远程压缩。 */
+  readonly codexCindyRemoteCompactionCompatible?: boolean;
   /**
    * Codex-only: start/resume 成功后,产品 prompt 这一次到底有没有进入
    * codex thread history。Maker 用这个事实更新 host 持久化 bit,避免再从
@@ -1827,6 +1857,8 @@ export interface AgentSessionHandle {
 
   /** 当前 maker 进程内记录的 Fast mode 状态；不支持的 agent 不实现。 */
   getFastMode?(): boolean;
+  /** 当前 maker 进程内记录的思考强度；固定强度模型可返回 null。 */
+  getEffort?(): Effort | null;
 
   // ── Rewind ────────────────────────────────────────────────────────────────
   // Claude 走 SDK message uuid + file checkpoint；Codex 走 app-server thread/rollback

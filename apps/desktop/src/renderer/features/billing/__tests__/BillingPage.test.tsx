@@ -14,9 +14,17 @@ const i18n = {
 };
 
 const uiMocks = vi.hoisted(() => ({
+  clipboardWriteText: vi.fn(),
   confirm: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+}));
+
+const modelCatalogMocks = vi.hoisted(() => ({
+  refreshBuiltinProviderModels: vi.fn(async () => ({
+    ok: true as const,
+    providerId: 'xd' as const,
+  })),
 }));
 
 const authState = vi.hoisted(() => ({ dataOwnerId: 'account-fixture' as string | null }));
@@ -103,9 +111,15 @@ import { BillingPage } from '../BillingPage';
 import * as QRCode from 'qrcode';
 
 beforeEach(() => {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: uiMocks.clipboardWriteText },
+  });
+  uiMocks.clipboardWriteText.mockReset().mockResolvedValue(undefined);
   uiMocks.confirm.mockReset().mockResolvedValue(false);
   uiMocks.toastError.mockReset();
   uiMocks.toastSuccess.mockReset();
+  modelCatalogMocks.refreshBuiltinProviderModels.mockClear();
   authState.dataOwnerId = 'account-fixture';
   routerState.search = '';
 });
@@ -382,6 +396,9 @@ describe('BillingPage remote catalog rendering', () => {
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
+        },
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
         },
         openExternal: vi.fn(),
       },
@@ -684,7 +701,7 @@ describe('BillingPage remote catalog rendering', () => {
     expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
   });
 
-  it('refreshes the balance once and shows no recovery action when a top-up succeeds', async () => {
+  it('refreshes the balance and XD models once when a top-up succeeds', async () => {
     const pendingOrder = {
       orderId: 'order_paid',
       productCode: 'credit_topup',
@@ -725,6 +742,42 @@ describe('BillingPage remote catalog rendering', () => {
 
     view.rerender(<BillingPage />);
     expect(getBalance).toHaveBeenCalledTimes(2);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-refreshes the XD model catalog once when a subscription becomes active', async () => {
+    const pendingSubscription = {
+      subscriptionId: 'subscription_pending',
+      status: 'INCOMPLETE' as const,
+      currentPeriodStartAt: null,
+      currentPeriodEndAt: null,
+      entitlementValidUntil: null,
+      cancelAtPeriodEnd: false,
+      effectivePlan: null,
+      purchaseAttemptId: 'attempt_subscription',
+      paymentAction: null,
+    };
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'SUBSCRIPTION',
+      phase: 'AWAITING_PAYMENT',
+      subscription: pendingSubscription,
+    });
+    const view = render(<BillingPage />);
+    await waitFor(() => expect(window.electronAPI.billing.getBalance).toHaveBeenCalledTimes(1));
+
+    Object.assign(checkout.state, {
+      phase: 'COMPLETED',
+      subscription: { ...pendingSubscription, status: 'ACTIVE' as const },
+    });
+    view.rerender(<BillingPage />);
+
+    await waitFor(() =>
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd'),
+    );
+    view.rerender(<BillingPage />);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('switches to the expired hint once the server stops issuing the payment action', async () => {
@@ -1786,7 +1839,13 @@ describe('BillingPage plan change', () => {
   const install = (billing: ReturnType<typeof billingMocks>) => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
-      value: { billing, openExternal: vi.fn() },
+      value: {
+        billing,
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
+        },
+        openExternal: vi.fn(),
+      },
     });
     return billing;
   };
@@ -1847,11 +1906,14 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
 
     await act(async () => resolvePortal({ success: true }));
     await act(async () => window.dispatchEvent(new Event('focus')));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes billing after a timed-out Stripe portal launch', async () => {
@@ -1874,7 +1936,9 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('does not show Stripe management in the menu for an Alipay subscription', async () => {
@@ -2180,6 +2244,7 @@ describe('BillingPage plan change', () => {
     // APPLIED refreshes subscription, catalog, and balance exactly once more.
     await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
   });
 
   it('quotes the selected same-Product monthly Offer', async () => {
@@ -2766,28 +2831,102 @@ describe('BillingPage order history', () => {
           listOrders,
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
+        },
         openExternal: vi.fn(),
       },
     });
     return listOrders;
   };
 
-  it('lists the most recent orders with amount, id and status', async () => {
-    install([order()]);
+  it('lists the most recent orders with amount, masked id and status', async () => {
+    const fullOrderId = 'c2309a98-d776-4ad9-99b3-418951f13c7f';
+    install([order({ orderId: fullOrderId })]);
 
     render(<BillingPage />);
 
     expect(await screen.findByText('billing.orders.title')).toBeTruthy();
     expect(screen.getByText('billing.orders.count:{"count":1}')).toBeTruthy();
     expect(screen.getByText('billing.orders.description')).toBeTruthy();
-    // 订单号截断展示、完整值挂 title(客服场景要能复制全长)。
-    expect(screen.getByText('billing.orders.orderId:{"id":"ord_8f21"}').title).toBe(
-      'ord_8f21c4de9a',
-    );
+    // 展示首尾并固定脱敏中段，不把完整订单号写进可见文本或原生 title。
+    const orderIdButton = screen.getByRole('button', {
+      name: 'billing.orders.copy.action:{"id":"c2309a98****51f13c7f"}',
+    });
     expect(
-      screen.getByText(new Intl.NumberFormat('en', { style: 'currency', currency: 'CNY' }).format(33)),
+      within(orderIdButton).getByText('billing.orders.orderId:{"id":"c2309a98****51f13c7f"}'),
+    ).toBeTruthy();
+    expect(orderIdButton.getAttribute('title')).toBeNull();
+    expect(screen.queryByText(`billing.orders.orderId:{"id":"${fullOrderId}"}`)).toBeNull();
+    expect(orderIdButton.querySelector('svg')).toBeTruthy();
+    expect(
+      screen.getByText(
+        new Intl.NumberFormat('en', { style: 'currency', currency: 'CNY' }).format(33),
+      ),
     ).toBeTruthy();
     expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
+  });
+
+  it('copies the complete order id from both the id text and copy icon', async () => {
+    const fullOrderId = 'c2309a98-d776-4ad9-99b3-418951f13c7f';
+    install([order({ orderId: fullOrderId })]);
+
+    render(<BillingPage />);
+
+    const orderIdButton = await screen.findByRole('button', {
+      name: 'billing.orders.copy.action:{"id":"c2309a98****51f13c7f"}',
+    });
+    const maskedText = within(orderIdButton).getByText(
+      'billing.orders.orderId:{"id":"c2309a98****51f13c7f"}',
+    );
+    const copyIcon = orderIdButton.querySelector('svg');
+    expect(copyIcon).toBeTruthy();
+
+    fireEvent.click(maskedText);
+    await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith(fullOrderId));
+    expect(uiMocks.toastSuccess).toHaveBeenCalledWith('billing.orders.copy.success');
+
+    uiMocks.clipboardWriteText.mockClear();
+    fireEvent.click(copyIcon!);
+    await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith(fullOrderId));
+  });
+
+  it('masks short ids, distinguishes copy targets and keeps the control shrinkable', async () => {
+    const shortOrderId = 'ord_8f21c4de9a';
+    const otherOrderId = '1234567890abcdefghi';
+    install([order({ orderId: shortOrderId }), order({ orderId: otherOrderId })]);
+
+    render(<BillingPage />);
+
+    const shortOrderButton = await screen.findByRole('button', {
+      name: 'billing.orders.copy.action:{"id":"ord_8f****c4de9a"}',
+    });
+    expect(
+      within(shortOrderButton).getByText('billing.orders.orderId:{"id":"ord_8f****c4de9a"}'),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', {
+        name: 'billing.orders.copy.action:{"id":"12345678****bcdefghi"}',
+      }),
+    ).toBeTruthy();
+    expect(shortOrderButton.className).toContain('max-w-full');
+    expect(shortOrderButton.querySelector('span')?.className).toContain('break-all');
+  });
+
+  it('explains how to recover when copying an order id fails', async () => {
+    uiMocks.clipboardWriteText.mockRejectedValueOnce(new Error('clipboard denied'));
+    install([order()]);
+
+    render(<BillingPage />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'billing.orders.copy.action:{"id":"ord_8f****c4de9a"}',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(uiMocks.toastError).toHaveBeenCalledWith('billing.orders.copy.failed'),
+    );
   });
 
   it('asks the server for exactly the ten most recent orders', async () => {

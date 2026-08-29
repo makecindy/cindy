@@ -1154,6 +1154,12 @@ describe('new session model', () => {
     const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
     // 拉被控端 runtime 注册集合,渲染按可用集过滤,选中不可用时 coerce。
     expect(newSource).toContain('maker.listAvailableAgents()');
+    expect(newSource).toContain('onAgentsChanged');
+    expect(newSource).toContain('evictAgentCapabilitiesForDevice(deviceId);');
+    expect(newSource).toContain('const rosterRecoveryIdentityRef = useRef<');
+    expect(newSource).toContain('setAvailableAgentRosterRefreshNonce((value) => value + 1);');
+    expect(newSource).toContain('previous.connectionEpoch === connectionEpoch');
+    expect(newSource.match(/subscribe\(`new-session:\$\{selectedDeviceId\}`/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
     expect(newSource).toContain('availableNewSessionAgentOptions(availableAgentKinds).map');
     expect(newSource).toMatch(/availableAgentKinds\.has\(draft\.agentKind\)/);
     // 传输层 passthrough 到 allowlisted channel。

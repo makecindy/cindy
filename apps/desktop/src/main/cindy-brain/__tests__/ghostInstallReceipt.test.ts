@@ -229,7 +229,7 @@ describe('GhostInstallReceiptStore cleanup', () => {
     });
   });
 
-  it('preserves only the legacy Forge origin as an effective authorization fact', async () => {
+  it('recognizes only the Host-owned Forge origin as an effective authorization fact', async () => {
     await store.write(
       createGhostInstallReceipt({
         ...createSetupReceipt(),
@@ -242,6 +242,29 @@ describe('GhostInstallReceiptStore cleanup', () => {
     if (read.state !== 'approved') return;
     expect(effectiveInstallOrigin(read.receipt)).toBe('agent-forge');
     expect(effectiveInstallOrigin({ installOrigin: 'future-origin' })).toBe('manual');
+  });
+
+  it('reads receipts through a state-root path with a linked ancestor', async () => {
+    const realRoot = path.join(workDir, 'real-state');
+    const linkedRoot = path.join(workDir, 'linked-state');
+    await fs.promises.mkdir(realRoot);
+    try {
+      await fs.promises.symlink(
+        realRoot,
+        linkedRoot,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch {
+      return;
+    }
+    const linkedStore = new GhostInstallReceiptStore(
+      () => linkedRoot,
+      async () => {},
+    );
+
+    await linkedStore.write(createSetupReceipt());
+
+    expect(linkedStore.read('hello')).toMatchObject({ state: 'approved' });
   });
 
   it('treats only a missing migration marker as absent', () => {

@@ -78,6 +78,15 @@ const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
 ]);
 /** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
 const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;
+/** 单个 peer 的路由账本上限；满时拒绝新发送，绝不淘汰仍可能收到错误的旧记录。 */
+const MAX_OUTBOUND_ROUTE_IDS_PER_PEER = 1_024;
+/** 全 client 的硬上限；达到后同样以背压停发，不用别的 peer 的记录换空间。 */
+const MAX_OUTBOUND_ROUTE_IDS_TOTAL = 16_384;
+/** 同一逻辑帧跨 link generation 的记录上限；同代重发用计数压缩。 */
+const MAX_OUTBOUND_ROUTE_GENERATION_RUNS_PER_ID = 256;
+/** 已结算记录不占发送额度；仅保留近期代次供迟到 relay-error 归属。 */
+const MAX_SETTLED_OUTBOUND_ROUTE_IDS_PER_PEER = 1_024;
+const MAX_SETTLED_OUTBOUND_ROUTE_IDS_TOTAL = 16_384;
 
 /**
  * 该 push channel 是否属于可驱逐档(latest-wins 腾位的唯一判据入口)。
@@ -384,6 +393,8 @@ export interface DeviceLinkPeerRouteStateChanged {
   deviceId: string;
   state: 'offline';
   connectionEpoch: number;
+  /** 本地已接受的 peer link 代次；同一 WebSocket 内重开也会递增。 */
+  linkGeneration: number;
 }
 
 /**
@@ -420,6 +431,8 @@ interface PendingRequest {
   dst?: string;
   /** 可靠 invoke 未 ACK 时可跨 relay 短断线继续等；其它请求立即失败。 */
   reliableDst?: string;
+  /** 请求真正发出时所属的 peer link 代次，供迟到 relay-error 归属。 */
+  linkGeneration?: number;
 }
 
 interface PendingReliableMessage {
@@ -522,6 +535,8 @@ interface PeerTransportState {
   pushAdmissionDropCount: number;
   /** 上次输出 latest-wins 驱逐告警的单调时刻;0 表示从未输出。 */
   pushAdmissionDropLogAt: number;
+  /** 同一 relay WebSocket 内每次接受 link-open/link-accept 都递增。 */
+  linkGeneration: number;
 }
 
 interface PendingInboundLinkOffer {
@@ -632,7 +647,24 @@ export class DeviceLinkClient {
     (change: DeviceLinkPeerRouteStateChanged) => void
   >();
   /** Avoid emitting the same authoritative route failure once per queued frame. */
-  private peerOfflineNotifiedEpoch = new Map<string, number>();
+  private peerOfflineNotifiedGeneration = new Map<
+    string,
+    { connectionEpoch: number; linkGeneration: number }
+  >();
+  /**
+   * relay-error 回带原帧 id；据此把迟到错误归回消息发出时的 peer link 代次。
+   * 未决记录受硬上限保护并参与发送背压；成功确认后直接释放，无法确认交付的
+   * best-effort / 超时帧移入不占发送额度的近期历史，迟到错误仍能按原代次归属。
+   * 跨 socket 时由 resetLinkStateForReconnect 清空；两份账本都不进入 wire protocol。
+   */
+  private outboundRouteGenerationByPeer = new Map<
+    string,
+    Map<string, Array<{ linkGeneration: number; count: number }>>
+  >();
+  private settledOutboundRouteGenerationByPeer = new Map<
+    string,
+    Map<string, Array<{ linkGeneration: number; count: number }>>
+  >();
 
   constructor(opts: DeviceLinkClientOptions) {
     this.opts = opts;
@@ -857,6 +889,11 @@ export class DeviceLinkClient {
     return this.connEpoch;
   }
 
+  /** Current accepted link generation for one peer within the WebSocket lifecycle. */
+  getPeerLinkGeneration(deviceId: string): number {
+    return this.peerTransport.get(deviceId)?.linkGeneration ?? 0;
+  }
+
   /** Subscribe to typed peer route lifecycle changes (currently authoritative offline). */
   onPeerRouteStateChanged(
     cb: (change: DeviceLinkPeerRouteStateChanged) => void,
@@ -880,14 +917,24 @@ export class DeviceLinkClient {
     return () => this.presenceHandlers.delete(cb);
   }
 
-  private notifyPeerRouteOffline(deviceId: string): void {
-    if (this.peerOfflineNotifiedEpoch.get(deviceId) === this.connEpoch) return;
-    this.peerOfflineNotifiedEpoch.set(deviceId, this.connEpoch);
+  private notifyPeerRouteOffline(deviceId: string, linkGeneration: number): void {
+    const notified = this.peerOfflineNotifiedGeneration.get(deviceId);
+    if (
+      notified?.connectionEpoch === this.connEpoch
+      && notified.linkGeneration === linkGeneration
+    ) {
+      return;
+    }
+    this.peerOfflineNotifiedGeneration.set(deviceId, {
+      connectionEpoch: this.connEpoch,
+      linkGeneration,
+    });
     if (this.peerRouteStateHandlers.size === 0) return;
     const change: DeviceLinkPeerRouteStateChanged = {
       deviceId,
       state: 'offline',
       connectionEpoch: this.connEpoch,
+      linkGeneration,
     };
     for (const cb of this.peerRouteStateHandlers) {
       try {
@@ -898,8 +945,11 @@ export class DeviceLinkClient {
     }
   }
 
-  private markPeerRouteOnline(deviceId: string): void {
-    this.peerOfflineNotifiedEpoch.delete(deviceId);
+  private markPeerRouteOnline(deviceId: string, linkGeneration?: number): number {
+    const peer = this.getPeerTransport(deviceId);
+    peer.linkGeneration = linkGeneration ?? peer.linkGeneration + 1;
+    this.peerOfflineNotifiedGeneration.delete(deviceId);
+    return peer.linkGeneration;
   }
 
   /** 订阅入站隧道帧(invoke / link-open / link-close / push / 未配对的响应帧) */
@@ -1055,7 +1105,7 @@ export class DeviceLinkClient {
     // 已经清掉的可靠 pending 也绝不能在下一次 openLink 后复活。
     if (this.status !== 'online') return;
     try {
-      this.sendEnvelope({
+      this.sendBestEffortRoutedEnvelope({
         v: PROTOCOL_VERSION,
         kind: 'link-close',
         dst,
@@ -1088,7 +1138,7 @@ export class DeviceLinkClient {
     // 超过单帧上限的大 result 只能靠可靠层分片,回落入队等 link 重建。
     if (peer?.reliable && !this.isPeerSendReady(peer) && this.status === 'online') {
       try {
-        this.sendEnvelope(env);
+        this.sendBestEffortRoutedEnvelope(env);
         peer.unlinkedLegacyResponseIds.delete(requestId);
         return;
       } catch (err) {
@@ -1124,7 +1174,8 @@ export class DeviceLinkClient {
     if (peerSupportsReliable) {
       this.dropDiscardablePendingPrefix(dst, peer, false, 'before link re-establishment replay');
     }
-    this.sendEnvelope({
+    const linkGeneration = peer.linkGeneration + 1;
+    const linkAcceptId = this.sendRoutedEnvelope({
       v: PROTOCOL_VERSION,
       kind: 'link-accept',
       id: requestId,
@@ -1144,8 +1195,13 @@ export class DeviceLinkClient {
             }
           : {}),
       },
-    });
-    this.markPeerRouteOnline(dst);
+    }, linkGeneration);
+    this.markPeerRouteOnline(dst, linkGeneration);
+    if (!peerSupportsLinkConfirm && linkAcceptId) {
+      // 旧端没有可等待的 confirmation；accept 是不可重放的单次控制帧，发送后
+      // 不把它变成永久历史配额；近期迟到错误仍可按原代次归属。
+      this.settleOutboundRouteAttemptsForId(dst, linkAcceptId);
+    }
     if (matchingOffer) {
       this.pendingInboundLinkOffers.delete(dst);
       this.setPeerCapabilities(
@@ -1182,7 +1238,12 @@ export class DeviceLinkClient {
       ...(ownerStamp ? { ownerStamp } : {}),
     };
     if (channel === DEVICE_LINK_TRANSPORT_ACK_CHANNEL) {
-      this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: pushPayload });
+      this.sendBestEffortRoutedEnvelope({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        dst,
+        payload: pushPayload,
+      });
       return;
     }
     this.sendPeerEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: pushPayload });
@@ -1236,6 +1297,7 @@ export class DeviceLinkClient {
     return new Promise<Envelope>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        if (env.dst) this.settleOutboundRouteAttemptsForId(env.dst, id);
         if (env.dst && env.kind === 'invoke') this.dropReliablePendingForRequest(env.dst, id);
         logFinished('timeout');
         reject(new DeviceLinkError('INVOKE_TIMEOUT', `no ${expectKind} within ${timeout}ms`));
@@ -1255,6 +1317,7 @@ export class DeviceLinkClient {
         timer,
         expectKind,
         dst: env.dst,
+        linkGeneration: env.dst ? this.getPeerLinkGeneration(env.dst) : undefined,
       });
 
       try {
@@ -1266,7 +1329,7 @@ export class DeviceLinkClient {
             if (pending) pending.reliableDst = outbound.dst;
           }
         } else {
-          this.sendEnvelope(outbound);
+          this.sendRoutedEnvelope(outbound);
         }
       } catch (err) {
         this.pending.delete(id);
@@ -1479,6 +1542,10 @@ export class DeviceLinkClient {
   private resetLinkStateForReconnect(): void {
     // hello 会从 host 读取完整最新状态；旧连接上尚未发出的覆盖型 patch 不跨世代重放。
     this.clearPendingPresence();
+    // 旧 socket 的 relay-error 已被 connection epoch 守卫隔离，不可能再合法到达；
+    // 保留它的物理发送记录只会让新连接重放产生的错误先消费旧代次，误判为 stale。
+    this.outboundRouteGenerationByPeer.clear();
+    this.settledOutboundRouteGenerationByPeer.clear();
     for (const peer of this.peerTransport.values()) {
       this.markPeerLinkDown(peer);
       peer.recoveryNeedsAck = true;
@@ -1902,7 +1969,17 @@ export class DeviceLinkClient {
               'outbound-accept',
             );
             const peer = this.getPeerTransport(env.src);
-            this.markPeerRouteOnline(env.src);
+            const acceptedLinkGeneration = this.markPeerRouteOnline(env.src);
+            // 这是本机先发送 link-open、对端收到后才可能返回的 accept。relay 对同一
+            // 来源连接严格按发送顺序处理，因此任何更早物理发送若会产生 route error，
+            // 错误必然排在这次 accept 之前；走到这里仍无错误的旧代记录就是已成功路由
+            // 但未收到 transport ACK 的尝试。重放前清掉它们，避免当前代真实错误被
+            // FIFO 错归给旧代。入站 link-open 的 sendLinkAccept 当下来自另一条来源
+            // 连接、尚不具备此屏障；仅新版 confirmation ACK 到达后再做同类清理。
+            this.discardOutboundRouteAttemptsBeforeGeneration(
+              env.src,
+              acceptedLinkGeneration,
+            );
             peer.outboundExplicitlyClosed = false;
             // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能
             // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
@@ -1921,6 +1998,7 @@ export class DeviceLinkClient {
               }
             }
           }
+          if (p.dst && env.id) this.discardOutboundRouteAttemptsForId(p.dst, env.id);
           this.pending.delete(env.id!);
           p.resolve(env);
           return true;
@@ -1935,21 +2013,50 @@ export class DeviceLinkClient {
         );
         const pending = env.id ? this.pending.get(env.id) : undefined;
         const routeDeviceId = payload.dst ?? pending?.dst;
+        const rememberedGeneration = env.id
+          ? this.consumeOutboundRouteGeneration(env.id, routeDeviceId)
+          : undefined;
+        // 所有 routed frame 都在物理发送前登记。未决记录会在成功结算后转入
+        // 不占发送额度的近期历史；transport ACK 则确认逻辑 seq 已交付并释放记录。
+        // ACK / relay-error 都没有物理 attempt id，重试又复用同一逻辑 id：ACK 后再来的
+        // 同 id 错误无法区分「旧发送迟到」与「后续重试失败」。此时 fail-stale 忽略，
+        // 避免拆掉刚恢复的新 link 或让已在对端执行的 invoke 向用户报失败；精确关联需要
+        // wire 携带物理发送标识，由分层传输任务继续处理。
+        // 若两份账本都查不到且没有 legacy request generation，不回退成当前代拆 link。
+        const releasedOrSettledRouteError = !!env.id
+          && rememberedGeneration === undefined
+          && (pending?.reliableDst !== undefined || pending?.linkGeneration === undefined);
+        const routeLinkGeneration = rememberedGeneration
+          ?? (pending?.reliableDst ? undefined : pending?.linkGeneration)
+          ?? (routeDeviceId ? this.getPeerLinkGeneration(routeDeviceId) : 0);
+        const stalePeerRouteError = !!routeDeviceId
+          && (
+            releasedOrSettledRouteError
+            || routeLinkGeneration < this.getPeerLinkGeneration(routeDeviceId)
+          );
         // DEVICE_OFFLINE is a peer route transition, not merely a rejected
         // request. Emit it before the pending fast path so the host cannot
         // miss it when the relay error is paired with an in-flight request.
-        if (payload.code === 'DEVICE_OFFLINE' && routeDeviceId) {
-          this.notifyPeerRouteOffline(routeDeviceId);
+        if (payload.code === 'DEVICE_OFFLINE' && routeDeviceId && !releasedOrSettledRouteError) {
+          this.notifyPeerRouteOffline(routeDeviceId, routeLinkGeneration);
+        }
+        // 同一个可靠 invoke 会在 peer link 重开后用原 request id 重放。旧代物理发送的
+        // terminal route error 可能晚于新代重放到达；它只负责消费上面的路由代次记录，
+        // 不能 reject 当前逻辑请求或把当前重放帧改成 skip，否则调用方会先看到失败、
+        // 而对端稍后仍可能执行成功。当前代错误仍走下方既有 fail-closed 收口。
+        if (pending?.reliableDst && terminalRouteFailure && stalePeerRouteError) {
+          return true;
         }
         if (env.id && pending) {
           const p = pending;
           this.pending.delete(env.id);
+          if (routeDeviceId) this.discardOutboundRouteAttemptsForId(routeDeviceId, env.id);
           // relay-error 代表原 invoke 没有交付到 peer。若它占用了可靠 stream 的 seq，
           // 不能只 reject 上层后把原请求留到重连重放，否则一个已向用户报错的写操作
           // 可能稍后突然执行。永久断链错误丢弃该 peer 全部 pending、靠下次握手 baseSeq
           // 跨过；其它单帧错误改成同 seq skip。
           if (p.reliableDst) {
-            if (terminalRouteFailure) {
+            if (terminalRouteFailure && !stalePeerRouteError) {
               this.markPeerLinkDown(this.getPeerTransport(p.reliableDst));
               this.abandonReliablePending(
                 p.reliableDst,
@@ -1962,7 +2069,7 @@ export class DeviceLinkClient {
           p.reject(new DeviceLinkError(payload.code, payload.message));
           return true;
         }
-        if (payload.dst && terminalRouteFailure) {
+        if (payload.dst && terminalRouteFailure && !stalePeerRouteError) {
           const peer = this.getPeerTransport(payload.dst);
           this.markPeerLinkDown(peer);
           peer.recoveryNeedsAck = true;
@@ -2397,9 +2504,10 @@ export class DeviceLinkClient {
 
   private sendPeerEnvelope(env: Envelope, allowClosedLegacyResponse = false): boolean {
     if (!env.dst || !isReliableKind(env.kind)) {
-      this.sendEnvelope(env);
+      this.sendBestEffortRoutedEnvelope(env);
       return false;
     }
+    const routedEnv: Envelope = env.id ? env : { ...env, id: createRequestId() };
     const peer = this.getPeerTransport(env.dst);
     if (
       peer.explicitlyClosed
@@ -2410,7 +2518,10 @@ export class DeviceLinkClient {
       throw new DeviceLinkError('LINK_NOT_OPEN', 'control link is closed');
     }
     if (!peer.reliable) {
-      this.sendEnvelope(env);
+      this.sendRoutedEnvelope(routedEnv);
+      if (!this.pending.has(routedEnv.id!)) {
+        this.settleOutboundRouteAttemptsForId(env.dst, routedEnv.id!);
+      }
       return false;
     }
 
@@ -2436,12 +2547,12 @@ export class DeviceLinkClient {
     let reservedBytes: number;
     try {
       frames = encodeReliableFrames(
-        env,
+        routedEnv,
         peer.streamId,
         seq,
         this.getTransportBaseSeq(peer),
       );
-      reservedBytes = this.measurePendingReservation(env, peer.streamId, seq);
+      reservedBytes = this.measurePendingReservation(routedEnv, peer.streamId, seq);
     } catch (err) {
       throw new DeviceLinkError(
         'PAYLOAD_TOO_LARGE',
@@ -2462,12 +2573,12 @@ export class DeviceLinkClient {
       this.assertWebSocketCapacity(this.measureReliableFrames(frames));
     }
     if (!hasPendingCapacity()) {
-      if (env.kind === 'invoke-result') {
+      if (routedEnv.kind === 'invoke-result') {
         // invoke-result 是控制端确认被控端存活的唯一凭据，绝不能被堆积的可丢弃
         // 帧饿死：丢弃整个队头可丢弃前缀（fresh push 一并放弃——单 FIFO 无法同时
         // 做到 push 无损与 result 抢占），让 result 成为最早可交付的 live seq。
         this.dropDiscardablePendingPrefix(env.dst, peer, false, 'to make room for invoke-result');
-      } else if (env.kind === 'push' && isCoalesciblePushEnvelope(env)) {
+      } else if (routedEnv.kind === 'push' && isCoalesciblePushEnvelope(routedEnv)) {
         // 可合并镜像 push（COALESCIBLE_PUSH_CHANNELS）是尽力而为的状态镜像
         // （控制端重连/回前台会整体 resync + 重新订阅）。拥塞即对端未在 ACK：
         // 2026-08-07 线上该形态一小时内 5168 次连续 BACKPRESSURE（maker:event），
@@ -2494,7 +2605,7 @@ export class DeviceLinkClient {
     // （ws 容量已在驱逐前预检）。
     const pending: PendingReliableMessage = {
       seq,
-      envelope: env,
+      envelope: routedEnv,
       bytes: reservedBytes,
       attempts: 0,
       lastSentAt: 0,
@@ -2539,7 +2650,9 @@ export class DeviceLinkClient {
     let sent = 0;
     try {
       for (const frame of frames) {
-        this.sendEnvelope(frame);
+        // pending 可在 link down 时入队，并在后续 link generation 才首次上网；
+        // 路由错误必须归属每次真实物理发送，而不是逻辑消息的入队代次。
+        this.sendRoutedEnvelope(frame, peer.linkGeneration);
         pending.sent = true;
         sent += 1;
       }
@@ -2603,6 +2716,221 @@ export class DeviceLinkClient {
     ws.send(text);
   }
 
+  private sendRoutedEnvelope(env: Envelope, linkGeneration?: number): string | undefined {
+    if (!env.dst) {
+      this.sendEnvelope(env);
+      return env.id;
+    }
+    const routed: Envelope = env.id ? env : { ...env, id: createRequestId() };
+    const generation = linkGeneration ?? this.getPeerLinkGeneration(env.dst);
+    this.rememberOutboundRouteGeneration(routed.id!, env.dst, generation);
+    try {
+      this.sendEnvelope(routed);
+    } catch (err) {
+      this.rollbackOutboundRouteGeneration(routed.id!, env.dst, generation);
+      throw err;
+    }
+    return routed.id;
+  }
+
+  private sendBestEffortRoutedEnvelope(env: Envelope, linkGeneration?: number): void {
+    const routedId = this.sendRoutedEnvelope(env, linkGeneration);
+    if (env.dst && routedId) this.settleOutboundRouteAttemptsForId(env.dst, routedId);
+  }
+
+  private rememberOutboundRouteGeneration(
+    id: string,
+    deviceId: string,
+    linkGeneration: number,
+  ): void {
+    let peerAttempts = this.outboundRouteGenerationByPeer.get(deviceId);
+    const generationRuns = peerAttempts?.get(id);
+    if (!generationRuns) {
+      const totalIds = Array.from(this.outboundRouteGenerationByPeer.values()).reduce(
+        (sum, attempts) => sum + attempts.size,
+        0,
+      );
+      if (
+        (peerAttempts?.size ?? 0) >= MAX_OUTBOUND_ROUTE_IDS_PER_PEER
+        || totalIds >= MAX_OUTBOUND_ROUTE_IDS_TOTAL
+      ) {
+        throw new DeviceLinkError(
+          'BACKPRESSURE',
+          `route attempt history is full for peer ${deviceId.slice(0, 8)}`,
+        );
+      }
+      if (!peerAttempts) {
+        peerAttempts = new Map();
+        this.outboundRouteGenerationByPeer.set(deviceId, peerAttempts);
+      }
+      peerAttempts.set(id, [{ linkGeneration, count: 1 }]);
+      return;
+    }
+    const latest = generationRuns.at(-1);
+    if (latest?.linkGeneration === linkGeneration) {
+      latest.count += 1;
+      return;
+    }
+    if (generationRuns.length >= MAX_OUTBOUND_ROUTE_GENERATION_RUNS_PER_ID) {
+      throw new DeviceLinkError(
+        'BACKPRESSURE',
+        `route generation history is full for peer ${deviceId.slice(0, 8)}`,
+      );
+    }
+    generationRuns.push({ linkGeneration, count: 1 });
+  }
+
+  private consumeOutboundRouteGeneration(id: string, deviceId?: string): number | undefined {
+    const ledgers = [
+      this.settledOutboundRouteGenerationByPeer,
+      this.outboundRouteGenerationByPeer,
+    ];
+    let resolvedDeviceId = deviceId;
+    let owningLedger: typeof this.outboundRouteGenerationByPeer | undefined;
+    let peerAttempts: Map<string, Array<{ linkGeneration: number; count: number }>> | undefined;
+    for (const ledger of ledgers) {
+      if (resolvedDeviceId) {
+        const candidate = ledger.get(resolvedDeviceId);
+        if (candidate?.has(id)) {
+          owningLedger = ledger;
+          peerAttempts = candidate;
+          break;
+        }
+        continue;
+      }
+      for (const [candidateDeviceId, candidateAttempts] of ledger) {
+        if (!candidateAttempts.has(id)) continue;
+        resolvedDeviceId = candidateDeviceId;
+        owningLedger = ledger;
+        peerAttempts = candidateAttempts;
+        break;
+      }
+      if (peerAttempts) break;
+    }
+    const generationRuns = peerAttempts?.get(id);
+    const first = generationRuns?.[0];
+    if (
+      !owningLedger
+      || !peerAttempts
+      || !generationRuns
+      || !first
+      || !resolvedDeviceId
+    ) return undefined;
+    const linkGeneration = first.linkGeneration;
+    first.count -= 1;
+    if (first.count === 0) generationRuns.shift();
+    if (generationRuns.length === 0) peerAttempts.delete(id);
+    if (peerAttempts.size === 0) owningLedger.delete(resolvedDeviceId);
+    return linkGeneration;
+  }
+
+  private discardOutboundRouteAttemptsBeforeGeneration(
+    deviceId: string,
+    minimumGeneration: number,
+  ): void {
+    for (const ledger of [
+      this.outboundRouteGenerationByPeer,
+      this.settledOutboundRouteGenerationByPeer,
+    ]) {
+      const peerAttempts = ledger.get(deviceId);
+      if (!peerAttempts) continue;
+      for (const [id, generationRuns] of peerAttempts) {
+        const retained = generationRuns.filter(
+          (run) => run.linkGeneration >= minimumGeneration,
+        );
+        if (retained.length === 0) {
+          peerAttempts.delete(id);
+        } else if (retained.length !== generationRuns.length) {
+          peerAttempts.set(id, retained);
+        }
+      }
+      if (peerAttempts.size === 0) ledger.delete(deviceId);
+    }
+  }
+
+  private discardOutboundRouteAttemptsForId(deviceId: string, id: string): void {
+    for (const ledger of [
+      this.outboundRouteGenerationByPeer,
+      this.settledOutboundRouteGenerationByPeer,
+    ]) {
+      const peerAttempts = ledger.get(deviceId);
+      if (!peerAttempts) continue;
+      peerAttempts.delete(id);
+      if (peerAttempts.size === 0) ledger.delete(deviceId);
+    }
+  }
+
+  private settleOutboundRouteAttemptsForId(deviceId: string, id: string): void {
+    const activePeerAttempts = this.outboundRouteGenerationByPeer.get(deviceId);
+    const activeRuns = activePeerAttempts?.get(id);
+    if (!activePeerAttempts || !activeRuns) return;
+    activePeerAttempts.delete(id);
+    if (activePeerAttempts.size === 0) this.outboundRouteGenerationByPeer.delete(deviceId);
+
+    let settledPeerAttempts = this.settledOutboundRouteGenerationByPeer.get(deviceId);
+    if (!settledPeerAttempts) {
+      settledPeerAttempts = new Map();
+      this.settledOutboundRouteGenerationByPeer.set(deviceId, settledPeerAttempts);
+    }
+    const settledRuns = settledPeerAttempts.get(id) ?? [];
+    for (const run of activeRuns) {
+      const latest = settledRuns.at(-1);
+      if (latest?.linkGeneration === run.linkGeneration) {
+        latest.count += run.count;
+      } else {
+        settledRuns.push({ ...run });
+      }
+    }
+    while (settledRuns.length > MAX_OUTBOUND_ROUTE_GENERATION_RUNS_PER_ID) {
+      settledRuns.shift();
+    }
+    // Map 插入顺序作为 LRU；已结算历史只用于识别迟到错误，不参与发送背压。
+    settledPeerAttempts.delete(id);
+    settledPeerAttempts.set(id, settledRuns);
+    this.trimSettledOutboundRouteHistory();
+  }
+
+  private trimSettledOutboundRouteHistory(): void {
+    for (const [deviceId, peerAttempts] of this.settledOutboundRouteGenerationByPeer) {
+      while (peerAttempts.size > MAX_SETTLED_OUTBOUND_ROUTE_IDS_PER_PEER) {
+        const oldestId = peerAttempts.keys().next().value as string | undefined;
+        if (!oldestId) break;
+        peerAttempts.delete(oldestId);
+      }
+      if (peerAttempts.size === 0) this.settledOutboundRouteGenerationByPeer.delete(deviceId);
+    }
+    let totalIds = Array.from(this.settledOutboundRouteGenerationByPeer.values()).reduce(
+      (sum, attempts) => sum + attempts.size,
+      0,
+    );
+    if (totalIds <= MAX_SETTLED_OUTBOUND_ROUTE_IDS_TOTAL) return;
+    for (const [deviceId, peerAttempts] of this.settledOutboundRouteGenerationByPeer) {
+      while (peerAttempts.size > 0 && totalIds > MAX_SETTLED_OUTBOUND_ROUTE_IDS_TOTAL) {
+        const oldestId = peerAttempts.keys().next().value as string | undefined;
+        if (!oldestId) break;
+        peerAttempts.delete(oldestId);
+        totalIds -= 1;
+      }
+      if (peerAttempts.size === 0) this.settledOutboundRouteGenerationByPeer.delete(deviceId);
+      if (totalIds <= MAX_SETTLED_OUTBOUND_ROUTE_IDS_TOTAL) break;
+    }
+  }
+
+  private rollbackOutboundRouteGeneration(
+    id: string,
+    deviceId: string,
+    linkGeneration: number,
+  ): void {
+    const peerAttempts = this.outboundRouteGenerationByPeer.get(deviceId);
+    const generationRuns = peerAttempts?.get(id);
+    const latest = generationRuns?.at(-1);
+    if (!peerAttempts || !generationRuns || latest?.linkGeneration !== linkGeneration) return;
+    latest.count -= 1;
+    if (latest.count === 0) generationRuns.pop();
+    if (generationRuns.length === 0) peerAttempts.delete(id);
+    if (peerAttempts.size === 0) this.outboundRouteGenerationByPeer.delete(deviceId);
+  }
+
   private assertWebSocketCapacity(additionalBytes: number): void {
     const ws = this.ws;
     if (!ws) throw new DeviceLinkError('NOT_CONNECTED', 'no active connection');
@@ -2664,6 +2992,7 @@ export class DeviceLinkClient {
         recoveryFramesSent: 0,
         pushAdmissionDropCount: 0,
         pushAdmissionDropLogAt: 0,
+        linkGeneration: 0,
       };
       this.peerTransport.set(dst, peer);
     }
@@ -2844,9 +3173,15 @@ export class DeviceLinkClient {
         : undefined
     );
     try {
-      this.sendEnvelope(makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId));
+      this.sendBestEffortRoutedEnvelope(
+        makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId),
+      );
     } catch (err) {
-      this.log.debug('reliable transport ACK send failed', err);
+      this.log.debug(
+        `reliable transport ACK send failed dst=${dst.slice(0, 8)}`
+        + ` stream=${streamId.slice(0, 8)} ack=${ackSeq} conn=${this.connEpoch}`,
+        err,
+      );
     }
   }
 
@@ -2923,6 +3258,12 @@ export class DeviceLinkClient {
         + ` stream=${peer.streamId.slice(0, 8)} request=${confirmation.requestId.slice(0, 8)}`
         + ` ack=${ackSeq} conn=${this.connEpoch}`,
       );
+      // 新版入站重建的带 request id ACK 是 local → remote 的因果屏障：对端已经
+      // 收到本代 link-accept，旧代成功路由却未 ACK 的尝试不会再产生 relay-error。
+      // 必须在重放前淘汰旧代记录，否则当前重放真实失败会 FIFO 消费旧代并被当
+      // stale。旧端没有 confirmation 能力时没有这个证据，继续保留原兼容路径。
+      this.discardOutboundRouteAttemptsBeforeGeneration(src, peer.linkGeneration);
+      this.discardOutboundRouteAttemptsForId(src, confirmation.requestId);
       this.commitReliableSendResume(src, peer, confirmation.resume);
     }
     if (!this.isPeerSendReady(peer)) return;
@@ -2933,6 +3274,9 @@ export class DeviceLinkClient {
     peer.highestAckSeq = ackSeq;
     for (const [seq, pending] of peer.pending) {
       if (seq > ackSeq) break;
+      if (pending.envelope.id) {
+        this.discardOutboundRouteAttemptsForId(src, pending.envelope.id);
+      }
       peer.pending.delete(seq);
       peer.pendingBytes -= pending.bytes;
     }
@@ -3031,6 +3375,13 @@ export class DeviceLinkClient {
     seq: number,
     pending: PendingReliableMessage,
   ): void {
+    // A reliable frame can be evicted without ever receiving a transport ACK
+    // (latest-wins / TTL / skip-prefix cleanup). Keep its physical-send
+    // generations in the bounded settled ledger so a delayed relay error can
+    // still be classified, while releasing the active 1024-ID send budget.
+    if (pending.envelope.dst && pending.envelope.id) {
+      this.settleOutboundRouteAttemptsForId(pending.envelope.dst, pending.envelope.id);
+    }
     peer.pending.delete(seq);
     peer.pendingBytes -= pending.bytes;
     if (peer.pending.size === 0 && peer.retryTimer) {
@@ -3394,7 +3745,8 @@ export class DeviceLinkClient {
       return;
     }
     this.log.warn(
-      `reliable transport ACK timeout for ${dst.slice(0, 8)} seq=${seq}; resetting peer link (relay connection kept alive)`,
+      `reliable transport ACK timeout; resetting peer link (relay connection kept alive)`
+      + ` ${this.describeReliableTimeout(dst, seq, peer)}`,
     );
     this.markPeerLinkDown(peer);
     if (peer.retryTimer) {
@@ -3418,7 +3770,7 @@ export class DeviceLinkClient {
    */
   private notifyTransportTimeoutClose(dst: string, attempt: number): void {
     try {
-      this.sendEnvelope({
+      this.sendBestEffortRoutedEnvelope({
         v: PROTOCOL_VERSION,
         kind: 'link-close',
         dst,
@@ -3488,8 +3840,10 @@ export class DeviceLinkClient {
 
   private forceReconnectForReliableTimeout(dst: string, seq: number): void {
     if (this.stopped || this.status !== 'online') return;
+    const peer = this.peerTransport.get(dst);
     this.log.warn(
-      `reliable transport ACK timeout for ${dst.slice(0, 8)} seq=${seq}; forcing reconnect`,
+      `reliable transport ACK timeout; forcing reconnect`
+      + ` ${this.describeReliableTimeout(dst, seq, peer)}`,
     );
     const ws = this.ws;
     this.ws = null;
@@ -3498,12 +3852,47 @@ export class DeviceLinkClient {
     this.handleDisconnect(1006, 'reliable transport retry exhausted');
   }
 
+  /**
+   * Final timeout evidence only: no payload or full device identifiers. This
+   * separates "ACK never advanced" from an ACK send exception and records the
+   * exact peer/link phase without adding a warning on every 2s retry tick.
+   */
+  private describeReliableTimeout(
+    dst: string,
+    seq: number,
+    peer: PeerTransportState | undefined,
+  ): string {
+    if (!peer) {
+      return `dst=${dst.slice(0, 8)} seq=${seq} peer=missing conn=${this.connEpoch}`;
+    }
+    const pending = peer.pending.get(seq)
+      ?? (peer.pending.values().next().value as PendingReliableMessage | undefined);
+    const ageMs = pending
+      ? Math.max(0, Math.round(this.monotonicNow() - pending.enqueuedAt))
+      : -1;
+    return `dst=${dst.slice(0, 8)} seq=${seq}`
+      + ` kind=${pending?.envelope.kind ?? 'missing'}`
+      + ` attempts=${pending?.attempts ?? -1} sent=${pending?.sent ?? false} ageMs=${ageMs}`
+      + ` pending=${peer.pending.size}/${peer.pendingBytes}`
+      + ` ack=${peer.highestAckSeq} next=${peer.nextSeq}`
+      + ` send=${peer.sendPhase} receive=${peer.receiveReady}`
+      + ` stream=${peer.streamId.slice(0, 8)}`
+      + ` remoteStream=${peer.remoteStreamId?.slice(0, 8) ?? 'none'}`
+      + ` recovery=${peer.recoveryNeedsAck}/${peer.recoveryFramesSent}`
+      + ` conn=${this.connEpoch}`;
+  }
+
   private abandonReliablePending(dst: string, message: string): void {
     const peer = this.peerTransport.get(dst);
     if (peer) {
       if (peer.retryTimer) {
         clearInterval(peer.retryTimer);
         peer.retryTimer = null;
+      }
+      for (const pending of peer.pending.values()) {
+        if (pending.envelope.id) {
+          this.settleOutboundRouteAttemptsForId(dst, pending.envelope.id);
+        }
       }
       peer.pending.clear();
       peer.pendingBytes = 0;
@@ -3525,6 +3914,7 @@ export class DeviceLinkClient {
     for (const [id, pending] of this.pending) {
       if (pending.expectKind !== 'link-accept' || pending.dst !== dst) continue;
       this.pending.delete(id);
+      this.settleOutboundRouteAttemptsForId(dst, id);
       pending.reject(new DeviceLinkError(code, message));
     }
   }
@@ -3538,6 +3928,9 @@ export class DeviceLinkClient {
       }
     }
     this.peerTransport.clear();
+    this.peerOfflineNotifiedGeneration.clear();
+    this.outboundRouteGenerationByPeer.clear();
+    this.settledOutboundRouteGenerationByPeer.clear();
     for (const timer of this.timeoutCloseNotifyTimers.values()) clearTimeout(timer);
     this.timeoutCloseNotifyTimers.clear();
   }

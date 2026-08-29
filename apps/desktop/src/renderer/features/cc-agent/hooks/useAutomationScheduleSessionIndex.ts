@@ -98,8 +98,8 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
       const { runs, inflightRunIds } = await loadScheduleSidebarIndexSnapshot();
       if (refreshSeqRef.current !== seq || cancelledRef.current) return;
 
-      // 抑制标记的事件丢失自愈:这份列表是 scheduler 落库的权威 run 状态(且包含所有
-      // 带 sessionId 的 run,没有 history limit),据它清掉「已终态」和「已不存在」的
+      // 抑制标记的事件丢失自愈:这份列表包含所有 running run,以及每个 session 的最新
+      // 映射和未读终态 run,据它清掉「已终态」和「已不存在」的
       // 标记。RunStatus 里只有 'running' 不是终态。刻意不用定时器猜 run 还在不在飞行
       // —— 见 silencedSessionDoneStore 的文件头与 reconcileRunMarkers 注释。
       const dbRunStatus = new Map<string, RunLivenessStatus>();

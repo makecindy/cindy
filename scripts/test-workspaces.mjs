@@ -20,6 +20,9 @@ const IGNORED_PARTS = new Set([
 	"coverage",
 	".git",
 	".cache",
+	// 会话工具临时产物（.gitignore 明确忽略 tmp/）。不忽略的话 readAllFiles
+	// 会递归进去，遇到沙箱/工具遗留的不可读子目录抛 EPERM 让整个门禁失败（#3353）。
+	"tmp",
 ]);
 const NESTED_NON_WORKSPACES = ["apps/desktop/cindy-updater", "tools"];
 const VALID_STATUSES = new Set([
@@ -757,7 +760,19 @@ export function createWorkspaceRunReporter({
 export function readAllFiles(root) {
 	const files = [];
 	function visit(absDir) {
-		for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
+		let entries;
+		try {
+			entries = fs.readdirSync(absDir, { withFileTypes: true });
+		} catch (error) {
+			// 不可读目录（沙箱/本地工具遗留的受限临时目录在 Windows 上抛 EPERM，
+			// 见 #3353）不应让整个测试门禁在收集阶段失败：忽略该子树，继续扫描
+			// 其余可读目录。已跟踪文件与未被忽略的源码不会落在这种目录里。
+			if (error && (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOENT")) {
+				return;
+			}
+			throw error;
+		}
+		for (const entry of entries) {
 			const abs = path.join(absDir, entry.name);
 			const rel = normalizeRelPath(path.relative(root, abs));
 			if (isIgnoredFile(rel)) continue;

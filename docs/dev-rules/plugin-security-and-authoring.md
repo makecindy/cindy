@@ -50,7 +50,8 @@
 
 ### 1.1 Manifest v3 直接能力声明
 
-- 新插件统一使用 `schemaVersion: 3`，并填写不低于 `0.1.61` 的 `minCindyVersion`。
+- 新插件统一使用 `schemaVersion: 3`，并填写插件实际依赖的首个 Cindy 正式版本作为
+  `minCindyVersion`。Manifest schema 不设置统一的 Cindy 版本下限；具体版本只属于插件包元数据。
   v3 **没有** `slots`；
   `tools`、`card`、`panel`、`mainView`、`subscribe`、`skill`、`cindy`、`agent`、`node`、`network`、
   `preview` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。
@@ -117,8 +118,19 @@
   `defaultInstall`。安装成功默认启用；插件声明哪些能力不改变
   安装动作是否需要确认，因为安装不设能力确认弹窗。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，
-  自定义市场还必须匹配 `sourceKey`；已装目录的 canonical manifest digest 必须与账本一致。
-  任何同 id 来源冲突或目录漂移都不得被自动覆盖，只能由用户显式选择替换来源。
+  自定义市场还必须匹配 `sourceKey`；已装目录的原始 `ghost.json` 字节 SHA-256 必须与账本
+  一致。旧记录缺少 raw 字段时，Host 只能按已发布的 legacy digest 编码核对同一份受限读取
+  的字节，命中后原地补字段且不改 `updatedAt`；raw 字段已经存在但不匹配时必须 fail closed，
+  不得用当前目录覆盖基线。`manifestDigest` 保留旧语义供降级客户端读取，不能改写成 raw SHA。
+  同 id 来源冲突或目录漂移通常不得被自动覆盖，只能由用户显式选择替换来源。唯一受控例外是：
+  当前组织下发 `defaultInstall`、组织与合法非空前缀都精确匹配、同 ghost id 在目录中唯一时，
+  可以接管无有效市场来源的普通本地安装，或修复同一目标 `pluginId` 的坏 market / legacy-adopted
+  记录。接管仍要求现有 receipt 已批准、未显式卸载退订、插件不忙，并在落位前于 ghost id 锁内
+  重读 owner、来源、批准与退订事实；不得覆盖有效的公开／其它组织市场路由或 Git／本地自定义
+  市场路由。`ghost_forge_install` 的首装与更新一律记录 `agent-forge`，作为作者本地自测保护，
+  不进入自动接管；普通 `.cindy` 导入仍是 `manual`，不享受这项保护。自动接管不得复用用户手动
+  换源的退订语义，不写 `markRemoved` 或 default-install opt-out。普通本地／Forge 换源只把
+  旧来源记录置为 `installed=false`，不得新增或清除 opt-out；只有用户显式卸载才写 opt-out。
 - 所有仍匹配稳定来源的已装插件都静默自动更新，不限 public／organization、也不限
   `defaultInstall`。更新保持现有启用状态，不弹成功 toast；插件正有调用、派活或 Cindy
   工作时跳过，下一轮重试。服务端市场按客户端版本投影最近发布、曾上架且仍有效的兼容
@@ -228,8 +240,14 @@
   Worker。设置页只能读取 `hostAvailable` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
   不允许 `exchange` 或 `setup.requires` 引用，第三方插件不得声明。
 - `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
-  Membership 生效；只有当前组织的 Plugin Market organization 安装记录仍有效、且
-  安装目录 manifest digest 与记录一致时，Host 才会根据当前组织和插件 id 推导 audience。
+  Membership 生效。资格有两条默认基座：当前组织的 Plugin Market organization 安装记录仍有效、
+  且安装目录 `ghost.json` 的 raw SHA（旧记录迁移前为集中 legacy digest）与记录一致；
+  Manifest 与身份必须来自同一次受限读取，禁止分两次读取后分别校验与消费；或企业作者显式使用 `ghost_forge_install`
+  安装、在提交前核对插件 id 与精确注入域名，且插件 id 命中当前组织前缀。手动导入不取得
+  Forge 作者资格。另有一条点名例外：`ghostId` 精确等于 `mivo-canvas` 的组织成员本地安装，
+  在已装 manifest 声明的精确 `oidc-token` host 仅为 `mivo-canvas.dsworks.cn` 时可解析 audience；其它本地插件、个人账号、
+  通配 host、其它精确 host 仍不签发。若该插件已有市场 organization 记录（含 `installed:false` 的卸载残留），不得走白名单捷径，必须仍走
+  digest 校验。市场账本损坏、schema 不认或该 ghostId 记录校验失败时 fail-closed，不得当成「无记录」走例外。Host 根据当前组织和插件 id 推导 audience。
   插件和 Node Worker 都不能读取或保存令牌。声明必须固定使用
   `Authorization: Bearer {value}` 并显式列出非空 `inject.hosts`；其中只允许精确域名，
   不允许通配。实际目标必须精确命中这份可信 manifest 声明的服务域名才会签发和注入。它没有用户输入、`url`、`exchange` 或

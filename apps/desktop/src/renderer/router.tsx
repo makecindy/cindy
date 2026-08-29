@@ -6,6 +6,7 @@ import { SidebarWindowLayout } from '@/components/layout/SidebarWindowLayout';
 import { GhostPanelWindowLayout } from '@/components/layout/GhostPanelWindowLayout';
 import { SettingsView } from '@/components/settings/SettingsView';
 import { LoginPage } from '@/components/login/LoginPage';
+import { AddAccountLoginPage } from '@/components/login/AddAccountLoginPage';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { GuestRoute } from '@/components/auth/GuestRoute';
 import { LocalDbGate } from '@/components/auth/LocalDbGate';
@@ -56,6 +57,10 @@ export const router = createHashRouter([
     // 冒泡到这里,全屏展示可恢复错误页(2026-07-09 React #130 事故的直接止血层)。
     errorElement: <RouteErrorFallback />,
     children: [
+      {
+        path: 'add-account',
+        element: <AddAccountLoginPage />,
+      },
       {
         // 主功能区入口 —— 经过 LocalDbGate（localDb 就绪）才能进
         element: <LocalDbGate />,

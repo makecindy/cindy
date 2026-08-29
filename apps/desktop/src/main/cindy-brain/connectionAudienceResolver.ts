@@ -1,12 +1,21 @@
 /**
- * Host-owned Connection audience resolution. New grants require an intact
- * organization-scoped Plugin Market install; a bounded read-only fallback keeps
- * legacy Forge receipts working. The Host derives the audience from the current
- * organization and the installed plugin id.
+ * Host-owned Connection audience resolution. Explicit Forge installs for the
+ * current organization and intact organization-market installs are the two
+ * dynamic bases. A named local-install exception exists only for ghostId
+ * `mivo-canvas`: organization members may resolve after the org gate when the
+ * installed manifest's exact oidc-token host is only `mivo-canvas.dsworks.cn`.
+ * An intact organization market record, including installed:false, still takes
+ * the digest path and must not skip via this exception. A present but invalid
+ * market ledger is a hard failure, not an absent record. The Host derives the
+ * audience from current identity + plugin id.
  */
 import { isValidGhostId, isValidGhostNetworkHostPattern } from '../../shared/ghost.js';
 import type { GhostManifest } from '../../shared/ghost.js';
 import type { PluginMarketInstallationRecord } from '../plugin-market/ledger.js';
+import {
+  verifyInstalledMarketManifest,
+  type InstalledMarketManifestIdentity,
+} from '../plugin-market/installedManifestIdentity.js';
 import { PLUGIN_MEMBER_PUBLISHER_GHOST_ID } from '../plugin-publisher/types.js';
 import { PLUGIN_PREFIX_PATTERN } from '@cindy/plugin-protocol';
 
@@ -33,6 +42,10 @@ export interface ConnectionAudienceResolver {
 
 const ORG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const PLUGIN_SLUG_RE = /^[a-z][a-z0-9-]{0,31}$/;
+/** Named local-install Connection exception. Must stay an exact id, not a prefix. */
+const LOCAL_OIDC_ALLOWLIST_GHOST_ID = 'mivo-canvas';
+/** Local exception may inject the org JWT only to this exact BFF host. */
+const LOCAL_OIDC_ALLOWLIST_HOST = 'mivo-canvas.dsworks.cn';
 
 /**
  * Host-owned Connection audiences that plugins must never mint.
@@ -56,10 +69,29 @@ export function isConnectionSecretReady(
   return resolution !== null && injectHosts.some((host) => resolution.allowedHosts.includes(host));
 }
 
+/** Exact non-wildcard hosts declared for Host-injected Connection JWTs. */
+export function declaredOidcTokenHosts(manifest: GhostManifest): string[] {
+  return [
+    ...new Set(
+      (manifest.network?.secrets ?? [])
+        .filter((secret) => secret.source === 'oidc-token')
+        .flatMap((secret) => secret.inject.hosts ?? [])
+        .filter((host) => isValidGhostNetworkHostPattern(host) && !host.startsWith('*.')),
+    ),
+  ];
+}
+
+export type MarketInstallationLookup =
+  | { kind: 'absent' }
+  | { kind: 'found'; record: PluginMarketInstallationRecord }
+  | { kind: 'invalid' };
+
 export interface LoadConnectionAudienceResolverOptions {
-  readInstalledManifest(ghostId: string): GhostManifest | null;
-  readInstalledManifestDigest(ghostId: string): string | null;
-  readMarketInstallation(ghostId: string): PluginMarketInstallationRecord | null;
+  /** Manifest and byte identity from one bounded read of the installed ghost.json. */
+  readInstalledManifestIdentity(ghostId: string): InstalledMarketManifestIdentity | null;
+  readMarketInstallation(
+    ghostId: string,
+  ): PluginMarketInstallationRecord | MarketInstallationLookup | null;
   readApprovedPackageSha256?(ghostId: string): string | null;
   readInstallOrigin?(ghostId: string): 'manual' | 'agent-forge';
   lookupOrganizationPrefix?(
@@ -97,14 +129,7 @@ export function loadConnectionAudienceResolver(
       }
 
       const finish = (manifest: GhostManifest): ConnectionAudienceResolution | null => {
-        const allowedHosts = [
-          ...new Set(
-            (manifest.network?.secrets ?? [])
-              .filter((secret) => secret.source === 'oidc-token')
-              .flatMap((secret) => secret.inject.hosts ?? [])
-              .filter((host) => isValidGhostNetworkHostPattern(host) && !host.startsWith('*.')),
-          ),
-        ];
+        const allowedHosts = declaredOidcTokenHosts(manifest);
         if (allowedHosts.length === 0) return reject('oidc-host-declaration-missing');
         const audience = `${identity.orgSlug}:${ghostId}`;
         if (audience.length > 64) return reject('audience-too-long');
@@ -120,17 +145,16 @@ export function loadConnectionAudienceResolver(
         };
       };
 
-      const readManifest = (): GhostManifest | null => {
+      const readManifestIdentity = (): InstalledMarketManifestIdentity | null => {
         try {
-          return options.readInstalledManifest(ghostId);
+          return options.readInstalledManifestIdentity(ghostId);
         } catch {
           return null;
         }
       };
 
-      // 只读兼容升级前的 Forge receipt。新安装不再写 agent-forge；但旧插件的
-      // Connection JWT 资格不能因客户端升级中断。个人身份、缺失组织 slug、未知
-      // 前缀与缺失批准包哈希都已在进入此分支前后 fail closed。
+      // 显式 ghost_forge_install 的企业作者自测分支，同时兼容升级前已有的
+      // agent-forge receipt。个人身份、未知前缀与缺失批准包哈希均 fail closed。
       const forgeOrigin = options.readInstallOrigin?.(ghostId);
       if (forgeOrigin === 'agent-forge') {
         const prefixLookup = options.lookupOrganizationPrefix?.(identity.orgId);
@@ -141,22 +165,49 @@ export function loadConnectionAudienceResolver(
           if (!approvedSha || !/^[a-f0-9]{64}$/.test(approvedSha)) {
             return reject('forge-package-sha-missing');
           }
-          const manifest = readManifest();
-          if (!manifest) return reject('plugin-not-installed');
-          if (manifest.id !== ghostId) return reject('plugin-id-mismatch');
-          return finish(manifest);
+          const identitySnapshot = readManifestIdentity();
+          if (!identitySnapshot) return reject('plugin-not-installed');
+          if (identitySnapshot.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+          return finish(identitySnapshot.manifest);
         }
       }
 
       let installation: PluginMarketInstallationRecord | null = null;
       try {
-        installation = options.readMarketInstallation(ghostId);
+        const lookup = options.readMarketInstallation(ghostId);
+        if (
+          lookup &&
+          typeof lookup === 'object' &&
+          'kind' in lookup &&
+          (lookup.kind === 'absent' || lookup.kind === 'found' || lookup.kind === 'invalid')
+        ) {
+          if (lookup.kind === 'invalid') return reject('market-installation-invalid');
+          if (lookup.kind === 'found') installation = lookup.record;
+        } else {
+          installation = lookup;
+        }
       } catch {
         return reject('market-installation-read-failed');
       }
-      if (!installation || !installation.installed) {
+      if (!installation) {
+        // Named exception after the org gate and before market-missing reject.
+        // Any persisted market row, including installed:false, still takes digest.
+        if (ghostId === LOCAL_OIDC_ALLOWLIST_GHOST_ID) {
+          const allowlisted = readManifestIdentity();
+          if (!allowlisted) return reject('plugin-not-installed');
+          if (allowlisted.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+          const allowlistedHosts = declaredOidcTokenHosts(allowlisted.manifest);
+          if (
+            allowlistedHosts.length !== 1 ||
+            allowlistedHosts[0] !== LOCAL_OIDC_ALLOWLIST_HOST
+          ) {
+            return reject('oidc-host-not-allowlisted');
+          }
+          return finish(allowlisted.manifest);
+        }
         return reject('market-installation-missing');
       }
+      if (!installation.installed) return reject('market-installation-missing');
       if (installation.source !== 'market') return reject('market-installation-untrusted');
       if (installation.scope !== 'organization') {
         return reject('market-installation-not-organization');
@@ -164,28 +215,22 @@ export function loadConnectionAudienceResolver(
       if (installation.organizationId !== identity.orgId) {
         return reject('market-installation-org-mismatch');
       }
-      if (!installation.manifestDigest) {
-        return reject('market-manifest-digest-missing');
+      if (!installation.rawManifestSha256 && !installation.manifestDigest) {
+        return reject('market-manifest-identity-missing');
       }
 
-      let manifest: GhostManifest | null = null;
+      let identitySnapshot: InstalledMarketManifestIdentity | null = null;
       try {
-        manifest = options.readInstalledManifest(ghostId);
+        identitySnapshot = options.readInstalledManifestIdentity(ghostId);
       } catch {
         return reject('installed-manifest-read-failed');
       }
-      if (!manifest) return reject('plugin-not-installed');
-      if (manifest.id !== ghostId) return reject('plugin-id-mismatch');
-      let installedManifestDigest: string | null = null;
-      try {
-        installedManifestDigest = options.readInstalledManifestDigest(ghostId);
-      } catch {
-        return reject('installed-manifest-digest-read-failed');
+      if (!identitySnapshot) return reject('plugin-not-installed');
+      if (identitySnapshot.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+      if (!verifyInstalledMarketManifest(installation, identitySnapshot)) {
+        return reject('installed-manifest-identity-mismatch');
       }
-      if (installedManifestDigest !== installation.manifestDigest) {
-        return reject('installed-manifest-digest-mismatch');
-      }
-      return finish(manifest);
+      return finish(identitySnapshot.manifest);
     },
   };
 }

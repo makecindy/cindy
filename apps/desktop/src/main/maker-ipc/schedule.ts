@@ -560,9 +560,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     })),
   );
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_COST_SUMMARIES, async () =>
-    withScheduler(({ storage }) => storage.listCostSummaries()),
-  );
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_COST_SUMMARIES, async () => []);
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_DELETE_RUN, async (_e, runId: unknown) => {
     const id = requireString(runId, 'runId');

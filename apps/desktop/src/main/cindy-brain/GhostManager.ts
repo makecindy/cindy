@@ -18,6 +18,7 @@ import {
   ghostInstallApprovalToken,
   ghostIconMimeType,
   isValidGhostId,
+  ghostManifestToLegacyV2DigestFormat,
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
@@ -1023,7 +1024,7 @@ export class GhostManager {
     return this.receiptStore.rootDir();
   }
 
-  /** 新安装不再写来源；这里只识别旧 receipt，避免存量 Forge Broker 资格断裂。 */
+  /** 只认显式 Forge 安装写入的来源；未知/手动来源一律按 manual。 */
   readEffectiveInstallOrigin(id: string): 'manual' | 'agent-forge' {
     this.ensureCurrentOwnerContextSync();
     try {
@@ -1033,6 +1034,19 @@ export class GhostManager {
     } catch {
       return 'manual';
     }
+  }
+
+  /**
+   * 自动接管只能把一份成功读取且仍为 approved 的 receipt 当作来源证据。
+   * 与授权链的宽松投影不同，这里任何缺失、损坏或 I/O 异常都必须上抛。
+   */
+  readApprovedInstallOriginStrict(id: string): 'manual' | 'agent-forge' {
+    this.ensureCurrentOwnerContextSync();
+    const approval = this.readApproval(id);
+    if (approval.state !== 'approved') {
+      throw new Error(`approved Plugin receipt is unavailable: ${approval.state}`);
+    }
+    return effectiveInstallOrigin(approval.receipt);
   }
 
   /**
@@ -2142,6 +2156,10 @@ export class GhostManager {
         unsupportedLegacySlots: string[];
         trust: GhostTrustInfo;
         packageSha256: string;
+        /** SHA-256 of the exact ghost.json entry bytes in this package. */
+        rawManifestSha256: string;
+        /** Exact normalized shape emitted by the released v0.1.61 v2 validator. */
+        releasedLegacyDigestFormat: unknown;
         iconDataUrl?: string;
       }
     | { rejection: InstallRejection }
@@ -2154,6 +2172,8 @@ export class GhostManager {
       unsupportedLegacySlots: parsed.unsupportedLegacySlots,
       trust: parsed.trust,
       packageSha256: parsed.packageSha256,
+      rawManifestSha256: parsed.rawManifestSha256,
+      releasedLegacyDigestFormat: parsed.releasedLegacyDigestFormat,
       ...(parsed.iconDataUrl !== undefined ? { iconDataUrl: parsed.iconDataUrl } : {}),
     };
   }
@@ -2170,6 +2190,8 @@ export class GhostManager {
         unsupportedLegacySlots: string[];
         trust: GhostTrustInfo;
         packageSha256: string;
+        rawManifestSha256: string;
+        releasedLegacyDigestFormat: unknown;
         iconDataUrl?: string;
         allEntries: JSZip.JSZipObject[];
         prefix: string;
@@ -2274,16 +2296,14 @@ export class GhostManager {
 
     // 3) 校验清单
     let manifestRaw: unknown;
+    let manifestBytes: Buffer;
     try {
-      manifestRaw = JSON.parse(
-        (
-          await readZipEntryBufferWithLimit(
-            manifestEntry,
-            MAX_GHOST_MANIFEST_BYTES,
-            GHOST_MANIFEST_FILE,
-          )
-        ).toString('utf8'),
+      manifestBytes = await readZipEntryBufferWithLimit(
+        manifestEntry,
+        MAX_GHOST_MANIFEST_BYTES,
+        GHOST_MANIFEST_FILE,
       );
+      manifestRaw = JSON.parse(manifestBytes.toString('utf8'));
     } catch {
       return {
         rejection: { code: 'file-invalid', reason: `${GHOST_MANIFEST_FILE} 不是合法 JSON` },
@@ -2555,6 +2575,11 @@ export class GhostManager {
       unsupportedLegacySlots: v.unsupportedLegacySlots,
       trust: signature.trust,
       packageSha256: crypto.createHash('sha256').update(buf).digest('hex'),
+      rawManifestSha256: crypto.createHash('sha256').update(manifestBytes).digest('hex'),
+      releasedLegacyDigestFormat: ghostManifestToLegacyV2DigestFormat(
+        v.manifest,
+        manifestRaw,
+      ),
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
       allEntries,
       prefix,
@@ -2567,6 +2592,7 @@ export class GhostManager {
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: 'agent-forge';
     },
   ) {
     return this.runExclusiveMutation(() => this.installUnlocked(lizFilePath, opts));
@@ -2578,6 +2604,7 @@ export class GhostManager {
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: 'agent-forge';
     },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
     // 装入初始启用态由调用方决定；缺省 true 保持既有调用方语义不变。
@@ -2684,6 +2711,7 @@ export class GhostManager {
           packageSha256,
           revision: receiptRevision,
           ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+          ...(opts?.installOrigin ? { installOrigin: opts.installOrigin } : {}),
         });
         await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
         let tombstoneClearPending = false;
@@ -2781,6 +2809,7 @@ export class GhostManager {
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: 'agent-forge';
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
       onPackagePlaced?: () => void;
@@ -2795,6 +2824,7 @@ export class GhostManager {
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      installOrigin?: 'agent-forge';
       /** 新目录已换位、旧目录仍可回滚时执行；抛错会恢复旧版本。 */
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
@@ -2844,11 +2874,9 @@ export class GhostManager {
         },
       };
     }
-    const legacyInstallOrigin =
-      approvalResult.state === 'approved' &&
-      effectiveInstallOrigin(approvalResult.receipt) === 'agent-forge'
-        ? 'agent-forge'
-        : undefined;
+    // 来源描述的是本次明确选择的装入通道，而不是 id 的永久资格。手动更新
+    // 不继承旧 Forge 来源，否则新增 OIDC host 可绕过 Forge 的窄确认。
+    const installOrigin = opts.installOrigin;
     // 延续当前唤醒/沉睡状态。旧安装尚无 receipt 时，重新安装仍采用原
     // `.disabled` 镜像；损坏 receipt 一律保持停用。
     const enabled =
@@ -3023,7 +3051,7 @@ export class GhostManager {
         packageSha256,
         revision: receiptRevision,
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
-        ...(legacyInstallOrigin ? { installOrigin: legacyInstallOrigin } : {}),
+        ...(installOrigin ? { installOrigin } : {}),
       });
       await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
     } catch (err) {

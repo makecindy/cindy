@@ -36,6 +36,15 @@ export type IpcErrorCode =
   // 远端切模/切来源需要不同路由(claude-code setModel 守卫):提示重建会话。
   | 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE'
   | 'NO_LIVE_QUERY'
+  // 已保存账号切换 / 同步 / 新增账号。保留 auth 业务码跨 Electron IPC，
+  // renderer 才能区分重新登录、区域不匹配与本地凭证库故障。
+  | 'INVALID_AUTH_ACTION'
+  | 'PASSIVE_AUTH_MUTATION_BLOCKED'
+  | 'ACCOUNT_NOT_FOUND'
+  | 'ACCOUNT_REAUTH_REQUIRED'
+  | 'REGION_MISMATCH'
+  | 'CREDENTIAL_STORE_UNAVAILABLE'
+  | 'AUTH_FLOW_SUPERSEDED'
   // 智能通讯录: (platform, value) 身份已属于另一个联系人 — message 里带占用者 id
   | 'IDENTITY_CONFLICT'
   // domain-specific
@@ -263,6 +272,13 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'LOCAL_OLLAMA_NOT_READY',
   'REMOTE_MODEL_SWITCH_ROUTE_CHANGE',
   'NO_LIVE_QUERY',
+  'INVALID_AUTH_ACTION',
+  'PASSIVE_AUTH_MUTATION_BLOCKED',
+  'ACCOUNT_NOT_FOUND',
+  'ACCOUNT_REAUTH_REQUIRED',
+  'REGION_MISMATCH',
+  'CREDENTIAL_STORE_UNAVAILABLE',
+  'AUTH_FLOW_SUPERSEDED',
   'STALE_DIFF',
   'PUSH_LEASE_EXPIRED',
   'PUSH_NO_REMOTE',

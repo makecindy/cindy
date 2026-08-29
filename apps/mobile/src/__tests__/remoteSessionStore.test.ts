@@ -438,6 +438,85 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessions()[0].agentSwitchIntent).toBeNull();
   });
 
+  it('applies runtime model projections and preserves them only for legacy snapshots', () => {
+    const runtimeBaseline = {
+      agentKind: 'codex' as const,
+      model: 'gpt-baseline',
+      providerId: 'xd',
+      effort: 'high',
+      fastMode: false,
+    };
+    const runtimeEffective = {
+      agentKind: 'codex' as const,
+      model: 'gpt-runtime',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+    };
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', {
+      model: runtimeEffective.model,
+      providerId: runtimeEffective.providerId,
+      effort: runtimeEffective.effort,
+      fastMode: runtimeEffective.fastMode,
+      runtimeGeneration: 3,
+      runtimeBaseline,
+      runtimeEffective,
+      runtimePending: null,
+    });
+
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: 'Legacy snapshot' }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      title: 'Legacy snapshot',
+      runtimeGeneration: 3,
+      runtimeBaseline,
+      runtimeEffective,
+      runtimePending: null,
+    });
+
+    const settledBaseline = { ...runtimeBaseline, model: 'gpt-user-selected' };
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', {
+        model: settledBaseline.model,
+        runtimeGeneration: 0,
+        runtimeBaseline: settledBaseline,
+        runtimeEffective: settledBaseline,
+        runtimePending: null,
+      }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      model: 'gpt-user-selected',
+      runtimeGeneration: 0,
+      runtimeBaseline: settledBaseline,
+      runtimeEffective: settledBaseline,
+      runtimePending: null,
+    });
+  });
+
+  it('clears stale effort for a fixed-strength runtime model', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { effort: 'high' })]);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', {
+      model: 'fixed-strength-model',
+      providerId: 'openai',
+      effort: '',
+      runtimeEffective: {
+        agentKind: 'codex',
+        model: 'fixed-strength-model',
+        providerId: 'openai',
+        effort: null,
+        fastMode: false,
+      },
+    });
+
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      model: 'fixed-strength-model',
+      effort: '',
+      runtimeEffective: { effort: null },
+    });
+  });
+
   it('does not let a draft sentinel snapshot replace an optimistic first-message title', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
       session('s1', { title: '帮我排查登录失败' }),

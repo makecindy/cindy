@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
+    "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
@@ -39,6 +40,12 @@
     "details": "Error details"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "Database Cleanup Was Interrupted",
+      "interruptedDescription": "Database cleanup stopped unexpectedly. Restart Cindy so it can recover safely from the saved maintenance state.",
+      "recoveryFailedTitle": "The Local Database Couldn't Be Recovered Safely",
+      "recoveryFailedDescription": "Database cleanup recovery failed. Cindy stopped opening the local database to avoid overwriting the original data."
+    },
     "updateReady": {
       "title": "Update required to continue",
       "description": "Your local data was upgraded by a newer version of Cindy and can't be opened by this version. The new version is downloaded and ready — restart to install it and get back in.",
@@ -828,8 +835,77 @@
         "legacyImagesLabel": "Image cache directory",
         "legacyImagesDescription": "Cindy does not scan or clean this directory automatically. Deleting files may make images in message history unavailable; review them before deleting.",
         "legacyImagesOpenButton": "Open directory",
+        "legacyImagesClearButton": "Clear image cache",
         "legacyImagesDirectoryMissing": "The image cache directory was not found",
         "legacyImagesOpenFailed": "Could not open the image cache directory. Try again.",
+        "legacyImagesClearConfirmTitle": "Clean up the image cache?",
+        "legacyImagesClearConfirmDescription": "Only files in the image cache directory will be deleted; the message database will not be queried. Images in message history may become unavailable, and this cannot be undone.",
+        "legacyImagesClearConfirmButton": "Clear image cache",
+        "legacyImagesCleared": "Image cache cleaned up",
+        "legacyImagesClearFailed": "Could not clean up the image cache. Try again.",
+        "chatAttachmentsLabel": "Message attachment cache directory",
+        "chatAttachmentsDescription": "Some attachments you send are stored here. Cindy does not scan or clean this directory automatically. Deleting files may make attachments in message history unavailable.",
+        "chatAttachmentsOpenButton": "Open directory",
+        "chatAttachmentsClearButton": "Clear attachment cache",
+        "chatAttachmentsDirectoryMissing": "The message attachment cache directory was not found",
+        "chatAttachmentsOpenFailed": "Could not open the message attachment cache directory. Try again.",
+        "chatAttachmentsClearConfirmTitle": "Clean up the message attachment cache?",
+        "chatAttachmentsClearConfirmDescription": "Only files in the message attachment cache directory will be deleted; the message database will not be queried. Some attachments in message history may become unavailable, and this cannot be undone.",
+        "chatAttachmentsClearConfirmButton": "Clear attachment cache",
+        "chatAttachmentsCleared": "Message attachment cache cleaned up",
+          "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
+          "dbSlimmingBackupDirectoryDialogTitle": "Choose database cleanup backup folder",
+          "dbSlimmingLabel": "Database cleanup",
+          "dbSlimmingDescription": "Scan history in soft-deleted and archived tasks not updated for the selected period, with an option to include active tasks. After confirmation, Cindy restarts and compacts the database before opening it. Files and generated media on disk are not deleted.",
+          "dbSlimmingScanButton": "Scan database",
+          "dbSlimmingScanLoading": "Scanning the database…",
+          "dbSlimmingScanResultTitle": "Database scan results",
+          "dbSlimmingExecutionLoading": "Preparing database cleanup. Cindy will restart shortly…",
+          "dbSlimmingArchiveAgeLabel": "Clean tasks not updated for more than",
+          "dbSlimmingArchiveAgeOption7Days": "7 days",
+          "dbSlimmingArchiveAgeOption1": "1 month",
+          "dbSlimmingArchiveAgeOption3": "3 months",
+          "dbSlimmingArchiveAgeOption6": "6 months",
+          "dbSlimmingIncludeActiveLabel": "Clean active task history",
+          "dbSlimmingIncludeActiveDescription": "Also clean history from active tasks older than the selected period",
+          "dbSlimmingIncludeActiveConfirmTitle": "Include active tasks in database cleanup?",
+          "dbSlimmingIncludeActiveConfirmDescription": "An active task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, active, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible active tasks and their Agent context will be reset; task entries remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
+          "dbSlimmingIncludeActiveConfirmButton": "Include active tasks",
+          "dbSlimmingIncludeActiveCancelButton": "Keep active tasks",
+          "dbSlimmingBackupLabel": "Back up database before cleanup",
+          "dbSlimmingBackupDefaultLocation": "Database folder (keeps only the latest cleanup backup)",
+          "dbSlimmingUseDefaultDirectoryButton": "Use default folder",
+          "dbSlimmingChooseDirectoryButton": "Choose backup folder",
+          "dbSlimmingBackupDirectoryFailed": "Could not choose a backup folder. Try again.",
+          "dbSlimmingScanFailed": "Could not scan the database. Try again.",
+          "dbSlimmingScheduleFailed": "Could not schedule database cleanup. Scan again and retry.",
+          "dbSlimmingBackupMissing": "The latest cleanup backup could not be found.",
+          "dbSlimmingBackupOpenFailed": "Could not open the cleanup backup location. Try again.",
+          "dbSlimmingReportTasks": "Will clean {{deleted}} soft-deleted tasks and {{archived}} archived tasks",
+          "dbSlimmingReportTasksWithActive": "Will clean {{active}} active tasks, {{deleted}} soft-deleted tasks, and {{archived}} archived tasks",
+          "dbSlimmingReportMessages": "Estimated message content to clean: {{count}} messages (about {{size}})",
+          "dbSlimmingReportSpace": "Database: {{database}}; temporary space needed: at least {{temporary}}; available: {{free}}",
+          "dbSlimmingSpaceUnknown": "unknown",
+          "dbSlimmingInsufficientSpace": "There is not enough disk space to safely create a working copy and compact the database.",
+          "dbSlimmingConfirmButton": "Confirm database cleanup",
+          "dbSlimmingConfirmTitle": "Restart and clean up the database?",
+          "dbSlimmingConfirmDescriptionWithBackup": "Cindy will restart gracefully, then back up, clean history, compact, and verify the database before opening it. Data is cleaned only after the backup is written and verified.",
+          "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy will restart gracefully, then clean and compact the database before opening it. No backup will be created, and cleaned history cannot be recovered.",
+          "dbSlimmingRestartButton": "Restart and clean up database",
+          "dbSlimmingResultCompleted": "Removed {{messages}} messages from {{tasks}} tasks and reduced the database by {{size}}.",
+          "dbSlimmingOpenBackupButton": "Open cleanup backup",
+          "dbSlimmingToastCompleted": "Database cleanup complete; freed {{size}}",
+          "dbSlimmingHistoryCleared": "History has been cleared",
+          "dbSlimmingFailure": {
+            "backup-failed": "The database backup could not be created or retained. No history was cleaned.",
+            "cleanup-failed": "Database cleanup did not finish. The original database is unchanged.",
+            "database-in-use": "Another instance is using the database, so cleanup was not run.",
+            "insufficient-space": "There was not enough disk space to clean up the database.",
+            "integrity-check-failed": "The database integrity check failed. The original database was restored.",
+            "replacement-failed": "The compacted database could not be installed. The original database was restored.",
+            "recovery-failed": "Database recovery failed. Cindy stopped opening the database to protect the original data.",
+            "unknown": "Database cleanup did not finish. Try again."
+          },
         "cleanupLabel": "Disk cleanup",
         "cleanupDescription": "Scans for media files no session references anymore, oversized caches, and obsolete folders. Shows the numbers first and deletes only after you confirm; images in composer drafts and queued messages are protected automatically.",
         "scanButton": "Scan",
@@ -1355,6 +1431,9 @@
         "subtitle": "All models · Claude Code / Codex · billed from your balance per token",
         "modelLabel": "All models",
         "billingLabel": "billed from your balance per token",
+        "accountTier": {
+          "free": "Free tier"
+        },
         "disconnectConfirm": {
           "title": "Disconnect Cindy AI?",
           "description": "Disconnecting clears the Cindy AI key saved locally. You will need to reconnect to keep using models provided by Cindy AI."
@@ -1618,6 +1697,8 @@
         "refreshFailed": "Model list couldn’t be refreshed — try again later",
         "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
         "disableModel": "Disable This Model",
+        "paymentRequired": "Paid",
+        "paymentUnlock": "Pay to unlock",
         "enableModel": "Enable This Model",
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
         "accessWriteFailed": "Couldn't save the change. Please try again.",
@@ -1959,6 +2040,7 @@
     },
     "betaChannel": {
       "title": "Beta channel",
+      "badge": "Beta",
       "description": "Join the beta channel to receive upcoming client updates early. Takes effect after restart.",
       "toggleAria": "Beta channel toggle",
       "restartTitle": "Restart Cindy",
@@ -1968,7 +2050,7 @@
       "restartBusyDescription": "Tasks are currently in progress and restarting will interrupt them. Restart now anyway?",
       "unavailable": "The beta channel is unavailable — could not reach the beta update server.",
       "toast": {
-        "disabled": "Beta channel disabled; takes effect after restart",
+        "disabled": "Beta channel disabled. Cindy will keep the current version and switch when a newer release is available",
         "toggleFailed": "Failed to toggle beta channel"
       }
     },
@@ -2587,13 +2669,20 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
+      "description": "Control when Claude Code and Pi automatically compact context. Codex manages context compaction separately.",
       "card": {
         "label": "Compaction trigger threshold",
-        "badge": "Claude Code and Pi",
+        "badge": "Claude Code",
         "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
         "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
         "sliderAria": "Adjust auto-compaction trigger threshold"
+      },
+      "piCard": {
+        "label": "Compaction trigger threshold",
+        "badge": "Pi",
+        "description": "Pi's native auto-compaction starts when context usage reaches this percentage. The setting is applied the next time a Pi task starts.",
+        "hint": "Lower values compact earlier and leave more room for the response; higher values compact later. Changes apply the next time a Pi task starts.",
+        "sliderAria": "Adjust Pi auto-compaction trigger threshold"
       }
     },
     "personalization": {
@@ -2704,7 +2793,7 @@
     "chatEmbedding": {
       "cell": {
         "label": "Enable chat semantic indexing",
-        "description": "New chat messages are embedded into a local vector store (voyage-4) for future semantic search. Stays on this device. Only messages after enabling are indexed; existing history is not backfilled."
+        "description": "New messages and semantic search queries are sent to the vector model (voyage-4) to create vectors. Message vectors are stored in a local index. Only messages created after this setting is enabled are indexed; existing chat history is not backfilled."
       },
       "toggleAria": "Toggle chat semantic indexing",
       "toast": {
@@ -3142,6 +3231,10 @@
           "name": "Cindy Memory",
           "description": "Cross-agent long-term memory for persistent context across sessions"
         },
+        "docs": {
+          "name": "Document Toolkit",
+          "description": "Turn content into real files — PDF, Word, Excel, and PowerPoint — and read them back to verify the result. No extra software to install."
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "Host capability disclosure — tells agents what tools and models are available"
@@ -3166,6 +3259,18 @@
         "enabled": "Silent encrypted-content retry is on.",
         "disabled": "Silent encrypted-content retry is off.",
         "toggleFailed": "Failed to switch silent encrypted-content retry"
+      }
+    },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "Automatic task model fallback",
+        "description": "After repeated connection or capacity failures, try another connected source for the same model, then a model explicitly recommended for the current agent. It never switches agents or changes your saved selection. Off by default."
+      },
+      "toggleAria": "Toggle automatic task model fallback",
+      "toast": {
+        "enabled": "Automatic task model fallback is on.",
+        "disabled": "Automatic task model fallback is off.",
+        "toggleFailed": "Failed to change automatic task model fallback"
       }
     },
     "remoteControl": {
@@ -3440,6 +3545,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
+        "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
         "retry": "Retry",
@@ -4340,6 +4446,16 @@
         "expandDescription": "Show Full Description",
         "collapseDescription": "Hide Full Description"
       },
+      "forgeOidcInstallConfirm": {
+        "title": "Confirm organization identity testing",
+        "description": "After installation, this plugin can use your current organization identity to request Connection JWTs for the hosts below. Confirm that this is the plugin you just built.",
+        "pluginNameLabel": "Plugin",
+        "pluginIdLabel": "Plugin id",
+        "hostsLabel": "Organization identity request hosts",
+        "typedIdLabel": "Enter the plugin id <strong>{{id}}</strong> to confirm",
+        "confirm": "Install and allow testing",
+        "cancel": "Cancel"
+      },
       "trust": {
         "official": "Official Cindy plugin",
         "officialDetail": "Bundled with Cindy.",
@@ -5191,6 +5307,32 @@
       "envFailed": "Environment setup failed — click to retry"
     },
     "downloadStats": "{{percent}}% · {{speed}} MB/s · {{done}} MB / {{total}} MB",
+    "databaseCleanup": {
+      "title": "Cleaning up the database",
+      "progressLabel": "Database cleanup progress",
+      "phase": {
+        "preparing": "Preparing cleanup",
+        "backingUp": "Backing up the database",
+        "copying": "Creating a cleanup working copy",
+        "cleaning": "Deleting expired messages",
+        "compacting": "Compacting the database",
+        "verifying": "Verifying the database",
+        "finalizing": "Safely replacing the database",
+        "cancelling": "Cancelling cleanup"
+      },
+      "elapsedAndRemaining": "Elapsed {{elapsed}} · About {{remaining}} remaining",
+      "elapsedFinalizing": "Elapsed {{elapsed}} · Almost done",
+      "duration": {
+        "seconds": "{{count}} sec",
+        "minutes": "{{count}} min"
+      },
+      "cancelAction": "Cancel cleanup and open Cindy",
+      "cancellingAction": "Cancelling cleanup…",
+      "finalizingAction": "Finishing up…",
+      "cancelHint": "You can cancel safely. Cindy will keep the original database and continue starting.",
+      "cancellingHint": "Stopping cleanup. The original database will not be changed.",
+      "finalizingHint": "Safely replacing the database. Do not close Cindy."
+    },
     "envFailed": {
       "title": "Environment initialization failed",
       "retry": "Retry"
@@ -5404,7 +5546,7 @@
         "provider": "Provider",
         "tokens": "Total tokens",
         "context": "Context used",
-            "lastActive": "Last active"
+        "lastActive": "Last active"
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
       "tokensTooltip": "The session's lifetime total, not the tokens spent within the last 30 days."
@@ -5470,6 +5612,7 @@
   },
   "contentHeader": {
     "toggleSidebar": "Toggle sidebar",
+    "exitFullscreen": "Exit full screen",
     "collapseSidebar": "Collapse Sidebar",
     "expandSidebar": "Expand Sidebar",
     "collapsePanel": "Collapse",
@@ -6367,12 +6510,31 @@
     },
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
+      "settingsLinkBeta": "Settings, current user: {{name}}, Beta channel enabled",
+      "moreLabel": "More, current user: {{name}}",
+      "menuSettings": "Settings",
+      "menuAddAccount": "Sign in to another account",
+      "menuLogout": "Log out",
       "canaryBadge": "Canary user",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "viewReleaseNotes": "View release notes",
       "reopenUpdateBanner": "Update ready — click to review",
       "downloadMobile": "Download Cindy Mobile"
+    },
+    "accountSwitcher": {
+      "title": "Switch account",
+      "description": "Choose an account used on this device",
+      "syncing": "Checking sign-in status…",
+      "syncFailed": "Some account statuses could not be updated",
+      "switchFailed": "Could not switch accounts. Sign in to that account again",
+      "runningTaskTitle": "Stop running tasks and switch accounts?",
+      "runningTaskDescription": "Tasks are currently running. Switching accounts will stop them first, and unfinished work will not continue.",
+      "runningTaskConfirm": "Stop Tasks and Switch",
+      "startFailed": "Could not open the sign-in page. Try again later",
+      "addAccount": "Sign in to another account",
+      "back": "Back",
+      "close": "Close"
     },
     "mobileDownload": {
       "title": "Control Cindy Remotely",
@@ -6600,6 +6762,13 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "This model needs an API key — configure it in Settings",
+      "paymentRequired": {
+        "badge": "Paid",
+        "unlock": "Pay to unlock",
+        "title": "Pay to Unlock This Model",
+        "description": "Subscribe to a paid plan or top up your balance to use this model.",
+        "action": "View Billing Options"
+      },
       "hidden": "Hidden",
       "modelListAria": "Model list",
       "subscriptionDirectDisabled": {
@@ -7255,7 +7424,16 @@
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "Request details"
+      "userTurnCostDetailsTitle": "Request details",
+      "relative": {
+        "justNow": "just now",
+        "minutesAgo_one": "{{count}} minute ago",
+        "minutesAgo_other": "{{count}} minutes ago",
+        "hoursAgo_one": "{{count}} hour ago",
+        "hoursAgo_other": "{{count}} hours ago",
+        "daysAgo_one": "{{count}} day ago",
+        "daysAgo_other": "{{count}} days ago"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
@@ -7316,6 +7494,9 @@
       "forkStripEncrypted": "Fork and strip",
       "forkStripEncryptedRunning": "Forking…",
       "forkStripEncryptedTitle": "Fork and strip into a new session",
+      "forkStripOversizedHistory": "Slim history and continue",
+      "forkStripOversizedHistoryRunning": "Forking…",
+      "forkStripOversizedHistoryTitle": "Fork into a new task after removing oversized inline images",
       "codexSessionExpiredLogin": "Reconnect ChatGPT",
       "codexSessionReconnected": "ChatGPT is reconnected. Click “Retry” to continue.",
       "networkUnreachable": "Network error: the service is temporarily unreachable. Click \"Retry\" to try again.",
@@ -7488,6 +7669,7 @@
       "promptSend": "Send",
       "promptCancel": "Cancel"
     },
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "agentActionRow": {
       "noContent": "Nothing to display",
       "fileChange": {
@@ -7680,6 +7862,7 @@
       "contextRebuild": {
         "labelOverflow": "Context reorganized, continuing",
         "labelTimeout": "Last turn didn't respond; context reorganized to continue",
+        "labelStrip": "Oversized images removed, continuing",
         "toggleHint": "View handoff context",
         "handoffTitle": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)",
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
@@ -7687,6 +7870,7 @@
       "review": {
         "running": "Reviewing current work",
         "completed": "Review complete",
+        "stale": "Review complete · result out of date",
         "failed": "Review did not complete",
         "openTask": "Open review task",
         "readOnlyHint": "Independent task · no development memory · read-only",
@@ -7860,7 +8044,10 @@
     "generatedFiles": {
       "title": "Files created this message",
       "showMore": "Show {{count}} more",
-      "showLess": "Show less"
+      "showLess": "Show less",
+      "artifactLabel": "Artifact",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}} pages", "slides": "{{count}} slides", "sheets": "{{count}} sheets", "rows": "{{count}} rows", "bytes": "{{count}}" }
     },
     "turnChanges": {
       "title": "Changed {{count}} files",
@@ -8756,7 +8943,15 @@
         "custom": "Custom"
       },
       "weekday": {
-        "full": { "0": "Sunday", "1": "Monday", "2": "Tuesday", "3": "Wednesday", "4": "Thursday", "5": "Friday", "6": "Saturday" },
+        "full": {
+          "0": "Sunday",
+          "1": "Monday",
+          "2": "Tuesday",
+          "3": "Wednesday",
+          "4": "Thursday",
+          "5": "Friday",
+          "6": "Saturday"
+        },
         "short": { "0": "Su", "1": "Mo", "2": "Tu", "3": "We", "4": "Th", "5": "Fr", "6": "Sa" }
       },
       "time": {
@@ -8922,7 +9117,7 @@
       "sessionCost": "Session cost {{cost}}",
       "sessionValue": "Session value {{value}}",
       "runCost": "Run cost {{cost}}",
-      "runValue": "Estimated run value {{value}}",
+      "runTokens": "Token usage {{tokens}}",
       "costUnavailable": "Cost unavailable",
       "legacyCostUnavailable": "Historical cost unavailable",
       "persistentSessionGroup": "Persistent session {{session}} · {{count}} runs",
@@ -9543,7 +9738,8 @@
       "publicNameHint": "This attribution will appear publicly in the Issue body",
       "anonymous": "Anonymous",
       "useAnonymous": "Use Anonymous Attribution",
-      "envLine": "Attached automatically on submit: client {{appVersion}} · {{platform}} {{arch}} · UI language {{uiLanguage}}",
+      "envLine": "Attached automatically on submit: client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
       "regionLine": "Build region: {{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -9572,10 +9768,12 @@
   "ghostGrant": {
     "confirm": {
       "title": "“{{name}}” requests access to your files",
+      "titleRevealPath": "Allow the Agent to receive this media file's local path?",
       "count": "{{count}} files",
       "descriptionAttachments": "The files below are outside this session's working directory. If you allow, they will be handed to this plugin (it only receives content fingerprints, never paths).",
       "descriptionDir": "The directory/file below is outside this session's working directory. If you allow, its files will be handed to this plugin for upload (it only receives a one-time ticket, never paths).",
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
+      "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "dirMeta": "{{count}} files · {{size}}",
@@ -10215,6 +10413,8 @@
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
+      "codexHistoryOversized": "This task’s history includes oversized images, so remote compaction cannot finish. Cindy will omit those images and continue in this task.",
+      "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
       "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
       "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",
       "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue."
@@ -10231,7 +10431,7 @@
     },
     "confirm": {
       "logoutTitle": "Log out",
-      "logoutDescription": "Log out of the current account?",
+      "logoutDescription": "Log out of all accounts on this device?",
       "logoutConfirm": "Log out",
       "cancel": "Cancel",
       "sessionExpiredTitle": "Login expired",
@@ -10673,6 +10873,11 @@
       "count": "{{count}} orders",
       "incomplete": "There are many order records. Only the latest {{count}} are shown.",
       "orderId": "NO. {{id}}",
+      "copy": {
+        "action": "Copy Order ID {{id}}",
+        "success": "Order ID copied",
+        "failed": "Order ID wasn’t copied — try again"
+      },
       "states": {
         "completed": "Completed",
         "awaitingPayment": "Awaiting payment",

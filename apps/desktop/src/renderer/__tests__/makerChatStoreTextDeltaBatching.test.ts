@@ -2338,6 +2338,7 @@ describe('makerChatStore text delta batching', () => {
       source: null,
       endpoint: null,
       errorCode: 'NETWORK_ERROR',
+      accountTier: null,
     });
     onInputProjection?.(
       projection(SESSION_ID, {

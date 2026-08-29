@@ -18,6 +18,31 @@ import {
   repairSchemaDriftWithBackup,
 } from '../localDb/schemaDriftRepair';
 
+interface FtsRow {
+  rowid: number;
+  message_id: string;
+  session_id: string;
+  role: string;
+  content: string;
+}
+
+function ftsRows(db: Database.Database): FtsRow[] {
+  return db
+    .prepare(
+      `SELECT rowid, message_id, session_id, role, content
+       FROM messages_fts
+       ORDER BY rowid`,
+    )
+    .all() as FtsRow[];
+}
+
+function insertSearchMessage(db: Database.Database, id: string, content: string): void {
+  db.prepare(
+    `INSERT INTO messages(id, client_id, session_id, role, content, created_at)
+     VALUES (?, ?, 's1', 'user', ?, 1)`,
+  ).run(id, `client-${id}`, content);
+}
+
 describe('repairSchemaDrift', () => {
   it('derives managed tables from every sqliteTable export in schema.ts', () => {
     const exportedTableNames = Object.values(localSchema)
@@ -215,6 +240,64 @@ describe('repairSchemaDrift', () => {
           AND name = 'uniq_active_team_per_lead'
       `).get();
       expect(partialIndex).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('restores a missing FTS row map before later inserts, updates, and deletes', () => {
+    const db = new Database(':memory:');
+    try {
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+      db.prepare("INSERT INTO sessions(id, created_at, updated_at) VALUES ('s1', 1, 1)").run();
+      insertSearchMessage(db, 'm1', 'first');
+      insertSearchMessage(db, 'm2', 'second');
+      const before = ftsRows(db);
+
+      db.exec('DROP TABLE messages_fts_rows;');
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+
+      expect(
+        db.prepare('SELECT fts_rowid, message_id FROM messages_fts_rows ORDER BY fts_rowid').all(),
+      ).toEqual(before.map((row) => ({ fts_rowid: row.rowid, message_id: row.message_id })));
+
+      insertSearchMessage(db, 'm3', 'third');
+      db.prepare("UPDATE messages SET content = 'second updated' WHERE id = 'm2'").run();
+      db.prepare("DELETE FROM messages WHERE id = 'm1'").run();
+
+      expect(ftsRows(db).map(({ message_id, content }) => ({ message_id, content }))).toEqual([
+        { message_id: 'm2', content: 'second updated' },
+        { message_id: 'm3', content: 'third' },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rebuilds stale FTS content while restoring a missing row map', () => {
+    const db = new Database(':memory:');
+    try {
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+      db.prepare("INSERT INTO sessions(id, created_at, updated_at) VALUES ('s1', 1, 1)").run();
+      insertSearchMessage(db, 'm1', 'canonical');
+      db.prepare("UPDATE messages_fts SET content = 'stale' WHERE message_id = 'm1'").run();
+      db.exec('DROP TABLE messages_fts_rows;');
+
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+
+      const rows = ftsRows(db);
+      const mapping = db
+        .prepare("SELECT fts_rowid FROM messages_fts_rows WHERE message_id = 'm1'")
+        .get() as { fts_rowid: number };
+      expect(rows).toEqual([
+        {
+          rowid: mapping.fts_rowid,
+          message_id: 'm1',
+          session_id: 's1',
+          role: 'user',
+          content: 'canonical',
+        },
+      ]);
     } finally {
       db.close();
     }

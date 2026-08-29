@@ -367,14 +367,22 @@ export const MAKER_INVOKE = {
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
+  SESSION_RUNTIME_FALLBACK_GET: 'maker:session-runtime-fallback:get',
+  SESSION_RUNTIME_FALLBACK_SET: 'maker:session-runtime-fallback:set',
+  SESSION_RUNTIME_FALLBACK_RESET: 'maker:session-runtime-fallback:reset',
   /**
-   * Claude Code 与 Pi 共用的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
+   * Claude Code 的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
    * 经 runtimeConfig.autoCompactThresholdPct getter 热读，当前会话下一轮结束即按新值判断。
    */
   COMPACTION_GET_PCT: 'maker:compaction:get-pct',
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
   COMPACTION_SET_PCT: 'maker:compaction:set-pct',
   COMPACTION_RESET_PCT: 'maker:compaction:reset-pct',
+  /** Pi 原生自动上下文压缩触发阈值。下次 startSession / 恢复任务时读取。 */
+  PI_COMPACTION_GET_PCT: 'maker:pi-compaction:get-pct',
+  PI_COMPACTION_GET_STATE: 'maker:pi-compaction:get-state',
+  PI_COMPACTION_SET_PCT: 'maker:pi-compaction:set-pct',
+  PI_COMPACTION_RESET_PCT: 'maker:pi-compaction:reset-pct',
   /**
    * LSP Beta 开关 ——
    *  - GET: renderer 启动期同步 localStorage 镜像
@@ -385,12 +393,11 @@ export const MAKER_INVOKE = {
   LSP_MODE_GET: 'maker:lsp-mode:get',
   LSP_MODE_SET: 'maker:lsp-mode:set',
   /**
-   * 聊天嵌入开关 (Phase 1.2 chat-history-embedder) ——
-   *  - GET: 启动期 renderer 同步 localStorage 镜像
-   *  - SET: 用户 toggle 时落 <userData>/chat-embedding-settings.json, 立即触发
-   *         chat-history-embedder.setChatEmbeddingEnabled(); 第一次开启时
-   *         初始化 cutoff (embedding_meta.chat_embedding_started_at)。
-   * 默认 false (新装包不会自动产生 ~¥0.09/天 embedding 费用)。
+   * 对话语义索引开关 (chat-history-embedder) ——
+   *  - GET: 启动期及账号切换时同步 owner-scoped renderer 镜像
+   *  - SET: 用户 toggle 时写入当前 owner 的明确 override，并立即 reconcile runtime；
+   *         第一次开启时初始化 cutoff (embedding_meta.chat_embedding_started_at)。
+   *  - 默认:已认证企业组织账号开启，其余账号 / 本地模式 / 未登录关闭。
    */
   CHAT_EMBEDDING_GET: 'maker:chat-embedding:get',
   CHAT_EMBEDDING_SET: 'maker:chat-embedding:set',
@@ -585,9 +592,9 @@ export const MAKER_INVOKE = {
   /** 表单「AI 生成」:按自然语言描述生成前置检查脚本并落盘,返回可填入的命令。 */
   SCHEDULE_GENERATE_PRE_RUN_HOOK: 'maker:schedule:generate-pre-run-hook',
   SCHEDULE_LIST_RUNS: 'maker:schedule:list-runs',
-  /** Sidebar 聚合索引：带 sessionId 的 run + 未读终态 run，避免固定 history limit 截断。 */
+  /** Sidebar 聚合索引：每个 session 最新映射 + 全部 running / 未读终态 run。 */
   SCHEDULE_LIST_SIDEBAR_INDEX_RUNS: 'maker:schedule:list-sidebar-index-runs',
-  /** Automation 列表总开销：按 schedule 去重 session 汇总 sessions.total_cost_usd。 */
+  /** 已移除累计费用展示；保留 channel 供旧 device-link 控制端降级为空结果。 */
   SCHEDULE_LIST_COST_SUMMARIES: 'maker:schedule:list-cost-summaries',
   SCHEDULE_DELETE_RUN: 'maker:schedule:delete-run',
   /** Renderer 在 delete/pause 前查这条 schedule 当前有多少个 in-flight run,>0 时弹二次确认。 */
@@ -793,6 +800,8 @@ export const MAKER_SEND = {
 
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
+  /** Runtime agent roster changed after an optional agent recovery. */
+  AGENTS_CHANGED: 'maker:agents:changed',
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */
@@ -813,6 +822,8 @@ export const MAKER_PUSH = {
    * 模型选择器 live 刷新）。无 payload；收到即重拉 listProviders。
    */
   PROVIDER_CHANGED: 'maker:provider:changed',
+  /** 当前 owner 的对话语义索引设置由另一窗口 / 进程改动。payload 为 owner stamp。 */
+  CHAT_EMBEDDING_CHANGED: 'maker:chat-embedding:changed',
   /** 本机 Ollama 运行态变化（设置页右栏 + 发消息前就绪）。 */
   LOCAL_MODEL_STATUS: 'maker:local-model:status',
   /** 本机 Ollama /api/pull 进度。 */

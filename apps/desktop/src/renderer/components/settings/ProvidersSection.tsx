@@ -309,6 +309,7 @@ function RowIconButton({
 function DetailHeader({
   icon,
   title,
+  modelCountSuffix,
   subtitle,
   trailing,
   provider,
@@ -320,6 +321,8 @@ function DetailHeader({
 }: {
   icon: ReactNode;
   title: string;
+  /** 紧跟模型数量的供应商专属元数据。 */
+  modelCountSuffix?: ReactNode;
   subtitle: string;
   trailing: ReactNode;
   provider?: ProviderView;
@@ -389,6 +392,7 @@ function DetailHeader({
                   {title}
                 </span>
                 {modelCount !== null && <ModelCountChip count={modelCount} />}
+                {modelCountSuffix}
                 {subscriptionProduct && (
                   <CustomTag
                     label={t('settings.providers.models.subscriptionProduct', {
@@ -1396,16 +1400,13 @@ function XdGatewayHeader({
   const assetModule =
     assetState.kind === 'hidden' ? undefined : (
       <div
-        className={cn(
-          'flex flex-wrap justify-between gap-x-6 gap-y-4 border-t px-5 py-5',
-          assetState.kind === 'fault' ? 'items-center gap-y-3' : 'items-start',
-        )}
+        data-testid="cindy-ai-asset-module"
+        className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 border-t px-5 py-4"
         style={{ borderColor: 'var(--settings-theme-card-border)' }}
       >
         {assetState.kind === 'fault' ? (
           <>
-            {/* 「本该有、这次拿不到」——讲清发生了什么 + 下一步,并就地给恢复入口
-                (DESIGN「Errors = what happened + what to do」)。 */}
+            {/* 「本该有、这次拿不到」——讲清发生了什么 + 下一步,并就地给恢复入口。 */}
             <p
               className="max-w-[400px] text-13 leading-relaxed"
               style={{ color: 'var(--text-secondary)' }}
@@ -1416,7 +1417,7 @@ function XdGatewayHeader({
           </>
         ) : (
           <>
-            <div className="min-w-0">
+            <div className="min-w-[120px]">
               <p className="text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
                 {t('billing.balance.title')}
               </p>
@@ -1432,16 +1433,12 @@ function XdGatewayHeader({
                 )}
               </p>
             </div>
-            {/* pt 与金额基线光学对齐(标签 12px + 6px 间距的一半)。 */}
-            <div className="flex shrink-0 items-center gap-4 pt-3.5">
-              <button
-                type="button"
+            {/* 余额充值是主动作；查看用量为同区块内的次动作。 */}
+            <div className="flex shrink-0 items-center gap-3">
+              <PillButton
+                label={t('settings.providers.xd.asset.viewUsage')}
                 onClick={() => goToBilling()}
-                className="text-13 transition-colors hover:text-[var(--text-primary)]"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                {t('settings.providers.xd.asset.viewUsage')}
-              </button>
+              />
               <CtaPillButton
                 label={t('billing.settings.topupCard.action')}
                 onClick={() => goToBilling('topup')}
@@ -1456,6 +1453,16 @@ function XdGatewayHeader({
     <DetailHeader
       icon={<XDIncMark size={18} />}
       title={t('settings.providers.xd.title')}
+      modelCountSuffix={
+        syncStatus.accountTier === 'free' ? (
+          <span
+            data-testid="cindy-ai-free-tier-badge"
+            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
+          >
+            {t('settings.providers.xd.accountTier.free')}
+          </span>
+        ) : undefined
+      }
       subtitle={providerSubtitleForDisplay(provider, t('settings.providers.xd.modelLabel'), {
         suffix: t('settings.providers.xd.billingLabel'),
         fallback: t('settings.providers.xd.subtitle'),

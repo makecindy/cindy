@@ -80,6 +80,65 @@ describe('capped Review workspace fingerprint', () => {
     ).rejects.toBeInstanceOf(ReviewCappedWorkspaceFingerprintError);
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'symlinkMode link-text binds the link text without resolving the target (#2463 review)',
+    async () => {
+      // 悬空 / 指向仓库外的 symlink 是合法 Git 改动(Git 记录的内容就是链接
+      // 文本);resolve 语义下会 fail closed 中止,link-text 语义绑定文本本身。
+      const repoRoot = await makeTempDir();
+      const link = path.join(repoRoot, 'link.ts');
+      await fs.symlink('../shared/lib', link);
+      const opts = { symlinkMode: 'link-text' as const };
+
+      const before = await fingerprintReviewCappedWorkspaceFiles(repoRoot, ['link.ts'], opts);
+      const again = await fingerprintReviewCappedWorkspaceFiles(repoRoot, ['link.ts'], opts);
+      expect(again).toBe(before);
+
+      await fs.unlink(link);
+      await fs.symlink('../shared/other', link);
+      const after = await fingerprintReviewCappedWorkspaceFiles(repoRoot, ['link.ts'], opts);
+      expect(after).not.toBe(before);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'symlinkMode link-text distinguishes non-UTF-8 target bytes (#2463 review)',
+    async () => {
+      // readlink 默认按 UTF-8 解码,0xff / 0xfe 等非法字节都坍缩成替换字符:
+      // 原始字节不同的两个链接文本必须产生不同指纹。
+      const repoRoot = await makeTempDir();
+      const link = path.join(repoRoot, 'raw-link');
+      const opts = { symlinkMode: 'link-text' as const };
+
+      await fs.symlink(Buffer.from([0x2e, 0x2e, 0x2f, 0xff]), link);
+      const withFf = await fingerprintReviewCappedWorkspaceFiles(repoRoot, ['raw-link'], opts);
+      await fs.unlink(link);
+      await fs.symlink(Buffer.from([0x2e, 0x2e, 0x2f, 0xfe]), link);
+      const withFe = await fingerprintReviewCappedWorkspaceFiles(repoRoot, ['raw-link'], opts);
+
+      expect(withFe).not.toBe(withFf);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'symlinkMode link-text never reads target bytes (#2463 review)',
+    async () => {
+      // 指向敏感文件的链接:只绑定文本,目标内容变化不得进入指纹 ——
+      // 反证目标字节从未被读取。
+      const repoRoot = await makeTempDir();
+      const sensitive = path.join(repoRoot, '.env.local');
+      await fs.writeFile(sensitive, 'TOKEN=first');
+      await fs.symlink('.env.local', path.join(repoRoot, 'safe-name.ts'));
+      const opts = { symlinkMode: 'link-text' as const };
+
+      const before = await fingerprintReviewCappedWorkspaceFiles(repoRoot, ['safe-name.ts'], opts);
+      await fs.writeFile(sensitive, 'TOKEN=other-value');
+      const after = await fingerprintReviewCappedWorkspaceFiles(repoRoot, ['safe-name.ts'], opts);
+
+      expect(after).toBe(before);
+    },
+  );
+
   it('fails closed instead of degrading to metadata above the byte limit', async () => {
     const repoRoot = await makeTempDir();
     await fs.writeFile(path.join(repoRoot, 'large.ts'), '1234');
@@ -87,5 +146,32 @@ describe('capped Review workspace fingerprint', () => {
     await expect(
       fingerprintReviewCappedWorkspaceFiles(repoRoot, ['large.ts'], { maxTotalBytes: 3 }),
     ).rejects.toBeInstanceOf(ReviewCappedWorkspaceFingerprintLimitError);
+  });
+});
+
+describe('git 路径词法校验的平台语义 (#2463 review)', () => {
+  it.skipIf(process.platform === 'win32')(
+    'accepts POSIX filenames containing backslashes (C:\\notes, dir\\..\\file)',
+    async () => {
+      // 反斜杠在 POSIX 上是普通文件名字符,git 会原样输出 —— 不能按 win32
+      // 语义误判为绝对路径/越界而中止 Review。
+      const repoRoot = await makeTempDir();
+      await fs.writeFile(path.join(repoRoot, 'C:\\notes'), 'a');
+      await fs.writeFile(path.join(repoRoot, 'dir\\..\\file'), 'b');
+
+      await expect(
+        fingerprintReviewCappedWorkspaceFiles(repoRoot, ['C:\\notes', 'dir\\..\\file']),
+      ).resolves.toBeTruthy();
+    },
+  );
+
+  it('still rejects "/"-separated parent traversal and absolute paths', async () => {
+    const repoRoot = await makeTempDir();
+    await expect(
+      fingerprintReviewCappedWorkspaceFiles(repoRoot, ['../escape.ts']),
+    ).rejects.toBeInstanceOf(ReviewCappedWorkspaceFingerprintError);
+    await expect(
+      fingerprintReviewCappedWorkspaceFiles(repoRoot, ['/abs.ts']),
+    ).rejects.toBeInstanceOf(ReviewCappedWorkspaceFingerprintError);
   });
 });

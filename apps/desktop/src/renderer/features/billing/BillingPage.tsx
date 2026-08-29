@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ChevronUp,
   CircleDollarSign,
+  Copy,
   CreditCard,
   ExternalLink,
   PackageOpen,
@@ -141,12 +142,11 @@ function isAwaitingPaymentOrder(order: BillingPaymentOrder): boolean {
   return phaseForOrder(order) === 'AWAITING_PAYMENT';
 }
 
-/**
- * 订单号在界面上只做「认得出是哪一单」用,全长展示会把左列挤没 —— 截断展示、完整值
- * 挂 title。截断取头部:服务端订单号带随机前缀,头 8 位已足够区分。
- */
-function shortOrderId(orderId: string): string {
-  return orderId.length > 8 ? orderId.slice(0, 8) : orderId;
+/** 订单号展示保留首尾用于对单，中段固定脱敏；复制仍使用服务端返回的完整原值。 */
+function maskedOrderId(orderId: string): string {
+  if (orderId.length <= 2) return '*'.repeat(orderId.length);
+  const visibleEdgeLength = Math.min(8, Math.floor((orderId.length - 1) / 2));
+  return `${orderId.slice(0, visibleEdgeLength)}****${orderId.slice(-visibleEdgeLength)}`;
 }
 
 function decimalParts(value: string): { value: bigint; scale: number } | null {
@@ -466,6 +466,12 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     ]);
   }, [loadBalance, loadOrders, loadSubscription]);
 
+  const refreshXdModelsAfterEntitlementChange = useCallback(async () => {
+    // 订阅权益会改变 Model Access 按当前用户返回的模型集合。这里必须走 XD 的
+    // 主进程真源刷新，不能只重载 Billing state 后继续使用 active-catalog 的旧快照。
+    await window.electronAPI.maker.refreshBuiltinProviderModels('xd');
+  }, []);
+
   useEffect(() => {
     void loadBillingState();
   }, [loadBillingState]);
@@ -474,7 +480,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     const refreshAfterPortal = () => {
       if (!subscriptionPortalRefreshPendingRef.current) return;
       subscriptionPortalRefreshPendingRef.current = false;
-      void loadBillingState();
+      // Stripe Portal can upgrade, downgrade, cancel, or resume a subscription. Billing
+      // state and the XD catalog are separate snapshots, so returning to Cindy must refresh
+      // both explicitly; the app-wide focus refresh is throttled and cannot provide this
+      // entitlement boundary.
+      void Promise.allSettled([
+        loadBillingState(),
+        refreshXdModelsAfterEntitlementChange(),
+      ]);
     };
     const onVisible = () => {
       if (document.visibilityState === 'visible') refreshAfterPortal();
@@ -485,7 +498,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       window.removeEventListener('focus', refreshAfterPortal);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [loadBillingState]);
+  }, [loadBillingState, refreshXdModelsAfterEntitlementChange]);
 
   const closeCheckout = useCallback(() => {
     const abandonedIncomplete = checkout.state.subscription?.status === 'INCOMPLETE';
@@ -517,6 +530,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
       void loadBalance();
+      // 服务端的 paid tier 同时认有效订阅和未全额退款的成功充值订单；两类支付
+      // 完成都必须重拉 `/models`，由服务端重算 tier 并收敛 AIGateway access group。
+      if (checkout.state.kind === 'TOPUP' || checkout.state.kind === 'SUBSCRIPTION') {
+        void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
+      }
       if (checkout.state.kind === 'SUBSCRIPTION') {
         void loadSubscription(checkout.state.subscription);
       }
@@ -528,16 +546,19 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     loadBalance,
     loadOrders,
     loadSubscription,
+    refreshXdModelsAfterEntitlementChange,
   ]);
 
   const handlePlanChangeSettled = useCallback(
     (kind: PlanChangeSettledKind) => {
       // APPLIED is the only settle that moves credits; one full reload covers
       // subscription, catalog, and balance without a second balance call.
-      if (kind === 'APPLIED') void loadBillingState();
-      else void loadSubscription();
+      if (kind === 'APPLIED') {
+        void loadBillingState();
+        void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
+      } else void loadSubscription();
     },
-    [loadBillingState, loadSubscription],
+    [loadBillingState, loadSubscription, refreshXdModelsAfterEntitlementChange],
   );
   const planChange = usePlanChange(accountId, handlePlanChangeSettled);
 
@@ -1752,6 +1773,14 @@ function OrderHistoryCard({
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const copyOrderId = async (orderId: string) => {
+    try {
+      await navigator.clipboard.writeText(orderId);
+      toast.success(t('billing.orders.copy.success'));
+    } catch {
+      toast.error(t('billing.orders.copy.failed'));
+    }
+  };
   /**
    * 支付方式只有在服务端还带着本单的支付动作时才知道 —— 订单投影(shared/billing.ts 的
    * BillingPaymentOrder)里没有收单渠道字段,终态订单通常也不再带 paymentAction。整批都
@@ -1788,13 +1817,25 @@ function OrderHistoryCard({
               <p className="truncate text-12 font-medium tabular-nums text-[var(--text-primary)]">
                 {formatLedgerTimestamp(order.createdAt, billingLocale)}
               </p>
-              {/* 订单号只用来对单,截断展示、完整值挂 title(客服场景要能复制全长)。 */}
-              <p
-                title={order.orderId}
-                className="mt-1 truncate font-mono text-10 text-[var(--text-tertiary)]"
+              {/* 可见值只露首尾；整块按钮含 Copy 图标，点击任一位置都复制完整订单号。 */}
+              <button
+                type="button"
+                onClick={() => void copyOrderId(order.orderId)}
+                aria-label={t('billing.orders.copy.action', {
+                  id: maskedOrderId(order.orderId),
+                })}
+                className={cn(
+                  '-ml-1.5 mt-0.5 inline-flex max-w-full cursor-pointer select-none items-center gap-1 rounded-full px-1.5 py-0.5 text-left',
+                  'font-mono text-10 text-[var(--text-tertiary)] transition-colors',
+                  'hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-secondary)]',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                )}
               >
-                {t('billing.orders.orderId', { id: shortOrderId(order.orderId) })}
-              </p>
+                <span className="min-w-0 break-all">
+                  {t('billing.orders.orderId', { id: maskedOrderId(order.orderId) })}
+                </span>
+                <Copy aria-hidden="true" size={11} className="shrink-0" />
+              </button>
             </div>
             <p className="min-w-0 truncate text-right text-12 font-medium tabular-nums text-[var(--text-primary)]">
               {formatMoney(order.amount, order.currency, billingLocale)}

@@ -6,6 +6,7 @@ import {
   findLatestRebuildableError,
   lookupVerifiedContextWindow,
   isContextOverflowErrorData,
+  isOversizedHistoryErrorData,
   isPiPromptRpcTimeoutError,
   persistedUserContentToWireMessage,
   planContextOverflowRollover,
@@ -126,6 +127,13 @@ describe('shouldRebuildPiNativeSession', () => {
         false,
       ),
     ).toBeNull();
+    expect(
+      findLatestRebuildableError([
+        msg('user', '继续', 'u1'),
+        msg('error', { reason: 'codex_history_oversized', message: 'oversized' }, 'e1'),
+      ]),
+    ).toEqual({ reason: 'codex_history_oversized', message: 'oversized' });
+    expect(isOversizedHistoryErrorData({ reason: 'codex_history_oversized' })).toBe(true);
   });
 });
 
@@ -182,17 +190,30 @@ describe('planContextOverflowRollover', () => {
 describe('createContextOverflowRollover', () => {
   function makeDeps(source: OverflowSourceMessage[]) {
     return {
-      getSessionRow: vi.fn(async () => ({
-        status: 'active',
-        agentKind: 'pi',
-        remoteHostId: null as string | null,
-        clearedAt: null,
-        sdkSessionId: '/tmp/dead.jsonl',
-        contextTokens: 0,
-        contextWindow: 200_000,
-        model: 'x-ai/grok-4.6',
-        providerId: 'xai',
-      })),
+      getSessionRow: vi.fn(
+        async (): Promise<{
+          status: string;
+          agentKind: string;
+          remoteHostId: string | null;
+          clearedAt: number | null;
+          sdkSessionId: string;
+          contextTokens: number;
+          contextWindow: number;
+          model: string;
+          providerId: string;
+          workingDir?: string | null;
+        }> => ({
+          status: 'active',
+          agentKind: 'pi',
+          remoteHostId: null,
+          clearedAt: null,
+          sdkSessionId: '/tmp/dead.jsonl',
+          contextTokens: 0,
+          contextWindow: 200_000,
+          model: 'x-ai/grok-4.6',
+          providerId: 'xai',
+        }),
+      ),
       listMessages: vi.fn(async () => source),
       findLatestUser: vi.fn(async (): Promise<OverflowSourceMessage | null> => null),
       findLatestRebuildMeta: vi.fn(async () => null),
@@ -668,7 +689,7 @@ describe('createContextOverflowRollover', () => {
     expect(deps.closeSession).toHaveBeenCalledWith('s1');
   });
 
-  it('keeps remote sessions out of automatic rollover', async () => {
+  it('keeps SSH remote sessions out of automatic rollover', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
@@ -690,6 +711,154 @@ describe('createContextOverflowRollover', () => {
     expect(deps.closeSession).not.toHaveBeenCalled();
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
+
+  it('strips oversized Codex history in place instead of forking a Cindy session', async () => {
+    const deps = makeDeps([
+      msg('user', '继续', 'u1'),
+      msg('error', { reason: 'codex_history_oversized', message: 'oversized' }, 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: 'thread-fat',
+      contextTokens: 20_000,
+      contextWindow: 200_000,
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      workingDir: '/work',
+    });
+    const tryStrip = vi.fn(async () => 'recovered' as const);
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      tryStripOversizedCodexHistory: tryStrip,
+    });
+    rollover.claim('s1');
+
+    await expect(
+      rollover.tryRecover('s1', { reason: 'codex_history_oversized', message: 'oversized' }),
+    ).resolves.toBe(true);
+    expect(tryStrip).toHaveBeenCalledWith({
+      sessionId: 's1',
+      threadId: 'thread-fat',
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      workingDir: '/work',
+    });
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
+  });
+
+  it('falls back to rollover when oversized strip fails', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: 'thread-fat',
+      contextTokens: 20_000,
+      contextWindow: 200_000,
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      workingDir: '/work',
+    });
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      tryStripOversizedCodexHistory: vi.fn(async () => 'failed' as const),
+    });
+    rollover.claim('s1');
+
+    await expect(
+      rollover.tryRecover('s1', { reason: 'codex_history_oversized', message: 'oversized' }),
+    ).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalled();
+  });
+
+  it('does not rebuild when strip reports the turn is still running', async () => {
+    const deps = makeDeps([
+      msg('user', '继续', 'u1'),
+      msg('error', { reason: 'codex_history_oversized', message: 'oversized' }, 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: 'thread-fat',
+      contextTokens: 20_000,
+      contextWindow: 200_000,
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      workingDir: '/work',
+    });
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      tryStripOversizedCodexHistory: vi.fn(async () => 'busy' as const),
+    });
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { reason: 'codex_history_oversized', message: 'oversized' }),
+    ).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.onRebuilt).not.toHaveBeenCalled();
+  });
+
+  it('does not rebuild when oversized strip finds a stale owner', async () => {
+    const deps = makeDeps([
+      msg('user', '继续', 'u1'),
+      msg('error', { reason: 'codex_history_oversized', message: 'oversized' }, 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: 'thread-fat',
+      contextTokens: 20_000,
+      contextWindow: 200_000,
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      workingDir: '/work',
+    });
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      tryStripOversizedCodexHistory: vi.fn(async () => 'stale' as const),
+    });
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { reason: 'codex_history_oversized', message: 'oversized' }),
+    ).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
+
+  it('does not rollover before send when current Codex thread is already slim', async () => {
+    const deps = makeDeps([
+      msg('user', '继续', 'u1'),
+      msg('error', { reason: 'codex_history_oversized', message: 'oversized' }, 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: 'thread-slim',
+      contextTokens: 20_000,
+      contextWindow: 200_000,
+      model: 'gpt-5.6',
+      providerId: 'openai',
+      workingDir: '/work',
+    });
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      tryStripOversizedCodexHistory: vi.fn(async () => 'not-needed' as const),
+    });
+
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.closeSession).not.toHaveBeenCalled();
   });
 });
 

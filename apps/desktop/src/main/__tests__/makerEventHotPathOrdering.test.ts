@@ -61,6 +61,31 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('installInteractionLifecycleObserver(session, null);');
   });
 
+  it('runs the paid-model fence in the shared Session lifecycle boundary', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const observerStart = wireSessionSource.indexOf('session.setTurnLifecycleObserver({');
+    const observerEnd = wireSessionSource.indexOf('\n  });', observerStart);
+    const observerSource = wireSessionSource.slice(observerStart, observerEnd);
+
+    expect(observerStart).toBeGreaterThanOrEqual(0);
+    expect(observerEnd).toBeGreaterThan(observerStart);
+    expect(observerSource).toContain('await verdictForModelRoute(');
+    expect(observerSource).toContain(
+      "if (verdict.kind === 'reroute' && verdict.reason === 'payment-required')",
+    );
+    expect(observerSource).toContain("verdict.reason === 'payment-required'");
+    expectOrder(
+      observerSource,
+      'await verdictForModelRoute(',
+      'sessionTurnLeaseTracker.markTurnStarted(',
+    );
+    expectOrder(
+      observerSource,
+      "if (verdict.kind === 'reroute' && verdict.reason === 'payment-required')",
+      'sessionTurnLeaseTracker.markTurnStarted(',
+    );
+  });
+
   it('rejects a fenced leftover terminal before register-side turn effects', () => {
     expect(source).toContain('delete rendererEvent.sessionTurnGeneration');
     expect(source).toContain('delete rendererEvent.sessionInstanceId');
@@ -534,7 +559,10 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken');
     expect(source).toContain('autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken)');
     expect(closedBlock).toContain(
-      'const preserveAutoResumeIntent = shouldPreserveCodexReconnectStalledAutoResume(',
+      'shouldPreserveCodexReconnectStalledAutoResume(session, closeReason)',
+    );
+    expect(closedBlock).toContain(
+      'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(closedBlock).toContain('if (preserveAutoResumeIntent) {');
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');

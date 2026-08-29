@@ -40,11 +40,22 @@ vi.mock('../../cindy-brain/index.js', () => ({
   installOrUpdateMarketGhostPackage: async (
     filePath: string,
     options: {
-      afterCommitInLock?: (installed: unknown) => void | Promise<void>;
+      afterCommitInLock?: (
+        installed: unknown,
+        evidence: {
+          rawManifestSha256: string;
+          legacyManifestDigest: string;
+          canonicalManifest: GhostManifest;
+        },
+      ) => void | Promise<void>;
     },
   ) => {
     const installed = await brain.installOrUpdateMarketGhostPackage(filePath, options);
-    await options.afterCommitInLock?.(installed);
+    await options.afterCommitInLock?.(installed, {
+      rawManifestSha256: 'b'.repeat(64),
+      legacyManifestDigest: 'c'.repeat(64),
+      canonicalManifest: (installed as { manifest: GhostManifest }).manifest,
+    });
     return installed;
   },
   rejectReservedGhostIdForCustomMarket: brain.rejectReservedGhostIdForCustomMarket,
@@ -240,6 +251,11 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
     expect(afterCommit).toHaveBeenCalledWith(
       expect.objectContaining({ manifest: GOOD_MANIFEST }),
       GOOD_MANIFEST,
+      {
+        rawManifestSha256: 'b'.repeat(64),
+        legacyManifestDigest: 'c'.repeat(64),
+        canonicalManifest: GOOD_MANIFEST,
+      },
     );
     expect(fs.existsSync(String(commitPath))).toBe(false);
   });

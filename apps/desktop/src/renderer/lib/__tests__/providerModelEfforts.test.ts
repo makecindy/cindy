@@ -116,6 +116,58 @@ describe('resolveProviderModelEfforts', () => {
     ).toBe('low');
   });
 
+  it('xAI Grok Pi 裸 id 与订阅 xai/ wire id 都能查到同一条档位', () => {
+    const xai = {
+      id: 'xai',
+      name: 'xAI',
+      source: 'builtin' as const,
+      connected: true,
+      agents: ['pi', 'codex'],
+      auth: { method: 'apiKey' as const },
+      routing: {
+        pi: { upstream: 'https://api.x.ai/v1', authStrategy: 'api-key-header' as const },
+        codex: { upstream: 'https://api.x.ai/v1', authStrategy: 'api-key-header' as const },
+      },
+      models: {
+        pi: [
+          {
+            id: 'grok-4.6',
+            name: 'Grok 4.6',
+            contextWindow: 500_000,
+            efforts: ['low', 'medium', 'high', 'xhigh'] as Effort[],
+            defaultEffort: 'high' as Effort,
+          },
+        ],
+        codex: [
+          {
+            id: 'xai/grok-4.6',
+            name: 'Grok 4.6',
+            contextWindow: 500_000,
+            efforts: ['low', 'medium', 'high'] as Effort[],
+            defaultEffort: 'high' as Effort,
+          },
+        ],
+      },
+    } as ProviderView;
+
+    expect(
+      resolveProviderModelEfforts({
+        providers: [xai],
+        providerId: 'xai',
+        modelId: 'xai/grok-4.6',
+        agentKind: 'pi',
+      }),
+    ).toEqual({ efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' });
+    expect(
+      resolveProviderModelEfforts({
+        providers: [xai],
+        providerId: 'xai',
+        modelId: 'grok-4.6',
+        agentKind: 'codex',
+      }),
+    ).toEqual({ efforts: ['low', 'medium', 'high'], defaultEffort: 'high' });
+  });
+
   it('ChatInput 把目标 provider 贯穿 model-only、换源与跨引擎 effort 解析后才组装 setModel 选择', () => {
     const source = readFileSync(
       resolve(__dirname, '../../components/new-chat/ChatInput.tsx'),
@@ -144,6 +196,16 @@ describe('resolveProviderModelEfforts', () => {
     );
     expect(source.slice(agentSwitchStart, agentSwitchEnd)).toContain(
       'resolveModelEfforts(\n          newModelId,\n          providerId,\n          targetAgentKind,\n        )',
+    );
+    expect(source.slice(agentSwitchStart, agentSwitchEnd)).toContain('resolveRequestedEffort({');
+    expect(source.slice(agentSwitchStart, agentSwitchEnd)).toContain(
+      'overrides.fastMode && fastCapable',
+    );
+    expect(source.slice(modelChangeStart, modelChangeEnd)).toContain(
+      'intent.effort ? { effort: intent.effort as Effort }',
+    );
+    expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
+      'resolveIntentReselectEffort(reconciledEffort, intent.effort)',
     );
     expect(source.slice(modelChangeStart, modelChangeEnd)).toMatch(
       /resolveModelEfforts\(\s*newModelId,\s*effectiveSourceId,?\s*\)/,

@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { olderStableVersion, PINNED_CLAUDE_VERSION } from './runtimeVersionFixtures';
+
 const { appMock, downloadMock, execFileMock } = vi.hoisted(() => ({
   appMock: { isPackaged: true, getPath: vi.fn<(name: string) => string>() },
   downloadMock: vi.fn(),
@@ -19,6 +21,14 @@ vi.mock('../../downloader/index.js', () => ({ download: downloadMock }));
 const originalPlatform = process.platform;
 let fallback: typeof import('../linux-runtime-fallback');
 let tempDir = '';
+
+function claudeVersionOutput(version = PINNED_CLAUDE_VERSION): string {
+  return `${version} (Claude Code)\n`;
+}
+
+function claudeExecutable(version = PINNED_CLAUDE_VERSION): string {
+  return `#!/bin/sh\necho "${version} (Claude Code)"\n`;
+}
 
 beforeAll(async () => {
   Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
@@ -39,7 +49,7 @@ beforeEach(() => {
       callback(new Error('system lookup disabled in migration test'), '', '');
       return;
     }
-    callback(null, '2.1.219 (Claude Code)\n', '');
+    callback(null, claudeVersionOutput(), '');
   });
 });
 
@@ -55,14 +65,14 @@ describe('legacy managed binary migration', () => {
   it('reuses and atomically migrates the exact pinned Claude cache without network access', async () => {
     const legacyPath = fallback.legacyManagedBinaryPath(tempDir, 'claude-code');
     fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-    fs.writeFileSync(legacyPath, '#!/bin/sh\necho "2.1.219 (Claude Code)"\n', { mode: 0o755 });
+    fs.writeFileSync(legacyPath, claudeExecutable(), { mode: 0o755 });
     fs.writeFileSync(path.join(path.dirname(legacyPath), '.verified'), '');
 
     const result = await fallback.prepareLinuxRuntimeFallback('claude-code');
 
     expect(result).toMatchObject({ ready: true, installed: false, source: 'legacy' });
     expect(result.binaryPath).toBe(fallback.privateBinaryPath(tempDir, 'claude-code'));
-    expect(fs.readFileSync(result.binaryPath, 'utf8')).toContain('2.1.219');
+    expect(fs.readFileSync(result.binaryPath, 'utf8')).toContain(PINNED_CLAUDE_VERSION);
     expect(downloadMock).not.toHaveBeenCalled();
   });
 
@@ -81,14 +91,14 @@ describe('legacy managed binary migration', () => {
       callback(
         null,
         command === systemClaude
-          ? '2.1.218 (Claude Code)\n'
-          : '2.1.219 (Claude Code)\n',
+          ? claudeVersionOutput(olderStableVersion(PINNED_CLAUDE_VERSION))
+          : claudeVersionOutput(),
         '',
       );
     });
     downloadMock.mockImplementationOnce(async ({ targetPath }: { targetPath: string }) => {
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.writeFileSync(targetPath, '#!/bin/sh\necho "2.1.219 (Claude Code)"\n', { mode: 0o755 });
+      fs.writeFileSync(targetPath, claudeExecutable(), { mode: 0o755 });
       return {
         path: targetPath,
         size: fs.statSync(targetPath).size,

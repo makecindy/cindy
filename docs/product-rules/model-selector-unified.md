@@ -21,6 +21,7 @@
 
 ### 1.2 面板(向下展开)
 
+- 未保存过形态偏好的用户默认进入 **A 版**(`classic`)；原始版与 B 版继续保留为用户可选偏好，升级不改已保存选择。
 - 结构:搜索框贴顶 → 左侧 rail(★收藏 / [同引擎·仅会话内] / 全部 / 各供应商图标) → 右侧列表 → 底部「＋添加模型」。
 - 宽度自适应:`max-content`,min 460px / max min(600px, 100vw-48px)——长名先撑宽,到上限才截断,不硬砍。
 - 行(双行):
@@ -150,9 +151,11 @@
 
 | 情形 | 行为 |
 |---|---|
-| 新用户 | 无任何 override;推荐映射+目录默认(`newSessionDefault`→排序首个 defaultEnabled)生效;服务端改推荐,升级即跟随 |
-| 未自定义老用户 | 同新用户;旧 lastByVendor 种子值因 `modelChosenByVendor` 未置位而不视为自定义(现有语义) |
-| 已自定义老用户 | `modelChosenByVendor=true` 的 vendor 模型选择、providerModelMemory 深度/Fast、新引擎 override 全部保留;**零迁移**——新 store 为空即「全部跟随推荐」,旧数据不搬不猜 |
+| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-5.6-Sol / Codex / high；Anthropic 订阅→Claude Opus 5 / Claude Code / high；xAI 订阅→Grok 4.6 / Pi / high；CN / Global Cindy Gateway→原生多模态 GLM-5.3-Flash / Pi / high。Gateway 默认必须同时明确声明图片输入与 Pi 实时能力；Pi 不可用时不把该默认强塞进 Codex 或 Claude Code |
+| 多来源 | 可用订阅优先于 Gateway；客户端没有“最近连接时间”时，多订阅稳定按 OpenAI→Anthropic→xAI。来源仍在加载、账号目录没有目标模型、或零来源时不编造组合，保留连接引导 |
+| 未自定义老用户 | 同新用户；自动下放不设置 `modelChosenByVendor`。仅由旧版 cc 不可用触发并持久化的非 cc Harness 仍属于系统回退，不算用户自定义 |
+| 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |
+| 远程任务 | SSH / device-link 不套用控制端本机登录态；继续由执行端能力与来源快照决定，避免把本机授权强塞给远端 |
 
 ---
 

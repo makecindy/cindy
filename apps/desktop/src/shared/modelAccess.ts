@@ -25,6 +25,9 @@ export type ModelAccessSyncState =
 /** 当前生效的 XD 网关凭据来源:服务端下发 / 用户手填;null = 无标记(历史手填或未配置)。 */
 export type ModelAccessCredentialSource = 'server' | 'manual';
 
+/** 当前个人账号的 Cindy AI 模型权益；组织与未登录请求不适用个人档位。 */
+export type ModelAccessAccountTier = 'free' | 'paid' | 'not_applicable';
+
 export interface ModelAccessStatus {
   state: ModelAccessSyncState;
   /** state='failed' 时的错误码(ServerApiError code / 'SAFE_STORAGE_UNAVAILABLE')。 */
@@ -33,6 +36,8 @@ export interface ModelAccessStatus {
   source: ModelAccessCredentialSource | null;
   /** source='server' 时下发的推理 endpoint(展示用;消费一律走 main 侧 getter)。 */
   endpoint: string | null;
+  /** 最近一次当前账号 v5 模型目录成功响应的用户级身份；未知或已失效时为 null。 */
+  accountTier: ModelAccessAccountTier | null;
 }
 
 /** 当前登录身份在 AIGateway Credit Ledger 中的同一时点余额快照。 */
@@ -165,6 +170,8 @@ export interface ModelGroupPricing {
  */
 export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
+  /** v5 entitlement projection; missing only on persisted/legacy snapshots. */
+  availability?: 'available' | 'requires_payment';
   /**
    * Gateway 原生 mode(issue #882:权威分类字段,字段值不改名)。原样透传,可能
    * 缺省(旧缓存 / 服务端尚未覆盖到的模型)——**不代表**本条目已被服务端判定
@@ -218,6 +225,7 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
  * remain a runtime-parser concern.
  */
 export interface ModelAccessModelsResponse {
-  schemaVersion: 1 | 2 | 3 | 4;
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
+  accountTier?: ModelAccessAccountTier;
   models: ModelAccessGatewayModel[];
 }

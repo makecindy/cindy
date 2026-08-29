@@ -145,6 +145,8 @@ import {
 import {
   isSelectedSourceDisconnected,
   resolveEffort,
+  resolveRequestedEffort,
+  resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -771,6 +773,8 @@ interface ChatInputProps {
     effort?: Effort;
     fast: boolean;
     favoriteUid: string | null;
+    /** 来自配置浮层「恢复推荐」，不得把推荐档重新写成用户 override。 */
+    resetToRecommended?: true;
   }) => void;
   /**
    * 统一面板里被选中的收藏锚点 uid(与 onUnifiedDraftSelect 成对,由草稿层持有)。
@@ -1986,10 +1990,11 @@ export function ChatInput({
 
   const folderOpen = folderPickerOpen ?? internalFolderOpen;
   const setFolderOpen = onFolderPickerOpenChange ?? setInternalFolderOpen;
-  // `dispatchSend` 在取发送快照后可能等待 effort runtime 同步。此窗口内继续编辑会让
-  // 成功发送后的清理误删尚未发送的文字或附件，因此 composer 必须作为一个整体短暂只读。
-  // 正常路径没有等待；只有设置同步中的会话最多锁 5 秒（见 dispatchSend 的 preflight）。
+  // `dispatchSend` 在取发送快照后可能等待 effort / enqueue。清空前 composer 必须只读，
+  // 避免快照后的编辑被成功清理误删。乐观清空后只放开打字；发送按钮和设置控件仍由
+  // sendDispatchInFlight 锁到 onSend 结算，避免按钮亮着点了却被 in-flight guard 静默丢掉。
   const [sendDispatchInFlight, setSendDispatchInFlight] = useState(false);
+  const [allowTypeDuringSend, setAllowTypeDuringSend] = useState(false);
   const composerEditorLocked = disabled || sendDispatchInFlight;
   const composerMutationLockedRef = useRef(composerEditorLocked);
   composerMutationLockedRef.current = composerEditorLocked;
@@ -3034,10 +3039,12 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
-  composerMutationLockedRef.current = composerMutationLocked;
+  const composerTypingLocked =
+    disabled || (sendDispatchInFlight && !allowTypeDuringSend) || voiceBusyOnCurrentComposer;
+  composerMutationLockedRef.current = composerTypingLocked;
   useEffect(() => {
-    editor?.setEditable(!composerMutationLocked);
-  }, [composerMutationLocked, editor]);
+    editor?.setEditable(!composerTypingLocked);
+  }, [composerTypingLocked, editor]);
 
   // 附件/浏览器评论/语音/锁定保持原有「失效」语义（不同于普通文字输入的暂时隐藏）。
   // 同步清 ref，避免稳定闭包里的 Tab 在 React 重渲染前填入已隐藏推荐。
@@ -3065,8 +3072,7 @@ export function ChatInput({
 
   const captureSendFocusForRestore = useComposerSendFocusRestore(
     editor,
-    composerMutationLocked,
-    sendDispatchInFlight,
+    composerTypingLocked,
   );
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(
@@ -3683,9 +3689,15 @@ export function ChatInput({
     // the next task never paints the previous session's listening/refining text.
     saveCurrentEditorDraft();
     restoreNextDraft();
-    // The reused composer now shows the destination draft. Drop the source
-    // send lock so the next task is immediately editable.
-    setSendDispatchInFlight(false);
+    // Destination task must stay editable. If we land back on a task whose send
+    // is still awaiting onSend, restore that task's send lock so the button
+    // stays disabled instead of silently dropping the next click. Typing stays
+    // locked until that send has actually cleared the click-time draft.
+    const nextSendKey = storageKey ?? sessionId ?? '__draft__';
+    const nextSendInFlight = dispatchSendInFlightKeysRef.current.has(nextSendKey);
+    const nextSendCleared = dispatchSendClearedKeysRef.current.has(nextSendKey);
+    setSendDispatchInFlight(nextSendInFlight);
+    setAllowTypeDuringSend(nextSendInFlight && nextSendCleared);
     if (wasBusyWithoutSend && prevEditorKey && prevEditorKey === voiceOwnerKey) {
       const sourceKey = prevEditorKey;
       const persistDetachedVoice = (previousVoiceText: string, nextVoiceText: string) => {
@@ -4855,6 +4867,7 @@ export function ChatInput({
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightKeysRef = useRef(new Set<string>());
+  const dispatchSendClearedKeysRef = useRef(new Set<string>());
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
@@ -4874,21 +4887,40 @@ export function ChatInput({
       // reference hydration happens against this immutable payload after the
       // live composer is cleared, so the user can immediately type the next
       // message without it leaking into or being cleared by this send.
-      const serializedAtClick = optimisticallyClearRemoteComposer
-        ? serializeEditorContent(editor)
-        : null;
-      const documentBeforeOptimisticClear = optimisticallyClearRemoteComposer
+      // Local/SSH still serialize after live reference hydration, but they
+      // keep the same click-time restore snapshot so a rejected send can put
+      // the original draft back without waiting for enqueue to settle.
+      const editorOwnsSourceAtStart = editorOwnsSourceDraft({
+        editorDestroyed: editor.isDestroyed,
+        editorStorageKey: storageKeyForDraftRef.current,
+        sourceStorageKey,
+      });
+      // Delayed voice stop-and-send can fire after the reused editor already
+      // shows the next task. Never snapshot that live document as the source
+      // restore payload; use the frozen extras or the source draft slot.
+      const serializedAtClick =
+        optimisticallyClearRemoteComposer && editorOwnsSourceAtStart
+          ? serializeEditorContent(editor)
+          : null;
+      const sourceDraftAtStart =
+        !editorOwnsSourceAtStart && sourceStorageKey
+          ? getComposerDraft(sourceStorageKey)
+          : undefined;
+      const frozenSourceAtStart =
+        !editorOwnsSourceAtStart &&
+        frozenVoiceSendRef.current?.sourceStorageKey === sourceStorageKey
+          ? frozenVoiceSendRef.current
+          : null;
+      let documentBeforeOptimisticClear = editorOwnsSourceAtStart
         ? editor.getJSON()
-        : null;
-      const attachmentsBeforeOptimisticClear = optimisticallyClearRemoteComposer
+        : (sourceDraftAtStart?.text ?? { type: 'doc', content: [{ type: 'paragraph' }] });
+      let attachmentsBeforeOptimisticClear = editorOwnsSourceAtStart
         ? [...latestAttachmentsRef.current]
-        : [];
-      const commentsBeforeOptimisticClear = optimisticallyClearRemoteComposer
+        : [...(frozenSourceAtStart?.attachments ?? sourceDraftAtStart?.attachments ?? [])];
+      let commentsBeforeOptimisticClear = editorOwnsSourceAtStart
         ? [...browserCommentsRef.current]
-        : [];
-      const dataOwnerAtOptimisticClear = optimisticallyClearRemoteComposer
-        ? getDataOwnerGeneration()
-        : null;
+        : [...(frozenSourceAtStart?.comments ?? sourceDraftAtStart?.browserComments ?? [])];
+      const dataOwnerAtOptimisticClear = getDataOwnerGeneration();
       const finishAgentSendDispatch = sourceSessionId
         ? tryBeginAgentSendDispatch(sourceSessionId)
         : () => {};
@@ -4900,10 +4932,11 @@ export function ChatInput({
       turnGenRef.current += 1;
       showRecommendationRef.current = false;
       if (sourceSessionId) dismissPromptRecommendation(sourceSessionId);
-      // Local/SSH sends keep the live composer while references and runtime
-      // settings settle; remote sends must stay editable after their
-      // click-time snapshot is cleared. A background source send after a
-      // session switch must not lock the newly restored composer.
+      // Local/SSH lock the live composer only while the click-time document
+      // is still on screen (reference hydration / preflight). After the
+      // optimistic clear, the editor must stay editable for the next message.
+      // A background source send after a session switch must not lock the
+      // newly restored composer.
       const lockCurrentComposer =
         !optimisticallyClearRemoteComposer && storageKeyForDraftRef.current === sourceStorageKey;
       if (lockCurrentComposer) {
@@ -4956,6 +4989,9 @@ export function ChatInput({
                 refined,
               ),
             };
+            documentBeforeOptimisticClear = plainTextToComposerDocument(serializedContent.text);
+            attachmentsBeforeOptimisticClear = [...frozenVoiceSend.attachments];
+            commentsBeforeOptimisticClear = [...frozenVoiceSend.comments];
             frozenVoiceSendRef.current = null;
           }
         }
@@ -5176,6 +5212,24 @@ export function ChatInput({
           latestAttachmentsRef.current,
           browserCommentsRef.current,
         );
+        if (
+          !optimisticallyClearRemoteComposer &&
+          editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          })
+        ) {
+          // Local/SSH hydrate mentions on the live editor first. Refresh the
+          // restore snapshot to that post-hydration document so a rejected
+          // send puts back exactly what enqueue would have taken. After a
+          // session switch the reused editor already holds the next task;
+          // keep the click-time / frozen source extras so failure restore
+          // cannot write the target draft into the source slot.
+          documentBeforeOptimisticClear = editor.getJSON();
+          attachmentsBeforeOptimisticClear = [...latestAttachmentsRef.current];
+          commentsBeforeOptimisticClear = [...browserCommentsRef.current];
+        }
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked) return;
@@ -5195,12 +5249,13 @@ export function ChatInput({
           });
           const isCurrentComposer =
             latestStorageKeyRef.current === sourceStorageKey && editorOwnsSource;
-          // Local/SSH sends keep the live composer until onSend is accepted.
-          // If the user kept typing on the same session, leave that newer
-          // draft untouched. A route switch is not "newer input": the reused
-          // editor may still hold the source document because restoreNextDraft
-          // was deferred for voice stop/refine/send.
+          // Local/SSH also clear immediately now. If the user kept typing on
+          // the same session after that snapshot, leave the newer draft
+          // untouched. A route switch is not "newer input": the reused editor
+          // may still hold the source document because restoreNextDraft was
+          // deferred for voice stop/refine/send.
           if (
+            !options?.preserveNewerContent &&
             !optimisticallyClearRemoteComposer &&
             isCurrentComposer &&
             !isComposerSendSnapshotCurrent(
@@ -5441,9 +5496,10 @@ export function ChatInput({
             optimisticComposerRestored = false;
             clearSentComposer({ preserveNewerContent: true });
           } else {
-            // Local/SSH never entered the optimistic-clear path. Reuse the normal
-            // snapshot guard so an unchanged accepted draft clears while newer edits survive.
-            clearSentComposer();
+            // Folder-picker / deferred local accept: the first attempt already
+            // restored the click-time draft. Clear it now, but keep any newer
+            // edits the user typed while the picker was open.
+            clearSentComposer({ preserveNewerContent: true });
           }
           markRecentPluginUsage();
         };
@@ -5454,13 +5510,19 @@ export function ChatInput({
             releaseRemoteComposerTransition();
           }
         };
-        if (optimisticallyClearRemoteComposer) {
-          try {
-            clearSentComposer();
-          } catch (error) {
-            restoreRemoteComposerAndRelease();
-            throw error;
-          }
+        // Click-time composer must disappear before any await that can surface
+        // the user bubble. Device-link already did this; local/SSH used to wait
+        // until onSend resolved, so the same text sat in both the transcript
+        // and the composer while enqueue / effort / slash / auth settled.
+        try {
+          clearSentComposer();
+        } catch (error) {
+          restoreRemoteComposerAndRelease();
+          throw error;
+        }
+        dispatchSendClearedKeysRef.current.add(sendInFlightKey);
+        if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
+          setAllowTypeDuringSend(true);
         }
         if (
           optimisticallyClearRemoteComposer &&
@@ -5495,10 +5557,6 @@ export function ChatInput({
             const coordinator = effortChangeCoordinatorRef.current;
             let runtimeSettled = false;
             let timeoutId: ReturnType<typeof setTimeout> | undefined;
-            const lockComposerForEffort =
-              !optimisticallyClearRemoteComposer &&
-              storageKeyForDraftRef.current === sourceStorageKey;
-            if (lockComposerForEffort) setSendDispatchInFlight(true);
             try {
               await Promise.race([
                 coordinator.awaitRuntimeSettled(sessionId).then(() => {
@@ -5510,16 +5568,13 @@ export function ChatInput({
               ]);
             } finally {
               if (timeoutId !== undefined) clearTimeout(timeoutId);
-              if (lockComposerForEffort && storageKeyForDraftRef.current === sourceStorageKey) {
-                setSendDispatchInFlight(false);
-              }
             }
 
             // 不把 timeout 写成全局 dirty：若迟到的是「持久化失败、runtime 尚未触碰」，旧实现
             // 会永久阻断后续发送。当前这次发送直接失败；下一次会重新等待真实 settle 结果。
             if (!runtimeSettled) {
               toast.error(t('newChat.chatInput.effortRuntimeDirty'));
-              if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
+              restoreRemoteComposerAndRelease();
               return;
             }
             // onSend is the click-time closure and still targets the source
@@ -5529,7 +5584,7 @@ export function ChatInput({
             // never wiped.
             if (coordinator.isRuntimeDirty(sessionId)) {
               toast.error(t('newChat.chatInput.effortRuntimeDirty'));
-              if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
+              restoreRemoteComposerAndRelease();
               return;
             }
             // 等待 commit 后，闭包里的 activeEffort 可能仍是旧 props；以该 session 已提交的
@@ -5556,21 +5611,22 @@ export function ChatInput({
             },
           );
         } catch (error) {
-          if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
+          restoreRemoteComposerAndRelease();
           log.warn('send rejected:', error instanceof Error ? error.message : String(error));
           return;
         }
         if (result === false) {
-          if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
+          restoreRemoteComposerAndRelease();
           return;
         }
         releaseRemoteComposerTransition();
         markRecentPluginUsage();
-        if (!optimisticallyClearRemoteComposer) clearSentComposer();
       } finally {
         dispatchSendInFlightKeysRef.current.delete(sendInFlightKey);
+        dispatchSendClearedKeysRef.current.delete(sendInFlightKey);
         if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
           setSendDispatchInFlight(false);
+          setAllowTypeDuringSend(false);
         }
         finishAgentSendDispatch();
       }
@@ -6041,6 +6097,7 @@ export function ChatInput({
       providerId: string,
       modelId: string,
       expectedRevision?: number,
+      effort?: Effort,
     ) => void | boolean | Promise<void | boolean>;
     byModel: (
       modelId: string,
@@ -6115,37 +6172,38 @@ export function ChatInput({
           modelMemory && providerId
             ? modelMemory.getEffort(targetAgentKind, providerId, newModelId)
             : undefined;
-        const newEffort =
-          overrides?.effort && efforts.includes(overrides.effort)
-            ? overrides.effort
-            : resolveEffort({
-                efforts,
-                defaultEffort,
-                activeEffort,
-                providerEffort,
-                rememberedEffort: getRememberedEffort(newModelId),
-              });
+        const newEffort = resolveRequestedEffort({
+          requested: overrides?.effort,
+          efforts,
+          defaultEffort,
+          activeEffort,
+          providerEffort,
+          rememberedEffort: getRememberedEffort(newModelId),
+        });
         // Fast 目标值:目标 (来源,模型) 支持时按目标引擎全局预设,否则 false——
         // 旧引擎的 fastMode 不能原样带进新引擎。
+        // 显式 override 也必须过目标能力门:意图期改选到不支持 Fast 的模型/来源时,
+        // 旧 intent.fastMode=true 不能绕过 resolveFastSupported 写进新意图。
+        const fastCapable = resolveFastSupported({
+          deviceId: deviceLinkDeviceId ?? undefined,
+          deviceProviders: remoteProviders.providers,
+          localProviders: localProviders.providers,
+          capabilities:
+            targetAgentKind === 'codex'
+              ? codexCaps.capabilities
+              : targetAgentKind === 'pi'
+                ? piCaps.capabilities
+                : ccCaps.capabilities,
+          providerId,
+          modelId: newModelId,
+          agentKind: targetAgentKind,
+        });
         const targetFast =
           overrides?.fastMode !== undefined
-            ? overrides.fastMode
-            : !!providerId &&
+            ? overrides.fastMode && fastCapable
+            : fastCapable &&
+              !!providerId &&
               !!modelMemory &&
-              resolveFastSupported({
-                deviceId: deviceLinkDeviceId ?? undefined,
-                deviceProviders: remoteProviders.providers,
-                localProviders: localProviders.providers,
-                capabilities:
-                  targetAgentKind === 'codex'
-                    ? codexCaps.capabilities
-                    : targetAgentKind === 'pi'
-                      ? piCaps.capabilities
-                      : ccCaps.capabilities,
-                providerId,
-                modelId: newModelId,
-                agentKind: targetAgentKind,
-              }) &&
               (modelMemory.getFast(targetAgentKind, providerId, newModelId) ?? false);
 
         // 会话级操作按来源路由:device-link 远程会话隧道到被控端(意图注册表与引擎
@@ -6307,6 +6365,7 @@ export function ChatInput({
                 providerId,
                 newModelId,
                 result.sameEngineRevision,
+                newEffort,
               )
             : await sameEngineReselectRef.current.byModel(newModelId, result.sameEngineRevision);
           // 被更新的选择超车(byProvider / byModel 自带修订号守卫)→ 同样按「没切」上报。
@@ -6564,10 +6623,11 @@ export function ChatInput({
       favoriteUid: string | null;
       /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
       rowModelId?: string;
+      resetToRecommended?: true;
     }) => {
       if (sessionId || settingsLocked) return;
       const targetKind = vendorKeyToAgentKind(selection.engine);
-      if (targetKind && selection.providerId) {
+      if (targetKind && selection.providerId && !selection.resetToRecommended) {
         if (selection.effort) {
           modelMemory?.setEffort(
             targetKind,
@@ -6587,6 +6647,7 @@ export function ChatInput({
         ...(selection.effort ? { effort: selection.effort } : {}),
         fast: selection.fast,
         favoriteUid: selection.favoriteUid,
+        ...(selection.resetToRecommended ? { resetToRecommended: true as const } : {}),
       });
     },
     [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect],
@@ -6621,7 +6682,9 @@ export function ChatInput({
         // ★ await 并**透传真实结果**(Chris 2026-08-19):此前是 fire-and-forget + `return`,
         // 返回 undefined 被上游读成「已应用」——意图期内改选模型时,登记失败 / 被超车的
         // 那一路会被当成成功,后续持久化照跑,而会话上的意图其实一个字没变。
-        return await performAgentSwitch(intent.target, newModelId, null);
+        return await performAgentSwitch(intent.target, newModelId, null, {
+          ...(intent.effort ? { effort: intent.effort as Effort } : {}),
+        });
       }
       let rollbackModelAfterPersistFailure: { model: string; seq: number } | null = null;
       const committedActiveEffort =
@@ -7136,10 +7199,14 @@ export function ChatInput({
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
         // 同 performModelChange:await 并透传真实结果,别把「意图重登记失败」当成已应用
         // (Chris 2026-08-19)。
+        const nextEffort = resolveIntentReselectEffort(reconciledEffort, intent.effort);
         return await performAgentSwitch(
           intent.target,
           reconciledModelId ?? intent.model,
           newProviderId,
+          {
+            ...(nextEffort ? { effort: nextEffort as Effort } : {}),
+          },
         );
       }
       let rollbackProviderAfterPersistFailure: {
@@ -7425,8 +7492,8 @@ export function ChatInput({
 
   // performAgentSwitch 的"选回当前引擎"分支经 ref 调用(两 handler 声明在其后,TDZ)。
   sameEngineReselectRef.current = {
-    byProvider: (providerId, modelId, expectedRevision) =>
-      handleProviderChange(providerId, modelId, undefined, expectedRevision),
+    byProvider: (providerId, modelId, expectedRevision, effort) =>
+      handleProviderChange(providerId, modelId, effort, expectedRevision),
     byModel: (modelId, expectedRevision) => handleModelChange(modelId, expectedRevision),
   };
 

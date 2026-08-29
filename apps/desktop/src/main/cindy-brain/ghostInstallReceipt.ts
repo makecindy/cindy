@@ -66,8 +66,8 @@ export interface GhostInstallReceipt {
    */
   packageSha256?: string;
   /**
-   * 旧版 Forge 安装写入的来源标记。新安装不再写入；保留只读是为了让升级前
-   * 已获 Broker 资格的存量插件不会在客户端升级后突然失效。
+   * 显式 `ghost_forge_install` 写入的来源标记。手动导入等其它入口不写；旧版
+   * receipt 中的同名值继续有效，避免升级后丢失既有企业作者自测资格。
    */
   installOrigin?: string;
   /**
@@ -194,6 +194,10 @@ export class GhostInstallReceiptStore {
     return path.resolve(this.getRootDir());
   }
 
+  private realRootDirSync(): string {
+    return fs.realpathSync(this.rootDir());
+  }
+
   read(id: string): GhostInstallReceiptReadResult {
     const result = this.readForRecovery(id);
     if (result.state === 'approved') return result;
@@ -207,7 +211,7 @@ export class GhostInstallReceiptStore {
     let bytes: Buffer | null;
     try {
       bytes = readBoundedFileNoFollowSync(receiptPath, MAX_RECEIPT_BYTES, {
-        containWithin: this.rootDir(),
+        containWithin: this.realRootDirSync(),
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -455,7 +459,7 @@ export class GhostInstallReceiptStore {
       const bytes = readBoundedFileNoFollowSync(
         this.migrationLedgerPath(),
         MAX_MIGRATION_LEDGER_BYTES,
-        { containWithin: this.rootDir() },
+        { containWithin: this.realRootDirSync() },
       );
       if (bytes === null) return null;
       const raw = JSON.parse(
@@ -690,7 +694,7 @@ export class GhostInstallReceiptStore {
       // reads from the same handle with O_NONBLOCK so a FIFO/device blocks
       // neither the open nor the subsequent read.
       bytes = readBoundedFileNoFollowSync(markerPath, MAX_PENDING_MUTATION_BYTES, {
-        containWithin: this.rootDir(),
+        containWithin: this.realRootDirSync(),
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
@@ -1056,7 +1060,7 @@ function isPersistableInstallOrigin(value: string): boolean {
   );
 }
 
-/** 旧 receipt 的授权视图：只有历史 agent-forge 值有效，其余一律降级。 */
+/** 来源授权视图：只有 Host 写入的 agent-forge 值有效，其余一律降级。 */
 export function effectiveInstallOrigin(
   receipt: Pick<GhostInstallReceipt, 'installOrigin'>,
 ): 'manual' | 'agent-forge' {
@@ -1112,6 +1116,8 @@ function validateReceipt(
   if (typeof value.revision !== 'string' || !isRevision(value.revision)) {
     return { ok: false, reason: 'receipt revision 不合法' };
   }
+  // This validator accepts the durable author format first, then narrowly
+  // reconstructs normalized setup snapshots produced by affected builds.
   const manifestResult = validateNormalizedGhostManifest(value.manifest);
   if (!manifestResult.ok || manifestResult.manifest.id !== expectedId) {
     return {

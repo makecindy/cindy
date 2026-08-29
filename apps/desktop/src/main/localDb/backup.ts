@@ -1,13 +1,15 @@
 /**
  * chat-data-localization F1/F3：本地 db 文件备份与恢复（V0.4 修订 + ADR-FE7 移除）。
  *
- * 两类备份文件（互不挤压配额）:
+ * 三类备份文件（互不挤压配额）:
  *   - `.bak.{ISO}` —— schema migration 前的快照，按"份数 + 总体积"双上限轮转
  *     （见 `pruneIsoBackupsToBudget` / `isoBackupTotalBudgetBytes`）。
  *   - `.bak.clean` —— 历史"干净退出快照"。**新版本不再生成**(write 路径
  *     `cleanExitSnapshot` 已移除,详见 localDb/index.ts 文件头 ADR-FE7 修订说明)。
  *     已存在的旧 `.bak.clean` 文件仍作为 SQLITE_CORRUPT 恢复的 Step 1 兜底,
  *     向后兼容老用户。新装用户磁盘上不会有这个文件。
+ *   - `.slimming-backup` —— 用户主动数据库瘦身前的最近一份快照，由
+ *     `maintenanceStore` 的独立索引轮换；本文件的升级配额和自动损坏恢复不读取它。
  *
  * SQLITE_CORRUPT 兜底：`.bak.clean`（若存在）优先 → `.bak.{ISO}` 回落（ADR-FE8）。
  * 主路径靠 SQLite WAL crash recovery（业界主流方案,VSCode/Slack/codex 同款）。
@@ -89,7 +91,7 @@ export function cleanupFailedBackupArtifacts(backupPath: string): void {
 
 /**
  * 列出当前 db 对应的所有 `.bak.{ISO}` 文件，按 ISO 时间戳字典序升序返回。
- * 显式排除 `.bak.clean`——配额隔离（ADR-FE9）。
+ * 显式只接受 ISO 命名；`.bak.clean` 和 `.slimming-backup` 均不会进入升级配额。
  */
 export function listIsoBackups(dbFilePath: string): string[] {
   const dir = path.dirname(dbFilePath);
@@ -257,6 +259,9 @@ export interface RestoreResult {
  *   Step 1: `.bak.clean` 优先（最近一次干净退出快照，已被 quick_check 把关）
  *   Step 2: 回落到最新 `.bak.{ISO}`
  *   Step 3: 都不可用 → return null（调用方阻断启动 + 弹 OS 对话框）
+ *
+ * 主动瘦身备份不参与这条自动恢复链，避免把用户选择的历史截面
+ * 误当成 schema migration 的可兼容回滚点。
  *
  * 每一级恢复后会用 better-sqlite3 试只读打开 + quick_check 验证；打不开则继续下一级。
  */

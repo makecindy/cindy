@@ -101,6 +101,7 @@ describe('submit_github_issue tool', () => {
     });
     expect(submit).toHaveBeenCalledWith({
       sessionId: 'sess-1',
+      agentKind: 'claude-code',
       workingDir: '/tmp/wd',
       title: VALID_ARGS.title,
       body: VALID_ARGS.body,
