@@ -2121,8 +2121,11 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([sibling]);
   });
 
-  it('does not report a reinstall enabled while disable-ledger reconciliation keeps failing', async () => {
-    const { source } = await createSkillOnlyPackage('npm:persistently-disabled-package');
+  it.each([
+    ['transient I/O', 'EIO'],
+    ['permission', 'EACCES'],
+  ])('keeps native install successful through persistent %s and reconciles after recovery', async (_label, code) => {
+    const { root, source } = await createSkillOnlyPackage(`npm:persistently-disabled-${code.toLowerCase()}`);
     const sibling = 'npm:keep-disabled';
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     const stateFile = path.join(stateDir, 'cindy-package-state.json');
@@ -2137,20 +2140,35 @@ describe('Pi package executable-code boundary', () => {
     const originalRename = fs.rename.bind(fs);
     const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
       if (path.resolve(String(to)) === path.resolve(stateFile)) {
-        throw Object.assign(new Error('simulated EACCES'), { code: 'EACCES' });
+        throw Object.assign(new Error(`simulated ${code}`), { code });
       }
       return originalRename(from, to);
     });
+    const store = await import('../pi-package-store.js');
     try {
-      const store = await import('../pi-package-store.js');
-      await expect(mutateAuthorized(store, { action: 'install', source }))
-        .rejects.toThrow('state is unavailable');
-      expect(runtime.spawns.some(({ args }) => args.includes('install'))).toBe(true);
+      await expect(mutateAuthorized(store, { action: 'install', source })).resolves.toMatchObject({
+        affectedPackage: { source, enabled: true },
+      });
+      await expect(store.listPiPackages()).resolves.toMatchObject({
+        packages: [expect.objectContaining({ source, enabled: true })],
+      });
+      await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
     } finally {
       renameSpy.mockRestore();
     }
-    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    let state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
     expect(state.disabledSources).toEqual([source, sibling]);
+    vi.resetModules();
+    const recoveredStore = await import('../pi-package-store.js');
+    await expect(recoveredStore.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
+
+    await expect(mutateAuthorized(recoveredStore, { action: 'install', source })).resolves.toMatchObject({
+      affectedPackage: { source, enabled: true },
+    });
+    state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([sibling]);
+    await expect(fs.stat(path.join(stateDir, 'cindy-package-pending-enable.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each([

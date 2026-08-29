@@ -279,6 +279,7 @@ let inspectionPromise: Promise<InspectedPackage[]> | undefined;
 let inspectionCache: { expiresAt: number; value: InspectedPackage[] } | undefined;
 let inspectionGeneration = 0;
 const snapshotUnavailableRoots = new Map<string, SnapshotUnavailableWarning>();
+const pendingEnabledSources = new Set<string>();
 
 function packageHome(): string {
   return path.join(app.getPath('userData'), 'pi-package-home');
@@ -307,6 +308,10 @@ async function snapshotRootForInstalledPackage(
 
 function statePath(): string {
   return path.join(packageHome(), 'cindy-package-state.json');
+}
+
+function pendingEnablePath(): string {
+  return path.join(packageHome(), 'cindy-package-pending-enable.json');
 }
 
 function changeTokenPath(): string {
@@ -470,7 +475,13 @@ async function requireState(): Promise<PiPackageState> {
 
 async function readStateWithoutBlockingPi(): Promise<PiPackageState> {
   const result = await readState();
-  if (result.ok) return result.state;
+  if (result.ok) {
+    const pending = await readPendingEnabledSources();
+    return {
+      ...result.state,
+      disabledSources: result.state.disabledSources.filter((source) => !pending.has(source)),
+    };
+  }
   // Cindy's optional projection must never turn a valid native Pi package
   // operation into a failure. A corrupt projection loses only Cindy-specific
   // toggles; Pi's own package settings remain the source of install truth.
@@ -491,6 +502,60 @@ async function writeState(state: PiPackageState): Promise<void> {
   } finally {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
   }
+}
+
+async function readPendingEnabledSources(): Promise<Set<string>> {
+  const pending = new Set(pendingEnabledSources);
+  try {
+    const parsed = JSON.parse(await fs.readFile(pendingEnablePath(), 'utf8')) as unknown;
+    if (!Array.isArray(parsed) || !parsed.every((source) => (
+      typeof source === 'string' && source.length > 0 && source.length <= MAX_SOURCE_LENGTH
+    ))) throw new Error('Invalid pending Pi enable reconciliation');
+    for (const source of parsed) pending.add(source);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.warn('Pi pending enable reconciliation unavailable');
+    }
+  }
+  return pending;
+}
+
+async function writePendingEnabledSources(sources: ReadonlySet<string>): Promise<void> {
+  pendingEnabledSources.clear();
+  for (const source of sources) pendingEnabledSources.add(source);
+  if (sources.size === 0) {
+    await fs.rm(pendingEnablePath(), { force: true });
+    return;
+  }
+  await fs.mkdir(packageHome(), { recursive: true, mode: 0o700 });
+  const target = pendingEnablePath();
+  const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify([...sources].sort())}\n`, {
+      mode: 0o600,
+      flag: 'wx',
+    });
+    await fs.rename(temporary, target);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
+async function persistPendingEnabledSources(sources: Iterable<string>): Promise<void> {
+  const pending = await readPendingEnabledSources();
+  for (const source of sources) pending.add(source);
+  await writePendingEnabledSources(pending);
+}
+
+async function reconcilePendingEnabledSources(): Promise<void> {
+  const pending = await readPendingEnabledSources();
+  if (pending.size === 0) return;
+  const state = await requireState();
+  const disabledSources = state.disabledSources.filter((source) => !pending.has(source));
+  if (disabledSources.length !== state.disabledSources.length) {
+    await writeState({ ...state, disabledSources });
+  }
+  await writePendingEnabledSources(new Set());
 }
 
 function boundedAppend(current: string, chunk: Buffer): string {
@@ -2571,6 +2636,13 @@ export async function mutatePiPackage(
     // mutation lock so the secret source never crosses into Renderer state.
     const source = await resolvePackageMutationTarget(requestedSource, request.mutationTarget);
     const logSource = projectPackageSource(source).displaySource;
+    try {
+      await reconcilePendingEnabledSources();
+    } catch {
+      // The active journal remains the effective enable source until a later
+      // mutation can fold it into the durable disable ledger.
+      log.warn('Pi pending enable reconciliation deferred');
+    }
     // Cindy projection state is optional metadata. Native Pi package commands
     // run before any Cindy inspection; an analyzer timeout or unknown future
     // package shape therefore cannot delay or veto the upstream command.
@@ -2622,12 +2694,24 @@ export async function mutatePiPackage(
       // a persistent failure must not produce a false enabled receipt.
       try {
         await clearDisabledPackageSources(installAliases);
+        const pending = await readPendingEnabledSources();
+        for (const alias of installAliases) pending.delete(alias);
+        await writePendingEnabledSources(pending);
       } catch (error) {
-        log.warn('Pi package installed but Cindy enable projection failed', {
+        // Pi install already succeeded. Persist an effective enable journal so
+        // every Main instance and the next runtime can honor that native result
+        // without erasing sibling disables; a later mutation reconciles it.
+        try {
+          await persistPendingEnabledSources(installAliases);
+        } catch {
+          // Keep the effective overlay in this Main even if the journal itself
+          // is temporarily unwritable. Native Pi success is never rewritten.
+          for (const alias of installAliases) pendingEnabledSources.add(alias);
+        }
+        log.warn('Pi package installed; enable-ledger reconciliation deferred', {
           source: logSource,
-          message: error instanceof Error ? error.message : String(error),
+          failure: 'state-unavailable',
         });
-        throw new PiPackageStateUnavailableError();
       }
       try {
         await revokeExtensionApproval(installAliases);
