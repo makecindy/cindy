@@ -193,7 +193,7 @@ describe('feishu streaming text', () => {
       'g'.repeat(64),
       '终态正文',
       ['C:\\cindy-media\\ok.png', 'C:\\cindy-media\\missing.png'],
-      [],
+      ['/allowed'],
       1,
     );
 
@@ -233,12 +233,50 @@ describe('feishu streaming text', () => {
       'h'.repeat(64),
       '见 ![图](xdt-image://blob/same.png)',
       [absPath],
-      [],
+      ['/allowed'],
       1,
     );
 
     expect(mocks.uploadImage.mock.calls.filter(([p]) => p === absPath)).toHaveLength(1);
     expect(mocks.sendCardToChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resolve local images when allowedFileRoots is empty', async () => {
+    mocks.resolveMediaUrl.mockReturnValue('/cindy-media/secret.png');
+    mocks.uploadImage.mockResolvedValue('img_secret');
+
+    await mirrorFinal(
+      'oc_group',
+      't'.repeat(64),
+      '正文 ![图](xdt-image://blob/secret.png)',
+      ['/cindy-media/extra.png'],
+      [],
+      1,
+    );
+
+    expect(mocks.resolveMediaUrl).not.toHaveBeenCalled();
+    expect(mocks.uploadImage).not.toHaveBeenCalled();
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe('正文');
+  });
+
+  it('does not claim delivery for an image-only mirror with empty allowedFileRoots', async () => {
+    mocks.resolveMediaUrl.mockReturnValue('/cindy-media/secret.png');
+    mocks.uploadImage.mockResolvedValue('img_secret');
+
+    await mirrorFinal(
+      'oc_group',
+      'u'.repeat(64),
+      '![图](xdt-image://blob/secret.png)',
+      [],
+      [],
+      1,
+    );
+
+    expect(mocks.resolveMediaUrl).not.toHaveBeenCalled();
+    expect(mocks.uploadImage).not.toHaveBeenCalled();
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
+      messages.streaming.deliveryFailed,
+    );
   });
 
   it('mirrors file-only replies with fileSentDone instead of emptyReply', async () => {

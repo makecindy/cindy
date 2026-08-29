@@ -48,6 +48,7 @@ import {
   stripXdtForStreaming,
   classifyXdtOnly,
   stripXdtFileLinks,
+  stripXdtImageLinks,
   collectXdtFileLinks,
   collectXdtImageUrls,
 } from '../xdtRefs.js';
@@ -559,7 +560,13 @@ export async function mirrorFinal(
   inboundEpoch: number,
 ): Promise<void> {
   const send = async (): Promise<void> => {
-    const imageUrls = collectXdtImageUrls(text);
+    // Empty roots is the SSH fail-closed signal from turnRunner. Do not resolve
+    // xdt-image / cindy-media URLs or extra absPaths through local media stores.
+    const allowLocalMedia = allowedFileRoots.some((root) => root.trim());
+    const requestedImageUrls = collectXdtImageUrls(text);
+    const imageUrls = allowLocalMedia ? requestedImageUrls : [];
+    const skippedLocalMedia =
+      !allowLocalMedia && (extraImageAbsPaths.length > 0 || requestedImageUrls.length > 0);
     const imageMap = new Map<string, string>();
     const bodyImageAbsPaths = new Set<string>();
     if (imageUrls.length > 0) {
@@ -594,11 +601,15 @@ export async function mirrorFinal(
       if (!isPinnedAccountCurrent()) return;
     }
     const imageKeys = await uploadExtraImageKeys(
-      extraImageAbsPaths.filter((absPath) => !bodyImageAbsPaths.has(absPath)),
+      allowLocalMedia
+        ? extraImageAbsPaths.filter((absPath) => !bodyImageAbsPaths.has(absPath))
+        : [],
     );
     if (!isPinnedAccountCurrent()) return;
     const fileLinks = collectXdtFileLinks(text);
-    const cardText = stripXdtFileLinks(text);
+    const cardText = allowLocalMedia
+      ? stripXdtFileLinks(text)
+      : stripXdtImageLinks(stripXdtFileLinks(text)).trim();
     const cardTextTrimmed = cardText.trim();
     const hasImages = imageUrls.length > 0 || imageKeys.length > 0;
     const fileOnly = cardTextTrimmed.length === 0 && !hasImages && fileLinks.length > 0;
@@ -610,6 +621,14 @@ export async function mirrorFinal(
           ? transportMessages.streaming.fileSentDone(sentCount)
           : transportMessages.streaming.deliveryFailed;
       await sendCardToChat(chatId, buildMarkdownCardV2(status), mirrorUuid(mirrorKey, 'card'));
+      return;
+    }
+    if (skippedLocalMedia && cardTextTrimmed.length === 0) {
+      await sendCardToChat(
+        chatId,
+        buildMarkdownCardV2(transportMessages.streaming.deliveryFailed),
+        mirrorUuid(mirrorKey, 'card'),
+      );
       return;
     }
     let card: unknown;
