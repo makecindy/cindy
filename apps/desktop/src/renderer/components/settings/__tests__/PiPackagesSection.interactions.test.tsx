@@ -302,6 +302,59 @@ describe('PiPackagesSection interaction state machine', () => {
     }));
   });
 
+  it('keeps rows with the same redacted source independent by opaque target', async () => {
+    const redactedSource = 'git:https://example.com/acme/package.git';
+    const firstPackage: PiPackageView = {
+      ...packageView(1),
+      source: redactedSource,
+      name: 'credential-a',
+      mutationTarget: `cindy-pi-package:${'a'.repeat(64)}`,
+    };
+    const secondPackage: PiPackageView = {
+      ...packageView(2),
+      source: redactedSource,
+      name: 'credential-b',
+      mutationTarget: `cindy-pi-package:${'b'.repeat(64)}`,
+    };
+    const mutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
+    const { mutatePiPackage } = installElectronApi({
+      listPiPackages: vi.fn(async () => ({
+        available: true,
+        packages: [firstPackage, secondPackage],
+      })),
+      mutatePiPackage: vi.fn(() => mutation.promise),
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('credential-b');
+
+    const detailButtons = screen.getAllByRole('button', {
+      name: 'settings.piPackages.showDetails',
+    });
+    fireEvent.click(detailButtons[0]!);
+    expect(screen.getAllByText(redactedSource)).toHaveLength(1);
+    fireEvent.click(detailButtons[1]!);
+    expect(screen.getAllByText(redactedSource)).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole('button', {
+      name: 'settings.piPackages.collapseDetails',
+    })[0]!);
+    expect(screen.getAllByText(redactedSource)).toHaveLength(1);
+
+    const updateButtons = screen.getAllByRole('button', {
+      name: 'settings.piPackages.updateAria',
+    });
+    fireEvent.click(updateButtons[1]!);
+    await waitFor(() => expect(mutatePiPackage).toHaveBeenCalledWith({
+      action: 'update',
+      source: redactedSource,
+      mutationTarget: secondPackage.mutationTarget,
+    }));
+    expect(updateButtons[0]?.getAttribute('aria-busy')).toBe('false');
+    expect(updateButtons[1]?.getAttribute('aria-busy')).toBe('true');
+
+    mutation.resolve({ available: true, packages: [firstPackage, secondPackage] });
+    await waitFor(() => expect(updateButtons[1]?.getAttribute('aria-busy')).toBe('false'));
+  });
+
   it('routes enable directly to Main without a dialog and shows progress', async () => {
     const mutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const { mutatePiPackage } = installElectronApi({

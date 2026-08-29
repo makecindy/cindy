@@ -41,7 +41,11 @@ type PiPackagesLoadState = 'loading' | 'ready' | 'error';
 
 interface PiPackageBusyOperation {
   action: PiPackageMutationAction;
-  source: string;
+  packageId: string;
+}
+
+function packageRowId(pkg: PiPackageView): string {
+  return pkg.mutationTarget ?? pkg.source;
 }
 
 function resourceLabel(
@@ -177,7 +181,7 @@ export function PiPackagesSection() {
   ): Promise<boolean> => {
     if (mutationInFlightRef.current) return false;
     mutationInFlightRef.current = true;
-    setBusy({ action, source: packageSource });
+    setBusy({ action, packageId: options?.mutationTarget ?? packageSource });
     try {
       const result = await window.electronAPI.maker.mutatePiPackage({
         action,
@@ -344,20 +348,21 @@ export function PiPackagesSection() {
             const mutationTargetOption = pkg.mutationTarget
               ? { mutationTarget: pkg.mutationTarget }
               : {};
-            const packageBusy = busy?.source === pkg.source;
+            const rowId = packageRowId(pkg);
+            const packageBusy = busy?.packageId === rowId;
             const packageManageable = pkg.manageable !== false;
             const packageCanToggle = packageManageable && pkg.canToggle !== false;
-            const expanded = expandedSources.has(pkg.source);
+            const expanded = expandedSources.has(rowId);
             const noticeCount = packageCompatibilityNoticeCount(pkg);
             return (
               <div
-                key={pkg.source}
+                key={rowId}
                 className="border-b border-[var(--settings-theme-card-border)] last:border-b-0"
               >
                 <div className="flex min-h-11 items-center gap-1.5 px-3 py-1">
                   <button
                     type="button"
-                    onClick={() => toggleDetails(pkg.source)}
+                    onClick={() => toggleDetails(rowId)}
                     aria-expanded={expanded}
                     className="flex min-w-0 flex-1 items-baseline gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
                   >
@@ -438,7 +443,7 @@ export function PiPackagesSection() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => toggleDetails(pkg.source)}
+                    onClick={() => toggleDetails(rowId)}
                     aria-expanded={expanded}
                     aria-label={
                       expanded
