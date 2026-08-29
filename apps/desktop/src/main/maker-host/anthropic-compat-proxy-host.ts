@@ -51,6 +51,10 @@ import {
   getPiNativeSubscriptionHandler,
   getResponsesBridgeHandler,
 } from './anthropic-responses-bridge-host.js';
+import {
+  OWNER_BOUNDARY_PENDING_ERROR,
+  isOwnerBoundaryPendingError,
+} from './owner-boundary-error.js';
 import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
 import {
   isExclusiveXaiModelId,
@@ -309,7 +313,7 @@ function retryableLocalRoute(code: string, message: string): RoutingDecision {
 function ownerBoundaryPendingRoute(): RoutingDecision {
   return retryableLocalRoute(
     'owner_boundary_pending',
-    'App session is switching; retry after the owner boundary settles.',
+    OWNER_BOUNDARY_PENDING_ERROR,
   );
 }
 
@@ -331,7 +335,9 @@ function withOwnerBoundaryDispatchGate(
       try {
         await inner(args);
       } catch (err) {
-        if (!args.res.headersSent && ownerBoundDispatchUnsafe(ctx)) {
+        if (!args.res.headersSent && (
+          isOwnerBoundaryPendingError(err) || ownerBoundDispatchUnsafe(ctx)
+        )) {
           await ownerBoundaryPendingRoute().localHandler?.(args);
           return;
         }

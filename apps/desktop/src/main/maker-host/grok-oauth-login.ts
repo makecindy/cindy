@@ -33,6 +33,7 @@ import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { OwnerBoundaryPendingError } from './owner-boundary-error.js';
 import { bindNativeProviderAuth, isNativeProviderAuthBound, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
 import type { XaiBridgeAuthRecoveryOutcome } from './xai-bridge-auth-invalidation.js';
 
@@ -769,20 +770,17 @@ async function refreshIfNeeded(current: GrokTokenBlob): Promise<GrokTokenBlob> {
   return (await refreshBlob(current, false)).blob;
 }
 
-const OWNER_BOUNDARY_PENDING_ERROR =
-  'App session is switching; retry after the owner boundary settles.';
-
 function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
   if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeAtStart) {
-    throw new Error(OWNER_BOUNDARY_PENDING_ERROR);
+    throw new OwnerBoundaryPendingError();
   }
 }
 
 /**
  * 取当前可用的 xAI access_token(过期则先刷新)。bridge 的 buildHeaders 调用。
- * 未登录 / 刷新后仍无 token → 抛错(bridge 据此回 502)。
- * owner-boundary pending 或 await 期间 owner generation 变了时抛同一句话:
- * CC proxy wrap 会把它收成 503,而不是带着上一任 owner 的 token 出站。
+ * 未登录 / 刷新后仍无 token → 抛错(bridge 据此回 502 authentication_error)。
+ * owner-boundary pending 或 await 期间 owner generation 变了时抛 OwnerBoundaryPendingError:
+ * 订阅桥 catch 必须收成 503,不得写成 authentication_error。
  * peekGrokAccessToken 只读、不抛,失效等值用。
  */
 export async function getGrokAccessToken(): Promise<string> {

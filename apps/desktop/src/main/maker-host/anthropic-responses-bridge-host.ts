@@ -44,6 +44,11 @@ import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { XAI_X_SEARCH_TOOL_TYPE, xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import {
+  OWNER_BOUNDARY_PENDING_ERROR,
+  OwnerBoundaryPendingError,
+  isOwnerBoundaryPendingError,
+} from './owner-boundary-error.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 
 const zstdCompressAsync = promisify(zstdCompress);
@@ -230,12 +235,9 @@ export const invalidateChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
   },
 });
 
-const OWNER_BOUNDARY_PENDING_ERROR =
-  'App session is switching; retry after the owner boundary settles.';
-
 function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
   if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeAtStart) {
-    throw new Error(OWNER_BOUNDARY_PENDING_ERROR);
+    throw new OwnerBoundaryPendingError();
   }
 }
 
@@ -784,7 +786,7 @@ export function getPiNativeSubscriptionHandler(
       // which destroys the client response so PI observes a transport failure
       // instead of accepting a cleanly-ended truncated stream.
       if (res.headersSent) throw err;
-      if (err instanceof Error && err.message === OWNER_BOUNDARY_PENDING_ERROR) {
+      if (isOwnerBoundaryPendingError(err)) {
         res.writeHead(503, {
           'content-type': 'application/json; charset=utf-8',
           'cache-control': 'no-store',
