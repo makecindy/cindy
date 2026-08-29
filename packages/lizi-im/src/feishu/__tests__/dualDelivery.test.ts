@@ -47,6 +47,22 @@ describe('Feishu native thread/main dual delivery', () => {
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
   });
 
+  it('suppresses fresh flat message ids after the logical send is confirmed', async () => {
+    vi.useFakeTimers();
+    const topic = await coordinateDualDelivery(input());
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat_first', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+
+    const duplicate = coordinateDualDelivery(
+      input({ messageId: 'om_flat_second', threadId: '' }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(duplicate).resolves.toEqual({ kind: 'suppress-main-copy' });
+    expect(topic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+  });
+
   it('dispatches an unpaired flat group message after the bounded wait', async () => {
     vi.useFakeTimers();
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));

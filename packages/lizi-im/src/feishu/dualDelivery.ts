@@ -236,6 +236,9 @@ export async function coordinateDualDelivery(
   pruneTtlMap(recentThreads, now);
   pruneRecentFlats(now);
   pruneConfirmed(now);
+  // Once a logical send has paired, every later delivery for the same exact
+  // key is a duplicate even when Feishu assigns it a fresh message_id.
+  if (confirmed.has(key)) return { kind: 'suppress-main-copy' };
   if (!input.threadId && recentThreads.has(key)) {
     recentThreads.delete(key);
     confirmLogicalSend(key, now);
