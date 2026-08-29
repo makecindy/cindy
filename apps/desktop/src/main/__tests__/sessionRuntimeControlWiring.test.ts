@@ -186,14 +186,24 @@ describe('session runtime control wiring', () => {
     expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
   });
 
-  it('prepares a target-window rebuild before applying any harness runtime model change', () => {
+  it('requires a verified target window before preparing any destructive model rebuild', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
+    const verifiedWindowOnly = setModel.indexOf(
+      'targetContextWindow = verifiedTargetWindow ?? undefined;',
+    );
+    const unknownWindowGuard = setModel.indexOf(
+      'target model context window is unknown; runtime selection was not changed',
+    );
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
+    expect(verifiedWindowOnly).toBeGreaterThan(-1);
+    expect(setModel).not.toContain('verifiedTargetWindow ?? targetCatalogModel?.contextWindow');
+    expect(verifiedWindowOnly).toBeLessThan(unknownWindowGuard);
+    expect(unknownWindowGuard).toBeLessThan(prepare);
     expect(prepare).toBeGreaterThan(-1);
     expect(prepare).toBeLessThan(apply);
     expect(setModel).not.toContain('getAutoCompactThresholdPct');

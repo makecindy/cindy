@@ -15153,20 +15153,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetRouteProviderId,
           runtimeAgentKind,
         );
-        const runtimeProviders = await getDesktopProviderService().listProviders({
-          allowSideEffects: false,
-          catalog: getActiveCatalog(),
-        });
-        const actualTargetProviderId =
-          targetRouteProviderId ??
-          effectiveSourceIdForModel(runtimeProviders, null, model, runtimeAgentKind);
-        const targetProvider = runtimeProviders.find(
-          (candidate) => candidate.id === actualTargetProviderId,
-        );
-        const targetCatalogModel = findCatalogModel(targetProvider, model, runtimeAgentKind, {
-          exact: true,
-        });
-        targetContextWindow = verifiedTargetWindow ?? targetCatalogModel?.contextWindow;
+        // Materialized/user-provider catalog windows can be display-only fallbacks.
+        // A destructive native-context rebuild may use only a route-verified window.
+        targetContextWindow = verifiedTargetWindow ?? undefined;
         if (!targetContextWindow || targetContextWindow <= 0) {
           throwIpcError(
             'PRECONDITION_FAILED',
