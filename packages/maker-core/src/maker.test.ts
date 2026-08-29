@@ -191,6 +191,67 @@ function createDeferred<T = void>(): {
   return { promise, resolve };
 }
 
+describe('Maker local Pi package generation fence', () => {
+  it.each(['disable', 'remove', 'update'])(
+    'closes an in-flight local Pi startup before publish after %s',
+    async () => {
+      const started = createDeferred<AgentSessionHandle>();
+      const handle = createHandle({ id: 'pi-thread', agentKind: 'pi' });
+      handle.close = vi.fn(async () => undefined);
+      const startSession = vi.fn(async () => started.promise);
+      const maker = new Maker({
+        agents: { pi: createAgent(startSession, 'pi') },
+        storage: createStorage(),
+        logger: createLogger(),
+      });
+      const creating = maker.createSession({
+        id: 'local-pi',
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      });
+      await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+      maker.advanceLocalPiPackageRuntimeGeneration();
+      started.resolve(handle);
+
+      await expect(creating).rejects.toThrow('invalidated by a package change');
+      expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+      expect(maker.listActiveSessions()).toEqual([]);
+    },
+  );
+
+  it.each([
+    ['remote', { remoteHostId: 'ssh-host' }],
+    ['Review', { reviewMode: true }],
+  ])('does not fence an in-flight %s Pi startup', async (_label, boundary) => {
+    const started = createDeferred<AgentSessionHandle>();
+    const handle = createHandle({ id: 'pi-thread', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const startSession = vi.fn(async () => started.promise);
+    const maker = new Maker({
+      agents: { pi: createAgent(startSession, 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const creating = maker.createSession({
+      id: 'excluded-pi',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+      ...boundary,
+    });
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    started.resolve(handle);
+
+    await expect(creating).resolves.toBeInstanceOf(Session);
+    expect(handle.close).not.toHaveBeenCalled();
+    expect(maker.listActiveSessions()).toHaveLength(1);
+  });
+});
+
 describe('Maker session creation singleflight', () => {
   it('binds each rebuilt business session to a fresh runtime instance id', async () => {
     const seenInstanceIds: string[] = [];

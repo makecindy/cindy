@@ -3,7 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { invalidateLocalPiPackageRuntimes } from '../pi-package-runtime-invalidation.js';
 
-type InvalidationMaker = Pick<Maker, 'listActiveSessions' | 'getSessionMeta' | 'closeSession'>;
+type InvalidationMaker = Pick<
+  Maker,
+  | 'advanceLocalPiPackageRuntimeGeneration'
+  | 'listActiveSessions'
+  | 'getSessionMeta'
+  | 'closeSession'
+>;
 
 function session(id: string, agentKind: Session['agentKind']): Session {
   return { id, agentKind } as Session;
@@ -29,8 +35,11 @@ describe('Pi package runtime invalidation', () => {
       ...(id === 'review-pi' ? { reviewMode: true as const } : {}),
     }));
     const closeSession = vi.fn(async () => undefined);
+    const advanceGeneration = vi.fn();
+    const listActiveSessions = vi.fn(() => sessions);
     const maker: InvalidationMaker = {
-      listActiveSessions: () => sessions,
+      advanceLocalPiPackageRuntimeGeneration: advanceGeneration,
+      listActiveSessions,
       getSessionMeta,
       closeSession,
     };
@@ -40,12 +49,16 @@ describe('Pi package runtime invalidation', () => {
       failedSessionIds: [],
     });
     expect(getSessionMeta).toHaveBeenCalledTimes(3);
+    expect(advanceGeneration.mock.invocationCallOrder[0]).toBeLessThan(
+      listActiveSessions.mock.invocationCallOrder[0]!,
+    );
     expect(closeSession).toHaveBeenCalledWith('local-pi', 'requested');
   });
 
   it('still closes known-local siblings when one metadata lookup fails', async () => {
     const closeSession = vi.fn(async () => undefined);
     const maker: InvalidationMaker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
       listActiveSessions: () => [session('unknown-pi', 'pi'), session('local-pi', 'pi')],
       getSessionMeta: vi.fn(async (id: string) => {
         if (id === 'unknown-pi') throw new Error('metadata unavailable');
@@ -71,6 +84,7 @@ describe('Pi package runtime invalidation', () => {
 
   it('reports close failures without rewriting an already committed package mutation', async () => {
     const maker: InvalidationMaker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
       listActiveSessions: () => [session('local-pi', 'pi')],
       getSessionMeta: vi.fn(async () => ({
         id: 'local-pi',

@@ -380,6 +380,12 @@ export class Maker {
   /** Once shutdown starts, no new handle may race past its creation barrier. */
   private shutdownStarted = false;
   /**
+   * Fences local ordinary Pi startups against managed-package mutations. A
+   * startup captures this before its first await and may publish only if the
+   * value is unchanged after every startup hook has settled.
+   */
+  private localPiPackageRuntimeGeneration = 0;
+  /**
    * startSession 已返回、但 Session 尚未发布时 cleanup 失败的 handle。后续同 id
    * create 必须先把它确认关闭，不能丢失所有权后再 spawn 一个并存进程。
    */
@@ -559,6 +565,9 @@ export class Maker {
   private async createSessionOnce(opts: CreateSessionOptions): Promise<Session> {
     const agent = this.requireAgent(opts.agentKind);
     const id = opts.id ?? generateSessionId();
+    const localPiPackageGeneration = (
+      opts.agentKind === 'pi' && !opts.remoteHostId && !opts.reviewMode
+    ) ? this.localPiPackageRuntimeGeneration : null;
 
     this.logger.debug('createSession ↓', {
       localSessionId: id,
@@ -759,6 +768,60 @@ export class Maker {
       }
     }
 
+    if (this.lifecycleHooks.onStartSucceeded) {
+      try {
+        await this.lifecycleHooks.onStartSucceeded(id, startOpts);
+      } catch (err) {
+        this.logger.warn('lifecycleHooks.onStartSucceeded threw; continuing session publish', {
+          sessionId: id,
+          error: String(err),
+        });
+      }
+    }
+
+    if (
+      localPiPackageGeneration !== null
+      && localPiPackageGeneration !== this.localPiPackageRuntimeGeneration
+    ) {
+      let cleanupFailed = false;
+      try {
+        await handle.close({ reason: 'navigation' });
+      } catch (closeError) {
+        cleanupFailed = true;
+        this.failedHandleCleanups.set(id, {
+          handle,
+          promise: null,
+          ...(this.lifecycleHooks.onClose
+            ? {
+                onCleaned: () => {
+                  void Promise.resolve(this.lifecycleHooks.onClose!(id)).catch((err) => {
+                    this.logger.warn('lifecycleHooks.onClose threw after stale Pi cleanup retry', {
+                      sessionId: id,
+                      error: String(err),
+                    });
+                  });
+                },
+              }
+            : {}),
+        });
+        this.logger.warn('failed to close stale local Pi handle after package mutation', {
+          sessionId: id,
+          error: String(closeError),
+        });
+      }
+      if (!cleanupFailed && this.lifecycleHooks.onClose) {
+        try {
+          await this.lifecycleHooks.onClose(id);
+        } catch (err) {
+          this.logger.warn('lifecycleHooks.onClose threw after stale Pi startup', {
+            sessionId: id,
+            error: String(err),
+          });
+        }
+      }
+      throw new Error('Local Pi runtime startup was invalidated by a package change; retry the task.');
+    }
+
     const session = new Session({
       id: meta.id,
       sessionInstanceId,
@@ -830,17 +893,6 @@ export class Maker {
         }
       }
     });
-
-    if (this.lifecycleHooks.onStartSucceeded) {
-      try {
-        await this.lifecycleHooks.onStartSucceeded(id, startOpts);
-      } catch (err) {
-        this.logger.warn('lifecycleHooks.onStartSucceeded threw; continuing session publish', {
-          sessionId: id,
-          error: String(err),
-        });
-      }
-    }
 
     this.activeSessions.set(meta.id, session);
     this.emit({ type: 'session:created', session });
@@ -930,6 +982,14 @@ export class Maker {
   isSessionAlive(id: string): boolean {
     const sess = this.activeSessions.get(id);
     return sess !== undefined && sess.getStatus() !== 'closed';
+  }
+
+  /**
+   * Advance the local managed-package boundary synchronously. Any ordinary
+   * local Pi startup that captured an older value will close before publish.
+   */
+  advanceLocalPiPackageRuntimeGeneration(): void {
+    this.localPiPackageRuntimeGeneration += 1;
   }
 
   /** 列出所有当前激活的 session */

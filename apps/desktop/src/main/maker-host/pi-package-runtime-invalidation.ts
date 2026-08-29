@@ -15,8 +15,18 @@ export interface PiPackageRuntimeInvalidationResult {
 }
 
 export async function invalidateLocalPiPackageRuntimes(
-  maker: Pick<Maker, 'listActiveSessions' | 'getSessionMeta' | 'closeSession'>,
+  maker: Pick<
+    Maker,
+    | 'advanceLocalPiPackageRuntimeGeneration'
+    | 'listActiveSessions'
+    | 'getSessionMeta'
+    | 'closeSession'
+  >,
 ): Promise<PiPackageRuntimeInvalidationResult> {
+  // Advance before taking the active-session snapshot. A local Pi startup is
+  // then either already published and included below, or observes the newer
+  // generation and closes before it can publish with stale package bytes.
+  maker.advanceLocalPiPackageRuntimeGeneration();
   const candidates = maker.listActiveSessions().filter((session) => session.agentKind === 'pi');
   const metadata = await Promise.all(candidates.map(async (session) => {
     try {
