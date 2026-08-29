@@ -172,14 +172,6 @@ export interface IMUnsupportedEntry {
  * to the parent group timeline. The idempotency key is opaque to the host and
  * must be stable for the logical user send.
  */
-/** Directory identity captured before an Agent turn may replace the path. */
-export interface IMPinnedFileRoot {
-  path: string;
-  canonicalPath: string;
-  dev: bigint;
-  ino: bigint;
-}
-
 export interface IMFinalReplyMirror {
   kind: 'parent-chat';
   chatId: string;
@@ -194,11 +186,6 @@ export interface IMFinalReplyMirror {
    * means fail-closed: the card still mirrors, local files do not.
    */
   allowedFileRoots?: string[];
-  /**
-   * `dev`/`ino` of `allowedFileRoots` captured before the Agent turn.
-   * Delivery rejects a root whose live identity no longer matches.
-   */
-  pinnedFileRoots?: IMPinnedFileRoot[];
   /**
    * Dual-delivery pairing was already confirmed at inbound. Terminal
    * parent-chat copies must not wait on a TTL-pruned confirmation map.

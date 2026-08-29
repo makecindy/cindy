@@ -30,8 +30,6 @@ import * as ownerGuard from './ownerGuard.js';
 import { parseIncoming } from './incomingContent.js';
 import type { AttachmentRef } from './incomingContent.js';
 import { messages as transportMessages } from './messages.js';
-import { openAllowedOutboundFile } from '../allowedFiles.js';
-import type { AllowedOutboundRoot, OpenedAllowedOutboundFile } from '../allowedFiles.js';
 import type {
   IMMessageEvent,
   InteractiveCardSpec,
@@ -913,11 +911,21 @@ function inferFeishuFileType(
   return 'stream';
 }
 
+/** A Feishu upload reference that can be sent again without reading the source file. */
+export interface ReusableFeishuFileMessage {
+  msgType: 'file' | 'image';
+  content: string;
+}
+
+export interface FeishuSendFileResult extends SendFileResult {
+  reusableMessage?: ReusableFeishuFileMessage;
+}
+
 export async function sendFile(
   userId: string,
   absPath: string,
   displayName?: string,
-): Promise<SendFileResult> {
+): Promise<FeishuSendFileResult> {
   const target = resolveSendTarget(userId);
   if (!target) {
     getLog().error(`[feishu/outbound] sendFile: no reply anchor for topic lane ...${userId.slice(-8)}`);
@@ -926,28 +934,24 @@ export async function sendFile(
   return sendFileToTarget(target, absPath, displayName);
 }
 
-/** Copy one terminal-output file directly to a parent group main timeline. */
+/** Re-send an already uploaded terminal-output file to a parent group main timeline. */
 export async function sendFileToChat(
   chatId: string,
-  absPath: string,
-  allowedRoots: readonly AllowedOutboundRoot[],
-  displayName: string | undefined,
+  message: ReusableFeishuFileMessage,
   uuid: string,
 ): Promise<SendFileResult> {
-  const opened = await openAllowedOutboundFile(absPath, allowedRoots);
-  if (!opened) return { ok: false, reason: 'NOT_FOUND' };
   try {
-    return await sendOpenedFileToTarget(
+    const res = await createMessage(
       { kind: 'chat_id', id: chatId },
-      opened,
-      displayName,
+      message.msgType,
+      message.content,
       uuid,
     );
-  } finally {
-    await opened.handle.close().catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      getLog().warn(`[feishu/outbound] sendFileToChat close failed: ${msg}`);
-    });
+    return { ok: true, messageId: res.messageId };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    getLog().error(`[feishu/outbound] sendFileToChat SEND_FAIL: ${msg}`);
+    return { ok: false, reason: 'SEND_FAIL' };
   }
 }
 
@@ -962,7 +966,7 @@ async function sendFileToTarget(
   absPath: string,
   displayName?: string,
   uuid?: string,
-): Promise<SendFileResult> {
+): Promise<FeishuSendFileResult> {
   const c = ensureClient();
 
   if (!fs.existsSync(absPath)) return { ok: false, reason: 'NOT_FOUND' };
@@ -980,38 +984,13 @@ async function sendFileToTarget(
   );
 }
 
-async function sendOpenedFileToTarget(
-  target: SendTarget,
-  opened: OpenedAllowedOutboundFile,
-  displayName?: string,
-  uuid?: string,
-): Promise<SendFileResult> {
-  return sendFileSourceToTarget(
-    ensureClient(),
-    target,
-    {
-      absPath: opened.canonicalPath,
-      size: opened.size,
-      // Supplying the validated fd prevents a second path lookup. The outer
-      // `finally` owns the FileHandle lifecycle, so the stream must not close it.
-      createReadStream: () =>
-        fs.createReadStream(opened.canonicalPath, {
-          fd: opened.handle.fd,
-          autoClose: false,
-        }),
-    },
-    displayName,
-    uuid,
-  );
-}
-
 async function sendFileSourceToTarget(
   c: Lark.Client,
   target: SendTarget,
   source: OutboundFileSource,
   displayName?: string,
   uuid?: string,
-): Promise<SendFileResult> {
+): Promise<FeishuSendFileResult> {
   const log = getLog();
   const baseName = path.basename(source.absPath);
   const showName = displayName?.length ? displayName : baseName;
@@ -1047,8 +1026,13 @@ async function sendFileSourceToTarget(
 
   // 2. Send message referencing file_key.
   try {
-    const res = await createMessage(target, 'file', JSON.stringify({ file_key: fileKey }), uuid);
-    return { ok: true, messageId: res.messageId };
+    const content = JSON.stringify({ file_key: fileKey });
+    const res = await createMessage(target, 'file', content, uuid);
+    return {
+      ok: true,
+      messageId: res.messageId,
+      reusableMessage: { msgType: 'file', content },
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`[feishu/outbound] sendFile SEND_FAIL: ${msg}`);
@@ -1302,7 +1286,7 @@ async function sendImageMessage(
   target: SendTarget,
   createReadStream: () => fs.ReadStream,
   uuid?: string,
-): Promise<SendFileResult> {
+): Promise<FeishuSendFileResult> {
   const log = getLog();
   try {
     const upRes = await c.im.v1.image.create({
@@ -1314,8 +1298,13 @@ async function sendImageMessage(
     const imageKey = (upRes as { image_key?: string }).image_key;
     if (!imageKey) return { ok: false, reason: 'UPLOAD_FAIL' };
 
-    const res = await createMessage(target, 'image', JSON.stringify({ image_key: imageKey }), uuid);
-    return { ok: true, messageId: res.messageId };
+    const content = JSON.stringify({ image_key: imageKey });
+    const res = await createMessage(target, 'image', content, uuid);
+    return {
+      ok: true,
+      messageId: res.messageId,
+      reusableMessage: { msgType: 'image', content },
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`[feishu/outbound] sendImageMessage failed: ${msg}`);

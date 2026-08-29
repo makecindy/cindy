@@ -26,7 +26,6 @@ export type {
   IMAttachment,
   IMUnsupportedEntry,
   IMFinalReplyMirror,
-  IMPinnedFileRoot,
   IMMessageEvent,
   IMCardActionEvent,
   IMStatus,
@@ -38,7 +37,6 @@ export type {
   SendFileResult,
 } from './types.js';
 
-export { pinAllowedFileRoot } from './allowedFiles.js';
 export { FeishuIM, createFeishuIM } from './feishu/index.js';
 export {
   decodeLaneUserId as decodeFeishuLaneUserId,
