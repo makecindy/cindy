@@ -24,7 +24,7 @@
  *        runner 已持有全部上下文，方案 A 更简单、不引入 host 层订阅复杂度）
  *
  * 与 plan 文件偏离的地方：
- *   - extractErr() 内联实现（参考 runAgentTurn.ts:382-385 的 errData 解析模式）
+ *   - extractErr() 复用 main/im 的终态安全投影（保留普通错误的旧字符串回退）
  *   - randomSessionId 用 crypto.randomUUID
  *   - workingDir 在 heartbeat 模式下不能由 schedule 重新指定（已有 row 的 workDir 才是真）
  */
@@ -92,6 +92,7 @@ import { backfillSessionMeta } from './runners/_shared';
 import { buildSkipResultText, executePreRunHook, formatPreRunHookFailure } from './pre-run-hook';
 import { defaultModelFor } from './model-defaults';
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
+import { terminalErrorText } from '../im/shared/turnRetryNotice.js';
 
 const ALLOWED_EFFORT = new Set<string>([
   'minimal',
@@ -2664,10 +2665,7 @@ export function buildSilentRunInstruction(): string {
 }
 
 function extractErr(data: unknown): string {
-  if (data && typeof data === 'object' && 'message' in data) {
-    return String((data as { message: unknown }).message);
-  }
-  return String(data);
+  return terminalErrorText(data);
 }
 
 /**
