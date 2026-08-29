@@ -48,13 +48,15 @@ describe('session Agent switch UI wiring', () => {
       'confirmComposerModelWindowSwitch(option.contextWindow)',
     );
     expect(remoteGuard).toContain('currentSession?.contextWindow');
-    expect(remoteGuard).toContain(
-      'controlBusy || remoteSessionRunning || !hasVerifiedWindows || !hasVerifiedUsage',
-    );
+    expect(remoteGuard).toContain('contextTokens >= 0');
+    expect(remoteGuard).toContain('controlBusy || remoteSessionRunning');
     expect(remoteGuard).toContain('targetContextWindow >= currentContextWindow');
-    expect(remoteGuard.indexOf('remoteSessionRunning')).toBeLessThan(
-      remoteGuard.indexOf('targetContextWindow >= currentContextWindow'),
-    );
+    expect(remoteGuard).toContain('!hasVerifiedWindows || !hasVerifiedUsage');
+    const busyGate = remoteGuard.indexOf('controlBusy || remoteSessionRunning');
+    const nonShrinkGate = remoteGuard.indexOf('targetContextWindow >= currentContextWindow');
+    const unknownGate = remoteGuard.indexOf('!hasVerifiedWindows || !hasVerifiedUsage');
+    expect(busyGate).toBeLessThan(nonShrinkGate);
+    expect(nonShrinkGate).toBeLessThan(unknownGate);
     expect(rowSelector).toContain(
       'next.model !== currentSession.model || next.providerId !== currentSession.providerId',
     );

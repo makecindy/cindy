@@ -7985,13 +7985,13 @@ export default function SessionScreen() {
     const hasVerifiedWindows =
       typeof currentContextWindow === 'number' && Number.isFinite(currentContextWindow) && currentContextWindow > 0
       && typeof targetContextWindow === 'number' && Number.isFinite(targetContextWindow) && targetContextWindow > 0;
+    // Persisted zero is an authoritative empty context, not an unknown usage placeholder.
     const hasVerifiedUsage =
-      typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens > 0;
-    if (
-      currentSession?.remoteHostId
-      && (controlBusy || remoteSessionRunning || !hasVerifiedWindows || !hasVerifiedUsage)
-    ) return false;
+      typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens >= 0;
+    if (currentSession?.remoteHostId && (controlBusy || remoteSessionRunning)) return false;
+    // Busy stays closed, but a verified same/expanded window never needs remote context rebuild.
     if (hasVerifiedWindows && targetContextWindow >= currentContextWindow) return true;
+    if (currentSession?.remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;
     return confirmMobileModelWindowSwitch(
       contextTokens,
       targetContextWindow,
