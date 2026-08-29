@@ -42,13 +42,13 @@ import {
   type ReusableFeishuFileMessage,
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
+import { resolveFeishuMediaUrl } from './mediaCache.js';
 import { getHost, getLog } from './moduleScope.js';
 import {
   releaseMirrorConfirmation,
   scheduleMirrorOnConfirmation,
   waitForMirrorConfirmation,
 } from './dualDelivery.js';
-import { resolveFeishuMediaUrl } from './mediaCache.js';
 import { messages as transportMessages } from './messages.js';
 import type { IMFinalReplyMirror, StreamingTextHandle } from '../types.js';
 // xdt-* 引用解析抽到渠道无关模块(slack streamingText 共用同一套语义)
@@ -153,11 +153,6 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   private pending: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private finalized = false;
-  private mirrorChatId?: string;
-  private mirrorKey?: string;
-  private allowedFileRoots: readonly string[];
-  private inboundEpoch?: number;
-  private mirrorConfirmed: boolean;
   /**
    * 工具结果(tool_result_full event)带过来的图片 absPath, finalize 时跟文本里
    * xdt-image markdown 链接一起 upload + 拼到 card 末尾。host 主进程负责把
@@ -166,38 +161,15 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
    */
   private extraImageAbsPaths: string[] = [];
 
-  constructor(
-    messageId: string,
-    openId: string,
-    initial: string,
-    mirrorChatId?: string,
-    mirrorKey?: string,
-    allowedFileRoots: readonly string[] = [],
-    inboundEpoch?: number,
-    mirrorConfirmed = false,
-  ) {
+  constructor(messageId: string, openId: string, initial: string) {
     this.messageId = messageId;
     this.openId = openId;
-    this.mirrorChatId = mirrorChatId;
-    this.mirrorKey = mirrorKey;
-    this.allowedFileRoots = allowedFileRoots;
-    this.inboundEpoch = inboundEpoch;
-    this.mirrorConfirmed = mirrorConfirmed;
     // `initial` is what's currently DISPLAYED in feishu (e.g. "🧠 思考中...").
     // `buffer` is what we've ACCUMULATED to display — starts empty so the
     // first real append() *replaces* the placeholder rather than appending
     // to it (otherwise the placeholder permanently prefixes the message).
     this.buffer = '';
     this.flushed = initial;
-  }
-
-  armFinalReplyMirror(mirror: IMFinalReplyMirror): void {
-    if (this.finalized || mirror.kind !== 'parent-chat') return;
-    this.mirrorChatId = mirror.chatId;
-    this.mirrorKey = mirror.idempotencyKey;
-    this.allowedFileRoots = mirror.allowedFileRoots ?? [];
-    this.inboundEpoch = mirror.accountEpoch;
-    this.mirrorConfirmed = Boolean(mirror.confirmed);
   }
 
   append(delta: string): void {
@@ -220,7 +192,10 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     }, PATCH_THROTTLE_MS);
   }
 
-  async finalize(finalText: string): Promise<void> {
+  async finalize(
+    finalText: string,
+    opts?: { finalReplyMirror?: IMFinalReplyMirror },
+  ): Promise<void> {
     if (this.finalized) return;
     this.finalized = true;
     if (this.pending) {
@@ -235,7 +210,14 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       }
     }
     this.buffer = finalText;
-    await this.doFinalize();
+    const mirror = opts?.finalReplyMirror;
+    try {
+      await this.doFinalize(mirror);
+    } finally {
+      if (mirror?.kind === 'parent-chat') {
+        releaseMirrorConfirmation(mirror.idempotencyKey);
+      }
+    }
   }
 
   close(): void {
@@ -292,7 +274,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
 
   // ── finalize: upload images, send files, patch with mixed elements ────────
 
-  private async doFinalize(): Promise<void> {
+  private async doFinalize(finalReplyMirror?: IMFinalReplyMirror): Promise<void> {
     const log = getLog();
     const text = this.buffer;
 
@@ -326,8 +308,14 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
             return null;
           }
           bodyImageAbsPaths.add(absPath);
-          const key = await uploadImage(absPath);
-          return key ? ([url, key] as const) : null;
+          try {
+            const key = await uploadImage(absPath);
+            return key ? ([url, key] as const) : null;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(`[feishu/streamingText] uploadImage ${absPath} failed: ${msg}`);
+            return null;
+          }
         }),
       );
       for (const r of results) {
@@ -361,7 +349,10 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
             if (
               sent.ok &&
               sent.reusableMessage &&
-              isLexicallyWithinAllowedFileRoots(link.absPath, this.allowedFileRoots)
+              isLexicallyWithinAllowedFileRoots(
+                link.absPath,
+                finalReplyMirror?.allowedFileRoots ?? [],
+              )
             ) {
               return { message: sent.reusableMessage, sourceIndex };
             }
@@ -391,6 +382,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     const hasAnyImage = imageUrls.length > 0 || extraImageKeys.length > 0;
     const fileOnly = cardTextTrimmed.length === 0 && !hasAnyImage && fileLinks.length > 0;
     let primaryCardPatched = false;
+    let mirrorResult: FinalCardResult | null = null;
     try {
       let card: unknown;
       if (fileOnly) {
@@ -408,10 +400,11 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           ? buildMixedMarkdownCardV2(visibleText, imageMap, extraImageKeys)
           : buildMarkdownCardV2(visibleText),
       );
+      mirrorResult = { card, reusableFiles, fileOnly };
       await patchCardRaw(this.messageId, card);
       primaryCardPatched = true;
       this.flushed = this.buffer;
-      await this.sendOrScheduleMirror({ card, reusableFiles, fileOnly });
+      await this.sendOrScheduleMirror(mirrorResult, finalReplyMirror);
     } catch (err) {
       if (primaryCardPatched) {
         log.warn(
@@ -437,25 +430,39 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           log.error(`[feishu/streamingText] fallback text failed: ${textMsg}`);
         }
       }
+      if (mirrorResult) {
+        try {
+          await this.sendOrScheduleMirror(mirrorResult, finalReplyMirror);
+        } catch (mirrorErr) {
+          log.warn(
+            `[feishu/streamingText] parent-chat mirror failed after primary fallback (non-fatal): ${
+              mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr)
+            }`,
+          );
+        }
+      }
     }
   }
 
-  private async sendOrScheduleMirror(result: FinalCardResult): Promise<void> {
-    const key = this.mirrorKey;
-    if (!this.mirrorChatId || !key) return;
-    if (this.inboundEpoch === undefined) return;
+  private async sendOrScheduleMirror(
+    result: FinalCardResult,
+    mirror: IMFinalReplyMirror | undefined,
+  ): Promise<void> {
+    if (mirror?.kind !== 'parent-chat') return;
     await sendOrScheduleMirror(
-      key,
-      () => this.mirrorFinalResult(result),
-      this.inboundEpoch,
-      this.mirrorConfirmed,
+      mirror.idempotencyKey,
+      () => this.mirrorFinalResult(result, mirror),
+      mirror.accountEpoch,
+      mirror.confirmed,
     );
   }
 
-  private async mirrorFinalResult(result: FinalCardResult): Promise<void> {
-    const chatId = this.mirrorChatId;
-    const key = this.mirrorKey;
-    if (!chatId || !key) return;
+  private async mirrorFinalResult(
+    result: FinalCardResult,
+    mirror: IMFinalReplyMirror,
+  ): Promise<void> {
+    const chatId = mirror.chatId;
+    const key = mirror.idempotencyKey;
     const log = getLog();
     if (result.fileOnly) {
       const sentCount = await sendMirroredFiles(chatId, key, result.reusableFiles);
@@ -493,40 +500,15 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
 export async function start(
   openId: string,
   initial: string = transportMessages.streaming.randomThinking(),
-  opts?: {
-    mirrorChatId?: string;
-    mirrorKey?: string;
-    allowedFileRoots?: readonly string[];
-    inboundEpoch?: number;
-    mirrorConfirmed?: boolean;
-  },
 ): Promise<StreamingTextHandle> {
   // 群主流 @ 开话题时, 开场白卡就是本轮流式卡(openThread 已用它开好话题) —
   // 认领后直接 patch, 不再新建一条「开个话题」占位回复。
   const claimed = claimPatchableOpener(openId);
   if (claimed) {
-    return new FeishuStreamingTextHandle(
-      claimed,
-      openId,
-      initial,
-      opts?.mirrorChatId,
-      opts?.mirrorKey,
-      opts?.allowedFileRoots,
-      opts?.inboundEpoch,
-      opts?.mirrorConfirmed,
-    );
+    return new FeishuStreamingTextHandle(claimed, openId, initial);
   }
   const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial));
-  return new FeishuStreamingTextHandle(
-    messageId,
-    openId,
-    initial,
-    opts?.mirrorChatId,
-    opts?.mirrorKey,
-    opts?.allowedFileRoots,
-    opts?.inboundEpoch,
-    opts?.mirrorConfirmed,
-  );
+  return new FeishuStreamingTextHandle(messageId, openId, initial);
 }
 
 /**

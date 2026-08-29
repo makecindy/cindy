@@ -36,6 +36,7 @@ import { feishuEvents } from './events.js';
 import { cancelAppRegistration, reconnectSavedCredentials, registerFeishuIpc } from './ipc.js';
 import * as outbound from './outbound.js';
 import * as streamingText from './streamingText.js';
+import { releaseMirrorConfirmation, retainMirrorConfirmation } from './dualDelivery.js';
 import { downloadAttachments, type DownloadResult } from './attachmentDownloader.js';
 import type { AttachmentRef } from './incomingContent.js';
 
@@ -435,22 +436,13 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   startStreamingText(
     userId: string,
     initial?: string,
-    opts?: { finalReplyMirror?: IMFinalReplyMirror },
   ): Promise<StreamingTextHandle> {
-    const mirror = opts?.finalReplyMirror;
-    return streamingText.start(
-      userId,
-      initial,
-      mirror?.kind === 'parent-chat'
-        ? {
-            mirrorChatId: mirror.chatId,
-            mirrorKey: mirror.idempotencyKey,
-            allowedFileRoots: mirror.allowedFileRoots,
-            inboundEpoch: mirror.accountEpoch,
-            mirrorConfirmed: mirror.confirmed,
-          }
-        : undefined,
-    );
+    return streamingText.start(userId, initial);
+  }
+
+  retainFinalReplyMirror(mirror: IMFinalReplyMirror): () => void {
+    retainMirrorConfirmation(mirror.idempotencyKey);
+    return () => releaseMirrorConfirmation(mirror.idempotencyKey);
   }
 
   async mirrorFinalReply(

@@ -61,7 +61,6 @@ import { decodeLaneUserId, encodeLaneUserId } from './codec.js';
 import {
   coordinateDualDelivery,
   resetDualDeliveryForTest,
-  retainMirrorConfirmation,
 } from './dualDelivery.js';
 import { getLog } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
@@ -285,7 +284,6 @@ function parentChatMirror(
   confirmed?: boolean,
 ): IMFinalReplyMirror | undefined {
   if (!key || accountEpoch === undefined) return undefined;
-  retainMirrorConfirmation(key);
   return {
     kind: 'parent-chat',
     chatId,

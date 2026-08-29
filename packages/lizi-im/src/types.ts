@@ -355,14 +355,18 @@ export interface StreamingTextHandle {
    * text) and append-deltas don't fit naturally.
    */
   replace(fullText: string): void;
-  /** Replace card with `finalText` and stop throttling. */
-  finalize(finalText: string): Promise<void>;
   /**
-   * Attach a parent-chat copy just before the true terminal `finalize`.
-   * Start-of-turn streaming handles must not carry this — intermediate
-   * `finalize` before a permission / ask card would copy a fragment.
+   * Replace the card with `finalText` and stop throttling.
+   *
+   * `finalReplyMirror` is supplied only for the true turn terminal. Callers
+   * intentionally omit it when finalising a pre-interaction fragment, so a
+   * channel can reuse media uploaded by this exact finalisation without
+   * publishing an incomplete answer to the secondary destination.
    */
-  armFinalReplyMirror?(mirror: IMFinalReplyMirror): void;
+  finalize(
+    finalText: string,
+    opts?: { finalReplyMirror?: IMFinalReplyMirror },
+  ): Promise<void>;
   /** Cancel without finalising (still leaves the last rendered text on screen). */
   close(): void;
   /**

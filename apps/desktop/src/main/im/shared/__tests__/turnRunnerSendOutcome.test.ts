@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
     error: vi.fn(),
     debug: vi.fn(),
   },
+  releaseFinalReplyMirror: vi.fn(),
   feishuIm: {
     reactToMessage: vi.fn(),
     removeMessageReaction: vi.fn(),
@@ -40,6 +41,7 @@ const mocks = vi.hoisted(() => ({
     consumePendingOpenerCard: vi.fn(),
     getPendingOpenerTrigger: vi.fn(),
     takeNotedFallbackOpenerId: vi.fn(),
+    retainFinalReplyMirror: vi.fn(),
     mirrorFinalReply: vi.fn(),
   },
   getMaker: vi.fn(),
@@ -565,6 +567,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
     mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue(undefined);
     mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue(undefined);
+    mocks.feishuIm.retainFinalReplyMirror.mockReturnValue(mocks.releaseFinalReplyMirror);
     mocks.feishuIm.startStreamingText.mockResolvedValue({
       messageId: 'stream-1',
       append: vi.fn(),
@@ -1896,6 +1899,35 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
   });
 
+  it('releases mirror retention when a queued turn is dropped by stop', async () => {
+    setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn(vi.fn(), { userMessageId: 'msg-first' });
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-queued-stop',
+    };
+
+    await runDefaultTurn(vi.fn(), {
+      userMessageId: 'msg-second',
+      finalReplyMirror: mirror,
+    });
+    expect(mocks.feishuIm.retainFinalReplyMirror).toHaveBeenCalledWith({
+      ...mirror,
+      allowedFileRoots: ['F:\\XDMaker'],
+    });
+    expect(mocks.releaseFinalReplyMirror).not.toHaveBeenCalled();
+
+    await expect(
+      getRunner().stopActiveTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+      }),
+    ).resolves.toMatchObject({ stopped: true, droppedQueued: 1 });
+    expect(mocks.releaseFinalReplyMirror).toHaveBeenCalledTimes(1);
+  });
+
   it('queues while a desktop-originated turn is running (attached takeover) and dispatches on its stray done', async () => {
     // 接管模式典型场景: desktop 侧 turn 在跑(本渠道没有对应 TurnState),
     // isTurnRunning=true → 入队; desktop turn 的 done 以 stray event 到达 → 派发。
@@ -2691,7 +2723,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(mirror, expected);
   });
 
-  it('does not arm streaming cards with the parent-chat mirror and copies only the terminal view', async () => {
+  it('arms only the true terminal finalize with the parent-chat mirror', async () => {
     const handle = {
       messageId: 'stream-terminal',
       append: vi.fn(),
@@ -2710,6 +2742,12 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const onTurnComplete = vi.fn();
     await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
 
+    expect(mocks.feishuIm.retainFinalReplyMirror).toHaveBeenCalledWith({
+      ...mirror,
+      allowedFileRoots: ['F:\\XDMaker'],
+    });
+    expect(mocks.releaseFinalReplyMirror).not.toHaveBeenCalled();
+
     h.emit({ type: 'text', data: { text: 'final answer', isFinal: true } });
     await waitForAssertion(() => {
       expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
@@ -2723,23 +2761,24 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await waitForAssertion(() => {
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
       expect(handle.finalize).toHaveBeenCalledTimes(1);
-      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
     });
-    expect(mocks.feishuIm.mirrorFinalReply.mock.calls[0][0]).toEqual({
-      ...mirror,
-      allowedFileRoots: ['F:\\XDMaker'],
+    expect(handle.finalize).toHaveBeenCalledWith(expect.stringContaining('final answer'), {
+      finalReplyMirror: {
+        ...mirror,
+        allowedFileRoots: ['F:\\XDMaker'],
+      },
     });
-    expect(String(mocks.feishuIm.mirrorFinalReply.mock.calls[0][1])).toContain('final answer');
+    expect(mocks.releaseFinalReplyMirror).toHaveBeenCalledTimes(1);
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
   });
 
-  it('arms the streaming handle at terminal finalize so parent-chat files reuse the upload key', async () => {
+  it('supplies the parent-chat mirror only at terminal finalize so files reuse the upload key', async () => {
     const handle = {
       messageId: 'stream-armed',
       append: vi.fn(),
       replace: vi.fn(),
       finalize: vi.fn(),
       close: vi.fn(),
-      armFinalReplyMirror: vi.fn(),
     };
     mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
     const mirror = {
@@ -2756,7 +2795,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await waitForAssertion(() => {
       expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
     });
-    expect(handle.armFinalReplyMirror).not.toHaveBeenCalled();
+    expect(handle.finalize).not.toHaveBeenCalled();
     expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
 
     h.emit({ type: 'done', data: {} });
@@ -2764,13 +2803,12 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
       expect(handle.finalize).toHaveBeenCalledTimes(1);
     });
-    expect(handle.armFinalReplyMirror).toHaveBeenCalledWith({
-      ...mirror,
-      allowedFileRoots: ['F:\\XDMaker'],
+    expect(handle.finalize).toHaveBeenCalledWith(expect.stringContaining('see the file'), {
+      finalReplyMirror: {
+        ...mirror,
+        allowedFileRoots: ['F:\\XDMaker'],
+      },
     });
-    expect(handle.armFinalReplyMirror.mock.invocationCallOrder[0]).toBeLessThan(
-      handle.finalize.mock.invocationCallOrder[0],
-    );
     expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
   });
 
@@ -2810,16 +2848,19 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await waitForAssertion(() => {
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
       expect(handle.finalize).toHaveBeenCalledTimes(1);
-      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
     });
-    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
-      {
-        ...mirror,
-        allowedFileRoots: ['F:\\XDMaker'],
-      },
+    expect(handle.addExtraImageAbsPath).toHaveBeenCalledWith(extraAbsPath);
+    expect(handle.finalize).toHaveBeenCalledWith(
       expect.stringContaining('here is the image'),
-      { mediaAbsPaths: [extraAbsPath] },
+      {
+        finalReplyMirror: {
+          ...mirror,
+          allowedFileRoots: ['F:\\XDMaker'],
+        },
+      },
     );
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+
   });
 
   it('never treats SSH workdir or media paths as local parent-chat files', async () => {
@@ -2846,14 +2887,18 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     await waitForAssertion(() => {
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
-      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
     });
     expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
     expect(mocks.materializeLocalMarkdownImages).not.toHaveBeenCalled();
-    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
-      { ...mirror, allowedFileRoots: [] },
-      expect.stringContaining('remote final'),
-    );
+    const handle = await mocks.feishuIm.startStreamingText.mock.results[0].value;
+    expect(handle.finalize).toHaveBeenCalledWith(expect.stringContaining('remote final'), {
+      finalReplyMirror: {
+        ...mirror,
+        allowedFileRoots: [],
+      },
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
   });
 
   it('defers parent-chat mirroring across an in-turn permission card until the turn completes', async () => {
@@ -2910,6 +2955,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(firstHandle.finalize).toHaveBeenCalled();
       expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalled();
     });
+    expect(firstHandle.finalize).toHaveBeenCalledWith(expect.stringContaining('I will run bash'));
     expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
 
     permissionGate.resolve({ kind: 'permission', behavior: 'allow' });
@@ -2926,11 +2972,18 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await waitForAssertion(() => {
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
       expect(secondHandle.finalize).toHaveBeenCalled();
-      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
     });
-    const mirroredText = String(mocks.feishuIm.mirrorFinalReply.mock.calls[0][1]);
-    expect(mirroredText).toContain('command finished: ok');
-    expect(mirroredText).not.toContain('I will run bash');
+    expect(secondHandle.finalize).toHaveBeenCalledWith(
+      expect.stringContaining('command finished: ok'),
+      {
+        finalReplyMirror: {
+          ...mirror,
+          allowedFileRoots: ['F:\\XDMaker'],
+        },
+      },
+    );
+    expect(String(secondHandle.finalize.mock.calls[0][0])).not.toContain('I will run bash');
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
   });
 
   it('does not report route resolution before auth passes on an existing route', async () => {

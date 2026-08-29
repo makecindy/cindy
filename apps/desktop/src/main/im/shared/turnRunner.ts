@@ -191,6 +191,8 @@ interface TurnState {
   scopeKey?: string;
   /** Optional secondary presentation target for this turn's terminal output only. */
   finalReplyMirror?: IMFinalReplyMirror;
+  /** Releases channel-side confirmation retention when this turn leaves the queue/lifecycle. */
+  finalReplyMirrorRelease: (() => void) | null;
   initialMessageText: string;
   /** First text-delta resolves this lazily (avoids creating a card for empty turns). */
   streamingHandle: StreamingTextHandle | null;
@@ -816,6 +818,7 @@ export function createTurnRunner(
             allowedFileRoots,
           }
         : undefined,
+      finalReplyMirrorRelease: null,
       initialMessageText: text,
       streamingHandle: null,
       streamingHandlePromise: null,
@@ -843,7 +846,6 @@ export function createTurnRunner(
       terminalPromise,
       resolveTerminal,
     };
-
     let state: SessionState;
     try {
       state = await ensureSessionWired(target, userId);
@@ -954,6 +956,7 @@ export function createTurnRunner(
         await completeTurnCallbackAfterAck(turn);
         return { kind: 'busy', reason: 'session_running' };
       }
+      retainTurnFinalReplyMirror(turn);
       state.sendQueue.push(item);
       log.info(`queued message for session=${row.id.slice(-8)} position=${state.sendQueue.length}`);
       // 本渠道没有未收口的 turn(纯 desktop turn 在跑) → 派发只能靠它的 stray
@@ -967,6 +970,7 @@ export function createTurnRunner(
       return { kind: 'busy', reason: 'queued_internally' };
     }
 
+    retainTurnFinalReplyMirror(turn);
     const dispatch = await dispatchQueuedSend(state, userId, item);
     if (dispatch.kind !== 'accepted') return dispatch;
     return {
@@ -1286,11 +1290,13 @@ export function createTurnRunner(
               /* The session is already detaching; reporting remains best-effort. */
             }
           }
+          releaseTurnFinalReplyMirror(item.turn);
           finishDeferredDetachIfIdle(state);
           return { kind: 'busy', reason: 'session_detaching' };
         }
         if (item.queueMode === 'external') {
           await completeTurnCallbackAfterAck(item.turn);
+          releaseTurnFinalReplyMirror(item.turn);
           return { kind: 'busy', reason: 'session_running' };
         }
         state.sendQueue.unshift(item);
@@ -1556,27 +1562,19 @@ export function createTurnRunner(
   }
 
   /**
-   * Terminal streaming finalize. Parent-chat copies are armed here — not at
+   * Terminal streaming finalize. Parent-chat copies are supplied here — not at
    * `startStreamingText` — so permission / ask / plan `finalizeActiveStream`
    * cannot reuse the same card UUID for a fragment.
-   *
-   * Returns true when the handle itself will copy the parent chat (reusable
-   * Feishu file keys live on that path). Callers must not also one-shot
-   * `mirrorFinalReply`, which has no upload key and would send deliveryFailed.
    */
-  async function finalizeTurnStream(
-    turn: TurnState,
-    finalView: string,
-  ): Promise<boolean> {
+  async function finalizeTurnStream(turn: TurnState, finalView: string): Promise<void> {
     const handle = turn.streamingHandle;
-    if (!handle) return false;
-    const mirror = turn.finalReplyMirror;
-    const mirroredByHandle = Boolean(handle.armFinalReplyMirror && mirror);
-    if (mirroredByHandle && mirror) {
-      handle.armFinalReplyMirror!(mirror);
-    }
+    if (!handle) return;
     try {
-      await handle.finalize(finalView);
+      if (turn.finalReplyMirror) {
+        await handle.finalize(finalView, { finalReplyMirror: turn.finalReplyMirror });
+      } else {
+        await handle.finalize(finalView);
+      }
     } catch (err) {
       if (output.kind === 'chunked-text') {
         turn.terminalKind = 'error';
@@ -1586,7 +1584,6 @@ export function createTurnRunner(
         `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    return mirroredByHandle;
   }
 
   async function handleSessionWiringBusy(userId: string, turn: TurnState): Promise<void> {
@@ -2571,7 +2568,38 @@ export function createTurnRunner(
     return true;
   }
 
+  function retainTurnFinalReplyMirror(turn: TurnState): void {
+    if (turn.finalReplyMirrorRelease || !turn.finalReplyMirror || output.kind !== 'rich-card') {
+      return;
+    }
+    try {
+      const release = output.im.retainFinalReplyMirror?.(turn.finalReplyMirror);
+      if (typeof release === 'function') turn.finalReplyMirrorRelease = release;
+    } catch (err) {
+      log.warn(
+        `final reply mirror retention failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  function releaseTurnFinalReplyMirror(turn: TurnState): void {
+    const release = turn.finalReplyMirrorRelease;
+    turn.finalReplyMirrorRelease = null;
+    try {
+      release?.();
+    } catch (err) {
+      log.warn(
+        `final reply mirror retention release failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   function settleTurnTerminal(turn: TurnState): void {
+    releaseTurnFinalReplyMirror(turn);
     const resolve = turn.resolveTerminal;
     if (!resolve) return;
     turn.resolveTerminal = null;
@@ -2733,6 +2761,7 @@ export function createTurnRunner(
         /* 忽略失败：派发失败提示不能再阻塞收口。 */
       }
     }
+    releaseTurnFinalReplyMirror(failure.turn);
     if (finishDeferredDetachIfIdle(state)) return;
     // 一条 pre-dispatch failure 不能卡死后面的排队消息 — 继续放行。
     maybeDispatchNextQueued(state, userId);
@@ -2845,10 +2874,9 @@ export function createTurnRunner(
     // 创建失败集中在此捕获并 resolve null(#2164):调用点全部是 fire-and-forget
     // 的 .then(...),各自补 rejection handler 必然遗漏;失败留下脱敏日志与
     // streamingStartFailed 标记,已生成正文由收口分支一次性降级发送。
-    // Dual-delivery parent-chat copies are armed only at true turn completion.
-    // Passing the mirror onto every streaming handle would copy pre-interaction
-    // fragments (permission / ask / plan review) with the same *-card UUID and
-    // then drop the real terminal result.
+    // Dual-delivery parent-chat copies are armed only by the true terminal
+    // finalize call. Pre-interaction fragments use the same handle contract but
+    // deliberately finalize without finalReplyMirror.
     turn.streamingHandlePromise = (async () => {
       try {
         const handle =
@@ -2971,14 +2999,7 @@ export function createTurnRunner(
     }
     if (turn.streamingHandle) {
       const finalView = composeStreamingView(turn) || '_(空回复)_';
-      const mirroredByHandle = await finalizeTurnStream(turn, finalView);
-      if (!mirroredByHandle) {
-        await mirrorTurnFinalReply(
-          turn.finalReplyMirror,
-          finalView,
-          turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-        );
-      }
+      await finalizeTurnStream(turn, finalView);
     } else if (turn.presenter.wholeText().length === 0) {
       // No streamed text at all — send a one-shot text so the user knows the
       // turn ended. (Rare; normally agents emit at least one text block.)
@@ -3101,14 +3122,7 @@ export function createTurnRunner(
     if (turn?.streamingHandle) {
       const view = composeStreamingView(turn);
       const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
-      const mirroredByHandle = await finalizeTurnStream(turn, body);
-      if (!mirroredByHandle) {
-        await mirrorTurnFinalReply(
-          turn.finalReplyMirror,
-          body,
-          turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
-        );
-      }
+      await finalizeTurnStream(turn, body);
     } else {
       try {
         if (output.kind === 'chunked-text') {
@@ -3419,6 +3433,7 @@ export function createTurnRunner(
     const dropped = state.sendQueue.splice(0, state.sendQueue.length);
     log.warn(`dropping ${dropped.length} queued message(s) on cleanup/detach`);
     for (const item of dropped) {
+      releaseTurnFinalReplyMirror(item.turn);
       releaseAttachedImTurnHeadless(item.turn);
       void cancelAckReaction(item.turn);
     }

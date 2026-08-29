@@ -127,8 +127,11 @@ export interface RichChannelIM extends TextChannelIM {
   startStreamingText(
     userId: string,
     initial?: string,
-    opts?: { threadTs?: string; finalReplyMirror?: IMFinalReplyMirror },
+    opts?: { threadTs?: string },
   ): Promise<StreamingTextHandle>;
+
+  /** Keep mirror confirmation alive while a turn is active or queued; returns its release hook. */
+  retainFinalReplyMirror?(mirror: IMFinalReplyMirror): (() => void) | void;
 
   /** Best-effort terminal mirror when the primary rich surface could not be created. */
   mirrorFinalReply?(

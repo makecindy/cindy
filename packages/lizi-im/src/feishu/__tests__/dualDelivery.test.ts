@@ -54,6 +54,61 @@ describe('Feishu native thread/main dual delivery', () => {
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
   });
 
+  it('retains a live turn confirmation past the normal TTL and cache cap', async () => {
+    vi.useFakeTimers();
+    const topic = await coordinateDualDelivery(input());
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    retainMirrorConfirmation(topic.mirrorKey);
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+
+    // Fill beyond MAX_CONFIRMED while consuming each unrelated mirror. The
+    // target represents a still-running Agent turn and must remain pinned.
+    for (let i = 0; i < 2_001; i++) {
+      const fillerTopic = await coordinateDualDelivery(
+        input({ createTime: `filler-${i}`, messageId: `om_filler_topic_${i}` }),
+      );
+      if (fillerTopic.kind !== 'dispatch' || !fillerTopic.mirrorKey) {
+        throw new Error('missing filler mirror key');
+      }
+      await coordinateDualDelivery(
+        input({
+          createTime: `filler-${i}`,
+          messageId: `om_filler_flat_${i}`,
+          threadId: '',
+        }),
+      );
+      await expect(waitForMirrorConfirmation(fillerTopic.mirrorKey)).resolves.toBe(true);
+    }
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 1);
+    await coordinateDualDelivery(
+      input({ createTime: 'prune-trigger', messageId: 'om_prune_trigger' }),
+    );
+
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat_after_terminal', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+  });
+
+  it('does not pin a confirmed route until the caller emits an Agent turn', async () => {
+    vi.useFakeTimers();
+    const topic = await coordinateDualDelivery(input());
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 1);
+    await coordinateDualDelivery(
+      input({ createTime: 'prune-unemitted', messageId: 'om_prune_unemitted' }),
+    );
+
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(false);
+  });
+
   it('suppresses fresh flat message ids after the logical send is confirmed', async () => {
     vi.useFakeTimers();
     const topic = await coordinateDualDelivery(input());
@@ -487,7 +542,7 @@ describe('Feishu native thread/main dual delivery', () => {
     expect(isMirrorConfirmationRetainedForTest(topic.mirrorKey)).toBe(false);
   });
 
-  it('keeps an inflight confirmation past the confirmed TTL until release', async () => {
+  it('keeps a live confirmation past the TTL and restarts the TTL on release', async () => {
     vi.useFakeTimers();
     const topic = await coordinateDualDelivery(input());
     await coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
@@ -495,9 +550,14 @@ describe('Feishu native thread/main dual delivery', () => {
     retainMirrorConfirmation(topic.mirrorKey);
 
     await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 1);
-    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+    await coordinateDualDelivery(
+      input({ createTime: 'release-prune-trigger', messageId: 'om_release_prune_trigger' }),
+    );
 
     releaseMirrorConfirmation(topic.mirrorKey);
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 1);
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(false);
   });
 });

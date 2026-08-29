@@ -73,8 +73,24 @@ const recentThreads = new Map<string, number>();
 const recentFlats = new Map<string, RecentFlatRecord>();
 const confirmed = new Map<string, number>();
 const deferredMirrors = new Map<string, Array<() => void>>();
-/** Logical sends whose Agent turn has not yet consumed the terminal mirror. */
-const inflightMirrors = new Set<string>();
+/** Confirmation records retained until the elected Agent turn reaches a terminal mirror path. */
+const liveMirrorConfirmations = new Set<string>();
+
+export function retainMirrorConfirmation(key: string): void {
+  liveMirrorConfirmations.add(key);
+}
+
+export function releaseMirrorConfirmation(key: string): void {
+  if (!liveMirrorConfirmations.delete(key)) return;
+  if (!confirmed.has(key)) return;
+  const now = Date.now();
+  // A duplicate can arrive after a very long Agent turn. Once the live pin is
+  // released, restart the ordinary suppression TTL from the terminal instead
+  // of immediately pruning the old pair timestamp.
+  confirmed.delete(key);
+  confirmed.set(key, now);
+  pruneConfirmed(now);
+}
 
 function logicalSendKey(input: DualDeliveryInput): string | null {
   if (!input.createTime) return null;
@@ -169,11 +185,13 @@ function abandonUnpairedFlatRoute(key: string, rec: RecentFlatRecord): void {
     pruneRecentFlats(rec.ts);
   }
   dropDeferredMirrors(key);
+  releaseMirrorConfirmation(key);
 }
 
 function flushDeferredMirrors(key: string): void {
   const scheduled = deferredMirrors.get(key);
   deferredMirrors.delete(key);
+  if (scheduled) releaseMirrorConfirmation(key);
   for (const run of scheduled ?? []) {
     try {
       run();
@@ -185,26 +203,10 @@ function flushDeferredMirrors(key: string): void {
 
 function pruneConfirmed(now: number): void {
   for (const [key, ts] of confirmed) {
-    if (inflightMirrors.has(key)) continue;
     if (now - ts <= CONFIRMED_TTL_MS && confirmed.size <= MAX_CONFIRMED) break;
+    if (liveMirrorConfirmations.has(key)) continue;
     confirmed.delete(key);
   }
-  if (confirmed.size <= MAX_CONFIRMED) return;
-  for (const key of confirmed.keys()) {
-    if (confirmed.size <= MAX_CONFIRMED) break;
-    if (inflightMirrors.has(key)) continue;
-    confirmed.delete(key);
-  }
-}
-
-/** Hold a dispatched mirror key so confirmation cannot expire before terminal copy. */
-export function retainMirrorConfirmation(mirrorKey: string): void {
-  inflightMirrors.add(mirrorKey);
-}
-
-/** Release after the terminal parent-chat copy has been sent or scheduled. */
-export function releaseMirrorConfirmation(mirrorKey: string): void {
-  inflightMirrors.delete(mirrorKey);
 }
 
 function dispatchWithMirror(
@@ -360,9 +362,15 @@ export async function coordinateDualDelivery(
 /** Waits only for the bounded pairing window; Agent execution itself is never delayed. */
 export async function waitForMirrorConfirmation(mirrorKey: string): Promise<boolean> {
   pruneConfirmed(Date.now());
-  if (confirmed.has(mirrorKey)) return true;
+  if (confirmed.has(mirrorKey)) {
+    releaseMirrorConfirmation(mirrorKey);
+    return true;
+  }
   const entry = pending.get(mirrorKey);
-  return entry ? entry.decision : false;
+  if (!entry) return false;
+  const isConfirmed = await entry.decision;
+  if (isConfirmed) releaseMirrorConfirmation(mirrorKey);
+  return isConfirmed;
 }
 
 /**
@@ -378,6 +386,7 @@ export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void
   pruneTtlMap(recentThreads, now);
   pruneRecentFlats(now);
   if (confirmed.has(mirrorKey)) {
+    releaseMirrorConfirmation(mirrorKey);
     send();
     return true;
   }
@@ -386,17 +395,21 @@ export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void
     !recentThreads.has(mirrorKey) &&
     !recentFlats.has(mirrorKey)
   ) {
+    releaseMirrorConfirmation(mirrorKey);
     return false;
   }
   const queued = deferredMirrors.get(mirrorKey) ?? [];
-  queued.push(send);
+  queued.push(() => {
+    releaseMirrorConfirmation(mirrorKey);
+    send();
+  });
   deferredMirrors.set(mirrorKey, queued);
   return true;
 }
 
 /** Test-only: whether terminal-mirror retain is still holding this key. */
 export function isMirrorConfirmationRetainedForTest(mirrorKey: string): boolean {
-  return inflightMirrors.has(mirrorKey);
+  return liveMirrorConfirmations.has(mirrorKey);
 }
 
 /** Test-only reset. Production state intentionally survives transport reconnects. */
@@ -409,6 +422,6 @@ export function resetDualDeliveryForTest(): void {
   recentThreads.clear();
   recentFlats.clear();
   confirmed.clear();
-  inflightMirrors.clear();
   deferredMirrors.clear();
+  liveMirrorConfirmations.clear();
 }
