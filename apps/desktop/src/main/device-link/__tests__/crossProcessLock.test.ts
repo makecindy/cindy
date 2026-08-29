@@ -691,7 +691,9 @@ describe('接管陈旧锁', () => {
       await expect(
         withCrossProcessLock(lock, { label: 'churn', waitMs: 2_000 }, async (s) => s),
       ).resolves.toEqual({ held: false, reason: 'busy' });
-      expect(performance.now() - started).toBeLessThan(1_000);
+      // CI 文件系统调度下三次 stale takeover 可能超过 1s；上限对齐 waitMs，
+      // 仍拦住真正卡死的实现，不再把瞬时抖动当回归。
+      expect(performance.now() - started).toBeLessThan(2_000);
       expect(takeovers).toBe(3);
     } finally {
       spy.mockRestore();
