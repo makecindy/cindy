@@ -2249,9 +2249,7 @@ describe('Pi package executable-code boundary', () => {
     expect(result.affectedPackage).toMatchObject({ enabled: true });
     expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
     await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [expect.objectContaining({ enabled: true })],
-    });
+    await expect(store.listPiPackages()).rejects.toThrow('state is unavailable');
     const publications = `${JSON.stringify(result)}\n${JSON.stringify(loggerRuntime.warn.mock.calls)}`;
     expect(publications).not.toContain('alice');
     expect(publications).not.toContain('s3cr3t');
@@ -2358,13 +2356,14 @@ describe('Pi package executable-code boundary', () => {
   it.each([
     ['transient I/O', 'EIO'],
     ['permission', 'EACCES'],
-  ])('keeps native package projection enabled through a %s Cindy-state read failure', async (_label, code) => {
+  ])('fails local projection closed through a %s Cindy-state read failure', async (_label, code) => {
     const { source } = await createSkillOnlyPackage('npm:disabled-skill-package');
+    const sibling = 'npm:sibling-disabled';
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     const stateFile = path.join(stateDir, 'cindy-package-state.json');
     const persistedState = `${JSON.stringify({
       version: 3,
-      disabledSources: [source],
+      disabledSources: [source, sibling],
       approvedExtensionSources: [],
       approvedExtensionFingerprints: {},
       snapshotUnavailableRoots: {},
@@ -2383,14 +2382,8 @@ describe('Pi package executable-code boundary', () => {
     }) as typeof fs.readFile);
     try {
       const store = await import('../pi-package-store.js');
-      await expect(store.listPiPackages()).resolves.toMatchObject({
-        packages: [{
-          source,
-          enabled: true,
-          warning: 'inspection-failed',
-          resources: [expect.objectContaining({ kind: 'skill' })],
-        }],
-      });
+      await expect(store.listPiPackages()).rejects.toThrow('state is unavailable');
+      await expect(store.resolveManagedPiNativePackagePaths()).rejects.toThrow('state is unavailable');
       await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
         extensions: [], skills: [], promptTemplates: [], packageRoots: [],
       });
@@ -2399,13 +2392,17 @@ describe('Pi package executable-code boundary', () => {
         source,
         enabled: false,
       })).rejects.toThrow('state is unavailable');
+      expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'failed to read Pi extension state',
+        { failureCategory: 'state-unavailable' },
+      );
     } finally {
       readSpy.mockRestore();
     }
     await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(persistedState);
   });
 
-  it('does not let corrupt Cindy state block native loading or get overwritten by a toggle', async () => {
+  it('fails local projection closed for corrupt Cindy state without overwriting it', async () => {
     const { source } = await createSkillOnlyPackage('npm:corrupt-state-skill-package');
     const stateDir = path.join(runtime.userData, 'pi-package-home');
     const stateFile = path.join(stateDir, 'cindy-package-state.json');
@@ -2414,13 +2411,8 @@ describe('Pi package executable-code boundary', () => {
     await fs.writeFile(stateFile, corruptState);
     const store = await import('../pi-package-store.js');
 
-    await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{
-        source,
-        enabled: true,
-        warning: 'inspection-failed',
-      }],
-    });
+    await expect(store.listPiPackages()).rejects.toThrow('state is unavailable');
+    await expect(store.resolveManagedPiNativePackagePaths()).rejects.toThrow('state is unavailable');
     await expect(store.resolveManagedPiPackageResources({
       snapshotRoot: path.join(runtime.userData, 'corrupt-state-snapshot'),
     })).resolves.toEqual({

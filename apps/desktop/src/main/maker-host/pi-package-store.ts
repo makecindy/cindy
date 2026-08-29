@@ -574,7 +574,7 @@ async function readState(): Promise<PiPackageStateReadResult> {
       return { ok: true, state: emptyState() };
     }
     log.warn('failed to read Pi extension state', {
-      message: error instanceof Error ? error.message : String(error),
+      failureCategory: 'state-unavailable',
     });
     return { ok: false, error };
   }
@@ -595,11 +595,11 @@ async function readStateWithoutBlockingPi(): Promise<PiPackageState> {
       disabledSources: result.state.disabledSources.filter((source) => !pending.has(source)),
     };
   }
-  // Cindy's optional projection must never turn a valid native Pi package
-  // operation into a failure. A corrupt projection loses only Cindy-specific
-  // toggles; Pi's own package settings remain the source of install truth.
-  log.warn('ignoring unavailable Cindy Pi package projection for native parity');
-  return emptyState();
+  // An unavailable disable ledger cannot be projected as an empty ledger: that
+  // would silently restore capabilities the user explicitly revoked. Native
+  // mutations remain successful, but local startup/list projection must wait
+  // until Cindy can determine the effective package state.
+  throw new PiPackageStateUnavailableError();
 }
 
 async function writeState(state: PiPackageState): Promise<void> {
