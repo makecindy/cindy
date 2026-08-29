@@ -206,10 +206,16 @@ describe('Feishu parent-chat file reuse', () => {
       file: unknown,
       options?: unknown,
     ) => {
-      const asPath = typeof file === 'string' ? file : String(file);
-      if (asPath === absPath && fsSync.lstatSync(absPath).isSymbolicLink()) {
-        fsSync.unlinkSync(absPath);
-        fsSync.writeFileSync(absPath, 'trusted decoy');
+      // Linux binds via /proc/self/fd and never realpath(absPath). Retarget
+      // the in-root name on the first lookup of any candidate so the decoy
+      // inode is distinct from the opened secret.
+      try {
+        if (fsSync.lstatSync(absPath).isSymbolicLink()) {
+          fsSync.unlinkSync(absPath);
+          fsSync.writeFileSync(absPath, 'trusted decoy');
+        }
+      } catch {
+        /* absPath already replaced or gone */
       }
       return realRealpath(
         file as Parameters<typeof realRealpath>[0],

@@ -14,6 +14,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { pendingTopicLeaseCountForTest, resetDualDeliveryForTest } from '../dualDelivery.js';
 import { feishuEvents } from '../events.js';
 import type { IMMessageEvent } from '../../types.js';
 
@@ -165,6 +166,7 @@ beforeEach(async () => {
   // message_id。
   wsClient.resetInboundDedupeForTest();
   wsClient.resetOrphanRetriesForTest();
+  resetDualDeliveryForTest();
   mocks.options.length = 0;
   mocks.eventHandlers = {};
   vi.clearAllMocks();
@@ -176,6 +178,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await wsClient.stop({ announceOffline: false, reason: 'test-cleanup' });
   wsClient.resetOrphanRetriesForTest();
+  resetDualDeliveryForTest();
   feishuEvents.removeAllListeners('message');
   vi.useRealTimers();
 });
@@ -274,6 +277,22 @@ describe('feishu group thread routing', () => {
       confirmed: true,
     });
     expect(mocks.openThread).not.toHaveBeenCalled();
+  });
+
+  it('releases the topic lease when a mention-only topic has nothing to relay', async () => {
+    const events = collectMessages();
+    await connect();
+    const empty = groupTopicMessage('@_user_1', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    empty.message.create_time = '1788000000000';
+    empty.message.message_id = 'om_empty_mention';
+
+    await mocks.eventHandlers['im.message.receive_v1'](empty);
+
+    expect(events).toHaveLength(0);
+    expect(mocks.openThread).not.toHaveBeenCalled();
+    expect(pendingTopicLeaseCountForTest()).toBe(0);
   });
 
   it('late topic after the cache TTL still takes over while the flat route is uncommitted', async () => {

@@ -689,6 +689,36 @@ describe('feishu streaming text', () => {
     expect(mocks.sendFileToChat).not.toHaveBeenCalled();
   });
 
+  it('does not reuse a file_key when uploaded inode identity is zero', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-zero-ino-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+    const realPath = fsSync.realpathSync(allowedFile);
+    mocks.sendFile.mockResolvedValue({
+      ok: true,
+      messageId: 'om_primary_file',
+      reusableMessage: {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      uploadedSource: {
+        realPath,
+        dev: 1,
+        ino: 0,
+      },
+    });
+    const handle = await start('g/oc_group/omt_topic');
+
+    await handle.finalize(
+      `见 [report.txt](xdt-file://${allowedFile})`,
+      terminalMirror('w'.repeat(64), [root], [{ dev: 1, ino: 0 }]),
+    );
+
+    expect(mocks.sendFile).toHaveBeenCalled();
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+  });
+
   it('copies parent-chat files when the allowed root uses host filesystem case', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-case-'));
     tempDirs.push(root);

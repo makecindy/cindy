@@ -109,6 +109,28 @@ describe('Feishu native thread/main dual delivery', () => {
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(false);
   });
 
+  it('releases an uncommitted topic lease so a later retry can acquire a fresh one', async () => {
+    const topic = await coordinateDualDelivery(input());
+    if (topic.kind !== 'dispatch' || !topic.commitTopic || !topic.abandonTopic) {
+      throw new Error('elected topic must expose abandonTopic');
+    }
+    topic.abandonTopic();
+    expect(topic.commitTopic()).toBe(false);
+
+    const retry = await coordinateDualDelivery(
+      input({ messageId: 'om_topic_retry', threadId: 'omt_topic' }),
+    );
+    expect(retry).toMatchObject({
+      kind: 'dispatch',
+      commitTopic: expect.any(Function),
+      abandonTopic: expect.any(Function),
+    });
+    if (retry.kind !== 'dispatch' || !retry.commitTopic) {
+      throw new Error('abandoned topic must allow a fresh lease');
+    }
+    expect(retry.commitTopic()).toBe(true);
+  });
+
   it('allows an elected topic retry before the topic route commits', async () => {
     const topic = await coordinateDualDelivery(input());
     await expect(

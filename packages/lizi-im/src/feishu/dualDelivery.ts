@@ -66,6 +66,8 @@ export type DualDeliveryDecision =
        * committed — abort instead of starting a second turn.
        */
       commitTopic?: () => boolean;
+      /** Release an uncommitted topic route that will never emit an Agent turn. */
+      abandonTopic?: () => void;
     }
   | { kind: 'suppress-main-copy' };
 
@@ -215,11 +217,26 @@ function commitTopicRoute(key: string, rec: RecentFlatRecord): boolean {
   return true;
 }
 
-function topicRouteCallbacks(key: string): { commitTopic: () => boolean } {
-  const existing = topicLeases.get(key);
+function abandonTopicRoute(key: string, rec: RecentFlatRecord): void {
+  if (rec.state !== 'pending') return;
+  rec.state = 'abandoned';
+  rec.ts = Date.now();
+  if (topicLeases.get(key) === rec) {
+    topicLeases.delete(key);
+    topicLeases.set(key, rec);
+    pruneTopicLeases(rec.ts);
+  }
+}
+
+function topicRouteCallbacks(
+  key: string,
+  existingLease?: RecentFlatRecord,
+): { commitTopic: () => boolean; abandonTopic: () => void } {
+  const existing = existingLease ?? topicLeases.get(key);
   const lease = existing?.state === 'pending' ? existing : rememberTopicLease(key, Date.now());
   return {
     commitTopic: () => commitTopicRoute(key, lease),
+    abandonTopic: () => abandonTopicRoute(key, lease),
   };
 }
 
@@ -348,9 +365,7 @@ export async function coordinateDualDelivery(
     if (input.threadId) {
       const lease = topicLeases.get(key);
       if (lease?.state === 'pending') {
-        return dispatchWithMirror(key, {
-          commitTopic: () => commitTopicRoute(key, lease),
-        });
+        return dispatchWithMirror(key, topicRouteCallbacks(key, lease));
       }
     }
     return { kind: 'suppress-main-copy' };
@@ -470,6 +485,15 @@ export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void
 /** Test-only: whether terminal-mirror retain is still holding this key. */
 export function isMirrorConfirmationRetainedForTest(mirrorKey: string): boolean {
   return liveMirrorConfirmations.has(mirrorKey);
+}
+
+/** Test-only: pending elected-topic leases that pruneTopicLeases will not expire. */
+export function pendingTopicLeaseCountForTest(): number {
+  let count = 0;
+  for (const rec of topicLeases.values()) {
+    if (rec.state === 'pending') count += 1;
+  }
+  return count;
 }
 
 /** Test-only reset. Production state intentionally survives transport reconnects. */

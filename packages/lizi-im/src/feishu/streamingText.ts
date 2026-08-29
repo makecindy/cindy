@@ -139,6 +139,9 @@ function sameInode(
   left: { dev: number; ino: number },
   right: { dev: number; ino: number },
 ): boolean {
+  // Node reports ino===0 on some Windows volumes for every file. Matching
+  // that sentinel would treat unrelated objects as the same inode.
+  if (left.ino === 0 || right.ino === 0) return false;
   return left.dev === right.dev && left.ino === right.ino;
 }
 

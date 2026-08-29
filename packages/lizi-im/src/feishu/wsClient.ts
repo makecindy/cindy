@@ -1485,6 +1485,7 @@ async function processClaimedMessage(
   let isUnpairedFlatTakenOver: (() => boolean) | undefined;
   let abandonUnpairedFlat: (() => void) | undefined;
   let commitTopic: (() => boolean) | undefined;
+  let abandonTopic: (() => void) | undefined;
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
     if (!mentionsSelf(data.message?.mentions, botOpenId)) return;
@@ -1530,6 +1531,7 @@ async function processClaimedMessage(
       isUnpairedFlatTakenOver = paired.isUnpairedFlatTakenOver;
       abandonUnpairedFlat = paired.abandonUnpairedFlat;
       commitTopic = paired.commitTopic;
+      abandonTopic = paired.abandonTopic;
     }
   } else {
     // TOFU: first p2p sender becomes owner. Send welcome and continue
@@ -1591,6 +1593,7 @@ async function processClaimedMessage(
   // Drop entirely only when there's literally nothing to relay.
   if (!text && attachments.length === 0 && unsupported.length === 0) {
     abandonUnpairedFlat?.();
+    abandonTopic?.();
     return;
   }
 
