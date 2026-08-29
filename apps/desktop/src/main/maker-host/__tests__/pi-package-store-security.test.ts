@@ -2202,6 +2202,101 @@ describe('Pi package executable-code boundary', () => {
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('lets an explicit disable cancel a pending reinstall enable without changing siblings', async () => {
+    const { root, source } = await createSkillOnlyPackage('npm:pending-enable-disabled');
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    await fs.writeFile(pendingFile, JSON.stringify([source]));
+    const originalRename = fs.rename.bind(fs);
+    let blockedReconcile = false;
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (!blockedReconcile && path.resolve(String(to)) === path.resolve(stateFile)) {
+        blockedReconcile = true;
+        throw Object.assign(new Error('simulated reconciliation EIO'), { code: 'EIO' });
+      }
+      return originalRename(from, to);
+    });
+    const store = await import('../pi-package-store.js');
+    try {
+      await expect(store.mutatePiPackage({
+        action: 'set-enabled', source, enabled: false,
+      })).resolves.toMatchObject({
+        changed: true,
+        affectedPackage: { source, enabled: false },
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+    expect(blockedReconcile).toBe(true);
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source, sibling].sort());
+    await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.not.toContain(root);
+  });
+
+  it('keeps an explicit disable effective but reports failure when pending journal removal fails', async () => {
+    const { root, source } = await createSkillOnlyPackage('npm:pending-enable-journal-failure');
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    await fs.writeFile(pendingFile, JSON.stringify([source]));
+    const originalRename = fs.rename.bind(fs);
+    const originalRm = fs.rm.bind(fs);
+    let blockedReconcile = false;
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (!blockedReconcile && path.resolve(String(to)) === path.resolve(stateFile)) {
+        blockedReconcile = true;
+        throw Object.assign(new Error('simulated reconciliation EIO'), { code: 'EIO' });
+      }
+      return originalRename(from, to);
+    });
+    const rmSpy = vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === path.resolve(pendingFile)) {
+        throw Object.assign(new Error('simulated pending journal EACCES'), { code: 'EACCES' });
+      }
+      return originalRm(target, options);
+    });
+    const store = await import('../pi-package-store.js');
+    try {
+      await expect(store.mutatePiPackage({
+        action: 'set-enabled', source, enabled: false,
+      })).rejects.toThrow('state is unavailable');
+    } finally {
+      renameSpy.mockRestore();
+      rmSpy.mockRestore();
+    }
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [expect.objectContaining({ source, enabled: false })],
+    });
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.not.toContain(root);
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toContain(source);
+    expect(state.disabledSources).toContain(sibling);
+
+    vi.resetModules();
+    const reloadedStore = await import('../pi-package-store.js');
+    await expect(reloadedStore.resolveManagedPiNativePackagePaths()).resolves.not.toContain(root);
+  });
+
   it.each([
     ['transient I/O', 'EIO'],
     ['permission', 'EACCES'],
