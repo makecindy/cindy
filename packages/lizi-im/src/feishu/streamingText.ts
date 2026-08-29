@@ -40,6 +40,7 @@ import {
   getBoundClient,
   runWithPinnedAccount,
   isPinnedAccountCurrent,
+  type FeishuUploadedFileSource,
   type ReusableFeishuFileMessage,
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
@@ -134,46 +135,75 @@ interface ReusableMirroredFile {
   sourceIndex: number;
 }
 
-function sameInode(left: fs.Stats, right: fs.Stats): boolean {
+function sameInode(
+  left: { dev: number; ino: number },
+  right: { dev: number; ino: number },
+): boolean {
   return left.dev === right.dev && left.ino === right.ino;
+}
+
+function resolveRootIdentities(
+  allowedFileRoots: readonly string[],
+  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>,
+): ReadonlyArray<{ dev: number; ino: number }> {
+  if (pinnedFileRoots) return pinnedFileRoots;
+  const live: Array<{ dev: number; ino: number }> = [];
+  for (const root of allowedFileRoots) {
+    if (!root.trim()) continue;
+    try {
+      const st = fs.statSync(fs.realpathSync(root));
+      live.push({ dev: st.dev, ino: st.ino });
+    } catch {
+      /* skip unresolvable live roots */
+    }
+  }
+  return live;
+}
+
+function isSourceWithinAllowedFileRoots(
+  source: FeishuUploadedFileSource,
+  allowedFileRoots: readonly string[],
+  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>,
+): boolean {
+  const roots = resolveRootIdentities(allowedFileRoots, pinnedFileRoots);
+  if (roots.length === 0) return false;
+  if (roots.some((root) => sameInode(source, root))) return true;
+  // Walk the uploaded source's real parents. String prefix comparison is
+  // wrong on case-insensitive volumes: Darwin realpath preserves the
+  // caller's spelling after following symlinks.
+  let current = source.realPath;
+  for (;;) {
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+    try {
+      const st = fs.statSync(current);
+      if (roots.some((root) => sameInode(st, root))) return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 function isWithinAllowedFileRoots(
   absPath: string,
   allowedFileRoots: readonly string[],
+  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>,
+  uploadedSource?: FeishuUploadedFileSource,
 ): boolean {
-  let targetReal: string;
-  let targetStat: fs.Stats;
+  const source = uploadedSource ?? readUploadedSource(absPath);
+  if (!source) return false;
+  return isSourceWithinAllowedFileRoots(source, allowedFileRoots, pinnedFileRoots);
+}
+
+function readUploadedSource(absPath: string): FeishuUploadedFileSource | null {
   try {
-    targetReal = fs.realpathSync(absPath);
-    targetStat = fs.statSync(targetReal);
+    const realPath = fs.realpathSync(absPath);
+    const st = fs.statSync(realPath);
+    return { realPath, dev: st.dev, ino: st.ino };
   } catch {
-    return false;
+    return null;
   }
-  return allowedFileRoots.some((root) => {
-    if (!root.trim()) return false;
-    let baseStat: fs.Stats;
-    try {
-      baseStat = fs.statSync(fs.realpathSync(root));
-    } catch {
-      return false;
-    }
-    if (sameInode(targetStat, baseStat)) return true;
-    // Walk the uploaded source's real parents. String prefix comparison is
-    // wrong on case-insensitive volumes: Darwin realpath preserves the
-    // caller's spelling after following symlinks.
-    let current = targetReal;
-    for (;;) {
-      const parent = path.dirname(current);
-      if (parent === current) return false;
-      current = parent;
-      try {
-        if (sameInode(fs.statSync(current), baseStat)) return true;
-      } catch {
-        return false;
-      }
-    }
-  });
 }
 
 class FeishuStreamingTextHandle implements StreamingTextHandle {
@@ -383,6 +413,8 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
               isWithinAllowedFileRoots(
                 link.absPath,
                 finalReplyMirror?.allowedFileRoots ?? [],
+                finalReplyMirror?.pinnedFileRoots,
+                sent.uploadedSource,
               )
             ) {
               return { message: sent.reusableMessage, sourceIndex };

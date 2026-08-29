@@ -31,6 +31,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -181,6 +182,32 @@ function resolveTurnFileRoots(
   remoteHostId: string | null | undefined,
 ): string[] {
   return remoteHostId ? [] : [workingDir];
+}
+
+function pinTurnFileRoots(roots: readonly string[]): Array<{ dev: number; ino: number }> {
+  const pinned: Array<{ dev: number; ino: number }> = [];
+  for (const root of roots) {
+    if (!root.trim()) continue;
+    try {
+      const st = fs.statSync(fs.realpathSync(root));
+      pinned.push({ dev: st.dev, ino: st.ino });
+    } catch {
+      /* Unresolvable roots are omitted; an empty pin fail-closes file reuse. */
+    }
+  }
+  return pinned;
+}
+
+function withTurnFileRoots(
+  mirror: IMFinalReplyMirror | undefined,
+  allowedFileRoots: string[],
+): IMFinalReplyMirror | undefined {
+  if (!mirror) return undefined;
+  return {
+    ...mirror,
+    allowedFileRoots,
+    pinnedFileRoots: pinTurnFileRoots(allowedFileRoots),
+  };
 }
 
 interface TurnState {
@@ -749,15 +776,7 @@ export function createTurnRunner(
           if (!consumed) {
             await replyMissingAuth(userId, authStatus, scopeKey, target.attached);
           }
-          await mirrorEarlyRejectReply(
-            args.finalReplyMirror
-              ? {
-                  ...args.finalReplyMirror,
-                  allowedFileRoots,
-                }
-              : undefined,
-            text,
-          );
+          await mirrorEarlyRejectReply(withTurnFileRoots(args.finalReplyMirror, allowedFileRoots), text);
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -812,12 +831,7 @@ export function createTurnRunner(
       turnId: randomUUID(),
       userId,
       scopeKey: target.scopeKey,
-      finalReplyMirror: args.finalReplyMirror
-        ? {
-            ...args.finalReplyMirror,
-            allowedFileRoots,
-          }
-        : undefined,
+      finalReplyMirror: withTurnFileRoots(args.finalReplyMirror, allowedFileRoots),
       finalReplyMirrorRelease: null,
       initialMessageText: text,
       streamingHandle: null,

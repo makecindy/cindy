@@ -88,12 +88,17 @@ describe('Feishu parent-chat file reuse', () => {
     const absPath = await fileFixture('report.txt', 'trusted report');
 
     const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
-    expect(primary).toEqual({
+    expect(primary).toMatchObject({
       ok: true,
       messageId: 'om_sent',
       reusableMessage: {
         msgType: 'file',
         content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      uploadedSource: {
+        realPath: expect.any(String),
+        dev: expect.any(Number),
+        ino: expect.any(Number),
       },
     });
 

@@ -126,7 +126,6 @@ export function createSlashHandlers(
       if (ctx.consumePendingOpener) {
         try {
           if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) {
-            await mirrorFirstSlashReply(ctx, text);
             return;
           }
         } catch (err) {
@@ -142,10 +141,13 @@ export function createSlashHandlers(
       } else {
         await im.sendMarkdownText(ctx.userId, text);
       }
-      await mirrorFirstSlashReply(ctx, text);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`safeSendText failed (non-fatal): ${msg}`);
+    } finally {
+      // Thread send failure must still consume the parent-chat retain; otherwise
+      // enqueue retention pins confirmed forever.
+      await mirrorFirstSlashReply(ctx, text);
     }
   }
 
@@ -159,7 +161,6 @@ export function createSlashHandlers(
       if (ctx.consumePendingOpener) {
         try {
           if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) {
-            await mirrorFirstSlashReply(ctx, slashCardMirrorText(spec));
             return true;
           }
         } catch (err) {
@@ -178,12 +179,13 @@ export function createSlashHandlers(
       } else {
         await richIm.sendInteractiveCard(ctx.userId, spec);
       }
-      await mirrorFirstSlashReply(ctx, slashCardMirrorText(spec));
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`safeSendCard failed (non-fatal): ${msg}`);
       return false;
+    } finally {
+      await mirrorFirstSlashReply(ctx, slashCardMirrorText(spec));
     }
   }
 

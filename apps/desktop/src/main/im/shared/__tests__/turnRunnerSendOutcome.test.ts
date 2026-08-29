@@ -1820,6 +1820,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       {
         ...mirror,
         allowedFileRoots: ['F:\\XDMaker'],
+        pinnedFileRoots: [],
       },
       ui.agent.credentialBusy,
     );
@@ -1916,6 +1917,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.retainFinalReplyMirror).toHaveBeenCalledWith({
       ...mirror,
       allowedFileRoots: ['F:\\XDMaker'],
+      pinnedFileRoots: [],
     });
     expect(mocks.releaseFinalReplyMirror).not.toHaveBeenCalled();
 
@@ -2745,6 +2747,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.retainFinalReplyMirror).toHaveBeenCalledWith({
       ...mirror,
       allowedFileRoots: ['F:\\XDMaker'],
+      pinnedFileRoots: [],
     });
     expect(mocks.releaseFinalReplyMirror).not.toHaveBeenCalled();
 
@@ -2766,6 +2769,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       finalReplyMirror: {
         ...mirror,
         allowedFileRoots: ['F:\\XDMaker'],
+        pinnedFileRoots: [],
       },
     });
     expect(mocks.releaseFinalReplyMirror).toHaveBeenCalledTimes(1);
@@ -2807,6 +2811,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       finalReplyMirror: {
         ...mirror,
         allowedFileRoots: ['F:\\XDMaker'],
+        pinnedFileRoots: [],
       },
     });
     expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
@@ -2856,6 +2861,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         finalReplyMirror: {
           ...mirror,
           allowedFileRoots: ['F:\\XDMaker'],
+          pinnedFileRoots: [],
         },
       },
     );
@@ -2896,6 +2902,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       finalReplyMirror: {
         ...mirror,
         allowedFileRoots: [],
+        pinnedFileRoots: [],
       },
     });
     expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
@@ -2979,6 +2986,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         finalReplyMirror: {
           ...mirror,
           allowedFileRoots: ['F:\\XDMaker'],
+          pinnedFileRoots: [],
         },
       },
     );

@@ -187,6 +187,13 @@ export interface IMFinalReplyMirror {
    */
   allowedFileRoots?: string[];
   /**
+   * Filesystem identity of `allowedFileRoots`, captured before Agent execution.
+   * Parent-chat file reuse must compare the uploaded object's real ancestry
+   * against this snapshot — the Agent can replace the original path string with
+   * a symlink or junction after the turn starts.
+   */
+  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>;
+  /**
    * Dual-delivery pairing was already confirmed at inbound. Terminal
    * parent-chat copies must not wait on a TTL-pruned confirmation map.
    */

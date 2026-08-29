@@ -917,8 +917,16 @@ export interface ReusableFeishuFileMessage {
   content: string;
 }
 
+export interface FeishuUploadedFileSource {
+  realPath: string;
+  dev: number;
+  ino: number;
+}
+
 export interface FeishuSendFileResult extends SendFileResult {
   reusableMessage?: ReusableFeishuFileMessage;
+  /** Identity of the bytes that were uploaded; authorizes parent-chat key reuse. */
+  uploadedSource?: FeishuUploadedFileSource;
 }
 
 export async function sendFile(
@@ -970,8 +978,15 @@ async function sendFileToTarget(
   const c = ensureClient();
 
   if (!fs.existsSync(absPath)) return { ok: false, reason: 'NOT_FOUND' };
-  const stat = fs.statSync(absPath);
-  return sendFileSourceToTarget(
+  let realPath: string;
+  let stat: fs.Stats;
+  try {
+    realPath = fs.realpathSync(absPath);
+    stat = fs.statSync(realPath);
+  } catch {
+    return { ok: false, reason: 'NOT_FOUND' };
+  }
+  const result = await sendFileSourceToTarget(
     c,
     target,
     {
@@ -982,6 +997,10 @@ async function sendFileToTarget(
     displayName,
     uuid,
   );
+  if (result.ok) {
+    result.uploadedSource = { realPath, dev: stat.dev, ino: stat.ino };
+  }
+  return result;
 }
 
 async function sendFileSourceToTarget(
