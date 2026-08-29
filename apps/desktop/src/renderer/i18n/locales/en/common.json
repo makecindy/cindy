@@ -2933,14 +2933,21 @@
         "unsupported-filter": "Cindy cannot display this Pi resource filter yet. Pi still handles the package and filter natively.",
         "unsafe-source": "The saved source contains credentials or private URL parameters. Cindy hid those fields in this view without blocking Pi’s package behavior."
       },
+      "failure": {
+        "sourceUnavailable": "The source is unavailable. Check the network or URL, or try another source.",
+        "packageNotFound": "The package was not found. Check the package name or repository URL.",
+        "versionNotFound": "That version was not found. Choose an available version and try again.",
+        "stateUnavailable": "Cindy could not read the Pi extension state. Restart Cindy and try again.",
+        "nativeCommandFailed": "Pi's package command failed. Check the source or version and try again."
+      },
       "success": {
-        "install": "Pi extension installed. Check its enabled state below; the current task is unchanged.",
-        "installEnabled": "Pi extension installed and enabled. The current task is unchanged; start or restart a Pi task to use it.",
-        "remove": "Pi extension removed. The current task keeps the old extension until it is closed.",
+        "install": "Pi extension installed. Active local Pi tasks were stopped; start a Pi task to use it.",
+        "installEnabled": "Pi extension installed and enabled. Active local Pi tasks were stopped; start a Pi task to use it.",
+        "remove": "Pi extension removed. Active local Pi tasks were stopped so its tools can no longer run.",
         "settingsRemove": "Pi extension removed. Active local Pi tasks were stopped so its tools can no longer run.",
         "settingsDisable": "Pi extension disabled. Active local Pi tasks were stopped so its tools can no longer run.",
-        "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.",
-        "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it."
+        "update": "Pi extension updated. Active local Pi tasks were stopped; start a Pi task to use the update.",
+        "set-enabled": "Pi extension state saved. Active local Pi tasks were stopped; start a Pi task to use the new state."
       }
     },
     "computerUse": {

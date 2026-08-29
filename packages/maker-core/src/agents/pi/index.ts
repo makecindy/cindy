@@ -550,6 +550,13 @@ const DEFAULT_PI_EXTENSION_UI_STRINGS: PiExtensionUiStrings = {
   confirm: '✓',
   cancel: '✕',
   mutationFailed: '✕',
+  mutationFailure: {
+    'source-unavailable': 'Source unavailable. Check the network or URL and try another source.',
+    'package-not-found': 'Package not found. Check the package name or repository URL.',
+    'version-not-found': 'Version not found. Choose an available version and try again.',
+    'state-unavailable': 'Package state is unavailable. Restart Cindy and try again.',
+    'native-command-failed': 'Pi package command failed. Check the source or version and try again.',
+  },
   mutationSuccess: {
     install: '✓',
     update: '✓',
@@ -582,7 +589,13 @@ function resolvePiExtensionUiStrings(deps: AgentDeps): PiExtensionUiStrings {
       && strings.mutationSuccess.update.trim()
       && strings.mutationSuccess.remove.trim()
     ) {
-      return strings;
+      return {
+        ...strings,
+        mutationFailure: {
+          ...DEFAULT_PI_EXTENSION_UI_STRINGS.mutationFailure,
+          ...strings.mutationFailure,
+        },
+      };
     }
   } catch (error) {
     deps.logger.warn('pi extension UI localization failed; using fallback copy', {
@@ -590,6 +603,15 @@ function resolvePiExtensionUiStrings(deps: AgentDeps): PiExtensionUiStrings {
     });
   }
   return DEFAULT_PI_EXTENSION_UI_STRINGS;
+}
+
+function piManagedPackageFailureMessage(
+  strings: PiExtensionUiStrings,
+  error: unknown,
+): string {
+  return error instanceof PiManagedPackageMutationFailedError
+    ? (strings.mutationFailure?.[error.failureCode] ?? strings.mutationFailed)
+    : strings.mutationFailed;
 }
 
 interface ParsedPiManagedPackageCommand {
@@ -4432,7 +4454,7 @@ export class PiAgent extends BaseAgent {
             });
             outcome = {
               ok: false,
-              error: uiStrings.mutationFailed,
+              error: piManagedPackageFailureMessage(uiStrings, error),
             };
           }
         }
@@ -6480,12 +6502,13 @@ export class PiAgent extends BaseAgent {
               sessionId: context.sessionId,
               message: error instanceof Error ? error.message : String(error),
             });
+            const uiStrings = resolvePiExtensionUiStrings(this.deps);
             proc.send({
               type: 'extension_ui_response',
               id,
               value: JSON.stringify({
                 ok: false,
-                error: resolvePiExtensionUiStrings(this.deps).mutationFailed,
+                error: piManagedPackageFailureMessage(uiStrings, error),
               }),
             });
             if (error instanceof PiManagedPackageMutationFailedError

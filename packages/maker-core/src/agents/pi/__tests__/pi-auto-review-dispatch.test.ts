@@ -142,6 +142,7 @@ vi.mock('../rpc-client.js', () => ({
 import {
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
+  PiManagedPackageMutationFailedError,
   type TurnPermissionPolicy,
 } from '../../base-agent.js';
 import { PiAgent } from '../index.js';
@@ -1650,6 +1651,38 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         action: 'install',
         message: rawError,
       });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('returns a stable actionable native failure category to the user and Agent', async () => {
+    const deps = buildDeps();
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '确认',
+      cancel: '取消',
+      mutationFailed: 'Pi 扩展操作失败。',
+      mutationFailure: {
+        'version-not-found': '没有找到这个版本。请选择可用版本后重试。',
+      },
+      mutationSuccess: { install: '已安装', update: '已更新', remove: '已移除' },
+    });
+    deps.mutatePiManagedPackage = vi.fn(async () => {
+      throw new PiManagedPackageMutationFailedError(false, 'version-not-found');
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-actionable-failure-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: 'pi install npm:context-mode@missing' });
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      expect(prompt).toContain('没有找到这个版本。请选择可用版本后重试。');
+      expect(prompt).not.toContain('ETARGET');
     } finally {
       await handle.close();
     }

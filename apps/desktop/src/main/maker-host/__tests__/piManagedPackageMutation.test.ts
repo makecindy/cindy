@@ -10,6 +10,10 @@ vi.mock('../pi-package-store.js', () => ({
   piPackageMutationMayHaveChangedState: storeMocks.mayHaveChangedState,
 }));
 
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({ warn: vi.fn() }),
+}));
+
 vi.mock('../pi-package-mutation-grant.js', () => ({
   issuePiPackageMutationGrant: vi.fn(),
 }));
@@ -79,7 +83,27 @@ describe('Pi managed package Main authorization', () => {
     }, deps).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(PiManagedPackageMutationFailedError);
-    expect(failure).toMatchObject({ mayHaveChangedState: true, cause: rawError });
+    expect(failure).toMatchObject({
+      mayHaveChangedState: true,
+      failureCode: 'native-command-failed',
+    });
+    expect(failure).not.toHaveProperty('cause');
+  });
+
+  it.each([
+    ['npm ERR! code ETARGET No matching version found', 'version-not-found'],
+    ['npm ERR! code E404 package not found', 'package-not-found'],
+    ['getaddrinfo ENOTFOUND registry.example', 'source-unavailable'],
+    ['Pi extension state is unavailable', 'state-unavailable'],
+  ] as const)('classifies recoverable native failure: %s', async (message, failureCode) => {
+    const { deps } = buildDeps();
+    vi.mocked(deps.mutate).mockRejectedValueOnce(new Error(message));
+
+    await expect(mutateAuthorizedPiManagedPackage({
+      action: 'install',
+      source: 'npm:context-mode',
+      authorization: 'local-desktop-command',
+    }, deps)).rejects.toMatchObject({ failureCode });
   });
 
   it('rejects authorization values outside the host-owned union at runtime', async () => {

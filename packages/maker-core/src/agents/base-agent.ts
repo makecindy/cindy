@@ -468,13 +468,20 @@ export class PiManagedPackageMutationCancelledError extends Error {
   }
 }
 
-/** Host-classified package failure; raw cause remains outside model-visible receipts. */
+export type PiManagedPackageMutationFailureCode =
+  | 'source-unavailable'
+  | 'package-not-found'
+  | 'version-not-found'
+  | 'state-unavailable'
+  | 'native-command-failed';
+
+/** Host-classified package failure; raw cause remains Main-local. */
 export class PiManagedPackageMutationFailedError extends Error {
   readonly code = 'PI_PACKAGE_MUTATION_FAILED';
 
   constructor(
     readonly mayHaveChangedState: boolean,
-    readonly cause: unknown,
+    readonly failureCode: PiManagedPackageMutationFailureCode,
   ) {
     super('Pi extension mutation failed');
     this.name = 'PiManagedPackageMutationFailedError';
@@ -485,6 +492,7 @@ export interface PiExtensionUiStrings {
   confirm: string;
   cancel: string;
   mutationFailed: string;
+  mutationFailure?: Partial<Record<PiManagedPackageMutationFailureCode, string>>;
   mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
 }
 

@@ -2924,14 +2924,21 @@
         "unsupported-filter": "Cindy 暂时无法展示这个 Pi 资源筛选配置；包和筛选仍由 Pi 原生处理。",
         "unsafe-source": "保存的来源包含凭证或私密 URL 参数。Cindy 仅在此处隐藏敏感字段，不会阻断 Pi 的包行为。"
       },
+      "failure": {
+        "sourceUnavailable": "无法访问这个来源。请检查网络或地址，也可以换一个来源重试。",
+        "packageNotFound": "没有找到这个包。请检查包名或仓库地址。",
+        "versionNotFound": "没有找到这个版本。请选择可用版本后重试。",
+        "stateUnavailable": "Cindy 无法读取 Pi 扩展状态。请重启 Cindy 后重试。",
+        "nativeCommandFailed": "Pi 原生包命令失败。请检查来源或版本后重试。"
+      },
       "success": {
-        "install": "Pi 扩展已安装，请在下方查看启用状态。当前任务不会变化。",
-        "installEnabled": "Pi 扩展已安装并启用。当前任务不会变化；新建或重启 Pi 任务后生效。",
-        "remove": "Pi 扩展已移除。当前任务仍保留旧扩展，关闭后才会彻底卸载。",
+        "install": "Pi 扩展已安装。正在运行的本机 Pi 任务已停止；新建 Pi 任务即可使用。",
+        "installEnabled": "Pi 扩展已安装并启用。正在运行的本机 Pi 任务已停止；新建 Pi 任务即可使用。",
+        "remove": "Pi 扩展已移除。正在运行的本机 Pi 任务已停止，其工具无法再运行。",
         "settingsRemove": "Pi 扩展已移除。正在运行的本机 Pi 任务已停止，其工具无法再运行。",
         "settingsDisable": "Pi 扩展已停用。正在运行的本机 Pi 任务已停止，其工具无法再运行。",
-        "update": "Pi 扩展已更新。当前任务仍使用旧版本；新建或重启后生效。",
-        "set-enabled": "Pi 扩展启用状态已保存。当前任务不会变化；新建或重启后生效。"
+        "update": "Pi 扩展已更新。正在运行的本机 Pi 任务已停止；新建 Pi 任务即可使用新版本。",
+        "set-enabled": "Pi 扩展启用状态已保存。正在运行的本机 Pi 任务已停止；新建 Pi 任务即可使用新状态。"
       }
     },
     "computerUse": {

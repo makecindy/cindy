@@ -2924,14 +2924,21 @@
         "unsupported-filter": "Cindy 暫時無法顯示這個 Pi 資源篩選設定；套件與篩選仍由 Pi 原生處理。",
         "unsafe-source": "儲存的來源包含憑證或私密 URL 參數。Cindy 僅在此處隱藏敏感欄位，不會阻擋 Pi 的套件行為。"
       },
+      "failure": {
+        "sourceUnavailable": "無法存取這個來源。請檢查網路或網址，也可以改用其他來源重試。",
+        "packageNotFound": "找不到這個套件。請檢查套件名稱或儲存庫網址。",
+        "versionNotFound": "找不到這個版本。請選擇可用版本後重試。",
+        "stateUnavailable": "Cindy 無法讀取 Pi 擴充功能狀態。請重新啟動 Cindy 後重試。",
+        "nativeCommandFailed": "Pi 原生套件命令失敗。請檢查來源或版本後重試。"
+      },
       "success": {
-        "install": "Pi 擴充功能已安裝，請在下方查看啟用狀態。目前任務不會改變。",
-        "installEnabled": "Pi 擴充功能已安裝並啟用。目前任務不會改變；新建或重新啟動 Pi 任務後生效。",
-        "remove": "Pi 擴充功能已移除。目前任務仍保留舊擴充功能，關閉後才會徹底卸載。",
+        "install": "Pi 擴充功能已安裝。執行中的本機 Pi 任務已停止；新建 Pi 任務即可使用。",
+        "installEnabled": "Pi 擴充功能已安裝並啟用。執行中的本機 Pi 任務已停止；新建 Pi 任務即可使用。",
+        "remove": "Pi 擴充功能已移除。執行中的本機 Pi 任務已停止，其工具無法再執行。",
         "settingsRemove": "Pi 擴充功能已移除。執行中的本機 Pi 任務已停止，其工具無法再執行。",
         "settingsDisable": "Pi 擴充功能已停用。執行中的本機 Pi 任務已停止，其工具無法再執行。",
-        "update": "Pi 擴充功能已更新。目前任務仍使用舊版本；新建或重新啟動後生效。",
-        "set-enabled": "Pi 擴充功能啟用狀態已儲存。目前任務不會改變；新建或重新啟動後生效。"
+        "update": "Pi 擴充功能已更新。執行中的本機 Pi 任務已停止；新建 Pi 任務即可使用新版本。",
+        "set-enabled": "Pi 擴充功能啟用狀態已儲存。執行中的本機 Pi 任務已停止；新建 Pi 任務即可使用新狀態。"
       }
     },
     "computerUse": {

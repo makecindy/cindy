@@ -1660,6 +1660,13 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       confirm: t('settings.piPackages.extensionDialogConfirm'),
       cancel: t('settings.piPackages.cancel'),
       mutationFailed: t('settings.piPackages.operationFailed'),
+      mutationFailure: {
+        'source-unavailable': t('settings.piPackages.failure.sourceUnavailable'),
+        'package-not-found': t('settings.piPackages.failure.packageNotFound'),
+        'version-not-found': t('settings.piPackages.failure.versionNotFound'),
+        'state-unavailable': t('settings.piPackages.failure.stateUnavailable'),
+        'native-command-failed': t('settings.piPackages.failure.nativeCommandFailed'),
+      },
       mutationSuccess: {
         install: t('settings.piPackages.success.installEnabled'),
         update: t('settings.piPackages.success.update'),
