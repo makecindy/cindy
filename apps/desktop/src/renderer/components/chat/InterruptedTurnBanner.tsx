@@ -151,7 +151,7 @@ export function UnreadFailedScheduleBanner({
 }
 
 /** ErrorBanner 的 retryText 只是显示 Retry 的非空 typed token,onRetry 忽略它。 */
-const ERROR_TAIL_RETRY_TOKEN = '__xdt_error_tail_continue__';
+export const ERROR_TAIL_RETRY_TOKEN = '__xdt_error_tail_continue__';
 
 export function ErrorTailErrorBanner({
   errorText,

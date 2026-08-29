@@ -487,6 +487,28 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
+  it('reserves terminal error persistId before EVENT broadcast and writes after', () => {
+    const wireSessionSource = extractWireSessionSource();
+    expectOrder(
+      wireSessionSource,
+      'persistId = reserveTurnErrorPersistId(',
+      'broadcastToAllWindows(MAKER_PUSH.EVENT',
+    );
+    expectOrder(
+      wireSessionSource,
+      'broadcastToAllWindows(MAKER_PUSH.EVENT',
+      'onTurnErrorEvent(',
+    );
+    expect(wireSessionSource).toContain('const autoResumeWouldSuppressPersist');
+    const persistBoundaryStart = wireSessionSource.indexOf(
+      'let turnAssistantPersistId: string | undefined;',
+    );
+    expect(persistBoundaryStart).toBeGreaterThanOrEqual(0);
+    expect(
+      wireSessionSource.indexOf('const autoResumeSuppressesPersist', persistBoundaryStart),
+    ).toBeGreaterThan(persistBoundaryStart);
+  });
+
   it('rejects stale Agent Island interactions before renderer delivery', () => {
     const interactionListenerSource = extractInstallDesktopInteractionListenerSource();
     const epochCaptureIndex = interactionListenerSource.indexOf(

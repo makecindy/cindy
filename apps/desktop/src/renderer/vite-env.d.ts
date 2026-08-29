@@ -715,7 +715,8 @@ interface CCAgentStreamEvent {
    * F1-a: 由 main 端 messagePersistBroadcaster 为这条消息分配的稳定 persistId,
    * 经 maker:event payload 透传。renderer 用它当在途气泡 clientId(不再自造随机),
    * 让 main 落库后的 onCreated(同 id)命中 dedup,把在途气泡替换为权威行而非新增。
-   * Phase 2 仅对 assistant 'text' 事件下发;其它类型暂为 undefined。
+   * assistant 'text' 与终止型 error 都会下发(error 为广播前预留的 persistId);
+   * 其它类型暂为 undefined。
    */
   persistId?: string;
   /**

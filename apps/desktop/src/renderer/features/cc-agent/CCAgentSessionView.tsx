@@ -88,6 +88,7 @@ import {
 } from '@/components/chat/shareSelectionStore';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
 import {
+  ERROR_TAIL_RETRY_TOKEN,
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
   UnreadFailedScheduleBanner,
@@ -1557,6 +1558,8 @@ export function CCAgentSessionView({
     usageLimitRecovery,
     errorIsRecoverable,
     errorRetryText,
+    errorPersistId,
+    disposedErrorPersistId,
     credentialSwitchWait,
     continuationInFlightClientId,
     continuationTurnClientId,
@@ -1832,8 +1835,13 @@ export function CCAgentSessionView({
   }, [markCurrentUnreadFailedScheduleRun]);
   const errorTailMsg = useMemo(() => {
     const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
-    return last && last.role === 'error' && !last.errorDismissed ? last : null;
-  }, [messages]);
+    return last &&
+      last.role === 'error' &&
+      !last.errorDismissed &&
+      last.clientId !== disposedErrorPersistId
+      ? last
+      : null;
+  }, [disposedErrorPersistId, messages]);
   // 队列里已有合成续跑项 = 用户已点过继续/重试、只是尚未被接受落库(排队被挡 /
   // 凭证切换等待):视为已推进,banner 抑制(review P2)—— 本地 hidden 态在重挂/
   // 重载后丢失,只看 messages 尾部时旧 error 行仍在,banner 会重现并允许对同一
@@ -3561,11 +3569,31 @@ export function CCAgentSessionView({
   // 失败路径则天然保留红点,与仍在展示的横幅一致。
   const handleRetry = useCallback(() => {
     void rebuildClaudeSubscriptionSessionBeforeRetry(errorReason)
-      .then(() => retryLastError())
+      .then(async () => {
+        if (errorRetryText) {
+          await retryLastError();
+          return;
+        }
+        if (errorPersistId && sessionId) {
+          makerChatStore.disposeLiveErrorPersist(sessionId);
+          await makerChatStore.sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT);
+          clearError();
+          return;
+        }
+        await retryLastError();
+      })
       .catch((error) => {
         log.warn('retryLastError failed', error);
       });
-  }, [errorReason, rebuildClaudeSubscriptionSessionBeforeRetry, retryLastError]);
+  }, [
+    clearError,
+    errorPersistId,
+    errorReason,
+    errorRetryText,
+    rebuildClaudeSubscriptionSessionBeforeRetry,
+    retryLastError,
+    sessionId,
+  ]);
 
   const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
     if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
@@ -4583,7 +4611,7 @@ export function CCAgentSessionView({
                 error={error}
                 errorReason={errorReason}
                 isRecoverable={errorIsRecoverable}
-                retryText={errorRetryText}
+                retryText={errorRetryText ?? (errorPersistId ? ERROR_TAIL_RETRY_TOKEN : null)}
                 onRetry={handleRetry}
                 onSilentStopContinue={handleSilentStopContinue}
                 onContinueAfterUsageReset={

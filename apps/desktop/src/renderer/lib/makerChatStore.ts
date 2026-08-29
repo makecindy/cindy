@@ -2401,6 +2401,16 @@ export interface SessionChatState {
    */
   errorRetryText: string | null;
   /**
+   * 当前 live 终态错误预留的持久化 error 行 clientId。广播 payload.persistId
+   * 写入;无可靠恢复依据(计划内升级关闭 / 自愈压住)时为 null。
+   */
+  errorPersistId: string | null;
+  /**
+   * 本视图已对这次 live 错误点过重试或关闭。尾部横幅跳过该 id,避免同一错误再弹。
+   * 离开视图不清这个字段——点过才算处置;未点就离开,回来仍应看到持久化卡。
+   */
+  disposedErrorPersistId: string | null;
+  /**
    * 凭证切换等待态(main projection 透传):发送需重启共享 codex 进程,被列出的
    * 会话挡住;队首保留、结束后 main 自动重发。渲染为等待横幅(非错误)。
    */
@@ -2677,6 +2687,8 @@ export type SessionChatLightState = Pick<
   | 'errorReason'
   | 'recoverableError'
   | 'errorRetryText'
+  | 'errorPersistId'
+  | 'disposedErrorPersistId'
   | 'credentialSwitchWait'
   | 'continuationInFlightClientId'
   | 'continuationTurnClientId'
@@ -2737,6 +2749,8 @@ function createInitialState(): SessionChatState {
     inputRecovery: null,
     activeTurnRetryText: null,
     errorRetryText: null,
+    errorPersistId: null,
+    disposedErrorPersistId: null,
     credentialSwitchWait: null,
     continuationInFlightClientId: null,
     continuationTurnClientId: null,
@@ -2812,6 +2826,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   inputRecovery: null,
   activeTurnRetryText: null,
   errorRetryText: null,
+  errorPersistId: null,
+  disposedErrorPersistId: null,
   credentialSwitchWait: null,
   continuationInFlightClientId: null,
   continuationTurnClientId: null,
@@ -3609,6 +3625,31 @@ function enterView(sessionId: string): () => void {
   return () => leaveView(sessionId);
 }
 
+function applyErrorPersistedDirtySignal(sessionId: string, persistId?: string): void {
+  const state = sessions.get(sessionId);
+  if (!state) return;
+  if (_activeViewSessions.has(sessionId)) {
+    // Keep live banner during active view; invalidate + clear on leave so the
+    // persisted card can appear the next time the user enters without having
+    // clicked. Click (retry/close) is what disposes — leave does not.
+    _pendingErrorClearOnLeave.add(sessionId);
+    if (persistId && state.error && !state.errorPersistId) {
+      setState(sessionId, (s) => ({
+        ...s,
+        errorPersistId: s.error && !s.errorPersistId ? persistId : s.errorPersistId,
+      }));
+    }
+    return;
+  }
+  setState(sessionId, (s) => ({
+    ...s,
+    ...(s.historyLoaded ? { historyLoaded: false } : {}),
+    ...(s.error
+      ? { error: null, usageLimitRecovery: null, errorRetryText: null, errorPersistId: null }
+      : {}),
+  }));
+}
+
 function leaveView(sessionId: string): void {
   const count = _activeViewSessions.get(sessionId);
   if (!count) return;
@@ -3625,7 +3666,9 @@ function leaveView(sessionId: string): void {
     setState(sessionId, (s) => ({
       ...s,
       ...(s.historyLoaded ? { historyLoaded: false } : {}),
-      ...(s.error ? { error: null, usageLimitRecovery: null, errorRetryText: null } : {}),
+      ...(s.error
+        ? { error: null, usageLimitRecovery: null, errorRetryText: null, errorPersistId: null }
+        : {}),
     }));
   }
   _trimMessagesIfNeeded(sessionId);
@@ -4114,6 +4157,7 @@ function applyInputProjection(
       recoverableError:
         projection.error || projection.credentialSwitchWait ? null : s.recoverableError,
       errorRetryText: projection.errorRetryText,
+      errorPersistId: projection.error ? s.errorPersistId : null,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
       continuationTurnClientId: projectedContinuationTurnClientId,
@@ -5497,6 +5541,7 @@ export function handleStreamEvent(
             errorReason: null,
             recoverableError: null,
             errorRetryText: null,
+            errorPersistId: null,
             isStreaming: hasAutoResumePendingCard ? state.isStreaming : true,
             agentStatus: {
               ...(hasAutoResumePendingCard
@@ -5520,6 +5565,7 @@ export function handleStreamEvent(
           errorReason: reason ?? null,
           recoverableError: errMsg,
           errorRetryText: null,
+          errorPersistId: null,
           isStreaming: true,
           agentStatus: {
             ...state.agentStatus,
@@ -5577,6 +5623,10 @@ export function handleStreamEvent(
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (reason ?? null),
         recoverableError: null,
         errorRetryText: derivedRetryText ?? preservedRetryText,
+        errorPersistId:
+          isPlannedUpgradeClose || suppressAutoResumeBroadcastError
+            ? null
+            : (event.persistId ?? null),
         isStreaming: false,
         activeTurnRetryText: null,
         continuationTurnClientId: null,
@@ -6042,6 +6092,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     recoverableError: null,
     activeTurnRetryText: null,
     errorRetryText: null,
+    errorPersistId: null,
     pendingPermission: null,
     pendingAskUser: null,
     pendingPluginSetup: null,
@@ -6292,6 +6343,7 @@ function handleStatusUpdate(
     usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
+    errorPersistId: isTurnStart ? null : state.errorPersistId,
     recoverableError: isTurnComplete ? null : state.recoverableError,
     isStreaming: update.isRunning
       ? true
@@ -8009,24 +8061,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           // 被控端 terminal error 落库脏信号 → 让控制端已加载历史的远程会话同样失效,
           // 下次用户打开该会话时从被控端重拉,error 卡得以正常出现。
           // 当前正在被查看的会话:保留 live ErrorBanner 不干扰,但登记 pending,离开时再清。
-          const ep = push.payload as { sessionId?: string } | null;
+          const ep = push.payload as { sessionId?: string; persistId?: string } | null;
           if (ep?.sessionId) {
-            const epState = sessions.get(ep.sessionId);
-            if (epState) {
-              if (_activeViewSessions.has(ep.sessionId)) {
-                // Keep live banner; register pending so the error card appears on leave.
-                // Mirrors the local onErrorPersisted path including the streaming case.
-                _pendingErrorClearOnLeave.add(ep.sessionId);
-              } else {
-                setState(ep.sessionId, (s) => ({
-                  ...s,
-                  ...(s.historyLoaded ? { historyLoaded: false } : {}),
-                  ...(s.error
-                    ? { error: null, usageLimitRecovery: null, errorRetryText: null }
-                    : {}),
-                }));
-              }
-            }
+            applyErrorPersistedDirtySignal(
+              ep.sessionId,
+              typeof ep.persistId === 'string' ? ep.persistId : undefined,
+            );
           }
           break;
         }
@@ -8196,26 +8236,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       ) {
         return;
       }
-      const p = raw as { sessionId?: string } | null;
+      const p = raw as { sessionId?: string; persistId?: string } | null;
       if (!p?.sessionId) return;
-      const state = sessions.get(p.sessionId);
-      if (!state) return;
-      if (_activeViewSessions.has(p.sessionId)) {
-        // Keep live banner during active view (or when a follow-up turn is streaming
-        // in the active view); invalidate + clear on leave so the ErrorMessageCard
-        // appears the next time the user enters the session.
-        _pendingErrorClearOnLeave.add(p.sessionId);
-        return;
-      }
-      // Background session (not in active view), possibly streaming a follow-up turn.
-      // ensureInitialMessages guards against mid-stream reload, so marking
-      // historyLoaded=false here is safe; the error card will surface when the user
-      // opens the session after the current turn finishes.
-      setState(p.sessionId, (s) => ({
-        ...s,
-        ...(s.historyLoaded ? { historyLoaded: false } : {}),
-        ...(s.error ? { error: null, usageLimitRecovery: null, errorRetryText: null } : {}),
-      }));
+      applyErrorPersistedDirtySignal(
+        p.sessionId,
+        typeof p.persistId === 'string' ? p.persistId : undefined,
+      );
     },
     'local-db-session-error-persisted',
   );
@@ -8561,6 +8587,8 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     errorReason: state.errorReason,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
+    errorPersistId: state.errorPersistId,
+    disposedErrorPersistId: state.disposedErrorPersistId,
     credentialSwitchWait: state.credentialSwitchWait,
     continuationInFlightClientId: state.continuationInFlightClientId,
     continuationTurnClientId: state.continuationTurnClientId,
@@ -8606,6 +8634,8 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.errorReason === b.errorReason &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
+    a.errorPersistId === b.errorPersistId &&
+    a.disposedErrorPersistId === b.disposedErrorPersistId &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
     a.continuationInFlightClientId === b.continuationInFlightClientId &&
     a.continuationTurnClientId === b.continuationTurnClientId &&
@@ -13360,10 +13390,25 @@ function popQueueTail(sessionId: string): boolean {
 }
 
 /**
- * Dismiss the error banner without retrying. Pure UI state — no persistence.
+ * 用户点了 live 横幅的重试或关闭:这次错误算已处置。尾部横幅跳过同一 persistId,
+ * 并尽快把即将/已经落库的 error 行标 dismissed。离开视图不会走这里。
+ */
+function disposeLiveErrorPersist(sessionId: string): void {
+  const persistId = sessions.get(sessionId)?.errorPersistId;
+  if (!persistId) return;
+  setState(sessionId, (s) =>
+    s.disposedErrorPersistId === persistId ? s : { ...s, disposedErrorPersistId: persistId },
+  );
+  void dismissErrorTailMessage(sessionId, persistId);
+}
+
+/**
+ * Dismiss the error banner without retrying. Also disposes the bound persist row
+ * so the same error does not reappear as a tail banner in this view.
  */
 function clearError(sessionId: string): void {
   if (!sessionId) return;
+  disposeLiveErrorPersist(sessionId);
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   runInputProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.clearError(sessionId, boundaryOpts) : input.clearError(sessionId),
@@ -13373,7 +13418,8 @@ function clearError(sessionId: string): void {
       s.error == null &&
       s.usageLimitRecovery == null &&
       s.recoverableError == null &&
-      s.errorRetryText == null
+      s.errorRetryText == null &&
+      s.errorPersistId == null
     ) {
       return s;
     }
@@ -13384,12 +13430,14 @@ function clearError(sessionId: string): void {
       errorReason: null,
       recoverableError: null,
       errorRetryText: null,
+      errorPersistId: null,
     };
   });
 }
 
 function retryLastError(sessionId: string): Promise<void> {
   if (!sessionId) return Promise.resolve();
+  disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
@@ -13507,6 +13555,7 @@ function retryLastError(sessionId: string): Promise<void> {
  */
 function continueAfterSilentStop(sessionId: string): void {
   if (!sessionId) return;
+  disposeLiveErrorPersist(sessionId);
   void sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT).then(
     () => {
       setState(sessionId, (s) => ({
@@ -13515,6 +13564,7 @@ function continueAfterSilentStop(sessionId: string): void {
         usageLimitRecovery: null,
         errorReason: null,
         errorRetryText: null,
+        errorPersistId: null,
       }));
     },
     (err) => {
@@ -15116,6 +15166,8 @@ export const makerChatStore = {
   clearSession,
   /** Dismiss the error banner without retrying. */
   clearError,
+  /** Bind live error to persist row as already handled (retry/close). */
+  disposeLiveErrorPersist,
   /** Retry the typed recovery target owned by main coordinator. */
   retryLastError,
   /** silent-stop 耗尽横幅「继续」:清横幅 + 隐藏续跑指令(见函数注释)。 */

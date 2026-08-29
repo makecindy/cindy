@@ -90,6 +90,9 @@ import {
   flushOrphanToolResults,
   isSuccessfulCodexDoneEventData,
   onTurnErrorEvent,
+  reserveTurnErrorPersistId,
+  releaseReservedTurnErrorPersistId,
+  whenTurnErrorPersisted,
   resetTurnPersistState,
   clearCodexPlanRowsForSession,
   clearSessionPersistState,
@@ -2397,7 +2400,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     // 脏信号必须发:让已加载历史的后台会话下次打开时从 DB 重拉,error 卡正常浮现。
     expect(mockSend).toHaveBeenCalledWith(
       'local-db:session:error-persisted',
-      { sessionId: SESSION },
+      { sessionId: SESSION, persistId },
       undefined,
     );
   });
@@ -2736,6 +2739,77 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     // turnStartedAt (1000) <= clearBoundary (2000) → cap 生效
     // createdAt 必须 <= clearBoundaryTs，error 卡不出现在清空后的新会话
     expect(createdAt).toBeLessThanOrEqual(clearBoundaryTs);
+  });
+});
+
+describe('reserveTurnErrorPersistId — 广播前预留与 waiter', () => {
+  it('预留 id 不写库,onTurnErrorEvent 复用同一 id', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'boom' });
+    expect(reserved).toBeTruthy();
+    expect(createMessage).not.toHaveBeenCalled();
+
+    const persistId = onTurnErrorEvent(SESSION, { message: 'boom' }, null, reserved);
+    expect(persistId).toBe(reserved);
+
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createMessage).mock.calls[0][1]).toMatchObject({ clientId: reserved });
+    expect(mockSend).toHaveBeenCalledWith(
+      'local-db:session:error-persisted',
+      { sessionId: SESSION, persistId: reserved },
+      undefined,
+    );
+  });
+
+  it('whenTurnErrorPersisted 等到写库完成才返回', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'wait-me' });
+    expect(reserved).toBeTruthy();
+    let done = false;
+    const waiting = whenTurnErrorPersisted(SESSION, reserved!).then(() => {
+      done = true;
+    });
+    expect(done).toBe(false);
+
+    onTurnErrorEvent(SESSION, { message: 'wait-me' }, null, reserved);
+    expect(done).toBe(false);
+
+    await flushWrites();
+    await waiting;
+    expect(done).toBe(true);
+  });
+
+  it('未知 persistId 的 whenTurnErrorPersisted 立即返回', async () => {
+    await expect(whenTurnErrorPersisted(SESSION, 'never-reserved')).resolves.toBeUndefined();
+  });
+
+  it('release 解开 waiter 且同一 id 不再写库', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'skip' });
+    expect(reserved).toBeTruthy();
+    const waiting = whenTurnErrorPersisted(SESSION, reserved!);
+    releaseReservedTurnErrorPersistId(SESSION, reserved!);
+    await waiting;
+    expect(createMessage).not.toHaveBeenCalled();
+
+    expect(onTurnErrorEvent(SESSION, { message: 'skip' }, null, reserved)).toBe(reserved);
+    await flushWrites();
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('同一预留 id 二次 onTurnErrorEvent 不双写', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'once' });
+    onTurnErrorEvent(SESSION, { message: 'once' }, null, reserved);
+    onTurnErrorEvent(SESSION, { message: 'once' }, null, reserved);
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('owner-scope 跳过写入时仍解开 waiter', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'skip-owner' });
+    expect(reserved).toBeTruthy();
+    ownerScopeState.current = false;
+    onTurnErrorEvent(SESSION, { message: 'skip-owner' }, null, reserved);
+    await whenTurnErrorPersisted(SESSION, reserved!);
+    expect(createMessage).not.toHaveBeenCalled();
   });
 });
 

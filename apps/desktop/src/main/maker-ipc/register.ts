@@ -458,6 +458,8 @@ import {
   sealAssistantBlockForLateFinal,
   markAutoResumeOutcome,
   onTurnErrorEvent,
+  releaseReservedTurnErrorPersistId,
+  reserveTurnErrorPersistId,
   prepareSyntheticToolEventForBroadcast,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
@@ -4317,8 +4319,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // F1-a Phase 2: assistant 文本持久化收口 main 单点(根除多窗各落一份的重复)。
       // 在 onEvent 同步路径只做 O(1):为在飞 assistant 分配 / 复用 persistId、累积全文,
       // 把 persistId 盖进广播 payload 让 renderer 在途气泡用同一 id;真正落库走模块内
-      // 异步队列、不在此同步执行(规则19 热路径)。其它消息类型的 persistId 暂为
-      // undefined,renderer 继续走原逻辑(后续 Phase 收口 tool_use / tool_result 等)。
+      // 异步队列、不在此同步执行(规则19 热路径)。终止型 error 同样在广播前预留 persistId
+      // (O(1) createId,不 flush、不写库),让 live 横幅与事后 error 行绑定同一 id。
       const eventAgentMeta = (event as { agentMeta?: AgentMeta | null }).agentMeta ?? null;
       // 跟踪会话最近一次非空 agentMeta(镜像 renderer state.lastAgentMeta),给 interaction
       // 边界 flush 当兜底锚点,保 agent_meta 不丢(rewind/fork)。
@@ -4451,12 +4453,38 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         !isContinuationBoundary && (event.type === 'done' || isTerminalTurnErrorEvent(event))
           ? orcaTeamServiceForEvents?.captureWorkerTerminalTurn(session.id)
           : undefined;
+      // 与下方 autoResumeSuppressesPersist 同判据,但必须在广播前就算出来:
+      // 热路径测试以 `const autoResumeSuppressesPersist` 为 flush 边界,不能把那条
+      // const 提前。预留 persistId 只看这份,真正写库仍走广播后的那份。
+      const autoResumeWouldSuppressPersist =
+        event.type === 'error' &&
+        (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
+          agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
       const suppressOverflowBroadcast =
         !session.remoteHostId &&
         event.type === 'error' &&
         isTerminalTurnErrorEvent(event) &&
         (isContextOverflowErrorData(event.data) ||
           isOversizedHistoryErrorData(event.data));
+      if (
+        event.type === 'error' &&
+        isTerminalTurnErrorEvent(event) &&
+        !isPlannedUpgradeClose &&
+        !isRemoteAuthRetry &&
+        !isGatewayProxyTokenRecovery &&
+        !autoResumeWouldSuppressPersist &&
+        !suppressOverflowBroadcast
+      ) {
+        persistId = reserveTurnErrorPersistId(
+          session.id,
+          attributedEvent.data as {
+            message?: unknown;
+            reason?: unknown;
+            sdkError?: unknown;
+          } | null,
+          eventAgentMeta,
+        );
+      }
       if (suppressOverflowBroadcast) {
         overflowSuppressedBroadcasts.set(session.id, {
           sessionId: session.id,
@@ -4595,20 +4623,30 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (overflowClaim === 'claimed') {
           const overflowErrorData = attributedEvent.data;
           const surfaceOverflowFailure = (): void => {
+            const overflowErrorPayload = overflowErrorData as {
+              message?: unknown;
+              reason?: unknown;
+              sdkError?: unknown;
+            } | null;
+            const overflowPersistId = reserveTurnErrorPersistId(
+              session.id,
+              overflowErrorPayload,
+              eventAgentMeta,
+            );
             const stashed = overflowSuppressedBroadcasts.get(session.id);
             overflowSuppressedBroadcasts.delete(session.id);
             if (stashed) {
-              broadcastToAllWindows(MAKER_PUSH.EVENT, stashed);
+              broadcastToAllWindows(MAKER_PUSH.EVENT, {
+                ...stashed,
+                persistId: overflowPersistId ?? stashed.persistId,
+              });
               handleAgentIslandEventAfterBroadcast(session, stashed.event);
             }
             onTurnErrorEvent(
               session.id,
-              overflowErrorData as {
-                message?: unknown;
-                reason?: unknown;
-                sdkError?: unknown;
-              } | null,
+              overflowErrorPayload,
               eventAgentMeta,
+              overflowPersistId,
             );
           };
           void contextOverflowRolloverHolder
@@ -4629,6 +4667,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             });
         } else if (overflowClaim === 'in-flight') {
           // 同一 turn 的重复终态 error：继续压住，避免污染历史。
+          if (persistId) releaseReservedTurnErrorPersistId(session.id, persistId);
         } else if (
           event.type === 'error' &&
           !isPlannedUpgradeClose &&
@@ -4644,7 +4683,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               sdkError?: unknown;
             } | null,
             eventAgentMeta,
+            persistId,
           );
+        } else if (persistId) {
+          releaseReservedTurnErrorPersistId(session.id, persistId);
         }
         // 压住的错误详情必须在这里存一份:决策推迟场景下 onResumableTurnError 还没被调用过
         // (它自己那份 set 发生在接管成立时),不存就无从补落。同 clientId 内容,覆盖无害。
