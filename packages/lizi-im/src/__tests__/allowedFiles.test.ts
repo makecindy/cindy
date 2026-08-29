@@ -36,6 +36,25 @@ describe('openAllowedOutboundFile', () => {
     await expect(openAllowedOutboundFile(allowedFile, [])).resolves.toBeNull();
   });
 
+  it('rejects a lexical in-root path whose realpath only matches after case folding', async () => {
+    const root = '/cindy-allowed-root';
+    const candidate = '/cindy-allowed-root/secret.txt';
+    const colliding = '/cindy-Allowed-root/secret.txt';
+
+    await expect(
+      openAllowedOutboundFile(candidate, [root], {
+        realpath: async (target) =>
+          target === path.resolve(root) ? path.resolve(root) : path.resolve(colliding),
+        open: () => {
+          throw new Error('should not open a case-colliding path');
+        },
+        stat: () => {
+          throw new Error('should not stat a case-colliding path');
+        },
+      }),
+    ).resolves.toBeNull();
+  });
+
   it('rejects a lexical in-root path whose realpath escapes the root', async () => {
     const root = path.resolve('workspace');
     const candidate = path.join(root, 'linked', 'secret.txt');

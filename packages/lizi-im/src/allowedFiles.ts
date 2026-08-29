@@ -4,13 +4,26 @@ import fs from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
-function isPathWithin(base: string, target: string): boolean {
+function isPathWithin(
+  base: string,
+  target: string,
+  options: { foldCase?: boolean } = {},
+): boolean {
+  // path.win32.relative always lowercases, so a colliding NTFS
+  // case-sensitive sibling such as C:\Work would still look in-root of C:\work.
+  // Use an exact prefix after canonicalization; only the lexical pre-check
+  // folds case so ordinary Windows paths with mixed drive/dir casing proceed
+  // to realpath.
+  const foldCase = Boolean(options.foldCase) && process.platform === 'win32';
   const normalize = (value: string): string => {
     const resolved = path.resolve(value);
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    return foldCase ? resolved.toLowerCase() : resolved;
   };
-  const relative = path.relative(normalize(base), normalize(target));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  const baseN = normalize(base);
+  const targetN = normalize(target);
+  if (baseN === targetN) return true;
+  const prefix = baseN.endsWith(path.sep) ? baseN : `${baseN}${path.sep}`;
+  return targetN.startsWith(prefix);
 }
 
 function isSameFile(left: BigIntStats, right: BigIntStats): boolean {
@@ -75,7 +88,7 @@ export async function openAllowedOutboundFile(
   for (const root of allowedRoots) {
     if (!root.trim()) continue;
     const rootAbs = path.resolve(root);
-    if (!isPathWithin(rootAbs, targetAbs)) continue;
+    if (!isPathWithin(rootAbs, targetAbs, { foldCase: true })) continue;
 
     let handle: FileHandle | null = null;
     let keepHandle = false;
