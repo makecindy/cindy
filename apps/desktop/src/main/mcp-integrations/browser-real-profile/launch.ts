@@ -1,14 +1,27 @@
 import net from 'node:net';
 import path from 'node:path';
 
-import { MANAGED_CDP_PORT, MANAGED_PROFILE, REAL_MANAGED_PROFILE } from '../browser-managed-config.js';
+import {
+  MANAGED_CDP_PORT,
+  MANAGED_PROFILE,
+  REAL_MANAGED_PROFILE,
+} from '../browser-managed-config.js';
 
-import type { BrowserControlRequest, BrowserControlResult, BrowserControlRuntime } from '@cindy/browser-control-runtime';
+import type {
+  BrowserControlRequest,
+  BrowserControlResult,
+  BrowserControlRuntime,
+} from '@cindy/browser-control-runtime';
 
 import { FOREIGN_AGENT_BROWSER_ERROR } from '../../../shared/browserBackend.js';
 
 import { resolveSourceBrowserFromOs } from './source.js';
-import { cleanupRealProfileSnapshots, realProfileDestDir, snapshotRealProfile } from './snapshot.js';
+import {
+  cleanupRealProfileSnapshots,
+  realProfileDestDir,
+  rememberCopiedLoginsCdpPort,
+  snapshotRealProfile,
+} from './snapshot.js';
 import {
   isRealProfileError,
   RealProfileError,
@@ -21,7 +34,11 @@ import {
 export interface RealProfileLaunchDeps {
   isEnabled: () => boolean;
   getRuntimeDir: () => string;
-  applyConfig: (opts: { useRealProfile: boolean; executablePath?: string; cdpPort?: number }) => void;
+  applyConfig: (opts: {
+    useRealProfile: boolean;
+    executablePath?: string;
+    cdpPort?: number;
+  }) => void;
   resolveSource?: () => InstalledChromium;
   snapshot?: typeof snapshotRealProfile;
   cleanup?: typeof cleanupRealProfileSnapshots;
@@ -238,6 +255,7 @@ async function startWithSnapshot(
       cdpPort,
     });
     deps.setLastApplied(result.sourceKind);
+    rememberCopiedLoginsCdpPort(runtimeDir, cdpPort);
   } catch (err) {
     deps.setLastApplied(null);
     if (isRealProfileError(err)) {

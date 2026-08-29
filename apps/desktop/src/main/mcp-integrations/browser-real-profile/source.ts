@@ -110,10 +110,7 @@ export function executableCandidates(
   if (platform === 'darwin') {
     const macApp = (appName: string, binary: string): string[] => {
       const bundle = `${appName}.app/Contents/MacOS/${binary}`;
-      return [
-        `/Applications/${bundle}`,
-        path.posix.join(home, 'Applications', bundle),
-      ];
+      return [`/Applications/${bundle}`, path.posix.join(home, 'Applications', bundle)];
     };
     switch (kind) {
       case 'chrome':
@@ -141,6 +138,7 @@ export function executableCandidates(
         return [
           path.join(pf, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
           path.join(pf86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+          path.join(local, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
         ];
       case 'brave':
         return [
@@ -269,7 +267,11 @@ export function detectDefaultHandlerFromOs(options?: {
   if (platform === 'darwin') {
     return parseDefaultHandler(
       platform,
-      run('defaults', ['read', 'com.apple.LaunchServices/com.apple.launchservices.secure', 'LSHandlers']),
+      run('defaults', [
+        'read',
+        'com.apple.LaunchServices/com.apple.launchservices.secure',
+        'LSHandlers',
+      ]),
     );
   }
   if (platform === 'win32') {

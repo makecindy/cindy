@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -37,9 +38,9 @@ describe('parseDefaultHandler', () => {
   it('treats Safari and Firefox as other so Chrome can still be selected', () => {
     expect(parseDefaultHandler('darwin', 'com.apple.Safari')).toBe('other');
     expect(parseDefaultHandler('linux', 'firefox.desktop')).toBe('other');
-    expect(parseDefaultHandler('win32', '    ProgId    REG_SZ    FirefoxURL-308046B0AF4A39CB')).toBe(
-      'other',
-    );
+    expect(
+      parseDefaultHandler('win32', '    ProgId    REG_SZ    FirefoxURL-308046B0AF4A39CB'),
+    ).toBe('other');
   });
 
   it('maps Edge / Brave / Chrome progids and desktop files', () => {
@@ -60,7 +61,9 @@ describe('resolveSourceBrowser', () => {
   });
 
   it('falls back to Chrome when the OS default is Safari', () => {
-    expect(resolveSourceBrowser({ defaultKind: 'other', installed: [edge, chrome] })).toEqual(chrome);
+    expect(resolveSourceBrowser({ defaultKind: 'other', installed: [edge, chrome] })).toEqual(
+      chrome,
+    );
   });
 
   it('falls back to Chrome when default detection fails', () => {
@@ -96,6 +99,30 @@ describe('listInstalledChromium', () => {
       },
     ]);
   });
+
+  it('finds Edge under LOCALAPPDATA on win32', () => {
+    const home = 'C:\\Users\\x';
+    const local = 'C:\\Users\\x\\AppData\\Local';
+    const exe = path.join(local, 'Microsoft', 'Edge', 'Application', 'msedge.exe');
+    expect(
+      listInstalledChromium({
+        platform: 'win32',
+        home,
+        env: {
+          LOCALAPPDATA: local,
+          PROGRAMFILES: 'C:\\Program Files',
+          'PROGRAMFILES(X86)': 'C:\\Program Files (x86)',
+        },
+        exists: (filePath) => filePath === exe,
+      }),
+    ).toEqual([
+      {
+        kind: 'edge',
+        executablePath: exe,
+        userDataDir: path.win32.join(local, 'Microsoft', 'Edge', 'User Data'),
+      },
+    ]);
+  });
 });
 
 describe('userDataDirFor', () => {
@@ -103,7 +130,9 @@ describe('userDataDirFor', () => {
     expect(userDataDirFor('chrome', 'darwin', '/Users/dash')).toBe(
       '/Users/dash/Library/Application Support/Google/Chrome',
     );
-    expect(userDataDirFor('chrome', 'linux', '/home/dash')).toBe('/home/dash/.config/google-chrome');
+    expect(userDataDirFor('chrome', 'linux', '/home/dash')).toBe(
+      '/home/dash/.config/google-chrome',
+    );
     expect(
       userDataDirFor('chrome', 'win32', 'C:\\Users\\dash', {
         LOCALAPPDATA: 'C:\\Users\\dash\\AppData\\Local',

@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 
-import { MANAGED_PROFILE, REAL_MANAGED_PROFILE } from '../browser-managed-config.js';
+import {
+  MANAGED_CDP_PORT,
+  MANAGED_PROFILE,
+  REAL_MANAGED_PROFILE,
+} from '../browser-managed-config.js';
 import { REAL_PROFILE_READ_DENIED } from '../../../shared/browserBackend.js';
 import { resolveSourceBrowserFromOs } from './source.js';
 import {
@@ -24,6 +28,11 @@ const AUTH_DB_RELATIVE_PATHS = [
 ] as const;
 
 const PLAIN_PROFILE_FILES = ['Preferences'] as const;
+
+const SNAPSHOT_PROFILE_RELATIVE_PATHS = [
+  ...AUTH_DB_RELATIVE_PATHS,
+  ...PLAIN_PROFILE_FILES,
+] as const;
 
 const COOKIE_DB_CANDIDATES = ['Cookies', path.join('Network', 'Cookies')] as const;
 
@@ -74,13 +83,16 @@ export function rewriteLocalStateForManagedDefault(
   localStateRaw: string,
   sourceProfile: string,
 ): string {
-  let parsed = asObject((() => {
-    try {
-      return JSON.parse(localStateRaw) as unknown;
-    } catch {
-      return {};
-    }
-  })()) ?? {};
+  let parsed =
+    asObject(
+      (() => {
+        try {
+          return JSON.parse(localStateRaw) as unknown;
+        } catch {
+          return {};
+        }
+      })(),
+    ) ?? {};
   const profile = { ...(asObject(parsed.profile) ?? {}) };
   const infoCache = asObject(profile.info_cache) ?? {};
   const sourceInfo = {
@@ -113,6 +125,38 @@ export function pruneExtraChromeProfiles(userDataDir: string): void {
     if (!entry.isDirectory()) continue;
     if (!EXTRA_CHROME_PROFILE_DIR.test(entry.name)) continue;
     fs.rmSync(path.join(userDataDir, entry.name), { recursive: true, force: true });
+  }
+}
+
+/** HTTP / GPU caches that cannot replay a login. Dest Default is otherwise rebuilt. */
+const DISCARDABLE_PROFILE_CACHE_NAMES = new Set([
+  'Cache',
+  'Code Cache',
+  'GPUCache',
+  'GrShaderCache',
+  'ShaderCache',
+  'DawnGraphiteCache',
+  'DawnWebGPUCache',
+]);
+
+/**
+ * Drop leftover Local Storage / IndexedDB / Service Worker / etc. from a
+ * previous source profile. Keep only this snapshot's auth files and caches.
+ */
+export function pruneNonAuthProfileState(destProfileDir: string): void {
+  const keep = new Set<string>(DISCARDABLE_PROFILE_CACHE_NAMES);
+  for (const relative of SNAPSHOT_PROFILE_RELATIVE_PATHS) {
+    keep.add(relative.split(/[/\\]/)[0] ?? relative);
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(destProfileDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (keep.has(entry.name)) continue;
+    fs.rmSync(path.join(destProfileDir, entry.name), { recursive: true, force: true });
   }
 }
 
@@ -213,10 +257,7 @@ export function probeOsSourceProfileReadAccess(options?: {
 }
 
 function throwReadDenied(): never {
-  throw new RealProfileError(
-    'COPY_FAILED',
-    REAL_PROFILE_READ_DENIED,
-  );
+  throw new RealProfileError('COPY_FAILED', REAL_PROFILE_READ_DENIED);
 }
 
 function secureDir(dir: string): void {
@@ -229,15 +270,6 @@ function secureDir(dir: string): void {
 }
 
 const SQLITE_SIDECARS = ['-wal', '-shm', '-journal'] as const;
-
-const SNAPSHOT_PROFILE_RELATIVE_PATHS = [
-  ...AUTH_DB_RELATIVE_PATHS,
-  ...PLAIN_PROFILE_FILES,
-] as const;
-
-function stagingUserDataDir(destDir: string): string {
-  return `${destDir}.staging`;
-}
 
 function removeSqliteAndSidecars(filePath: string): void {
   fs.rmSync(filePath, { force: true });
@@ -260,8 +292,8 @@ function publishStagedFile(src: string, dest: string): void {
 
 /**
  * Swap this snapshot's auth files onto dest only after the staging tree is
- * complete. Dest Cache / GPUCache stay; leftover Cookies vs Network/Cookies
- * and Login Data from a previous source do not.
+ * complete. Dest HTTP/GPU caches stay; leftover Cookies vs Network/Cookies,
+ * Login Data, and site credential stores from a previous source do not.
  */
 function publishStagedSnapshot(options: {
   stagingDir: string;
@@ -287,6 +319,7 @@ function publishStagedSnapshot(options: {
     }
   }
 
+  pruneNonAuthProfileState(destProfileDir);
   pruneExtraChromeProfiles(destDir);
   fs.rmSync(stagingDir, { recursive: true, force: true });
 }
@@ -361,11 +394,11 @@ export async function snapshotRealProfile(options: {
     );
   }
 
-  const stagingDir = stagingUserDataDir(destDir);
-  fs.rmSync(stagingDir, { recursive: true, force: true });
+  secureDir(path.dirname(destDir));
+  let stagingDir = '';
 
   try {
-    secureDir(path.dirname(destDir));
+    stagingDir = fs.mkdtempSync(`${destDir}.staging-`);
     secureDir(stagingDir);
     const stagingProfileDir = path.join(stagingDir, 'Default');
     secureDir(stagingProfileDir);
@@ -440,9 +473,50 @@ export async function snapshotRealProfile(options: {
       filesCopied,
     };
   } catch (err) {
-    fs.rmSync(stagingDir, { recursive: true, force: true });
+    if (stagingDir) fs.rmSync(stagingDir, { recursive: true, force: true });
     throw err;
   }
+}
+
+function completeMarkerPath(destDir: string): string {
+  return path.join(destDir, COMPLETE_MARKER);
+}
+
+function isManagedCdpPort(port: unknown): port is number {
+  return (
+    typeof port === 'number' &&
+    Number.isInteger(port) &&
+    port >= MANAGED_CDP_PORT &&
+    port < MANAGED_CDP_PORT + 20
+  );
+}
+
+/** CDP port last used for Cindy-real, stored on the existing complete marker. */
+export function readCopiedLoginsCdpPort(runtimeDir: string): number | null {
+  if (!runtimeDir) return null;
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(completeMarkerPath(realProfileDestDir(runtimeDir)), 'utf8'),
+    ) as {
+      cdpPort?: unknown;
+    };
+    return isManagedCdpPort(parsed.cdpPort) ? parsed.cdpPort : null;
+  } catch {
+    return null;
+  }
+}
+
+export function rememberCopiedLoginsCdpPort(runtimeDir: string, port: number): void {
+  if (!runtimeDir || !isManagedCdpPort(port)) return;
+  const file = completeMarkerPath(realProfileDestDir(runtimeDir));
+  if (!fs.existsSync(file)) return;
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+  } catch {
+    parsed = {};
+  }
+  fs.writeFileSync(file, JSON.stringify({ ...parsed, cdpPort: port }), 'utf8');
 }
 
 export function cleanupRealProfileSnapshots(runtimeDir: string): void {

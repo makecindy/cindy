@@ -26,8 +26,11 @@ export {
   probeSourceProfileReadAccess,
   profileIsLocked,
   pruneExtraChromeProfiles,
+  pruneNonAuthProfileState,
+  readCopiedLoginsCdpPort,
   realProfileDestDir,
   realProfileProfileDir,
+  rememberCopiedLoginsCdpPort,
   rewriteLocalStateForManagedDefault,
   snapshotRealProfile,
 } from './snapshot.js';

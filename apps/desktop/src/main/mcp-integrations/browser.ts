@@ -46,6 +46,7 @@ import {
   cleanupCopiedLoginsThen,
   FOREIGN_AGENT_BROWSER_ERROR,
   probeOsSourceProfileReadAccess,
+  readCopiedLoginsCdpPort,
   wrapRuntimeWithRealProfile,
 } from './browser-real-profile/index.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -74,13 +75,24 @@ function healLegacyManagedProfileDir(): void {
     const current = nodePath.join(runtimeDir, 'browser', MANAGED_PROFILE);
     if (fs.existsSync(legacy) && !fs.existsSync(current)) {
       fs.renameSync(legacy, current);
-      logger.info(`managed profile dir renamed in place: ${LEGACY_MANAGED_PROFILE} -> ${MANAGED_PROFILE}`);
+      logger.info(
+        `managed profile dir renamed in place: ${LEGACY_MANAGED_PROFILE} -> ${MANAGED_PROFILE}`,
+      );
     }
   } catch (err) {
     logger.warn(`managed profile dir rename failed (fresh profile will be used): ${String(err)}`);
   }
 }
 healLegacyManagedProfileDir();
+
+function realProfileRuntimeDir(): string {
+  return process.env.XDT_BROWSER_RUNTIME_DIR ?? '';
+}
+
+const initialUseRealProfile = readBrowserBackendSettings().useRealProfile;
+const rememberedCopiedLoginsCdpPort = initialUseRealProfile
+  ? readCopiedLoginsCdpPort(realProfileRuntimeDir())
+  : null;
 
 // Single shared runtime for the desktop process. Boots with the managed profile
 // (electron-free, safe at module-eval); logs route into the unified logger.
@@ -96,7 +108,8 @@ healLegacyManagedProfileDir();
 const vendoredRuntime = trackBrowserRuntimeUsage(
   createBrowserControlRuntime({
     config: buildManagedConfig({
-      useRealProfile: readBrowserBackendSettings().useRealProfile,
+      useRealProfile: initialUseRealProfile,
+      ...(rememberedCopiedLoginsCdpPort ? { cdpPort: rememberedCopiedLoginsCdpPort } : {}),
     }),
     logSink: (level, scope, args) => {
       // Bind to `logger`: the unified logger's methods rely on `this`, and calling
@@ -107,10 +120,6 @@ const vendoredRuntime = trackBrowserRuntimeUsage(
     },
   }),
 );
-
-function realProfileRuntimeDir(): string {
-  return process.env.XDT_BROWSER_RUNTIME_DIR ?? '';
-}
 
 /**
  * Consent-gated snapshot wrapper sits *outside* usage tracking: a failed
@@ -131,9 +140,7 @@ type SessionUploadRootResolver = (sessionId: string) => Promise<string[]>;
 
 let resolveSessionUploadRoots: SessionUploadRootResolver = async () => [];
 
-export function setBrowserSessionUploadRootResolver(
-  resolver: SessionUploadRootResolver,
-): void {
+export function setBrowserSessionUploadRootResolver(resolver: SessionUploadRootResolver): void {
   resolveSessionUploadRoots = resolver;
 }
 
@@ -198,10 +205,7 @@ const backendController = new BrowserBackendController({
   createRsbBackend,
   logger,
 });
-const browserBackendHealthService = new BrowserBackendHealthService(
-  backendController,
-  logger,
-);
+const browserBackendHealthService = new BrowserBackendHealthService(backendController, logger);
 
 /**
  * Main-window webContents accessor — populated by bootstrap-electron via
@@ -218,9 +222,7 @@ function readMainWindowForBackend(): Electron.WebContents | null {
  * Bootstrap hook. Called from `bootstrap-electron.ts` once `mainWindowRef` is
  * known. Idempotent re-binds are safe.
  */
-export function setMainWindowAccessorForBackend(
-  accessor: () => Electron.WebContents | null,
-): void {
+export function setMainWindowAccessorForBackend(accessor: () => Electron.WebContents | null): void {
   mainWindowAccessor = accessor;
 }
 
@@ -272,6 +274,13 @@ export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<vo
 }
 
 async function stopExternalRuntimeIfUsed(): Promise<void> {
+  const useRealProfile = readBrowserBackendSettings().useRealProfile;
+  const remembered = useRealProfile ? readCopiedLoginsCdpPort(realProfileRuntimeDir()) : null;
+  if (remembered) {
+    setBrowserControlRuntimeConfig(
+      buildManagedConfig({ useRealProfile: true, cdpPort: remembered }),
+    );
+  }
   const status = await vendoredRuntime.call({ action: 'status' });
   const running =
     status.ok &&
@@ -438,7 +447,7 @@ export function registerBrowserBackendIpc(): void {
     // surfacing the rare malformed-payload path as a hard error since the
     // semantic is "renderer no longer focused on any RSB session".
     const raw = optionalNullableString(obj.sessionId);
-    const sessionId: string | null = raw === null ? null : raw ?? null;
+    const sessionId: string | null = raw === null ? null : (raw ?? null);
     setActiveRsbSessionId(sessionId);
     return { ok: true };
   });

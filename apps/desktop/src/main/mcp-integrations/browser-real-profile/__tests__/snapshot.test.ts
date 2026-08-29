@@ -12,8 +12,10 @@ import {
   probeOsSourceProfileReadAccess,
   probeSourceProfileReadAccess,
   profileIsLocked,
+  readCopiedLoginsCdpPort,
   realProfileDestDir,
   realProfileProfileDir,
+  rememberCopiedLoginsCdpPort,
   rewriteLocalStateForManagedDefault,
   snapshotRealProfile,
 } from '../snapshot.js';
@@ -34,6 +36,14 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function leftoverStagingNames(destDir: string): string[] {
+  const parent = path.dirname(destDir);
+  if (!fs.existsSync(parent)) return [];
+  return fs
+    .readdirSync(parent)
+    .filter((name) => name.startsWith(`${path.basename(destDir)}.staging`));
+}
 
 function writeSqlite(filePath: string, table: string, value: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -143,7 +153,9 @@ describe('realProfileDestDir', () => {
     expect(realProfileDestDir('/runtime')).toBe(
       path.join('/runtime', 'browser', REAL_MANAGED_PROFILE, 'user-data'),
     );
-    expect(realProfileProfileDir('/runtime')).toBe(path.join('/runtime', 'browser', REAL_MANAGED_PROFILE));
+    expect(realProfileProfileDir('/runtime')).toBe(
+      path.join('/runtime', 'browser', REAL_MANAGED_PROFILE),
+    );
   });
 });
 
@@ -156,13 +168,21 @@ describe('snapshotRealProfile', () => {
 
     expect(result.sourceProfile).toBe('Profile 6');
     expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe('session-cookie');
-    expect(readSqlite(path.join(destDir, 'Default', 'Login Data'), 'logins')).toBe('saved-password');
+    expect(readSqlite(path.join(destDir, 'Default', 'Login Data'), 'logins')).toBe(
+      'saved-password',
+    );
     expect(fs.existsSync(path.join(destDir, 'Default', 'Preferences'))).toBe(true);
     expect(result.filesCopied).toContain('Local State');
     expect(result.filesCopied).toContain(path.join('Default', 'Cookies'));
-    const destLocalState = JSON.parse(fs.readFileSync(path.join(destDir, 'Local State'), 'utf8')) as {
+    const destLocalState = JSON.parse(
+      fs.readFileSync(path.join(destDir, 'Local State'), 'utf8'),
+    ) as {
       os_crypt: { keep: boolean };
-      profile: { last_used: string; last_active_profiles: string[]; info_cache: Record<string, { name: string }> };
+      profile: {
+        last_used: string;
+        last_active_profiles: string[];
+        info_cache: Record<string, { name: string }>;
+      };
     };
     expect(destLocalState.os_crypt.keep).toBe(true);
     expect(destLocalState.profile.last_used).toBe('Default');
@@ -180,6 +200,28 @@ describe('snapshotRealProfile', () => {
     await snapshotRealProfile({ source, destDir, platform: 'darwin' });
     expect(fs.existsSync(path.join(destDir, 'Profile 2'))).toBe(false);
     expect(fs.existsSync(path.join(destDir, 'Default', 'Cookies'))).toBe(true);
+  });
+
+  it('drops leftover site credential stores but keeps HTTP/GPU caches', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+    const destDefault = path.join(destDir, 'Default');
+    fs.mkdirSync(path.join(destDefault, 'Local Storage'), { recursive: true });
+    fs.writeFileSync(path.join(destDefault, 'Local Storage', 'leveldb'), 'old-ls');
+    fs.mkdirSync(path.join(destDefault, 'IndexedDB'), { recursive: true });
+    fs.writeFileSync(path.join(destDefault, 'IndexedDB', 'site'), 'old-idb');
+    fs.mkdirSync(path.join(destDefault, 'Service Worker'), { recursive: true });
+    fs.writeFileSync(path.join(destDefault, 'Service Worker', 'script'), 'old-sw');
+    fs.mkdirSync(path.join(destDefault, 'GPUCache'), { recursive: true });
+    fs.writeFileSync(path.join(destDefault, 'GPUCache', 'data'), 'gpu');
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(fs.existsSync(path.join(destDefault, 'Local Storage'))).toBe(false);
+    expect(fs.existsSync(path.join(destDefault, 'IndexedDB'))).toBe(false);
+    expect(fs.existsSync(path.join(destDefault, 'Service Worker'))).toBe(false);
+    expect(fs.readFileSync(path.join(destDefault, 'GPUCache', 'data'), 'utf8')).toBe('gpu');
+    expect(fs.existsSync(path.join(destDefault, 'Cookies'))).toBe(true);
+    expect(leftoverStagingNames(destDir)).toEqual([]);
   });
 
   it('refuses to write anywhere except Cindy-real/user-data', async () => {
@@ -215,7 +257,9 @@ describe('snapshotRealProfile', () => {
       return realRead(file, encoding as BufferEncoding);
     });
     try {
-      await expect(snapshotRealProfile({ source, destDir, platform: 'darwin' })).rejects.toMatchObject({
+      await expect(
+        snapshotRealProfile({ source, destDir, platform: 'darwin' }),
+      ).rejects.toMatchObject({
         code: 'COPY_FAILED',
         message: REAL_PROFILE_READ_DENIED,
       });
@@ -266,12 +310,15 @@ describe('snapshotRealProfile', () => {
     // Cookies copies first; a corrupt Login Data fails the later backup.
     fs.writeFileSync(path.join(source.userDataDir, 'Profile 6', 'Login Data'), 'not-a-sqlite-db');
 
-    await expect(snapshotRealProfile({ source, destDir, platform: 'darwin' })).rejects.toMatchObject({
+    await expect(
+      snapshotRealProfile({ source, destDir, platform: 'darwin' }),
+    ).rejects.toMatchObject({
       code: 'COPY_FAILED',
     });
     expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe('stale-cookie');
     expect(readSqlite(path.join(destDir, 'Default', 'Login Data'), 'logins')).toBe('stale-login');
     expect(fs.existsSync(`${destDir}.staging`)).toBe(false);
+    expect(leftoverStagingNames(destDir)).toEqual([]);
   });
 
   it('uses sqlite backup so dest has no WAL sidecar from the source', async () => {
@@ -383,6 +430,31 @@ describe('probeSourceProfileReadAccess', () => {
         },
       }),
     ).toEqual({ readable: true });
+  });
+});
+
+describe('copied logins CDP port marker', () => {
+  it('round-trips a relocated port on the complete marker', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    const runtimeDir = path.join(root, 'runtime');
+    await snapshotRealProfile({
+      source,
+      destDir: realProfileDestDir(runtimeDir),
+      platform: 'darwin',
+    });
+    expect(readCopiedLoginsCdpPort(runtimeDir)).toBeNull();
+    rememberCopiedLoginsCdpPort(runtimeDir, 18801);
+    expect(readCopiedLoginsCdpPort(runtimeDir)).toBe(18801);
+  });
+
+  it('ignores missing markers and ports outside the managed range', () => {
+    expect(readCopiedLoginsCdpPort('')).toBeNull();
+    const runtimeDir = path.join(makeTempDir(), 'runtime');
+    rememberCopiedLoginsCdpPort(runtimeDir, 18801);
+    expect(readCopiedLoginsCdpPort(runtimeDir)).toBeNull();
+    rememberCopiedLoginsCdpPort(runtimeDir, 80);
+    expect(readCopiedLoginsCdpPort(runtimeDir)).toBeNull();
   });
 });
 
