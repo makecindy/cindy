@@ -19,6 +19,7 @@
 
 ## 版本记录
 
+- **2026-08-29（圆角三档写死）**：`DESIGN.md §5` Border Radius Scale 措辞加硬（拍板人 = 用户）：按钮一律胶囊（含权限允许/拒绝，删除「cannot wear the pill」主观逃生口）、8px 档判据改为「盒内非按钮」、4px 不入档（30 处生产存量登记为债、新代码禁止、机器拦截随设计系统棘轮 PR 落地）、「看起来小」不是改档理由、不加档。2px status micro-cells 窄豁免不变。裁决全文与未决余项（允许/拒绝主次、双端几何）见 [`design-decision-log.md`](./design-decision-log.md)「08-29」条。
 - **2026-08-29（设计系统治理合同）**：新建 [`design-governance.md`](./design-governance.md)，启动设计系统治理（九张主线 PR 的第一张，纯文档）。定案：四种真相边界（规则 = `DESIGN.md`、数值现阶段 = `colors.ts` / 目标 = `packages/design-tokens` DTCG、台账 = 未来的 `design-inventory.md`、视觉 = 真实运行截图）；Token 工具单选 Terrazzo（锁 2.7.1，推迟到生成切换才安装）、不采用 Style Dictionary；可见 PR 两级证据合同（静态守卫测试 + 真实 Cindy Light/Dark 截图）；PR 三类风险不混张；旧 Token ID 不删不改名、用户主题不改写磁盘两条兼容红线；PermissionPrompt 圆角混用（8px×4 / 4px×4 / 12px×1，2026-08-29 实测）登记为待裁决项，裁决未关闭前相关文件不进迁移 diff。存量门禁与文档逐项登记处置去向（含 `DESIGN.md §10` Tier-1 表与 `§16.1` 表「生成切换后由机器摘要替代、此前维持人工维护」）。本条目仅登记治理文件；`DESIGN.md` 正文零改动。
 - **2026-08-24（手柄线稿交稿）**：新增 [`gamepad-silhouette-authoring.md`](./gamepad-silhouette-authoring.md)，把设置页 Xbox 手柄图的画法收成同事交稿约定（同网格、长弧、键壳分家、热区与填充）。
 - **2026-08-06（资源用量进程类别色）**：按用户对资源用量面板“icon 改为彩色”的走查要求，`DESIGN.md §2 / §10` 登记仅限 14px 进程类型 glyph 的六色 Light / Dark 调色板；颜色只编码任务 Agent、控制面服务、主进程、Renderer、GPU、Utility 类别，不表达健康或运行状态，行背景、文字、指标与操作继续保持中性。对应 token 加入外部主题导入保护，防类别色随导入主题漂移；该例外不得扩散到其它表格或进程 UI。
