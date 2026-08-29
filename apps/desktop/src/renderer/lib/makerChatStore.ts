@@ -59,7 +59,8 @@ import {
   isTurnContinuationBoundaryEvent,
 } from '@cindy/maker-shared/turn-continuation';
 import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
-import { parseToolLoopErrorDetails, type ToolLoopErrorDetails } from '@cindy/maker-core';
+import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource, SerializedAttachedFile } from '@/lib/fileTypes';
 import type {
