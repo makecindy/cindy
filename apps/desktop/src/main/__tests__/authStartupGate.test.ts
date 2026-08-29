@@ -131,6 +131,30 @@ describe('awaitWithStartupTimeout', () => {
     }
   });
 
+  it('超时且 onTimeout 抛错:waiter 收到该错误;flow 迟到 resolve 仍走 onLateResult', async () => {
+    let resolveFlow!: (v: string) => void;
+    const flow = new Promise<string>((r) => {
+      resolveFlow = r;
+    });
+    const boom = new Error('timeout-fallback-failed');
+    const onLateResult = vi.fn();
+    const p = awaitWithStartupTimeout(flow, {
+      timeoutMs: 1000,
+      onTimeout: () => {
+        throw boom;
+      },
+      onLateResult,
+    });
+    // 先挂上 rejection 断言再推进计时器,避免超时 reject 在 expect 之前变成 unhandled。
+    const rejected = expect(p).rejects.toBe(boom);
+    await vi.advanceTimersByTimeAsync(1000);
+    await rejected;
+
+    resolveFlow('late');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onLateResult).toHaveBeenCalledWith('late');
+  });
+
   it('timeoutMs <= 0:退化为直接 await,永不超时', async () => {
     const onTimeout = vi.fn(() => 'fallback');
     let resolveFlow!: (v: string) => void;

@@ -2754,6 +2754,16 @@ let replacementIntegrationReloadTimers: ReturnType<typeof setTimeout>[] = [];
 const COLD_START_AUTH_GATE_TIMEOUT_MS = 20_000;
 
 /**
+ * 登录准备态(「正在连接登录服务」)最多阻塞 UI 的时长。getProviders 走
+ * CindyAuthClient 默认 15s AbortController,但黑洞 / captive-portal 下 Electron
+ * `net.fetch` 可能无视 abort,请求永不 settle → renderer 的 preparing 转圈永不
+ * 结束。冷启动 splash 的 `awaitWithStartupTimeout` 闸只包 initialize();登录页是
+ * initialize 完成、GuestRoute 放行之后才出现的。这里复用同一把闸,时限更保守
+ * (30s),超时后走既有 error 步(「暂时无法登录」+ 重试);不 abort 在途 getProviders。
+ */
+const LOGIN_PREPARING_GATE_TIMEOUT_MS = 30_000;
+
+/**
  * auth 状态代际计数:login / clearAuth(logout、会话过期、账号切换)
  * 每次改写全局登录态时 +1。冷启动流程在开跑时快照代际,超时转后台后的每个状态
  * 写入点都先核对代际——用户在流程挂起期间手动登录 / 登出过,则迟到结果整体丢弃,
@@ -4485,7 +4495,24 @@ async function loadLoginProviders(expectedLoginFlowEpoch = loginFlowEpoch): Prom
   pendingSsoVerificationTicket = null;
   pendingAccountDeletionRestored = false;
   pendingAuthRealm = null;
-  const providers = await createAuthClient(AUTH_REGION).getProviders();
+  // 与冷启动 splash 同一把闸:限时等待,超时先以 AUTH_SERVICE_UNAVAILABLE 解锁
+  // preparing UI,getProviders 继续后台跑;不 abort(net.fetch 本就可能无视 abort)。
+  const providers = await awaitWithStartupTimeout(createAuthClient(AUTH_REGION).getProviders(), {
+    timeoutMs: LOGIN_PREPARING_GATE_TIMEOUT_MS,
+    onTimeout: () => {
+      log.warn(
+        `login providers still pending after ${LOGIN_PREPARING_GATE_TIMEOUT_MS}ms — unlocking the preparing UI`,
+      );
+      throw new AuthApiError(
+        'AUTH_SERVICE_UNAVAILABLE',
+        0,
+        'Authentication server did not respond in time',
+      );
+    },
+    onLateResult: () => log.info('login providers settled after preparing gate timeout'),
+    onLateError: (err) =>
+      log.warn('login providers request failed after preparing gate timeout', err),
+  });
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
   providerConfig = providers;
   loginFlowState = reduceAuthFlow(loginFlowState, {

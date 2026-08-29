@@ -1,7 +1,8 @@
 /**
  * 冷启动 auth 流程的「限时等待」编排 —— 与 Electron / 网络层解耦的纯逻辑,
- * 供 authManager 的 `initialize()` 使用,并可独立单测(authManager 本身依赖
- * Electron,无法在 node 测试环境直接 import,同 authRefreshFailure.ts 的拆分理由)。
+ * 供 authManager 的 `initialize()`(splash)与 `loadLoginProviders()`(登录准备态)
+ * 使用,并可独立单测(authManager 本身依赖 Electron,无法在 node 测试环境直接
+ * import,同 authRefreshFailure.ts 的拆分理由)。
  *
  * 背景:冷启动 refresh 是 token-rotating 端点,**禁止 abort**(服务端已轮换而客户端
  * abort 后,重试旧 token 会命中 INVALID_REFRESH_TOKEN 永久登出)。因此在黑洞 / captive
