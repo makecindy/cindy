@@ -598,7 +598,7 @@ describe('Pi package executable-code boundary', () => {
     await fs.mkdir(path.join(root, 'skills', 'generated'), { recursive: true });
     await fs.writeFile(path.join(root, 'skills', 'generated', 'SKILL.md'), '# Generated\n');
     runtime.spawnHook = (args) => {
-      if (args[0] !== 'run' || args[1] !== 'build') return;
+      if (args.at(-2) !== 'run' || args.at(-1) !== 'build') return;
       const entry = path.join(root, 'build', 'adapters', 'pi', 'extension.js');
       mkdirSync(path.dirname(entry), { recursive: true });
       writeFileSync(entry, 'export default function setup() {}\n');
