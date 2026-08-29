@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { rehydrateDeviceLinkTopics } from '@/device-link/rehydrate';
+import { rehydrateDeviceLinkPeer, rehydrateDeviceLinkTopics } from '@/device-link/rehydrate';
 import type { DeviceLinkRehydrateDeps } from '@/device-link/rehydrate';
 
 function deps() {
@@ -46,9 +46,45 @@ describe('rehydrateDeviceLinkTopics', () => {
       'subscribe:dev-1:session:s1,sessions',
       'rebuild:dev-1:s1',
       'reseed:dev-1',
+      'open:dev-2',
       'subscribe:dev-2:session:s2',
       'rebuild:dev-2:s2',
     ]);
+  });
+
+  it('opens a topic-only peer before replaying its subscription', async () => {
+    const { calls, harness } = deps();
+
+    await rehydrateDeviceLinkTopics([
+      { deviceId: 'dev-topic-only', openLink: false, topics: ['sessions'] },
+    ], harness);
+
+    expect(calls).toEqual([
+      'open:dev-topic-only',
+      'subscribe:dev-topic-only:sessions',
+      'reseed:dev-topic-only',
+    ]);
+  });
+
+  it('reports whether the peer link-open step actually succeeded', async () => {
+    const { harness } = deps();
+    const success = await rehydrateDeviceLinkPeer(
+      { deviceId: 'dev-ok', openLink: true, topics: [] },
+      harness,
+    );
+    expect(success.transientFailures).toBe(0);
+    expect(success.linkOpened).toBe(true);
+
+    vi.mocked(harness.openLink).mockReturnValueOnce({
+      capturedPresenceEpoch: 0,
+      capturedResponseEvidenceEpoch: 0,
+      request: Promise.reject(Object.assign(new Error('offline'), { code: 'DEVICE_OFFLINE' })),
+    });
+    const failed = await rehydrateDeviceLinkPeer(
+      { deviceId: 'dev-failed', openLink: true, topics: [] },
+      harness,
+    );
+    expect(failed.linkOpened).toBe(false);
   });
 
   it('stops the remaining sweep when background release cancels it', async () => {

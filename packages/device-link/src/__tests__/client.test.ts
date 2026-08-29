@@ -81,6 +81,7 @@ function makeHarness(opts?: {
   token?: string | null;
   timing?: ConstructorParameters<typeof DeviceLinkClient>[0]['timing'];
   logger?: ConstructorParameters<typeof DeviceLinkClient>[0]['logger'];
+  peerFailurePolicy?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerFailurePolicy'];
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -99,6 +100,7 @@ function makeHarness(opts?: {
       sockets.push(ws);
       return ws;
     },
+    peerFailurePolicy: opts?.peerFailurePolicy,
     timing: {
       reconnectBaseMs: 5,
       reconnectMaxMs: 40,
@@ -776,6 +778,157 @@ describe('DeviceLinkClient', () => {
         payload: { streamId: firstMeta.streamId, ackSeq: firstMeta.seq },
       },
     });
+    h.client.stop();
+  });
+
+  it('Mobile opt-in:出站 peer ACK 超时只复位该 peer,旧 Desktop 可用既有 link-open 恢复且邻居零感知', async () => {
+    const h = makeHarness({
+      peerFailurePolicy: 'isolate-peer',
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 60_000,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    const resets: Array<{
+      deviceId: string;
+      reason: 'ack-timeout';
+      connectionEpoch: number;
+      linkGeneration: number;
+      seq: number;
+    }> = [];
+    h.client.onPeerTransportReset((change) => resets.push(change));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const establishOutbound = async (deviceId: string, remoteStreamId: string): Promise<void> => {
+      const opening = h.client.openLink(deviceId, {
+        controllerName: 'Mobile',
+        protocolVersion: 1,
+        appVersion: '1',
+      }, 1_000);
+      const openFrame = h.current().sent
+        .filter((env) => env.kind === 'link-open' && env.dst === deviceId)
+        .at(-1)!;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-accept',
+        id: openFrame.id,
+        src: deviceId,
+        payload: {
+          appVersion: 'old-desktop',
+          allowlistHash: 'hash',
+          // 旧 Desktop 只理解既有 reliable transport,不声明
+          // transport-timeout-close-v1；Mobile 仍不得靠新 wire 值恢复。
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          transportStreamId: remoteStreamId,
+          transportBaseSeq: 1,
+        },
+      });
+      await opening;
+    };
+
+    await establishOutbound('peer-broken', 'old-desktop-broken-stream');
+    await establishOutbound('peer-healthy', 'old-desktop-healthy-stream');
+    const socket = h.current();
+    const socketCount = h.sockets.length;
+
+    const brokenRequest = h.client.invoke(
+      'peer-broken',
+      { channel: 'local-db:sessions:list', args: [10] },
+      60_000,
+    );
+    // 防测试失败提前退出时产生未处理 rejection；正常路径在下方以真实结果收口。
+    void brokenRequest.catch(() => {});
+    const brokenFrame = socket.sent
+      .filter((env) => env.kind === 'invoke' && env.dst === 'peer-broken')
+      .at(-1)!;
+    const brokenMeta = parseTransportPayload(brokenFrame.payload)!.meta;
+
+    const healthyRequest = h.client.invoke(
+      'peer-healthy',
+      { channel: 'local-db:sessions:list', args: [10] },
+      60_000,
+    );
+    const healthyFrame = socket.sent
+      .filter((env) => env.kind === 'invoke' && env.dst === 'peer-healthy')
+      .at(-1)!;
+    const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'peer-healthy',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: healthyMeta.streamId,
+          ackSeq: healthyMeta.seq,
+        },
+      },
+    });
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: healthyFrame.id,
+      src: 'peer-healthy',
+      payload: { ok: true, result: ['healthy'] },
+    });
+    await expect(healthyRequest).resolves.toMatchObject({ ok: true, result: ['healthy'] });
+
+    // broken peer 永不 ACK；达到预算后只产生本地 peer reset 事件。
+    await vi.waitFor(() => expect(resets).toHaveLength(1));
+    expect(resets[0]).toMatchObject({
+      deviceId: 'peer-broken',
+      reason: 'ack-timeout',
+      connectionEpoch: h.client.getConnectionEpoch(),
+      linkGeneration: expect.any(Number),
+      seq: brokenMeta.seq,
+    });
+    expect(h.client.isLinkReady('peer-broken')).toBe(false);
+    expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+    expect(socket.terminated).toBe(false);
+    expect(socket.closed).toBeNull();
+    expect(h.sockets).toHaveLength(socketCount);
+    expect(socket.sent.some((env) => (
+      env.kind === 'link-close'
+      && env.dst === 'peer-broken'
+    ))).toBe(false);
+
+    // host 用旧版本也支持的 link-open 重建同一 peer；共享 socket 与邻居不动。
+    const sentBeforeReopen = socket.sent.length;
+    await establishOutbound('peer-broken', 'old-desktop-broken-stream');
+    expect(h.client.isLinkReady('peer-broken')).toBe(true);
+    expect(h.client.isLinkReady('peer-healthy')).toBe(true);
+    expect(h.sockets).toHaveLength(socketCount);
+
+    const replay = socket.sent.slice(sentBeforeReopen).find((env) => (
+      env.kind === 'invoke'
+      && env.dst === 'peer-broken'
+      && parseTransportPayload(env.payload)?.meta.seq === brokenMeta.seq
+    ));
+    expect(replay).toBeDefined();
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'peer-broken',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: {
+          streamId: brokenMeta.streamId,
+          ackSeq: brokenMeta.seq,
+        },
+      },
+    });
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: brokenFrame.id,
+      src: 'peer-broken',
+      payload: { ok: true, result: ['recovered'] },
+    });
+    await expect(brokenRequest).resolves.toMatchObject({ ok: true, result: ['recovered'] });
     h.client.stop();
   });
 

@@ -775,9 +775,10 @@ describe('mobile auth-server login', () => {
     expect(boundaryBody).toContain(
       'accountGenerationRef.current !== auth.accountGeneration',
     );
-    expect(boundaryBody).toContain(
-      'if (accountGenerationChanged) clearPerAccountDeviceLinkState();',
-    );
+    expect(boundaryBody).toContain('if (accountGenerationChanged) {');
+    expect(boundaryBody).toContain('clearPerAccountDeviceLinkState();');
+    expect(boundaryBody).toContain('registryRef.current.clear();');
+    expect(boundaryBody).toContain('remoteSubscribedTopicsRef.current.clear();');
   });
 
   it('accepts enterprise ID, organization slug, and verified domains up to the API limit', () => {

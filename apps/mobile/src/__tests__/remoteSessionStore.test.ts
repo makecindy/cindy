@@ -2793,6 +2793,52 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessions()[0].title).toBe('New');
   });
 
+  it('fences an older whole-list snapshot after created/patched pushes per device', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: 'Old' })]);
+    const dev1Epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    const dev2Epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-2');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+      sessionId: 's1',
+      patch: { title: 'New' },
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', dev1Epoch)).toBe(false);
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-2', dev2Epoch)).toBe(true);
+
+    const afterPatch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:created', { sessionId: 's2' });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', afterPatch)).toBe(false);
+
+    const beforeReset = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeReset)).toBe(false);
+  });
+
+  it('fences an older whole-list snapshot after valid session usage pushes', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+
+    const beforeSpend = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalCostUsd: 1.23,
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeSpend)).toBe(false);
+
+    const beforeTokens = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', {
+      sessionId: 's1',
+      totalTokens: 45_000,
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeTokens)).toBe(false);
+
+    const beforeInvalid = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', {
+      sessionId: 's1',
+      totalTokens: -1,
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeInvalid)).toBe(true);
+  });
+
   it('mirrors goal status pushes per session and clears on null goal', () => {
     const goal = {
       sessionId: 's1',
