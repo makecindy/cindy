@@ -915,6 +915,9 @@ const LightboxPage = memo(function LightboxPage({
         // 捏合一开始就锁死翻页,不等 JS zoomed 提交;否则松手后立刻左右拖
         // 会被 pagingEnabled 的 FlatList 抢走,当前页直接滑走。
         runOnJS(reportZoomed)(true);
+        // 下滑半途改捏合:关掉正在进行的 dismiss 位移,不把图和背景留在半透明上。
+        dragY.value = 0;
+        dismissY.value = 0;
         savedScale.value = scale.value;
         originX.value = lightboxPinchOrigin(event.focalX, width);
         originY.value = lightboxPinchOrigin(event.focalY, height);
@@ -1025,6 +1028,13 @@ const LightboxPage = memo(function LightboxPage({
         }
         dragY.value = withSpring(0, { damping: 20, stiffness: 240 });
         dismissY.value = withSpring(0, { damping: 20, stiffness: 240 });
+      })
+      .onFinalize((_event, success) => {
+        // fail/cancel 不走 onEnd:下滑半途被捏合抢走时,位移和背景渐隐必须立刻清掉。
+        // success 路径由 onEnd 负责(关闭或回弹),这里不要抢。
+        if (success) return;
+        dragY.value = 0;
+        dismissY.value = 0;
       });
 
     const doubleTap = Gesture.Tap()

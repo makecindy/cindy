@@ -104,6 +104,8 @@ describe('mobile message media thumbnail wiring', () => {
     // chrome 显隐走共享 motion token,不在组件里写死毫秒
     expect(lightboxSource).toContain('duration: motionDuration.instant');
     expect(lightboxSource).toContain('duration: motionDuration.fast');
+    // 下滑半途改捏合:fail 不走 onEnd,必须在 onFinalize 清掉 dragY/dismissY
+    expect(lightboxSource).toContain('onFinalize((_event, success)');
     // 分享按产品决策走系统分享单;expo-sharing 必须动态 import(旧构建缺原生模块)
     const screenShare = screenSource.includes("await import('expo-sharing')");
     expect(screenShare).toBe(true);
