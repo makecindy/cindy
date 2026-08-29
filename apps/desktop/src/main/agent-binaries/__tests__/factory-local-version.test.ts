@@ -127,12 +127,13 @@ describe('local runtime version arbitration', () => {
     const provisioner = makeProvisioner(installSubdir, binaryName, resolveVersion);
 
     await expect(provisioner.peekNeedsDownload()).resolves.toBe(false);
+    expect(resolveVersion).not.toHaveBeenCalled();
     await expect(provisioner.prepare()).resolves.toEqual({
       ready: true,
       binaryPath: selfUpdated,
     });
     expect(mocks.download).not.toHaveBeenCalled();
-    expect(resolveVersion).toHaveBeenCalledTimes(2);
+    expect(resolveVersion).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(path.dirname(older))).toBe(true);
     await expect(provisioner.getState()).resolves.toMatchObject({
       status: 'ready',
@@ -192,11 +193,16 @@ describe('local runtime version arbitration', () => {
     expect(fs.existsSync(path.dirname(oldBinary))).toBe(false);
   });
 
-  it('falls back to the previous exact-manifest behavior when version probing fails', async () => {
+  it.each([
+    ['the probe fails', 'throw'],
+    ['the output is invalid', null],
+    ['the real version is older', '0.84.2'],
+  ])('repairs an exact-manifest directory when %s', async (_label, reported) => {
     const installSubdir = uniqueInstallSubdir();
     const exact = await mountVerifiedBinary(installSubdir, '0.84.3', 'pi');
     const provisioner = makeProvisioner(installSubdir, 'pi', async () => {
-      throw new Error('probe failed');
+      if (reported === 'throw') throw new Error('probe failed');
+      return reported;
     });
 
     await expect(provisioner.peekNeedsDownload()).resolves.toBe(false);
@@ -204,6 +210,6 @@ describe('local runtime version arbitration', () => {
       ready: true,
       binaryPath: exact,
     });
-    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.download).toHaveBeenCalledTimes(1);
   });
 });

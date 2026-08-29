@@ -27,7 +27,6 @@ import {
   type VendorRuntimeState,
 } from './types.js';
 import {
-  isBinaryVersionNewer,
   isBinaryVersionNotOlder,
   normalizeBinaryVersion,
 } from './binary-version-probe.js';
@@ -58,42 +57,6 @@ function getFinalBinPath(installSubdir: string, version: string, binaryName: str
 
 function getVerifiedMarker(installSubdir: string, version: string): string {
   return path.join(getVersionDir(installSubdir, version), '.verified');
-}
-
-interface VerifiedBinaryCandidate {
-  directoryVersion: string;
-  binaryPath: string;
-}
-
-/** List executable installs carrying the provisioner's completed-download marker. */
-function listVerifiedBinaries(
-  installSubdir: string,
-  binaryName: string,
-): VerifiedBinaryCandidate[] {
-  try {
-    const root = getInstallRoot(installSubdir);
-    return fs
-      .readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => ({
-        directoryVersion: entry.name,
-        binaryPath: getFinalBinPath(installSubdir, entry.name, binaryName),
-      }))
-      .filter((candidate) => {
-        try {
-          fs.accessSync(getVerifiedMarker(installSubdir, candidate.directoryVersion));
-          fs.accessSync(candidate.binaryPath, fs.constants.X_OK);
-          return true;
-        } catch {
-          return false;
-        }
-      })
-      .sort((a, b) =>
-        b.directoryVersion.localeCompare(a.directoryVersion, undefined, { numeric: true }),
-      );
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -147,25 +110,20 @@ async function findPreferredLocalBinary(
   const requiredVersion = normalizeBinaryVersion(manifestVersion);
   if (!resolveVersion || !requiredVersion) return null;
 
-  const resolved = await Promise.all(
-    listVerifiedBinaries(installSubdir, binaryName).map(async (candidate) => {
-      try {
-        const reported = await resolveVersion(candidate.binaryPath, signal);
-        const version = reported ? normalizeBinaryVersion(reported) : null;
-        return version ? { version, binaryPath: candidate.binaryPath } : null;
-      } catch {
-        // Local probes are advisory; the exact-manifest flow below remains authoritative.
-        return null;
-      }
-    }),
-  );
-  return resolved.reduce<{ version: string; binaryPath: string } | null>((preferred, candidate) => {
-    if (!candidate || !isBinaryVersionNotOlder(candidate.version, requiredVersion))
-      return preferred;
-    return !preferred || isBinaryVersionNewer(candidate.version, preferred.version)
-      ? candidate
-      : preferred;
-  }, null);
+  // Normal cleanup leaves one install. Probe only the same latest candidate that
+  // the historical offline fallback would run, rather than executing every old binary.
+  const candidate = findLatestVerifiedBinary(installSubdir, binaryName);
+  if (!candidate) return null;
+  try {
+    const reported = await resolveVersion(candidate.binaryPath, signal);
+    const version = reported ? normalizeBinaryVersion(reported) : null;
+    return version && isBinaryVersionNotOlder(version, requiredVersion)
+      ? { version, binaryPath: candidate.binaryPath }
+      : null;
+  } catch {
+    // Local probes are advisory; the manifest repair flow below remains authoritative.
+    return null;
+  }
 }
 
 function isInstalled(installSubdir: string, version: string, binaryName: string): boolean {
@@ -258,7 +216,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
     try {
       version = await config.localVersionResolver(binaryPath, signal);
     } catch {
-      // The resolver is intentionally fail-open to the pre-existing manifest path.
+      // Probe failures are handled as repair-needed by the manifest flow below.
     }
     if (version !== null) {
       localVersionCache.set(binaryPath, { ...identity, version });
@@ -353,9 +311,13 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
           return { ready: true, binaryPath: preferredLocal.binaryPath };
         }
 
-        // 3.1 已安装的 manifest 精确版本命中（探针失败时仍保持原流程）。
+        // 3.1 未启用真实版本仲裁的 runtime 保持原有 manifest 精确命中流程。
+        // 启用仲裁时，探针失败/无效/较旧必须继续下载，以修复残留的 .verified 安装。
         const finalBinPath = getFinalBinPath(config.installSubdir, asset.version, binaryName);
-        if (isInstalled(config.installSubdir, asset.version, binaryName)) {
+        if (
+          !config.localVersionResolver &&
+          isInstalled(config.installSubdir, asset.version, binaryName)
+        ) {
           emit({
             status: 'ready',
             installedVersion: asset.version,
@@ -489,15 +451,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         if (!manifest) return true;
         const asset = getVendorAsset(manifest, config.manifestField);
         if (!asset) return config.optionalAsset !== true;
-        const binaryName = deriveBinaryName();
-        const preferredLocal = await findPreferredLocalBinary(
-          config.installSubdir,
-          binaryName,
-          asset.version,
-          config.localVersionResolver ? resolveLocalVersion : undefined,
-        );
-        if (preferredLocal) return false;
-        return !isInstalled(config.installSubdir, asset.version, binaryName);
+        return !isInstalled(config.installSubdir, asset.version, deriveBinaryName());
       } catch {
         return true;
       }

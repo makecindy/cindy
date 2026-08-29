@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  isBinaryVersionNewer,
   isBinaryVersionNotOlder,
   parseBinaryVersionOutput,
   probeBinaryVersion,
@@ -15,7 +14,6 @@ describe('binary version probe', () => {
 
   it('uses SemVer precedence for prerelease arbitration', () => {
     expect(isBinaryVersionNotOlder('0.84.5-beta.1', '0.84.4')).toBe(true);
-    expect(isBinaryVersionNewer('0.84.5', '0.84.5-beta.1')).toBe(true);
     expect(isBinaryVersionNotOlder('0.84.5-beta.1', '0.84.5')).toBe(false);
   });
 

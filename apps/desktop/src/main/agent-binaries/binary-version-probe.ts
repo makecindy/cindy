@@ -3,7 +3,6 @@ import { createRequire } from 'node:module';
 
 interface SemverApi {
   valid(version: string): string | null;
-  gt(left: string, right: string): boolean;
   gte(left: string, right: string): boolean;
 }
 
@@ -18,10 +17,6 @@ export function normalizeBinaryVersion(version: string): string | null {
 
 export function isBinaryVersionNotOlder(candidate: string, required: string): boolean {
   return semver.gte(candidate, required);
-}
-
-export function isBinaryVersionNewer(candidate: string, current: string): boolean {
-  return semver.gt(candidate, current);
 }
 
 /** Parse the first version line emitted by a managed runtime's `--version`. */
