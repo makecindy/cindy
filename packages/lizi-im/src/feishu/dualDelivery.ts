@@ -93,11 +93,17 @@ function logicalSendKey(input: DualDeliveryInput): string | null {
     .digest('hex');
 }
 
+function dropDeferredMirrors(key: string): void {
+  if (!deferredMirrors.delete(key)) return;
+  // Dropped callbacks never run, so their `.finally(release)` cannot fire.
+  releaseMirrorConfirmation(key);
+}
+
 function pruneTtlMap(map: Map<string, number>, now: number): void {
   for (const [key, ts] of map) {
     if (now - ts <= LATE_COPY_TTL_MS && map.size <= MAX_RECENT) break;
     map.delete(key);
-    deferredMirrors.delete(key);
+    dropDeferredMirrors(key);
   }
 }
 
@@ -116,7 +122,7 @@ function pruneRecentFlats(now: number): void {
     if (rec.state === 'pending') continue;
     if (now - rec.ts > LATE_COPY_TTL_MS) {
       recentFlats.delete(key);
-      deferredMirrors.delete(key);
+      dropDeferredMirrors(key);
     }
   }
   if (recentFlats.size <= MAX_RECENT) return;
@@ -124,7 +130,7 @@ function pruneRecentFlats(now: number): void {
     if (recentFlats.size <= MAX_RECENT) break;
     if (rec.state === 'pending') continue;
     recentFlats.delete(key);
-    deferredMirrors.delete(key);
+    dropDeferredMirrors(key);
   }
 }
 
@@ -162,7 +168,7 @@ function abandonUnpairedFlatRoute(key: string, rec: RecentFlatRecord): void {
     recentFlats.set(key, rec);
     pruneRecentFlats(rec.ts);
   }
-  deferredMirrors.delete(key);
+  dropDeferredMirrors(key);
 }
 
 function flushDeferredMirrors(key: string): void {
@@ -384,6 +390,11 @@ export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void
   queued.push(send);
   deferredMirrors.set(mirrorKey, queued);
   return true;
+}
+
+/** Test-only: whether terminal-mirror retain is still holding this key. */
+export function isMirrorConfirmationRetainedForTest(mirrorKey: string): boolean {
+  return inflightMirrors.has(mirrorKey);
 }
 
 /** Test-only reset. Production state intentionally survives transport reconnects. */
