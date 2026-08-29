@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   coordinateDualDelivery,
+  isMirrorConfirmationRetainedForTest,
   releaseMirrorConfirmation,
   resetDualDeliveryForTest,
   retainMirrorConfirmation,
@@ -277,6 +278,26 @@ describe('Feishu native thread/main dual delivery', () => {
     expect(retryDecision.commitUnpairedFlat()).toBe(true);
   });
 
+  it('releases inflight retain when an abandoned flat drops its deferred mirror', async () => {
+    vi.useFakeTimers();
+    const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const flatDecision = await flat;
+    if (
+      flatDecision.kind !== 'dispatch' ||
+      !flatDecision.mirrorKey ||
+      !flatDecision.abandonUnpairedFlat
+    ) {
+      throw new Error('unpaired flat must expose abandonUnpairedFlat');
+    }
+    retainMirrorConfirmation(flatDecision.mirrorKey);
+    const scheduled = vi.fn();
+    expect(scheduleMirrorOnConfirmation(flatDecision.mirrorKey, scheduled)).toBe(true);
+    flatDecision.abandonUnpairedFlat();
+    expect(scheduled).not.toHaveBeenCalled();
+    expect(isMirrorConfirmationRetainedForTest(flatDecision.mirrorKey)).toBe(false);
+  });
+
   it('suppresses a late topic after the unpaired flat has committed its route', async () => {
     vi.useFakeTimers();
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
@@ -452,15 +473,18 @@ describe('Feishu native thread/main dual delivery', () => {
     vi.useFakeTimers();
     const topic = await coordinateDualDelivery(input());
     if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    retainMirrorConfirmation(topic.mirrorKey);
     await vi.advanceTimersByTimeAsync(1_000);
     const scheduled = vi.fn();
     scheduleMirrorOnConfirmation(topic.mirrorKey, scheduled);
+    expect(isMirrorConfirmationRetainedForTest(topic.mirrorKey)).toBe(true);
     await vi.advanceTimersByTimeAsync(25_001);
 
     const lateFlat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(lateFlat).resolves.toMatchObject({ kind: 'dispatch' });
     expect(scheduled).not.toHaveBeenCalled();
+    expect(isMirrorConfirmationRetainedForTest(topic.mirrorKey)).toBe(false);
   });
 
   it('keeps an inflight confirmation past the confirmed TTL until release', async () => {
