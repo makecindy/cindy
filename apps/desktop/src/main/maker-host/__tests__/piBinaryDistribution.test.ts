@@ -43,6 +43,16 @@ describe('Pi binary distribution contract', () => {
     expect(binaries).toContain('signal: opts.signal');
   });
 
+  it('preserves a locally self-updated Pi when its real version is not below the manifest', () => {
+    const binaries = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/agent-binaries/index.ts'),
+      'utf8',
+    );
+
+    expect(binaries).toContain('preserveLocalVersion: true');
+    expect(binaries).toContain('localVersionResolver: cfg.preserveLocalVersion');
+  });
+
   it('does not expose an old Pi cache through the binary-version IPC', () => {
     const binaryVersion = fs.readFileSync(
       path.join(desktopRoot, 'src/main/maker-ipc/binary-version.ts'),
