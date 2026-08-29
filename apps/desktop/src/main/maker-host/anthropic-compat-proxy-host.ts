@@ -144,7 +144,8 @@ export function setClaudeProxyOAuthSpawnChecker(fn: () => boolean): void {
 //
 // 热路径必须永不抛:ipcMaker 在 owner boundary 会抛 PRECONDITION_FAILED,proxy 引擎捕获后
 // fail-open 默认 LiteLLM,provider-oauth 占位 key 原样上游 → 确定性 401。setter 内吞掉异常,
-// 当作「会话未反解」;真正的 fail-closed 在 routingTransform 收口(占位 key + boundary → 503)。
+// 当作「会话未反解」;真正的 fail-closed 在 routingTransform 收口(boundary pending → 503,
+// 含订阅桥;非 boundary 的占位透传合同不变)。
 let _resolveCcSessionId: ((sdkSessionId: string) => string | null) | null = null;
 export function setClaudeProxySessionIdResolver(
   fn: (sdkSessionId: string) => string | null,
@@ -162,7 +163,9 @@ export function setClaudeProxySessionIdResolver(
 }
 
 // owner-boundary 探针 —— 由 host 注入 isAppSessionBoundaryPending。pending 期间
-// canUseCindyGateway=false,网关 key 读出来是 null,不能据此把占位 key passthrough 给 LiteLLM。
+// canUseCindyGateway=false,网关 key 读出来是 null;订阅桥仍会经 getGrokAccessToken /
+// getChatgptBridgeAuth 读 getActiveAppSession()(commit 前是上一任 owner)。finalize 对
+// pending 一律 503,不豁免 localHandler。
 let _isOwnerBoundaryPending: () => boolean = () => false;
 export function setClaudeProxyOwnerBoundaryPendingChecker(fn: () => boolean): void {
   _isOwnerBoundaryPending = fn;
@@ -702,8 +705,13 @@ export function createModelRoutingTransform(): RoutingTransform {
         ],
       };
     };
-    const finalize = (resolved: RoutingDecision | null): RoutingDecision | null =>
-      refuseUnsafePlaceholderPassthrough(stripInternalPiHeaders(resolved), ctx);
+    const finalize = (resolved: RoutingDecision | null): RoutingDecision | null => {
+      // beginAppSessionBoundary 的 fail-closed:teardown 期间 getActiveAppSession() 仍是
+      // 上一任 owner。订阅桥 / PI 原生转发 / oauth headerOverride 都会读那份凭证,不能
+      // 因为 localHandler 不是「默认上游透传」就放行。
+      if (isOwnerBoundaryPending()) return ownerBoundaryPendingRoute();
+      return refuseUnsafePlaceholderPassthrough(stripInternalPiHeaders(resolved), ctx);
+    };
     try {
       const decision = route(body, ctx);
       return decision instanceof Promise

@@ -288,6 +288,7 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
   afterEach(() => {
     setClaudeProxyOwnerBoundaryPendingChecker(() => false);
     setPendingCredentialSwitchReader(() => undefined);
+    resetPiProxySessionsForTest();
   });
 
   async function invokeLocalHandler(decision: Awaited<ReturnType<ReturnType<typeof createModelRoutingTransform>>>) {
@@ -347,7 +348,7 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
     });
   });
 
-  it('boundary pending 时订阅前缀模型仍优先走 SuperGrok,不因缺 session 改 503', async () => {
+  it('boundary pending 时订阅前缀模型也 503,不把旧 owner 的 OAuth 打到 SuperGrok', async () => {
     gatewayKey = null;
     setClaudeProxyOwnerBoundaryPendingChecker(() => true);
     const decision = await Promise.resolve(
@@ -356,14 +357,55 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
         ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
       ),
     );
-    expect(decision?.localHandler).toEqual(expect.any(Function));
     const { writeHead, end } = await invokeLocalHandler(decision);
-    if (writeHead.mock.calls.length > 0) {
-      expect(writeHead.mock.calls[0][0]).not.toBe(503);
-      expect(JSON.parse(end.mock.calls[0][0])).not.toMatchObject({
-        error: { code: 'owner_boundary_pending' },
-      });
-    }
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('boundary pending 时 chatgpt/ 前缀同样 503,不读旧 owner 的 Codex OAuth', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'chatgpt/gpt-5.5' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('boundary pending 时 PI 原生 xai 转发也 503,不读旧 owner 的 Grok OAuth', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    registerPiProxySession('sess-pi', 'session-secret', () => 'xai');
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'grok-4.6' },
+        ctxWith({
+          'x-cindy-pi-session-id': 'sess-pi',
+          'x-cindy-pi-session-token': 'session-secret',
+          'x-cindy-pi-provider-id': 'xai',
+          'x-api-key': PLACEHOLDER,
+        }),
+      ),
+    );
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
   });
 
   it('resolver 抛错但有网关 key 时分类器仍换 key(#831),不 passthrough 占位', () => {
