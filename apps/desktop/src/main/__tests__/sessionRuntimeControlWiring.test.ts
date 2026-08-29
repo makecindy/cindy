@@ -432,6 +432,21 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain("effort: effective.effort ?? '',");
   });
 
+  it('persists Pi runtime-verified windows without catalog replacement', () => {
+    const snapshotStart = registerSource.indexOf('if (pendingContextSnapshot) {');
+    const snapshotEnd = registerSource.indexOf(
+      'if (pendingCodexAccountUsageSnapshot)',
+      snapshotStart,
+    );
+    const snapshot = registerSource.slice(snapshotStart, snapshotEnd);
+
+    expect(snapshot).toContain("session.agentKind === 'pi'");
+    expect(snapshot).toContain('piRuntimeWindow ?? verifiedWindow');
+    expect(snapshot.indexOf('pendingContextSnapshot.contextWindow')).toBeLessThan(
+      snapshot.indexOf('lookupVerifiedContextWindow('),
+    );
+  });
+
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
     expect(registerSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
@@ -477,6 +492,9 @@ describe('session runtime control wiring', () => {
     );
     expect(setModel.slice(runtimeCommit, contextSnapshot)).toContain('if (!response.deferred) {');
     expect(setModel.slice(runtimeCommit, contextSnapshot)).toContain('try {');
+    expect(setModel).toContain("currentAgentKind === 'pi'");
+    expect(setModel).toContain('getUsageSnapshot?.().contextWindow');
+    expect(setModel).toContain(': verifiedWindow;');
     expect(setModel).toContain('runtime model context snapshot refresh failed');
   });
 

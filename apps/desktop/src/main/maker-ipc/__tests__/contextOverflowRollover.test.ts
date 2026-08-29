@@ -360,15 +360,42 @@ describe('createContextOverflowRollover', () => {
     );
   });
 
+  it('uses the persisted verified Pi runtime window after a cold restart', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      agentKind: 'pi',
+      sdkSessionId: '/tmp/cold-pi-session.jsonl',
+      contextTokens: 300_000,
+      contextWindow: 1_000_000,
+      model: 'runtime-wide-model',
+      providerId: 'xd',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    deps.resolveVerifiedWindow.mockReturnValue(200_000);
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+    ).resolves.toBe('rebuilt');
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1',
+      expect.any(String),
+      expect.objectContaining({ reason: 'model-window-switch' }),
+    );
+  });
+
   it('keeps an unknown persisted current window fail-closed', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
       ...(await deps.getSessionRow()),
+      agentKind: 'pi',
       contextTokens: 300_000,
       contextWindow: 0,
       model: 'unknown-model',
     });
     deps.getLiveSession.mockReturnValue(undefined);
+    deps.resolveVerifiedWindow.mockReturnValue(200_000);
     const rollover = createContextOverflowRollover(deps);
 
     await expect(

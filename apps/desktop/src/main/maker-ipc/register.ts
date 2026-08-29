@@ -4793,6 +4793,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         }
       }
       if (pendingContextSnapshot) {
+        const piRuntimeWindow =
+          session.agentKind === 'pi' &&
+          Number.isFinite(pendingContextSnapshot.contextWindow) &&
+          pendingContextSnapshot.contextWindow > 0
+            ? pendingContextSnapshot.contextWindow
+            : null;
         const verifiedWindow = lookupVerifiedContextWindow(
           (agentKind, modelId, providerId) =>
             resolveVerifiedContextWindow(
@@ -4808,7 +4814,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         recordSessionContextSnapshot(
           session.id,
           pendingContextSnapshot.contextTokens,
-          verifiedWindow ?? pendingContextSnapshot.contextWindow,
+          piRuntimeWindow ?? verifiedWindow ?? pendingContextSnapshot.contextWindow,
         );
       }
       if (pendingCodexAccountUsageSnapshot) {
@@ -15550,7 +15556,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
               currentAgentKind,
             );
-            if (verifiedWindow) {
+            const piRuntimeWindow = maker.getSession(sessionId)?.getUsageSnapshot?.().contextWindow;
+            const snapshotWindow =
+              currentAgentKind === 'pi'
+                ? typeof piRuntimeWindow === 'number' && piRuntimeWindow > 0
+                  ? piRuntimeWindow
+                  : null
+                : verifiedWindow;
+            if (snapshotWindow) {
               const [usage] = await getDbClient()
                 .drizzle.select({ contextTokens: sessions.contextTokens })
                 .from(sessions)
@@ -15559,7 +15572,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               await recordSessionContextSnapshot(
                 sessionId,
                 usage?.contextTokens ?? 0,
-                verifiedWindow,
+                snapshotWindow,
               );
             }
           } catch (error) {

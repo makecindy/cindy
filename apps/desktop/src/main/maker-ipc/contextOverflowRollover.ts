@@ -583,14 +583,18 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       sessionRow.providerId,
       sessionRow.agentKind,
     );
-    // Pi's live window comes from its post-reload get_state verification. A stale
-    // catalog value must not overwrite that runtime fact during a later switch.
-    const currentContextWindow =
-      sessionRow.agentKind === 'pi' &&
-      liveUsage &&
-      Number.isFinite(liveUsage.contextWindow) &&
-      liveUsage.contextWindow > 0
+    // Pi snapshots come from post-reload get_state verification and are persisted
+    // at turn end. Never replace that runtime fact with a stale catalog window,
+    // including after restart when no live handle exists.
+    const piRuntimeWindow =
+      liveUsage && Number.isFinite(liveUsage.contextWindow) && liveUsage.contextWindow > 0
         ? liveUsage.contextWindow
+        : Number.isFinite(sessionRow.contextWindow) && (sessionRow.contextWindow ?? 0) > 0
+          ? (sessionRow.contextWindow ?? 0)
+          : 0;
+    const currentContextWindow =
+      sessionRow.agentKind === 'pi'
+        ? piRuntimeWindow
         : effectiveContextWindow(
             sessionRow.model,
             reportedCurrentWindow,
