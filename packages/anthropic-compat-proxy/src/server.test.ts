@@ -2567,6 +2567,42 @@ describe('anthropic-compat-proxy request body limit(超限回可读 413,不斩�
     expect(compactorCalls).toBe(1);
   });
 
+  it('命中 localHandler 时同样先压缩超限 JSON,再交给 handler', async () => {
+    const gateway = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(500);
+      res.end('local handler must prevent forwarding');
+    });
+    upstreamClose = gateway.close;
+    let compactorCalls = 0;
+    let seen: { raw: string; parsed: Record<string, unknown> } | null = null;
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      maxRequestBodyBytes: 1024,
+      oversizedRequestIngressBytes: 8 * 1024,
+      oversizedRequestCompactor: (body) => {
+        compactorCalls += 1;
+        return { model: (body as Record<string, unknown>).model, compacted: true };
+      },
+      routingTransform: () => ({
+        localHandler: async ({ rawBody, parsedBody, res }) => {
+          seen = { raw: rawBody.toString('utf8'), parsed: parsedBody as Record<string, unknown> };
+          res.writeHead(204);
+          res.end();
+        },
+      }),
+    });
+
+    const res = await post(proxy.url, { model: 'gpt-5.5', history: 'x'.repeat(4096) });
+    expect(res.status).toBe(204);
+    expect(compactorCalls).toBe(1);
+    expect(seen).toEqual({
+      raw: JSON.stringify({ model: 'gpt-5.5', compacted: true }),
+      parsed: { model: 'gpt-5.5', compacted: true },
+    });
+    expect(gateway.bodies).toHaveLength(0);
+  });
+
   it('硬上限以内的请求完全跳过 oversized compactor', async () => {
     const gateway = await startFakeUpstream((_i, _body, res) => { res.writeHead(200); res.end('{}'); });
     upstreamClose = gateway.close;

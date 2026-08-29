@@ -1955,14 +1955,61 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。
     // parsedBody 复用路由阶段的解析结果,不二次 parse。
     if (decision?.localHandler) {
-      // Local handlers receive the original request and do not opt into the
-      // forwarding compaction contract, so retain the historical hard limit.
-      if (rawBody.length > maxBodyBytes) {
+      // PI native subscription handlers also receive provider-native JSON and
+      // can carry the same accumulated vision history as forwarded requests.
+      // Apply the bounded compactor before the local-handler hard-limit check;
+      // non-JSON or unparseable bodies still retain the historical 413 path.
+      let localRawBody = rawBody;
+      let localParsedBody = rawParsed;
+      if (rawBody.length > maxBodyBytes && oversizedRequestCompactor) {
+        const originalLocalBodyBytes = rawBody.length;
+        const compactStartedAt = Date.now();
+        let oversizedParsed: unknown = rawParsed;
+        if (oversizedParsed === undefined && contentType.toLowerCase().startsWith('application/json')) {
+          try {
+            oversizedParsed = JSON.parse(rawBody.toString('utf8'));
+          } catch {
+            oversizedParsed = undefined;
+          }
+        }
+        if (oversizedParsed !== undefined) {
+          try {
+            const compacted = oversizedRequestCompactor(oversizedParsed, requestCtx, maxBodyBytes);
+            const compactedBody = isPromiseLike<unknown | null>(compacted)
+              ? await compacted
+              : compacted;
+            if (compactedBody !== null && compactedBody !== undefined) {
+              const serialized = JSON.stringify(compactedBody);
+              if (typeof serialized !== 'string') throw new Error('compactor returned a non-serializable body');
+              localRawBody = Buffer.from(serialized, 'utf8');
+              // Do not retain the original oversized Buffer through local
+              // handler execution; compaction already produced the bytes the
+              // handler will consume.
+              rawBody = localRawBody;
+              localParsedBody = compactedBody;
+              logger.info?.('oversized request body compacted before local dispatch', {
+                reqId,
+                originalBytes: originalLocalBodyBytes,
+                compactedBytes: localRawBody.length,
+                compactionMs: Date.now() - compactStartedAt,
+              });
+            }
+          } catch (err) {
+            logger.warn?.('oversized request compactor failed; enforcing hard limit', {
+              reqId,
+              originalBytes: originalLocalBodyBytes,
+              compactionMs: Date.now() - compactStartedAt,
+              err: String(err),
+            });
+          }
+        }
+      }
+      if (localRawBody.length > maxBodyBytes) {
         respondRequestTooLarge({
           req, res, logger, reqId, method, url, headers,
           limitBytes: maxBodyBytes,
           declaredBytes: Number.isFinite(declaredBytes) ? declaredBytes : null,
-          receivedBytes: rawBody.length,
+          receivedBytes: localRawBody.length,
         });
         return;
       }
@@ -1972,13 +2019,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           method,
           upstreamBase: 'local-handler',
           url,
-          bytes: rawBody.length,
-          ...(dumpRequestBody ? { body: dumpBody(rawBody, DEBUG_REQUEST_DUMP_MAX_BYTES) } : {}),
+          bytes: localRawBody.length,
+          ...(dumpRequestBody ? { body: dumpBody(localRawBody, DEBUG_REQUEST_DUMP_MAX_BYTES) } : {}),
         });
       }
       await runLocalHandler(
         decision.localHandler,
-        { rawBody, parsedBody: rawParsed, ctx: requestCtx, res },
+        { rawBody: localRawBody, parsedBody: localParsedBody, ctx: requestCtx, res },
         logger,
         reqId,
       );

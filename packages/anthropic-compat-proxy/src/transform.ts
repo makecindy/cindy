@@ -1181,7 +1181,7 @@ interface OversizedImageCandidate {
   container: unknown[];
   index: number;
   replacement: Record<string, string>;
-  /** Tool-result images are lower-value history and are removed first. */
+  /** 0 = old tool-result, 1 = other history, 2 = newest tool-result. */
   priority: number;
   /** Older messages are removed before newer messages. */
   age: number;
@@ -1195,6 +1195,7 @@ function collectOversizedAnthropicImages(
   messages: unknown[],
   candidates: OversizedImageCandidate[],
 ): void {
+  let newestToolResultCandidateIndex = -1;
   let latestUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
@@ -1221,13 +1222,27 @@ function collectOversizedAnthropicImages(
         // Preserve every image in the newest user message, including images
         // nested in its tool_result content.
         if (messageIndex === latestUserIndex) continue;
-        candidates.push({
+        const candidate: OversizedImageCandidate = {
           container: content,
           index,
           replacement: { type: 'text', text: OVERSIZED_IMAGE_OMITTED_TEXT },
           priority: inToolResult ? 0 : 1,
           age: messageIndex,
-        });
+        };
+        candidates.push(candidate);
+        if (
+          inToolResult
+          && (
+            newestToolResultCandidateIndex < 0
+            // `index` is local to each nested content array, so it cannot
+            // order images from separate tool_result blocks in one message.
+            // Candidates are collected in wire order; the later candidate is
+            // the newer image when message ages tie.
+            || candidate.age >= candidates[newestToolResultCandidateIndex].age
+          )
+        ) {
+          newestToolResultCandidateIndex = candidates.length - 1;
+        }
         continue;
       }
       if (block.type === 'tool_result' && Array.isArray(block.content)) {
@@ -1241,6 +1256,19 @@ function collectOversizedAnthropicImages(
     if (!isPlainObject(message) || !Array.isArray(message.content)) continue;
     scan(message.content, messageIndex, false);
   }
+  // Keep the most recent tool-result image behind older history images.  It
+  // may still be removed as a last resort when no other candidate can bring
+  // the request under the hard limit, but it is never the first image dropped
+  // merely because tool results use role=user in Anthropic's wire format.
+  if (newestToolResultCandidateIndex >= 0) {
+    candidates[newestToolResultCandidateIndex].priority = 2;
+  }
+}
+
+function isResponsesUserMessage(item: Record<string, unknown>): boolean {
+  // Responses clients in the wild omit `type` for ordinary user messages;
+  // explicit non-message item types must remain ineligible for protection.
+  return item.role === 'user' && (item.type === 'message' || item.type === undefined);
 }
 
 function collectOversizedResponsesImages(
@@ -1250,7 +1278,7 @@ function collectOversizedResponsesImages(
   let latestUserIndex = -1;
   for (let i = input.length - 1; i >= 0; i -= 1) {
     const item = input[i];
-    if (isPlainObject(item) && item.type === 'message' && item.role === 'user') {
+    if (isPlainObject(item) && isResponsesUserMessage(item)) {
       latestUserIndex = i;
       break;
     }

@@ -288,7 +288,9 @@ export interface ProxyOptions {
    * Optional compactor for bodies that exceed maxRequestBodyBytes.  Enabling
    * this also permits a bounded ingress window so the compactor can inspect a
    * request before the hard limit is applied.  Requests within the normal
-   * limit do not enter this path.
+   * limit do not enter this path.  When routing selects a local handler, the
+   * same compaction result is passed to that handler before its hard-limit
+   * check.
    */
   oversizedRequestCompactor?: OversizedRequestCompactor;
   /** Maximum bytes accepted for an oversized request before compaction. */
