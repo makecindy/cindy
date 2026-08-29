@@ -2770,11 +2770,16 @@
     },
     "linkOpen": {
       "title": "Link open behavior",
-      "description": "Where web links and HTML files in messages open on left click.",
-      "card": {
-        "label": "Default open target",
-        "description": "Right-click a link anytime to pick the other option for a single open.",
-        "ariaLabel": "Select default link open target"
+      "description": "Where message links open on left click. Right-click still lets you pick the other option once.",
+      "web": {
+        "label": "Web pages",
+        "description": "Links on the public internet.",
+        "ariaLabel": "Choose where web pages open"
+      },
+      "local": {
+        "label": "Local pages",
+        "description": "HTML files on this computer, and localhost addresses.",
+        "ariaLabel": "Choose where local pages open"
       },
       "options": {
         "sidebar": "Sidebar browser",
@@ -2975,10 +2980,30 @@
           "disabled": "Browser automation disabled",
           "toggleFailed": "Failed to toggle browser automation",
           "openedForLogin": "Automation browser opened — sign into the sites you need",
-          "openForLoginFailed": "Failed to open the browser"
+          "openForLoginFailed": "Failed to open the browser",
+          "foreignInstance": "Another Cindy window is already using the agent browser. Quit the other instance and try again."
         },
         "openForLogin": "Open agent browser",
         "openForLoginHint": "This is a dedicated browser for agents: it runs on your installed Chrome but with a separate profile (shown as “Cindy”), so it never touches your everyday Chrome's tabs, bookmarks, or logins. Agents open pages, read, click, and take screenshots here on your behalf. For sites that need a login, click “Open agent browser” above and sign in once — your session is kept, so the agent can keep acting as you afterward."
+      },
+      "realProfile": {
+        "title": "Use my browser logins",
+        "description": "The agent will open sites with your signed-in Chrome, Edge, or Brave accounts.",
+        "toggleAria": "Use my browser logins",
+        "unavailableEmbedded": "Only available with the standalone external browser. The sidebar browser cannot load Chrome’s login files.",
+        "confirmTitle": "Let the agent use your browser logins?",
+        "confirmDescription": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. You can turn it off anytime; the copy will be deleted.",
+        "confirmDescriptionMac": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. Reading Chrome’s login files also needs Full Disk Access. You can turn this off anytime; the copy will be deleted.",
+        "confirm": "Use my logins",
+        "readDeniedTitle": "Full Disk Access Needed",
+        "readDeniedDescription": "Cindy needs this permission to read Chrome’s login files. Turn on Cindy under Privacy & Security → Full Disk Access, then try again.",
+        "openFullDiskAccess": "Open System Settings",
+        "readDeniedLater": "Not Now",
+        "toast": {
+          "enabled": "Agent browser will use your Chrome logins",
+          "disabled": "Copied logins removed. Agent browser is isolated again.",
+          "failed": "Failed to update browser login setting"
+        }
       },
       "browserBackend": {
         "title": "Automation browser target",

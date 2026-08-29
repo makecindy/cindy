@@ -29,6 +29,14 @@
     {
       "file": "extension/src/browser/config.ts",
       "desc": "skip upstream auto-injected \"openclaw\"/\"user\" profiles when the host provides its own (avoids CDP port 18800 collision with the managed profile + never drives the user's Chrome)"
+    },
+    {
+      "file": "extension/src/browser/chrome.ts",
+      "desc": "decorate Chrome chip with host displayName so Cindy-real stays disk-only"
+    },
+    {
+      "file": "extension/src/browser/chrome.ts",
+      "desc": "pass chipName into decorateOpenClawProfile instead of the disk key"
     }
   ],
   "fileCount": 335,

@@ -2769,11 +2769,16 @@
     },
     "linkOpen": {
       "title": "링크 열기 방식",
-      "description": "메시지의 링크나 HTML 파일을 왼쪽 클릭했을 때 기본으로 여는 위치입니다.",
-      "card": {
-        "label": "기본 열기 위치",
-        "description": "링크를 마우스 오른쪽 버튼으로 클릭하면 언제든 다른 방식을 선택할 수 있습니다.",
-        "ariaLabel": "링크 기본 열기 위치 선택"
+      "description": "메시지에서 웹이나 로컬 링크를 왼쪽 클릭했을 때 기본으로 여는 위치입니다. 오른쪽 클릭으로 다른 방식도 고를 수 있습니다.",
+      "web": {
+        "label": "외부 웹페이지",
+        "description": "인터넷상의 웹 링크입니다.",
+        "ariaLabel": "외부 웹페이지 기본 열기 위치 선택"
+      },
+      "local": {
+        "label": "내부 웹페이지",
+        "description": "이 컴퓨터의 HTML 파일과 localhost 주소입니다.",
+        "ariaLabel": "내부 웹페이지 기본 열기 위치 선택"
       },
       "options": {
         "sidebar": "내장 사이드바 브라우저",
@@ -2974,10 +2979,30 @@
           "disabled": "브라우저 자동화 비활성화됨",
           "toggleFailed": "브라우저 자동화 전환 실패",
           "openedForLogin": "자동화 브라우저를 열었습니다. 필요한 사이트에 로그인하세요",
-          "openForLoginFailed": "브라우저를 열지 못했습니다"
+          "openForLoginFailed": "브라우저를 열지 못했습니다",
+          "foreignInstance": "다른 Cindy 창이 이미 Agent 전용 브라우저를 사용 중입니다. 그 창을 종료한 뒤 다시 시도하세요."
         },
         "openForLogin": "Agent 전용 브라우저 열기",
         "openForLoginHint": "에이전트 전용 독립 브라우저입니다. 설치된 Chrome을 사용하지만 프로필이 완전히 분리되어 있어(오른쪽 위에 “Cindy”로 표시) 평소 Chrome의 탭·북마크·로그인 상태에 전혀 영향을 주지 않습니다. 에이전트가 이 브라우저에서 사용자를 대신해 페이지를 열고 읽고 클릭하고 스크린샷을 찍습니다. 로그인이 필요한 사이트는 위의 “Agent 전용 브라우저 열기”에서 한 번 로그인하면 로그인 상태가 유지되어, 이후 에이전트가 사용자 명의로 계속 작업할 수 있습니다."
+      },
+      "realProfile": {
+        "title": "내 브라우저 로그인 사용",
+        "description": "Chrome, Edge, Brave에 로그인한 계정으로 사이트에 접근합니다.",
+        "toggleAria": "내 브라우저 로그인 사용",
+        "unavailableEmbedded": "독립 외부 브라우저에서만 사용할 수 있습니다. 사이드바 내장 브라우저는 Chrome 로그인 파일을 읽지 못합니다.",
+        "confirmTitle": "Agent가 브라우저 로그인을 사용하도록 할까요?",
+        "confirmDescription": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. 언제든 끌 수 있으며 복사본은 삭제됩니다.",
+        "confirmDescriptionMac": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. Chrome 로그인 파일을 읽으려면 ‘전체 디스크 접근 권한’도 필요합니다. 언제든 끌 수 있으며, 복사본은 삭제됩니다.",
+        "confirm": "내 로그인 사용",
+        "readDeniedTitle": "전체 디스크 접근 권한이 필요합니다",
+        "readDeniedDescription": "Chrome 로그인 파일을 읽으려면 시스템이 Cindy를 허용해야 합니다. 개인 정보 보호 및 보안 → 전체 디스크 접근 권한에서 Cindy를 켠 다음 다시 시도하세요.",
+        "openFullDiskAccess": "시스템 설정 열기",
+        "readDeniedLater": "나중에",
+        "toast": {
+          "enabled": "Agent 전용 브라우저가 Chrome 로그인을 사용합니다",
+          "disabled": "복사한 로그인을 삭제했고 Agent 브라우저는 다시 격리됩니다",
+          "failed": "브라우저 로그인 설정을 바꾸지 못했습니다"
+        }
       },
       "browserBackend": {
         "title": "자동화 브라우저 대상",

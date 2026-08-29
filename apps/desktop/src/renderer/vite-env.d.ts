@@ -54,6 +54,7 @@ type ProviderRoutingPayload = import('@cindy/model-providers').Provider['routing
 type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type BrowserBackendHealth = import('../shared/browserBackend').BrowserBackendHealth;
 type BrowserBackendRecoveryResult = import('../shared/browserBackend').BrowserBackendRecoveryResult;
+type BrowserBackendSourceReadAccess = import('../shared/browserBackend').BrowserBackendSourceReadAccess;
 type DesktopAccountDeletionConfirmInput =
   import('../shared/authIpc').DesktopAccountDeletionConfirmInput;
 type DesktopAccountDeletionAvailabilityResult =
@@ -4721,6 +4722,7 @@ interface ElectronAPI {
       active: 'external' | 'rsb-webview';
       systemDefault: 'external' | 'rsb-webview';
       isOverride: boolean;
+      useRealProfile: boolean;
     }>;
     setKind: (kind: 'external' | 'rsb-webview') => Promise<{
       ok: true;
@@ -4729,6 +4731,8 @@ interface ElectronAPI {
     reset: () => Promise<{ ok: true; active: 'external' | 'rsb-webview' }>;
     getHealth: () => Promise<BrowserBackendHealth>;
     recover: () => Promise<BrowserBackendRecoveryResult>;
+    setUseRealProfile: (enabled: boolean) => Promise<{ ok: true; enabled: boolean }>;
+    probeSourceRead: () => Promise<BrowserBackendSourceReadAccess>;
   };
 
   // ── Dialog（v0.6 新增） ────────────────────────────────────────────────────

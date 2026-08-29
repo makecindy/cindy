@@ -2695,11 +2695,16 @@
     },
     "linkOpen": {
       "title": "链接打开方式",
-      "description": "消息里左键点击网页链接或 HTML 文件时的默认打开位置。",
-      "card": {
-        "label": "默认打开位置",
-        "description": "右键点击链接可随时临时选择另一种打开方式。",
-        "ariaLabel": "选择链接默认打开位置"
+      "description": "消息里左键点击网页或本机链接时的默认打开位置。右键仍可临时选择另一种方式。",
+      "web": {
+        "label": "外部网页",
+        "description": "互联网上的网页链接。",
+        "ariaLabel": "选择外部网页的默认打开位置"
+      },
+      "local": {
+        "label": "内部网页",
+        "description": "本地硬盘上的 HTML 文件，以及本机地址（localhost）。",
+        "ariaLabel": "选择内部网页的默认打开位置"
       },
       "options": {
         "sidebar": "内置侧边栏浏览器",
@@ -2966,10 +2971,30 @@
           "disabled": "已禁用浏览器自动化",
           "toggleFailed": "切换浏览器自动化失败",
           "openedForLogin": "已打开自动化浏览器，请在其中登录需要的网站",
-          "openForLoginFailed": "打开浏览器失败"
+          "openForLoginFailed": "打开浏览器失败",
+          "foreignInstance": "本机已有另一个 Cindy 占用了 Agent 专用浏览器。请先退出其它 Cindy 窗口再试。"
         },
         "openForLogin": "打开 Agent 专用浏览器",
         "openForLoginHint": "这是 Agent 专用的独立浏览器：基于你本机的 Chrome，但用一份独立配置（右上角显示为 Cindy），不会动你日常 Chrome 的标签页、书签和登录态。Agent 会在这里替你打开网页、阅读内容、点击和截图。需要登录的网站，点上面「打开 Agent 专用浏览器」手动登录一次即可——登录态会长期保留，之后 Agent 就能以你的身份继续操作。"
+      },
+      "realProfile": {
+        "title": "使用我的浏览器登录态",
+        "description": "Agent 会用你在 Chrome、Edge 或 Brave 里已登录的身份访问网站。",
+        "toggleAria": "使用我的浏览器登录态",
+        "unavailableEmbedded": "仅独立外置浏览器可用。侧边栏内置浏览器无法读取 Chrome 的登录文件。",
+        "confirmTitle": "允许 Agent 使用你的浏览器登录态？",
+        "confirmDescription": "Agent 将能以你已登录的身份打开网页，包括邮箱、网盘和公司后台。可以随时关掉，拷贝会被删除。",
+        "confirmDescriptionMac": "Agent 将能以你已登录的身份打开网页，包括邮箱、网盘和公司后台。读取 Chrome 登录文件还需要「完全磁盘访问权限」。可以随时关掉，拷贝会被删除。",
+        "confirm": "使用我的登录态",
+        "readDeniedTitle": "需要完全磁盘访问权限",
+        "readDeniedDescription": "读取 Chrome 登录文件需要系统允许 Cindy。请在「隐私与安全性 → 完全磁盘访问权限」中打开 Cindy，然后回到这里再试。",
+        "openFullDiskAccess": "打开系统设置",
+        "readDeniedLater": "稍后再说",
+        "toast": {
+          "enabled": "Agent 专用浏览器将使用你的 Chrome 登录态",
+          "disabled": "已删除拷贝的登录态，Agent 浏览器恢复为隔离身份",
+          "failed": "更新浏览器登录态设置失败"
+        }
       },
       "browserBackend": {
         "title": "浏览器自动化目标",

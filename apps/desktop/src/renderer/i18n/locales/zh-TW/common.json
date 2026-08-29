@@ -2695,11 +2695,16 @@
     },
     "linkOpen": {
       "title": "連結開啟方式",
-      "description": "訊息裡左鍵點選網頁連結或 HTML 檔案時的預設開啟位置。",
-      "card": {
-        "label": "預設開啟位置",
-        "description": "右鍵點選連結可隨時臨時選擇另一種開啟方式。",
-        "ariaLabel": "選擇連結預設開啟位置"
+      "description": "訊息裡左鍵點選網頁或本機連結時的預設開啟位置。右鍵仍可臨時選擇另一種方式。",
+      "web": {
+        "label": "外部網頁",
+        "description": "網際網路上的網頁連結。",
+        "ariaLabel": "選擇外部網頁的預設開啟位置"
+      },
+      "local": {
+        "label": "內部網頁",
+        "description": "本機硬碟上的 HTML 檔案，以及本機位址（localhost）。",
+        "ariaLabel": "選擇內部網頁的預設開啟位置"
       },
       "options": {
         "sidebar": "內建側邊欄瀏覽器",
@@ -2966,10 +2971,30 @@
           "disabled": "已停用瀏覽器自動化",
           "toggleFailed": "切換瀏覽器自動化失敗",
           "openedForLogin": "已開啟自動化瀏覽器，請在其中登入需要的網站",
-          "openForLoginFailed": "開啟瀏覽器失敗"
+          "openForLoginFailed": "開啟瀏覽器失敗",
+          "foreignInstance": "本機已有另一個 Cindy 占用了 Agent 專用瀏覽器。請先退出其它 Cindy 視窗再試。"
         },
         "openForLogin": "開啟 Agent 專用瀏覽器",
         "openForLoginHint": "這是 Agent 專用的獨立瀏覽器：基於你本機的 Chrome，但用一份獨立配置（右上角顯示為 Cindy），不會動你日常 Chrome 的標籤頁、書籤和登入態。Agent 會在這裡替你開啟網頁、閱讀內容、點選和截圖。需要登入的網站，點上面「開啟 Agent 專用瀏覽器」手動登入一次即可——登入態會長期保留，之後 Agent 就能以你的身份繼續操作。"
+      },
+      "realProfile": {
+        "title": "使用我的瀏覽器登入態",
+        "description": "Agent 會用你在 Chrome、Edge 或 Brave 裡已登入的身分造訪網站。",
+        "toggleAria": "使用我的瀏覽器登入態",
+        "unavailableEmbedded": "僅獨立外置瀏覽器可用。側邊欄內建瀏覽器無法讀取 Chrome 的登入檔。",
+        "confirmTitle": "允許 Agent 使用你的瀏覽器登入態？",
+        "confirmDescription": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。可以隨時關掉，拷貝會被刪除。",
+        "confirmDescriptionMac": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。讀取 Chrome 登入檔還需要「完全磁碟存取權」。可以隨時關掉，拷貝會被刪除。",
+        "confirm": "使用我的登入態",
+        "readDeniedTitle": "需要完全磁碟存取權",
+        "readDeniedDescription": "讀取 Chrome 登入檔需要系統允許 Cindy。請在「隱私權與安全性 → 完全磁碟存取權」中打開 Cindy，然後回到這裡再試。",
+        "openFullDiskAccess": "打開系統設定",
+        "readDeniedLater": "稍後再說",
+        "toast": {
+          "enabled": "Agent 專用瀏覽器將使用你的 Chrome 登入態",
+          "disabled": "已刪除拷貝的登入態，Agent 瀏覽器恢復為隔離身分",
+          "failed": "更新瀏覽器登入態設定失敗"
+        }
       },
       "browserBackend": {
         "title": "瀏覽器自動化目標",
