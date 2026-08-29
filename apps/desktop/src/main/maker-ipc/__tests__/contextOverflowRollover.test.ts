@@ -267,7 +267,7 @@ describe('createContextOverflowRollover', () => {
             contextWindow: number;
             needsRollover?: boolean;
           };
-        } => ({ isTurnRunning: () => false }),
+        } | undefined => ({ isTurnRunning: () => false }),
       ),
       closeSession: vi.fn(async () => undefined),
       getAutoCompactThresholdPct: undefined as (() => number | undefined) | undefined,
@@ -326,6 +326,51 @@ describe('createContextOverflowRollover', () => {
       expect(deps.replayUserMessage).not.toHaveBeenCalled();
     },
   );
+
+  it('rebuilds a pressured cold local session before its persisted SDK session can resume', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      sdkSessionId: '/tmp/cold-session.jsonl',
+      contextTokens: 300_000,
+      contextWindow: 500_000,
+      model: 'wide-model',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+    ).resolves.toBe('rebuilt');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1',
+      expect.any(String),
+      expect.objectContaining({ reason: 'model-window-switch' }),
+    );
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for a pressured cold SSH session without closing or rebuilding it', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      remoteHostId: 'remote-1',
+      sdkSessionId: '/tmp/remote-cold-session.jsonl',
+      contextTokens: 300_000,
+      contextWindow: 500_000,
+      model: 'wide-model',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+    ).resolves.toBe('remote-unsupported');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
 
   it('falls back to persisted usage when a lazy live snapshot still reports placeholder zero', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);

@@ -15126,21 +15126,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         hadLiveSession: maker.getSession(sessionId) !== undefined,
       };
       const liveSessionBeforeRouteChange = maker.getSession(sessionId);
+      const persistedSessionMeta = liveSessionBeforeRouteChange
+        ? null
+        : await maker.getSessionMeta(sessionId);
       const runtimeAgentKind =
         liveSessionBeforeRouteChange?.agentKind ??
         (getSessionDbAgentKind(sessionId)
           ? dbToMakerAgentKind(getSessionDbAgentKind(sessionId))
-          : undefined);
+          : persistedSessionMeta?.agentKind);
       const targetRouteProviderId =
         effectiveProviderId === undefined
           ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
           : (normalizeSessionProviderId(effectiveProviderId) ?? null);
+      const currentRuntimeModel =
+        liveSessionBeforeRouteChange?.model ?? persistedSessionMeta?.model;
       const runtimeRouteChanged =
-        liveSessionBeforeRouteChange !== undefined &&
-        (liveSessionBeforeRouteChange.model !== model || currentProviderId !== targetRouteProviderId);
+        currentRuntimeModel !== undefined &&
+        (currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId);
       let targetContextWindow: number | undefined;
       let modelWindowRebuilt = false;
-      if (liveSessionBeforeRouteChange && runtimeAgentKind && runtimeRouteChanged) {
+      if (runtimeAgentKind && runtimeRouteChanged) {
         const verifiedTargetWindow = lookupVerifiedContextWindow(
           (_agentKind, modelId, pid) =>
             resolveVerifiedContextWindow(

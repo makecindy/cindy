@@ -201,6 +201,13 @@ describe('session runtime control wiring', () => {
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
     expect(verifiedWindowOnly).toBeGreaterThan(-1);
+    expect(setModel).toContain('await maker.getSessionMeta(sessionId)');
+    expect(setModel).toContain(
+      'liveSessionBeforeRouteChange?.model ?? persistedSessionMeta?.model',
+    );
+    expect(setModel).not.toContain(
+      'if (liveSessionBeforeRouteChange && runtimeAgentKind && runtimeRouteChanged)',
+    );
     expect(setModel).not.toContain('verifiedTargetWindow ?? targetCatalogModel?.contextWindow');
     expect(verifiedWindowOnly).toBeLessThan(unknownWindowGuard);
     expect(unknownWindowGuard).toBeLessThan(prepare);
