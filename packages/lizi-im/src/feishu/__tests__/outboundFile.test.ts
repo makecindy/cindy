@@ -1,3 +1,4 @@
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -140,5 +141,49 @@ describe('Feishu parent-chat file reuse', () => {
 
     expect(mocks.createFile).toHaveBeenCalledOnce();
     expect(mocks.createImage).not.toHaveBeenCalled();
+  });
+
+  it('uploads the inode opened for identity when the path is replaced before the stream starts', async () => {
+    const absPath = await fileFixture('report.txt', 'trusted report');
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-outside-'));
+    tempDirs.push(outsideRoot);
+    const outside = path.join(outsideRoot, 'secret.txt');
+    await fs.writeFile(outside, 'LEAKED SECRET');
+
+    let uploaded = '';
+    mocks.createFile.mockImplementation(
+      async ({ data }: { data: { file: NodeJS.ReadableStream } }) => {
+        uploaded = await readStream(data.file);
+        return { file_key: 'file-key' };
+      },
+    );
+
+    const realCreateReadStream = fsSync.createReadStream;
+    const spy = vi.spyOn(fsSync, 'createReadStream').mockImplementation(((
+      file: unknown,
+      options?: unknown,
+    ) => {
+      if (file === absPath) {
+        fsSync.unlinkSync(absPath);
+        fsSync.copyFileSync(outside, absPath);
+      }
+      return realCreateReadStream(
+        file as Parameters<typeof realCreateReadStream>[0],
+        options as Parameters<typeof realCreateReadStream>[1],
+      );
+    }) as typeof fsSync.createReadStream);
+
+    try {
+      const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
+      expect(primary.ok).toBe(true);
+      expect(uploaded).toBe('trusted report');
+      expect(primary.uploadedSource).toMatchObject({
+        realPath: expect.any(String),
+        dev: expect.any(Number),
+        ino: expect.any(Number),
+      });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

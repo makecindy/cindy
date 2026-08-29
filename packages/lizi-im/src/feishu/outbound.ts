@@ -20,6 +20,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
+import { open as openFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 
@@ -977,30 +978,39 @@ async function sendFileToTarget(
 ): Promise<FeishuSendFileResult> {
   const c = ensureClient();
 
-  if (!fs.existsSync(absPath)) return { ok: false, reason: 'NOT_FOUND' };
-  let realPath: string;
-  let stat: fs.Stats;
+  let handle: FileHandle;
   try {
-    realPath = fs.realpathSync(absPath);
-    stat = fs.statSync(realPath);
+    handle = await openFile(absPath, 'r');
   } catch {
     return { ok: false, reason: 'NOT_FOUND' };
   }
-  const result = await sendFileSourceToTarget(
-    c,
-    target,
-    {
-      absPath,
-      size: stat.size,
-      createReadStream: () => fs.createReadStream(absPath),
-    },
-    displayName,
-    uuid,
-  );
-  if (result.ok) {
-    result.uploadedSource = { realPath, dev: stat.dev, ino: stat.ino };
+
+  try {
+    const stat = await handle.stat();
+    let realPath: string;
+    try {
+      realPath = fs.realpathSync(absPath);
+    } catch {
+      realPath = absPath;
+    }
+    const result = await sendFileSourceToTarget(
+      c,
+      target,
+      {
+        absPath,
+        size: stat.size,
+        createReadStream: () => handle.createReadStream({ autoClose: false }),
+      },
+      displayName,
+      uuid,
+    );
+    if (result.ok) {
+      result.uploadedSource = { realPath, dev: stat.dev, ino: stat.ino };
+    }
+    return result;
+  } finally {
+    await handle.close().catch(() => undefined);
   }
-  return result;
 }
 
 async function sendFileSourceToTarget(
