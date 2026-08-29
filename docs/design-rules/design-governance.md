@@ -182,8 +182,8 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 
 | 事项 | 现状 | 裁决人 | 规则 |
 | --- | --- | --- | --- |
-| PermissionPrompt 圆角 | **裁决已做出（2026-08-29），回写未合入**：三档不变、按钮一律胶囊、8px = 盒内非按钮、4px 不入档（存量为债、新代码禁止）、「看起来小」不是改档理由。回写 `DESIGN.md §5` 与 [`design-decision-log.md`](./design-decision-log.md) 归档由 PR [#3619](https://github.com/makecindy/cindy/pull/3619) 承载；**该 PR 合入前本行不算关闭**，`DESIGN.md` 现行文本仍以主干为准 | 设计师 | #3619 合入后本行改为已关闭；在此之前 DS-6 不得按「圆角已关」推进 |
-| Permission 迁移余项 | 待裁决：允许/拒绝按钮的视觉主次、危险授权样式、Desktop 与 Mobile 权限弹窗几何是否一致 | 设计师 | 余项与上行 #3619 全部关闭前，Permission 相关文件不得进入任何迁移 PR 的 diff（DS-6 前置）；结论同样回写 `DESIGN.md` 并归档 |
+| PermissionPrompt 圆角 | **已关闭（2026-08-29 裁决，#3619 回写）**：三档不变、按钮一律胶囊、8px = 盒内非按钮、4px 不入档（存量为债、新代码禁止）、「看起来小」不是改档理由。`DESIGN.md §5` 已加硬，全文归档于 [`design-decision-log.md`](./design-decision-log.md)「08-29」条 | 设计师 | 已按 `DESIGN.md §13` 机制回写并归档（与回写同一 PR 生效） |
+| Permission 迁移余项 | 待裁决：允许/拒绝按钮的视觉主次、危险授权样式、Desktop 与 Mobile 权限弹窗几何是否一致 | 设计师 | 余项未关闭前，Permission 相关文件不得进入任何迁移 PR 的 diff（DS-6 前置）；结论同样回写 `DESIGN.md` 并归档 |
 
 ## 11. 存量门禁与文档处置表
 
