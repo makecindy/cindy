@@ -267,7 +267,7 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 - Base unit: 8px
 - Scale: 4px, 6px, 8px, 10px, 12px, 14px, 16px, 20px, 24px, 32px, 40px, 48px
-- Button padding: 10px 24px (consistent across all buttons)
+- Button padding: 10px 24px (consistent across all filled buttons; bare text buttons follow their component entry, not this padding)
 - Container padding: dialogs 16px (`p-4`, see §4 Dialog & Modal); dropdown panels 6–8px (see §4 Select & Dropdown)
 
 ### Layout Structure (App)
@@ -286,11 +286,11 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 Three tiers — **these three only** (wording hardened 2026-08-29, designer ruling — see `design-decision-log.md` 08-29). **Tier assignment is a single decision tree in this §5 section; §4 component entries, the §7 Do/Don't lists and the §9 iteration guide restate it for convenience — when wording drifts, this section wins:**
 
-- **Pill (9999px)**: **every button is a pill — no exceptions.** Anything that commits a decision or triggers an action wears the pill: buttons (permission approve/deny included), tabs, single-line inputs, tags, badges. The only buttons exempt from the pill shape are **bare text buttons with no background of their own** (wizard back-navigation "← 上一步", the §16.3 login text-button category): they have no fill to round, so they carry no radius at all — they are text, not a filled button. Register any new bare-text-button usage in the component entry that introduces it.
+- **Pill (9999px)**: **every filled button is a pill — no exceptions.** Anything that commits a decision or triggers an action wears the pill: buttons (permission approve/deny included), tabs, single-line inputs, tags, badges. The only buttons exempt from the pill shape are **bare text buttons with no background of their own** (wizard back-navigation "← 上一步", the §16.3 login text-button category): they have no fill to round, so they carry no radius at all — they are text, not a filled button. Register any new bare-text-button usage in the component entry that introduces it.
 - **Container (12px)**: the box that holds content — code blocks, cards, panels, dialogs. Implemented as Tailwind `rounded-xl` (12px).
 - **Inner control (8px)**: multi-line inputs (textarea) — **always 8px, whether the textarea sits inside a visible container or is the outermost control of a form area** — plus selected/hover row highlights in dropdowns/menus and small in-block cells nested inside a container. Implemented as Tailwind `rounded-lg` (8px).
 
-_No 4px / 6px / 10px, and no arbitrary radii. **4px is not a tier**: existing `rounded-[4px]` usages (30 production occurrences on 2026-08-29 — `git grep -o "rounded-\[4px\]" -- apps/desktop/src/renderer | wc -l`) are registered debt to be migrated by the design-system roadmap, and **new code must not introduce it**. Do not add tiers, and **"it looks small" is never a reason to move an element down a tier** — an element's tier follows what it IS (button / box / nested non-button), not its size. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container to nest cleanly (hence 8, not 12) — a pill there becomes a lozenge, 12px looks bloated._
+_No 4px / 6px / 10px, and no arbitrary radii. **4px is not a tier**: existing `rounded-[4px]` usages (30 production occurrences on 2026-08-29 — `git grep -o "rounded-\[4px\]" -- apps/desktop/src/renderer | wc -l`) are registered debt to be migrated by the design-system roadmap, and **new code must not introduce it**. Do not add tiers, and **"it looks small" is never a reason to move an element down a tier** — an element's tier follows what it IS (button / box / textarea — always 8px / nested non-button), not its size or nesting. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container to nest cleanly (hence 8, not 12) — a pill there becomes a lozenge, 12px looks bloated._
 
 > **Narrow exception — status micro-cells (2px)** (registered 2026-07-28): non-interactive status squares of 8×8px or smaller keep a 2px radius — the workflow agent status strip's cells (background-tasks panel detail + workflow chat card) and the equivalent per-category square in SystemCard. At that size any tier radius rounds the square into a dot and destroys the "block strip" read that lets a large agent fleet be scanned at a glance. Scope is exactly this: **non-interactive, ≤8px, status-only**. Do NOT generalize to buttons, tags, rows, badges or containers — those still pick a tier.
 
@@ -317,7 +317,7 @@ _No 4px / 6px / 10px, and no arbitrary radii. **4px is not a tier**: existing `r
 - Maintain zero shadows — depth comes from borders and background shifts only
 - Keep content density low — each section should present one clear idea
 - Use monospace for terminal commands and code — it's primary content, not decoration
-- Keep all buttons at 10px 24px padding with pill shape — consistency is absolute
+- Keep all filled buttons at 10px 24px padding with pill shape — consistency is absolute (bare text buttons are the §5 exemption: no background, no radius, no pill padding)
 
 ### Don't
 

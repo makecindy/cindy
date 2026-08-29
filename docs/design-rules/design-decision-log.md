@@ -42,6 +42,13 @@
   豁免随组件条目登记（§4 向导条目已写明），新增裸文字按钮用法须在引入它的
   组件条目登记。`AddProviderWizard.tsx` 现行实现（无圆角文字按钮）与裁决一致，
   无需迁移。（→ `DESIGN.md §5` / §4 Inputs & Forms / §4 Multi-step dialogs / §7 / §9）
+  追加两处（第二轮 review 指出同节残留）：(3) §5 判据分类句由三分类
+  「button / box / nested non-button」扩为四分类「button / box / textarea（一律
+  8px）/ nested non-button」，独立 textarea 不再落在分类缝隙里；(4) §7「Keep all
+  buttons at 10px 24px padding with pill shape」与 §5 Spacing「consistent across
+  all buttons」两处绝对表述收窄为「filled buttons」，裸文字按钮不受 pill padding
+  约束、按其组件条目执行；§5 Pill 档首句同步由「every button」改「every filled
+  button」。（同上条落点）
 
 - **08-16** **登录：唯一 SSO 不再经过 method-choice（拍板人 = 用户）**——
   用户已经从登录首页选了企业 SSO（组织标识探测），或邮箱 / 组织探测结果只剩
