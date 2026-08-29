@@ -435,6 +435,53 @@ describe('cindy-bridge extension source', () => {
     }
   });
 
+  it('fails closed for relative PowerShell reads after a directory change', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'cindy-pi-powershell-cwd-'));
+    try {
+      const sshDir = path.join(tempRoot, 'secrets', '.ssh');
+      const keyPath = path.join(sshDir, 'work');
+      const innocentLink = path.join(tempRoot, 'innocent');
+      mkdirSync(sshDir, { recursive: true });
+      writeFileSync(keyPath, 'secret');
+      symlinkSync(sshDir, innocentLink, process.platform === 'win32' ? 'junction' : 'dir');
+      const location = process.platform === 'win32' ? '.\\innocent' : './innocent';
+      const evidence = loadPowerShellReadEvidence(tempRoot);
+
+      for (const locationCommand of [
+        `Set-Location ${location}`,
+        `cd ${location}`,
+        `chdir ${location}`,
+        `sl ${location}`,
+        `Push-Location ${location}`,
+        `pushd ${location}`,
+        'Pop-Location',
+        'popd',
+      ]) {
+        const command = `${locationCommand}; Get-Content work`;
+        expect(evidence({ command }), command).toEqual({ targets: [], unresolved: true });
+      }
+
+      expect(evidence({ command: `Set-Location ${location}` })).toEqual({
+        targets: [],
+        unresolved: false,
+      });
+      expect(evidence({ command: `Set-Location ${location}; Get-Content '${keyPath}'` })).toEqual({
+        targets: [path.normalize(keyPath)],
+        unresolved: false,
+      });
+
+      expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+        'isCindyShellTool(event.toolName) && (bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets))',
+      );
+      expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+        "if (credentialRead && permission.mode === 'bypassPermissions')",
+      );
+      expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('await ctx.ui.input(');
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when a direct PowerShell read operand is not statically resolvable', () => {
     const evidence = loadPowerShellReadEvidence(process.cwd());
     for (const command of [

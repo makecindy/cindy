@@ -735,6 +735,10 @@ function bashExpandedPathCandidates(
 }
 
 const POWERSHELL_DIRECT_FILE_READ_COMMANDS = new Set(['get-content', 'gc', 'cat', 'type']);
+const POWERSHELL_WORKING_DIRECTORY_COMMANDS = new Set([
+  'set-location', 'cd', 'chdir', 'sl',
+  'push-location', 'pushd', 'pop-location', 'popd',
+]);
 const POWERSHELL_GET_CONTENT_SWITCHES = new Set(['-raw', '-wait', '-force', '-asbytestream']);
 
 type PowerShellDirectArguments = { words: string[]; unresolved: boolean };
@@ -894,21 +898,27 @@ function powershellDirectArguments(command: string, start: number): PowerShellDi
   return { words, unresolved: false };
 }
 
-function powershellStaticReadTarget(word: string, literal: boolean): string | null {
+function powershellDirectCommand(command: string): { name: string; end: number } | null {
+  const match = /^\s*(?:[A-Za-z][A-Za-z0-9.-]*\\)?([A-Za-z][A-Za-z0-9-]*)(?=\s|$)/.exec(command);
+  return match ? { name: match[1].toLowerCase(), end: match[0].length } : null;
+}
+
+function powershellStaticReadTarget(word: string, literal: boolean, cwd: string | null): string | null {
   if (!word || word === '-' || word.startsWith('@') || word.startsWith('~')) return null;
   if (/^[A-Za-z][A-Za-z0-9.-]*:/.test(word) && !/^[A-Za-z]:[\\/]/.test(word)) return null;
   if (!literal && /[*?\[]/.test(word)) return null;
-  return path.isAbsolute(word) ? path.normalize(word) : path.resolve(process.cwd(), word);
+  if (path.isAbsolute(word)) return path.normalize(word);
+  return cwd === null ? null : path.resolve(cwd, word);
 }
 
-function powershellDirectReadEvidence(command: string): BashInputReadEvidence {
-  const direct = /^\s*(?:[A-Za-z][A-Za-z0-9.-]*\\)?([A-Za-z][A-Za-z0-9-]*)(?=\s|$)/.exec(command);
-  if (!direct || !POWERSHELL_DIRECT_FILE_READ_COMMANDS.has(direct[1].toLowerCase())) {
+function powershellDirectReadEvidence(command: string, cwd: string | null): BashInputReadEvidence {
+  const direct = powershellDirectCommand(command);
+  if (!direct || !POWERSHELL_DIRECT_FILE_READ_COMMANDS.has(direct.name)) {
     // Invoke-Expression, the call operator, variable command names and other indirect forms
     // are intentionally outside this narrow direct-read contract.
     return { targets: [], unresolved: false };
   }
-  const parsed = powershellDirectArguments(command, direct[0].length);
+  const parsed = powershellDirectArguments(command, direct.end);
   if (parsed.unresolved) return { targets: [], unresolved: true };
   let targetWord: string | null = null;
   let literal = false;
@@ -926,7 +936,7 @@ function powershellDirectReadEvidence(command: string): BashInputReadEvidence {
     if (word.startsWith('-') || targetWord !== null) return { targets: [], unresolved: true };
     targetWord = word;
   }
-  const target = targetWord === null ? null : powershellStaticReadTarget(targetWord, literal);
+  const target = targetWord === null ? null : powershellStaticReadTarget(targetWord, literal, cwd);
   return target ? { targets: [target], unresolved: false } : { targets: [], unresolved: true };
 }
 
@@ -942,8 +952,11 @@ function powershellInputReadEvidence(input: unknown): BashInputReadEvidence {
   }
   const targets: string[] = [];
   let unresolved = false;
+  let cwd: string | null = process.cwd();
   for (const statement of payload.statements) {
-    const evidence = powershellDirectReadEvidence(statement);
+    const direct = powershellDirectCommand(statement);
+    if (direct && POWERSHELL_WORKING_DIRECTORY_COMMANDS.has(direct.name)) cwd = null;
+    const evidence = powershellDirectReadEvidence(statement, cwd);
     targets.push(...evidence.targets);
     unresolved ||= evidence.unresolved;
   }
