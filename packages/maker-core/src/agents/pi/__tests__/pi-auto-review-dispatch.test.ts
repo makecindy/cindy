@@ -100,6 +100,9 @@ vi.mock('../rpc-client.js', () => ({
         captured.onAfterSetModel?.();
         return { success: false };
       }
+      if (cmd.type === 'set_model') {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
       if (cmd.type === 'prompt' && captured.failPrompt) {
         return { command: 'prompt', success: false };
       }

@@ -457,6 +457,37 @@ describe("PiAgent native auto-compaction ownership", () => {
     await handle.close();
   });
 
+  it("verifies a missing set_model window even when the catalog estimate is unchanged", async () => {
+    const deps = buildDeps();
+    deps.runtimeConfig = {
+      ...deps.runtimeConfig,
+      autoCompactThresholdPct: 90,
+      piAutoCompactThresholdPct: 90,
+    };
+    deps.capabilityAdditions = {
+      availableModels: deps.capabilityAdditions!.availableModels.map((model) =>
+        model.id === "n" ? { ...model, contextWindow: 200_000 } : model,
+      ),
+    };
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "s1",
+      workingDir: cwd,
+      model: "m",
+    });
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(20_000);
+
+    knobs.setModelReportsContextWindow = false;
+    knobs.rpcCalls = [];
+    await handle.setModel!("n");
+
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(10_000);
+    expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
+    expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(3);
+    expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(2);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
+    await handle.close();
+  });
+
   it("terminates when the runtime window changes again during settings verification", async () => {
     const handle = await start();
     knobs.targetRuntimeContextWindow = 1_000_000;

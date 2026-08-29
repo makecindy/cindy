@@ -5010,15 +5010,25 @@ export class PiAgent extends BaseAgent {
       autoReviewConfirmUndeliveredNotice.reset();
       const previousWindow = ctx.contextWindow;
       const data = (resp.data ?? {}) as { contextWindow?: number };
-      const nextWindow =
+      const setModelReportedWindow =
         typeof data.contextWindow === 'number' && data.contextWindow > 0
           ? data.contextWindow
-          : (this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)?.contextWindow
-            ?? this.capabilities.availableModels.find((candidate) => candidate.id === model)?.contextWindow
-            ?? ctx.contextWindow);
+          : null;
+      const nextWindow =
+        setModelReportedWindow ??
+        this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)
+          ?.contextWindow ??
+        this.capabilities.availableModels.find((candidate) => candidate.id === model)
+          ?.contextWindow ??
+        ctx.contextWindow;
       if (nextWindow > 0) ctx.contextWindow = nextWindow;
-      if (nextWindow > 0 && nextWindow !== previousWindow) {
+      // A missing set_model window leaves the catalog estimate unverified even when
+      // it equals the prior window. Reload and read get_state before allowing use.
+      if (setModelReportedWindow === null || (nextWindow > 0 && nextWindow !== previousWindow)) {
         try {
+          if (!Number.isFinite(nextWindow) || nextWindow <= 0) {
+            throw new Error('pi: model switch returned no verifiable context window');
+          }
           await this.writePiRuntimeSettings(configHome, {
             fileOps,
             contextWindow: nextWindow,
