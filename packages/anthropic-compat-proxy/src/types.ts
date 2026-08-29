@@ -270,6 +270,14 @@ export interface ProxyOptions {
    */
   maxRequestBodyBytes?: number;
   /**
+   * 可选: 流式响应期间的「无数据」空闲超时(ms)。上游半开(TCP 已建连、无数据、不
+   * close)时 socket 级 timeout 不触发,客户端会永远挂在流式响应上。本值在响应已开始
+   * 但持续空闲超时后 destroy 上游请求,让客户端立即失败收尾。默认 31min（晚于宿主
+   * 最长约 30min 的内层恢复预算）;0 / 负值 = 禁用(恢复扩展前的悬挂行为)。测试传
+   * 短值(如 50ms)验证看门狗。
+   */
+  upstreamStreamIdleTimeoutMs?: number;
+  /**
    * 可选: 出站(上游方向)代理解析器。per-request 以最终上游 origin 现取:
    *   - `http://` 代理地址 = 经该代理转发(https 上游走 CONNECT 隧道、http 上游走绝对形式)
    *   - `socks5://`(含 socks5h / socks 别名)= 经 SOCKS5 隧道转发,两种上游都走隧道,
