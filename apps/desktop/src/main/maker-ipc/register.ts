@@ -15345,7 +15345,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         if (
           (!targetContextWindow || targetContextWindow <= 0) &&
-          (runtimeAgentKind !== 'pi' || isDeviceLinkInvoke() || !!runtimeStatus.remoteHostId)
+          (runtimeAgentKind !== 'pi' || !!runtimeStatus.remoteHostId)
         ) {
           throwIpcError(
             'PRECONDITION_FAILED',
@@ -15383,6 +15383,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
         if (
           isDeviceLinkInvoke() &&
+          runtimeAgentKind !== 'pi' &&
           !targetDoesNotShrink &&
           (remoteTargetAssessment.level === 'danger' ||
             remoteTargetAssessment.level === 'overflow')

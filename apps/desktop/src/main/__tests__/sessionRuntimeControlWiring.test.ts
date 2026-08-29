@@ -514,7 +514,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('Pi current runtime could not be verified');
   });
 
-  it('fails closed for remote danger, overflow, and confirmation payloads', () => {
+  it('fails closed for non-Pi remote danger, overflow, and confirmation payloads', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -527,6 +527,13 @@ describe('session runtime control wiring', () => {
     );
     expect(setModel).toContain("remoteTargetAssessment.level === 'danger'");
     expect(setModel).toContain("remoteTargetAssessment.level === 'overflow'");
+    const remoteAssessment = setModel.indexOf('const remoteTargetAssessment');
+    const remotePressureRejection = setModel.indexOf(
+      'remote model-window rebuild is unsupported; runtime selection was not changed',
+    );
+    const nonPiRemoteGuard = setModel.indexOf("runtimeAgentKind !== 'pi'", remoteAssessment);
+    expect(nonPiRemoteGuard).toBeGreaterThan(remoteAssessment);
+    expect(nonPiRemoteGuard).toBeLessThan(remotePressureRejection);
     expect(setModel).toContain(
       'remote model-window rebuild is unsupported; runtime selection was not changed',
     );
@@ -584,6 +591,15 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('runtimeRouteChanged || confirmedContextWindow !== undefined');
     expect(setModel).toContain('targetContextWindow = finalPiWindow');
     expect(setModel).toContain("if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {");
+    expect(setModel).toContain("runtimeAgentKind !== 'pi' || !!runtimeStatus.remoteHostId");
+    expect(setModel).not.toContain(
+      "runtimeAgentKind !== 'pi' || isDeviceLinkInvoke() || !!runtimeStatus.remoteHostId",
+    );
+    const finalRemotePressureRejection = setModel.indexOf(
+      'remote model-window confirmation is unsupported; runtime selection was not changed',
+      finalWindow,
+    );
+    expect(finalRemotePressureRejection).toBeGreaterThan(finalWindow);
     expect(setModel).toContain('targetContextWindow = confirmedContextWindow ?? targetContextWindow');
     expect(setModel).toContain('confirmedContextWindow === targetContextWindow');
     expect(setModel).toContain('confirmedContextWindow === finalPiWindow');
