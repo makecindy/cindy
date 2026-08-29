@@ -37,7 +37,7 @@ describe('ChatInput model source switching wiring', () => {
     );
   });
 
-  it('attaches the negotiated exact window after local or remote overflow confirmation', () => {
+  it('keeps exact-window confirmation local and removes it from device-link calls', () => {
     const guardStart = chatInputSource.indexOf(
       'const confirmModelSwitchContextGuard = useCallback(',
     );
@@ -55,13 +55,16 @@ describe('ChatInput model source switching wiring', () => {
     const modelChange = chatInputSource.slice(modelStart, providerStart);
     const providerChange = chatInputSource.slice(providerStart);
     for (const route of [modelChange, providerChange]) {
-      expect(route).toContain('await setModelWithFinalWindowConfirmation(');
-      expect(route).toContain('confirmedFinalWindow ?? confirmedGuardContextWindow');
-      expect(route).toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
-      expect(route.indexOf("typeof proceed === 'number'")).toBeLessThan(
-        route.indexOf('confirmedFinalWindow ?? confirmedGuardContextWindow'),
-      );
+      const remoteSet = route.indexOf('const remoteSetModelResult = await remoteMaker.setModel(');
+      const localSet = route.indexOf('await setModelWithFinalWindowConfirmation(', remoteSet);
+      expect(remoteSet).toBeGreaterThan(-1);
+      expect(localSet).toBeGreaterThan(remoteSet);
+      const remoteRoute = route.slice(remoteSet, localSet);
+      expect(remoteRoute).not.toContain('setModelWithFinalWindowConfirmation');
+      expect(remoteRoute).not.toContain('confirmedContextWindow');
+      expect(route.slice(localSet)).toContain('confirmedFinalWindow ?? confirmedGuardContextWindow');
     }
+    expect(chatInputSource).not.toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
   });
 
   it('passes the guard-confirmed window into both initial trusted local set-model calls', () => {
@@ -98,11 +101,11 @@ describe('ChatInput model source switching wiring', () => {
       /confirmModelSwitchContextGuard\(\s*modelId,\s*undefined,\s*providerId,\s*requiredWindow,/,
     );
     expect(helper).toContain('result = await invoke(requiredWindow)');
-    expect(chatInputSource.split('await setModelWithFinalWindowConfirmation(')).toHaveLength(5);
+    expect(chatInputSource.split('await setModelWithFinalWindowConfirmation(')).toHaveLength(3);
     expect(chatInputSource).toContain('? { confirmedContextWindow }');
   });
 
-  it('blocks only pressured SSH window shrinks before any continue/confirm path', () => {
+  it('blocks pressured SSH and device-link window shrinks before any confirm path', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);
     const guard = chatInputSource.slice(start, end);
@@ -121,6 +124,8 @@ describe('ChatInput model source switching wiring', () => {
     expect(remoteBlock).toBeLessThan(warningPath);
     expect(remoteBlock).toBeLessThan(confirmPath);
     const blocked = guard.slice(remoteBlock, warningPath);
+    expect(guard).toContain('(remoteHostId || remoteDeviceId)');
+    expect(guard.indexOf('(remoteHostId || remoteDeviceId)')).toBeLessThan(remoteBlock);
     expect(blocked).toContain("verdict.level === 'danger' || verdict.level === 'overflow'");
     expect(blocked).toContain('overflowDescriptionRemote');
     expect(blocked).toContain('toast.error(');

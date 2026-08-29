@@ -274,6 +274,13 @@ describe('session runtime control wiring', () => {
     expect(catchBlock.indexOf('cancelPendingSessionRuntimeMutation')).toBeLessThan(
       catchBlock.indexOf('broadcastSessionRuntimeProjection'),
     );
+    expect(catchBlock).toContain("const failureReason = 'runtime-selection-cancelled'");
+    expect(catchBlock).toContain('onTurnErrorEvent(sessionId, { message: failureMessage');
+    expect(catchBlock).toContain('broadcastToAllWindows(MAKER_PUSH.EVENT');
+    expect(catchBlock).toContain('The previous model remains active.');
+    expect(catchBlock.indexOf('broadcastSessionRuntimeProjection')).toBeLessThan(
+      catchBlock.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT'),
+    );
   });
 
   it('drops in-flight effort and Fast mutations after an owner boundary', () => {

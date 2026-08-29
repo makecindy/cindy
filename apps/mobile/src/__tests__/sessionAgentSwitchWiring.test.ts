@@ -27,7 +27,7 @@ describe('session Agent switch UI wiring', () => {
     expect(source).toContain('agentKind={agentSwitchIntent.targetAgentKind}');
   });
 
-  it('confirms overflow before either same-Agent model selection writes through', () => {
+  it('sends one remote model request without confirmation UI or payload', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     const rowSelector = source.slice(
       source.indexOf('const selectComposerModelRow'),
@@ -37,84 +37,20 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const selectComposerFlatModel'),
       source.indexOf('const browseComposerModelAgent'),
     );
-    const remoteGuard = source.slice(
-      source.indexOf('const confirmComposerModelWindowSwitch'),
-      source.indexOf('// 选行 = 原子切', source.indexOf('const confirmComposerModelWindowSwitch')),
-    );
-    expect(rowSelector).toContain(
-      'confirmComposerModelWindowSwitch(row.model.contextWindow)',
-    );
-    expect(flatSelector).toContain(
-      'confirmComposerModelWindowSwitch(option.contextWindow)',
-    );
-    expect(remoteGuard).toContain('currentSession?.contextWindow');
-    expect(remoteGuard).toContain('contextTokens >= 0');
-    expect(remoteGuard).toContain('controlBusy || remoteSessionRunning');
-    expect(remoteGuard).toContain('targetContextWindow >= currentContextWindow');
-    expect(remoteGuard).toContain('!hasVerifiedWindows || !hasVerifiedUsage');
-    const busyGate = remoteGuard.indexOf('controlBusy || remoteSessionRunning');
-    const nonShrinkGate = remoteGuard.indexOf('targetContextWindow >= currentContextWindow');
-    const unknownGate = remoteGuard.indexOf('!hasVerifiedWindows || !hasVerifiedUsage');
-    expect(busyGate).toBeLessThan(nonShrinkGate);
-    expect(nonShrinkGate).toBeLessThan(unknownGate);
-    expect(rowSelector).toContain(
-      'next.model !== currentSession.model || next.providerId !== currentSession.providerId',
-    );
-    expect(flatSelector).toContain('option.id !== currentSession?.model');
-    expect(rowSelector).toContain('setComposerModelWithFinalWindowConfirmation({');
-    expect(flatSelector).toContain('setComposerModelWithFinalWindowConfirmation({');
-    expect(rowSelector).toContain(
-      'row.model.contextWindow < currentSession.contextWindow',
-    );
-    expect(rowSelector).toContain(
-      'currentSession.contextTokens >= row.model.contextWindow',
-    );
-    expect(flatSelector).toContain(
-      'option.contextWindow < currentSession.contextWindow',
-    );
-    expect(flatSelector).toContain(
-      'currentSession.contextTokens >= option.contextWindow',
-    );
-    expect(rowSelector).toContain('confirmedContextWindow,');
-    expect(flatSelector).toContain('confirmedOverflow');
-  });
-
-  it('negotiates and sends the append-only model-window confirmation capability', () => {
-    const context = readSource('src/device-link/DeviceLinkContext.tsx');
-    const transport = readSource('src/device-link/mobileMakerTransport.ts');
-    const capabilities = context.slice(
-      context.indexOf('const CONTROLLER_CAPABILITIES = ['),
-      context.indexOf('];', context.indexOf('const CONTROLLER_CAPABILITIES = [')),
-    );
-
-    expect(capabilities).toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
-    expect(context).toContain('capabilities: CONTROLLER_CAPABILITIES');
-    expect(transport).toContain('confirmedContextWindow: confirmedOverflow.contextWindow');
-    expect(transport).toContain(
-      'modelWindowConfirmationCapability:\n                  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1',
-    );
-    expect(transport).not.toContain(
-      'verified final Pi window requires a new explicit confirmation',
-    );
-  });
-
-  it('confirms authoritative Pi final-window pressure and retries the exact window', () => {
-    const source = readSource('app/sessions/[sessionId].tsx');
     const helper = source.slice(
-      source.indexOf('const setComposerModelWithFinalWindowConfirmation'),
-      source.indexOf('// 选行 = 原子切', source.indexOf('const setComposerModelWithFinalWindowConfirmation')),
+      source.indexOf('const setComposerModel = useCallback'),
+      source.indexOf('// 选行 = 原子切', source.indexOf('const setComposerModel = useCallback')),
     );
 
-    expect(helper).toContain('contextWindowConfirmationRequired');
-    expect(helper).toContain('contextTokensForConfirmation');
-    expect(helper).toContain('authoritativeTokens < requiredWindow * 0.9');
-    expect(helper).toContain('Alert.alert(');
-    expect(helper).toContain('used: formatTokens(authoritativeTokens)');
-    expect(helper).toContain('total: formatTokens(requiredWindow)');
-    expect(helper).toContain('(authoritativeTokens / requiredWindow) * 100');
-    expect(helper).toContain('result = await invoke(requiredWindow)');
-    expect(helper).toContain('verified final Pi window changed before retry');
-    expect(helper).toContain('if (!accepted) return false');
+    expect(helper).toContain('await maker.setModel(sessionId, args.model, args.providerId)');
+    expect(rowSelector).toContain('setComposerModel({');
+    expect(flatSelector).toContain('setComposerModel({ model: option.id })');
+    expect(source).not.toContain('confirmMobileModelWindowSwitch');
+    expect(source).not.toContain('confirmComposerModelWindowSwitch');
+    expect(source).not.toContain('setComposerModelWithFinalWindowConfirmation');
+    expect(source).not.toContain('contextWindowConfirmationRequired');
+    expect(source).not.toContain('contextTokensForConfirmation');
+    expect(source).not.toContain('confirmedContextWindow');
     expect(source).toContain('applied === false && rollbackPatch && deviceId');
   });
 });

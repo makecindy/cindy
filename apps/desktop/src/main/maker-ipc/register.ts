@@ -11138,6 +11138,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 broadcastError instanceof Error ? broadcastError.message : String(broadcastError),
             });
           });
+          const failureMessage =
+            error instanceof Error && error.message.includes('unsupported')
+              ? 'Deferred model switch was cancelled because safe context rebuild is unsupported. The previous model remains active.'
+              : 'Deferred model switch was cancelled because it could not be applied safely. The previous model remains active.';
+          const failureReason = 'runtime-selection-cancelled';
+          onTurnErrorEvent(sessionId, { message: failureMessage, reason: failureReason }, null);
+          const dbAgentKind = getSessionDbAgentKind(sessionId);
+          const agentSource = dbAgentKind ? dbToMakerAgentKind(dbAgentKind) : undefined;
+          broadcastToAllWindows(MAKER_PUSH.EVENT, {
+            sessionId,
+            event: {
+              type: 'error',
+              data: { message: failureMessage, reason: failureReason, isTerminal: true },
+              ...(agentSource ? { source: agentSource } : {}),
+            } satisfies AgentEvent,
+          });
         }
       } finally {
         settlingSessionRuntimeControls.delete(sessionId);
