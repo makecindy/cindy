@@ -698,6 +698,13 @@ interface ChatInputProps {
    */
   extraDirs?: string[];
   onExtraDirsChange?: (next: string[]) => void | Promise<void>;
+  /** 用户明确授予的附加可读写目录，与 extraDirs 的只读授权分开显示和保存。 */
+  writableDirs?: string[];
+  /** Main-owned writable picker 的一次性授权作用域；本机新增入口必须提供。 */
+  writableGrantScope?: string;
+  onWritableDirsChange?: (next: string[]) => void | Promise<void>;
+  /** 会话态撤权使用路径意图，避免连续删除基于同一份旧 writableDirs 快照。 */
+  onWritableDirRemove?: (path: string) => void | Promise<void>;
   /**
    * 「新建目标」入口回调(首页草稿态用):提供时「+」菜单显示「新建目标」,点击调它
    * (NewMakerDraftRoute 负责建会话 + setGoal)。会话态(有 sessionId)不需要传 ——
@@ -1089,6 +1096,10 @@ export function ChatInput({
   focusOnStorageKeyChange = false,
   ownsHardwareComposerActions = true,
   extraDirs,
+  writableDirs,
+  writableGrantScope,
+  onWritableDirsChange,
+  onWritableDirRemove,
   onExtraDirsChange,
   onNewGoal,
   rememberedEffortByModel,
@@ -4345,22 +4356,62 @@ export function ChatInput({
     }
     if (onExtraDirsChange) {
       const currentExtraDirs = extraDirs ?? [];
+      const currentWritableDirs = writableDirs ?? [];
+      const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
       actions.push({
         id: 'add-extra-dir',
         label:
-          currentExtraDirs.length >= MAX_EXTRA_DIRS
+          totalDirs >= MAX_EXTRA_DIRS
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
-            : t('extraDirs.add'),
-        disabled: composerMutationLocked || currentExtraDirs.length >= MAX_EXTRA_DIRS,
+            : t('extraDirs.addReadOnly'),
+        disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
         run: () => {
           void pickAndAddExtraDir({
             extraDirs: currentExtraDirs,
+            otherDirs: currentWritableDirs,
             workingDir,
             onChange: onExtraDirsChange,
             confirm: confirmDialog,
             parentDirectoryConfirm: {
               title: t('extraDirs.parentConfirmTitle'),
               description: (path) => t('extraDirs.parentConfirmDescription', { path }),
+              confirmText: t('extraDirs.parentConfirmAccept'),
+              cancelText: t('extraDirs.parentConfirmCancel'),
+            },
+          });
+        },
+      });
+    }
+    // 远端已有授权仍通过 onWritableDirsChange 展示并可撤销；但这里调用的是控制端
+    // 原生目录选择器，只能在已确认本机会话中提供，不能把本机绝对路径发给 SSH/
+    // device-link 被控端。undefined 表示归属尚未解析，同样 fail closed。
+    if (
+      onWritableDirsChange
+      && writableGrantScope
+      && !remoteHostId
+      && deviceLinkDeviceId === null
+    ) {
+      const currentExtraDirs = extraDirs ?? [];
+      const currentWritableDirs = writableDirs ?? [];
+      const totalDirs = currentExtraDirs.length + currentWritableDirs.length;
+      actions.push({
+        id: 'add-writable-dir',
+        label:
+          totalDirs >= MAX_EXTRA_DIRS
+            ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
+            : t('extraDirs.addWritable'),
+        disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
+        run: () => {
+          void pickAndAddExtraDir({
+            extraDirs: currentWritableDirs,
+            otherDirs: currentExtraDirs,
+            workingDir,
+            writableGrantScope,
+            onChange: onWritableDirsChange,
+            confirm: confirmDialog,
+            parentDirectoryConfirm: {
+              title: t('extraDirs.writableParentConfirmTitle'),
+              description: (path) => t('extraDirs.writableParentConfirmDescription', { path }),
               confirmText: t('extraDirs.parentConfirmAccept'),
               cancelText: t('extraDirs.parentConfirmCancel'),
             },
@@ -4377,10 +4428,15 @@ export function ChatInput({
     inSessionGoalEnabled,
     localAttachmentPickerEnabled,
     onExtraDirsChange,
+    onWritableDirsChange,
     onNewGoal,
     planModeEntry,
+    remoteHostId,
     runNewGoalAction,
     t,
+    deviceLinkDeviceId,
+    writableDirs,
+    writableGrantScope,
     workingDir,
   ]);
 
@@ -8159,8 +8215,8 @@ export function ChatInput({
                 )}
                 {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
                 <ExtraDirsButton
-                  extraDirsCount={(extraDirs ?? []).length}
-                  hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}
+                  extraDirsCount={(extraDirs ?? []).length + (writableDirs ?? []).length}
+                  hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   autoFocusTarget={composerSuggestionFocusTarget}
@@ -8183,6 +8239,22 @@ export function ChatInput({
                                 void onExtraDirsChange(
                                   (extraDirs ?? []).filter((item) => item !== path),
                                 );
+                              },
+                            }
+                          : null
+                      }
+                      writableDirs={
+                        !settingsLocked && onWritableDirsChange
+                          ? {
+                              dirs: writableDirs ?? [],
+                              onRemove: (path) => {
+                                if (onWritableDirRemove) {
+                                  void onWritableDirRemove(path);
+                                } else {
+                                  void onWritableDirsChange(
+                                    (writableDirs ?? []).filter((item) => item !== path),
+                                  );
+                                }
                               },
                             }
                           : null
@@ -8534,6 +8606,22 @@ export function ChatInput({
                       dirs: extraDirs ?? [],
                       onRemove: (path) => {
                         void onExtraDirsChange((extraDirs ?? []).filter((item) => item !== path));
+                      },
+                    }
+                  : null
+              }
+              writableDirs={
+                onWritableDirsChange
+                  ? {
+                      dirs: writableDirs ?? [],
+                      onRemove: (path) => {
+                        if (onWritableDirRemove) {
+                          void onWritableDirRemove(path);
+                        } else {
+                          void onWritableDirsChange(
+                            (writableDirs ?? []).filter((item) => item !== path),
+                          );
+                        }
                       },
                     }
                   : null

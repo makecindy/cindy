@@ -135,6 +135,35 @@ describe('session runtime control wiring', () => {
     }
   });
 
+  it('serializes local and remote directory validation, runtime apply, persistence, and rollback', () => {
+    const grantUpdate = handlerBody(
+      registerSource,
+      'const applyDirectoryGrants =',
+      'ipcMain.handle(MAKER_INVOKE.SET_EXTRA_DIRS',
+    );
+    const extraDirs = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_EXTRA_DIRS',
+      'MAKER_INVOKE.SET_WRITABLE_DIRS',
+    );
+    const writableDirs = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_WRITABLE_DIRS',
+      '// ── Memory 控制',
+    );
+
+    expect(grantUpdate).toContain('withSendToSessionLock(sessionId');
+    expect(grantUpdate).toContain('applyRemoteDirectoryGrantUpdate(axis');
+    expect(grantUpdate).toContain('persist: (patch) => persistSessionFields(sessionId, patch)');
+    expect(grantUpdate).toContain('terminate: () => maker.closeSession(sessionId)');
+    expect(grantUpdate).toContain('markRemoteSettingPersistedInsideHandler(result.dirs)');
+    expect(grantUpdate).toContain('options.remote || route?.remoteHostId');
+    expect(grantUpdate).toContain('isPersistedDirectoryGrantSubset(accepted, previousDirs)');
+    expect(extraDirs).toContain("applyDirectoryGrants('extraDirs'");
+    expect(writableDirs).toContain("applyDirectoryGrants('writableDirs'");
+    expect(writableDirs).toContain('senderId: event.sender.id');
+  });
+
   it('guards local user model changes before parsing input while preserving trusted internal paths', () => {
     const setModel = handlerBody(
       registerSource,
