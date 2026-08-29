@@ -7078,7 +7078,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
     return runPiPackageMutationIpcBoundary(
       async () => {
+        let runtimesInvalidated = false;
         const invalidateRuntimes = async (): Promise<void> => {
+          if (runtimesInvalidated) return;
+          runtimesInvalidated = true;
           try {
             const invalidation = await invalidateLocalPiPackageRuntimes(maker);
             if (invalidation.failedSessionIds.length > 0) {
@@ -7096,13 +7099,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
         };
         try {
+          const mutationHooks = { onRuntimeInvalidationPublished: invalidateRuntimes };
           const result = !piPackageMutationNeedsGrant(request)
-            ? await mutatePiPackage(request)
+            ? await mutatePiPackage(request, undefined, mutationHooks)
             : await mutatePiPackage(
                 request,
                 // The trusted Settings action is the user's one authorization;
                 // this grant binds only the exact request.
                 issuePiPackageMutationGrant(request),
+                mutationHooks,
               );
           // Pi discovers packages at process start. Every successful roster
           // mutation must retire old local ordinary runtimes, including install,

@@ -2733,9 +2733,15 @@ async function buildMissingDeclaredPiExtensions(pkg: InspectedPackage): Promise<
   return true;
 }
 
+export interface PiPackageMutationHooks {
+  /** Settings may retire its local runtimes immediately after the durable edge. */
+  onRuntimeInvalidationPublished?: () => void | Promise<void>;
+}
+
 export async function mutatePiPackage(
   request: PiPackageMutationRequest,
   grant?: PiPackageMutationGrant,
+  hooks?: PiPackageMutationHooks,
 ): Promise<PiPackageMutationResult> {
   if (piPackageMutationNeedsGrant(request)) {
     // The one-shot grant binds the exact user/tool action to this mutation. It
@@ -2780,6 +2786,15 @@ export async function mutatePiPackage(
       if (runtimeInvalidationPublished) return;
       await publishPiPackagesChanged({ invalidateCache: false, runtimeInvalidation: true });
       runtimeInvalidationPublished = true;
+      try {
+        await hooks?.onRuntimeInvalidationPublished?.();
+      } catch {
+        // Convergence is best-effort after the durable package mutation edge;
+        // never rewrite native success because a local runtime did not close.
+        log.warn('Pi package runtime convergence callback failed', {
+          failureCategory: 'runtime-invalidation-failed',
+        });
+      }
     };
     if (request.action === 'install') {
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);

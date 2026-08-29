@@ -231,9 +231,10 @@ afterEach(async () => {
 async function mutateAuthorized(
   store: typeof import('../pi-package-store.js'),
   request: import('../../../shared/piPackages.js').PiPackageMutationRequest,
+  hooks?: import('../pi-package-store.js').PiPackageMutationHooks,
 ) {
   const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
-  return store.mutatePiPackage(request, issuePiPackageMutationGrant(request));
+  return store.mutatePiPackage(request, issuePiPackageMutationGrant(request), hooks);
 }
 
 describe('Pi package executable-code boundary', () => {
@@ -2490,14 +2491,18 @@ describe('Pi package executable-code boundary', () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
     const listener = vi.fn();
+    const localRuntimeFence = vi.fn();
     const unsubscribe = store.onPiPackagesChanged(listener);
     let listStartedAfterFence = false;
     runtime.spawnHook = (args) => {
-      if (args.includes('list')) listStartedAfterFence = listener.mock.calls.length > 0;
+      if (args.includes('list')) listStartedAfterFence = localRuntimeFence.mock.calls.length > 0;
     };
     try {
-      await mutateAuthorized(store, { ...request, source });
+      await mutateAuthorized(store, { ...request, source }, {
+        onRuntimeInvalidationPublished: localRuntimeFence,
+      });
       expect(listStartedAfterFence).toBe(true);
+      expect(localRuntimeFence).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith('local');
     } finally {
       unsubscribe();
