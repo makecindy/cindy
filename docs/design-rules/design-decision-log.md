@@ -16,6 +16,17 @@
   背景：设计系统改造调研发现 PermissionPrompt 混用 `rounded-[8px]`×4 /
   `rounded-[4px]`×4 / `rounded-[12px]`×1，与 §5 三档冲突；全仓走查
   `rounded-[4px]` 生产存量共 30 处（2026-08-29 快照，不止权限弹窗，是普遍债）。
+  计数口径（`design-governance.md` §9 计数纪律，均为当日快照）：
+
+  ```bash
+  # PermissionPrompt 内圆角分布（2026-08-29 快照：8px×4 / 4px×4 / 12px×1）
+  git grep -o 'rounded-\[8px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
+  git grep -o 'rounded-\[4px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
+  git grep -o 'rounded-\[12px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
+  # 全仓 rounded-[4px] 生产存量（2026-08-29 快照：30）
+  git grep -o "rounded-\[4px\]" -- apps/desktop/src/renderer | wc -l
+  ```
+
   裁决四条：(1) **三档不变、不加档**，把 §5 的软表述写死——会提交决定 / 触发动作
   的按钮**一律胶囊**（权限允许/拒绝按钮包含在内），原「only for small interactive
   pieces that cannot wear the pill」的主观逃生口删除；(2) 8px 档的判据改为
