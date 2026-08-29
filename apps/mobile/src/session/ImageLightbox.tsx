@@ -787,6 +787,7 @@ const LightboxPage = memo(function LightboxPage({
   const displayedH = useSharedValue(height);
   const pinchBusy = useSharedValue(0);
   const panBusy = useSharedValue(0);
+  const doubleTapBusy = useSharedValue(0);
   const dragY = useSharedValue(0);
   /**
    * 已 onLoad 成功的原图地址。存地址而不是 boolean:换图 / 强制重取换 url 后
@@ -833,6 +834,28 @@ const LightboxPage = memo(function LightboxPage({
     // 捏合中 onChange 每帧按新 displayed 钳;不能改 savedTranslate,否则下一帧
     // 会用被改过的起点 + 焦点增量跳一下。
     if (pinchBusy.value) return;
+    // 双击 withTiming 还在跑:重钳的是目标(saved),不是动画中间值。把中间值
+    // 写进 translate/saved 会取消动画,点击点漂向中心,scale 却继续飞向 2.5x。
+    if (doubleTapBusy.value) {
+      const next = reclampLightboxPan(
+        savedTranslateX.value,
+        savedTranslateY.value,
+        width,
+        height,
+        savedScale.value,
+        size.width,
+        size.height,
+      );
+      if (next.x === savedTranslateX.value && next.y === savedTranslateY.value) return;
+      savedTranslateX.value = next.x;
+      savedTranslateY.value = next.y;
+      translateX.value = withTiming(next.x);
+      translateY.value = withTiming(next.y, undefined, (finished) => {
+        'worklet';
+        if (finished) doubleTapBusy.value = 0;
+      });
+      return;
+    }
     const next = reclampLightboxPan(
       translateX.value,
       translateY.value,
@@ -862,6 +885,7 @@ const LightboxPage = memo(function LightboxPage({
     originY.value = 0;
     pinchBusy.value = 0;
     panBusy.value = 0;
+    doubleTapBusy.value = 0;
     dragY.value = 0;
     chromeHidden.value = 0;
     onChromeBusy(false);
@@ -912,6 +936,7 @@ const LightboxPage = memo(function LightboxPage({
     const pinch = Gesture.Pinch()
       .onStart((event) => {
         pinchBusy.value = 1;
+        doubleTapBusy.value = 0;
         hideChrome();
         // 捏合一开始就锁死翻页,不等 JS zoomed 提交;否则松手后立刻左右拖
         // 会被 pagingEnabled 的 FlatList 抢走,当前页直接滑走。
@@ -965,6 +990,7 @@ const LightboxPage = memo(function LightboxPage({
       })
       .onStart(() => {
         panBusy.value = 1;
+        doubleTapBusy.value = 0;
         hideChrome();
         savedTranslateX.value = translateX.value;
         savedTranslateY.value = translateY.value;
@@ -1041,11 +1067,16 @@ const LightboxPage = memo(function LightboxPage({
         const next = nextDoubleTapScale(scale.value);
         originX.value = 0;
         originY.value = 0;
+        doubleTapBusy.value = 1;
+        const clearDoubleTapBusy = (finished?: boolean) => {
+          'worklet';
+          if (finished) doubleTapBusy.value = 0;
+        };
         if (!isLightboxZoomed(next)) {
           scale.value = withTiming(1);
           savedScale.value = 1;
           translateX.value = withTiming(0);
-          translateY.value = withTiming(0);
+          translateY.value = withTiming(0, undefined, clearDoubleTapBusy);
           savedTranslateX.value = 0;
           savedTranslateY.value = 0;
           runOnJS(reportZoomed)(false);
@@ -1066,7 +1097,7 @@ const LightboxPage = memo(function LightboxPage({
         scale.value = withTiming(next);
         savedScale.value = next;
         translateX.value = withTiming(tx);
-        translateY.value = withTiming(ty);
+        translateY.value = withTiming(ty, undefined, clearDoubleTapBusy);
         savedTranslateX.value = tx;
         savedTranslateY.value = ty;
         runOnJS(reportZoomed)(true);

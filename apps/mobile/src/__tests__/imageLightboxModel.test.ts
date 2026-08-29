@@ -62,6 +62,13 @@ describe('imageLightboxModel', () => {
     expect(reclampLightboxPan(250, 0, 400, 800, 2, 400, 800)).toEqual({ x: 200, y: 0 });
   });
 
+  it('distinguishes reclamping the double-tap target from an in-flight intermediate', () => {
+    // 双击目标 150,动画走到 80 时竖图 overflow 仍是 200:钳中间值会把目标改成 80
+    // (动画停早,点击点漂向中心)。动画中必须钳 saved 目标,不能钳 live。
+    expect(reclampLightboxPan(80, 0, 400, 800, 2, 400, 800)).toEqual({ x: 80, y: 0 });
+    expect(reclampLightboxPan(150, 0, 400, 800, 2, 400, 800)).toEqual({ x: 150, y: 0 });
+  });
+
   it('bakes pinch origin into translation so resetting origin does not jump', () => {
     expect(lightboxPinchOrigin(300, 400)).toBe(100);
     // translate 40, origin 100, scale 2 → 40 + 100 * (1-2) = -60
