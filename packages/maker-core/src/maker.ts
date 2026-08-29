@@ -1044,19 +1044,26 @@ export class Maker {
     return this.storage.list();
   }
 
+  /** Close only when this exact runtime instance is still current for its business id. */
+  async closeSessionIfCurrent(
+    session: Session,
+    reason: Exclude<MakerSessionCloseReason, 'unexpected'> = 'requested',
+  ): Promise<void> {
+    if (this.activeSessions.get(session.id) !== session) return;
+    // First closer owns the cause. A later concurrent close must not relabel
+    // a user-requested close as an internal replacement (or vice versa).
+    if (!this.closeReasons.has(session)) this.closeReasons.set(session, reason);
+    await session.close();
+    // status listener 会自动清理 activeSessions 并 emit
+  }
+
   /** 关闭并移除一个 session */
   async closeSession(
     id: string,
     reason: Exclude<MakerSessionCloseReason, 'unexpected'> = 'requested',
   ): Promise<void> {
-    const sess = this.activeSessions.get(id);
-    if (sess) {
-      // First closer owns the cause. A later concurrent close must not relabel
-      // a user-requested close as an internal replacement (or vice versa).
-      if (!this.closeReasons.has(sess)) this.closeReasons.set(sess, reason);
-      await sess.close();
-      // status listener 会自动清理 activeSessions 并 emit
-    }
+    const session = this.activeSessions.get(id);
+    if (session) await this.closeSessionIfCurrent(session, reason);
     // 已经不在内存里就 no-op —— 没有持久化的运行态需要更新。
   }
 

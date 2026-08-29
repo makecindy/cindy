@@ -21,7 +21,7 @@ type InvalidationMaker = Pick<
   | 'advanceLocalPiPackageRuntimeGeneration'
   | 'listActiveSessions'
   | 'getSessionMeta'
-  | 'closeSession'
+  | 'closeSessionIfCurrent'
 >;
 
 export async function invalidateLocalPiPackageRuntimesForObservedChange(
@@ -61,7 +61,7 @@ export async function invalidateLocalPiPackageRuntimes(
   // to appear earlier in the session map.
   const requestedSessionIds = eligible.map(({ session }) => session.id);
   const outcomes = await Promise.allSettled(
-    requestedSessionIds.map((sessionId) => maker.closeSession(sessionId, 'requested')),
+    eligible.map(({ session }) => maker.closeSessionIfCurrent(session, 'requested')),
   );
   return {
     requestedSessionIds,
