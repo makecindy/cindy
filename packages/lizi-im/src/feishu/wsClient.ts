@@ -309,16 +309,36 @@ function resumeUnconfirmedOpenRetriesFor(
   }
 }
 
-async function recallRecoveredOpener(messageId: string, kind: 'opened' | 'orphaned'): Promise<void> {
+async function recallRecoveredOpener(
+  messageId: string,
+  kind: 'opened' | 'orphaned',
+): Promise<boolean> {
   const log = getLog();
   try {
-    await outbound.recallOwnMessage(messageId);
+    const recalled = await outbound.recallOwnMessage(messageId);
+    if (!recalled) {
+      log.warn(
+        `[feishu/wsClient] recall ${kind} opener after late topic takeover was rejected (non-fatal)`,
+      );
+    }
+    return recalled;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(
       `[feishu/wsClient] recall ${kind} opener after late topic takeover failed (non-fatal): ${msg}`,
     );
+    return false;
   }
+}
+
+function scheduleTakeoverRecallRetry(entry: UnconfirmedOpenRetry, epoch: number): void {
+  if (orphanRetryEpoch !== epoch) {
+    getLog().info(
+      '[feishu/wsClient] late-takeover opener recall stale after credential clear — dropping retry',
+    );
+    return;
+  }
+  scheduleUnconfirmedOpenRetry({ ...entry, timer: undefined, recallOnly: true });
 }
 
 function scheduleUnconfirmedOpenRetry(entry: UnconfirmedOpenRetry): void {
@@ -381,7 +401,13 @@ async function retryUnconfirmedOpen(
   }
   if (opener.kind === 'orphaned') {
     if (entry.recallOnly || entry.isUnpairedFlatTakenOver?.()) {
-      await recallRecoveredOpener(opener.openerMessageId, 'orphaned');
+      const recalled = await recallRecoveredOpener(opener.openerMessageId, 'orphaned');
+      if (!recalled) {
+        scheduleTakeoverRecallRetry(
+          { ...entry, attempt: entry.attempt + 1 },
+          epoch,
+        );
+      }
       return;
     }
     log.error(
@@ -399,7 +425,13 @@ async function retryUnconfirmedOpen(
   let groupContextLane: { chatId: string; threadId: string } | undefined;
   if (opener.kind === 'opened') {
     if (entry.recallOnly || (entry.commitUnpairedFlat && !entry.commitUnpairedFlat())) {
-      await recallRecoveredOpener(opener.messageId, 'opened');
+      const recalled = await recallRecoveredOpener(opener.messageId, 'opened');
+      if (!recalled) {
+        scheduleTakeoverRecallRetry(
+          { ...entry, attempt: entry.attempt + 1 },
+          epoch,
+        );
+      }
       return;
     }
     laneUserId = encodeLaneUserId(entry.chatId, opener.threadId);
@@ -1573,12 +1605,24 @@ async function processClaimedMessage(
       if (opener.kind === 'orphaned') {
         if (isUnpairedFlatTakenOver?.()) {
           log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
-          try {
-            await outbound.recallOwnMessage(opener.openerMessageId);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(
-              `[feishu/wsClient] recall orphaned opener after late topic takeover failed (non-fatal): ${msg}`,
+          const recallEpoch = orphanRetryEpoch;
+          const recalled = await recallRecoveredOpener(opener.openerMessageId, 'orphaned');
+          if (!recalled) {
+            scheduleTakeoverRecallRetry(
+              {
+                botAppId,
+                service,
+                messageId,
+                chatId,
+                senderOpenId,
+                text,
+                attachments,
+                unsupported,
+                raw: data,
+                attempt: 0,
+                recallOnly: true,
+              },
+              recallEpoch,
             );
           }
           return;
@@ -1644,12 +1688,24 @@ async function processClaimedMessage(
       if (commitUnpairedFlat && !commitUnpairedFlat()) {
         log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
         if (opener.kind === 'opened') {
-          try {
-            await outbound.recallOwnMessage(opener.messageId);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(
-              `[feishu/wsClient] recall bot-opened thread after late topic takeover failed (non-fatal): ${msg}`,
+          const recallEpoch = orphanRetryEpoch;
+          const recalled = await recallRecoveredOpener(opener.messageId, 'opened');
+          if (!recalled) {
+            scheduleTakeoverRecallRetry(
+              {
+                botAppId,
+                service,
+                messageId,
+                chatId,
+                senderOpenId,
+                text,
+                attachments,
+                unsupported,
+                raw: data,
+                attempt: 0,
+                recallOnly: true,
+              },
+              recallEpoch,
             );
           }
         }

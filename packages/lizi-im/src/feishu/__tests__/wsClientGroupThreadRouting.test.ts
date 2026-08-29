@@ -317,6 +317,118 @@ describe('feishu group thread routing', () => {
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
   });
 
+  it('retries a late-takeover opener recall when Feishu returns a business rejection', async () => {
+    vi.useFakeTimers();
+    let releaseOpenThread:
+      | ((value: { kind: 'opened'; messageId: string; threadId: string }) => void)
+      | undefined;
+    mocks.openThread
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseOpenThread = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        kind: 'opened',
+        messageId: 'om_bot_opener_retry',
+        threadId: 'omt_bot_retry',
+      });
+    mocks.recallOwnMessage.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const events = collectMessages();
+    await connect();
+    const topic = groupTopicMessage('迟到话题撤回重试', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000009000';
+    topic.message.message_id = 'om_topic_recall_retry';
+    const flat = groupMainFlowMessage('迟到话题撤回重试', 'om_flat_recall_retry') as {
+      message: Record<string, unknown>;
+    };
+    flat.message.create_time = '1788000009000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+    expect(releaseOpenThread).toBeDefined();
+    releaseOpenThread?.({
+      kind: 'opened',
+      messageId: 'om_bot_opener_retry',
+      threadId: 'omt_bot_retry',
+    });
+    await flatHandling;
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_existing');
+    expect(mocks.recallOwnMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.recallOwnMessage).toHaveBeenLastCalledWith('om_bot_opener_retry');
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
+    expect(mocks.openThread).toHaveBeenLastCalledWith('om_flat_recall_retry');
+    expect(mocks.recallOwnMessage).toHaveBeenCalledTimes(2);
+    expect(mocks.recallOwnMessage).toHaveBeenLastCalledWith('om_bot_opener_retry');
+    expect(events).toHaveLength(1);
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+  });
+
+  it('does not revive a pending takeover recall after credentials are cleared', async () => {
+    vi.useFakeTimers();
+    let releaseOpenThread:
+      | ((value: { kind: 'opened'; messageId: string; threadId: string }) => void)
+      | undefined;
+    let releaseRecall: ((value: boolean) => void) | undefined;
+    mocks.openThread.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseOpenThread = resolve;
+        }),
+    );
+    mocks.recallOwnMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseRecall = resolve;
+        }),
+    );
+    const events = collectMessages();
+    await connect();
+    const topic = groupTopicMessage('撤回在途时清凭证', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topic.message.create_time = '1788000010000';
+    topic.message.message_id = 'om_topic_clear_during_recall';
+    const flat = groupMainFlowMessage('撤回在途时清凭证', 'om_flat_clear_during_recall') as {
+      message: Record<string, unknown>;
+    };
+    flat.message.create_time = '1788000010000';
+
+    const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await mocks.eventHandlers['im.message.receive_v1'](topic);
+    expect(releaseOpenThread).toBeDefined();
+    releaseOpenThread?.({
+      kind: 'opened',
+      messageId: 'om_bot_clear_during_recall',
+      threadId: 'omt_bot_clear_during_recall',
+    });
+    await Promise.resolve();
+    expect(releaseRecall).toBeDefined();
+
+    await wsClient.stop({ announceOffline: false, reason: 'clear-credentials' });
+    wsClient.clearOrphanRetriesForCredentialClear();
+    releaseRecall?.(false);
+    await flatHandling;
+
+    await connect();
+    await vi.advanceTimersByTimeAsync(10_000 + 30_000 + 90_000 + 1_000);
+
+    expect(events).toHaveLength(1);
+    expect(mocks.openThread).toHaveBeenCalledTimes(1);
+    expect(mocks.recallOwnMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+  });
+
   it('committed unpaired flat still mirrors parent chat when a late topic is suppressed', async () => {
     vi.useFakeTimers();
     mocks.openThread.mockResolvedValueOnce({
