@@ -279,6 +279,33 @@ describe('feishu group thread routing', () => {
     expect(mocks.openThread).not.toHaveBeenCalled();
   });
 
+  it('does not register a reply anchor for a topic delivery that loses the route lease', async () => {
+    const events = collectMessages();
+    await connect();
+    const topicA = groupTopicMessage('同步回答', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topicA.message.create_time = '1788000000000';
+    topicA.message.message_id = 'om_topic_a';
+    const topicB = groupTopicMessage('同步回答', 'omt_existing') as {
+      message: Record<string, unknown>;
+    };
+    topicB.message.create_time = '1788000000000';
+    topicB.message.message_id = 'om_topic_b';
+
+    await Promise.all([
+      mocks.eventHandlers['im.message.receive_v1'](topicA),
+      mocks.eventHandlers['im.message.receive_v1'](topicB),
+    ]);
+
+    expect(events).toHaveLength(1);
+    expect(mocks.pushReplyAnchor).toHaveBeenCalledTimes(1);
+    expect(mocks.pushReplyAnchor).toHaveBeenCalledWith(
+      'g/oc_chat1/omt_existing',
+      events[0].messageId,
+    );
+  });
+
   it('releases the topic lease when a mention-only topic has nothing to relay', async () => {
     const events = collectMessages();
     await connect();

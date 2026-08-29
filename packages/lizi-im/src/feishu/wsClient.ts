@@ -1627,6 +1627,13 @@ async function processClaimedMessage(
   let groupContextLane: { chatId: string; threadId: string } | undefined;
   if (isGroup) {
     if (incomingThreadId) {
+      // Commit before the FIFO reply-anchor: two topic deliveries of the same
+      // logical send can both pass the coordinator while the lease is pending.
+      // The loser must not enqueue an anchor that a later streaming reply would claim.
+      if (commitTopic && !commitTopic()) {
+        log.info('[feishu/wsClient] elected topic aborted: another topic delivery already committed');
+        return;
+      }
       laneUserId = encodeLaneUserId(chatId, incomingThreadId);
       outbound.pushReplyAnchor(laneUserId, messageId);
     } else {
@@ -1793,10 +1800,6 @@ async function processClaimedMessage(
     outbound.getAccountEpoch(),
     finalReplyMirrorConfirmed,
   );
-  if (commitTopic && !commitTopic()) {
-    log.info('[feishu/wsClient] elected topic aborted: another topic delivery already committed');
-    return;
-  }
   feishuEvents.emit('message', {
     channelName: 'feishu',
     senderId: laneUserId ?? senderOpenId,
