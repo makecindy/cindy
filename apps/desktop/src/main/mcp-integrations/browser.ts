@@ -11,13 +11,13 @@ import nodePath from 'node:path';
 import { app, ipcMain } from 'electron';
 import {
   createBrowserControlRuntime,
-  type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
+import type { BrowserMcpDeps } from '@cindy/mcps';
 
 import { createLogger } from '../logger.js';
 import { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
-import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recipes/loader.js';
-import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
+import { loadUserBrowserRecipes } from '../browser-recipes/loader.js';
+import { writeUserRecipe } from '../browser-recipes/writer.js';
 import { stopRuntimeForQuitIfUsed, trackBrowserRuntimeUsage } from './browser-dispose.js';
 import {
   BrowserBackendController,
@@ -41,6 +41,8 @@ import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
+import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
+import { compressInlineImage } from './inlineImageCompressor.js';
 
 export { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
 
@@ -249,14 +251,7 @@ export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<vo
  * BrowserControlRuntime contract so the desktop host does not depend on an
  * upstream product API or product-facing name.
  */
-export function getBrowserMcpDeps(): {
-  getRuntime(): BrowserControlRuntime;
-  supportsResourceDownloads(): boolean;
-  supportsSemanticQueries(): boolean;
-  logger: typeof logger;
-  getUserRecipes(): Promise<UserRecipesResult>;
-  saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
-} {
+export function getBrowserMcpDeps(): BrowserMcpDeps {
   return {
     // L2 user-recipe layer (userData/browser-recipes); merged over the bundled
     // L1 catalog inside the MCP. Empty/missing dir → bundled-only (== before).
@@ -267,6 +262,11 @@ export function getBrowserMcpDeps(): {
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
     getRuntime: () => backendController,
+    resolveScreenshot: (result) =>
+      resolveBrowserScreenshot(result, {
+        runtimeDir: process.env.XDT_BROWSER_RUNTIME_DIR,
+      }),
+    compressInlineImage,
     supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
     supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
     logger,
