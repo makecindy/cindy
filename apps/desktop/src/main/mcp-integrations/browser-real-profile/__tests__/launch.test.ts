@@ -6,6 +6,7 @@ import {
   annotateStatusData,
   isOwnLiveManagedBrowser,
   shouldPrepareCopiedLogins,
+  shouldStopRememberedLeftover,
   withActiveBrowserProfile,
   wrapRuntimeWithRealProfile,
 } from '../launch.js';
@@ -228,6 +229,7 @@ describe('wrapRuntimeWithRealProfile', () => {
 
   it('snapshots into this runtime when leftover Chrome sits under ~/.xdt-maker', async () => {
     let started = 0;
+    let stops = 0;
     const inner = {
       async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
         if (request.action === 'status') {
@@ -235,6 +237,10 @@ describe('wrapRuntimeWithRealProfile', () => {
             running: true,
             userDataDir: '/Users/dash/.xdt-maker/browser-runtime/browser/Cindy-real/user-data',
           });
+        }
+        if (request.action === 'stop') {
+          stops += 1;
+          return result('stop', { stopped: true });
         }
         if (request.action === 'start') {
           started += 1;
@@ -259,11 +265,13 @@ describe('wrapRuntimeWithRealProfile', () => {
       cleanup: vi.fn(),
       platform: 'darwin',
       pickCdpPort: async () => 18801,
+      readRememberedCdpPort: () => null,
     });
     const startedResult = await wrapped.call({ action: 'start' });
     expect(startedResult.ok).toBe(true);
     expect(startedResult.errorCode).toBeUndefined();
     expect(started).toBe(1);
+    expect(stops).toBe(0);
     expect(snapshot).toHaveBeenCalledOnce();
     expect(applyConfig).toHaveBeenCalledWith({
       useRealProfile: true,
@@ -386,6 +394,166 @@ describe('wrapRuntimeWithRealProfile', () => {
     expect(snapshot).not.toHaveBeenCalled();
     expect(cleanup).not.toHaveBeenCalled();
     expect(applyConfig).not.toHaveBeenCalled();
+  });
+
+  it('stops a remembered Cindy-real leftover before snapshotting after a crash', async () => {
+    const innerState = { running: true, starts: 0, stops: 0 };
+    const inner = {
+      async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
+        if (request.action === 'status') {
+          return result('status', { running: innerState.running });
+        }
+        if (request.action === 'stop') {
+          innerState.stops += 1;
+          innerState.running = false;
+          return result('stop', { stopped: true });
+        }
+        if (request.action === 'start') {
+          innerState.starts += 1;
+          return result('start', { running: true });
+        }
+        return result(request.action, {});
+      },
+    };
+    const snapshot = vi.fn(async () => ({
+      destDir: '/runtime/browser/Cindy-real/user-data',
+      sourceKind: 'chrome' as const,
+      sourceProfile: 'Default',
+      filesCopied: ['Local State'],
+    }));
+    const applyConfig = vi.fn();
+    const wrapped = wrapRuntimeWithRealProfile(inner, {
+      isEnabled: () => true,
+      getRuntimeDir: () => '/runtime',
+      applyConfig,
+      resolveSource: () => chrome,
+      snapshot,
+      cleanup: vi.fn(),
+      platform: 'darwin',
+      pickCdpPort: pick18800,
+      readRememberedCdpPort: () => 18801,
+    });
+    const started = await wrapped.call({ action: 'start' });
+    expect(started.ok).toBe(true);
+    expect(innerState.stops).toBe(1);
+    expect(innerState.starts).toBe(1);
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(applyConfig).toHaveBeenCalledWith({
+      useRealProfile: true,
+      executablePath: '/chrome',
+      cdpPort: 18800,
+    });
+  });
+
+  it('does not snapshot when a remembered leftover cannot be stopped', async () => {
+    const inner = {
+      async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
+        if (request.action === 'status') {
+          return result('status', { running: true });
+        }
+        if (request.action === 'stop') {
+          return result('stop', { stopped: false });
+        }
+        return result(request.action, {});
+      },
+    };
+    const snapshot = vi.fn();
+    const wrapped = wrapRuntimeWithRealProfile(inner, {
+      isEnabled: () => true,
+      getRuntimeDir: () => '/runtime',
+      applyConfig: vi.fn(),
+      resolveSource: () => chrome,
+      snapshot,
+      cleanup: vi.fn(),
+      pickCdpPort: pick18800,
+      readRememberedCdpPort: () => 18801,
+    });
+    const started = await wrapped.call({ action: 'start' });
+    expect(started.ok).toBe(false);
+    expect(started.message).toMatch(/stop/i);
+    expect(snapshot).not.toHaveBeenCalled();
+  });
+
+  it('discards an in-flight snapshot when consent is revoked before apply', async () => {
+    let enabled = true;
+    let startedProfile: string | undefined;
+    const inner = {
+      async call(request: BrowserControlRequest): Promise<BrowserControlResult> {
+        if (request.action === 'status') {
+          return result('status', { running: false });
+        }
+        if (request.action === 'start') {
+          startedProfile = request.profile;
+          return result('start', { running: true });
+        }
+        return result(request.action, {});
+      },
+    };
+    const snapshot = vi.fn(async () => {
+      enabled = false;
+      return {
+        destDir: '/runtime/browser/Cindy-real/user-data',
+        sourceKind: 'chrome' as const,
+        sourceProfile: 'Default',
+        filesCopied: ['Local State'],
+      };
+    });
+    const cleanup = vi.fn();
+    const applyConfig = vi.fn();
+    const wrapped = wrapRuntimeWithRealProfile(inner, {
+      isEnabled: () => enabled,
+      getRuntimeDir: () => '/runtime',
+      applyConfig,
+      resolveSource: () => chrome,
+      snapshot,
+      cleanup,
+      platform: 'darwin',
+      pickCdpPort: pick18800,
+    });
+    const started = await wrapped.call({ action: 'start' });
+    expect(started.ok).toBe(true);
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledWith('/runtime');
+    expect(applyConfig).toHaveBeenCalledWith({ useRealProfile: false, cdpPort: 18800 });
+    expect(applyConfig).not.toHaveBeenCalledWith(expect.objectContaining({ useRealProfile: true }));
+    expect(startedProfile).toBe('Cindy');
+  });
+});
+
+describe('shouldStopRememberedLeftover', () => {
+  it('stops only a consent-on leftover on a remembered Cindy-real port', () => {
+    expect(
+      shouldStopRememberedLeftover({
+        enabled: true,
+        running: true,
+        ownLive: false,
+        rememberedCdpPort: 18801,
+      }),
+    ).toBe(true);
+    expect(
+      shouldStopRememberedLeftover({
+        enabled: true,
+        running: true,
+        ownLive: true,
+        rememberedCdpPort: 18801,
+      }),
+    ).toBe(false);
+    expect(
+      shouldStopRememberedLeftover({
+        enabled: true,
+        running: true,
+        ownLive: false,
+        rememberedCdpPort: null,
+      }),
+    ).toBe(false);
+    expect(
+      shouldStopRememberedLeftover({
+        enabled: false,
+        running: true,
+        ownLive: false,
+        rememberedCdpPort: 18801,
+      }),
+    ).toBe(false);
   });
 });
 

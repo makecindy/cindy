@@ -16,8 +16,10 @@ import type {
 import { FOREIGN_AGENT_BROWSER_ERROR } from '../../../shared/browserBackend.js';
 
 import { resolveSourceBrowserFromOs } from './source.js';
+import { assertManagedBrowserStopped } from './runtime-stop.js';
 import {
   cleanupRealProfileSnapshots,
+  readCopiedLoginsCdpPort,
   realProfileDestDir,
   rememberCopiedLoginsCdpPort,
   snapshotRealProfile,
@@ -45,6 +47,8 @@ export interface RealProfileLaunchDeps {
   platform?: NodeJS.Platform;
   /** Return a free CDP port at or after `preferred`. Injected in tests. */
   pickCdpPort?: (preferred: number) => Promise<number>;
+  /** Cindy-real CDP port from the existing complete marker. Injected in tests. */
+  readRememberedCdpPort?: (runtimeDir: string) => number | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -196,6 +200,24 @@ export function shouldPrepareCopiedLogins(
   return action === 'start' || enabled;
 }
 
+/**
+ * Crash restart can see `running: true` on the remembered Cindy-real port
+ * without pid/userDataDir (vendored status only fills those from in-process
+ * state). Occupancy of 18800 without a marker is some other instance — relocate
+ * rather than stop. A marker means this runtime already launched Cindy-real on
+ * that port, so stop the leftover before copying onto the same user-data.
+ */
+export function shouldStopRememberedLeftover(input: {
+  enabled: boolean;
+  running: boolean;
+  ownLive: boolean;
+  rememberedCdpPort: number | null;
+}): boolean {
+  return (
+    input.enabled && input.running && !input.ownLive && typeof input.rememberedCdpPort === 'number'
+  );
+}
+
 async function startWithSnapshot(
   inner: Pick<BrowserControlRuntime, 'call'>,
   request: BrowserControlRequest,
@@ -211,15 +233,36 @@ async function startWithSnapshot(
   const enabled = deps.isEnabled();
   const status = await inner.call({ action: 'status' });
   const runtimeDir = deps.getRuntimeDir();
+  const revertToIsolated = () => {
+    if (runtimeDir) deps.cleanup(runtimeDir);
+    deps.applyConfig({ useRealProfile: false, cdpPort: MANAGED_CDP_PORT });
+    deps.setLastApplied(null);
+    return inner.call(withActiveBrowserProfile(request, false));
+  };
   if (isRunning(status.data) && isOwnLiveManagedBrowser(status.data, runtimeDir)) {
     return inner.call(withActiveBrowserProfile(request, enabled));
   }
 
   if (!enabled) {
-    if (runtimeDir) deps.cleanup(runtimeDir);
-    deps.applyConfig({ useRealProfile: false, cdpPort: MANAGED_CDP_PORT });
-    deps.setLastApplied(null);
-    return inner.call(withActiveBrowserProfile(request, false));
+    return revertToIsolated();
+  }
+
+  const readRemembered = deps.readRememberedCdpPort ?? readCopiedLoginsCdpPort;
+  if (
+    shouldStopRememberedLeftover({
+      enabled: true,
+      running: isRunning(status.data),
+      ownLive: false,
+      rememberedCdpPort: readRemembered(runtimeDir),
+    })
+  ) {
+    const stop = await inner.call({ action: 'stop' });
+    try {
+      assertManagedBrowserStopped({ status, stop });
+    } catch (err) {
+      if (isRealProfileError(err)) return failure(request.action, err.code, err.message);
+      return failure(request.action, FOREIGN_AGENT_BROWSER_ERROR, FOREIGN_AGENT_BROWSER_ERROR);
+    }
   }
 
   let cdpPort = MANAGED_CDP_PORT;
@@ -250,6 +293,9 @@ async function startWithSnapshot(
       destDir: realProfileDestDir(runtimeDir),
       platform: deps.platform,
     });
+    if (!deps.isEnabled()) {
+      return revertToIsolated();
+    }
     deps.applyConfig({
       useRealProfile: true,
       executablePath: source.executablePath,
@@ -269,6 +315,9 @@ async function startWithSnapshot(
     );
   }
 
+  if (!deps.isEnabled()) {
+    return revertToIsolated();
+  }
   return inner.call(withActiveBrowserProfile(request, true));
 }
 
