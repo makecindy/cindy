@@ -690,6 +690,28 @@ export class Maker {
       elapsedMs: Date.now() - startedAt,
     });
 
+    // Reject a stale local Pi handle before creating or updating durable task
+    // metadata. A startup invalidated by a package mutation was never published
+    // and must not leave a ghost task or overwrite an existing sdkSessionId.
+    if (
+      localPiPackageGeneration !== null
+      && localPiPackageGeneration !== this.localPiPackageRuntimeGeneration
+    ) {
+      try {
+        await handle.close({ reason: 'navigation' });
+      } catch (closeError) {
+        this.failedHandleCleanups.set(id, {
+          handle,
+          promise: null,
+        });
+        this.logger.warn('failed to close stale local Pi handle after package mutation', {
+          sessionId: id,
+          error: String(closeError),
+        });
+      }
+      throw new Error('Local Pi runtime startup was invalidated by a package change; retry the task.');
+    }
+
     // 落地元数据 —— storage 已有同 id 的 row 时跳过 insert, 走 update 把 sdkSessionId 写回
     let meta: SessionMeta;
     try {
@@ -777,49 +799,6 @@ export class Maker {
           error: String(err),
         });
       }
-    }
-
-    if (
-      localPiPackageGeneration !== null
-      && localPiPackageGeneration !== this.localPiPackageRuntimeGeneration
-    ) {
-      let cleanupFailed = false;
-      try {
-        await handle.close({ reason: 'navigation' });
-      } catch (closeError) {
-        cleanupFailed = true;
-        this.failedHandleCleanups.set(id, {
-          handle,
-          promise: null,
-          ...(this.lifecycleHooks.onClose
-            ? {
-                onCleaned: () => {
-                  void Promise.resolve(this.lifecycleHooks.onClose!(id)).catch((err) => {
-                    this.logger.warn('lifecycleHooks.onClose threw after stale Pi cleanup retry', {
-                      sessionId: id,
-                      error: String(err),
-                    });
-                  });
-                },
-              }
-            : {}),
-        });
-        this.logger.warn('failed to close stale local Pi handle after package mutation', {
-          sessionId: id,
-          error: String(closeError),
-        });
-      }
-      if (!cleanupFailed && this.lifecycleHooks.onClose) {
-        try {
-          await this.lifecycleHooks.onClose(id);
-        } catch (err) {
-          this.logger.warn('lifecycleHooks.onClose threw after stale Pi startup', {
-            sessionId: id,
-            error: String(err),
-          });
-        }
-      }
-      throw new Error('Local Pi runtime startup was invalidated by a package change; retry the task.');
     }
 
     const session = new Session({
