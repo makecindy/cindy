@@ -73,6 +73,23 @@ describe('buildClaudeEnv', () => {
     expect(env.ANTHROPIC_API_KEY).toBe('key');
   });
 
+  it('appends host-managed proxy headers after auth headers without allowing duplicates', async () => {
+    const env = await buildClaudeEnv(
+      createAuthAdapter({ ANTHROPIC_CUSTOM_HEADERS: 'x-tenant: acme\nx-cindy-cc-session-id: stale' }),
+      {},
+      {
+        proxyHeaders: {
+          'x-cindy-cc-session-id': 'session-1',
+          'x-cindy-cc-session-token': 'token-1',
+        },
+      },
+    );
+
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe(
+      'x-tenant: acme\nx-cindy-cc-session-id: session-1\nx-cindy-cc-session-token: token-1',
+    );
+  });
+
   it('evaluates function-form behaviorFlags with the spawn route context', async () => {
     const behaviorFlags = vi.fn(() => ({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0' }));
 

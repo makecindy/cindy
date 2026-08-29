@@ -246,6 +246,13 @@ export interface ProxyOptions {
    */
   routingTransform?: RoutingTransform;
   /**
+   * Always remove these headers before forwarding to an upstream, including
+   * non-JSON requests that do not run `routingTransform`. Header matching is
+   * case-insensitive. Use this for loopback-only control headers that must
+   * never leave the local proxy process.
+   */
+  forwardHeaderDelete?: readonly string[];
+  /**
    * 可选响应观察器。默认关闭;开启后只能 tee 响应 chunk 做轻量 metadata 解析,
    * 不能改写响应或阻塞流式 pipe。
    */

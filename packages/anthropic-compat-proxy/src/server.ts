@@ -1687,7 +1687,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       target,
       overrideTarget,
       headerOverride: decision?.headerOverride,
-      headerDelete: decision?.headerDelete,
+      headerDelete: [
+        ...(opts.forwardHeaderDelete ?? []),
+        ...(decision?.headerDelete ?? []),
+      ],
       pathOverride,
     };
   };
@@ -2308,13 +2311,18 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       // transfer-encoding …), 对普通转发是对的 —— 但 **WebSocket 握手必须带
       // `Connection: Upgrade`**(RFC 6455), 缺了上游不会回 101。所以这里显式补回
       // 握手必需的两个头; Sec-WebSocket-* 不属于 hop-by-hop, 已在 headers 里。
+      const upstreamHeaders = { ...headers };
+      const forwardHeaderDelete = new Set((opts.forwardHeaderDelete ?? []).map((header) => header.toLowerCase()));
+      for (const header of Object.keys(upstreamHeaders)) {
+        if (forwardHeaderDelete.has(header.toLowerCase())) delete upstreamHeaders[header];
+      }
       const upstreamReq = reqFn({
         hostname: target.hostname,
         port: target.port,
         method: req.method ?? 'GET',
         path: upstreamPath,
         headers: {
-          ...headers,
+          ...upstreamHeaders,
           host: formatHostHeader(target.hostname, target.port, target.protocol),
           connection: 'Upgrade',
           upgrade: 'websocket',

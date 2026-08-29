@@ -1089,7 +1089,11 @@ export class ClaudeCodeAgent extends BaseAgent {
       credentialMode,
       authState.authSource,
     );
+    const proxySessionAuth = !opts.remoteHostId && opts.sessionId
+      ? this.deps.getClaudeProxySessionAuth?.(opts.sessionId, opts.sessionInstanceId) ?? null
+      : null;
 
+    try {
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
     const sdkModelFor = (model: string): string => this.sdkModelFor(model);
@@ -1104,6 +1108,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
       sessionProviderId: opts.providerId ?? null,
+      proxyHeaders: proxySessionAuth
+        ? {
+            'x-cindy-cc-session-id': proxySessionAuth.sessionId,
+            'x-cindy-cc-session-token': proxySessionAuth.token,
+          }
+        : undefined,
       modelContextWindows: providerRoutedModels,
       // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
       // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
@@ -3496,6 +3506,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       runningBackgroundTasks.clear();
       terminalBackgroundTaskIds.clear();
       closed = true;
+      proxySessionAuth?.dispose();
       try { dismissAllPending('session_closed', 'deny'); } catch (e) {
         log.warn(`${logLabel}: dismissAllPending threw`, { error: String(e) });
       }
@@ -6013,6 +6024,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         turnInFlight = false;
         clearBridgeState();
         closed = true;
+        proxySessionAuth?.dispose();
         try {
           // 任何挂着的 interaction 强制 deny + emit dismissed, 防止 host 卡住等永远不会来的回应
           dismissAllPending('session_closed', 'deny');
@@ -6535,6 +6547,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
 
     return handle;
+    } catch (error) {
+      // No handle escapes a failed startup, so this is its only lifecycle owner.
+      proxySessionAuth?.dispose();
+      throw error;
+    }
   }
 
   // ── Memory 实现 ────────────────────────────────────────────────────────

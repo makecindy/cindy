@@ -51,6 +51,7 @@ vi.mock('../provider-route', () => ({
 import {
   createModelRoutingTransform,
   setClaudeProxyGatewayKeyReader,
+  getClaudeProxySessionAuth,
   setClaudeProxySessionIdResolver,
 } from '../anthropic-compat-proxy-host';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store';
@@ -139,6 +140,89 @@ describe('claude session route observation (routing transform ② 段)', () => {
       ),
     ).toEqual({ upstreamOverride: 'https://api.anthropic.com' });
     expect(takeClaudeRequestRoute(22)).toEqual({ sessionId: 'sess-1', route: 'subscription' });
+  });
+
+  it('routes a fresh session through its authenticated host header before the SDK id is known (#3279)', () => {
+    setSessionProvider('sess-fresh-kimi', 'kimi-code');
+    const auth = getClaudeProxySessionAuth('sess-fresh-kimi');
+    routeMocks.resolveSessionRouteDecision.mockReturnValueOnce({
+      upstreamOverride: 'https://api.kimi.com/coding',
+      headerOverride: { authorization: 'Bearer kimi-token' },
+    });
+
+    const decision = createModelRoutingTransform()(
+      { model: 'k3' },
+      ctxWith({
+        authorization: 'Bearer stale-claude-token',
+        'x-cindy-cc-session-id': auth!.sessionId,
+        'x-cindy-cc-session-token': auth!.token,
+      }, 25),
+    );
+
+    expect(decision).toEqual({
+      upstreamOverride: 'https://api.kimi.com/coding',
+      headerOverride: { authorization: 'Bearer kimi-token' },
+    });
+    expect(routeMocks.resolveSessionRouteDecision).toHaveBeenCalledWith(
+      'sess-fresh-kimi',
+      'claude-code',
+      null,
+      'k3',
+    );
+    clearSessionProvider('sess-fresh-kimi');
+  });
+
+  it('rejects an invalid host route token instead of falling back to the default provider', async () => {
+    const decision = createModelRoutingTransform()(
+      { model: 'k3' },
+      ctxWith({
+        'x-cindy-cc-session-id': 'sess-fresh-kimi',
+        'x-cindy-cc-session-token': 'forged',
+      }, 26),
+    );
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    const resolvedDecision = await Promise.resolve(decision);
+    await resolvedDecision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(401, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'invalid_cc_session_token' },
+    });
+  });
+
+  it('revokes a replaced or disposed session-instance attestation', async () => {
+    const oldAuth = getClaudeProxySessionAuth('sess-fresh-kimi', 'instance-old')!;
+    const currentAuth = getClaudeProxySessionAuth('sess-fresh-kimi', 'instance-current')!;
+    const transform = createModelRoutingTransform();
+
+    const oldDecision = await Promise.resolve(transform(
+      { model: 'k3' },
+      ctxWith({
+        'x-cindy-cc-session-id': oldAuth.sessionId,
+        'x-cindy-cc-session-token': oldAuth.token,
+      }),
+    ));
+    expect(oldDecision?.localHandler).toBeTypeOf('function');
+
+    oldAuth.dispose();
+    const activeDecision = await Promise.resolve(transform(
+      { model: 'k3' },
+      ctxWith({
+        'x-cindy-cc-session-id': currentAuth.sessionId,
+        'x-cindy-cc-session-token': currentAuth.token,
+      }),
+    ));
+    expect(activeDecision?.localHandler).not.toBeTypeOf('function');
+
+    currentAuth.dispose();
+    const disposedDecision = await Promise.resolve(transform(
+      { model: 'k3' },
+      ctxWith({
+        'x-cindy-cc-session-id': currentAuth.sessionId,
+        'x-cindy-cc-session-token': currentAuth.token,
+      }),
+    ));
+    expect(disposedDecision?.localHandler).toBeTypeOf('function');
   });
 
   it('records gateway for an explicitly selected XD passthrough with a frozen child key', () => {

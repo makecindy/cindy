@@ -41,6 +41,7 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
@@ -117,6 +118,52 @@ const log = createMakerLogger('cc-proxy');
 
 let _handle: ProxyHandle | null = null;
 let _initialized = false;
+
+const CC_PROXY_SESSION_ID_HEADER = 'x-cindy-cc-session-id';
+const CC_PROXY_SESSION_TOKEN_HEADER = 'x-cindy-cc-session-token';
+const CC_PROXY_INTERNAL_HEADERS = [CC_PROXY_SESSION_ID_HEADER, CC_PROXY_SESSION_TOKEN_HEADER];
+interface ClaudeProxySessionRegistration {
+  sessionInstanceId?: string;
+  token: string;
+}
+
+const ccProxySessionTokens = new Map<string, ClaudeProxySessionRegistration>();
+
+/** Mint the per-process proof that lets a fresh CC request select its Cindy session route. */
+export function getClaudeProxySessionAuth(
+  sessionId: string,
+  sessionInstanceId?: string,
+): { sessionId: string; token: string; dispose: () => void } | null {
+  const id = sessionId.trim();
+  if (!id) return null;
+  const registration: ClaudeProxySessionRegistration = {
+    ...(sessionInstanceId?.trim() ? { sessionInstanceId: sessionInstanceId.trim() } : {}),
+    token: randomBytes(32).toString('base64url'),
+  };
+  // One business session can be reopened with a new instance. Replacing the
+  // registration immediately revokes a delayed process from the old instance.
+  ccProxySessionTokens.set(id, registration);
+  return {
+    sessionId: id,
+    token: registration.token,
+    dispose: () => {
+      if (ccProxySessionTokens.get(id) === registration) ccProxySessionTokens.delete(id);
+    },
+  };
+}
+
+/** Internal proxy headers are only safe when this process owns the loopback hop. */
+export function isAnthropicCompatProxyReady(): boolean {
+  return _handle !== null;
+}
+
+function authenticateClaudeProxySession(sessionId: string | null, token: string | null): string | null {
+  if (!sessionId || !token) return null;
+  const registration = ccProxySessionTokens.get(sessionId);
+  const expected = registration?.token;
+  if (!expected || expected.length !== token.length) return null;
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(token)) ? sessionId : null;
+}
 
 // gateway api key reader —— 由 host 注入(readClaudeApiKey),避免 proxy-host 直接 import
 // auth-adapters(重模块)。oauth-spawn 下走网关的请求(默认 / 选 XD)要把鉴权头换成它。
@@ -342,11 +389,25 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 都记一笔活动时刻。routingTransform 会处理无 body 控制面请求与 JSON 请求；
     // 非 JSON 的 POST/PUT/PATCH 不经过这里,由响应侧 observer 兜底观察活动。
     // 开销 = 一次 header 读 + 一次活跃会话表反解 + Map.set,非 per-token 路径。
+    const claimedCcSessionId = headerValue(ctx.headers, CC_PROXY_SESSION_ID_HEADER);
+    const claimedCcSessionToken = headerValue(ctx.headers, CC_PROXY_SESSION_TOKEN_HEADER);
+    const authenticatedCcSessionId = authenticateClaudeProxySession(
+      claimedCcSessionId,
+      claimedCcSessionToken,
+    );
+    if ((claimedCcSessionId !== null || claimedCcSessionToken !== null) && !authenticatedCcSessionId) {
+      return {
+        localHandler: async ({ res }) => {
+          res.writeHead(401, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', code: 'invalid_cc_session_token', message: 'Invalid Claude Code proxy session token.' } }));
+        },
+      };
+    }
     const sdkSessionId = ctx.headers['x-claude-code-session-id'];
     const ccSessionId = sdkSessionId && _resolveCcSessionId
       ? _resolveCcSessionId(sdkSessionId)
       : null;
-    const sessionId = piSessionId ?? ccSessionId;
+    const sessionId = piSessionId ?? authenticatedCcSessionId ?? ccSessionId;
     if (sdkSessionId) {
       recordClaudeApiActivity(
         sdkSessionId,
@@ -590,7 +651,12 @@ export function createModelRoutingTransform(): RoutingTransform {
       || headerValue(ctx.headers, 'x-cindy-pi-session-token') !== null
       || headerValue(ctx.headers, 'x-cindy-pi-provider-id') !== null;
     if (!hasInternalPiHeader) return decision;
-    const stripInternalPiHeaders = (
+    const internalHeadersToDelete = [
+      ...(hasInternalPiHeader
+        ? ['x-cindy-pi-session-id', 'x-cindy-pi-session-token', 'x-cindy-pi-provider-id']
+        : []),
+    ];
+    const stripInternalHeaders = (
       resolved: RoutingDecision | null,
     ): RoutingDecision | null => {
       if (resolved?.localHandler) return resolved;
@@ -599,16 +665,14 @@ export function createModelRoutingTransform(): RoutingTransform {
         headerDelete: [
           ...new Set([
             ...(resolved?.headerDelete ?? []),
-            'x-cindy-pi-session-id',
-            'x-cindy-pi-session-token',
-            'x-cindy-pi-provider-id',
+            ...internalHeadersToDelete,
           ]),
         ],
       };
     };
     return decision instanceof Promise
-      ? decision.then(stripInternalPiHeaders)
-      : stripInternalPiHeaders(decision);
+      ? decision.then(stripInternalHeaders)
+      : stripInternalHeaders(decision);
   };
 }
 
@@ -630,6 +694,10 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway 换 key)。
       // 'gateway' 模式恒返 null,字节级行为与扩展前一致。
       routingTransform: createModelRoutingTransform(),
+      // These attestations are meaningful only on the loopback hop. Keeping
+      // stripping in the proxy forwarding layer covers multipart/non-JSON
+      // requests, which intentionally bypass body routing transforms.
+      forwardHeaderDelete: CC_PROXY_INTERNAL_HEADERS,
       // 只读响应观察器(组合三个,互不感知):
       //   - fast mode 链路核验:tee SSE 抽上游 usage.speed(debug-gated);
       //   - 订阅余量旁路:读 anthropic-ratelimit-unified-* headers(仅订阅直连响应,

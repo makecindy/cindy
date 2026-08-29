@@ -968,6 +968,33 @@ async function postWithAuth(url: string, body: unknown, authorization: string): 
 }
 
 describe('anthropic-compat-proxy routingTransform', () => {
+  it('strips loopback-only headers from non-JSON forwards', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      forwardHeaderDelete: ['x-cindy-cc-session-id', 'x-cindy-cc-session-token'],
+    });
+
+    const response = await fetch(`${proxy.url}/v1/files`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/octet-stream',
+        'x-cindy-cc-session-id': 'session-1',
+        'x-cindy-cc-session-token': 'secret',
+      },
+      body: 'raw-upload',
+    });
+
+    expect(response.status).toBe(200);
+    expect(upstream.headers.at(-1)?.['x-cindy-cc-session-id']).toBeUndefined();
+    expect(upstream.headers.at(-1)?.['x-cindy-cc-session-token']).toBeUndefined();
+  });
+
   it('routes an explicit upstream override without resolving an unavailable default upstream', async () => {
     const custom = await startFakeUpstream((_i, _b, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
