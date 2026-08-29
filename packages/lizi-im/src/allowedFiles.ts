@@ -15,10 +15,15 @@ function isPathWithin(base: string, target: string): boolean {
 
 function isSameFile(left: BigIntStats, right: BigIntStats): boolean {
   // Windows file indexes are not always populated. Fail closed on POSIX when
-  // either inode is 0; on win32 treat a pair of zeros as "identity unknown"
-  // and let the pre/post canonical-path checks carry the containment proof.
+  // either inode is 0; on win32 a pair of zeros is not identity — require
+  // matching size so an escaped open of a different file still fails.
   if (left.ino === 0n || right.ino === 0n) {
-    return process.platform === 'win32' && left.ino === 0n && right.ino === 0n;
+    return (
+      process.platform === 'win32' &&
+      left.ino === 0n &&
+      right.ino === 0n &&
+      left.size === right.size
+    );
   }
   return left.dev === right.dev && left.ino === right.ino;
 }
@@ -55,9 +60,11 @@ const defaultFileSystem: AllowedOutboundFileSystem = {
  * Open a model-authored attachment only when both its lexical path and the
  * opened file identity stay under a host-approved root.
  *
- * The pre/post canonical checks plus `dev`/`ino` comparison close the race
- * between path validation and `open()`. Callers must upload from `handle` and
- * close it in a `finally`; reopening `canonicalPath` would reintroduce TOCTOU.
+ * Identity is bound to the pre-open `stat()` of the in-root canonical path,
+ * not a second path lookup after `open()`. Re-statting the caller path would
+ * let an ancestor-directory swap make `targetStatAfter` match an already
+ * escaped handle. Callers must upload from `handle` and close it in a
+ * `finally`; reopening `canonicalPath` would reintroduce TOCTOU.
  */
 export async function openAllowedOutboundFile(
   absPath: string,
@@ -79,12 +86,15 @@ export async function openAllowedOutboundFile(
       ]);
       if (!isPathWithin(rootRealBefore, targetRealBefore)) continue;
 
-      const rootStatBefore = await fileSystem.stat(rootRealBefore);
-      if (!rootStatBefore.isDirectory()) continue;
+      const [rootStatBefore, targetStatBefore] = await Promise.all([
+        fileSystem.stat(rootRealBefore),
+        fileSystem.stat(targetRealBefore),
+      ]);
+      if (!rootStatBefore.isDirectory() || !targetStatBefore.isFile()) continue;
 
       handle = await fileSystem.open(targetRealBefore);
       const openedStat = await handle.stat({ bigint: true });
-      if (!openedStat.isFile()) continue;
+      if (!openedStat.isFile() || !isSameFile(targetStatBefore, openedStat)) continue;
 
       const [rootRealAfter, targetRealAfter] = await Promise.all([
         fileSystem.realpath(rootAbs),
@@ -92,17 +102,20 @@ export async function openAllowedOutboundFile(
       ]);
       if (!isPathWithin(rootRealAfter, targetRealAfter)) continue;
 
-      const [rootStatAfter, targetStatAfter] = await Promise.all([
-        fileSystem.stat(rootRealAfter),
-        fileSystem.stat(targetRealAfter),
-      ]);
-      if (
-        !rootStatAfter.isDirectory() ||
-        !targetStatAfter.isFile() ||
-        !isSameFile(rootStatBefore, rootStatAfter) ||
-        !isSameFile(openedStat, targetStatAfter)
-      ) {
+      const rootStatAfter = await fileSystem.stat(rootRealAfter);
+      if (!rootStatAfter.isDirectory() || !isSameFile(rootStatBefore, rootStatAfter)) {
         continue;
+      }
+
+      if (process.platform === 'linux') {
+        try {
+          const fdPath = await fs.readlink(`/proc/self/fd/${handle.fd}`);
+          if (!isPathWithin(rootRealBefore, fdPath) && !isPathWithin(rootRealAfter, fdPath)) {
+            continue;
+          }
+        } catch {
+          // /proc may be unavailable; identity + canonical path still apply.
+        }
       }
 
       keepHandle = true;

@@ -88,28 +88,52 @@ describe('openAllowedOutboundFile', () => {
     },
   );
 
-  it('rejects when the path identity changes between open and the post-check', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-race-root-'));
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-race-outside-'));
+  it.skipIf(process.platform === 'win32')(
+    'keeps the opened inode when the path is replaced after open',
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-race-root-'));
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-race-outside-'));
+      tempDirs.push(root, outside);
+      const candidate = path.join(root, 'report.txt');
+      const replacement = path.join(outside, 'secret.txt');
+      await Promise.all([
+        fs.writeFile(candidate, 'report'),
+        fs.writeFile(replacement, 'secret'),
+      ]);
+
+      const opened = await openAllowedOutboundFile(candidate, [root], {
+        realpath: (target) => fs.realpath(target),
+        open: async (target) => {
+          const handle = await fs.open(target, 'r');
+          // Path replacement after open must not re-bind the handle. Upload
+          // stays on the inode that matched the pre-open in-root stat.
+          await fs.rename(candidate, path.join(root, 'report-original.txt'));
+          await fs.copyFile(replacement, candidate);
+          return handle;
+        },
+        stat: (target) => fs.stat(target, { bigint: true }),
+      });
+      expect(opened).not.toBeNull();
+      await expect(opened?.handle.readFile({ encoding: 'utf8' })).resolves.toBe('report');
+      await opened?.handle.close();
+    },
+  );
+
+  it('rejects when the opened inode does not match the pre-open in-root file', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-swap-root-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-allowed-swap-outside-'));
     tempDirs.push(root, outside);
     const candidate = path.join(root, 'report.txt');
-    const replacement = path.join(outside, 'secret.txt');
+    const escaped = path.join(outside, 'secret.txt');
     await Promise.all([
       fs.writeFile(candidate, 'report'),
-      fs.writeFile(replacement, 'secret'),
+      fs.writeFile(escaped, 'secret'),
     ]);
 
     await expect(
       openAllowedOutboundFile(candidate, [root], {
         realpath: (target) => fs.realpath(target),
-        open: async (target) => {
-          const handle = await fs.open(target, 'r');
-          // Deterministically replace the directory entry after open but before
-          // the post-open identity check.
-          await fs.rename(candidate, path.join(root, 'report-original.txt'));
-          await fs.copyFile(replacement, candidate);
-          return handle;
-        },
+        open: () => fs.open(escaped, 'r'),
         stat: (target) => fs.stat(target, { bigint: true }),
       }),
     ).resolves.toBeNull();
