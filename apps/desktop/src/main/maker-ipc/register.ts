@@ -11076,6 +11076,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     superseded: boolean;
     generation?: number;
     effectiveProviderId?: string | null;
+    contextWindowConfirmationRequired?: number;
+    contextTokensForConfirmation?: number;
   }> = async () => {
     throw new Error('session runtime selection is not ready');
   };
@@ -14939,6 +14941,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) {
       throwIpcError('INVALID_PARAMS', 'selection must contain effort + fastMode');
     }
+    const confirmedContextWindow = (selection as { confirmedContextWindow?: unknown } | undefined)
+      ?.confirmedContextWindow;
+    if (
+      confirmedContextWindow !== undefined &&
+      (typeof confirmedContextWindow !== 'number' ||
+        !Number.isSafeInteger(confirmedContextWindow) ||
+        confirmedContextWindow <= 0)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'confirmedContextWindow must be a positive integer');
+    }
     let atomicSelection = selection as
       { effort: SessionRuntimeProfile['effort']; fastMode: boolean } | undefined;
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
@@ -15197,7 +15209,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         (currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId);
       let targetContextWindow: number | undefined;
       let modelWindowRebuilt = false;
-      if (runtimeAgentKind && runtimeRouteChanged) {
+      if (runtimeAgentKind && (runtimeRouteChanged || confirmedContextWindow !== undefined)) {
         const verifiedTargetWindow = lookupVerifiedContextWindow(
           (_agentKind, modelId, pid) =>
             resolveVerifiedContextWindow(
@@ -15213,6 +15225,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // Materialized/user-provider catalog windows can be display-only fallbacks.
         // A destructive native-context rebuild may use only a route-verified window.
         targetContextWindow = verifiedTargetWindow ?? undefined;
+        if (
+          confirmedContextWindow !== undefined &&
+          targetContextWindow !== undefined &&
+          confirmedContextWindow > targetContextWindow
+        ) {
+          throwIpcError(
+            'INVALID_PARAMS',
+            'confirmedContextWindow exceeds the verified catalog window',
+          );
+        }
+        targetContextWindow = confirmedContextWindow ?? targetContextWindow;
         if (!targetContextWindow || targetContextWindow <= 0) {
           throwIpcError(
             'PRECONDITION_FAILED',
@@ -15233,6 +15256,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               sessionId,
               {
                 contextWindow: targetContextWindow,
+                ...(confirmedContextWindow !== undefined
+                  ? { recheckTargetPressure: true, confirmedTargetPressure: true }
+                  : {}),
                 assertCanCommit: assertRuntimeOwnerCurrent,
                 beforeClose: () => {
                   clearPendingCredentialSwitchForSession(sessionId, { wake: false });
@@ -15453,12 +15479,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             );
           }
           if (finalPiWindow < targetContextWindow) {
+            let finalPressureContextTokens: number | undefined;
             const finalPreparation =
               await contextOverflowRolloverHolder!.prepareModelWindowSwitch(sessionId, {
                 contextWindow: finalPiWindow,
                 recheckTargetPressure: true,
+                confirmedTargetPressure:
+                  internalOptions.source !== 'user' ||
+                  isDeviceLinkInvoke() ||
+                  confirmedContextWindow === finalPiWindow,
+                onConfirmationRequired: (contextTokens) => {
+                  finalPressureContextTokens = contextTokens;
+                },
                 assertCanCommit: assertRuntimeOwnerCurrent,
               });
+            if (finalPreparation === 'confirmation-required') {
+              assertRuntimeOwnerCurrent();
+              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+              restoreControlStores();
+              return {
+                ...response,
+                contextWindowConfirmationRequired: finalPiWindow,
+                contextTokensForConfirmation: finalPressureContextTokens,
+              };
+            }
             if (finalPreparation === 'rebuilt') {
               modelWindowRebuilt = true;
               targetContextWindow = finalPiWindow;

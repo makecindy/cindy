@@ -361,32 +361,48 @@ describe('createContextOverflowRollover', () => {
     );
   });
 
-  it('rebuilds when Pi final-window verification reveals target pressure', async () => {
-    const deps = makeDeps([msg('user', '继续', 'u1')]);
-    deps.getSessionRow.mockResolvedValue({
-      ...(await deps.getSessionRow()),
-      agentKind: 'pi',
-      contextTokens: 300_000,
-      contextWindow: 500_000,
-    });
-    deps.getLiveSession.mockReturnValue({
-      isTurnRunning: () => false,
-      getUsageSnapshot: () => ({ contextTokens: 300_000, contextWindow: 272_000 }),
-    });
-    const rollover = createContextOverflowRollover(deps);
+  it.each([250_000, 300_000])(
+    'requires confirmation at %i tokens before rebuilding pressure revealed by Pi final-window verification',
+    async (contextTokens) => {
+      const deps = makeDeps([msg('user', '继续', 'u1')]);
+      deps.getSessionRow.mockResolvedValue({
+        ...(await deps.getSessionRow()),
+        agentKind: 'pi',
+        contextTokens,
+        contextWindow: 500_000,
+      });
+      deps.getLiveSession.mockReturnValue({
+        isTurnRunning: () => false,
+        getUsageSnapshot: () => ({ contextTokens, contextWindow: 272_000 }),
+      });
+      const rollover = createContextOverflowRollover(deps);
+      const onConfirmationRequired = vi.fn();
 
-    await expect(
-      rollover.prepareModelWindowSwitch('s1', {
-        contextWindow: 272_000,
-        recheckTargetPressure: true,
-      }),
-    ).resolves.toBe('rebuilt');
-    expect(deps.commitRebuild).toHaveBeenCalledWith(
-      's1',
-      expect.any(String),
-      expect.objectContaining({ reason: 'model-window-switch' }),
-    );
-  });
+      await expect(
+        rollover.prepareModelWindowSwitch('s1', {
+          contextWindow: 272_000,
+          recheckTargetPressure: true,
+          onConfirmationRequired,
+        }),
+      ).resolves.toBe('confirmation-required');
+      expect(onConfirmationRequired).toHaveBeenCalledWith(contextTokens);
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+
+      await expect(
+        rollover.prepareModelWindowSwitch('s1', {
+          contextWindow: 272_000,
+          recheckTargetPressure: true,
+          confirmedTargetPressure: true,
+        }),
+      ).resolves.toBe('rebuilt');
+      expect(deps.commitRebuild).toHaveBeenCalledWith(
+        's1',
+        expect.any(String),
+        expect.objectContaining({ reason: 'model-window-switch' }),
+      );
+    },
+  );
 
   it('does not rebuild after Pi final-window verification below the pressure line', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);

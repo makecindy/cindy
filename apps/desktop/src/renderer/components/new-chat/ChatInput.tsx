@@ -6040,9 +6040,13 @@ export function ChatInput({
       newModelId: string,
       sourceRemoteDeviceId?: string,
       targetProviderId?: string | null,
+      verifiedTargetContextWindow?: number,
+      verifiedContextTokens?: number,
+      requireDestructiveConfirmation = false,
     ): Promise<boolean> => {
       if (!sessionId) return true;
-      const contextTokens = makerChatStore.getSnapshot(sessionId).agentStatus.contextTokens;
+      const contextTokens =
+        verifiedContextTokens ?? makerChatStore.getSnapshot(sessionId).agentStatus.contextTokens;
       if (!contextTokens || contextTokens <= 0) return true;
       // 显式来源必须按完整 route 查窗口：同 model id 在不同 provider 可分别为 1M / 200K。
       // 无来源的旧 flat 入口才沿用设备能力缓存的 model-id 回退。
@@ -6057,7 +6061,8 @@ export function ChatInput({
             )
           : null;
       const targetContextWindow =
-        targetProviderId !== undefined
+        verifiedTargetContextWindow ??
+        (targetProviderId !== undefined
           ? targetRouteProviderId && currentModelAgentKind
             ? resolveProviderModelContextWindow({
                 providers,
@@ -6066,7 +6071,7 @@ export function ChatInput({
                 agentKind: currentModelAgentKind,
               })
             : undefined
-          : getModelById(newModelId, remoteDeviceId)?.contextWindow;
+          : getModelById(newModelId, remoteDeviceId)?.contextWindow);
       const verdict = assessModelSwitchContext({
         contextTokens,
         targetContextWindow,
@@ -6093,7 +6098,10 @@ export function ChatInput({
         );
         return false;
       }
-      if (verdict.level === 'warn' || verdict.level === 'danger') {
+      if (
+        !requireDestructiveConfirmation &&
+        (verdict.level === 'warn' || verdict.level === 'danger')
+      ) {
         toast.warning(t('newChat.chatInput.modelSwitchContextGuard.warnToast', vars), {
           duration: 4000,
         });
@@ -6108,6 +6116,46 @@ export function ChatInput({
       });
     },
     [sessionId, remoteHostId, confirmDialog, t, providers, currentModelAgentKind],
+  );
+
+  const setModelWithFinalWindowConfirmation = useCallback(
+    async (
+      modelId: string,
+      providerId: string | null | undefined,
+      invoke: (confirmedContextWindow?: number) =>
+        Promise<{ deferred: boolean; superseded?: boolean } | undefined>,
+    ): Promise<{
+      accepted: boolean;
+      result?: { deferred: boolean; superseded?: boolean };
+    }> => {
+      let result = await invoke();
+      const finalPressure = result as {
+        contextWindowConfirmationRequired?: unknown;
+        contextTokensForConfirmation?: unknown;
+      } | null;
+      const requiredWindow = finalPressure?.contextWindowConfirmationRequired;
+      if (typeof requiredWindow !== 'number' || requiredWindow <= 0) {
+        return { accepted: true, result };
+      }
+      const accepted = await confirmModelSwitchContextGuard(
+        modelId,
+        undefined,
+        providerId,
+        requiredWindow,
+        typeof finalPressure?.contextTokensForConfirmation === 'number'
+          ? finalPressure.contextTokensForConfirmation
+          : undefined,
+        true,
+      );
+      if (!accepted) return { accepted: false };
+      result = await invoke(requiredWindow);
+      if (
+        typeof (result as { contextWindowConfirmationRequired?: unknown } | null)
+          ?.contextWindowConfirmationRequired === 'number'
+      ) return { accepted: false };
+      return { accepted: true, result };
+    },
+    [confirmModelSwitchContextGuard],
   );
 
   // session-agent-switch 意图制:选中「只属于另一家引擎」的模型 → 只向 main 登记
@@ -6811,13 +6859,27 @@ export function ChatInput({
             const rollbackSeq = (switchSeqBySession.get(sessionId) ?? 0) + 1;
             switchSeqBySession.set(sessionId, rollbackSeq);
             rollbackModelAfterPersistFailure = { model: activeModel, seq: rollbackSeq };
-            const setModelResult = await window.electronAPI.maker.setModel(
-              sessionId,
-              newModelId,
-              undefined,
-              expectedAgentSwitchRevision,
-              { effort: newEffort, fastMode: restoredFast },
-            );
+            const { accepted, result: setModelResult } =
+              await setModelWithFinalWindowConfirmation(
+                newModelId,
+                undefined,
+                (confirmedContextWindow) =>
+                  window.electronAPI.maker.setModel(
+                    sessionId,
+                    newModelId,
+                    undefined,
+                    expectedAgentSwitchRevision,
+                    {
+                      effort: newEffort,
+                      fastMode: restoredFast,
+                      ...(confirmedContextWindow ? { confirmedContextWindow } : {}),
+                    } as { effort: string; fastMode: boolean },
+                  ),
+              );
+            if (!accepted) {
+              rollbackModelAfterPersistFailure = null;
+              return false;
+            }
             if (setModelResult?.superseded) {
               rollbackModelAfterPersistFailure = null;
               return false;
@@ -6917,6 +6979,7 @@ export function ChatInput({
       syncSessionDraftModelPrefs,
       fastMode,
       confirmModelSwitchContextGuard,
+      setModelWithFinalWindowConfirmation,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
       settingsLocked,
@@ -7359,13 +7422,27 @@ export function ChatInput({
           // deferred = 会话自己在跑,main 已登记 pending、turn 结束自动生效(选择不丢);
           // DB 照常落盘(重启也生效),但跳过 runtime setEffort/setFastMode —— 会话
           // turn 结束会被关闭重建,别去动还在跑的旧 turn。
-          const setModelResult = await window.electronAPI.maker.setModel(
-            sessionId,
-            modelId,
-            newProviderId,
-            expectedAgentSwitchRevision,
-            { effort: eff, fastMode: restoredFast },
-          );
+          const { accepted, result: setModelResult } =
+            await setModelWithFinalWindowConfirmation(
+              modelId,
+              newProviderId,
+              (confirmedContextWindow) =>
+                window.electronAPI.maker.setModel(
+                  sessionId,
+                  modelId,
+                  newProviderId,
+                  expectedAgentSwitchRevision,
+                  {
+                    effort: eff,
+                    fastMode: restoredFast,
+                    ...(confirmedContextWindow ? { confirmedContextWindow } : {}),
+                  } as { effort: string; fastMode: boolean },
+                ),
+            );
+          if (!accepted) {
+            rollbackProviderAfterPersistFailure = null;
+            return false;
+          }
           if (setModelResult?.superseded) {
             rollbackProviderAfterPersistFailure = null;
             return false;
@@ -7486,6 +7563,7 @@ export function ChatInput({
       effectiveSourceId,
       t,
       confirmModelSwitchContextGuard,
+      setModelWithFinalWindowConfirmation,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
       settingsLocked,

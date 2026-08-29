@@ -369,6 +369,7 @@ export type OverflowClaimResult = 'claimed' | 'in-flight' | 'idle';
 
 export type ModelWindowSwitchPreparationResult =
   | 'not-needed'
+  | 'confirmation-required'
   | 'rebuilt'
   | 'busy'
   | 'remote-unsupported'
@@ -407,6 +408,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     target: {
       contextWindow: number;
       recheckTargetPressure?: boolean;
+      confirmedTargetPressure?: boolean;
+      onConfirmationRequired?: (contextTokens: number) => void;
       assertCanCommit?: () => void;
       beforeClose?: () => void;
     },
@@ -549,6 +552,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     target: {
       contextWindow: number;
       recheckTargetPressure?: boolean;
+      confirmedTargetPressure?: boolean;
+      onConfirmationRequired?: (contextTokens: number) => void;
       assertCanCommit?: () => void;
       beforeClose?: () => void;
     },
@@ -655,6 +660,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     }
     if (sessionRow.remoteHostId) return 'remote-unsupported';
     if (live?.isTurnRunning()) return 'busy';
+    if (targetPressureRequiresRebuild && target.confirmedTargetPressure !== true) {
+      target.onConfirmationRequired?.(contextTokens);
+      return 'confirmation-required';
+    }
 
     const source = (await deps.listMessages(sessionId)).filter(
       (message) => message.role !== 'error',

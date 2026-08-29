@@ -503,6 +503,14 @@ describe('session runtime control wiring', () => {
     expect(finalWindow).toBeGreaterThan(apply);
     expect(finalWindow).toBeLessThan(runtimeCommit);
     expect(setModel).toContain('recheckTargetPressure: true');
+    expect(setModel).toContain("finalPreparation === 'confirmation-required'");
+    expect(setModel).toContain('contextWindowConfirmationRequired: finalPiWindow');
+    expect(setModel).toContain('contextTokensForConfirmation: finalPressureContextTokens');
+    expect(setModel).toContain('finalPressureContextTokens = contextTokens');
+    expect(setModel).toContain('runtimeRouteChanged || confirmedContextWindow !== undefined');
+    expect(setModel).toContain('targetContextWindow = confirmedContextWindow ?? targetContextWindow');
+    expect(setModel).toContain('{ recheckTargetPressure: true, confirmedTargetPressure: true }');
+    expect(setModel).toContain('confirmedContextWindow === finalPiWindow');
     expect(setModel).toContain("finalPreparation === 'rebuilt'");
   });
 

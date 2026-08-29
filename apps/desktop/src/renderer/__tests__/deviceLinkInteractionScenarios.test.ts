@@ -1269,13 +1269,13 @@ describe('远程交互接线不变式', () => {
     const end = src.indexOf('const handleNavigateToProviders', start);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
-    const runtimeGate = body.indexOf(
-      'const setModelResult = await window.electronAPI.maker.setModel(',
-    );
-    const atomicSelection = body.indexOf('{ effort: eff, fastMode: restoredFast }');
+    const runtimeGate = body.indexOf('await setModelWithFinalWindowConfirmation(');
+    const atomicSelection = body.indexOf('effort: eff,', runtimeGate);
+    const atomicFast = body.indexOf('fastMode: restoredFast,', atomicSelection);
     const applyUi = body.indexOf('applyProviderSelection();');
     expect(runtimeGate).toBeGreaterThan(-1);
     expect(atomicSelection).toBeGreaterThan(runtimeGate);
+    expect(atomicFast).toBeGreaterThan(atomicSelection);
     expect(applyUi).toBeGreaterThan(-1);
     expect(atomicSelection).toBeLessThan(applyUi);
     expect(body).not.toContain('await sessionService.update(sessionId, {');
@@ -1288,16 +1288,13 @@ describe('远程交互接线不变式', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
-    const runtimeGate = body.indexOf(
-      'const setModelResult = await window.electronAPI.maker.setModel(',
-    );
-    const atomicSelection = body.indexOf(
-      '{ effort: newEffort, fastMode: restoredFast }',
-      runtimeGate,
-    );
+    const runtimeGate = body.indexOf('await setModelWithFinalWindowConfirmation(');
+    const atomicSelection = body.indexOf('effort: newEffort,', runtimeGate);
+    const atomicFast = body.indexOf('fastMode: restoredFast,', atomicSelection);
     const applyUi = body.indexOf('onModelDidChange?.(newModelId)');
     expect(runtimeGate).toBeGreaterThan(-1);
     expect(atomicSelection).toBeGreaterThan(runtimeGate);
+    expect(atomicFast).toBeGreaterThan(atomicSelection);
     expect(applyUi).toBeGreaterThan(-1);
     expect(atomicSelection).toBeLessThan(applyUi);
     expect(body).not.toContain('await sessionService.update(sessionId, {');

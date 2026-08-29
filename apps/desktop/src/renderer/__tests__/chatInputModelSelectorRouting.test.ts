@@ -37,6 +37,22 @@ describe('ChatInput model source switching wiring', () => {
     );
   });
 
+  it('confirms pressure first revealed by Pi final-window verification before retrying', () => {
+    const helperStart = chatInputSource.indexOf(
+      'const setModelWithFinalWindowConfirmation = useCallback(',
+    );
+    const helperEnd = chatInputSource.indexOf('// session-agent-switch', helperStart);
+    const helper = chatInputSource.slice(helperStart, helperEnd);
+
+    expect(helper).toContain('contextWindowConfirmationRequired');
+    expect(helper).toContain('contextTokensForConfirmation');
+    expect(helper).toMatch(
+      /confirmModelSwitchContextGuard\(\s*modelId,\s*undefined,\s*providerId,\s*requiredWindow,/,
+    );
+    expect(helper).toContain('result = await invoke(requiredWindow)');
+    expect(chatInputSource).toContain('? { confirmedContextWindow }');
+  });
+
   it('blocks pressured SSH model switches before any continue/confirm path', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);
