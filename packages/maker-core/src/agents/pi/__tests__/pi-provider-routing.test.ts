@@ -212,7 +212,7 @@ describe('Pi provider-aware model routing', () => {
         }>;
       }>;
     };
-    expect(apiResolver).toHaveBeenCalledWith('openai', 'shared-model');
+    expect(apiResolver).toHaveBeenCalledWith('openai', 'shared-model', { remote: false });
     expect(descriptorResolver).toHaveBeenCalledWith('openai', 'shared-model');
     expect(models.providers.cindy?.models.find((model) => model.id === 'shared-model')).toMatchObject({
       name: 'Subscription Shared',
@@ -225,7 +225,7 @@ describe('Pi provider-aware model routing', () => {
     expect(models.providers['native-b']?.models.some((model) => model.id === 'shared-model')).toBe(true);
 
     await expect(handle.setModel!('shared-model', { providerId: 'xd' })).rejects.toThrow(
-      /restart the Pi session to change provider wire protocol/,
+      /restart the Pi session to change provider API/,
     );
     expect(captured.requests).not.toContainEqual({
       type: 'set_model',
@@ -1040,7 +1040,7 @@ describe('Pi provider-aware model routing', () => {
     gatewayApi = 'openai-responses';
     captured.requests.length = 0;
     await expect(handle.setModel!('shared-model', { providerId: 'xd' })).rejects.toThrow(
-      /restart the Pi session to change provider wire protocol/,
+      /restart the Pi session to change provider API/,
     );
     expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
     await handle.close();
@@ -1627,6 +1627,7 @@ describe('Pi provider-aware model routing', () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
       resolveRemotePiBinaryPath: async () => '/remote/pi',
       getRemotePiFileOps: () => ({
         mkdirp: async () => {},
@@ -2055,7 +2056,14 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
-  it('keeps provider cindy while applying a model-level Responses API and /v1 base URL', async () => {
+  it.each([
+    ['anthropic-messages', 'messages-model', undefined],
+    ['openai-responses', 'responses-model', 'http://127.0.0.1:9988/v1'],
+    ['openai-completions', 'moonshotai/kimi-k3', 'http://127.0.0.1:9988/v1'],
+    ['google-generative-ai', 'google/gemini-3.6-flash', 'http://127.0.0.1:9988/v1beta'],
+  ] as const)(
+    'keeps provider cindy while emitting Gateway API %s',
+    async (api, modelId, baseUrl) => {
     const deps: AgentDeps = {
       auth: {
         getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
@@ -2069,8 +2077,8 @@ describe('Pi provider-aware model routing', () => {
       capabilityAdditions: {
         availableModels: [
           {
-            id: 'responses-model',
-            displayName: 'Responses Model',
+            id: modelId,
+            displayName: modelId,
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
@@ -2078,14 +2086,26 @@ describe('Pi provider-aware model routing', () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
-      resolvePiGatewayModelApi: (_providerId, modelId) =>
-        modelId === 'responses-model' ? 'openai-responses' : 'anthropic-messages',
+      resolvePiGatewayModelApi: () => api,
+      resolvePiGatewayModelSpec: () => ({
+        api,
+        ...(api === 'openai-completions'
+          ? {
+              compat: {
+                maxTokensField: 'max_tokens',
+                thinkingFormat: 'openai',
+                requiresReasoningContentOnAssistantMessages: true,
+                deferredToolsMode: 'kimi',
+              },
+            }
+          : {}),
+      }),
     };
 
     const handle = await new PiAgent(deps).startSession({
-      sessionId: 'gateway-responses-model',
+      sessionId: `gateway-${api}`,
       workingDir: cwd,
-      model: 'responses-model',
+      model: modelId,
       providerId: 'xd',
     });
 
@@ -2096,15 +2116,33 @@ describe('Pi provider-aware model routing', () => {
     ) as {
       providers: Record<string, {
         api: string;
-        models: Array<{ id: string; api?: string; baseUrl?: string }>;
+        models: Array<{
+          id: string;
+          api?: string;
+          baseUrl?: string;
+          headers?: Record<string, string>;
+          compat?: Record<string, unknown>;
+        }>;
       }>;
     };
     expect(models.providers.cindy?.api).toBe('anthropic-messages');
-    expect(models.providers.cindy?.models.find((model) => model.id === 'responses-model'))
-      .toMatchObject({
-        api: 'openai-responses',
-        baseUrl: 'http://127.0.0.1:9988/v1',
+    const model = models.providers.cindy?.models.find((candidate) => candidate.id === modelId);
+    expect(model).toMatchObject({ api });
+    expect(model?.baseUrl).toBe(baseUrl);
+    if (api === 'openai-completions') {
+      expect(model?.compat).toMatchObject({
+        maxTokensField: 'max_tokens',
+        thinkingFormat: 'openai',
+        requiresReasoningContentOnAssistantMessages: true,
+        deferredToolsMode: 'kimi',
       });
+    }
+    if (api === 'google-generative-ai') {
+      expect(model?.headers).toEqual({
+        authorization: 'Bearer $CINDY_PI_API_KEY',
+        'x-goog-api-key': '$CINDY_PI_API_KEY',
+      });
+    }
     await handle.close();
   });
 
@@ -2170,7 +2208,7 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
-  it('still fails closed when an XD Pi model has no valid v3 wire protocol', async () => {
+  it('omits an unsupported Gateway route without aborting a same-id BYOM session', async () => {
     const deps: AgentDeps = {
       auth: {
         getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
@@ -2184,8 +2222,8 @@ describe('Pi provider-aware model routing', () => {
       capabilityAdditions: {
         availableModels: [
           {
-            id: 'invalid-xd-model',
-            displayName: 'Invalid XD Model',
+            id: 'shared-future-model',
+            displayName: 'Shared Future Model',
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
@@ -2194,15 +2232,34 @@ describe('Pi provider-aware model routing', () => {
       },
       resolvePiAgentHome: () => agentHome,
       resolvePiGatewayModelApi: () => null,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'my-local',
+            name: 'My Local',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            api: 'openai-completions',
+            models: [{ id: 'shared-future-model' }],
+          },
+        ],
+        env: {},
+      }),
     };
 
-    await expect(new PiAgent(deps).startSession({
-      sessionId: 'invalid-xd-v3-wire',
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'unsupported-xd-same-id-byom',
       workingDir: cwd,
-      model: 'invalid-xd-model',
-      providerId: 'xd',
-    })).rejects.toThrow(/Model Access v3 did not provide a Pi wire protocol/);
-    expect(captured.args).toEqual([]);
+      model: 'shared-future-model',
+      providerId: 'my-local',
+    });
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { models: Array<{ id: string }> }> };
+    expect(models.providers.cindy?.models.find((model) => model.id === 'shared-future-model'))
+      .toBeUndefined();
+    expect(models.providers['my-local']?.models.find((model) => model.id === 'shared-future-model'))
+      .toMatchObject({ id: 'shared-future-model' });
+    await handle.close();
   });
 
   it('reconciles a stale persisted effort to the selected BYOM model default before startup', async () => {
@@ -2469,6 +2526,63 @@ describe('Pi provider-aware model routing', () => {
     spawnPiSubagentRunner: testSubagentRunnerHost,
     resolvePiGatewayModelApi: () => 'anthropic-messages',
     resolvePiNativeProviders,
+  });
+
+  it('omits remote Google Gateway routes that cannot sanitize x-goog-api-key', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const written = new Map<string, string>();
+    const modelId = 'google/gemini-3.6-flash';
+    const base = byomDeps(async () => ({ providers: [], env: {} }), [
+      {
+        id: modelId,
+        displayName: 'Gemini 3.6 Flash',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ]);
+    const agent = new PiAgent({
+      ...base,
+      runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+      resolvePiGatewayModelApi: () => 'google-generative-ai',
+      resolvePiGatewayModelSpec: () => ({ api: 'google-generative-ai' }),
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async () => remoteStub,
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async (filePath, content) => {
+          written.set(filePath, content);
+        },
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'remote-google-header-sanitizer',
+      workingDir: cwd,
+      model: modelId,
+      providerId: 'xd',
+      remoteHostId: 'remote-host',
+    })).rejects.toThrow(/\[PI_GATEWAY_PROTOCOL_UNAVAILABLE\]/);
+    const modelsJson = [...written.entries()].find(([filePath]) => filePath.endsWith('models.json'))?.[1];
+    expect(modelsJson).toBeTruthy();
+    expect(modelsJson).not.toContain('x-goog-api-key');
+    const models = JSON.parse(modelsJson!) as {
+      providers: Record<string, { models: Array<{ id: string }> }>;
+    };
+    expect(models.providers.cindy?.models).toEqual([]);
   });
 
   function installPlanModeExtension(): void {
