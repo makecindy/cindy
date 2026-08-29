@@ -151,8 +151,6 @@ describe('withCodexUpstreamRecording', () => {
     headers: threadId ? { 'thread-id': threadId } : {},
   }) as never;
 
-  // Each case reimports the proxy host via vi.resetModules(). Under Linux CI
-  // shard load the cold import has exceeded Vitest's 5s default.
   it('records the override upstream origin for the request thread', async () => {
     const host = await freshCodexProxyHost();
     host.resetCodexThreadUpstreamForTest();
@@ -317,7 +315,7 @@ describe('withCodexUpstreamRecording', () => {
 
     expect(await wrapped({}, ctxFor('t-boom'))).toBe(decision);
   });
-}, 20_000);
+});
 
 describe('codex gateway config', () => {
   it('所有认证模式都让缺少 model metadata 的 Codex 模型使用 CodeModeOnly', async () => {

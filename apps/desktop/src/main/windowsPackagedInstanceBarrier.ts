@@ -3,14 +3,6 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 5_000;
 const HELPER_EXIT_TIMEOUT_MS = 2_000;
 const MAX_HELPER_OUTPUT_BYTES = 16 * 1024;
-// PowerShell Add-Type cold compile under Windows CI load is independent of
-// mutex WaitOne. A short busy-path timeoutMs (50ms) still needs this budget
-// or Node times out before the helper can print {"status":"busy"}.
-const HELPER_START_BUFFER_MS = 10_000;
-
-function helperReadinessTimeoutMs(timeoutMs: number): number {
-  return timeoutMs + HELPER_START_BUFFER_MS;
-}
 
 const WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -122,7 +114,7 @@ function waitForFirstLine(
     const timer = setTimeout(() => {
       finish(() => reject(new Error('timed out acquiring Windows packaged-instance barrier')));
       child.kill();
-    }, helperReadinessTimeoutMs(timeoutMs));
+    }, timeoutMs + 1_000);
     const onStdout = (chunk: Buffer | string): void => {
       stdout += chunk.toString();
       if (stdout.length > MAX_HELPER_OUTPUT_BYTES) {
@@ -272,6 +264,4 @@ export const __testing = {
   WINDOWS_PACKAGED_INSTANCE_BARRIER_SCRIPT,
   parseBarrierStatus,
   processSingletonNames,
-  HELPER_START_BUFFER_MS,
-  helperReadinessTimeoutMs,
 };
