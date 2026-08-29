@@ -12,7 +12,7 @@
  * resume 路径、启动 RPC 也不会即时拒),控制流本身才是被测对象。
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -2125,7 +2125,19 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     ['failure', 'pi list failed at /private/package-home'],
     ['timeout', 'pi list timed out after 30000ms'],
   ])('fails local startup explicitly when native package projection has a %s', async (_kind, detail) => {
+    let configHomeDuringProjection = '';
+    let runtimeFilesDuringProjection: string[] = [];
     const resolvePiNativePackagePaths = vi.fn(async () => {
+      const runTmp = path.join(agentHome, 'run-tmp');
+      const configHomes = readdirSync(runTmp);
+      expect(configHomes).toHaveLength(1);
+      configHomeDuringProjection = path.join(runTmp, configHomes[0]!);
+      expect(existsSync(path.join(configHomeDuringProjection, 'models.json'))).toBe(true);
+      const runtimeDir = path.join(agentHome, 'runtime');
+      runtimeFilesDuringProjection = readdirSync(runtimeDir)
+        .filter((name) => name.startsWith('perm-') || name.startsWith('subagent-'))
+        .map((name) => path.join(runtimeDir, name));
+      expect(runtimeFilesDuringProjection).toHaveLength(2);
       throw new Error(detail);
     });
     const agent = new PiAgent(buildDeps({ resolvePiNativePackagePaths }));
@@ -2139,6 +2151,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     );
     expect(resolvePiNativePackagePaths).toHaveBeenCalledOnce();
     expect(knobs.spawnedArgs).toEqual([]);
+    expect(disposed).toBe(1);
+    await waitFor(() => !existsSync(configHomeDuringProjection));
+    await waitFor(() => runtimeFilesDuringProjection.every((file) => !existsSync(file)));
     const reviewHandle = await agent.startSession({
       sessionId: 'native-package-review',
       workingDir: cwd,

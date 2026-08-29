@@ -2753,13 +2753,24 @@ export class PiAgent extends BaseAgent {
             piCompactionPct: sessionPiAutoCompactPct,
             packages: nativePackagePaths,
           });
-        } catch (error) {
+        } catch {
+          // Projection runs after config/runtime files and the MCP session route
+          // exist, but before a handle owns their normal close path. Roll back
+          // exactly that unpublished startup state before surfacing the failure.
+          try {
+            disposeSessionCtx?.();
+          } catch {
+            /* best-effort: cleanup failure must not mask package-state failure */
+          }
+          disposeSessionCtx = undefined;
+          cleanupConfigHome();
+          cleanupRuntimeFiles();
           // Do not substitute Cindy's static analyzer as an allowlist or launch
           // with an empty package projection. That would silently drop native
           // Pi packages while claiming the task started normally.
           this.deps.logger.warn('pi native package projection unavailable', {
             sessionId: opts.sessionId ?? null,
-            message: error instanceof Error ? error.message : String(error),
+            failureCategory: 'state-unavailable',
           });
           const strings = resolvePiExtensionUiStrings(this.deps);
           throw new Error(

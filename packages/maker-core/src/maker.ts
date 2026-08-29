@@ -773,7 +773,6 @@ export class Maker {
       throw error;
     }
 
-    let startSucceededHookEntered = false;
     const rollbackStaleLocalPiMetadata = async (): Promise<void> => {
       const current = await this.storage.get(id);
       if (createdMetadata) {
@@ -800,31 +799,21 @@ export class Maker {
           error: String(error),
         });
       }
-      let cleanupFailed = false;
       try {
         await handle.close({ reason: 'navigation' });
       } catch (closeError) {
-        cleanupFailed = true;
         this.failedHandleCleanups.set(id, {
           handle,
           promise: null,
-          ...(startSucceededHookEntered && this.lifecycleHooks.onClose
-            ? { onCleaned: () => void this.lifecycleHooks.onClose!(id) }
-            : {}),
         });
         this.logger.warn('failed to close stale local Pi handle after package mutation', {
           sessionId: id,
           error: String(closeError),
         });
       }
-      if (!cleanupFailed && startSucceededHookEntered && this.lifecycleHooks.onClose) {
-        await Promise.resolve(this.lifecycleHooks.onClose(id)).catch((error) => {
-          this.logger.warn('lifecycleHooks.onClose threw after stale Pi startup', {
-            sessionId: id,
-            error: String(error),
-          });
-        });
-      }
+      // This handle was never published. Ordinary onClose may release a task's
+      // worktree and other durable ownership, so it belongs only to published
+      // session closure—not startup rollback.
       throw new Error('Local Pi runtime startup was invalidated by a package change; retry the task.');
     };
     if (
@@ -858,7 +847,6 @@ export class Maker {
     }
 
     if (this.lifecycleHooks.onStartSucceeded) {
-      startSucceededHookEntered = true;
       try {
         await this.lifecycleHooks.onStartSucceeded(id, startOpts);
       } catch (err) {

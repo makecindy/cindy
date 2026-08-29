@@ -341,7 +341,7 @@ describe('Maker local Pi package generation fence', () => {
     expect(maker.listActiveSessions()).toEqual([]);
   });
 
-  it('rejects a mutation during async onStartSucceeded and runs lifecycle cleanup', async () => {
+  it('rejects a mutation during async onStartSucceeded without closing unpublished task ownership', async () => {
     const hookEntered = createDeferred();
     const allowHook = createDeferred();
     const onClose = vi.fn();
@@ -372,7 +372,8 @@ describe('Maker local Pi package generation fence', () => {
     allowHook.resolve();
 
     await expect(creating).rejects.toThrow('invalidated by a package change');
-    expect(onClose).toHaveBeenCalledWith('hook-race');
+    expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+    expect(onClose).not.toHaveBeenCalled();
     expect(await storage.get('hook-race')).toBeNull();
     expect(maker.listActiveSessions()).toEqual([]);
   });
