@@ -1,7 +1,10 @@
 import type { Maker, Session } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { invalidateLocalPiPackageRuntimes } from '../pi-package-runtime-invalidation.js';
+import {
+  invalidateLocalPiPackageRuntimes,
+  invalidateLocalPiPackageRuntimesForObservedChange,
+} from '../pi-package-runtime-invalidation.js';
 
 type InvalidationMaker = Pick<
   Maker,
@@ -44,7 +47,9 @@ describe('Pi package runtime invalidation', () => {
       closeSession,
     };
 
-    await expect(invalidateLocalPiPackageRuntimes(maker)).resolves.toEqual({
+    await expect(
+      invalidateLocalPiPackageRuntimesForObservedChange(maker, 'external-runtime'),
+    ).resolves.toEqual({
       requestedSessionIds: ['local-pi'],
       failedSessionIds: [],
     });
@@ -53,6 +58,21 @@ describe('Pi package runtime invalidation', () => {
       listActiveSessions.mock.invocationCallOrder[0]!,
     );
     expect(closeSession).toHaveBeenCalledWith('local-pi', 'requested');
+  });
+
+  it('does not duplicate convergence for the same-process token publication', async () => {
+    const maker: InvalidationMaker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
+      listActiveSessions: vi.fn(() => []),
+      getSessionMeta: vi.fn(),
+      closeSession: vi.fn(),
+    };
+
+    await expect(
+      invalidateLocalPiPackageRuntimesForObservedChange(maker, 'local'),
+    ).resolves.toBeNull();
+    expect(maker.advanceLocalPiPackageRuntimeGeneration).not.toHaveBeenCalled();
+    expect(maker.listActiveSessions).not.toHaveBeenCalled();
   });
 
   it('still closes known-local siblings when one metadata lookup fails', async () => {

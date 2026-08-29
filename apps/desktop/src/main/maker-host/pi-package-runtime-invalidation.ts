@@ -1,5 +1,7 @@
 import type { Maker } from '@cindy/maker-core';
 
+import type { PiPackagesChangeOrigin } from './pi-package-store.js';
+
 /**
  * Stop every live local ordinary Pi runtime after Settings changes the managed
  * package roster. Pi loads extensions only at process startup, so leaving an
@@ -14,14 +16,24 @@ export interface PiPackageRuntimeInvalidationResult {
   failedSessionIds: string[];
 }
 
+type InvalidationMaker = Pick<
+  Maker,
+  | 'advanceLocalPiPackageRuntimeGeneration'
+  | 'listActiveSessions'
+  | 'getSessionMeta'
+  | 'closeSession'
+>;
+
+export async function invalidateLocalPiPackageRuntimesForObservedChange(
+  maker: InvalidationMaker,
+  origin: PiPackagesChangeOrigin,
+): Promise<PiPackageRuntimeInvalidationResult | null> {
+  if (origin !== 'external-runtime') return null;
+  return invalidateLocalPiPackageRuntimes(maker);
+}
+
 export async function invalidateLocalPiPackageRuntimes(
-  maker: Pick<
-    Maker,
-    | 'advanceLocalPiPackageRuntimeGeneration'
-    | 'listActiveSessions'
-    | 'getSessionMeta'
-    | 'closeSession'
-  >,
+  maker: InvalidationMaker,
 ): Promise<PiPackageRuntimeInvalidationResult> {
   // Advance before taking the active-session snapshot. A local Pi startup is
   // then either already published and included below, or observes the newer

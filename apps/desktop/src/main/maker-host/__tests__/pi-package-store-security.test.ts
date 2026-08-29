@@ -1917,7 +1917,9 @@ describe('Pi package executable-code boundary', () => {
         promptTemplates: [],
         packageRoots: [],
       });
-      await vi.waitFor(() => expect(secondListener).toHaveBeenCalled(), { timeout: 2_000 });
+      await vi.waitFor(() => expect(secondListener).toHaveBeenCalledWith('external'), {
+        timeout: 2_000,
+      });
       await expect(secondStore.listPiPackages()).resolves.toMatchObject({
         packages: [{ source, enabled: true, warning: 'inspection-limit' }],
       });
@@ -1933,7 +1935,9 @@ describe('Pi package executable-code boundary', () => {
           extensions: [path.join(recoveredRoot, '0', 'extensions', 'index.ts')],
           packageRoots: [path.join(recoveredRoot, '0')],
         });
-        await vi.waitFor(() => expect(firstListener).toHaveBeenCalled(), { timeout: 2_000 });
+        await vi.waitFor(() => expect(firstListener).toHaveBeenCalledWith('external'), {
+          timeout: 2_000,
+        });
         await expect(firstStore.listPiPackages()).resolves.toMatchObject({
           packages: [{ source, enabled: true }],
         });
@@ -2226,6 +2230,7 @@ describe('Pi package executable-code boundary', () => {
 
     await mutateAuthorized(store, { action: 'install', source });
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith('local');
 
     unsubscribe();
     await mutateAuthorized(store, { action: 'update', source });
@@ -2266,6 +2271,7 @@ describe('Pi package executable-code boundary', () => {
       call.label === 'pi-package-mutation' && (call.waitMs ?? 0) > 120_000
     ))).toBe(true);
     expect(new Set(tokens.map((token) => token.trim())).size).toBe(4);
+    expect(tokens.every((token) => token.startsWith('runtime:'))).toBe(true);
   });
 
   it('propagates package and approval changes to another shared-userData instance', async () => {
@@ -2288,7 +2294,9 @@ describe('Pi package executable-code boundary', () => {
     );
     await mutateAuthorized(secondStore, { action: 'update', source });
 
-    await vi.waitFor(() => expect(listener).toHaveBeenCalled(), { timeout: 2_000 });
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+      timeout: 2_000,
+    });
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
       packages: [{ source, enabled: true }],
     });

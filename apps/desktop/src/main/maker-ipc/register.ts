@@ -560,7 +560,10 @@ import {
   onPiPackagesChanged,
   piPackageMutationMayHaveChangedState,
 } from '../maker-host/pi-package-store.js';
-import { invalidateLocalPiPackageRuntimes } from '../maker-host/pi-package-runtime-invalidation.js';
+import {
+  invalidateLocalPiPackageRuntimes,
+  invalidateLocalPiPackageRuntimesForObservedChange,
+} from '../maker-host/pi-package-runtime-invalidation.js';
 import {
   issuePiPackageMutationGrant,
   piPackageMutationNeedsGrant,
@@ -6006,7 +6009,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
   });
   disposePiPackagesChangedBroadcast?.();
-  disposePiPackagesChangedBroadcast = onPiPackagesChanged(() => {
+  disposePiPackagesChangedBroadcast = onPiPackagesChanged((origin) => {
+    void invalidateLocalPiPackageRuntimesForObservedChange(maker, origin)
+      .then((invalidation) => {
+        if (invalidation && invalidation.failedSessionIds.length > 0) {
+          log.warn('Cross-process Pi package change did not retire every local runtime', {
+            failedSessionIds: invalidation.failedSessionIds,
+          });
+        }
+      })
+      .catch((error) => {
+        log.warn('Cross-process Pi package runtime invalidation failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
         win.webContents.send(MAKER_PUSH.PI_PACKAGES_CHANGED);

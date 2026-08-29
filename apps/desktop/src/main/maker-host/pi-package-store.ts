@@ -81,7 +81,8 @@ const DEFAULT_SNAPSHOT_LIMITS: PiPackageSnapshotLimits = {
 };
 const STATE_VERSION = 3;
 const CHANGE_TOKEN_POLL_MS = 250;
-const changeListeners = new Set<() => void>();
+export type PiPackagesChangeOrigin = 'local' | 'external' | 'external-runtime';
+const changeListeners = new Set<(origin: PiPackagesChangeOrigin) => void>();
 const packageMutationMayHaveChangedErrors = new WeakSet<object>();
 let changeTokenWatcherActive = false;
 let lastObservedChangeToken: string | null | undefined;
@@ -90,7 +91,9 @@ let changeTokenReadQueued = false;
 const changeTokenWatchListener = () => void observePiPackageChangeToken();
 const PACKAGE_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
 
-export function onPiPackagesChanged(listener: () => void): () => void {
+export function onPiPackagesChanged(
+  listener: (origin: PiPackagesChangeOrigin) => void,
+): () => void {
   changeListeners.add(listener);
   startPiPackageChangeTokenWatcher();
   return () => {
@@ -99,10 +102,10 @@ export function onPiPackagesChanged(listener: () => void): () => void {
   };
 }
 
-function notifyPiPackagesChanged(): void {
+function notifyPiPackagesChanged(origin: PiPackagesChangeOrigin): void {
   for (const listener of changeListeners) {
     try {
-      listener();
+      listener(origin);
     } catch (error) {
       log.warn('Pi package change listener failed', {
         message: error instanceof Error ? error.message : String(error),
@@ -140,7 +143,9 @@ function observePiPackageChangeToken(): Promise<void> {
     if (token === lastObservedChangeToken) return;
     lastObservedChangeToken = token;
     invalidateInspectionCache();
-    notifyPiPackagesChanged();
+    // Unprefixed tokens come from older Cindy versions. Conservatively treat
+    // them as runtime-affecting so mixed packaged/dev instances still converge.
+    notifyPiPackagesChanged(token?.startsWith('view:') ? 'external' : 'external-runtime');
   }).catch((error) => {
     log.warn('Pi package change token observation failed', {
       message: error instanceof Error ? error.message : String(error),
@@ -308,18 +313,21 @@ function changeTokenPath(): string {
   return path.join(packageHome(), 'cindy-package-change-token');
 }
 
-async function persistPiPackageChangeToken(): Promise<void> {
-  const token = `${Date.now()}-${process.pid}-${randomUUID()}`;
+async function persistPiPackageChangeToken(runtimeInvalidation: boolean): Promise<void> {
+  const scope = runtimeInvalidation ? 'runtime' : 'view';
+  const token = `${scope}:${Date.now()}-${process.pid}-${randomUUID()}`;
   // Set the local baseline before the atomic publish. The local process emits
   // synchronously below; its watcher must not duplicate the same refresh.
   lastObservedChangeToken = token;
   atomicWriteFileSync(changeTokenPath(), `${token}\n`);
 }
 
-async function publishPiPackagesChanged(options: { invalidateCache?: boolean } = {}): Promise<void> {
-  await persistPiPackageChangeToken();
+async function publishPiPackagesChanged(
+  options: { invalidateCache?: boolean; runtimeInvalidation?: boolean } = {},
+): Promise<void> {
+  await persistPiPackageChangeToken(options.runtimeInvalidation === true);
   if (options.invalidateCache !== false) invalidateInspectionCache();
-  notifyPiPackagesChanged();
+  notifyPiPackagesChanged('local');
 }
 
 function mutationLockPath(): string {
@@ -2785,7 +2793,7 @@ export async function mutatePiPackage(
         packages: [...result.packages, fallback],
         affectedPackage: fallback,
       };
-      await publishPiPackagesChanged({ invalidateCache: false });
+      await publishPiPackagesChanged({ invalidateCache: false, runtimeInvalidation: true });
       return mutationResult;
     }
     if (request.action === 'set-enabled' && request.enabled === true) {
@@ -2804,7 +2812,7 @@ export async function mutatePiPackage(
       }
     }
     const mutationResult = { ...result, changed: true, ...(affectedPackage ? { affectedPackage } : {}) };
-    await publishPiPackagesChanged({ invalidateCache: false });
+    await publishPiPackagesChanged({ invalidateCache: false, runtimeInvalidation: true });
     return mutationResult;
   }, async () => {
     // Any action may already have changed Pi's package tree or Cindy's state
@@ -2812,7 +2820,7 @@ export async function mutatePiPackage(
     // change token before releasing the cross-process lock, then refresh every
     // open Settings view and command palette.
       if (mutationMayHaveChangedState) {
-        await publishPiPackagesChanged();
+        await publishPiPackagesChanged({ runtimeInvalidation: true });
       }
     });
   } catch (error) {
