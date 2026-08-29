@@ -405,6 +405,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     sessionId: string,
     target: {
       contextWindow: number;
+      recheckTargetPressure?: boolean;
       assertCanCommit?: () => void;
       beforeClose?: () => void;
     },
@@ -546,6 +547,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     sessionId: string,
     target: {
       contextWindow: number;
+      recheckTargetPressure?: boolean;
       assertCanCommit?: () => void;
       beforeClose?: () => void;
     },
@@ -601,7 +603,17 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             verifiedCurrentWindow,
           );
     if (contextTokens > 0 && currentContextWindow <= 0) return 'unknown-context';
+    const targetPressureRequiresRebuild =
+      target.recheckTargetPressure === true &&
+      shouldHandoffAfterContextAssessment(
+        assessModelSwitchContext({
+          contextTokens,
+          targetContextWindow: target.contextWindow,
+          autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+        }),
+      );
     if (
+      !targetPressureRequiresRebuild &&
       !shouldRebuildForModelWindowSwitch({
         contextTokens,
         currentContextWindow,

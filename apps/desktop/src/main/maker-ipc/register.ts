@@ -15388,6 +15388,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (supersededByOwnerBoundary()) {
           return { deferred: false, superseded: true };
         }
+        const piSessionAfterRouteChange = maker.getSession(sessionId);
+        if (
+          runtimeAgentKind === 'pi' &&
+          piSessionAfterRouteChange &&
+          runtimeRouteChanged &&
+          result.status !== 'deferred' &&
+          !modelWindowRebuilt &&
+          targetContextWindow
+        ) {
+          const finalPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;
+          if (typeof finalPiWindow !== 'number' || finalPiWindow <= 0) {
+            await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+            restoreControlStores();
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'Pi did not expose its verified final context window; runtime selection was not accepted',
+            );
+          }
+          if (finalPiWindow < targetContextWindow) {
+            const finalPreparation =
+              await contextOverflowRolloverHolder!.prepareModelWindowSwitch(sessionId, {
+                contextWindow: finalPiWindow,
+                recheckTargetPressure: true,
+                assertCanCommit: assertRuntimeOwnerCurrent,
+              });
+            if (finalPreparation === 'rebuilt') {
+              modelWindowRebuilt = true;
+              targetContextWindow = finalPiWindow;
+            } else if (finalPreparation !== 'not-needed') {
+              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+              restoreControlStores();
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                `Pi final-window context preparation failed: ${finalPreparation}`,
+              );
+            }
+          }
+        }
         if (atomicSelection) {
           const selectionToCommit = atomicSelection;
           // model/provider/effort/fast 是一次选择快照，必须在同一把 session 锁内收敛。

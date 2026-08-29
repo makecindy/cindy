@@ -471,6 +471,22 @@ describe('session runtime control wiring', () => {
     expect(fallback).toContain('profiles.control.generation,');
   });
 
+  it('rechecks Pi pressure against the final verified runtime window before commit', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    const finalWindow = setModel.indexOf('const finalPiWindow =');
+    const runtimeCommit = setModel.indexOf('let generation: number;');
+
+    expect(finalWindow).toBeGreaterThan(apply);
+    expect(finalWindow).toBeLessThan(runtimeCommit);
+    expect(setModel).toContain('recheckTargetPressure: true');
+    expect(setModel).toContain("finalPreparation === 'rebuilt'");
+  });
+
   it('commits runtime control before best-effort context bookkeeping', () => {
     const setModel = handlerBody(
       registerSource,

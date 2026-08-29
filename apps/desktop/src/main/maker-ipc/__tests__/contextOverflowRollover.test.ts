@@ -360,6 +360,57 @@ describe('createContextOverflowRollover', () => {
     );
   });
 
+  it('rebuilds when Pi final-window verification reveals target pressure', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      agentKind: 'pi',
+      contextTokens: 300_000,
+      contextWindow: 500_000,
+    });
+    deps.getLiveSession.mockReturnValue({
+      isTurnRunning: () => false,
+      getUsageSnapshot: () => ({ contextTokens: 300_000, contextWindow: 272_000 }),
+    });
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', {
+        contextWindow: 272_000,
+        recheckTargetPressure: true,
+      }),
+    ).resolves.toBe('rebuilt');
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1',
+      expect.any(String),
+      expect.objectContaining({ reason: 'model-window-switch' }),
+    );
+  });
+
+  it('does not rebuild after Pi final-window verification below the pressure line', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      agentKind: 'pi',
+      contextTokens: 200_000,
+      contextWindow: 500_000,
+    });
+    deps.getLiveSession.mockReturnValue({
+      isTurnRunning: () => false,
+      getUsageSnapshot: () => ({ contextTokens: 200_000, contextWindow: 272_000 }),
+    });
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', {
+        contextWindow: 272_000,
+        recheckTargetPressure: true,
+      }),
+    ).resolves.toBe('not-needed');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
+
   it('uses the persisted verified Pi runtime window after a cold restart', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
