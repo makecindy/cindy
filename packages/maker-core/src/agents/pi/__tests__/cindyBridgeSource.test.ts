@@ -1365,6 +1365,7 @@ describe('cindy-bridge extension source', () => {
       if (process.platform !== 'win32') {
         const dangling = path.join(authorized, 'dangling');
         symlinkSync(path.join(tempRoot, 'missing-target'), dangling, 'dir');
+        expect(resolveTarget(dangling)).toBeNull();
         expect(resolveTarget(path.join(dangling, 'new.txt'))).toBeNull();
       }
     } finally {

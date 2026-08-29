@@ -3319,6 +3319,13 @@ function resolveDestructiveTargetPath(target: string): string | null {
   try {
     return normalizeSlashes(realpathSync(absoluteTarget));
   } catch {
+    try {
+      lstatSync(absoluteTarget);
+      return null;
+    } catch (lstatError) {
+      const code = (lstatError as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+    }
     let ancestor = nodePath.dirname(absoluteTarget);
     for (let depth = 0; depth < 64; depth += 1) {
       try {

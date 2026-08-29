@@ -1578,6 +1578,13 @@ function resolveFileWriteTargetPath(targetPath: string): string | null {
   try {
     return realpathSync(targetPath);
   } catch {
+    try {
+      lstatSync(targetPath);
+      return null;
+    } catch (lstatError) {
+      const code = (lstatError as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+    }
     let dir = path.dirname(targetPath);
     for (let i = 0; i < 64; i += 1) {
       try {

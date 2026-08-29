@@ -263,6 +263,11 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
       }, [grant], opts)).toBe('prompt-each-time');
       expect(reviewAction({
         kind: 'exec',
+        command: `echo owned > ${join(grant, 'dangling-link')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      expect(reviewAction({
+        kind: 'exec',
         command: `rm -rf ${join(grant, 'build')}`,
         cwd: grant,
       }, [grant], opts)).toBe('prompt');

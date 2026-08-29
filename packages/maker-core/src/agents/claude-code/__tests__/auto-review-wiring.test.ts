@@ -680,20 +680,22 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
       const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
         writableDirs: [writableDir],
       });
-      const lexicalPath = path.join(linkedDir, 'result.txt');
+      const lexicalPaths = [linkedDir, path.join(linkedDir, 'result.txt')];
 
-      const result = await canUseTool(
-        'Write',
-        { file_path: lexicalPath },
-        { toolUseID: 'unresolved-link', suggestions: SESSION_SUGGESTION },
-      );
-      expect(result).toMatchObject({
-        behavior: 'allow',
-        updatedInput: { file_path: lexicalPath },
-      });
+      for (const [index, lexicalPath] of lexicalPaths.entries()) {
+        const result = await canUseTool(
+          'Write',
+          { file_path: lexicalPath },
+          { toolUseID: `unresolved-link-${index}`, suggestions: SESSION_SUGGESTION },
+        );
+        expect(result).toMatchObject({
+          behavior: 'allow',
+          updatedInput: { file_path: lexicalPath },
+        });
+      }
       expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
-      expect(permissionRequests(seen)).toHaveLength(1);
-      expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
+      expect(permissionRequests(seen)).toHaveLength(2);
+      expect(permissionRequests(seen).every((request) => request.suggestions === undefined)).toBe(true);
       await handle.close();
     },
   );
