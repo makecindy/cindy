@@ -27,14 +27,21 @@
   git grep -o 'rounded-\[12px\]' -- apps/desktop/src/renderer/components/new-chat/PermissionPrompt.tsx | wc -l
   # 全仓 rounded-[4px] 存量（2026-08-29 快照：30；字面量语法，全 renderer 无 tests/vendor 命中）
   git grep -o "rounded-\[4px\]" -- apps/desktop/src/renderer | wc -l
-  # 解析后等价 4px 的其它写法（2026-08-29 快照，生产代码 = 排除 __tests__/.test./vendor/；
-  # 裸 rounded 是 Tailwind DEFAULT 0.25rem=4px，rounded-sm 是 --radius(8px)-4px=4px，
-  # 两者与 rounded-[4px] 同为禁止档位的等价语法——「30」只是字面量语法的局部计数，
-  # DS-6 迁移与 DS-7 棘轮的基线必须按三语法合计（30+80+11）建立，不能只按 30）
-  git grep -oE "rounded[ ,)\"'?}]" -- apps/desktop/src/renderer | grep -vE '(__tests__|\.test\.|vendor/)' | wc -l   # 裸 rounded：80
-  git grep -oE "rounded-sm[ ,)\"'?}]" -- apps/desktop/src/renderer | grep -vE '(__tests__|\.test\.|vendor/)' | wc -l  # rounded-sm：11
-  # 同为非档位值的 rounded-md（--radius-2px=6px，亦不入 §5 三档；供 DS-7 棘轮一并建基线）
-  git grep -oE "rounded-md[ ,)\"'?}]" -- apps/desktop/src/renderer | grep -vE '(__tests__|\.test\.|vendor/)' | wc -l  # rounded-md：204
+  # 解析后等价 4px 的其它写法（2026-08-29 快照；生产代码 = pathspec 排除 tests/vendor）。
+  # 数值依据：tailwind.config.ts 的 borderRadius.lg/md/sm 基于 var(--radius) 派生；
+  # --radius 由 theme-service 运行时注入（colors.ts registerColor('radius', 0.5rem)
+  # → serializeThemeCss 写入 :root，dark 主题经 resolveThemeValue 回退 light 默认），
+  # 故 rounded-sm = calc(0.5rem − 4px) = 4px、rounded-md = calc(0.5rem − 2px) = 6px，
+  # 裸 rounded = Tailwind DEFAULT 0.25rem = 4px。
+  # 裸 rounded 计数限定「字符串字面量内的独立 token」（PCRE 词边界 + 前瞻排除
+  # rounded-* 变体；grep -v 排除 `${rounded}` 模板插值）——旧口径曾把注释与局部
+  # 变量名（如 turnUsageTooltip.ts 的 const rounded）计入 80，属假阳性，已修正为 58。
+  # DS-6 迁移与 DS-7 棘轮的基线按三语法合计（30+58+11）建立；此为静态扫描近似，
+  # 棘轮落地时应以 AST / 编译产物扫描为准。
+  git grep -oP "[\"'\`][^\"'\`]*\brounded\b(?![-a-zA-Z\[])[^\"'\`]*[\"'\`]" -- apps/desktop/src/renderer ':!*/__tests__/*' ':!*.test.*' ':!*/vendor/*' | grep -v '\${rounded' | wc -l    # 裸 rounded：58
+  git grep -oP "[\"'\`][^\"'\`]*\brounded-sm\b(?![-a-zA-Z\[])[^\"'\`]*[\"'\`]" -- apps/desktop/src/renderer ':!*/__tests__/*' ':!*.test.*' ':!*/vendor/*' | wc -l                                 # rounded-sm：11
+  # 同为非档位值的 rounded-md（6px，亦不入 §5 三档；供 DS-7 棘轮一并建基线）
+  git grep -oP "[\"'\`][^\"'\`]*\brounded-md\b(?![-a-zA-Z\[])[^\"'\`]*[\"'\`]" -- apps/desktop/src/renderer ':!*/__tests__/*' ':!*.test.*' ':!*/vendor/*' | grep -v '\${rounded' | wc -l   # rounded-md：196
   ```
 
   裁决四条：(1) **三档不变、不加档**，把 §5 的软表述写死——会提交决定 / 触发动作
@@ -79,16 +86,24 @@
   elements) + registered bare text buttons are the only exemption」；(4) 中「filled
   buttons」字样随本轮撤销作废，裸文字按钮不受 pill padding 约束的实质不变。
   （同上条落点）
-  追加修正（第五轮 review 指出 4px 计数口径漏等价写法）：(6) **「4px 不入档」的
-  禁令覆盖所有解析后等价于 4px 的写法**——本仓 `tailwind.config.ts` 只覆盖
-  `borderRadius.lg/md/sm`（基于 `--radius`=0.5rem=8px 派生），裸 `rounded`（Tailwind
-  DEFAULT 0.25rem）与 `rounded-sm`（8px−4px）同样解析为 4px，与 `rounded-[4px]`
-  同属禁止档位的等价语法；`rounded-md`（8px−2px=6px）亦不入三档。主裁决「全仓 30 处」
-  只是 `rounded-[4px]` 字面量语法的局部计数——生产代码中裸 `rounded` 另有 80 处、
-  `rounded-sm` 11 处（计数命令见上方口径块）；DS-6 迁移与 DS-7 棘轮建基线时必须按
-  三种 4px 等价语法合计（30+80+11），并把 `rounded-md` 的 204 处一并纳入非档位值
-  清理范围，不得只按 30 建基线。§5 行内数字句同步补「in ANY of its equivalent
-  spellings」限定并指向口径块。（同上条落点）
+  追加修正（第五轮 review 指出 4px 计数口径漏等价写法；第六轮 review 指出注入链
+  未交代、裸 rounded 计数混入非样式文本）：(6) **「4px 不入档」的禁令覆盖所有解析后
+  等价于 4px 的写法**——本仓 `tailwind.config.ts` 只覆盖 `borderRadius.lg/md/sm`
+  （基于 `var(--radius)` 派生），裸 `rounded`（Tailwind DEFAULT 0.25rem）与
+  `rounded-sm`（8px−4px）同样解析为 4px，与 `rounded-[4px]` 同属禁止档位的等价
+  语法；`rounded-md`（8px−2px=6px）亦不入三档。**`--radius` 的数值依据**：该变量
+  不在任何静态 CSS 文件中，由 `theme-service.ts` 运行时注入——`colors.ts`
+  `registerColor('radius', { light: '0.5rem' })` 经 `serializeThemeCss` 写入
+  `:root`（dark 主题经 `resolveThemeValue` 回退 light 默认，值不变），故
+  `rounded-sm`/`rounded-md` 的 `calc(var(--radius) ± Npx)` 在运行时有效求值。
+  主裁决「全仓 30 处」只是 `rounded-[4px]` 字面量语法的局部计数——生产代码中
+  裸 `rounded` 另有 58 处（字符串字面量内独立 token 口径；旧口径 80 曾混入注释与
+  局部变量名假阳性，如 `turnUsageTooltip.ts` 的 `const rounded`、
+  `AppearanceSection.tsx` 注释行，已修正）、`rounded-sm` 11 处（计数命令见上方
+  口径块）；DS-6 迁移与 DS-7 棘轮建基线时必须按三种 4px 等价语法合计（30+58+11）
+  建立，并把 `rounded-md` 的 196 处一并纳入非档位值清理范围，不得只按 30 建基线。
+  静态计数是近似口径，棘轮落地时应以 AST / 编译产物扫描复核。§5 行内数字句同步补
+  「in ANY of its equivalent spellings」限定并指向口径块。（同上条落点）
 
 - **08-16** **登录：唯一 SSO 不再经过 method-choice（拍板人 = 用户）**——
   用户已经从登录首页选了企业 SSO（组织标识探测），或邮箱 / 组织探测结果只剩
