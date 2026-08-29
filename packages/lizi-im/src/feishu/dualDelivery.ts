@@ -67,6 +67,8 @@ const recentThreads = new Map<string, number>();
 const recentFlats = new Map<string, RecentFlatRecord>();
 const confirmed = new Map<string, number>();
 const deferredMirrors = new Map<string, Array<() => void>>();
+/** Live Agent turns that still need a terminal parent-chat mirror. */
+const heldConfirmations = new Set<string>();
 
 function logicalSendKey(input: DualDeliveryInput): string | null {
   if (!input.createTime) return null;
@@ -171,9 +173,20 @@ function flushDeferredMirrors(key: string): void {
 
 function pruneConfirmed(now: number): void {
   for (const [key, ts] of confirmed) {
+    if (heldConfirmations.has(key)) continue;
     if (now - ts <= CONFIRMED_TTL_MS && confirmed.size <= MAX_CONFIRMED) break;
     confirmed.delete(key);
   }
+}
+
+/** Pin a logical send so confirmation cannot expire before terminal delivery. */
+export function holdMirrorConfirmation(key: string): void {
+  heldConfirmations.add(key);
+}
+
+/** Release a live-turn pin after the parent-chat mirror attempt finishes. */
+export function releaseMirrorConfirmation(key: string): void {
+  heldConfirmations.delete(key);
 }
 
 function settleUnpairedPending(key: string, entry: PendingLogicalSend): void {
@@ -328,26 +341,29 @@ export async function waitForMirrorConfirmation(mirrorKey: string): Promise<bool
  * Run `send` if this logical send is already confirmed, or when a late pair
  * (main-feed copy or committed-flat topic) confirms it inside the late-copy TTL.
  * No-ops once that window has expired.
+ *
+ * @returns whether `send` ran immediately or was queued for a later confirmation.
  */
-export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void): void {
+export function scheduleMirrorOnConfirmation(mirrorKey: string, send: () => void): boolean {
   const now = Date.now();
   pruneConfirmed(now);
   pruneTtlMap(recentThreads, now);
   pruneRecentFlats(now);
   if (confirmed.has(mirrorKey)) {
     send();
-    return;
+    return true;
   }
   if (
     !pending.has(mirrorKey) &&
     !recentThreads.has(mirrorKey) &&
     !recentFlats.has(mirrorKey)
   ) {
-    return;
+    return false;
   }
   const queued = deferredMirrors.get(mirrorKey) ?? [];
   queued.push(send);
   deferredMirrors.set(mirrorKey, queued);
+  return true;
 }
 
 /** Test-only reset. Production state intentionally survives transport reconnects. */
@@ -361,4 +377,5 @@ export function resetDualDeliveryForTest(): void {
   recentFlats.clear();
   confirmed.clear();
   deferredMirrors.clear();
+  heldConfirmations.clear();
 }

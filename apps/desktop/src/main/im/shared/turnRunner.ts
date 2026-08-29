@@ -87,6 +87,7 @@ import type {
   IMAttachment,
   IMFinalReplyMirror,
   InteractiveCardSpec,
+  ReusableOutboundFileRef,
   StreamingTextHandle,
 } from '@cindy/im';
 
@@ -1532,7 +1533,7 @@ export function createTurnRunner(
   async function mirrorTurnFinalReply(
     mirror: IMFinalReplyMirror | undefined,
     text: string,
-    opts?: { mediaAbsPaths?: string[] },
+    opts?: { mediaAbsPaths?: string[]; reusableFiles?: readonly ReusableOutboundFileRef[] },
   ): Promise<void> {
     if (!mirror || output.kind !== 'rich-card') return;
     try {
@@ -1545,6 +1546,20 @@ export function createTurnRunner(
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`terminal mirror failed (non-fatal): ${msg}`);
     }
+  }
+
+  function collectTerminalMirrorOpts(
+    turn: TurnState,
+    handle: StreamingTextHandle | null | undefined,
+  ): { mediaAbsPaths?: string[]; reusableFiles?: ReusableOutboundFileRef[] } | undefined {
+    const mediaAbsPaths = turn.mediaAbsPaths.length > 0 ? turn.mediaAbsPaths : undefined;
+    const reusableFiles = handle?.consumeReusableOutboundFiles?.();
+    const files = reusableFiles && reusableFiles.length > 0 ? reusableFiles : undefined;
+    if (!mediaAbsPaths && !files) return undefined;
+    return {
+      ...(mediaAbsPaths ? { mediaAbsPaths } : {}),
+      ...(files ? { reusableFiles: files } : {}),
+    };
   }
 
   async function handleSessionWiringBusy(userId: string, turn: TurnState): Promise<void> {
@@ -2943,7 +2958,7 @@ export function createTurnRunner(
       await mirrorTurnFinalReply(
         turn.finalReplyMirror,
         finalView,
-        turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
+        collectTerminalMirrorOpts(turn, turn.streamingHandle),
       );
     } else if (turn.presenter.wholeText().length === 0) {
       // No streamed text at all — send a one-shot text so the user knows the
@@ -3075,7 +3090,7 @@ export function createTurnRunner(
       await mirrorTurnFinalReply(
         turn.finalReplyMirror,
         body,
-        turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : undefined,
+        collectTerminalMirrorOpts(turn, turn.streamingHandle),
       );
     } else {
       try {

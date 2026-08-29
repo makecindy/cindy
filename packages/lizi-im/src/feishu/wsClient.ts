@@ -60,6 +60,7 @@ import { parseCardAction } from './cardActionParser.js';
 import { decodeLaneUserId, encodeLaneUserId } from './codec.js';
 import {
   coordinateDualDelivery,
+  holdMirrorConfirmation,
   resetDualDeliveryForTest,
 } from './dualDelivery.js';
 import { getLog } from './moduleScope.js';
@@ -473,16 +474,7 @@ async function retryUnconfirmedOpen(
     text: entry.text,
     speaker: { id: entry.senderOpenId, name: '', isOwner: true },
     ...(groupContextLane ? { groupContextLane } : {}),
-    ...(entry.mirrorKey && entry.mirrorAccountEpoch !== undefined
-      ? {
-          finalReplyMirror: {
-            kind: 'parent-chat' as const,
-            chatId: entry.chatId,
-            idempotencyKey: entry.mirrorKey,
-            accountEpoch: entry.mirrorAccountEpoch,
-          },
-        }
-      : {}),
+    ...attachParentChatMirror(entry.chatId, entry.mirrorKey, entry.mirrorAccountEpoch),
     ...(entry.replyContext ? { replyContext: entry.replyContext } : {}),
     attachments: entry.attachments,
     unsupported: entry.unsupported,
@@ -1325,6 +1317,23 @@ async function announceLifecycle(phase: 'online' | 'offline'): Promise<void> {
   }
 }
 
+function attachParentChatMirror(
+  chatId: string,
+  key: string | undefined,
+  accountEpoch: number | undefined,
+): Pick<IMMessageEvent, 'finalReplyMirror'> | Record<string, never> {
+  if (!key || accountEpoch === undefined) return {};
+  holdMirrorConfirmation(key);
+  return {
+    finalReplyMirror: {
+      kind: 'parent-chat',
+      chatId,
+      idempotencyKey: key,
+      accountEpoch,
+    },
+  };
+}
+
 // ── inbound handlers ──────────────────────────────────────────────────────────
 
 /**
@@ -1778,16 +1787,11 @@ async function processClaimedMessage(
         }
       : {}),
     ...(groupContextLane ? { groupContextLane } : {}),
-    ...(finalReplyMirrorKey && decodeLaneUserId(laneUserId ?? '')?.threadId
-      ? {
-          finalReplyMirror: {
-            kind: 'parent-chat' as const,
-            chatId,
-            idempotencyKey: finalReplyMirrorKey,
-            accountEpoch: outbound.getAccountEpoch(),
-          },
-        }
-      : {}),
+    ...attachParentChatMirror(
+      chatId,
+      decodeLaneUserId(laneUserId ?? '')?.threadId ? finalReplyMirrorKey : undefined,
+      outbound.getAccountEpoch(),
+    ),
     ...(resolvedReply ? { replyContext: resolvedReply.replyContext } : {}),
     attachments,
     unsupported,

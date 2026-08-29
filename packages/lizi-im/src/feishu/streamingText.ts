@@ -42,10 +42,15 @@ import {
   type ReusableFeishuFileMessage,
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
-import { getLog } from './moduleScope.js';
-import { scheduleMirrorOnConfirmation, waitForMirrorConfirmation } from './dualDelivery.js';
+import { resolveFeishuMediaUrl } from './mediaCache.js';
+import { getHost, getLog } from './moduleScope.js';
+import {
+  releaseMirrorConfirmation,
+  scheduleMirrorOnConfirmation,
+  waitForMirrorConfirmation,
+} from './dualDelivery.js';
 import { messages as transportMessages } from './messages.js';
-import type { StreamingTextHandle } from '../types.js';
+import type { ReusableOutboundFileRef, StreamingTextHandle } from '../types.js';
 // xdt-* 引用解析抽到渠道无关模块(slack streamingText 共用同一套语义)
 import {
   stripXdtForStreaming,
@@ -159,6 +164,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
    * 不参与 namespace 路由(@cindy/im 包对 lizi-art / 其它 host 命名空间不感知)。
    */
   private extraImageAbsPaths: string[] = [];
+  private reusableFiles: ReusableMirroredFile[] = [];
 
   constructor(
     messageId: string,
@@ -237,6 +243,17 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     this.extraImageAbsPaths.push(absPath);
   }
 
+  consumeReusableOutboundFiles(): ReusableOutboundFileRef[] {
+    if (this.mirrorChatId && this.mirrorKey) return [];
+    const files = this.reusableFiles;
+    this.reusableFiles = [];
+    return files.map(({ message, sourceIndex }) => ({
+      msgType: message.msgType,
+      content: message.content,
+      sourceIndex,
+    }));
+  }
+
   // ── intermediate (throttled) patch ────────────────────────────────────────
 
   private async flushIntermediate(): Promise<void> {
@@ -295,8 +312,6 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           // uploadImage takes an absPath, so we resolve here.
           // cindy-media(媒体总仓新地址)优先走 host 注入的解析回调;老
           // xdt-image 仍走 feishu 专属目录解析。
-          const { resolveFeishuMediaUrl } = await import('./mediaCache.js');
-          const { getHost } = await import('./moduleScope.js');
           let absPath: string;
           try {
             const hostResolved = getHost().media?.resolveMediaUrl(url) ?? null;
@@ -362,6 +377,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       reusableFiles = results.filter(
         (message): message is ReusableMirroredFile => message !== null,
       );
+      this.reusableFiles = reusableFiles;
     }
 
     // 3. Strip xdt-file from card text (delivered separately, no placeholder).
@@ -556,26 +572,57 @@ async function sendOrScheduleMirror(
   send: () => Promise<void>,
   inboundEpoch: number,
 ): Promise<void> {
-  if (getAccountEpoch() !== inboundEpoch) return;
+  const release = (): void => {
+    releaseMirrorConfirmation(mirrorKey);
+  };
+  if (getAccountEpoch() !== inboundEpoch) {
+    release();
+    return;
+  }
   const pinned = getBoundClient();
-  if (!pinned) return;
+  if (!pinned) {
+    release();
+    return;
+  }
   const runPinned = async (): Promise<void> => {
     if (getAccountEpoch() !== inboundEpoch) return;
     await runWithPinnedAccount({ client: pinned, epoch: inboundEpoch }, send);
   };
   if (await waitForMirrorConfirmation(mirrorKey)) {
-    await runPinned();
+    try {
+      await runPinned();
+    } finally {
+      release();
+    }
     return;
   }
-  scheduleMirrorOnConfirmation(mirrorKey, () => {
-    void runPinned().catch((err) => {
-      getLog().warn(
-        `[feishu/streamingText] deferred parent-chat mirror failed (non-fatal): ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    });
+  const queued = scheduleMirrorOnConfirmation(mirrorKey, () => {
+    void runPinned()
+      .catch((err) => {
+        getLog().warn(
+          `[feishu/streamingText] deferred parent-chat mirror failed (non-fatal): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      })
+      .finally(release);
   });
+  if (queued === false) release();
+}
+
+function toReusableMirroredFiles(
+  files: readonly ReusableOutboundFileRef[],
+): ReusableMirroredFile[] {
+  const out: ReusableMirroredFile[] = [];
+  for (const file of files) {
+    if (file.msgType !== 'file' && file.msgType !== 'image') continue;
+    if (!file.content) continue;
+    out.push({
+      message: { msgType: file.msgType, content: file.content },
+      sourceIndex: file.sourceIndex,
+    });
+  }
+  return out;
 }
 
 /** One-shot mirror used when the primary streaming surface failed to start. */
@@ -586,7 +633,9 @@ export async function mirrorFinal(
   extraImageAbsPaths: readonly string[] = [],
   allowedFileRoots: readonly string[] = [],
   inboundEpoch: number,
+  reusableFiles: readonly ReusableOutboundFileRef[] = [],
 ): Promise<void> {
+  const mirroredFiles = toReusableMirroredFiles(reusableFiles);
   const send = async (): Promise<void> => {
     // Empty roots is the SSH fail-closed signal from turnRunner. Do not resolve
     // xdt-image / cindy-media URLs or extra absPaths through local media stores.
@@ -598,8 +647,6 @@ export async function mirrorFinal(
     const imageMap = new Map<string, string>();
     const bodyImageAbsPaths = new Set<string>();
     if (imageUrls.length > 0) {
-      const { resolveFeishuMediaUrl } = await import('./mediaCache.js');
-      const { getHost } = await import('./moduleScope.js');
       const results = await Promise.all(
         imageUrls.map(async (url) => {
           let absPath: string;
@@ -643,11 +690,13 @@ export async function mirrorFinal(
     const fileOnly = cardTextTrimmed.length === 0 && !hasImages && fileLinks.length > 0;
     if (fileOnly) {
       if (!isPinnedAccountCurrent()) return;
-      await sendCardToChat(
-        chatId,
-        buildMarkdownCardV2(transportMessages.streaming.deliveryFailed),
-        mirrorUuid(mirrorKey, 'card'),
-      );
+      const sentCount = await sendMirroredFiles(chatId, mirrorKey, mirroredFiles);
+      if (!isPinnedAccountCurrent()) return;
+      const status =
+        sentCount > 0
+          ? transportMessages.streaming.fileSentDone(sentCount)
+          : transportMessages.streaming.deliveryFailed;
+      await sendCardToChat(chatId, buildMarkdownCardV2(status), mirrorUuid(mirrorKey, 'card'));
       return;
     }
     if (skippedLocalMedia && cardTextTrimmed.length === 0) {
@@ -672,6 +721,8 @@ export async function mirrorFinal(
         : buildMarkdownCardV2(visibleText),
     );
     await sendCardToChat(chatId, card, mirrorUuid(mirrorKey, 'card'));
+    if (!isPinnedAccountCurrent()) return;
+    await sendMirroredFiles(chatId, mirrorKey, mirroredFiles);
   };
   await sendOrScheduleMirror(mirrorKey, send, inboundEpoch);
 }

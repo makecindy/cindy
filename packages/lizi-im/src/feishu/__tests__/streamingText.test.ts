@@ -25,6 +25,7 @@ vi.mock('../outbound.js', () => mocks);
 vi.mock('../dualDelivery.js', () => ({
   waitForMirrorConfirmation: vi.fn(async () => true),
   scheduleMirrorOnConfirmation: vi.fn(),
+  releaseMirrorConfirmation: vi.fn(),
 }));
 vi.mock('../moduleScope.js', () => ({
   getLog: () => ({ debug: vi.fn(), error: vi.fn(), warn: vi.fn() }),
@@ -174,6 +175,7 @@ describe('feishu streaming text', () => {
     vi.mocked(waitForMirrorConfirmation).mockResolvedValueOnce(false);
     vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
       run();
+      return true;
     });
     const handle = await start('g/oc_group/omt_topic', undefined, {
       mirrorChatId: 'oc_group',
@@ -284,6 +286,82 @@ describe('feishu streaming text', () => {
     expect(mocks.uploadImage).not.toHaveBeenCalled();
     expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
       messages.streaming.deliveryFailed,
+    );
+  });
+
+  it('exposes primary upload refs when the handle itself does not mirror', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-consume-refs-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      allowedFileRoots: [root],
+    });
+
+    await handle.finalize(`[report.txt](xdt-file://${allowedFile})`);
+
+    expect(handle.consumeReusableOutboundFiles?.()).toEqual([
+      {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+        sourceIndex: 0,
+      },
+    ]);
+    expect(handle.consumeReusableOutboundFiles?.()).toEqual([]);
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+  });
+
+  it('does not expose primary upload refs when the handle already mirrored them', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-internal-refs-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'v'.repeat(64),
+      allowedFileRoots: [root],
+      inboundEpoch: 1,
+    });
+
+    await handle.finalize(`[report.txt](xdt-file://${allowedFile})`);
+
+    expect(handle.consumeReusableOutboundFiles?.()).toEqual([]);
+    expect(mocks.sendFileToChat).toHaveBeenCalledOnce();
+  });
+
+  it('reuses one-shot parent-chat file refs without reopening the source', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-oneshot-reuse-'));
+    tempDirs.push(root);
+    const allowedFile = path.join(root, 'report.txt');
+    await fs.writeFile(allowedFile, 'report');
+
+    await mirrorFinal(
+      'oc_group',
+      'w'.repeat(64),
+      `[report.txt](xdt-file://${allowedFile})`,
+      [],
+      [root],
+      1,
+      [
+        {
+          msgType: 'file',
+          content: JSON.stringify({ file_key: 'file-key' }),
+          sourceIndex: 0,
+        },
+      ],
+    );
+
+    expect(mocks.sendFile).not.toHaveBeenCalled();
+    expect(mocks.sendFileToChat).toHaveBeenCalledWith(
+      'oc_group',
+      {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      `${'w'.repeat(32)}-f0`,
+    );
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
+      messages.streaming.fileSentDone(1),
     );
   });
 
@@ -419,6 +497,7 @@ describe('feishu streaming text', () => {
     let deferred: (() => void) | undefined;
     vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
       deferred = run;
+      return true;
     });
 
     await mirrorFinal('oc_group', 'k'.repeat(64), '终态正文', [], [], 1);
@@ -442,6 +521,7 @@ describe('feishu streaming text', () => {
     let deferred: (() => void) | undefined;
     vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
       deferred = run;
+      return true;
     });
     const handle = await start('g/oc_group/omt_topic', undefined, {
       mirrorChatId: 'oc_group',
@@ -506,6 +586,7 @@ describe('feishu streaming text', () => {
     let deferred: (() => void) | undefined;
     vi.mocked(scheduleMirrorOnConfirmation).mockImplementation((_key, run) => {
       deferred = run;
+      return true;
     });
     mocks.sendCardToChat.mockRejectedValueOnce(new Error('group unavailable'));
 

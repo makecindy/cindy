@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   coordinateDualDelivery,
+  holdMirrorConfirmation,
+  releaseMirrorConfirmation,
   resetDualDeliveryForTest,
   scheduleMirrorOnConfirmation,
   waitForMirrorConfirmation,
@@ -362,6 +364,66 @@ describe('Feishu native thread/main dual delivery', () => {
     );
     expect(lateTopic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
     expect(firstDecision.commitUnpairedFlat()).toBe(false);
+  });
+
+  it('forgets unheld confirmations after the confirmed TTL', async () => {
+    vi.useFakeTimers();
+    const topic = await coordinateDualDelivery(input());
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 1);
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(false);
+    const lateFlat = coordinateDualDelivery(input({ messageId: 'om_flat_late', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(lateFlat).resolves.toMatchObject({ kind: 'dispatch' });
+  });
+
+  it('keeps a held confirmation past the confirmed TTL', async () => {
+    vi.useFakeTimers();
+    const topic = await coordinateDualDelivery(input());
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    holdMirrorConfirmation(topic.mirrorKey);
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 1);
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat_late', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    releaseMirrorConfirmation(topic.mirrorKey);
+  });
+
+  it('does not capacity-evict a held confirmation', async () => {
+    const topic = await coordinateDualDelivery(input({ createTime: 'held-0', messageId: 'om_held' }));
+    await expect(
+      coordinateDualDelivery(
+        input({ createTime: 'held-0', messageId: 'om_held_flat', threadId: '' }),
+      ),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    holdMirrorConfirmation(topic.mirrorKey);
+
+    for (let i = 1; i <= 2_001; i++) {
+      await coordinateDualDelivery(
+        input({ createTime: `held-${i}`, messageId: `om_held_t${i}` }),
+      );
+      await coordinateDualDelivery(
+        input({ createTime: `held-${i}`, messageId: `om_held_f${i}`, threadId: '' }),
+      );
+    }
+
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+    await expect(
+      coordinateDualDelivery(
+        input({ createTime: 'held-0', messageId: 'om_held_later', threadId: '' }),
+      ),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    releaseMirrorConfirmation(topic.mirrorKey);
   });
 
   it('does not suppress a copy after the late-copy window, and drops the deferred mirror', async () => {

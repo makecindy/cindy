@@ -22,6 +22,7 @@ import type {
   IMMessageEvent,
   IMStatus,
   InteractiveCardSpec,
+  ReusableOutboundFileRef,
   SendFileResult,
   StreamingTextHandle,
 } from './types.js';
@@ -134,7 +135,7 @@ export interface RichChannelIM extends TextChannelIM {
   mirrorFinalReply?(
     mirror: IMFinalReplyMirror,
     text: string,
-    opts?: { mediaAbsPaths?: string[] },
+    opts?: { mediaAbsPaths?: string[]; reusableFiles?: readonly ReusableOutboundFileRef[] },
   ): Promise<void>;
 
   /**

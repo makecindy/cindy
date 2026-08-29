@@ -339,6 +339,16 @@ export interface InteractiveCardSpec {
   buttons: InteractiveCardButton[];
 }
 
+/**
+ * Opaque upload ref from a primary streaming finalize. Parent-chat mirrors
+ * reuse it instead of reopening the source file.
+ */
+export interface ReusableOutboundFileRef {
+  msgType: string;
+  content: string;
+  sourceIndex: number;
+}
+
 /** Handle returned by `startStreamingText`; allows throttled append + finalise. */
 export interface StreamingTextHandle {
   readonly messageId: string;
@@ -363,6 +373,12 @@ export interface StreamingTextHandle {
    * 可选 — 不实现也合法 (e.g. 单纯 patch markdown 的轻量 handle 不支持图片)。
    */
   addExtraImageAbsPath?(absPath: string): void;
+  /**
+   * Terminal file upload refs produced by `finalize()`. Hosts pass them to
+   * `mirrorFinalReply` so the parent-chat copy can reuse the primary upload.
+   * Handles that already mirrored internally return an empty list.
+   */
+  consumeReusableOutboundFiles?(): ReusableOutboundFileRef[];
 }
 
 export interface SendFileResult {

@@ -2729,6 +2729,57 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(String(mocks.feishuIm.mirrorFinalReply.mock.calls[0][1])).toContain('final answer');
   });
 
+  it('passes primary streaming file refs into the terminal parent-chat mirror', async () => {
+    const reusableFiles = [
+      {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+        sourceIndex: 0,
+      },
+    ];
+    const handle = {
+      messageId: 'stream-file-refs',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+      consumeReusableOutboundFiles: vi.fn(() => reusableFiles),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-file-refs',
+    };
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({ type: 'text', data: { text: 'see the file', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+      expect(handle.consumeReusableOutboundFiles).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledTimes(1);
+    });
+    expect(handle.consumeReusableOutboundFiles.mock.invocationCallOrder[0]).toBeGreaterThan(
+      handle.finalize.mock.invocationCallOrder[0],
+    );
+    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
+      {
+        ...mirror,
+        allowedFileRoots: ['F:\\XDMaker'],
+      },
+      expect.stringContaining('see the file'),
+      { reusableFiles },
+    );
+  });
+
   it('mirrors side-channel tool images onto the parent-chat even when the final text omits them', async () => {
     const extraAbsPath = 'C:\\cindy-media\\tool-extra.png';
     mocks.resolveXdtImageUrl.mockReturnValue({ absPath: extraAbsPath });

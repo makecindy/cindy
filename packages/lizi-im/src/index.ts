@@ -34,6 +34,7 @@ export type {
   InteractiveCardButton,
   InteractiveCardSpec,
   StreamingTextHandle,
+  ReusableOutboundFileRef,
   SendFileResult,
 } from './types.js';
 
