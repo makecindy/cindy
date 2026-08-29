@@ -41,12 +41,10 @@ describe('windowsPackagedInstanceBarrier', () => {
     async () => {
       const programName = `CindyBarrierTest${process.pid}`;
       const userDataDir = path.join(os.tmpdir(), programName);
-      // timeoutMs 是 mutex WaitOne; waitForFirstLine 另加 HELPER_STARTUP_SLACK
-      // 等 PowerShell Add-Type。Windows CI 负载高时编译常超过 2s。
       const first = await acquireWindowsPackagedInstanceBarrier({
         userDataDir,
         programName,
-        timeoutMs: 15_000,
+        timeoutMs: 1_000,
       });
       try {
         expect(first.isHeld()).toBe(true);
@@ -65,7 +63,7 @@ describe('windowsPackagedInstanceBarrier', () => {
       const retry = await acquireWindowsPackagedInstanceBarrier({
         userDataDir,
         programName,
-        timeoutMs: 15_000,
+        timeoutMs: 1_000,
       });
       expect(retry.isHeld()).toBe(true);
       await retry.release();
