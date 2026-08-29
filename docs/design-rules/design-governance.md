@@ -182,7 +182,8 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 
 | 事项 | 现状 | 裁决人 | 规则 |
 | --- | --- | --- | --- |
-| PermissionPrompt 圆角 | **已关闭（2026-08-29 裁决，#3619 回写）**：三档不变、按钮一律胶囊（唯一豁免 = 已登记的裸文字按钮）、8px = textarea 一律 8px + 盒内非按钮、4px 不入档（含裸 `rounded` / `rounded-sm` 等价写法；存量为债、新代码禁止）、「看起来小」不是改档理由。`DESIGN.md §5` 已加硬，全文归档于 [`design-decision-log.md`](./design-decision-log.md)「08-29」条 | 设计师 | 已按 `DESIGN.md §13` 机制回写并归档（与回写同一 PR 生效） |
+| PermissionPrompt 圆角 | **已关闭（2026-08-29 裁决，#3619 回写）**：三档不变、按钮一律胶囊（唯一豁免 = 已登记的裸文字按钮）、8px = textarea 一律 8px + 盒内非按钮、4px 不入档（含裸 `rounded` / `rounded-sm` 等价写法，**前提 = 主题未覆盖 `colors.radius`**；存量为债、新代码禁止）、「看起来小」不是改档理由。`DESIGN.md §5` 已加硬，全文归档于 [`design-decision-log.md`](./design-decision-log.md)「08-29」条 | 设计师 | 已按 `DESIGN.md §13` 机制回写并归档（与回写同一 PR 生效） |
+| `radius` 主题覆盖 | 待裁决（随 DS-7 棘轮设计一并关）：本地主题 JSON 可覆盖 `colors.radius`（`resolveThemeValue` 优先 `theme.colors[id]`），届时 `rounded-sm`/`rounded-md` 的 computed 值整体平移、不再等于 4px/6px。是否冻结 `radius` 为不可覆盖不变量（涉及 `local-themes-normalize` 白名单 + 既有本地主题兼容红线）；裁决前 DS-7 按类名建基线、以默认主题 computed 值为准 | 设计师 | 未关闭前 DS-7 棘轮不得把覆盖了 `radius` 的本地主题报为违规；结论回写 `DESIGN.md` §5 与 decision-log |
 | Permission 迁移余项 | 待裁决：允许/拒绝按钮的视觉主次、危险授权样式、Desktop 与 Mobile 权限弹窗几何是否一致 | 设计师 | 余项未关闭前，Permission 相关文件不得进入任何迁移 PR 的 diff（DS-6 前置）；结论同样回写 `DESIGN.md` 并归档 |
 
 ## 11. 存量门禁与文档处置表

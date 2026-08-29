@@ -33,6 +33,13 @@
   # → serializeThemeCss 写入 :root，dark 主题经 resolveThemeValue 回退 light 默认），
   # 故 rounded-sm = calc(0.5rem − 4px) = 4px、rounded-md = calc(0.5rem − 2px) = 6px，
   # 裸 rounded = Tailwind DEFAULT 0.25rem = 4px。
+  # ⚠ 上述求值以「主题未覆盖 colors.radius」为前提：resolveThemeValue 优先读
+  # theme.colors[id]，本地主题 JSON 手写 colors.radius（如 '1rem'）会整体平移
+  # rounded-sm/md 的 computed 值（sm 变 12px、md 变 14px）——外部主题导入的
+  # 108-token allowlist 不含 radius，但本地主题无白名单过滤。按类名的档位分类
+  # 只对内置 / 未覆盖 radius 的主题成立；「radius 是否冻结为不可覆盖不变量」
+  # 登记为待裁决项（见下方补充裁决 (7)），裁决前 DS-7 棘轮按类名建基线、
+  # 以默认主题 computed 值为准。
   # 裸 rounded 计数限定「字符串字面量内的独立 token」（PCRE 词边界 + 前瞻排除
   # rounded-* 变体；grep -v 排除 `${rounded}` 模板插值）——旧口径曾把注释与局部
   # 变量名（如 turnUsageTooltip.ts 的 const rounded）计入 80，属假阳性，已修正为 58。
@@ -104,6 +111,16 @@
   建立，并把 `rounded-md` 的 196 处一并纳入非档位值清理范围，不得只按 30 建基线。
   静态计数是近似口径，棘轮落地时应以 AST / 编译产物扫描复核。§5 行内数字句同步补
   「in ANY of its equivalent spellings」限定并指向口径块。（同上条落点）
+  追加（第七轮 review 指出主题覆盖可平移派生值）：(7) **`rounded-sm`/`rounded-md`
+  的档位分类以「主题未覆盖 `colors.radius`」为前提**——`resolveThemeValue` 优先读
+  `theme.colors[id]`，本地主题 JSON 手写 `colors.radius`（如 `'1rem'`）会把
+  `rounded-sm` 平移到 12px、`rounded-md` 到 14px（外部主题导入的 108-token
+  allowlist 不含 radius，本地主题无白名单过滤）。口径块已补 ⚠ 前提说明；DS-7
+  棘轮按类名建基线、以默认主题 computed 值为准。**待裁决（随 DS-7 棘轮设计一并关）**：
+  `radius` 是否冻结为不可覆盖的主题不变量（冻结则类名分类对全部主题成立；不冻结则
+  棘轮须按 computed value 分类或豁免覆盖主题）——冻结涉及 `local-themes-normalize`
+  加白名单与既有本地主题兼容（治理合同兼容红线：用户主题不改写磁盘），属代码改动，
+  不随本纯文档 PR 落地。（同上条落点）
 
 - **08-16** **登录：唯一 SSO 不再经过 method-choice（拍板人 = 用户）**——
   用户已经从登录首页选了企业 SSO（组织标识探测），或邮箱 / 组织探测结果只剩
