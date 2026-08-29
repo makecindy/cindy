@@ -633,22 +633,26 @@ async function readPendingEnabledSources(): Promise<Set<string>> {
   return pending;
 }
 
-async function writePendingEnabledSources(sources: ReadonlySet<string>): Promise<void> {
+async function writePendingEnabledSources(sources: ReadonlySet<string>): Promise<boolean> {
   pendingEnabledSources.clear();
   for (const source of sources) pendingEnabledSources.add(source);
-  if (sources.size === 0) {
+  const durableSources = new Set([...sources].filter((source) => (
+    !projectPackageSource(source).unsafe && !/[?#]/.test(source)
+  )));
+  if (durableSources.size === 0) {
     await fs.rm(pendingEnablePath(), { force: true });
-    return;
+    return durableSources.size === sources.size;
   }
   await fs.mkdir(packageHome(), { recursive: true, mode: 0o700 });
   const target = pendingEnablePath();
   const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
   try {
-    await fs.writeFile(temporary, `${JSON.stringify([...sources].sort())}\n`, {
+    await fs.writeFile(temporary, `${JSON.stringify([...durableSources].sort())}\n`, {
       mode: 0o600,
       flag: 'wx',
     });
     await fs.rename(temporary, target);
+    return durableSources.size === sources.size;
   } finally {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
   }
@@ -657,7 +661,7 @@ async function writePendingEnabledSources(sources: ReadonlySet<string>): Promise
 async function persistPendingEnabledSources(sources: Iterable<string>): Promise<void> {
   const pending = await readPendingEnabledSources();
   for (const source of sources) pending.add(source);
-  await writePendingEnabledSources(pending);
+  if (!await writePendingEnabledSources(pending)) throw new PiPackageStateUnavailableError();
 }
 
 async function reconcilePendingEnabledSources(): Promise<void> {

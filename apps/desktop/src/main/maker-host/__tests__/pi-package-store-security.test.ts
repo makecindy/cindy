@@ -2235,6 +2235,34 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([sibling]);
   });
 
+  it('keeps private install sources memory-only when enable-ledger reconciliation is unavailable', async () => {
+    const source = 'https://alice:s3cr3t@packages.example/context-mode.git?token=query-secret#fragment-secret';
+    await createSkillOnlyPackage(source);
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, '{invalid-state');
+    const store = await import('../pi-package-store.js');
+
+    const result = await mutateAuthorized(store, { action: 'install', source });
+    expect(result.affectedPackage).toMatchObject({ enabled: true });
+    expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
+    await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [expect.objectContaining({ enabled: true })],
+    });
+    const publications = `${JSON.stringify(result)}\n${JSON.stringify(loggerRuntime.warn.mock.calls)}`;
+    expect(publications).not.toContain('alice');
+    expect(publications).not.toContain('s3cr3t');
+    expect(publications).not.toContain('query-secret');
+    expect(publications).not.toContain('fragment-secret');
+    expect(loggerRuntime.warn).toHaveBeenCalledWith(
+      'Pi package installed; enable-ledger reconciliation deferred',
+      expect.objectContaining({ failure: 'state-unavailable' }),
+    );
+  });
+
   it.each([
     ['transient I/O', 'EIO'],
     ['permission', 'EACCES'],
