@@ -15256,6 +15256,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         pendingCredentialSwitch: pendingCredentialSwitchHolder?.get(sessionId),
         hadLiveSession: maker.getSession(sessionId) !== undefined,
       };
+      const restoreControlStores = () => {
+        if (previousRuntime.hadProviderRoute) {
+          setSessionProvider(sessionId, previousRuntime.providerId);
+        } else {
+          clearSessionProvider(sessionId);
+        }
+        setSessionEffort(sessionId, previousRuntime.effort);
+        setSessionFastMode(sessionId, previousRuntime.fastMode);
+      };
       const liveSessionBeforeRouteChange = maker.getSession(sessionId);
       const persistedSessionMeta = liveSessionBeforeRouteChange
         ? null
@@ -15313,11 +15322,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         targetContextWindow = verifiedTargetWindow ?? undefined;
         if (
           confirmedContextWindow !== undefined &&
-          targetContextWindow !== undefined &&
-          (confirmedContextWindow > targetContextWindow ||
-            (isDeviceLinkInvoke() &&
-              runtimeAgentKind !== 'pi' &&
-              confirmedContextWindow !== targetContextWindow))
+          ((runtimeAgentKind !== 'pi' && confirmedContextWindow !== targetContextWindow) ||
+            (targetContextWindow !== undefined && confirmedContextWindow > targetContextWindow))
         ) {
           throwIpcError(
             isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : 'INVALID_PARAMS',
@@ -15327,7 +15333,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // A remote Pi confirmation may name the smaller window verified by the
         // previous final get_state. Re-run the catalog-window preflight first;
         // only the next final Pi verification may consume that confirmation.
-        if (!isDeviceLinkInvoke()) {
+        if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {
           targetContextWindow = confirmedContextWindow ?? targetContextWindow;
         }
         if (!targetContextWindow || targetContextWindow <= 0) {
@@ -15347,17 +15353,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           typeof liveContextTokens === 'number' && Number.isFinite(liveContextTokens)
             ? liveContextTokens
             : null;
-        const contextTokens =
+        const liveUsageIsAuthoritative =
           verifiedLiveContextTokens !== null &&
-          (verifiedLiveContextTokens > 0 || persistedContextTokens === 0)
-            ? verifiedLiveContextTokens
-            : (persistedContextTokens ?? 0);
-        if (
-          runtimeStatus.remoteHostId &&
-          (!verifiedCurrentWindow ||
-            (persistedContextTokens === null &&
-              (verifiedLiveContextTokens === null || verifiedLiveContextTokens <= 0)))
-        ) {
+          (verifiedLiveContextTokens > 0 || persistedContextTokens === 0);
+        const contextTokensKnown = liveUsageIsAuthoritative || persistedContextTokens !== null;
+        const contextTokens = liveUsageIsAuthoritative
+          ? verifiedLiveContextTokens
+          : (persistedContextTokens ?? 0);
+        if (!contextTokensKnown || (runtimeAgentKind !== 'pi' && !verifiedCurrentWindow)) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'model window switch context is unknown; runtime selection was not changed',
+          );
+        }
+        if (runtimeStatus.remoteHostId && !verifiedCurrentWindow) {
           throwIpcError(
             'PRECONDITION_FAILED',
             'remote model window switch context is unknown; runtime selection was not changed',
@@ -15387,15 +15396,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             );
           }
           let pendingClearedForWindowRebuild = false;
+          let confirmationContextTokens: number | undefined;
           let preparation: ModelWindowSwitchPreparationResult;
           try {
             preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(
               sessionId,
               {
                 contextWindow: targetContextWindow,
-                ...(confirmedContextWindow !== undefined
-                  ? { recheckTargetPressure: true, confirmedTargetPressure: true }
-                  : {}),
+                recheckTargetPressure: true,
+                confirmedTargetPressure:
+                  trustedRemoteWindowConfirmation &&
+                  confirmedContextWindow === targetContextWindow,
+                onConfirmationRequired: (contextTokens) => {
+                  confirmationContextTokens = contextTokens;
+                },
                 assertCanCommit: assertRuntimeOwnerCurrent,
                 beforeClose: () => {
                   clearPendingCredentialSwitchForSession(sessionId, { wake: false });
@@ -15418,6 +15432,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               }
             }
             throw error;
+          }
+          if (preparation === 'confirmation-required') {
+            if (!previousRuntime.hadLiveSession && maker.getSession(sessionId)) {
+              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+            }
+            restoreControlStores();
+            if (!confirmationContextTokens || confirmationContextTokens <= 0) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'verified model-window confirmation usage is unavailable',
+              );
+            }
+            return {
+              deferred: false,
+              superseded: false,
+              contextWindowConfirmationRequired: targetContextWindow,
+              contextTokensForConfirmation: confirmationContextTokens,
+            };
           }
           if (preparation === 'busy') {
             throwIpcError(
@@ -15488,15 +15520,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         runtimeStatus.orcaRole === 'worker' &&
         liveSessionBeforeRouteChange !== undefined &&
         (liveSessionBeforeRouteChange.model !== model || currentProviderId !== targetProviderId);
-      const restoreControlStores = () => {
-        if (previousRuntime.hadProviderRoute) {
-          setSessionProvider(sessionId, previousRuntime.providerId);
-        } else {
-          clearSessionProvider(sessionId);
-        }
-        setSessionEffort(sessionId, previousRuntime.effort);
-        setSessionFastMode(sessionId, previousRuntime.fastMode);
-      };
       const reconcileRetainedLiveProfile = async (): Promise<void> => {
         const retainedSession = maker.getSession(sessionId);
         if (!retainedSession || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {

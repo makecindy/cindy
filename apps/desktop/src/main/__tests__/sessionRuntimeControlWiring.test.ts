@@ -585,9 +585,9 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('contextTokensForConfirmation: finalPressureContextTokens');
     expect(setModel).toContain('finalPressureContextTokens = contextTokens');
     expect(setModel).toContain('runtimeRouteChanged || confirmedContextWindow !== undefined');
-    expect(setModel).toContain('if (!isDeviceLinkInvoke()) {');
+    expect(setModel).toContain("if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {");
     expect(setModel).toContain('targetContextWindow = confirmedContextWindow ?? targetContextWindow');
-    expect(setModel).toContain('{ recheckTargetPressure: true, confirmedTargetPressure: true }');
+    expect(setModel).toContain('confirmedContextWindow === targetContextWindow');
     expect(setModel).toContain('confirmedContextWindow === finalPiWindow');
     expect(finalMismatch).toBeGreaterThan(finalWindow);
     expect(finalMismatch).toBeLessThan(smallerFinalWindow);

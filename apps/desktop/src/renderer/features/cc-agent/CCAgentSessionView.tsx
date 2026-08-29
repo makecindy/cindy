@@ -60,6 +60,7 @@ import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
 import { useWorkerProjection, useWorkerProjectionOwner } from './hooks/workerProjectionStore';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
+import { setModelWithWindowConfirmation } from './lib/modelWindowConfirmation';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
 import { WorktreeCreatingOverlay } from '@/components/new-chat/WorktreeCreatingOverlay';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
@@ -3571,27 +3572,63 @@ export function CCAgentSessionView({
     if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
     const model = session.model;
     const previousProviderId = session.providerId ?? null;
+    const fmtTokens = (value: number): string =>
+      value >= 1_000_000
+        ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+        : `${Math.round(value / 1000)}K`;
 
-    await window.electronAPI.maker.setModel(sessionId, model, 'anthropic');
-    try {
-      await sessionService.update(sessionId, {
-        model,
-        providerId: 'anthropic',
-      });
-    } catch (error) {
-      // runtime route 已先切换；若持久化失败就回滚，避免当前进程与 DB 对同一会话
-      // 产生两个 provider 真源。
-      await window.electronAPI.maker
-        .setModel(sessionId, model, previousProviderId)
-        .catch((rollbackError) => {
-          log.warn('Claude subscription recovery rollback failed', rollbackError);
+    const switched = await setModelWithWindowConfirmation({
+      invoke: (confirmedContextWindow) =>
+        window.electronAPI.maker.setModel(
+          sessionId,
+          model,
+          'anthropic',
+          undefined,
+          confirmedContextWindow
+            ? ({
+                effort: session.effort as Effort,
+                fastMode,
+                confirmedContextWindow,
+              } as { effort: string; fastMode: boolean })
+            : undefined,
+        ),
+      confirm: ({ contextWindow, contextTokens }) =>
+        confirmDialog({
+          title: t('newChat.chatInput.modelSwitchContextGuard.title'),
+          description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', {
+            used: fmtTokens(contextTokens),
+            total: fmtTokens(contextWindow),
+            pct: Math.round((contextTokens / contextWindow) * 100),
+          }),
+          confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
+          cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
+        }),
+    });
+    if (!switched) return;
+    if (switched === 'applied') {
+      try {
+        await sessionService.update(sessionId, {
+          model,
+          providerId: 'anthropic',
         });
-      throw error;
+      } catch (error) {
+        // runtime route 已先切换；若持久化失败就回滚，避免当前进程与 DB 对同一会话
+        // 产生两个 provider 真源。确认后的原子重试已由 Main 持久化，不走此分支。
+        await window.electronAPI.maker
+          .setModel(sessionId, model, previousProviderId)
+          .catch((rollbackError) => {
+            log.warn('Claude subscription recovery rollback failed', rollbackError);
+          });
+        throw error;
+      }
     }
 
     await refreshServerSession();
     await retryLastError();
-  }, [canSwitchToClaudeSubscription, refreshServerSession, retryLastError, session, sessionId]);
+  }, [
+    canSwitchToClaudeSubscription, confirmDialog, fastMode, refreshServerSession,
+    retryLastError, session, sessionId, t,
+  ]);
 
   const handleSilentStopContinue = useCallback(() => {
     continueAfterSilentStop();

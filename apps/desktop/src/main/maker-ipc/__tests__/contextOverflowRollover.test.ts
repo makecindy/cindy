@@ -404,6 +404,38 @@ describe('createContextOverflowRollover', () => {
     },
   );
 
+  it('requires an exact confirmation before rebuilding a 1M Claude task for a 200K subscription route', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      agentKind: 'cc',
+      contextTokens: 180_000,
+      contextWindow: 1_000_000,
+      model: 'claude-opus',
+      providerId: 'xd',
+    });
+    deps.resolveVerifiedWindow.mockReturnValue(1_000_000);
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', {
+        contextWindow: 200_000,
+        recheckTargetPressure: true,
+      }),
+    ).resolves.toBe('confirmation-required');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', {
+        contextWindow: 200_000,
+        recheckTargetPressure: true,
+        confirmedTargetPressure: true,
+      }),
+    ).resolves.toBe('rebuilt');
+    expect(deps.commitRebuild).toHaveBeenCalledTimes(1);
+  });
+
   it('does not rebuild after Pi final-window verification below the pressure line', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
