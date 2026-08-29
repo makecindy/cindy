@@ -484,6 +484,10 @@ describe('父层 — 行级 handler 的引用稳定性', () => {
       /useEffect\(\s*\(\)\s*=>\s*\{\s*pruneSelectionToRenderedRows\(\);\s*\}\s*\)/,
     );
     expect(source).toMatch(/if \(!hasSidebarSelection\) return undefined;/);
+    // 单击锚点不算多选:handleSessionClick 每次普通点击都会写
+    // selectionAnchorSessionId,观察器必须只由非空 selectedSessionIds 驱动。
+    expect(source).toMatch(/const hasSidebarSelection = selectedSessionIds\.size > 0;/);
+    expect(source).not.toMatch(/hasSidebarSelection = selectedSessionIds\.size > 0 \|\|/);
   });
 
   it('SessionCard / ProjectNode / AutomationSessionGroupItem 必须 memo 包裹', () => {

@@ -2016,10 +2016,11 @@ function ExpandedView({
     setSelectionAnchorSessionId((prev) => (prev && renderedSessionIds.has(prev) ? prev : null));
   }, []);
 
-  // 只在真有多选时才盯 DOM。无选择时每帧 querySelectorAll + getComputedStyle
-  // 会把「全部展开后再切任务」扫成整表布局税。折叠改成动画结束后卸载,隐藏行
-  // 从树上拿掉,MutationObserver 就能接到,不必再每渲染扫一遍可见性。
-  const hasSidebarSelection = selectedSessionIds.size > 0 || selectionAnchorSessionId != null;
+  // 只在真有多选集合时才盯 DOM。单击也会写下 selectionAnchorSessionId 当
+  // Shift 范围锚点,那不算多选;锚点失效时 Shift 点击会现场用可见行校验。
+  // 若把锚点算进去,首次点击后观察器会一直挂着,运行态/未读子节点增删又把
+  // getVisibleSidebarSessionIds 打回整表布局税。
+  const hasSidebarSelection = selectedSessionIds.size > 0;
   useEffect(() => {
     if (!hasSidebarSelection) return undefined;
     const root = sidebarScrollRef.current;
