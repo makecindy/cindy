@@ -17,6 +17,7 @@ import {
 } from '../../shared/xboxGamepad.js';
 import {
   reduceXboxGamepadFrame,
+  xboxGamepadActiveHolds,
   xboxGamepadHoldReleases,
   xboxGamepadPreviewFromFrame,
   type XboxGamepadFrame,
@@ -95,7 +96,9 @@ export class XboxGamepadController {
     const next = active ? family : null;
     if (this.layoutPreviewFamily === next) return;
     this.layoutPreviewFamily = next;
-    if (next) this.releaseHolds(this.slots[next]);
+    if (next) {
+      for (const held of GAMEPAD_FAMILIES) this.releaseHolds(this.slots[held]);
+    }
   }
 
   handleHostMessage(message: XboxGamepadHostMessage): void {
@@ -145,12 +148,12 @@ export class XboxGamepadController {
     this.hostError = null;
     this.emitPreview(xboxGamepadPreviewFromFrame(frame, family));
     if (!this.shouldDispatch(slot)) {
-      slot.previousFrame = null;
+      this.releaseHolds(slot);
       return;
     }
     const actions = reduceXboxGamepadFrame(slot.previousFrame, frame, slot.settings.layout);
     slot.previousFrame = frame;
-    for (const action of actions) this.deps.dispatch(action);
+    this.emitActions(slot, actions);
   }
 
   markUnavailable(): void {
@@ -206,7 +209,45 @@ export class XboxGamepadController {
   private releaseHolds(slot: AccessorySlot): void {
     const actions = xboxGamepadHoldReleases(slot.previousFrame, slot.settings.layout);
     slot.previousFrame = null;
-    for (const action of actions) this.deps.dispatch(action);
+    this.emitActions(slot, actions);
+  }
+
+  private emitActions(origin: AccessorySlot, actions: InputDeviceRendererAction[]): void {
+    for (const action of actions) {
+      if (action.type === 'voice' && action.phase === 'release' && this.otherVoiceHeld(origin)) {
+        continue;
+      }
+      if (action.type === 'scroll-stop') {
+        const remaining = this.otherScroll(origin);
+        if (remaining) {
+          this.deps.dispatch(remaining);
+          continue;
+        }
+      }
+      this.deps.dispatch(action);
+    }
+  }
+
+  private otherVoiceHeld(except: AccessorySlot): boolean {
+    for (const family of GAMEPAD_FAMILIES) {
+      const slot = this.slots[family];
+      if (slot === except || !this.shouldDispatch(slot)) continue;
+      if (xboxGamepadActiveHolds(slot.previousFrame, slot.settings.layout).voice) return true;
+    }
+    return false;
+  }
+
+  private otherScroll(
+    except: AccessorySlot,
+  ): Extract<InputDeviceRendererAction, { type: 'scroll' }> | null {
+    let best: Extract<InputDeviceRendererAction, { type: 'scroll' }> | null = null;
+    for (const family of GAMEPAD_FAMILIES) {
+      const slot = this.slots[family];
+      if (slot === except || !this.shouldDispatch(slot)) continue;
+      const scroll = xboxGamepadActiveHolds(slot.previousFrame, slot.settings.layout).scroll;
+      if (scroll && (!best || scroll.intensity > best.intensity)) best = scroll;
+    }
+    return best;
   }
 
   private emit(): void {

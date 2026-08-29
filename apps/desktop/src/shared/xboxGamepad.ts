@@ -169,7 +169,14 @@ export function resolveGamepadFamily(input: {
   ) {
     return 'nintendo';
   }
-  if (hay.includes('xbox') || hay.includes('elite') || /\bseries [xs]\b/.test(hay)) {
+  // Wired Xbox pads often advertise USB product "Controller" and vendor Microsoft.
+  if (
+    hay.includes('xbox') ||
+    hay.includes('elite') ||
+    hay.includes('microsoft') ||
+    /\bseries [xs]\b/.test(hay) ||
+    (input.name ?? '').toLowerCase() === 'controller'
+  ) {
     return 'xbox';
   }
   return 'generic';

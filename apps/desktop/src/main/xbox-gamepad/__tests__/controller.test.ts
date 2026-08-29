@@ -217,4 +217,86 @@ describe('XboxGamepadController', () => {
     });
     expect(preview).not.toHaveBeenCalled();
   });
+
+  it('releases every family hold when layout preview starts', () => {
+    const dispatch = vi.fn();
+    const controller = new XboxGamepadController({
+      isCindyFrontmost: () => true,
+      dispatch,
+    });
+    controller.applySettings('xbox', enabledSettings());
+    controller.applySettings('playstation', enabledSettings());
+    for (const family of ['xbox', 'playstation'] as const) {
+      controller.handleHostMessage({
+        kind: 'frame',
+        family,
+        buttons: XBOX_GAMEPAD_EMPTY_FRAME.buttons,
+        axes: XBOX_GAMEPAD_EMPTY_FRAME.axes,
+        triggers: XBOX_GAMEPAD_EMPTY_FRAME.triggers,
+      });
+      controller.handleHostMessage({
+        kind: 'frame',
+        family,
+        buttons: { ...XBOX_GAMEPAD_EMPTY_FRAME.buttons, lt: true },
+        axes: { lx: 0, ly: 0, rx: 0, ry: 1 },
+        triggers: { lt: 1, rt: 0 },
+      });
+    }
+    dispatch.mockClear();
+
+    controller.setLayoutPreviewActive(true, 'xbox');
+    expect(dispatch).toHaveBeenCalledWith({ type: 'voice', phase: 'release' });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
+  });
+
+  it('keeps the other pad voice and scroll when one family releases', () => {
+    const dispatch = vi.fn();
+    const controller = new XboxGamepadController({
+      isCindyFrontmost: () => true,
+      dispatch,
+    });
+    controller.applySettings('xbox', enabledSettings());
+    controller.applySettings('playstation', enabledSettings());
+    for (const family of ['xbox', 'playstation'] as const) {
+      controller.handleHostMessage({
+        kind: 'frame',
+        family,
+        buttons: XBOX_GAMEPAD_EMPTY_FRAME.buttons,
+        axes: XBOX_GAMEPAD_EMPTY_FRAME.axes,
+        triggers: XBOX_GAMEPAD_EMPTY_FRAME.triggers,
+      });
+      controller.handleHostMessage({
+        kind: 'frame',
+        family,
+        buttons: { ...XBOX_GAMEPAD_EMPTY_FRAME.buttons, lt: true },
+        axes: { lx: 0, ly: 0, rx: 0, ry: 1 },
+        triggers: { lt: 1, rt: 0 },
+      });
+    }
+    dispatch.mockClear();
+
+    controller.handleHostMessage({
+      kind: 'frame',
+      family: 'xbox',
+      buttons: XBOX_GAMEPAD_EMPTY_FRAME.buttons,
+      axes: XBOX_GAMEPAD_EMPTY_FRAME.axes,
+      triggers: XBOX_GAMEPAD_EMPTY_FRAME.triggers,
+    });
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'voice', phase: 'release' });
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'scroll-stop' });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'scroll', direction: 'up' }),
+    );
+
+    dispatch.mockClear();
+    controller.handleHostMessage({
+      kind: 'frame',
+      family: 'playstation',
+      buttons: XBOX_GAMEPAD_EMPTY_FRAME.buttons,
+      axes: XBOX_GAMEPAD_EMPTY_FRAME.axes,
+      triggers: XBOX_GAMEPAD_EMPTY_FRAME.triggers,
+    });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'voice', phase: 'release' });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
+  });
 });

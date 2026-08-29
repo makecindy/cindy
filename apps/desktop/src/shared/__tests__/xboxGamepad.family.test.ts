@@ -35,6 +35,11 @@ describe('resolveGamepadFamily', () => {
     expect(resolveGamepadFamily({ name: 'Elite Series 2' })).toBe('xbox');
   });
 
+  it('keeps wired Microsoft Controller pads on the Xbox accessory', () => {
+    expect(resolveGamepadFamily({ name: 'Microsoft', category: 'Controller' })).toBe('xbox');
+    expect(resolveGamepadFamily({ name: 'Controller' })).toBe('xbox');
+  });
+
   it('defaults unknown extended pads to the generic accessory', () => {
     expect(resolveGamepadFamily({ name: '8BitDo Pro 2' })).toBe('generic');
     expect(resolveGamepadFamily({ name: 'Game Controller' })).toBe('generic');

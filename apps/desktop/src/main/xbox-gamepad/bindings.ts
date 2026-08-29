@@ -97,14 +97,28 @@ export function reduceXboxGamepadFrame(
   return actions;
 }
 
+export function xboxGamepadActiveHolds(
+  frame: XboxGamepadFrame | null,
+  layout: XboxGamepadLayout,
+): {
+  voice: boolean;
+  scroll: Extract<InputDeviceRendererAction, { type: 'scroll' }> | null;
+} {
+  if (!frame) return { voice: false, scroll: null };
+  return {
+    voice: voiceHeld(frame, layout),
+    scroll: combinedScroll(frame, layout),
+  };
+}
+
 export function xboxGamepadHoldReleases(
   frame: XboxGamepadFrame | null,
   layout: XboxGamepadLayout,
 ): InputDeviceRendererAction[] {
-  if (!frame) return [];
+  const holds = xboxGamepadActiveHolds(frame, layout);
   const actions: InputDeviceRendererAction[] = [];
-  if (voiceHeld(frame, layout)) actions.push({ type: 'voice', phase: 'release' });
-  if (combinedScroll(frame, layout)) actions.push({ type: 'scroll-stop' });
+  if (holds.voice) actions.push({ type: 'voice', phase: 'release' });
+  if (holds.scroll) actions.push({ type: 'scroll-stop' });
   return actions;
 }
 

@@ -49,7 +49,12 @@ func resolveGamepadFamily(from controller: GCController) -> String {
   {
     return "nintendo"
   }
-  if haystack.contains("xbox") || haystack.contains("elite") {
+  // Wired Xbox pads often advertise USB product "Controller" and vendor Microsoft.
+  if haystack.contains("xbox")
+    || haystack.contains("elite")
+    || haystack.contains("microsoft")
+    || vendor == "controller"
+  {
     return "xbox"
   }
   return "generic"

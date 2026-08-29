@@ -415,7 +415,7 @@ function FaceLetter({ center, label }: { center: readonly [number, number]; labe
       dominantBaseline="middle"
       fill="currentColor"
       stroke="none"
-      fontSize="22"
+      fontSize="20"
       fontWeight="600"
       fontFamily="Inter, system-ui, sans-serif"
     >
