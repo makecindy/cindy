@@ -1335,7 +1335,23 @@ describe('Cindy durable PI Subagent runner', () => {
       childId: running.tasks[0]?.childId,
       message: 'continue from the completed result',
     })).resolves.toBe(1);
-    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
+    // controlPiSubagentRuns 返回 1 只表示控制面已受理，不代表 fake child 已经
+    // 把 follow_up 写进 commands.jsonl。直接读会撞上 CI 调度窗口：文件里可能
+    // 只有最初的 prompt。用 waitFor 轮询到 follow_up 真正落盘。
+    const commands = await waitFor(
+      async () => {
+        const parsed = await readCommandsIfPresent(fixture.commandsFile);
+        return parsed?.some(
+          (command) =>
+            command.type === 'follow_up' &&
+            command.message === 'continue from the completed result',
+        )
+          ? parsed
+          : null;
+      },
+      undefined,
+      'the accepted follow_up control to appear in the fake child command log',
+    );
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'steer', message: 'late correction' }));
     expect(commands).toContainEqual(expect.objectContaining({
       type: 'follow_up', message: 'continue from the completed result',
