@@ -342,6 +342,24 @@ describe('ToolLoopGuard', () => {
     }
     expect(feed(g, 'failed', 'Edit', { old_string: 'failed' }, MISSING, true, 'next-batch').kind).toBe('ok');
   });
+
+  it('同批次无关成功结果不清零契约 streak,下一批次才继续累计', () => {
+    const g = new ToolLoopGuard();
+
+    expect(feed(g, 'bad-a', 'Edit', { old_string: 'a' }, MISSING, true, 'batch-a').kind).toBe('ok');
+    // 结果顺序若为 malformed Edit → successful Read, 不应把第一批失败抹掉。
+    expect(feed(g, 'read-a', 'Read', { file_path: 'context.txt' }, 'read ok', false, 'batch-a').kind).toBe('ok');
+
+    expect(feed(g, 'bad-b', 'Edit', { old_string: 'b' }, MISSING, true, 'batch-b').kind).toBe('ok');
+    expect(feed(g, 'read-b', 'Read', { file_path: 'context.txt' }, 'read ok', false, 'batch-b').kind).toBe('ok');
+
+    expect(feed(g, 'bad-c', 'Edit', { old_string: 'c' }, MISSING, true, 'batch-c')).toMatchObject({
+      kind: 'hard',
+      reason: 'contract',
+      count: 3,
+      contractCategory: 'missing_required_field',
+    });
+  });
 });
 
 describe('classifyToolContractError', () => {

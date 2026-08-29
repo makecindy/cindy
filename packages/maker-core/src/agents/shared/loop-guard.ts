@@ -243,9 +243,17 @@ export class ToolLoopGuard {
         };
       }
     } else {
-      this.lastContractKey = null;
-      this.lastContractBatchId = null;
-      this.contractStreak = 0;
+      // A successful/unclassified result from the same assistant batch is
+      // unrelated evidence, not a new model turn. Defer resetting the
+      // contract streak until a different batch arrives; otherwise a batch
+      // containing malformed Edit + successful Read becomes order-dependent.
+      const sameBatch = toolResultBatchId !== undefined
+        && toolResultBatchId === this.lastContractBatchId;
+      if (!sameBatch) {
+        this.lastContractKey = null;
+        this.lastContractBatchId = null;
+        this.contractStreak = 0;
+      }
     }
 
     // 第 1 层: 连续 name+input+output 完全相同
