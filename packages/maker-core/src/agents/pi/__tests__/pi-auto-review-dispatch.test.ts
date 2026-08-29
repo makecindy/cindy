@@ -1394,6 +1394,36 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it.each(['install', 'update', 'remove'] as const)(
+    'keeps hook-origin pi %s on the tool-confirmation path',
+    async (action) => {
+      const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+      const deps = buildDeps();
+      deps.mutatePiManagedPackage = mutatePiManagedPackage;
+      const handle = await new PiAgent(deps).startSession({
+        sessionId: `managed-package-hook-${action}-session`,
+        workingDir: cwd,
+        model: 'm',
+      });
+      const command = `pi ${action} npm:context-mode`;
+      try {
+        captured.requests = [];
+        await handle.send({ type: 'user', content: command }, {
+          [MAIN_OWNED_SEND_CONTEXT]: {
+            origin: { kind: 'hook', source: 'telegram' },
+            rawChannelText: command,
+          },
+        });
+
+        expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+        expect(captured.requests.find((request) => request.type === 'prompt')?.message)
+          .toContain(command);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
   it('redacts private URL fields from deterministic command receipts', async () => {
     const privateSource = 'https://alice:s3cr3t@packages.example/context-mode.git?token=query-secret#fragment-secret';
     const publicSource = 'https://packages.example/context-mode.git';
@@ -1719,6 +1749,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       });
       expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeNonExactRawText);
 
+      const callsBeforeHookCommand = mutatePiManagedPackage.mock.calls.length;
       await handle.send({
         type: 'user',
         content: 'official hook note\n\npi remove npm:context-mode',
@@ -1728,11 +1759,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           rawChannelText: 'pi remove npm:context-mode',
         },
       });
-      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
-        action: 'remove',
-        source: 'npm:context-mode',
-        authorization: 'local-desktop-command',
-      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeHookCommand);
     } finally {
       await handle.close();
     }

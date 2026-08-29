@@ -4495,8 +4495,10 @@ export class PiAgent extends BaseAgent {
       if (!allowPiPackageManagement || imageCount > 0 || hasAdditionalContent) {
         return { text, accepted: false };
       }
-      const mainOwnedChannelCommand = mainOwnedContext?.origin.kind === 'im'
-        || mainOwnedContext?.origin.kind === 'hook';
+      // Server-backed hooks are not authenticated direct user commands. Keep
+      // their package changes on the existing tool-confirmation path.
+      if (mainOwnedContext?.origin.kind === 'hook') return { text, accepted: false };
+      const mainOwnedChannelCommand = mainOwnedContext?.origin.kind === 'im';
       const authenticatedImCommand = mainOwnedContext?.origin.kind === 'im';
       const commandText = mainOwnedChannelCommand
         ? mainOwnedContext.rawChannelText
