@@ -623,7 +623,7 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'new-session') {
-        patchDraft({ workingDir: payload.workingDir, extraDirs: [] });
+        patchDraft({ workingDir: payload.workingDir, extraDirs: [], writableDirs: [] });
         navigate('/cc-agent/new');
         return;
       }

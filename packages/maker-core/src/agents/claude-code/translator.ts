@@ -2321,8 +2321,13 @@ function handleResult(
   // surface 耗尽提示)。data 为 unknown 形状、既有消费方(记账 / IM / orca)均按需
   // typeof 读字段, 加字段零影响; 不命中时 done 与现状逐字节一致。
   const safeResult =
-    msg.is_error && typeof msg.result === 'string'
-      ? { ...msg, result: redactSensitiveText(msg.result) }
+    typeof msg.result === 'string'
+      ? {
+          ...msg,
+          result: msg.is_error
+            ? redactSensitiveText(msg.result)
+            : stripInternalWebCitations(msg.result),
+        }
       : msg;
   const resultWithUsageSegments = {
     ...safeResult,

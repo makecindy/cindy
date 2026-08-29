@@ -311,10 +311,16 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);');
     expect(deferredHandler).toBeTruthy();
     expect(deferredHandler).toContain('getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);');
+    expect(deferredHandler).toContain('return persistId;');
     expectOrder(
       deferredHandler ?? '',
       'onTurnErrorEvent(sid, errData, agentMeta);',
       'getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);',
+    );
+    expectOrder(
+      deferredHandler ?? '',
+      'getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);',
+      'return persistId;',
     );
   });
 
@@ -485,6 +491,28 @@ describe('maker:event hot path ordering', () => {
       'isSuccessfulCodexDoneEventData(event.data)',
       'markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId)',
     );
+  });
+
+  it('reserves terminal error persistId before EVENT broadcast and writes after', () => {
+    const wireSessionSource = extractWireSessionSource();
+    expectOrder(
+      wireSessionSource,
+      'persistId = reserveTurnErrorPersistId(',
+      'broadcastToAllWindows(MAKER_PUSH.EVENT',
+    );
+    expectOrder(
+      wireSessionSource,
+      'broadcastToAllWindows(MAKER_PUSH.EVENT',
+      'onTurnErrorEvent(',
+    );
+    expect(wireSessionSource).toContain('const autoResumeWouldSuppressPersist');
+    const persistBoundaryStart = wireSessionSource.indexOf(
+      'let turnAssistantPersistId: string | undefined;',
+    );
+    expect(persistBoundaryStart).toBeGreaterThanOrEqual(0);
+    expect(
+      wireSessionSource.indexOf('const autoResumeSuppressesPersist', persistBoundaryStart),
+    ).toBeGreaterThan(persistBoundaryStart);
   });
 
   it('rejects stale Agent Island interactions before renderer delivery', () => {

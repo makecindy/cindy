@@ -977,6 +977,32 @@ describe('maker SEND transaction', () => {
     expect(lazySession.send).toHaveBeenCalled();
   });
 
+  it('restores a persisted writable parent without a filtered read-only child after restart', async () => {
+    const lazySession = createSession({ id: 'restart-session', workDir: '/repo' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      readSessionExtraDirsFromDb: vi.fn(async () => []),
+      readSessionWritableDirsFromDb: vi.fn(async () => ['/shared']),
+      bootstrapSession: vi.fn(async () => ({
+        session: lazySession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('restart-session', 'hello', {
+      id: 'restart-session',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    })).resolves.toMatchObject({ accepted: true });
+
+    const bootstrapOpts = vi.mocked(deps.bootstrapSession).mock.calls[0]?.[0];
+    expect(bootstrapOpts).toMatchObject({ writableDirs: ['/shared'] });
+    expect(bootstrapOpts).not.toHaveProperty('extraDirs');
+  });
+
   it('activates a forked Pi business session once with the latest DB route on its first send', async () => {
     const lazySession = createSession({
       id: 'forked-pi-session',

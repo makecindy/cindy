@@ -256,6 +256,8 @@ export const MAKER_INVOKE = {
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',
+  // 附加可读写目录；与 SET_EXTRA_DIRS 的只读授权严格分离。
+  SET_WRITABLE_DIRS: 'maker:set-writable-dirs',
   // 未来 MetaAgent 入口（占位）
   RUN: 'maker:run',
   // Chat utility (Stage 2 C1) — 不是 session 级 API,但走 maker.* 命名空间统一管理

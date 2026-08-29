@@ -1461,6 +1461,11 @@ export interface StartSessionOptions {
    */
   extraDirs?: string[];
   /**
+   * 附加可读写目录列表(绝对路径)。这是用户逐目录授予的会话级权限，不能从
+   * extraDirs 自动推导；启动时快照，并可由 setWritableDirs 热更新。
+   */
+  writableDirs?: string[];
+  /**
    * vendor-specific 透传字段。等价于现有 VendorSessionOptions.vendorOptions。
    * 例如：Claude 的 forkSession / resumeSessionAt / source / onStderrLine ...
    */
@@ -1845,6 +1850,9 @@ export interface AgentSessionHandle {
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。
    */
   setExtraDirs?(dirs: string[]): Promise<void>;
+
+  /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
+  setWritableDirs?(dirs: string[]): Promise<void>;
 
   /**
    * 运行时合并 vendorOptions(浅合并到内部闭包)。

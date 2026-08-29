@@ -13,6 +13,7 @@ import {
 } from '@/lib/silencedSessionDoneStore';
 import { markSessionStarting, resetSessionStartingStoreForTests } from '@/lib/sessionStartingStore';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
+import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
 import {
   addSessionAttention,
   clearSessionAttention,
@@ -46,6 +47,10 @@ vi.mock('@/lib/sessionAttentionStore', () => ({
   getSessionAttentionKind: vi.fn(() => undefined),
   hasSessionAttention: vi.fn(() => false),
   useSessionAttentionSnapshot: () => new Set<string>(),
+}));
+
+vi.mock('@/hooks/usePendingAlertAttention', () => ({
+  noteSessionTurnStartedForAlerts: vi.fn(),
 }));
 
 function status(isRunning: boolean, hasError = false, sideTask?: boolean): SessionStatusInfo {
@@ -483,6 +488,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(vi.mocked(clearSessionAttention)).toHaveBeenCalledWith('s-orphan', {
       intent: 'explicit',
     });
+    expect(vi.mocked(noteSessionTurnStartedForAlerts)).toHaveBeenCalledWith('s-orphan');
     vi.mocked(getSessionAttentionKind).mockReturnValue(undefined);
   });
 
@@ -496,6 +502,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(vi.mocked(clearSessionAttention)).not.toHaveBeenCalledWith('s-real', {
       intent: 'explicit',
     });
+    expect(vi.mocked(noteSessionTurnStartedForAlerts)).toHaveBeenCalledWith('s-real');
     vi.mocked(getSessionAttentionKind).mockReturnValue(undefined);
     storeMock.terminalErrorSessions.delete('s-real');
   });

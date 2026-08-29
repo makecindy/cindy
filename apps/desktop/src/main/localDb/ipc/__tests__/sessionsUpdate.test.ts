@@ -167,6 +167,7 @@ function createDb(): void {
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
       one_m INTEGER NOT NULL DEFAULT 0,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       orca_role TEXT,
@@ -224,6 +225,12 @@ async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise
   return handler({}, id, patch);
 }
 
+async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
+  const handler = h.handlers.get('local-db:sessions:create');
+  if (!handler) throw new Error('create handler not registered');
+  return handler({ sender: { id: 7 } }, body);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
@@ -263,6 +270,25 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('rejects new SSH writable roots because the picker is not on the remote filesystem', async () => {
+    await expect(invokeCreate({
+      id: 'ssh-forged',
+      agentKind: 'codex',
+      workingDir: '/remote/repo',
+      remoteHostId: 'host-1',
+      writableDirs: ['/remote/outside'],
+    })).rejects.toThrow(/can only be revoked/i);
+    expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('ssh-forged'))
+      .toBeUndefined();
+  });
+
+  it('rejects renderer-side directory grant writes outside the atomic maker handlers', async () => {
+    await expect(invokeUpdate('cc-local', { writableDirs: ['/forged'] }))
+      .rejects.toThrow(/maker:set-\*-dirs/i);
+    await expect(invokeUpdate('cc-local', { extraDirs: ['/forged-read'] }))
+      .rejects.toThrow(/maker:set-\*-dirs/i);
+  });
+
   it('recovers cleanup only for deleted parent tasks after restart', async () => {
     const userData = h.userDataDir!;
     const parentRoot = path.join(userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');

@@ -1528,6 +1528,7 @@ function commandReadsProcessEnviron(command: unknown): boolean {
 function currentPermissionState(): {
   mode: 'ask' | 'bypassPermissions';
   readOnlyRoots: string[];
+  writableRoots: string[];
   reviewReadPaths: string[];
   reviewOnly: boolean;
 } {
@@ -1538,7 +1539,7 @@ function currentPermissionState(): {
   const reviewOnlyByStart = process.env.CINDY_PI_REVIEW_ONLY === '1';
   const file = process.env.CINDY_PI_PERMISSION_FILE ?? '';
   if (!file) {
-    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+    return { mode: 'ask', readOnlyRoots: [], writableRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
   }
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'));
@@ -1547,13 +1548,16 @@ function currentPermissionState(): {
       readOnlyRoots: Array.isArray(parsed?.readOnlyRoots)
         ? parsed.readOnlyRoots.filter((root: unknown) => typeof root === 'string')
         : [],
+      writableRoots: Array.isArray(parsed?.writableRoots)
+        ? parsed.writableRoots.filter((root: unknown) => typeof root === 'string')
+        : [],
       reviewReadPaths: Array.isArray(parsed?.reviewReadPaths)
         ? parsed.reviewReadPaths.filter((root: unknown) => typeof root === 'string')
         : [],
       reviewOnly: parsed?.reviewOnly === true || reviewOnlyByStart,
     };
   } catch {
-    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+    return { mode: 'ask', readOnlyRoots: [], writableRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
   }
 }
 
@@ -1562,6 +1566,59 @@ function isInsideRoot(candidate: string, root: string): boolean {
   const base = path.resolve(root);
   const rel = path.relative(base, target);
   return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel));
+}
+
+/**
+ * 解析结构化写工具真正会触碰的路径。目标尚不存在时解析最近存在的父目录，
+ * 因而仍能看穿授权目录内部的 symlink / Windows junction。无法证明则返回 null，
+ * 由 Host 将本次 Auto 审核升级为逐次确认，绝不回落到字面路径绿灯。
+ */
+function resolveFileWriteTargetPath(targetPath: string): string | null {
+  if (!targetPath) return null;
+  try {
+    return realpathSync(targetPath);
+  } catch {
+    try {
+      lstatSync(targetPath);
+      return null;
+    } catch (lstatError) {
+      const code = (lstatError as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+    }
+    let dir = path.dirname(targetPath);
+    for (let i = 0; i < 64; i += 1) {
+      try {
+        return path.join(realpathSync(dir), path.relative(dir, targetPath));
+      } catch {
+        // 词法祖先存在却无法 realpath，典型是悬空/循环链接或权限错误。继续越过它
+        // 会把一个未知真实目标重新伪装成授权根内路径，必须在这里 fail closed。
+        try {
+          lstatSync(dir);
+          return null;
+        } catch (lstatError) {
+          const code = (lstatError as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) return null;
+        dir = parent;
+      }
+    }
+    return null;
+  }
+}
+
+/** Canonical roots are evidence from the same filesystem that will execute the write. */
+function resolveWritableRootsForHost(writableRoots: string[]): string[] | null {
+  const resolved = new Set<string>();
+  for (const root of [process.cwd(), ...writableRoots]) {
+    try {
+      resolved.add(realpathSync(root));
+    } catch {
+      return null;
+    }
+  }
+  return [...resolved];
 }
 
 function reviewAncestorsWithin(start: string, root: string): string[] {
@@ -3080,25 +3137,15 @@ export default async function cindyBridge(pi: any) {
     // 漏掉 **symlink 父目录**(agentHome/link/perm.json, link -> /outside)。修:
     // 目标存在 → realpath 目标;目标不存在 → realpath 最近的**存在的父目录**,
     // 用真实父目录判定(父目录链上的 symlink 一并解析)。
-    const writeTargetResolved = (() => {
-      if (!targetPath) return null;
-      try {
-        return realpathSync(targetPath);
-      } catch {
-        // 目标不存在:向上找最近存在的祖先并 realpath。
-        let dir = path.dirname(targetPath);
-        for (let i = 0; i < 64; i += 1) {
-          try {
-            return path.join(realpathSync(dir), path.basename(targetPath));
-          } catch {
-            const parent = path.dirname(dir);
-            if (parent === dir) return null;
-            dir = parent;
-          }
-        }
-        return null;
-      }
-    })();
+    const writeTargetResolved = resolveFileWriteTargetPath(targetPath);
+    if (
+      targetPath
+      && FILE_WRITE_BUILTINS.has(event.toolName)
+      && writeTargetResolved === null
+      && permission.mode !== 'bypassPermissions'
+    ) {
+      return { block: true, reason: 'Cindy could not verify the real file-write target.' };
+    }
     const writeInsideAgentHome = agentHomeDir
       && (
         isInsideRoot(targetPath, agentHomeDir)
@@ -3196,6 +3243,12 @@ export default async function cindyBridge(pi: any) {
           toolName: permissionToolName,
           input: permissionInput,
           resolvedCredentialPaths: credentialEvidenceForHost,
+          ...(FILE_WRITE_BUILTINS.has(event.toolName)
+            ? {
+                resolvedWritePath: writeTargetResolved,
+                resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots),
+              }
+            : {}),
         }),
       );
     } catch {
@@ -3210,6 +3263,17 @@ export default async function cindyBridge(pi: any) {
             ? 'Cindy Auto-review denied this tool call.'
             : 'Cindy could not approve this tool call.',
       };
+    }
+    if (
+      FILE_WRITE_BUILTINS.has(event.toolName)
+      && writeTargetResolved !== null
+      && event.input
+      && typeof event.input === 'object'
+    ) {
+      // Pi 随后不再使用用户提供的 link 名，而是使用审核过的 canonical 路径，
+      // 缩小等待确认期间替换原始 link 的竞态面。这不是 descriptor / inode 绑定；
+      // 同 UID 并发替换 canonical 路径仍需未来由 OS 级 no-follow 写入能力解决。
+      event.input.path = writeTargetResolved;
     }
   });
 

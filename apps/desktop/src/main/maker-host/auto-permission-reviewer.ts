@@ -38,7 +38,9 @@ export interface AutoPermissionReviewerDeps {
 const MAX_REASON_CHARS = 240;
 const MAX_REVIEW_OUTPUT_CHARS = 1_024;
 const MAX_USER_INTENT_CHARS = 2_000;
-const MAX_WORKSPACE_ROOTS = 8;
+// ChatInput permits ten external directory grants shared across read-only and writable
+// roots. Keep those ten plus the primary workspace visible to the reviewer.
+const MAX_WORKSPACE_ROOTS = 11;
 const MAX_WORKSPACE_ROOT_CHARS = 512;
 const REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
@@ -114,14 +116,17 @@ function serializeUntrustedPayload(value: unknown): string {
  */
 export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): string {
   assertReviewableActionSize(request.action);
-  // workspaceRoots 位置语义(与 maker-core reviewAction 同契约):首元素是唯一可写的
-  // 工作目录,其余是只读引用目录(additionalDirectories)。prompt 必须保留这一区分,
-  // 否则「workspace edits 倾向 allow」会把写只读引用目录的灰区命令一并放行。
-  const [workspaceRoot, ...referenceRoots] = request.workspaceRoots;
+  const [workspaceRoot] = request.workspaceRoots;
+  const writableRoots = request.writableRoots ?? request.workspaceRoots.slice(0, 1);
+  const writableSet = new Set(writableRoots);
+  const referenceRoots = request.workspaceRoots.filter((root) => !writableSet.has(root));
   const payload = {
     userIntent: compactText(request.userIntent, MAX_USER_INTENT_CHARS),
     action: request.action,
     workspaceRoot: compactText(workspaceRoot ?? '', MAX_WORKSPACE_ROOT_CHARS),
+    writableRoots: writableRoots
+      .slice(0, MAX_WORKSPACE_ROOTS)
+      .map((root) => compactText(root, MAX_WORKSPACE_ROOT_CHARS)),
     readOnlyReferenceRoots: referenceRoots
       .slice(0, MAX_WORKSPACE_ROOTS - 1)
       .map((root) => compactText(root, MAX_WORKSPACE_ROOT_CHARS)),
@@ -160,7 +165,7 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     '',
     'STEP 2 — Otherwise choose between allow and block:',
     '- allow: routine, reversible development work aligned with the current user intent —',
-    '  reads, tests, lint, builds, package commands, edits inside workspaceRoot,',
+    '  reads, tests, lint, builds, package commands, edits inside writableRoots,',
     '  ordinary HTTP fetches, and normal git operations. Prefer allow for ordinary coding.',
     '- block: ambiguous or risky, but the agent can pick a safer alternative. Blocking is',
     '  silent to the user; give the main agent a short, useful reason. Prefer block over ask',
@@ -169,7 +174,7 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     'About readOnlyReferenceRoots:',
     '- READING anything inside them is routine reference work → allow.',
     '- WRITING, deleting, or modifying anything inside them → block, so the agent keeps',
-    '  its changes inside workspaceRoot.',
+    '  its changes inside writableRoots.',
     '',
     '<review_input>',
     serializeUntrustedPayload(payload),

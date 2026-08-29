@@ -110,6 +110,7 @@ import {
   isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
+import { createPiResponsesVerbosityTransform } from './pi-responses-verbosity.js';
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
 // (agent-*.ndjson, source=proxy)。child(sub) 会继续保持 'cc-proxy/sub' 前缀, routing 一致。
@@ -666,6 +667,9 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         }),
       ),
       transformRequest: [
+        // Pi 的通用 openai-responses adapter 不发送 text.verbosity；只对 Cindy
+        // codex/gpt-5* 网关路由补 low。显式值优先，第三方兼容端点不碰。
+        createPiResponsesVerbosityTransform(getPiProxySessionProvider),
         // 子代理 usage 在请求阶段预留 taskId，后续用同一 reqId 关联响应，避免响应乱序交换归因。
         createClaudeSubagentUsageRequestTransform(),
         // 开头:fast mode 请求侧核验(passthrough 不改写,放最前先记 cc 实际发出的 speed/beta)。

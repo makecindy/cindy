@@ -137,6 +137,7 @@ let onDeviceLinkStatusChanged: ((data: unknown) => void) | undefined;
 let onPresenceChanged: ((data: unknown) => void) | undefined;
 let onRemotePush: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 let onDbMessageCreated: ((data: unknown) => void) | undefined;
+let onErrorPersisted: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 let onInputProjection: ((data: unknown) => void) | undefined;
 let onInteractionRequest: ((data: unknown) => void) | undefined;
 let onInteractionDismissed: ((data: unknown) => void) | undefined;
@@ -179,7 +180,7 @@ const input = {
     void clearedAt;
     return projection(sessionId);
   }),
-  persistTurnErrorDeferred: vi.fn(async () => {}),
+  persistTurnErrorDeferred: vi.fn(async (): Promise<string | undefined> => undefined),
 };
 
 function projection(
@@ -254,6 +255,7 @@ function installElectronBridge(): void {
   onPresenceChanged = undefined;
   onRemotePush = undefined;
   onDbMessageCreated = undefined;
+  onErrorPersisted = undefined;
   onInputProjection = undefined;
   onInteractionRequest = undefined;
   onInteractionDismissed = undefined;
@@ -322,6 +324,10 @@ function installElectronBridge(): void {
         messages: {
           onCreated: (cb: (data: unknown) => void) => {
             onDbMessageCreated = cb;
+            return vi.fn();
+          },
+          onErrorPersisted: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+            onErrorPersisted = cb;
             return vi.fn();
           },
         },
@@ -2359,6 +2365,186 @@ describe('makerChatStore text delta batching', () => {
     expect(input.retryLastError).not.toHaveBeenCalled();
     expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
     expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('deferred persist IPC 回执只绑定 persistId，写失败时离开视图也不清 live error', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    input.persistTurnErrorDeferred.mockResolvedValueOnce('err-persist-deferred');
+    makerChatStore.enterView(SESSION_ID);
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBe('err-persist-deferred');
+
+    makerChatStore.leaveView(SESSION_ID);
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBe('err-persist-deferred');
+
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-deferred' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('迟到的 deferred persist IPC 不得把 A 的 persistId 绑到下一轮 live error B', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    let resolvePersist: ((id: string | undefined) => void) | undefined;
+    input.persistTurnErrorDeferred.mockImplementationOnce(
+      () =>
+        new Promise<string | undefined>((resolve) => {
+          resolvePersist = resolve;
+        }),
+    );
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    emitStatus({ status: 'Thinking…', isRunning: true });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, message: 'later error B' },
+      },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    resolvePersist?.('err-persist-A');
+    await flushPromises();
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('迟到的落库脏信号不得清掉下一轮 live error B', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    let resolvePersist: ((id: string | undefined) => void) | undefined;
+    input.persistTurnErrorDeferred.mockImplementationOnce(
+      () =>
+        new Promise<string | undefined>((resolve) => {
+          resolvePersist = resolve;
+        }),
+    );
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    emitStatus({ status: 'Thinking…', isRunning: true });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, message: 'later error B' },
+      },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+
+    resolvePersist?.('err-persist-A');
+    await flushPromises();
+    await flushPromises();
+
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-A' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('deferred persist IPC 回执不清后台 live error，要等真实脏信号', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    input.persistTurnErrorDeferred.mockResolvedValueOnce('err-persist-bg');
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBe('err-persist-bg');
+
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-bg' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
   });
 
   it('does not treat a custom LiteLLM provider token error as Cindy credentials', async () => {

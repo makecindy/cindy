@@ -5,7 +5,7 @@
  *  1. 组环境信息并解析本次真实提交身份—— agent 不参与;
  *  2. await confirm(确认卡片,含真实身份)—— **唯一**通往 postIssue 的路径;
  *  3. confirmed 后以用户确认的 title/body/type 为准(用户编辑版优先);
- *  4. body 末尾附 env 块,clamp 后严格按已确认身份 POST,失败不切换身份。
+ *  4. body 末尾附「提交时的任务环境」块,clamp 后严格按已确认身份 POST,失败不切换身份。
  *
  * 模块保持 electron-free,全部依赖注入(规则 14),单测直接调 submitGithubIssueWithConfirm。
  */
@@ -196,6 +196,9 @@ export async function submitGithubIssueWithConfirm(
   const envBlock = [
     '',
     '---',
+    '## 提交时的任务环境',
+    '',
+    '仅代表提交时快照,不一定是故障环境。OS 来自提交客户端本机,不含 SSH 远端主机;Harness / 模型来自当前任务。与运行环境无关的反馈可忽略本段。',
     // global 不写这一行 —— 缺失即默认区域,理由见 CINDY_REGION_CODE(与确认卡片同源)。
     ...(regionCode ? [`**版本区域**: ${regionCode}`] : []),
     `**OS**: ${env.platform} ${env.arch} (${env.osVersion})`,
