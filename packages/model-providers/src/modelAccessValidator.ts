@@ -577,7 +577,11 @@ function modelEntryError(
         isModelEffort(value.defaultEffort) ? value.defaultEffort : null,
       );
       if (error) return error;
-      if (isPlainObject(override) && override.wireProtocol !== undefined) {
+      if (
+        agent !== 'pi' &&
+        isPlainObject(override) &&
+        override.wireProtocol !== undefined
+      ) {
         if (!isModelAccessWireProtocol(override.wireProtocol)) {
           return `${path}.perAgent.${agent}.wireProtocol must be a supported wire protocol`;
         }
@@ -593,6 +597,9 @@ function modelEntryError(
     schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
   ) {
     for (const agent of supportedAgents) {
+      // Version-matched Pi metadata may fill a missing API for an already-declared Pi member.
+      // Claude and Codex have no such fallback and remain strict contract requirements.
+      if (agent === 'pi') continue;
       const override = isPlainObject(value.perAgent) ? value.perAgent[agent] : undefined;
       if (!isPlainObject(override) || !isModelAccessWireProtocol(override.wireProtocol)) {
         return `${path}.perAgent.${agent}.wireProtocol is required when ${path}.agents includes ${agent}`;

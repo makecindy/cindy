@@ -36,6 +36,7 @@ import {
   type CatalogXdMediaKind,
   type CatalogModel,
   type CustomProviderConfig,
+  type PiModelApi,
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
@@ -43,6 +44,7 @@ import {
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 import { projectUnverifiedCatalogFallbackForBuildRegion } from './provider-access-policy.js';
+import { resolveBundledPiGatewayModelProfile } from './pi-gateway-model-catalog.js';
 import {
   applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
@@ -131,7 +133,7 @@ export interface XdGatewayAgentOverride {
   defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
-  wireProtocol?: Extract<ProviderWireProtocol, 'anthropic-messages' | 'openai-responses'>;
+  wireProtocol?: PiModelApi;
 }
 
 /**
@@ -318,31 +320,54 @@ function preserveNonGrok46DiscoveryEfforts(
   });
 }
 
-function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
-  return (model.agents ?? []).filter((agent) => {
-    if (agent !== 'pi') return true;
-    const wireProtocol = model.perAgent?.pi?.wireProtocol;
-    return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses';
-  });
+function isPiModelApi(value: unknown): value is PiModelApi {
+  return (
+    value === 'anthropic-messages' ||
+    value === 'openai-responses' ||
+    value === 'openai-completions' ||
+    value === 'google-generative-ai'
+  );
 }
 
-/**
- * XD 下发模型给 Pi 时的真实 wire protocol。
- *
- * Pi provider 始终叫 `cindy`；这里只读取 v3 服务端给该模型的 transport，供
- * models.json 写入模型级 `api`。三态语义：非 XD Pi 模型返回 undefined；XD Pi 模型
- * 缺失或协议非法返回 null，由 maker-core fail closed；有效配置返回服务端声明值。
- */
-export function resolveXdPiGatewayWireProtocol(
-  modelId: string,
-): Extract<ProviderWireProtocol, 'anthropic-messages' | 'openai-responses'> | null | undefined {
+function resolveXdPiGatewayModelApi(model: XdGatewayModelInfo): PiModelApi | null {
+  // Model Access is authoritative whenever it explicitly declares Pi's API. The version-matched
+  // local Pi table only fills legacy rows that declare Pi membership but omit that field.
+  const remoteApi: unknown = model.perAgent?.pi?.wireProtocol;
+  if (remoteApi !== undefined) return isPiModelApi(remoteApi) ? remoteApi : null;
+  return resolveBundledPiGatewayModelProfile(model.id)?.api ?? null;
+}
+
+function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
+  return (model.agents ?? []).filter(
+    (agent) => agent !== 'pi' || resolveXdPiGatewayModelApi(model) !== null,
+  );
+}
+
+/** Resolve remote-authoritative Pi API, using the local Pi table only when it is omitted. */
+export function resolveXdPiGatewayApi(modelId: string): PiModelApi | null | undefined {
   const normalized = modelId.replace(/\[1m\]$/, '');
   const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
   if (!gatewayModel?.agents?.includes('pi')) return undefined;
-  const wireProtocol = gatewayModel.perAgent?.pi?.wireProtocol;
-  return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses'
-    ? wireProtocol
-    : null;
+  return resolveXdPiGatewayModelApi(gatewayModel);
+}
+
+/** Legacy wire vocabulary for HTTP-only consumers that cannot represent Google's native API. */
+export function resolveXdPiGatewayWireProtocol(
+  modelId: string,
+): ProviderWireProtocol | null | undefined {
+  const api = resolveXdPiGatewayApi(modelId);
+  switch (api) {
+    case 'anthropic-messages':
+      return 'anthropic-messages';
+    case 'openai-responses':
+      return 'openai-responses';
+    case 'openai-completions':
+      return 'openai-chat';
+    case 'google-generative-ai':
+      return null;
+    default:
+      return api;
+  }
 }
 
 /** 派生 XD 中「仅 claude-code 面（投影给 Claude）、无 codex 原生」的模型 id 集合。 */
@@ -1185,9 +1210,8 @@ function computeMerged(): Catalog {
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
-          // Pi 的协议是 Model Access 按模型下发的权威路由元数据。重建 CatalogModel 时
-          // 必须一并投影，否则模型虽然保留在 Pi tab，统一路由器却会因协议缺失而 fail closed。
-          ...(agent === 'pi' && ov.wireProtocol ? { piApi: ov.wireProtocol } : {}),
+          // Model Access owns explicit API; the version-matched Pi table only fills a missing API.
+          ...(agent === 'pi' ? { piApi: resolveXdPiGatewayModelApi(gm) as PiModelApi } : {}),
         };
         models[agent]!.push(merged);
       }

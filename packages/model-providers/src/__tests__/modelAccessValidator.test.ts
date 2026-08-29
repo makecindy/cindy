@@ -409,7 +409,7 @@ describe('model access catalog contract', () => {
     );
   });
 
-  it('accepts v3 Pi with either explicit gateway wire protocol', () => {
+  it('treats Pi wireProtocol as an ignorable hint while keeping Claude and Codex fixed', () => {
     const piModel = {
       ...VALID_V3_RESPONSE.models[0],
       agents: ['claude-code', 'codex', 'pi'],
@@ -418,19 +418,32 @@ describe('model access catalog contract', () => {
         pi: { wireProtocol: 'openai-responses' },
       },
     } as const;
-    expect(parseListModelsResponse({ ...VALID_V3_RESPONSE, models: [piModel] }).ok).toBe(true);
+    for (const wireProtocol of [
+      'anthropic-messages',
+      'openai-responses',
+      'openai-completions',
+      'google-generative-ai',
+    ] as const) {
+      expect(
+        parseListModelsResponse({
+          ...VALID_V3_RESPONSE,
+          models: [{
+            ...piModel,
+            perAgent: { ...piModel.perAgent, pi: { wireProtocol } },
+          }],
+        }).ok,
+      ).toBe(true);
+    }
     expect(
       parseListModelsResponse({
         ...VALID_V3_RESPONSE,
-        models: [
-          {
-            ...piModel,
-            perAgent: {
-              ...piModel.perAgent,
-              pi: { wireProtocol: 'anthropic-messages' },
-            },
+        models: [{
+          ...piModel,
+          perAgent: {
+            'claude-code': { wireProtocol: 'anthropic-messages' },
+            codex: { wireProtocol: 'openai-responses' },
           },
-        ],
+        }],
       }).ok,
     ).toBe(true);
     expectReject(
@@ -440,18 +453,28 @@ describe('model access catalog contract', () => {
     expectReject(
       {
         ...VALID_V3_RESPONSE,
-        models: [
-          {
-            ...piModel,
-            perAgent: {
-              ...piModel.perAgent,
-              codex: { wireProtocol: 'anthropic-messages' },
-            },
+        models: [{
+          ...piModel,
+          perAgent: {
+            ...piModel.perAgent,
+            codex: { wireProtocol: 'anthropic-messages' },
           },
-        ],
+        }],
       },
       'response.models[0].perAgent.codex.wireProtocol must be openai-responses',
     );
+    expect(
+      parseListModelsResponse({
+        ...VALID_V3_RESPONSE,
+        models: [{
+          ...piModel,
+          perAgent: {
+            ...piModel.perAgent,
+            pi: { wireProtocol: 'future-protocol' },
+          },
+        }],
+      }).ok,
+    ).toBe(true);
   });
 
   it('requires complete runtime metadata in v3 without changing v2', () => {

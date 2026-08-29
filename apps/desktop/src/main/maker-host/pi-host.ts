@@ -8,7 +8,8 @@
  *    从安全存储注入，models.json 不落任何真实订阅凭证。
  *  - endpoint:统一走 authenticated loopback proxy。PI 按供应商使用原生协议：
  *    Claude=Messages、ChatGPT=Codex Responses、SuperGrok=PI bundled API；host
- *    只注入凭证并原样转发。Cindy Gateway 继续按 Model Access v3 下发协议。
+ *    只注入凭证并原样转发。Cindy Gateway 的成员与显式 API 来自 Model Access；
+ *    版本匹配的 Pi 本地模型表只补足缺失 API 及协议一致的 compat。
  *  - 二进制:与 cc/codex 同链 —— splash prepare 经 agent-binaries 按 CDN manifest
  *    的 pi 字段下载整目录 tar.gz 到 userData/pi/<version>/(SHA256 校验,清单一变
  *    下次启动即换新)。dev 期使用 apps/pi-bin 中 pnpm install:pi 的产物；正式版
@@ -95,8 +96,12 @@ import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.
 import {
   getActiveCatalog,
   getLocalCatalogOverridesSnapshot,
-  resolveXdPiGatewayWireProtocol,
+  resolveXdPiGatewayApi,
 } from './active-catalog.js';
+import {
+  resolveBundledPiGatewayCatalogIdentity,
+  resolveBundledPiGatewayModelProfile,
+} from './pi-gateway-model-catalog.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
 import { resolveManagedPiPackageResources } from './pi-package-store.js';
@@ -133,6 +138,7 @@ export type PiListedModelIds = ReadonlyMap<string, ReadonlySet<string>>;
 
 const piBundledModelsByBinary = new Map<string, Promise<PiBundledModelCatalog | null>>();
 const listedIdsByCatalog = new WeakMap<PiBundledModelCatalog, PiListedModelIds>();
+let latestPiBundledModelCatalog: PiBundledModelCatalog | null = null;
 
 export function listedPiModelIds(
   catalog: PiBundledModelCatalog | undefined,
@@ -440,6 +446,7 @@ export async function readPiBundledModels(
       );
       if (catalog.size === 0) return null;
       listedIdsByCatalog.set(catalog, listed);
+      latestPiBundledModelCatalog = catalog;
       return catalog;
     } catch (err) {
       log.warn(
@@ -1465,8 +1472,48 @@ export async function buildXaiPiNativeProvider(
 export function resolvePiCindyGatewayModelApi(
   _selectedProviderId: string | null | undefined,
   modelId: string,
-): 'anthropic-messages' | 'openai-responses' | null | undefined {
-  return resolveXdPiGatewayWireProtocol(modelId);
+): PiModelApi | null | undefined {
+  return resolveXdPiGatewayApi(modelId);
+}
+
+export function resolvePiCindyGatewayModelSpec(
+  _selectedProviderId: string | null | undefined,
+  modelId: string,
+): Pick<
+  PiNativeModelSpec,
+  'api' | 'compat' | 'samplingParams' | 'thinkingLevelMap'
+> | null | undefined {
+  const api = resolveXdPiGatewayApi(modelId);
+  if (api === undefined || api === null) return api;
+  const bundled = resolveBundledPiGatewayModelProfile(modelId);
+  const identity = resolveBundledPiGatewayCatalogIdentity(modelId);
+  const probed = identity
+    ? latestPiBundledModelCatalog?.get(identity.provider)?.get(identity.modelId)
+    : undefined;
+  // Provider quirks are API-specific. Local metadata may fill omissions only when it agrees with
+  // the final remote-authoritative API; never apply stale compat across a protocol change.
+  const compatibleBundled = bundled?.api === api ? bundled : undefined;
+  const compatibleProbed = probed?.api === api ? probed : undefined;
+  return {
+    api,
+    ...(compatibleBundled?.compat ?? compatibleProbed?.compat
+      ? { compat: structuredClone(compatibleBundled?.compat ?? compatibleProbed?.compat) }
+      : {}),
+    ...(compatibleBundled?.samplingParams ?? compatibleProbed?.samplingParams
+      ? {
+          samplingParams: structuredClone(
+            compatibleBundled?.samplingParams ?? compatibleProbed?.samplingParams,
+          ),
+        }
+      : {}),
+    ...(compatibleBundled?.thinkingLevelMap ?? compatibleProbed?.thinkingLevelMap
+      ? {
+          thinkingLevelMap: {
+            ...(compatibleBundled?.thinkingLevelMap ?? compatibleProbed?.thinkingLevelMap),
+          },
+        }
+      : {}),
+  };
 }
 
 /** BYOM:读 DB 自定义 provider + safeStorage key → pi 原生 provider spec。IO 外壳,逻辑在上面。 */
@@ -1736,9 +1783,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
     // `cindy` is the gateway fallback block even when the session starts on a subscription or
-    // BYOM provider. Its model protocol must therefore come from the exact XD model, never from
-    // the currently selected provider's endpoint default.
+    // BYOM provider. Its explicit protocol comes from the exact XD model; the local Pi table only
+    // fills a remote omission and never inherits the currently selected provider's endpoint.
     resolvePiGatewayModelApi: resolvePiCindyGatewayModelApi,
+    resolvePiGatewayModelSpec: resolvePiCindyGatewayModelSpec,
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
     resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
     resolvePiVisionBridgeEnv: opts.resolvePiVisionBridgeEnv,

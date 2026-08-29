@@ -213,6 +213,23 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
   return null;
 }
 
+/**
+ * Pi chooses the payload API; the proxy only borrows Gateway's matching authenticated front door.
+ * Messages uses the Claude route, while Responses, Chat Completions, and native Gemini use the
+ * Codex/OpenAI route. The original URL and body remain untouched so Gateway performs no client-side
+ * protocol coercion.
+ */
+export function piGatewayRequestAgent(
+  requestUrl: string,
+): 'claude-code' | 'codex' {
+  try {
+    const pathname = new URL(requestUrl, 'http://127.0.0.1').pathname.replace(/\/+$/, '');
+    return pathname.endsWith('/messages') ? 'claude-code' : 'codex';
+  } catch {
+    return 'codex';
+  }
+}
+
 function unavailablePiProviderRoute(providerId: string): RoutingDecision {
   return {
     localHandler: async ({ res }) => {
@@ -337,7 +354,19 @@ export function createModelRoutingTransform(): RoutingTransform {
         localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId),
       };
     }
-    const requestAgent = piSessionId ? 'pi' : 'claude-code';
+    const isPiGatewayRequest = Boolean(
+      piSessionId &&
+        (subagentRoute
+          ? piProviderId === null || piProviderId === 'xd'
+          : piProviderId === 'xd' ||
+            (piProviderId === null &&
+              (selectedPiProviderId === null || selectedPiProviderId === 'xd'))),
+    );
+    const requestAgent = piSessionId
+      ? isPiGatewayRequest
+        ? piGatewayRequestAgent(ctx.url)
+        : 'pi'
+      : 'claude-code';
     // 后台活动检测(claude-session-background-activity):凡带 cc 会话标头的请求
     // 都记一笔活动时刻。routingTransform 会处理无 body 控制面请求与 JSON 请求；
     // 非 JSON 的 POST/PUT/PATCH 不经过这里,由响应侧 observer 兜底观察活动。
@@ -426,6 +455,14 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
 
     const gatewayKey = _readGatewayKey();
+
+    if (subagentRoute && isPiGatewayRequest) {
+      // A `cindy` child route is provider-null by design. Route it by the request API instead of
+      // accidentally inheriting the parent session provider.
+      return (
+        gatewayDefaultRouteDecision(requestAgent, gatewayKey) ?? unavailablePiProviderRoute('xd')
+      );
+    }
 
     if (subagentRoute && piProviderId) {
       // A provider-pinned child token is both the authorization boundary and

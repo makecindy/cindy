@@ -17,6 +17,7 @@ import {
   getActiveCatalog,
   getXdGatewayModels,
   isXdGatewayPaymentRequiredRoute,
+  resolveXdPiGatewayApi,
   resolveXdPiGatewayWireProtocol,
   setActiveCatalog,
   setAnthropicDiscoveredModels,
@@ -165,43 +166,89 @@ describe('XD 网关权威模型清单重建', () => {
     });
   });
 
-  it('Pi 在 cindy provider 内接受 v3 显式协议，并过滤缺失协议的模型', () => {
+  it('Pi 服从远程显式 API，并仅在远程缺失时使用本地表', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
-        id: 'messages-model',
-        agents: ['claude-code', 'codex', 'pi'],
-        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
-      },
-      {
-        id: 'responses-model',
+        id: 'claude-opus-5',
         agents: ['claude-code', 'codex', 'pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
       },
       {
-        id: 'missing-wire',
+        id: 'gpt-5.6-sol',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
+      },
+      {
+        id: 'moonshot/kimi-k3',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'google/gemini-3.7-flash',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'deepseek/deepseek-v4-pro',
         agents: ['claude-code', 'codex', 'pi'],
       },
       {
-        id: 'claude-only-model',
-        agents: ['claude-code'],
-        perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' } },
+        id: 'future-unmapped-model',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'future-unsupported-api',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'future-protocol' as never } },
+      },
+      {
+        id: 'gemini-3.6-flash',
+        agents: ['codex'],
+        perAgent: { codex: { wireProtocol: 'openai-responses' } },
       },
     ]);
 
-    expect(resolveXdPiGatewayWireProtocol('messages-model')).toBe('anthropic-messages');
-    expect(resolveXdPiGatewayWireProtocol('responses-model')).toBe('openai-responses');
-    expect(resolveXdPiGatewayWireProtocol('responses-model[1m]')).toBe('openai-responses');
-    expect(resolveXdPiGatewayWireProtocol('missing-wire')).toBeNull();
-    expect(resolveXdPiGatewayWireProtocol('claude-only-model')).toBeUndefined();
-    expect(resolveXdPiGatewayWireProtocol('unknown-model')).toBeUndefined();
-    expect(xdModels('pi').map((model) => model.id)).toEqual([
-      'messages-model',
-      'responses-model',
-    ]);
+    expect(resolveXdPiGatewayApi('claude-opus-5')).toBe('openai-responses');
+    expect(resolveXdPiGatewayApi('gpt-5.6-sol')).toBe('anthropic-messages');
+    expect(resolveXdPiGatewayApi('moonshot/kimi-k3')).toBe('openai-responses');
+    expect(resolveXdPiGatewayWireProtocol('moonshot/kimi-k3')).toBe('openai-responses');
+    expect(resolveXdPiGatewayApi('google/gemini-3.7-flash')).toBe('openai-responses');
+    expect(resolveXdPiGatewayWireProtocol('google/gemini-3.7-flash')).toBe('openai-responses');
+    expect(resolveXdPiGatewayApi('deepseek/deepseek-v4-pro')).toBe('openai-completions');
+    expect(resolveXdPiGatewayApi('future-unmapped-model')).toBe('openai-responses');
+    expect(resolveXdPiGatewayApi('future-unsupported-api')).toBeNull();
+    expect(resolveXdPiGatewayApi('gemini-3.6-flash')).toBeUndefined();
     expect(xdModels('pi')).toMatchObject([
-      { id: 'messages-model', piApi: 'anthropic-messages' },
-      { id: 'responses-model', piApi: 'openai-responses' },
+      { id: 'claude-opus-5', piApi: 'openai-responses' },
+      { id: 'gpt-5.6-sol', piApi: 'anthropic-messages' },
+      { id: 'moonshot/kimi-k3', piApi: 'openai-responses' },
+      { id: 'google/gemini-3.7-flash', piApi: 'openai-responses' },
+      { id: 'deepseek/deepseek-v4-pro', piApi: 'openai-completions' },
+      { id: 'future-unmapped-model', piApi: 'openai-responses' },
+    ]);
+  });
+
+  it('远程决定 Pi 成员与显式 API，不会凭其它 agent 可达性擅自投影', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'moonshot/kimi-k3',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'google/gemini-3.6-flash',
+        agents: ['codex'],
+        perAgent: { codex: { wireProtocol: 'openai-responses' } },
+      },
+    ]);
+
+    expect(resolveXdPiGatewayApi('moonshot/kimi-k3')).toBe('openai-responses');
+    expect(resolveXdPiGatewayApi('google/gemini-3.6-flash')).toBeUndefined();
+    expect(xdModels('pi')).toMatchObject([
+      { id: 'moonshot/kimi-k3', piApi: 'openai-responses' },
     ]);
   });
 
@@ -347,32 +394,32 @@ describe('XD 网关权威模型清单重建', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
-        id: 'gateway-vision',
+        id: 'google/gemini-3.7-flash',
         agents: ['pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
         modalities: { input: ['text', 'image'], output: ['text'] },
       },
       {
-        id: 'gateway-text',
+        id: 'qwen/qwen3.8-27b',
         agents: ['pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
         modalities: { input: ['text'], output: ['text'] },
       },
       {
-        id: 'gateway-unknown',
+        id: 'qwen/qwen3.8-flash',
         agents: ['pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
       },
     ]);
 
     const pi = deriveAvailableModels(getActiveCatalog(), 'pi');
-    expect(pi.find((model) => model.id === 'gateway-vision')).toMatchObject({
+    expect(pi.find((model) => model.id === 'google/gemini-3.7-flash')).toMatchObject({
       supportsImageInput: true,
     });
-    expect(pi.find((model) => model.id === 'gateway-text')).toMatchObject({
+    expect(pi.find((model) => model.id === 'qwen/qwen3.8-27b')).toMatchObject({
       supportsImageInput: false,
     });
-    expect(pi.find((model) => model.id === 'gateway-unknown')).not.toHaveProperty(
+    expect(pi.find((model) => model.id === 'qwen/qwen3.8-flash')).not.toHaveProperty(
       'supportsImageInput',
     );
   });

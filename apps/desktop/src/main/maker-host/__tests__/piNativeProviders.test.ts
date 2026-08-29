@@ -38,6 +38,7 @@ import {
   resolvePiBundledApiByModelId,
   resolvePiBundledModelById,
   resolvePiCindyGatewayModelApi,
+  resolvePiCindyGatewayModelSpec,
   type PiBundledModelInfo,
 } from '../pi-host.js';
 import { setXdGatewayModels } from '../active-catalog.js';
@@ -71,27 +72,67 @@ afterEach(() => {
 });
 
 describe('resolvePiCindyGatewayModelApi', () => {
-  it('uses the exact XD model protocol even while the session is on a BYOM provider', () => {
+  it('uses the exact remote API even while the session is on a BYOM provider', () => {
     setXdGatewayModels([
       {
-        id: 'gateway-messages',
+        id: 'claude-opus-5',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'gpt-5.6-sol',
         agents: ['pi'],
         perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
       },
+    ]);
+
+    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'claude-opus-5')).toBe(
+      'openai-responses',
+    );
+    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'gpt-5.6-sol')).toBe(
+      'anthropic-messages',
+    );
+  });
+
+  it('keeps remote Kimi Responses authoritative and rejects Completions compat', () => {
+    setXdGatewayModels([
       {
-        id: 'gateway-responses',
-        agents: ['pi'],
+        id: 'moonshot/kimi-k3',
+        agents: ['claude-code', 'codex', 'pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
       },
     ]);
 
-    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'gateway-messages')).toBe(
-      'anthropic-messages',
-    );
-    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'gateway-responses')).toBe(
+    expect(resolvePiCindyGatewayModelApi('xd', 'moonshot/kimi-k3')).toBe(
       'openai-responses',
     );
+    expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3')).toEqual({
+      api: 'openai-responses',
+    });
   });
+
+  it.each([undefined, 'openai-completions'] as const)(
+    'uses local Kimi compat when the remote API is %s',
+    (wireProtocol) => {
+      setXdGatewayModels([
+        {
+          id: 'moonshot/kimi-k3',
+          agents: ['claude-code', 'codex', 'pi'],
+          ...(wireProtocol ? { perAgent: { pi: { wireProtocol } } } : {}),
+        },
+      ]);
+
+      expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3')).toMatchObject({
+        api: 'openai-completions',
+        compat: {
+          maxTokensField: 'max_tokens',
+          thinkingFormat: 'openai',
+          requiresReasoningContentOnAssistantMessages: true,
+          deferredToolsMode: 'kimi',
+        },
+      });
+    },
+  );
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
@@ -369,7 +410,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const catalog = await readPiBundledModels(bundledPiPath);
     expect(catalog?.get('openai-codex')?.get('gpt-5.6-sol')?.api).toBe('openai-codex-responses');
     expect(catalog?.get('xai')?.get('grok-4.5')?.api).toBe('openai-responses');
-    expect(catalog?.get('xai')?.get('grok-build-0.1')?.api).toBe('openai-completions');
+    expect(catalog?.get('xai')?.get('grok-build-0.1')?.api).toBe('openai-responses');
     const anthropicModels = [...(catalog?.get('anthropic')?.values() ?? [])];
     expect(anthropicModels.length).toBeGreaterThan(0);
     expect(anthropicModels.every((model) => model.api === 'anthropic-messages')).toBe(true);
@@ -377,6 +418,33 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(catalog?.get('zai')?.get('glm-5.2')).toMatchObject({
       api: 'openai-completions',
       baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+    });
+  });
+
+  it.skipIf(
+    process.platform !== 'darwin' || process.arch !== 'arm64' || !existsSync(bundledPiPath),
+  )('uses the exact Pi binary to enrich first-party Gateway profiles without remote API input', async () => {
+    await readPiBundledModels(bundledPiPath);
+    setXdGatewayModels([
+      { id: 'claude-opus-5', agents: ['pi'] },
+      { id: 'gpt-5.6-sol', agents: ['pi'] },
+      { id: 'google/gemini-3.7-flash', agents: ['pi'] },
+    ]);
+
+    expect(resolvePiCindyGatewayModelSpec('xd', 'claude-opus-5')).toMatchObject({
+      api: 'anthropic-messages',
+      compat: { forceAdaptiveThinking: true, supportsStrictTools: true },
+    });
+    expect(resolvePiCindyGatewayModelSpec('xd', 'gpt-5.6-sol')).toMatchObject({
+      api: 'openai-responses',
+      compat: {
+        supportsOpenAIGrammarTools: true,
+        supportsAdditionalTools: true,
+        supportsToolSearch: true,
+      },
+    });
+    expect(resolvePiCindyGatewayModelSpec('xd', 'google/gemini-3.7-flash')).toMatchObject({
+      api: 'google-generative-ai',
     });
   });
 

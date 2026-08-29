@@ -68,6 +68,7 @@ import {
   type MainOwnedSendContext,
   type PiExtraSpawnConfig,
   type PiExtensionUiStrings,
+  type PiNativeApi,
   type PiNativeModelSpec,
   type PiNativeProviderSpec,
   type PiSubagentRunnerLaunchRequest,
@@ -326,10 +327,31 @@ const PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS = new Set([
 /** 分支摘要同样可能触发一次完整 LLM 调用。 */
 const PI_BRANCH_NAVIGATION_TIMEOUT_MS = 600_000;
 
-/** PI 的 OpenAI Responses client 以 baseUrl 为 `/v1` 根；Anthropic client 则自行追加 `/v1/messages`。 */
-function piResponsesBaseUrl(endpoint: string): string {
+/** PI 的 OpenAI client 以 baseUrl 为 `/v1` 根；Anthropic client 则自行追加 `/v1/messages`。 */
+function piOpenAiBaseUrl(endpoint: string): string {
   const trimmed = endpoint.replace(/\/+$/, '');
   return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+}
+
+type PiGatewayApi = Exclude<PiNativeApi, 'openai-codex-responses'>;
+
+function isPiGatewayApi(value: PiNativeApi | null | undefined): value is PiGatewayApi {
+  return (
+    value === 'anthropic-messages' ||
+    value === 'openai-responses' ||
+    value === 'openai-completions' ||
+    value === 'google-generative-ai'
+  );
+}
+
+function piGatewayModelBaseUrl(endpoint: string, api: PiGatewayApi): string | undefined {
+  if (api === 'anthropic-messages') return undefined;
+  if (api !== 'google-generative-ai') return piOpenAiBaseUrl(endpoint);
+  const trimmed = endpoint.replace(/\/+$/, '');
+  if (trimmed.endsWith('/v1beta')) return trimmed;
+  return trimmed.endsWith('/v1')
+    ? `${trimmed.slice(0, -'/v1'.length)}/v1beta`
+    : `${trimmed}/v1beta`;
 }
 
 class PiImageInputUnsupportedError extends Error {
@@ -1398,7 +1420,7 @@ export class PiAgent extends BaseAgent {
     } = {},
   ): Promise<{
     gatewayImageInputByModel: Map<string, boolean>;
-    gatewayApiByModel: Map<string, 'anthropic-messages' | 'openai-responses'>;
+    gatewayApiByModel: Map<string, PiGatewayApi>;
     /** models.json + settings.json 内容 sha256 —— 远端 daemon 启动身份的一部分。 */
     modelsJsonHash: string;
   }> {
@@ -1426,38 +1448,56 @@ export class PiAgent extends BaseAgent {
         ? [...publicModels, retainedRuntimeModel]
         : publicModels;
     const gatewayImageInputByModel = new Map<string, boolean>();
-    const gatewayApiByModel = new Map<string, 'anthropic-messages' | 'openai-responses'>();
+    const gatewayApiByModel = new Map<string, PiGatewayApi>();
     const models = runtimeModels.flatMap((publicModel: ModelDescriptor) => {
       // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
       // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
       // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
       // host 未注入 resolver 或只有 BYOM 条目时保留旧 flat fallback。
       const m = this.deps.resolvePiGatewayModelDescriptor?.(gatewayProviderId, publicModel.id) ?? publicModel;
-      const resolvedApi = this.deps.resolvePiGatewayModelApi?.(gatewayProviderId, m.id);
+      const resolvedSpec = this.deps.resolvePiGatewayModelSpec?.(gatewayProviderId, m.id);
+      const resolvedApi = resolvedSpec?.api ?? this.deps.resolvePiGatewayModelApi?.(gatewayProviderId, m.id);
       if (
+        resolvedSpec === null ||
         resolvedApi === null ||
-        (resolvedApi !== undefined && resolvedApi !== 'anthropic-messages' && resolvedApi !== 'openai-responses')
+        (resolvedApi !== undefined && !isPiGatewayApi(resolvedApi))
       ) {
-        throw new Error(`Model Access v3 did not provide a Pi wire protocol for model: ${m.id}`);
+        // Fail this Gateway member closed without aborting unrelated subscription/BYOM sessions
+        // that happen to expose the same flattened model id.
+        return [];
       }
-      // undefined means no protocol was declared for this concrete gateway route. Native
+      // undefined means Model Access did not declare this concrete Gateway membership. Native
       // subscription/BYOM models remain in their own provider blocks; normal sessions must not
-      // copy them into `cindy` under a guessed Claude protocol. Offline fork only needs Pi to
-      // parse a historical JSONL file and never sends a model request, so it gets a local-only
-      // structural placeholder.
+      // copy them into `cindy`. Offline fork only parses historical JSONL and gets a structural
+      // placeholder without creating a live request route.
       if (resolvedApi === undefined && !opts.offlineValidationOnly) return [];
       const api = resolvedApi ?? 'anthropic-messages';
+      const modelBaseUrl = endpoint ? piGatewayModelBaseUrl(endpoint, api) : undefined;
       gatewayApiByModel.set(m.id, api);
       const supportsImageInput = m.supportsImageInput === true;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
       return [{
         id: m.id,
         name: m.displayName,
-        // Pi 0.83 支持同一 provider 下逐模型覆盖 API/baseUrl。provider 身份仍是
-        // `cindy`；Model Access v3 让 PI 固定命中 Gateway 的 `/v1/responses` 前门。
-        // 该前门可由 Gateway 翻译到不同上游，不代表底层模型原生实现 Responses。
+        // Pi 0.83 支持同一 provider 下逐模型覆盖 API/baseUrl。Host 优先使用 Model
+        // Access 显式 API，并仅由版本匹配的 Pi 本地表补足缺失值与协议一致的 compat。
         api,
-        ...(api === 'openai-responses' && endpoint ? { baseUrl: piResponsesBaseUrl(endpoint) } : {}),
+        ...(modelBaseUrl ? { baseUrl: modelBaseUrl } : {}),
+        ...(api === 'google-generative-ai'
+          ? {
+              headers: {
+                authorization: `Bearer $${PI_API_KEY_ENV}`,
+                'x-goog-api-key': `$${PI_API_KEY_ENV}`,
+              },
+            }
+          : {}),
+        ...(resolvedSpec?.thinkingLevelMap
+          ? { thinkingLevelMap: { ...resolvedSpec.thinkingLevelMap } }
+          : {}),
+        ...(resolvedSpec?.compat ? { compat: structuredClone(resolvedSpec.compat) } : {}),
+        ...(resolvedSpec?.samplingParams
+          ? { samplingParams: structuredClone(resolvedSpec.samplingParams) }
+          : {}),
         reasoning: m.efforts.length > 0,
         input: supportsImageInput ? ['text', 'image'] : ['text'],
         // Model Access v3 requires this value; never replace the server limit with a client guess.
@@ -1477,7 +1517,7 @@ export class PiAgent extends BaseAgent {
         name: 'Cindy AI',
         baseUrl: endpoint ?? 'http://127.0.0.1:0',
         // Structural provider default for Pi's models.json schema only. Every selectable Cindy
-        // gateway model above carries its authoritative model-level api from Model Access v3.
+        // gateway model above carries its resolved model-level API.
         api: 'anthropic-messages',
         apiKey: `$${PI_API_KEY_ENV}`,
         // 本地 loopback compat proxy 用 session headers 做订阅 OAuth 注入;远端打真上游
@@ -1921,8 +1961,9 @@ export class PiAgent extends BaseAgent {
     // authority; adding a guessed gateway candidate can make a bare alias pick
     // the current `cindy` provider and leak an invalid unnamespaced model id.
     const routedGatewaySubagentModels = gatewaySubagentModels.filter((model) => {
-      const api = this.deps.resolvePiGatewayModelApi?.(PI_PROVIDER_ID, model.id);
-      return api === 'anthropic-messages' || api === 'openai-responses';
+      const spec = this.deps.resolvePiGatewayModelSpec?.(PI_PROVIDER_ID, model.id);
+      const api = spec?.api ?? this.deps.resolvePiGatewayModelApi?.(PI_PROVIDER_ID, model.id);
+      return spec !== null && isPiGatewayApi(api);
     });
     const gatewaySubagentRouteKey = 'cindy-gateway';
     const gatewaySubagentProxyToken =
@@ -4751,26 +4792,26 @@ export class PiAgent extends BaseAgent {
         const routeProviderId = nextRequestedProviderId !== undefined
           ? nextRequestedProviderId
           : mutableProviderId;
-        const resolvedApi = this.deps.resolvePiGatewayModelApi?.(routeProviderId, nextModel);
+        const resolvedSpec = this.deps.resolvePiGatewayModelSpec?.(routeProviderId, nextModel);
+        const resolvedApi = resolvedSpec?.api ?? this.deps.resolvePiGatewayModelApi?.(routeProviderId, nextModel);
         if (
+          resolvedSpec === null ||
           resolvedApi === null ||
-          (resolvedApi !== undefined &&
-            resolvedApi !== 'anthropic-messages' &&
-            resolvedApi !== 'openai-responses')
+          (resolvedApi !== undefined && !isPiGatewayApi(resolvedApi))
         ) {
           throw new Error(
-            `Model Access v3 did not provide a Pi wire protocol for model: ${nextModel}`,
+            `No supported Gateway Pi API is available for model: ${nextModel}`,
           );
         }
         if (resolvedApi === undefined) {
-          throw new Error(`Pi wire protocol is not configured for model: ${nextModel}`);
+          throw new Error(`Pi API is not configured for model: ${nextModel}`);
         }
         const desiredApi = resolvedApi;
         const configuredApi = gatewayApiByModel.get(nextModel);
         if (configuredApi && configuredApi !== desiredApi) {
           throw new Error(
             `pi: provider switch for model '${nextModel}' requires API '${desiredApi}', but this session ` +
-              `started with '${configuredApi}'; restart the Pi session to change provider wire protocol.`,
+              `started with '${configuredApi}'; restart the Pi session to change provider API.`,
           );
         }
       };
