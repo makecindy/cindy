@@ -186,6 +186,11 @@ export interface IMFinalReplyMirror {
    * means fail-closed: the card still mirrors, local files do not.
    */
   allowedFileRoots?: string[];
+  /**
+   * Dual-delivery pairing was already confirmed at inbound. Terminal
+   * parent-chat copies must not wait on a TTL-pruned confirmation map.
+   */
+  confirmed?: boolean;
 }
 
 export interface IMMessageEvent {

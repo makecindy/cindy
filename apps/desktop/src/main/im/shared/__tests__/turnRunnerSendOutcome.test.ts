@@ -1814,7 +1814,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       threadTs: undefined,
     });
     expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
-      { ...mirror, allowedFileRoots: ['F:\\XDMaker'] },
+      {
+        ...mirror,
+        allowedFileRoots: ['F:\\XDMaker'],
+      },
       ui.agent.credentialBusy,
     );
   });

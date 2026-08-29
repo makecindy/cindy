@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../outbound.js', () => mocks);
 vi.mock('../dualDelivery.js', () => ({
   waitForMirrorConfirmation: vi.fn(async () => true),
-  scheduleMirrorOnConfirmation: vi.fn(),
+  scheduleMirrorOnConfirmation: vi.fn(() => false),
   releaseMirrorConfirmation: vi.fn(),
 }));
 vi.mock('../moduleScope.js', () => ({
@@ -192,6 +192,18 @@ describe('feishu streaming text', () => {
     );
   });
 
+  it('mirrors immediately when inbound pairing was already confirmed', async () => {
+    await mirrorFinal('oc_group', 'p'.repeat(64), '终态正文', [], [], 1, true);
+
+    expect(waitForMirrorConfirmation).not.toHaveBeenCalled();
+    expect(scheduleMirrorOnConfirmation).not.toHaveBeenCalled();
+    expect(mocks.sendCardToChat).toHaveBeenCalledWith(
+      'oc_group',
+      expect.anything(),
+      `${'p'.repeat(32)}-card`,
+    );
+  });
+
   it('still mirrors parent-chat text when one extra image upload fails', async () => {
     mocks.uploadImage.mockImplementation(async (absPath: string) => {
       if (absPath.includes('missing')) throw new Error('file gone');
@@ -342,6 +354,7 @@ describe('feishu streaming text', () => {
       [],
       [root],
       1,
+      false,
       [
         {
           msgType: 'file',

@@ -42,13 +42,13 @@ import {
   type ReusableFeishuFileMessage,
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
-import { resolveFeishuMediaUrl } from './mediaCache.js';
 import { getHost, getLog } from './moduleScope.js';
 import {
   releaseMirrorConfirmation,
   scheduleMirrorOnConfirmation,
   waitForMirrorConfirmation,
 } from './dualDelivery.js';
+import { resolveFeishuMediaUrl } from './mediaCache.js';
 import { messages as transportMessages } from './messages.js';
 import type { ReusableOutboundFileRef, StreamingTextHandle } from '../types.js';
 // xdt-* 引用解析抽到渠道无关模块(slack streamingText 共用同一套语义)
@@ -157,6 +157,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   private readonly mirrorKey?: string;
   private readonly allowedFileRoots: readonly string[];
   private readonly inboundEpoch?: number;
+  private readonly mirrorConfirmed: boolean;
   /**
    * 工具结果(tool_result_full event)带过来的图片 absPath, finalize 时跟文本里
    * xdt-image markdown 链接一起 upload + 拼到 card 末尾。host 主进程负责把
@@ -174,6 +175,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     mirrorKey?: string,
     allowedFileRoots: readonly string[] = [],
     inboundEpoch?: number,
+    mirrorConfirmed = false,
   ) {
     this.messageId = messageId;
     this.openId = openId;
@@ -181,6 +183,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     this.mirrorKey = mirrorKey;
     this.allowedFileRoots = allowedFileRoots;
     this.inboundEpoch = inboundEpoch;
+    this.mirrorConfirmed = mirrorConfirmed;
     // `initial` is what's currently DISPLAYED in feishu (e.g. "🧠 思考中...").
     // `buffer` is what we've ACCUMULATED to display — starts empty so the
     // first real append() *replaces* the placeholder rather than appending
@@ -445,7 +448,12 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     const key = this.mirrorKey;
     if (!this.mirrorChatId || !key) return;
     if (this.inboundEpoch === undefined) return;
-    await sendOrScheduleMirror(key, () => this.mirrorFinalResult(result), this.inboundEpoch);
+    await sendOrScheduleMirror(
+      key,
+      () => this.mirrorFinalResult(result),
+      this.inboundEpoch,
+      this.mirrorConfirmed,
+    );
   }
 
   private async mirrorFinalResult(result: FinalCardResult): Promise<void> {
@@ -494,6 +502,7 @@ export async function start(
     mirrorKey?: string;
     allowedFileRoots?: readonly string[];
     inboundEpoch?: number;
+    mirrorConfirmed?: boolean;
   },
 ): Promise<StreamingTextHandle> {
   // 群主流 @ 开话题时, 开场白卡就是本轮流式卡(openThread 已用它开好话题) —
@@ -508,6 +517,7 @@ export async function start(
       opts?.mirrorKey,
       opts?.allowedFileRoots,
       opts?.inboundEpoch,
+      opts?.mirrorConfirmed,
     );
   }
   const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial));
@@ -519,6 +529,7 @@ export async function start(
     opts?.mirrorKey,
     opts?.allowedFileRoots,
     opts?.inboundEpoch,
+    opts?.mirrorConfirmed,
   );
 }
 
@@ -528,6 +539,10 @@ export async function start(
  */
 export async function patchMarkdown(messageId: string, markdown: string): Promise<void> {
   await patchCardRaw(messageId, buildMarkdownCardV2(markdown));
+}
+
+function allowLocalMediaRoots(allowedFileRoots: readonly string[] = []): boolean {
+  return allowedFileRoots.some((root) => root.trim());
 }
 
 async function sendMirroredFiles(
@@ -571,6 +586,7 @@ async function sendOrScheduleMirror(
   mirrorKey: string,
   send: () => Promise<void>,
   inboundEpoch: number,
+  alreadyConfirmed = false,
 ): Promise<void> {
   const release = (): void => {
     releaseMirrorConfirmation(mirrorKey);
@@ -588,7 +604,7 @@ async function sendOrScheduleMirror(
     if (getAccountEpoch() !== inboundEpoch) return;
     await runWithPinnedAccount({ client: pinned, epoch: inboundEpoch }, send);
   };
-  if (await waitForMirrorConfirmation(mirrorKey)) {
+  if (alreadyConfirmed || (await waitForMirrorConfirmation(mirrorKey))) {
     try {
       await runPinned();
     } finally {
@@ -596,7 +612,7 @@ async function sendOrScheduleMirror(
     }
     return;
   }
-  const queued = scheduleMirrorOnConfirmation(mirrorKey, () => {
+  const deferred = scheduleMirrorOnConfirmation(mirrorKey, () => {
     void runPinned()
       .catch((err) => {
         getLog().warn(
@@ -607,7 +623,7 @@ async function sendOrScheduleMirror(
       })
       .finally(release);
   });
-  if (queued === false) release();
+  if (!deferred) release();
 }
 
 function toReusableMirroredFiles(
@@ -633,13 +649,14 @@ export async function mirrorFinal(
   extraImageAbsPaths: readonly string[] = [],
   allowedFileRoots: readonly string[] = [],
   inboundEpoch: number,
+  alreadyConfirmed = false,
   reusableFiles: readonly ReusableOutboundFileRef[] = [],
 ): Promise<void> {
   const mirroredFiles = toReusableMirroredFiles(reusableFiles);
   const send = async (): Promise<void> => {
     // Empty roots is the SSH fail-closed signal from turnRunner. Do not resolve
     // xdt-image / cindy-media URLs or extra absPaths through local media stores.
-    const allowLocalMedia = allowedFileRoots.some((root) => root.trim());
+    const allowLocalMedia = allowLocalMediaRoots(allowedFileRoots);
     const requestedImageUrls = collectXdtImageUrls(text);
     const imageUrls = allowLocalMedia ? requestedImageUrls : [];
     const skippedLocalMedia =
@@ -724,5 +741,5 @@ export async function mirrorFinal(
     if (!isPinnedAccountCurrent()) return;
     await sendMirroredFiles(chatId, mirrorKey, mirroredFiles);
   };
-  await sendOrScheduleMirror(mirrorKey, send, inboundEpoch);
+  await sendOrScheduleMirror(mirrorKey, send, inboundEpoch, alreadyConfirmed);
 }

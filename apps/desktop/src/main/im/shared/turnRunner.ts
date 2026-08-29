@@ -177,6 +177,13 @@ const PRE_DISPATCH_ACK_CLEANUP_TIMEOUT_MS = 1500;
 /** SESSION_RUNNING 竞态 / desktop turn 仍在跑时的兜底重试间隔。 */
 const DISPATCH_RETRY_MS = 500;
 
+function resolveTurnFileRoots(
+  workingDir: string,
+  remoteHostId: string | null | undefined,
+): string[] {
+  return remoteHostId ? [] : [workingDir];
+}
+
 interface TurnState {
   /** Stable identity used by the central interaction router for this turn. */
   turnId: string;
@@ -728,6 +735,7 @@ export function createTurnRunner(
       target = created.target;
     }
     const row = target.row;
+    const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
     if (!target.authChecked) {
       const auth = await checkImRouteAuthDetailed(row, undefined, authCheckDeps());
       if (!auth.ok) {
@@ -744,7 +752,7 @@ export function createTurnRunner(
             args.finalReplyMirror
               ? {
                   ...args.finalReplyMirror,
-                  allowedFileRoots: row.remoteHostId ? [] : [row.workingDir],
+                  allowedFileRoots,
                 }
               : undefined,
             text,
@@ -806,7 +814,7 @@ export function createTurnRunner(
       finalReplyMirror: args.finalReplyMirror
         ? {
             ...args.finalReplyMirror,
-            allowedFileRoots: row.remoteHostId ? [] : [row.workingDir],
+            allowedFileRoots,
           }
         : undefined,
       initialMessageText: text,
@@ -815,7 +823,7 @@ export function createTurnRunner(
       streamingStartFailed: false,
       presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
-      allowedFileRoots: row.remoteHostId ? [] : [row.workingDir],
+      allowedFileRoots,
       done: false,
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,

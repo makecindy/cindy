@@ -41,6 +41,12 @@ export type DualDeliveryDecision =
       kind: 'dispatch';
       mirrorKey?: string;
       /**
+       * Pairing was already confirmed when this topic/takeover dispatched.
+       * Terminal mirrors must not wait on a confirmation map that can be TTL
+       * or capacity pruned during a long Agent turn.
+       */
+      alreadyConfirmed?: boolean;
+      /**
        * Unpaired main-feed copies call this after `openThread` returns, and
        * only when the copy is actually about to emit an Agent turn.
        * `false` means a late topic already claimed the route — recall the
@@ -67,8 +73,8 @@ const recentThreads = new Map<string, number>();
 const recentFlats = new Map<string, RecentFlatRecord>();
 const confirmed = new Map<string, number>();
 const deferredMirrors = new Map<string, Array<() => void>>();
-/** Live Agent turns that still need a terminal parent-chat mirror. */
-const heldConfirmations = new Set<string>();
+/** Logical sends whose Agent turn has not yet consumed the terminal mirror. */
+const inflightMirrors = new Set<string>();
 
 function logicalSendKey(input: DualDeliveryInput): string | null {
   if (!input.createTime) return null;
@@ -173,20 +179,38 @@ function flushDeferredMirrors(key: string): void {
 
 function pruneConfirmed(now: number): void {
   for (const [key, ts] of confirmed) {
-    if (heldConfirmations.has(key)) continue;
+    if (inflightMirrors.has(key)) continue;
     if (now - ts <= CONFIRMED_TTL_MS && confirmed.size <= MAX_CONFIRMED) break;
+    confirmed.delete(key);
+  }
+  if (confirmed.size <= MAX_CONFIRMED) return;
+  for (const key of confirmed.keys()) {
+    if (confirmed.size <= MAX_CONFIRMED) break;
+    if (inflightMirrors.has(key)) continue;
     confirmed.delete(key);
   }
 }
 
-/** Pin a logical send so confirmation cannot expire before terminal delivery. */
-export function holdMirrorConfirmation(key: string): void {
-  heldConfirmations.add(key);
+/** Hold a dispatched mirror key so confirmation cannot expire before terminal copy. */
+export function retainMirrorConfirmation(mirrorKey: string): void {
+  inflightMirrors.add(mirrorKey);
 }
 
-/** Release a live-turn pin after the parent-chat mirror attempt finishes. */
-export function releaseMirrorConfirmation(key: string): void {
-  heldConfirmations.delete(key);
+/** Release after the terminal parent-chat copy has been sent or scheduled. */
+export function releaseMirrorConfirmation(mirrorKey: string): void {
+  inflightMirrors.delete(mirrorKey);
+}
+
+function dispatchWithMirror(
+  key: string,
+  extra: Omit<Extract<DualDeliveryDecision, { kind: 'dispatch' }>, 'kind' | 'mirrorKey' | 'alreadyConfirmed'> = {},
+): DualDeliveryDecision {
+  return {
+    kind: 'dispatch',
+    mirrorKey: key,
+    ...(confirmed.has(key) ? { alreadyConfirmed: true } : {}),
+    ...extra,
+  };
 }
 
 function settleUnpairedPending(key: string, entry: PendingLogicalSend): void {
@@ -281,7 +305,7 @@ export async function coordinateDualDelivery(
     recentFlats.set(key, recentFlat);
     confirmLogicalSend(key, now);
     rememberRecent(recentThreads, key, now);
-    return { kind: 'dispatch', mirrorKey: key };
+    return dispatchWithMirror(key);
   }
   if (!input.threadId && recentFlat) {
     if (recentFlat.state === 'abandoned') {
@@ -304,7 +328,7 @@ export async function coordinateDualDelivery(
     // copy that arrived first is already parked on `entry.decision`; a later
     // flat copy is suppressed through `recentThreads`. A late topic after an
     // unpaired flat takes over unless that flat has already committed.
-    return { kind: 'dispatch', mirrorKey: key };
+    return dispatchWithMirror(key);
   }
 
   entry.flatMessageIds.add(input.messageId);
@@ -319,14 +343,12 @@ export async function coordinateDualDelivery(
   }
   const lease = entry.flatLease;
   return lease
-    ? {
-        kind: 'dispatch',
-        mirrorKey: key,
+    ? dispatchWithMirror(key, {
         commitUnpairedFlat: () => commitUnpairedFlatRoute(key, lease),
         isUnpairedFlatTakenOver: () => isUnpairedFlatTakenOver(lease),
         abandonUnpairedFlat: () => abandonUnpairedFlatRoute(key, lease),
-      }
-    : { kind: 'dispatch', mirrorKey: key };
+      })
+    : dispatchWithMirror(key);
 }
 
 /** Waits only for the bounded pairing window; Agent execution itself is never delayed. */
@@ -376,6 +398,6 @@ export function resetDualDeliveryForTest(): void {
   recentThreads.clear();
   recentFlats.clear();
   confirmed.clear();
+  inflightMirrors.clear();
   deferredMirrors.clear();
-  heldConfirmations.clear();
 }

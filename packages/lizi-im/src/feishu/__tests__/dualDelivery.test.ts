@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   coordinateDualDelivery,
-  holdMirrorConfirmation,
   releaseMirrorConfirmation,
   resetDualDeliveryForTest,
+  retainMirrorConfirmation,
   scheduleMirrorOnConfirmation,
   waitForMirrorConfirmation,
 } from '../dualDelivery.js';
@@ -34,7 +34,11 @@ describe('Feishu native thread/main dual delivery', () => {
     const topic = await coordinateDualDelivery(input());
 
     await expect(flat).resolves.toEqual({ kind: 'suppress-main-copy' });
-    expect(topic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(topic).toEqual({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+      alreadyConfirmed: true,
+    });
     if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
   });
@@ -98,6 +102,7 @@ describe('Feishu native thread/main dual delivery', () => {
     await expect(coordinateDualDelivery(input())).resolves.toEqual({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
+      alreadyConfirmed: true,
     });
     expect(firstDecision.commitUnpairedFlat()).toBe(false);
   });
@@ -154,7 +159,11 @@ describe('Feishu native thread/main dual delivery', () => {
     }
 
     const topic = await coordinateDualDelivery(input());
-    expect(topic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(topic).toEqual({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+      alreadyConfirmed: true,
+    });
     if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
     expect(flatDecision.commitUnpairedFlat()).toBe(false);
@@ -175,7 +184,11 @@ describe('Feishu native thread/main dual delivery', () => {
     );
     const lateTopic = await coordinateDualDelivery(input());
 
-    expect(lateTopic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(lateTopic).toEqual({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+      alreadyConfirmed: true,
+    });
     expect(flatDecision.commitUnpairedFlat()).toBe(false);
   });
 
@@ -203,7 +216,11 @@ describe('Feishu native thread/main dual delivery', () => {
       input({ createTime: 'capacity-0', messageId: 'om_capacity_topic' }),
     );
 
-    expect(lateTopic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(lateTopic).toEqual({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+      alreadyConfirmed: true,
+    });
     expect(flatDecision.commitUnpairedFlat()).toBe(false);
   });
 
@@ -226,6 +243,7 @@ describe('Feishu native thread/main dual delivery', () => {
     expect(topic).toEqual({
       kind: 'dispatch',
       mirrorKey: expect.any(String),
+      alreadyConfirmed: true,
     });
     if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
@@ -362,7 +380,11 @@ describe('Feishu native thread/main dual delivery', () => {
     const lateTopic = await coordinateDualDelivery(
       input({ createTime: '1', messageId: 'om_t0', threadId: 'omt_0' }),
     );
-    expect(lateTopic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(lateTopic).toEqual({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+      alreadyConfirmed: true,
+    });
     expect(firstDecision.commitUnpairedFlat()).toBe(false);
   });
 
@@ -388,7 +410,7 @@ describe('Feishu native thread/main dual delivery', () => {
       coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
     ).resolves.toEqual({ kind: 'suppress-main-copy' });
     if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
-    holdMirrorConfirmation(topic.mirrorKey);
+    retainMirrorConfirmation(topic.mirrorKey);
 
     await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 1);
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
@@ -406,7 +428,7 @@ describe('Feishu native thread/main dual delivery', () => {
       ),
     ).resolves.toEqual({ kind: 'suppress-main-copy' });
     if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
-    holdMirrorConfirmation(topic.mirrorKey);
+    retainMirrorConfirmation(topic.mirrorKey);
 
     for (let i = 1; i <= 2_001; i++) {
       await coordinateDualDelivery(
@@ -439,5 +461,19 @@ describe('Feishu native thread/main dual delivery', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(lateFlat).resolves.toMatchObject({ kind: 'dispatch' });
     expect(scheduled).not.toHaveBeenCalled();
+  });
+
+  it('keeps an inflight confirmation past the confirmed TTL until release', async () => {
+    vi.useFakeTimers();
+    const topic = await coordinateDualDelivery(input());
+    await coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
+    if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
+    retainMirrorConfirmation(topic.mirrorKey);
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 1);
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
+
+    releaseMirrorConfirmation(topic.mirrorKey);
+    await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(false);
   });
 });
