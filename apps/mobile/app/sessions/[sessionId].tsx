@@ -7982,9 +7982,18 @@ export default function SessionScreen() {
     model: string;
     providerId?: string;
   }): Promise<boolean> => {
-    await maker.setModel(sessionId, args.model, args.providerId);
-    return true;
-  }, [maker, sessionId]);
+    try {
+      await maker.setModel(sessionId, args.model, args.providerId);
+      return true;
+    } catch (err) {
+      if (!isPreconditionFailedRemoteError(err)) throw err;
+      Alert.alert(
+        t('models.contextWindowSwitch.remoteTitle'),
+        t('models.contextWindowSwitch.cancel'),
+      );
+      return false;
+    }
+  }, [maker, sessionId, t]);
 
   // 选行 = 原子切「来源 + 模型 + effort + fast」(effort 优先级与桌面同源:该 (来源,模型) 的
   // 会话镜像记忆 → 沿用当前档 → 模型默认;同模型换来源不沿用;fast 按镜像恢复、fastEditable 门控)。

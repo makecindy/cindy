@@ -41,6 +41,10 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const setComposerModel = useCallback'),
       source.indexOf('// 选行 = 原子切', source.indexOf('const setComposerModel = useCallback')),
     );
+    const controlAction = source.slice(
+      source.indexOf('const runControlAction = useCallback'),
+      source.indexOf('const writeSessionAgentSwitchIntent'),
+    );
 
     expect(helper).toContain('await maker.setModel(sessionId, args.model, args.providerId)');
     expect(rowSelector).toContain('setComposerModel({');
@@ -51,6 +55,12 @@ describe('session Agent switch UI wiring', () => {
     expect(source).not.toContain('contextWindowConfirmationRequired');
     expect(source).not.toContain('contextTokensForConfirmation');
     expect(source).not.toContain('confirmedContextWindow');
-    expect(source).toContain('applied === false && rollbackPatch && deviceId');
+    expect(helper).toContain('if (!isPreconditionFailedRemoteError(err)) throw err;');
+    expect(helper).toContain("t('models.contextWindowSwitch.remoteTitle')");
+    expect(helper).toContain("t('models.contextWindowSwitch.cancel')");
+    expect(helper).toContain('return false;');
+    expect(helper).not.toContain('setError(');
+    expect(controlAction).toContain('applied === false && rollbackPatch && deviceId');
+    expect(controlAction).toContain('setError(formatRemoteError(err));');
   });
 });
