@@ -186,6 +186,28 @@ describe('session runtime control wiring', () => {
     expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
   });
 
+  it('prepares a target-window rebuild before applying any harness runtime model change', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const prepare = setModel.indexOf('prepareModelWindowSwitch(');
+    const apply = setModel.indexOf('applyRuntimeSetModelChange({');
+    expect(prepare).toBeGreaterThan(-1);
+    expect(prepare).toBeLessThan(apply);
+    expect(setModel).not.toContain('getAutoCompactThresholdPct');
+    expect(setModel).toContain("preparation === 'busy'");
+    expect(setModel).toContain("preparation === 'remote-unsupported'");
+    expect(setModel).toContain('beforeClose: () => {');
+    expect(setModel).toContain('clearPendingCredentialSwitchForSession(sessionId, { wake: false })');
+    expect(setModel).toContain('sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)');
+    expect(setModel).toContain('modelWindowRebuilt ||');
+    expect(setModel).toContain('patch.contextWindow = targetContextWindow;');
+    expect(setModel).toContain('(rebuildLiveOrcaWorker || modelWindowRebuilt)');
+    expect(setModel).toContain('wakeSessionInputAfterCredentialSwitch(sessionId);');
+  });
+
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
       registerSource,
@@ -476,6 +498,8 @@ describe('session runtime control wiring', () => {
     );
     expect(setModel).toContain("runtimeStatus.orcaRole === 'worker'");
     expect(setModel).toContain('forceSessionRebuild: rebuildLiveOrcaWorker');
-    expect(setModel).toContain('if (rebuildLiveOrcaWorker && !response.deferred)');
+    expect(setModel).toContain(
+      'if ((rebuildLiveOrcaWorker || modelWindowRebuilt) && !response.deferred)',
+    );
   });
 });

@@ -18,6 +18,10 @@ const captured = vi.hoisted(() => ({
     refreshTimeoutOnEvent?: (event: { type: string }) => boolean;
   } | undefined>,
   closes: 0,
+  initialProvider: undefined as string | undefined,
+  initialModel: undefined as string | undefined,
+  runtimeProvider: undefined as string | undefined,
+  runtimeModel: undefined as string | undefined,
   requestHandler: undefined as undefined | ((command: Record<string, unknown>) => Promise<{
     success: boolean;
     command?: unknown;
@@ -73,11 +77,48 @@ vi.mock('../rpc-client.js', () => {
       ) {
         captured.requests.push(command);
         captured.requestOptions.push(options);
-        if (captured.requestHandler) return captured.requestHandler(command);
-        if (command.type === 'get_state') {
-          return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+        const argValue = (flag: string): string | undefined => {
+          const index = captured.args.indexOf(flag);
+          return index >= 0 ? captured.args[index + 1] : undefined;
+        };
+        captured.initialProvider ??= argValue('--provider');
+        captured.initialModel ??= argValue('--model');
+        captured.runtimeProvider ??= captured.initialProvider;
+        captured.runtimeModel ??= captured.initialModel;
+        const response = captured.requestHandler
+          ? await captured.requestHandler(command)
+          : command.type === 'get_state'
+            ? {
+                success: true,
+                data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } },
+              }
+            : { success: true, data: {} };
+        if (response.success && command.type === 'set_model') {
+          captured.runtimeProvider = String(command.provider);
+          captured.runtimeModel = String(command.modelId);
+        } else if (response.success && command.type === 'switch_session') {
+          captured.runtimeProvider = captured.initialProvider;
+          captured.runtimeModel = captured.initialModel;
         }
-        return { success: true, data: {} };
+        if (response.success && command.type === 'get_state') {
+          const data = (response.data ?? {}) as Record<string, unknown>;
+          const model =
+            data.model && typeof data.model === 'object'
+              ? (data.model as Record<string, unknown>)
+              : {};
+          return {
+            ...response,
+            data: {
+              ...data,
+              model: {
+                ...model,
+                provider: captured.runtimeProvider,
+                id: captured.runtimeModel,
+              },
+            },
+          };
+        }
+        return response;
       }
       send(): void {}
       async close(): Promise<void> { this.isClosed = true; captured.closes += 1; }
@@ -129,6 +170,10 @@ describe('Pi provider-aware model routing', () => {
     captured.requests = [];
     captured.requestOptions = [];
     captured.closes = 0;
+    captured.initialProvider = undefined;
+    captured.initialModel = undefined;
+    captured.runtimeProvider = undefined;
+    captured.runtimeModel = undefined;
     captured.requestHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-provider-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-provider-cwd-'));
@@ -3700,6 +3745,8 @@ describe('Pi provider-aware model routing', () => {
     await handle.setModel!('grok-4.6', { providerId: 'xai' });
     expect(forwardEvents).toEqual([
       'forward:http://127.0.0.1:18765:47989',
+      'set_model',
+      // switch_session rebuilds from the original CLI route; target is re-applied.
       'set_model',
     ]);
     await handle.close();

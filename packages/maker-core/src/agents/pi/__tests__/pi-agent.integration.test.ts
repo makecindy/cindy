@@ -398,6 +398,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             // 走的正是本模型,不标会在 send 前被 PiImageInputUnsupportedError 拒收。
             supportsImageInput: true,
           },
+          {
+            id: 'pi-test-small-model',
+            displayName: 'Pi Test Small Model',
+            contextWindow: 100_000,
+            efforts: [],
+            defaultEffort: null,
+          },
         ],
       },
       resolvePiAgentHome: () => agentHome,
@@ -466,6 +473,42 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         // usage:input 42 + output 7(anthropic 流里的 usage 记账)
         const usage = handle.getUsageSnapshot();
         expect(usage.tokenUsage).toBeGreaterThan(0);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'keeps the target runtime after a context-window settings reload',
+    { timeout: 60_000 },
+    async () => {
+      const agent = new PiAgent(buildDeps());
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-model-reload-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      try {
+        handle = await agent.startSession({
+          sessionId: 'itest-model-reload-session',
+          workingDir,
+          model: 'pi-test-model',
+        });
+        await handle.setModel?.('pi-test-small-model');
+        expect(handle.model).toBe('pi-test-small-model');
+        expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
+
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            if (event.type === 'done') return;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'after model switch' });
+        await done;
+
+        const request = seenRequests.slice(requestsBefore).at(-1);
+        expect(request).toBeDefined();
+        expect(JSON.parse(request!.body)).toMatchObject({ model: 'pi-test-small-model' });
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });

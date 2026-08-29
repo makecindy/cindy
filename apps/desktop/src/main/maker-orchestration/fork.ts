@@ -78,7 +78,7 @@ interface ForkNativeSource {
   nextSwitch: MessagePosition | null;
   /** false = 原生会话已因同引擎换窗失效，只复制可见历史，首次发送走交接。 */
   reuseVendorSession: boolean;
-  rebuildReason?: 'context-overflow' | 'pi-prompt-timeout';
+  rebuildReason?: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
 }
 
 interface ForkTimelineMessage {
@@ -115,7 +115,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   agentKind: DbAgentKind;
   model: string;
   providerId: string | null;
-  reason: 'context-overflow' | 'pi-prompt-timeout';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
 }): Promise<void> {
   const handoffMessages: HandoffSourceMessage[] = opts.rows
     .filter(
@@ -159,7 +159,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
 }
 
 interface ParsedContextRebuildBoundary {
-  reason: 'context-overflow' | 'pi-prompt-timeout';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
   sourceAgentKind?: DbAgentKind;
   sourceModel?: string | null;
   sourceProviderId?: string | null;
@@ -168,7 +168,11 @@ interface ParsedContextRebuildBoundary {
 function parseContextRebuildBoundary(content: string): ParsedContextRebuildBoundary | null {
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>;
-    if (parsed.reason !== 'context-overflow' && parsed.reason !== 'pi-prompt-timeout') {
+    if (
+      parsed.reason !== 'context-overflow' &&
+      parsed.reason !== 'model-window-switch' &&
+      parsed.reason !== 'pi-prompt-timeout'
+    ) {
       return null;
     }
     return {
@@ -193,7 +197,7 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
 
 function parseContextRebuildReason(
   content: string,
-): 'context-overflow' | 'pi-prompt-timeout' | null {
+): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | null {
   return parseContextRebuildBoundary(content)?.reason ?? null;
 }
 

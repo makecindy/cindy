@@ -745,6 +745,7 @@ import {
   isPiPromptRpcTimeoutError,
   lookupVerifiedContextWindow,
   persistedUserContentToWireMessage,
+  type ModelWindowSwitchPreparationResult,
   shouldRebuildPiNativeSession,
 } from './contextOverflowRollover.js';
 import { classifyCodexHistoryOversized } from '../maker-host/codex-local-sessions.js';
@@ -15125,10 +15126,129 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         hadLiveSession: maker.getSession(sessionId) !== undefined,
       };
       const liveSessionBeforeRouteChange = maker.getSession(sessionId);
-      const targetProviderId =
+      const runtimeAgentKind =
+        liveSessionBeforeRouteChange?.agentKind ??
+        (getSessionDbAgentKind(sessionId)
+          ? dbToMakerAgentKind(getSessionDbAgentKind(sessionId))
+          : undefined);
+      const targetRouteProviderId =
         effectiveProviderId === undefined
-          ? currentProviderId
+          ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
           : (normalizeSessionProviderId(effectiveProviderId) ?? null);
+      const runtimeRouteChanged =
+        liveSessionBeforeRouteChange !== undefined &&
+        (liveSessionBeforeRouteChange.model !== model || currentProviderId !== targetRouteProviderId);
+      let targetContextWindow: number | undefined;
+      let modelWindowRebuilt = false;
+      if (liveSessionBeforeRouteChange && runtimeAgentKind && runtimeRouteChanged) {
+        const verifiedTargetWindow = lookupVerifiedContextWindow(
+          (_agentKind, modelId, pid) =>
+            resolveVerifiedContextWindow(
+              getActiveCatalog(),
+              runtimeAgentKind,
+              pid,
+              modelId,
+            ),
+          model,
+          targetRouteProviderId,
+          runtimeAgentKind,
+        );
+        const runtimeProviders = await getDesktopProviderService().listProviders({
+          allowSideEffects: false,
+          catalog: getActiveCatalog(),
+        });
+        const actualTargetProviderId =
+          targetRouteProviderId ??
+          effectiveSourceIdForModel(runtimeProviders, null, model, runtimeAgentKind);
+        const targetProvider = runtimeProviders.find(
+          (candidate) => candidate.id === actualTargetProviderId,
+        );
+        const targetCatalogModel = findCatalogModel(targetProvider, model, runtimeAgentKind, {
+          exact: true,
+        });
+        targetContextWindow = verifiedTargetWindow ?? targetCatalogModel?.contextWindow;
+        if (!targetContextWindow || targetContextWindow <= 0) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'target model context window is unknown; runtime selection was not changed',
+          );
+        }
+        if (targetContextWindow > 0) {
+          if (!contextOverflowRolloverHolder) {
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'model window switch protection is unavailable; runtime selection was not changed',
+            );
+          }
+          let pendingClearedForWindowRebuild = false;
+          let preparation: ModelWindowSwitchPreparationResult;
+          try {
+            preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(
+              sessionId,
+              {
+                contextWindow: targetContextWindow,
+                assertCanCommit: assertRuntimeOwnerCurrent,
+                beforeClose: () => {
+                  clearPendingCredentialSwitchForSession(sessionId, { wake: false });
+                  pendingClearedForWindowRebuild = true;
+                },
+              },
+            );
+          } catch (error) {
+            if (
+              pendingClearedForWindowRebuild &&
+              sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)
+            ) {
+              if (previousRuntime.pendingCredentialSwitch) {
+                pendingCredentialSwitchHolder?.register(
+                  sessionId,
+                  previousRuntime.pendingCredentialSwitch,
+                );
+              } else {
+                wakeSessionInputAfterCredentialSwitch(sessionId);
+              }
+            }
+            throw error;
+          }
+          if (preparation === 'busy') {
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'wait for the current turn to finish before switching to a smaller context window',
+            );
+          }
+          if (preparation === 'remote-unsupported') {
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'this remote task cannot safely rebuild context for the smaller model window',
+            );
+          }
+          if (preparation === 'unknown-context') {
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'current context window is unknown; runtime selection was not changed',
+            );
+          }
+          if (preparation === 'in-flight') {
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'context preparation is already running; retry the model switch after it finishes',
+            );
+          }
+          assertRuntimeOwnerCurrent();
+          modelWindowRebuilt = preparation === 'rebuilt';
+          if (
+            modelWindowRebuilt &&
+            effectiveProviderId === undefined &&
+            previousRuntime.pendingCredentialSwitch
+          ) {
+            // beforeClose deliberately cleared the stale pending record so it
+            // cannot finalize against the retiring native session. Preserve its
+            // provider intent as an explicit route for this accepted switch.
+            effectiveProviderId = targetRouteProviderId;
+          }
+        }
+      }
+      const targetProviderId = targetRouteProviderId;
       const rebuildLiveOrcaWorker =
         routeExplicit &&
         runtimeStatus.orcaRole === 'worker' &&
@@ -15301,7 +15421,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             commitControlStores();
           }
         }
-        if (internalOptions.source === 'user' && (isDeviceLinkInvoke() || atomicSelection)) {
+        if (
+          modelWindowRebuilt ||
+          (internalOptions.source === 'user' && (isDeviceLinkInvoke() || atomicSelection))
+        ) {
           // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
           // 本地 renderer 的 sessionService.update 也有同一窗口。凡携带 selection 的
           // 新调用都由 host 在解锁前一次落定全部字段。
@@ -15314,6 +15437,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (atomicSelection) {
             patch.effort = atomicSelection.effort;
             patch.fastMode = atomicSelection.fastMode;
+          }
+          if (modelWindowRebuilt && targetContextWindow) {
+            patch.contextWindow = targetContextWindow;
           }
           try {
             await persistSessionFields(sessionId, patch);
@@ -15410,7 +15536,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             },
           });
         }
-        if (rebuildLiveOrcaWorker && !response.deferred) {
+        if ((rebuildLiveOrcaWorker || modelWindowRebuilt) && !response.deferred) {
           wakeSessionInputAfterCredentialSwitch(sessionId);
         }
         if (!response.deferred) {

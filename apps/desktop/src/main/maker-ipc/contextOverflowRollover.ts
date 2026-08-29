@@ -15,6 +15,11 @@ import {
   readAgentInputReferences,
 } from '@cindy/maker-shared/agent-input-projection';
 
+import {
+  assessModelSwitchContext,
+  MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+  shouldHandoffAfterContextAssessment,
+} from '../../shared/modelSwitchAssessment.js';
 import { afterStripAttempt, decideCindyCompression } from './cindyContextCompression.js';
 import { buildHandoffText, extractPlainText, type HandoffSourceMessage } from './agentHandoff.js';
 
@@ -335,7 +340,7 @@ export interface ContextOverflowRolloverDeps {
     sessionId: string,
     handoff: string,
     meta: {
-      reason: 'context-overflow' | 'pi-prompt-timeout';
+      reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
       sourceUserClientId: string | null;
       sourceAgentKind?: 'cc' | 'codex' | 'pi';
       sourceModel?: string | null;
@@ -361,10 +366,49 @@ export interface ContextOverflowRolloverDeps {
 
 export type OverflowClaimResult = 'claimed' | 'in-flight' | 'idle';
 
+export type ModelWindowSwitchPreparationResult =
+  | 'not-needed'
+  | 'rebuilt'
+  | 'busy'
+  | 'remote-unsupported'
+  | 'unknown-context'
+  | 'in-flight';
+
+export function shouldRebuildForModelWindowSwitch(input: {
+  contextTokens: number;
+  currentContextWindow: number;
+  targetContextWindow: number;
+}): boolean {
+  if (
+    !Number.isFinite(input.currentContextWindow) ||
+    input.currentContextWindow <= 0 ||
+    !Number.isFinite(input.targetContextWindow) ||
+    input.targetContextWindow <= 0 ||
+    input.targetContextWindow >= input.currentContextWindow
+  ) {
+    return false;
+  }
+  return shouldHandoffAfterContextAssessment(
+    assessModelSwitchContext({
+      contextTokens: input.contextTokens,
+      targetContextWindow: input.targetContextWindow,
+      autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+    }),
+  );
+}
+
 export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps): {
   claim(sessionId: string): OverflowClaimResult;
   tryRecover(sessionId: string, errorData: unknown): Promise<boolean>;
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
+  prepareModelWindowSwitch(
+    sessionId: string,
+    target: {
+      contextWindow: number;
+      assertCanCommit?: () => void;
+      beforeClose?: () => void;
+    },
+  ): Promise<ModelWindowSwitchPreparationResult>;
 } {
   const inFlight = new Set<string>();
 
@@ -496,6 +540,92 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       });
       return true;
     });
+  };
+
+  const runPrepareModelWindowSwitch = async (
+    sessionId: string,
+    target: {
+      contextWindow: number;
+      assertCanCommit?: () => void;
+      beforeClose?: () => void;
+    },
+  ): Promise<ModelWindowSwitchPreparationResult> => {
+    await deps.drainPersistQueue();
+    const sessionRow = await deps.getSessionRow(sessionId);
+    if (!sessionRow || sessionRow.status === 'deleted' || !sessionRow.sdkSessionId) {
+      return 'not-needed';
+    }
+    const live = deps.getLiveSession(sessionId);
+    const liveUsage = live?.getUsageSnapshot?.();
+    const contextTokens =
+      liveUsage && Number.isFinite(liveUsage.contextTokens) && liveUsage.contextTokens >= 0
+        ? liveUsage.contextTokens
+        : (sessionRow.contextTokens ?? 0);
+    const reportedCurrentWindow =
+      liveUsage && Number.isFinite(liveUsage.contextWindow) && liveUsage.contextWindow > 0
+        ? liveUsage.contextWindow
+        : (sessionRow.contextWindow ?? 0);
+    const verifiedCurrentWindow = lookupVerifiedContextWindow(
+      deps.resolveVerifiedWindow,
+      sessionRow.model,
+      sessionRow.providerId,
+      sessionRow.agentKind,
+    );
+    const currentContextWindow = effectiveContextWindow(
+      sessionRow.model,
+      reportedCurrentWindow,
+      verifiedCurrentWindow,
+    );
+    if (contextTokens > 0 && currentContextWindow <= 0) return 'unknown-context';
+    if (
+      !shouldRebuildForModelWindowSwitch({
+        contextTokens,
+        currentContextWindow,
+        targetContextWindow: target.contextWindow,
+      })
+    ) {
+      return 'not-needed';
+    }
+    if (sessionRow.remoteHostId) return 'remote-unsupported';
+    if (live?.isTurnRunning()) return 'busy';
+
+    const source = (await deps.listMessages(sessionId)).filter(
+      (message) => message.role !== 'error',
+    );
+    const latestUser =
+      [...source].reverse().find((message) => message.role === 'user' && !isSyntheticUser(message)) ??
+      (await deps.findLatestUser?.(sessionId)) ??
+      null;
+    const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
+    target.assertCanCommit?.();
+    target.beforeClose?.();
+    if (live) await deps.closeSession(sessionId);
+    target.assertCanCommit?.();
+    const label = engineLabelForOverflow(sessionRow.agentKind);
+    const handoff = buildHandoffText(source, {
+      fromLabel: label,
+      toLabel: label,
+      sessionId,
+      reason: 'model-window-switch',
+    });
+    await deps.commitRebuild(sessionId, handoff, {
+      reason: 'model-window-switch',
+      sourceUserClientId: latestUser?.clientId ?? null,
+      sourceAgentKind: normalizeOverflowDbAgentKind(sessionRow.agentKind),
+      sourceModel: sessionRow.model ?? null,
+      sourceProviderId: sessionRow.providerId ?? null,
+      expectedClearedAt: sessionRow.clearedAt,
+    });
+    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+    deps.onRebuilt?.(sessionId);
+    deps.log.info('model window shrink rebuilt native context before runtime switch', {
+      sessionId,
+      agentKind: sessionRow.agentKind,
+      contextTokens,
+      currentContextWindow,
+      targetContextWindow: target.contextWindow,
+    });
+    return 'rebuilt';
   };
 
   const runPrepare = async (sessionId: string): Promise<boolean> => {
@@ -655,6 +785,25 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         });
         // A failed pre-send rebuild must not fall through to the caller's
         // stale resume/fork/thread options. Let the send boundary fail closed.
+        throw error;
+      } finally {
+        inFlight.delete(sessionId);
+      }
+    },
+
+    async prepareModelWindowSwitch(sessionId, target) {
+      if (inFlight.has(sessionId)) return 'in-flight';
+      inFlight.add(sessionId);
+      try {
+        return await deps.withCloseSuppressed(sessionId, () =>
+          runPrepareModelWindowSwitch(sessionId, target),
+        );
+      } catch (error) {
+        deps.log.warn('model window switch preparation failed', {
+          sessionId,
+          targetContextWindow: target.contextWindow,
+          error: error instanceof Error ? error.message : String(error),
+        });
         throw error;
       } finally {
         inFlight.delete(sessionId);

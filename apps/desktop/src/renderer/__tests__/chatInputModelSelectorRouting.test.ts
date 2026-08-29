@@ -9,6 +9,16 @@ const chatInputSource = readFileSync(
 );
 
 describe('ChatInput model source switching wiring', () => {
+  it('uses the unified 90% switch-rebuild line instead of a harness compaction setting', () => {
+    const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
+    const end = chatInputSource.indexOf('// session-agent-switch', start);
+    const guard = chatInputSource.slice(start, end);
+    expect(guard).toContain(
+      'autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT',
+    );
+    expect(guard).not.toContain('compactionGetState');
+  });
+
   it('lets a disconnected source reselect the highlighted fallback provider row', () => {
     const selectorStart = chatInputSource.lastIndexOf('<ModelSelector');
     expect(selectorStart).toBeGreaterThanOrEqual(0);

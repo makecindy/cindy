@@ -14,6 +14,10 @@ const knobs = vi.hoisted(() => ({
   rpcCalls: [] as Array<Record<string, unknown>>,
   switchSessionSuccess: true,
   autoCompactionSuccess: true,
+  runtimeProvider: "cindy",
+  runtimeModel: "m",
+  runtimeContextWindow: 200_000,
+  stateModelOverride: null as null | string,
   onEvent: null as
     null | ((event: { type: string; [key: string]: unknown }) => void),
 }));
@@ -55,7 +59,11 @@ vi.mock("../rpc-client.js", () => ({
           success: true,
           data: {
             sessionFile: "/mock/s.jsonl",
-            model: { contextWindow: 200_000 },
+            model: {
+              provider: knobs.runtimeProvider,
+              id: knobs.stateModelOverride ?? knobs.runtimeModel,
+              contextWindow: knobs.runtimeContextWindow,
+            },
           },
         };
       }
@@ -70,12 +78,20 @@ vi.mock("../rpc-client.js", () => ({
           : { success: false, error: "runtime rejected" };
       }
       if (cmd.type === "set_model") {
-        return { success: true, data: { contextWindow: 100_000 } };
+        knobs.runtimeProvider = String(cmd.provider);
+        knobs.runtimeModel = String(cmd.modelId);
+        knobs.runtimeContextWindow = knobs.runtimeModel === "n" ? 100_000 : 200_000;
+        return { success: true, data: { contextWindow: knobs.runtimeContextWindow } };
       }
       if (cmd.type === "switch_session") {
-        return knobs.switchSessionSuccess
-          ? { success: true, data: {} }
-          : { success: false, error: "reload denied" };
+        if (!knobs.switchSessionSuccess) {
+          return { success: false, error: "reload denied" };
+        }
+        // Real Pi reconstructs from the process' original CLI route.
+        knobs.runtimeProvider = "cindy";
+        knobs.runtimeModel = "m";
+        knobs.runtimeContextWindow = 200_000;
+        return { success: true, data: {} };
       }
       return { success: true, data: { entries: [] } };
     }
@@ -137,6 +153,10 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.rpcCalls = [];
     knobs.switchSessionSuccess = true;
     knobs.autoCompactionSuccess = true;
+    knobs.runtimeProvider = "cindy";
+    knobs.runtimeModel = "m";
+    knobs.runtimeContextWindow = 200_000;
+    knobs.stateModelOverride = null;
     knobs.onEvent = null;
     agentHome = mkdtempSync(path.join(tmpdir(), "pi-native-ac-home-"));
     cwd = mkdtempSync(path.join(tmpdir(), "pi-native-ac-cwd-"));
@@ -379,7 +399,25 @@ describe("PiAgent native auto-compaction ownership", () => {
     expect(readLatestPiSettings().compaction?.reserveTokens).toBe(50_000);
     await handle.setModel!("n");
     expect(readLatestPiSettings().compaction?.reserveTokens).toBe(25_000);
-    expect(knobs.rpcCalls.some((call) => call.type === "switch_session")).toBe(true);
+    const switchIndex = knobs.rpcCalls.findIndex((call) => call.type === "switch_session");
+    const setModelIndexes = knobs.rpcCalls
+      .map((call, index) => (call.type === "set_model" ? index : -1))
+      .filter((index) => index >= 0);
+    const verifyIndex = knobs.rpcCalls.findLastIndex((call) => call.type === "get_state");
+    expect(setModelIndexes).toHaveLength(2);
+    expect(setModelIndexes[0]).toBeLessThan(switchIndex);
+    expect(setModelIndexes[1]).toBeGreaterThan(switchIndex);
+    expect(verifyIndex).toBeGreaterThan(setModelIndexes[1]!);
+    expect(knobs.runtimeProvider).toBe("cindy");
+    expect(knobs.runtimeModel).toBe("n");
+    expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
+    await handle.close();
+  });
+
+  it("terminates the session when the reloaded runtime does not confirm the target model", async () => {
+    const handle = await start();
+    knobs.stateModelOverride = "m";
+    await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
     await handle.close();
   });
 

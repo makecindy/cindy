@@ -11,6 +11,7 @@ import {
   persistedUserContentToWireMessage,
   planContextOverflowRollover,
   shouldRebuildForContextPressure,
+  shouldRebuildForModelWindowSwitch,
   shouldRebuildPiNativeSession,
   type OverflowSourceMessage,
 } from '../contextOverflowRollover';
@@ -187,6 +188,47 @@ describe('planContextOverflowRollover', () => {
   });
 });
 
+describe('shouldRebuildForModelWindowSwitch', () => {
+  it.each([
+    [244_799, 272_000, false],
+    [244_800, 272_000, true],
+    [271_999, 272_000, true],
+    [272_000, 272_000, true],
+    [449_999, 272_000, true],
+    [450_000, 272_000, true],
+    [179_999, 200_000, false],
+    [180_000, 200_000, true],
+  ] as const)(
+    'assesses 500K → %i at the unified 90%% target boundary (%i tokens)',
+    (contextTokens, targetContextWindow, expected) => {
+      expect(
+        shouldRebuildForModelWindowSwitch({
+          contextTokens,
+          currentContextWindow: 500_000,
+          targetContextWindow,
+        }),
+      ).toBe(expected);
+    },
+  );
+
+  it('does not rebuild for equal or larger target windows', () => {
+    expect(
+      shouldRebuildForModelWindowSwitch({
+        contextTokens: 450_000,
+        currentContextWindow: 500_000,
+        targetContextWindow: 500_000,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRebuildForModelWindowSwitch({
+        contextTokens: 450_000,
+        currentContextWindow: 500_000,
+        targetContextWindow: 1_000_000,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('createContextOverflowRollover', () => {
   function makeDeps(source: OverflowSourceMessage[]) {
     return {
@@ -239,6 +281,103 @@ describe('createContextOverflowRollover', () => {
       log: { info: vi.fn(), warn: vi.fn() },
     };
   }
+
+  it.each(['cc', 'codex', 'pi'] as const)(
+    'rebuilds %s native context before a pressured 500K → 272K model switch',
+    async (agentKind) => {
+      const deps = makeDeps([
+        msg('user', '先做 A', 'u1', 1),
+        msg('assistant', '做完 A', 'a1', 2),
+      ]);
+      deps.getSessionRow.mockResolvedValue({
+        status: 'active',
+        agentKind,
+        remoteHostId: null,
+        clearedAt: null,
+        sdkSessionId: '/tmp/live-session',
+        contextTokens: 244_800,
+        contextWindow: 500_000,
+        model: 'wide-model',
+        providerId: 'xd',
+      });
+      const rollover = createContextOverflowRollover(deps);
+
+      await expect(
+        rollover.prepareModelWindowSwitch('s1', {
+          contextWindow: 272_000,
+        }),
+      ).resolves.toBe('rebuilt');
+
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.commitRebuild).toHaveBeenCalledWith(
+        's1',
+        expect.any(String),
+        expect.objectContaining({
+          reason: 'model-window-switch',
+          sourceAgentKind: agentKind,
+          sourceModel: 'wide-model',
+        }),
+      );
+      const commitCalls = deps.commitRebuild.mock.calls as unknown as Array<[string, string]>;
+      const handoff = String(commitCalls[0]?.[1] ?? '');
+      expect(handoff).toContain('switching to a model with a smaller context window');
+      expect(handoff).not.toContain("exceeded the model's context window");
+      expect(deps.setPendingHandoff).toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not retire the native session below the target pressure line', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      ...(await deps.getSessionRow()),
+      contextTokens: 244_799,
+      contextWindow: 500_000,
+    });
+    const beforeClose = vi.fn();
+    const rollover = createContextOverflowRollover(deps);
+    await expect(
+      rollover.prepareModelWindowSwitch('s1', {
+        contextWindow: 272_000,
+        beforeClose,
+      }),
+    ).resolves.toBe('not-needed');
+    expect(beforeClose).not.toHaveBeenCalled();
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
+
+  it('fails closed without mutating a busy or remote pressured session', async () => {
+    const busyDeps = makeDeps([msg('user', '继续', 'u1')]);
+    busyDeps.getSessionRow.mockResolvedValue({
+      ...(await busyDeps.getSessionRow()),
+      contextTokens: 244_800,
+      contextWindow: 500_000,
+    });
+    busyDeps.getLiveSession.mockReturnValue({ isTurnRunning: () => true });
+    const busy = createContextOverflowRollover(busyDeps);
+    await expect(
+      busy.prepareModelWindowSwitch('s1', {
+        contextWindow: 272_000,
+      }),
+    ).resolves.toBe('busy');
+    expect(busyDeps.closeSession).not.toHaveBeenCalled();
+
+    const remoteDeps = makeDeps([msg('user', '继续', 'u1')]);
+    remoteDeps.getSessionRow.mockResolvedValue({
+      ...(await remoteDeps.getSessionRow()),
+      remoteHostId: 'remote-1',
+      contextTokens: 244_800,
+      contextWindow: 500_000,
+    });
+    const remote = createContextOverflowRollover(remoteDeps);
+    await expect(
+      remote.prepareModelWindowSwitch('s1', {
+        contextWindow: 272_000,
+      }),
+    ).resolves.toBe('remote-unsupported');
+    expect(remoteDeps.closeSession).not.toHaveBeenCalled();
+  });
 
   it('rebuilds once, injects handoff, and wire-replays the same user content', async () => {
     const deps = makeDeps([

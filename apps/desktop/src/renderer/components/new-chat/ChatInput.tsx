@@ -348,7 +348,10 @@ import {
   makerChatStore,
 } from '@/lib/makerChatStore';
 // 切模型前的上下文容量预检(大窗口 → 小窗口护栏), 纯函数与 main 共用。
-import { assessModelSwitchContext } from '../../../shared/modelSwitchAssessment';
+import {
+  assessModelSwitchContext,
+  MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+} from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
@@ -6029,7 +6032,7 @@ export function ChatInput({
    * 分级语义见 shared/modelSwitchAssessment.ts。overflow 确认后由 host 交接换窗,
    * 不要再建议用户先 /compact —— 小窗口模型压整段历史同样会失败。
    * 返回 false = 用户取消, 调用方直接放弃本次切换(无任何副作用)。
-   * fail-open: 占用未知(0)/ 目标窗口未知 / 阈值读取失败都不拦。
+   * fail-open: 占用未知(0)/ 目标窗口未知时不拦；三个 harness 的强制换窗线统一为 90%。
    */
   const confirmModelSwitchContextGuard = useCallback(
     async (newModelId: string, sourceRemoteDeviceId?: string): Promise<boolean> => {
@@ -6040,16 +6043,11 @@ export function ChatInput({
       // 优先复用操作开始时捕获的 device scope，relay origin 暂失时不能退回本机目录。
       const remoteDeviceId = sourceRemoteDeviceId ?? getSessionDeviceId(sessionId) ?? undefined;
       const targetContextWindow = getModelById(newModelId, remoteDeviceId)?.contextWindow;
-      let autoCompactThresholdPct: number | undefined;
-      try {
-        autoCompactThresholdPct = (await window.electronAPI.maker.compactionGetState()).pct;
-      } catch {
-        // 阈值读不到 → assessment 内部回退默认 90, 不阻断切换。
-      }
       const verdict = assessModelSwitchContext({
         contextTokens,
         targetContextWindow,
-        autoCompactThresholdPct,
+        // 切窗安全线独立于各 harness 的日常 auto-compaction 设置。
+        autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
       });
       if (verdict.level === 'ok') return true;
       const fmtTokens = (n: number): string =>

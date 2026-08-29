@@ -61,9 +61,14 @@ Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.
 （`retry.provider.maxRetries` 保持 0）、`--append-system-prompt`、`--session-dir`、启动时 RPC
 `set_auto_compaction{enabled:true}` / `set_thinking_level`。Pi 原生负责 threshold 与 overflow 压缩；
 Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
-下一次发送前换窗。设置页的 Pi 百分比在每次启动或恢复 Pi 任务时冻结，并写入该任务 `settings.json` 的
-`compaction.reserveTokens`（`window * (1 - pct/100)`）；切模只按这份快照重算，不回读最新全局值。
-Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
+下一次发送前换窗。设置页的 Pi 百分比默认 90%（已有显式 override 保留），在每次启动或恢复
+Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveTokens`
+（`window * (1 - pct/100)`）；切模只按这份快照重算，不回读最新全局值。
+大窗切小窗先由 Desktop 的统一目标窗口事务按目标窗口 90% 固定压力线评估（独立于 Pi
+日常自动压缩百分比），命中时换干净原生窗口；未命中时 Pi 重写 settings 后调用
+`switch_session`，必须重新 `set_model` 并用 `get_state` 校验
+provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
+子代理 route 保持 pending，失败则终止该 live 任务。Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。

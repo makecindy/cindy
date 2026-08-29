@@ -999,7 +999,7 @@ export async function commitContextRebuild(
   sessionId: string,
   handoff: string,
   meta: {
-    reason: 'context-overflow' | 'pi-prompt-timeout';
+    reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout';
     sourceUserClientId: string | null;
     sourceAgentKind?: 'cc' | 'codex' | 'pi';
     sourceModel?: string | null;
