@@ -360,6 +360,42 @@ describe('ToolLoopGuard', () => {
       contractCategory: 'missing_required_field',
     });
   });
+
+  it('同批次成功结果先到也不清零契约 streak,结果顺序不影响跨批次计数', () => {
+    const g = new ToolLoopGuard();
+
+    for (const [index, batchId] of ['batch-a', 'batch-b'].entries()) {
+      expect(
+        feed(g, `read-${index}`, 'Read', { file_path: 'context.txt' }, 'read ok', false, batchId).kind,
+      ).toBe('ok');
+      expect(
+        feed(g, `bad-${index}`, 'Edit', { old_string: `s-${index}` }, MISSING, true, batchId).kind,
+      ).toBe('ok');
+    }
+
+    expect(feed(g, 'read-c', 'Read', { file_path: 'context.txt' }, 'read ok', false, 'batch-c').kind).toBe('ok');
+    expect(feed(g, 'bad-c', 'Edit', { old_string: 'c' }, MISSING, true, 'batch-c')).toMatchObject({
+      kind: 'hard',
+      reason: 'contract',
+      count: 3,
+      contractCategory: 'missing_required_field',
+    });
+  });
+
+  it('同批次其它契约类别先到也不清零目标类别 streak', () => {
+    const g = new ToolLoopGuard();
+    const stale = 'String to replace not found in file.';
+
+    expect(feed(g, 'missing-a', 'Edit', { old_string: 'a' }, MISSING, true, 'batch-a').kind).toBe('ok');
+    expect(feed(g, 'stale-b', 'Edit', { old_string: 'b' }, stale, true, 'batch-b').kind).toBe('ok');
+    expect(feed(g, 'missing-b', 'Edit', { old_string: 'b' }, MISSING, true, 'batch-b').kind).toBe('ok');
+    expect(feed(g, 'missing-c', 'Edit', { old_string: 'c' }, MISSING, true, 'batch-c')).toMatchObject({
+      kind: 'hard',
+      reason: 'contract',
+      count: 3,
+      contractCategory: 'missing_required_field',
+    });
+  });
 });
 
 describe('classifyToolContractError', () => {

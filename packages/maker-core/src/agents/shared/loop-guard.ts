@@ -116,6 +116,11 @@ interface PendingToolUse {
   input: unknown;
 }
 
+interface ContractObservation {
+  toolName: string;
+  category: ToolContractErrorCategory;
+}
+
 export interface ToolLoopGuardOptions {
   /** 第 1 层:连续完全相同(name+input+output)多少次判循环。 */
   consecutiveLimit?: number;
@@ -179,10 +184,17 @@ export class ToolLoopGuard {
   // 第 2/3 层共用状态: 最近 max(windowSize, rotationWindowSize) 个 name+input 指纹
   private callWindow: string[] = [];
 
-  // 第 4 层状态: 最近一次契约错误的 name+类别键、批次与连续计数
+  // 第 4 层无批次兼容状态: 最近一次契约错误的 name+类别键与连续计数
   private lastContractKey: string | null = null;
-  private lastContractBatchId: string | null = null;
   private contractStreak = 0;
+
+  // 第 4 层批次状态: 一批 tool_result 是同一轮模型回应,不能按结果到达顺序
+  // 把批次内的成功/其它工具误当成新的模型轮次。只保留当前批次和上一批次
+  // 的 key, 让状态有界且按每个工具+错误类别分别累计。
+  private activeContractBatchId: string | null = null;
+  private activeContractKeys = new Set<string>();
+  private previousContractKeys = new Set<string>();
+  private contractStreakByKey = new Map<string, number>();
 
   constructor(options: ToolLoopGuardOptions = {}) {
     this.consecutiveLimit = options.consecutiveLimit ?? DEFAULT_CONSECUTIVE_LIMIT;
@@ -205,8 +217,8 @@ export class ToolLoopGuard {
 
   /**
    * 工具结果到达后配对并按四层判据判断。没有配到完整 tool_use 时直接放行,
-   * 避免用不完整信息误判。契约错误层只接受明确标记为失败的结果；同一批次内
-   * 的同类错误只计一次，避免并行 tool_result 在模型观察错误前伪造多轮重试。
+   * 避免用不完整信息误判。契约错误层只接受明确标记为失败的结果；有批次标识时
+   * 先按完整批次聚合,由下一批次到达时提交重置,避免结果顺序影响 streak。
    */
   onToolResult(
     toolUseId: string,
@@ -221,37 +233,52 @@ export class ToolLoopGuard {
 
     // 第 4 层: 同工具同类契约错误连续出现(input 各不相同也计)。放在 1-3 层之前:
     // 它的阈值(3)低于第 1 层(4),同 input 的重复契约错误也应更早止损。
-    // 未分类结果(成功或 other 错误)打断"连续"——other 永不触发熔断。
+    // 有 batch id 时按“连续批次”计数, 同一批次每个 key 最多计一次; 成功/其它
+    // 工具结果不能因到达顺序把同批次的契约错误抹掉。没有 batch id 的旧调用方
+    // 保留原先逐结果计数语义。
     const contractCategory = isError ? classifyToolContractError(toolUse.name, output) : null;
-    if (contractCategory !== null) {
-      const contractKey = `${toolUse.name}\n${contractCategory}`;
-      const sameBatch = contractKey === this.lastContractKey
-        && toolResultBatchId !== undefined
-        && toolResultBatchId === this.lastContractBatchId;
-      if (!sameBatch) {
-        this.contractStreak = contractKey === this.lastContractKey ? this.contractStreak + 1 : 1;
-      }
-      this.lastContractKey = contractKey;
-      this.lastContractBatchId = toolResultBatchId ?? null;
-      if (this.contractStreak >= this.contractConsecutiveLimit) {
-        return {
-          kind: 'hard',
-          reason: 'contract',
-          count: this.contractStreak,
-          toolName: toolUse.name,
-          contractCategory,
-        };
+    if (toolResultBatchId !== undefined) {
+      this.beginContractBatch(toolResultBatchId);
+      if (contractCategory !== null) {
+        const contractKey = `${toolUse.name}\n${contractCategory}`;
+        // Parallel results in one user message are one model attempt. Count this
+        // key only on its first result in the batch, regardless of result order.
+        if (!this.activeContractKeys.has(contractKey)) {
+          this.activeContractKeys.add(contractKey);
+          const streak = this.previousContractKeys.has(contractKey)
+            ? (this.contractStreakByKey.get(contractKey) ?? 0) + 1
+            : 1;
+          this.contractStreakByKey.set(contractKey, streak);
+          if (streak >= this.contractConsecutiveLimit) {
+            return {
+              kind: 'hard',
+              reason: 'contract',
+              count: streak,
+              toolName: toolUse.name,
+              contractCategory,
+            };
+          }
+        }
       }
     } else {
-      // A successful/unclassified result from the same assistant batch is
-      // unrelated evidence, not a new model turn. Defer resetting the
-      // contract streak until a different batch arrives; otherwise a batch
-      // containing malformed Edit + successful Read becomes order-dependent.
-      const sameBatch = toolResultBatchId !== undefined
-        && toolResultBatchId === this.lastContractBatchId;
-      if (!sameBatch) {
+      // Legacy callers do not provide batch ids; preserve the original
+      // adjacent-result streak semantics for them.
+      this.resetContractBatchState();
+      if (contractCategory !== null) {
+        const contractKey = `${toolUse.name}\n${contractCategory}`;
+        this.contractStreak = contractKey === this.lastContractKey ? this.contractStreak + 1 : 1;
+        this.lastContractKey = contractKey;
+        if (this.contractStreak >= this.contractConsecutiveLimit) {
+          return {
+            kind: 'hard',
+            reason: 'contract',
+            count: this.contractStreak,
+            toolName: toolUse.name,
+            contractCategory,
+          };
+        }
+      } else {
         this.lastContractKey = null;
-        this.lastContractBatchId = null;
         this.contractStreak = 0;
       }
     }
@@ -321,8 +348,29 @@ export class ToolLoopGuard {
     this.consecutiveStreak = 0;
     this.callWindow = [];
     this.lastContractKey = null;
-    this.lastContractBatchId = null;
     this.contractStreak = 0;
+    this.resetContractBatchState();
+  }
+
+  private beginContractBatch(batchId: string): void {
+    if (this.activeContractBatchId === batchId) return;
+
+    this.previousContractKeys = this.activeContractKeys;
+    this.activeContractKeys = new Set<string>();
+    // A key only remains eligible to continue if it occurred in the immediately
+    // previous batch. This bounds memory and makes an intervening clean batch
+    // break the contract streak.
+    for (const key of this.contractStreakByKey.keys()) {
+      if (!this.previousContractKeys.has(key)) this.contractStreakByKey.delete(key);
+    }
+    this.activeContractBatchId = batchId;
+  }
+
+  private resetContractBatchState(): void {
+    this.activeContractBatchId = null;
+    this.activeContractKeys = new Set<string>();
+    this.previousContractKeys = new Set<string>();
+    this.contractStreakByKey = new Map<string, number>();
   }
 }
 
