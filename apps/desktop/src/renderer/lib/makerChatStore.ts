@@ -2402,7 +2402,9 @@ export interface SessionChatState {
   errorRetryText: string | null;
   /**
    * 当前 live 终态错误预留的持久化 error 行 clientId。广播 payload.persistId
-   * 写入;无可靠恢复依据(计划内升级关闭 / 自愈压住)时为 null。
+   * 写入;无可靠恢复依据(计划内升级关闭 / 自愈压住)时为 null。同一 turn 的重复
+   * 终态 error 往往因 main dedup 不再带 persistId,缺失时必须保留已有绑定,
+   * 否则点关闭/重试无法 dismiss 即将落库的那一行。
    */
   errorPersistId: string | null;
   /**
@@ -5623,10 +5625,15 @@ export function handleStreamEvent(
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (reason ?? null),
         recoverableError: null,
         errorRetryText: derivedRetryText ?? preservedRetryText,
+        // persistId 只绑定即将落库的 error 行,不是重试依据。新事件带来非空 id
+        // 时更新绑定;同一 turn 重复终态 error 常因 main dedup 不再带 persistId,
+        // 缺失时保留已有绑定,避免关掉/重试后无法 dismiss 已预留的那一行。
         errorPersistId:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError
             ? null
-            : (event.persistId ?? null),
+            : (typeof event.persistId === 'string' && event.persistId
+                ? event.persistId
+                : state.errorPersistId),
         isStreaming: false,
         activeTurnRetryText: null,
         continuationTurnClientId: null,

@@ -2782,6 +2782,26 @@ describe('reserveTurnErrorPersistId — 广播前预留与 waiter', () => {
     await expect(whenTurnErrorPersisted(SESSION, 'never-reserved')).resolves.toBeUndefined();
   });
 
+  it('whenTurnErrorPersisted 在预留写入完成前不会因墙钟超时提前返回', async () => {
+    vi.useFakeTimers();
+    try {
+      const reserved = reserveTurnErrorPersistId(SESSION, { message: 'slow-write' });
+      expect(reserved).toBeTruthy();
+      let done = false;
+      const waiting = whenTurnErrorPersisted(SESSION, reserved!).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(done).toBe(false);
+
+      releaseReservedTurnErrorPersistId(SESSION, reserved!);
+      await waiting;
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('release 解开 waiter 且同一 id 不再写库', async () => {
     const reserved = reserveTurnErrorPersistId(SESSION, { message: 'skip' });
     expect(reserved).toBeTruthy();

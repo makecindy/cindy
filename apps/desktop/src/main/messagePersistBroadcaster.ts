@@ -446,7 +446,7 @@ function enqueueWrite(label: string, fn: (ownerScope: OwnerScope) => Promise<unk
 
 /**
  * error 行写入专用队列：owner-scope 跳过或写入失败时也必须解开预留 waiter，
- * 否则 dismiss-error 会空等满超时窗口。
+ * 否则 dismiss-error 会一直等这条预留 id 落库。
  */
 function enqueueTurnErrorWrite(
   sessionId: string,
@@ -1952,7 +1952,6 @@ async function latestMessageCreatedAt(sessionId: string): Promise<number | undef
 const _recentErrorPersistKeys = new Map<string, number>();
 /** message-only fallback 窗口:完全无 turn identity 时仅防多窗近乎同时(<100ms)并发。 */
 const DEDUP_WINDOW_MS_MESSAGE = 300;
-const TURN_ERROR_PERSIST_WAIT_MS = 5000;
 
 interface TurnErrorPersistWaiter {
   promise: Promise<void>;
@@ -2029,7 +2028,8 @@ function dropSessionTurnErrorReservations(sessionId: string): void {
  *
  * persistId 可在广播前经 reserveTurnErrorPersistId 预留(O(1),不 flush、不写库);
  * 真正写库仍必须保持在广播后。用户若在落库前点关闭/重试,dismiss-error 会先等
- * whenTurnErrorPersisted 再按同一 id 标记 ignored。
+ * whenTurnErrorPersisted(等到写入、跳过或释放,不以墙钟超时当作已落库)再按同一
+ * id 标记 ignored。
  *
  * content 存结构化 { message, reason?, sdkError? }:reason 是 maker-core 的稳定
  * key('empty-response' / 'turn-failed' 等),renderer 渲染时按它走 i18n(规则 18),
@@ -2095,17 +2095,14 @@ export function releaseReservedTurnErrorPersistId(sessionId: string, persistId: 
 
 /**
  * dismiss-error 在写库完成前点关闭时,先等这条预留 id 落库(或被释放)。
- * 没有 waiter(已写完/从未预留)立即返回;超时 5s 后也返回,避免 IPC 挂死。
+ * 没有 waiter(已写完/从未预留)立即返回。有 waiter 就必须等到写入、owner-scope
+ * 跳过或 release —— 不能墙钟超时后按「已落库」去查询,否则会 NOT_FOUND,迟到的
+ * 写入留下未忽略行,重启又弹出同一张卡。会话清理会解开仍在等的 waiter。
  */
 export function whenTurnErrorPersisted(sessionId: string, persistId: string): Promise<void> {
   const waiter = _turnErrorPersistWaiters.get(turnErrorPersistKey(sessionId, persistId));
   if (!waiter) return Promise.resolve();
-  return Promise.race([
-    waiter.promise,
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, TURN_ERROR_PERSIST_WAIT_MS);
-    }),
-  ]);
+  return waiter.promise;
 }
 
 export function onTurnErrorEvent(

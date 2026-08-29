@@ -127,15 +127,32 @@ describe('handleStreamEvent — terminal error keeps the projection retry token'
     expect(next.errorRetryText).toBeNull();
   });
 
-  it('does not keep a previous persistId when the terminal event has none', () => {
+  it('keeps an existing persistId when a duplicate terminal event omits it', () => {
     const before = {
       ...EMPTY_SESSION_STATE,
-      errorPersistId: 'old-id',
+      error: 'Request timed out',
+      errorPersistId: 'err_persist_1',
       isStreaming: true,
     };
 
     const next = handleStreamEvent(before, terminalError());
 
-    expect(next.errorPersistId).toBeNull();
+    expect(next.errorPersistId).toBe('err_persist_1');
+  });
+
+  it('replaces the binding when a later terminal event carries a new persistId', () => {
+    const before = {
+      ...EMPTY_SESSION_STATE,
+      error: 'old error',
+      errorPersistId: 'old-id',
+      isStreaming: true,
+    };
+
+    const next = handleStreamEvent(before, {
+      ...terminalError(),
+      persistId: 'err_persist_2',
+    });
+
+    expect(next.errorPersistId).toBe('err_persist_2');
   });
 });
