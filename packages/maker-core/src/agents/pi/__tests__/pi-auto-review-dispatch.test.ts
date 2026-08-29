@@ -1258,6 +1258,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt?.message).toContain('"compatibility":"partial"');
       expect(prompt?.message).toContain('"status-display"');
       expect(prompt?.message).toContain('installed and enabled');
+      expect(prompt?.message).toContain('stopping active local Pi tasks including this task');
+      expect(prompt?.message).toContain('available after starting a new Pi task');
+      expect(prompt?.message).not.toContain('keeps its startup snapshot');
       expect(prompt?.message).toContain('Do not enumerate non-blocking compatibility notices');
       expect(prompt?.message).not.toContain('Settings > General');
       expect(prompt?.message).toContain('Do not run bash');
