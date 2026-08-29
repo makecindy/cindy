@@ -1949,7 +1949,12 @@ async function latestMessageCreatedAt(sessionId: string): Promise<number | undef
  *
  * clearSessionPersistState 时一并清理。
  */
-const _recentErrorPersistKeys = new Map<string, number>();
+interface RecentTurnErrorPersistClaim {
+  capturedAt: number;
+  persistId?: string;
+}
+
+const _recentErrorPersistKeys = new Map<string, RecentTurnErrorPersistClaim>();
 /** message-only fallback 窗口:完全无 turn identity 时仅防多窗近乎同时(<100ms)并发。 */
 const DEDUP_WINDOW_MS_MESSAGE = 300;
 
@@ -2060,12 +2065,39 @@ function claimTurnErrorDedup(
   capturedAt: number,
 ): boolean {
   const { dedupKey, hasTurnIdentity } = turnErrorDedupKey(sessionId, message, agentMeta);
-  const lastT = _recentErrorPersistKeys.get(dedupKey);
-  if (lastT !== undefined && (hasTurnIdentity || capturedAt - lastT < DEDUP_WINDOW_MS_MESSAGE)) {
+  const last = _recentErrorPersistKeys.get(dedupKey);
+  if (
+    last !== undefined &&
+    (hasTurnIdentity || capturedAt - last.capturedAt < DEDUP_WINDOW_MS_MESSAGE)
+  ) {
     return false;
   }
-  _recentErrorPersistKeys.set(dedupKey, capturedAt);
+  _recentErrorPersistKeys.set(dedupKey, { capturedAt });
   return true;
+}
+
+function rememberTurnErrorPersistId(
+  sessionId: string,
+  message: string,
+  agentMeta: AgentMeta | null,
+  persistId: string,
+): void {
+  const { dedupKey } = turnErrorDedupKey(sessionId, message, agentMeta);
+  const last = _recentErrorPersistKeys.get(dedupKey);
+  if (last) {
+    last.persistId = persistId;
+    return;
+  }
+  _recentErrorPersistKeys.set(dedupKey, { capturedAt: Date.now(), persistId });
+}
+
+function lookupTurnErrorPersistId(
+  sessionId: string,
+  message: string,
+  agentMeta: AgentMeta | null,
+): string | undefined {
+  const { dedupKey } = turnErrorDedupKey(sessionId, message, agentMeta);
+  return _recentErrorPersistKeys.get(dedupKey)?.persistId;
 }
 
 /**
@@ -2081,6 +2113,7 @@ export function reserveTurnErrorPersistId(
   if (!message) return undefined;
   if (!claimTurnErrorDedup(sessionId, message, agentMeta, Date.now())) return undefined;
   const persistId = createId();
+  rememberTurnErrorPersistId(sessionId, message, agentMeta, persistId);
   _reservedTurnErrorPersistIds.add(turnErrorPersistKey(sessionId, persistId));
   createTurnErrorWaiter(sessionId, persistId);
   return persistId;
@@ -2134,8 +2167,13 @@ export function onTurnErrorEvent(
     // 多窗 dedup:防止多个 BrowserWindow 各自触发 persistTurnErrorDeferred 导致重复 error 行。
     // 优先用 agentMeta.requestId/uuid 作 turn 级 key(唯一,不同 turn 不误 dedup);
     // 无 agentMeta 时优先使用 register 记录的 turnDedupId,最后才回退 message 短窗口。
-    if (!claimTurnErrorDedup(sessionId, message, agentMeta, capturedAt)) return undefined;
+    // Electron main 单线程:claim + createId + remember 在同一次调用里完成,输家
+    // 再进来时 lookup 一定能拿到赢家的 persistId,不必另造 pending-dismiss。
+    if (!claimTurnErrorDedup(sessionId, message, agentMeta, capturedAt)) {
+      return lookupTurnErrorPersistId(sessionId, message, agentMeta);
+    }
     persistId = createId();
+    rememberTurnErrorPersistId(sessionId, message, agentMeta, persistId);
     _consumedTurnErrorPersistIds.add(turnErrorPersistKey(sessionId, persistId));
     createTurnErrorWaiter(sessionId, persistId);
   }

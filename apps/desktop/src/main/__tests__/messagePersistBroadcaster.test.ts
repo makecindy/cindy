@@ -2497,8 +2497,8 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     const id3 = onTurnErrorEvent(SESSION, { message: msg });
 
     expect(id1).toBeTruthy();
-    expect(id2).toBeUndefined(); // dedup 命中（同步调用 < 300ms）
-    expect(id3).toBeUndefined(); // dedup 命中（同步调用 < 300ms）
+    expect(id2).toBe(id1); // 输家也要拿到同一 persistId,关闭/重试才能 dismiss
+    expect(id3).toBe(id1);
 
     await flushWrites();
     expect(createMessage).toHaveBeenCalledTimes(1); // 只落一条
@@ -2547,7 +2547,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     const id2 = onTurnErrorEvent(SESSION, { message: msg }, meta);
 
     expect(id1).toBeTruthy();
-    expect(id2).toBeUndefined(); // 同 requestId → dedup 命中
+    expect(id2).toBe(id1); // 同 requestId → dedup 命中,输家复用赢家 persistId
 
     await flushWrites();
     expect(createMessage).toHaveBeenCalledTimes(1);
@@ -2567,7 +2567,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     secondSpy.mockRestore();
 
     expect(id1).toBeTruthy();
-    expect(id2).toBeUndefined();
+    expect(id2).toBe(id1);
 
     await flushWrites();
     expect(createMessage).toHaveBeenCalledTimes(1);
@@ -2830,6 +2830,26 @@ describe('reserveTurnErrorPersistId — 广播前预留与 waiter', () => {
     onTurnErrorEvent(SESSION, { message: 'skip-owner' }, null, reserved);
     await whenTurnErrorPersisted(SESSION, reserved!);
     expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('多窗 dedup 输家返回同一 persistId，dismiss 等到同一写入', async () => {
+    const id1 = onTurnErrorEvent(SESSION, { message: 'dup-window-auth' });
+    const id2 = onTurnErrorEvent(SESSION, { message: 'dup-window-auth' });
+    expect(id1).toBeTruthy();
+    expect(id2).toBe(id1);
+
+    let done = false;
+    const waiting = whenTurnErrorPersisted(SESSION, id2!).then(() => {
+      done = true;
+    });
+    expect(done).toBe(false);
+    expect(createMessage).not.toHaveBeenCalled();
+
+    await flushWrites();
+    await waiting;
+    expect(done).toBe(true);
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createMessage).mock.calls[0][1]).toMatchObject({ clientId: id1 });
   });
 
   it('会话清理不提前兑现已入队的 waiter，写完才 done', async () => {

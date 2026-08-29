@@ -3638,13 +3638,15 @@ function persistTurnErrorDeferredTracked(
   pending = makerApiFor(sessionId)
     .input.persistTurnErrorDeferred(sessionId, errData, agentMeta)
     .then((persistId) => {
+      const id = typeof persistId === 'string' && persistId ? persistId : undefined;
+      // IPC 回执只表示已入队并登记了 persistId,不是 createMessage 成功。
+      // 先绑定身份再摘掉 pending,点关闭/重试才能 dismiss 同一行;
+      // 历史失效与后台清 live 仍等 local-db:session:error-persisted。
+      if (id) bindLiveErrorPersistId(sessionId, id);
       if (_deferredTurnErrorPersist.get(sessionId) === pending) {
         _deferredTurnErrorPersist.delete(sessionId);
       }
-      if (typeof persistId === 'string' && persistId) {
-        applyErrorPersistedDirtySignal(sessionId, persistId);
-      }
-      return typeof persistId === 'string' && persistId ? persistId : undefined;
+      return id;
     })
     .catch((err: unknown) => {
       if (_deferredTurnErrorPersist.get(sessionId) === pending) {
@@ -3656,6 +3658,15 @@ function persistTurnErrorDeferredTracked(
   _deferredTurnErrorPersist.set(sessionId, pending);
 }
 
+function bindLiveErrorPersistId(sessionId: string, persistId: string): void {
+  const state = sessions.get(sessionId);
+  if (!state?.error || state.errorPersistId) return;
+  setState(sessionId, (s) => ({
+    ...s,
+    errorPersistId: s.error && !s.errorPersistId ? persistId : s.errorPersistId,
+  }));
+}
+
 function applyErrorPersistedDirtySignal(sessionId: string, persistId?: string): void {
   const state = sessions.get(sessionId);
   if (!state) return;
@@ -3664,12 +3675,7 @@ function applyErrorPersistedDirtySignal(sessionId: string, persistId?: string): 
     // persisted card can appear the next time the user enters without having
     // clicked. Click (retry/close) is what disposes — leave does not.
     _pendingErrorClearOnLeave.add(sessionId);
-    if (persistId && state.error && !state.errorPersistId) {
-      setState(sessionId, (s) => ({
-        ...s,
-        errorPersistId: s.error && !s.errorPersistId ? persistId : s.errorPersistId,
-      }));
-    }
+    if (persistId) bindLiveErrorPersistId(sessionId, persistId);
     return;
   }
   setState(sessionId, (s) => ({
