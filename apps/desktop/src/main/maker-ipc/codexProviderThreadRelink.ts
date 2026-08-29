@@ -26,7 +26,7 @@ export interface CodexProviderThreadRelinkDeps {
     sourceModel: string;
     sourceProviderId: string | null;
     workingDir?: string;
-  }): Promise<{ newSdkSessionId: string }>;
+  }): Promise<{ newSdkSessionId: string; cleanup?: () => Promise<void> }>;
   commit(input: {
     sessionId: string;
     source: CodexProviderThreadRelinkSource & { sdkSessionId: string };
@@ -85,14 +85,19 @@ export async function relinkCodexProviderThread(
     sourceProviderId: sourceWithThread.providerId,
     ...(sourceWithThread.workingDir ? { workingDir: sourceWithThread.workingDir } : {}),
   });
-  const committed = await deps.commit({
-    sessionId: input.sessionId,
-    source: sourceWithThread,
-    newSdkSessionId: forked.newSdkSessionId,
-    target: input.target,
-  });
-  if (!committed) {
-    throw new Error(`Codex provider thread relink was superseded for session ${input.sessionId}`);
+  try {
+    const committed = await deps.commit({
+      sessionId: input.sessionId,
+      source: sourceWithThread,
+      newSdkSessionId: forked.newSdkSessionId,
+      target: input.target,
+    });
+    if (!committed) {
+      throw new Error(`Codex provider thread relink was superseded for session ${input.sessionId}`);
+    }
+  } catch (error) {
+    await forked.cleanup?.().catch(() => undefined);
+    throw error;
   }
   return {
     previousSdkSessionId: sourceWithThread.sdkSessionId,

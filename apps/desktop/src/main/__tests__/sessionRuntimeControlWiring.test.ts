@@ -285,6 +285,8 @@ describe('session runtime control wiring', () => {
       "throwIpcError(\n                'PRECONDITION_FAILED'",
     );
     expect(relinkBoundary).toContain('.catch((error) => {');
+    expect(relinkBoundary).toContain('reserveCodexForkCleanup(');
+    expect(relinkBoundary).toContain('...(cleanup ? { cleanup } : {})');
     expect(relinkBoundary).toContain('if (isIpcError(error)) throw error;');
     expect(relinkBoundary).toContain(
       "throwIpcError('INTERNAL', 'Failed to rebuild Codex provider thread')",

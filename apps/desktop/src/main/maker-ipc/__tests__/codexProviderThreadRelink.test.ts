@@ -66,7 +66,8 @@ describe('relinkCodexProviderThread', () => {
       },
     },
   ])('forks and CAS-commits the complete route for $name', async ({ source, target }) => {
-    const fork = vi.fn(async () => ({ newSdkSessionId: 'thread-replacement' }));
+    const cleanup = vi.fn(async () => {});
+    const fork = vi.fn(async () => ({ newSdkSessionId: 'thread-replacement', cleanup }));
     const commit = vi.fn(async () => true);
 
     expect(decideCodexProviderThreadRelink(source, target)).toBe('relink');
@@ -92,6 +93,7 @@ describe('relinkCodexProviderThread', () => {
       newSdkSessionId: 'thread-replacement',
       target,
     });
+    expect(cleanup).not.toHaveBeenCalled();
   });
 
   it('forks with source credentials and CAS-commits the full target route', async () => {
@@ -136,15 +138,37 @@ describe('relinkCodexProviderThread', () => {
   });
 
   it('fails closed when the source tuple is superseded before CAS commit', async () => {
+    const cleanup = vi.fn(async () => {});
     await expect(
       relinkCodexProviderThread(
         {
           readSource: vi.fn(async () => source),
-          fork: vi.fn(async () => ({ newSdkSessionId: 'thread-openai' })),
+          fork: vi.fn(async () => ({ newSdkSessionId: 'thread-openai', cleanup })),
           commit: vi.fn(async () => false),
         },
         { sessionId: 'session-1', target },
       ),
     ).rejects.toThrow(/superseded/);
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the database error when replacement cleanup also fails', async () => {
+    const databaseError = new Error('route CAS failed');
+    const cleanup = vi.fn(async () => {
+      throw new Error('replacement cleanup failed');
+    });
+    await expect(
+      relinkCodexProviderThread(
+        {
+          readSource: vi.fn(async () => source),
+          fork: vi.fn(async () => ({ newSdkSessionId: 'thread-openai', cleanup })),
+          commit: vi.fn(async () => {
+            throw databaseError;
+          }),
+        },
+        { sessionId: 'session-1', target },
+      ),
+    ).rejects.toBe(databaseError);
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 });

@@ -747,7 +747,10 @@ import {
   persistedUserContentToWireMessage,
   shouldRebuildPiNativeSession,
 } from './contextOverflowRollover.js';
-import { classifyCodexHistoryOversized } from '../maker-host/codex-local-sessions.js';
+import {
+  classifyCodexHistoryOversized,
+  reserveCodexForkCleanup,
+} from '../maker-host/codex-local-sessions.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
@@ -15209,7 +15212,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                     stripEncryptedReasoning: true,
                     remoteHostId: null,
                   });
-                  return { newSdkSessionId: forked.newSdkSessionId };
+                  if (forked.newSdkSessionId === sourceSdkSessionId) {
+                    throwIpcError('INTERNAL', 'Codex fork returned an invalid replacement thread');
+                  }
+                  const cleanup = reserveCodexForkCleanup(
+                    forked.newSdkSessionId,
+                    sourceSdkSessionId,
+                  );
+                  return {
+                    newSdkSessionId: forked.newSdkSessionId,
+                    ...(cleanup ? { cleanup } : {}),
+                  };
                 },
                 commit: async ({ sessionId: targetSessionId, source, newSdkSessionId, target }) => {
                   if (
