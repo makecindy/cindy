@@ -3,15 +3,23 @@ import {
   LIGHTBOX_DOUBLE_TAP_SCALE,
   LIGHTBOX_MAX_SCALE,
   LIGHTBOX_MIN_SCALE,
+  LIGHTBOX_TAP_MAX_DISTANCE,
+  bakeLightboxOrigin,
   canShareLightboxImage,
   clampLightboxScale,
   clampLightboxTranslation,
+  isLightboxZoomed,
   lightboxBackgroundOpacity,
+  lightboxContainedSize,
+  lightboxDoubleTapTranslate,
   lightboxImageLayers,
   lightboxInitialIndex,
   lightboxPageIndex,
   lightboxPageLabel,
+  lightboxPanOverflow,
+  lightboxPinchOrigin,
   nextDoubleTapScale,
+  shouldCloseLightboxOnTap,
   shouldDismissLightbox,
 } from '@/session/imageLightboxModel';
 
@@ -31,11 +39,59 @@ describe('imageLightboxModel', () => {
     expect(clampLightboxTranslation(-250, 400, 2)).toBe(-200);
   });
 
+  it('clamps translation against the contained image size, not the letterbox', () => {
+    // 横图 contain 进 400×800:显示 400×200。2x 后高 400,相对 800 高仍无溢出
+    expect(lightboxContainedSize(400, 800, 800, 400)).toEqual({ width: 400, height: 200 });
+    expect(lightboxPanOverflow(800, 200, 2)).toBe(0);
+    expect(clampLightboxTranslation(80, 800, 2, 200)).toBe(0);
+    // 竖图 contain 进 400×800:显示 400×800。2x 后宽溢出 200
+    expect(lightboxContainedSize(400, 800, 400, 800)).toEqual({ width: 400, height: 800 });
+    expect(clampLightboxTranslation(250, 400, 2, 400)).toBe(200);
+    // 自然尺寸未知时退回容器
+    expect(lightboxContainedSize(400, 800, 0, 0)).toEqual({ width: 400, height: 800 });
+  });
+
+  it('bakes pinch origin into translation so resetting origin does not jump', () => {
+    expect(lightboxPinchOrigin(300, 400)).toBe(100);
+    // translate 40, origin 100, scale 2 → 40 + 100 * (1-2) = -60
+    expect(bakeLightboxOrigin(40, 100, 2)).toBe(-60);
+    expect(bakeLightboxOrigin(-60, 0, 2)).toBe(-60);
+  });
+
+  it('double-tap zooms into the tap point and resets when returning to 1x', () => {
+    expect(isLightboxZoomed(1)).toBe(false);
+    expect(isLightboxZoomed(1.005)).toBe(false);
+    expect(isLightboxZoomed(2.5)).toBe(true);
+    // tap 300 in 400-wide view, 2.5x: origin 100 → 100 * (1-2.5) = -150
+    expect(lightboxDoubleTapTranslate(300, 400, LIGHTBOX_DOUBLE_TAP_SCALE)).toBe(-150);
+    expect(lightboxDoubleTapTranslate(300, 400, 1)).toBe(0);
+  });
+
   it('dismisses on distance or fling velocity', () => {
     expect(shouldDismissLightbox(121, 0)).toBe(true);
     expect(shouldDismissLightbox(-121, 0)).toBe(true);
     expect(shouldDismissLightbox(20, 900)).toBe(true);
     expect(shouldDismissLightbox(20, 100)).toBe(false);
+  });
+
+  it('keeps tap-to-close slop tight enough that a pan is not a tap', () => {
+    expect(LIGHTBOX_TAP_MAX_DISTANCE).toBeGreaterThan(0);
+    expect(LIGHTBOX_TAP_MAX_DISTANCE).toBeLessThan(40);
+  });
+
+  it('closes on tap only at 1x', () => {
+    expect(shouldCloseLightboxOnTap(1)).toBe(true);
+    expect(shouldCloseLightboxOnTap(1.005)).toBe(true);
+    expect(shouldCloseLightboxOnTap(LIGHTBOX_DOUBLE_TAP_SCALE)).toBe(false);
+    expect(shouldCloseLightboxOnTap(2)).toBe(false);
+  });
+
+  it('never dismisses while zoomed, even past distance or fling', () => {
+    // 放大后平移(含纵向无溢出的横图)不能变成下滑关闭
+    expect(shouldDismissLightbox(200, 0, LIGHTBOX_DOUBLE_TAP_SCALE)).toBe(false);
+    expect(shouldDismissLightbox(20, 900, 2)).toBe(false);
+    expect(shouldDismissLightbox(200, 900, LIGHTBOX_MIN_SCALE)).toBe(true);
+    expect(shouldDismissLightbox(200, 0, 1.005)).toBe(true);
   });
 
   it('fades the backdrop with drag progress', () => {
