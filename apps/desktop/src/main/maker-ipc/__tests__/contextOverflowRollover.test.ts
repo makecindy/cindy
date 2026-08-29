@@ -559,12 +559,13 @@ describe('createContextOverflowRollover', () => {
   });
 
   it.each([
-    [0, 'not-needed'],
-    [244_799, 'not-needed'],
-    [244_800, 'remote-unsupported'],
+    [500_000, 0, 'not-needed'],
+    [600_000, 0, 'not-needed'],
+    [272_000, 244_799, 'not-needed'],
+    [272_000, 244_800, 'remote-unsupported'],
   ] as const)(
-    'uses persisted cold SSH Pi usage %i before deciding remote rebuild support',
-    async (contextTokens, expected) => {
+    'uses persisted cold SSH Pi facts for target %i at usage %i before deciding remote rebuild support',
+    async (targetContextWindow, contextTokens, expected) => {
       const deps = makeDeps([msg('user', '继续', 'u1')]);
       deps.getSessionRow.mockResolvedValue({
         ...(await deps.getSessionRow()),
@@ -579,7 +580,7 @@ describe('createContextOverflowRollover', () => {
       const rollover = createContextOverflowRollover(deps);
 
       await expect(
-        rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 }),
+        rollover.prepareModelWindowSwitch('s1', { contextWindow: targetContextWindow }),
       ).resolves.toBe(expected);
       expect(deps.rehydrateColdPiRuntimeForWindowVerification).not.toHaveBeenCalled();
       expect(deps.closeSession).not.toHaveBeenCalled();

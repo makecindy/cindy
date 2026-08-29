@@ -538,7 +538,7 @@ describe('session runtime control wiring', () => {
     );
   });
 
-  it('bypasses remote pressure handling only for a verified same or larger window', () => {
+  it('lets cold remote Pi use persisted low-pressure facts before rejecting rebuild support', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -554,8 +554,10 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('targetContextWindow > 0 && !targetDoesNotShrink');
     expect(setModel).toContain('runtimeStatus.remoteHostId && isSessionInTurn(sessionId)');
     expect(setModel).toContain('busy remote task cannot change runtime selection');
-    expect(setModel).toContain('runtimeStatus.remoteHostId &&');
-    expect(setModel).toContain(
+    expect(setModel).toContain("runtimeAgentKind !== 'pi' && !verifiedCurrentWindow");
+    expect(setModel).toContain('model window switch context is unknown; runtime selection was not changed');
+    expect(setModel).toContain("runtimeAgentKind === 'pi' &&\n            !runtimeStatus.remoteHostId");
+    expect(setModel).not.toContain(
       'remote model window switch context is unknown; runtime selection was not changed',
     );
     expect(setModel).toContain('finalPiWindow < verifiedCurrentWindow');

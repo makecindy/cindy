@@ -15366,12 +15366,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             'model window switch context is unknown; runtime selection was not changed',
           );
         }
-        if (runtimeStatus.remoteHostId && !verifiedCurrentWindow) {
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'remote model window switch context is unknown; runtime selection was not changed',
-          );
-        }
         const remoteTargetAssessment = assessModelSwitchContext({
           contextTokens,
           targetContextWindow: verifiedTargetWindow ?? undefined,
@@ -15482,6 +15476,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           modelWindowRebuilt = preparation === 'rebuilt';
           if (
             runtimeAgentKind === 'pi' &&
+            !runtimeStatus.remoteHostId &&
             !modelWindowRebuilt &&
             verifiedCurrentWindow === undefined
           ) {
