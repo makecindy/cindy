@@ -115,6 +115,7 @@ async function uploadExtraImageKeys(absPaths: readonly string[]): Promise<string
 interface FinalCardResult {
   card: unknown;
   fileLinks: ReturnType<typeof collectXdtFileLinks>;
+  fileOnly: boolean;
 }
 
 class FeishuStreamingTextHandle implements StreamingTextHandle {
@@ -337,10 +338,11 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     //    c) empty text + only files → "🎉 N 个文件已送达" placeholder
     //    d) totally empty → fallback "(空回复)"
     const hasAnyImage = imageUrls.length > 0 || extraImageKeys.length > 0;
+    const fileOnly = cardTextTrimmed.length === 0 && !hasAnyImage && fileLinks.length > 0;
     let primaryCardPatched = false;
     try {
       let card: unknown;
-      if (cardTextTrimmed.length === 0 && !hasAnyImage && fileLinks.length > 0) {
+      if (fileOnly) {
         card = buildMarkdownCardV2(transportMessages.streaming.fileSentDone(fileLinks.length));
       } else if (hasAnyImage) {
         // 文本空但有图(画完图没说话) — 不要在图上面塞 "(空回复)" 占位, 让图自己说话。
@@ -358,7 +360,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       await patchCardRaw(this.messageId, card);
       primaryCardPatched = true;
       this.flushed = this.buffer;
-      await this.sendOrScheduleMirror({ card, fileLinks });
+      await this.sendOrScheduleMirror({ card, fileLinks, fileOnly });
     } catch (err) {
       if (primaryCardPatched) {
         log.warn(
@@ -399,6 +401,29 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     const key = this.mirrorKey;
     if (!chatId || !key) return;
     const log = getLog();
+    if (result.fileOnly) {
+      const sentCount = await sendMirroredFiles(
+        chatId,
+        key,
+        result.fileLinks,
+        this.allowedFileRoots,
+      );
+      if (!isPinnedAccountCurrent()) return;
+      const status =
+        sentCount > 0
+          ? transportMessages.streaming.fileSentDone(sentCount)
+          : transportMessages.streaming.deliveryFailed;
+      try {
+        await sendCardToChat(chatId, buildMarkdownCardV2(status), mirrorUuid(key, 'card'));
+      } catch (err) {
+        log.warn(
+          `[feishu/streamingText] parent-chat mirror card failed (non-fatal): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      return;
+    }
     try {
       await sendCardToChat(chatId, result.card, mirrorUuid(key, 'card'));
     } catch (err) {
@@ -463,18 +488,18 @@ async function sendMirroredFiles(
   key: string,
   fileLinks: ReturnType<typeof collectXdtFileLinks>,
   allowedFileRoots: readonly string[],
-): Promise<void> {
+): Promise<number> {
   const log = getLog();
-  await Promise.all(
+  const delivered = await Promise.all(
     fileLinks.map(async (link, index) => {
       const safePath = await resolveAllowedOutboundFile(link.absPath, allowedFileRoots);
       if (!safePath) {
         log.warn(
           '[feishu/streamingText] parent-chat mirror file skipped (outside allowed roots)',
         );
-        return;
+        return false;
       }
-      if (!isPinnedAccountCurrent()) return;
+      if (!isPinnedAccountCurrent()) return false;
       try {
         const sent = await sendFileToChat(
           chatId,
@@ -488,16 +513,20 @@ async function sendMirroredFiles(
               sent.reason ?? 'unknown'
             }`,
           );
+          return false;
         }
+        return true;
       } catch (err) {
         log.warn(
           `[feishu/streamingText] parent-chat mirror file threw (non-fatal): ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
+        return false;
       }
     }),
   );
+  return delivered.filter(Boolean).length;
 }
 
 async function sendOrScheduleMirror(
@@ -579,10 +608,19 @@ export async function mirrorFinal(
     const cardText = stripXdtFileLinks(text);
     const cardTextTrimmed = cardText.trim();
     const hasImages = imageUrls.length > 0 || imageKeys.length > 0;
+    const fileOnly = cardTextTrimmed.length === 0 && !hasImages && fileLinks.length > 0;
+    if (fileOnly) {
+      const sentCount = await sendMirroredFiles(chatId, mirrorKey, fileLinks, allowedFileRoots);
+      if (!isPinnedAccountCurrent()) return;
+      const status =
+        sentCount > 0
+          ? transportMessages.streaming.fileSentDone(sentCount)
+          : transportMessages.streaming.deliveryFailed;
+      await sendCardToChat(chatId, buildMarkdownCardV2(status), mirrorUuid(mirrorKey, 'card'));
+      return;
+    }
     let card: unknown;
-    if (cardTextTrimmed.length === 0 && !hasImages && fileLinks.length > 0) {
-      card = buildMarkdownCardV2(transportMessages.streaming.fileSentDone(fileLinks.length));
-    } else if (hasImages) {
+    if (hasImages) {
       card = buildMixedMarkdownCardV2(cardText, imageMap, imageKeys);
     } else {
       card = buildMarkdownCardV2(

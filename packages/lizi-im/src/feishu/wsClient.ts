@@ -265,6 +265,7 @@ interface UnconfirmedOpenRetry {
   /** 未配对群副本: 恢复链真正要派 turn 时才提交路由。 */
   commitUnpairedFlat?: () => boolean;
   isUnpairedFlatTakenOver?: () => boolean;
+  abandonUnpairedFlat?: () => void;
   /** 双投镜像身份与入站账号代次必须跨延迟恢复链保留。 */
   mirrorKey?: string;
   mirrorAccountEpoch?: number;
@@ -276,8 +277,10 @@ const suspendedUnconfirmedOpens: UnconfirmedOpenRetry[] = [];
 function clearUnconfirmedOpenRetries(): void {
   for (const retry of unconfirmedOpenRetries.values()) {
     if (retry.timer) clearTimeout(retry.timer);
+    retry.abandonUnpairedFlat?.();
   }
   unconfirmedOpenRetries.clear();
+  for (const retry of suspendedUnconfirmedOpens) retry.abandonUnpairedFlat?.();
   suspendedUnconfirmedOpens.length = 0;
 }
 
@@ -304,7 +307,10 @@ function resumeUnconfirmedOpenRetriesFor(
   for (let i = suspendedUnconfirmedOpens.length - 1; i >= 0; i--) {
     const entry = suspendedUnconfirmedOpens[i]!;
     suspendedUnconfirmedOpens.splice(i, 1);
-    if (entry.botAppId !== botAppId || entry.service !== service) continue;
+    if (entry.botAppId !== botAppId || entry.service !== service) {
+      entry.abandonUnpairedFlat?.();
+      continue;
+    }
     scheduleUnconfirmedOpenRetry(entry);
   }
 }
@@ -373,6 +379,7 @@ async function retryUnconfirmedOpen(
       (currentBotAppId !== entry.botAppId || currentService !== entry.service);
     if (accountChanged) {
       log.info('[feishu/wsClient] unconfirmed openThread retry skipped: account changed');
+      entry.abandonUnpairedFlat?.();
       return;
     }
     suspendUnconfirmedOpenRetry({ ...entry, timer: undefined });
@@ -380,7 +387,10 @@ async function retryUnconfirmedOpen(
     return;
   }
   const opener = await outbound.openThread(entry.messageId);
-  if (orphanRetryEpoch !== epoch) return;
+  if (orphanRetryEpoch !== epoch) {
+    entry.abandonUnpairedFlat?.();
+    return;
+  }
   // saveAndConnect 的普通换账号只 stop/start, 不推进 orphanRetryEpoch —
   // await 后必须再核当前 bot, 否则会把 A 的 opener/turn 写进 B 的 outbound。
   if (!isSameBotActive(entry.botAppId, entry.service)) {
@@ -389,6 +399,7 @@ async function retryUnconfirmedOpen(
       (currentBotAppId !== entry.botAppId || currentService !== entry.service);
     if (accountChanged) {
       log.info('[feishu/wsClient] unconfirmed openThread dropped after await: account changed');
+      entry.abandonUnpairedFlat?.();
       return;
     }
     suspendUnconfirmedOpenRetry({ ...entry, timer: undefined });
@@ -419,6 +430,7 @@ async function retryUnconfirmedOpen(
       entry.messageId,
       opener.openerMessageId,
     );
+    entry.abandonUnpairedFlat?.();
     return;
   }
   let laneUserId: string;
@@ -1452,6 +1464,7 @@ async function processClaimedMessage(
   let finalReplyMirrorKey: string | undefined;
   let commitUnpairedFlat: (() => boolean) | undefined;
   let isUnpairedFlatTakenOver: (() => boolean) | undefined;
+  let abandonUnpairedFlat: (() => void) | undefined;
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
     if (!mentionsSelf(data.message?.mentions, botOpenId)) return;
@@ -1494,6 +1507,7 @@ async function processClaimedMessage(
       finalReplyMirrorKey = paired.mirrorKey;
       commitUnpairedFlat = paired.commitUnpairedFlat;
       isUnpairedFlatTakenOver = paired.isUnpairedFlatTakenOver;
+      abandonUnpairedFlat = paired.abandonUnpairedFlat;
     }
   } else {
     // TOFU: first p2p sender becomes owner. Send welcome and continue
@@ -1554,6 +1568,7 @@ async function processClaimedMessage(
 
   // Drop entirely only when there's literally nothing to relay.
   if (!text && attachments.length === 0 && unsupported.length === 0) {
+    abandonUnpairedFlat?.();
     return;
   }
 
@@ -1566,6 +1581,7 @@ async function processClaimedMessage(
       abandonInboundTurn(botAppId, messageId);
     }
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
+    abandonUnpairedFlat?.();
     return;
   }
 
@@ -1597,6 +1613,7 @@ async function processClaimedMessage(
           abandonInboundTurn(botAppId, messageId);
         }
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
+        abandonUnpairedFlat?.();
         return;
       }
       // 孤儿开场白不会派发副本 turn: 先 peek 是否已被迟到话题接管, 再决定
@@ -1635,6 +1652,7 @@ async function processClaimedMessage(
           `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
         );
         await sendOrphanOpenerNotice(botAppId, service, messageId, opener.openerMessageId);
+        abandonUnpairedFlat?.();
         return;
       }
       if (opener.kind === 'unconfirmed') {
@@ -1674,6 +1692,7 @@ async function processClaimedMessage(
           attempt: 0,
           commitUnpairedFlat,
           isUnpairedFlatTakenOver,
+          abandonUnpairedFlat,
           ...(finalReplyMirrorKey
             ? {
                 mirrorKey: finalReplyMirrorKey,

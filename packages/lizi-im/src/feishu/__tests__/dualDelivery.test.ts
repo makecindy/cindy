@@ -59,6 +59,31 @@ describe('Feishu native thread/main dual delivery', () => {
     await expect(waitForMirrorConfirmation(flatDecision.mirrorKey)).resolves.toBe(false);
   });
 
+  it('elects only one route when duplicate flat ids share a logical send', async () => {
+    vi.useFakeTimers();
+    const firstFlat = coordinateDualDelivery(input({ messageId: 'om_flat_first', threadId: '' }));
+    const secondFlat = coordinateDualDelivery(
+      input({ messageId: 'om_flat_second', threadId: '' }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    const firstDecision = await firstFlat;
+
+    expect(firstDecision).toMatchObject({ kind: 'dispatch' });
+    await expect(secondFlat).resolves.toEqual({ kind: 'suppress-main-copy' });
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat_third', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    if (firstDecision.kind !== 'dispatch' || !firstDecision.commitUnpairedFlat) {
+      throw new Error('elected flat must expose commitUnpairedFlat');
+    }
+
+    await expect(coordinateDualDelivery(input())).resolves.toEqual({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+    });
+    expect(firstDecision.commitUnpairedFlat()).toBe(false);
+  });
+
   it('does not merge equal text from different create_time values', async () => {
     vi.useFakeTimers();
     const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
@@ -115,6 +140,74 @@ describe('Feishu native thread/main dual delivery', () => {
     if (topic.kind !== 'dispatch' || !topic.mirrorKey) throw new Error('missing mirror key');
     await expect(waitForMirrorConfirmation(topic.mirrorKey)).resolves.toBe(true);
     expect(flatDecision.commitUnpairedFlat()).toBe(false);
+  });
+
+  it('keeps an uncommitted flat route leased past the late-copy cache TTL', async () => {
+    vi.useFakeTimers();
+    const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const flatDecision = await flat;
+    if (flatDecision.kind !== 'dispatch' || !flatDecision.commitUnpairedFlat) {
+      throw new Error('unpaired flat must expose commitUnpairedFlat');
+    }
+
+    await vi.advanceTimersByTimeAsync(25_001);
+    await coordinateDualDelivery(
+      input({ createTime: 'unrelated', messageId: 'om_unrelated', threadId: 'omt_other' }),
+    );
+    const lateTopic = await coordinateDualDelivery(input());
+
+    expect(lateTopic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(flatDecision.commitUnpairedFlat()).toBe(false);
+  });
+
+  it('does not capacity-evict an uncommitted flat route lease', async () => {
+    const firstFlat = coordinateDualDelivery(
+      input({ createTime: 'capacity-0', messageId: 'om_capacity_0', threadId: '' }),
+    );
+    // MAX_PENDING (512) must be exceeded before records enter recentFlats, then
+    // MAX_RECENT (1,000) must also be exceeded to exercise cache pruning.
+    for (let i = 1; i <= 1_512; i++) {
+      void coordinateDualDelivery(
+        input({
+          createTime: `capacity-${i}`,
+          messageId: `om_capacity_${i}`,
+          threadId: '',
+        }),
+      );
+    }
+    const flatDecision = await firstFlat;
+    if (flatDecision.kind !== 'dispatch' || !flatDecision.commitUnpairedFlat) {
+      throw new Error('capacity-evicted flat must expose commitUnpairedFlat');
+    }
+
+    const lateTopic = await coordinateDualDelivery(
+      input({ createTime: 'capacity-0', messageId: 'om_capacity_topic' }),
+    );
+
+    expect(lateTopic).toEqual({ kind: 'dispatch', mirrorKey: expect.any(String) });
+    expect(flatDecision.commitUnpairedFlat()).toBe(false);
+  });
+
+  it('releases an explicitly abandoned flat route lease', async () => {
+    vi.useFakeTimers();
+    const flat = coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const flatDecision = await flat;
+    if (
+      flatDecision.kind !== 'dispatch' ||
+      !flatDecision.commitUnpairedFlat ||
+      !flatDecision.abandonUnpairedFlat
+    ) {
+      throw new Error('unpaired flat must expose route lifecycle callbacks');
+    }
+
+    flatDecision.abandonUnpairedFlat();
+    expect(flatDecision.commitUnpairedFlat()).toBe(false);
+    await expect(coordinateDualDelivery(input())).resolves.toEqual({
+      kind: 'dispatch',
+      mirrorKey: expect.any(String),
+    });
   });
 
   it('suppresses a late topic after the unpaired flat has committed its route', async () => {

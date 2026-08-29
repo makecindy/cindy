@@ -262,6 +262,99 @@ describe('feishu streaming text', () => {
     expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).not.toBe(
       messages.streaming.emptyReply,
     );
+    expect(mocks.sendFileToChat.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.sendCardToChat.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('does not claim delivery when a file-only mirror path is unavailable', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-file-missing-'));
+    tempDirs.push(root);
+    const missingFile = path.join(root, 'missing.txt');
+
+    await mirrorFinal(
+      'oc_group',
+      'p'.repeat(64),
+      `[missing.txt](xdt-file://${missingFile})`,
+      [],
+      [root],
+      1,
+    );
+
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
+      messages.streaming.deliveryFailed,
+    );
+  });
+
+  it('does not claim delivery for a file-only mirror outside allowed roots', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-file-allowed-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-file-outside-'));
+    tempDirs.push(allowedRoot, outsideRoot);
+    const outsideFile = path.join(outsideRoot, 'secret.txt');
+    await fs.writeFile(outsideFile, 'secret');
+
+    await mirrorFinal(
+      'oc_group',
+      's'.repeat(64),
+      `[secret.txt](xdt-file://${outsideFile})`,
+      [],
+      [allowedRoot],
+      1,
+    );
+
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
+      messages.streaming.deliveryFailed,
+    );
+  });
+
+  it('reports the actual successful count for a partial file-only mirror', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-file-partial-'));
+    tempDirs.push(root);
+    const firstFile = path.join(root, 'first.txt');
+    const secondFile = path.join(root, 'second.txt');
+    await Promise.all([fs.writeFile(firstFile, 'first'), fs.writeFile(secondFile, 'second')]);
+    const firstRealPath = await fs.realpath(firstFile);
+    mocks.sendFileToChat.mockImplementation(async (_chatId: string, absPath: string) =>
+      absPath === firstRealPath
+        ? { ok: true, messageId: 'om_first' }
+        : { ok: false, reason: 'upload rejected' },
+    );
+
+    await mirrorFinal(
+      'oc_group',
+      'q'.repeat(64),
+      `[first.txt](xdt-file://${firstFile})\n[second.txt](xdt-file://${secondFile})`,
+      [],
+      [root],
+      1,
+    );
+
+    expect(mocks.sendFileToChat).toHaveBeenCalledTimes(2);
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
+      messages.streaming.fileSentDone(1),
+    );
+  });
+
+  it('does not claim delivery when a streaming file-only mirror upload is rejected', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-handle-file-fail-'));
+    tempDirs.push(root);
+    const file = path.join(root, 'report.txt');
+    await fs.writeFile(file, 'report');
+    mocks.sendFileToChat.mockResolvedValue({ ok: false, reason: 'upload rejected' });
+    const handle = await start('g/oc_group/omt_topic', undefined, {
+      mirrorChatId: 'oc_group',
+      mirrorKey: 'r'.repeat(64),
+      allowedFileRoots: [root],
+      inboundEpoch: 1,
+    });
+
+    await handle.finalize(`[report.txt](xdt-file://${file})`);
+
+    expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe(
+      messages.streaming.deliveryFailed,
+    );
   });
 
   it('drops a deferred parent-chat mirror after Feishu credentials rebind', async () => {

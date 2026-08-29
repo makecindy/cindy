@@ -22,6 +22,7 @@ interface PendingLogicalSend {
   decision: Promise<boolean>;
   resolveDecision: (confirmed: boolean) => void;
   timer: ReturnType<typeof setTimeout>;
+  flatLease?: RecentFlatRecord;
 }
 
 export interface DualDeliveryInput {
@@ -51,12 +52,14 @@ export type DualDeliveryDecision =
        * dispatch still need to recall when a late topic already took over.
        */
       isUnpairedFlatTakenOver?: () => boolean;
+      /** Release an uncommitted flat route that will never emit an Agent turn. */
+      abandonUnpairedFlat?: () => void;
     }
   | { kind: 'suppress-main-copy' };
 
 interface RecentFlatRecord {
   ts: number;
-  state: 'pending' | 'committed' | 'taken-over';
+  state: 'pending' | 'committed' | 'taken-over' | 'abandoned';
 }
 
 const pending = new Map<string, PendingLogicalSend>();
@@ -97,29 +100,56 @@ function rememberRecent(map: Map<string, number>, key: string, now: number): voi
 }
 
 function pruneRecentFlats(now: number): void {
+  // An uncommitted flat record is a live route lease, not a cache entry. It may
+  // outlive the normal late-copy TTL while openThread UUID recovery is still
+  // deciding whether this path can emit a turn. Only explicit lifecycle
+  // transitions make it eligible for eviction.
   for (const [key, rec] of recentFlats) {
-    if (now - rec.ts <= LATE_COPY_TTL_MS && recentFlats.size <= MAX_RECENT) break;
+    if (rec.state === 'pending') continue;
+    if (now - rec.ts > LATE_COPY_TTL_MS) {
+      recentFlats.delete(key);
+      deferredMirrors.delete(key);
+    }
+  }
+  if (recentFlats.size <= MAX_RECENT) return;
+  for (const [key, rec] of recentFlats) {
+    if (recentFlats.size <= MAX_RECENT) break;
+    if (rec.state === 'pending') continue;
     recentFlats.delete(key);
     deferredMirrors.delete(key);
   }
 }
 
-function rememberRecentFlat(key: string, now: number): void {
+function rememberRecentFlat(key: string, now: number): RecentFlatRecord {
+  const rec: RecentFlatRecord = { ts: now, state: 'pending' };
   recentFlats.delete(key);
-  recentFlats.set(key, { ts: now, state: 'pending' });
+  recentFlats.set(key, rec);
   pruneRecentFlats(now);
+  return rec;
 }
 
-function commitUnpairedFlatRoute(key: string): boolean {
-  const rec = recentFlats.get(key);
-  if (rec?.state === 'taken-over') return false;
-  if (!rec) return !confirmed.has(key);
+function commitUnpairedFlatRoute(key: string, rec: RecentFlatRecord): boolean {
+  if (rec.state === 'taken-over' || rec.state === 'abandoned') return false;
+  if (rec.state === 'committed') return true;
   rec.state = 'committed';
+  rec.ts = Date.now();
+  if (recentFlats.get(key) === rec) {
+    recentFlats.delete(key);
+    recentFlats.set(key, rec);
+    pruneRecentFlats(rec.ts);
+  }
   return true;
 }
 
-function isUnpairedFlatTakenOver(key: string): boolean {
-  return recentFlats.get(key)?.state === 'taken-over';
+function isUnpairedFlatTakenOver(rec: RecentFlatRecord): boolean {
+  return rec.state === 'taken-over';
+}
+
+function abandonUnpairedFlatRoute(key: string, rec: RecentFlatRecord): void {
+  if (rec.state !== 'pending') return;
+  rec.state = 'abandoned';
+  if (recentFlats.get(key) === rec) recentFlats.delete(key);
+  deferredMirrors.delete(key);
 }
 
 function flushDeferredMirrors(key: string): void {
@@ -144,7 +174,7 @@ function pruneConfirmed(now: number): void {
 function settleUnpairedPending(key: string, entry: PendingLogicalSend): void {
   const now = Date.now();
   if (entry.threadMessageId) rememberRecent(recentThreads, key, now);
-  else if (entry.flatMessageIds.size > 0) rememberRecentFlat(key, now);
+  else if (entry.flatMessageIds.size > 0) entry.flatLease = rememberRecentFlat(key, now);
   entry.resolveDecision(false);
 }
 
@@ -219,9 +249,18 @@ export async function coordinateDualDelivery(
       return { kind: 'suppress-main-copy' };
     }
     recentFlat.state = 'taken-over';
+    recentFlat.ts = now;
+    recentFlats.delete(key);
+    recentFlats.set(key, recentFlat);
     confirmLogicalSend(key, now);
     rememberRecent(recentThreads, key, now);
     return { kind: 'dispatch', mirrorKey: key };
+  }
+  if (!input.threadId && recentFlat) {
+    // A live or committed flat route already owns this logical send. Feishu
+    // retries normally keep the same message id and are stopped upstream, but
+    // a second flat id must not mint a parallel route lease here.
+    return { kind: 'suppress-main-copy' };
   }
 
   let entry = pending.get(key);
@@ -243,14 +282,20 @@ export async function coordinateDualDelivery(
     return { kind: 'suppress-main-copy' };
   }
 
-  return (await entry.decision)
-    ? { kind: 'suppress-main-copy' }
-    : {
+  if (await entry.decision) return { kind: 'suppress-main-copy' };
+  if (entry.flatMessageIds.values().next().value !== input.messageId) {
+    return { kind: 'suppress-main-copy' };
+  }
+  const lease = entry.flatLease;
+  return lease
+    ? {
         kind: 'dispatch',
         mirrorKey: key,
-        commitUnpairedFlat: () => commitUnpairedFlatRoute(key),
-        isUnpairedFlatTakenOver: () => isUnpairedFlatTakenOver(key),
-      };
+        commitUnpairedFlat: () => commitUnpairedFlatRoute(key, lease),
+        isUnpairedFlatTakenOver: () => isUnpairedFlatTakenOver(lease),
+        abandonUnpairedFlat: () => abandonUnpairedFlatRoute(key, lease),
+      }
+    : { kind: 'dispatch', mirrorKey: key };
 }
 
 /** Waits only for the bounded pairing window; Agent execution itself is never delayed. */

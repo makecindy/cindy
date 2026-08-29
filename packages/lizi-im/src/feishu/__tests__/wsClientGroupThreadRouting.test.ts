@@ -275,7 +275,7 @@ describe('feishu group thread routing', () => {
     expect(mocks.openThread).not.toHaveBeenCalled();
   });
 
-  it('late topic after pair window takes over before the unpaired flat opens a new thread', async () => {
+  it('late topic after the cache TTL still takes over while the flat route is uncommitted', async () => {
     vi.useFakeTimers();
     let releaseOpenThread: ((value: { kind: 'opened'; messageId: string; threadId: string }) => void) | undefined;
     mocks.openThread.mockImplementationOnce(
@@ -299,6 +299,7 @@ describe('feishu group thread routing', () => {
 
     const flatHandling = mocks.eventHandlers['im.message.receive_v1'](flat);
     await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(25_001);
     await mocks.eventHandlers['im.message.receive_v1'](topic);
     expect(releaseOpenThread).toBeDefined();
     releaseOpenThread?.({ kind: 'opened', messageId: 'om_bot_opener', threadId: 'omt_bot' });
