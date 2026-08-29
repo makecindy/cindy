@@ -7,9 +7,11 @@ import {
 } from '../binary-version-probe.js';
 
 describe('binary version probe', () => {
-  it('normalizes stable and prefixed semantic versions', () => {
+  it('normalizes bare, v-prefixed, and Pi-prefixed semantic versions', () => {
     expect(parseBinaryVersionOutput('0.84.4\n', '')).toBe('0.84.4');
     expect(parseBinaryVersionOutput('v0.84.4-beta.1\n', '')).toBe('0.84.4-beta.1');
+    expect(parseBinaryVersionOutput('pi 0.84.4\n', '')).toBe('0.84.4');
+    expect(parseBinaryVersionOutput('pi v0.84.4-beta.1\n', '')).toBe('0.84.4-beta.1');
   });
 
   it('uses SemVer precedence for prerelease arbitration', () => {
@@ -18,7 +20,7 @@ describe('binary version probe', () => {
   });
 
   it('rejects unrelated or multiline-leading output', () => {
-    expect(parseBinaryVersionOutput('pi 0.84.4\n', '')).toBeNull();
+    expect(parseBinaryVersionOutput('other 0.84.4\n', '')).toBeNull();
     expect(parseBinaryVersionOutput('warning\n0.84.4\n', '')).toBeNull();
   });
 

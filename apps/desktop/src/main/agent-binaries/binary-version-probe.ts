@@ -19,11 +19,19 @@ export function isBinaryVersionNotOlder(candidate: string, required: string): bo
   return semver.gte(candidate, required);
 }
 
-/** Parse the first version line emitted by a managed runtime's `--version`. */
+/** Parse the supported Pi version forms from the first `--version` output line. */
 export function parseBinaryVersionOutput(stdout: string, stderr: string): string | null {
   const output = (stdout || stderr).trim();
   const firstLine = output.split(/\r?\n/, 1)[0]?.trim() ?? '';
-  return normalizeBinaryVersion(firstLine);
+  const tokens = firstLine.split(/\s+/);
+  const versionToken = tokens.length === 1
+    ? tokens[0]
+    : tokens.length === 2 && tokens[0]?.toLowerCase() === 'pi'
+      ? tokens[1]
+      : undefined;
+  return versionToken
+    ? normalizeBinaryVersion(versionToken.replace(/^v(?=\d)/, ''))
+    : null;
 }
 
 /**
