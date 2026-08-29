@@ -133,7 +133,7 @@ describe('local runtime version arbitration', () => {
       binaryPath: selfUpdated,
     });
     expect(mocks.download).not.toHaveBeenCalled();
-    expect(resolveVersion).toHaveBeenCalledTimes(1);
+    expect(resolveVersion).toHaveBeenCalledTimes(2);
     expect(fs.existsSync(path.dirname(older))).toBe(true);
     await expect(provisioner.getState()).resolves.toMatchObject({
       status: 'ready',
@@ -142,6 +142,38 @@ describe('local runtime version arbitration', () => {
       binaryPath: selfUpdated,
     });
   });
+
+  it.each([
+    ['the directory-latest candidate is invalid', null, '0.84.4'],
+    ['the older directory reports a higher version', '0.84.4', '0.84.5'],
+  ])(
+    'selects the highest real version when %s',
+    async (_label, latestReported, olderDirectoryReported) => {
+      const installSubdir = uniqueInstallSubdir();
+      const binaryName = 'pi';
+      const olderDirectory = await mountVerifiedBinary(installSubdir, '0.84.3', binaryName);
+      const latestDirectory = await mountVerifiedBinary(installSubdir, '0.84.4', binaryName);
+      const versions = new Map([
+        [latestDirectory, latestReported],
+        [olderDirectory, olderDirectoryReported],
+      ]);
+      const resolveVersion = vi.fn(
+        async (binaryPath: string) => versions.get(binaryPath) ?? null,
+      );
+
+      const result = await makeProvisioner(
+        installSubdir,
+        binaryName,
+        resolveVersion,
+      ).prepare();
+
+      expect(result).toEqual({ ready: true, binaryPath: olderDirectory });
+      expect(resolveVersion).toHaveBeenCalledTimes(2);
+      expect(mocks.download).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.dirname(olderDirectory))).toBe(true);
+      expect(fs.existsSync(path.dirname(latestDirectory))).toBe(true);
+    },
+  );
 
   it('selects the highest real local version before an exact manifest-directory match', async () => {
     const installSubdir = uniqueInstallSubdir();
