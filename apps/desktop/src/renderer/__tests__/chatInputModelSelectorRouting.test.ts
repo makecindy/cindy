@@ -114,6 +114,10 @@ describe('ChatInput model source switching wiring', () => {
     );
     const catalogTargetResolution = guard.indexOf('const targetRouteProviderId =');
     const remoteGuard = guard.indexOf('const hasVerifiedWindows =');
+    const remoteUnknownBlock = guard.indexOf(
+      'if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;',
+    );
+    const zeroUsagePass = guard.indexOf('if (!contextTokens || contextTokens <= 0) return true;');
     const remoteBlock = guard.indexOf("verdict.level === 'danger' || verdict.level === 'overflow'");
     const warningPath = guard.indexOf("verdict.level === 'warn'");
     const confirmPath = guard.indexOf('const accepted = await confirmDialog({');
@@ -125,7 +129,12 @@ describe('ChatInput model source switching wiring', () => {
     const shrinkGate = guard.slice(remoteGuard, remoteBlock);
     expect(shrinkGate).toContain('agentStatus.isRunning');
     expect(shrinkGate).toContain('targetContextWindow >= currentContextWindow');
+    expect(shrinkGate).toContain(
+      'const hasVerifiedUsage = Number.isFinite(contextTokens) && contextTokens >= 0;',
+    );
     expect(shrinkGate).toContain('!hasVerifiedWindows || !hasVerifiedUsage');
+    expect(remoteUnknownBlock).toBeGreaterThan(remoteGuard);
+    expect(zeroUsagePass).toBeGreaterThan(remoteUnknownBlock);
     expect(shrinkGate).toContain('return true;');
     expect(remoteBlock).toBeLessThan(warningPath);
     expect(remoteBlock).toBeLessThan(confirmPath);

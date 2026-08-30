@@ -6134,7 +6134,7 @@ export function ChatInput({
         Number.isFinite(currentContextWindow) && currentContextWindow > 0 &&
         typeof targetContextWindow === 'number' &&
         Number.isFinite(targetContextWindow) && targetContextWindow > 0;
-      const hasVerifiedUsage = Number.isFinite(contextTokens) && contextTokens > 0;
+      const hasVerifiedUsage = Number.isFinite(contextTokens) && contextTokens >= 0;
       if (remoteHostId && agentStatus.isRunning) return false;
       // 同窗或扩窗不需要 handoff；本地与 SSH 都保留普通切换。
       if (hasVerifiedWindows && targetContextWindow >= currentContextWindow) return true;
