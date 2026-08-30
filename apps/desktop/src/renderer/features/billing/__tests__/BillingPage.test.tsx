@@ -3004,6 +3004,8 @@ describe('BillingPage order history', () => {
     expect(uiMocks.toastError).toHaveBeenCalledWith(
       'billing.orders.invoice.sendFailed:{"email":"xd-billing@xd.com"}',
     );
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('o-gmail-no-consent')).toBeTruthy();
   });
 
   it('ignores repeated send activations while the mail request is pending', async () => {

@@ -2031,7 +2031,10 @@ function InvoiceRequestDialog({
   return (
     <ConfirmDialog
       open={order !== null}
-      onOpenChange={(open) => !open && onClose()}
+      onOpenChange={(open) => {
+        if (open || sendInvoiceLockRef.current) return;
+        onClose();
+      }}
       title={t('billing.orders.invoice.title')}
       content={invoiceContent}
       maxWidth={460}
