@@ -229,15 +229,32 @@ export function broadcastSessionPatched(
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
-  if (hasCapturedScope) {
-    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
-  } else if (ownerStamp === undefined) {
-    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
-  } else {
-    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+  try {
+    if (hasCapturedScope) {
+      broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+    } else if (ownerStamp === undefined) {
+      broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+    } else {
+      broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+    }
+  } catch (error) {
+    log.warn('session patch device-link broadcast failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) {
+  let windows: ReturnType<typeof BrowserWindow.getAllWindows> = [];
+  try {
+    windows = BrowserWindow.getAllWindows();
+  } catch (error) {
+    log.warn('session patch window enumeration failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  for (const w of windows) {
+    try {
+      if (w.isDestroyed()) continue;
       if (hasCapturedScope) {
         w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
       } else if (ownerStamp === undefined) {
@@ -245,6 +262,11 @@ export function broadcastSessionPatched(
       } else {
         w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
       }
+    } catch (error) {
+      log.warn('session patch window broadcast failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }

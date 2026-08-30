@@ -311,6 +311,9 @@ describe('createContextOverflowRollover', () => {
       ).resolves.toBe('rebuilt');
 
       expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.closeSession.mock.invocationCallOrder[0]!).toBeLessThan(
+        deps.commitRebuild.mock.invocationCallOrder[0]!,
+      );
       expect(deps.commitRebuild).toHaveBeenCalledWith(
         's1',
         expect.any(String),

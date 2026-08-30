@@ -12366,29 +12366,83 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     closeSession: (sessionId) => maker.closeSession(sessionId),
     drainPersistQueue,
     commitRebuild: async (sessionId, handoff, meta) => {
-      const { updatedAt } = await commitContextRebuild(sessionId, handoff, meta);
-      const [sessionKindRow] = await getDbClient()
-        .drizzle.select({ agentKind: sessions.agentKind })
+      // Read projection metadata before the transaction: after a successful
+      // context.rebuild there must be no fallible step before the zero-usage push.
+      const ownerScope = captureDataOwnerBroadcastScope();
+      const dbSnapshot = getCurrentDbClientSnapshot();
+      if (!dbSnapshot) throw new Error('context rebuild requires an active Profile database');
+      const [sessionKindRow] = await dbSnapshot.client.drizzle
+        .select({
+          agentKind: sessions.agentKind,
+          contextWindow: sessions.contextWindow,
+        })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
+      if (
+        !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
+        getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
+      ) {
+        throw new Error('context rebuild owner changed before commit');
+      }
+      const { updatedAt } = await commitContextRebuild(sessionId, handoff, meta);
+      if (
+        !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
+        getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
+      ) {
+        throw new Error('context rebuild owner changed after commit');
+      }
+      const projectionContextWindow =
+        typeof sessionKindRow?.contextWindow === 'number' &&
+        Number.isFinite(sessionKindRow.contextWindow) &&
+        sessionKindRow.contextWindow > 0
+          ? sessionKindRow.contextWindow
+          : undefined;
       const cardAgentKind =
         sessionKindRow?.agentKind === 'codex'
           ? 'codex'
           : sessionKindRow?.agentKind === 'pi'
             ? 'pi'
             : 'cc';
-      broadcastSessionPatched(sessionId, {
-        sdkSessionId: null,
-        updatedAt: new Date(updatedAt).toISOString(),
-      });
-      await createDbMessage(sessionId, {
-        clientId: `context-rebuild-card:${createId()}`,
-        role: 'assistant',
-        content: '',
-        agentKind: cardAgentKind,
-        agentMeta: { contextRebuild: { reason: meta.reason, handoff } } as AgentMeta,
-      });
+      broadcastSessionPatched(
+        sessionId,
+        {
+          sdkSessionId: null,
+          contextTokens: 0,
+          ...(projectionContextWindow === undefined
+            ? {}
+            : { contextWindow: projectionContextWindow }),
+          updatedAt: new Date(updatedAt).toISOString(),
+        },
+        ownerScope,
+      );
+      try {
+        await createDbMessage(
+          sessionId,
+          {
+            clientId: `context-rebuild-card:${createId()}`,
+            role: 'assistant',
+            content: '',
+            agentKind: cardAgentKind,
+            agentMeta: { contextRebuild: { reason: meta.reason, handoff } } as AgentMeta,
+          },
+          {
+            broadcastOwnerScope: ownerScope,
+            shouldBroadcast: () =>
+              isDataOwnerBroadcastScopeCurrent(ownerScope) &&
+              getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch,
+          },
+        );
+      } catch (error) {
+        // The hidden marker and zero-usage session state are already committed.
+        // A derived visual card must not turn that successful rebuild into a
+        // failed switch or strand control projections on the source route.
+        log.warn('context rebuild card creation failed after commit', {
+          sessionId,
+          reason: meta.reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     },
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
@@ -16171,6 +16225,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (modelWindowRebuilt && targetContextWindow) {
             patch.contextWindow = targetContextWindow;
           }
+          const routeProjectionOwnerScope = captureDataOwnerBroadcastScope();
           try {
             await persistSessionFields(sessionId, patch);
           } catch (persistenceError) {
@@ -16208,6 +16263,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               );
             }
             throw persistenceError;
+          }
+          if (modelWindowRebuilt && targetContextWindow) {
+            // commitRebuild first projects zero usage against the still-authoritative
+            // source route. Publish the accepted final window only after its route
+            // persistence succeeds, keeping rollback projections on the source window.
+            broadcastSessionPatched(
+              sessionId,
+              {
+                contextTokens: 0,
+                contextWindow: targetContextWindow,
+              },
+              routeProjectionOwnerScope,
+            );
           }
           if (isDeviceLinkInvoke()) {
             // dispatch 继续兼容最小/旧 handler 的锁外回流；标记本结果避免重复写。

@@ -282,6 +282,47 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('wakeSessionInputAfterCredentialSwitch(sessionId);');
   });
 
+  it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
+    const commitRebuild = handlerBody(
+      registerSource,
+      'commitRebuild: async (sessionId, handoff, meta) => {',
+      'setPendingHandoff: (sessionId, handoff, expectedGeneration)',
+    );
+    const query = commitRebuild.indexOf('contextWindow: sessions.contextWindow,');
+    const commit = commitRebuild.indexOf('commitContextRebuild(sessionId, handoff, meta)');
+    const broadcast = commitRebuild.indexOf('broadcastSessionPatched(\n        sessionId,');
+
+    expect(query).toBeGreaterThan(-1);
+    expect(commit).toBeGreaterThan(query);
+    expect(broadcast).toBeGreaterThan(commit);
+    expect(commitRebuild).toContain('contextTokens: 0,');
+    expect(commitRebuild).toContain('{ contextWindow: projectionContextWindow }');
+    expect(commitRebuild).toContain('const ownerScope = captureDataOwnerBroadcastScope();');
+    expect(commitRebuild).toContain('getCurrentDbClientSnapshot()?.clientEpoch');
+    expect(commitRebuild).toContain('ownerScope,\n      );');
+    expect(commitRebuild).toContain("log.warn('context rebuild card creation failed after commit'");
+    expect(commitRebuild).toContain('try {\n        await createDbMessage(\n          sessionId,');
+
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain("typeof runtimeStatus.contextTokens === 'number'");
+    expect(setModel).toContain('runtimeStatus.contextTokens >= 0');
+    const persistFinalRoute = setModel.indexOf('await persistSessionFields(sessionId, patch);');
+    const projectFinalWindow = setModel.indexOf(
+      '// commitRebuild first projects zero usage against the still-authoritative',
+    );
+    expect(persistFinalRoute).toBeGreaterThan(-1);
+    expect(projectFinalWindow).toBeGreaterThan(persistFinalRoute);
+    expect(setModel.slice(projectFinalWindow)).toContain('contextTokens: 0,');
+    expect(setModel.slice(projectFinalWindow)).toContain('contextWindow: targetContextWindow,');
+    expect(setModel).toContain(
+      'const routeProjectionOwnerScope = captureDataOwnerBroadcastScope();',
+    );
+  });
+
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
       registerSource,
