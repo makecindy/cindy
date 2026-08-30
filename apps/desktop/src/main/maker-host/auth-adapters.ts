@@ -96,6 +96,8 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
+  isNativeProviderAuthSharedSystemCredential,
+  markNativeProviderAuthSharedSystemCredential,
   readExplicitNativeProviderAuthOwner,
   restoreNativeProviderAuthForRecovery,
   unbindNativeProviderAuth,
@@ -1103,13 +1105,22 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
     const topology = await inspectCodexAuthLink(systemAuth, myAuth);
     if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
+      if (process.platform === 'win32') {
+        markNativeProviderAuthSharedSystemCredential('openai');
+      }
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
     }
 
     const hasLocalEntry = topology.linkType !== 'missing';
+    const wasSharedWindowsCredential =
+      process.platform === 'win32' &&
+      topology.linkType === 'file' &&
+      isNativeProviderAuthSharedSystemCredential('openai');
     const explicitIsolatedOwner =
-      topology.linkType === 'file' ? readExplicitNativeProviderAuthOwner('openai') : null;
+      topology.linkType === 'file' && !wasSharedWindowsCredential
+        ? readExplicitNativeProviderAuthOwner('openai')
+        : null;
     if (explicitIsolatedOwner) {
       log.info('keeping explicitly authorized instance-isolated Codex auth', {
         ownerMatchesActive: explicitIsolatedOwner === getActiveAppSession().dataOwnerId,

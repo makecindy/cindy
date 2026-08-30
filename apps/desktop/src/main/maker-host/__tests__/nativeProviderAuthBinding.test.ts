@@ -29,6 +29,8 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
+  isNativeProviderAuthSharedSystemCredential,
+  markNativeProviderAuthSharedSystemCredential,
   migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
   readLegacyNativeProviderAuthOwner,
@@ -803,6 +805,19 @@ describe('凭证来路(selfAuthorized)—— 显式授权 vs 自动继承', () =
     bindNativeProviderAuth('openai');
     unbindNativeProviderAuth('openai', { revoked: true });
     expect(isNativeProviderAuthSelfAuthorized('openai')).toBe(false);
+  });
+
+  it('新显式授权和登出都会清除旧的系统共享 provenance', () => {
+    bindNativeProviderAuth('openai');
+    expect(markNativeProviderAuthSharedSystemCredential('openai')).toBe(true);
+    expect(isNativeProviderAuthSharedSystemCredential('openai')).toBe(true);
+
+    bindNativeProviderAuth('openai');
+    expect(isNativeProviderAuthSharedSystemCredential('openai')).toBe(false);
+
+    expect(markNativeProviderAuthSharedSystemCredential('openai')).toBe(true);
+    unbindNativeProviderAuth('openai');
+    expect(isNativeProviderAuthSharedSystemCredential('openai')).toBe(false);
   });
 
   it('从没绑定过的 provider 不算自己授权过', () => {

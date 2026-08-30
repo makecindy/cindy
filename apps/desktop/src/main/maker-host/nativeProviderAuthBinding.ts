@@ -53,7 +53,20 @@ type BindingFile = Partial<Record<NativeProviderId, string>> & {
   selfAuthorized?: Partial<Record<NativeProviderId, string>>;
   /** 授权来源审计；旧文件缺失时继续由 selfAuthorized / provider 迁移语义兼容。 */
   sources?: Partial<Record<NativeProviderId, ConnectionSourceKind>>;
+  /**
+   * 已当场验证为系统共享凭证的 owner。Windows 的 hardlink 在系统 auth.json 原子换代后会
+   * 退化成普通 file；这份独立 provenance 让下次启动仍能把旧 inode 迁回系统新凭证，且不
+   * 覆盖 sources 里真实的「最初由 Cindy 显式授权」来路。
+   */
+  sharedSystemCredential?: Partial<Record<NativeProviderId, string>>;
 };
+
+function sharedSystemCredentialOwners(
+  bindings: BindingFile,
+): Partial<Record<NativeProviderId, string>> {
+  const value = bindings.sharedSystemCredential;
+  return value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+}
 
 function bindingPath(): string {
   return path.join(app.getPath('userData'), 'native-provider-auth.json');
@@ -421,6 +434,8 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
     const read = readBindingsOrFail();
     if (read.ok) {
       const bindings = read.bindings;
+      const sharedSystemCredential = sharedSystemCredentialOwners(bindings);
+      delete sharedSystemCredential[provider];
       // 显式授权 = 用户重新表达了「我要连它」，撤销标记就此作废。
       if (bindings.revoked && provider in bindings.revoked) {
         const revoked = { ...bindings.revoked };
@@ -435,6 +450,7 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
           ...bindings.sources,
           [provider]: 'explicit-provider-oauth',
         },
+        sharedSystemCredential,
         [provider]: owner,
       });
       return true;
@@ -452,6 +468,8 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
     // 就此关闭 —— 无从得知谁被撤销过时,丢弃标记等于给所有残留凭证放行。用户对它们各自显式
     // 授权即可恢复。
     const salvaged = read.reason === 'badRevoked' ? read.bindings : {};
+    const sharedSystemCredential = sharedSystemCredentialOwners(salvaged);
+    delete sharedSystemCredential[provider];
     const suppressed: Partial<Record<NativeProviderId, string>> = {};
     for (const other of NATIVE_PROVIDER_IDS) {
       if (other !== provider) suppressed[other] = owner;
@@ -464,6 +482,7 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
         ...salvaged.sources,
         [provider]: 'explicit-provider-oauth',
       },
+      sharedSystemCredential,
       [provider]: owner,
     });
     return true;
@@ -504,6 +523,42 @@ export function readExplicitNativeProviderAuthOwner(
   return source === 'explicit-provider-oauth' || selfAuthorizedOwner === boundOwner
     ? boundOwner
     : null;
+}
+
+/** Persist that this owner's credential was observed as the healthy system-shared Windows inode. */
+export function markNativeProviderAuthSharedSystemCredential(
+  provider: NativeProviderId,
+): boolean {
+  const snapshot = readBindingsOrFail();
+  if (!snapshot.ok) return false;
+  const snapshotOwner = snapshot.bindings[provider]?.trim();
+  if (!snapshotOwner) return false;
+  if (sharedSystemCredentialOwners(snapshot.bindings)[provider]?.trim() === snapshotOwner) {
+    return true;
+  }
+  return withNativeBindingMutationLock(false, () => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return false;
+    const owner = read.bindings[provider]?.trim();
+    if (!owner) return false;
+    const sharedSystemCredential = sharedSystemCredentialOwners(read.bindings);
+    if (sharedSystemCredential[provider]?.trim() === owner) return true;
+    writeBindings({
+      ...read.bindings,
+      sharedSystemCredential: { ...sharedSystemCredential, [provider]: owner },
+    });
+    return true;
+  });
+}
+
+/** Whether the current binding carries owner-consistent proof of a previously shared system inode. */
+export function isNativeProviderAuthSharedSystemCredential(provider: NativeProviderId): boolean {
+  const read = readBindingsOrFail();
+  if (!read.ok) return false;
+  const owner = read.bindings[provider]?.trim();
+  return Boolean(
+    owner && sharedSystemCredentialOwners(read.bindings)[provider]?.trim() === owner,
+  );
 }
 
 /** 返回当前 owner 绑定的授权来源；归属不明或旧文件未记录时返回 null。 */
@@ -547,7 +602,15 @@ export function unbindNativeProviderAuth(
       const bindings = snapshot.bindings;
       const hasSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
       const hasSource = bindings.sources?.[provider] !== undefined;
-      if (!(provider in bindings) && !hasSelfAuthorized && !hasSource) return;
+      const hasSharedSystemCredential =
+        sharedSystemCredentialOwners(bindings)[provider] !== undefined;
+      if (
+        !(provider in bindings) &&
+        !hasSelfAuthorized &&
+        !hasSource &&
+        !hasSharedSystemCredential
+      )
+        return;
     }
   }
   withRequiredNativeBindingMutationLock(() => {
@@ -558,7 +621,16 @@ export function unbindNativeProviderAuth(
     const marking = opts?.revoked === true && !!owner;
     const hadSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
     const hadSource = bindings.sources?.[provider] !== undefined;
-    if (!(provider in bindings) && !marking && !hadSelfAuthorized && !hadSource) return;
+    const sharedSystemCredential = sharedSystemCredentialOwners(bindings);
+    const hadSharedSystemCredential = sharedSystemCredential[provider] !== undefined;
+    if (
+      !(provider in bindings) &&
+      !marking &&
+      !hadSelfAuthorized &&
+      !hadSource &&
+      !hadSharedSystemCredential
+    )
+      return;
     delete bindings[provider];
     // 授权来路随绑定一起作废:登出之后这份凭证若还在本机,它对 Cindy 就重新是「外部已有的
     // 凭证」，继承语义（及其文案）重新成立。
@@ -571,6 +643,10 @@ export function unbindNativeProviderAuth(
       const sources = { ...bindings.sources };
       delete sources[provider];
       bindings.sources = sources;
+    }
+    if (hadSharedSystemCredential) {
+      delete sharedSystemCredential[provider];
+      bindings.sharedSystemCredential = sharedSystemCredential;
     }
     if (marking) bindings.revoked = { ...(bindings.revoked ?? {}), [provider]: owner as string };
     writeBindings(bindings);
