@@ -129,6 +129,27 @@ describe('auxiliary-model-settings-store', () => {
     expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
   });
 
+  it('seals legacy voice migration when old auxiliary pins win, so reset stays automatic', async () => {
+    writeJson(settingsPath(), {
+      sessionTitleModel: TITLE_PIN,
+      promptRecommendationModel: PROMPT_PIN,
+    });
+    writeJson(ownerVoicePath(), {
+      refinerProvider: 'litellm-kimi-k2.6',
+      refinerProviderChain: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
+    });
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    expect(readJson(migrationStatePath())).toEqual({ legacyVoiceMigrationCompleted: true });
+
+    await writeAuxiliaryModelSettingsPatch({ models: [] });
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [] });
+    expect(isAuxiliaryModelCustomized()).toBe(false);
+    expect(() => readFileSync(settingsPath())).toThrow();
+    expect(readJson(migrationStatePath())).toEqual({ legacyVoiceMigrationCompleted: true });
+  });
+
   it('migrates a legacy voice chain when auxiliary settings were never customized', () => {
     writeJson(ownerVoicePath(), {
       utilityModelProvider: 'litellm-kimi-k2.6',

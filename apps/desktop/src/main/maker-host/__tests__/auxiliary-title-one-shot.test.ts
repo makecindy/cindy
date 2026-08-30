@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   models: [] as string[],
+  ownerScope: 'local:owner-a:1',
   requestText: vi.fn(),
 }));
 
@@ -23,6 +24,7 @@ const REQUEST = {
 function runtimeDeps() {
   return {
     readModels: () => h.models,
+    readOwnerScope: () => h.ownerScope,
     requestText: h.requestText,
   };
 }
@@ -30,6 +32,7 @@ function runtimeDeps() {
 beforeEach(() => {
   vi.clearAllMocks();
   h.models = [];
+  h.ownerScope = 'local:owner-a:1';
   h.requestText.mockImplementation(async (_prompt: string, options: Record<string, unknown>) => {
     const allowed = await (options.beforeDispatch as () => Promise<boolean>)();
     return allowed
@@ -90,5 +93,51 @@ describe('auxiliary task-title routing', () => {
     });
 
     await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBeNull();
+  });
+
+  it('cancels dispatch when the owner scope changes even if the model list is unchanged', async () => {
+    h.models = ['codex-gpt-5.4-mini'];
+    h.requestText.mockImplementation(async (_prompt: string, options: Record<string, unknown>) => {
+      h.ownerScope = 'cloud:owner-b:2';
+      const allowed = await (options.beforeDispatch as () => Promise<boolean>)();
+      return allowed
+        ? {
+            ok: true,
+            text: '不应采用',
+            providerId: 'xd',
+            model: 'gpt-5.4-mini',
+            transport: 'litellm-chat-completions',
+          }
+        : { ok: false, reason: 'all_candidates_failed', attempts: [] };
+    });
+
+    await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBeNull();
+  });
+
+  it('rechecks the owner scope after an async model read', async () => {
+    h.models = ['codex-gpt-5.4-mini'];
+    let readCount = 0;
+    const readModels = vi.fn(async () => {
+      readCount += 1;
+      if (readCount === 2) h.ownerScope = 'cloud:owner-b:2';
+      return h.models;
+    });
+    h.requestText.mockImplementation(async (_prompt: string, options: Record<string, unknown>) => {
+      const allowed = await (options.beforeDispatch as () => Promise<boolean>)();
+      return allowed
+        ? {
+            ok: true,
+            text: '不应采用',
+            providerId: 'xd',
+            model: 'gpt-5.4-mini',
+            transport: 'litellm-chat-completions',
+          }
+        : { ok: false, reason: 'all_candidates_failed', attempts: [] };
+    });
+
+    await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, {
+      ...runtimeDeps(),
+      readModels,
+    })).resolves.toBeNull();
   });
 });

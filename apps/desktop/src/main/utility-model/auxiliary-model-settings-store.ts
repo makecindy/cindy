@@ -203,7 +203,17 @@ export function migrateLegacyAuxiliaryModelSettings(): void {
       ])
     : [];
 
+  const legacyVoiceMigrationCompleted = hasLegacyVoiceMigrationMarker();
+  const ownerVoice = legacyVoiceMigrationCompleted
+    ? []
+    : legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath()));
+  const unscopedVoice = ownerVoice.length > 0 || legacyVoiceMigrationCompleted
+    ? []
+    : legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath()));
+  const fromVoice = (ownerVoice.length > 0 ? ownerVoice : unscopedVoice).slice(0, 3);
+
   if (fromOldPins.length > 0) {
+    if (fromVoice.length > 0) markLegacyVoiceMigrationComplete();
     rewriteAuxiliarySettingsFile(fromOldPins);
     log.info('migrated legacy auxiliary model pins', { count: fromOldPins.length });
     return;
@@ -212,13 +222,7 @@ export function migrateLegacyAuxiliaryModelSettings(): void {
   // The legacy voice file stays in place for older clients and passive
   // instances. Keep a separate owner-scoped tombstone so resetting the new
   // override does not import that same legacy chain again on the next read.
-  if (hasLegacyVoiceMigrationMarker()) return;
-
-  const ownerVoice = legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath()));
-  const unscopedVoice = ownerVoice.length > 0
-    ? []
-    : legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath()));
-  const fromVoice = (ownerVoice.length > 0 ? ownerVoice : unscopedVoice).slice(0, 3);
+  if (legacyVoiceMigrationCompleted) return;
 
   if (fromVoice.length > 0) {
     rewriteAuxiliarySettingsFile(fromVoice);

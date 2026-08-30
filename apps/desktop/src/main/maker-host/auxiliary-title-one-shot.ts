@@ -23,6 +23,7 @@ const AUXILIARY_TITLE_RESPONSE_INSTRUCTIONS =
 
 interface AuxiliaryTitleRuntimeDeps {
   readModels: () => string[] | Promise<string[]>;
+  readOwnerScope: () => string | Promise<string>;
   requestText: (
     prompt: string,
     opts: Parameters<typeof requestUtilityText>[2],
@@ -37,6 +38,10 @@ const DEFAULT_DEPS: AuxiliaryTitleRuntimeDeps = {
       '../utility-model/auxiliary-model-settings-store.js'
     );
     return readAuxiliaryModelSettings().models;
+  },
+  readOwnerScope: async () => {
+    const { activeOwnerScopeKey } = await import('../appSessionState.js');
+    return activeOwnerScopeKey();
   },
   // Keep the heavyweight utility-model/provider runtime out of title.ts's
   // startup import graph. It also lets lightweight title IPC tests provide
@@ -61,6 +66,7 @@ async function generateAuxiliaryTitle(
   args: TitleRequest,
   deps: AuxiliaryTitleRuntimeDeps,
 ): Promise<TitleOneShotResult> {
+  const ownerScope = await deps.readOwnerScope();
   const models = [...await deps.readModels()];
   const snapshot = JSON.stringify(models);
   const result = await deps.requestText(args.prompt, {
@@ -74,7 +80,11 @@ async function generateAuxiliaryTitle(
     responseInstructions: AUXILIARY_TITLE_RESPONSE_INSTRUCTIONS,
     signal: args.signal,
     // Settings may change while OAuth refresh/credential discovery awaits.
-    beforeDispatch: async () => JSON.stringify(await deps.readModels()) === snapshot,
+    beforeDispatch: async () => {
+      if ((await deps.readOwnerScope()) !== ownerScope) return false;
+      const currentModels = JSON.stringify(await deps.readModels());
+      return (await deps.readOwnerScope()) === ownerScope && currentModels === snapshot;
+    },
   });
   if (!result.ok) {
     log.warn('auxiliary title model failed', {
