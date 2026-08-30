@@ -3027,6 +3027,7 @@ export async function mutatePiPackage(
         sourceAliasesWithCanonical(source),
       ])).flat())];
       let effectiveInstallAliases = installAliases;
+      let installEnableStateCommitted = false;
       // Explicit reinstall means enabled only after its precise aliases leave
       // the durable disable ledger. Reconcile that effective state before the
       // runtime fence so a startup admitted by the new generation cannot read
@@ -3034,19 +3035,23 @@ export async function mutatePiPackage(
       try {
         effectiveInstallAliases = await expandAliasesWithDisabledSources(installAliases);
         await clearDisabledPackageSources(effectiveInstallAliases);
+        installEnableStateCommitted = true;
         const pending = await readPendingEnabledSources();
         for (const alias of effectiveInstallAliases) pending.delete(alias);
         await writePendingEnabledSources(pending);
       } catch (error) {
-        // Pi install already succeeded. Persist an effective enable journal so
-        // every Main instance and the next runtime can honor that native result
-        // without erasing sibling disables; a later mutation reconciles it.
-        try {
-          await persistPendingEnabledSources(effectiveInstallAliases);
-        } catch {
-          // Native install remains committed, but a process-local override
-          // cannot prove enabled state to another Main or after restart.
-          installEnableProjectionUnavailable = true;
+        // Only a failed authoritative state commit needs the existing pending
+        // journal fallback. Once the disable ledger is clear, journal cleanup
+        // is auxiliary and cannot turn the committed enable into a false
+        // projection-unavailable result.
+        if (!installEnableStateCommitted) {
+          try {
+            await persistPendingEnabledSources(effectiveInstallAliases);
+          } catch {
+            // Native install remains committed, but a process-local override
+            // cannot prove enabled state to another Main or after restart.
+            installEnableProjectionUnavailable = true;
+          }
         }
         log.warn('Pi package installed; enable-ledger reconciliation deferred', {
           action: 'install',

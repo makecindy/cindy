@@ -2376,6 +2376,75 @@ describe('Pi package executable-code boundary', () => {
     },
   );
 
+  it.each(['EIO', 'EACCES'])(
+    'keeps committed install enablement authoritative when pending cleanup fails with %s',
+    async (code) => {
+      const { root, source } = await createSkillOnlyPackage(`npm:pending-cleanup-${code.toLowerCase()}`);
+      const disabledSibling = 'npm:keep-disabled';
+      const pendingSibling = 'npm:keep-pending';
+      const stateDir = path.join(runtime.userData, 'pi-package-home');
+      const stateFile = path.join(stateDir, 'cindy-package-state.json');
+      const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(stateFile, JSON.stringify({
+        version: 3,
+        disabledSources: [source, disabledSibling],
+        approvedExtensionSources: [],
+        approvedExtensionFingerprints: {},
+        snapshotUnavailableRoots: {},
+      }));
+      await fs.writeFile(pendingFile, JSON.stringify([source, pendingSibling]));
+      const originalReadFile = fs.readFile.bind(fs);
+      let pendingReadFailures = 1;
+      const readSpy = vi.spyOn(fs, 'readFile').mockImplementation((async (
+        target: Parameters<typeof fs.readFile>[0],
+        options?: Parameters<typeof fs.readFile>[1],
+      ) => {
+        if (path.resolve(String(target)) === path.resolve(pendingFile)
+          && pendingReadFailures > 0) {
+          pendingReadFailures -= 1;
+          throw Object.assign(new Error(`simulated ${code}`), { code });
+        }
+        return originalReadFile(target, options as never);
+      }) as typeof fs.readFile);
+      const originalRename = fs.rename.bind(fs);
+      const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+        if (path.resolve(String(to)) === path.resolve(pendingFile)) {
+          throw Object.assign(new Error(`simulated ${code}`), { code });
+        }
+        return originalRename(from, to);
+      });
+      const runtimeFence = vi.fn();
+      try {
+        const store = await import('../pi-package-store.js');
+        const result = await mutateAuthorized(store, { action: 'install', source }, {
+          onRuntimeInvalidationPublished: runtimeFence,
+        });
+        expect(result).toMatchObject({
+          changed: true,
+          available: true,
+          affectedPackage: { source, enabled: true },
+        });
+        expect(result).not.toHaveProperty('projectionUnavailable');
+        expect(runtimeFence).toHaveBeenCalledOnce();
+        expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toMatchObject({
+          disabledSources: [disabledSibling],
+        });
+        expect(JSON.parse(await fs.readFile(pendingFile, 'utf8'))).toEqual([source, pendingSibling]);
+
+        vi.resetModules();
+        const peerStore = await import('../pi-package-store.js');
+        await expect(peerStore.listPiPackages()).resolves.toMatchObject({
+          packages: [expect.objectContaining({ source, enabled: true })],
+        });
+        await expect(peerStore.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
+      } finally {
+        readSpy.mockRestore();
+        renameSpy.mockRestore();
+      }
+    },
+  );
+
   it.each([
     ['transient I/O', 'EIO'],
     ['permission', 'EACCES'],
