@@ -3,12 +3,20 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const chatInputSource = readFileSync(
-  resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
-  'utf8',
+const normalizeSourceText = (source: string): string => source.replace(/\r\n?/g, '\n');
+const chatInputSource = normalizeSourceText(
+  readFileSync(
+    resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
+    'utf8',
+  ),
 );
 
 describe('ChatInput model source switching wiring', () => {
+  it('normalizes Windows checkout line endings before matching guard order', () => {
+    const windowsCheckoutSource = chatInputSource.replace(/\n/g, '\r\n');
+    expect(normalizeSourceText(windowsCheckoutSource)).toBe(chatInputSource);
+  });
+
   it('uses the unified 90% switch-rebuild line instead of a harness compaction setting', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);
