@@ -1,4 +1,4 @@
-import type { Maker } from '@cindy/maker-core';
+import type { Maker, Session } from '@cindy/maker-core';
 
 import type { PiPackagesChangeOrigin } from './pi-package-store.js';
 
@@ -32,33 +32,44 @@ export async function invalidateLocalPiPackageRuntimesForObservedChange(
   return invalidateLocalPiPackageRuntimes(maker);
 }
 
-export async function invalidateLocalPiPackageRuntimes(
+interface PiPackageRuntimeSnapshotEntry {
+  session: Session;
+  eligible: boolean;
+  metadataFailed: boolean;
+}
+
+export interface PiPackageRuntimeInvalidationSnapshot {
+  entries: readonly PiPackageRuntimeSnapshotEntry[];
+}
+
+/** Fence startup and bind the exact runtime instances that predate the mutation. */
+export async function captureLocalPiPackageRuntimeInvalidationSnapshot(
   maker: InvalidationMaker,
-): Promise<PiPackageRuntimeInvalidationResult> {
-  // Advance before taking the active-session snapshot. A local Pi startup is
-  // then either already published and included below, or observes the newer
-  // generation and closes before it can publish with stale package bytes.
+): Promise<PiPackageRuntimeInvalidationSnapshot> {
   maker.advanceLocalPiPackageRuntimeGeneration();
   const candidates = maker.listActiveSessions().filter((session) => session.agentKind === 'pi');
-  const metadata = await Promise.all(candidates.map(async (session) => {
+  const entries = await Promise.all(candidates.map(async (session) => {
     try {
       const meta = await maker.getSessionMeta(session.id);
-      return { session, meta, failed: meta === null };
+      return {
+        session,
+        eligible: Boolean(meta && !meta.remoteHostId && !meta.reviewMode),
+        metadataFailed: meta === null,
+      };
     } catch {
-      // Isolate lookup failures per record. We cannot safely close an unknown
-      // remote/Review session, but one bad record must not stop known-local
-      // siblings from converging.
-      return { session, meta: null, failed: true as const };
+      // Unknown metadata cannot safely cross the remote/Review boundary.
+      return { session, eligible: false, metadataFailed: true };
     }
   }));
-  const eligible = metadata.filter(({ meta }) => meta && !meta.remoteHostId && !meta.reviewMode);
-  const metadataFailedSessionIds = metadata.flatMap(({ session, failed }) => (
-    failed ? [session.id] : []
-  ));
+  return { entries };
+}
 
-  // Queue every close before awaiting convergence. One slow process must not
-  // leave sibling Pi runtimes running the extension merely because it happened
-  // to appear earlier in the session map.
+/** Retire only exact instances captured at the durable mutation edge. */
+export async function invalidateLocalPiPackageRuntimeSnapshot(
+  maker: InvalidationMaker,
+  snapshot: PiPackageRuntimeInvalidationSnapshot,
+): Promise<PiPackageRuntimeInvalidationResult> {
+  const eligible = snapshot.entries.filter((entry) => entry.eligible);
   const requestedSessionIds = eligible.map(({ session }) => session.id);
   const outcomes = await Promise.allSettled(
     eligible.map(({ session }) => maker.closeSessionIfCurrent(session, 'requested')),
@@ -66,10 +77,19 @@ export async function invalidateLocalPiPackageRuntimes(
   return {
     requestedSessionIds,
     failedSessionIds: [
-      ...metadataFailedSessionIds,
+      ...snapshot.entries.flatMap(({ session, metadataFailed }) => (
+        metadataFailed ? [session.id] : []
+      )),
       ...outcomes.flatMap((outcome, index) => (
         outcome.status === 'rejected' ? [requestedSessionIds[index]!] : []
       )),
     ],
   };
+}
+
+export async function invalidateLocalPiPackageRuntimes(
+  maker: InvalidationMaker,
+): Promise<PiPackageRuntimeInvalidationResult> {
+  const snapshot = await captureLocalPiPackageRuntimeInvalidationSnapshot(maker);
+  return invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot);
 }

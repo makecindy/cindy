@@ -486,11 +486,15 @@ describe('Pi package executable-code boundary', () => {
     expect(store.piPackageMutationMayHaveChangedState(validationFailure)).toBe(false);
 
     runtime.exitCode = 1;
+    const runtimeFence = vi.fn();
     const commandFailure = await mutateAuthorized(store, {
       action: 'install',
       source,
+    }, {
+      onRuntimeInvalidationPublished: runtimeFence,
     }).catch((error: unknown) => error);
     expect(store.piPackageMutationMayHaveChangedState(commandFailure)).toBe(true);
+    expect(runtimeFence).toHaveBeenCalledOnce();
   });
 
   it.each([

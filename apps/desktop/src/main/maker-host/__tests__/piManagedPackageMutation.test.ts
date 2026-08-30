@@ -99,7 +99,12 @@ describe('Pi managed package Main authorization', () => {
     expect(makerHostSource).toContain(
       'onPiManagedPackageMutationCommitted: async () =>',
     );
-    expect(makerHostSource).toContain('_maker?.advanceLocalPiPackageRuntimeGeneration();');
+    expect(makerHostSource).toContain(
+      'await captureLocalPiPackageRuntimeInvalidationSnapshot(maker)',
+    );
+    expect(makerHostSource).toContain(
+      'invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot)',
+    );
   });
 
   it('keeps the exact action and source bound to the one-shot grant', async () => {

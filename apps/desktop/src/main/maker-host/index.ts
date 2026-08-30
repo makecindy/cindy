@@ -111,7 +111,11 @@ import {
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
-import { invalidateLocalPiPackageRuntimes } from './pi-package-runtime-invalidation.js';
+import {
+  captureLocalPiPackageRuntimeInvalidationSnapshot,
+  invalidateLocalPiPackageRuntimeSnapshot,
+  type PiPackageRuntimeInvalidationSnapshot,
+} from './pi-package-runtime-invalidation.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -1818,6 +1822,9 @@ export function getMaker(): Maker {
     registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
     _initialCustomMcpRefresh = refreshCustomMcpProviders();
 
+    // Store mutations are serialized; each settled callback consumes the exact
+    // pre-mutation runtime snapshot captured by its durable commit edge.
+    const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
     const buildPiAgentForDesktop = () => buildPiAgent({
       logger: desktopMakerLogger,
       turnChangeCapture: {
@@ -1847,15 +1854,20 @@ export function getMaker(): Maker {
       makerMemory: makerMemoryManager,
       // Fence in-flight startups at the durable package edge, but do not close
       // the current caller before maker-core queues its host-owned receipt and
-      // sends the extension response. The settled callback below retires every
-      // published local ordinary Pi runtime immediately after that handoff.
+      // sends the extension response. The settled callback below retires only
+      // the exact pre-commit local runtimes captured before that handoff.
       onPiManagedPackageMutationCommitted: async () => {
-        _maker?.advanceLocalPiPackageRuntimeGeneration();
+        const maker = _maker;
+        if (!maker) return;
+        pendingPiPackageRuntimeSnapshots.push(
+          await captureLocalPiPackageRuntimeInvalidationSnapshot(maker),
+        );
       },
       onPiManagedPackageMutationSettled: async () => {
         const maker = _maker;
-        if (!maker) return;
-        const invalidation = await invalidateLocalPiPackageRuntimes(maker);
+        const snapshot = pendingPiPackageRuntimeSnapshots.shift();
+        if (!maker || !snapshot) return;
+        const invalidation = await invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot);
         if (invalidation.failedSessionIds.length > 0) {
           throw new Error(
             `failed to retire ${invalidation.failedSessionIds.length} local Pi runtime(s)`,

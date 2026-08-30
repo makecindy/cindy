@@ -2913,6 +2913,21 @@ export async function mutatePiPackage(
   }
   let mutationMayHaveChangedState = false;
   let runtimeInvalidationPublished = false;
+  const publishRuntimeInvalidation = async (invalidateCache = false): Promise<void> => {
+    if (runtimeInvalidationPublished) return;
+    runtimeInvalidationPublished = true;
+    try {
+      // Fence startup and bind pre-commit runtimes before token I/O yields.
+      await hooks?.onRuntimeInvalidationPublished?.();
+    } catch {
+      // Convergence is best-effort after the durable package mutation edge;
+      // never rewrite native success because a local runtime did not close.
+      log.warn('Pi package runtime convergence callback failed', {
+        failureCategory: 'runtime-invalidation-failed',
+      });
+    }
+    await publishPiPackagesChanged({ invalidateCache, runtimeInvalidation: true });
+  };
   try {
     return await enqueueMutation(async () => {
     // Renderer rows with credential/query/fragment-bearing sources carry only a
@@ -2943,20 +2958,6 @@ export async function mutatePiPackage(
       } catch (error) {
         mutationMayHaveChangedState = piPackageMutationFailureCategory(error) === 'native-command-failed';
         throw error;
-      }
-    };
-    const publishRuntimeInvalidation = async (): Promise<void> => {
-      if (runtimeInvalidationPublished) return;
-      await publishPiPackagesChanged({ invalidateCache: false, runtimeInvalidation: true });
-      runtimeInvalidationPublished = true;
-      try {
-        await hooks?.onRuntimeInvalidationPublished?.();
-      } catch {
-        // Convergence is best-effort after the durable package mutation edge;
-        // never rewrite native success because a local runtime did not close.
-        log.warn('Pi package runtime convergence callback failed', {
-          failureCategory: 'runtime-invalidation-failed',
-        });
       }
     };
     if (request.action === 'install') {
@@ -3265,7 +3266,7 @@ export async function mutatePiPackage(
     // change token before releasing the cross-process lock, then refresh every
     // open Settings view and command palette.
       if (mutationMayHaveChangedState && !runtimeInvalidationPublished) {
-        await publishPiPackagesChanged({ runtimeInvalidation: true });
+        await publishRuntimeInvalidation(true);
       }
     });
   } catch (error) {

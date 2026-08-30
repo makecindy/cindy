@@ -2,6 +2,8 @@ import type { Maker, Session } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  captureLocalPiPackageRuntimeInvalidationSnapshot,
+  invalidateLocalPiPackageRuntimeSnapshot,
   invalidateLocalPiPackageRuntimes,
   invalidateLocalPiPackageRuntimesForObservedChange,
 } from '../pi-package-runtime-invalidation.js';
@@ -104,6 +106,40 @@ describe('Pi package runtime invalidation', () => {
     });
     expect(closeSessionIfCurrent).toHaveBeenCalledWith(original, 'requested');
     expect(closed).not.toHaveBeenCalled();
+  });
+
+  it('does not retire a new-generation runtime started between commit and settled receipt', async () => {
+    const beforeCommit = session('before-commit', 'pi');
+    const afterCommit = session('after-commit', 'pi');
+    const active = [beforeCommit];
+    const closeSessionIfCurrent = vi.fn(async () => undefined);
+    const maker: InvalidationMaker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
+      listActiveSessions: vi.fn(() => [...active]),
+      getSessionMeta: vi.fn(async (id: string) => ({
+        id,
+        agentKind: 'pi' as const,
+        workDir: '/tmp',
+        title: id,
+        model: 'test',
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+      closeSessionIfCurrent,
+    };
+
+    const commitSnapshot = await captureLocalPiPackageRuntimeInvalidationSnapshot(maker);
+    active.push(afterCommit);
+    await expect(
+      invalidateLocalPiPackageRuntimeSnapshot(maker, commitSnapshot),
+    ).resolves.toEqual({
+      requestedSessionIds: ['before-commit'],
+      failedSessionIds: [],
+    });
+
+    expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
+    expect(closeSessionIfCurrent).toHaveBeenCalledWith(beforeCommit, 'requested');
+    expect(closeSessionIfCurrent).not.toHaveBeenCalledWith(afterCommit, 'requested');
   });
 
   it('does not duplicate convergence for the same-process token publication', async () => {
