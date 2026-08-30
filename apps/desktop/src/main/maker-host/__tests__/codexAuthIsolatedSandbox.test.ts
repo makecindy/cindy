@@ -140,7 +140,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
   it('dev 默认只读共享:登录、登出和失效都不改持久凭证', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     const onLogout = vi.fn();
     const onInvalidated = vi.fn();
@@ -150,6 +150,10 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     await expect(adapter.getState()).resolves.toMatchObject({
       authenticated: true,
       oauthWritesBlocked: true,
+    });
+    expect(readCodexOneShotCreds(adapter)).toEqual({
+      accessToken: 'system-token',
+      accountId: 'acct-1',
     });
     const beforeSystem = fs.readFileSync(systemAuth, 'utf8');
     const beforeLocal = fs.readFileSync(localAuth, 'utf8');
@@ -166,6 +170,9 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       authenticated: false,
       oauthWritesBlocked: true,
     });
+    await expect(adapter.getAccessToken()).resolves.toBeNull();
+    await expect(adapter.getAccountId()).resolves.toBeNull();
+    expect(readCodexOneShotCreds(adapter)).toBeNull();
     expect(onLogout).toHaveBeenCalledOnce();
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(beforeSystem);
     expect(fs.readFileSync(localAuth, 'utf8')).toBe(beforeLocal);
@@ -183,6 +190,61 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     );
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(beforeSystem);
     expect(fs.readFileSync(localAuth, 'utf8')).toBe(beforeLocal);
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+  });
+
+  it('dev 只读失效以内存指纹等待系统凭证换代,不泄漏旧 token 或写共享文件', async () => {
+    const { codexHome, localAuth, systemAuth } = fixture();
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    const invalidatedSystemBytes = fs.readFileSync(systemAuth);
+    const invalidatedSystemMode = fs.statSync(systemAuth).mode;
+
+    await adapter.invalidate('refresh_token_reused');
+
+    await expect(adapter.getAccessToken()).resolves.toBeNull();
+    await expect(adapter.getAccountId()).resolves.toBeNull();
+    expect(readCodexOneShotCreds(adapter)).toBeNull();
+    expect(fs.readFileSync(systemAuth)).toEqual(invalidatedSystemBytes);
+    expect(fs.readFileSync(localAuth)).toEqual(invalidatedSystemBytes);
+    expect(fs.statSync(systemAuth).mode).toBe(invalidatedSystemMode);
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+
+    const replacement = path.join(path.dirname(systemAuth), 'auth.replacement.json');
+    fs.writeFileSync(
+      replacement,
+      JSON.stringify({
+        account: { email: 'dev@example.test' },
+        tokens: { access_token: 'renewed-system-token', account_id: 'acct-1' },
+      }),
+      { mode: invalidatedSystemMode },
+    );
+    fs.renameSync(replacement, systemAuth);
+    const renewedSystemBytes = fs.readFileSync(systemAuth);
+    const renewedSystemMode = fs.statSync(systemAuth).mode;
+    expect(readCodexOneShotCreds(adapter)).toBeNull();
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      recoveryRequiredReason: 'refresh_token_reused',
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.getAccessToken()).resolves.toBe('renewed-system-token');
+    await expect(adapter.getAccountId()).resolves.toBe('acct-1');
+    expect(readCodexOneShotCreds(adapter)).toEqual({
+      accessToken: 'renewed-system-token',
+      accountId: 'acct-1',
+    });
+    expect(fs.readFileSync(systemAuth)).toEqual(renewedSystemBytes);
+    expect(fs.statSync(systemAuth).mode).toBe(renewedSystemMode);
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
