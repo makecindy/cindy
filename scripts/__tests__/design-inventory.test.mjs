@@ -511,6 +511,22 @@ test('薄壳 surface 经 extraStyleRoots 继承被委托 surface 的样式事实
   );
 });
 
+test('Orca 工作台继承会话视图样式事实,不再把聊天界面统计成全 0', () => {
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const session = surfaces.find((surface) => surface.id === 'desktop.chat.session');
+  const orca = surfaces.find((surface) => surface.id === 'desktop.chat.orca-workflow');
+  assert.ok(session && orca);
+  // OrcaSplitView / OrcaWorkerPanel 直接渲染 <CCAgentSessionView compact orcaMode>,
+  // 样式事实必须覆盖会话视图本体(继承 desktop.chat.session),再叠加 Orca 包装层。
+  assert.ok(
+    orca.reachableComponents.includes('CCAgentSessionView'),
+    'CCAgentSessionView 必须列入 orca 可达组件',
+  );
+  assert.ok(orca.tokenCount >= session.tokenCount && orca.tokenCount > 0);
+  assert.ok(orca.bareColors >= session.bareColors && orca.bareColors > 0);
+  assert.ok(orca.bareRadii >= session.bareRadii && orca.bareRadii > 0);
+});
+
 test('defaultHumanSeed: 全量 legacy + unassigned,protected 与迁移状态正交', () => {
   const seed = defaultHumanSeed(catalogSurfaces());
   const ids = extractHumanSurfaceIds(seed);

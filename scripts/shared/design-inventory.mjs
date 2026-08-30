@@ -386,12 +386,21 @@ export function catalogSurfaces() {
       platform: 'desktop',
       title: 'Orca 协同工作台',
       productionEntry: 'hash `/cc-agent/orca/:sessionId`（OrcaWorkflowRoute）',
-      reachableComponents: ['OrcaWorkflowRoute', 'OrcaSplitView', 'OrcaWorkerPanel'],
+      reachableComponents: [
+        'OrcaWorkflowRoute',
+        'OrcaSplitView',
+        'OrcaWorkerPanel',
+        'CCAgentSessionView',
+      ],
       styleRoots: [
         'apps/desktop/src/renderer/features/cc-agent/OrcaWorkflowRoute.tsx',
         'apps/desktop/src/renderer/features/cc-agent/OrcaSplitView.tsx',
         'apps/desktop/src/renderer/features/cc-agent/OrcaWorkerPanel.tsx',
       ],
+      // OrcaSplitView / OrcaWorkerPanel 都直接渲染 <CCAgentSessionView compact orcaMode>:
+      // 会话视图本体(chat 组件、composer 等)的样式事实在 desktop.chat.session 一侧,
+      // 只扫三个 Orca 包装文件会把完整聊天界面统计成全 0。
+      extraStyleRoots: ['desktop.chat.session'],
       routerPaths: ['/cc-agent/orca/:sessionId'],
       routeComponents: ['OrcaWorkflowRoute'],
     },
