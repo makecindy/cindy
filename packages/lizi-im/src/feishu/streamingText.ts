@@ -40,6 +40,8 @@ import {
   getBoundClient,
   runWithPinnedAccount,
   isPinnedAccountCurrent,
+  attestedRealPath,
+  attestOpenFileWithinDirectory,
   type FeishuUploadedFileSource,
   type ReusableFeishuFileMessage,
 } from './outbound.js';
@@ -136,12 +138,12 @@ interface ReusableMirroredFile {
 }
 
 function sameInode(
-  left: { dev: number; ino: number },
-  right: { dev: number; ino: number },
+  left: { dev: string; ino: string },
+  right: { dev: string; ino: string },
 ): boolean {
   // Node reports ino===0 on some Windows volumes for every file. Matching
   // that sentinel would treat unrelated objects as the same inode.
-  if (left.ino === 0 || right.ino === 0) return false;
+  if (left.ino === '0' || right.ino === '0') return false;
   return left.dev === right.dev && left.ino === right.ino;
 }
 
@@ -159,14 +161,17 @@ function normalizePathForContainment(value: string): string {
   return resolved.replace(/^([A-Za-z]):/, (_, drive: string) => `${drive.toLowerCase()}:`);
 }
 
-/** `child` is `parent` itself or nested inside it after both are resolved. */
-function isRealPathWithinRoot(realFilePath: string, realRoot: string): boolean {
+function pathSegmentsWithinRoot(realFilePath: string, realRoot: string): string[] | null {
   const file = normalizePathForContainment(realFilePath);
   const root = normalizePathForContainment(realRoot);
-  if (file === root) return true;
+  if (file === root) return null;
   // path.win32.relative is case-insensitive even when this directory is not.
   const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
-  return file.startsWith(rootWithSep);
+  if (!file.startsWith(rootWithSep)) return null;
+  const segments = file.slice(rootWithSep.length).split(path.sep);
+  return segments.length > 0 && segments.every((segment) => segment && segment !== '.' && segment !== '..')
+    ? segments
+    : null;
 }
 
 function openDirectoryFd(target: string, noFollow: boolean): number {
@@ -177,105 +182,73 @@ function openDirectoryFd(target: string, noFollow: boolean): number {
 }
 
 /**
- * Directory path bound to a handle. Pinned roots use the path frozen with the
- * inode before Agent execution; the live handle only proves that inode is still
- * what `root` opens. Unpinned roots open the native realpath with O_NOFOLLOW so
- * the string and inode come from the same directory, not realpathSync+statSync.
- * Empty `pinnedFileRoots` (explicit pin that resolved nothing) fail-closes.
- * A root whose path was swapped onto another directory after the pin is skipped.
+ * Parent-chat reuse never re-uploads disk bytes. It reopens the frozen uploaded
+ * inode and the turn-pinned root only to prove object ancestry: the leaf is
+ * opened once, the root is opened once, and the native helper walks each child
+ * relative to the preceding directory handle without following links. A final
+ * handle identity comparison binds both sides even if their lexical paths are
+ * swapped between checks. Missing pins/helpers fail closed.
  */
-function matchingLiveRootRealPaths(
-  allowedFileRoots: readonly string[],
-  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>,
-): string[] {
-  const matching: string[] = [];
-  for (const root of allowedFileRoots) {
-    if (!root.trim()) continue;
-    const bound = pinnedFileRoots
-      ? bindPinnedLiveRoot(root, pinnedFileRoots)
-      : bindUnpinnedLiveRoot(root);
-    if (bound) matching.push(bound);
-  }
-  return matching;
-}
-
-function bindPinnedLiveRoot(
-  root: string,
-  pinnedFileRoots: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>,
-): string | null {
-  let fd: number | undefined;
-  try {
-    fd = openDirectoryFd(root, false);
-    const st = fs.fstatSync(fd);
-    if (!st.isDirectory()) return null;
-    const pin = pinnedFileRoots.find((candidate) => sameInode(st, candidate));
-    if (!pin?.realPath || isSyntheticFdPath(pin.realPath)) return null;
-    return pin.realPath;
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd);
-  }
-}
-
-function bindUnpinnedLiveRoot(root: string): string | null {
-  let real: string;
-  try {
-    real = fs.realpathSync.native(root);
-  } catch {
-    return null;
-  }
-  if (isSyntheticFdPath(real)) return null;
-  let fd: number | undefined;
-  try {
-    fd = openDirectoryFd(real, true);
-    const st = fs.fstatSync(fd);
-    if (!st.isDirectory() || st.ino === 0) return null;
-    return real;
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd);
-  }
-}
-
-/**
- * Parent-chat reuse must not re-read disk. Authorize only when the frozen
- * attested realPath is still the uploaded inode and is contained in a root
- * whose live directory handle still matches the turn pin. Ancestor inode lists
- * are ignored: a full-path parent walk can be swapped onto the workingDir
- * between opens, and a caller can stuff the pin into `ancestors`.
- */
-function isSourceWithinAllowedFileRoots(
+async function isSourceWithinAllowedFileRoots(
   source: FeishuUploadedFileSource,
   allowedFileRoots: readonly string[],
-  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>,
-): boolean {
-  if (source.ino === 0) return false;
+  pinnedFileRoots?: ReadonlyArray<{ dev: string; ino: string; realPath?: string }>,
+): Promise<boolean> {
+  if (source.ino === '0') return false;
   if (!source.realPath || isSyntheticFdPath(source.realPath)) return false;
-  if (pinnedFileRoots && pinnedFileRoots.length === 0) return false;
+  if (!pinnedFileRoots?.length) return false;
 
-  let liveReal: string;
+  let sourceFd: number | undefined;
   try {
-    liveReal = fs.realpathSync.native(source.realPath);
-    const st = fs.statSync(liveReal);
-    if (!sameInode({ dev: st.dev, ino: st.ino }, source)) return false;
+    let flags = fs.constants.O_RDONLY;
+    if (fs.constants.O_NOFOLLOW) flags |= fs.constants.O_NOFOLLOW;
+    if (fs.constants.O_NONBLOCK) flags |= fs.constants.O_NONBLOCK;
+    sourceFd = fs.openSync(source.realPath, flags);
+    const sourceStat = fs.fstatSync(sourceFd, { bigint: true });
+    if (
+      !sourceStat.isFile() ||
+      !sameInode({ dev: String(sourceStat.dev), ino: String(sourceStat.ino) }, source)
+    ) {
+      return false;
+    }
+
+    for (const root of allowedFileRoots) {
+      if (!root.trim()) continue;
+      let rootFd: number | undefined;
+      try {
+        rootFd = openDirectoryFd(root, false);
+        const rootStat = fs.fstatSync(rootFd, { bigint: true });
+        if (!rootStat.isDirectory()) continue;
+        const rootIdentity = { dev: String(rootStat.dev), ino: String(rootStat.ino) };
+        const pin = pinnedFileRoots.find((candidate) => sameInode(rootIdentity, candidate));
+        if (!pin) continue;
+        const rootRealPath =
+          pin.realPath && !isSyntheticFdPath(pin.realPath)
+            ? pin.realPath
+            : await attestedRealPath(rootFd, rootIdentity);
+        if (!rootRealPath || isSyntheticFdPath(rootRealPath)) continue;
+        const segments = pathSegmentsWithinRoot(source.realPath, rootRealPath);
+        if (!segments) continue;
+        if (await attestOpenFileWithinDirectory(sourceFd, rootFd, segments)) return true;
+      } catch {
+        /* This root cannot prove containment. Try the next approved root. */
+      } finally {
+        if (rootFd !== undefined) fs.closeSync(rootFd);
+      }
+    }
   } catch {
     return false;
+  } finally {
+    if (sourceFd !== undefined) fs.closeSync(sourceFd);
   }
-  if (normalizePathForContainment(liveReal) !== normalizePathForContainment(source.realPath)) {
-    return false;
-  }
-
-  const roots = matchingLiveRootRealPaths(allowedFileRoots, pinnedFileRoots);
-  return roots.some((root) => isRealPathWithinRoot(liveReal, root));
+  return false;
 }
 
-function isWithinAllowedFileRoots(
+async function isWithinAllowedFileRoots(
   allowedFileRoots: readonly string[],
-  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>,
+  pinnedFileRoots?: ReadonlyArray<{ dev: string; ino: string; realPath?: string }>,
   uploadedSource?: FeishuUploadedFileSource,
-): boolean {
+): Promise<boolean> {
   if (!uploadedSource) return false;
   return isSourceWithinAllowedFileRoots(uploadedSource, allowedFileRoots, pinnedFileRoots);
 }
@@ -484,11 +457,11 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
             if (
               sent.ok &&
               sent.reusableMessage &&
-              isWithinAllowedFileRoots(
+              (await isWithinAllowedFileRoots(
                 finalReplyMirror?.allowedFileRoots ?? [],
                 finalReplyMirror?.pinnedFileRoots,
                 sent.uploadedSource,
-              )
+              ))
             ) {
               return { message: sent.reusableMessage, sourceIndex };
             }

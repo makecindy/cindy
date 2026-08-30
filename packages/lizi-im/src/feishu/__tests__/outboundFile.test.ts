@@ -86,7 +86,7 @@ describe('Feishu parent-chat file reuse', () => {
   });
 
   it('uploads a regular file once and reuses its file_key for the parent chat', async () => {
-    const absPath = await fileFixture('report.txt', 'trusted report');
+    const absPath = await fileFixture('报告.txt', 'trusted report');
 
     const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
     expect(primary).toMatchObject({
@@ -98,14 +98,12 @@ describe('Feishu parent-chat file reuse', () => {
       },
       uploadedSource: {
         realPath: expect.any(String),
-        dev: expect.any(Number),
-        ino: expect.any(Number),
+        dev: expect.any(String),
+        ino: expect.any(String),
         ancestors: [],
       },
     });
-    // Linux `/proc/self/fd` is a real symlink. Darwin `/dev/fd` is fdescfs
-    // (realpath is not the opened file); Windows has no Node fd path.
-    if (process.platform === 'linux') {
+    if (['linux', 'darwin', 'win32'].includes(process.platform)) {
       expect(primary.uploadedSource!.realPath.length).toBeGreaterThan(0);
     } else {
       expect(primary.uploadedSource!.realPath).toBe('');
@@ -118,6 +116,65 @@ describe('Feishu parent-chat file reuse', () => {
     expect(mocks.createFile).toHaveBeenCalledOnce();
     expect(mocks.createImage).not.toHaveBeenCalled();
     expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('proves a Unicode file only through the same pinned directory object chain', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-chain-allowed-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-chain-outside-'));
+    tempDirs.push(allowedRoot, outsideRoot);
+    const segments = ['子目录', '报告.txt'];
+    await Promise.all([
+      fs.mkdir(path.join(allowedRoot, segments[0])),
+      fs.mkdir(path.join(outsideRoot, segments[0])),
+    ]);
+    const allowedFile = path.join(allowedRoot, ...segments);
+    const outsideFile = path.join(outsideRoot, ...segments);
+    await Promise.all([
+      fs.writeFile(allowedFile, 'allowed'),
+      fs.writeFile(outsideFile, 'outside'),
+    ]);
+
+    const rootFd = fsSync.openSync(allowedRoot, fsSync.constants.O_RDONLY);
+    const allowedFd = fsSync.openSync(allowedFile, fsSync.constants.O_RDONLY);
+    const outsideFd = fsSync.openSync(outsideFile, fsSync.constants.O_RDONLY);
+    try {
+      await expect(
+        outbound.attestOpenFileWithinDirectory(allowedFd, rootFd, segments),
+      ).resolves.toBe(true);
+      await expect(
+        outbound.attestOpenFileWithinDirectory(outsideFd, rootFd, segments),
+      ).resolves.toBe(false);
+    } finally {
+      fsSync.closeSync(outsideFd);
+      fsSync.closeSync(allowedFd);
+      fsSync.closeSync(rootFd);
+    }
+  });
+
+  it('rejects a source reached only through an intermediate directory link', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-chain-link-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-chain-secret-'));
+    tempDirs.push(allowedRoot, outsideRoot);
+    const outsideFile = path.join(outsideRoot, 'secret.txt');
+    await fs.writeFile(outsideFile, 'secret');
+    const linked = path.join(allowedRoot, 'linked');
+    try {
+      await fs.symlink(outsideRoot, linked, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw error;
+    }
+
+    const rootFd = fsSync.openSync(allowedRoot, fsSync.constants.O_RDONLY);
+    const sourceFd = fsSync.openSync(outsideFile, fsSync.constants.O_RDONLY);
+    try {
+      await expect(
+        outbound.attestOpenFileWithinDirectory(sourceFd, rootFd, ['linked', 'secret.txt']),
+      ).resolves.toBe(false);
+    } finally {
+      fsSync.closeSync(sourceFd);
+      fsSync.closeSync(rootFd);
+    }
   });
 
   it('uploads an image once and reuses its image_key for the parent chat', async () => {
@@ -187,43 +244,63 @@ describe('Feishu parent-chat file reuse', () => {
       expect(uploaded).toBe('trusted report');
       expect(primary.uploadedSource).toMatchObject({
         realPath: expect.any(String),
-        dev: expect.any(Number),
-        ino: expect.any(Number),
+        dev: expect.any(String),
+        ino: expect.any(String),
       });
     } finally {
       spy.mockRestore();
     }
   });
 
-  it('does not attest a path-based fallback when the OS has no handle-backed path', async () => {
+  it('does not attest a path-based fallback when the Windows helper is unavailable', async () => {
     const absPath = await fileFixture('report.txt', 'trusted report');
-
-    const realNative = fsSync.realpathSync.native.bind(fsSync.realpathSync);
-    const spy = vi.spyOn(fsSync.realpathSync, 'native').mockImplementation(((
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    const realStat = fsSync.statSync.bind(fsSync);
+    const stat = vi.spyOn(fsSync, 'statSync').mockImplementation(((
       file: unknown,
       options?: unknown,
     ) => {
-      const candidate = String(file);
-      if (candidate.includes('/dev/fd/') || candidate.includes('/proc/self/fd/')) {
-        throw new Error('no handle-backed path');
+      if (String(file).toLowerCase().endsWith('\\powershell.exe')) {
+        throw new Error('Windows helper unavailable');
       }
-      return realNative(
-        file as Parameters<typeof realNative>[0],
-        options as Parameters<typeof realNative>[1],
+      return realStat(
+        file as Parameters<typeof realStat>[0],
+        options as Parameters<typeof realStat>[1],
       );
-    }) as typeof fsSync.realpathSync.native);
+    }) as typeof fsSync.statSync);
 
     try {
       const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
       expect(primary.ok).toBe(true);
       expect(primary.uploadedSource).toMatchObject({
         realPath: '',
-        dev: expect.any(Number),
-        ino: expect.any(Number),
+        dev: expect.any(String),
+        ino: expect.any(String),
       });
     } finally {
-      spy.mockRestore();
+      stat.mockRestore();
+      platform.mockRestore();
     }
+  });
+
+  it('keeps Darwin containment independent of Electron RunAsNode', async () => {
+    const source = await fs.readFile(new URL('../outbound.ts', import.meta.url), 'utf8');
+    const helperStart = source.indexOf('const DARWIN_HANDLE_CONTAINMENT_SCRIPT');
+    const helperEnd = source.indexOf('let client:', helperStart);
+    const helper = source.slice(helperStart, helperEnd);
+    const launcherStart = source.indexOf('async function darwinHandleContainment');
+    const launcherEnd = source.indexOf('/**\n * Object-chain containment proof', launcherStart);
+    const launcher = source.slice(launcherStart, launcherEnd);
+
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    expect(launcherStart).toBeGreaterThanOrEqual(0);
+    expect(launcherEnd).toBeGreaterThan(launcherStart);
+    expect(helper).toContain('O_NOFOLLOW');
+    expect(helper).toContain('sysopen');
+    expect(launcher).toContain("'/usr/bin/perl'");
+    expect(launcher).not.toContain('process.execPath');
+    expect(launcher).not.toContain('ELECTRON_RUN_AS_NODE');
   });
 
   it('does not attest the restored in-root path after the opened file is retargeted', async () => {
@@ -238,7 +315,7 @@ describe('Feishu parent-chat file reuse', () => {
     } catch {
       return;
     }
-    const secretStat = fsSync.statSync(secret);
+    const secretStat = fsSync.statSync(secret, { bigint: true });
 
     const realRealpath = fsSync.realpathSync.native.bind(fsSync.realpathSync);
     const spy = vi.spyOn(fsSync.realpathSync, 'native').mockImplementation(((
@@ -266,17 +343,17 @@ describe('Feishu parent-chat file reuse', () => {
       const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
       expect(primary.ok).toBe(true);
       const decoyReal = realRealpath(absPath);
-      const decoyStat = fsSync.statSync(decoyReal);
+      const decoyStat = fsSync.statSync(decoyReal, { bigint: true });
       expect(primary.uploadedSource).toMatchObject({
-        dev: secretStat.dev,
-        ino: secretStat.ino,
+        dev: String(secretStat.dev),
+        ino: String(secretStat.ino),
       });
-      expect(primary.uploadedSource!.ino).not.toBe(decoyStat.ino);
+      expect(primary.uploadedSource!.ino).not.toBe(String(decoyStat.ino));
       expect(primary.uploadedSource!.realPath).not.toBe(decoyReal);
       if (primary.uploadedSource!.realPath) {
-        const named = fsSync.statSync(primary.uploadedSource!.realPath);
-        expect(named.ino).toBe(secretStat.ino);
-        expect(named.dev).toBe(secretStat.dev);
+        const named = fsSync.statSync(primary.uploadedSource!.realPath, { bigint: true });
+        expect(String(named.ino)).toBe(primary.uploadedSource!.ino);
+        expect(String(named.dev)).toBe(primary.uploadedSource!.dev);
       }
     } finally {
       spy.mockRestore();

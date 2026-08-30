@@ -19,6 +19,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { open as openFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
@@ -42,6 +43,294 @@ import type { BotCredentials } from './internal-types.js';
 const FEISHU_FILE_SIZE_LIMIT = 30 * 1024 * 1024;
 /** 10 MB per image when sending as `msg_type:image`. */
 const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const HANDLE_PATH_HELPER_TIMEOUT_MS = 5_000;
+const HANDLE_PATH_HELPER_MAX_BYTES = 256 * 1024;
+
+/**
+ * Windows does not expose a `/proc/self/fd` equivalent to Node. The helper gets
+ * the already-open file as stdin, then asks the kernel for that inherited
+ * handle's final path. It never accepts an Agent-controlled path argument.
+ */
+const WINDOWS_HANDLE_PATH_SCRIPT = String.raw`
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $utf8
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CindyHandlePath {
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  public static extern uint GetFinalPathNameByHandle(IntPtr handle, StringBuilder path, uint size, uint flags);
+  [DllImport("kernel32.dll")]
+  public static extern IntPtr GetStdHandle(int kind);
+}
+'@
+$handle = [CindyHandlePath]::GetStdHandle(-10)
+$path = New-Object System.Text.StringBuilder 32768
+$length = [CindyHandlePath]::GetFinalPathNameByHandle($handle, $path, $path.Capacity, 0)
+if ($length -eq 0 -or $length -ge $path.Capacity) { exit 1 }
+[Console]::Out.Write($path.ToString())
+`;
+const WINDOWS_HANDLE_PATH_COMMAND = Buffer.from(
+  WINDOWS_HANDLE_PATH_SCRIPT,
+  'utf16le',
+).toString('base64');
+
+/**
+ * Prove that an already-open source handle is reachable from an already-open
+ * directory handle without resolving any Agent-controlled absolute path. Each
+ * component is opened relative to the previous handle with reparse traversal
+ * disabled; the final native file identity must equal the source handle.
+ */
+const WINDOWS_HANDLE_CONTAINMENT_SCRIPT = String.raw`
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $utf8
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class CindyHandleContainment {
+  private const uint FILE_READ_ATTRIBUTES = 0x00000080;
+  private const uint SYNCHRONIZE = 0x00100000;
+  private const uint FILE_SHARE_ALL = 0x00000007;
+  private const uint FILE_SHARE_READ_WRITE = 0x00000003;
+  private const uint FILE_OPEN = 0x00000001;
+  private const uint FILE_DIRECTORY_FILE = 0x00000001;
+  private const uint FILE_NON_DIRECTORY_FILE = 0x00000040;
+  private const uint FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020;
+  private const uint FILE_OPEN_REPARSE_POINT = 0x00200000;
+  private const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct UNICODE_STRING {
+    public ushort Length;
+    public ushort MaximumLength;
+    public IntPtr Buffer;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct OBJECT_ATTRIBUTES {
+    public int Length;
+    public IntPtr RootDirectory;
+    public IntPtr ObjectName;
+    public uint Attributes;
+    public IntPtr SecurityDescriptor;
+    public IntPtr SecurityQualityOfService;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct IO_STATUS_BLOCK {
+    public IntPtr Status;
+    public IntPtr Information;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct FILE_ATTRIBUTE_TAG_INFO {
+    public uint FileAttributes;
+    public uint ReparseTag;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct BY_HANDLE_FILE_INFORMATION {
+    public uint FileAttributes;
+    public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+    public uint VolumeSerialNumber;
+    public uint FileSizeHigh;
+    public uint FileSizeLow;
+    public uint NumberOfLinks;
+    public uint FileIndexHigh;
+    public uint FileIndexLow;
+  }
+
+  [DllImport("kernel32.dll")]
+  private static extern IntPtr GetStdHandle(int kind);
+
+  [DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool GetFileInformationByHandle(
+    IntPtr handle,
+    out BY_HANDLE_FILE_INFORMATION info
+  );
+
+  [DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool GetFileInformationByHandleEx(
+    IntPtr handle,
+    int infoClass,
+    out FILE_ATTRIBUTE_TAG_INFO info,
+    uint size
+  );
+
+  [DllImport("ntdll.dll")]
+  private static extern int NtCreateFile(
+    out SafeFileHandle fileHandle,
+    uint desiredAccess,
+    ref OBJECT_ATTRIBUTES objectAttributes,
+    out IO_STATUS_BLOCK ioStatusBlock,
+    IntPtr allocationSize,
+    uint fileAttributes,
+    uint shareAccess,
+    uint createDisposition,
+    uint createOptions,
+    IntPtr eaBuffer,
+    uint eaLength
+  );
+
+  private static SafeFileHandle OpenRelative(IntPtr root, string name, bool directory) {
+    IntPtr nameBuffer = IntPtr.Zero;
+    IntPtr unicodePointer = IntPtr.Zero;
+    try {
+      nameBuffer = Marshal.StringToHGlobalUni(name);
+      var unicode = new UNICODE_STRING {
+        Length = checked((ushort)(name.Length * 2)),
+        MaximumLength = checked((ushort)((name.Length + 1) * 2)),
+        Buffer = nameBuffer
+      };
+      unicodePointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UNICODE_STRING)));
+      Marshal.StructureToPtr(unicode, unicodePointer, false);
+      var attributes = new OBJECT_ATTRIBUTES {
+        Length = Marshal.SizeOf(typeof(OBJECT_ATTRIBUTES)),
+        RootDirectory = root,
+        ObjectName = unicodePointer,
+        Attributes = 0,
+        SecurityDescriptor = IntPtr.Zero,
+        SecurityQualityOfService = IntPtr.Zero
+      };
+      IO_STATUS_BLOCK statusBlock;
+      SafeFileHandle opened;
+      uint options = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT |
+        (directory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE);
+      int status = NtCreateFile(
+        out opened,
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        ref attributes,
+        out statusBlock,
+        IntPtr.Zero,
+        0,
+        directory ? FILE_SHARE_READ_WRITE : FILE_SHARE_ALL,
+        FILE_OPEN,
+        options,
+        IntPtr.Zero,
+        0
+      );
+      if (status < 0 || opened == null || opened.IsInvalid) {
+        if (opened != null) opened.Dispose();
+        return null;
+      }
+      FILE_ATTRIBUTE_TAG_INFO tag;
+      if (!GetFileInformationByHandleEx(
+          opened.DangerousGetHandle(),
+          9,
+          out tag,
+          (uint)Marshal.SizeOf(typeof(FILE_ATTRIBUTE_TAG_INFO))) ||
+          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        opened.Dispose();
+        return null;
+      }
+      return opened;
+    } catch {
+      return null;
+    } finally {
+      if (unicodePointer != IntPtr.Zero) Marshal.FreeHGlobal(unicodePointer);
+      if (nameBuffer != IntPtr.Zero) Marshal.FreeHGlobal(nameBuffer);
+    }
+  }
+
+  private static bool SameFile(IntPtr left, IntPtr right) {
+    BY_HANDLE_FILE_INFORMATION a;
+    BY_HANDLE_FILE_INFORMATION b;
+    if (!GetFileInformationByHandle(left, out a) || !GetFileInformationByHandle(right, out b)) {
+      return false;
+    }
+    if (a.FileIndexHigh == 0 && a.FileIndexLow == 0) return false;
+    if (b.FileIndexHigh == 0 && b.FileIndexLow == 0) return false;
+    return a.VolumeSerialNumber == b.VolumeSerialNumber &&
+      a.FileIndexHigh == b.FileIndexHigh &&
+      a.FileIndexLow == b.FileIndexLow;
+  }
+
+  public static bool Check(string[] segments) {
+    if (segments == null || segments.Length == 0) return false;
+    IntPtr root = GetStdHandle(-10);
+    IntPtr source = GetStdHandle(-12);
+    if (root == IntPtr.Zero || root == new IntPtr(-1) ||
+        source == IntPtr.Zero || source == new IntPtr(-1)) return false;
+
+    var opened = new List<SafeFileHandle>();
+    try {
+      IntPtr parent = root;
+      for (int i = 0; i < segments.Length; i++) {
+        string segment = segments[i];
+        if (String.IsNullOrEmpty(segment) || segment == "." || segment == ".." ||
+            segment.IndexOf('\0') >= 0 || segment.IndexOf('\\') >= 0 ||
+            segment.IndexOf('/') >= 0 || segment.IndexOf(':') >= 0) return false;
+        SafeFileHandle next = OpenRelative(parent, segment, i < segments.Length - 1);
+        if (next == null) return false;
+        opened.Add(next);
+        parent = next.DangerousGetHandle();
+      }
+      return opened.Count > 0 && SameFile(opened[opened.Count - 1].DangerousGetHandle(), source);
+    } finally {
+      for (int i = opened.Count - 1; i >= 0; i--) opened[i].Dispose();
+    }
+  }
+}
+'@
+try {
+  $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:CINDY_HANDLE_SEGMENTS))
+  $segments = @((ConvertFrom-Json -InputObject $json))
+  if ([CindyHandleContainment]::Check([string[]]$segments)) {
+    [Console]::Out.Write('1')
+    exit 0
+  }
+} catch {}
+exit 1
+`;
+const WINDOWS_HANDLE_CONTAINMENT_COMMAND = Buffer.from(
+  WINDOWS_HANDLE_CONTAINMENT_SCRIPT,
+  'utf16le',
+).toString('base64');
+
+const DARWIN_HANDLE_CONTAINMENT_SCRIPT = String.raw`
+use strict;
+use warnings;
+use Fcntl qw(O_RDONLY O_NONBLOCK O_DIRECTORY O_NOFOLLOW :mode);
+
+sub fail_closed { exit 1; }
+
+my @segments = @ARGV;
+fail_closed() unless @segments;
+for my $segment (@segments) {
+  fail_closed() if !defined($segment) || $segment eq '' || $segment eq '.' ||
+    $segment eq '..' || index($segment, '/') >= 0 || index($segment, "\0") >= 0;
+}
+
+my @source = stat(STDERR);
+fail_closed() unless @source && S_ISREG($source[2]) && $source[1] != 0;
+chdir('/dev/fd/0') or fail_closed();
+
+my @opened;
+for (my $index = 0; $index < @segments; $index += 1) {
+  my $directory = $index < @segments - 1;
+  my $flags = O_RDONLY | O_NOFOLLOW | O_NONBLOCK;
+  $flags |= O_DIRECTORY if $directory;
+  sysopen(my $handle, $segments[$index], $flags) or fail_closed();
+  push @opened, $handle;
+  my @opened_stat = stat($handle);
+  fail_closed() unless @opened_stat;
+  if ($directory) {
+    fail_closed() unless S_ISDIR($opened_stat[2]);
+    chdir('/dev/fd/' . fileno($handle)) or fail_closed();
+  } else {
+    fail_closed() unless S_ISREG($opened_stat[2]) && $opened_stat[1] != 0 &&
+      $opened_stat[0] == $source[0] && $opened_stat[1] == $source[1];
+  }
+}
+
+print STDOUT '1';
+`;
 
 let client: Lark.Client | null = null;
 let creds: BotCredentials | null = null;
@@ -920,15 +1209,14 @@ export interface ReusableFeishuFileMessage {
 
 export interface FeishuUploadedFileSource {
   realPath: string;
-  dev: number;
-  ino: number;
+  /** Exact decimal identities; strings avoid truncating 64-bit Windows file IDs. */
+  dev: string;
+  ino: string;
   /**
-   * Unused for authorization. Node has no portable openat, so a parent walk
-   * that re-opens each directory by absolute path can be swapped onto the
-   * pinned workingDir. Parent-chat reuse proves containment with the frozen
-   * attested `realPath` instead.
+   * Compatibility-only diagnostic. Parent-chat authorization ignores caller-
+   * supplied ancestry and walks from the live pinned root handle instead.
    */
-  ancestors: ReadonlyArray<{ dev: number; ino: number }>;
+  ancestors: ReadonlyArray<{ dev: string; ino: string }>;
 }
 
 export interface FeishuSendFileResult extends SendFileResult {
@@ -984,42 +1272,270 @@ function isSyntheticFdPath(resolved: string): boolean {
 
 function realPathIfInode(
   candidate: string,
-  identity: { dev: number; ino: number },
+  identity: { dev: string; ino: string },
 ): string | null {
   try {
     const realPath = fs.realpathSync.native(candidate);
     if (isSyntheticFdPath(realPath)) return null;
-    const leaf = fs.statSync(realPath);
-    if (leaf.dev === identity.dev && leaf.ino === identity.ino) return realPath;
+    const leaf = fs.statSync(realPath, { bigint: true });
+    if (String(leaf.dev) === identity.dev && String(leaf.ino) === identity.ino) return realPath;
   } catch {
     /* candidate no longer names this inode */
   }
   return null;
 }
 
-/**
- * Native canonical path for the opened handle. `realpathSync.native(absPath)` after open is
- * a separate lookup: the Agent can retarget the path between those two calls.
- * Bind only via the fd where the OS exposes a real path (`/proc/self/fd` on Linux).
- * Darwin `/dev/fd` is fdescfs and does not canonicalize to the opened file;
- * Windows has no Node-exposed handle path. Do not pair independent
- * realpath+stat lookups on absPath. Unbound → empty string (fail closed).
- */
-function attestedRealPath(
-  fd: number,
-  identity: { dev: number; ino: number },
-): string {
-  const fdHints =
-    process.platform === 'linux'
-      ? [`/proc/self/fd/${fd}`]
-      : process.platform === 'darwin'
-        ? [`/dev/fd/${fd}`]
-        : [];
-  for (const hint of fdHints) {
-    const bound = realPathIfInode(hint, identity);
-    if (bound) return bound;
+function runHandlePathHelper(
+  command: string,
+  args: readonly string[],
+  stdin: number | 'ignore',
+  stderr: number | 'ignore' = 'ignore',
+  env?: NodeJS.ProcessEnv,
+): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, {
+        stdio: [stdin, 'pipe', stderr],
+        windowsHide: true,
+        ...(env ? { env } : {}),
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+
+    let settled = false;
+    const finish = (value: Buffer | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const chunks: Buffer[] = [];
+    let total = 0;
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += next.length;
+      if (total > HANDLE_PATH_HELPER_MAX_BYTES) {
+        child.stdout?.destroy();
+        child.kill();
+        finish(null);
+        return;
+      }
+      chunks.push(next);
+    });
+    child.once('error', () => finish(null));
+    child.once('close', (code) => finish(code === 0 ? Buffer.concat(chunks) : null));
+
+    const timer = setTimeout(() => {
+      child.stdout?.destroy();
+      child.kill();
+      finish(null);
+    }, HANDLE_PATH_HELPER_TIMEOUT_MS);
+    timer.unref?.();
+  });
+}
+
+function windowsPowerShellPath(): string | null {
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  if (!systemRoot || !path.win32.isAbsolute(systemRoot)) return null;
+  const executable = path.win32.join(
+    systemRoot,
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  try {
+    return fs.statSync(executable).isFile() ? executable : null;
+  } catch {
+    return null;
   }
-  return '';
+}
+
+function normalizeWindowsHandlePath(raw: string): string | null {
+  const value = raw.replace(/^\uFEFF/, '');
+  if (!value || /[\0\r\n]/.test(value)) return null;
+  const extendedPrefix = '\\\\?\\';
+  if (!value.startsWith(extendedPrefix)) return null;
+  const unprefixed = value.slice(extendedPrefix.length);
+  if (unprefixed.startsWith('UNC\\')) return `\\\\${unprefixed.slice(4)}`;
+  return /^[A-Za-z]:\\/.test(unprefixed) ? unprefixed : null;
+}
+
+async function windowsHandlePath(fd: number): Promise<string | null> {
+  const powershell = windowsPowerShellPath();
+  if (!powershell) return null;
+  const output = await runHandlePathHelper(
+    powershell,
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', WINDOWS_HANDLE_PATH_COMMAND],
+    fd,
+  );
+  return output ? normalizeWindowsHandlePath(output.toString('utf8')) : null;
+}
+
+async function darwinHandlePath(fd: number): Promise<string | null> {
+  const output = await runHandlePathHelper(
+    '/usr/sbin/lsof',
+    ['-w', '-a', '-p', String(process.pid), '-d', String(fd), '-F0n'],
+    'ignore',
+  );
+  if (!output) return null;
+  for (const rawField of output.toString('utf8').split('\0')) {
+    const field = rawField.startsWith('\n') ? rawField.slice(1) : rawField;
+    if (field.startsWith('n') && field.length > 1) return field.slice(1);
+  }
+  return null;
+}
+
+/**
+ * Native canonical path for the opened handle. A later lookup of `absPath` is
+ * a separate operation that can be retargeted. Linux binds through procfs;
+ * macOS asks `lsof` for the live vnode path; Windows passes the opened handle
+ * to a fixed PowerShell/GetFinalPathNameByHandle helper. Any unavailable or
+ * unverifiable helper fails closed.
+ */
+export async function attestedRealPath(
+  fd: number,
+  identity: { dev: string; ino: string },
+): Promise<string> {
+  const candidate =
+    process.platform === 'linux'
+      ? `/proc/self/fd/${fd}`
+      : process.platform === 'darwin'
+        ? await darwinHandlePath(fd)
+        : process.platform === 'win32'
+          ? await windowsHandlePath(fd)
+          : null;
+  return candidate ? (realPathIfInode(candidate, identity) ?? '') : '';
+}
+
+function validContainmentSegments(segments: readonly string[]): boolean {
+  if (segments.length === 0) return false;
+  return segments.every(
+    (segment) =>
+      segment.length > 0 &&
+      segment !== '.' &&
+      segment !== '..' &&
+      !segment.includes('\0') &&
+      !segment.includes('/'),
+  );
+}
+
+function sameOpenFile(leftFd: number, rightFd: number): boolean {
+  try {
+    const left = fs.fstatSync(leftFd, { bigint: true });
+    const right = fs.fstatSync(rightFd, { bigint: true });
+    if (!left.isFile() || !right.isFile() || left.ino === 0n || right.ino === 0n) return false;
+    return left.dev === right.dev && left.ino === right.ino;
+  } catch {
+    return false;
+  }
+}
+
+function linuxHandleContainment(
+  sourceFd: number,
+  rootFd: number,
+  segments: readonly string[],
+): boolean {
+  if (!fs.constants.O_NOFOLLOW || !validContainmentSegments(segments)) return false;
+  const opened: number[] = [];
+  let parentFd = rootFd;
+  try {
+    for (let index = 0; index < segments.length; index += 1) {
+      const directory = index < segments.length - 1;
+      let flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
+      if (fs.constants.O_NONBLOCK) flags |= fs.constants.O_NONBLOCK;
+      if (directory && fs.constants.O_DIRECTORY) flags |= fs.constants.O_DIRECTORY;
+      const fd = fs.openSync(`/proc/self/fd/${parentFd}/${segments[index]}`, flags);
+      opened.push(fd);
+      const stat = fs.fstatSync(fd, { bigint: true });
+      if (directory) {
+        if (!stat.isDirectory()) return false;
+        parentFd = fd;
+      } else if (!sameOpenFile(fd, sourceFd)) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    for (const fd of opened.reverse()) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* best-effort close */
+      }
+    }
+  }
+}
+
+async function windowsHandleContainment(
+  sourceFd: number,
+  rootFd: number,
+  segments: readonly string[],
+): Promise<boolean> {
+  if (!validContainmentSegments(segments) || segments.some((segment) => segment.includes('\\'))) {
+    return false;
+  }
+  const powershell = windowsPowerShellPath();
+  if (!powershell) return false;
+  const encodedSegments = Buffer.from(JSON.stringify(segments), 'utf8').toString('base64');
+  const output = await runHandlePathHelper(
+    powershell,
+    [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      WINDOWS_HANDLE_CONTAINMENT_COMMAND,
+    ],
+    rootFd,
+    sourceFd,
+    { ...process.env, CINDY_HANDLE_SEGMENTS: encodedSegments },
+  );
+  return output?.toString('utf8') === '1';
+}
+
+async function darwinHandleContainment(
+  sourceFd: number,
+  rootFd: number,
+  segments: readonly string[],
+): Promise<boolean> {
+  if (!validContainmentSegments(segments)) return false;
+  const output = await runHandlePathHelper(
+    '/usr/bin/perl',
+    ['-e', DARWIN_HANDLE_CONTAINMENT_SCRIPT, '--', ...segments],
+    rootFd,
+    sourceFd,
+    {},
+  );
+  return output?.toString('utf8') === '1';
+}
+
+/**
+ * Object-chain containment proof. `sourceFd` and `rootFd` stay open throughout
+ * the check; every child is opened relative to the preceding directory handle
+ * with symlink/reparse traversal disabled, then the final handle is compared
+ * to `sourceFd`. No absolute path is re-resolved by the helper.
+ */
+export async function attestOpenFileWithinDirectory(
+  sourceFd: number,
+  rootFd: number,
+  segments: readonly string[],
+): Promise<boolean> {
+  if (process.platform === 'linux') {
+    return linuxHandleContainment(sourceFd, rootFd, segments);
+  }
+  if (process.platform === 'darwin') {
+    return darwinHandleContainment(sourceFd, rootFd, segments);
+  }
+  if (process.platform === 'win32') {
+    return windowsHandleContainment(sourceFd, rootFd, segments);
+  }
+  return false;
 }
 
 async function sendFileToTarget(
@@ -1038,14 +1554,15 @@ async function sendFileToTarget(
   }
 
   try {
-    const stat = await handle.stat();
-    const realPath = attestedRealPath(handle.fd, stat);
+    const stat = await handle.stat({ bigint: true });
+    const identity = { dev: String(stat.dev), ino: String(stat.ino) };
+    const realPath = await attestedRealPath(handle.fd, identity);
     const result = await sendFileSourceToTarget(
       c,
       target,
       {
         absPath,
-        size: stat.size,
+        size: Number(stat.size),
         createReadStream: () => handle.createReadStream({ autoClose: false }),
       },
       displayName,
@@ -1054,8 +1571,7 @@ async function sendFileToTarget(
     if (result.ok) {
       result.uploadedSource = {
         realPath,
-        dev: stat.dev,
-        ino: stat.ino,
+        ...identity,
         ancestors: [],
       };
     }
