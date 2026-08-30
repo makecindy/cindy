@@ -313,6 +313,27 @@ describe('mobile maker transport', () => {
     ]);
   });
 
+  it('sends model/provider/effort/Fast as one atomic set-model selection', async () => {
+    const { calls, maker } = harness();
+
+    await maker.setModel('s1', 'fixed-model', 'provider-a', {
+      effort: null,
+      fastMode: false,
+    });
+
+    expect(calls).toEqual([{
+      deviceId: 'dev-1',
+      channel: 'maker:set-model',
+      args: [
+        's1',
+        'fixed-model',
+        'provider-a',
+        null,
+        { effort: null, fastMode: false },
+      ],
+    }]);
+  });
+
   it('fails closed when a legacy Desktop returns model-window confirmation data', async () => {
     const invoke: RemoteInvoke = async () => ({
       deferred: false,

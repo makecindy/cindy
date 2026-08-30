@@ -13805,11 +13805,70 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // deferred 接受时已按请求值落盘,不纠正则下一次懒 resume 按停用路由重建
     // (PR #744 review 第十、十四轮)。
     persistRoute: async (sessionId, route) => {
-      const patch: Record<string, unknown> = { providerId: route.providerId };
-      if (route.model) patch.model = route.model;
-      if (route.effort) patch.effort = route.effort;
-      if (route.fastMode !== undefined) patch.fastMode = route.fastMode;
       const agentKind = getSessionDbAgentKind(sessionId);
+      const [desiredRow] = await getDbClient()
+        .drizzle.select({
+          model: sessions.model,
+          effort: sessions.effort,
+          fastMode: sessions.fastMode,
+        })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      const finalModel = route.model ?? desiredRow?.model ?? null;
+      const previousRoute = pendingCredentialSwitchHolder?.get(sessionId)?.previousRoute;
+      const restoringPreviousRoute =
+        !!route.model &&
+        route.model === previousRoute?.model &&
+        route.providerId === previousRoute.providerId;
+      let finalEffort = restoringPreviousRoute && route.effort && isSupportedRuntimeEffort(route.effort)
+        ? route.effort
+        : isSupportedRuntimeEffort(desiredRow?.effort)
+          ? desiredRow.effort
+          : !desiredRow && route.effort && isSupportedRuntimeEffort(route.effort)
+            ? route.effort
+            : null;
+      let finalFastMode = restoringPreviousRoute && route.fastMode !== undefined
+        ? route.fastMode
+        : desiredRow
+          ? desiredRow.fastMode === true
+          : route.fastMode === true;
+      if (agentKind && finalModel) {
+        const runtimeAgentKind = dbToMakerAgentKind(agentKind);
+        const providers = await getDesktopProviderService().listProviders({
+          allowSideEffects: false,
+          catalog: getActiveCatalog(),
+        });
+        const finalProviderId = route.providerId ?? effectiveSourceIdForModel(
+          providers,
+          null,
+          finalModel,
+          runtimeAgentKind,
+        );
+        const finalProvider = providers.find((provider) => provider.id === finalProviderId);
+        const catalogModel = findCatalogModel(finalProvider, finalModel, runtimeAgentKind, {
+          exact: true,
+        });
+        if (catalogModel) {
+          const axes = resolveSessionRuntimeAxes({
+            model: catalogModel,
+            effort: finalEffort,
+            fastMode: finalFastMode,
+            effortExplicit: false,
+            fastExplicit: false,
+          });
+          if (axes.ok) {
+            finalEffort = axes.effort;
+            finalFastMode = axes.fastMode;
+          }
+        }
+      }
+      const patch: Record<string, unknown> = {
+        providerId: route.providerId,
+        effort: finalEffort,
+        fastMode: finalFastMode,
+      };
+      if (route.model) patch.model = route.model;
       if (route.model && agentKind) {
         const verifiedWindow = lookupVerifiedContextWindow(
           (resolvedAgentKind, modelId, pid) =>
@@ -13826,6 +13885,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (verifiedWindow) patch.contextWindow = verifiedWindow;
       }
       await getDbClient().drizzle.update(sessions).set(patch).where(eq(sessions.id, sessionId));
+      setSessionEffort(sessionId, finalEffort);
+      setSessionFastMode(sessionId, finalFastMode);
       broadcastSessionPatched(sessionId, patch);
     },
     logger: log,
@@ -15256,7 +15317,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         (!isSupportedRuntimeEffort(selectionEffort) &&
           !(
             selectionEffort === null &&
-            (internalOptions.source !== 'user' || confirmedContextWindow !== undefined)
+            (internalOptions.source !== 'user' ||
+              isDeviceLinkInvoke() ||
+              confirmedContextWindow !== undefined)
           )) ||
         typeof (selection as { fastMode?: unknown }).fastMode !== 'boolean')
     ) {
@@ -16083,7 +16146,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                       'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
                   }
                 : {}),
-              forceSessionRebuild: rebuildLiveOrcaWorker,
+              forceSessionRebuild:
+                rebuildLiveOrcaWorker ||
+                (atomicSelection?.effort === null && runtimeAgentKind !== 'pi'),
               ...(runtimeAgentKind === 'pi' && runtimeRouteChanged
                 ? {
                     assertSessionCloseSupported: () => {
@@ -16096,10 +16161,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 : {}),
               isSessionInTurn,
               registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
-              clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
+              clearPendingCredentialSwitch: atomicSelection
+                ? (pendingSessionId) =>
+                    clearPendingCredentialSwitchForSession(pendingSessionId, { wake: false })
+                : clearPendingCredentialSwitchForSession,
               // Worker rebuild must publish the accepted runtime profile before queued input
               // can lazy-create the replacement execution unit.
-              ...(!rebuildLiveOrcaWorker
+              ...(!rebuildLiveOrcaWorker && !atomicSelection
                 ? { wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch }
                 : {}),
               getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
@@ -16220,7 +16288,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               session: sess,
               effort: selectionToCommit.effort,
               fastMode: selectionToCommit.fastMode,
-              applyEffort: routeExplicit || internalOptions.effortExplicit === true,
+              applyEffort:
+                runtimeAgentKind !== 'pi' &&
+                (routeExplicit || internalOptions.effortExplicit === true),
               applyFastMode: routeExplicit || internalOptions.fastExplicit === true,
               assertCanCommit: assertRuntimeOwnerCurrent,
               commitControlStores,
@@ -16363,7 +16433,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             },
           });
         }
-        if ((rebuildLiveOrcaWorker || modelWindowRebuilt) && !response.deferred) {
+        if ((rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection) && !response.deferred) {
           wakeSessionInputAfterCredentialSwitch(sessionId);
         }
         if (!response.deferred) {
@@ -16444,6 +16514,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           effectiveProviderId: normalizeSessionProviderId(effectiveProviderId) ?? null,
         });
       } catch (err) {
+        // Atomic calls suppress applyRuntimeSetModelChange's early wake. If a later step
+        // rejects after clearing an older pending switch, release the queue on the still-
+        // authoritative profile; a restored/new pending gate will conservatively block it.
+        if (atomicSelection) {
+          wakeSessionInputAfterCredentialSwitch(sessionId);
+        }
         if (err instanceof CredentialModeSwitchBusyError) {
           // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
           // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。

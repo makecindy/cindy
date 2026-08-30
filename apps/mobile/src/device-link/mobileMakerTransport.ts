@@ -429,6 +429,7 @@ export interface MobileMakerTransport {
     sessionId: string,
     model: string,
     providerId?: string,
+    selection?: { effort: string | null; fastMode: boolean },
   ): Promise<{ deferred?: boolean; superseded?: boolean } | undefined>;
   /** 登记跨 Agent 切换意图；真正切换在下一条消息发送时由 desktop main 执行。 */
   switchSessionAgent(
@@ -683,10 +684,15 @@ export function createMobileMakerTransport({
     send: (sessionId, message, createOpts, sendOpts) =>
       call('maker:send', [sessionId, message, createOpts, sendOpts]),
     listActiveSessions: () => call('maker:list-active'),
-    setModel: async (sessionId, model, providerId) => {
+    setModel: async (sessionId, model, providerId, selection) => {
+      const wireArgs = selection
+        ? [sessionId, model, providerId ?? null, null, selection]
+        : providerId
+          ? [sessionId, model, providerId]
+          : [sessionId, model];
       const result = await call<{ deferred?: boolean; superseded?: boolean } | undefined>(
         'maker:set-model',
-        providerId ? [sessionId, model, providerId] : [sessionId, model],
+        wireArgs,
       );
       if (
         result !== null &&

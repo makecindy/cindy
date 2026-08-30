@@ -151,9 +151,10 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('testID="session.modelSheet"');
     expect(source).not.toContain('composerOverlayPanel');
     expect(source).toContain('onPress={toggleComposerModelPicker}');
-    // 选行 fast 写穿只按值变化,不做 fastEditable 门控:切到不支持 fast 的模型时必须把
-    // 服务端残留的 fastMode=true 清零(review P1 回归锚)。
-    expect(source).toContain('if (next.fastMode !== modelSheetSelection.fastMode)');
+    // 新 host 把 fast 纳入原子 selection；旧 host 的兼容写穿仍只按值变化，不做
+    // fastEditable 门控，切到不支持 fast 的模型时必须把服务端残留的 true 清零。
+    expect(source).toContain('fastMode: next.fastMode');
+    expect(source).toContain('if (!atomicSelection && next.fastMode !== modelSheetSelection.fastMode)');
     expect(source).not.toContain('fastEditable && next.fastMode');
     // + 号打开可拖动 Context 面板(附件 / 计划模式 / 目标模式收在面板内)。
     expect(source).toContain('testID="session.contextSheet"');

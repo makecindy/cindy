@@ -202,7 +202,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
-  it('accepts null effort only for fixed-effort local confirmation retries before rebuild', () => {
+  it('accepts null effort for fixed-effort local retries and device-link atomic selections', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -217,7 +217,7 @@ describe('session runtime control wiring', () => {
     expect(confirmation).toBeGreaterThan(-1);
     expect(confirmation).toBeLessThan(selectionValidation);
     expect(setModel).toContain(
-      "selectionEffort === null &&\n            (internalOptions.source !== 'user' || confirmedContextWindow !== undefined)",
+      "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
     );
     expect(setModel).toContain('catalogModel.efforts.length > 0');
     expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
@@ -250,6 +250,81 @@ describe('session runtime control wiring', () => {
     );
     expect(axisValidation).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
     expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
+  });
+
+  it('reconciles deferred route axes before the pending gate can wake input', () => {
+    const persistRoute = handlerBody(
+      registerSource,
+      'persistRoute: async (sessionId, route) => {',
+      'logger: log,',
+    );
+    const resolveAxes = persistRoute.indexOf('const axes = resolveSessionRuntimeAxes({');
+    const persist = persistRoute.indexOf(
+      'await getDbClient().drizzle.update(sessions).set(patch)',
+      resolveAxes,
+    );
+    const commitEffort = persistRoute.indexOf('setSessionEffort(sessionId, finalEffort);', persist);
+    const commitFast = persistRoute.indexOf('setSessionFastMode(sessionId, finalFastMode);', persist);
+    const broadcast = persistRoute.indexOf('broadcastSessionPatched(sessionId, patch);', persist);
+
+    expect(persistRoute).toContain('const [desiredRow] = await getDbClient()');
+    expect(persistRoute).toContain('const restoringPreviousRoute =');
+    expect(persistRoute).toContain(
+      'let finalEffort = restoringPreviousRoute && route.effort',
+    );
+    expect(persistRoute).toContain(
+      'let finalFastMode = restoringPreviousRoute && route.fastMode !== undefined',
+    );
+    expect(persistRoute).toContain('effortExplicit: false');
+    expect(persistRoute).toContain('fastExplicit: false');
+    expect(resolveAxes).toBeGreaterThan(-1);
+    expect(persist).toBeGreaterThan(resolveAxes);
+    expect(commitEffort).toBeGreaterThan(persist);
+    expect(commitFast).toBeGreaterThan(commitEffort);
+    expect(broadcast).toBeGreaterThan(commitFast);
+  });
+
+  it('commits device-link atomic axes before a rebuilt queue can wake', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const selectionStart = setModel.indexOf('const selectionToCommit = atomicSelection;');
+    const applyAxes = setModel.indexOf('await applyRuntimeSelectionAxesWithRecovery({');
+    const patchEffort = setModel.indexOf('patch.effort = atomicSelection.effort;', applyAxes);
+    const patchFast = setModel.indexOf('patch.fastMode = atomicSelection.fastMode;', patchEffort);
+    const persistSelection = setModel.indexOf(
+      'await persistSessionFields(sessionId, patch);',
+      patchFast,
+    );
+    const normalWakeGuard = setModel.indexOf(
+      'if ((rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection) && !response.deferred)',
+      persistSelection,
+    );
+    const wakeQueue = setModel.indexOf(
+      'wakeSessionInputAfterCredentialSwitch(sessionId);',
+      normalWakeGuard,
+    );
+
+    expect(setModel).toContain('selectionEffort === null &&');
+    expect(setModel).toContain('isDeviceLinkInvoke() ||');
+    expect(setModel).toContain(
+      "(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')",
+    );
+    expect(setModel).toContain('!rebuildLiveOrcaWorker && !atomicSelection');
+    expect(setModel).toContain('{ wake: false }');
+    expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
+    expect(selectionStart).toBeGreaterThan(-1);
+    expect(setModel.slice(selectionStart, applyAxes)).toContain(
+      'setSessionFastMode(sessionId, selectionToCommit.fastMode);',
+    );
+    expect(applyAxes).toBeGreaterThan(selectionStart);
+    expect(patchEffort).toBeGreaterThan(applyAxes);
+    expect(patchFast).toBeGreaterThan(patchEffort);
+    expect(persistSelection).toBeGreaterThan(patchFast);
+    expect(normalWakeGuard).toBeGreaterThan(persistSelection);
+    expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
   });
 
   it('requires a verified target window before preparing any destructive model rebuild', () => {
@@ -287,7 +362,9 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)');
     expect(setModel).toContain('modelWindowRebuilt ||');
     expect(setModel).toContain('patch.contextWindow = targetContextWindow;');
-    expect(setModel).toContain('(rebuildLiveOrcaWorker || modelWindowRebuilt)');
+    expect(setModel).toContain(
+      '(rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection)',
+    );
     expect(setModel).toContain('wakeSessionInputAfterCredentialSwitch(sessionId);');
   });
 
@@ -951,7 +1028,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
     expect(setModel).toContain('const result = routeExplicit');
     expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
-    expect(setModel).toContain('applyEffort: routeExplicit || internalOptions.effortExplicit === true');
+    expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
+    expect(setModel).toContain('(routeExplicit || internalOptions.effortExplicit === true)');
     expect(setModel).toContain('applyFastMode: routeExplicit || internalOptions.fastExplicit === true');
   });
 
@@ -962,9 +1040,10 @@ describe('session runtime control wiring', () => {
       'const recoverRemoteRuntimeAxisPersistence',
     );
     expect(setModel).toContain("runtimeStatus.orcaRole === 'worker'");
-    expect(setModel).toContain('forceSessionRebuild: rebuildLiveOrcaWorker');
+    expect(setModel).toContain('forceSessionRebuild:');
+    expect(setModel).toContain('rebuildLiveOrcaWorker ||');
     expect(setModel).toContain(
-      'if ((rebuildLiveOrcaWorker || modelWindowRebuilt) && !response.deferred)',
+      'if ((rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection) && !response.deferred)',
     );
   });
 });

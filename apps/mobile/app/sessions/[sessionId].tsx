@@ -172,6 +172,7 @@ import {
 import {
   buildSessionRuntimeOptions,
   normalizeMobileAgentCapabilities,
+  reconcileRuntimeDraftWithCapabilities,
   type MobileAgentCapabilities,
   type MobileModelOption,
   type MobileSessionRuntimeOptions,
@@ -8006,6 +8007,7 @@ export default function SessionScreen() {
     model: string;
     providerId?: string;
     targetContextWindow?: number;
+    selection?: { effort: string | null; fastMode: boolean };
   }): Promise<boolean> => {
     if (shouldBlockLegacyRemoteModelWindowSwitch({
       hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
@@ -8018,7 +8020,7 @@ export default function SessionScreen() {
       return false;
     }
     try {
-      await maker.setModel(sessionId, args.model, args.providerId);
+      await maker.setModel(sessionId, args.model, args.providerId, args.selection);
       return true;
     } catch (err) {
       const reason = formatRemoteError(err);
@@ -8068,20 +8070,26 @@ export default function SessionScreen() {
       });
       return;
     }
+    const atomicSelection = modelSheetCapabilities?.supportsModelWindowSwitchGuard === true
+      ? { effort: next.effort || null, fastMode: next.fastMode }
+      : undefined;
     void (async () => {
       await runControlAction(async () => {
         const applied = await setComposerModel({
           model: next.model,
           providerId: next.providerId,
           targetContextWindow: row.model.contextWindow,
+          selection: atomicSelection,
         });
         if (!applied) return false;
-        if (next.effort && next.effort !== modelSheetSelection.effort) {
+        // 新 host 在 SET_MODEL 的 session lock 内落定全部轴，再唤醒重建后的输入队列。
+        // 旧 host 不懂 selection，保留原有低压/same/expand 兼容链；90% 缩窗已在上方拒绝。
+        if (!atomicSelection && next.effort && next.effort !== modelSheetSelection.effort) {
           await maker.setEffort(sessionId, next.effort);
         }
         // 只按值变化写穿,不做 fastEditable 门控:切到不支持 fast 的模型时
         // resolveRowSelection 已算出 fastMode=false,门控会跳过清零、让服务端残留 true。
-        if (next.fastMode !== modelSheetSelection.fastMode) {
+        if (!atomicSelection && next.fastMode !== modelSheetSelection.fastMode) {
           await maker.setFastMode(sessionId, next.fastMode);
         }
       }, {
@@ -8091,8 +8099,7 @@ export default function SessionScreen() {
         ...(next.effort ? { effort: next.effort } : {}),
         fastMode: next.fastMode,
         ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
-        // 多步 RPC(setModel → setEffort → setFastMode)可能部分成功,失败时回读权威
-        // 会话收敛而非本地回滚,避免手机显示与远端已生效状态脱节(codex review R16)。
+        // 旧 host 的兼容 RPC 链可能部分成功；失败时回读权威会话收敛而非本地回滚。
       }, { recover: 'refetch' });
     })();
   }, [
@@ -8113,19 +8120,31 @@ export default function SessionScreen() {
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
     if (!canUseRemoteSessionControls || modelSheetAgentKind !== sessionAgentKind) return;
+    const next = reconcileRuntimeDraftWithCapabilities({
+      model: option.id,
+      effort: modelSheetSelection?.effort ?? '',
+      permissionMode: currentSession?.permissionMode ?? 'default',
+      fastMode: modelSheetSelection?.fastMode ?? false,
+    }, modelSheetCapabilities);
+    const atomicSelection = modelSheetCapabilities?.supportsModelWindowSwitchGuard === true
+      ? { effort: next.effort || null, fastMode: next.fastMode }
+      : undefined;
     void (async () => {
       await runControlAction(
         () => setComposerModel({
           model: option.id,
           targetContextWindow: option.contextWindow,
+          selection: atomicSelection,
         }),
         {
           model: option.id,
+          ...(atomicSelection?.effort ? { effort: atomicSelection.effort } : {}),
+          ...(atomicSelection ? { fastMode: atomicSelection.fastMode } : {}),
           ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
         },
       );
     })();
-  }, [agentSwitchIntent, canUseRemoteSessionControls, modelSheetAgentKind, runControlAction, sessionAgentKind, setComposerModel]);
+  }, [agentSwitchIntent, canUseRemoteSessionControls, currentSession?.permissionMode, modelSheetAgentKind, modelSheetCapabilities, modelSheetSelection?.effort, modelSheetSelection?.fastMode, runControlAction, sessionAgentKind, setComposerModel]);
   const browseComposerModelAgent = useCallback(async (next: MobileSessionAgentKind) => {
     if (next === modelSheetAgentKind) return true;
     if (next !== sessionAgentKind) {

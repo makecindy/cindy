@@ -52,7 +52,9 @@ describe('session Agent switch UI wiring', () => {
     );
 
     const legacyGuard = helper.indexOf('shouldBlockLegacyRemoteModelWindowSwitch({');
-    const setModel = helper.indexOf('await maker.setModel(sessionId, args.model, args.providerId)');
+    const setModel = helper.indexOf(
+      'await maker.setModel(sessionId, args.model, args.providerId, args.selection)',
+    );
     expect(legacyGuard).toBeGreaterThan(-1);
     expect(legacyGuard).toBeLessThan(setModel);
     expect(helper.slice(legacyGuard, setModel)).toContain('return false;');
@@ -65,8 +67,14 @@ describe('session Agent switch UI wiring', () => {
     expect(helper).toContain('currentContextWindow: currentSession?.contextWindow');
     expect(helper).toContain('targetContextWindow: args.targetContextWindow');
     expect(helper).toContain('showRemoteModelWindowUnsupported(args.targetContextWindow);');
+    expect(rowSelector).toContain(
+      'modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
+    );
+    expect(rowSelector).toContain('selection: atomicSelection,');
     expect(rowSelector).toContain('setComposerModel({');
     expect(rowSelector).toContain('if (!applied) return false;');
+    expect(rowSelector).toContain('if (!atomicSelection && next.effort');
+    expect(rowSelector).toContain('if (!atomicSelection && next.fastMode');
     expect(rowSelector.indexOf('if (!applied) return false;')).toBeLessThan(
       rowSelector.indexOf('await maker.setEffort('),
     );
@@ -74,7 +82,16 @@ describe('session Agent switch UI wiring', () => {
       rowSelector.indexOf('await maker.setFastMode('),
     );
     expect(rowSelector).toContain('targetContextWindow: row.model.contextWindow');
+    expect(flatSelector).toContain('reconcileRuntimeDraftWithCapabilities({');
+    expect(flatSelector).toContain(
+      'modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
+    );
     expect(flatSelector).toContain('targetContextWindow: option.contextWindow');
+    expect(flatSelector).toContain('selection: atomicSelection,');
+    expect(flatSelector).toContain(
+      'atomicSelection?.effort ? { effort: atomicSelection.effort }',
+    );
+    expect(flatSelector).toContain('{ fastMode: atomicSelection.fastMode }');
     expect(source).not.toContain('confirmMobileModelWindowSwitch');
     expect(source).not.toContain('confirmComposerModelWindowSwitch');
     expect(source).not.toContain('setComposerModelWithFinalWindowConfirmation');
