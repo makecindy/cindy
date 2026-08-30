@@ -130,8 +130,8 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('deferWindowsSessionEndWiringTeardown(');
     expectOrder(
       wireSessionSource,
-      'for (const dispose of existing.disposers) dispose();',
       'deferWindowsSessionEndWiringTeardown(',
+      'for (const dispose of existing.disposers) dispose();',
     );
     expect(wireSessionSource).toContain('existing.session.setInteractionListener(null);');
     const replayTeardownStart = wireSessionSource.indexOf(
@@ -249,38 +249,43 @@ describe('maker:event hot path ordering', () => {
     expect(fallbackClassification).toBeGreaterThanOrEqual(0);
     expect(forwardStaleFence).toBeGreaterThan(fallbackClassification);
     expect(wireSessionSource).toContain('const replay = event.sessionEventReplay;');
+    const replayStart = wireSessionSource.indexOf(
+      'const replay = event.sessionEventReplay;',
+      forwardStaleFence,
+    );
+    expect(replayStart).toBeGreaterThanOrEqual(forwardStaleFence);
     expectOrder(
-      wireSessionSource,
+      wireSessionSource.slice(replayStart),
       'const replay = event.sessionEventReplay;',
       'persistReservedStaleAssistantBlock(',
     );
     expectOrder(
-      wireSessionSource,
+      wireSessionSource.slice(replayStart),
       'persistReservedStaleAssistantBlock(',
       'persistReservedStaleOrphanToolResults(',
     );
     expectOrder(
-      wireSessionSource,
+      wireSessionSource.slice(replayStart),
       'persistReservedStaleOrphanToolResults(',
       'onReservedStaleTurnErrorEvent(',
     );
     expectOrder(
-      wireSessionSource,
+      wireSessionSource.slice(replayStart),
       'onReservedStaleTurnErrorEvent(',
       'trackRequiredWindowsFallbackErrorPersistence(',
     );
     expectOrder(
-      wireSessionSource,
+      wireSessionSource.slice(replayStart),
       'trackRequiredWindowsFallbackErrorPersistence(',
       'const durableStaleDone = whenSessionPersistedDurably(session.id);',
     );
     expectOrder(
-      wireSessionSource,
+      wireSessionSource.slice(replayStart),
       'const durableStaleDone = whenSessionPersistedDurably(session.id);',
       'trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleDone, {',
     );
     expectOrder(
-      wireSessionSource,
+      wireSessionSource.slice(replayStart),
       'trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleDone, {',
       "log.debug('ignored stale terminal after leftover turn reclaim'",
     );
@@ -319,9 +324,21 @@ describe('maker:event hot path ordering', () => {
 
     expectOrder(
       replacementSource,
-      'reserveStaleClaudeUsageForSessionReplacement(existing.session);',
-      'reserveAssistantBlockForSessionReplacement(session.id, session.instanceId, {',
+      'const keepsReplayConsumers = deferWindowsSessionEndWiringTeardown(',
+      'if (keepsReplayConsumers) {',
     );
+    expectOrder(
+      replacementSource,
+      'if (keepsReplayConsumers) {',
+      'reserveAssistantBlockForSessionReplacement(',
+    );
+    expect(replacementSource).toContain(
+      'flushAssistantBlock(session.id, null, supersededTurnIdentity);',
+    );
+    expect(replacementSource).toContain(
+      'persistReservedStaleOrphanToolResults(session.id, null, supersededTurnIdentity);',
+    );
+    expect(replacementSource).toContain('resetTurnPersistState(session.id);');
     expect(replacementSource).toContain(
       'sessionInstanceId: existing.session.instanceId,\n      turnGeneration: existing.session.getTurnGeneration(),',
     );

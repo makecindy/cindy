@@ -4396,33 +4396,48 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   }
   if (existing) {
     reserveStaleClaudeUsageForSessionReplacement(existing.session);
-    reserveAssistantBlockForSessionReplacement(session.id, session.instanceId, {
+    const supersededTurnIdentity: AssistantTurnPersistenceIdentity = {
       sessionInstanceId: existing.session.instanceId,
       turnGeneration: existing.session.getTurnGeneration(),
       dbAgentKind: makerToDbAgentKind(existing.session.agentKind),
-    });
-    reservePendingToolResultsForSessionReplacement(session.id, session.instanceId);
+    };
     // A runtime replacement invalidates any delayed direct-abort callback that
     // still belongs to the old Session instance.
     cancelDirectAbortReconciliation(session.id);
     goalDeferredResumeCancelObserver?.(session.id);
+    const teardownExistingReplayConsumers = (): void => {
+      for (const dispose of existing.replayConsumerDisposers) dispose();
+      clearReservedStaleClaudeUsage(existing.session.id, existing.session.instanceId);
+    };
+    const keepsReplayConsumers = deferWindowsSessionEndWiringTeardown(
+      existing.session.id,
+      existing.session.agentKind,
+      teardownExistingReplayConsumers,
+    );
+    if (keepsReplayConsumers) {
+      reserveAssistantBlockForSessionReplacement(
+        session.id,
+        session.instanceId,
+        supersededTurnIdentity,
+      );
+      reservePendingToolResultsForSessionReplacement(session.id, session.instanceId);
+    } else {
+      // Ordinary provider/runtime replacement has no replay owner. Flush the
+      // superseded turn's visible buffers before its consumers are disposed so
+      // partial assistant/tool output is not stranded in reserved maps.
+      flushAssistantBlock(session.id, null, supersededTurnIdentity);
+      persistReservedStaleOrphanToolResults(session.id, null, supersededTurnIdentity);
+      consumeLastAssistantPersistId(session.id);
+      consumeLastTopLevelAssistantPersistId(session.id);
+      resetTurnPersistState(session.id);
+    }
     // Session-wide ownership cleanup must happen before the replacement can
     // acquire its own lease under the same business id. Only the old event
     // gate, onEvent consumers, and exact-instance close observer are needed by
     // a held Session replay and may outlive this point.
     for (const dispose of existing.disposers) dispose();
     existing.session.setInteractionListener(null);
-    const teardownExistingReplayConsumers = (): void => {
-      for (const dispose of existing.replayConsumerDisposers) dispose();
-      clearReservedStaleClaudeUsage(existing.session.id, existing.session.instanceId);
-    };
-    if (
-      !deferWindowsSessionEndWiringTeardown(
-        existing.session.id,
-        existing.session.agentKind,
-        teardownExistingReplayConsumers,
-      )
-    ) {
+    if (!keepsReplayConsumers) {
       teardownExistingReplayConsumers();
     }
   }
