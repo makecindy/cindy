@@ -832,6 +832,36 @@ export function deferWindowsSessionEndEvent(
   );
 }
 
+/** Retain one synthetic terminal after Session has already disabled its fan-out. */
+export function deferRetainedWindowsSessionEndFallback(
+  sessionId: string,
+  agentKind: AgentKind,
+  sessionInstanceId: string,
+  turnGeneration: number,
+  replay: (event: AgentEvent) => void,
+): boolean {
+  const capturedAt = Date.now();
+  const fallbackEvent: AgentEvent = {
+    type: 'error',
+    data: {
+      message: 'Windows ended the session before this turn produced a terminal event.',
+      isTerminal: true,
+      reason: 'session_event_loop_crashed',
+    },
+    source: agentKind,
+    sessionInstanceId,
+    sessionTurnGeneration: turnGeneration,
+  };
+  return deferWindowsSessionEndEvent(
+    sessionId,
+    agentKind,
+    fallbackEvent,
+    () => replay({ ...fallbackEvent, sessionEventReplay: { capturedAt } }),
+    undefined,
+    sessionInstanceId,
+  );
+}
+
 /** Keep a replaced Session's held-event pipeline alive until its events are settled. */
 export function deferWindowsSessionEndWiringTeardown(
   sessionId: string,

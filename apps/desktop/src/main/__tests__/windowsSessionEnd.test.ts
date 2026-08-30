@@ -6,6 +6,7 @@ import {
   beginWindowsSessionEndQuery,
   cancelWindowsSessionEndQuery,
   createWindowsSessionEndEventGate,
+  deferRetainedWindowsSessionEndFallback,
   deferWindowsSessionEndEvent,
   deferWindowsSessionEndWiringTeardown,
   finishWindowsSessionEndProductTurn,
@@ -639,6 +640,42 @@ describe('Windows session-end terminal error classification', () => {
     expect(emitReplacementFallback).toHaveBeenCalledOnce();
     expect(closingReplay).toHaveBeenCalledOnce();
     expect(replacementReplay).toHaveBeenCalledOnce();
+  });
+
+  it('replays a retained fallback after Session fan-out is unavailable', async () => {
+    const turn = activeTurn('closed-failed-session', 3, 'closed-failed-instance');
+    const replay = vi.fn();
+    markWindowsSessionEnding([turn]);
+
+    const settlement = settleWindowsSessionEndRecoveryMarkers([]);
+    let settled = false;
+    void settlement.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    expect(
+      deferRetainedWindowsSessionEndFallback(
+        turn.sessionId,
+        'claude-code',
+        turn.sessionInstanceId,
+        turn.turnGeneration,
+        replay,
+      ),
+    ).toBe(true);
+    await expect(settlement).resolves.toEqual([turn.sessionId]);
+    expect(replay).toHaveBeenCalledOnce();
+    expect(replay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'error',
+        source: 'claude-code',
+        sessionInstanceId: turn.sessionInstanceId,
+        sessionTurnGeneration: turn.turnGeneration,
+        sessionEventReplay: { capturedAt: expect.any(Number) },
+        data: expect.objectContaining({ isTerminal: true }),
+      }),
+    );
   });
 
   it('waits for terminal fallback from every confirmed generation in a session', async () => {

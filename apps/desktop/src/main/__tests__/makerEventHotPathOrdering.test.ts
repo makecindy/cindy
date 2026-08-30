@@ -235,6 +235,12 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain(
       'registration.replayConsumerDisposers.push(windowsSessionEndBeforeCloseDisposer);',
     );
+    expect(wireSessionSource).toMatch(
+      /const emitWindowsSessionEndFallbackTerminal = \(turnGeneration: number\): boolean => \{[\s\S]*session\.emitHostTerminalErrorForGeneration\([\s\S]*if \(emittedBySession\) return true;[\s\S]*return deferRetainedWindowsSessionEndFallback\([\s\S]*replayRetainedWindowsSessionEndFallback/,
+    );
+    expect(wireSessionSource).toMatch(
+      /replayRetainedWindowsSessionEndFallback = \(event: AgentEvent\): void => \{[\s\S]*handleGhostSessionEvent\(event, true\);[\s\S]*handleForwardSessionEvent\(event, true\)/,
+    );
     expect(wireSessionSource).toContain('if (isFencedStaleSessionTerminal(session.id, event))');
     expect(wireSessionSource).not.toContain(
       '!isWindowsSessionEndFallbackSession(session.id) &&\n      isFencedStaleSessionTerminal',

@@ -226,6 +226,7 @@ import { messageToCamel, setSessionRuntimeProjector } from '../localDb/mapper.js
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import {
   createWindowsSessionEndEventGate,
+  deferRetainedWindowsSessionEndFallback,
   deferWindowsSessionEndEvent,
   deferWindowsSessionEndWiringTeardown,
   finishWindowsSessionEndProductTurn,
@@ -4450,11 +4451,24 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   wiredSessionsById.set(session.id, registration);
 
   const windowsSessionEndTurnRegistrations = new Set<number>();
-  const emitWindowsSessionEndFallbackTerminal = (turnGeneration: number): boolean =>
-    session.emitHostTerminalErrorForGeneration(
+  let replayRetainedWindowsSessionEndFallback: (event: AgentEvent) => void = () => undefined;
+  const emitWindowsSessionEndFallbackTerminal = (turnGeneration: number): boolean => {
+    const emittedBySession = session.emitHostTerminalErrorForGeneration(
       turnGeneration,
       'Windows ended the session before this turn produced a terminal event.',
     );
+    if (emittedBySession) return true;
+    // A close can begin during the reversible query and reject before Windows
+    // confirms shutdown. Session has cleared its fan-out by then, but the
+    // exact-instance replay consumers remain retained by the query snapshot.
+    return deferRetainedWindowsSessionEndFallback(
+      session.id,
+      session.agentKind,
+      session.instanceId,
+      turnGeneration,
+      replayRetainedWindowsSessionEndFallback,
+    );
+  };
   session.setTurnLifecycleObserver({
     beforeProviderStart: async (turnGeneration) => {
       if (shouldRejectWindowsSessionEndTurnStart(session.agentKind)) {
@@ -6701,6 +6715,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           })();
         }
       }
+  };
+  replayRetainedWindowsSessionEndFallback = (event: AgentEvent): void => {
+    handleGhostSessionEvent(event, true);
+    handleForwardSessionEvent(event, true);
   };
   registration.replayConsumerDisposers.push(
     session.onEvent((event: AgentEvent) => handleForwardSessionEvent(event)),
