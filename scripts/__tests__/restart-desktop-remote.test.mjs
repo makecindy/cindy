@@ -381,6 +381,7 @@ test("isolated auth launch proof binds the current derived sandbox and is privat
 			expiresAtMs: 723_000,
 		});
 		if (process.platform !== "win32") assert.equal(fs.statSync(proofPath).mode & 0o077, 0);
+		assert.deepEqual(fs.readdirSync(userDataDir), [ISOLATED_AUTH_LAUNCH_PROOF_FILE]);
 	} finally {
 		fs.rmSync(userDataDir, { recursive: true, force: true });
 	}
