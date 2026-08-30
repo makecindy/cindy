@@ -18,6 +18,7 @@ export type CodexLoginResult = {
   expiresAt?: number;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  oauthWritesBlocked?: boolean;
   credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
   credentialDiagnostics?: CodexCredentialDiagnostics;
   recoveryRequiredReason?: string;

@@ -1731,7 +1731,11 @@ export function getMaker(): Maker {
     // logout + 这里这个 broadcast, 让 useCodexAuth hook 立刻进 'unauthenticated' 状态,
     // UI 弹 "请重新登录" — 否则错误只会反复埋在后台日志里。payload 字段对齐
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
-    desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason, credentialScope) => {
+    desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (
+      reason,
+      credentialScope,
+      oauthWritesBlocked,
+    ) => {
       resetProviderModelAutoRefreshCooldowns('openai');
       resetCodexModelBackfillState();
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
@@ -1760,6 +1764,7 @@ export function getMaker(): Maker {
         authenticated: false,
         errorReason: reason,
         credentialScope,
+        ...(oauthWritesBlocked ? { oauthWritesBlocked: true } : {}),
       };
       for (const win of BrowserWindow.getAllWindows()) {
         if (win.isDestroyed()) continue;

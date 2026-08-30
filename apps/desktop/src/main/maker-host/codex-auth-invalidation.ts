@@ -141,6 +141,17 @@ export function currentCodexAuthFileFingerprint(authPath: string): CodexAuthFile
   }
 }
 
+/** 取指定 auth.json 的指纹; 文件不存在 / stat 失败返回 null。 */
+export function currentCodexAuthMarker(
+  authPath: string,
+  reason: string,
+  credentialScope?: CodexCredentialScope,
+): InvalidatedSystemCodexAuthMarker | null {
+  const fingerprint = currentCodexAuthFileFingerprint(authPath);
+  if (!fingerprint) return null;
+  return { reason, ...(credentialScope ? { credentialScope } : {}), ...fingerprint };
+}
+
 /** 取当前系统 auth.json 的指纹; 文件不存在 / stat 失败返回 null。 */
 export function currentSystemCodexAuthMarker(
   systemAuthPath: string,

@@ -16,6 +16,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  ISOLATED_AUTH_LAUNCH_PROOF_FILE,
+  isDevProfileFreshnessArtifact,
   isKeychainIdentityMarkerArtifact,
   resolveDevKeychainDecision,
   type KeychainIdentityIo,
@@ -320,5 +322,13 @@ describe('isKeychainIdentityMarkerArtifact', () => {
     expect(isKeychainIdentityMarkerArtifact('cindy-user1.db')).toBe(false);
     expect(isKeychainIdentityMarkerArtifact('safe-storage')).toBe(false);
     expect(isKeychainIdentityMarkerArtifact('keychain-identity-notes.txt')).toBe(false);
+  });
+
+  it('launch proof 与原子临时文件不构成 profile 存量数据', () => {
+    expect(isDevProfileFreshnessArtifact(ISOLATED_AUTH_LAUNCH_PROOF_FILE)).toBe(true);
+    expect(
+      isDevProfileFreshnessArtifact(`${ISOLATED_AUTH_LAUNCH_PROOF_FILE}.123-${'a'.repeat(64)}.tmp`),
+    ).toBe(true);
+    expect(isDevProfileFreshnessArtifact(`${ISOLATED_AUTH_LAUNCH_PROOF_FILE}.notes`)).toBe(false);
   });
 });
