@@ -81,41 +81,95 @@ type IpcUserMessage =
   string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
 
 export const TRUSTED_DESKTOP_QUEUE_ORIGIN = Symbol('trusted-desktop-queue-origin');
+export const TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT = 'trustedDesktopPiCommandAuthorization';
 interface TrustedDesktopQueueOriginReceipt {
   clientId: string;
   persistedContent: string;
   text: string;
 }
+interface TrustedDesktopPiCommandSnapshot extends TrustedDesktopQueueOriginReceipt {
+  version: 1;
+}
+type QueuedMessageWithDesktopAuthorization = AgentInputQueuedMessage & {
+  [TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT]?: TrustedDesktopPiCommandSnapshot;
+};
+
+function isExactPiPackageCommand(text: string): boolean {
+  const original = text.trim();
+  if (!original || /[\r\n\0]/.test(original)) return false;
+  const match = original.match(/^\/?pi\s+(install|update|remove)\s+(.+)$/i);
+  return Boolean(match?.[1] && match[2]);
+}
+
+function canTrustDesktopPiCommand(item: AgentInputQueuedMessage): boolean {
+  const semanticOrigin = item.origin as { kind?: unknown } | undefined;
+  return isExactPiPackageCommand(item.text)
+    && extractPlainText(item.persistedContent) === item.text
+    && (item.files?.length ?? 0) === 0
+    && (item.mentions?.length ?? 0) === 0
+    && (item.sessionRefs?.length ?? 0) === 0
+    && (item.agentReferences?.length ?? 0) === 0
+    && item.fromMobileClient !== true
+    && item.autoResume !== true
+    && item.originalSyntheticTrigger === undefined
+    && (semanticOrigin === undefined || semanticOrigin.kind === 'desktop');
+}
+
+function withoutDesktopAuthorization(
+  item: AgentInputQueuedMessage,
+  preserveSemanticOrigin = false,
+): QueuedMessageWithDesktopAuthorization {
+  const explicitUserItem = { ...item } as QueuedMessageWithDesktopAuthorization;
+  if (!preserveSemanticOrigin
+    || (item.origin as { kind?: unknown } | undefined)?.kind === 'desktop') delete explicitUserItem.origin;
+  delete explicitUserItem[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
+  return explicitUserItem;
+}
 
 export function stampTrustedDesktopQueuedOrigin(
   item: AgentInputQueuedMessage,
   deviceLinkInvoke: boolean,
+  preserveSemanticOrigin = false,
 ): AgentInputQueuedMessage {
-  const { origin: _wireOrigin, ...explicitUserItem } = item;
-  const semanticOrigin = item.origin as { kind?: unknown } | undefined;
-  const hasStructuredAgentInput = (item.files?.length ?? 0) > 0
-    || (item.mentions?.length ?? 0) > 0
-    || (item.sessionRefs?.length ?? 0) > 0
-    || (item.agentReferences?.length ?? 0) > 0;
-  return (deviceLinkInvoke
-    || hasStructuredAgentInput
-    || item.fromMobileClient === true
-    || item.autoResume === true
-    || item.originalSyntheticTrigger !== undefined
-    || (semanticOrigin !== undefined && semanticOrigin.kind !== 'desktop')
-    || extractPlainText(item.persistedContent) !== item.text
-    ? explicitUserItem
-    : {
-        ...explicitUserItem,
-        origin: {
-          kind: 'desktop',
-          [TRUSTED_DESKTOP_QUEUE_ORIGIN]: {
-            clientId: explicitUserItem.clientId,
-            persistedContent: explicitUserItem.persistedContent,
-            text: explicitUserItem.text,
-          } satisfies TrustedDesktopQueueOriginReceipt,
-        },
-      }) as AgentInputQueuedMessage;
+  const explicitUserItem = withoutDesktopAuthorization(item, preserveSemanticOrigin);
+  if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem;
+  const receipt: TrustedDesktopPiCommandSnapshot = {
+    version: 1,
+    clientId: explicitUserItem.clientId,
+    persistedContent: explicitUserItem.persistedContent,
+    text: explicitUserItem.text,
+  };
+  explicitUserItem[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT] = receipt;
+  return {
+    ...explicitUserItem,
+    origin: {
+      kind: 'desktop',
+      [TRUSTED_DESKTOP_QUEUE_ORIGIN]: receipt,
+    },
+  } as unknown as AgentInputQueuedMessage;
+}
+
+export function restoreTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  const queued = item as QueuedMessageWithDesktopAuthorization;
+  const receipt = queued[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
+  if (receipt?.version !== 1
+    || receipt.clientId !== item.clientId
+    || receipt.persistedContent !== item.persistedContent
+    || receipt.text !== item.text
+    || !canTrustDesktopPiCommand(item)) return withoutDesktopAuthorization(item, true);
+  return {
+    ...item,
+    origin: {
+      kind: 'desktop',
+      [TRUSTED_DESKTOP_QUEUE_ORIGIN]: receipt,
+    },
+  } as unknown as AgentInputQueuedMessage;
+}
+
+export function revokeTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage): void {
+  const queued = item as QueuedMessageWithDesktopAuthorization;
+  delete queued[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
+  if ((item.origin as { kind?: unknown } | undefined)?.kind === 'desktop') delete item.origin;
 }
 
 type MakerSendOptions = {

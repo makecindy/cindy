@@ -58,8 +58,10 @@ describe('session runtime control wiring', () => {
     expect(makerSendSource).toContain(
       'persistedContent: explicitUserItem.persistedContent',
     );
-    expect(makerSendSource).toContain('return (deviceLinkInvoke');
-    expect(makerSendSource).toContain('|| hasStructuredAgentInput');
+    expect(makerSendSource).toContain(
+      'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
+    );
+    expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
     expect(registerSource).toContain(
       'onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item)',
     );
@@ -69,14 +71,14 @@ describe('session runtime control wiring', () => {
       'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
     );
     expect(updateText).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
-    expect(updateText).toContain('stampTrustedDesktopQueuedOrigin(updated, remote)');
+    expect(updateText).toContain('stampTrustedDesktopQueuedOrigin(updated, remote, true)');
     const updateContent = handlerBody(
       registerSource,
       'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
       'MAKER_INVOKE.INPUT_MOVE,',
     );
     expect(updateContent).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
-    expect(updateContent).toContain('stampTrustedDesktopQueuedOrigin(updated, remote)');
+    expect(updateContent).toContain('stampTrustedDesktopQueuedOrigin(updated, remote, true)');
     const enqueue = handlerBody(
       registerSource,
       'MAKER_INVOKE.INPUT_ENQUEUE,',

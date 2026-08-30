@@ -14786,7 +14786,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         refs,
         contexts,
         remote,
-        (updated) => stampTrustedDesktopQueuedOrigin(updated, remote),
+        (updated) => stampTrustedDesktopQueuedOrigin(updated, remote, true),
       );
     },
   );
@@ -14858,7 +14858,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sid,
           cid,
           update,
-          (updated) => stampTrustedDesktopQueuedOrigin(updated, remote),
+          (updated) => stampTrustedDesktopQueuedOrigin(updated, remote, true),
         );
         acceptedByCoordinator = result.updated;
         if (result.updated) {
