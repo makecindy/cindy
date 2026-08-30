@@ -966,6 +966,8 @@ describe('maker:event hot path ordering', () => {
     const ghostHandler = wireSessionSource.slice(ghostHandlerStart, forwardHandlerStart);
     const forwardHandler = wireSessionSource.slice(forwardHandlerStart, forwardHandlerEnd);
     const gateSource = wireSessionSource.slice(gateIndex, ghostHandlerStart);
+    expect(ghostHandler).toContain('event.sessionEventReplay === undefined');
+    expect(forwardHandler).toContain('event.sessionEventReplay === undefined');
     expect(ghostHandler).toContain('isWindowsSessionEndSensitiveEvent(event)');
     expect(forwardHandler).toContain('isWindowsSessionEndSensitiveEvent(event)');
     expect(wireSessionSource).toContain("event.type === 'done' || isTerminalTurnErrorEvent(event)");
@@ -996,6 +998,16 @@ describe('maker:event hot path ordering', () => {
     );
     expectOrder(ghostHandler, 'deferWindowsSessionEndEvent(', 'noteTurnDiffEvent(');
     expectOrder(forwardHandler, 'deferWindowsSessionEndEvent(', "if (event.type === 'turn_diff')");
+    expectOrder(
+      ghostHandler,
+      'event.sessionEventReplay === undefined',
+      'deferWindowsSessionEndEvent(',
+    );
+    expectOrder(
+      forwardHandler,
+      'event.sessionEventReplay === undefined',
+      'deferWindowsSessionEndEvent(',
+    );
   });
 
   it('reserves terminal error persistId before EVENT broadcast and writes after', () => {

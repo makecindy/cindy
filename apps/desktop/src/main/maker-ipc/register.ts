@@ -4574,6 +4574,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   const handleGhostSessionEvent = (event: AgentEvent, replayed = false): void => {
     if (
       !replayed &&
+      event.sessionEventReplay === undefined &&
       isWindowsSessionEndSensitiveEvent(event) &&
       deferWindowsSessionEndEvent(
         session.id,
@@ -4603,6 +4604,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   const handleForwardSessionEvent = (event: AgentEvent, replayed = false): void => {
     if (
       !replayed &&
+      event.sessionEventReplay === undefined &&
       isWindowsSessionEndSensitiveEvent(event) &&
       deferWindowsSessionEndEvent(
         session.id,
