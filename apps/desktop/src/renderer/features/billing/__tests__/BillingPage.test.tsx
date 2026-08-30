@@ -927,6 +927,30 @@ describe('BillingPage remote catalog rendering', () => {
     expect(new URLSearchParams(routerState.search).get('tab')).toBe('billing');
   });
 
+  it('深链 ?intent=subscribe 在目录加载失败时保留参数，刷新成功后再打开购买弹窗', async () => {
+    routerState.search = 'tab=billing&intent=subscribe';
+    vi.mocked(window.electronAPI.billing.getCatalog).mockRejectedValueOnce(
+      new Error('catalog unavailable'),
+    );
+
+    render(<BillingPage />);
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('button', { name: 'billing.actions.refreshCatalog' })
+          .hasAttribute('disabled'),
+      ).toBe(false),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBe('subscribe');
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+
+    expect(await screen.findByText('Configured subscription')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+  });
+
   it('shows server-visible unavailable offers and only enables purchasable offers', async () => {
     render(<BillingPage />);
 
@@ -2277,6 +2301,34 @@ describe('BillingPage plan change', () => {
 
     await screen.findByText('billing.settings.subscriptionCard.manageAction');
     expect(screen.queryByText('billing.planChange.targetTitle')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+  });
+
+  it('深链 ?intent=plan-change 在订阅加载失败时保留参数，刷新成功后再打开目标弹窗', async () => {
+    routerState.search = 'tab=billing&intent=plan-change';
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('subscription status unavailable'))
+      .mockResolvedValueOnce({ subscription: activeSubscription() });
+    install(billing);
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.settings.subscriptionCard.unavailable')).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('button', { name: 'billing.actions.refreshCatalog' })
+          .hasAttribute('disabled'),
+      ).toBe(false),
+    );
+    expect(screen.queryByText('billing.planChange.targetTitle')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBe('plan-change');
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+
+    expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
     expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
   });
 

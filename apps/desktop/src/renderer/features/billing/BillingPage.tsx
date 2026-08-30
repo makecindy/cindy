@@ -947,6 +947,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     const intent = searchParams.get('intent');
     if (intent !== 'subscribe' && intent !== 'plan-change') return;
     if (loadingCatalog || loadingSubscription) return;
+    // 目录或订阅请求失败时 loading 也会结束。此时还不知道能不能打开对应弹窗，
+    // 不能把 intent 摘掉 —— 用户点刷新成功后才能重放。加载成功但没有改档入口
+    // 才消费 plan-change（落地计费页，重放也不会弹出）。
+    if (catalogError || subscriptionError) return;
     const next = new URLSearchParams(searchParams);
     next.delete('intent');
     setSearchParams(next, { replace: true });
@@ -958,12 +962,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       setPlanChangeTargetOpen(true);
     }
   }, [
+    catalogError,
     loadingCatalog,
     loadingSubscription,
     openPurchaseDialog,
     searchParams,
     setSearchParams,
     showPlanChangeEntry,
+    subscriptionError,
   ]);
 
   const selectOffer = (offerCode: string) => {
