@@ -7981,6 +7981,7 @@ export default function SessionScreen() {
   const setComposerModel = useCallback(async (args: {
     model: string;
     providerId?: string;
+    targetContextWindow?: number;
   }): Promise<boolean> => {
     try {
       await maker.setModel(sessionId, args.model, args.providerId);
@@ -7996,13 +7997,27 @@ export default function SessionScreen() {
       ) {
         throw err;
       }
-      Alert.alert(
-        t('models.contextWindowSwitch.remoteTitle'),
-        t('models.contextWindowSwitch.cancel'),
-      );
+      const contextTokens = currentSession?.contextTokens;
+      const targetContextWindow = args.targetContextWindow;
+      const description =
+        typeof contextTokens === 'number' &&
+        Number.isFinite(contextTokens) &&
+        contextTokens > 0 &&
+        typeof targetContextWindow === 'number' &&
+        Number.isFinite(targetContextWindow) &&
+        targetContextWindow > 0
+          ? t('models.contextWindowSwitch.remoteDescription', {
+              used: formatModelWindowTokens(contextTokens),
+              total: formatModelWindowTokens(targetContextWindow),
+              pct: Math.round((contextTokens / targetContextWindow) * 100),
+            })
+          : reason;
+      Alert.alert(t('models.contextWindowSwitch.remoteTitle'), description, [
+        { text: t('models.contextWindowSwitch.cancel'), style: 'cancel' },
+      ]);
       return false;
     }
-  }, [maker, sessionId, t]);
+  }, [currentSession?.contextTokens, maker, sessionId, t]);
 
   // 选行 = 原子切「来源 + 模型 + effort + fast」(effort 优先级与桌面同源:该 (来源,模型) 的
   // 会话镜像记忆 → 沿用当前档 → 模型默认;同模型换来源不沿用;fast 按镜像恢复、fastEditable 门控)。
@@ -8033,6 +8048,7 @@ export default function SessionScreen() {
         const applied = await setComposerModel({
           model: next.model,
           providerId: next.providerId,
+          targetContextWindow: row.model.contextWindow,
         });
         if (!applied) return false;
         if (next.effort && next.effort !== modelSheetSelection.effort) {
@@ -8074,7 +8090,10 @@ export default function SessionScreen() {
     if (!canUseRemoteSessionControls || modelSheetAgentKind !== sessionAgentKind) return;
     void (async () => {
       await runControlAction(
-        () => setComposerModel({ model: option.id }),
+        () => setComposerModel({
+          model: option.id,
+          targetContextWindow: option.contextWindow,
+        }),
         {
           model: option.id,
           ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
@@ -10540,6 +10559,12 @@ function ComposerActivityStatus({
       </View>
     </View>
   );
+}
+
+function formatModelWindowTokens(value: number): string {
+  return value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+    : `${Math.round(value / 1_000)}K`;
 }
 
 function formatComposerActivityElapsed(seconds: number): string {

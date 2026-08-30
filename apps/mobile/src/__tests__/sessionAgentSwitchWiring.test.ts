@@ -55,7 +55,8 @@ describe('session Agent switch UI wiring', () => {
     expect(rowSelector.indexOf('if (!applied) return false;')).toBeLessThan(
       rowSelector.indexOf('await maker.setFastMode('),
     );
-    expect(flatSelector).toContain('setComposerModel({ model: option.id })');
+    expect(rowSelector).toContain('targetContextWindow: row.model.contextWindow');
+    expect(flatSelector).toContain('targetContextWindow: option.contextWindow');
     expect(source).not.toContain('confirmMobileModelWindowSwitch');
     expect(source).not.toContain('confirmComposerModelWindowSwitch');
     expect(source).not.toContain('setComposerModelWithFinalWindowConfirmation');
@@ -71,7 +72,12 @@ describe('session Agent switch UI wiring', () => {
     expect(helper).toContain('throw err;');
     expect(helper).not.toContain('Alert.alert(reason);');
     expect(helper).toContain("t('models.contextWindowSwitch.remoteTitle')");
-    expect(helper).toContain("t('models.contextWindowSwitch.cancel')");
+    expect(helper).toContain("t('models.contextWindowSwitch.remoteDescription', {");
+    expect(helper).toContain('used: formatModelWindowTokens(contextTokens)');
+    expect(helper).toContain('total: formatModelWindowTokens(targetContextWindow)');
+    expect(helper).toContain('pct: Math.round((contextTokens / targetContextWindow) * 100)');
+    expect(helper).toContain(': reason;');
+    expect(helper).toContain("{ text: t('models.contextWindowSwitch.cancel'), style: 'cancel' }");
     expect(helper.match(/return false;/g)).toHaveLength(1);
     expect(helper).not.toContain('setError(');
     expect(controlAction).toContain('applied === false && rollbackPatch && deviceId');
