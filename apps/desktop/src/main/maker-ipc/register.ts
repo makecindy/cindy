@@ -4775,13 +4775,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (
           isWindowsSessionEndFallbackReplay &&
           isTerminalTurnErrorEvent(event) &&
-          (replayedAssistantPersistId !== undefined || replayedOrphanToolResultCount > 0)
+          !isTurnContinuationBoundaryEvent(event)
         ) {
-          const durableStaleHistoricalOutput = whenSessionPersistedDurably(
+          const durableStaleTerminal = whenSessionPersistedDurably(
             session.id,
             staleTurnIdentity,
           );
-          trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleHistoricalOutput, {
+          trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleTerminal, {
             requireSuccess: true,
           });
         }

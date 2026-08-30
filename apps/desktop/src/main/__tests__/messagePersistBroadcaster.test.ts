@@ -2951,6 +2951,34 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     }
   });
 
+  it('keeps an already queued stale non-assistant write in the exact durable barrier', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-tool-instance',
+      turnGeneration: 4,
+      dbAgentKind: 'cc' as const,
+    };
+    vi.mocked(createMessage).mockRejectedValueOnce(
+      new Error('already queued stale tool-use insert rejected'),
+    );
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'older-tool-use', toolName: 'Bash', input: { command: 'pwd' } },
+      null,
+    );
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    await expect(whenSessionPersistedDurably(SESSION)).resolves.toBeUndefined();
+
+    try {
+      clearSessionPersistState(SESSION);
+      await flushWrites();
+      await expect(
+        whenSessionPersistedDurably(SESSION, olderIdentity),
+      ).rejects.toThrow('already queued stale tool-use insert rejected');
+    } finally {
+      releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    }
+  });
+
   it('persists an exact stale assistant block without consuming its replacement block', async () => {
     const olderIdentity = {
       sessionInstanceId: 'older-instance',

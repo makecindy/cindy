@@ -311,8 +311,12 @@ describe('maker:event hot path ordering', () => {
     expect(staleFenceSource).toContain("event.type === 'done'");
     expect(staleFenceSource).toContain('!isTurnContinuationBoundaryEvent(event)');
     expect(staleFenceSource).toContain('requireSuccess: true');
-    expect(staleFenceSource).toContain('replayedAssistantPersistId !== undefined');
-    expect(staleFenceSource).toContain('replayedOrphanToolResultCount > 0');
+    expect(staleFenceSource).toMatch(
+      /isWindowsSessionEndFallbackReplay &&\s*isTerminalTurnErrorEvent\(event\) &&\s*!isTurnContinuationBoundaryEvent\(event\)\s*\) \{\s*const durableStaleTerminal = whenSessionPersistedDurably\(\s*session\.id,\s*staleTurnIdentity,?\s*\)/,
+    );
+    expect(staleFenceSource).not.toContain(
+      'replayedAssistantPersistId !== undefined || replayedOrphanToolResultCount > 0',
+    );
   });
 
   it('records stale Claude paired-done usage against the exact historical turn', () => {
