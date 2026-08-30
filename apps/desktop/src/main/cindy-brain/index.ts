@@ -5146,10 +5146,9 @@ export function getGhostLibrarySlot(): GhostLibrarySlot {
         shell.showItemInFolder(absPath);
       },
       showSaveDialog: async (opts) => {
-        const win = BrowserWindow.getFocusedWindow();
-        const picked = win
-          ? await dialog.showSaveDialog(win, { defaultPath: opts.defaultPath })
-          : await dialog.showSaveDialog({ defaultPath: opts.defaultPath });
+        const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) throw new Error('没有可挂靠的宿主窗口');
+        const picked = await dialog.showSaveDialog(win, { defaultPath: opts.defaultPath });
         return { canceled: picked.canceled, filePath: picked.filePath };
       },
     });

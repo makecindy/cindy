@@ -242,6 +242,17 @@ describe('GhostLibrarySlot', () => {
     },
   );
 
+  it('reveal: 同插件两次请求间隔不足 = RATE_LIMITED(按尝试记账)', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd' });
+    const first = await slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/a.psd' });
+    expect(first.ok).toBe(true);
+    clock += 1_000;
+    const second = await slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/a.psd' });
+    expect(second).toMatchObject({ ok: false, errorCode: 'RATE_LIMITED' });
+    expect(showItemInFolder).toHaveBeenCalledTimes(1);
+  });
+
   it('saveAs: 用户取消不复制;确认则拷到所选路径,成功只回库内相对键',
     async () => {
       await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });

@@ -75,6 +75,8 @@ export class GhostLibrarySlot {
   private readonly sessions = new Map<string, GhostLibrarySession>();
   /** 迁移进行中的插件:全部写操作只读化(切换与 grace 前不再有写入落旧根)。 */
   private readonly relocating = new Set<string>();
+  /** 插件 id → 上次 reveal 尝试时刻(按尝试记账;对齐 pick/confirm 骚扰钳制)。 */
+  private readonly lastRevealAttemptAt = new Map<string, number>();
   /** 插件 id → 上次 saveAs 尝试时刻(按尝试记账;对齐 pick/confirm 骚扰钳制)。 */
   private readonly lastSaveAsAttemptAt = new Map<string, number>();
   /** 全局另存为对话框在场标记(系统弹窗一次一个,不排队)。 */
@@ -356,6 +358,14 @@ export class GhostLibrarySlot {
         const abs = await vault.resolveExistingFile(req.path);
         if (!abs) return fail('NOT_FOUND', `库内没有这个文件:${req.path}`);
         if (!this.deps.showItemInFolder) return fail('UNSUPPORTED', '当前宿主不能在文件夹中显示');
+
+        // 骚扰钳制:限速按尝试记账(spam 顺延窗口),PATH_INVALID/NOT_FOUND/UNSUPPORTED 不记账。
+        const now = this.deps.now?.() ?? Date.now();
+        const last = this.lastRevealAttemptAt.get(ghostId);
+        this.lastRevealAttemptAt.set(ghostId, now);
+        if (last !== undefined && now - last < GHOST_PICK_MIN_INTERVAL_MS) {
+          return fail('RATE_LIMITED', '在文件夹中显示请求太频繁,稍后再试');
+        }
         this.deps.showItemInFolder(abs);
         return { ok: true, op: 'reveal', path: req.path };
       }
