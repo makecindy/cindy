@@ -143,6 +143,7 @@ async function freshCodexProxyHost() {
 }
 
 describe('withCodexUpstreamRecording', () => {
+  const COLD_IMPORT_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 15_000;
   const DEFAULT_UPSTREAM = 'https://gateway.example/v1';
   const ctxFor = (threadId?: string) => ({
     reqId: 1,
@@ -151,7 +152,8 @@ describe('withCodexUpstreamRecording', () => {
     headers: threadId ? { 'thread-id': threadId } : {},
   }) as never;
 
-  // Linux CI shard 下本文件首次 resetModules + import SUT 经常超过默认 5s；断言未变。
+  // 首次 resetModules + import SUT 会承受整分片的冷转换争用。Linux 需要高于默认
+  // 5s；Windows 在完整分片争用下还会越过项目级 20s，因此只为这次冷导入保留 30s。
   it('records the override upstream origin for the request thread', async () => {
     const host = await freshCodexProxyHost();
     host.resetCodexThreadUpstreamForTest();
@@ -166,7 +168,7 @@ describe('withCodexUpstreamRecording', () => {
     expect(host.getCodexThreadUpstreamOrigin('t-xai')).toBe('https://api.x.ai');
     // 没记录过的 thread 不借用别人的结论。
     expect(host.getCodexThreadUpstreamOrigin('t-other')).toBe(null);
-  }, 15_000);
+  }, COLD_IMPORT_TIMEOUT_MS);
 
   it('falls back to the default upstream when the decision does not override it', async () => {
     const host = await freshCodexProxyHost();

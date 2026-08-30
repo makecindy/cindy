@@ -162,6 +162,7 @@ import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
+import { scheduleCodexGlobalSkillsRefresh } from '../maker-host/codex-global-skills-refresh.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
 import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots } from './skillSlot.js';
 import { assertGhostSkillProjectionStableOwner } from '../authBoundaryQuarantine.js';
@@ -7985,6 +7986,7 @@ function scheduleGhostSkillReconcile(): void {
             log.info('ghost skill links reconciled', {
               actions: result.actions.filter((a) => a.op !== 'kept'),
             });
+            scheduleCodexGlobalSkillsRefresh();
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
