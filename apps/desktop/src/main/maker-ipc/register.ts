@@ -11283,6 +11283,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }> = async () => {
     throw new Error('session runtime selection is not ready');
   };
+  const runtimeSelectionRequiresModelWindowConfirmation = (result: {
+    contextWindowConfirmationRequired?: number;
+    contextTokensForConfirmation?: number;
+  }): boolean =>
+    result.contextWindowConfirmationRequired !== undefined ||
+    result.contextTokensForConfirmation !== undefined;
   const settlingSessionRuntimeControls = new Set<string>();
   const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): void => {
     if (settlingSessionRuntimeControls.has(sessionId)) return;
@@ -11308,10 +11314,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             routeExplicit: isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation),
           },
         );
-        if (
-          result.contextWindowConfirmationRequired !== undefined ||
-          result.contextTokensForConfirmation !== undefined
-        ) {
+        if (runtimeSelectionRequiresModelWindowConfirmation(result)) {
           throw new Error('deferred model-window selection requires unsupported confirmation');
         }
         log.info('pending session runtime settled', {
@@ -11464,6 +11467,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!readSessionRuntimeFallbackSettings().enabled || episodeAttempt < 2) return null;
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: Session | null = null;
+    let blockAutoResumeForModelWindowConfirmation = false;
     try {
       const profiles = await readSessionRuntimeProfiles(sessionId);
       if (!profiles) return null;
@@ -11569,6 +11573,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           throw retryError;
         }
       }
+      if (runtimeSelectionRequiresModelWindowConfirmation(result)) {
+        blockAutoResumeForModelWindowConfirmation = true;
+        throw new Error(
+          'automatic model-window confirmation is unsupported; runtime selection was not changed',
+        );
+      }
       log.info('automatic session runtime fallback evaluated', {
         sessionId,
         episodeAttempt,
@@ -11587,6 +11597,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         attemptToken,
         error: error instanceof Error ? error.message : String(error),
       });
+      if (blockAutoResumeForModelWindowConfirmation) {
+        // Ordinary fallback failures may retry the unchanged runtime. A required
+        // confirmation must instead abort auto-resume before it sends again.
+        if (runtimeSession) pendingSessionRuntimeFallbackRebuilds.delete(runtimeSession);
+        throw error;
+      }
       return runtimeSession;
     }
   };
@@ -11665,6 +11681,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ok: false,
           errorCode: 'CONFLICT',
           message: `session runtime generation changed; read it again before retrying`,
+        };
+      }
+      if (runtimeSelectionRequiresModelWindowConfirmation(response)) {
+        return {
+          ok: false,
+          errorCode: 'ROUTE_UNAVAILABLE',
+          message: 'model-window confirmation is required; runtime selection was not changed',
         };
       }
       const control = getSessionRuntimeControlSnapshot(targetSessionId);

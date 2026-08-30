@@ -585,6 +585,48 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('result = await applyCandidate();');
   });
 
+  it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
+    const setRuntime = handlerBody(
+      registerSource,
+      'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch }) => {',
+      'assertExternalInputAllowed: assertReviewExternalInputAllowed,',
+    );
+    const setRuntimeGuard = setRuntime.indexOf(
+      'if (runtimeSelectionRequiresModelWindowConfirmation(response))',
+    );
+    const setRuntimeSuccess = setRuntime.indexOf(
+      'const control = getSessionRuntimeControlSnapshot(targetSessionId);',
+    );
+    expect(setRuntimeGuard).toBeGreaterThan(-1);
+    expect(setRuntimeGuard).toBeLessThan(setRuntimeSuccess);
+    expect(setRuntime.slice(setRuntimeGuard, setRuntimeSuccess)).toContain('ok: false');
+    expect(setRuntime.slice(setRuntimeGuard, setRuntimeSuccess)).toContain(
+      "errorCode: 'ROUTE_UNAVAILABLE'",
+    );
+    expect(setRuntime.slice(setRuntimeGuard, setRuntimeSuccess)).toContain(
+      'runtime selection was not changed',
+    );
+
+    const fallback = handlerBody(
+      registerSource,
+      'const maybeApplySessionRuntimeFallback = async (',
+      'const sessionControlService = createSessionControlService({',
+    );
+    const fallbackGuard = fallback.indexOf(
+      'if (runtimeSelectionRequiresModelWindowConfirmation(result))',
+    );
+    const fallbackSuccess = fallback.indexOf(
+      "log.info('automatic session runtime fallback evaluated'",
+    );
+    expect(fallbackGuard).toBeGreaterThan(-1);
+    expect(fallbackGuard).toBeLessThan(fallbackSuccess);
+    expect(fallback).toContain('blockAutoResumeForModelWindowConfirmation = true;');
+    expect(fallback).toContain('if (blockAutoResumeForModelWindowConfirmation) {');
+    expect(fallback).toContain(
+      'pendingSessionRuntimeFallbackRebuilds.delete(runtimeSession);\n        throw error;',
+    );
+  });
+
   it('fences atomic model axis settlement after an owner boundary', () => {
     const setModel = handlerBody(
       registerSource,
