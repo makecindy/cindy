@@ -25,6 +25,15 @@ function handlerBody(source: string, channel: string, nextChannel: string): stri
 }
 
 describe('session runtime control wiring', () => {
+  it('advertises host-side model-window protection to remote controllers', () => {
+    const capabilities = handlerBody(
+      registerSource,
+      'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
+      'ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
+    );
+    expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
+  });
+
   it('guards every fallback setting IPC before reading or mutating the setting', () => {
     for (const [channel, nextChannel] of [
       [

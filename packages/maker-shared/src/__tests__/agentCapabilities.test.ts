@@ -6,6 +6,7 @@ import {
   compactEnglishEffortLabel,
   normalizeMobileAgentCapabilities,
   reconcileRuntimeDraftWithCapabilities,
+  shouldBlockLegacyRemoteModelWindowSwitch,
 } from '../agentCapabilities';
 
 const desktopCapabilitiesPayload = {
@@ -82,12 +83,58 @@ describe('agent capabilities shared model', () => {
       'plan',
     ]);
     expect(capabilities?.supportsSessionAgentSwitch).toBe(false);
+    expect(capabilities?.supportsModelWindowSwitchGuard).toBe(false);
     expect(capabilities?.availableModels[0].newSessionDefault).toEqual(['claude-code', 'codex', 'pi']);
     expect('newSessionDefault' in (capabilities?.availableModels[1] ?? {})).toBe(false);
     expect(normalizeMobileAgentCapabilities({
       ...desktopCapabilitiesPayload,
       supportsSessionAgentSwitch: true,
     })?.supportsSessionAgentSwitch).toBe(true);
+    expect(normalizeMobileAgentCapabilities({
+      ...desktopCapabilitiesPayload,
+      supportsModelWindowSwitchGuard: true,
+    })?.supportsModelWindowSwitchGuard).toBe(true);
+  });
+
+  it('fails closed only for known pressured non-Pi shrinks on legacy hosts', () => {
+    const pressuredShrink = {
+      hostGuardSupported: false,
+      agentKind: 'codex',
+      isSsh: false,
+      contextTokens: 250_000,
+      currentContextWindow: 1_000_000,
+      targetContextWindow: 200_000,
+    };
+
+    expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredShrink)).toBe(true);
+    expect(shouldBlockLegacyRemoteModelWindowSwitch({
+      ...pressuredShrink,
+      contextTokens: 180_000,
+    })).toBe(true);
+    expect(shouldBlockLegacyRemoteModelWindowSwitch({
+      ...pressuredShrink,
+      contextTokens: 179_999,
+    })).toBe(false);
+    expect(shouldBlockLegacyRemoteModelWindowSwitch({
+      ...pressuredShrink,
+      targetContextWindow: 1_000_000,
+    })).toBe(false);
+    expect(shouldBlockLegacyRemoteModelWindowSwitch({
+      ...pressuredShrink,
+      agentKind: 'pi',
+    })).toBe(false);
+    expect(shouldBlockLegacyRemoteModelWindowSwitch({
+      ...pressuredShrink,
+      hostGuardSupported: true,
+    })).toBe(false);
+    expect(shouldBlockLegacyRemoteModelWindowSwitch({
+      ...pressuredShrink,
+      isSsh: true,
+    })).toBe(false);
+    expect(shouldBlockLegacyRemoteModelWindowSwitch({
+      ...pressuredShrink,
+      currentContextWindow: undefined,
+    })).toBe(false);
   });
 
   it('uses the current model efforts and model-specific labels', () => {

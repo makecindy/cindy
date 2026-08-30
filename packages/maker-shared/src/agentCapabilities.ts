@@ -27,6 +27,8 @@ export interface MobileAgentCapabilities {
   planModeSupported: boolean;
   /** desktop host 是否支持同一会话 Claude Code / Codex pending-intent 切换；旧 host 缺省 false。 */
   supportsSessionAgentSwitch?: boolean;
+  /** host 是否在 set-model 内执行强制模型窗口保护；旧 host 缺省 false。 */
+  supportsModelWindowSwitchGuard?: boolean;
 }
 
 export interface MobileSessionRuntimeOptions {
@@ -155,7 +157,35 @@ export function normalizeMobileAgentCapabilities(value: unknown): MobileAgentCap
     hasFastMode: value.hasFastMode === true,
     planModeSupported: isRecord(value.planMode) && value.planMode.supported === true,
     supportsSessionAgentSwitch: value.supportsSessionAgentSwitch === true,
+    supportsModelWindowSwitchGuard: value.supportsModelWindowSwitchGuard === true,
   };
+}
+
+export function shouldBlockLegacyRemoteModelWindowSwitch(args: {
+  hostGuardSupported: boolean;
+  agentKind: string | null | undefined;
+  isSsh: boolean;
+  contextTokens: number | null | undefined;
+  currentContextWindow: number | null | undefined;
+  targetContextWindow: number | null | undefined;
+}): boolean {
+  if (args.hostGuardSupported || args.agentKind === 'pi' || args.isSsh) return false;
+  const { contextTokens, currentContextWindow, targetContextWindow } = args;
+  if (
+    typeof contextTokens !== 'number' ||
+    !Number.isFinite(contextTokens) ||
+    contextTokens < 0 ||
+    typeof currentContextWindow !== 'number' ||
+    !Number.isFinite(currentContextWindow) ||
+    currentContextWindow <= 0 ||
+    typeof targetContextWindow !== 'number' ||
+    !Number.isFinite(targetContextWindow) ||
+    targetContextWindow <= 0 ||
+    targetContextWindow >= currentContextWindow
+  ) {
+    return false;
+  }
+  return contextTokens / targetContextWindow >= 0.9;
 }
 
 export function buildSessionRuntimeOptions(

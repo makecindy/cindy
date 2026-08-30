@@ -183,6 +183,7 @@ import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import { ModelPickerSheet } from '@/session/ModelPickerSheet';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { getModel } from '@cindy/model-providers/registry';
+import { shouldBlockLegacyRemoteModelWindowSwitch } from '@cindy/maker-shared/agent-capabilities';
 import { clearSessionMirror, makeSessionMirrorAccessors } from '@/session/sessionModelMirror';
 import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import {
@@ -7978,11 +7979,45 @@ export default function SessionScreen() {
     void runGoalAction(() => maker.goal.clear(sessionId), null);
   }, [maker, runGoalAction, sessionId]);
 
+  const showRemoteModelWindowUnsupported = useCallback((
+    targetContextWindow: number | undefined,
+    fallbackDescription?: string,
+  ): void => {
+    const contextTokens = currentSession?.contextTokens;
+    const description =
+      typeof contextTokens === 'number' &&
+      Number.isFinite(contextTokens) &&
+      contextTokens > 0 &&
+      typeof targetContextWindow === 'number' &&
+      Number.isFinite(targetContextWindow) &&
+      targetContextWindow > 0
+        ? t('models.contextWindowSwitch.remoteDescription', {
+            used: formatModelWindowTokens(contextTokens),
+            total: formatModelWindowTokens(targetContextWindow),
+            pct: Math.round((contextTokens / targetContextWindow) * 100),
+          })
+        : fallbackDescription;
+    Alert.alert(t('models.contextWindowSwitch.remoteTitle'), description, [
+      { text: t('models.contextWindowSwitch.cancel'), style: 'cancel' },
+    ]);
+  }, [currentSession?.contextTokens, t]);
+
   const setComposerModel = useCallback(async (args: {
     model: string;
     providerId?: string;
     targetContextWindow?: number;
   }): Promise<boolean> => {
+    if (shouldBlockLegacyRemoteModelWindowSwitch({
+      hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
+      agentKind: sessionAgentKind,
+      isSsh: Boolean(currentSession?.remoteHostId),
+      contextTokens: currentSession?.contextTokens,
+      currentContextWindow: currentSession?.contextWindow,
+      targetContextWindow: args.targetContextWindow,
+    })) {
+      showRemoteModelWindowUnsupported(args.targetContextWindow);
+      return false;
+    }
     try {
       await maker.setModel(sessionId, args.model, args.providerId);
       return true;
@@ -7997,27 +8032,19 @@ export default function SessionScreen() {
       ) {
         throw err;
       }
-      const contextTokens = currentSession?.contextTokens;
-      const targetContextWindow = args.targetContextWindow;
-      const description =
-        typeof contextTokens === 'number' &&
-        Number.isFinite(contextTokens) &&
-        contextTokens > 0 &&
-        typeof targetContextWindow === 'number' &&
-        Number.isFinite(targetContextWindow) &&
-        targetContextWindow > 0
-          ? t('models.contextWindowSwitch.remoteDescription', {
-              used: formatModelWindowTokens(contextTokens),
-              total: formatModelWindowTokens(targetContextWindow),
-              pct: Math.round((contextTokens / targetContextWindow) * 100),
-            })
-          : reason;
-      Alert.alert(t('models.contextWindowSwitch.remoteTitle'), description, [
-        { text: t('models.contextWindowSwitch.cancel'), style: 'cancel' },
-      ]);
+      showRemoteModelWindowUnsupported(args.targetContextWindow, reason);
       return false;
     }
-  }, [currentSession?.contextTokens, maker, sessionId, t]);
+  }, [
+    currentSession?.contextTokens,
+    currentSession?.contextWindow,
+    currentSession?.remoteHostId,
+    maker,
+    modelSheetCapabilities?.supportsModelWindowSwitchGuard,
+    sessionAgentKind,
+    sessionId,
+    showRemoteModelWindowUnsupported,
+  ]);
 
   // 选行 = 原子切「来源 + 模型 + effort + fast」(effort 优先级与桌面同源:该 (来源,模型) 的
   // 会话镜像记忆 → 沿用当前档 → 模型默认;同模型换来源不沿用;fast 按镜像恢复、fastEditable 门控)。

@@ -27,7 +27,7 @@ describe('session Agent switch UI wiring', () => {
     expect(source).toContain('agentKind={agentSwitchIntent.targetAgentKind}');
   });
 
-  it('sends one remote model request and isolates only rebuild-unsupported preconditions', () => {
+  it('preflights legacy hosts and isolates only rebuild-unsupported preconditions', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     const rowSelector = source.slice(
       source.indexOf('const selectComposerModelRow'),
@@ -37,16 +37,34 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const selectComposerFlatModel'),
       source.indexOf('const browseComposerModelAgent'),
     );
+    const helperStart = source.indexOf('const setComposerModel = useCallback');
+    const alertHelper = source.slice(
+      source.indexOf('const showRemoteModelWindowUnsupported = useCallback'),
+      helperStart,
+    );
     const helper = source.slice(
-      source.indexOf('const setComposerModel = useCallback'),
-      source.indexOf('// 选行 = 原子切', source.indexOf('const setComposerModel = useCallback')),
+      helperStart,
+      source.indexOf('// 选行 = 原子切', helperStart),
     );
     const controlAction = source.slice(
       source.indexOf('const runControlAction = useCallback'),
       source.indexOf('const writeSessionAgentSwitchIntent'),
     );
 
-    expect(helper).toContain('await maker.setModel(sessionId, args.model, args.providerId)');
+    const legacyGuard = helper.indexOf('shouldBlockLegacyRemoteModelWindowSwitch({');
+    const setModel = helper.indexOf('await maker.setModel(sessionId, args.model, args.providerId)');
+    expect(legacyGuard).toBeGreaterThan(-1);
+    expect(legacyGuard).toBeLessThan(setModel);
+    expect(helper.slice(legacyGuard, setModel)).toContain('return false;');
+    expect(helper).toContain(
+      'hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
+    );
+    expect(helper).toContain('agentKind: sessionAgentKind');
+    expect(helper).toContain('isSsh: Boolean(currentSession?.remoteHostId)');
+    expect(helper).toContain('contextTokens: currentSession?.contextTokens');
+    expect(helper).toContain('currentContextWindow: currentSession?.contextWindow');
+    expect(helper).toContain('targetContextWindow: args.targetContextWindow');
+    expect(helper).toContain('showRemoteModelWindowUnsupported(args.targetContextWindow);');
     expect(rowSelector).toContain('setComposerModel({');
     expect(rowSelector).toContain('if (!applied) return false;');
     expect(rowSelector.indexOf('if (!applied) return false;')).toBeLessThan(
@@ -71,14 +89,19 @@ describe('session Agent switch UI wiring', () => {
     expect(helper).toContain('!isRemoteModelWindowUnsupported');
     expect(helper).toContain('throw err;');
     expect(helper).not.toContain('Alert.alert(reason);');
-    expect(helper).toContain("t('models.contextWindowSwitch.remoteTitle')");
-    expect(helper).toContain("t('models.contextWindowSwitch.remoteDescription', {");
-    expect(helper).toContain('used: formatModelWindowTokens(contextTokens)');
-    expect(helper).toContain('total: formatModelWindowTokens(targetContextWindow)');
-    expect(helper).toContain('pct: Math.round((contextTokens / targetContextWindow) * 100)');
-    expect(helper).toContain(': reason;');
-    expect(helper).toContain("{ text: t('models.contextWindowSwitch.cancel'), style: 'cancel' }");
-    expect(helper.match(/return false;/g)).toHaveLength(1);
+    expect(helper).toContain(
+      'showRemoteModelWindowUnsupported(args.targetContextWindow, reason);',
+    );
+    expect(alertHelper).toContain("t('models.contextWindowSwitch.remoteTitle')");
+    expect(alertHelper).toContain("t('models.contextWindowSwitch.remoteDescription', {");
+    expect(alertHelper).toContain('used: formatModelWindowTokens(contextTokens)');
+    expect(alertHelper).toContain('total: formatModelWindowTokens(targetContextWindow)');
+    expect(alertHelper).toContain('pct: Math.round((contextTokens / targetContextWindow) * 100)');
+    expect(alertHelper).toContain(': fallbackDescription;');
+    expect(alertHelper).toContain(
+      "{ text: t('models.contextWindowSwitch.cancel'), style: 'cancel' }",
+    );
+    expect(helper.match(/return false;/g)).toHaveLength(2);
     expect(helper).not.toContain('setError(');
     expect(controlAction).toContain('applied === false && rollbackPatch && deviceId');
     expect(controlAction).toContain('setError(formatRemoteError(err));');
