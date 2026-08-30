@@ -3407,10 +3407,13 @@ describe('Pi package executable-code boundary', () => {
     expect(lockRuntime.maxActive).toBe(1);
   });
 
-  it('rejects a stale toggle after external native removal without writing ghost state', async () => {
+  it('rejects a stale enable after external native removal without writing ghost state', async () => {
     const { source } = await createPackage();
     const installedList = runtime.listOutput;
     const firstStore = await import('../pi-package-store.js');
+    const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
+    const staleEnableRequest = { action: 'set-enabled', source, enabled: true } as const;
+    const staleEnableGrant = issuePiPackageMutationGrant(staleEnableRequest);
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
       packages: [{ source }],
     });
@@ -3428,11 +3431,11 @@ describe('Pi package executable-code boundary', () => {
     const runtimeFence = vi.fn();
     const unsubscribe = firstStore.onPiPackagesChanged(listener);
     try {
-      const failure = await firstStore.mutatePiPackage({
-        action: 'set-enabled',
-        source,
-        enabled: false,
-      }, undefined, { onRuntimeInvalidationPublished: runtimeFence })
+      const failure = await firstStore.mutatePiPackage(
+        staleEnableRequest,
+        staleEnableGrant,
+        { onRuntimeInvalidationPublished: runtimeFence },
+      )
         .catch((error: unknown) => error);
       expect(failure).toMatchObject({ name: 'PiPackageStateUnavailableError' });
       expect(String(failure)).not.toContain(source);
@@ -3563,6 +3566,50 @@ describe('Pi package executable-code boundary', () => {
     const logs = JSON.stringify(loggerRuntime.warn.mock.calls);
     expect(logs).toContain('projection-unavailable');
     expect(logs).not.toContain('private projection failure');
+  });
+
+  it('persists an explicit disable and converges runtimes without a fresh roster read', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const runtimeFence = vi.fn();
+    runtime.listOutcomes = [{ stderr: 'list unavailable during disable', exitCode: 1 }];
+
+    const receipt = await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source,
+      enabled: false,
+    }, { onRuntimeInvalidationPublished: runtimeFence });
+
+    expect(receipt).toMatchObject({
+      changed: true,
+      available: false,
+      projectionUnavailable: true,
+    });
+    expect(runtimeFence).toHaveBeenCalledOnce();
+    expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source]);
+  });
+
+  it('still requires a fresh native roster before enabling a source without an opaque target', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: false });
+    const stateFile = path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json');
+    runtime.listOutcomes = [{ stderr: 'list unavailable during enable', exitCode: 1 }];
+    const runtimeFence = vi.fn();
+
+    await expect(mutateAuthorized(store, {
+      action: 'set-enabled',
+      source,
+      enabled: true,
+    }, { onRuntimeInvalidationPublished: runtimeFence })).rejects.toThrow('state is unavailable');
+    expect(runtimeFence).not.toHaveBeenCalled();
+    const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([source]);
   });
 
   it('refreshes open settings when set-enabled persists but the follow-up list fails', async () => {

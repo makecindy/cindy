@@ -2965,7 +2965,9 @@ export async function mutatePiPackage(
     const source = await resolvePackageMutationTarget(
       requestedSource,
       request.mutationTarget,
-      request.action === 'set-enabled',
+      // Enabling must resolve to Pi's current roster. Disabling is a revocation:
+      // the trusted row source can be durably denied even if Pi list is unavailable.
+      request.action === 'set-enabled' && request.enabled === true,
     );
     const logSource = projectPackageSource(source).displaySource;
     try {
