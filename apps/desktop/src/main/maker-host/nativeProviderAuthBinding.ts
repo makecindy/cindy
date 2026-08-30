@@ -72,6 +72,15 @@ function bindingPath(): string {
   return path.join(app.getPath('userData'), 'native-provider-auth.json');
 }
 
+function hasInvalidProviderOwnerSlot(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return true;
+  const owners = value as Record<string, unknown>;
+  return NATIVE_PROVIDER_IDS.some(
+    (provider) => provider in owners && typeof owners[provider] !== 'string',
+  );
+}
+
 /**
  * 读绑定文件，**区分「确实还没有这个文件」与「有但读不出来」**。
  *
@@ -123,6 +132,19 @@ function readBindingsOrFail(): BindingRead {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return { ok: false, reason: 'unreadable' };
     }
+    const ownerFields = value as {
+      selfAuthorized?: unknown;
+      sharedSystemCredential?: unknown;
+    };
+    if (
+      hasInvalidProviderOwnerSlot(value) ||
+      hasInvalidProviderOwnerSlot(ownerFields.selfAuthorized) ||
+      hasInvalidProviderOwnerSlot(ownerFields.sharedSystemCredential)
+    ) {
+      // Owner provenance is an authorization boundary. A syntactically valid JSON value with
+      // the wrong runtime type is not proof and must never reach downstream string operations.
+      return { ok: false, reason: 'unreadable' };
+    }
     // revoked 也要验型:下游用 `provider in bindings.revoked` 判定,而 `in` 的右操作数是
     // 原始值时直接抛 TypeError —— 一个被手工修坏的字段会让认领、迁移、登出乃至重新授权
     // 全部炸在这里(PR #548 review)。
@@ -136,7 +158,8 @@ function readBindingsOrFail(): BindingRead {
       revoked !== undefined &&
       (typeof revoked !== 'object' || revoked === null || Array.isArray(revoked))
     ) {
-      const { revoked: _bad, ...rest } = value as BindingFile;
+      const rest = { ...(value as BindingFile) };
+      delete rest.revoked;
       return { ok: false, reason: 'badRevoked', bindings: rest };
     }
     return { ok: true, bindings: value as BindingFile };

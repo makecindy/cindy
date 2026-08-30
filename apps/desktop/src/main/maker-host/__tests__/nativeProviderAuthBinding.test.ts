@@ -33,6 +33,7 @@ import {
   markNativeProviderAuthSharedSystemCredential,
   migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
+  readExplicitNativeProviderAuthOwner,
   readLegacyNativeProviderAuthOwner,
   recoverPendingLegacyNativeProviderAuthOwner,
   reserveCommittedLegacyNativeProviderAuthOwner,
@@ -828,5 +829,20 @@ describe('凭证来路(selfAuthorized)—— 显式授权 vs 自动继承', () =
     fs.mkdirSync(userDataDir, { recursive: true });
     fs.writeFileSync(bindingFile, '{ this is not json');
     expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(true);
+  });
+
+  it.each([
+    ['provider owner', { openai: 42, selfAuthorized: { openai: 'owner-a' } }],
+    ['self-authorized owner', { openai: 'owner-a', selfAuthorized: { openai: 42 } }],
+  ])('treats a non-string %s as unproven without rewriting the binding', (_case, value) => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify(value));
+    const before = fs.readFileSync(bindingFile);
+
+    expect(() => readExplicitNativeProviderAuthOwner('openai')).not.toThrow();
+    expect(readExplicitNativeProviderAuthOwner('openai')).toBeNull();
+    expect(isNativeProviderAuthBound('openai')).toBe(false);
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(false);
+    expect(fs.readFileSync(bindingFile)).toEqual(before);
   });
 });
