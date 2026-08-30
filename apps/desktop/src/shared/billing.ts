@@ -18,17 +18,31 @@ export function isAllowedBillingMailto(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   try {
     const parsed = new URL(value);
+    const queryKeys = [...parsed.searchParams.keys()];
+    const hasDuplicateQueryKey = new Set(queryKeys).size !== queryKeys.length;
     return (
       parsed.protocol === 'mailto:' &&
       decodeURIComponent(parsed.pathname).toLowerCase() === BILLING_SUPPORT_EMAIL &&
       !parsed.username &&
       !parsed.password &&
       !parsed.host &&
-      [...parsed.searchParams.keys()].every((key) => key === 'subject' || key === 'body')
+      !hasDuplicateQueryKey &&
+      queryKeys.every((key) => key === 'subject' || key === 'body')
     );
   } catch {
     return false;
   }
+}
+
+/**
+ * Keeps the sender check explicit at the main-process adapter boundary. The
+ * URL policy alone is not sufficient authorization for a privileged shell call.
+ */
+export function isAllowedBillingMailtoRequest(
+  value: unknown,
+  isTrustedSender: boolean,
+): value is string {
+  return isTrustedSender && isAllowedBillingMailto(value);
 }
 
 export const BILLING_INVOKE = {

@@ -1892,9 +1892,10 @@ function InvoiceRequestDialog({
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   const sendButtonRef = useRef<HTMLButtonElement>(null);
-  const paymentMethod = order?.paymentAction
-    ? t(`billing.paymentActions.${order.paymentAction.type}`)
-    : t('billing.orders.invoice.notAvailable');
+  // BillingPaymentOrder does not carry the actual acquiring provider, and a
+  // terminal order usually has no paymentAction. Never present an action type
+  // such as QR_CODE/REDIRECT as the user's payment method.
+  const paymentMethod = t('billing.orders.invoice.notAvailable');
   const buildInvoiceEmail = () => {
     if (!order) return null;
     const subject = t('billing.orders.invoice.emailSubject', { orderId: order.orderId });

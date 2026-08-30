@@ -2912,7 +2912,9 @@ describe('BillingPage order history', () => {
     expect(supportEmailButton.getAttribute('href')).toBeNull();
     expect(screen.getByText(fullOrderId)).toBeTruthy();
     expect(
-      within(await screen.findByRole('dialog')).getByText('billing.paymentActions.QR_CODE'),
+      within(await screen.findByRole('dialog')).getByText(
+        'billing.orders.invoice.notAvailable',
+      ),
     ).toBeTruthy();
     expect(screen.getByText('billing.orders.invoice.fields.invoiceTitle')).toBeTruthy();
     expect(screen.getByText('billing.orders.invoice.fields.contact')).toBeTruthy();

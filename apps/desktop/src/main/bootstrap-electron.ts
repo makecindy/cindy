@@ -32,7 +32,7 @@ import {
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
-import { isAllowedBillingMailto } from '../shared/billing.js';
+import { isAllowedBillingMailtoRequest } from '../shared/billing.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -5932,7 +5932,7 @@ const registerIpcHandlers = () => {
         // provide the localized subject/body, but it must not choose a recipient or
         // use mailto as a general-purpose external scheme.
         const isBillingMailto =
-          isAllowedBillingMailto(url) && isTrustedAppRendererEvent(event);
+          isAllowedBillingMailtoRequest(url, isTrustedAppRendererEvent(event));
         const isAllowedSystemSettingsUrl =
           process.platform === 'darwin' && allowedSystemSettingsUrls.has(url);
         if (!isWebUrl && !isBillingMailto && !isAllowedSystemSettingsUrl) {
