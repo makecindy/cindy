@@ -838,12 +838,22 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     return getCodexHome();
   }
 
+  private trustedDevOAuthWriteOverride(): boolean {
+    return (
+      !app.isPackaged &&
+      process.env.XDT_ISOLATED === '1' &&
+      process.env.XDT_ISOLATED_AUTH === '1' &&
+      process.env.XDT_USER_DATA_DIR_EPOCH === '1' &&
+      process.env.XDT_ALLOW_DEV_OAUTH_WRITE === '1'
+    );
+  }
+
   private devOAuthWritesBlocked(): boolean {
-    return !app.isPackaged && process.env.XDT_ALLOW_DEV_OAUTH_WRITE !== '1';
+    return !app.isPackaged && !this.trustedDevOAuthWriteOverride();
   }
 
   private warnDevOAuthWriteOverride(action: string): void {
-    if (app.isPackaged || process.env.XDT_ALLOW_DEV_OAUTH_WRITE !== '1') return;
+    if (!this.trustedDevOAuthWriteOverride()) return;
     if (this.devOAuthWriteOverrideWarned) return;
     this.devOAuthWriteOverrideWarned = true;
     log.warn(`DEV OAUTH WRITE OVERRIDE ENABLED (${action}): local ChatGPT/Codex login can change`);

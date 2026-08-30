@@ -324,14 +324,46 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
-  it('显式写开关只解除 dev UI/主进程门禁,不会自行启动 OAuth', async () => {
-    fixture();
+  it('普通 isolated 的写开关不能绕过只读门禁或改写共享凭证', async () => {
+    const { localAuth, systemAuth } = fixture();
+    const systemBytes = fs.readFileSync(systemAuth);
+    const systemStat = fs.statSync(systemAuth);
+    vi.stubEnv('XDT_ISOLATED', '1');
     vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');
     h.dataOwnerId = 'owner-a';
+    const chmod = vi.spyOn(fs.promises, 'chmod');
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState()).resolves.toMatchObject({
+      authenticated: true,
+      oauthWritesBlocked: true,
+    });
+    expect(fs.readFileSync(localAuth)).toEqual(systemBytes);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
+    expect(fs.statSync(systemAuth).mode).toBe(systemStat.mode);
+    expect(fs.statSync(systemAuth).ino).toBe(systemStat.ino);
+    expect(chmod).not.toHaveBeenCalled();
+  });
+
+  it('受信 isolated-auth 沙箱可从空凭证启动并解除写门禁', async () => {
+    const { localAuth, systemAuth } = fixture();
+    const systemBytes = fs.readFileSync(systemAuth);
+    const systemStat = fs.statSync(systemAuth);
+    vi.stubEnv('XDT_ISOLATED', '1');
+    vi.stubEnv('XDT_ISOLATED_AUTH', '1');
+    vi.stubEnv('XDT_USER_DATA_DIR_EPOCH', '1');
+    vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');
+    h.dataOwnerId = 'owner-a';
+    const chmod = vi.spyOn(fs.promises, 'chmod');
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
 
-    await expect(new DesktopCodexAuthAdapter().getState()).resolves.not.toHaveProperty(
-      'oauthWritesBlocked',
-    );
+    const state = await new DesktopCodexAuthAdapter().getState();
+    expect(state).toMatchObject({ authenticated: false });
+    expect(state).not.toHaveProperty('oauthWritesBlocked');
+    expect(fs.existsSync(localAuth)).toBe(false);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
+    expect(fs.statSync(systemAuth).mode).toBe(systemStat.mode);
+    expect(chmod).not.toHaveBeenCalled();
   });
 });
