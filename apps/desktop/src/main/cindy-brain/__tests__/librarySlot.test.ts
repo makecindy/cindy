@@ -253,6 +253,40 @@ describe('GhostLibrarySlot', () => {
     expect(showItemInFolder).toHaveBeenCalledTimes(1);
   });
 
+  it('reveal: 解析期间账号切换则不打开文件夹', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd' });
+    const orig = LibraryVault.prototype.resolveExistingFile;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const spy = vi.spyOn(LibraryVault.prototype, 'resolveExistingFile').mockImplementation(async function (
+      this: LibraryVault,
+      relPath: string,
+    ) {
+      started();
+      await gate;
+      return orig.call(this, relPath);
+    });
+    try {
+      const pending = slot.handleLibraryRequest(GHOST_ID, { op: 'reveal', path: 'exports/a.psd' });
+      await opened;
+      scopeKey = 'local:owner-b:1';
+      await slot.disposeAll();
+      release();
+      const r = await pending;
+      expect(r).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+      expect(showItemInFolder).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('saveAs: 用户取消不复制;确认则拷到所选路径,成功只回库内相对键',
     async () => {
       await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
@@ -341,6 +375,43 @@ describe('GhostLibrarySlot', () => {
     expect(second).toMatchObject({ ok: false, errorCode: 'BUSY' });
     release({ canceled: true });
     expect(await first).toEqual({ ok: true, op: 'saveAs', cancelled: true });
+  });
+
+  it('saveAs: 拷贝期间账号切换则不替换已有目标', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'new-psd' });
+    const dest = path.join(tmp, 'Desktop', 'existing.psd');
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    await fs.promises.writeFile(dest, 'keep-me');
+    clock += 4_000;
+    showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dest });
+
+    const origCopy = fs.promises.copyFile.bind(fs.promises);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const spy = vi.spyOn(fs.promises, 'copyFile').mockImplementation(async (src, dst, mode) => {
+      started();
+      await gate;
+      return origCopy(src, dst, mode);
+    });
+    try {
+      const pending = slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+      await opened;
+      scopeKey = 'local:owner-b:1';
+      await slot.disposeAll();
+      release();
+      const r = await pending;
+      expect(r).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+      expect(fs.readFileSync(dest, 'utf8')).toBe('keep-me');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('saveAs: 对话框期间账号切换则拒绝拷贝,不把源文件拷出', async () => {

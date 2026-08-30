@@ -1511,6 +1511,7 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).toContain('跨平台标题带已核验插件名');
     expect(FORGE_GUIDE).toContain('已有对话框在场');
     expect(FORGE_GUIDE).toContain('对话框期间账号切换');
+    expect(FORGE_GUIDE).toContain('拷贝完成替换前、reveal 打开文件夹前再核一次会话');
     expect(FORGE_GUIDE).toContain('先拷到目标旁临时文件再替换');
     expect(FORGE_GUIDE).toContain('`BUSY`');
     expect(FORGE_GUIDE).toContain('`RATE_LIMITED`');

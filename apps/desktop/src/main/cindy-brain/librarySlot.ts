@@ -228,6 +228,29 @@ export class GhostLibrarySlot {
     }
   }
 
+  /**
+   * 慢 IO / 系统对话框之后再核一次:停用、切账号、disposeAll 都会让这次
+   * 请求作废。reveal 的 resolveExistingFile 与 saveAs 的 copyFile 都不走
+   * vault.invalidated,不能把切换前解析的路径继续交给 Finder 或 rename。
+   */
+  private rejectIfSessionStale(
+    ghostId: string,
+    session: GhostLibrarySession,
+    cancelledMessage: string,
+  ): GhostPipeLibraryResult | null {
+    if (!this.checkEligibility(ghostId)) {
+      return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力');
+    }
+    if (this.deps.captureOwnerScope() !== session.ownerScopeKey) {
+      return fail('LIBRARY_UNAVAILABLE', cancelledMessage);
+    }
+    const live = this.sessions.get(ghostId);
+    if (!live || live !== session) {
+      return fail('LIBRARY_UNAVAILABLE', cancelledMessage);
+    }
+    return null;
+  }
+
   /** dbPath 相对键 → 库内绝对路径;经 vault 收敛校验(库内 symlink 指根外拒)。 */
   private async resolveDbPath(session: GhostLibrarySession, dbPath: unknown): Promise<{ abs: string } | GhostPipeLibraryResult> {
     const reason = validateLibraryRelPath(dbPath);
@@ -367,6 +390,12 @@ export class GhostLibrarySlot {
         if (last !== undefined && now - last < GHOST_PICK_MIN_INTERVAL_MS) {
           return fail('RATE_LIMITED', '在文件夹中显示请求太频繁,稍后再试');
         }
+        const stale = this.rejectIfSessionStale(
+          ghostId,
+          session,
+          '账号已切换,在文件夹中显示已取消',
+        );
+        if (stale) return stale;
         this.deps.showItemInFolder(abs);
         return { ok: true, op: 'reveal', path: req.path };
       }
@@ -416,14 +445,14 @@ export class GhostLibrarySlot {
 
         // 对话框可能挂很久:期间账号切换会 disposeAll 作废旧 vault,但源文件
         // 仍在磁盘。不得用切换前解析的 abs 拷贝,也不得把用户所选绝对路径回沙箱。
-        const currentScope = this.deps.captureOwnerScope();
-        if (currentScope !== session.ownerScopeKey) {
-          return fail('LIBRARY_UNAVAILABLE', '账号已切换,另存为已取消');
-        }
+        const afterDialog = this.rejectIfSessionStale(
+          ghostId,
+          session,
+          '账号已切换,另存为已取消',
+        );
+        if (afterDialog) return afterDialog;
         const live = this.sessions.get(ghostId);
-        if (!live || live !== session) {
-          return fail('LIBRARY_UNAVAILABLE', '账号已切换,另存为已取消');
-        }
+        if (!live) return fail('LIBRARY_UNAVAILABLE', '账号已切换,另存为已取消');
         const freshAbs = await live.vault.resolveExistingFile(relPath);
         if (!freshAbs) return fail('NOT_FOUND', `库内没有这个文件:${relPath}`);
         const dest = picked.filePath;
@@ -437,6 +466,13 @@ export class GhostLibrarySlot {
         );
         try {
           await fs.promises.copyFile(freshAbs, tmpDest);
+          // copy 可能很慢:期间 disposeAll 不会取消这份 Node 拷贝,替换前再核一次。
+          const afterCopy = this.rejectIfSessionStale(
+            ghostId,
+            session,
+            '账号已切换,另存为已取消',
+          );
+          if (afterCopy) return afterCopy;
           await fs.promises.rename(tmpDest, dest);
         } catch (error) {
           this.deps.log?.warn('ghost library saveAs copy failed', {
