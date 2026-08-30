@@ -365,6 +365,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     await wsClient.stop({
       offlineTimeoutMs: wsClient.QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS,
       reason: 'transport-dispose',
+      discardPendingTopicLeases: true,
     });
   }
 

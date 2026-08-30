@@ -79,6 +79,8 @@ let currentService: BotCredentials['service'] | null = null;
  * currentBotAppId 已清空、新账号尚未装入的空窗恢复，仍能区分同账号重连与换号。
  */
 let pendingStartAccount: Pick<BotCredentials, 'appId' | 'service'> | null = null;
+/** Latest connection generation invalidated by an explicit logical logout/shutdown. */
+let topicLeaseDiscardThroughGeneration = 0;
 let currentStatus: FeishuConnectionStatus = 'idle';
 let acceptingInbound = false;
 let lifecycleGeneration = 0;
@@ -555,16 +557,18 @@ function isSameBotActive(botAppId: string, service: BotCredentials['service']): 
 }
 
 /**
- * 入站 await 恢复时是否已经换成另一个 bot。同账号重连(appId+service 未变)
- * 和没有下一账号的停机间隙都不是替换 —— pending topic lease 必须留下,
- * 已配对的重投才能再 dispatch。start() 等待 stop() 的空窗优先比较待启动
- * 账号；跨账号时显式放弃，否则 pruneTopicLeases 永久跳过 pending, 反复换号
- * 会让 Map 无界增长, 切回旧账号还能沿旧 lease 起 turn。
+ * 入站 await 恢复时是否应放弃 topic lease。明确登出/销毁会按 connection
+ * generation 永久作废旧 lease；transport 重连则保留。账号替换的 stop/start
+ * 空窗优先比较待启动账号，同账号保留、跨账号放弃。否则
+ * pruneTopicLeases 永久跳过 pending, 反复换号会让 Map 无界增长, 切回旧账号
+ * 还能沿旧 lease 起 turn。
  */
-function isReplacedBotAccount(
+function shouldAbandonTopicLease(
   botAppId: string,
   service: BotCredentials['service'],
+  generation: number,
 ): boolean {
+  if (generation <= topicLeaseDiscardThroughGeneration) return true;
   if (pendingStartAccount) {
     return pendingStartAccount.appId !== botAppId || pendingStartAccount.service !== service;
   }
@@ -1238,11 +1242,40 @@ interface StopOptions {
   announceOffline?: boolean;
   /** Clear the owner after any offline notice, before broadcasting idle. */
   clearOwnerBeforeIdle?: boolean;
+  /** Publish the account that will start immediately after this stop completes. */
+  nextAccount?: Pick<BotCredentials, 'appId' | 'service'>;
+  /** Logical logout/shutdown: old in-flight topic leases must never survive. */
+  discardPendingTopicLeases?: boolean;
   reason?: string;
 }
 
 export async function stop(opts: StopOptions = {}): Promise<void> {
+  const pendingAccount = opts.nextAccount
+    ? { appId: opts.nextAccount.appId, service: opts.nextAccount.service }
+    : null;
+  if (opts.discardPendingTopicLeases) {
+    // Explicit logout wins over any stale replacement intent.
+    pendingStartAccount = null;
+  } else if (pendingAccount) {
+    pendingStartAccount = pendingAccount;
+  }
+  try {
+    await stopCurrentClient(opts);
+  } catch (err) {
+    if (pendingAccount && pendingStartAccount === pendingAccount) pendingStartAccount = null;
+    throw err;
+  }
+}
+
+async function stopCurrentClient(opts: StopOptions): Promise<void> {
   const log = getLog();
+  const stoppedGeneration = lifecycleGeneration;
+  if (opts.discardPendingTopicLeases) {
+    topicLeaseDiscardThroughGeneration = Math.max(
+      topicLeaseDiscardThroughGeneration,
+      stoppedGeneration,
+    );
+  }
   // Close the logical ingress gate before awaiting the offline announcement.
   // Lark may still deliver callbacks while stop is waiting on network I/O;
   // those callbacks must never reach account-scoped host state after logout.
@@ -1650,7 +1683,7 @@ async function processClaimedMessage(
     }
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
     abandonUnpairedFlat?.();
-    if (isReplacedBotAccount(botAppId, service)) abandonTopic?.();
+    if (shouldAbandonTopicLease(botAppId, service, generation)) abandonTopic?.();
     return;
   }
 
@@ -1689,7 +1722,7 @@ async function processClaimedMessage(
         }
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
         abandonUnpairedFlat?.();
-        if (isReplacedBotAccount(botAppId, service)) abandonTopic?.();
+        if (shouldAbandonTopicLease(botAppId, service, generation)) abandonTopic?.();
         return;
       }
       // 孤儿开场白不会派发副本 turn: 先 peek 是否已被迟到话题接管, 再决定
