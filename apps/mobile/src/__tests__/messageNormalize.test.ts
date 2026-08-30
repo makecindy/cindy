@@ -998,6 +998,47 @@ describe('normalizeRemoteMessages', () => {
     expect(items[1].body).toBe('something exploded');
   });
 
+  it('localizes persisted tool-loop errors from reason and bounded details', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'tool-loop-generic',
+        role: 'error',
+        content: JSON.stringify({
+          message: '上游模型疑似陷入死循环，category=missing_required_field',
+          reason: 'tool_use_loop_detected',
+        }),
+      }),
+      message({
+        id: 'tool-loop-contract',
+        role: 'error',
+        content: JSON.stringify({
+          message: 'internal contract failure: missing_required_field',
+          reason: 'tool_use_loop_detected',
+          toolLoop: { kind: 'contract', count: 3 },
+        }),
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+      message({
+        id: 'tool-loop-invalid-details',
+        role: 'error',
+        content: JSON.stringify({
+          message: 'raw malformed loop category=missing_required_field',
+          reason: 'tool_use_loop_detected',
+          toolLoop: { kind: 'unknown', count: 999999999 },
+        }),
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }),
+    ]);
+
+    expect(items[0].body).toBe(i18n.t('session.tail.toolUseLoopDetected'));
+    expect(items[0].body).not.toContain('missing_required_field');
+    expect(items[1].body).toBe(
+      i18n.t('session.tail.toolUseLoopDetectedWithCount', { count: 3 }),
+    );
+    expect(items[1].body).not.toContain('missing_required_field');
+    expect(items[2].body).toBe(i18n.t('session.tail.toolUseLoopDetected'));
+  });
+
   it('extracts scheduler automation origin from user agentMeta', () => {
     const items = normalizeRemoteMessages([
       message({

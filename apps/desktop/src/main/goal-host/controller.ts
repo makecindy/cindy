@@ -186,6 +186,8 @@ export interface TurnOutcome {
   /** 本轮是否以终止型 error 收尾。 */
   errored: boolean;
   errorMessage?: string;
+  /** Stable terminal reason used by projections; never persist provider message text for it. */
+  errorReason?: string;
   /**
    * 错误归类:'usage_limit' = 账号限流,'overload' = 上游模型没容量。两者都置
    * usageLimited(可恢复、到点自动续),区别只在等多久——限额等账号周期重置,
@@ -264,7 +266,12 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
     const stoppedByUser = /abort|cancel|interrupt|stopped/i.test(msg);
     return {
       status: stoppedByUser ? 'paused' : 'blocked',
-      lastReason: stoppedByUser ? 'paused: stopped by user' : `turn failed: ${msg}`,
+      lastReason:
+        stoppedByUser
+          ? 'paused: stopped by user'
+          : outcome.errorReason === 'tool_use_loop_detected'
+            ? 'tool_use_loop_detected'
+            : `turn failed: ${msg}`,
       turnsUsed,
       tokensUsed,
       noProgressStreak: prev.noProgressStreak,
@@ -1854,6 +1861,7 @@ export class GoalController {
 
     const origin: 'goal' | 'other' = event.turnOrigin?.kind === 'goal' ? 'goal' : 'other';
     const errorMessage = errored ? extractErrorMessage(event.data) : undefined;
+    const errorReason = errored ? extractErrorReason(event.data) : undefined;
     // 连续过载计数:自动续跑的止损闸门。三道预算护栏都可能没设,过载轮又不产出
     // token、不推进 noProgressStreak,所以必须有一个不依赖用户配置的上限。
     // 本轮不是过载(成功、真错、或用户 Stop)→ 立刻清零,只掐"连续"过载。
@@ -1883,6 +1891,7 @@ export class GoalController {
       verdict: origin === 'goal' ? parseVerdict(turn?.text ?? '') : null,
       errored,
       errorMessage,
+      errorReason,
       // 被动检测:本轮以"账号限流"或"上游没容量"型 error 收尾 → 标记,
       // decideNextGoalState 据此置 usageLimited(非终态、到点自动续)。
       // **过载优先判**:529 同时命中两条判定,但只有过载分支能拿到可用的 resetAt
@@ -2605,6 +2614,12 @@ function extractErrorMessage(data: unknown): string {
     return String((data as { message: unknown }).message);
   }
   return String(data);
+}
+
+function extractErrorReason(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object' || !('reason' in data)) return undefined;
+  const reason = (data as { reason?: unknown }).reason;
+  return typeof reason === 'string' && reason.length > 0 ? reason : undefined;
 }
 
 /** 重新导出供调用方判断终态(避免到处 import types)。 */

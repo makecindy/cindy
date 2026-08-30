@@ -290,6 +290,10 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     const { handle, hooks, workingDir } = await startSession(undefined, {
       turnChangeCapture: { beforeKnownFileWrite, noteOpaqueWrite },
     });
+    const realDir = await makeTempDir();
+    const linkedDir = path.join(workingDir, 'linked-output');
+    await fs.symlink(realDir, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const canonicalRealDir = await fs.realpath(realDir);
     const pre = hooks?.PreToolUse?.[0]?.hooks[0];
     const post = hooks?.PostToolUse?.[0]?.hooks[0];
     if (!pre || !post) throw new Error('expected turn change capture hooks');
@@ -297,7 +301,7 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     await pre({
       hook_event_name: 'PreToolUse',
       tool_name: 'Write',
-      tool_input: { file_path: 'a.ts', content: 'next' },
+      tool_input: { file_path: path.join(linkedDir, 'a.ts'), content: 'next' },
     });
     await pre({
       hook_event_name: 'PreToolUse',
@@ -308,7 +312,7 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
       sessionId: 'session-mcp-policy',
       provider: 'claude-code',
       cwd: workingDir,
-      targetPath: 'a.ts',
+      targetPath: path.join(canonicalRealDir, 'a.ts'),
     });
     expect(noteOpaqueWrite).not.toHaveBeenCalled();
 
@@ -868,6 +872,31 @@ describe('prompt-each-time never turns into a persisted grant', () => {
 });
 
 describe('a custom server cannot take over a builtin name', () => {
+  it('passes read-only and read-write directory grants through one SDK directory allowlist', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const agent = new ClaudeCodeAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-directory-grants',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'auto',
+      extraDirs: ['/reference-only'],
+      writableDirs: ['/shared-output'],
+    });
+    const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as {
+      additionalDirectories?: string[];
+      permissionMode?: string;
+    };
+    expect(options.additionalDirectories).toEqual(['/reference-only', '/shared-output']);
+    // Native Auto cannot distinguish the two grants; Cindy's canUseTool path owns review.
+    expect(options.permissionMode).toBe('default');
+    expect(agent.capabilities.writableDirs).toEqual({ supported: true });
+    await handle.close();
+  });
+
   it('把 session 花名册快照追加到 Claude systemPrompt', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -1086,6 +1115,7 @@ describe('remote sessions share the same permission semantics', () => {
       getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
       getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
       resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
+      reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
     },
   ) {
     const configDir = await makeTempDir();
@@ -1099,6 +1129,7 @@ describe('remote sessions share the same permission semantics', () => {
     deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
     deps.capabilityRouting = options?.capabilityRouting;
     deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
+    deps.reviewAutoPermissionAction = options?.reviewAutoPermissionAction;
     // 远端只装得到 stdio / sse / http 类 server —— in-process 的会被 filter 掉。
     deps.mcpProviders = (
       options?.mcpServerNames ?? ['cindy_browser', 'cindy_contacts']
@@ -1155,6 +1186,7 @@ describe('remote sessions share the same permission semantics', () => {
       seen,
       remoteStartParams,
       remoteIdentity,
+      workingDir,
     };
   }
 
@@ -1214,6 +1246,27 @@ describe('remote sessions share the same permission semantics', () => {
 
     expect(result.behavior).toBe('allow');
     expect(seen).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('prompts for remote structured writes when the controller cannot prove the real target', async () => {
+    const { handle, onApprovalRequest, seen, workingDir } = await startRemoteSession(
+      () => 'auto-approve',
+      {
+        permissionMode: 'auto',
+        attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
+      },
+    );
+
+    const result = await onApprovalRequest({
+      requestId: 'r-remote-write',
+      kind: 'permission',
+      toolName: 'Write',
+      input: { file_path: path.join(workingDir, 'result.txt') },
+    });
+
+    expect(result.behavior).toBe('allow');
+    expect(permissionRequests(seen)).toHaveLength(1);
     await handle.close();
   });
 
@@ -1347,6 +1400,30 @@ describe('remote sessions share the same permission semantics', () => {
       input: { file_path: '/tmp/x' },
     });
     expect(allowed.behavior).toBe('allow');
+    await handle.close();
+  });
+
+  it('does not let the controller auto-review remote destructive paths from lexical prefixes', async () => {
+    const reviewer = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(
+      () => 'prompt',
+      {
+        permissionMode: 'auto',
+        reviewAutoPermissionAction: reviewer,
+        attachResolver: () => ({ kind: 'permission', behavior: 'deny' }),
+      },
+    );
+
+    const result = await onApprovalRequest({
+      requestId: 'r-remote-rm',
+      kind: 'permission',
+      toolName: 'Bash',
+      input: { command: 'rm -rf build' },
+    });
+
+    expect(result.behavior).toBe('deny');
+    expect(reviewer).not.toHaveBeenCalled();
+    expect(permissionRequests(seen)).toHaveLength(1);
     await handle.close();
   });
 

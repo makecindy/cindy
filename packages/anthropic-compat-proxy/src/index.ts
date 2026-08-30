@@ -42,6 +42,7 @@ export {
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
+  compactOversizedImageHistory,
   createToolUseProviderSpecificFieldsRecoveryRule,
   dedupeDuplicateToolUseIds,
   dedupeDuplicateToolUseIdsFromBody,
@@ -81,6 +82,7 @@ export type {
 } from './instructions-injection.js';
 export type {
   LocalRequestHandler,
+  OversizedRequestCompactor,
   ProxyHandle,
   ProxyLogger,
   ProxyOptions,

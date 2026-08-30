@@ -328,7 +328,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       "vendorKey === 'cc' && extraDirs !== undefined && onExtraDirsChange",
     );
     expect(chatInputSource).toContain(
-      'hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}',
+      'hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}',
     );
     expect(extraDirsButtonSource).not.toContain("const isCc = agentKind === 'cc'");
     // ×N 角标在 create-agent(新建草稿)也要外显(2026-07-25 用户定稿):引用目录

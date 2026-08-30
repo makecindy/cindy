@@ -462,6 +462,7 @@ import { initHeartbeatService } from './heartbeatService';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { WindowManualDragController } from './windowManualDrag';
+import { issueWritableDirectoryPickerGrant } from './maker-ipc/writableDirectoryPickerGrant.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
@@ -5928,6 +5929,7 @@ const registerIpcHandlers = () => {
   const allowedSystemSettingsUrls = new Set([
     'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
     'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
   ]);
 
   // Open external URL in system default browser, plus a small allowlist of
@@ -6293,7 +6295,19 @@ const registerIpcHandlers = () => {
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
     'dialog:show-open-directory',
-    async (_event, { defaultPath }: { defaultPath?: string } = {}) => {
+    async (
+      event,
+      {
+        defaultPath,
+        writableGrantScope,
+      }: { defaultPath?: string; writableGrantScope?: string } = {},
+    ) => {
+      if (writableGrantScope !== undefined) {
+        assertTrustedAppRendererEvent(event);
+        if (!writableGrantScope || writableGrantScope.length > 128) {
+          throw new Error('invalid writable directory grant scope');
+        }
+      }
       const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
       if (!targetWin) return { success: true, path: null };
       const result = await dialog.showOpenDialog(targetWin, {
@@ -6305,7 +6319,15 @@ const registerIpcHandlers = () => {
       if (result.canceled || result.filePaths.length === 0) {
         return { success: true, path: null };
       }
-      return { success: true, path: result.filePaths[0] };
+      const selectedPath = result.filePaths[0];
+      if (writableGrantScope !== undefined) {
+        await issueWritableDirectoryPickerGrant({
+          scopeId: writableGrantScope,
+          senderId: event.sender.id,
+          directory: selectedPath,
+        });
+      }
+      return { success: true, path: selectedPath };
     },
   );
 

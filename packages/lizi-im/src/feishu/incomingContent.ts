@@ -107,10 +107,12 @@ export function parseIncoming(
     case 'share_chat':
     case 'share_user':
     case 'system':
-    case 'merge_forward':
+    case 'merge_forward': {
+      return EMPTY_RESULT;
+    }
     case 'card':
     case 'interactive': {
-      return EMPTY_RESULT;
+      return parseInteractive(c);
     }
     default: {
       return {
@@ -173,4 +175,48 @@ function parsePost(c: Record<string, unknown>): ParsedIncoming {
     attachments,
     unsupported,
   };
+}
+
+/**
+ * Bot 答案走 interactive 卡片(v2 markdown / v1 lark_md)。引用回复需要把卡片
+ * 正文抽出来,抽不出(模板卡等)就留空,让 resolveReplyMessage 返回 null 走群历史。
+ * 卡片图只当上下文标记,不当可下载附件——image_key 在卡片里,下载协议与消息图不同。
+ */
+function parseInteractive(c: Record<string, unknown>): ParsedIncoming {
+  const parts: string[] = [];
+  const body = c.body;
+  if (body && typeof body === 'object') {
+    const elements = (body as Record<string, unknown>).elements;
+    if (Array.isArray(elements)) collectCardElementText(elements, parts);
+  }
+  if (Array.isArray(c.elements)) collectCardElementText(c.elements, parts);
+  const text = parts.join('\n').trim();
+  if (!text) return EMPTY_RESULT;
+  return { text, attachments: [], unsupported: [] };
+}
+
+function collectCardElementText(elements: unknown[], parts: string[]): void {
+  for (const el of elements) {
+    if (!el || typeof el !== 'object') continue;
+    const n = el as Record<string, unknown>;
+    const tag = typeof n.tag === 'string' ? n.tag : '';
+    if (tag === 'markdown') {
+      const content = typeof n.content === 'string' ? n.content.trim() : '';
+      if (content) parts.push(content);
+      continue;
+    }
+    if (tag === 'img') {
+      parts.push('[图片]');
+      continue;
+    }
+    if (tag === 'div') {
+      const textObj = n.text;
+      if (textObj && typeof textObj === 'object') {
+        const content = (textObj as Record<string, unknown>).content;
+        if (typeof content === 'string' && content.trim()) parts.push(content.trim());
+      }
+      continue;
+    }
+    if (tag === 'action') continue;
+  }
 }

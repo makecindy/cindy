@@ -4,6 +4,7 @@
  * 消息流里 http(s) 链接的**右键**「打开方式」菜单:在侧边栏浏览器中打开 /
  * 在默认浏览器中打开。左键不再弹菜单——由 openUrlByPreference /
  * openHtmlFileByPreference 按用户偏好(设置 → 个性化 → 链接打开方式)直开。
+ * 外部网页与内部网页(本地 HTML / localhost)是两套默认,互不影响。
  *
  * html 文件 chip 的右键不走本 hook——它们已有 useFileChipContextMenu
  * (复制 / 路径 / 目录 / 浏览器查看),「侧边栏打开 / 查看源文件」以可选项
@@ -34,7 +35,10 @@ import {
   openUrlInSidebarBrowser,
   pathToFileUrl,
 } from '@/features/right-sidebar/lib/openInSidebarBrowser';
-import { getLinkOpenPreference } from '@/hooks/useLinkOpenPreference';
+import {
+  getLinkOpenPreference,
+  getLinkOpenPreferenceForUrl,
+} from '@/hooks/useLinkOpenPreference';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
 
 /** 左键"按偏好直开"只对浏览器"作为页面渲染"有意义的 html 家族生效;其余本地
@@ -54,13 +58,13 @@ async function openInSidebar(sessionId: string, url: string, t: TFunction): Prom
   }
 }
 
-/** http(s) 链接左键:按用户偏好直开(sidebar → 内置新页签;external → 系统浏览器)。 */
+/** http(s) / file 链接左键:按 URL 属于外部网页还是内部网页选对应偏好直开。 */
 export async function openUrlByPreference(
   sessionId: string,
   url: string,
   t: TFunction,
 ): Promise<void> {
-  if (getLinkOpenPreference() === 'sidebar') {
+  if (getLinkOpenPreferenceForUrl(url) === 'sidebar') {
     await openInSidebar(sessionId, url, t);
     return;
   }
@@ -68,13 +72,13 @@ export async function openUrlByPreference(
   if (!res.success) toast.error(t('chat.markdownRenderer.openLinkFailed'));
 }
 
-/** 本地 html 文件左键:按用户偏好直开(sidebar → file:// 进内置;external → 系统浏览器)。 */
+/** 本地 html 文件左键:走内部网页偏好(sidebar → file:// 进内置;external → 系统浏览器)。 */
 export async function openHtmlFileByPreference(
   sessionId: string,
   absPath: string,
   t: TFunction,
 ): Promise<void> {
-  if (getLinkOpenPreference() === 'sidebar') {
+  if (getLinkOpenPreference('local') === 'sidebar') {
     await openInSidebar(sessionId, pathToFileUrl(absPath), t);
     return;
   }

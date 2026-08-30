@@ -180,6 +180,35 @@ describe('session runtime control wiring', () => {
     }
   });
 
+  it('serializes local and remote directory validation, runtime apply, persistence, and rollback', () => {
+    const grantUpdate = handlerBody(
+      registerSource,
+      'const applyDirectoryGrants =',
+      'ipcMain.handle(MAKER_INVOKE.SET_EXTRA_DIRS',
+    );
+    const extraDirs = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_EXTRA_DIRS',
+      'MAKER_INVOKE.SET_WRITABLE_DIRS',
+    );
+    const writableDirs = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.SET_WRITABLE_DIRS',
+      '// ── Memory 控制',
+    );
+
+    expect(grantUpdate).toContain('withSendToSessionLock(sessionId');
+    expect(grantUpdate).toContain('applyRemoteDirectoryGrantUpdate(axis');
+    expect(grantUpdate).toContain('persist: (patch) => persistSessionFields(sessionId, patch)');
+    expect(grantUpdate).toContain('terminate: () => maker.closeSession(sessionId)');
+    expect(grantUpdate).toContain('markRemoteSettingPersistedInsideHandler(result.dirs)');
+    expect(grantUpdate).toContain('options.remote || route?.remoteHostId');
+    expect(grantUpdate).toContain('isPersistedDirectoryGrantSubset(accepted, previousDirs)');
+    expect(extraDirs).toContain("applyDirectoryGrants('extraDirs'");
+    expect(writableDirs).toContain("applyDirectoryGrants('writableDirs'");
+    expect(writableDirs).toContain('senderId: event.sender.id');
+  });
+
   it('guards local user model changes before parsing input while preserving trusted internal paths', () => {
     const setModel = handlerBody(
       registerSource,
@@ -314,6 +343,70 @@ describe('session runtime control wiring', () => {
     expect(terminalGuard).toBeLessThan(setModel.indexOf('acceptSessionRuntimeMutation({'));
     expect(terminalGuard).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
     expect(setModel).toContain('return withSendToSessionLock(sessionId, applyLocked);');
+  });
+
+  it('maps every Codex relink failure to the structured IPC error protocol', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const relinkBoundary = setModel.slice(
+      setModel.indexOf('const relinkCodexThread ='),
+      setModel.indexOf('const rebuildLiveOrcaWorker'),
+    );
+    expect(relinkBoundary).toContain(
+      "throwIpcError(\n                'PRECONDITION_FAILED'",
+    );
+    expect(relinkBoundary).toContain('.catch((error) => {');
+    expect(relinkBoundary).toContain('reserveCodexForkCleanup(');
+    expect(relinkBoundary).toContain('...(cleanup ? { cleanup } : {})');
+    expect(relinkBoundary).toContain('if (isIpcError(error)) throw error;');
+    expect(relinkBoundary).toContain(
+      "throwIpcError('INTERNAL', 'Failed to rebuild Codex provider thread')",
+    );
+    expect(relinkBoundary).not.toContain('throw new Error');
+  });
+
+  it('relinks legacy provider selections with the persisted effort and Fast axes', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const targetRoute = setModel.slice(
+      setModel.indexOf('const targetCodexRoute:'),
+      setModel.indexOf('const relinkCodexThread ='),
+    );
+    expect(targetRoute).toContain('requiresCodexThreadRelink');
+    expect(targetRoute).toContain('? {');
+    expect(targetRoute).toContain(
+      'effort: atomicSelection ? atomicSelection.effort : runtimeStatus.effort',
+    );
+    expect(targetRoute).toContain(
+      'fastMode: atomicSelection ? atomicSelection.fastMode : runtimeStatus.fastMode',
+    );
+    expect(targetRoute).not.toContain('requiresCodexThreadRelink && atomicSelection');
+  });
+
+  it('derives the Codex relink boundary from effective credential identities', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const relinkGate = setModel.slice(
+      setModel.indexOf('const hasPersistedLocalCodexThread ='),
+      setModel.indexOf('const targetCodexRoute:'),
+    );
+    expect(relinkGate).toContain('decideCodexProviderThreadRelink(');
+    expect(relinkGate).toContain(
+      '{ model: runtimeStatus.model, providerId: runtimeStatus.providerId }',
+    );
+    expect(relinkGate).toContain('{ model, providerId: targetProviderId }');
+    expect(relinkGate).toContain("relinkDecision === 'unresolved'");
+    expect(relinkGate).toContain("relinkDecision === 'relink'");
+    expect(relinkGate).toContain("throwIpcError(\n          'PRECONDITION_FAILED'");
   });
 
   it('rejects terminal tasks before effort or Fast mutations recreate runtime state', () => {

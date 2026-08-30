@@ -2,9 +2,11 @@
  * ImageLightbox — IM 级全屏图片查看器。
  * ---------------------------------------------------------------------------
  * 点缩略图直接全屏黑底看图,交互对齐主流 IM:
- *   - 双指捏合缩放(1x~4x)、放大后单指平移(钳制在图片边界内)
- *   - 双击在 1x / 2.5x 间切换;单击关闭(微信式,产品决策)
+ *   - 双指捏合绕焦点缩放(1x~4x);放大后单指平移(钳制在 contain 后的图片边界内)
+ *   - 双击在 1x / 2.5x 间切换并落到点击点;1x 单击关闭
  *   - 1x 下竖直下滑跟手关闭(位移 + 背景渐隐),横滑翻会话内图片集
+ *   - 放大后单指只平移;单击不关(双击缩回,或先回到 1x 再单击/下滑)
+ *   - 捏合/平移期间 chrome 让位(不抢触摸),结束后恢复
  *   - chrome 极简:右下系统分享、多图时顶部页码;无关闭按钮(单击 / 下滑即关)、无文件名无正文
  * 手势判定全部走 imageLightboxModel.ts 纯函数;取件复用会话屏的队列 + 磁盘缓存
  * (onResolveRemoteMedia),点开时通常已被列表缩略图取过、秒出。
@@ -28,7 +30,7 @@ import {
 import { Text } from '@/components/AppText';
 import { MessageSquarePlus, Pen, Share as ShareIcon, Undo2, X } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
-import { fontWeight, iconSize, iconStroke, radius, typeScale } from '@/theme';
+import { fontWeight, iconSize, iconStroke, motionDuration, radius, typeScale } from '@/theme';
 import { Gesture, GestureDetector, GestureHandlerRootView } from '@/platform/gestureHandler';
 import Animated, {
   runOnJS,
@@ -47,15 +49,25 @@ import {
   type ResolveRemoteMediaFn,
 } from '@/session/remoteMedia';
 import {
+  bakeLightboxOrigin,
   canShareLightboxImage,
+  compensateLightboxOrigin,
   clampLightboxScale,
   clampLightboxTranslation,
+  clampLightboxVisualPan,
+  isLightboxZoomed,
   lightboxBackgroundOpacity,
+  lightboxContainedSize,
+  lightboxDoubleTapTranslate,
   lightboxImageLayers,
   lightboxInitialIndex,
   lightboxPageIndex,
   lightboxPageLabel,
+  lightboxPinchOrigin,
+  LIGHTBOX_TAP_MAX_DISTANCE,
   nextDoubleTapScale,
+  reclampLightboxPan,
+  shouldCloseLightboxOnTap,
   shouldDismissLightbox,
 } from '@/session/imageLightboxModel';
 import {
@@ -170,6 +182,8 @@ export const ImageLightbox = memo(function ImageLightbox({
   const urls = useMemo(() => images.map((image) => image.url), [images]);
   const [activeIndex, setActiveIndex] = useState(() => lightboxInitialIndex(urls, initialUrl));
   const [zoomed, setZoomed] = useState(false);
+  /** 捏合/平移进行中 chrome 不接收触摸,避免底栏抢走双指。 */
+  const [chromeInteractive, setChromeInteractive] = useState(true);
   const [resolveMap, setResolveMap] = useState<Record<string, PageResolveState>>({});
   /**
    * trimmed url → 列表缩略图地址(渐进出图的垫底层)。独立于 resolveMap:
@@ -178,6 +192,11 @@ export const ImageLightbox = memo(function ImageLightbox({
   const [previewMap, setPreviewMap] = useState<Record<string, string>>({});
   /** 下滑拖动量(当前活跃页写入),驱动背景与 chrome 渐隐。 */
   const dismissY = useSharedValue(0);
+  /** 捏合/平移期间把 chrome 透明度打到 0;与 dismissY 相乘。 */
+  const chromeHidden = useSharedValue(0);
+  const handleChromeBusy = useCallback((busy: boolean) => {
+    setChromeInteractive(!busy);
+  }, []);
 
   // ---- 圈点标注状态(仅活跃页;笔迹归一化存储,显示/烧录共用同一映射)----
   const [isAnnotating, setIsAnnotating] = useState(false);
@@ -379,6 +398,9 @@ export const ImageLightbox = memo(function ImageLightbox({
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: lightboxBackgroundOpacity(dismissY.value, height),
   }));
+  const chromeStyle = useAnimatedStyle(() => ({
+    opacity: lightboxBackgroundOpacity(dismissY.value, height) * (1 - chromeHidden.value),
+  }));
 
   const activeImage = images[activeIndex] ?? null;
   const activeUri = activeImage ? displayUriFor(activeImage) : null;
@@ -483,10 +505,12 @@ export const ImageLightbox = memo(function ImageLightbox({
               annotationStrokes={index === activeIndex
                 ? strokes
                 : annotation?.initialStrokesFor?.(item) ?? EMPTY_STROKES}
+              chromeHidden={chromeHidden}
               dismissY={dismissY}
               height={height}
               image={item}
               naturalSize={naturalSizes[item.key] ?? null}
+              onChromeBusy={handleChromeBusy}
               onDrawPoint={handleDrawPoint}
               onImageError={handleImageLoadError}
               onNaturalSize={handleNaturalSize}
@@ -504,8 +528,8 @@ export const ImageLightbox = memo(function ImageLightbox({
           windowSize={3}
         />
         <Animated.View
-          pointerEvents="box-none"
-          style={[styles.chrome, backdropStyle, { paddingBottom: insets.bottom + 16, paddingTop: insets.top + 8 }]}
+          pointerEvents={chromeInteractive ? 'box-none' : 'none'}
+          style={[styles.chrome, chromeStyle, { paddingBottom: insets.bottom + 16, paddingTop: insets.top + 8 }]}
         >
           {isAnnotating ? (
             // 标注模式 chrome(对齐桌面):底部工具栏切换为 取消 / 撤销 / 提交
@@ -694,10 +718,12 @@ const LightboxPage = memo(function LightboxPage({
   annotating,
   annotationDraftStroke,
   annotationStrokes,
+  chromeHidden,
   dismissY,
   height,
   image,
   naturalSize,
+  onChromeBusy,
   onDrawPoint,
   onImageError,
   onNaturalSize,
@@ -716,11 +742,14 @@ const LightboxPage = memo(function LightboxPage({
   annotationDraftStroke: AnnotationStroke | null;
   /** 已落笔迹(活跃页=编辑态;其它页=各自的既有笔迹,只读叠加显示)。 */
   annotationStrokes: readonly AnnotationStroke[];
+  chromeHidden: SharedValue<number>;
   dismissY: SharedValue<number>;
   height: number;
   image: MobileMessageGalleryImage;
   /** 图片自然尺寸(overlay 坐标基准;未知时 overlay 不渲染、画笔不采点)。 */
   naturalSize: { width: number; height: number } | null;
+  /** 捏合/平移开始与结束时通知父层开关 chrome 触摸。 */
+  onChromeBusy(busy: boolean): void;
   /** 画笔事件(容器坐标 + 当页 transform 快照),UI 线程经 runOnJS 上抛。 */
   onDrawPoint: (
     phase: 'start' | 'move' | 'end',
@@ -750,8 +779,16 @@ const LightboxPage = memo(function LightboxPage({
   const translateY = useSharedValue(0);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
+  const originX = useSharedValue(0);
+  const originY = useSharedValue(0);
+  const startFocalX = useSharedValue(0);
+  const startFocalY = useSharedValue(0);
+  const displayedW = useSharedValue(width);
+  const displayedH = useSharedValue(height);
+  const pinchBusy = useSharedValue(0);
+  const panBusy = useSharedValue(0);
+  const doubleTapBusy = useSharedValue(0);
   const dragY = useSharedValue(0);
-  const [pageZoomed, setPageZoomed] = useState(false);
   /**
    * 已 onLoad 成功的原图地址。存地址而不是 boolean:换图 / 强制重取换 url 后
    * 天然失效,不需要额外 effect 复位(漏复位就会让新图那段又回到纯黑)。
@@ -781,10 +818,53 @@ const LightboxPage = memo(function LightboxPage({
     fullFailedTerminally: !retryable && !!uri && failedFullUri === uri,
   });
 
-  const setZoomedBoth = useCallback((value: boolean) => {
-    setPageZoomed(value);
+  const reportZoomed = useCallback((value: boolean) => {
     onZoomChange(value);
   }, [onZoomChange]);
+
+  useEffect(() => {
+    const size = lightboxContainedSize(
+      width,
+      height,
+      naturalSize?.width ?? 0,
+      naturalSize?.height ?? 0,
+    );
+    displayedW.value = size.width;
+    displayedH.value = size.height;
+    // 捏合中 onChange 每帧按新 displayed 钳;不能改 savedTranslate,否则下一帧
+    // 会用被改过的起点 + 焦点增量跳一下。
+    if (pinchBusy.value) return;
+    // 双击动画中只改 saved;live 仍归原 withTiming,结束回调再贴齐。
+    // 中途另起 withTiming 会跟 scale 抢默认时长:缩放先到、点击点随后横漂。
+    if (doubleTapBusy.value) {
+      const next = reclampLightboxPan(
+        savedTranslateX.value,
+        savedTranslateY.value,
+        width,
+        height,
+        savedScale.value,
+        size.width,
+        size.height,
+      );
+      savedTranslateX.value = next.x;
+      savedTranslateY.value = next.y;
+      return;
+    }
+    const next = reclampLightboxPan(
+      translateX.value,
+      translateY.value,
+      width,
+      height,
+      scale.value,
+      size.width,
+      size.height,
+    );
+    translateX.value = next.x;
+    translateY.value = next.y;
+    savedTranslateX.value = next.x;
+    savedTranslateY.value = next.y;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [naturalSize, width, height]);
 
   // 翻走 / 换图时复位缩放与位移,避免回到本页时残留上次的缩放态。
   useEffect(() => {
@@ -795,82 +875,238 @@ const LightboxPage = memo(function LightboxPage({
     translateY.value = 0;
     savedTranslateX.value = 0;
     savedTranslateY.value = 0;
+    originX.value = 0;
+    originY.value = 0;
+    pinchBusy.value = 0;
+    panBusy.value = 0;
+    doubleTapBusy.value = 0;
     dragY.value = 0;
-    setPageZoomed(false);
+    chromeHidden.value = 0;
+    onChromeBusy(false);
     // 共享值的写入不需要依赖追踪,这里只关心 active 翻转时机
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   const gesture = useMemo(() => {
-    const pinch = Gesture.Pinch()
-      .onUpdate((event) => {
-        scale.value = clampLightboxScale(savedScale.value * event.scale);
-      })
-      .onEnd(() => {
-        savedScale.value = scale.value;
-        if (scale.value <= 1.01) {
-          scale.value = withTiming(1);
-          savedScale.value = 1;
-          translateX.value = withTiming(0);
-          translateY.value = withTiming(0);
-          savedTranslateX.value = 0;
-          savedTranslateY.value = 0;
-          runOnJS(setZoomedBoth)(false);
-        } else {
-          runOnJS(setZoomedBoth)(true);
-        }
-      });
+    const hideChrome = () => {
+      'worklet';
+      chromeHidden.value = withTiming(1, { duration: motionDuration.instant });
+      runOnJS(onChromeBusy)(true);
+    };
+    const maybeShowChrome = () => {
+      'worklet';
+      if (pinchBusy.value || panBusy.value) return;
+      chromeHidden.value = withTiming(0, { duration: motionDuration.fast });
+      runOnJS(onChromeBusy)(false);
+    };
+    const bakePinchOrigin = () => {
+      'worklet';
+      const bakedX = bakeLightboxOrigin(translateX.value, originX.value, scale.value);
+      const bakedY = bakeLightboxOrigin(translateY.value, originY.value, scale.value);
+      originX.value = 0;
+      originY.value = 0;
+      if (!isLightboxZoomed(scale.value)) {
+        scale.value = withTiming(1);
+        savedScale.value = 1;
+        translateX.value = withTiming(0);
+        translateY.value = withTiming(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+        runOnJS(reportZoomed)(false);
+        return;
+      }
+      const cx = clampLightboxTranslation(bakedX, width, scale.value, displayedW.value);
+      const cy = clampLightboxTranslation(bakedY, height, scale.value, displayedH.value);
+      translateX.value = cx;
+      translateY.value = cy;
+      savedTranslateX.value = cx;
+      savedTranslateY.value = cy;
+      savedScale.value = scale.value;
+      runOnJS(reportZoomed)(true);
+    };
 
-    // 标注模式下平移改双指专属(单指让给画笔),放大与否都可拖(便于边画边挪视野)。
-    const panZoomed = Gesture.Pan()
-      .enabled(annotating || pageZoomed)
-      .minPointers(annotating ? 2 : 1)
-      .onUpdate((event) => {
-        translateX.value = clampLightboxTranslation(savedTranslateX.value + event.translationX, width, scale.value);
-        translateY.value = clampLightboxTranslation(savedTranslateY.value + event.translationY, height, scale.value);
-      })
-      .onEnd(() => {
+    // 焦点捏合:起点锁定 origin,缩放绕焦点;浏览态跟手质心,标注态只改 scale
+    // (平移交给双指 pan,避免 Simultaneous 下位移被加两遍)。
+    const pinch = Gesture.Pinch()
+      .onStart((event) => {
+        pinchBusy.value = 1;
+        doubleTapBusy.value = 0;
+        hideChrome();
+        // 捏合一开始就锁死翻页,不等 JS zoomed 提交;否则松手后立刻左右拖
+        // 会被 pagingEnabled 的 FlatList 抢走,当前页直接滑走。
+        runOnJS(reportZoomed)(true);
+        // 下滑半途改捏合:关掉正在进行的 dismiss 位移,不把图和背景留在半透明上。
+        dragY.value = 0;
+        dismissY.value = 0;
+        savedScale.value = scale.value;
+        originX.value = lightboxPinchOrigin(event.focalX, width);
+        originY.value = lightboxPinchOrigin(event.focalY, height);
+        // 已放大时 origin 会立刻贡献 origin*(1-scale);扣掉等量位移,二次捏合不跳。
+        translateX.value = compensateLightboxOrigin(translateX.value, originX.value, scale.value);
+        translateY.value = compensateLightboxOrigin(translateY.value, originY.value, scale.value);
         savedTranslateX.value = translateX.value;
         savedTranslateY.value = translateY.value;
+        startFocalX.value = event.focalX;
+        startFocalY.value = event.focalY;
+      })
+      .onChange((event) => {
+        scale.value = clampLightboxScale(savedScale.value * event.scale);
+        if (annotating) return;
+        // 画面中心钳制,再补偿回 raw。origin≠0 时不能钳 raw。
+        const next = clampLightboxVisualPan(
+          savedTranslateX.value + (event.focalX - startFocalX.value),
+          savedTranslateY.value + (event.focalY - startFocalY.value),
+          originX.value,
+          originY.value,
+          width,
+          height,
+          scale.value,
+          displayedW.value,
+          displayedH.value,
+        );
+        translateX.value = next.x;
+        translateY.value = next.y;
+      })
+      .onFinalize(() => {
+        if (!pinchBusy.value) return;
+        bakePinchOrigin();
+        pinchBusy.value = 0;
+        maybeShowChrome();
+      });
+
+    // 浏览:单指平移,未放大时 fail,避免与 pinch 抢 2 指。
+    // 标注:恰好双指平移,1x 也可挪视野。
+    const panZoomed = Gesture.Pan()
+      .minPointers(annotating ? 2 : 1)
+      .maxPointers(annotating ? 2 : 1)
+      .onTouchesDown((_event, state) => {
+        if (!annotating && !isLightboxZoomed(scale.value)) state.fail();
+      })
+      .onStart(() => {
+        panBusy.value = 1;
+        doubleTapBusy.value = 0;
+        hideChrome();
+        savedTranslateX.value = translateX.value;
+        savedTranslateY.value = translateY.value;
+      })
+      .onChange((event) => {
+        // 标注双指 pan 与 off-center pinch Simultaneous,origin 常非 0;
+        // 浏览单指 pan 的 origin 已 bake 归零,helper 退化为钳 raw。
+        const next = clampLightboxVisualPan(
+          translateX.value + event.changeX,
+          translateY.value + event.changeY,
+          originX.value,
+          originY.value,
+          width,
+          height,
+          scale.value,
+          displayedW.value,
+          displayedH.value,
+        );
+        translateX.value = next.x;
+        translateY.value = next.y;
+      })
+      .onFinalize(() => {
+        savedTranslateX.value = translateX.value;
+        savedTranslateY.value = translateY.value;
+        if (!panBusy.value) return;
+        panBusy.value = 0;
+        maybeShowChrome();
       });
 
     const panDismiss = Gesture.Pan()
-      .enabled(!pageZoomed && !annotating)
+      .enabled(!annotating)
+      .maxPointers(1)
+      .onTouchesDown((_event, state) => {
+        if (isLightboxZoomed(scale.value)) state.fail();
+      })
+      .onTouchesMove((_event, state) => {
+        // Simultaneous 下 onTouchesDown 的 fail 经常来不及:放大后竖直滑会被
+        // activeOffsetY 认成下滑关闭。横图 contain 后即使 2.5x 也常无纵向溢出,
+        // 图不动、手还在往下,手势就落到关闭上。
+        if (isLightboxZoomed(scale.value)) state.fail();
+      })
       .activeOffsetY([-16, 16])
       .failOffsetX([-12, 12])
       .onUpdate((event) => {
+        if (isLightboxZoomed(scale.value)) {
+          dragY.value = 0;
+          dismissY.value = 0;
+          return;
+        }
         dragY.value = event.translationY;
         dismissY.value = event.translationY;
       })
       .onEnd((event) => {
-        if (shouldDismissLightbox(event.translationY, event.velocityY)) {
+        if (shouldDismissLightbox(event.translationY, event.velocityY, scale.value)) {
           runOnJS(onRequestClose)();
           return;
         }
         dragY.value = withSpring(0, { damping: 20, stiffness: 240 });
         dismissY.value = withSpring(0, { damping: 20, stiffness: 240 });
+      })
+      .onFinalize((_event, success) => {
+        // fail/cancel 不走 onEnd:下滑半途被捏合抢走时,位移和背景渐隐必须立刻清掉。
+        // success 路径由 onEnd 负责(关闭或回弹),这里不要抢。
+        if (success) return;
+        dragY.value = 0;
+        dismissY.value = 0;
       });
 
     const doubleTap = Gesture.Tap()
       .enabled(!annotating)
       .numberOfTaps(2)
-      .onEnd((_event, success) => {
+      .onEnd((event, success) => {
         if (!success) return;
         const next = nextDoubleTapScale(scale.value);
+        originX.value = 0;
+        originY.value = 0;
+        doubleTapBusy.value = 1;
+        const clearDoubleTapBusy = (finished?: boolean) => {
+          'worklet';
+          if (!finished || !doubleTapBusy.value) return;
+          doubleTapBusy.value = 0;
+          // 尺寸变化只改过 saved:与 scale 同一拍结束时把 live 收到新 contain 边界。
+          translateX.value = savedTranslateX.value;
+          translateY.value = savedTranslateY.value;
+        };
+        if (!isLightboxZoomed(next)) {
+          scale.value = withTiming(1);
+          savedScale.value = 1;
+          translateX.value = withTiming(0);
+          translateY.value = withTiming(0, undefined, clearDoubleTapBusy);
+          savedTranslateX.value = 0;
+          savedTranslateY.value = 0;
+          runOnJS(reportZoomed)(false);
+          return;
+        }
+        const tx = clampLightboxTranslation(
+          lightboxDoubleTapTranslate(event.x, width, next),
+          width,
+          next,
+          displayedW.value,
+        );
+        const ty = clampLightboxTranslation(
+          lightboxDoubleTapTranslate(event.y, height, next),
+          height,
+          next,
+          displayedH.value,
+        );
         scale.value = withTiming(next);
         savedScale.value = next;
-        translateX.value = withTiming(0);
-        translateY.value = withTiming(0);
-        savedTranslateX.value = 0;
-        savedTranslateY.value = 0;
-        runOnJS(setZoomedBoth)(next > 1);
+        translateX.value = withTiming(tx);
+        translateY.value = withTiming(ty, undefined, clearDoubleTapBusy);
+        savedTranslateX.value = tx;
+        savedTranslateY.value = ty;
+        runOnJS(reportZoomed)(true);
       });
 
     const singleTap = Gesture.Tap()
       .enabled(!annotating)
       .numberOfTaps(1)
+      .maxDistance(LIGHTBOX_TAP_MAX_DISTANCE)
       .onEnd((_event, success) => {
-        if (success) runOnJS(onRequestClose)();
+        if (success && shouldCloseLightboxOnTap(scale.value)) runOnJS(onRequestClose)();
       });
 
     // 画笔:单指跟手采点(worklet 只搬运坐标 + transform 快照,归一化在 JS 侧
@@ -896,15 +1132,20 @@ const LightboxPage = memo(function LightboxPage({
       panDismiss,
       panDraw,
     );
-    // 共享值引用恒定,只有布尔开关与尺寸变化需要重建手势
+    // 共享值引用恒定,只有布尔开关与尺寸变化需要重建手势。不再把 zoomed
+    // 放进 deps:捏合结束改 React 状态会整图重建手势图,正是卡顿来源。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageZoomed, annotating, width, height, onRequestClose, setZoomedBoth, onDrawPoint]);
+  }, [annotating, width, height, onRequestClose, reportZoomed, onDrawPoint, onChromeBusy]);
 
   const imageStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: translateX.value },
       { translateY: translateY.value + dragY.value },
+      { translateX: originX.value },
+      { translateY: originY.value },
       { scale: scale.value },
+      { translateX: -originX.value },
+      { translateY: -originY.value },
     ],
   }));
 

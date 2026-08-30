@@ -57,6 +57,10 @@
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。
+- 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁脚本，
+  或参与设计系统迁移 PR 前，必须先读治理合同
+  `docs/design-rules/design-governance.md`：真相源边界、兼容红线、两级证据合同与
+  PR 风险分类均以它为准；视觉规则本身仍以 `DESIGN.md` 为准。
 - 新增或修改任何 UI 文案里的**产品术语**前，必须先查术语表 `i18n/GLOSSARY.md`：已裁决
   的术语照用，不自造译法；表里没有或拿不准的，在 `i18n/glossary.json` 加
   `status: "proposed"` 条目再讨论。门禁为 `pnpm check:i18n-glossary`，规则见

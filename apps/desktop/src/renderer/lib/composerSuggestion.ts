@@ -23,7 +23,8 @@ export type ComposerSuggestionActionId =
   | 'new-goal'
   | 'plan-mode'
   | 'collaboration'
-  | 'add-extra-dir';
+  | 'add-extra-dir'
+  | 'add-writable-dir';
 
 export interface ComposerSuggestionAction {
   id: ComposerSuggestionActionId;
@@ -167,7 +168,11 @@ export function buildComposerSuggestionEntries(
     const attach = input.actions.find((a) => a.id === 'attach-files');
     if (attach) entries.push({ kind: 'action', action: attach });
     for (const action of input.actions) {
-      if (action.id === 'attach-files' || action.id === 'add-extra-dir') continue;
+      if (
+        action.id === 'attach-files'
+        || action.id === 'add-extra-dir'
+        || action.id === 'add-writable-dir'
+      ) continue;
       entries.push({ kind: 'action', action });
     }
     for (const type of ['browser-tab', 'agent'] as const) {
@@ -189,6 +194,8 @@ export function buildComposerSuggestionEntries(
     }
     const addDir = input.actions.find((a) => a.id === 'add-extra-dir');
     if (addDir) entries.push({ kind: 'action', action: addDir });
+    const addWritableDir = input.actions.find((a) => a.id === 'add-writable-dir');
+    if (addWritableDir) entries.push({ kind: 'action', action: addWritableDir });
     return entries;
   }
 
