@@ -1602,7 +1602,7 @@ describe('Codex system credential suppression marker', () => {
     expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-token');
   });
 
-  it('preserves a different-account file with explicit Cindy OAuth provenance', async () => {
+  it('preserves explicit isolated auth across owner A to B to A without exposing it to B', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-isolated-preserve-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -1630,8 +1630,10 @@ describe('Codex system credential suppression marker', () => {
       }),
     );
 
+    const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
-    const state = await new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' });
+    const ownerAAdapter = new DesktopCodexAuthAdapter();
+    const state = await ownerAAdapter.getState({ credentialMode: 'oauth-bearer' });
 
     expect(state).toMatchObject({
       authenticated: true,
@@ -1644,6 +1646,40 @@ describe('Codex system credential suppression marker', () => {
     });
     expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(localAuth, 'utf8')).toContain('isolated-token');
+    await expect(ownerAAdapter.getAccessToken()).resolves.toBe('isolated-token');
+
+    const localBeforeSwitch = fs.readFileSync(localAuth);
+    const systemBeforeSwitch = fs.readFileSync(systemAuth);
+    const systemStatBeforeSwitch = fs.statSync(systemAuth);
+    h.dataOwnerId = 'owner-b';
+    h.sessionGeneration += 1;
+    const ownerBAdapter = new DesktopCodexAuthAdapter();
+
+    await expect(ownerBAdapter.getState()).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'oauth_not_bound',
+    });
+    await expect(ownerBAdapter.getAccessToken()).resolves.toBeNull();
+    expect(fs.readFileSync(localAuth)).toEqual(localBeforeSwitch);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBeforeSwitch);
+    expect(fs.statSync(systemAuth).ino).toBe(systemStatBeforeSwitch.ino);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'owner-a',
+      selfAuthorized: { openai: 'owner-a' },
+      sources: { openai: 'explicit-provider-oauth' },
+    });
+
+    h.dataOwnerId = 'owner-a';
+    h.sessionGeneration += 1;
+    const restoredOwnerAAdapter = new DesktopCodexAuthAdapter();
+    await expect(
+      restoredOwnerAAdapter.getState({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'instance-isolated',
+    });
+    await expect(restoredOwnerAAdapter.getAccessToken()).resolves.toBe('isolated-token');
+    expect(fs.readFileSync(localAuth)).toEqual(localBeforeSwitch);
   });
 
   it('real token invalidation still surfaces its reason when no replacement local credential exists', () => {

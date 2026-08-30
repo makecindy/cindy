@@ -485,6 +485,27 @@ export function isNativeProviderAuthSelfAuthorized(provider: NativeProviderId): 
   );
 }
 
+/**
+ * Return the proven owner of a Cindy-explicit OAuth credential without applying the active-owner
+ * binding gate. This is intentionally stricter than isNativeProviderAuthSelfAuthorized(): unreadable
+ * or contradictory provenance must not turn an unproven local credential into an isolated one.
+ */
+export function readExplicitNativeProviderAuthOwner(
+  provider: NativeProviderId,
+): string | null {
+  const read = readBindingsOrFail();
+  if (!read.ok) return null;
+  const boundOwner = read.bindings[provider]?.trim();
+  if (!boundOwner) return null;
+  const source = read.bindings.sources?.[provider];
+  const selfAuthorizedOwner = read.bindings.selfAuthorized?.[provider]?.trim();
+  if (source !== undefined && source !== 'explicit-provider-oauth') return null;
+  if (selfAuthorizedOwner !== undefined && selfAuthorizedOwner !== boundOwner) return null;
+  return source === 'explicit-provider-oauth' || selfAuthorizedOwner === boundOwner
+    ? boundOwner
+    : null;
+}
+
 /** 返回当前 owner 绑定的授权来源；归属不明或旧文件未记录时返回 null。 */
 export function getNativeProviderAuthSource(
   provider: NativeProviderId,

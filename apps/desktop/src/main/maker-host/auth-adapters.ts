@@ -96,6 +96,7 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
+  readExplicitNativeProviderAuthOwner,
   restoreNativeProviderAuthForRecovery,
   unbindNativeProviderAuth,
 } from './nativeProviderAuthBinding.js';
@@ -1087,12 +1088,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
 
     const hasLocalEntry = topology.linkType !== 'missing';
-    const hasIsolatedProvenance =
-      topology.linkType === 'file' &&
-      isNativeProviderAuthBound('openai') &&
-      isNativeProviderAuthSelfAuthorized('openai');
-    if (hasIsolatedProvenance) {
-      log.info('keeping explicitly authorized instance-isolated Codex auth');
+    const explicitIsolatedOwner =
+      topology.linkType === 'file' ? readExplicitNativeProviderAuthOwner('openai') : null;
+    if (explicitIsolatedOwner) {
+      log.info('keeping explicitly authorized instance-isolated Codex auth', {
+        ownerMatchesActive: explicitIsolatedOwner === getActiveAppSession().dataOwnerId,
+      });
       return;
     }
 
