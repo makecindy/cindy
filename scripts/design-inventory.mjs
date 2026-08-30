@@ -153,25 +153,40 @@ if (danglingExtraStyleRoots.length > 0) {
 
 // ?view= 分支覆盖守卫：main-entry.tsx 的 view 分支是非 router 生产入口，源码新增
 // 分支而 catalog 未登记 surface 时，这里必须失败——否则权威台账会静默漏掉整个 surface。
+// 此外还核对「view → 渲染组件」映射：view 名保留但分支改渲染别的组件（换浮窗
+// 实现）时，catalog 的 productionEntry / reachableComponents / styleRoots 仍指向
+// 旧组件，这里必须失败——与路由组件核对、模块图入口核对同构。
 {
   const actualViews = extractViewEntries(fs.readFileSync(MAIN_ENTRY_PATH, 'utf8'));
-  const coveredViews = new Set(catalog.flatMap((surface) => surface.viewEntries ?? []));
-  const unmappedViews = actualViews.filter((view) => !coveredViews.has(view));
-  const staleViews = [...coveredViews].filter((view) => !actualViews.includes(view));
-  if (unmappedViews.length > 0 || staleViews.length > 0) {
-    const lines = [];
-    if (unmappedViews.length > 0) {
-      lines.push('  main-entry.tsx 有 view 分支未映射到 surface：');
-      for (const view of unmappedViews) lines.push(`  - ${view}`);
+  const coveredViews = new Map(
+    catalog.flatMap((surface) =>
+      Object.entries(surface.viewEntryComponents ?? {}).map(([view, component]) => [
+        view,
+        { component, surfaceId: surface.id },
+      ]),
+    ),
+  );
+  const lines = [];
+  for (const [view, component] of actualViews) {
+    const covered = coveredViews.get(view);
+    if (!covered) {
+      lines.push(`  - view 分支 ${view} 渲染 ${component}，但 catalog 未登记 viewEntryComponents`);
+    } else if (covered.component !== component) {
+      lines.push(
+        `  - view 分支 ${view} 实际渲染 ${component}，catalog 登记 ${covered.component}（surface ${covered.surfaceId}）`,
+      );
     }
-    if (staleViews.length > 0) {
-      lines.push('  catalog 登记的 view 分支已不在 main-entry.tsx 中：');
-      for (const view of staleViews) lines.push(`  - ${view}`);
+  }
+  for (const [view, covered] of coveredViews) {
+    if (!actualViews.has(view)) {
+      lines.push(`  - catalog 登记的 view 分支 ${view} 已不在 main-entry.tsx 中（surface ${covered.surfaceId}）`);
     }
+  }
+  if (lines.length > 0) {
     console.error(
-      '[design-inventory] ❌ ?view= 分支覆盖不完整：\n' +
+      '[design-inventory] ❌ ?view= 分支映射不一致：\n' +
         lines.join('\n') +
-        '\n  请同步更新 catalogSurfaces() 对应 surface 的 viewEntries。',
+        '\n  请同步更新 catalogSurfaces() 对应 surface 的 viewEntryComponents。',
     );
     process.exit(1);
   }

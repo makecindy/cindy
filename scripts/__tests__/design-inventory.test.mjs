@@ -627,39 +627,57 @@ test('市场页直接渲染的子组件纳入样式统计', () => {
   assert.ok(generated.styleSources.length > 1, '不能只扫入口文件');
 });
 
-test('view 分支覆盖守卫: main-entry 的 view 分支必须全部映射到 surface', () => {
+test('view 分支覆盖守卫: main-entry 的 view→组件映射必须与 catalog 一致', () => {
   const actualViews = extractViewEntries(fs.readFileSync(MAIN_ENTRY_PATH, 'utf8'));
-  // 与源码实况钉死:当前 4 个 view 分支。
-  assert.deepEqual(actualViews, [
-    'computer-permission-backdrop',
-    'computer-permission-guide',
-    'voice-input-dictionary-toast',
-    'voice-input-overlay',
-  ]);
-  const covered = new Set(catalogSurfaces().flatMap((surface) => surface.viewEntries ?? []));
-  const unmapped = actualViews.filter((view) => !covered.has(view));
-  assert.deepEqual(unmapped, [], `未映射 view 分支: ${unmapped.join(', ')}`);
-  // 反向:catalog 登记的 view 必须仍存在于源码。
-  const stale = [...covered].filter((view) => !actualViews.includes(view));
-  assert.deepEqual(stale, [], `已失效 view 登记: ${stale.join(', ')}`);
+  // 与源码实况钉死:当前 4 个 view 分支各自渲染的组件。
+  assert.deepEqual(Object.fromEntries(actualViews), {
+    'computer-permission-backdrop': 'ComputerPermissionBackdrop',
+    'computer-permission-guide': 'ComputerPermissionGuideWindow',
+    'voice-input-dictionary-toast': 'VoiceInputDictionaryToast',
+    'voice-input-overlay': 'VoiceInputOverlay',
+  });
+  const covered = new Map(
+    catalogSurfaces().flatMap((surface) => Object.entries(surface.viewEntryComponents ?? {})),
+  );
+  for (const [view, component] of actualViews) {
+    assert.ok(covered.has(view), `未映射 view 分支: ${view}`);
+    assert.equal(covered.get(view), component, `view ${view} 的渲染组件不一致`);
+  }
+  for (const [view] of covered) {
+    assert.ok(actualViews.has(view), `已失效 view 登记: ${view}`);
+  }
 });
 
-test('extractViewEntries: 新增 view 分支会被发现(fixture)', () => {
-  const fixture = `
-    const view = new URLSearchParams(window.location.search).get('view');
+test('extractViewEntries: view 名保留但渲染组件换了会被发现(fixture)', () => {
+  // 这正是「只比 view 名」防不住的场景:view 名不动,浮窗实现换成别的组件。
+  const swapped = `
+    const isVoiceInputOverlay = view === 'voice-input-overlay';
+    if (isVoiceInputOverlay) {
+      const { VoiceInputDictionaryToast } = await import('./voice-input/VoiceInputDictionaryToast');
+      root.render(<VoiceInputDictionaryToast />);
+    }
+  `;
+  const mappings = extractViewEntries(swapped);
+  assert.deepEqual(Object.fromEntries(mappings), {
+    'voice-input-overlay': 'VoiceInputDictionaryToast',
+  });
+  // 新增 view 分支。
+  const added = `
     const isNewOverlay = view === 'brand-new-overlay';
     if (isNewOverlay) {
       const { NewOverlay } = await import('./NewOverlay');
       root.render(<NewOverlay />);
     }
   `;
-  assert.deepEqual(extractViewEntries(fixture), ['brand-new-overlay']);
-  // 注释里的 view === 不算。
+  assert.deepEqual(Object.fromEntries(extractViewEntries(added)), {
+    'brand-new-overlay': 'NewOverlay',
+  });
+  // 注释里的 view === 不算(无 if 块时映射为空)。
   const withComment = `
     // view === 'commented-view' 已退役
     const isX = view === 'live-view';
   `;
-  assert.deepEqual(extractViewEntries(withComment), ['live-view']);
+  assert.deepEqual(Object.fromEntries(extractViewEntries(withComment)), {});
 });
 
 test('Token 统计基于去注释源码,注释里的 var(--xxx) 占位符不进基线', () => {
@@ -758,6 +776,44 @@ test('主窗口壳纳入全局基础样式 globals.css', () => {
   assert.ok(generated.styleSources.some((file) => file.endsWith('styles/globals.css')));
   // globals.css 的 :root 渐变等真实色值进入统计,基线不再低报。
   assert.ok(generated.bareColors > 3, `globals.css 并入后裸色应高于 3(实际 ${generated.bareColors})`);
+});
+
+test('主窗口壳纳入 MainLayout 直接挂载的全局浮层', () => {
+  // MainLayout.tsx:1548,1601,1611,1615 直接渲染四个全局浮层,触发时都是生产可见 UI。
+  const catalog = catalogSurfaces();
+  const shell = catalog.find((surface) => surface.id === 'desktop.shell.main-layout');
+  assert.ok(shell);
+  for (const component of [
+    'GhostMediaLightboxHost',
+    'UpdateNoticeDialog',
+    'FeishuConflictDialogHost',
+    'SessionShareImportWizard',
+  ]) {
+    assert.ok(
+      shell.reachableComponents.includes(component),
+      `${component} 必须列入主窗口壳可达组件`,
+    );
+  }
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const generated = surfaces.find((surface) => surface.id === 'desktop.shell.main-layout');
+  assert.ok(generated.styleSources.some((file) => file.endsWith('GhostMediaLightboxHost.tsx')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('UpdateNoticeDialog.tsx')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('FeishuConflictDialogHost.tsx')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('SessionShareImportWizard.tsx')));
+});
+
+test('设置页纳入 sortable.css（providers tab 拖拽行样式）', () => {
+  // ProvidersSection.tsx:2426 的 provider-settings-sortable-row 样式定义在
+  // sortable.css:88-109,由 main-entry.tsx:53 无条件导入。
+  const catalog = catalogSurfaces();
+  const settings = catalog.find((surface) => surface.id === 'desktop.settings');
+  assert.ok(settings);
+  assert.ok(
+    settings.styleRoots.includes('apps/desktop/src/renderer/styles/sortable.css'),
+  );
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const generated = surfaces.find((surface) => surface.id === 'desktop.settings');
+  assert.ok(generated.styleSources.some((file) => file.endsWith('styles/sortable.css')));
 });
 
 test('独立窗口 surface 纳入各自 entry 导入的 globals.css', () => {

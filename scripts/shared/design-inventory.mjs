@@ -326,13 +326,26 @@ export const RENDERER_INDEX_REL_PATH = 'apps/desktop/src/renderer/index.tsx';
 
 /**
  * 从 main-entry.tsx 抽出 `?view=` 分支事实：每个 `view === '<name>'` 分支渲染一个
- * 非 router 生产入口。与路由覆盖同构的守卫：catalog 的 viewEntries 必须覆盖全部
- * 实际分支，源码新增 view 分支而未登记 surface 时 --check 失败。
+ * 非 router 生产入口。返回「view 名 → 渲染组件」映射——只比 view 名不够：view 名
+ * 保留但分支改渲染别的组件（换浮窗实现）时，catalog 的 productionEntry /
+ * reachableComponents / styleRoots 仍指向旧组件，--check 却照样通过。
+ * 配对方式：`const isX = view === '<name>'` 声明后，`if (isX)` 块内第一个
+ * `const { <Component> } = await import(...)` 就是该分支的入口组件。
  */
 export function extractViewEntries(mainEntrySource) {
   const source = stripJsComments(mainEntrySource);
-  const branches = [...source.matchAll(/view\s*===\s*'([^']+)'/g)].map((match) => match[1]);
-  return uniqueSorted(branches);
+  const mappings = new Map();
+  // view 名 → flag 变量名
+  const flagFor = new Map();
+  for (const match of source.matchAll(/const (is\w+)\s*=\s*view\s*===\s*'([^']+)'/g)) {
+    flagFor.set(match[1], match[2]);
+  }
+  // flag 变量 → if 块内解构的组件
+  for (const match of source.matchAll(/if \((is\w+)\)[^{]*\{\s*const \{ (\w+) \} = await import\(/g)) {
+    const viewName = flagFor.get(match[1]);
+    if (viewName) mappings.set(viewName, match[2]);
+  }
+  return mappings;
 }
 
 /**
@@ -376,12 +389,22 @@ export function catalogSurfaces() {
         'RightSidebar',
         'WindowControls',
         'ChromeActions',
+        // MainLayout 直接挂载的全局浮层（更新提示/飞书冲突/媒体预览/导入向导），
+        // 触发时都是生产可见 UI——不登记会漏掉它们的样式事实与保护状态。
+        'GhostMediaLightboxHost',
+        'UpdateNoticeDialog',
+        'FeishuConflictDialogHost',
+        'SessionShareImportWizard',
       ],
       styleRoots: [
         'apps/desktop/src/renderer/components/layout',
         'apps/desktop/src/renderer/components/sidebar',
         'apps/desktop/src/renderer/components/title-bar',
         'apps/desktop/src/renderer/layout',
+        'apps/desktop/src/renderer/cindy-brain/GhostMediaLightboxHost.tsx',
+        'apps/desktop/src/renderer/components/UpdateNoticeDialog.tsx',
+        'apps/desktop/src/renderer/components/feishuBot',
+        'apps/desktop/src/renderer/components/settings/SessionShareImportWizard.tsx',
         // main-entry.tsx 无条件导入 globals.css，其中 CINDY 皮肤段直接改写
         // MainLayout 根容器与侧栏的背景/token/模糊——全局基础样式是主窗口壳的
         // 实际生效样式源（其它 surface 消费同一文件时同样按各自入口登记）。
@@ -565,7 +588,13 @@ export function catalogSurfaces() {
       productionEntry:
         'hash `/settings`（SettingsView；tab 含 general / personalization / providers / billing / usage / voice-input / im-bot / shortcuts / agent-island / import / remote-control / ghosts / builtin-tools / computer-use / help / about）',
       reachableComponents: ['SettingsView'],
-      styleRoots: ['apps/desktop/src/renderer/components/settings'],
+      styleRoots: [
+        'apps/desktop/src/renderer/components/settings',
+        // providers tab 的拖拽排序行(provider-settings-sortable-row)样式定义在
+        // sortable.css,由 main-entry.tsx 无条件导入;会话队列与侧栏消费同一文件,
+        // 各自 surface 按同样方式登记共享全局样式源。
+        'apps/desktop/src/renderer/styles/sortable.css',
+      ],
       routerPaths: ['/settings'],
       routeEntryComponents: { '/settings': 'SettingsView' },
     },
@@ -690,7 +719,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/voice-input/global.ts',
       ],
       routerPaths: [],
-      viewEntries: ['voice-input-overlay'],
+      viewEntryComponents: { 'voice-input-overlay': 'VoiceInputOverlay' },
     },
     {
       id: 'desktop.window.voice-dictionary-toast',
@@ -701,7 +730,7 @@ export function catalogSurfaces() {
       reachableComponents: ['VoiceInputDictionaryToast'],
       styleRoots: ['apps/desktop/src/renderer/voice-input/VoiceInputDictionaryToast.tsx'],
       routerPaths: [],
-      viewEntries: ['voice-input-dictionary-toast'],
+      viewEntryComponents: { 'voice-input-dictionary-toast': 'VoiceInputDictionaryToast' },
     },
     {
       id: 'desktop.window.computer-permission-guide',
@@ -716,7 +745,10 @@ export function catalogSurfaces() {
       ],
       routerPaths: [],
       // guide 与 backdrop 两个 view 分支渲染同文件的两个组件，同一 surface 承载。
-      viewEntries: ['computer-permission-guide', 'computer-permission-backdrop'],
+      viewEntryComponents: {
+        'computer-permission-guide': 'ComputerPermissionGuideWindow',
+        'computer-permission-backdrop': 'ComputerPermissionBackdrop',
+      },
     },
     {
       id: 'desktop.window.review-artifact-confirm',
