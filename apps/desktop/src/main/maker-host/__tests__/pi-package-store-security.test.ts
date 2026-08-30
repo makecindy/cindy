@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
+import fsSync, {
   mkdirSync,
   mkdtempSync,
   promises as fs,
@@ -2589,6 +2589,59 @@ describe('Pi package executable-code boundary', () => {
       expect(listener).toHaveBeenCalledWith('local');
     } finally {
       unsubscribe();
+    }
+  });
+
+  it.each([
+    ['install', 'EACCES', 'access-denied'],
+    ['install', 'EIO', 'io-failure'],
+    ['update', 'EACCES', 'access-denied'],
+    ['update', 'EIO', 'io-failure'],
+    ['remove', 'EACCES', 'access-denied'],
+    ['remove', 'EIO', 'io-failure'],
+  ] as const)('keeps native %s success and local convergence when token publication fails with %s', async (
+    action,
+    errorCode,
+    causeCategory,
+  ) => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const tokenPaths = new Set([
+      path.join(tokenDir, 'cindy-package-runtime-change-token'),
+      path.join(tokenDir, 'cindy-package-change-token'),
+    ].map((value) => path.resolve(value)));
+    const originalRename = fsSync.renameSync.bind(fsSync);
+    const renameSpy = vi.spyOn(fsSync, 'renameSync').mockImplementation(((from, to) => {
+      if (tokenPaths.has(path.resolve(String(to)))) {
+        throw Object.assign(new Error('secret-token at /private/host/path'), { code: errorCode });
+      }
+      return originalRename(from, to);
+    }) as typeof fsSync.renameSync);
+    const listener = vi.fn();
+    const localRuntimeFence = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await expect(mutateAuthorized(store, { action, source }, {
+        onRuntimeInvalidationPublished: localRuntimeFence,
+      })).resolves.toMatchObject({ changed: true });
+      expect(runtime.spawns.some(({ args }) => args.includes(action))).toBe(true);
+      expect(localRuntimeFence).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith('local');
+      expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token publication failed; local convergence continued',
+        expect.objectContaining({
+          failureCategory: 'runtime-token-publication-failed',
+          causeCategory,
+          recoveryAction: 'restart-cindy-to-refresh-packages',
+        }),
+      );
+      const logged = JSON.stringify(loggerRuntime.warn.mock.calls);
+      expect(logged).not.toContain('secret-token');
+      expect(logged).not.toContain('/private/host/path');
+    } finally {
+      unsubscribe();
+      renameSpy.mockRestore();
     }
   });
 

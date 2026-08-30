@@ -426,18 +426,56 @@ function viewChangeTokenPath(): string {
   return path.join(packageHome(), 'cindy-package-view-change-token');
 }
 
+function changeTokenPublicationFailureCategory(
+  error: unknown,
+): 'access-denied' | 'io-failure' | 'unavailable' {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (code === 'EACCES' || code === 'EPERM') return 'access-denied';
+  if (code === 'EIO') return 'io-failure';
+  return 'unavailable';
+}
+
+function tryPublishPiPackageRuntimeChangeToken(
+  tokenKind: 'runtime' | 'legacy',
+  tokenPath: string,
+  token: string,
+): boolean {
+  try {
+    atomicWriteFileSync(tokenPath, `${token}\n`);
+    return true;
+  } catch (error) {
+    log.warn('Pi package change token publication failed; local convergence continued', {
+      tokenKind,
+      failureCategory: 'runtime-token-publication-failed',
+      causeCategory: changeTokenPublicationFailureCategory(error),
+      recoveryAction: 'restart-cindy-to-refresh-packages',
+    });
+    return false;
+  }
+}
+
 async function persistPiPackageChangeToken(runtimeInvalidation: boolean): Promise<void> {
   const scope = runtimeInvalidation ? 'runtime' : 'view';
   const token = `${scope}:${Date.now()}-${process.pid}-${randomUUID()}`;
-  // Set only the corresponding local baseline before atomic publication. A
-  // later view edge can no longer overwrite an unobserved runtime edge.
+  // Set each local baseline before its synchronous atomic publication so this
+  // Main never re-observes its own edge. Restore the old baseline when a write
+  // fails; local convergence still proceeds, while a later real edge remains
+  // observable.
   if (runtimeInvalidation) {
+    const previousRuntime = lastObservedRuntimeChangeToken;
     lastObservedRuntimeChangeToken = token;
+    const runtimePublished = tryPublishPiPackageRuntimeChangeToken(
+      'runtime', runtimeChangeTokenPath(), token,
+    );
+    if (!runtimePublished) lastObservedRuntimeChangeToken = previousRuntime;
+
+    const previousLegacy = lastObservedLegacyChangeToken;
     lastObservedLegacyChangeToken = token;
-    lastNotifiedRuntimeChangeToken = token;
-    atomicWriteFileSync(runtimeChangeTokenPath(), `${token}\n`);
-    // Keep publishing runtime edges to the legacy file for older peers.
-    atomicWriteFileSync(changeTokenPath(), `${token}\n`);
+    const legacyPublished = tryPublishPiPackageRuntimeChangeToken(
+      'legacy', changeTokenPath(), token,
+    );
+    if (!legacyPublished) lastObservedLegacyChangeToken = previousLegacy;
+    if (runtimePublished || legacyPublished) lastNotifiedRuntimeChangeToken = token;
   } else {
     lastObservedViewChangeToken = token;
     atomicWriteFileSync(viewChangeTokenPath(), `${token}\n`);
