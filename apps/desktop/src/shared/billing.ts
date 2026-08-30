@@ -9,6 +9,28 @@ import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
 export const BILLING_SUPPORT_EMAIL = 'xd-billing@xd.com';
 
+/**
+ * Validates the only mailto URL that Desktop may hand to the system shell.
+ * Subject/body are display data from the renderer; recipient-affecting headers
+ * must stay outside this capability boundary.
+ */
+export function isAllowedBillingMailto(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === 'mailto:' &&
+      decodeURIComponent(parsed.pathname).toLowerCase() === BILLING_SUPPORT_EMAIL &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.host &&
+      [...parsed.searchParams.keys()].every((key) => key === 'subject' || key === 'body')
+    );
+  } catch {
+    return false;
+  }
+}
+
 export const BILLING_INVOKE = {
   GET_BALANCE: 'billing:get-balance',
   GET_CREDIT_USAGE: 'billing:get-credit-usage',

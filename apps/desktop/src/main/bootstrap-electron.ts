@@ -32,7 +32,7 @@ import {
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
-import { BILLING_SUPPORT_EMAIL } from '../shared/billing.js';
+import { isAllowedBillingMailto } from '../shared/billing.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -5931,12 +5931,7 @@ const registerIpcHandlers = () => {
         // Mail links are restricted to the fixed billing inbox. Renderer content may
         // provide the localized subject/body, but it must not choose a recipient or
         // use mailto as a general-purpose external scheme.
-        const isBillingMailto =
-          parsed.protocol === 'mailto:' &&
-          decodeURIComponent(parsed.pathname).toLowerCase() === BILLING_SUPPORT_EMAIL &&
-          !parsed.username &&
-          !parsed.password &&
-          !parsed.host;
+        const isBillingMailto = isAllowedBillingMailto(url);
         const isAllowedSystemSettingsUrl =
           process.platform === 'darwin' && allowedSystemSettingsUrls.has(url);
         if (!isWebUrl && !isBillingMailto && !isAllowedSystemSettingsUrl) {
