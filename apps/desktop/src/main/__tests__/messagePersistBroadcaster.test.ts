@@ -2793,6 +2793,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
       olderIdentity,
     );
     retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    await expect(whenSessionPersistedDurably(SESSION)).resolves.toBeUndefined();
 
     try {
       clearSessionPersistState(SESSION);
@@ -2911,7 +2912,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     );
   });
 
-  it('keeps an already queued stale assistant insert in the durable barrier', async () => {
+  it('keeps an already queued stale assistant insert in the durable barrier after replacement cleanup', async () => {
     const olderIdentity = {
       sessionInstanceId: 'older-instance',
       turnGeneration: 1,
@@ -2931,13 +2932,23 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
       'replacement-instance',
       olderIdentity,
     );
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
 
-    expect(
-      persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, false),
-    ).toBe(olderPersistId);
-    await expect(whenSessionPersistedDurably(SESSION)).rejects.toThrow(
-      'already queued stale assistant insert rejected',
-    );
+    try {
+      // Let the transferred insert fail before the held terminal replays. Its
+      // settled rejection must remain owned by the exact superseded turn even
+      // after the replacement Session clears the reusable business id.
+      clearSessionPersistState(SESSION);
+      await flushWrites();
+      expect(
+        persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, false),
+      ).toBe(olderPersistId);
+      await expect(
+        whenSessionPersistedDurably(SESSION, olderIdentity),
+      ).rejects.toThrow('already queued stale assistant insert rejected');
+    } finally {
+      releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    }
   });
 
   it('persists an exact stale assistant block without consuming its replacement block', async () => {

@@ -4742,7 +4742,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           event.type === 'done' &&
           !isTurnContinuationBoundaryEvent(event)
         ) {
-          const durableStaleDone = whenSessionPersistedDurably(session.id);
+          const durableStaleDone = whenSessionPersistedDurably(session.id, staleTurnIdentity);
           trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleDone, {
             requireSuccess: true,
           });
@@ -4754,7 +4754,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 event,
                 staleTurnIdentity,
                 replayedAssistantPersistId,
-                whenSessionPersistedDurably(session.id),
+                whenSessionPersistedDurably(session.id, staleTurnIdentity),
               )
             : undefined;
         if (staleClaudeUsageTask) {
@@ -4777,7 +4777,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           isTerminalTurnErrorEvent(event) &&
           (replayedAssistantPersistId !== undefined || replayedOrphanToolResultCount > 0)
         ) {
-          const durableStaleHistoricalOutput = whenSessionPersistedDurably(session.id);
+          const durableStaleHistoricalOutput = whenSessionPersistedDurably(
+            session.id,
+            staleTurnIdentity,
+          );
           trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleHistoricalOutput, {
             requireSuccess: true,
           });

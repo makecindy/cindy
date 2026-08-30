@@ -106,6 +106,11 @@ const reservedPersistedAssistantsBySession = new Map<
   Map<string, ReservedPersistedAssistant>
 >();
 const retainedSessionReplacementPersistStateBySession = new Map<string, Set<string>>();
+/** Pending durable outcomes transferred from a superseded exact turn. */
+const retainedSessionReplacementPersistenceOutcomesBySession = new Map<
+  string,
+  Map<string, Promise<void>>
+>();
 
 function assistantTurnIdentityKey(identity: AssistantTurnPersistenceIdentity): string {
   return `${identity.sessionInstanceId}:${identity.turnGeneration}`;
@@ -144,9 +149,23 @@ export function retainReservedSessionReplacementPersistState(
   sessionId: string,
   identity: AssistantTurnPersistenceIdentity,
 ): void {
+  const identityKey = assistantTurnIdentityKey(identity);
   const retained = retainedSessionReplacementPersistStateBySession.get(sessionId) ?? new Set();
-  retained.add(assistantTurnIdentityKey(identity));
+  retained.add(identityKey);
   retainedSessionReplacementPersistStateBySession.set(sessionId, retained);
+
+  // The business session id is about to be reused by the replacement runtime.
+  // Transfer the old exact turn's still-pending durable batch before new writes
+  // can join it, so replacement cleanup cannot erase the old replay barrier.
+  const batch = sessionPersistenceOutcomeBatches.get(sessionId);
+  if (!batch || batch.settled) return;
+  const outcomes =
+    retainedSessionReplacementPersistenceOutcomesBySession.get(sessionId) ?? new Map();
+  outcomes.set(identityKey, batch.outcome);
+  retainedSessionReplacementPersistenceOutcomesBySession.set(sessionId, outcomes);
+  if (sessionPersistenceOutcomeBatches.get(sessionId) === batch) {
+    sessionPersistenceOutcomeBatches.delete(sessionId);
+  }
 }
 
 function isSameAssistantTurnIdentity(
@@ -751,12 +770,28 @@ export async function drainPersistQueue(): Promise<void> {
 }
 
 /** Await every message/tool/assistant write queued for one session and propagate failure. */
-export function whenSessionPersistedDurably(sessionId: string): Promise<void> {
+export function whenSessionPersistedDurably(
+  sessionId: string,
+  retainedIdentity?: AssistantTurnPersistenceIdentity,
+): Promise<void> {
   const batch = sessionPersistenceOutcomeBatches.get(sessionId);
   // This is a snapshot of writes that are pending at the call boundary. A
   // settled batch is historical: a later terminal replay that queues no new
   // writes must not inherit an older transient failure.
-  return batch && !batch.settled ? batch.outcome : Promise.resolve();
+  const liveOutcome = batch && !batch.settled ? batch.outcome : undefined;
+  const retainedOutcome = retainedIdentity
+    ? retainedSessionReplacementPersistenceOutcomesBySession
+        .get(sessionId)
+        ?.get(assistantTurnIdentityKey(retainedIdentity))
+    : undefined;
+  if (!retainedOutcome) return liveOutcome ?? Promise.resolve();
+  if (!liveOutcome) return retainedOutcome;
+  return Promise.allSettled([retainedOutcome, liveOutcome]).then((results) => {
+    const failed = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failed) throw failed.reason;
+  });
 }
 
 function enqueuePersistAssistant(
@@ -1561,6 +1596,11 @@ export function releaseReservedSessionReplacementPersistState(
   deleteReservedIdentity(reservedAssistantBlocksBySession, sessionId, identityKey);
   deleteReservedIdentity(reservedPersistedAssistantsBySession, sessionId, identityKey);
   deleteReservedIdentity(reservedPendingFullTextBySession, sessionId, identityKey);
+  deleteReservedIdentity(
+    retainedSessionReplacementPersistenceOutcomesBySession,
+    sessionId,
+    identityKey,
+  );
   const retained = retainedSessionReplacementPersistStateBySession.get(sessionId);
   if (!retained) return;
   retained.delete(identityKey);

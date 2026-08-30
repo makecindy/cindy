@@ -291,11 +291,11 @@ describe('maker:event hot path ordering', () => {
     expectOrder(
       wireSessionSource.slice(replayStart),
       'trackRequiredWindowsFallbackErrorPersistence(',
-      'const durableStaleDone = whenSessionPersistedDurably(session.id);',
+      'const durableStaleDone = whenSessionPersistedDurably(session.id, staleTurnIdentity);',
     );
     expectOrder(
       wireSessionSource.slice(replayStart),
-      'const durableStaleDone = whenSessionPersistedDurably(session.id);',
+      'const durableStaleDone = whenSessionPersistedDurably(session.id, staleTurnIdentity);',
       'trackWindowsSessionEndFallbackStorageTask(session.id, durableStaleDone, {',
     );
     expectOrder(
