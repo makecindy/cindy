@@ -706,6 +706,41 @@ describe('feishu streaming text', () => {
     expect(mocks.sendFileToChat).not.toHaveBeenCalled();
   });
 
+  it('does not reuse a file_key when stuffed ancestors claim the pinned root', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-stuffed-allowed-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-stuffed-outside-'));
+    tempDirs.push(allowedRoot, outsideRoot);
+    const secret = path.join(outsideRoot, 'secret.txt');
+    await fs.writeFile(secret, 'secret');
+    await fs.writeFile(path.join(allowedRoot, 'report.txt'), 'ok');
+    const secretReal = fsSync.realpathSync(secret);
+    const secretStat = fsSync.statSync(secretReal);
+    const pinned = pinRoot(allowedRoot);
+    mocks.sendFile.mockResolvedValue({
+      ok: true,
+      messageId: 'om_primary_file',
+      reusableMessage: {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      uploadedSource: {
+        realPath: secretReal,
+        dev: secretStat.dev,
+        ino: secretStat.ino,
+        ancestors: pinned,
+      },
+    });
+    const handle = await start('g/oc_group/omt_topic');
+
+    await handle.finalize(
+      `见 [secret](xdt-file://${secret})`,
+      terminalMirror('s'.repeat(64), [allowedRoot], pinned),
+    );
+
+    expect(mocks.sendFile).toHaveBeenCalled();
+    expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+  });
+
   it('does not reuse a file_key when a parent is swapped onto the pinned root after upload', async () => {
     const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-swap-allowed-'));
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-swap-outside-'));

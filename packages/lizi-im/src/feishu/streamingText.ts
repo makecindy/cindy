@@ -25,6 +25,7 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   sendCardRaw,
@@ -144,41 +145,117 @@ function sameInode(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
-function resolveRootIdentities(
+function isSyntheticFdPath(resolved: string): boolean {
+  const normalized = resolved.replaceAll('\\', '/');
+  return /(?:^|\/)(?:proc\/self\/fd|dev\/fd)\/\d+$/.test(normalized);
+}
+
+function normalizePathForContainment(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function flipPathCase(value: string): string {
+  return value.replace(/[a-zA-Z]/g, (char) =>
+    char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase(),
+  );
+}
+
+/**
+ * True when `rootReal` and its letter-case flip name the same inode. APFS and
+ * Windows realpath keep the input spelling, so a host-cased root would otherwise
+ * fail prefix comparison against the attested file path.
+ */
+function rootIsCaseInsensitive(rootReal: string): boolean {
+  if (process.platform === 'win32') return true;
+  const flipped = flipPathCase(rootReal);
+  if (flipped === rootReal) return false;
+  try {
+    const original = fs.statSync(rootReal);
+    const flippedStat = fs.statSync(flipped);
+    return sameInode(
+      { dev: original.dev, ino: original.ino },
+      { dev: flippedStat.dev, ino: flippedStat.ino },
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** `child` is `parent` itself or nested inside it after both are resolved. */
+function isRealPathWithinRoot(realFilePath: string, realRoot: string): boolean {
+  const fold = rootIsCaseInsensitive(realRoot);
+  const file = fold
+    ? path.resolve(realFilePath).toLowerCase()
+    : normalizePathForContainment(realFilePath);
+  const root = fold
+    ? path.resolve(realRoot).toLowerCase()
+    : normalizePathForContainment(realRoot);
+  if (file === root) return true;
+  const relative = path.relative(root, file);
+  return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+/**
+ * Live realpath of each allowed root that still names a pinned inode.
+ * Empty `pinnedFileRoots` (explicit pin that resolved nothing) fail-closes.
+ * A root whose path was swapped onto another directory after the pin is skipped.
+ */
+function matchingLiveRootRealPaths(
   allowedFileRoots: readonly string[],
   pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>,
-): ReadonlyArray<{ dev: number; ino: number }> {
-  if (pinnedFileRoots) return pinnedFileRoots;
-  const live: Array<{ dev: number; ino: number }> = [];
+): string[] {
+  const matching: string[] = [];
   for (const root of allowedFileRoots) {
     if (!root.trim()) continue;
     try {
-      const st = fs.statSync(fs.realpathSync(root));
-      live.push({ dev: st.dev, ino: st.ino });
+      const real = fs.realpathSync(root);
+      const st = fs.statSync(real);
+      if (pinnedFileRoots) {
+        if (!pinnedFileRoots.some((pin) => sameInode({ dev: st.dev, ino: st.ino }, pin))) {
+          continue;
+        }
+      } else if (st.ino === 0) {
+        continue;
+      }
+      matching.push(real);
     } catch {
       /* skip unresolvable live roots */
     }
   }
-  return live;
+  return matching;
 }
 
+/**
+ * Parent-chat reuse must not re-read disk. Authorize only when the frozen
+ * attested realPath is still the uploaded inode and is contained in a root
+ * whose live realpath inode still matches the turn pin. Ancestor inode lists
+ * are ignored: a full-path parent walk can be swapped onto the workingDir
+ * between opens, and a caller can stuff the pin into `ancestors`.
+ */
 function isSourceWithinAllowedFileRoots(
   source: FeishuUploadedFileSource,
   allowedFileRoots: readonly string[],
   pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>,
 ): boolean {
-  const roots = resolveRootIdentities(allowedFileRoots, pinnedFileRoots);
-  if (roots.length === 0) return false;
-  // Node reports ino===0 on some Windows volumes. Refuse leaf identity that
-  // cannot distinguish this file from any other on the volume.
   if (source.ino === 0) return false;
-  if (roots.some((root) => sameInode(source, root))) return true;
-  // Compare the upload-time ancestor snapshot only. A live parent walk after
-  // the leaf inode recheck can be swapped onto the pinned workingDir between
-  // successive stat() calls.
-  const ancestors = source.ancestors ?? [];
-  if (ancestors.length === 0) return false;
-  return ancestors.some((ancestor) => roots.some((root) => sameInode(ancestor, root)));
+  if (!source.realPath || isSyntheticFdPath(source.realPath)) return false;
+  if (pinnedFileRoots && pinnedFileRoots.length === 0) return false;
+
+  let liveReal: string;
+  try {
+    liveReal = fs.realpathSync(source.realPath);
+    const st = fs.statSync(liveReal);
+    if (!sameInode({ dev: st.dev, ino: st.ino }, source)) return false;
+  } catch {
+    return false;
+  }
+  if (normalizePathForContainment(liveReal) !== normalizePathForContainment(source.realPath)) {
+    return false;
+  }
+
+  const roots = matchingLiveRootRealPaths(allowedFileRoots, pinnedFileRoots);
+  return roots.some((root) => isRealPathWithinRoot(liveReal, root));
 }
 
 function isWithinAllowedFileRoots(

@@ -923,10 +923,10 @@ export interface FeishuUploadedFileSource {
   dev: number;
   ino: number;
   /**
-   * Parent-directory identities captured from O_NOFOLLOW directory handles
-   * while the upload file handle was still open. Parent-chat reuse must
-   * compare against this snapshot — live path walks after upload can be
-   * retargeted onto the pinned workingDir.
+   * Unused for authorization. Node has no portable openat, so a parent walk
+   * that re-opens each directory by absolute path can be swapped onto the
+   * pinned workingDir. Parent-chat reuse proves containment with the frozen
+   * attested `realPath` instead.
    */
   ancestors: ReadonlyArray<{ dev: number; ino: number }>;
 }
@@ -1021,50 +1021,6 @@ function attestedRealPath(
   return realPathIfInode(absPath, identity) ?? '';
 }
 
-function directoryOpenFlags(): number {
-  let flags = fs.constants.O_RDONLY;
-  if (typeof fs.constants.O_DIRECTORY === 'number') flags |= fs.constants.O_DIRECTORY;
-  // Last-component no-follow: a parent swapped for a symlink to the pinned
-  // workingDir cannot contribute that root's inode to the snapshot.
-  if (typeof fs.constants.O_NOFOLLOW === 'number') flags |= fs.constants.O_NOFOLLOW;
-  return flags;
-}
-
-/**
- * Snapshot parent-directory (dev, ino) via directory handles. Node has no
- * portable openat, so this still names each parent by path; identities come
- * from fstat(fd) with O_NOFOLLOW, and callers must not re-walk the path later.
- */
-function snapshotFileAncestorInodes(fileRealPath: string): Array<{ dev: number; ino: number }> {
-  if (!fileRealPath || isSyntheticFdPath(fileRealPath)) return [];
-  const flags = directoryOpenFlags();
-  const ancestors: Array<{ dev: number; ino: number }> = [];
-  const seen = new Set<string>();
-  let current = path.dirname(fileRealPath);
-  for (;;) {
-    let fd: number;
-    try {
-      fd = fs.openSync(current, flags);
-    } catch {
-      break;
-    }
-    try {
-      const st = fs.fstatSync(fd);
-      if (st.ino === 0) break;
-      const key = `${st.dev}:${st.ino}`;
-      if (seen.has(key)) break;
-      seen.add(key);
-      ancestors.push({ dev: st.dev, ino: st.ino });
-    } finally {
-      fs.closeSync(fd);
-    }
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  return ancestors;
-}
-
 async function sendFileToTarget(
   target: SendTarget,
   absPath: string,
@@ -1083,11 +1039,6 @@ async function sendFileToTarget(
   try {
     const stat = await handle.stat();
     const realPath = attestedRealPath(handle.fd, absPath, stat);
-    const ancestors = snapshotFileAncestorInodes(realPath);
-    // Drop the snapshot if the leaf path was retargeted while parents were
-    // being opened. Check-time reuse then fail-closes instead of walking live.
-    const attestedAncestors =
-      realPath && realPathIfInode(realPath, stat) ? ancestors : [];
     const result = await sendFileSourceToTarget(
       c,
       target,
@@ -1104,7 +1055,7 @@ async function sendFileToTarget(
         realPath,
         dev: stat.dev,
         ino: stat.ino,
-        ancestors: attestedAncestors,
+        ancestors: [],
       };
     }
     return result;
