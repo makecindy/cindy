@@ -1503,6 +1503,16 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).toContain('仅企业组织成员可用，个人账号不可用');
   });
 
+  it('documents library reveal/saveAs without leaking the user-chosen absolute path', () => {
+    expect(FORGE_GUIDE).toContain("op: 'reveal'");
+    expect(FORGE_GUIDE).toContain("op: 'saveAs'");
+    expect(FORGE_GUIDE).toContain('path 永远是库内相对键,不是用户另存到的绝对路径');
+    expect(FORGE_GUIDE).toContain('已有对话框在场');
+    expect(FORGE_GUIDE).toContain('对话框期间账号切换');
+    expect(FORGE_GUIDE).toContain('`BUSY`');
+    expect(FORGE_GUIDE).toContain('`RATE_LIMITED`');
+  });
+
   it('documents explicit Forge install without changing pack into an install action', () => {
     expect(FORGE_GUIDE).toContain("ghost_forge_install({ dir: '<绝对路径>' })");
     expect(FORGE_GUIDE).toContain('不要因为 scaffold 或 pack 成功就自动调用本工具');

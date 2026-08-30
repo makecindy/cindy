@@ -22,6 +22,7 @@ import * as path from 'node:path';
 
 import {
   GHOST_LIBRARY_OPS,
+  GHOST_PICK_MIN_INTERVAL_MS,
   type GhostPipeLibraryResult,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -64,6 +65,8 @@ export interface GhostLibrarySlotDeps {
   showItemInFolder?(absPath: string): void;
   /** 系统另存为(生产接 dialog.showSaveDialog)。 */
   showSaveDialog?(opts: { defaultPath: string }): Promise<{ canceled: boolean; filePath?: string }>;
+  /** 可注入时钟(单测限速);默认 Date.now。 */
+  now?(): number;
 }
 
 const fail = (errorCode: string, message: string): GhostPipeLibraryResult => ({ ok: false, errorCode, message });
@@ -72,6 +75,10 @@ export class GhostLibrarySlot {
   private readonly sessions = new Map<string, GhostLibrarySession>();
   /** 迁移进行中的插件:全部写操作只读化(切换与 grace 前不再有写入落旧根)。 */
   private readonly relocating = new Set<string>();
+  /** 插件 id → 上次 saveAs 尝试时刻(按尝试记账;对齐 pick/confirm 骚扰钳制)。 */
+  private readonly lastSaveAsAttemptAt = new Map<string, number>();
+  /** 全局另存为对话框在场标记(系统弹窗一次一个,不排队)。 */
+  private saveAsDialogInFlight = false;
 
   constructor(private readonly deps: GhostLibrarySlotDeps) {}
 
@@ -356,16 +363,56 @@ export class GhostLibrarySlot {
         if (typeof req.path !== 'string' || !req.path) {
           return fail('PATH_INVALID', 'saveAs 需要库内相对路径');
         }
-        const abs = await vault.resolveExistingFile(req.path);
-        if (!abs) return fail('NOT_FOUND', `库内没有这个文件:${req.path}`);
+        const relPath = req.path;
+        const abs = await vault.resolveExistingFile(relPath);
+        if (!abs) return fail('NOT_FOUND', `库内没有这个文件:${relPath}`);
         if (!this.deps.showSaveDialog) return fail('UNSUPPORTED', '当前宿主不能弹出另存为');
+
+        // 骚扰钳制:限速按尝试记账(spam 顺延窗口),再看全局在场标记。
+        const now = this.deps.now?.() ?? Date.now();
+        const last = this.lastSaveAsAttemptAt.get(ghostId);
+        this.lastSaveAsAttemptAt.set(ghostId, now);
+        if (last !== undefined && now - last < GHOST_PICK_MIN_INTERVAL_MS) {
+          return fail('RATE_LIMITED', '另存为请求太频繁,稍后再试');
+        }
+        if (this.saveAsDialogInFlight) {
+          return fail('BUSY', '已有一个选择窗口在等用户操作');
+        }
+
         const rawName = typeof req.name === 'string' ? req.name.trim() : '';
         const base = path.basename(rawName || path.basename(abs) || 'export.bin');
-        const picked = await this.deps.showSaveDialog({ defaultPath: base });
-        if (picked.canceled || !picked.filePath) return { ok: true, op: 'saveAs', cancelled: true };
-        await fs.promises.copyFile(abs, picked.filePath);
+        this.saveAsDialogInFlight = true;
+        let picked: { canceled: boolean; filePath?: string };
+        try {
+          picked = await this.deps.showSaveDialog({ defaultPath: base });
+        } catch (error) {
+          this.deps.log?.warn('ghost library saveAs dialog failed', {
+            ghostId,
+            err: error instanceof Error ? error.message : String(error),
+          });
+          return fail('INTERNAL', '另存为窗口无法打开');
+        } finally {
+          this.saveAsDialogInFlight = false;
+        }
+        if (picked.canceled || !picked.filePath) {
+          return { ok: true, op: 'saveAs', cancelled: true };
+        }
+
+        // 对话框可能挂很久:期间账号切换会 disposeAll 作废旧 vault,但源文件
+        // 仍在磁盘。不得用切换前解析的 abs 拷贝,也不得把用户所选绝对路径回沙箱。
+        const currentScope = this.deps.captureOwnerScope();
+        if (currentScope !== session.ownerScopeKey) {
+          return fail('LIBRARY_UNAVAILABLE', '账号已切换,另存为已取消');
+        }
+        const live = this.sessions.get(ghostId);
+        if (!live || live !== session) {
+          return fail('LIBRARY_UNAVAILABLE', '账号已切换,另存为已取消');
+        }
+        const freshAbs = await live.vault.resolveExistingFile(relPath);
+        if (!freshAbs) return fail('NOT_FOUND', `库内没有这个文件:${relPath}`);
+        await fs.promises.copyFile(freshAbs, picked.filePath);
         const st = await fs.promises.stat(picked.filePath);
-        return { ok: true, op: 'saveAs', cancelled: false, path: picked.filePath, bytes: st.size };
+        return { ok: true, op: 'saveAs', cancelled: false, path: relPath, bytes: st.size };
       }
       case 'db.open': {
         const resolved = await this.resolveDbPath(session, req.dbPath);

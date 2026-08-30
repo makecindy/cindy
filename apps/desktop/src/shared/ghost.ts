@@ -8348,6 +8348,7 @@ export type GhostPipeLibraryResult =
   | { ok: true; op: 'db.userVersion'; version: number | null }
   | { ok: true; op: 'reveal'; path: string }
   | { ok: true; op: 'saveAs'; cancelled: true }
+  /** saveAs 成功:path 是库内相对键(与请求相同),不是用户另存到的绝对路径。 */
   | { ok: true; op: 'saveAs'; cancelled: false; path: string; bytes: number }
   | { ok: false; errorCode: string; message: string };
 
