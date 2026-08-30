@@ -1748,19 +1748,18 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain(
       'trackWindowsSessionEndFallbackStorageTask(session.id, claudeUsagePersistenceTask, {',
     );
-    expect(claudeDoneSource).toContain(
-      'const modelUsageResults = await Promise.allSettled(modelUsageWrites);',
+    expect(claudeDoneSource).toContain('const usageResults = await Promise.allSettled(usageWrites);');
+    expect(claudeDoneSource).toMatch(
+      /const usageResults = await Promise\.allSettled\(usageWrites\);[\s\S]*?if \(isWindowsSessionEndFallbackReplay\) \{\s*propagateFirstRejectedUsageWrite\(usageResults\);/,
     );
-    expectOrder(
-      claudeDoneSource,
-      'const modelUsageResults = await Promise.allSettled(modelUsageWrites);',
-      'propagateFirstRejectedUsageWrite(modelUsageResults);',
-    );
-    expect(claudeDoneSource.match(/await awaitBothSpendWrites\(/g)).toHaveLength(2);
+    expect(claudeDoneSource).toContain('propagateFirstRejectedUsageWrite(usageResults);');
+    expect(claudeDoneSource).not.toContain('await awaitBothSpendWrites(');
     expect(claudeDoneSource).not.toContain('await Promise.all([');
     expect(claudeDoneSource).toContain(
       "cacheCreateTokensDelta: m.deltas.cacheCreateTokens,\n                }, undefined, { throwOnError: true }),",
     );
+    expect(claudeDoneSource).toContain('void claudeUsagePersistenceTask.catch((error) => {');
+    expect(claudeDoneSource).toContain("log.warn('Claude usage persistence task failed'");
   });
 
   it('awaits both Claude spend sinks before propagating either rejection', () => {

@@ -5977,7 +5977,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             // 订阅轮打 #billing=subscription 标记(Claude 订阅:Anthropic 模型 + cost=0),
             // 或 bridge 订阅轮(chatgpt// xai/ 前缀,source==='subscription');两类均需触发
             // rebroadcastTodaySpend 刷新首页仪表盘。
-            const modelUsageWrites: Promise<unknown>[] = [];
+            const usageWrites: Promise<unknown>[] = [];
             const subscriptionTurnEstimates: RegionalMoney[] = [];
             let hasSubscriptionValueRow = false;
             for (const m of perModel) {
@@ -6005,7 +6005,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   : isClaudeSubscriptionValueRow || isBridgeSubscriptionRow
                     ? (subscriptionEstimate ?? unpricedSubscriptionValueMarker())
                     : null;
-              modelUsageWrites.push(
+              usageWrites.push(
                 recordModelTurnUsage({
                   agentKind: 'claude-code',
                   model:
@@ -6022,17 +6022,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 }, undefined, { throwOnError: true }),
               );
             }
-            // Keep the fallback barrier open until every per-model usage row has
-            // reached the durable queue.  The normal path remains fire-and-forget
-            // at the event boundary because this whole task is still detached.
-            const modelUsageResults = await Promise.allSettled(modelUsageWrites);
-            // 无真实费用、但产生订阅价值或 provider 参考估值的轮次不走
-            // recordTurnSpend。等模型行落库后重广播今日 spend 快照,通知已打开的首页
-            // 仪表盘刷新(对齐 codex 订阅轮的 rebroadcastCodexTodayUsage)。
-            if ((hasSubscriptionValueRow || estimatedTurnMoney) && !turnMoney) {
-              void rebroadcastTodaySpend();
-            }
-            propagateFirstRejectedUsageWrite(modelUsageResults);
             if (turnMoney && turnMoney.amount > 0) {
               // 保留 #216 的 token/cache 明细随费用落库 (MessageActionBar tooltip)。
               // deltas 非空 → buildClaudeTurnUsageDetails 用 deltas 里的 model, fallbackModel 不取用。
@@ -6045,19 +6034,21 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 claudeGenerationDurationMs,
                 claudeTurnDurationMs,
               );
-              await awaitBothSpendWrites(
+              usageWrites.push(
                 recordTurnSpend(turnMoney, undefined, { throwOnError: true }),
                 recordSessionTurnSpend(session.id, turnMoney, { throwOnError: true }),
+                (async () => {
+                  // per-message 维度优先挂 assistant；纯 tool turn 则按 scheduler runId 直接归因。
+                  const changedScheduleId = await recordSchedulerTurnCost({
+                    sessionId: session.id,
+                    clientId: turnAssistantPersistId,
+                    money: turnMoney,
+                    turnUsageDetails,
+                    turnOrigin: event.turnOrigin,
+                  });
+                  if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+                })(),
               );
-              // per-message 维度优先挂 assistant；纯 tool turn 则按 scheduler runId 直接归因。
-              const changedScheduleId = await recordSchedulerTurnCost({
-                sessionId: session.id,
-                clientId: turnAssistantPersistId,
-                money: turnMoney,
-                turnUsageDetails,
-                turnOrigin: event.turnOrigin,
-              });
-              if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
             } else if (turnAssistantPersistId) {
               // 无真实计费轮的「本轮价值」估算,挂到消息(isEstimate:true,chip 的
               // "本会话价值"由 useSessionEstimatedValue 汇总),不进 daily_spend /
@@ -6083,24 +6074,38 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 claudeGenerationDurationMs,
                 claudeTurnDurationMs,
               );
-              if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
-                const changedScheduleId = await recordSchedulerTurnCost({
-                  sessionId: session.id,
-                  clientId: turnAssistantPersistId,
-                  money: turnEstimatedValue,
-                  turnUsageDetails,
-                  turnOrigin: event.turnOrigin,
-                });
-                if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
-              } else {
-                // 真实计费与订阅估值都拿不到(典型:网关目录整体不下发价格、模型不在价表)
-                // —— 钱没有,但 token 明细是算好的,落下来让 UI 退回显示本轮 token。
-                await recordTurnUsageOnMessage({
-                  sessionId: session.id,
-                  clientId: turnAssistantPersistId,
-                  turnUsageDetails,
-                });
-              }
+              usageWrites.push(
+                (async () => {
+                  if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
+                    const changedScheduleId = await recordSchedulerTurnCost({
+                      sessionId: session.id,
+                      clientId: turnAssistantPersistId,
+                      money: turnEstimatedValue,
+                      turnUsageDetails,
+                      turnOrigin: event.turnOrigin,
+                    });
+                    if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+                  } else {
+                    // 真实计费与订阅估值都拿不到(典型:网关目录整体不下发价格、模型不在价表)
+                    // —— 钱没有,但 token 明细是算好的,落下来让 UI 退回显示本轮 token。
+                    await recordTurnUsageOnMessage({
+                      sessionId: session.id,
+                      clientId: turnAssistantPersistId,
+                      turnUsageDetails,
+                    });
+                  }
+                })(),
+              );
+            }
+            // Start every independent accounting sink before observing failure.
+            // Ordinary turns remain best-effort; only Windows fallback recovery
+            // propagates a rejection into its required-success durability barrier.
+            const usageResults = await Promise.allSettled(usageWrites);
+            if ((hasSubscriptionValueRow || estimatedTurnMoney) && !turnMoney) {
+              void rebroadcastTodaySpend();
+            }
+            if (isWindowsSessionEndFallbackReplay) {
+              propagateFirstRejectedUsageWrite(usageResults);
             }
           })();
         } else if (typeof cumulative === 'number' && cumulative >= 0) {
@@ -6176,24 +6181,38 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             }
             const ledgerCurrency = (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
             const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
-            await awaitBothSpendWrites(
+            const usageResults = await Promise.allSettled([
               recordTurnSpend(money, undefined, { throwOnError: true }),
               recordSessionTurnSpend(session.id, money, { throwOnError: true }),
-            );
-            const changedScheduleId = await recordSchedulerTurnCost({
-              sessionId: session.id,
-              clientId: turnAssistantPersistId,
-              money,
-              turnUsageDetails,
-              turnOrigin: event.turnOrigin,
-            });
-            if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+              (async () => {
+                const changedScheduleId = await recordSchedulerTurnCost({
+                  sessionId: session.id,
+                  clientId: turnAssistantPersistId,
+                  money,
+                  turnUsageDetails,
+                  turnOrigin: event.turnOrigin,
+                });
+                if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+              })(),
+            ]);
+            if (isWindowsSessionEndFallbackReplay) {
+              propagateFirstRejectedUsageWrite(usageResults);
+            }
           })();
         }
-        if (isWindowsSessionEndFallbackReplay && claudeUsagePersistenceTask) {
-          trackWindowsSessionEndFallbackStorageTask(session.id, claudeUsagePersistenceTask, {
-            requireSuccess: true,
-          });
+        if (claudeUsagePersistenceTask) {
+          if (isWindowsSessionEndFallbackReplay) {
+            trackWindowsSessionEndFallbackStorageTask(session.id, claudeUsagePersistenceTask, {
+              requireSuccess: true,
+            });
+          } else {
+            void claudeUsagePersistenceTask.catch((error) => {
+              log.warn('Claude usage persistence task failed', {
+                sessionId: session.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          }
         }
         // 与 spend 记账并列的另一个 turn-done side-effect: 刷新 Claude 账号月度配额
         // (LiteLLM /v2/user/info)。fire-and-forget, 模块内 2s 超时 + 10s 节流。
