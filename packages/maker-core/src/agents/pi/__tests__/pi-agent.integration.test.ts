@@ -530,6 +530,76 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
+    'sends the locally selected Gateway Kimi API with matching compat to /v1/chat/completions',
+    { timeout: 60_000 },
+    async () => {
+      const deps = buildDeps();
+      deps.capabilityAdditions = {
+        ...deps.capabilityAdditions,
+        availableModels: [
+          ...(deps.capabilityAdditions?.availableModels ?? []),
+          {
+            id: 'moonshotai/kimi-k3',
+            displayName: 'Kimi K3',
+            contextWindow: 1_000_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'max',
+          },
+        ],
+      };
+      deps.resolvePiGatewayModelApi = (_providerId, modelId) =>
+        modelId === 'moonshotai/kimi-k3' ? 'openai-completions' : 'anthropic-messages';
+      deps.resolvePiGatewayModelSpec = (_providerId, modelId) =>
+        modelId === 'moonshotai/kimi-k3'
+          ? {
+              api: 'openai-completions',
+              compat: {
+                maxTokensField: 'max_tokens',
+                thinkingFormat: 'openai',
+                requiresReasoningContentOnAssistantMessages: true,
+                deferredToolsMode: 'kimi',
+              },
+              thinkingLevelMap: { low: 'low', high: 'high', max: 'max' },
+            }
+          : { api: 'anthropic-messages' };
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-kimi-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      scriptedResponses.push(chatCompletionsStreamBody('pong from kimi gateway', 'moonshotai/kimi-k3'));
+      try {
+        handle = await new PiAgent(deps).startSession({
+          sessionId: 'itest-kimi-session',
+          workingDir,
+          model: 'moonshotai/kimi-k3',
+          providerId: 'xd',
+          effort: 'max',
+        });
+        const events: AgentEvent[] = [];
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+
+        await handle.send({ type: 'user', content: 'ping kimi' });
+        await collected;
+
+        const requests = seenRequests.slice(requestsBefore);
+        expect(requests.some((request) => request.url === '/v1/chat/completions')).toBe(true);
+        expect(requests.some((request) => request.url === '/v1/responses')).toBe(false);
+        expect(events.some((event) =>
+          event.type === 'text'
+          && (event.data as { text?: string }).text?.includes('pong from kimi gateway'),
+        )).toBe(true);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
     'uses the bundled openai-codex adapter for a host subscription model',
     { timeout: 60_000 },
     async () => {
@@ -682,7 +752,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'uses PI bundled xAI APIs as the baseline for Responses and Chat Completions models',
+    'uses the current PI bundled xAI Responses API for both official models',
     { timeout: 60_000 },
     async () => {
       const deps = buildDeps();
@@ -764,8 +834,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await run(
         'itest-native-xai-completions',
         'xai/grok-build-0.1',
-        chatCompletionsStreamBody('pong from xai completions', 'grok-build-0.1'),
-        '/v1/chat/completions',
+        responsesStreamBody('pong from xai responses', 'grok-build-0.1'),
+        '/v1/responses',
       );
     },
   );

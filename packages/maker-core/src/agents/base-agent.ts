@@ -247,6 +247,12 @@ export interface PiRemoteFileOps {
   listDir(dir: string): Promise<string[]>;
 }
 
+/** Gateway rows carry only host-resolved API/compat metadata, never a native provider endpoint. */
+export type PiGatewayModelSpec = Pick<
+  PiNativeModelSpec,
+  'api' | 'compat' | 'samplingParams' | 'thinkingLevelMap'
+>;
+
 /**
  * BYOM:一个**原生 pi provider**(用户自定义/本地模型)—— 直连用户端点,不经 Cindy 的
  * anthropic-compat 代理(设计原则:pi 主导,禁双重转义)。host 从 custom-provider-store
@@ -666,18 +672,22 @@ export interface AgentDeps {
   ) => ModelDescriptor | null;
 
   /**
-   * Pi-only:解析 `cindy` gateway 内某模型应使用的 PI API。provider 仍保持 `cindy`，
-   * 但同一 model id 可能同时存在于 XD 与订阅来源，必须同时按当前会话来源落实 wire
-   * protocol，不能只按 model id 猜。三态语义：
-   * - `openai-responses`：Model Access v3 明确指定的 Cindy AI Pi 路由；
-   * - `anthropic-messages`：非 XD compat proxy 路由；
-   * - `null`：模型属于 Cindy AI Pi 目录，但协议缺失或不匹配，Pi fail closed；
-   * - `undefined`：当前来源未声明该模型的 Pi 协议；不得写入 `cindy` gateway 块。
+   * Pi-only:按 Cindy Server > 执行环境本地 Pi 目录 > Gateway hint 解析 `cindy` API。
+   * `remote` 让 host 在无法探测实际远端 Pi 时跳过本机目录，禁止跨二进制借 metadata。
+   * null = 已知 Gateway Pi 模型但无法安全解析；undefined = 不属于 Gateway Pi 目录。
    */
   resolvePiGatewayModelApi?: (
     providerId: string | null | undefined,
     modelId: string,
+    context?: { remote: boolean },
   ) => PiNativeApi | null | undefined;
+
+  /** Host-resolved model-specific PI compatibility metadata for the Gateway block. */
+  resolvePiGatewayModelSpec?: (
+    providerId: string | null | undefined,
+    modelId: string,
+    context?: { remote: boolean },
+  ) => PiGatewayModelSpec | null | undefined;
 
   /**
    * Host-provided capability descriptor additions.

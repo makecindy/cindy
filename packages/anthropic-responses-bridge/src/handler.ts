@@ -97,6 +97,36 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(buf);
 }
 
+/** 与 desktop `OwnerBoundaryPendingError` 对齐:本包不能 import desktop,按 name/code/message 认。 */
+const OWNER_BOUNDARY_PENDING_MESSAGE =
+  'App session is switching; retry after the owner boundary settles.';
+
+function isOwnerBoundaryPendingError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'OwnerBoundaryPendingError') return true;
+  if ((err as { code?: unknown }).code === 'owner_boundary_pending') return true;
+  return err.message === OWNER_BOUNDARY_PENDING_MESSAGE;
+}
+
+function writeOwnerBoundaryPending(res: ServerResponse, err: unknown): void {
+  const message = err instanceof Error ? err.message : OWNER_BOUNDARY_PENDING_MESSAGE;
+  const buf = Buffer.from(JSON.stringify({
+    type: 'error',
+    error: {
+      type: 'owner_boundary_pending',
+      code: 'owner_boundary_pending',
+      message,
+    },
+  }), 'utf8');
+  res.writeHead(503, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': String(buf.length),
+    'cache-control': 'no-store',
+    'retry-after': '1',
+  });
+  res.end(buf);
+}
+
 function writeSseEvent(res: ServerResponse, ev: AnthropicSseEvent): void {
   res.write(`event: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`);
 }
@@ -294,6 +324,10 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     try {
       providerHeaders = await provider.buildHeaders({ sessionId });
     } catch (err) {
+      if (isOwnerBoundaryPendingError(err)) {
+        writeOwnerBoundaryPending(res, err);
+        return;
+      }
       log.error?.('buildHeaders failed', { reqId, prefix: provider.prefix, err: err instanceof Error ? err.message : String(err) });
       writeJson(res, 502, {
         type: 'error',
