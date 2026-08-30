@@ -552,6 +552,21 @@ export function isNativeProviderAuthSelfAuthorized(provider: NativeProviderId): 
   );
 }
 
+function explicitNativeProviderAuthOwner(
+  bindings: BindingFile,
+  provider: NativeProviderId,
+): string | null {
+  const boundOwner = bindings[provider]?.trim();
+  if (!boundOwner) return null;
+  const source = bindings.sources?.[provider];
+  const selfAuthorizedOwner = bindings.selfAuthorized?.[provider]?.trim();
+  if (source !== undefined && source !== 'explicit-provider-oauth') return null;
+  if (selfAuthorizedOwner !== undefined && selfAuthorizedOwner !== boundOwner) return null;
+  return source === 'explicit-provider-oauth' || selfAuthorizedOwner === boundOwner
+    ? boundOwner
+    : null;
+}
+
 /**
  * Return the proven owner of a Cindy-explicit OAuth credential without applying the active-owner
  * binding gate. This is intentionally stricter than isNativeProviderAuthSelfAuthorized(): unreadable
@@ -562,17 +577,44 @@ export function readExplicitNativeProviderAuthOwner(
 ): string | null {
   const read = readBindingsOrFail();
   if (!read.ok) return null;
-  const boundOwner = read.bindings[provider]?.trim();
+  const boundOwner = explicitNativeProviderAuthOwner(read.bindings, provider);
   if (!boundOwner) return null;
-  const source = read.bindings.sources?.[provider];
-  const selfAuthorizedOwner = read.bindings.selfAuthorized?.[provider]?.trim();
   const isolatedOwner = instanceIsolatedCredentialOwners(read.bindings)[provider]?.trim();
-  if (source !== undefined && source !== 'explicit-provider-oauth') return null;
-  if (selfAuthorizedOwner !== undefined && selfAuthorizedOwner !== boundOwner) return null;
-  return isolatedOwner === boundOwner &&
-    (source === 'explicit-provider-oauth' || selfAuthorizedOwner === boundOwner)
-    ? boundOwner
-    : null;
+  return isolatedOwner === boundOwner ? boundOwner : null;
+}
+
+/** Return a parent-version explicit owner only when neither current provenance marker exists. */
+export function readLegacyExplicitNativeProviderAuthOwner(
+  provider: NativeProviderId,
+): string | null {
+  const read = readBindingsOrFail();
+  if (!read.ok) return null;
+  const owner = explicitNativeProviderAuthOwner(read.bindings, provider);
+  if (!owner) return null;
+  if (sharedSystemCredentialOwners(read.bindings)[provider] !== undefined) return null;
+  if (instanceIsolatedCredentialOwners(read.bindings)[provider] !== undefined) return null;
+  return owner;
+}
+
+/** Promote an account-distinct parent-version explicit credential without rebinding its owner. */
+export function migrateLegacyExplicitNativeProviderAuthToInstanceIsolated(
+  provider: NativeProviderId,
+  expectedOwner: string,
+): boolean {
+  return withNativeBindingMutationLock(false, () => {
+    const read = readBindingsOrFail();
+    if (!read.ok) return false;
+    if (explicitNativeProviderAuthOwner(read.bindings, provider) !== expectedOwner) return false;
+    if (sharedSystemCredentialOwners(read.bindings)[provider] !== undefined) return false;
+    const isolated = instanceIsolatedCredentialOwners(read.bindings);
+    if (isolated[provider] !== undefined && isolated[provider] !== expectedOwner) return false;
+    if (isolated[provider] === expectedOwner) return true;
+    writeBindings({
+      ...read.bindings,
+      instanceIsolatedCredential: { ...isolated, [provider]: expectedOwner },
+    });
+    return true;
+  });
 }
 
 /** Persist that this owner's credential was observed as a healthy system-shared hardlink inode. */

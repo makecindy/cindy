@@ -97,7 +97,9 @@ import {
   isNativeProviderAuthSelfAuthorized,
   isNativeProviderAuthSharedSystemCredential,
   markNativeProviderAuthSharedSystemCredential,
+  migrateLegacyExplicitNativeProviderAuthToInstanceIsolated,
   readExplicitNativeProviderAuthOwner,
+  readLegacyExplicitNativeProviderAuthOwner,
   restoreNativeProviderAuthForRecovery,
   unbindNativeProviderAuth,
 } from './nativeProviderAuthBinding.js';
@@ -402,8 +404,9 @@ function detectCodexCredentialScope(codexHome: string): NonNullable<AuthState['c
     if (existsSync(systemAuth) && pathsReferToSameFileSync(localAuth, systemAuth)) {
       return 'system-shared';
     }
-    if (isNativeProviderAuthBound('openai') && isNativeProviderAuthSelfAuthorized('openai')) {
-      return 'instance-isolated';
+    if (isNativeProviderAuthBound('openai')) {
+      if (isNativeProviderAuthSharedSystemCredential('openai')) return 'system-shared';
+      if (isNativeProviderAuthSelfAuthorized('openai')) return 'instance-isolated';
     }
     return 'unknown';
   } catch {
@@ -1160,6 +1163,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       topology.linkType === 'file' && !wasSharedLegacyCredential
         ? readExplicitNativeProviderAuthOwner('openai')
         : null;
+    const legacyExplicitOwner =
+      topology.linkType === 'file' && !wasSharedLegacyCredential && !explicitIsolatedOwner
+        ? readLegacyExplicitNativeProviderAuthOwner('openai')
+        : null;
     if (explicitIsolatedOwner) {
       log.info('keeping explicitly authorized instance-isolated Codex auth', {
         ownerMatchesActive: explicitIsolatedOwner === getActiveAppSession().dataOwnerId,
@@ -1170,8 +1177,20 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const sysAccount = await readCodexAccountId(systemAuth);
     if (!sysAccount) return; // 本机 auth.json 解析不出 account, 保守不动
 
+    const myAccount = hasLocalEntry ? await readCodexAccountId(myAuth) : null;
+    if (legacyExplicitOwner && myAccount && myAccount !== sysAccount) {
+      const migrated = migrateLegacyExplicitNativeProviderAuthToInstanceIsolated(
+        'openai',
+        legacyExplicitOwner,
+      );
+      log.info('keeping account-distinct legacy explicit Codex auth', {
+        provenanceMigrated: migrated,
+        ownerMatchesActive: legacyExplicitOwner === getActiveAppSession().dataOwnerId,
+      });
+      return;
+    }
+
     if (hasLocalEntry) {
-      const myAccount = await readCodexAccountId(myAuth);
       credPathLog.warn('unproven Codex auth is an orphan repair candidate', {
         linkType: topology.linkType,
         accountMatch: myAccount ? myAccount === sysAccount : 'unknown',

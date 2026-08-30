@@ -1643,6 +1643,178 @@ describe('Codex system credential suppression marker', () => {
     }
   });
 
+  it.each([
+    { platform: 'darwin', label: 'POSIX' },
+    { platform: 'win32', label: 'Windows' },
+  ])('preserves a parent-version explicit isolated account on $label', async ({ platform }) => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    try {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-legacy-explicit-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'user-data');
+      h.dataOwnerId = 'owner-a';
+      const home = path.join(root, 'home');
+      const systemAuth = path.join(home, '.codex', 'auth.json');
+      const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+      const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+      vi.spyOn(os, 'homedir').mockReturnValue(home);
+      const chmodSpy = vi.spyOn(fs.promises, 'chmod');
+      fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+      fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+      fs.writeFileSync(
+        systemAuth,
+        JSON.stringify({ tokens: { access_token: 'system-a-token', account_id: 'account-a' } }),
+        { mode: 0o600 },
+      );
+      fs.writeFileSync(
+        localAuth,
+        JSON.stringify({ tokens: { access_token: 'cindy-b-token', account_id: 'account-b' } }),
+        { mode: 0o600 },
+      );
+      fs.writeFileSync(
+        bindingFile,
+        JSON.stringify({
+          openai: 'owner-a',
+          selfAuthorized: { openai: 'owner-a' },
+          sources: { openai: 'explicit-provider-oauth' },
+        }),
+      );
+      const localBefore = fs.readFileSync(localAuth);
+      const localStatBefore = fs.statSync(localAuth);
+      const systemBefore = fs.readFileSync(systemAuth);
+      const systemStatBefore = fs.statSync(systemAuth);
+
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'instance-isolated',
+      });
+      await expect(adapter.getAccessToken()).resolves.toBe('cindy-b-token');
+
+      expect(fs.readFileSync(localAuth)).toEqual(localBefore);
+      expect(fs.statSync(localAuth)).toMatchObject({
+        ino: localStatBefore.ino,
+        mode: localStatBefore.mode,
+      });
+      expect(fs.readFileSync(systemAuth)).toEqual(systemBefore);
+      expect(fs.statSync(systemAuth)).toMatchObject({
+        ino: systemStatBefore.ino,
+        mode: systemStatBefore.mode,
+      });
+      expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+        openai: 'owner-a',
+        selfAuthorized: { openai: 'owner-a' },
+        sources: { openai: 'explicit-provider-oauth' },
+        instanceIsolatedCredential: { openai: 'owner-a' },
+      });
+      expect(chmodSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
+  it.each([
+    { platform: 'darwin', label: 'POSIX' },
+    { platform: 'win32', label: 'Windows' },
+  ])('attributes a detached shared F1 invalidation on $label', async ({ platform }) => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    try {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-provenance-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'user-data');
+      h.dataOwnerId = 'owner-a';
+      const home = path.join(root, 'home');
+      const systemAuth = path.join(home, '.codex', 'auth.json');
+      const codexHome = path.join(h.userDataDir, 'codex-home');
+      const localAuth = path.join(codexHome, 'auth.json');
+      const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+      vi.spyOn(os, 'homedir').mockReturnValue(home);
+      const chmodSpy = vi.spyOn(fs.promises, 'chmod');
+      fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(
+        systemAuth,
+        JSON.stringify({ tokens: { access_token: 'system-f1-token', account_id: 'acct-1' } }),
+        { mode: 0o600 },
+      );
+      fs.linkSync(systemAuth, localAuth);
+      fs.writeFileSync(
+        bindingFile,
+        JSON.stringify({
+          openai: 'owner-a',
+          selfAuthorized: { openai: 'owner-a' },
+          sources: { openai: 'explicit-provider-oauth' },
+          sharedSystemCredential: { openai: 'owner-a' },
+        }),
+      );
+
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      const f1Fingerprint = currentCodexAuthFileFingerprint(localAuth);
+      const f1Generation = adapter.captureCredentialGeneration();
+      expect(f1Fingerprint).not.toBeNull();
+      expect(f1Generation).not.toBeNull();
+
+      const replacement = path.join(path.dirname(systemAuth), 'auth.f2.json');
+      fs.writeFileSync(
+        replacement,
+        JSON.stringify({ tokens: { access_token: 'system-f2-token', account_id: 'acct-1' } }),
+        { mode: 0o600 },
+      );
+      fs.renameSync(replacement, systemAuth);
+      const systemF2Before = fs.readFileSync(systemAuth);
+      const systemF2StatBefore = fs.statSync(systemAuth);
+      const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);
+      const broadcast = vi.fn().mockResolvedValue(undefined);
+      adapter.setOnLogoutSuccess(onLogoutSuccess);
+      adapter.setOnInvalidatedBroadcast(broadcast);
+
+      await expect(
+        adapter.invalidate('late_f1_401', { credentialGeneration: f1Generation }),
+      ).resolves.toBeUndefined();
+
+      expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
+        reason: 'late_f1_401',
+        credentialScope: 'system-shared',
+        recoveryOwnerId: 'owner-a',
+        sha256: f1Fingerprint!.sha256,
+      });
+      expect(onLogoutSuccess).toHaveBeenCalledOnce();
+      expect(broadcast).toHaveBeenCalledWith('late_f1_401', 'system-shared');
+      expect(fs.readFileSync(systemAuth)).toEqual(systemF2Before);
+      expect(fs.statSync(systemAuth)).toMatchObject({
+        ino: systemF2StatBefore.ino,
+        mode: systemF2StatBefore.mode,
+      });
+
+      const restartedAdapter = new DesktopCodexAuthAdapter();
+      await expect(
+        restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
+      ).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'system-shared',
+        recoveryRequiredReason: 'late_f1_401',
+      });
+      expectPlatformSharedLink(systemAuth, localAuth);
+      await expect(restartedAdapter.getAccessToken()).resolves.toBe('system-f2-token');
+      await restartedAdapter.verifyRecoveryWithAccountRpc(async () => undefined);
+      expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toBeNull();
+      expect(fs.readFileSync(systemAuth)).toEqual(systemF2Before);
+      expect(chmodSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
   it('tracks a consumed symlink target generation until a later system replacement', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-generation-'));
     dirs.push(root);
