@@ -3505,6 +3505,7 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   (跨平台标题带已核验插件名;macOS 另有正文),同插件 3 秒内连发 \`RATE_LIMITED\`;
   saveAs 已有对话框在场 \`BUSY\`(不排队)。
   对话框期间账号切换则拒绝拷贝(\`LIBRARY_UNAVAILABLE\`);
+  确认后先拷到目标旁临时文件再替换,失败不破坏已有文件;
 - **不可用 ≠ 空**:\`state:'unavailable'\` 时**不要**当空库重建、不要触发
   清理、不要把素材判成已删——如实向用户展示状态,等位置恢复;
 - **无跨库事务**:多个 .sqlite 之间没有 ATTACH;跨库一致性用幂等 + 墓碑

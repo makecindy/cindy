@@ -283,6 +283,31 @@ describe('GhostLibrarySlot', () => {
     },
   );
 
+  it('saveAs: 覆盖已有目标时先写临时文件;拷贝失败则原文件原样', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'new-psd' });
+    const dest = path.join(tmp, 'Desktop', 'existing.psd');
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    await fs.promises.writeFile(dest, 'keep-me');
+
+    clock += 4_000;
+    showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dest });
+    const copy = vi.spyOn(fs.promises, 'copyFile').mockRejectedValueOnce(new Error('ENOSPC'));
+    try {
+      const r = await slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+      expect(r).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+      expect(fs.readFileSync(dest, 'utf8')).toBe('keep-me');
+    } finally {
+      copy.mockRestore();
+    }
+
+    clock += 4_000;
+    showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dest });
+    const saved = await slot.handleLibraryRequest(GHOST_ID, { op: 'saveAs', path: 'exports/a.psd' });
+    expect(saved.ok).toBe(true);
+    expect(fs.readFileSync(dest, 'utf8')).toBe('new-psd');
+  });
+
   it('saveAs: 同插件两次请求间隔不足 = RATE_LIMITED(按尝试记账)', async () => {
     await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
     await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'exports/a.psd', content: 'psd' });

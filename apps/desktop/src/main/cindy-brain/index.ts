@@ -5150,7 +5150,9 @@ export function getGhostLibrarySlot(): GhostLibrarySlot {
         // 语音 overlay 是 hidden + focusable:false 的 prewarm 窗,经常排在 [0]
         // (bootstrap-electron.ts / authManager.ts 已踩过);macOS sheet 挂上去
         // 用户看不见,saveAsDialogInFlight 却一直占着。无主壳窗 = 失败关闭。
-        const candidates = mainShellWindows();
+        const candidates = mainShellWindows().filter(
+          (window) => window.isVisible() && !window.isMinimized(),
+        );
         const focused = BrowserWindow.getFocusedWindow();
         const win =
           focused && !focused.isDestroyed() && candidates.includes(focused)

@@ -17,6 +17,7 @@
  * 全部经 deps,单测拿 tmpdir + 进程内 core 直测,零 Electron。
  */
 
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -425,8 +426,28 @@ export class GhostLibrarySlot {
         }
         const freshAbs = await live.vault.resolveExistingFile(relPath);
         if (!freshAbs) return fail('NOT_FOUND', `库内没有这个文件:${relPath}`);
-        await fs.promises.copyFile(freshAbs, picked.filePath);
-        const st = await fs.promises.stat(picked.filePath);
+        const dest = picked.filePath;
+        // 先拷到目标旁临时文件,成功后再 rename 替换。copyFile 直接写 dest
+        // 会在磁盘满/中断时截断用户已有文件;同目录 rename 在 POSIX 原子,
+        // Windows 经 libuv MoveFileEx REPLACE_EXISTING。失败清 tmp、不碰原文件
+        // (不走先删目标再 rename:那条 Windows 退化会在第二步失败时毁掉原文件)。
+        const tmpDest = path.join(
+          path.dirname(dest),
+          `.cindy-saveas-${process.pid}-${randomBytes(6).toString('hex')}.tmp`,
+        );
+        try {
+          await fs.promises.copyFile(freshAbs, tmpDest);
+          await fs.promises.rename(tmpDest, dest);
+        } catch (error) {
+          this.deps.log?.warn('ghost library saveAs copy failed', {
+            ghostId,
+            err: error instanceof Error ? error.message : String(error),
+          });
+          return fail('INTERNAL', '另存为写入失败');
+        } finally {
+          await fs.promises.unlink(tmpDest).catch(() => {});
+        }
+        const st = await fs.promises.stat(dest);
         return { ok: true, op: 'saveAs', cancelled: false, path: relPath, bytes: st.size };
       }
       case 'db.open': {

@@ -16,7 +16,8 @@ describe('library saveAs dialog parent wiring', () => {
   it('parents saveAs to a visible main-shell window, not getAllWindows()[0]', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
-    expect(body).toContain('const candidates = mainShellWindows();');
+    expect(body).toContain('const candidates = mainShellWindows().filter(');
+    expect(body).toContain('window.isVisible() && !window.isMinimized()');
     expect(body).toContain('candidates.includes(focused)');
     expect(body).toContain("throw new Error('没有可挂靠的宿主窗口')");
     expect(body).not.toContain('BrowserWindow.getAllWindows()[0]');
