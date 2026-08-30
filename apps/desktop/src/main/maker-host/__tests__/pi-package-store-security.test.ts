@@ -2916,6 +2916,64 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  it('converges a peer-only runtime edge after recovery from a null legacy baseline', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+
+    let runtimeReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (runtimeReadBlocked && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        throw Object.assign(new Error('runtime token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const { invalidateLocalPiPackageRuntimesForObservedChange } = await import(
+      '../pi-package-runtime-invalidation.js'
+    );
+    const originListener = vi.fn();
+    const closeSessionIfCurrent = vi.fn(async () => undefined);
+    const localPi = { id: 'local-pi-null-baseline', agentKind: 'pi' };
+    const maker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
+      listActiveSessions: vi.fn(() => [localPi]),
+      getSessionMeta: vi.fn(async () => ({ remoteHostId: null, reviewMode: false })),
+      closeSessionIfCurrent,
+    };
+    const unsubscribe = store.onPiPackagesChanged((origin) => {
+      originListener(origin);
+      void invalidateLocalPiPackageRuntimesForObservedChange(maker as never, origin);
+    });
+    try {
+      await vi.waitFor(() => expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+      ));
+
+      // Legacy is absent, so its successful read established a valid null
+      // recovery baseline before another Main publishes only the runtime edge.
+      await fs.writeFile(runtimeToken, 'runtime:peer-only-after-null\n');
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:peer-only-after-null\n');
+
+      await vi.waitFor(() => expect(originListener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
+        localPi,
+        'requested',
+      ));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(originListener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+      expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
   it('does not invent a runtime edge when recovery has only a view-style legacy baseline', async () => {
     const tokenDir = path.join(runtime.userData, 'pi-package-home');
     const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');

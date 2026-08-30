@@ -91,7 +91,8 @@ const packageMutationMayHaveChangedErrors = new WeakSet<object>();
 let changeTokenWatcherActive = false;
 let lastObservedRuntimeChangeToken: string | null | undefined;
 let runtimeChangeTokenReadFailedBeforeBaseline = false;
-let runtimeRecoveryLegacyBaseline: string | undefined;
+let runtimeRecoveryLegacyBaseline: string | null = null;
+let runtimeRecoveryLegacyBaselineInitialized = false;
 let lastObservedLegacyChangeToken: string | null | undefined;
 let lastObservedViewChangeToken: string | null | undefined;
 let lastNotifiedRuntimeChangeToken: string | null | undefined;
@@ -203,10 +204,11 @@ function observePiPackageChangeToken(): Promise<void> {
         // legacy baseline lets us distinguish a peer runtime edge from the
         // token that this Main had already observed.
         runtimeChanged = runtimeChangeTokenReadFailedBeforeBaseline
-          && runtimeRecoveryLegacyBaseline !== undefined
+          && runtimeRecoveryLegacyBaselineInitialized
           && runtimeToken !== runtimeRecoveryLegacyBaseline;
         runtimeChangeTokenReadFailedBeforeBaseline = false;
-        runtimeRecoveryLegacyBaseline = undefined;
+        runtimeRecoveryLegacyBaseline = null;
+        runtimeRecoveryLegacyBaselineInitialized = false;
         lastObservedRuntimeChangeToken = runtimeToken;
         if (!runtimeChanged && lastNotifiedRuntimeChangeToken === undefined) {
           lastNotifiedRuntimeChangeToken = runtimeToken;
@@ -231,14 +233,17 @@ function observePiPackageChangeToken(): Promise<void> {
     if (runtimeResult.status === 'rejected'
       && runtimeObservationCurrent
       && lastObservedRuntimeChangeToken === undefined
-      && runtimeRecoveryLegacyBaseline === undefined
+      && !runtimeRecoveryLegacyBaselineInitialized
       && !legacyChanged
-      && lastObservedLegacyChangeToken
-      && !lastObservedLegacyChangeToken.startsWith('view:')) {
+      && lastObservedLegacyChangeToken !== undefined
+      && (lastObservedLegacyChangeToken === null
+        || !lastObservedLegacyChangeToken.startsWith('view:'))) {
       // Freeze the first trustworthy runtime-style legacy observation available
-      // during the outage. Later legacy edges converge independently and must
+      // during the outage. A missing legacy token is a valid null baseline, not
+      // an uninitialized one. Later legacy edges converge independently and must
       // not move this recovery comparison point.
       runtimeRecoveryLegacyBaseline = lastObservedLegacyChangeToken;
+      runtimeRecoveryLegacyBaselineInitialized = true;
     }
     if (viewResult.status === 'fulfilled' && viewObservationCurrent) {
       viewToken = viewResult.value;
