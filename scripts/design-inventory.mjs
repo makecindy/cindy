@@ -178,26 +178,40 @@ if (danglingExtraStyleRoots.length > 0) {
 }
 
 // renderer 模块图入口守卫：index.tsx 的查询参数决定加载哪个 entry 模块，与 view
-// 分支同构——新增查询参数入口而 catalog 未登记 surface 时必须失败。
+// 分支同构——新增查询参数入口而 catalog 未登记 surface 时必须失败。此外还核对
+// 「参数 → 入口模块」映射：参数保留但分支改加载别的入口（换窗口实现）时，
+// catalog 的 productionEntry / styleRoots 仍指向旧窗口，这里必须失败。
 {
   const actualEntries = extractRendererEntries(fs.readFileSync(RENDERER_INDEX_PATH, 'utf8'));
-  const coveredEntries = new Set(catalog.flatMap((surface) => surface.rendererEntries ?? []));
-  const unmappedEntries = actualEntries.filter((entry) => !coveredEntries.has(entry));
-  const staleEntries = [...coveredEntries].filter((entry) => !actualEntries.includes(entry));
-  if (unmappedEntries.length > 0 || staleEntries.length > 0) {
-    const lines = [];
-    if (unmappedEntries.length > 0) {
-      lines.push('  renderer/index.tsx 有模块图入口未映射到 surface：');
-      for (const entry of unmappedEntries) lines.push(`  - ${entry}`);
+  const coveredEntries = new Map(
+    catalog.flatMap((surface) =>
+      Object.entries(surface.rendererEntryModules ?? {}).map(([param, module]) => [
+        param,
+        { module, surfaceId: surface.id },
+      ]),
+    ),
+  );
+  const lines = [];
+  for (const [param, module] of actualEntries) {
+    const covered = coveredEntries.get(param);
+    if (!covered) {
+      lines.push(`  - 参数 ${param} 加载 ${module}，但 catalog 未登记 rendererEntryModules`);
+    } else if (covered.module !== module) {
+      lines.push(
+        `  - 参数 ${param} 实际加载 ${module}，catalog 登记 ${covered.module}（surface ${covered.surfaceId}）`,
+      );
     }
-    if (staleEntries.length > 0) {
-      lines.push('  catalog 登记的模块图入口已不在 renderer/index.tsx 中：');
-      for (const entry of staleEntries) lines.push(`  - ${entry}`);
+  }
+  for (const [param, covered] of coveredEntries) {
+    if (!actualEntries.has(param)) {
+      lines.push(`  - catalog 登记的参数 ${param} 已不在 renderer/index.tsx 中（surface ${covered.surfaceId}）`);
     }
+  }
+  if (lines.length > 0) {
     console.error(
-      '[design-inventory] ❌ renderer 模块图入口覆盖不完整：\n' +
+      '[design-inventory] ❌ renderer 模块图入口映射不一致：\n' +
         lines.join('\n') +
-        '\n  请同步更新 catalogSurfaces() 对应 surface 的 rendererEntries。',
+        '\n  请同步更新 catalogSurfaces() 对应 surface 的 rendererEntryModules。',
     );
     process.exit(1);
   }

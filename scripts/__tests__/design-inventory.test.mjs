@@ -694,6 +694,41 @@ test('主窗口壳纳入全局基础样式 globals.css', () => {
   assert.ok(generated.bareColors > 3, `globals.css 并入后裸色应高于 3(实际 ${generated.bareColors})`);
 });
 
+test('独立窗口 surface 纳入各自 entry 导入的 globals.css', () => {
+  // resource-usage-entry.tsx:9 / sidebar-window-entry.tsx:19 /
+  // ghost-panel-window-entry.tsx:21 都直接导入 globals.css,body/#root 基础
+  // 样式与窗口专用规则在这些窗口实际生效。
+  const globalsPath = 'apps/desktop/src/renderer/styles/globals.css';
+  const catalog = catalogSurfaces();
+  for (const surfaceId of [
+    'desktop.window.resource-usage',
+    'desktop.window.sidebar',
+    'desktop.window.ghost-panel',
+  ]) {
+    const surface = catalog.find((entry) => entry.id === surfaceId);
+    assert.ok(surface, surfaceId);
+    assert.ok(
+      surface.styleRoots.includes(globalsPath),
+      `${surfaceId} 必须登记 globals.css`,
+    );
+  }
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  for (const surfaceId of [
+    'desktop.window.resource-usage',
+    'desktop.window.sidebar',
+    'desktop.window.ghost-panel',
+  ]) {
+    const generated = surfaces.find((entry) => entry.id === surfaceId);
+    assert.ok(
+      generated.styleSources.some((file) => file.endsWith('styles/globals.css')),
+      `${surfaceId} 统计必须含 globals.css`,
+    );
+    // 三个窗口此前只报 4 tokens / 2 bare colors——并入全局样式后基线显著上调。
+    assert.ok(generated.tokenCount > 4, `${surfaceId} token 应高于 4(实际 ${generated.tokenCount})`);
+    assert.ok(generated.bareColors > 2, `${surfaceId} 裸色应高于 2(实际 ${generated.bareColors})`);
+  }
+});
+
 test('裸圆角统计覆盖 React style 对象的 camelCase borderRadius', () => {
   // 与 BARE_RADIUS_RE 同口径的行为级断言:经 scanStyleStats 出来的统计必须数到
   // style 对象声明。用真实文件钉死:LoginCaptchaOverlay.tsx 的 borderRadius: 18。
@@ -707,30 +742,56 @@ test('裸圆角统计覆盖 React style 对象的 camelCase borderRadius', () =>
   assert.ok(session.bareRadii > 408, `ImageLightbox 内联圆角应计入(实际 ${session.bareRadii})`);
 });
 
-test('renderer 模块图入口双向核对: index.tsx 的查询参数入口必须全部映射', () => {
+test('renderer 模块图入口双向核对: index.tsx 的参数→入口模块映射必须与 catalog 一致', () => {
   const actualEntries = extractRendererEntries(fs.readFileSync(RENDERER_INDEX_PATH, 'utf8'));
-  // 与源码实况钉死:当前 3 个模块图入口参数。
-  assert.deepEqual(actualEntries, ['ghostPanelWindow', 'resourceUsageWindow', 'sidebarWindow']);
-  const covered = new Set(catalogSurfaces().flatMap((surface) => surface.rendererEntries ?? []));
-  const unmapped = actualEntries.filter((entry) => !covered.has(entry));
-  assert.deepEqual(unmapped, [], `未映射模块图入口: ${unmapped.join(', ')}`);
-  const stale = [...covered].filter((entry) => !actualEntries.includes(entry));
-  assert.deepEqual(stale, [], `已失效模块图入口登记: ${stale.join(', ')}`);
+  // 与源码实况钉死:当前 3 个参数各自加载的入口模块。
+  assert.deepEqual(Object.fromEntries(actualEntries), {
+    resourceUsageWindow: './resource-usage-entry',
+    sidebarWindow: './sidebar-window-entry',
+    ghostPanelWindow: './ghost-panel-window-entry',
+  });
+  const covered = new Map(
+    catalogSurfaces().flatMap((surface) =>
+      Object.entries(surface.rendererEntryModules ?? {}),
+    ),
+  );
+  for (const [param, module] of actualEntries) {
+    assert.ok(covered.has(param), `未映射模块图入口: ${param}`);
+    assert.equal(covered.get(param), module, `参数 ${param} 的入口模块不一致`);
+  }
+  for (const [param] of covered) {
+    assert.ok(actualEntries.has(param), `已失效模块图入口登记: ${param}`);
+  }
 });
 
-test('extractRendererEntries: 新增查询参数入口会被发现(fixture)', () => {
-  const fixture = `
+test('extractRendererEntries: 参数保留但分支换入口模块会被发现(fixture)', () => {
+  // 这正是「只核参数名」防不住的场景:参数不动,窗口实现换成新入口。
+  const swapped = `
     const urlParams = new URLSearchParams(window.location.search);
-    const isNewWindow = urlParams.get('brandNewWindow') === '1';
-    void (isNewWindow ? import('./brand-new-entry') : import('./main-entry'));
+    const isSidebarWindow = urlParams.get('sidebarWindow') === '1';
+    void (isSidebarWindow
+      ? import('./brand-new-window-entry')
+      : import('./main-entry')
+    );
   `;
-  assert.deepEqual(extractRendererEntries(fixture), ['brandNewWindow']);
-  // 注释里的 urlParams.get 不算。
+  assert.deepEqual(Object.fromEntries(extractRendererEntries(swapped)), {
+    sidebarWindow: './brand-new-window-entry',
+  });
+  // 新增参数入口。
+  const added = `
+    const urlParams = new URLSearchParams(window.location.search);
+    const isNew = urlParams.get('brandNewWindow') === '1';
+    void (isNew ? import('./brand-new-entry') : import('./main-entry'));
+  `;
+  assert.deepEqual(Object.fromEntries(extractRendererEntries(added)), {
+    brandNewWindow: './brand-new-entry',
+  });
+  // 注释里的 urlParams.get 不算（无 import 分支时映射为空）。
   const withComment = `
     // urlParams.get('retired-window') 已退役
     const isX = urlParams.get('live-window') === '1';
   `;
-  assert.deepEqual(extractRendererEntries(withComment), ['live-window']);
+  assert.deepEqual(Object.fromEntries(extractRendererEntries(withComment)), {});
 });
 
 test('extraStyleRoots 失效引用会被报告,不静默展开为空', () => {

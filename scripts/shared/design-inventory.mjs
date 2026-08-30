@@ -334,15 +334,24 @@ export function extractViewEntries(mainEntrySource) {
 /**
  * 从 renderer/index.tsx 抽出模块图分发入口：`urlParams.get('<param>')` 条件决定
  * 加载哪个 entry 模块（resource-usage / sidebar-window / ghost-panel / main）。
- * 与 view 分支同构的守卫：catalog 的 rendererEntries 必须双向核对，index.tsx
- * 新增查询参数入口而未登记 surface 时 --check 失败。
+ * 返回「参数名 → 入口模块」映射——只核参数名不够：参数保留但分支改加载别的入口
+ * 时（换窗口实现），catalog 的 productionEntry / styleRoots 仍指向旧窗口，
+ * --check 却照样通过。映射核对与路由组件核对同构。
  */
 export function extractRendererEntries(indexSource) {
   const source = stripJsComments(indexSource);
-  const params = [
-    ...source.matchAll(/urlParams\.get\('([^']+)'\)/g),
-  ].map((match) => match[1]);
-  return uniqueSorted(params);
+  // 分发是嵌套三元链：参数条件先集中声明，import 分支按链序展开
+  // `param1 ? import(a) : param2 ? import(b) : ... : import(main)`。
+  // 从后往前配对：非 fallback 的 import 与最近的未消费参数按序对应（链序一致），
+  // 最末的 main 入口是 fallback、无参数，自然不参与映射。
+  const params = [...source.matchAll(/urlParams\.get\('([^']+)'\)/g)].map((m) => m[1]);
+  const imports = [...source.matchAll(/import\('([^']+)'\)/g)].map((m) => m[1]);
+  const mappings = new Map();
+  const conditionalImports = imports.slice(0, params.length);
+  conditionalImports.forEach((entryModule, index) => {
+    if (params[index]) mappings.set(params[index], entryModule);
+  });
+  return mappings;
 }
 
 /**
@@ -623,9 +632,12 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/sidebar-window-entry.tsx',
         'apps/desktop/src/renderer/components/layout/SidebarWindowLayout.tsx',
         'apps/desktop/src/main/right-sidebar-window',
+        // sidebar-window-entry.tsx 直接导入 globals.css，body/#root 基础样式与
+        // 窗口专用规则在该窗口实际生效——独立窗口与主窗口共享同一全局样式源。
+        'apps/desktop/src/renderer/styles/globals.css',
       ],
       routerPaths: ['/sidebar-window'],
-      rendererEntries: ['sidebarWindow'],
+      rendererEntryModules: { sidebarWindow: './sidebar-window-entry' },
       routeComponents: ['SidebarWindowLayout'],
     },
     {
@@ -639,9 +651,11 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/ghost-panel-window-entry.tsx',
         'apps/desktop/src/renderer/components/layout/GhostPanelWindowLayout.tsx',
         'apps/desktop/src/main/ghost-panel-window',
+        // ghost-panel-window-entry.tsx 直接导入 globals.css（同侧栏窗理由）。
+        'apps/desktop/src/renderer/styles/globals.css',
       ],
       routerPaths: ['/ghost-panel-window'],
-      rendererEntries: ['ghostPanelWindow'],
+      rendererEntryModules: { ghostPanelWindow: './ghost-panel-window-entry' },
       routeComponents: ['GhostPanelWindowLayout'],
     },
     {
@@ -655,9 +669,11 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/resource-usage-entry.tsx',
         'apps/desktop/src/renderer/components/resource-usage',
         'apps/desktop/src/main/resource-usage-window',
+        // resource-usage-entry.tsx 直接导入 globals.css（同侧栏窗理由）。
+        'apps/desktop/src/renderer/styles/globals.css',
       ],
       routerPaths: [],
-      rendererEntries: ['resourceUsageWindow'],
+      rendererEntryModules: { resourceUsageWindow: './resource-usage-entry' },
     },
     {
       id: 'desktop.window.voice-overlay',
