@@ -108,6 +108,10 @@ describe('Pi managed package Main authorization', () => {
     expect(makerHostSource).toContain(
       'invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot)',
     );
+    expect(makerHostSource).toContain("runtimeConvergence: 'partial' as const");
+    expect(makerHostSource).toContain("recoveryAction: 'restart-cindy-to-refresh-packages' as const");
+    expect(makerHostSource).toContain("runtimeConvergence: 'complete' as const");
+    expect(makerHostSource).not.toContain('failed to retire ${invalidation.failedSessionIds.length}');
   });
 
   it('keeps the exact action and source bound to the one-shot grant', async () => {

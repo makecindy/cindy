@@ -707,6 +707,56 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it('keeps approved tool success and publishes bounded restart recovery on convergence failure', async () => {
+    const deps = buildDeps();
+    const warn = vi.fn();
+    deps.logger = { ...noopLogger, warn };
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: { source: 'npm:context-mode', enabled: true },
+    }));
+    deps.onPiManagedPackageMutationSettled = vi.fn(async () => {
+      throw new Error('/Users/private/session close failed with secret');
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-tool-partial-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    try {
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({ kind: 'permission', behavior: 'allow' })) as never,
+      );
+      fireManagedPackageRequest('pkg-partial', 'install', 'npm:context-mode');
+      const response = await waitForResponse('pkg-partial');
+      expect(JSON.parse(String(response.value))).toMatchObject({
+        ok: true,
+        result: { changed: true, affectedPackage: { enabled: true } },
+      });
+      await vi.waitFor(() => expect(events.some((event) => (
+        event.type === 'text'
+        && String((event.data as { text?: string }).text).includes('"runtimeConvergence":"partial"')
+      ))).toBe(true));
+      const published = JSON.stringify({ response, events, warnings: warn.mock.calls });
+      expect(published).toContain('restart-cindy-to-refresh-packages');
+      expect(published).not.toContain('/Users/private');
+      expect(published).not.toContain('secret');
+      expect(warn).toHaveBeenCalledWith(
+        'Pi package runtime invalidation incomplete after receipt',
+        {
+          failureCategory: 'runtime-convergence-partial',
+          recoveryAction: 'restart-cindy-to-refresh-packages',
+        },
+      );
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each([
     [
       'credentials',
@@ -1434,7 +1484,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
     }));
     const deps = buildDeps();
-    const onPiManagedPackageMutationSettled = vi.fn(async () => undefined);
+    const onPiManagedPackageMutationSettled = vi.fn(async () => ({
+      runtimeConvergence: 'complete' as const,
+    }));
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
     deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
     const handle = await new PiAgent(deps).startSession({
@@ -1458,13 +1510,53 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt?.message).toContain('"compatibility":"partial"');
       expect(prompt?.message).toContain('"status-display"');
       expect(prompt?.message).toContain('installed and enabled');
-      expect(prompt?.message).toContain('stopping active local Pi tasks including this task');
+      expect(prompt?.message).toContain('requested active local Pi tasks including this task to stop');
+      expect(prompt?.message).toContain('do not claim every task has already stopped');
       expect(prompt?.message).toContain('available after starting a new Pi task');
       expect(prompt?.message).not.toContain('keeps its startup snapshot');
       expect(prompt?.message).toContain('Do not enumerate non-blocking compatibility notices');
       expect(prompt?.message).not.toContain('Settings > General');
       expect(prompt?.message).toContain('Do not run bash');
       await vi.waitFor(() => expect(onPiManagedPackageMutationSettled).toHaveBeenCalledOnce());
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('keeps direct native success while publishing partial runtime convergence recovery', async () => {
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: { source: 'npm:context-mode', enabled: true },
+    }));
+    deps.onPiManagedPackageMutationSettled = vi.fn(async () => ({
+      runtimeConvergence: 'partial' as const,
+      recoveryAction: 'restart-cindy-to-refresh-packages' as const,
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-command-partial-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    try {
+      captured.requests = [];
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
+      const prompt = captured.requests.find((request) => request.type === 'prompt')?.message ?? '';
+      expect(prompt).toContain('"ok":true');
+      expect(prompt).toContain('do not claim every task has already stopped');
+      expect(prompt).toContain('this task remains active');
+      expect(prompt).toContain('restart Cindy to finish refreshing Pi packages');
+      await vi.waitFor(() => expect(events.some((event) => (
+        event.type === 'text'
+        && String((event.data as { text?: string }).text).includes('"runtimeConvergence":"partial"')
+      ))).toBe(true));
     } finally {
       await handle.close();
     }

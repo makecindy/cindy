@@ -1872,13 +1872,19 @@ export function getMaker(): Maker {
       onPiManagedPackageMutationSettled: async () => {
         const maker = _maker;
         const snapshot = pendingPiPackageRuntimeSnapshots.shift();
-        if (!maker || !snapshot) return;
-        const invalidation = await invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot);
-        if (invalidation.failedSessionIds.length > 0) {
-          throw new Error(
-            `failed to retire ${invalidation.failedSessionIds.length} local Pi runtime(s)`,
-          );
+        if (!maker || !snapshot) {
+          return {
+            runtimeConvergence: 'partial' as const,
+            recoveryAction: 'restart-cindy-to-refresh-packages' as const,
+          };
         }
+        const invalidation = await invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot);
+        return invalidation.failedSessionIds.length > 0
+          ? {
+              runtimeConvergence: 'partial' as const,
+              recoveryAction: 'restart-cindy-to-refresh-packages' as const,
+            }
+          : { runtimeConvergence: 'complete' as const };
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。

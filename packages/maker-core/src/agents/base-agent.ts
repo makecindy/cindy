@@ -502,6 +502,11 @@ export interface PiExtensionUiStrings {
   mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
 }
 
+export interface PiManagedPackageRuntimeConvergence {
+  runtimeConvergence: 'complete' | 'partial';
+  recoveryAction?: 'restart-cindy-to-refresh-packages';
+}
+
 export interface PiSubagentRunnerProcess {
   readonly pid?: number;
   readonly killed: boolean;
@@ -598,11 +603,11 @@ export interface AgentDeps {
   mutatePiManagedPackage?: (request: PiManagedPackageMutationRequest) => Promise<unknown>;
 
   /**
-   * Pi-only: best-effort host callback after a package mutation receipt has
-   * been queued/sent. Desktop uses it to retire every stale local ordinary Pi
-   * runtime without rewriting an already committed native mutation result.
+   * Pi-only: host callback after a package mutation receipt has been queued/sent.
+   * Desktop retires stale local ordinary Pi runtimes and returns only a bounded
+   * convergence outcome; native package success remains authoritative.
    */
-  onPiManagedPackageMutationSettled?: () => Promise<void>;
+  onPiManagedPackageMutationSettled?: () => Promise<PiManagedPackageRuntimeConvergence | void>;
 
   /**
    * Pi-only: host-localized copy for extension dialogs and deterministic
