@@ -11,9 +11,8 @@ describe('dev OAuth write recovery guidance', () => {
     await i18n.changeLanguage(locale);
     const message = i18n.t('chatgptAuthRecovery.devWriteBlocked');
 
-    expect(message).toContain(
-      'pnpm restart:desktop:remote -- --isolated-auth --isolated[=<name>]',
-    );
+    expect(message).toContain('pnpm restart:desktop:remote -- --isolated-auth --isolated');
+    expect(message).not.toContain('--isolated[');
     expect(message).not.toContain('XDT_ALLOW_DEV_OAUTH_WRITE');
   });
 });
