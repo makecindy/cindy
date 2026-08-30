@@ -5,6 +5,7 @@ import type { AgentKind, Maker, OneShotOptions } from '@cindy/maker-core';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { createLogger } from '../logger.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { isAgentOneShotRouteDisabled } from '../maker-host/model-route-guard-live.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
@@ -75,6 +76,19 @@ type HelpOneShotTarget = {
   options: OneShotOptions;
 };
 
+/**
+ * Help routing is owner-bound even though it is best-effort. Do not dispatch a
+ * prompt after the account/session boundary moved while credentials or the
+ * auxiliary chain were being resolved.
+ */
+function isHelpOwnerScopeCurrent(scopeKey: string): boolean {
+  try {
+    return !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scopeKey;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeLocale(locale: unknown): HelpLocale {
   return locale === 'zh-CN' || locale === 'zh-TW' || locale === 'en' || locale === 'ja' || locale === 'ko'
     ? locale
@@ -121,6 +135,7 @@ async function routeHelpTopics(
   maker: Maker,
   target: HelpOneShotTarget,
   history: HelpMessage[],
+  ownerScopeKey: string,
 ): Promise<string[]> {
   if (HELP_KNOWLEDGE.length === 0) return [];
   try {
@@ -132,21 +147,26 @@ async function routeHelpTopics(
     const utility = await requestUtilityText(maker, prompt, {
       maxTokens: 30,
       timeoutMs: 12_000,
+      beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey),
     });
+    if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return [];
     let raw = utility.ok ? utility.text : '';
     // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
     if (
       !raw &&
       !auxiliaryModelCustomized &&
       target.agentKind &&
+      isHelpOwnerScopeCurrent(ownerScopeKey) &&
       !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
     ) {
+      if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return [];
       raw = await maker.oneShot(target.agentKind, prompt, {
         ...target.options,
         maxTokens: 30,
         timeoutMs: 12_000,
       });
     }
+    if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return [];
     return parseRouterOutput(raw, KNOWN_DOC_IDS);
   } catch (err) {
     // Routing is best-effort; on failure fall back to summary-only grounding.
@@ -328,11 +348,14 @@ export function registerMakerHelpIpc(maker: Maker): void {
       if (!isValidHistory(req.messages)) return { kind: 'no-answer' };
       const locale = normalizeLocale(req.locale);
       try {
+        // Capture before any async agent/DB/model work. Both utility requests
+        // in this help turn must remain tied to the same owner scope.
+        const ownerScopeKey = activeOwnerScopeKey();
         const preferredAgent = await getMostRecentSessionAgent();
         const target = await pickHelpOneShotTarget(maker, preferredAgent);
         const history = truncateHelpHistory(req.messages);
         // Stage 1: route to relevant KB docs (cheap, index-only).
-        const routedIds = await routeHelpTopics(maker, target, history);
+        const routedIds = await routeHelpTopics(maker, target, history, ownerScopeKey);
         const docs = HELP_KNOWLEDGE.filter((d) => routedIds.includes(d.id));
         // Stage 2: answer grounded in the routed docs (or summaries on miss).
         const prompt = buildHelpPrompt(history, locale, target.agentKind, docs);
@@ -341,17 +364,22 @@ export function registerMakerHelpIpc(maker: Maker): void {
         const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
         const utility = await requestUtilityText(maker, prompt, {
           ...target.options,
+          beforeDispatch: async () => isHelpOwnerScopeCurrent(ownerScopeKey),
         });
+        if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return { kind: 'no-answer' };
         let raw = utility.ok ? utility.text : '';
         // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
         if (
           !raw &&
           !auxiliaryModelCustomized &&
           target.agentKind &&
+          isHelpOwnerScopeCurrent(ownerScopeKey) &&
           !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
         ) {
+          if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return { kind: 'no-answer' };
           raw = await maker.oneShot(target.agentKind, prompt, target.options);
         }
+        if (!isHelpOwnerScopeCurrent(ownerScopeKey)) return { kind: 'no-answer' };
         if (utility.ok) {
           log.debug('help ask used utility model', {
             provider: utility.providerId,

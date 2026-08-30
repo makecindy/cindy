@@ -91,7 +91,12 @@ export function AuxiliaryModelSection() {
   // Keep the default/override split intact: first-time Custom is only a draft.
   // Local and signed-out sessions cannot use Cindy AI routes, so do not seed
   // those unavailable catalog pins into a draft that the user cannot select.
-  const automaticDraftModels = authMode === 'cloud' ? [...AUTO_AUXILIARY_MODEL_CHAIN] : [];
+  const automaticDraftModels =
+    authMode === 'cloud'
+      ? AUTO_AUXILIARY_MODEL_CHAIN.filter((ref) =>
+          options.some((option) => option.id === ref && option.available),
+        )
+      : [];
   const activeModels = customized ? models : drafting ? automaticDraftModels : [];
   const automaticChain = AUTO_AUXILIARY_MODEL_CHAIN_I18N_KEYS.map((key) =>
     t(`settings.auxiliaryModels.chain.${key}`),

@@ -14,11 +14,16 @@ describe('custom auxiliary chain does not hit the session agent', () => {
     ).toBe(2);
     expect(source).toContain('!auxiliaryModelCustomized');
     expect(source.match(/maker\.oneShot/g)?.length).toBeGreaterThan(0);
+    expect(source).toContain('const ownerScopeKey = activeOwnerScopeKey();');
+    expect(source.match(/beforeDispatch: async \(\) => isHelpOwnerScopeCurrent\(ownerScopeKey\)/g)?.length).toBe(2);
   });
 
   it('pinned-card summaries skip agent oneShot when the auxiliary list is customized', () => {
     const source = readFileSync(path.join(root, 'sessionTaskSummary.ts'), 'utf8');
     expect(source).toContain('const auxiliaryModelCustomized = isAuxiliaryModelCustomized();');
-    expect(source).toMatch(/auxiliaryModelCustomized[\s\S]{0,180}\.oneShot/);
+    expect(source).toContain('auxiliaryModelCustomized ||');
+    expect(source).toContain('await getMaker().oneShot');
+    expect(source).toContain('const ownerScopeKey = activeOwnerScopeKey();');
+    expect(source).toContain('beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey)');
   });
 });

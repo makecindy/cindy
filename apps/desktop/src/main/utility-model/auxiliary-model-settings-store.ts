@@ -217,14 +217,25 @@ let pendingLegacyMigration: Promise<void> | null = null;
 
 function scheduleLegacyMigration(): void {
   if (pendingLegacyMigration) return;
-  pendingLegacyMigration = store.updateAtomic(() => {
-    // Re-read under the same lock immediately before writing. A concurrent
-    // settings save wins; stale migration data is never written over it.
-    const currentPlan = readLegacyMigrationPlan();
-    if (!currentPlan) return {};
-    if (currentPlan.markVoiceMigrationComplete) markLegacyVoiceMigrationComplete();
-    return { models: currentPlan.models };
-  }).then(() => undefined).catch((error) => {
+  const ownerScopeKey = activeOwnerScopeKey();
+  pendingLegacyMigration = (async () => {
+    let markVoiceMigrationComplete = false;
+    await store.updateAtomic(() => {
+      // Re-read under the same lock immediately before writing. A concurrent
+      // settings save wins; stale migration data is never written over it.
+      const currentPlan = readLegacyMigrationPlan();
+      if (!currentPlan) return {};
+      markVoiceMigrationComplete = currentPlan.markVoiceMigrationComplete;
+      return { models: currentPlan.models };
+    });
+    // The marker is deliberately written after the target settings file has
+    // committed. If this process exits before this point, the persisted
+    // `models` array makes the migration idempotent and retry-safe. Never
+    // write the marker into a different owner after a session switch.
+    if (markVoiceMigrationComplete && activeOwnerScopeKey() === ownerScopeKey) {
+      markLegacyVoiceMigrationComplete();
+    }
+  })().catch((error) => {
     log.warn('legacy auxiliary model migration failed', {
       error: error instanceof Error ? error.message : String(error),
     });

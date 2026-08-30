@@ -7,6 +7,7 @@ import type {
   AuxiliaryModelOption,
   AuxiliaryModelSettingsState,
 } from '../../../../shared/auxiliaryModelSettings';
+import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../../shared/auxiliaryModelChain';
 
 const PREFERRED_PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
 const FALLBACK_PIN = 'cat:anthropic:claude-code:claude-haiku-4-5';
@@ -105,7 +106,7 @@ function state(partial: Partial<AuxiliaryModelSettingsState> = {}): AuxiliaryMod
   };
 }
 
-const OPTIONS: AuxiliaryModelOption[] = [
+const SUPPLIER_OPTIONS: AuxiliaryModelOption[] = [
   {
     id: PREFERRED_PIN,
     label: 'GPT-5 mini · OpenRouter',
@@ -133,6 +134,24 @@ const OPTIONS: AuxiliaryModelOption[] = [
     available: true,
   },
 ];
+
+const AUTOMATIC_OPTIONS: AuxiliaryModelOption[] = AUTO_AUXILIARY_MODEL_CHAIN.map(
+  (id, index) => ({
+    id,
+    label: ['DeepSeek V4 Flash', 'Hy3', 'Qwen3.8 Flash'][index]! + ' · Cindy AI',
+    group: 'Cindy AI',
+    providerId: 'xd',
+    agentKind: 'codex',
+    modelId: ['deepseek/deepseek-v4-flash', 'tencent/hy3', 'qwen/qwen3.8-flash'][index]!,
+    modelName: ['DeepSeek V4 Flash', 'Hy3', 'Qwen3.8 Flash'][index]!,
+    budget: false,
+    subscription: false,
+    agentSuffix: 'Codex',
+    available: true,
+  }),
+);
+
+const OPTIONS: AuxiliaryModelOption[] = [...AUTOMATIC_OPTIONS, ...SUPPLIER_OPTIONS];
 
 function installApi(): void {
   Object.defineProperty(window, 'electronAPI', {
@@ -234,7 +253,33 @@ describe('AuxiliaryModelSection', () => {
     expect(screen.getAllByText('settings.auxiliaryModels.customize')).toHaveLength(1);
     expect(
       screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:panel').textContent,
-    ).toBe('true:OpenRouter,Anthropic');
+    ).toBe('true:Cindy AI,Cindy AI,Cindy AI,OpenRouter,Anthropic');
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('filters unavailable automatic routes from a first-time custom draft', async () => {
+    h.get.mockResolvedValue(
+      state({
+        options: OPTIONS.map((option) =>
+          option.id === AUTO_AUXILIARY_MODEL_CHAIN[0]
+            ? { ...option, available: false }
+            : option,
+        ),
+      }),
+    );
+    render(<AuxiliaryModelSection />);
+
+    await selectMode('settings.auxiliaryModels.customize');
+
+    expect(screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:value').textContent).toBe(
+      AUTO_AUXILIARY_MODEL_CHAIN[1],
+    );
+    expect(screen.getByTestId('settings.auxiliaryModels.fallback1.ariaLabel:value').textContent).toBe(
+      AUTO_AUXILIARY_MODEL_CHAIN[2],
+    );
+    expect(screen.getByTestId('settings.auxiliaryModels.fallback2.ariaLabel:value').textContent).toBe(
+      'empty',
+    );
     expect(h.set).not.toHaveBeenCalled();
   });
 
@@ -287,7 +332,7 @@ describe('AuxiliaryModelSection', () => {
         models: [PREFERRED_PIN],
         isCustomized: true,
         customizedKeys: ['models'],
-        options: OPTIONS,
+        options: SUPPLIER_OPTIONS,
       }),
     );
     render(<AuxiliaryModelSection />);
