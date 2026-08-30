@@ -1050,8 +1050,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (!existsSync(systemAuth)) return;
 
     const topology = await inspectCodexAuthLink(systemAuth, myAuth);
-    if (topology.healthy && !this.sharedCredentialFingerprint) {
-      this.sharedCredentialFingerprint = currentCodexAuthFileFingerprint(systemAuth);
+    if (topology.healthy) {
+      this.sharedCredentialFingerprint =
+        currentCodexAuthFileFingerprint(systemAuth) ?? this.sharedCredentialFingerprint;
     }
     if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
       this.lastKnownCodexCredentialScope = 'system-shared';
@@ -1093,7 +1094,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     switch (kind) {
       case 'linked':
         this.lastKnownCodexCredentialScope = 'system-shared';
-        this.sharedCredentialFingerprint ??= currentCodexAuthFileFingerprint(systemAuth);
+        this.sharedCredentialFingerprint =
+          currentCodexAuthFileFingerprint(systemAuth) ?? this.sharedCredentialFingerprint;
         log.info('codex auth.json linked with ~/.codex (shared)', { linkType });
         break;
       case 'link-unsupported':
