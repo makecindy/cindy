@@ -2915,6 +2915,14 @@ function propagateFirstRejectedUsageWrite(results: PromiseSettledResult<unknown>
   if (failed) throw failed.reason;
 }
 
+async function awaitBothSpendWrites(
+  turnSpendWrite: Promise<unknown>,
+  sessionSpendWrite: Promise<unknown>,
+): Promise<void> {
+  const results = await Promise.allSettled([turnSpendWrite, sessionSpendWrite]);
+  propagateFirstRejectedUsageWrite(results);
+}
+
 function recordReservedStaleClaudeDoneUsage(
   sessionId: string,
   event: AgentEvent,
@@ -3105,10 +3113,10 @@ function recordReservedStaleClaudeDoneUsage(
         );
         writes.push(
           (async () => {
-            await Promise.all([
+            await awaitBothSpendWrites(
               recordTurnSpend(turnMoney, undefined, { throwOnError: true }),
               recordSessionTurnSpend(sessionId, turnMoney, { throwOnError: true }),
-            ]);
+            );
             const changedScheduleId = await recordSchedulerTurnCost({
               sessionId,
               clientId: assistantPersistId,
@@ -3178,10 +3186,10 @@ function recordReservedStaleClaudeDoneUsage(
       if (rawDelta > 0 && state.billingRoute === 'provider-api') {
         const ledgerCurrency = (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
         const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
-        await Promise.all([
+        await awaitBothSpendWrites(
           recordTurnSpend(money, undefined, { throwOnError: true }),
           recordSessionTurnSpend(sessionId, money, { throwOnError: true }),
-        ]);
+        );
         const changedScheduleId = await recordSchedulerTurnCost({
           sessionId,
           clientId: assistantPersistId,
@@ -6008,10 +6016,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 claudeGenerationDurationMs,
                 claudeTurnDurationMs,
               );
-              await Promise.all([
+              await awaitBothSpendWrites(
                 recordTurnSpend(turnMoney, undefined, { throwOnError: true }),
                 recordSessionTurnSpend(session.id, turnMoney, { throwOnError: true }),
-              ]);
+              );
               // per-message 维度优先挂 assistant；纯 tool turn 则按 scheduler runId 直接归因。
               const changedScheduleId = await recordSchedulerTurnCost({
                 sessionId: session.id,
@@ -6139,10 +6147,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             }
             const ledgerCurrency = (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
             const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
-            await Promise.all([
+            await awaitBothSpendWrites(
               recordTurnSpend(money, undefined, { throwOnError: true }),
               recordSessionTurnSpend(session.id, money, { throwOnError: true }),
-            ]);
+            );
             const changedScheduleId = await recordSchedulerTurnCost({
               sessionId: session.id,
               clientId: turnAssistantPersistId,

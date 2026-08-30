@@ -339,6 +339,8 @@ describe('maker:event hot path ordering', () => {
     expect(helperSource).toContain(
       'recordSessionTurnSpend(sessionId, turnMoney, { throwOnError: true }),',
     );
+    expect(helperSource.match(/await awaitBothSpendWrites\(/g)).toHaveLength(2);
+    expect(helperSource).not.toContain('await Promise.all([');
     expect(helperSource).toContain('clientId: assistantPersistId');
     expect(helperSource).toContain('recordTurnUsageOnMessage({');
     expectOrder(
@@ -1731,14 +1733,27 @@ describe('maker:event hot path ordering', () => {
       'const modelUsageResults = await Promise.allSettled(modelUsageWrites);',
       'propagateFirstRejectedUsageWrite(modelUsageResults);',
     );
-    expect(claudeDoneSource).toContain(
-      'await Promise.all([\n                recordTurnSpend(turnMoney, undefined, { throwOnError: true }),\n                recordSessionTurnSpend(session.id, turnMoney, { throwOnError: true }),\n              ]);',
-    );
-    expect(claudeDoneSource).toContain(
-      'await Promise.all([\n              recordTurnSpend(money, undefined, { throwOnError: true }),\n              recordSessionTurnSpend(session.id, money, { throwOnError: true }),\n            ]);',
-    );
+    expect(claudeDoneSource.match(/await awaitBothSpendWrites\(/g)).toHaveLength(2);
+    expect(claudeDoneSource).not.toContain('await Promise.all([');
     expect(claudeDoneSource).toContain(
       "cacheCreateTokensDelta: m.deltas.cacheCreateTokens,\n                }, undefined, { throwOnError: true }),",
+    );
+  });
+
+  it('awaits both Claude spend sinks before propagating either rejection', () => {
+    const helperStart = source.indexOf('async function awaitBothSpendWrites(');
+    const helperEnd = source.indexOf(
+      '\nfunction recordReservedStaleClaudeDoneUsage(',
+      helperStart,
+    );
+    const helperSource = source.slice(helperStart, helperEnd);
+
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    expectOrder(
+      helperSource,
+      'await Promise.allSettled([turnSpendWrite, sessionSpendWrite])',
+      'propagateFirstRejectedUsageWrite(results);',
     );
   });
 
