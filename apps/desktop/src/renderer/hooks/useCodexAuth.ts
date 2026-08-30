@@ -131,19 +131,24 @@ function replaceUi(
   ui: CodexUiState,
   revision: 'snapshot' | 'event' | 'auth',
 ): CodexAuthMachineState {
+  // Main's dev write policy is process-wide. Logout broadcasts intentionally omit it, so once
+  // observed it must remain authoritative across local/event state replacements.
+  const nextUi: CodexUiState = machine.ui.oauthWritesBlocked
+    ? { ...ui, oauthWritesBlocked: true }
+    : ui;
   let reconnectReason = machine.reconnectReason;
   let reconnectCredentialScope = machine.reconnectCredentialScope;
-  if (ui.kind === 'reconnect-required') {
-    reconnectReason = ui.reason;
-    reconnectCredentialScope = ui.credentialScope;
+  if (nextUi.kind === 'reconnect-required') {
+    reconnectReason = nextUi.reason;
+    reconnectCredentialScope = nextUi.credentialScope;
   }
-  if (ui.kind === 'authenticated' || ui.kind === 'unauthenticated') {
+  if (nextUi.kind === 'authenticated' || nextUi.kind === 'unauthenticated') {
     reconnectReason = null;
     reconnectCredentialScope = undefined;
   }
 
   return {
-    ui,
+    ui: nextUi,
     reconnectReason,
     ...(reconnectCredentialScope ? { reconnectCredentialScope } : {}),
     authRevision: machine.authRevision + (revision === 'auth' ? 1 : 0),
@@ -765,6 +770,7 @@ export function useCodexAuth(options?: {
     async (mode: 'browser' | 'device-code' = 'browser'): Promise<CodexLoginOutcome> => {
       const observerEpoch = observerEpochRef.current;
       if (!isObserverActive(observerEpoch)) return 'cancelled';
+      if (machineRef.current.ui.oauthWritesBlocked) return 'blocked';
       transition({ type: 'login-pending', mode });
       try {
         const result = await triggerOwnedLogin(mode);

@@ -120,7 +120,42 @@ describe('useCodexAuth lifecycle', () => {
       await result.current.logout();
     });
 
-    expect(result.current.state.kind).toBe('unauthenticated');
+    expect(result.current.state).toEqual({ kind: 'unauthenticated' });
+  });
+
+  it('keeps dev write policy authoritative across logout and its state broadcast', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({
+      authenticated: true,
+      identity: 'user@example.com',
+      authSource: 'oauth',
+      oauthWritesBlocked: true,
+    });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() =>
+      expect(result.current.state).toMatchObject({
+        kind: 'authenticated',
+        oauthWritesBlocked: true,
+      }),
+    );
+    await act(async () => {
+      await result.current.logout();
+    });
+    expect(result.current.state).toEqual({
+      kind: 'unauthenticated',
+      oauthWritesBlocked: true,
+    });
+
+    act(() => {
+      stateChangedListener(auth)({ agentKind: 'codex', authenticated: false });
+    });
+    expect(result.current.state).toEqual({
+      kind: 'unauthenticated',
+      oauthWritesBlocked: true,
+    });
+    await expect(result.current.triggerLogin()).resolves.toBe('blocked');
+    expect(auth.triggerLogin).not.toHaveBeenCalled();
   });
 
   it('refreshes to disconnected when cleanup fails after the marker committed', async () => {
@@ -214,10 +249,10 @@ describe('useCodexAuth lifecycle', () => {
     });
 
     expect(result.current.state).toEqual({
-      kind: 'error',
-      message: 'dev_oauth_write_blocked',
+      kind: 'unauthenticated',
       oauthWritesBlocked: true,
     });
+    expect(auth.triggerLogin).not.toHaveBeenCalled();
   });
 
   it('restores reconnect-required from a persisted OAuth invalidation', async () => {
