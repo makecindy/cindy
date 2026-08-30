@@ -15329,8 +15329,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         targetContextWindow = verifiedTargetWindow ?? undefined;
         if (
           confirmedContextWindow !== undefined &&
-          ((runtimeAgentKind !== 'pi' && confirmedContextWindow !== targetContextWindow) ||
-            (targetContextWindow !== undefined && confirmedContextWindow > targetContextWindow))
+          runtimeAgentKind !== 'pi' &&
+          confirmedContextWindow !== targetContextWindow
         ) {
           throwIpcError(
             isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : 'INVALID_PARAMS',

@@ -541,6 +541,10 @@ describe('session runtime control wiring', () => {
       'remote model-window confirmation is unsupported; runtime selection was not changed',
     );
     expect(setModel).toContain('!isDeviceLinkInvoke() && confirmedContextWindow ===');
+    expect(setModel).toContain(
+      "runtimeAgentKind !== 'pi' &&\n          confirmedContextWindow !== targetContextWindow",
+    );
+    expect(setModel).not.toContain('confirmedContextWindow > targetContextWindow');
   });
 
   it('fails closed before switching a busy or unverifiable cold remote Pi runtime', () => {

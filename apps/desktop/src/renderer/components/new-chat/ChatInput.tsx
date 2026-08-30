@@ -6051,6 +6051,8 @@ export function ChatInput({
       // 显式来源必须按完整 route 查窗口：同 model id 在不同 provider 可分别为 1M / 200K。
       // 无来源的旧 flat 入口才沿用设备能力缓存的 model-id 回退。
       const remoteDeviceId = sourceRemoteDeviceId ?? getSessionDeviceId(sessionId) ?? undefined;
+      // Pi 目录窗口只是展示估值；device-link 必须交给被控端切换并以最终 get_state 裁决。
+      if (remoteDeviceId && runtimeAgentKind === 'pi') return true;
       const targetRouteProviderId =
         targetProviderId !== undefined && currentModelAgentKind
           ? effectiveSourceIdForModel(
@@ -6127,7 +6129,7 @@ export function ChatInput({
       });
       return accepted && targetContextWindow ? targetContextWindow : accepted;
     },
-    [sessionId, remoteHostId, confirmDialog, t, providers, currentModelAgentKind],
+    [sessionId, remoteHostId, confirmDialog, t, providers, currentModelAgentKind, runtimeAgentKind],
   );
 
   const setModelWithFinalWindowConfirmation = useCallback(

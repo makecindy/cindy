@@ -105,16 +105,22 @@ describe('ChatInput model source switching wiring', () => {
     expect(chatInputSource).toContain('? { confirmedContextWindow }');
   });
 
-  it('blocks pressured SSH and device-link window shrinks before any confirm path', () => {
+  it('defers device-link Pi pressure to final runtime verification while blocking other remote shrinks', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);
     const guard = chatInputSource.slice(start, end);
+    const piRuntimeBypass = guard.indexOf(
+      "if (remoteDeviceId && runtimeAgentKind === 'pi') return true;",
+    );
+    const catalogTargetResolution = guard.indexOf('const targetRouteProviderId =');
     const remoteGuard = guard.indexOf('const hasVerifiedWindows =');
     const remoteBlock = guard.indexOf("verdict.level === 'danger' || verdict.level === 'overflow'");
     const warningPath = guard.indexOf("verdict.level === 'warn'");
     const confirmPath = guard.indexOf('const accepted = await confirmDialog({');
 
-    expect(remoteGuard).toBeGreaterThan(-1);
+    expect(piRuntimeBypass).toBeGreaterThan(-1);
+    expect(piRuntimeBypass).toBeLessThan(catalogTargetResolution);
+    expect(remoteGuard).toBeGreaterThan(catalogTargetResolution);
     expect(remoteGuard).toBeLessThan(remoteBlock);
     const shrinkGate = guard.slice(remoteGuard, remoteBlock);
     expect(shrinkGate).toContain('agentStatus.isRunning');
