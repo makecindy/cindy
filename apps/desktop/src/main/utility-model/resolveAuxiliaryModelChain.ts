@@ -12,6 +12,7 @@ import {
 } from '../../shared/auxiliaryModelChain.js';
 import { encodeCatalogModelPin } from '../../shared/catalogModelPin.js';
 import {
+  DEFAULT_UTILITY_MODEL_PROVIDER_KIND,
   getUtilityModelProfile,
   resolveUtilityModelProviderKindAlias,
   utilityTransportLabel,
@@ -85,7 +86,18 @@ function readEnvUtilityChain(): string[] | null {
       return [headRef, ...rest];
     }
   }
-  return entries.length > 0 ? entries : null;
+  if (entries.length > 0) {
+    // `UtilityModelSelection` has always treated a provider-chain-only
+    // configuration as a fallback tail behind the implicit default provider.
+    // Keep that legacy ordering when migrating the escape hatch into the
+    // shared auxiliary chain; otherwise the first configured fallback would
+    // silently become the primary route.
+    return [
+      DEFAULT_UTILITY_MODEL_PROVIDER_KIND,
+      ...entries.filter((entry) => entry !== DEFAULT_UTILITY_MODEL_PROVIDER_KIND),
+    ];
+  }
+  return null;
 }
 
 export function getEffectiveAuxiliaryModelChain(): EffectiveAuxiliaryModelChain {

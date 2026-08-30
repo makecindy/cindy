@@ -9,6 +9,7 @@ import {
 
 import { createLogger } from '../logger.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth } from '../maker-host/anthropic-responses-bridge-host.js';
 import { getValidClaudeAiOAuth } from '../maker-host/claude-oauth-refresh.js';
@@ -599,8 +600,17 @@ async function requestDefaultUtilityText(
   prompt: string,
   opts?: UtilityTextRequestOptions & { capability?: UtilityTextCapability },
 ): Promise<UtilityTextResult> {
+  // Default-chain resolution and credential discovery can both await. Capture
+  // the owner before either starts so callers that do not provide their own
+  // workflow guard still fail closed instead of dispatching into a new owner.
+  const ownerScopeKey = activeOwnerScopeKey();
+  const callerBeforeDispatch = opts?.beforeDispatch;
   const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
     ...opts,
+    beforeDispatch: async (route) => {
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return false;
+      return callerBeforeDispatch ? callerBeforeDispatch(route) : true;
+    },
     // Short auxiliary budgets cannot afford provider-default thinking. Callers
     // that need reasoning must pass disableReasoning: false.
     disableReasoning: opts?.disableReasoning ?? true,

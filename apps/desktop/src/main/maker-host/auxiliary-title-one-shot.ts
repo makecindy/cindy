@@ -7,8 +7,11 @@
 
 import type { AgentKind } from '@cindy/maker-core';
 
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
-import type { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { readAuxiliaryModelSettings } from '../utility-model/auxiliary-model-settings-store.js';
+import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { getMaker } from './index.js';
 import type { TitleOneShotDeps, TitleOneShotResult } from './title-one-shot.js';
 import { validateTitleOutput } from './title-output-validation.js';
 
@@ -31,28 +34,9 @@ interface AuxiliaryTitleRuntimeDeps {
 }
 
 const DEFAULT_DEPS: AuxiliaryTitleRuntimeDeps = {
-  // The settings store resolves owner-scoped Electron paths. Load it only when
-  // title generation actually runs, not while title IPC modules are registered.
-  readModels: async () => {
-    const { readAuxiliaryModelSettings } = await import(
-      '../utility-model/auxiliary-model-settings-store.js'
-    );
-    return readAuxiliaryModelSettings().models;
-  },
-  readOwnerScope: async () => {
-    const { activeOwnerScopeKey } = await import('../appSessionState.js');
-    return activeOwnerScopeKey();
-  },
-  // Keep the heavyweight utility-model/provider runtime out of title.ts's
-  // startup import graph. It also lets lightweight title IPC tests provide
-  // their existing Electron mocks without loading app-bound runtime config.
-  requestText: async (prompt, opts) => {
-    const [{ requestUtilityText: requestText }, { getMaker }] = await Promise.all([
-      import('../utility-model/oneShotCandidates.js'),
-      import('./index.js'),
-    ]);
-    return requestText(getMaker(), prompt, opts);
-  },
+  readModels: () => readAuxiliaryModelSettings().models,
+  readOwnerScope: () => activeOwnerScopeKey(),
+  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, opts),
 };
 
 type TitleRequest = {

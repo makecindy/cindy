@@ -24,11 +24,21 @@ const chainState = vi.hoisted(() => ({
   refs: ['codex-gpt-5.4-mini', 'litellm-gpt-5.4-mini'],
 }));
 
+const ownerState = vi.hoisted(() => ({
+  key: 'owner-a',
+  pending: false,
+}));
+
 vi.mock('../resolveAuxiliaryModelChain.js', () => ({
   getEffectiveAuxiliaryModelChain: () => ({
     source: chainState.source,
     refs: [...chainState.refs],
   }),
+}));
+
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => ownerState.key,
+  isAppSessionBoundaryPending: () => ownerState.pending,
 }));
 
 vi.mock('../../maker-host/auth-adapters.js', () => ({
@@ -139,6 +149,8 @@ describe('utility one-shot candidates', () => {
     fetchMock.mockReset();
     chainState.source = 'auto';
     chainState.refs = ['codex-gpt-5.4-mini', 'litellm-gpt-5.4-mini'];
+    ownerState.key = 'owner-a';
+    ownerState.pending = false;
     appCapabilities.mockReturnValue({ canUseCindyGateway: true } as never);
     readKey.mockReturnValue(null);
     readCodexCreds.mockRejectedValue(new Error('not authenticated'));
@@ -197,6 +209,22 @@ describe('utility one-shot candidates', () => {
         }),
       ],
     });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('aborts the default chain when the owner changes before dispatch', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'must not dispatch' } }] }),
+    } as never);
+
+    const request = requestUtilityText(makerMock(false), 'hello');
+    ownerState.key = 'owner-b';
+
+    const result = await request;
+
+    expect(result).toMatchObject({ ok: false });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

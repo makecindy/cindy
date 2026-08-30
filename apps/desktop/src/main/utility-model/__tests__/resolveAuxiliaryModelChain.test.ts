@@ -64,6 +64,19 @@ describe('getEffectiveAuxiliaryModelChain', () => {
     });
   });
 
+  it('keeps the implicit default provider ahead of an env-only fallback chain', () => {
+    vi.stubEnv('XDT_UTILITY_MODEL_PROVIDER_CHAIN', 'litellm-kimi-k2.6,litellm-deepseek-v4-flash');
+
+    expect(getEffectiveAuxiliaryModelChain()).toEqual({
+      source: 'env',
+      refs: [
+        'codex-gpt-5.4-mini',
+        'litellm-kimi-k2.6',
+        'litellm-deepseek-v4-flash',
+      ],
+    });
+  });
+
   it('keeps legacy voice refiner env vars and model overrides working', () => {
     vi.stubEnv('XDT_VOICE_INPUT_REFINER_PROVIDER', 'litellm');
     vi.stubEnv('XDT_VOICE_INPUT_REFINER_MODEL', 'qwen/qwen3.6-plus');

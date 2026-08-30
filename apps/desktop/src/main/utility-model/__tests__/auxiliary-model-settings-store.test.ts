@@ -242,4 +242,14 @@ describe('auxiliary-model-settings-store', () => {
       refinerModel: 'qwen/qwen3.6-plus',
     })).toEqual(['litellm-qwen3.6-plus']);
   });
+
+  it('keeps the implicit default head when migrating a legacy fallback-only chain', () => {
+    expect(__testing.legacyVoiceOverrideRefs({
+      refinerProviderChain: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
+    })).toEqual([
+      'codex-gpt-5.4-mini',
+      'litellm-kimi-k2.6',
+      'litellm-deepseek-v4-flash',
+    ]);
+  });
 });

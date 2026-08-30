@@ -164,7 +164,13 @@ function legacyVoiceOverrideRefs(raw: Record<string, unknown> | null): string[] 
   );
   const hasExplicitChain = chain.length > 0;
   if (!hasExplicitHead && !hasExplicitChain) return [];
-  return refs;
+  if (head || !hasExplicitChain) return refs;
+
+  // The legacy resolver always supplied the default provider as the head when
+  // only a provider chain was configured. Preserve that ordering during the
+  // one-shot migration instead of promoting the first fallback to primary.
+  const defaultHead = resolveUtilityModelProviderKindAlias('');
+  return collectUniqueRefs([defaultHead, ...refs]);
 }
 
 type LegacyMigrationPlan = {
