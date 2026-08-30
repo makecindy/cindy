@@ -9,7 +9,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { awaitWithStartupTimeout } from '../authStartupGate';
+import { AuthApiError } from '@cindy/auth-client';
+
+import {
+  LOGIN_PREPARING_GATE_TIMEOUT_MS,
+  awaitLoginProvidersWithPreparingGate,
+  awaitWithStartupTimeout,
+  mapLoginProvidersLoadFailure,
+} from '../authStartupGate';
 
 describe('awaitWithStartupTimeout', () => {
   beforeEach(() => {
@@ -131,6 +138,30 @@ describe('awaitWithStartupTimeout', () => {
     }
   });
 
+  it('超时且 onTimeout 抛错:waiter 收到该错误;flow 迟到 resolve 仍走 onLateResult', async () => {
+    let resolveFlow!: (v: string) => void;
+    const flow = new Promise<string>((r) => {
+      resolveFlow = r;
+    });
+    const boom = new Error('timeout-fallback-failed');
+    const onLateResult = vi.fn();
+    const p = awaitWithStartupTimeout(flow, {
+      timeoutMs: 1000,
+      onTimeout: () => {
+        throw boom;
+      },
+      onLateResult,
+    });
+    // 先挂上 rejection 断言再推进计时器,避免超时 reject 在 expect 之前变成 unhandled。
+    const rejected = expect(p).rejects.toBe(boom);
+    await vi.advanceTimersByTimeAsync(1000);
+    await rejected;
+
+    resolveFlow('late');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onLateResult).toHaveBeenCalledWith('late');
+  });
+
   it('timeoutMs <= 0:退化为直接 await,永不超时', async () => {
     const onTimeout = vi.fn(() => 'fallback');
     let resolveFlow!: (v: string) => void;
@@ -142,5 +173,65 @@ describe('awaitWithStartupTimeout', () => {
     resolveFlow('ok');
     await expect(p).resolves.toBe('ok');
     expect(onTimeout).not.toHaveBeenCalled();
+  });
+});
+
+describe('awaitLoginProvidersWithPreparingGate', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('stalled getProviders becomes retryable AUTH_SERVICE_UNAVAILABLE after 30s', async () => {
+    const hung = new Promise<string>(() => undefined);
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const p = awaitLoginProvidersWithPreparingGate(hung, log);
+    const rejected = expect(p).rejects.toMatchObject({
+      name: 'AuthApiError',
+      code: 'AUTH_SERVICE_UNAVAILABLE',
+    });
+
+    await vi.advanceTimersByTimeAsync(LOGIN_PREPARING_GATE_TIMEOUT_MS - 1);
+    expect(log.warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    const error = await p.catch((err: unknown) => err);
+    await rejected;
+
+    expect(error).toBeInstanceOf(AuthApiError);
+    expect(mapLoginProvidersLoadFailure(error)).toEqual({
+      success: false,
+      code: 'AUTH_SERVICE_UNAVAILABLE',
+      state: { step: 'error', code: 'AUTH_SERVICE_UNAVAILABLE', recoverTo: 'identifier' },
+    });
+
+    const hungRetry = new Promise<string>(() => undefined);
+    const retry = awaitLoginProvidersWithPreparingGate(hungRetry, log);
+    const retryRejected = expect(retry).rejects.toMatchObject({
+      code: 'AUTH_SERVICE_UNAVAILABLE',
+    });
+    await vi.advanceTimersByTimeAsync(LOGIN_PREPARING_GATE_TIMEOUT_MS);
+    await retryRejected;
+  });
+
+  it('does not abort a late getProviders; only logs the late settle', async () => {
+    let resolveFlow!: (v: string) => void;
+    const flow = new Promise<string>((resolve) => {
+      resolveFlow = resolve;
+    });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const p = awaitLoginProvidersWithPreparingGate(flow, log);
+    const rejected = expect(p).rejects.toMatchObject({ code: 'AUTH_SERVICE_UNAVAILABLE' });
+    await vi.advanceTimersByTimeAsync(LOGIN_PREPARING_GATE_TIMEOUT_MS);
+    await rejected;
+
+    resolveFlow('late-providers');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(log.info).toHaveBeenCalledWith('login providers settled after preparing gate timeout');
+    expect(log.warn).not.toHaveBeenCalledWith(
+      'login providers request failed after preparing gate timeout',
+      expect.anything(),
+    );
   });
 });

@@ -29,6 +29,7 @@ import {
   workLouderCodexCommandDescription,
   workLouderCodexCommandName,
 } from './workLouderCodexCommandCopy';
+import { PlayStationGamepadLayout } from './PlayStationGamepadLayout';
 import {
   XboxGamepadLayout,
   type XboxGamepadEditablePart,
@@ -40,6 +41,7 @@ import {
   createXboxGamepadDefaultLayout,
   createXboxGamepadDefaultSettings,
   XBOX_GAMEPAD_STICK_DIRECTIONS,
+  type GamepadFamily,
   type XboxGamepadBinding,
   type XboxGamepadButtonId,
   type XboxGamepadConnectionStatus,
@@ -93,9 +95,7 @@ function XboxDeviceChips({ device }: { device: XboxGamepadDeviceInfo }) {
   const label = deviceTitle(device);
   return (
     <div className="flex flex-wrap gap-2 pt-1">
-      {label && (
-        <DeviceChip icon={<Gamepad2 size={12} />}>{label}</DeviceChip>
-      )}
+      {label && <DeviceChip icon={<Gamepad2 size={12} />}>{label}</DeviceChip>}
       {device.transport === 'usb' && (
         <DeviceChip icon={<Usb size={12} />}>
           {t('settings.shortcuts.xboxGamepad.device.usb')}
@@ -131,18 +131,30 @@ function deviceTitle(device: XboxGamepadDeviceInfo): string | null {
   return name || null;
 }
 
+function gamepadCopyNs(
+  family: GamepadFamily,
+): 'xboxGamepad' | 'playstationGamepad' | 'nintendoGamepad' | 'genericGamepad' {
+  if (family === 'playstation') return 'playstationGamepad';
+  if (family === 'nintendo') return 'nintendoGamepad';
+  if (family === 'generic') return 'genericGamepad';
+  return 'xboxGamepad';
+}
+
 export function XboxGamepadEntry({
+  family = 'xbox',
   state,
   loading,
   grouped = false,
   onOpen,
 }: {
+  family?: GamepadFamily;
   state: XboxGamepadState | null;
   loading: boolean;
   grouped?: boolean;
   onOpen(): void;
 }) {
   const { t } = useTranslation();
+  const ns = gamepadCopyNs(family);
   return (
     <button
       type="button"
@@ -154,17 +166,17 @@ export function XboxGamepadEntry({
           : 'rounded-xl border p-4 border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
         'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
       )}
-      aria-label={t('settings.shortcuts.xboxGamepad.openAria')}
+      aria-label={t(`settings.shortcuts.${ns}.openAria`)}
     >
       <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
         <Gamepad2 size={18} aria-hidden="true" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-          {t('settings.shortcuts.xboxGamepad.title')}
+          {t(`settings.shortcuts.${ns}.title`)}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {t('settings.shortcuts.xboxGamepad.entryDescription')}
+          {t(`settings.shortcuts.${ns}.entryDescription`)}
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-2">
@@ -175,9 +187,15 @@ export function XboxGamepadEntry({
   );
 }
 
-export function XboxGamepadEntryContainer({ onOpen }: { onOpen(): void }) {
-  const { state, loading } = useXboxGamepad({ watchConnection: true });
-  return <XboxGamepadEntry state={state} loading={loading} onOpen={onOpen} />;
+export function XboxGamepadEntryContainer({
+  family = 'xbox',
+  onOpen,
+}: {
+  family?: GamepadFamily;
+  onOpen(): void;
+}) {
+  const { state, loading } = useXboxGamepad({ family, watchConnection: true });
+  return <XboxGamepadEntry family={family} state={state} loading={loading} onOpen={onOpen} />;
 }
 
 function isStickPart(part: XboxGamepadEditablePart): part is XboxGamepadStickId {
@@ -188,9 +206,17 @@ function stickClickButton(stick: XboxGamepadStickId): XboxGamepadButtonId {
   return stick === 'left' ? 'ls' : 'rs';
 }
 
-export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
+export function XboxGamepadSettings({
+  family,
+  onBack,
+}: {
+  family: GamepadFamily;
+  onBack(): void;
+}) {
   const { t } = useTranslation();
+  const ns = gamepadCopyNs(family);
   const { state, loading, saving, error, setSettings, resetSettings, reload } = useXboxGamepad({
+    family,
     watchConnection: true,
   });
   const { skills, bootstrapped, refresh: refreshSkills } = useSkillhub();
@@ -208,8 +234,7 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
     () => skills.filter((skill) => skill.kind === 'skill' && !skill.parseError),
     [skills],
   );
-  const isDefault =
-    state !== null && xboxGamepadSettingsMatchRestoreDefaults(settings);
+  const isDefault = state !== null && xboxGamepadSettingsMatchRestoreDefaults(settings);
 
   useEffect(() => {
     if (!bootstrapped) void refreshSkills();
@@ -217,18 +242,18 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
 
   useEffect(() => {
     const api = window.electronAPI?.xboxGamepad;
-    void api?.setLayoutPreviewActive?.(true);
+    void api?.setLayoutPreviewActive?.(true, family);
     return () => {
       void api?.setLayoutPreviewActive?.(false);
     };
-  }, []);
+  }, [family]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI?.xboxGamepad?.onPreviewInput?.((input) => {
-      setPreview(input);
+      if (input.family === family) setPreview(input);
     });
     return () => unsubscribe?.();
-  }, []);
+  }, [family]);
 
   const patchLayout = (update: (layout: XboxGamepadLayoutModel) => void): void => {
     if (!state) return;
@@ -241,7 +266,7 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
     if (isStickPart(part)) {
       const stick = settings.layout.sticks[part];
       return {
-        legend: t(`settings.shortcuts.xboxGamepad.controls.${part}Stick`),
+        legend: t(familyControlKey(family, `${part}Stick`)),
         name: stick
           ? t(`settings.shortcuts.xboxGamepad.stick.mode.options.${stick.mode}`)
           : undefined,
@@ -250,7 +275,7 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
     }
     const binding = settings.layout.buttons[part] ?? null;
     return {
-      legend: t(`settings.shortcuts.xboxGamepad.controls.${part}`),
+      legend: t(familyControlKey(family, part)),
       name: bindingLabel(binding, t) ?? t('settings.shortcuts.xboxGamepad.actions.none'),
       description:
         binding?.type === 'command'
@@ -274,7 +299,7 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
             <ArrowLeft size={17} />
           </button>
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.shortcuts.xboxGamepad.title')}
+            {t(`settings.shortcuts.${ns}.title`)}
           </h2>
         </div>
         <button
@@ -309,13 +334,13 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
                 onCheckedChange={(next) => {
                   void setSettings({ deviceEnabled: next });
                 }}
-                aria-label={t('settings.shortcuts.xboxGamepad.connection.toggle.aria')}
+                aria-label={t(`settings.shortcuts.${ns}.connection.toggle.aria`)}
               />
               <ConnectionBadge state={state} loading={loading} />
             </div>
           </div>
           <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
-            {t(`settings.shortcuts.xboxGamepad.connection.descriptions.${key}`)}
+            {t(`settings.shortcuts.${ns}.connection.descriptions.${key}`)}
           </p>
           {state?.devicePresent && <XboxDeviceChips device={state.device} />}
         </div>
@@ -331,17 +356,32 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
           </p>
         </div>
         <div className="flex justify-center">
-          <XboxGamepadLayout
-            layout={settings.layout}
-            disabled={!state || saving}
-            hintFor={hintFor}
-            onEdit={setEditing}
-            preview={preview}
-            labels={{
-              leftStick: t('settings.shortcuts.xboxGamepad.controls.leftStick'),
-              rightStick: t('settings.shortcuts.xboxGamepad.controls.rightStick'),
-            }}
-          />
+          {family === 'playstation' ? (
+            <PlayStationGamepadLayout
+              layout={settings.layout}
+              disabled={!state || saving}
+              hintFor={hintFor}
+              onEdit={setEditing}
+              preview={preview}
+              labels={{
+                leftStick: t(familyControlKey(family, 'leftStick')),
+                rightStick: t(familyControlKey(family, 'rightStick')),
+              }}
+            />
+          ) : (
+            <XboxGamepadLayout
+              layout={settings.layout}
+              disabled={!state || saving}
+              hintFor={hintFor}
+              onEdit={setEditing}
+              preview={preview}
+              variant={family === 'nintendo' ? 'nintendo' : 'xbox'}
+              labels={{
+                leftStick: t(familyControlKey(family, 'leftStick')),
+                rightStick: t(familyControlKey(family, 'rightStick')),
+              }}
+            />
+          )}
         </div>
       </SettingsCard>
 
@@ -352,7 +392,7 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
         }}
         title={
           editing && !isStickPart(editing)
-            ? t(`settings.shortcuts.xboxGamepad.controls.${editing}`)
+            ? t(familyControlKey(family, editing))
             : t('settings.shortcuts.xboxGamepad.layout.editor.title')
         }
         description={t('settings.shortcuts.xboxGamepad.layout.editor.description')}
@@ -386,7 +426,7 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
         }}
         title={
           editing && isStickPart(editing)
-            ? t(`settings.shortcuts.xboxGamepad.controls.${editing}Stick`)
+            ? t(familyControlKey(family, `${editing}Stick`))
             : t('settings.shortcuts.xboxGamepad.layout.editor.title')
         }
         description={t('settings.shortcuts.xboxGamepad.stick.description')}
@@ -410,7 +450,9 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
                   options={[
                     {
                       value: 'conversation-scroll',
-                      label: t('settings.shortcuts.xboxGamepad.stick.mode.options.conversation-scroll'),
+                      label: t(
+                        'settings.shortcuts.xboxGamepad.stick.mode.options.conversation-scroll',
+                      ),
                     },
                     {
                       value: 'custom',
@@ -444,7 +486,7 @@ export function XboxGamepadSettings({ onBack }: { onBack(): void }) {
               ))}
             <SettingsDivider />
             <SettingsRow
-              label={t(`settings.shortcuts.xboxGamepad.controls.${stickClickButton(editing)}`)}
+              label={t(familyControlKey(family, stickClickButton(editing)))}
               description={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
               control={
                 <BindingSelect
@@ -543,7 +585,9 @@ function BindingSelect({
   onChange(binding: XboxGamepadBinding | null): void;
 }) {
   const { t } = useTranslation();
-  const groups: SelectOptionGroup[] = [{ options: [{ value: 'none', label: t('settings.shortcuts.xboxGamepad.actions.none') }] }];
+  const groups: SelectOptionGroup[] = [
+    { options: [{ value: 'none', label: t('settings.shortcuts.xboxGamepad.actions.none') }] },
+  ];
   if (allowVoice) {
     groups.push({
       options: [{ value: 'voice', label: t('settings.shortcuts.xboxGamepad.actions.voice') }],
@@ -713,6 +757,10 @@ function SettingsRow({
 
 function SettingsDivider() {
   return <div className="my-1 h-px bg-[var(--settings-theme-card-border)]" />;
+}
+
+function familyControlKey(family: GamepadFamily, part: string): string {
+  return `settings.shortcuts.xboxGamepad.familyControls.${family}.${part}`;
 }
 
 function resolveXboxGamepadSettings(

@@ -62,6 +62,8 @@ import {
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
 
+let retryPiRuntimeAfterNetworkRecovery: (() => void) | null = null;
+let disposePiRuntimeRecovery: (() => void) | null = null;
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
 // both downloads, but allow normal consumer connections to finish while the
 // splash displays real byte progress.
@@ -214,7 +216,6 @@ import {
   prepare as binaryPrepare,
   peekNeedsDownload as binaryPeekNeedsDownload,
   broadcastResetForStep as binaryBroadcastResetForStep,
-  getCachedBinaryStatus,
   type AgentBinaryKind,
   type PrepareResult,
 } from './agent-binaries';
@@ -462,6 +463,7 @@ import { initHeartbeatService } from './heartbeatService';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { WindowManualDragController } from './windowManualDrag';
+import { issueWritableDirectoryPickerGrant } from './maker-ipc/writableDirectoryPickerGrant.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
@@ -538,7 +540,9 @@ import {
   setProviderAccessRuntimeRefreshListener,
   restartCodexAfterAuthModeChange,
   waitForInitialCustomMcpRefresh,
+  registerPiAgentIfAvailable,
 } from './maker-host/index.js';
+import { createPiRuntimeRecovery } from './agent-binaries/pi-runtime-recovery.js';
 import { createDynamicMaker } from './maker-host/dynamic-maker.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
@@ -3196,6 +3200,9 @@ const windowsClosePromptFallback = createWindowsClosePromptFallbackController(
 
 app.on('before-quit', () => {
   isQuitting = true;
+  disposePiRuntimeRecovery?.();
+  retryPiRuntimeAfterNetworkRecovery = null;
+  disposePiRuntimeRecovery = null;
   windowsClosePromptFallback.dispose();
   destroyWindowsTray();
   disposeUpdatePresentationRecovery();
@@ -3254,6 +3261,7 @@ function scheduleAppFocusSync(): void {
 }
 
 app.on('browser-window-focus', (_event, win) => {
+  retryPiRuntimeAfterNetworkRecovery?.();
   if (win === mainWindowRef) updatePresentationRecovery?.onWindowFocused();
   if (appFocusSyncTimer) {
     clearTimeout(appFocusSyncTimer);
@@ -5498,9 +5506,28 @@ const registerIpcHandlers = () => {
   // getMaker() 在构造期就读 binary path, 早于 splash 调用会抛错; 第一次 splash 成功后置 true,
   // 后续 retry 走 check-environment 不重复注册 (重复 ipcMain.handle 会覆盖同名 handler)。
   let makerIpcsRegistered = false;
-  // Pi 是“本次启动可选”的能力：一旦首次准备失败，就算后续清单/CDN恢复，
-  // 也不再把 Pi 动态塞回已经构造好的 Maker，避免返回状态与实际能力不一致。
-  let piDisabledForLaunch = false;
+  // Pi 是“本次启动可选”的能力：准备失败不阻塞主界面，交给 recovery 在网络恢复后
+  // 重新走 managed prepare，并在成功后动态注册到当前 Maker。
+  const piRuntimeRecovery = createPiRuntimeRecovery({
+    isOnline: () => net.isOnline(),
+    prepare: async () => {
+      const result = await binaryPrepare('pi', {
+        broadcastFailure: false,
+        broadcastProgress: false,
+        signal: AbortSignal.timeout(PI_AGENT_INSTALL_STARTUP_DEADLINE_MS),
+      });
+      return result;
+    },
+    register: () => registerPiAgentIfAvailable(),
+    onRegistered: () => {
+      console.info('[bootstrap-electron] Pi runtime recovered and agent registered');
+    },
+    logWarn: (message, error) => console.warn(`[bootstrap-electron] ${message}`, error ?? ''),
+  });
+  retryPiRuntimeAfterNetworkRecovery = () => {
+    void piRuntimeRecovery.retryNow('window-focus');
+  };
+  disposePiRuntimeRecovery = () => piRuntimeRecovery.dispose();
   const registerMakerIpcsAfterSplash = async (): Promise<void> => {
     if (makerIpcsRegistered) return;
     // 模型供应商目录(providers.json)按「OSS 真源 / bundled 兜底」加载一次存内存:必须在第一次
@@ -5861,41 +5888,26 @@ const registerIpcHandlers = () => {
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
     let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
-    // 轮 27 LOW-4:首次准备失败后账号切换(同一进程),二进制可能已由后台
-    // 下载/手动放置变得可用 —— 轻量重试:意外可用则清除标志继续准备。
-    if (piDisabledForLaunch) {
-      const cached = getCachedBinaryStatus('pi');
-      if (cached?.binaryPath && cached.binaryPath.length > 0) {
-        piDisabledForLaunch = false;
-      }
-    }
-    if (piDisabledForLaunch) {
+    try {
+      const piRes = await binaryPrepare('pi', {
+        ...stepOptsFor('pi'),
+        broadcastFailure: false,
+        signal: piInstallSignal,
+      });
+      piInfo =
+        piRes.ready && piRes.path
+          ? { status: 'passed' as const, path: piRes.path }
+          : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
+    } catch (err: unknown) {
       piInfo = {
         status: 'failed' as const,
-        error: 'pi disabled for this launch after an earlier prepare failure',
+        error: err instanceof Error ? err.message : String(err),
       };
-    } else {
-      try {
-        const piRes = await binaryPrepare('pi', {
-          ...stepOptsFor('pi'),
-          broadcastFailure: false,
-          signal: piInstallSignal,
-        });
-        piInfo =
-          piRes.ready && piRes.path
-            ? { status: 'passed' as const, path: piRes.path }
-            : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
-      } catch (err: unknown) {
-        piInfo = {
-          status: 'failed' as const,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
     }
     if (piInfo.status === 'failed') {
-      piDisabledForLaunch = true;
+      piRuntimeRecovery.markUnavailable(piInfo.error);
       console.warn(
-        `[bootstrap-electron] pi binary prepare failed (non-fatal, pi disabled for this launch): ${piInfo.error}`,
+        `[bootstrap-electron] pi binary prepare failed (non-fatal, recovery scheduled): ${piInfo.error}`,
       );
     }
 
@@ -5918,6 +5930,7 @@ const registerIpcHandlers = () => {
   const allowedSystemSettingsUrls = new Set([
     'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
     'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
   ]);
 
   // Open external URL in system default browser, plus a small allowlist of
@@ -6288,7 +6301,19 @@ const registerIpcHandlers = () => {
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
     'dialog:show-open-directory',
-    async (_event, { defaultPath }: { defaultPath?: string } = {}) => {
+    async (
+      event,
+      {
+        defaultPath,
+        writableGrantScope,
+      }: { defaultPath?: string; writableGrantScope?: string } = {},
+    ) => {
+      if (writableGrantScope !== undefined) {
+        assertTrustedAppRendererEvent(event);
+        if (!writableGrantScope || writableGrantScope.length > 128) {
+          throw new Error('invalid writable directory grant scope');
+        }
+      }
       const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
       if (!targetWin) return { success: true, path: null };
       const result = await dialog.showOpenDialog(targetWin, {
@@ -6300,7 +6325,15 @@ const registerIpcHandlers = () => {
       if (result.canceled || result.filePaths.length === 0) {
         return { success: true, path: null };
       }
-      return { success: true, path: result.filePaths[0] };
+      const selectedPath = result.filePaths[0];
+      if (writableGrantScope !== undefined) {
+        await issueWritableDirectoryPickerGrant({
+          scopeId: writableGrantScope,
+          senderId: event.sender.id,
+          directory: selectedPath,
+        });
+      }
+      return { success: true, path: selectedPath };
     },
   );
 

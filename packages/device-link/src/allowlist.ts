@@ -195,6 +195,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端 UI 本就按 capabilities.planMode 缺失隐藏入口。
   'maker:set-plan-mode',
   'maker:set-extra-dirs',
+  'maker:set-writable-dirs',
   // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
   // SDK leaf 与 SQLite 可见时间线，不依赖 sender/窗口，真相也只在被控端。
   'maker:get-session-tree',
@@ -552,6 +553,8 @@ export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
 export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // maker-ipc MAKER_PUSH
   'maker:event',
+  // Device-level runtime Agent roster changes; controllers refresh their local availability cache.
+  'maker:agents:changed',
   'maker:status-changed',
   'maker:input:projection',
   'maker:interaction-request',

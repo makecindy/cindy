@@ -730,9 +730,16 @@ export function applyAgentIslandEvent(
     session.interactionRevealDismissed = false;
     session.currentToolUseId = null;
     session.toolDetailUntil = null;
-    session.detail = typeof data?.message === 'string' && data.message.trim()
-      ? data.message.trim()
-      : '';
+    // Tool-loop terminal errors carry a maker-core diagnostic message for logs and
+    // the chat transcript, but Agent Island has its own localized string bundle.
+    // Do not surface the producer's Chinese/internal category in this main-side
+    // display path; other terminal errors keep their existing detail behavior.
+    const isToolLoopError = data?.reason === 'tool_use_loop_detected';
+    session.detail = isToolLoopError
+      ? state.strings.error
+      : typeof data?.message === 'string' && data.message.trim()
+        ? data.message.trim()
+        : '';
     session.detailSource = session.detail ? 'status' : null;
     if (session.detail) appendActivityLine(session, 'status', session.detail);
     session.errorUntil = now + AGENT_ISLAND_ERROR_DWELL_MS;

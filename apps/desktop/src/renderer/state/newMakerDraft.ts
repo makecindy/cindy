@@ -142,6 +142,8 @@ export interface NewMakerDraft {
    * 清空(NewMakerDraftRoute mount)、**不跨重启还原**(sanitize 一律置空)。
    */
   extraDirs: string[];
+  /** 单次草稿内用户明确授予的附加可读写目录；不跨重启。 */
+  writableDirs: string[];
   /** 每个 vendor 的"上次使用配置"——切回该 vendor 时自动恢复。 */
   lastByVendor: Record<MakerVendor, VendorPrefs>;
   /**
@@ -224,6 +226,7 @@ function makeDefault(): NewMakerDraft {
     fastModeByModel: {},
     effortByModel: {},
     extraDirs: [],
+    writableDirs: [],
     lastByVendor: {
       cc: defaultVendorPrefs('cc'),
       pi: defaultVendorPrefs('pi'),
@@ -298,6 +301,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   // 单次草稿的临时授权范围,静默还原会让用户无感知地把旧目录带进新会话。
   // NewMakerDraftRoute mount 时也会清空(同一决定的双保险)。
   const extraDirs: string[] = [];
+  const writableDirs: string[] = [];
   // collab 校验: 老版本无此字段 → 默认 OFF + codex worker。
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
@@ -448,6 +452,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     fastModeByModel,
     effortByModel,
     extraDirs,
+    writableDirs,
     lastByVendor: {
       cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
@@ -867,6 +872,7 @@ export function resetDraftWorkspaceTargets(): void {
   patchDraft({
     workingDir: null,
     extraDirs: [],
+    writableDirs: [],
     collab: { ...currentDraft.collab, enabled: false },
   });
 }

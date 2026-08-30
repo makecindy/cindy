@@ -47,7 +47,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isCuratedQwen38Tag } from '../../shared/localModelRuntime.js';
 import {
   buildCodexGatewayBaseUrl,
   CODEX_OAUTH_UPSTREAM,
@@ -815,6 +814,44 @@ function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined):
  * id),也不对所有 openai-chat 供应商放开。未命中继续沿用 fail-closed 默认——
  * 无图片能力的上游(如 DeepSeek)保持发送前显式报错,不静默吞图。
  */
+/**
+ * Chat bridge 的 system 消息策略(#3531)。
+ *
+ * 本地模板运行器(Ollama / LM Studio / llama.cpp 的 OpenAI 兼容层)用 Jinja
+ * chat template 渲染消息,Qwen3 系等模板硬校验 system 必须在开头,消息中段的
+ * system/developer 直接 500(Ornith 实测 `System message must be at the
+ * beginning`);这类运行器也不支持 developer 角色,合并成唯一首条 system 是
+ * 严格更安全的形态。因此**回环上游一律 coalesce-leading**(内置 Ollama 面板
+ * 与指向 127.0.0.1 等本机端点的自定义供应商都覆盖,不再限 Qwen3.8 白名单)。
+ * 远程供应商保持 preserve 缺省:coalesce 会把 developer 并为 system,对原生
+ * 区分 developer 角色的云端兼容层是语义变更,不能默认开。
+ */
+export function chatBridgeSystemMessagePolicyForRoute(
+  providerId: string,
+  upstream: string,
+): 'coalesce-leading' | undefined {
+  if (providerId === 'cindy-local-ollama') return 'coalesce-leading';
+  return isLoopbackChatUpstream(upstream) ? 'coalesce-leading' : undefined;
+}
+
+function isLoopbackChatUpstream(upstream: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(upstream);
+  } catch {
+    return false;
+  }
+  // 精确 loopback 判定(与 pi-host 同裁决):不能用 startsWith('127.'),
+  // 会误伤 127.example.com 这类合法域名。URL.hostname 已去方括号。
+  const host = url.hostname.toLowerCase();
+  return (
+    host === 'localhost' ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === '::1' ||
+    host === '[::1]'
+  );
+}
+
 export function chatBridgeCapabilitiesForRoute(
   upstream: string,
   realModel: string,
@@ -882,10 +919,13 @@ function createChatBridgeDecision(
     realModel,
     baseCapabilities,
   );
-  const capabilities =
-    route.providerId === 'cindy-local-ollama' && isCuratedQwen38Tag(realModel)
-      ? { ...routedCapabilities, systemMessagePolicy: 'coalesce-leading' as const }
-      : routedCapabilities;
+  const systemMessagePolicy = chatBridgeSystemMessagePolicyForRoute(
+    route.providerId,
+    route.routing.upstream,
+  );
+  const capabilities = systemMessagePolicy
+    ? { ...routedCapabilities, systemMessagePolicy }
+    : routedCapabilities;
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });

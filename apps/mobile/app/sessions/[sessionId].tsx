@@ -541,8 +541,13 @@ import {
 import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { pathDisplayName } from '@/session/chatPathCandidate';
 import { fetchRemoteAbsFileToUrl } from '@/session/remoteAbsFileFetch';
+import { showActionMenu, usesSystemActionMenu } from '@/platform/chrome';
 import { ChatFileChipMenuSheet } from '@/session/ChatFileChipMenuSheet';
-import type { ChatFileChipMenuActionKey } from '@/session/chatFileChipMenuModel';
+import {
+  chatFileChipMenuRows,
+  chatFileChipMenuTitle,
+  type ChatFileChipMenuActionKey,
+} from '@/session/chatFileChipMenuModel';
 import { mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/fileBrowserActions';
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
 import { normalizeRemoteOpDirEntries, parentRelPath } from '@/session/fileBrowserGrid';
@@ -1826,6 +1831,7 @@ export default function SessionScreen() {
   const loadedRouteFocusKeyRef = useRef<string | null>(null);
   const appliedRouteFocusKeyRef = useRef<string | null>(null);
   const appliedRouteComposerFocusKeyRef = useRef<string | null>(null);
+  const handleChipMenuActionRef = useRef<(key: ChatFileChipMenuActionKey, target: ChatFilePathTarget) => void>(() => {});
   const targetAvailableRef = useRef<boolean | null>(null);
   const targetAvailableDeviceRef = useRef<string | null>(null);
   // 记录已为哪个连接 epoch 触发过 resync;初值 = 首渲染时的 epoch,使首开由 mount effect 单独负责,
@@ -4594,7 +4600,7 @@ export default function SessionScreen() {
       const reconciled = reconcileMobileMessageRenderItems(previous, items);
       return reconciled;
     },
-    [errorTailClientId, forkOrigin, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
+    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
   );
   // 只在本次 render 真正 commit 后更新 reconcile 基准。写入 useMemo/ref 会让
   // Concurrent Mode 下被丢弃的 render 泄漏成下一轮的 previous,破坏尾行 memo 的稳定性。
@@ -7462,7 +7468,7 @@ export default function SessionScreen() {
     sessionMetadataSyncedForConnection: sessionMetadataSyncedKey === `${sessionId}:${connectionEpoch}`,
     interruptAcked: tailInterruptAcked,
     hiddenErrorClientIds: tailHiddenForBanner,
-  }), [messages, currentSession, inputProjection, isSessionStreaming, tailContinuationInFlight, sessionMetadataSyncedKey, sessionId, connectionEpoch, tailInterruptAcked, tailHiddenForBanner]);
+  }), [connectionEpoch, currentSession, i18nInstance.language, inputProjection, isSessionStreaming, messages, sessionId, sessionMetadataSyncedKey, tailContinuationInFlight, tailHiddenForBanner, tailInterruptAcked]);
 
   // 主按钮(重试 / 继续任务):发隐藏续跑指令(带 [UI_ACTION_TRIGGER] 前缀,消息流
   // 不渲染;排队区显示「继续未完成的任务(系统指令)」遮蔽气泡)。planMode 强制 false:
@@ -8309,7 +8315,21 @@ export default function SessionScreen() {
         }
       },
       onOpenPath: openChatPathTarget,
-      onLongPressPath: setChipMenuTarget,
+      onLongPressPath: (target) => {
+        if (usesSystemActionMenu()) {
+          const rows = chatFileChipMenuRows(target);
+          void showActionMenu({
+            cancelLabel: t('session.common.cancel'),
+            items: rows.map((row) => ({ key: row.key, label: row.label })),
+            title: chatFileChipMenuTitle(target),
+            userInterfaceStyle: mode,
+          }).then((result) => {
+            if (result.kind === 'action') handleChipMenuActionRef.current(result.key, target);
+          });
+          return;
+        }
+        setChipMenuTarget(target);
+      },
     };
   }, [
     connectionEpoch,
@@ -8317,9 +8337,11 @@ export default function SessionScreen() {
     currentSession?.workingDir,
     deviceId,
     maker,
+    mode,
     openChatPathTarget,
     openLink,
     sessionId,
+    t,
   ]);
 
   /** chip 菜单「导出 / 分享」:两段式导出 → 系统分享单(与文件浏览器同链路);
@@ -8423,6 +8445,7 @@ export default function SessionScreen() {
         return;
     }
   }, [applyComposerDocument, applyComposerDraft, deviceId, deviceName, openChatPathTarget, router, sessionId, shareChipFile]);
+  handleChipMenuActionRef.current = handleChipMenuAction;
 
   // 会话菜单元数据操作(重命名 / 置顶 / 归档 / 删除 / 恢复)乐观写:与首页
   // patchHomeSession 同一写序契约——守卫 / 队列 / 在途登记用 app 级单例

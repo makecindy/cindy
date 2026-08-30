@@ -13,6 +13,7 @@ import {
 } from '@/lib/silencedSessionDoneStore';
 import { markSessionStarting, resetSessionStartingStoreForTests } from '@/lib/sessionStartingStore';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
+import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
 import {
   addSessionAttention,
   clearSessionAttention,
@@ -46,6 +47,10 @@ vi.mock('@/lib/sessionAttentionStore', () => ({
   getSessionAttentionKind: vi.fn(() => undefined),
   hasSessionAttention: vi.fn(() => false),
   useSessionAttentionSnapshot: () => new Set<string>(),
+}));
+
+vi.mock('@/hooks/usePendingAlertAttention', () => ({
+  noteSessionTurnStartedForAlerts: vi.fn(),
 }));
 
 function status(isRunning: boolean, hasError = false, sideTask?: boolean): SessionStatusInfo {
@@ -113,7 +118,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(onSessionError).toHaveBeenCalledWith('session-err');
   });
 
-  it('keeps done attention but suppresses a scheduler-owned completion callback', async () => {
+  it('suppresses scheduler-owned success attention and completion callback', async () => {
     vi.useFakeTimers();
     const onSessionDone = vi.fn();
     markNextSessionTerminalNotificationOwnedByScheduler('run-owned', 'session-owned');
@@ -126,7 +131,23 @@ describe('useSessionRunningStatus silenced completion handling', () => {
       await vi.advanceTimersByTimeAsync(500);
     });
 
-    expect(vi.mocked(addSessionAttention)).toHaveBeenCalledWith('session-owned', 'done');
+    expect(vi.mocked(addSessionAttention)).not.toHaveBeenCalledWith('session-owned', 'done');
+    expect(onSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('rereads silence when it arrives during the done debounce window', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone }));
+
+    await emitSnapshot(new Map([['session-late', status(true)]]));
+    await emitSnapshot(new Map([['session-late', status(false)]]));
+    markNextSessionDoneSilenced('run-late', 'session-late');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(vi.mocked(addSessionAttention)).not.toHaveBeenCalledWith('session-late', 'done');
     expect(onSessionDone).not.toHaveBeenCalled();
   });
 
@@ -483,6 +504,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(vi.mocked(clearSessionAttention)).toHaveBeenCalledWith('s-orphan', {
       intent: 'explicit',
     });
+    expect(vi.mocked(noteSessionTurnStartedForAlerts)).toHaveBeenCalledWith('s-orphan');
     vi.mocked(getSessionAttentionKind).mockReturnValue(undefined);
   });
 
@@ -496,6 +518,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(vi.mocked(clearSessionAttention)).not.toHaveBeenCalledWith('s-real', {
       intent: 'explicit',
     });
+    expect(vi.mocked(noteSessionTurnStartedForAlerts)).toHaveBeenCalledWith('s-real');
     vi.mocked(getSessionAttentionKind).mockReturnValue(undefined);
     storeMock.terminalErrorSessions.delete('s-real');
   });
@@ -554,8 +577,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
       await vi.advanceTimersByTimeAsync(600);
     });
 
-    // attention 仍照常挂(schedulerOwned 只抑制外发通知,不抑制角标)。
-    expect(vi.mocked(addSessionAttention)).toHaveBeenCalledWith('session-owned-multi', 'done');
+    expect(vi.mocked(addSessionAttention)).not.toHaveBeenCalledWith('session-owned-multi', 'done');
     expect(onSessionDone).not.toHaveBeenCalled();
     vi.useRealTimers();
   });

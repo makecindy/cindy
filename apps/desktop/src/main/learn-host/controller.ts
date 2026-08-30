@@ -19,6 +19,10 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
+import {
+  parseToolLoopErrorDetails,
+  type ToolLoopErrorDetails,
+} from '@cindy/maker-shared/tool-loop-error';
 
 import {
   LEARN_TERMINAL_STATUSES,
@@ -68,6 +72,13 @@ export class LearnError extends Error {
     super(message);
     this.name = 'LearnError';
   }
+}
+
+/** Terminal agent errors retain their stable projection while crossing the
+ * learn pipeline so persisted runs can be localized by the renderer. */
+interface LearnTerminalError extends Error {
+  reason?: string;
+  toolLoop?: ToolLoopErrorDetails;
 }
 
 /** 蒸馏 session 的窄化形态(maker Session 的子集,便于测试 fake)。 */
@@ -363,7 +374,7 @@ export class LearnController {
       this.deps.logger.error('[learn] pipeline failed', { runId, error: String(err) });
       const current = this.deps.store.get(runId);
       if (current && current.status !== 'failed' && current.status !== 'cancelled') {
-        await this.fail(current, err instanceof Error ? err.message : String(err));
+        await this.fail(current, err instanceof Error ? err : String(err));
       }
     });
 
@@ -541,7 +552,7 @@ export class LearnController {
           resolve();
         } else if (this.deps.isTerminalErrorEvent(ev)) {
           off();
-          reject(new Error(extractErr(ev.data)));
+          reject(extractTerminalError(ev.data));
         }
       });
       this.active = { runId, session, stopListening: off, rejectTurn: reject };
@@ -1115,11 +1126,14 @@ export class LearnController {
     this.active = null;
   }
 
-  private async fail(run: LearnRunPublic, error: string, assistantText?: string): Promise<void> {
+  private async fail(run: LearnRunPublic, error: string | Error, assistantText?: string): Promise<void> {
     await this.deps.staging.cleanup(run.runId);
+    const projection = error instanceof Error ? error as LearnTerminalError : undefined;
     await this.update(run, {
       status: 'failed',
-      error,
+      error: error instanceof Error ? error.message : error,
+      ...(projection?.reason ? { errorReason: projection.reason } : {}),
+      ...(projection?.toolLoop ? { toolLoop: projection.toolLoop } : {}),
       ...(assistantText ? { assistantText } : {}),
     });
   }
@@ -1158,11 +1172,19 @@ export class LearnController {
   }
 }
 
-function extractErr(data: unknown): string {
-  if (data && typeof data === 'object' && 'message' in data) {
-    return String((data as { message: unknown }).message);
-  }
-  return String(data);
+function extractTerminalError(data: unknown): LearnTerminalError {
+  const record = data && typeof data === 'object'
+    ? data as { message?: unknown; reason?: unknown; toolLoop?: unknown }
+    : undefined;
+  const error = new Error(
+    record?.message !== undefined && record.message !== null
+      ? String(record.message)
+      : String(data),
+  ) as LearnTerminalError;
+  if (typeof record?.reason === 'string') error.reason = record.reason;
+  const toolLoop = parseToolLoopErrorDetails(record?.toolLoop);
+  if (toolLoop) error.toolLoop = toolLoop;
+  return error;
 }
 
 function isRevisionTurnActivityEvent(ev: { type: string; data?: unknown }): boolean {

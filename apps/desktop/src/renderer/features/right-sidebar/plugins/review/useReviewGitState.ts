@@ -1,8 +1,9 @@
 /**
  * Hooks for git-review read state.
  *
- * Refresh triggers are explicit refresh, window focus, and makerChatStore
- * updates for the current session (debounced; covers turn-end changes).
+ * Refresh triggers are explicit refresh, window focus, and the current Agent
+ * turn ending. Ordinary stream updates must not repeatedly reload the whole
+ * Review tree while the Agent is still working.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -27,6 +28,36 @@ const REFRESH_DEBOUNCE_MS = 350;
 const FILE_DIFF_BATCH_CONCURRENCY = 6;
 const reviewLoadCache = new LruCache<string, unknown>(20);
 
+type ReviewTurnActivityStore = Pick<typeof makerChatStore, 'getRunningSnapshot' | 'subscribe'>;
+
+/**
+ * Subscribe to the current session's running -> stopped edge.
+ *
+ * The session store also publishes text, tool, usage, and other stream updates.
+ * Reloading the full Git diff for every quiet gap between those updates can
+ * rebuild thousands of Review nodes several times during one Agent turn.
+ */
+export function subscribeReviewRefreshOnTurnEnd(
+  sessionId: string,
+  callbacks: {
+    onTurnEnd: () => void;
+    cancelPendingRefresh: () => void;
+  },
+  store: ReviewTurnActivityStore = makerChatStore,
+): () => void {
+  let wasRunning = store.getRunningSnapshot().get(sessionId)?.isRunning === true;
+  const unsubscribe = store.subscribe(sessionId, () => {
+    const isRunning = store.getRunningSnapshot().get(sessionId)?.isRunning === true;
+    if (wasRunning && !isRunning) callbacks.onTurnEnd();
+    if (!wasRunning && isRunning) callbacks.cancelPendingRefresh();
+    wasRunning = isRunning;
+  });
+  return () => {
+    unsubscribe();
+    callbacks.cancelPendingRefresh();
+  };
+}
+
 interface LoadState<T> {
   data: T | null;
   loading: boolean;
@@ -37,17 +68,27 @@ interface LoadState<T> {
   setData: (data: T) => void;
 }
 
-function useDebouncedCallback(cb: () => void, delayMs: number): () => void {
+type CancelableCallback = (() => void) & { cancel: () => void };
+
+function useDebouncedCallback(cb: () => void, delayMs: number): CancelableCallback {
   const timerRef = useRef<number | null>(null);
   const cbRef = useRef(cb);
   cbRef.current = cb;
-  return useCallback(() => {
+  const cancel = useCallback(() => {
+    if (timerRef.current === null) return;
+    window.clearTimeout(timerRef.current);
+    timerRef.current = null;
+  }, []);
+  const debounced = useCallback(() => {
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
       cbRef.current();
     }, delayMs);
   }, [delayMs]);
+  const cancelable = debounced as CancelableCallback;
+  cancelable.cancel = cancel;
+  return cancelable;
 }
 
 async function mapWithConcurrency<T, R>(
@@ -72,7 +113,11 @@ function useGitReviewLoad<T>(
   sessionId: string | null,
   fetch: (sessionId: string) => Promise<T>,
   logLabel: string,
-  options: { cacheKey?: string | null; preserveWhenDisabled?: boolean; scopeKey?: string | null } = {},
+  options: {
+    cacheKey?: string | null;
+    preserveWhenDisabled?: boolean;
+    scopeKey?: string | null;
+  } = {},
 ): LoadState<T> {
   const cacheKey = options.cacheKey ?? null;
   const preserveWhenDisabled = options.preserveWhenDisabled ?? false;
@@ -80,7 +125,7 @@ function useGitReviewLoad<T>(
   // oid / baseRef / whitespace 等查询参数,粒度比 scope 细。
   const scopeKey = options.scopeKey ?? cacheKey;
   const [data, setDataState] = useState<T | null>(() => {
-    const cached = cacheKey ? reviewLoadCache.get(cacheKey) as T | undefined : undefined;
+    const cached = cacheKey ? (reviewLoadCache.get(cacheKey) as T | undefined) : undefined;
     return cached ?? null;
   });
   const [loading, setLoading] = useState(false);
@@ -102,7 +147,7 @@ function useGitReviewLoad<T>(
     const scopeChanged = paintedScopeKey !== scopeKey;
     setPaintedScopeKey(scopeKey);
     setPaintedCacheKey(cacheKey);
-    const cached = cacheKey ? reviewLoadCache.get(cacheKey) as T | undefined : undefined;
+    const cached = cacheKey ? (reviewLoadCache.get(cacheKey) as T | undefined) : undefined;
     if (scopeChanged) {
       // 立即让旧 scope 的在途请求失效；不能等新 scope 的 load effect，旧请求可能
       // 在 render 与 effect 之间完成并把 A 会话数据写回 B 会话。
@@ -117,10 +162,13 @@ function useGitReviewLoad<T>(
       setErrorCode(null);
     }
   }
-  const setData = useCallback((next: T) => {
-    setDataState(next);
-    if (cacheKey) reviewLoadCache.set(cacheKey, next);
-  }, [cacheKey]);
+  const setData = useCallback(
+    (next: T) => {
+      setDataState(next);
+      if (cacheKey) reviewLoadCache.set(cacheKey, next);
+    },
+    [cacheKey],
+  );
 
   const load = useCallback(() => {
     if (!sessionId) {
@@ -162,7 +210,10 @@ function useGitReviewLoad<T>(
     if (!sessionId) return;
     const onFocus = () => debouncedLoad();
     window.addEventListener('focus', onFocus);
-    const unsubscribe = makerChatStore.subscribe(sessionId, debouncedLoad);
+    const unsubscribe = subscribeReviewRefreshOnTurnEnd(sessionId, {
+      onTurnEnd: debouncedLoad,
+      cancelPendingRefresh: debouncedLoad.cancel,
+    });
     return () => {
       window.removeEventListener('focus', onFocus);
       unsubscribe();
@@ -177,17 +228,28 @@ export function useReviewGitState(
   ignoreWhitespace = false,
   deviceId: string | null = null,
 ): LoadState<ReviewData> {
-  const fetchReviewData = useCallback((currentSessionId: string) =>
-    gitReviewApiFor(deviceId).get({ sessionId: currentSessionId, ignoreWhitespace }), [deviceId, ignoreWhitespace]);
+  const fetchReviewData = useCallback(
+    (currentSessionId: string) =>
+      gitReviewApiFor(deviceId).get({ sessionId: currentSessionId, ignoreWhitespace }),
+    [deviceId, ignoreWhitespace],
+  );
   return useGitReviewLoad(sessionId, fetchReviewData, 'git review load failed', {
-    cacheKey: sessionId ? `${deviceId ?? 'local'}:worktree:${sessionId}:${ignoreWhitespace ? 'w' : 'plain'}` : null,
+    cacheKey: sessionId
+      ? `${deviceId ?? 'local'}:worktree:${sessionId}:${ignoreWhitespace ? 'w' : 'plain'}`
+      : null,
     scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}` : null,
   });
 }
 
-export function useReviewDirtySummary(sessionId: string | null, deviceId: string | null = null): LoadState<ReviewDirtySummary> {
-  const fetchReviewSummary = useCallback((currentSessionId: string) =>
-    gitReviewApiFor(deviceId).summary({ sessionId: currentSessionId }), [deviceId]);
+export function useReviewDirtySummary(
+  sessionId: string | null,
+  deviceId: string | null = null,
+): LoadState<ReviewDirtySummary> {
+  const fetchReviewSummary = useCallback(
+    (currentSessionId: string) =>
+      gitReviewApiFor(deviceId).summary({ sessionId: currentSessionId }),
+    [deviceId],
+  );
   return useGitReviewLoad(sessionId, fetchReviewSummary, 'git review summary failed', {
     scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}` : null,
   });
@@ -198,8 +260,11 @@ export function useReviewCommits(
   baseRef: string | null,
   deviceId: string | null = null,
 ): LoadState<ReviewCommitListData> {
-  const fetchReviewCommits = useCallback((currentSessionId: string) =>
-    gitReviewApiFor(deviceId).commits({ sessionId: currentSessionId, baseRef }), [baseRef, deviceId]);
+  const fetchReviewCommits = useCallback(
+    (currentSessionId: string) =>
+      gitReviewApiFor(deviceId).commits({ sessionId: currentSessionId, baseRef }),
+    [baseRef, deviceId],
+  );
   return useGitReviewLoad(sessionId, fetchReviewCommits, 'git review commits failed', {
     scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}` : null,
   });
@@ -211,15 +276,30 @@ export function useReviewCommitDiff(
   ignoreWhitespace = false,
   deviceId: string | null = null,
 ): LoadState<ReviewCommitDiffData> {
-  const fetchCommitDiff = useCallback((currentSessionId: string) => {
-    if (!oid) return Promise.reject(new Error('commit oid is required'));
-    return gitReviewApiFor(deviceId).commitDiff({ sessionId: currentSessionId, oid, ignoreWhitespace });
-  }, [deviceId, ignoreWhitespace, oid]);
-  return useGitReviewLoad(sessionId && oid ? sessionId : null, fetchCommitDiff, 'git review commit diff failed', {
-    cacheKey: sessionId && oid ? `${deviceId ?? 'local'}:commit:${sessionId}:${oid}:${ignoreWhitespace ? 'w' : 'plain'}` : null,
-    scopeKey: sessionId && oid ? `${deviceId ?? 'local'}:${sessionId}` : null,
-    preserveWhenDisabled: true,
-  });
+  const fetchCommitDiff = useCallback(
+    (currentSessionId: string) => {
+      if (!oid) return Promise.reject(new Error('commit oid is required'));
+      return gitReviewApiFor(deviceId).commitDiff({
+        sessionId: currentSessionId,
+        oid,
+        ignoreWhitespace,
+      });
+    },
+    [deviceId, ignoreWhitespace, oid],
+  );
+  return useGitReviewLoad(
+    sessionId && oid ? sessionId : null,
+    fetchCommitDiff,
+    'git review commit diff failed',
+    {
+      cacheKey:
+        sessionId && oid
+          ? `${deviceId ?? 'local'}:commit:${sessionId}:${oid}:${ignoreWhitespace ? 'w' : 'plain'}`
+          : null,
+      scopeKey: sessionId && oid ? `${deviceId ?? 'local'}:${sessionId}` : null,
+      preserveWhenDisabled: true,
+    },
+  );
 }
 
 export function useReviewBranchDiff(
@@ -229,17 +309,27 @@ export function useReviewBranchDiff(
   enabled = true,
   deviceId: string | null = null,
 ): LoadState<ReviewBranchDiffData> {
-  const fetchBranchDiff = useCallback((currentSessionId: string) =>
-    gitReviewApiFor(deviceId).branchDiff({
-      sessionId: currentSessionId,
-      baseRef,
-      ignoreWhitespace,
-    }), [baseRef, deviceId, ignoreWhitespace]);
-  return useGitReviewLoad(sessionId && enabled ? sessionId : null, fetchBranchDiff, 'git review branch diff failed', {
-    cacheKey: sessionId ? `${deviceId ?? 'local'}:branch:${sessionId}:${baseRef ?? 'default'}:${ignoreWhitespace ? 'w' : 'plain'}` : null,
-    scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}` : null,
-    preserveWhenDisabled: true,
-  });
+  const fetchBranchDiff = useCallback(
+    (currentSessionId: string) =>
+      gitReviewApiFor(deviceId).branchDiff({
+        sessionId: currentSessionId,
+        baseRef,
+        ignoreWhitespace,
+      }),
+    [baseRef, deviceId, ignoreWhitespace],
+  );
+  return useGitReviewLoad(
+    sessionId && enabled ? sessionId : null,
+    fetchBranchDiff,
+    'git review branch diff failed',
+    {
+      cacheKey: sessionId
+        ? `${deviceId ?? 'local'}:branch:${sessionId}:${baseRef ?? 'default'}:${ignoreWhitespace ? 'w' : 'plain'}`
+        : null,
+      scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}` : null,
+      preserveWhenDisabled: true,
+    },
+  );
 }
 
 export function useReviewFileDiff(
@@ -254,26 +344,35 @@ export function useReviewFileDiff(
   const commitOid = request?.commitOid ?? null;
   const branchBaseRef = request?.branchBaseRef ?? null;
   const ignoreWhitespace = request?.ignoreWhitespace === true;
-  const fetchFileDiff = useCallback((currentSessionId: string) => {
-    if (!source || !path) return Promise.reject(new Error('file diff request is required'));
-    return gitReviewApiFor(deviceId).fileDiff({
-      sessionId: currentSessionId,
-      source,
-      path,
-      oldPath,
-      commitOid,
-      branchBaseRef,
-      ignoreWhitespace,
-    });
-  }, [branchBaseRef, commitOid, deviceId, ignoreWhitespace, oldPath, path, refreshVersion, source]);
-  const cacheKey = sessionId && source && path
-    ? `${deviceId ?? 'local'}:file:${sessionId}:${source}:${commitOid ?? branchBaseRef ?? 'worktree'}:${oldPath ?? ''}:${path}:${ignoreWhitespace ? 'w' : 'plain'}:${refreshVersion}`
-    : null;
-  return useGitReviewLoad(sessionId && source && path ? sessionId : null, fetchFileDiff, 'git review file diff failed', {
-    cacheKey,
-    scopeKey: sessionId && source && path ? `${deviceId ?? 'local'}:${sessionId}` : null,
-    preserveWhenDisabled: true,
-  });
+  const fetchFileDiff = useCallback(
+    (currentSessionId: string) => {
+      if (!source || !path) return Promise.reject(new Error('file diff request is required'));
+      return gitReviewApiFor(deviceId).fileDiff({
+        sessionId: currentSessionId,
+        source,
+        path,
+        oldPath,
+        commitOid,
+        branchBaseRef,
+        ignoreWhitespace,
+      });
+    },
+    [branchBaseRef, commitOid, deviceId, ignoreWhitespace, oldPath, path, refreshVersion, source],
+  );
+  const cacheKey =
+    sessionId && source && path
+      ? `${deviceId ?? 'local'}:file:${sessionId}:${source}:${commitOid ?? branchBaseRef ?? 'worktree'}:${oldPath ?? ''}:${path}:${ignoreWhitespace ? 'w' : 'plain'}:${refreshVersion}`
+      : null;
+  return useGitReviewLoad(
+    sessionId && source && path ? sessionId : null,
+    fetchFileDiff,
+    'git review file diff failed',
+    {
+      cacheKey,
+      scopeKey: sessionId && source && path ? `${deviceId ?? 'local'}:${sessionId}` : null,
+      preserveWhenDisabled: true,
+    },
+  );
 }
 
 export function useReviewFileDiffs(
@@ -281,34 +380,42 @@ export function useReviewFileDiffs(
   requests: readonly ReviewFileDiffRequest[],
   deviceId: string | null = null,
 ): LoadState<ReviewFileDiffData[]> {
-  const requestKey = requests.length > 0
-    ? JSON.stringify(requests.map((request) => ({
-      source: request.source,
-      path: request.path,
-      oldPath: request.oldPath ?? null,
-      commitOid: request.commitOid ?? null,
-      branchBaseRef: request.branchBaseRef ?? null,
-      ignoreWhitespace: request.ignoreWhitespace === true,
-    })))
-    : null;
+  const requestKey =
+    requests.length > 0
+      ? JSON.stringify(
+          requests.map((request) => ({
+            source: request.source,
+            path: request.path,
+            oldPath: request.oldPath ?? null,
+            commitOid: request.commitOid ?? null,
+            branchBaseRef: request.branchBaseRef ?? null,
+            ignoreWhitespace: request.ignoreWhitespace === true,
+          })),
+        )
+      : null;
   // React exhaustive-deps note: requestKey encodes request contents; array identity changes alone should not reload the batch.
-  const fetchFileDiffs = useCallback((currentSessionId: string) =>
-    mapWithConcurrency(requests, FILE_DIFF_BATCH_CONCURRENCY, (request) =>
-      gitReviewApiFor(deviceId).fileDiff({
-        sessionId: currentSessionId,
-        source: request.source,
-        path: request.path,
-        oldPath: request.oldPath ?? null,
-        commitOid: request.commitOid ?? null,
-        branchBaseRef: request.branchBaseRef ?? null,
-        ignoreWhitespace: request.ignoreWhitespace === true,
-      })), [deviceId, requestKey]);
+  const fetchFileDiffs = useCallback(
+    (currentSessionId: string) =>
+      mapWithConcurrency(requests, FILE_DIFF_BATCH_CONCURRENCY, (request) =>
+        gitReviewApiFor(deviceId).fileDiff({
+          sessionId: currentSessionId,
+          source: request.source,
+          path: request.path,
+          oldPath: request.oldPath ?? null,
+          commitOid: request.commitOid ?? null,
+          branchBaseRef: request.branchBaseRef ?? null,
+          ignoreWhitespace: request.ignoreWhitespace === true,
+        }),
+      ),
+    [deviceId, requestKey],
+  );
   return useGitReviewLoad(
     sessionId && requestKey ? sessionId : null,
     fetchFileDiffs,
     'git review file diff batch failed',
     {
-      cacheKey: sessionId && requestKey ? `${deviceId ?? 'local'}:files:${sessionId}:${requestKey}` : null,
+      cacheKey:
+        sessionId && requestKey ? `${deviceId ?? 'local'}:files:${sessionId}:${requestKey}` : null,
       scopeKey: sessionId && requestKey ? `${deviceId ?? 'local'}:${sessionId}` : null,
       preserveWhenDisabled: false,
     },

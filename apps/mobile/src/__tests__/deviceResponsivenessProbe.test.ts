@@ -28,8 +28,8 @@ describe('DEVICE_RESPONSIVENESS_PROBE_CHANNEL 契约', () => {
     expect(DEVICE_RESPONSIVENESS_PROBE_CHANNEL.startsWith('local-db:')).toBe(true);
   });
 
-  it('探测参数是最小读:limit=1,与 devices 页正常拉取同一参数形状', () => {
-    expect(buildDeviceResponsivenessProbeArgs()).toEqual([1, 'all', { includePinned: true }]);
+  it('探测参数是最小读:limit=1且不加载全部置顶会话', () => {
+    expect(buildDeviceResponsivenessProbeArgs()).toEqual([1, 'all', { includePinned: false }]);
     // 每次新数组,调用方可安全透传给 invoke(不共享可变引用)。
     expect(buildDeviceResponsivenessProbeArgs()).not.toBe(buildDeviceResponsivenessProbeArgs());
   });

@@ -299,12 +299,19 @@ stream_max_retries = 0
     const turnCompleted = new Promise<void>((resolve) => {
       resolveTurnCompleted = resolve;
     });
+    let resolveCommandItemCompleted!: () => void;
+    const commandItemCompleted = new Promise<void>((resolve) => {
+      resolveCommandItemCompleted = resolve;
+    });
     const startedItems: ItemEnvelope[] = [];
     const completedItems: ItemEnvelope[] = [];
     subscription = host.subscribeThread(thread.thread.id, {
       turnCompleted: () => resolveTurnCompleted(),
       itemStarted: ({ item }) => startedItems.push(item),
-      itemCompleted: ({ item }) => completedItems.push(item),
+      itemCompleted: ({ item }) => {
+        completedItems.push(item);
+        if (item.type === 'commandExecution') resolveCommandItemCompleted();
+      },
     });
 
     await withTimeout(
@@ -322,6 +329,9 @@ stream_max_retries = 0
       'turn/start',
     );
     await withTimeout(turnCompleted, 30_000, 'turn/completed');
+    // Codex may publish turn/completed before the command's terminal item.
+    // Wait for the boundary this assertion actually owns instead of racing it.
+    await withTimeout(commandItemCompleted, 30_000, 'commandExecution item/completed');
 
     expect(providerRequests).toHaveLength(2);
     const firstTools = providerRequests[0]?.tools as Array<Record<string, unknown>>;

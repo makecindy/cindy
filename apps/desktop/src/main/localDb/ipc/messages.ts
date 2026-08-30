@@ -621,6 +621,10 @@ export function registerMessageIpc(): void {
     async (_e, sessionId: unknown, clientId: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      // 动态 import:messagePersistBroadcaster 已静态依赖本模块 createMessage,
+      // 静态反向 import 会成环。落库前点关闭/重试时先等同一 persistId 写完。
+      const { whenTurnErrorPersisted } = await import('../../messagePersistBroadcaster.js');
+      await whenTurnErrorPersisted(sid, cid);
       const msg = await dismissErrorMessage(sid, cid);
       if (!msg) throwIpcError('NOT_FOUND', 'Error message 不存在');
       return msg;

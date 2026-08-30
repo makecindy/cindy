@@ -6,6 +6,7 @@ import path from 'node:path';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
+import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/config-dir';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
@@ -254,6 +255,15 @@ const desktopDevInstanceOptions = (() => {
     profileKind: devFlags.profileKind,
   };
 })();
+
+// Pin after the last userData setPath. Vite's main bundle require()s
+// @cindy/browser-control-runtime at chunk load (before this body), so
+// CONFIG_DIR is already the ~/.xdt-maker fallback. Setting env is not
+// enough — refresh the live binding Chrome launch actually joins.
+if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
+  process.env.XDT_BROWSER_RUNTIME_DIR = path.join(app.getPath('userData'), 'browser-runtime');
+}
+refreshBrowserRuntimeConfigDir();
 
 async function dispatch(): Promise<void> {
   const cleanupDevInstance = await beginDesktopDevInstance(desktopDevInstanceOptions);
