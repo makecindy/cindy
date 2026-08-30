@@ -41,6 +41,7 @@ import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import {
   CODEX_USER_DISCONNECT_REASON,
   clearInvalidatedSystemCodexAuthMarker,
+  currentCodexAuthMarker,
   currentSystemCodexAuthMarker,
   getActiveInvalidatedSystemCodexAuthMarker,
   isDurableDisconnectMarker,
@@ -2201,9 +2202,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         reason,
       });
       const credentialScope = this.readCodexCredentialScope();
+      const localAuthPath = path.join(this.codexHome, 'auth.json');
+      // A late 401 belongs to the credential actually consumed by the old host. The system path
+      // may already contain its replacement; if local evidence is unreadable, keep failing closed
+      // instead of guessing that the current system credential is the invalidated generation.
       this.devReadOnlyInvalidatedSystemCredential =
         credentialScope === 'system-shared'
-          ? currentSystemCodexAuthMarker(getSystemCodexAuthPath(), reason, credentialScope)
+          ? currentCodexAuthMarker(localAuthPath, reason, credentialScope)
           : null;
       this.oauthInvalidatedReason = reason;
       this.oauthInvalidatedCredentialScope = credentialScope;

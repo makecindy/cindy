@@ -267,6 +267,63 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
+  it('dev 只读系统换代先于迟到失效时记录本地旧代并恢复系统新代', async () => {
+    const { codexHome, localAuth, systemAuth } = fixture();
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    const oldLocalBytes = fs.readFileSync(localAuth);
+    const originalMode = fs.statSync(systemAuth).mode;
+
+    const replacement = path.join(path.dirname(systemAuth), 'auth.before-late-401.json');
+    fs.writeFileSync(
+      replacement,
+      JSON.stringify({
+        account: { email: 'dev@example.test' },
+        tokens: { access_token: 'preexisting-renewed-token', account_id: 'acct-1' },
+      }),
+      { mode: originalMode },
+    );
+    fs.renameSync(replacement, systemAuth);
+    const renewedSystemBytes = fs.readFileSync(systemAuth);
+    const renewedSystemStat = fs.statSync(systemAuth);
+    expect(fs.readFileSync(localAuth)).toEqual(oldLocalBytes);
+    expect(fs.readFileSync(localAuth)).not.toEqual(renewedSystemBytes);
+
+    const chmod = vi.spyOn(fs.promises, 'chmod');
+    await adapter.invalidate('late_host_401');
+
+    expect(readCodexOneShotCreds(adapter)).toBeNull();
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      recoveryRequiredReason: 'late_host_401',
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.getAccessToken()).resolves.toBe('preexisting-renewed-token');
+    await adapter.verifyRecoveryWithAccountRpc(async () => undefined);
+    const recoveredState = await adapter.getState({ credentialMode: 'oauth-bearer' });
+    expect(recoveredState).toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    expect(recoveredState).not.toHaveProperty('recoveryRequiredReason');
+    expect(fs.readFileSync(systemAuth)).toEqual(renewedSystemBytes);
+    expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
+    expect(fs.statSync(systemAuth).mode).toBe(renewedSystemStat.mode);
+    expect(fs.statSync(systemAuth).ino).toBe(renewedSystemStat.ino);
+    expect(chmod).not.toHaveBeenCalled();
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+  });
+
   it('显式写开关只解除 dev UI/主进程门禁,不会自行启动 OAuth', async () => {
     fixture();
     vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');
