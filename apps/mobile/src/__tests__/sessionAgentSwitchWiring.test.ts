@@ -60,7 +60,7 @@ describe('session Agent switch UI wiring', () => {
       'hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
     );
     expect(helper).toContain('agentKind: sessionAgentKind');
-    expect(helper).toContain('isSsh: Boolean(currentSession?.remoteHostId)');
+    expect(helper).not.toContain('isSsh');
     expect(helper).toContain('contextTokens: currentSession?.contextTokens');
     expect(helper).toContain('currentContextWindow: currentSession?.contextWindow');
     expect(helper).toContain('targetContextWindow: args.targetContextWindow');

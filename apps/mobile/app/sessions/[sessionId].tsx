@@ -8010,7 +8010,6 @@ export default function SessionScreen() {
     if (shouldBlockLegacyRemoteModelWindowSwitch({
       hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
       agentKind: sessionAgentKind,
-      isSsh: Boolean(currentSession?.remoteHostId),
       contextTokens: currentSession?.contextTokens,
       currentContextWindow: currentSession?.contextWindow,
       targetContextWindow: args.targetContextWindow,
@@ -8038,7 +8037,6 @@ export default function SessionScreen() {
   }, [
     currentSession?.contextTokens,
     currentSession?.contextWindow,
-    currentSession?.remoteHostId,
     maker,
     modelSheetCapabilities?.supportsModelWindowSwitchGuard,
     sessionAgentKind,

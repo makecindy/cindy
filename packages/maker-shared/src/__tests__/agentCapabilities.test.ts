@@ -96,11 +96,10 @@ describe('agent capabilities shared model', () => {
     })?.supportsModelWindowSwitchGuard).toBe(true);
   });
 
-  it('fails closed only for known pressured non-Pi shrinks on legacy hosts', () => {
+  it('fails closed for known pressured non-Pi shrinks on legacy hosts, including SSH', () => {
     const pressuredShrink = {
       hostGuardSupported: false,
       agentKind: 'codex',
-      isSsh: false,
       contextTokens: 250_000,
       currentContextWindow: 1_000_000,
       targetContextWindow: 200_000,
@@ -127,10 +126,12 @@ describe('agent capabilities shared model', () => {
       ...pressuredShrink,
       hostGuardSupported: true,
     })).toBe(false);
-    expect(shouldBlockLegacyRemoteModelWindowSwitch({
+    const pressuredSshShrink = {
       ...pressuredShrink,
       isSsh: true,
-    })).toBe(false);
+      contextTokens: 180_000,
+    };
+    expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredSshShrink)).toBe(true);
     expect(shouldBlockLegacyRemoteModelWindowSwitch({
       ...pressuredShrink,
       currentContextWindow: undefined,

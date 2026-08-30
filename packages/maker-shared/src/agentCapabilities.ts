@@ -164,12 +164,11 @@ export function normalizeMobileAgentCapabilities(value: unknown): MobileAgentCap
 export function shouldBlockLegacyRemoteModelWindowSwitch(args: {
   hostGuardSupported: boolean;
   agentKind: string | null | undefined;
-  isSsh: boolean;
   contextTokens: number | null | undefined;
   currentContextWindow: number | null | undefined;
   targetContextWindow: number | null | undefined;
 }): boolean {
-  if (args.hostGuardSupported || args.agentKind === 'pi' || args.isSsh) return false;
+  if (args.hostGuardSupported || args.agentKind === 'pi') return false;
   const { contextTokens, currentContextWindow, targetContextWindow } = args;
   if (
     typeof contextTokens !== 'number' ||
