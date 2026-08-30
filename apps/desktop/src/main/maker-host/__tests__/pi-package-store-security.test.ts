@@ -2807,6 +2807,272 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  it('converges local runtimes when a failed initial runtime-token read recovers after a peer-only edge', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyToken = path.join(tokenDir, 'cindy-package-change-token');
+    const viewToken = path.join(tokenDir, 'cindy-package-view-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:old\n'),
+      fs.writeFile(legacyToken, 'runtime:old\n'),
+      fs.writeFile(viewToken, 'view:old\n'),
+    ]);
+
+    let runtimeReadBlocked = true;
+    let legacyReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      const resolvedTarget = path.resolve(String(target));
+      if ((runtimeReadBlocked && resolvedTarget === path.resolve(runtimeToken))
+        || (legacyReadBlocked && resolvedTarget === path.resolve(legacyToken))) {
+        throw Object.assign(new Error('package token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const { invalidateLocalPiPackageRuntimesForObservedChange } = await import(
+      '../pi-package-runtime-invalidation.js'
+    );
+    const originListener = vi.fn();
+    const closeSessionIfCurrent = vi.fn(async () => undefined);
+    const localPi = { id: 'local-pi', agentKind: 'pi' };
+    const maker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
+      listActiveSessions: vi.fn(() => [localPi]),
+      getSessionMeta: vi.fn(async () => ({ remoteHostId: null, reviewMode: false })),
+      closeSessionIfCurrent,
+    };
+    const unsubscribe = store.onPiPackagesChanged((origin) => {
+      originListener(origin);
+      void invalidateLocalPiPackageRuntimesForObservedChange(maker as never, origin);
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(loggerRuntime.warn).toHaveBeenCalledWith(
+          'Pi package change token read failed',
+          expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+        );
+        expect(loggerRuntime.warn).toHaveBeenCalledWith(
+          'Pi package change token read failed',
+          expect.objectContaining({ tokenKind: 'legacy', failureCategory: 'io-failure' }),
+        );
+      });
+
+      // Recover the old legacy baseline while runtime observation stays down.
+      legacyReadBlocked = false;
+      await fs.writeFile(legacyToken, 'runtime:old\n');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Simulate another Main publishing only the runtime edge while its legacy
+      // mirror write fails. The legacy file intentionally stays on the old token.
+      await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
+
+      await vi.waitFor(() => expect(originListener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
+        localPi,
+        'requested',
+      ));
+      expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('does not invent a runtime edge when recovery has only a view-style legacy baseline', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:already-present\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), 'view:latest\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:latest\n'),
+    ]);
+
+    let runtimeReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (runtimeReadBlocked && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        throw Object.assign(new Error('runtime token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await vi.waitFor(() => expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+      ));
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:already-present\n');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('does not duplicate a legacy runtime edge when the unreadable runtime token recovers old', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyToken = path.join(tokenDir, 'cindy-package-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:old\n'),
+      fs.writeFile(legacyToken, 'runtime:old\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:old\n'),
+    ]);
+
+    let runtimeReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (runtimeReadBlocked && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        throw Object.assign(new Error('runtime token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await vi.waitFor(() => expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+      ));
+      await fs.writeFile(legacyToken, 'runtime:legacy-edge\n');
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:old\n');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('does not use an already-notified legacy edge as the runtime recovery baseline', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyToken = path.join(tokenDir, 'cindy-package-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:old\n'),
+      fs.writeFile(legacyToken, 'view:old\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:old\n'),
+    ]);
+
+    let runtimeReadBlocked = true;
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (runtimeReadBlocked && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        throw Object.assign(new Error('runtime token temporarily unreadable'), { code: 'EIO' });
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await vi.waitFor(() => expect(loggerRuntime.warn).toHaveBeenCalledWith(
+        'Pi package change token read failed',
+        expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
+      ));
+      await fs.writeFile(legacyToken, 'runtime:legacy-edge\n');
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
+        timeout: 2_000,
+      });
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+
+      runtimeReadBlocked = false;
+      await fs.writeFile(runtimeToken, 'runtime:old\n');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('discards an observer batch that predates a local runtime-token publication', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeToken = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(runtimeToken, 'runtime:old\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), 'runtime:old\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:old\n'),
+    ]);
+
+    let releaseRuntimeRead!: () => void;
+    const runtimeReadGate = new Promise<void>((resolve) => { releaseRuntimeRead = resolve; });
+    const originalOpen = fs.open.bind(fs);
+    let delayedRuntimeRead = false;
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      if (!delayedRuntimeRead && path.resolve(String(target)) === path.resolve(runtimeToken)) {
+        delayedRuntimeRead = true;
+        const handle = await originalOpen(target, flags, mode);
+        return {
+          stat: async () => {
+            await runtimeReadGate;
+            return handle.stat();
+          },
+          readFile: (...args: Parameters<typeof handle.readFile>) => handle.readFile(...args),
+          close: () => handle.close(),
+        } as Awaited<ReturnType<typeof fs.open>>;
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await vi.waitFor(() => expect(delayedRuntimeRead).toBe(true));
+      await mutateAuthorized(store, { action: 'install', source: 'npm:local-publication' });
+      releaseRuntimeRead();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      expect(listener).toHaveBeenCalledWith('local');
+      expect(listener).not.toHaveBeenCalledWith('external-runtime');
+    } finally {
+      releaseRuntimeRead();
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
+  it('uses the first successful runtime-token read as a cold-start baseline', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(tokenDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(path.join(tokenDir, 'cindy-package-runtime-change-token'), 'runtime:cold\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), 'runtime:cold\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:cold\n'),
+    ]);
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it.each([
     ['runtime', 'cindy-package-runtime-change-token', 'runtime:next', 'external-runtime'],
     ['legacy', 'cindy-package-change-token', 'runtime:legacy-next', 'external-runtime'],

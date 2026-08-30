@@ -90,6 +90,8 @@ const changeListeners = new Set<(origin: PiPackagesChangeOrigin) => void>();
 const packageMutationMayHaveChangedErrors = new WeakSet<object>();
 let changeTokenWatcherActive = false;
 let lastObservedRuntimeChangeToken: string | null | undefined;
+let runtimeChangeTokenReadFailedBeforeBaseline = false;
+let runtimeRecoveryLegacyBaseline: string | undefined;
 let lastObservedLegacyChangeToken: string | null | undefined;
 let lastObservedViewChangeToken: string | null | undefined;
 let lastNotifiedRuntimeChangeToken: string | null | undefined;
@@ -153,17 +155,33 @@ function observePiPackageChangeToken(): Promise<void> {
     changeTokenReadQueued = true;
     return changeTokenReadInFlight;
   }
+  const runtimeBaselineAtReadStart = lastObservedRuntimeChangeToken;
+  const legacyBaselineAtReadStart = lastObservedLegacyChangeToken;
+  const viewBaselineAtReadStart = lastObservedViewChangeToken;
   const pending = Promise.allSettled([
     readPiPackageChangeToken(runtimeChangeTokenPath()),
     readPiPackageChangeToken(changeTokenPath()),
     readPiPackageChangeToken(viewChangeTokenPath()),
   ]).then(([runtimeResult, legacyResult, viewResult]) => {
+    // A local publication may rebase observations while async reads are open.
+    // Ignore that stale batch per token and immediately read the published edge.
+    const runtimeObservationCurrent = lastObservedRuntimeChangeToken === runtimeBaselineAtReadStart;
+    const legacyObservationCurrent = lastObservedLegacyChangeToken === legacyBaselineAtReadStart;
+    const viewObservationCurrent = lastObservedViewChangeToken === viewBaselineAtReadStart;
+    if (!runtimeObservationCurrent || !legacyObservationCurrent || !viewObservationCurrent) {
+      changeTokenReadQueued = true;
+    }
     for (const [tokenKind, result] of [
       ['runtime', runtimeResult],
       ['legacy', legacyResult],
       ['view', viewResult],
     ] as const) {
       if (result.status === 'rejected') {
+        if (tokenKind === 'runtime'
+          && runtimeObservationCurrent
+          && lastObservedRuntimeChangeToken === undefined) {
+          runtimeChangeTokenReadFailedBeforeBaseline = true;
+        }
         log.warn('Pi package change token read failed', {
           tokenKind,
           failureCategory: changeTokenReadFailureCategory(result.reason),
@@ -177,17 +195,28 @@ function observePiPackageChangeToken(): Promise<void> {
     let runtimeToken: string | null = null;
     let legacyToken: string | null = null;
     let viewToken: string | null = null;
-    if (runtimeResult.status === 'fulfilled') {
+    if (runtimeResult.status === 'fulfilled' && runtimeObservationCurrent) {
       runtimeToken = runtimeResult.value;
       if (lastObservedRuntimeChangeToken === undefined) {
+        // A first successful read is a cold-start baseline only when runtime
+        // observation has never failed. After a failed read, an initialized
+        // legacy baseline lets us distinguish a peer runtime edge from the
+        // token that this Main had already observed.
+        runtimeChanged = runtimeChangeTokenReadFailedBeforeBaseline
+          && runtimeRecoveryLegacyBaseline !== undefined
+          && runtimeToken !== runtimeRecoveryLegacyBaseline;
+        runtimeChangeTokenReadFailedBeforeBaseline = false;
+        runtimeRecoveryLegacyBaseline = undefined;
         lastObservedRuntimeChangeToken = runtimeToken;
-        if (lastNotifiedRuntimeChangeToken === undefined) lastNotifiedRuntimeChangeToken = runtimeToken;
+        if (!runtimeChanged && lastNotifiedRuntimeChangeToken === undefined) {
+          lastNotifiedRuntimeChangeToken = runtimeToken;
+        }
       } else {
         runtimeChanged = runtimeToken !== lastObservedRuntimeChangeToken;
         lastObservedRuntimeChangeToken = runtimeToken;
       }
     }
-    if (legacyResult.status === 'fulfilled') {
+    if (legacyResult.status === 'fulfilled' && legacyObservationCurrent) {
       legacyToken = legacyResult.value;
       if (lastObservedLegacyChangeToken === undefined) {
         lastObservedLegacyChangeToken = legacyToken;
@@ -199,7 +228,19 @@ function observePiPackageChangeToken(): Promise<void> {
         lastObservedLegacyChangeToken = legacyToken;
       }
     }
-    if (viewResult.status === 'fulfilled') {
+    if (runtimeResult.status === 'rejected'
+      && runtimeObservationCurrent
+      && lastObservedRuntimeChangeToken === undefined
+      && runtimeRecoveryLegacyBaseline === undefined
+      && !legacyChanged
+      && lastObservedLegacyChangeToken
+      && !lastObservedLegacyChangeToken.startsWith('view:')) {
+      // Freeze the first trustworthy runtime-style legacy observation available
+      // during the outage. Later legacy edges converge independently and must
+      // not move this recovery comparison point.
+      runtimeRecoveryLegacyBaseline = lastObservedLegacyChangeToken;
+    }
+    if (viewResult.status === 'fulfilled' && viewObservationCurrent) {
       viewToken = viewResult.value;
       if (lastObservedViewChangeToken === undefined) {
         lastObservedViewChangeToken = viewToken;
