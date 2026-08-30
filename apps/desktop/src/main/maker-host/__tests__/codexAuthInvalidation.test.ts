@@ -480,6 +480,64 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
+  it('persists first explicit login provenance before reconciling a different system account', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-first-explicit-login-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({
+        account: { email: 'system-a@example.test' },
+        tokens: { access_token: 'system-a-token', account_id: 'account-a' },
+      }),
+    );
+    fs.writeFileSync(
+      localAuth,
+      JSON.stringify({
+        account: { email: 'cindy-b@example.test' },
+        tokens: { access_token: 'cindy-b-token', account_id: 'account-b' },
+      }),
+    );
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const finishSuccessfulCodexLogin = (
+      adapter as unknown as {
+        finishSuccessfulCodexLogin(): Promise<{
+          authenticated: boolean;
+          credentialScope?: string;
+        }>;
+      }
+    ).finishSuccessfulCodexLogin.bind(adapter);
+
+    await expect(finishSuccessfulCodexLogin()).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'instance-isolated',
+    });
+    expect(JSON.parse(fs.readFileSync(localAuth, 'utf8'))).toMatchObject({
+      account: { email: 'cindy-b@example.test' },
+      tokens: { access_token: 'cindy-b-token', account_id: 'account-b' },
+    });
+    expect(JSON.parse(fs.readFileSync(systemAuth, 'utf8'))).toMatchObject({
+      account: { email: 'system-a@example.test' },
+      tokens: { access_token: 'system-a-token', account_id: 'account-a' },
+    });
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'owner-a',
+      selfAuthorized: { openai: 'owner-a' },
+      sources: { openai: 'explicit-provider-oauth' },
+    });
+  });
+
   it('reclassifies a shared invalidation as isolated after an explicit Cindy login', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-to-isolated-'));
     dirs.push(root);

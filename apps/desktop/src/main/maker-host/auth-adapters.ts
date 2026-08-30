@@ -1779,6 +1779,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       getSystemCodexAuthPath(),
     );
     this.suppressSystemCodexReconcile = keepSuppressed || missingMarkerFailClosed;
+    // `codex login` 的成功已经由刚写入的真实 access_token 证明。先持久化显式来源，
+    // 再允许 reconcile 检查本地普通文件；否则首次登录会被当成无 provenance 孤岛，
+    // 用系统账号覆盖后才把错误的系统凭证标成 Cindy 显式授权。
+    bindNativeProviderAuth('openai');
     if (this.suppressSystemCodexReconcile) {
       log.warn(
         'system codex auth.json marker still active; keeping reconcile suppressed after login',
@@ -1788,8 +1792,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
     const cancelledAfterReconcile = cancelFinalization();
     if (cancelledAfterReconcile) return cancelledAfterReconcile;
-    // `codex login` 的成功必须由真实 access_token 证明；绝不能被 XD Gateway fallback 冒充。
-    bindNativeProviderAuth('openai');
     const state = requireCodexOAuthLoginState(
       await this.readState({ skipReconcile: true, credentialMode: 'oauth-bearer' }),
     );
