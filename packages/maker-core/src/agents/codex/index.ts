@@ -2709,6 +2709,7 @@ export class CodexAgent extends BaseAgent {
     // 往远端 config.toml 写 mcp_servers 段, daemon 经 SSH remote-forward 直连
     // 本机 HTTP bridge, tool call 按 params._meta.threadId 路由(与本地一致)。
     let createTransport: () => import('./app-server/transport.js').Transport;
+    let credentialGeneration: string | null = null;
     if (remoteHostId) {
       if (!this.deps.getRemoteCodexTransport) {
         throw new Error(
@@ -2723,14 +2724,23 @@ export class CodexAgent extends BaseAgent {
         binaryPath,
         env,
         extraArgs,
-        onProcessSpawned: (pid) =>
+        onProcessSpawned: (pid) => {
+          try {
+            credentialGeneration = this.deps.auth.captureCredentialGeneration?.() ?? null;
+          } catch (error) {
+            credentialGeneration = null;
+            this.deps.logger.warn('codex credential generation capture failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           this.deps.registerLocalCodexAppServerProcess?.({
             pid,
             role:
               hostPurpose === 'control-plane'
                 ? 'control-plane-service'
                 : 'task-host',
-          }),
+          });
+        },
       });
     }
 
@@ -2766,7 +2776,7 @@ export class CodexAgent extends BaseAgent {
           .then(async () => {
             if (usesLocalAuth) {
               try {
-                await this.deps.auth.invalidate?.(reason);
+                await this.deps.auth.invalidate?.(reason, { credentialGeneration });
               } catch (e) {
                 this.deps.logger.error('auth.invalidate threw', { message: (e as Error).message });
               }

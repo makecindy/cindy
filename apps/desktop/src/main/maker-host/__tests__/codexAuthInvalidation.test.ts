@@ -1429,6 +1429,8 @@ describe('Codex system credential suppression marker', () => {
       authSource: 'oauth',
       credentialScope: 'system-shared',
     });
+    const expiredGeneration = adapter.captureCredentialGeneration();
+    expect(expiredGeneration).not.toBeNull();
     expectPlatformSharedLink(systemAuth, localAuth);
 
     const replacement = path.join(path.dirname(systemAuth), 'auth.replacement.json');
@@ -1448,7 +1450,9 @@ describe('Codex system credential suppression marker', () => {
 
     const broadcast = vi.fn();
     adapter.setOnInvalidatedBroadcast(broadcast);
-    await expect(adapter.invalidate('token_revoked')).resolves.toBeUndefined();
+    await expect(
+      adapter.invalidate('token_revoked', { credentialGeneration: expiredGeneration }),
+    ).resolves.toBeUndefined();
     expect(broadcast).toHaveBeenCalledWith('token_revoked', 'system-shared');
     expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
       credentialScope: 'system-shared',
@@ -1526,9 +1530,13 @@ describe('Codex system credential suppression marker', () => {
     // Crossing the healthy shared reconcile boundary proves F2 is now the consumed generation.
     await expect(adapter.getAccessToken()).resolves.toBe('system-f2-token');
     const f2Fingerprint = currentCodexAuthFileFingerprint(systemAuth);
+    const f2Generation = adapter.captureCredentialGeneration();
     expect(f2Fingerprint).not.toBeNull();
+    expect(f2Generation).not.toBeNull();
 
-    await expect(adapter.invalidate('token_revoked')).resolves.toBeUndefined();
+    await expect(
+      adapter.invalidate('token_revoked', { credentialGeneration: f2Generation }),
+    ).resolves.toBeUndefined();
     expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
       credentialScope: 'system-shared',
       sha256: f2Fingerprint!.sha256,
@@ -1557,6 +1565,74 @@ describe('Codex system credential suppression marker', () => {
       recoveryRequiredReason: 'token_revoked',
     });
     await expect(adapter.getAccessToken()).resolves.toBe('system-f3-token');
+  });
+
+  it('binds a late shared-host invalidation to its captured credential generation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-host-generation-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-b';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-f1-token', account_id: 'acct-1' } }),
+    );
+    fs.linkSync(systemAuth, localAuth);
+    fs.mkdirSync(h.userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ openai: 'owner-b' }));
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await expect(adapter.getAccessToken()).resolves.toBe('system-f1-token');
+    const f1Fingerprint = currentCodexAuthFileFingerprint(localAuth);
+    const f1Generation = adapter.captureCredentialGeneration();
+    expect(f1Fingerprint).not.toBeNull();
+    expect(f1Generation).not.toBeNull();
+
+    const f2Replacement = path.join(path.dirname(systemAuth), 'auth.f2.json');
+    fs.writeFileSync(
+      f2Replacement,
+      JSON.stringify({ tokens: { access_token: 'system-f2-token', account_id: 'acct-1' } }),
+    );
+    fs.renameSync(f2Replacement, systemAuth);
+    const f2Before = fs.readFileSync(systemAuth);
+    const f2StatBefore = fs.statSync(systemAuth);
+
+    await Promise.all([
+      adapter.getState({ credentialMode: 'oauth-bearer' }),
+      adapter.getAccessToken(),
+    ]);
+    await expect(
+      adapter.invalidate('late_f1_401', { credentialGeneration: f1Generation }),
+    ).resolves.toBeUndefined();
+
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
+      credentialScope: 'system-shared',
+      sha256: f1Fingerprint!.sha256,
+    });
+    expect(getActiveInvalidatedSystemCodexAuthMarker(codexHome, systemAuth)).toBeNull();
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      recoveryRequiredReason: 'late_f1_401',
+    });
+    await expect(adapter.getAccessToken()).resolves.toBe('system-f2-token');
+    await adapter.verifyRecoveryWithAccountRpc(async () => undefined);
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toBeNull();
+    expect(fs.readFileSync(systemAuth)).toEqual(f2Before);
+    const f2StatAfter = fs.statSync(systemAuth);
+    expect({ dev: f2StatAfter.dev, ino: f2StatAfter.ino, mode: f2StatAfter.mode }).toEqual({
+      dev: f2StatBefore.dev,
+      ino: f2StatBefore.ino,
+      mode: f2StatBefore.mode,
+    });
   });
 
   it('repairs an unproven local auth orphan instead of preserving its refresh token', async () => {

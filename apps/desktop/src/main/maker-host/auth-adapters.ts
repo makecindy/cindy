@@ -316,6 +316,31 @@ function pathsReferToSameFileSync(left: string, right: string): boolean {
   );
 }
 
+function parseCodexCredentialGeneration(
+  value: string | null | undefined,
+): CodexAuthFileFingerprint | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<CodexAuthFileFingerprint>;
+    if (
+      typeof parsed.dev !== 'number' ||
+      !Number.isFinite(parsed.dev) ||
+      typeof parsed.ino !== 'number' ||
+      !Number.isFinite(parsed.ino) ||
+      typeof parsed.size !== 'number' ||
+      !Number.isFinite(parsed.size) ||
+      typeof parsed.mtimeMs !== 'number' ||
+      !Number.isFinite(parsed.mtimeMs) ||
+      typeof parsed.sha256 !== 'string' ||
+      !/^[0-9a-f]{64}$/i.test(parsed.sha256)
+    )
+      return null;
+    return parsed as CodexAuthFileFingerprint;
+  } catch {
+    return null;
+  }
+}
+
 async function pathsReferToSameFile(left: string, right: string): Promise<boolean> {
   const [leftStat, rightStat] = await Promise.all([
     fsp.stat(left, { bigint: true }),
@@ -787,7 +812,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private oauthRecoveryRequiredReason: string | null = null;
   private oauthRecoveryCredentialScope: AuthState['credentialScope'] = undefined;
   private suppressSystemCodexReconcile = false;
-  private sharedCredentialFingerprint: CodexAuthFileFingerprint | null = null;
   private lastOrphanRepair: NonNullable<AuthState['credentialDiagnostics']>['orphanRepair'] =
     'none';
   /** 运行期最近一次能够被文件/授权记录明确证明的来源，兜住系统 auth 原子替换后的旧硬链。 */
@@ -1078,10 +1102,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (!existsSync(systemAuth)) return;
 
     const topology = await inspectCodexAuthLink(systemAuth, myAuth);
-    if (topology.healthy) {
-      this.sharedCredentialFingerprint =
-        currentCodexAuthFileFingerprint(systemAuth) ?? this.sharedCredentialFingerprint;
-    }
     if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
@@ -1122,8 +1142,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     switch (kind) {
       case 'linked':
         this.lastKnownCodexCredentialScope = 'system-shared';
-        this.sharedCredentialFingerprint =
-          currentCodexAuthFileFingerprint(systemAuth) ?? this.sharedCredentialFingerprint;
         log.info('codex auth.json linked with ~/.codex (shared)', { linkType });
         break;
       case 'link-unsupported':
@@ -1455,8 +1473,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
     this.oauthRecoveryRequiredReason = null;
     this.oauthRecoveryCredentialScope = undefined;
-    this.sharedCredentialFingerprint = currentCodexAuthFileFingerprint(getSystemCodexAuthPath());
     return true;
+  }
+
+  captureCredentialGeneration(): string | null {
+    const fingerprint = currentCodexAuthFileFingerprint(path.join(this.codexHome, 'auth.json'));
+    return fingerprint ? JSON.stringify(fingerprint) : null;
   }
 
   /** Bracket one account-level RPC with compare-and-commit recovery confirmation. */
@@ -2153,7 +2175,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * 等价于 logout() + 主动 push auth state 让 renderer 立刻显示 "请重新登录",
    * 否则错误只会反复埋进后台日志, 用户全程无感。
    */
-  async invalidate(reason: string): Promise<void> {
+  async invalidate(
+    reason: string,
+    context?: { credentialGeneration?: string | null },
+  ): Promise<void> {
     this.ensureInvalidationMarkerLoaded();
     log.warn('codex auth invalidated', { reason });
     const localAuthPath = path.join(this.codexHome, 'auth.json');
@@ -2171,7 +2196,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
     // 服务端已经明确判定 OAuth 凭证失效时, 不能再从 ~/.codex 自动 reconcile 回来。
     // 否则 app-server 会拿同一份坏 token 继续 spawn/retry, 用户也看不到明确的重登录入口。
-    const credentialScope = this.readCodexCredentialScope();
+    const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
+    const detectedCredentialScope = this.readCodexCredentialScope();
+    // A host-bound invalidation without a valid spawn generation is ambiguous. Keep it fail-closed
+    // instead of fingerprinting whichever system credential happens to be current now.
+    const credentialScope =
+      context && detectedCredentialScope === 'system-shared' && !capturedFingerprint
+        ? 'unknown'
+        : detectedCredentialScope;
     const activeOwnerId = getActiveAppSession().dataOwnerId;
     const recoveryOwnerId =
       credentialScope === 'system-shared' && activeOwnerId && isNativeProviderAuthBound('openai')
@@ -2182,15 +2214,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     this.oauthRecoveryRequiredReason = null;
     this.oauthRecoveryCredentialScope = undefined;
     this.suppressSystemCodexReconcile = true;
-    const currentSystemFingerprint = currentCodexAuthFileFingerprint(getSystemCodexAuthPath());
-    const replacedSystemCredential =
-      credentialScope === 'system-shared' &&
-      this.sharedCredentialFingerprint &&
-      currentSystemFingerprint &&
-      (this.sharedCredentialFingerprint.dev !== currentSystemFingerprint.dev ||
-        this.sharedCredentialFingerprint.ino !== currentSystemFingerprint.ino)
-        ? this.sharedCredentialFingerprint
-        : undefined;
     const markerCommitted = writeInvalidatedSystemCodexAuthMarker(
       this.codexHome,
       getSystemCodexAuthPath(),
@@ -2198,7 +2221,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       localAuthPath,
       credentialScope,
       recoveryOwnerId,
-      replacedSystemCredential,
+      capturedFingerprint ?? undefined,
     );
     let durableFallbackCommitted = false;
     let effectiveCredentialScope = credentialScope;
