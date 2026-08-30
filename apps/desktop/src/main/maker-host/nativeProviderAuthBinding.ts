@@ -54,9 +54,9 @@ type BindingFile = Partial<Record<NativeProviderId, string>> & {
   /** 授权来源审计；旧文件缺失时继续由 selfAuthorized / provider 迁移语义兼容。 */
   sources?: Partial<Record<NativeProviderId, ConnectionSourceKind>>;
   /**
-   * 已当场验证为系统共享凭证的 owner。Windows 的 hardlink 在系统 auth.json 原子换代后会
-   * 退化成普通 file；这份独立 provenance 让下次启动仍能把旧 inode 迁回系统新凭证，且不
-   * 覆盖 sources 里真实的「最初由 Cindy 显式授权」来路。
+   * 已当场验证为系统共享凭证的 owner。存量 POSIX 与 Windows hardlink 在系统 auth.json
+   * 原子换代后都会退化成普通 file；这份独立 provenance 让下次启动仍能把旧 inode 迁回
+   * 系统新凭证，且不覆盖 sources 里真实的「最初由 Cindy 显式授权」来路。
    */
   sharedSystemCredential?: Partial<Record<NativeProviderId, string>>;
 };
@@ -548,7 +548,7 @@ export function readExplicitNativeProviderAuthOwner(
     : null;
 }
 
-/** Persist that this owner's credential was observed as the healthy system-shared Windows inode. */
+/** Persist that this owner's credential was observed as a healthy system-shared hardlink inode. */
 export function markNativeProviderAuthSharedSystemCredential(
   provider: NativeProviderId,
 ): boolean {

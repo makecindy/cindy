@@ -1140,21 +1140,20 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (!existsSync(systemAuth)) return;
 
     const topology = await inspectCodexAuthLink(systemAuth, myAuth);
+    if (topology.healthy && topology.linkType === 'hardlink') {
+      markNativeProviderAuthSharedSystemCredential('openai');
+    }
     if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
-      if (process.platform === 'win32') {
-        markNativeProviderAuthSharedSystemCredential('openai');
-      }
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
     }
 
     const hasLocalEntry = topology.linkType !== 'missing';
-    const wasSharedWindowsCredential =
-      process.platform === 'win32' &&
+    const wasSharedLegacyCredential =
       topology.linkType === 'file' &&
       isNativeProviderAuthSharedSystemCredential('openai');
     const explicitIsolatedOwner =
-      topology.linkType === 'file' && !wasSharedWindowsCredential
+      topology.linkType === 'file' && !wasSharedLegacyCredential
         ? readExplicitNativeProviderAuthOwner('openai')
         : null;
     if (explicitIsolatedOwner) {

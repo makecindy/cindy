@@ -1588,6 +1588,74 @@ describe('Codex system credential suppression marker', () => {
     }
   });
 
+  it('relinks a proven legacy POSIX hardlink after system auth rotation', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    try {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-posix-shared-rotation-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'user-data');
+      h.dataOwnerId = 'owner-a';
+      const home = path.join(root, 'home');
+      const systemAuth = path.join(home, '.codex', 'auth.json');
+      const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+      vi.spyOn(os, 'homedir').mockReturnValue(home);
+      const chmodSpy = vi.spyOn(fs.promises, 'chmod');
+      fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+      fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+      fs.writeFileSync(
+        systemAuth,
+        JSON.stringify({ tokens: { access_token: 'system-f1-token', account_id: 'acct-1' } }),
+        { mode: 0o600 },
+      );
+      fs.linkSync(systemAuth, localAuth);
+      fs.writeFileSync(
+        path.join(h.userDataDir, 'native-provider-auth.json'),
+        JSON.stringify({
+          openai: 'owner-a',
+          selfAuthorized: { openai: 'owner-a' },
+          sources: { openai: 'explicit-provider-oauth' },
+          sharedSystemCredential: { openai: 'owner-a' },
+        }),
+      );
+
+      const replacement = path.join(path.dirname(systemAuth), 'auth.f2.json');
+      fs.writeFileSync(
+        replacement,
+        JSON.stringify({ tokens: { access_token: 'system-f2-token', account_id: 'acct-1' } }),
+        { mode: 0o600 },
+      );
+      fs.renameSync(replacement, systemAuth);
+      expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-f1-token');
+      const systemBeforeReconcile = fs.readFileSync(systemAuth);
+      const systemStatBeforeReconcile = fs.statSync(systemAuth);
+
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      await expect(
+        new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
+      ).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'system-shared',
+        credentialDiagnostics: { linkType: 'symlink', healthy: true, orphanRepair: 'relinked' },
+      });
+
+      expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-f2-token');
+      expect(fs.readFileSync(localAuth, 'utf8')).not.toContain('system-f1-token');
+      expect(fs.readFileSync(systemAuth)).toEqual(systemBeforeReconcile);
+      expect(fs.statSync(systemAuth)).toMatchObject({
+        ino: systemStatBeforeReconcile.ino,
+        mode: systemStatBeforeReconcile.mode,
+      });
+      expect(chmodSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
   it('tracks a consumed symlink target generation until a later system replacement', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-generation-'));
     dirs.push(root);
