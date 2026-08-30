@@ -119,9 +119,48 @@ describe('ChatInput model source switching wiring', () => {
     expect(helper).toMatch(
       /confirmModelSwitchContextGuard\(\s*modelId,\s*undefined,\s*providerId,\s*requiredWindow,/,
     );
-    expect(helper).toContain('result = await invoke(requiredWindow)');
+    expect(helper).toContain('if (accepted !== requiredWindow) return { accepted: false };');
+    expect(helper).toContain('result = await invoke(accepted)');
+    expect(helper).not.toContain('result = await invoke(requiredWindow)');
     expect(chatInputSource.split('await setModelWithFinalWindowConfirmation(')).toHaveLength(3);
     expect(chatInputSource).toContain('? { confirmedContextWindow }');
+  });
+
+  it('keeps authoritative final-window confirmation ahead of stale snapshot shortcuts', () => {
+    const guardStart = chatInputSource.indexOf(
+      'const confirmModelSwitchContextGuard = useCallback(',
+    );
+    const helperStart = chatInputSource.indexOf(
+      'const setModelWithFinalWindowConfirmation = useCallback(',
+      guardStart,
+    );
+    const helperEnd = chatInputSource.indexOf('// session-agent-switch', helperStart);
+    const guard = chatInputSource.slice(guardStart, helperStart);
+    const helper = chatInputSource.slice(helperStart, helperEnd);
+    const piBypass = guard.indexOf("runtimeAgentKind === 'pi' &&");
+    const sameOrExpand = guard.indexOf('targetContextWindow >= currentContextWindow');
+    const localVerdictShortcut = guard.indexOf("verdict.level === 'ok'");
+    const confirmation = guard.indexOf('const accepted = await confirmDialog({');
+
+    expect(guard).toContain(
+      'const contextTokens = requireDestructiveConfirmation\n        ? verifiedContextTokens',
+    );
+    expect(guard.slice(0, piBypass)).toContain('!requireDestructiveConfirmation &&');
+    expect(guard.slice(piBypass, sameOrExpand)).toContain(
+      '!requireDestructiveConfirmation &&\n        hasVerifiedWindows',
+    );
+    expect(guard.slice(0, sameOrExpand)).toContain(
+      'requireDestructiveConfirmation && (!hasVerifiedTargetWindow || !hasVerifiedUsage)',
+    );
+    expect(guard.slice(sameOrExpand, localVerdictShortcut)).toContain(
+      '!requireDestructiveConfirmation &&\n        (!trustedContextTokens || trustedContextTokens <= 0)',
+    );
+    expect(guard.slice(localVerdictShortcut - 40, confirmation)).toContain(
+      '!requireDestructiveConfirmation && verdict.level',
+    );
+    expect(confirmation).toBeGreaterThan(localVerdictShortcut);
+    expect(helper).toContain('if (accepted !== requiredWindow) return { accepted: false };');
+    expect(helper).toContain('result = await invoke(accepted);');
   });
 
   it('gates the device-link Pi estimate bypass on the controlled host window guard', () => {
@@ -129,16 +168,16 @@ describe('ChatInput model source switching wiring', () => {
     const end = chatInputSource.indexOf('// session-agent-switch', start);
     const guard = chatInputSource.slice(start, end);
     const piCapability = guard.indexOf('const remotePiWindowGuardSupported =');
-    const piRuntimeBypass = guard.indexOf(
-      "if (remoteDeviceId && runtimeAgentKind === 'pi' && remotePiWindowGuardSupported) return true;",
-    );
+    const piRuntimeBypass = guard.indexOf("runtimeAgentKind === 'pi' &&");
     const catalogTargetResolution = guard.indexOf('const targetRouteProviderId =');
     const remoteGuard = guard.indexOf('const hasVerifiedWindows =');
     const legacyPiGuard = guard.indexOf('shouldBlockLegacyRemotePiModelWindowSwitch({');
     const remoteUnknownBlock = guard.indexOf(
       'if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;',
     );
-    const zeroUsagePass = guard.indexOf('if (!contextTokens || contextTokens <= 0) return true;');
+    const zeroUsagePass = guard.indexOf(
+      '!requireDestructiveConfirmation &&\n        (!trustedContextTokens || trustedContextTokens <= 0)',
+    );
     const remoteBlock = guard.indexOf("verdict.level === 'danger' || verdict.level === 'overflow'");
     const warningPath = guard.indexOf("verdict.level === 'warn'");
     const confirmPath = guard.indexOf('const accepted = await confirmDialog({');
@@ -149,6 +188,9 @@ describe('ChatInput model source switching wiring', () => {
     expect(guard).toContain('remoteDeviceId === deviceLinkDeviceId');
     expect(guard).toContain('supportsModelWindowSwitchGuard === true');
     expect(guard).not.toContain("if (remoteDeviceId && runtimeAgentKind === 'pi') return true;");
+    expect(guard.slice(piCapability, piRuntimeBypass)).toContain(
+      '!requireDestructiveConfirmation &&',
+    );
     expect(remoteGuard).toBeGreaterThan(catalogTargetResolution);
     expect(legacyPiGuard).toBeGreaterThan(remoteGuard);
     expect(legacyPiGuard).toBeLessThan(zeroUsagePass);
@@ -158,12 +200,20 @@ describe('ChatInput model source switching wiring', () => {
     expect(shrinkGate).toContain('agentStatus.isRunning');
     expect(shrinkGate).toContain('targetContextWindow >= currentContextWindow');
     expect(shrinkGate).toContain(
-      'const hasVerifiedUsage = Number.isFinite(contextTokens) && contextTokens >= 0;',
+      '!requireDestructiveConfirmation &&\n        hasVerifiedWindows',
     );
+    expect(shrinkGate).toContain(
+      'requireDestructiveConfirmation && (!hasVerifiedTargetWindow || !hasVerifiedUsage)',
+    );
+    expect(shrinkGate).toContain("typeof contextTokens === 'number'");
+    expect(shrinkGate).toContain('const hasVerifiedUsage = trustedContextTokens !== undefined;');
     expect(shrinkGate).toContain('!hasVerifiedWindows || !hasVerifiedUsage');
     expect(remoteUnknownBlock).toBeGreaterThan(legacyPiGuard);
     expect(zeroUsagePass).toBeGreaterThan(remoteUnknownBlock);
     expect(shrinkGate).toContain('return true;');
+    expect(guard).toContain(
+      "if (!requireDestructiveConfirmation && verdict.level === 'ok') return true;",
+    );
     expect(remoteBlock).toBeLessThan(warningPath);
     expect(remoteBlock).toBeLessThan(confirmPath);
     const blocked = guard.slice(remoteBlock, warningPath);

@@ -6103,7 +6103,9 @@ export function ChatInput({
     ): Promise<boolean | number> => {
       if (!sessionId) return true;
       const agentStatus = makerChatStore.getSnapshot(sessionId).agentStatus;
-      const contextTokens = verifiedContextTokens ?? agentStatus.contextTokens;
+      const contextTokens = requireDestructiveConfirmation
+        ? verifiedContextTokens
+        : (verifiedContextTokens ?? agentStatus.contextTokens);
       const currentContextWindow = agentStatus.contextWindow;
       // 显式来源必须按完整 route 查窗口：同 model id 在不同 provider 可分别为 1M / 200K。
       // 无来源的旧 flat 入口才沿用设备能力缓存的 model-id 回退。
@@ -6114,7 +6116,14 @@ export function ChatInput({
         remoteDeviceId === deviceLinkDeviceId &&
         (piCaps.capabilities as { supportsModelWindowSwitchGuard?: unknown } | null)
           ?.supportsModelWindowSwitchGuard === true;
-      if (remoteDeviceId && runtimeAgentKind === 'pi' && remotePiWindowGuardSupported) return true;
+      if (
+        !requireDestructiveConfirmation &&
+        remoteDeviceId &&
+        runtimeAgentKind === 'pi' &&
+        remotePiWindowGuardSupported
+      ) {
+        return true;
+      }
       const targetRouteProviderId =
         targetProviderId !== undefined && currentModelAgentKind
           ? effectiveSourceIdForModel(
@@ -6136,11 +6145,22 @@ export function ChatInput({
               })
             : undefined
           : getModelById(newModelId, remoteDeviceId)?.contextWindow);
-      const hasVerifiedWindows =
-        Number.isFinite(currentContextWindow) && currentContextWindow > 0 &&
+      const hasVerifiedTargetWindow =
         typeof targetContextWindow === 'number' &&
-        Number.isFinite(targetContextWindow) && targetContextWindow > 0;
-      const hasVerifiedUsage = Number.isFinite(contextTokens) && contextTokens >= 0;
+        Number.isFinite(targetContextWindow) &&
+        targetContextWindow > 0;
+      const hasVerifiedWindows =
+        Number.isFinite(currentContextWindow) &&
+        currentContextWindow > 0 &&
+        hasVerifiedTargetWindow;
+      const trustedContextTokens =
+        typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens >= 0
+          ? contextTokens
+          : undefined;
+      const hasVerifiedUsage = trustedContextTokens !== undefined;
+      if (requireDestructiveConfirmation && (!hasVerifiedTargetWindow || !hasVerifiedUsage)) {
+        return false;
+      }
       if (
         remoteDeviceId &&
         runtimeAgentKind === 'pi' &&
@@ -6154,24 +6174,36 @@ export function ChatInput({
         return false;
       }
       if (remoteHostId && agentStatus.isRunning) return false;
-      // 同窗或扩窗不需要 handoff；本地与 SSH 都保留普通切换。
-      if (hasVerifiedWindows && targetContextWindow >= currentContextWindow) return true;
+      // Main 的最终窗口确认属于权威破坏性请求，不得被旧 snapshot 的同窗/扩窗估值跳过。
+      if (
+        !requireDestructiveConfirmation &&
+        hasVerifiedWindows &&
+        targetContextWindow >= currentContextWindow
+      ) {
+        return true;
+      }
       // SSH 不做远端 handoff。缩窗判据的任一事实未知时继续关闭。
       if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;
-      if (!contextTokens || contextTokens <= 0) return true;
+      if (
+        !requireDestructiveConfirmation &&
+        (!trustedContextTokens || trustedContextTokens <= 0)
+      ) {
+        return true;
+      }
+      const contextTokensForAssessment = trustedContextTokens ?? 0;
       const verdict = assessModelSwitchContext({
-        contextTokens,
+        contextTokens: contextTokensForAssessment,
         targetContextWindow,
         // 切窗安全线独立于各 harness 的日常 auto-compaction 设置。
         autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
       });
-      if (verdict.level === 'ok') return true;
+      if (!requireDestructiveConfirmation && verdict.level === 'ok') return true;
       const fmtTokens = (n: number): string =>
         n >= 1_000_000
           ? `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
           : `${Math.round(n / 1000)}K`;
       const vars = {
-        used: fmtTokens(contextTokens),
+        used: fmtTokens(contextTokensForAssessment),
         total: fmtTokens(targetContextWindow ?? 0),
         pct: verdict.projectedPct,
       };
@@ -6245,8 +6277,8 @@ export function ChatInput({
           : undefined,
         true,
       );
-      if (!accepted) return { accepted: false };
-      result = await invoke(requiredWindow);
+      if (accepted !== requiredWindow) return { accepted: false };
+      result = await invoke(accepted);
       if (
         typeof (result as { contextWindowConfirmationRequired?: unknown } | null)
           ?.contextWindowConfirmationRequired === 'number'
