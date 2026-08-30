@@ -188,9 +188,8 @@ export interface IMFinalReplyMirror {
   allowedFileRoots?: string[];
   /**
    * Filesystem identity of `allowedFileRoots`, captured before Agent execution.
-   * Parent-chat file reuse must compare the uploaded object's real ancestry
-   * against this snapshot — the Agent can replace the original path string with
-   * a symlink or junction after the turn starts.
+   * Parent-chat file reuse must compare the upload-time ancestor snapshot
+   * against this pin — live path walks after upload can be retargeted.
    */
   pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>;
   /**

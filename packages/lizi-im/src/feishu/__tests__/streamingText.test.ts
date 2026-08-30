@@ -74,6 +74,39 @@ function pinRoot(root: string): Array<{ dev: number; ino: number }> {
   return [{ dev: st.dev, ino: st.ino }];
 }
 
+function ancestorInodes(fileRealPath: string): Array<{ dev: number; ino: number }> {
+  const ancestors: Array<{ dev: number; ino: number }> = [];
+  const seen = new Set<string>();
+  let current = path.dirname(fileRealPath);
+  for (;;) {
+    try {
+      const st = fsSync.statSync(current);
+      if (st.ino === 0) break;
+      const key = `${st.dev}:${st.ino}`;
+      if (seen.has(key)) break;
+      seen.add(key);
+      ancestors.push({ dev: st.dev, ino: st.ino });
+    } catch {
+      break;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return ancestors;
+}
+
+function fileSourceFromPath(absPath: string): {
+  realPath: string;
+  dev: number;
+  ino: number;
+  ancestors: Array<{ dev: number; ino: number }>;
+} {
+  const realPath = fsSync.realpathSync(absPath);
+  const st = fsSync.statSync(realPath);
+  return { realPath, dev: st.dev, ino: st.ino, ancestors: ancestorInodes(realPath) };
+}
+
 function flipPathCase(value: string): string {
   return value.replace(/[a-zA-Z]/g, (char) =>
     char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase(),
@@ -95,11 +128,9 @@ describe('feishu streaming text', () => {
     mocks.patchCardRaw.mockResolvedValue(undefined);
     mocks.sendCardToChat.mockResolvedValue({ messageId: 'om_mirror' });
     mocks.sendFile.mockImplementation(async (_userId: string, absPath: string) => {
-      let uploadedSource: { realPath: string; dev: number; ino: number } | undefined;
+      let uploadedSource: ReturnType<typeof fileSourceFromPath> | undefined;
       try {
-        const realPath = fsSync.realpathSync(absPath);
-        const st = fsSync.statSync(realPath);
-        uploadedSource = { realPath, dev: st.dev, ino: st.ino };
+        uploadedSource = fileSourceFromPath(absPath);
       } catch {
         /* tests may point at missing files */
       }
@@ -470,6 +501,7 @@ describe('feishu streaming text', () => {
               msgType: 'file',
               content: JSON.stringify({ file_key: 'second-key' }),
             },
+            uploadedSource: fileSourceFromPath(secondFile),
           },
     );
     const handle = await start('g/oc_group/omt_topic');
@@ -674,6 +706,63 @@ describe('feishu streaming text', () => {
     expect(mocks.sendFileToChat).not.toHaveBeenCalled();
   });
 
+  it('does not reuse a file_key when a parent is swapped onto the pinned root after upload', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-swap-allowed-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-swap-outside-'));
+    tempDirs.push(allowedRoot, outsideRoot);
+    const secret = path.join(outsideRoot, 'secret.txt');
+    await fs.writeFile(secret, 'secret');
+    await fs.writeFile(path.join(allowedRoot, 'decoy.txt'), 'decoy');
+    const secretReal = fsSync.realpathSync(secret);
+    const secretStat = fsSync.statSync(secretReal);
+    const pinned = pinRoot(allowedRoot);
+    mocks.sendFile.mockResolvedValue({
+      ok: true,
+      messageId: 'om_primary_file',
+      reusableMessage: {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      uploadedSource: {
+        realPath: secretReal,
+        dev: secretStat.dev,
+        ino: secretStat.ino,
+        ancestors: ancestorInodes(secretReal),
+      },
+    });
+
+    const realStat = fsSync.statSync.bind(fsSync);
+    const spy = vi.spyOn(fsSync, 'statSync').mockImplementation(((
+      file: unknown,
+      options?: unknown,
+    ) => {
+      const target = typeof file === 'string' ? file : String(file);
+      if (target === secretReal) {
+        const leaf = realStat(file as Parameters<typeof realStat>[0], options as Parameters<typeof realStat>[1]);
+        try {
+          fsSync.rmSync(outsideRoot, { recursive: true, force: true });
+          fsSync.symlinkSync(allowedRoot, outsideRoot);
+        } catch {
+          /* already swapped */
+        }
+        return leaf;
+      }
+      return realStat(file as Parameters<typeof realStat>[0], options as Parameters<typeof realStat>[1]);
+    }) as typeof fsSync.statSync);
+
+    try {
+      const handle = await start('g/oc_group/omt_topic');
+      await handle.finalize(
+        `见 [secret](xdt-file://${secret})`,
+        terminalMirror('v'.repeat(64), [allowedRoot], pinned),
+      );
+      expect(mocks.sendFile).toHaveBeenCalled();
+      expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('does not reuse a file_key when the attested path no longer names the uploaded inode', async () => {
     const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-leaf-allowed-'));
     const secretRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-leaf-secret-'));
@@ -694,6 +783,7 @@ describe('feishu streaming text', () => {
         realPath: decoyReal,
         dev: secretStat.dev,
         ino: secretStat.ino,
+        ancestors: ancestorInodes(fsSync.realpathSync(secret)),
       },
     });
     const handle = await start('g/oc_group/omt_topic');
@@ -724,6 +814,7 @@ describe('feishu streaming text', () => {
         realPath,
         dev: 1,
         ino: 0,
+        ancestors: ancestorInodes(realPath),
       },
     });
     const handle = await start('g/oc_group/omt_topic');

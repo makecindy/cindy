@@ -89,6 +89,7 @@ describe('Feishu parent-chat file reuse', () => {
     const absPath = await fileFixture('report.txt', 'trusted report');
 
     const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
+    const parentStat = fsSync.statSync(path.dirname(fsSync.realpathSync(absPath)));
     expect(primary).toMatchObject({
       ok: true,
       messageId: 'om_sent',
@@ -100,8 +101,14 @@ describe('Feishu parent-chat file reuse', () => {
         realPath: expect.any(String),
         dev: expect.any(Number),
         ino: expect.any(Number),
+        ancestors: expect.any(Array),
       },
     });
+    expect(
+      primary.uploadedSource!.ancestors.some(
+        (ancestor) => ancestor.dev === parentStat.dev && ancestor.ino === parentStat.ino,
+      ),
+    ).toBe(true);
 
     await expect(
       outbound.sendFileToChat('oc_group', primary.reusableMessage!, 'u1'),

@@ -25,7 +25,6 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
 
 import {
   sendCardRaw,
@@ -170,52 +169,25 @@ function isSourceWithinAllowedFileRoots(
 ): boolean {
   const roots = resolveRootIdentities(allowedFileRoots, pinnedFileRoots);
   if (roots.length === 0) return false;
+  // Node reports ino===0 on some Windows volumes. Refuse leaf identity that
+  // cannot distinguish this file from any other on the volume.
+  if (source.ino === 0) return false;
   if (roots.some((root) => sameInode(source, root))) return true;
-  // The pathname is only trustworthy if it still names the uploaded inode.
-  // Parent-walking an in-root decoy path would otherwise authorize a
-  // file_key that was read from a different, out-of-root handle.
-  try {
-    const leaf = fs.statSync(source.realPath);
-    if (!sameInode(leaf, source)) return false;
-  } catch {
-    return false;
-  }
-  // Walk the uploaded source's real parents. String prefix comparison is
-  // wrong on case-insensitive volumes: Darwin realpath preserves the
-  // caller's spelling after following symlinks.
-  let current = source.realPath;
-  for (;;) {
-    const parent = path.dirname(current);
-    if (parent === current) return false;
-    current = parent;
-    try {
-      const st = fs.statSync(current);
-      if (roots.some((root) => sameInode(st, root))) return true;
-    } catch {
-      return false;
-    }
-  }
+  // Compare the upload-time ancestor snapshot only. A live parent walk after
+  // the leaf inode recheck can be swapped onto the pinned workingDir between
+  // successive stat() calls.
+  const ancestors = source.ancestors ?? [];
+  if (ancestors.length === 0) return false;
+  return ancestors.some((ancestor) => roots.some((root) => sameInode(ancestor, root)));
 }
 
 function isWithinAllowedFileRoots(
-  absPath: string,
   allowedFileRoots: readonly string[],
   pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>,
   uploadedSource?: FeishuUploadedFileSource,
 ): boolean {
-  const source = uploadedSource ?? readUploadedSource(absPath);
-  if (!source) return false;
-  return isSourceWithinAllowedFileRoots(source, allowedFileRoots, pinnedFileRoots);
-}
-
-function readUploadedSource(absPath: string): FeishuUploadedFileSource | null {
-  try {
-    const realPath = fs.realpathSync(absPath);
-    const st = fs.statSync(realPath);
-    return { realPath, dev: st.dev, ino: st.ino };
-  } catch {
-    return null;
-  }
+  if (!uploadedSource) return false;
+  return isSourceWithinAllowedFileRoots(uploadedSource, allowedFileRoots, pinnedFileRoots);
 }
 
 class FeishuStreamingTextHandle implements StreamingTextHandle {
@@ -423,7 +395,6 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
               sent.ok &&
               sent.reusableMessage &&
               isWithinAllowedFileRoots(
-                link.absPath,
                 finalReplyMirror?.allowedFileRoots ?? [],
                 finalReplyMirror?.pinnedFileRoots,
                 sent.uploadedSource,
