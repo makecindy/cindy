@@ -27,6 +27,7 @@ import type {
   BillingSubscription,
 } from '../../../shared/billing';
 import type { ModelAccessStatus } from '../../../shared/modelAccess';
+import { isSupportedPurchaseOption } from '../../features/billing/purchaseSupport';
 
 export type ProviderAssetModuleState =
   { kind: 'hidden' } | { kind: 'fault' } | { kind: 'balance'; available: string };
@@ -105,7 +106,10 @@ export function canUpgradeBillingPlan(
       if (offer.interval !== current.offer.interval) return false;
       if (offer.code === current.offer.code) return false;
       if (!catalogOfferPurchasable(offer)) return false;
-      return offer.purchaseOptions.some((option) => option.provider === provider);
+      return offer.purchaseOptions.some(
+        (option) =>
+          option.provider === provider && isSupportedPurchaseOption(option, 'SUBSCRIPTION'),
+      );
     });
   });
 }

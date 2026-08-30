@@ -38,7 +38,6 @@ import {
   type BillingCatalogProduct,
   type BillingPaymentOrder,
   type BillingPendingPlanChange,
-  type BillingPurchaseOption,
   type BillingSubscription,
 } from '../../../shared/billing';
 import type {
@@ -49,6 +48,12 @@ import type {
 } from '../../../shared/modelAccess';
 import { AlipayIcon } from './AlipayIcon';
 import { billingApi } from './api';
+import {
+  isSupportedBillingProvider,
+  isSupportedPurchaseOption,
+  type SupportedBillingProvider,
+  type SupportedPurchaseOption,
+} from './purchaseSupport';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
 import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
@@ -71,11 +76,6 @@ type SubscriptionProductEntry = {
   defaultOffer: CatalogOfferEntry;
 };
 
-type SupportedBillingProvider = 'alipay' | 'stripe';
-type SupportedPurchaseOption = BillingPurchaseOption & {
-  provider: SupportedBillingProvider;
-};
-
 type PurchaseKind = BillingCatalogProduct['kind'];
 type BalanceIssue = 'NOT_PROVISIONED' | 'NOT_SUPPORTED' | 'UNAVAILABLE' | null;
 type CurrentPlanFacts = {
@@ -88,16 +88,6 @@ type CurrentPlanFacts = {
   cancelAtPeriodEnd: boolean;
   resumable: boolean;
 };
-
-const SUPPORTED_BILLING_PROVIDERS = new Set<SupportedBillingProvider>(['alipay', 'stripe']);
-const SUPPORTED_PAYMENT_ACTIONS = new Set<BillingPurchaseOption['paymentAction']>([
-  'QR_CODE',
-  'REDIRECT',
-]);
-const SUPPORTED_SUBSCRIPTION_CAPABILITIES = new Set<BillingPurchaseOption['capability']>([
-  'MERCHANT_INITIATED_MANDATE',
-  'PROVIDER_MANAGED_SUBSCRIPTION',
-]);
 
 // 未完成首购只属于当前 checkout 会话，不能展示为当前套餐或阻断重新购买。
 const SUBSCRIPTION_CANCELLABLE_STATUSES = BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
@@ -259,17 +249,6 @@ function catalogOfferUnavailableReason(
 ): BillingCatalogOfferUnavailableReason | null {
   if (isCatalogOfferPurchasable(entry)) return null;
   return entry.offer.unavailableReason ?? 'NO_AVAILABLE_PAYMENT_CHANNEL';
-}
-
-function isSupportedPurchaseOption(
-  option: BillingPurchaseOption,
-  productKind: BillingCatalogProduct['kind'],
-): option is SupportedPurchaseOption {
-  if (!SUPPORTED_BILLING_PROVIDERS.has(option.provider as SupportedBillingProvider)) return false;
-  if (!SUPPORTED_PAYMENT_ACTIONS.has(option.paymentAction)) return false;
-  return productKind === 'CREDIT_TOPUP'
-    ? option.capability === 'ONE_TIME_PAYMENT'
-    : SUPPORTED_SUBSCRIPTION_CAPABILITIES.has(option.capability);
 }
 
 function currencyFractionDigits(currency: string): number {
@@ -711,11 +690,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const currentPlan = currentSubscription?.effectivePlan ?? null;
   const pendingPlanChange = currentSubscription?.pendingPlanChange ?? null;
-  const currentProvider =
-    currentSubscription?.provider &&
-    SUPPORTED_BILLING_PROVIDERS.has(currentSubscription.provider as SupportedBillingProvider)
-      ? (currentSubscription.provider as SupportedBillingProvider)
-      : null;
+  const subscriptionProvider = currentSubscription?.provider;
+  const currentProvider = isSupportedBillingProvider(subscriptionProvider)
+    ? subscriptionProvider
+    : null;
   const currentPlanCandidate = useMemo<PlanChangeCandidate | null>(() => {
     if (!currentPlan) return null;
     const catalogProduct = catalog?.products.find(

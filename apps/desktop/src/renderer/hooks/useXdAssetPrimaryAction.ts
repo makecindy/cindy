@@ -10,7 +10,8 @@
  * 购买弹窗，计费页自己会用 purchaseBlocked 兜住。目录失败且仍符合更改套餐入口时
  * 按可升级处理，避免把还能升的人直接推进充值。
  *
- * 缓存按账号绑定，切号当帧失效 —— 与 useModelAccessCreditUsage 同一理由。
+ * 不跨实例缓存决议。购买 / 升级 / 取消 / 恢复发生在计费页，回到供应商页会重新
+ * 挂载：缓存会在新请求回来前画出上一套套餐的 CTA。宁可短暂不画右侧按钮。
  */
 
 import { useEffect, useState } from 'react';
@@ -24,26 +25,18 @@ import {
   type XdAssetPrimaryAction,
 } from '../components/settings/providerAssetModule';
 
-interface ActionSnapshot {
-  accountId: string;
-  primary: XdAssetPrimaryAction | null;
-}
-
-let cache: ActionSnapshot | null = null;
-
-function readCache(accountId: string | null): ActionSnapshot | null {
-  if (!accountId || cache?.accountId !== accountId) return null;
-  return cache;
-}
-
 export function useXdAssetPrimaryAction(enabled: boolean): XdAssetPrimaryAction | null {
   const { dataOwnerId, mode, user } = useAuth();
   const actionEnabled = enabled && mode === 'cloud' && user?.membershipKind === 'personal';
-  const [snapshot, setSnapshot] = useState<ActionSnapshot | null>(() => readCache(dataOwnerId));
+  const [primary, setPrimary] = useState<XdAssetPrimaryAction | null>(null);
 
   useEffect(() => {
-    if (!actionEnabled || !dataOwnerId) return;
+    if (!actionEnabled || !dataOwnerId) {
+      setPrimary(null);
+      return;
+    }
     let cancelled = false;
+    setPrimary(null);
 
     void Promise.all([
       billingApi
@@ -56,14 +49,12 @@ export function useXdAssetPrimaryAction(enabled: boolean): XdAssetPrimaryAction 
       const hasBlocking = hasBlockingBillingSubscription(subscription);
       const canUpgrade = canUpgradeBillingPlan(subscription, catalog);
       const resolvedCanUpgrade = catalog == null && canUpgrade == null ? true : canUpgrade;
-      cache = {
-        accountId: dataOwnerId,
-        primary: resolveXdAssetActionLayout({
+      setPrimary(
+        resolveXdAssetActionLayout({
           hasBlockingSubscription: hasBlocking,
           canUpgrade: resolvedCanUpgrade,
         }).primary,
-      };
-      setSnapshot(cache);
+      );
     });
 
     return () => {
@@ -71,6 +62,6 @@ export function useXdAssetPrimaryAction(enabled: boolean): XdAssetPrimaryAction 
     };
   }, [actionEnabled, dataOwnerId]);
 
-  if (!actionEnabled || !dataOwnerId || snapshot?.accountId !== dataOwnerId) return null;
-  return snapshot.primary;
+  if (!actionEnabled || !dataOwnerId) return null;
+  return primary;
 }

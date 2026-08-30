@@ -229,6 +229,84 @@ describe('canUpgradeBillingPlan', () => {
     };
     expect(canUpgradeBillingPlan(plusMonth, comingSoon)).toBe(false);
   });
+
+  it('更高档只有桌面接不住的渠道时不算能升级', () => {
+    const unknownProvider: BillingCatalog = {
+      products: [
+        {
+          code: 'max',
+          name: 'Max',
+          kind: 'SUBSCRIPTION',
+          level: 2,
+          sortOrder: 2,
+          offers: [monthOffer('max_month', 'futurepay')],
+        },
+      ],
+    };
+    expect(canUpgradeBillingPlan(plusMonth, unknownProvider)).toBe(false);
+  });
+
+  it('更高档只有一次性支付能力时不算能升级', () => {
+    const oneTimeOnly: BillingCatalog = {
+      products: [
+        {
+          code: 'max',
+          name: 'Max',
+          kind: 'SUBSCRIPTION',
+          level: 2,
+          sortOrder: 2,
+          offers: [
+            {
+              ...monthOffer('max_month'),
+              purchaseOptions: [
+                {
+                  id: 'listing_max_month',
+                  provider: 'stripe',
+                  capability: 'ONE_TIME_PAYMENT',
+                  paymentAction: 'REDIRECT',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(canUpgradeBillingPlan(plusMonth, oneTimeOnly)).toBe(false);
+  });
+
+  it('更高档同时有接得住和接不住的选项时仍可升级', () => {
+    const mixed: BillingCatalog = {
+      products: [
+        {
+          code: 'max',
+          name: 'Max',
+          kind: 'SUBSCRIPTION',
+          level: 2,
+          sortOrder: 2,
+          offers: [
+            {
+              ...monthOffer('max_month'),
+              purchaseOptions: [
+                {
+                  id: 'listing_max_future',
+                  provider: 'futurepay',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION',
+                  paymentAction: 'REDIRECT',
+                },
+                {
+                  id: 'listing_max_month',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION',
+                  paymentAction: 'REDIRECT',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(canUpgradeBillingPlan(plusMonth, mixed)).toBe(true);
+  });
 });
 
 describe('resolveXdAssetActionLayout', () => {
