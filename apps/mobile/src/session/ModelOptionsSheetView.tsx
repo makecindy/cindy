@@ -1,8 +1,9 @@
 /**
  * ModelOptionsSheetView —— 模型浮窗二级「模型选项」视图的内容(SheetSurface 的 children)。
  *
- * 承接原先行内 accordion 的配置区语义:顶部元信息行(供应商全名 · 上下文 · 单价 · 极速,
- * 对齐桌面 hover tooltip 口径)+ 「快速模式」Switch + 「推理强度」竖排单选。
+ * 承接原先行内 accordion 的配置区语义:顶部元信息行(供应商全名 · 上下文 · 极速)+
+ * 价格块(折后价 + 可选折扣说明,对齐桌面 ModelConfigFlyout)+
+ * 「快速模式」Switch + 「推理强度」竖排单选。
  * 读写语义与桌面完全一致:目标行是**选中行** → 改 live(onChangeSelectedEffort/FastMode);
  * **非选中行** → 写注入记忆(草稿 = draftModelMemory / 会话 = sessionModelMirror 写穿被控端)。
  * effort 点击后停留(可连续调 Fast),返回/把手下拉由浮窗层负责。
@@ -23,6 +24,7 @@ import { useSessionModelMirrorVersion } from "@/session/sessionModelMirror";
 import {
   buildRowMetaLine,
   effortLabelFor,
+  presentPickerPrice,
   rowEffortOf,
   rowFastOn,
   type PickerRowModel,
@@ -69,12 +71,34 @@ export interface ModelOptionsSheetViewProps {
 
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
+    headerBlock: {
+      gap: spacing.xs,
+      paddingBottom: spacing.sm,
+      paddingTop: spacing.xs,
+    },
     metaLine: {
       color: c.textTertiary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
-      paddingBottom: spacing.sm,
-      paddingTop: spacing.xs,
+    },
+    priceBlock: {
+      gap: spacing.xs,
+    },
+    priceTitle: {
+      color: c.textTertiary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+    },
+    // 折扣说明用 statusDone(#2AAE5B),与桌面 EFFORT_TIER_COLORS.low / «省 X%» 绿色加粗同源。
+    priceDiscount: {
+      color: c.statusDone,
+      fontWeight: fontWeight.semibold,
+    },
+    priceAmounts: {
+      color: c.textPrimary,
+      fontSize: typeScale.footnote,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
     },
     // 与推理强度选项行同一水平内边距(effortOptionRow 的 pill 内距):
     // label 与选项文字左对齐,Switch 与选项行的 Check 右对齐。
@@ -154,7 +178,12 @@ export function ModelOptionsSheetView({
       contextWindow,
       supportsFastMode: model.supportsFastMode,
     },
+  });
+  const price = presentPickerPrice({
     pricing,
+    provider,
+    modelId: model.id,
+    agentKind,
   });
   const currentEffort = rowEffortOf({
     model,
@@ -195,10 +224,32 @@ export function ModelOptionsSheetView({
 
   return (
     <View testID={testID}>
-      {metaLine ? (
-        <Text style={styles.metaLine} testID={`${testID}.meta`}>
-          {metaLine}
-        </Text>
+      {metaLine || price ? (
+        <View style={styles.headerBlock}>
+          {metaLine ? (
+            <Text style={styles.metaLine} testID={`${testID}.meta`}>
+              {metaLine}
+            </Text>
+          ) : null}
+          {price ? (
+            <View style={styles.priceBlock} testID={`${testID}.price`}>
+              <Text style={styles.priceTitle}>
+                {price.title}
+                {price.discountLabel ? (
+                  <Text style={styles.priceDiscount}>
+                    {` · ${price.discountLabel}`}
+                  </Text>
+                ) : null}
+              </Text>
+              <Text
+                style={styles.priceAmounts}
+                testID={`${testID}.priceAmounts`}
+              >
+                {price.amountsLine}
+              </Text>
+            </View>
+          ) : null}
+        </View>
       ) : null}
       {fastEditable ? (
         <View style={styles.fastRow}>
