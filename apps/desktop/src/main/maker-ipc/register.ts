@@ -592,7 +592,10 @@ import {
 } from './piPackageMutationIpc.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import {
+  AgentInputCoordinator,
+  type AgentInputQueuedMessageDiscardReason,
+} from './agent-input-coordinator.js';
 import {
   clearPromptPredictionSessionStopped,
   notePromptPredictionSessionStopped,
@@ -3199,8 +3202,8 @@ export interface SchedulerQueuedPromptRequest {
   onAccepted: () => void | Promise<void>;
   /** 派发已 accept 但最终未成为运行 turn(取消/回滚)时回调。 */
   onAcceptedRollback?: () => void | Promise<void>;
-  /** 排队项未派发即被丢弃(用户删除队列行 / stop 清队列 / 会话清理)时回调。 */
-  onDiscarded?: () => void;
+  /** 排队项未派发即被丢弃时回调；reason 来自 coordinator 的实际移除入口。 */
+  onDiscarded?: (reason: AgentInputQueuedMessageDiscardReason) => void;
 }
 
 /**
@@ -3214,14 +3217,21 @@ interface SchedulerQueueBridge {
   isSessionBusy(sessionId: string): boolean;
   hasQueuedPrompt(sessionId: string, scheduleId: string): boolean;
   enqueuePrompt(req: SchedulerQueuedPromptRequest): Promise<SchedulerEnqueueResult>;
-  removeQueuedPrompt(sessionId: string, clientId: string): void;
+  removeQueuedPrompt(
+    sessionId: string,
+    clientId: string,
+    reason: AgentInputQueuedMessageDiscardReason,
+  ): void;
   /** 排队项(含派发中 / 可重试 recovery)是否仍被 coordinator 跟踪 —— runner 派发等待的存活探测。 */
   isPromptTracked(sessionId: string, clientId: string): boolean;
 }
 
 let schedulerQueueBridgeHolder: SchedulerQueueBridge | null = null;
 /** 排队心跳的 discard 监听(clientId → 通知 runner 收尾)。派发/丢弃后清条目。 */
-const schedulerQueuedPromptDiscardWatchers = new Map<string, () => void>();
+const schedulerQueuedPromptDiscardWatchers = new Map<
+  string,
+  (reason: AgentInputQueuedMessageDiscardReason) => void
+>();
 
 export function isSchedulerTargetSessionBusy(sessionId: string): boolean {
   return schedulerQueueBridgeHolder?.isSessionBusy(sessionId) ?? false;
@@ -3245,8 +3255,12 @@ export function isSchedulerPromptTracked(sessionId: string, clientId: string): b
   return schedulerQueueBridgeHolder?.isPromptTracked(sessionId, clientId) ?? true;
 }
 
-export function removeQueuedSchedulerPrompt(sessionId: string, clientId: string): void {
-  schedulerQueueBridgeHolder?.removeQueuedPrompt(sessionId, clientId);
+export function removeQueuedSchedulerPrompt(
+  sessionId: string,
+  clientId: string,
+  reason: AgentInputQueuedMessageDiscardReason,
+): void {
+  schedulerQueueBridgeHolder?.removeQueuedPrompt(sessionId, clientId, reason);
 }
 
 function sessionMetaForIsland(session: {
@@ -13423,7 +13437,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
-    onDiscardedQueuedMessage: (sessionId, item) => {
+    onDiscardedQueuedMessage: (sessionId, item, reason) => {
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'discarded');
       discardQueuedAttachmentOwnership(sessionId, item.clientId);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
@@ -13435,12 +13449,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       finalizeUndispatchedClaimedRetry(sessionId, item, 'cancelled');
       // 持久化中的项在这里被取消后不会再走 onUndispatchedUserTurn，复用同一结算出口。
       if (!autoResume) settleUndispatchedInterruptedAutoResume(sessionId, item);
-      // 排队心跳被丢弃 → 通知 runner 按 aborted 收尾对应 run,不让 fire 永久挂起。
+      if (item.origin?.kind === 'scheduler') {
+        log.info('scheduler queued prompt discarded before dispatch', {
+          sessionId,
+          clientId: item.clientId,
+          scheduleId: item.origin.scheduleId,
+          runId: item.origin.runId,
+          discardReason: reason,
+          queueStage: 'before-dispatch',
+        });
+      }
+      // 排队心跳被丢弃 → 把结构化原因交给 runner 收尾对应 run,不让 fire 永久挂起。
       const watcher = schedulerQueuedPromptDiscardWatchers.get(item.clientId);
       if (watcher) {
         schedulerQueuedPromptDiscardWatchers.delete(item.clientId);
         try {
-          watcher();
+          watcher(reason);
         } catch (err) {
           log.warn('scheduler queued prompt discard watcher threw', {
             clientId: item.clientId,
@@ -13614,10 +13638,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return { clientId };
     },
-    removeQueuedPrompt: (sessionId, clientId) => {
+    removeQueuedPrompt: (sessionId, clientId, reason) => {
       // remove 只作用于 pending 行;已进入派发(activeTurn)的项 no-op —— 调用方
       // (runner abort 路径)对此已有兜底(转 session.abort)。
-      inputCoordinator.remove(sessionId, clientId);
+      inputCoordinator.remove(sessionId, clientId, reason);
     },
     // 存活探测刻意**不含** recovery:项转入 active-turn recovery 后,Retry 走
     // "克隆已受理 turn"路径,不会再触发 onAcceptedQueuedMessage,排队方注册的

@@ -11,7 +11,7 @@
  *    origin=scheduler),不直发 session.send、不自行 createMessage
  *  - accepted → 等 turn done → success run 带 resultText
  *  - 同 schedule 已有排队项 → 顺延(deferred),不重复入队
- *  - 排队项被丢弃(用户删除)→ run 以含 aborted 的错误收尾
+ *  - 用户删除排队项 → 结构化用户取消；其它 discard reason → 可诊断失败
  *  - pause/delete abort → removeQueuedPrompt 撤项
  *  - 会话空闲也走 coordinator，和普通聊天共享恢复生命周期
  */
@@ -20,8 +20,12 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { AcceptedCallbackDispatchCancelled } from '../../maker-ipc/acceptedCallbackRunner.js';
 
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
-import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
+import {
+  SCHEDULER_RUN_ID_VENDOR_OPTION,
+  ScheduleRunCancellationError,
+} from '@cindy/maker-scheduler';
 import type { FireContext, Logger, Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import type { AgentInputQueuedMessageDiscardReason } from '../../maker-ipc/agent-input-coordinator.js';
 
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
@@ -236,12 +240,16 @@ function enqueueLast(queue: QueueHarness): Parameters<SchedulerQueueDeps['enqueu
 interface QueueHarness {
   deps: SchedulerQueueDeps;
   enqueueCalls: Array<Parameters<SchedulerQueueDeps['enqueuePrompt']>[0]>;
-  removeCalls: Array<{ sessionId: string; clientId: string }>;
+  removeCalls: Array<{
+    sessionId: string;
+    clientId: string;
+    reason: AgentInputQueuedMessageDiscardReason;
+  }>;
   cancelAutoResumeCalls: Array<{ sessionId: string; runId: string }>;
   /** 模拟 drain 派发:触发最近一次入队项的 onAccepted。 */
   accept(): Promise<void>;
   /** 模拟排队项被丢弃(用户删除 / abort 撤项)。 */
-  discard(): void;
+  discard(reason?: AgentInputQueuedMessageDiscardReason): void;
   /** 模拟普通自动续跑最终仍失败。 */
   failAutoResume(): void;
 }
@@ -283,12 +291,12 @@ function createQueueHarness(opts: {
         if (opts.acceptBeforeEnqueueResolves) await req.onAccepted();
         return { clientId: `client-${enqueueCalls.length}` };
       }),
-      removeQueuedPrompt: (sessionId, clientId) => {
-        removeCalls.push({ sessionId, clientId });
+      removeQueuedPrompt: (sessionId, clientId, reason) => {
+        removeCalls.push({ sessionId, clientId, reason });
         // 与真实 coordinator.remove 对齐:pending 项被移除触发 onDiscarded;
         // 项已转 activeTurn/recovery 时 remove 是 no-op(removeTriggersDiscard=false)。
         if (opts.removeTriggersDiscard !== false) {
-          enqueueCalls.at(-1)?.onDiscarded?.();
+          enqueueCalls.at(-1)?.onDiscarded?.(reason);
         }
       },
       isPromptTracked: () => (opts.tracked ? opts.tracked() : true),
@@ -304,8 +312,8 @@ function createQueueHarness(opts: {
     async accept() {
       await enqueueCalls.at(-1)?.onAccepted();
     },
-    discard() {
-      enqueueCalls.at(-1)?.onDiscarded?.();
+    discard(reason = 'user-remove') {
+      enqueueCalls.at(-1)?.onDiscarded?.(reason);
     },
     failAutoResume() {
       for (const listener of [...autoResumeFailureListeners]) listener();
@@ -1013,16 +1021,32 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.send).not.toHaveBeenCalled();
   });
 
-  it('settles the run as aborted-style failure when the queued prompt is discarded', async () => {
+  it('uses a structured cancellation when the user removes the queued prompt', async () => {
     const harness = createSessionHarness(async () => ({ accepted: true }));
     const queue = createQueueHarness({ busy: true });
     const { runner } = createRunnerHarness(harness.session, queue.deps);
 
     const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
     await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
-    queue.discard();
+    queue.discard('user-remove');
 
-    await expect(firePromise).rejects.toThrow(/aborted/i);
+    await expect(firePromise).rejects.toBeInstanceOf(ScheduleRunCancellationError);
+    expect(harness.listenerCount()).toBe(0);
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
+  });
+
+  it('preserves a non-user discard reason as a diagnosable failure', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+    const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    queue.discard('queue-replaced');
+
+    await expect(firePromise).rejects.toThrow(
+      'queued heartbeat prompt removed before dispatch (queue-replaced)',
+    );
     expect(harness.listenerCount()).toBe(0);
     expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
   });
@@ -1038,7 +1062,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     ctx.abortController.abort();
 
     await expect(firePromise).rejects.toThrow(/aborted/i);
-    expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
+    expect(queue.removeCalls).toEqual([
+      { sessionId: SESSION_ID, clientId: 'client-1', reason: 'scheduler-abort' },
+    ]);
     expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
   });
 
@@ -1579,7 +1605,9 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
       );
 
       await expect(firePromise).resolves.toMatchObject({ deferred: true });
-      expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
+      expect(queue.removeCalls).toEqual([
+        { sessionId: SESSION_ID, clientId: 'client-1', reason: 'dispatch-timeout' },
+      ]);
       // 离开等待必须配对上报(reclaimSlot=false),否则引擎侧的槽位记账会漏
       expect(started).toBe(1);
       expect(ends).toEqual([false]);
@@ -1660,7 +1688,9 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
         QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS,
       );
       await settled;
-      expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
+      expect(queue.removeCalls).toEqual([
+        { sessionId: SESSION_ID, clientId: 'client-1', reason: 'dispatch-timeout' },
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -1683,7 +1713,9 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
       );
 
       await rejection;
-      expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
+      expect(queue.removeCalls).toEqual([
+        { sessionId: SESSION_ID, clientId: 'client-1', reason: 'dispatch-timeout' },
+      ]);
       expect(notifier.notify).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

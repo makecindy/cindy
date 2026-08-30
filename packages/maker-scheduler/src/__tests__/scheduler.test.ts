@@ -13,7 +13,12 @@ import type {
   ListFilter,
 } from '../types.js';
 import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
-import type { FireContext, FireResult, ScheduleRunner } from '../interfaces/schedule-runner.js';
+import {
+  ScheduleRunCancellationError,
+  type FireContext,
+  type FireResult,
+  type ScheduleRunner,
+} from '../interfaces/schedule-runner.js';
 import type { Logger } from '../interfaces/logger.js';
 
 class InMemoryStorage implements ScheduleStorage {
@@ -540,18 +545,44 @@ describe('Scheduler', () => {
     expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 2, 0)); // 照常重排,不停摆
   });
 
-  it("agent 任务错误文本 /abort/i 兜底保持原语义(runner 没接 signal 的存量路径)", async () => {
+  it("agent 任务错误文本含 'abort' 时不误判成用户取消", async () => {
     const local = makeHarness({
       runnerImpl: async () => {
-        throw new Error('session aborted');
+        throw new Error('session aborted by remote server');
       },
     });
     const sch = await local.scheduler.create({ ...baseInput });
     local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
     await local.scheduler.tick();
     const runs = await local.scheduler.listRuns(sch.id);
-    expect(runs[0].status).toBe('aborted');
-    // aborted 分支不重排(schedule 大概率已被 delete/pause;resume 会自己重算)
+    expect(runs).toHaveLength(1);
+    expect(runs[0].status).toBe('failed');
+    expect(runs[0].errorMsg).toBe('session aborted by remote server');
+    const after = await local.storage.get(sch.id);
+    expect(after?.status).toBe('active');
+    expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 2, 0));
+  });
+
+  it('结构化 runner 取消保留独立文案并记为 aborted', async () => {
+    const local = makeHarness({
+      runnerImpl: async () => {
+        throw new ScheduleRunCancellationError(
+          'cancelled by user (queued automation input removed)',
+        );
+      },
+    });
+    const sch = await local.scheduler.create({ ...baseInput });
+    local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+
+    await local.scheduler.tick();
+
+    const runs = await local.scheduler.listRuns(sch.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: 'aborted',
+      errorMsg: 'cancelled by user (queued automation input removed)',
+    });
+    expect(runs[0].readAt).toBe(runs[0].finishedAt);
     const after = await local.storage.get(sch.id);
     expect(after?.nextFireAt).toBeUndefined();
   });

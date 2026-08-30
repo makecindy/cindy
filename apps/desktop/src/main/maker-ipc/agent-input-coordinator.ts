@@ -247,6 +247,19 @@ export type AutoRetryOutcome = 'resumed' | 'superseded' | 'no-progress';
 
 export type AgentInputHostSendFailureCode = HostSendFailureCode;
 
+/** 队列项跨过 vendor dispatch 前被移除的结构化来源；不得用错误文本反推。 */
+export type AgentInputQueuedMessageDiscardReason =
+  | 'user-remove'
+  | 'session-stop'
+  | 'session-clear'
+  | 'hook-blocked'
+  | 'queue-replaced'
+  | 'queue-merge'
+  | 'queue-restore-stale'
+  | 'scheduler-abort'
+  | 'dispatch-timeout'
+  | 'internal-cleanup';
+
 export type AgentInputSendResult =
   | HostSendOutcome
   | { kind: 'session-dispatch'; source: string; dispatched: true }
@@ -482,7 +495,11 @@ export interface AgentInputCoordinatorDeps {
    * host 用它释放按 clientId 暂存的 accepted 副作用(如 orca 排队消息的回调表),
    * 否则被丢弃项的暂存条目会永久泄漏。
    */
-  onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  onDiscardedQueuedMessage?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    reason: AgentInputQueuedMessageDiscardReason,
+  ) => void;
   /**
    * 这个会话的失败 turn 正在重试；`source` 区分人工操作与自动续跑。
    *
@@ -1210,7 +1227,7 @@ export class AgentInputCoordinator {
           this.restoredQueueSessions.add(sessionId);
           this.queueRestorePromises.delete(sessionId);
           for (const item of items) {
-            this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+            this.deps.onDiscardedQueuedMessage?.(sessionId, item, 'internal-cleanup');
           }
           this.maybePersistQueueSnapshot(sessionId);
           return;
@@ -1247,7 +1264,7 @@ export class AgentInputCoordinator {
     });
     if (staleClearItems.length > 0) {
       for (const item of staleClearItems) {
-        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item, 'session-clear');
       }
       log.info('dropped pre-clear queue item(s) from crash snapshot', {
         sessionId,
@@ -1277,7 +1294,7 @@ export class AgentInputCoordinator {
     const restored = restorable.filter((item) => item.origin?.kind !== 'scheduler');
     if (staleSchedulerItems.length > 0) {
       for (const item of staleSchedulerItems) {
-        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item, 'queue-restore-stale');
       }
       log.info('dropped stale scheduler heartbeat item(s) from crash snapshot', {
         sessionId,
@@ -1524,7 +1541,7 @@ export class AgentInputCoordinator {
       // pre-vendor await。用户此时接管不能只作废 host waiter：那会让隐藏 Continue
       // 继续派发、而新输入排在它后面。复用 Stop 的 generation 取消边界，先确认
       // 旧续跑已被 coordinator 丢弃，再发布用户接管信号。
-      this.cancelPreparedAutoResume(sessionId, state);
+      this.cancelPreparedAutoResume(sessionId, state, 'queue-replaced');
     }
     if (isUiContinuationItem(item)) {
       // queue-head recovery 时**跳过** onUiRetry:那条消息在派发前就失败了,
@@ -1603,7 +1620,7 @@ export class AgentInputCoordinator {
         // 与 remove() 同口径:摘除消息时同步清其 edit lock,否则留下指向不存在
         // clientId 的孤儿锁,shouldQueueNewTurn 会把后续新输入误导向排队。
         state.queueEditLocks = state.queueEditLocks.filter((id) => id !== abandonedClientId);
-        this.deps.onDiscardedQueuedMessage?.(sessionId, abandoned);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, abandoned, 'queue-replaced');
         // 脱敏:只记 id/布尔,不记消息文本(白名单方向,见 log-upload-and-redaction)。
         log.info('explicit user input abandoned queue-head message (never accepted)', {
           sessionId,
@@ -1689,7 +1706,7 @@ export class AgentInputCoordinator {
 
     item = stampHostAcceptedAt(item, state.clearBoundaryMs);
     this.rememberEnqueuedClientId(state, item.clientId);
-    this.cancelPreparedAutoResume(sessionId, state);
+    this.cancelPreparedAutoResume(sessionId, state, 'queue-replaced');
     this.deps.onAutomaticEnqueue?.(sessionId);
     state.autoResumePending = null;
     state.autoResumeAttemptToken = null;
@@ -1726,7 +1743,7 @@ export class AgentInputCoordinator {
     // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
     // vendor dispatch 的隐藏 scheduler 续跑，再让 host 终止对应 run waiter；
     // 否则 compact 自己的 text/done 可能被旧 schedule run 误收。
-    this.cancelPreparedAutoResume(sessionId, state);
+    this.cancelPreparedAutoResume(sessionId, state, 'queue-replaced');
     this.deps.onUserEnqueue?.(sessionId);
     // 手动压缩与发送新消息一样,都是用户对失败 turn 的明确后续选择:
     // 放弃 active-turn retry,让 /compact 在真实 dispatch boundary 空闲时立即执行,
@@ -1974,7 +1991,7 @@ export class AgentInputCoordinator {
     }
 
     if (!isSchedulerOriginItem(item)) {
-      this.cancelPreparedAutoResume(sessionId, state);
+      this.cancelPreparedAutoResume(sessionId, state, 'queue-replaced');
     }
 
     if (!this.isTurnSteerable(sessionId, state)) {
@@ -2062,7 +2079,7 @@ export class AgentInputCoordinator {
         }
         this.deps.onUserMessageBlocked?.(sessionId, item, verdict);
         this.notifyRejectedUserTurn(sessionId, item);
-        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item, 'hook-blocked');
         this.emit(sessionId);
         this.scheduleDrain(sessionId, 'steer-ghost-blocked');
         // 普通 UI steer 的 true 表示“已处置”，避免 renderer 把被策略拦截的内容
@@ -2460,7 +2477,7 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const preserveQueue = opts?.keepQueue === true;
     this.supersedePendingAutoResumeRecoveries(sessionId);
-    this.cancelPreparedAutoResume(sessionId, state);
+    this.cancelPreparedAutoResume(sessionId, state, 'session-stop');
     this.abortInputBoundary(sessionId);
     this.abortSteerTransactions(sessionId);
     this.clearAbortReconcileRetry(state);
@@ -2478,7 +2495,7 @@ export class AgentInputCoordinator {
             senderLabel: item.origin.senderLabel,
           });
         }
-        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item, 'session-stop');
       }
       // 整批丢弃的排队消息同样从未派发:从弱网重发幂等窗口遗忘,允许再次入队。
       const droppedIds = new Set(droppedQueue.map((q) => q.clientId));
@@ -2498,7 +2515,7 @@ export class AgentInputCoordinator {
     clearErrorProjectionSignals(state);
     state.stickyError = null;
     state.recovery = null;
-    this.cancelPreSendActiveTurn(sessionId, state, preserveQueue);
+    this.cancelPreSendActiveTurn(sessionId, state, preserveQueue, 'session-stop');
     // 用户显式 Stop 立即结束续跑行的 vendor-turn 归属。已跨过 vendor dispatch
     // 的 activeTurn 仍需保留到 abort/terminal 收口，以维持队列边界；这里只清 owner，
     // 让本次 stop projection 不再把「重新连接中」误判为仍在飞。
@@ -2856,7 +2873,7 @@ export class AgentInputCoordinator {
   clearError(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
     if (state.autoResumePending) this.deps.onUserEnqueue?.(sessionId);
-    this.cancelPreparedAutoResume(sessionId, state);
+    this.cancelPreparedAutoResume(sessionId, state, 'queue-replaced');
     const shouldDrainTail = state.recovery?.kind === 'active-turn';
     state.error = null;
     clearErrorProjectionSignals(state);
@@ -2873,13 +2890,17 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
-  remove(sessionId: string, clientId: string): AgentInputProjection {
+  remove(
+    sessionId: string,
+    clientId: string,
+    reason: AgentInputQueuedMessageDiscardReason = 'user-remove',
+  ): AgentInputProjection {
     const state = this.getState(sessionId);
     if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
     const before = state.pendingQueue.length;
     const removed = state.pendingQueue.find((q) => q.clientId === clientId);
     state.pendingQueue = state.pendingQueue.filter((q) => q.clientId !== clientId);
-    if (removed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed);
+    if (removed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed, reason);
     // 显式移除的消息从未派发:该 clientId 允许被合法地重新入队(重排/再发都是
     // 既有产品流),必须从弱网重发幂等窗口里遗忘,否则再入队会被误吞。
     if (removed) {
@@ -3079,7 +3100,7 @@ export class AgentInputCoordinator {
     state.queueEditLocks = state.queueEditLocks.filter((id) => !removedIds.has(id));
     for (const item of removed) {
       this.removePendingCompactWaitClientId(state, item.clientId);
-      this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+      this.deps.onDiscardedQueuedMessage?.(sessionId, item, 'queue-merge');
     }
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'merge-queued-messages');
@@ -3193,9 +3214,9 @@ export class AgentInputCoordinator {
     this.abortInputBoundary(sessionId);
     this.abortSteerTransactions(sessionId);
     for (const item of prev.pendingQueue) {
-      this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+      this.deps.onDiscardedQueuedMessage?.(sessionId, item, 'session-clear');
     }
-    this.cancelPreSendActiveTurn(sessionId, prev, false);
+    this.cancelPreSendActiveTurn(sessionId, prev, false, 'session-clear');
     // 显式清上下文:强制开启持久化闸门,让 emit 写出空快照(删行),
     // 即使此前该会话从未触发恢复(否则旧快照残留,下次打开会诈尸)。
     this.restoredQueueSessions.add(sessionId);
@@ -4245,7 +4266,7 @@ export class AgentInputCoordinator {
           this.getState(sessionId).activeTurn = null;
           this.deps.onUserMessageBlocked?.(sessionId, head, verdict);
           this.notifyRejectedUserTurn(sessionId, head);
-          this.deps.onDiscardedQueuedMessage?.(sessionId, head);
+          this.deps.onDiscardedQueuedMessage?.(sessionId, head, 'hook-blocked');
           this.emit(sessionId);
           this.scheduleDrain(sessionId, 'ghost-hook-blocked');
           return;
@@ -4965,6 +4986,7 @@ export class AgentInputCoordinator {
     sessionId: string,
     state: SessionInputState,
     preserveQueue: boolean,
+    discardReason: AgentInputQueuedMessageDiscardReason,
   ): void {
     const active = state.activeTurn;
     if (!active || !isActiveTurnBeforeVendorDispatch(active)) return;
@@ -4984,7 +5006,7 @@ export class AgentInputCoordinator {
       return;
     }
     if (!preserveQueue) {
-      this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+      this.deps.onDiscardedQueuedMessage?.(sessionId, item, discardReason);
       return;
     }
     if (!state.pendingQueue.some((q) => q.clientId === item.clientId)) {
@@ -5036,7 +5058,7 @@ export class AgentInputCoordinator {
     // This item has already left pendingQueue but never crossed vendor dispatch. Reuse the
     // existing host cleanup boundary; register owns the single recovery/finalize operation.
     this.autoResumeDispatchAttempts.delete(item.clientId);
-    this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+    this.deps.onDiscardedQueuedMessage?.(sessionId, item, 'internal-cleanup');
   }
 
   /** 自动续跑项已真正进入 vendor，之后不再需要 pre-vendor 回滚信息。 */
@@ -5097,12 +5119,18 @@ export class AgentInputCoordinator {
    * 持久化前走 discard 回调，持久化后走 undispatched 回调，两条既有 host 边界都会结算
    * suppressed error 与 guard pending 状态。
    */
-  private cancelPreparedAutoResume(sessionId: string, state: SessionInputState): boolean {
+  private cancelPreparedAutoResume(
+    sessionId: string,
+    state: SessionInputState,
+    discardReason: AgentInputQueuedMessageDiscardReason,
+  ): boolean {
     const queuedClientIds = state.pendingQueue
       .filter((item) => item.autoResume)
       .map((item) => item.clientId);
     this.supersedePendingAutoResumeRecoveries(sessionId);
-    for (const clientId of queuedClientIds) this.remove(sessionId, clientId);
+    for (const clientId of queuedClientIds) {
+      this.remove(sessionId, clientId, discardReason);
+    }
 
     const active = state.activeTurn;
     const item = active?.item;
@@ -5110,7 +5138,7 @@ export class AgentInputCoordinator {
       return queuedClientIds.length > 0;
     }
     const persisted = active.persisted;
-    this.cancelPreSendActiveTurn(sessionId, state, false);
+    this.cancelPreSendActiveTurn(sessionId, state, false, discardReason);
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'auto-resume-cancelled');
     log.info('cancelled prepared auto-resume', {
@@ -5649,7 +5677,11 @@ export class AgentInputCoordinator {
     const hadPendingTakeover = state.autoResumePending !== null;
     state.autoResumePending = null;
     state.autoResumeAttemptToken = null;
-    const cancelledPrepared = this.cancelPreparedAutoResume(sessionId, state);
+    const cancelledPrepared = this.cancelPreparedAutoResume(
+      sessionId,
+      state,
+      'internal-cleanup',
+    );
     const surfacedMessage = Boolean(message && state.recovery);
     if (surfacedMessage) {
       state.error = message ?? null;

@@ -132,6 +132,7 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
       sid,
       expect.objectContaining({ clientId: 'q2' }),
+      'queue-merge',
     );
     expect(h.emitProjection).toHaveBeenCalledTimes(1);
   });
@@ -4032,6 +4033,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
       sid,
       expect.objectContaining({ clientId: 'q-1' }),
+      'queue-replaced',
     );
   });
 
@@ -4286,7 +4288,11 @@ describe('AgentInputCoordinator send transaction', () => {
       },
     );
     expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
-    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining(first));
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining(first),
+      'session-clear',
+    );
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
   });
 
@@ -10572,6 +10578,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
         autoResume: true,
         origin: schedulerItem.origin,
       }),
+      'queue-replaced',
     );
     expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
 
@@ -10610,6 +10617,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
       sid,
       expect.objectContaining({ autoResume: true, origin: schedulerItem.origin }),
+      'internal-cleanup',
     );
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
@@ -10749,6 +10757,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
       sid,
       expect.objectContaining({ autoResume: true }),
+      'internal-cleanup',
     );
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
 
