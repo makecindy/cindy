@@ -2903,6 +2903,10 @@ describe('BillingPage order history', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
 
     expect(await screen.findByRole('dialog')).toBeTruthy();
+    const sendButton = screen.getByRole('button', {
+      name: 'billing.orders.invoice.sendAction',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(sendButton));
     expect(screen.getByText('billing.orders.invoice.title')).toBeTruthy();
     const supportEmailButton = screen.getByRole('button', { name: 'xd-billing@xd.com' });
     expect(supportEmailButton.getAttribute('href')).toBeNull();
@@ -2923,7 +2927,7 @@ describe('BillingPage order history', () => {
     await waitFor(() => expect(window.electronAPI.openExternal).toHaveBeenCalledTimes(1));
     const mailto = vi.mocked(window.electronAPI.openExternal).mock.calls[0][0] as string;
     expect(mailto).toMatch(/^mailto:xd-billing@xd\.com\?/);
-    expect(mailto).toContain('subject=');
+    expect(mailto).toContain('%20');
     expect(mailto).toContain('body=');
     const mailBody = new URLSearchParams(mailto.split('?')[1]).get('body');
     expect(mailBody).toContain('I would like to request an invoice for the following order:');

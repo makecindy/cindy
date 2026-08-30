@@ -1891,7 +1891,7 @@ function InvoiceRequestDialog({
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
-  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const sendButtonRef = useRef<HTMLButtonElement>(null);
   const paymentMethod = order?.paymentAction
     ? t(`billing.paymentActions.${order.paymentAction.type}`)
     : t('billing.orders.invoice.notAvailable');
@@ -1910,7 +1910,9 @@ function InvoiceRequestDialog({
   const invoiceMailto =
     invoiceEmail === null
       ? ''
-      : `mailto:${BILLING_SUPPORT_EMAIL}?${new URLSearchParams(invoiceEmail).toString()}`;
+      : `mailto:${BILLING_SUPPORT_EMAIL}?subject=${encodeURIComponent(
+          invoiceEmail.subject,
+        )}&body=${encodeURIComponent(invoiceEmail.body)}`;
   const gmailComposeUrl =
     invoiceEmail === null
       ? ''
@@ -1976,7 +1978,7 @@ function InvoiceRequestDialog({
         <Dialog.Content
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            cancelButtonRef.current?.focus();
+            sendButtonRef.current?.focus();
           }}
           className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,480px)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-none focus:outline-none"
         >
@@ -2038,7 +2040,6 @@ function InvoiceRequestDialog({
             <Dialog.Close asChild>
               <button
                 type="button"
-                ref={cancelButtonRef}
                 className="h-8 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 {t('billing.actions.close')}
@@ -2046,6 +2047,7 @@ function InvoiceRequestDialog({
             </Dialog.Close>
             <button
               type="button"
+              ref={sendButtonRef}
               onClick={sendInvoiceRequest}
               className="flex h-8 items-center gap-1.5 rounded-full bg-[var(--text-primary)] px-3.5 text-12 font-medium text-[var(--surface)] transition-colors hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >

@@ -5924,14 +5924,15 @@ const registerIpcHandlers = () => {
   // macOS Privacy panes that Settings uses for permission onboarding.
   ipcMain.handle(
     'shell:open-external',
-    async (_event: Electron.IpcMainInvokeEvent, url: string): Promise<{ success: boolean }> => {
+    async (event: Electron.IpcMainInvokeEvent, url: string): Promise<{ success: boolean }> => {
       try {
         const parsed = new URL(url);
         const isWebUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
         // Mail links are restricted to the fixed billing inbox. Renderer content may
         // provide the localized subject/body, but it must not choose a recipient or
         // use mailto as a general-purpose external scheme.
-        const isBillingMailto = isAllowedBillingMailto(url);
+        const isBillingMailto =
+          isAllowedBillingMailto(url) && isTrustedAppRendererEvent(event);
         const isAllowedSystemSettingsUrl =
           process.platform === 'darwin' && allowedSystemSettingsUrls.has(url);
         if (!isWebUrl && !isBillingMailto && !isAllowedSystemSettingsUrl) {
