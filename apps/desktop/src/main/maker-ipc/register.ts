@@ -9730,6 +9730,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
       await contextOverflowRolloverHolder?.prepareUnhealthySession(targetSessionId);
       let live = maker.getSession(targetSessionId);
+      if (live?.agentKind === 'pi' && live.getStatus() === 'error') {
+        // A failed Pi close deliberately remains in Maker.activeSessions so the
+        // next create can retry teardown without spawning a second process.
+        // Never send through that unusable handle: fall through to lazy resume,
+        // whose Maker.createSession call performs the existing bounded close retry.
+        live = undefined;
+      }
       if (live) {
         if (live.isTurnRunning?.()) {
           await enqueueSendToSessionMessage({

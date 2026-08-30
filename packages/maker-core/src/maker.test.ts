@@ -909,8 +909,11 @@ describe('Maker session close events', () => {
     expect(startSession).toHaveBeenCalledTimes(2);
   });
 
-  it('retries a failed crash cleanup before recreating the session', async () => {
-    const crashingHandle = createHandle({ id: 'thread-crashed-close-retry' });
+  it('retries a retained Pi error handle before recreating the session', async () => {
+    const crashingHandle = createHandle({
+      id: 'thread-crashed-close-retry',
+      agentKind: 'pi',
+    });
     crashingHandle.events = () => ({
       [Symbol.asyncIterator]() {
         return {
@@ -925,29 +928,35 @@ describe('Maker session close events', () => {
       closeAttempts += 1;
       if (closeAttempts === 1) throw new Error('transport close failed');
     });
-    const healthyHandle = createHandle({ id: 'thread-rebuilt-after-close-retry' });
+    const healthyHandle = createHandle({
+      id: 'thread-rebuilt-after-close-retry',
+      agentKind: 'pi',
+    });
     const startSession = vi.fn()
       .mockResolvedValueOnce(crashingHandle)
       .mockResolvedValueOnce(healthyHandle);
     const maker = new Maker({
-      agents: { codex: createAgent(startSession) },
+      agents: { pi: createAgent(startSession, 'pi') },
       storage: createStorage(),
       logger: createLogger(),
     });
     const options: CreateSessionOptions = {
       id: 'session-crash-close-retry',
-      agentKind: 'codex',
+      agentKind: 'pi',
       workingDir: '/repo',
-      model: 'gpt-5.4',
+      model: 'pi-model',
     };
 
     const crashed = await maker.createSession(options);
     await vi.waitFor(() => expect(crashed.getStatus()).toBe('error'));
     expect(maker.getSession('session-crash-close-retry')).toBe(crashed);
+    expect(maker.listActiveSessions()).toEqual([crashed]);
 
     const rebuilt = await maker.createSession(options);
     expect(rebuilt.sdkSessionId).toBe('thread-rebuilt-after-close-retry');
     expect(maker.getSession('session-crash-close-retry')).toBe(rebuilt);
+    expect(maker.listActiveSessions()).toEqual([rebuilt]);
+    expect(maker.listActiveSessions()).not.toContain(crashed);
     expect(closeAttempts).toBe(2);
     expect(startSession).toHaveBeenCalledTimes(2);
   });

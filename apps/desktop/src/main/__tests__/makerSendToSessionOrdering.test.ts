@@ -360,6 +360,28 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session resumed');");
   });
 
+  it('routes a retained Pi error handle through bounded close retry before sending', () => {
+    const block = extractSendToSessionSource();
+    const loadLive = block.indexOf('let live = maker.getSession(targetSessionId);');
+    const retainedErrorGuard = block.indexOf(
+      "if (live?.agentKind === 'pi' && live.getStatus() === 'error') {",
+    );
+    const liveDispatch = block.indexOf('if (live) {', retainedErrorGuard);
+    const lazyResume = block.indexOf(
+      'const { session } = await bootstrapSession(createOpts);',
+      liveDispatch,
+    );
+
+    expect(loadLive).toBeGreaterThan(-1);
+    expect(retainedErrorGuard).toBeGreaterThan(loadLive);
+    expect(liveDispatch).toBeGreaterThan(retainedErrorGuard);
+    expect(lazyResume).toBeGreaterThan(liveDispatch);
+    expect(block.slice(retainedErrorGuard, liveDispatch)).toContain('live = undefined;');
+    expect(source).toContain(
+      'whose Maker.createSession call performs the existing bounded close retry',
+    );
+  });
+
   it('awaits Git baseline capture after send_to_session user row persistence and before dispatch', () => {
     const changeSetBlock = extractBetween(
       source,
@@ -751,7 +773,7 @@ describe('sendToSession ordering', () => {
     expect(terminalBlock).toContain('await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({');
     expect(terminalBlock).toContain('sessionId: session.id,');
     expect(terminalBlock).toContain("status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',");
-    expect(terminalBlock).toContain('finalText,');
+    expect(terminalBlock).toContain('finalText: workerTerminalFinalText,');
     expect(terminalBlock).not.toContain('getWorkerLink');
     expect(terminalBlock).not.toContain('listWorkersByLead');
     expect(terminalBlock).not.toContain('dispatchInterAgentMessage');
