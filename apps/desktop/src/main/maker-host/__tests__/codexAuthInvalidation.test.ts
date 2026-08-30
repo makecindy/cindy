@@ -2132,6 +2132,82 @@ describe('Codex system credential suppression marker', () => {
     await expect(adapter.getAccessToken()).resolves.toBe('cindy-f2-token');
   });
 
+  it.each([
+    { platform: 'darwin', label: 'POSIX' },
+    { platform: 'win32', label: 'Windows' },
+  ])('preserves a tracked login when an F1 host fails during the $label cleanup window', async ({
+    platform,
+  }) => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    try {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-login-cleanup-race-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'user-data');
+      h.dataOwnerId = 'owner-a';
+      const codexHome = path.join(h.userDataDir, 'codex-home');
+      const localAuth = path.join(codexHome, 'auth.json');
+      const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.mkdirSync(h.userDataDir, { recursive: true });
+      fs.writeFileSync(
+        localAuth,
+        JSON.stringify({ tokens: { access_token: 'host-f1-token', account_id: 'acct-1' } }),
+      );
+      fs.writeFileSync(bindingFile, JSON.stringify({ openai: 'owner-a' }));
+
+      const { clearCodexAuthBoundaryStateBeforeLogin, DesktopCodexAuthAdapter } = await import(
+        '../auth-adapters.js'
+      );
+      const adapter = new DesktopCodexAuthAdapter();
+      const f1Generation = adapter.captureCredentialGeneration();
+      expect(f1Generation).not.toBeNull();
+      await expect(
+        clearCodexAuthBoundaryStateBeforeLogin(codexHome, { forceRemoveAuth: true }),
+      ).resolves.toBe(true);
+      expect(fs.existsSync(localAuth)).toBe(false);
+
+      const loginGate = deferred<{ authenticated: boolean }>();
+      const trackedLogin = { promise: loginGate.promise, cancelled: false };
+      const privateState = adapter as unknown as {
+        pendingLogin: typeof trackedLogin | null;
+        loginCancellationOpen: boolean;
+      };
+      privateState.pendingLogin = trackedLogin;
+      privateState.loginCancellationOpen = true;
+      const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);
+      const broadcast = vi.fn().mockResolvedValue(undefined);
+      const chmodSpy = vi.spyOn(fs.promises, 'chmod');
+      adapter.setOnLogoutSuccess(onLogoutSuccess);
+      adapter.setOnInvalidatedBroadcast(broadcast);
+
+      const invalidation = adapter.invalidate('late_f1_401', {
+        credentialGeneration: f1Generation,
+      });
+      const f2Bytes = Buffer.from(
+        JSON.stringify({ tokens: { access_token: 'cindy-f2-token', account_id: 'acct-2' } }),
+      );
+      fs.writeFileSync(localAuth, f2Bytes);
+      loginGate.resolve({ authenticated: true });
+      await expect(invalidation).resolves.toBeUndefined();
+
+      expect(trackedLogin.cancelled).toBe(false);
+      expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
+      expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toBeNull();
+      expect(onLogoutSuccess).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
+      expect(chmodSpy).not.toHaveBeenCalled();
+      expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+        openai: 'owner-a',
+      });
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
   it('does not apply a stale orphan reconcile after a login writes local auth', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-login-reconcile-race-'));
     dirs.push(root);

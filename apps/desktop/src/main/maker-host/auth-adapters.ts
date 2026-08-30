@@ -2280,6 +2280,19 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 否则 app-server 会拿同一份坏 token 继续 spawn/retry, 用户也看不到明确的重登录入口。
     const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
     const currentLocalFingerprint = currentCodexCredentialGeneration(localAuthPath);
+    const loginCleanupOwnsMissingCredential = Boolean(
+      this.pendingLogin &&
+      this.loginCancellationOpen &&
+      capturedFingerprint &&
+      !currentLocalFingerprint,
+    );
+    if (loginCleanupOwnsMissingCredential) {
+      // Login preflight deliberately removes F1 before the CLI can publish F2. A late F1 host
+      // failure in that empty window may retire that host, but must not cancel the tracked login
+      // or race its eventual F2 write with destructive logout cleanup.
+      log.info('ignoring stale Codex invalidation during login credential cleanup', { reason });
+      return;
+    }
     const credentialContentChanged = Boolean(
       capturedFingerprint &&
       currentLocalFingerprint &&
