@@ -169,6 +169,7 @@ export function shouldBlockLegacyRemoteModelWindowSwitch(args: {
   targetContextWindow: number | null | undefined;
 }): boolean {
   if (args.hostGuardSupported) return false;
+  if (args.agentKind === 'pi') return true;
   const { contextTokens, currentContextWindow, targetContextWindow } = args;
   const hasKnownWindows =
     typeof currentContextWindow === 'number' &&

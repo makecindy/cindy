@@ -105,7 +105,7 @@ describe('agent capabilities shared model', () => {
       targetContextWindow: 200_000,
     };
 
-    it('blocks legacy shrinks at 90% while preserving same/expand, low pressure, and SSH semantics', () => {
+    it('blocks non-Pi legacy shrinks at 90% while preserving same/expand, low pressure, and SSH semantics', () => {
       expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredShrink)).toBe(true);
       expect(shouldBlockLegacyRemoteModelWindowSwitch({
         ...pressuredShrink,
@@ -123,29 +123,30 @@ describe('agent capabilities shared model', () => {
       expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredSshShrink)).toBe(true);
     });
 
-    it('bypasses Pi only on guarded hosts and evaluates legacy Pi pressure facts', () => {
-      const legacyPiShrink = { ...pressuredShrink, agentKind: 'pi' };
-      expect(shouldBlockLegacyRemoteModelWindowSwitch(legacyPiShrink)).toBe(true);
+    it('fails closed for every estimated legacy Pi route and defers guarded Pi to the host', () => {
+      const legacyPiSwitch = { ...pressuredShrink, agentKind: 'pi' };
+      const estimatedPiRoutes = {
+        lowPressure: { ...legacyPiSwitch, contextTokens: 179_999 },
+        exact90Percent: legacyPiSwitch,
+        sameWindow: { ...legacyPiSwitch, targetContextWindow: 1_000_000 },
+        expansion: { ...legacyPiSwitch, targetContextWindow: 2_000_000 },
+        unknownUsage: { ...legacyPiSwitch, contextTokens: undefined },
+        unknownCurrentWindow: { ...legacyPiSwitch, currentContextWindow: undefined },
+        unknownTargetWindow: { ...legacyPiSwitch, targetContextWindow: undefined },
+      };
+      for (const route of Object.values(estimatedPiRoutes)) {
+        expect(shouldBlockLegacyRemoteModelWindowSwitch(route)).toBe(true);
+      }
       expect(shouldBlockLegacyRemoteModelWindowSwitch({
-        ...legacyPiShrink,
-        contextTokens: 179_999,
-      })).toBe(false);
-      expect(shouldBlockLegacyRemoteModelWindowSwitch({
-        ...legacyPiShrink,
-        targetContextWindow: 1_000_000,
-      })).toBe(false);
-      expect(shouldBlockLegacyRemoteModelWindowSwitch({
-        ...legacyPiShrink,
+        ...legacyPiSwitch,
         hostGuardSupported: true,
       })).toBe(false);
       expect(shouldBlockLegacyRemoteModelWindowSwitch({
-        ...legacyPiShrink,
+        ...legacyPiSwitch,
+        hostGuardSupported: true,
         contextTokens: undefined,
-      })).toBe(true);
-      expect(shouldBlockLegacyRemoteModelWindowSwitch({
-        ...legacyPiShrink,
         targetContextWindow: undefined,
-      })).toBe(true);
+      })).toBe(false);
     });
 
     it('fails closed when legacy-host window or usage facts are unknown', () => {
