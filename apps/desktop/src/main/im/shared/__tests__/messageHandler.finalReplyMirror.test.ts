@@ -96,4 +96,56 @@ describe('messageHandler parent-chat mirror retain', () => {
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
     expect(runAgentTurn).toHaveBeenCalledTimes(1);
   });
+
+  it('releases a queued parent-chat mirror retain when message preprocessing throws', async () => {
+    const release = vi.fn();
+    const retainFinalReplyMirror = vi.fn(() => release);
+    const runAgentTurn = vi.fn();
+
+    const attach = createMessageHandler(
+      {
+        channel: 'feishu',
+        processingEmoji: 'OK',
+        output: { kind: 'rich-card', im: { retainFinalReplyMirror } },
+        turnPermissionPolicyFor: () => {
+          throw new Error('policy exploded');
+        },
+        ui: {
+          agent: {
+            sendInternalError: () => 'internal',
+            unsupportedOnly: () => 'unsupported',
+            unsupportedNotice: () => 'notice',
+          },
+        },
+      } as never,
+      { handleSlashCommand: vi.fn() } as never,
+      { runAgentTurn } as never,
+    );
+
+    let onMessage: ((event: IMMessageEvent) => void) | undefined;
+    attach({
+      name: 'feishu',
+      onMessage: (handler: (event: IMMessageEvent) => void) => {
+        onMessage = handler;
+        return () => undefined;
+      },
+      sendText: vi.fn(async () => ({ messageId: 'om_text' })),
+      sendMarkdownText: vi.fn(async () => ({ messageId: 'om_md' })),
+    } as never);
+
+    onMessage?.(
+      inboundEvent({
+        finalReplyMirror: {
+          kind: 'parent-chat',
+          chatId: 'oc_group',
+          idempotencyKey: 'unexpected-error',
+          accountEpoch: 1,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    expect(retainFinalReplyMirror).toHaveBeenCalledTimes(1);
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
 });

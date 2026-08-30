@@ -477,12 +477,16 @@ export function createMessageHandler(
           runInImAccountGeneration(accountGeneration, () =>
             processOne(im, event, accountGeneration),
           ).catch((err) => {
+            // `processOne` only rejects before it has handed the mirror to a
+            // terminal send path (for example, when an adapter policy hook
+            // throws). Release the enqueue retain for every such drop, not
+            // only account-generation invalidation.
+            try {
+              releaseQueuedMirror?.();
+            } catch {
+              /* best-effort */
+            }
             if (isImAccountScopeClosedError(err)) {
-              try {
-                releaseQueuedMirror?.();
-              } catch {
-                /* best-effort */
-              }
               log.info(`drop inbound message from stale account generation channel=${channel}`);
               return;
             }
