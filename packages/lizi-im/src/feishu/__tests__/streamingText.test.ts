@@ -863,6 +863,76 @@ describe('feishu streaming text', () => {
     expect(mocks.sendFileToChat).not.toHaveBeenCalled();
   });
 
+  it('does not fold case when the case-flipped root names a different inode', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-cs-allowed-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-cs-outside-'));
+    tempDirs.push(allowedRoot, outsideRoot);
+    await fs.writeFile(path.join(allowedRoot, 'report.txt'), 'ok');
+    const secret = path.join(outsideRoot, 'secret.txt');
+    await fs.writeFile(secret, 'secret');
+    const rootReal = fsSync.realpathSync(allowedRoot);
+    const flippedRoot = flipPathCase(rootReal);
+    if (flippedRoot === rootReal) return;
+    const collidingPath = path.join(flippedRoot, 'outside.txt');
+    const secretStat = fsSync.statSync(secret);
+    const pinned = pinRoot(allowedRoot);
+    mocks.sendFile.mockResolvedValue({
+      ok: true,
+      messageId: 'om_primary_file',
+      reusableMessage: {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      uploadedSource: {
+        realPath: collidingPath,
+        dev: secretStat.dev,
+        ino: secretStat.ino,
+        ancestors: pinned,
+      },
+    });
+
+    const realRealpath = fsSync.realpathSync.bind(fsSync);
+    const realStat = fsSync.statSync.bind(fsSync);
+    const rootStat = realStat(rootReal);
+    const spyRealpath = vi.spyOn(fsSync, 'realpathSync').mockImplementation(((
+      file: unknown,
+      options?: unknown,
+    ) => {
+      if (String(file) === collidingPath) return collidingPath;
+      return realRealpath(
+        file as Parameters<typeof realRealpath>[0],
+        options as Parameters<typeof realRealpath>[1],
+      );
+    }) as typeof fsSync.realpathSync);
+    const spyStat = vi.spyOn(fsSync, 'statSync').mockImplementation(((
+      file: unknown,
+      options?: unknown,
+    ) => {
+      const target = String(file);
+      if (target === collidingPath) return secretStat;
+      if (target === flippedRoot) {
+        return { ...rootStat, ino: rootStat.ino + 1 };
+      }
+      return realStat(
+        file as Parameters<typeof realStat>[0],
+        options as Parameters<typeof realStat>[1],
+      );
+    }) as typeof fsSync.statSync);
+
+    try {
+      const handle = await start('g/oc_group/omt_topic');
+      await handle.finalize(
+        `见 [secret](xdt-file://${collidingPath})`,
+        terminalMirror('c'.repeat(64), [allowedRoot], pinned),
+      );
+      expect(mocks.sendFile).toHaveBeenCalled();
+      expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    } finally {
+      spyRealpath.mockRestore();
+      spyStat.mockRestore();
+    }
+  });
+
   it('copies parent-chat files when the allowed root uses host filesystem case', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-case-'));
     tempDirs.push(root);

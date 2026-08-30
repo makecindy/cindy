@@ -152,7 +152,11 @@ function isSyntheticFdPath(resolved: string): boolean {
 
 function normalizePathForContainment(value: string): string {
   const resolved = path.resolve(value);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  if (process.platform !== 'win32') return resolved;
+  // Drive letter is the only OS-defined case-insensitive component. Folding the
+  // rest would collapse NTFS per-directory case-sensitive siblings (C:\work vs
+  // C:\Work) into one root.
+  return resolved.replace(/^([A-Za-z]):/, (_, drive: string) => `${drive.toLowerCase()}:`);
 }
 
 function flipPathCase(value: string): string {
@@ -164,10 +168,10 @@ function flipPathCase(value: string): string {
 /**
  * True when `rootReal` and its letter-case flip name the same inode. APFS and
  * Windows realpath keep the input spelling, so a host-cased root would otherwise
- * fail prefix comparison against the attested file path.
+ * fail prefix comparison against the attested file path. Do not assume every
+ * win32 volume is case-insensitive: NTFS can enable per-directory sensitivity.
  */
 function rootIsCaseInsensitive(rootReal: string): boolean {
-  if (process.platform === 'win32') return true;
   const flipped = flipPathCase(rootReal);
   if (flipped === rootReal) return false;
   try {
@@ -185,15 +189,16 @@ function rootIsCaseInsensitive(rootReal: string): boolean {
 /** `child` is `parent` itself or nested inside it after both are resolved. */
 function isRealPathWithinRoot(realFilePath: string, realRoot: string): boolean {
   const fold = rootIsCaseInsensitive(realRoot);
-  const file = fold
-    ? path.resolve(realFilePath).toLowerCase()
-    : normalizePathForContainment(realFilePath);
-  const root = fold
-    ? path.resolve(realRoot).toLowerCase()
-    : normalizePathForContainment(realRoot);
+  let file = normalizePathForContainment(realFilePath);
+  let root = normalizePathForContainment(realRoot);
+  if (fold) {
+    file = file.toLowerCase();
+    root = root.toLowerCase();
+  }
   if (file === root) return true;
-  const relative = path.relative(root, file);
-  return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
+  // path.win32.relative is case-insensitive even when this directory is not.
+  const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  return file.startsWith(rootWithSep);
 }
 
 /**
