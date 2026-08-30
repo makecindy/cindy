@@ -246,6 +246,25 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.readFileSync(systemAuth)).toEqual(renewedSystemBytes);
     expect(fs.statSync(systemAuth).mode).toBe(renewedSystemMode);
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+
+    const renewedSystemStat = fs.statSync(systemAuth);
+    const renewedLocalStat = fs.statSync(localAuth);
+    await expect(adapter.verifyRecoveryWithAccountRpc(async () => 'account-ok')).resolves.toBe(
+      'account-ok',
+    );
+    const recoveredState = await adapter.getState({ credentialMode: 'oauth-bearer' });
+    expect(recoveredState).toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    expect(recoveredState).not.toHaveProperty('recoveryRequiredReason');
+    expect(fs.readFileSync(systemAuth)).toEqual(renewedSystemBytes);
+    expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
+    expect(fs.statSync(systemAuth).mode).toBe(renewedSystemMode);
+    expect(fs.statSync(systemAuth).ino).toBe(renewedSystemStat.ino);
+    expect(fs.statSync(localAuth).ino).toBe(renewedLocalStat.ino);
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
   it('显式写开关只解除 dev UI/主进程门禁,不会自行启动 OAuth', async () => {

@@ -180,6 +180,7 @@ type CodexRecoveryVerificationProof = {
   ownerScopeKey: string;
   reason: string;
   credentialScope: NonNullable<AuthState['credentialScope']>;
+  markerPersistence: 'persisted' | 'memory-only';
   markerFingerprint: string;
   credentialSha256: string;
   accountId: string | null;
@@ -1334,7 +1335,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     this.oauthInvalidatedCredentialScope = undefined;
     this.oauthRecoveryRequiredReason = marker.reason;
     this.oauthRecoveryCredentialScope = marker.credentialScope ?? 'unknown';
-    this.devReadOnlyInvalidatedSystemCredential = null;
     this.devReadOnlyDetached = false;
     this.suppressSystemCodexReconcile = false;
     await this.reconcileWithSystemCodex();
@@ -1372,7 +1372,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     ) {
       return null;
     }
-    const marker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
+    const persistedMarker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
+    const marker = persistedMarker ?? this.devReadOnlyInvalidatedSystemCredential;
     const credential = readCodexRecoveryCredentialProof(path.join(this.codexHome, 'auth.json'));
     if (!marker || !credential) return null;
     const credentialScope =
@@ -1381,6 +1382,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       ownerScopeKey: activeOwnerScopeKey(),
       reason: this.oauthRecoveryRequiredReason,
       credentialScope,
+      markerPersistence: persistedMarker ? 'persisted' : 'memory-only',
       markerFingerprint: JSON.stringify(marker),
       ...credential,
     };
@@ -1388,16 +1390,19 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   /**
    * A successful account-level RPC proves only the credential captured before that RPC. Compare
-   * the proof again before mutating the durable recovery boundary so a late response cannot clear
-   * a newer login, invalidation or Cindy owner. Persistence failures are fail-soft for the usage
-   * read but fail-closed for recovery: the pending reason remains authoritative.
+   * the proof again before mutating the recovery boundary so a late response cannot clear a newer
+   * login, invalidation or Cindy owner. Persistence failures are fail-soft for the usage read but
+   * fail-closed for recovery: the pending reason remains authoritative.
    */
   private confirmRecoveryVerified(proof: CodexRecoveryVerificationProof): boolean {
     const current = this.captureRecoveryVerificationProof();
     if (!current || JSON.stringify(current) !== JSON.stringify(proof)) return false;
 
     const credentialScope = proof.credentialScope;
-    if (credentialScope === 'system-shared') {
+    if (proof.markerPersistence === 'memory-only') {
+      if (credentialScope !== 'system-shared') return false;
+      this.suppressSystemCodexReconcile = false;
+    } else if (credentialScope === 'system-shared') {
       if (!clearInvalidatedSystemCodexAuthMarker(this.codexHome)) {
         log.error('failed to clear verified Codex recovery marker');
         return false;
@@ -1417,6 +1422,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       }
       this.suppressSystemCodexReconcile = true;
     }
+    this.devReadOnlyInvalidatedSystemCredential = null;
     this.oauthRecoveryRequiredReason = null;
     this.oauthRecoveryCredentialScope = undefined;
     return true;
