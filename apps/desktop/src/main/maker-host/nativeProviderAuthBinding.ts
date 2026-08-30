@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import { platform as hostPlatform } from 'node:os';
 import path from 'node:path';
 
 import {
@@ -17,6 +18,11 @@ import {
   type NativeProviderId,
 } from './model-discovery/connection-source.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
+
+// Link-reconciliation tests override process.platform to exercise POSIX and
+// Windows topology semantics. Durability capabilities belong to the actual
+// host filesystem, so capture them before any such override can occur.
+const NATIVE_BINDING_HOST_PLATFORM = hostPlatform();
 
 const NATIVE_PROVIDER_IDS = [
   'anthropic',
@@ -212,7 +218,7 @@ function syncParentDirectory(file: string): void {
     // final-file FlushFileBuffers above remains the fallback durability
     // barrier in that case; do not turn a successful binding commit into a
     // logout merely because directory fsync is unavailable.
-    if (process.platform !== 'win32') throw error;
+    if (NATIVE_BINDING_HOST_PLATFORM !== 'win32') throw error;
   } finally {
     if (dirHandle !== undefined) fs.closeSync(dirHandle);
   }

@@ -145,6 +145,37 @@ describe('local → cloud native provider binding migration', () => {
     expect(fsyncSpy).toHaveBeenCalled();
   });
 
+  it('keeps directory durability bound to the real host when link tests spoof the platform', () => {
+    const hostPlatform = process.platform;
+    const realFsync = fs.fsyncSync.bind(fs);
+    vi.spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
+      if (fs.fstatSync(fd).isDirectory()) {
+        throw Object.assign(new Error('directory fsync is unsupported'), { code: 'EPERM' });
+      }
+      realFsync(fd);
+    });
+    Object.defineProperty(process, 'platform', {
+      value: hostPlatform === 'win32' ? 'darwin' : 'win32',
+      configurable: true,
+    });
+
+    try {
+      if (hostPlatform === 'win32') {
+        expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+        expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+          legacyClaimOwner: 'owner-a',
+        });
+      } else {
+        expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('failed');
+      }
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: hostPlatform,
+        configurable: true,
+      });
+    }
+  });
+
   it('retries transient Windows-style binding publication locks', () => {
     expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
     const originalRenameSync = fs.renameSync.bind(fs);
