@@ -559,6 +559,25 @@ async function runDefaultProfileCandidates(
       attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
       continue;
     }
+    // Profile candidates may spend time awaiting credential discovery before
+    // they reach this loop (for example maker.getAgentAuthState for Codex).
+    // Re-check the owning workflow immediately before invoking the candidate;
+    // otherwise a profile route can bypass the catalog HTTP path's final
+    // beforeDispatch fence and send the old owner's prompt after a switch.
+    if (
+      opts?.beforeDispatch
+      && !(await opts.beforeDispatch({
+        providerId: utilityRouteProviderIdFor(candidate.profile.transport, candidate.providerId),
+        agentKind: 'codex',
+        model: candidate.model,
+      }))
+    ) {
+      log.warn('utility text profile candidate aborted before dispatch', {
+        providerId: candidate.providerId,
+        model: candidate.model,
+      });
+      return null;
+    }
     try {
       const text = (await candidate.execute(prompt, opts)).trim();
       if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });

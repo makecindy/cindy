@@ -228,6 +228,28 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('rechecks the owner after profile resolution before invoking Codex oneShot', async () => {
+    chainState.refs = ['codex-gpt-5.4-mini'];
+    getProfiles.mockReturnValue([{
+      id: 'codex-gpt-5.4-mini',
+      model: 'gpt-5.4-mini',
+      transport: 'codex-responses',
+      auth: 'codex',
+      settingsTab: 'connections',
+      missingCredentialMessage: 'codex missing',
+    }]);
+    const maker = makerMock(true);
+    vi.mocked(maker.getAgentAuthState).mockImplementation(async () => {
+      ownerState.key = 'owner-b';
+      return { authenticated: true };
+    });
+
+    const result = await requestUtilityText(maker, 'must stay with owner-a');
+
+    expect(result).toMatchObject({ ok: false });
+    expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
+  });
+
   it('applies paid availability only to direct XD LiteLLM utility routes', () => {
     xdPaymentRequiredRoute.mockImplementation((model) => model === 'paid-model');
 
@@ -383,6 +405,29 @@ describe('utility one-shot candidates', () => {
     expect(JSON.parse(String(vi.mocked(fetchMock).mock.calls[0]?.[1]?.body))).toMatchObject({
       model: 'deepseek/deepseek-v4-flash',
     });
+  });
+
+  it('rechecks the owner for a pinned profile before invoking Codex oneShot', async () => {
+    const maker = makerMock(true);
+    vi.mocked(maker.getAgentAuthState).mockImplementation(async () => {
+      ownerState.key = 'owner-b';
+      return { authenticated: true };
+    });
+    getProfiles.mockReturnValue([{
+      id: 'codex-gpt-5.4-mini',
+      model: 'gpt-5.4-mini',
+      transport: 'codex-responses',
+      auth: 'codex',
+      settingsTab: 'connections',
+      missingCredentialMessage: 'codex missing',
+    }]);
+
+    const result = await requestUtilityText(maker, 'must stay with owner-a', {
+      pinnedProfileId: 'codex-gpt-5.4-mini',
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
   });
 
   it('不认的 pinnedProfileId 忽略,回落默认链', async () => {
