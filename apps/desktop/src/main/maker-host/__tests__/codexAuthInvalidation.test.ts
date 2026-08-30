@@ -1666,7 +1666,7 @@ describe('Codex system credential suppression marker', () => {
     await expect(adapter.getAccessToken()).resolves.toBe('system-f3-token');
   });
 
-  it('ignores a late shared-host invalidation after the local credential has advanced', async () => {
+  it('ignores a late shared-host invalidation across lossless Windows file IDs', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-host-generation-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -1687,6 +1687,28 @@ describe('Codex system credential suppression marker', () => {
     fs.mkdirSync(h.userDataDir, { recursive: true });
     fs.writeFileSync(bindingFile, JSON.stringify({ openai: 'owner-b' }));
 
+    const realFstatSync = fs.fstatSync.bind(fs);
+    const realStatSync = fs.statSync.bind(fs);
+    let exactIno = 9_007_199_254_740_992n;
+    vi.spyOn(fs, 'fstatSync').mockImplementation(((fd: number) => ({
+      ...realFstatSync(fd, { bigint: true }),
+      ino: exactIno,
+    })) as typeof fs.fstatSync);
+    vi.spyOn(fs, 'statSync').mockImplementation(((target: fs.PathLike, options?: unknown) => {
+      if (
+        typeof options === 'object' &&
+        options !== null &&
+        'bigint' in options &&
+        (options as { bigint?: boolean }).bigint
+      ) {
+        return realStatSync(target, { bigint: true });
+      }
+      const stat = realStatSync(target);
+      return path.resolve(String(target)) === path.resolve(localAuth)
+        ? { ...stat, ino: Number(exactIno) }
+        : stat;
+    }) as typeof fs.statSync);
+
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     await expect(adapter.getAccessToken()).resolves.toBe('system-f1-token');
@@ -1694,6 +1716,7 @@ describe('Codex system credential suppression marker', () => {
     const f1Generation = adapter.captureCredentialGeneration();
     expect(f1Fingerprint).not.toBeNull();
     expect(f1Generation).not.toBeNull();
+    expect(JSON.parse(f1Generation!).ino).toBe('9007199254740992');
 
     const f2Replacement = path.join(path.dirname(systemAuth), 'auth.f2.json');
     fs.writeFileSync(
@@ -1701,6 +1724,8 @@ describe('Codex system credential suppression marker', () => {
       JSON.stringify({ tokens: { access_token: 'system-f2-token', account_id: 'acct-1' } }),
     );
     fs.renameSync(f2Replacement, systemAuth);
+    exactIno = 9_007_199_254_740_993n;
+    expect(Number(9_007_199_254_740_992n)).toBe(Number(exactIno));
     const f2Before = fs.readFileSync(systemAuth);
     const f2StatBefore = fs.statSync(systemAuth);
     const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);

@@ -256,6 +256,8 @@ export interface AppServerHostOptions {
    * (单次 latch 在 client 内)。stderr 始终只作为诊断日志。
    */
   onAuthInvalidated?: (reason: string) => void;
+  /** Called only after app-server acknowledges initialize for the current transport. */
+  onInitialized?: () => void;
   /**
    * Host 创建时冻结的事实:该 app-server 的 model_provider.base_url 是否走
    * 本机 codex proxy。session 级 prompt gate 只读这个值,不再 live 读取全局状态。
@@ -708,6 +710,7 @@ export class AppServerHost {
       ...capabilities,
     };
     const resp = await client.initialize(this.opts.clientInfo, mergedCapabilities);
+    this.opts.onInitialized?.();
     this.logger.info('shared app-server up', {
       userAgent: resp.userAgent,
       codexHome: resp.codexHome,

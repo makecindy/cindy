@@ -41,7 +41,6 @@ import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import {
   CODEX_USER_DISCONNECT_REASON,
   clearInvalidatedSystemCodexAuthMarker,
-  currentCodexAuthFileFingerprint,
   getActiveInvalidatedSystemCodexAuthMarker,
   isDurableDisconnectMarker,
   readInvalidatedSystemCodexAuthMarker,
@@ -318,17 +317,54 @@ function pathsReferToSameFileSync(left: string, right: string): boolean {
   );
 }
 
+type CodexCredentialGeneration = {
+  dev: string;
+  ino: string;
+  size: number;
+  mtimeMs: number;
+  sha256: string;
+};
+
+const DECIMAL_FILE_ID_RE = /^(0|[1-9]\d*)$/;
+
+function currentCodexCredentialGeneration(authPath: string): CodexCredentialGeneration | null {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(authPath, 'r');
+    const stat = fs.fstatSync(fd, { bigint: true });
+    const bytes = fs.readFileSync(fd);
+    return {
+      dev: stat.dev.toString(),
+      ino: stat.ino.toString(),
+      size: Number(stat.size),
+      mtimeMs: Number(stat.mtimeMs),
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    };
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
 function parseCodexCredentialGeneration(
   value: string | null | undefined,
-): CodexAuthFileFingerprint | null {
+): CodexCredentialGeneration | null {
   if (!value) return null;
   try {
-    const parsed = JSON.parse(value) as Partial<CodexAuthFileFingerprint>;
+    const parsed = JSON.parse(value) as Partial<Record<keyof CodexCredentialGeneration, unknown>>;
+    const parseFileId = (candidate: unknown): string | null => {
+      if (typeof candidate === 'string' && DECIMAL_FILE_ID_RE.test(candidate)) return candidate;
+      if (typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 0) {
+        return String(candidate);
+      }
+      return null;
+    };
+    const dev = parseFileId(parsed.dev);
+    const ino = parseFileId(parsed.ino);
     if (
-      typeof parsed.dev !== 'number' ||
-      !Number.isFinite(parsed.dev) ||
-      typeof parsed.ino !== 'number' ||
-      !Number.isFinite(parsed.ino) ||
+      dev === null ||
+      ino === null ||
       typeof parsed.size !== 'number' ||
       !Number.isFinite(parsed.size) ||
       typeof parsed.mtimeMs !== 'number' ||
@@ -337,7 +373,7 @@ function parseCodexCredentialGeneration(
       !/^[0-9a-f]{64}$/i.test(parsed.sha256)
     )
       return null;
-    return parsed as CodexAuthFileFingerprint;
+    return { dev, ino, size: parsed.size, mtimeMs: parsed.mtimeMs, sha256: parsed.sha256 };
   } catch {
     return null;
   }
@@ -1488,7 +1524,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   captureCredentialGeneration(): string | null {
-    const fingerprint = currentCodexAuthFileFingerprint(path.join(this.codexHome, 'auth.json'));
+    const fingerprint = currentCodexCredentialGeneration(path.join(this.codexHome, 'auth.json'));
     return fingerprint ? JSON.stringify(fingerprint) : null;
   }
 
@@ -2208,18 +2244,20 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 服务端已经明确判定 OAuth 凭证失效时, 不能再从 ~/.codex 自动 reconcile 回来。
     // 否则 app-server 会拿同一份坏 token 继续 spawn/retry, 用户也看不到明确的重登录入口。
     const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
-    const currentLocalFingerprint = currentCodexAuthFileFingerprint(localAuthPath);
+    const currentLocalFingerprint = currentCodexCredentialGeneration(localAuthPath);
     const credentialContentChanged = Boolean(
       capturedFingerprint &&
-        currentLocalFingerprint &&
-        capturedFingerprint.sha256 !== currentLocalFingerprint.sha256,
+      currentLocalFingerprint &&
+      capturedFingerprint.sha256 !== currentLocalFingerprint.sha256,
     );
     const credentialIdentityChanged = Boolean(
       credentialContentChanged &&
-        capturedFingerprint &&
-        currentLocalFingerprint &&
-        (capturedFingerprint.dev !== currentLocalFingerprint.dev ||
-          capturedFingerprint.ino !== currentLocalFingerprint.ino),
+      capturedFingerprint &&
+      currentLocalFingerprint &&
+      (capturedFingerprint.ino === '0' ||
+        currentLocalFingerprint.ino === '0' ||
+        capturedFingerprint.dev !== currentLocalFingerprint.dev ||
+        capturedFingerprint.ino !== currentLocalFingerprint.ino),
     );
     if (credentialContentChanged && (credentialIdentityChanged || this.loginCancellationOpen)) {
       // A different file identity proves an external atomic replacement. An open login
@@ -2234,7 +2272,16 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // then failed with F2, or another trusted process may have advanced the shared file while this
     // host still held F1. The protocol exposes no refresh-adopted generation, so fail closed without
     // attributing F1 to F2; the unknown marker blocks respawning the rejected current credential.
-    const invalidatedFingerprint = credentialContentChanged ? null : capturedFingerprint;
+    const invalidatedFingerprint: CodexAuthFileFingerprint | null =
+      credentialContentChanged || !capturedFingerprint
+        ? null
+        : {
+            dev: Number(capturedFingerprint.dev),
+            ino: Number(capturedFingerprint.ino),
+            size: capturedFingerprint.size,
+            mtimeMs: capturedFingerprint.mtimeMs,
+            sha256: capturedFingerprint.sha256,
+          };
     const detectedCredentialScope = this.readCodexCredentialScope();
     // A host-bound invalidation without a valid spawn generation is ambiguous. Keep it fail-closed
     // instead of fingerprinting whichever system credential happens to be current now.

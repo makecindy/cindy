@@ -39,6 +39,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
     static dropThreadUnsubscribe = false;
     static dropModelList = false;
     static dropInitialize = false;
+    static beforeInitializeResponse: (() => Promise<void> | void) | null = null;
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static beforeSkillsListResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
@@ -70,6 +71,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
       }
       if (req.method === 'initialize') {
         if (MockCodexTransport.dropInitialize) return;
+        await MockCodexTransport.beforeInitializeResponse?.();
         this.emitLine({
           id: req.id,
           result: {
@@ -273,6 +275,7 @@ beforeEach(() => {
   MockCodexTransport.dropThreadUnsubscribe = false;
   MockCodexTransport.dropModelList = false;
   MockCodexTransport.dropInitialize = false;
+  MockCodexTransport.beforeInitializeResponse = null;
   MockCodexTransport.beforeThreadStartResponse = null;
   MockCodexTransport.beforeSkillsListResponse = null;
   MockCodexTransport.onCreate = null;
@@ -6103,6 +6106,36 @@ describe('CodexAgent MCP thread context hooks', () => {
     await remoteHandle.send({ type: 'user', content: 'still remote' });
     await localHandle.close();
     await remoteHandle.close();
+    await agent.dispose();
+  });
+
+  it('captures the local credential generation only after initialize is acknowledged', async () => {
+    const initializeGate = deferred<void>();
+    const captureCredentialGeneration = vi.fn(() => 'initialized-generation');
+    MockCodexTransport.beforeInitializeResponse = () => initializeGate.promise;
+    const agent = new CodexAgent(createDeps({}, {
+      auth: {
+        async getState() { return { authenticated: true }; },
+        async triggerLogin() { return { authenticated: true }; },
+        async logout() {},
+        async getAuthEnv() { return {}; },
+        captureCredentialGeneration,
+      },
+    }));
+
+    const startSession = agent.startSession({
+      sessionId: 'session-generation-after-initialize',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    await waitForExpectation(() => expect(createdTransports).toHaveLength(1));
+    expect(captureCredentialGeneration).not.toHaveBeenCalled();
+
+    initializeGate.resolve();
+    const handle = await startSession;
+    expect(captureCredentialGeneration).toHaveBeenCalledOnce();
+
+    await handle.close();
     await agent.dispose();
   });
 

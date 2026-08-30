@@ -2725,14 +2725,6 @@ export class CodexAgent extends BaseAgent {
         env,
         extraArgs,
         onProcessSpawned: (pid) => {
-          try {
-            credentialGeneration = this.deps.auth.captureCredentialGeneration?.() ?? null;
-          } catch (error) {
-            credentialGeneration = null;
-            this.deps.logger.warn('codex credential generation capture failed', {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
           this.deps.registerLocalCodexAppServerProcess?.({
             pid,
             role:
@@ -2761,6 +2753,20 @@ export class CodexAgent extends BaseAgent {
       subagentRoute,
       codexOpenAiWebSocketsEnabled,
       codexSubagentRoutingProfile,
+      // initialize acknowledgement is the first point at which this exact app-server has
+      // confirmed reading its auth environment. A spawn-time snapshot can precede that read.
+      onInitialized: remoteHostId
+        ? undefined
+        : () => {
+            try {
+              credentialGeneration = this.deps.auth.captureCredentialGeneration?.() ?? null;
+            } catch (error) {
+              credentialGeneration = null;
+              this.deps.logger.warn('codex credential generation capture failed', {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          },
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
