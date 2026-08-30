@@ -2,7 +2,12 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createElement, createRef } from 'react';
+import {
+  createElement,
+  createRef,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+} from 'react';
 
 import tailwindConfig from '../../../../../../../tailwind.config';
 import { BrowserChrome, type BrowserChromeHandle } from '../BrowserChrome';
@@ -17,18 +22,18 @@ vi.mock('react-i18next', () => ({
 // 沿用仓库既定测试模式:mock 成始终展开的直通组件,Item 渲染成普通 <button>,
 // 把 Radix 的 onSelect 映射到 onClick、透传 disabled —— 这样能直接断言菜单项的
 // 可用性与回调,不依赖真实菜单开合。
-vi.mock('@/components/ui/dropdown-menu', () => {
-  const react = require('react') as typeof import('react');
+vi.mock('@/components/ui/dropdown-menu', async () => {
+  const react = await vi.importActual<typeof import('react')>('react');
   return {
-    DropdownMenu: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenu: ({ children }: { children: ReactNode }) =>
       react.createElement(react.Fragment, null, children),
-    DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuTrigger: ({ children }: { children: ReactNode }) =>
       react.createElement(react.Fragment, null, children),
-    DropdownMenuContent: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuContent: ({ children }: { children: ReactNode }) =>
       react.createElement('div', null, children),
-    DropdownMenuGroup: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuGroup: ({ children }: { children: ReactNode }) =>
       react.createElement('div', null, children),
-    DropdownMenuLabel: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuLabel: ({ children }: { children: ReactNode }) =>
       react.createElement('div', null, children),
     DropdownMenuSeparator: () => react.createElement('hr'),
     DropdownMenuItem: ({
@@ -36,8 +41,8 @@ vi.mock('@/components/ui/dropdown-menu', () => {
       onSelect,
       disabled,
       ...props
-    }: Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onSelect'> & {
-      children: React.ReactNode;
+    }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onSelect'> & {
+      children: ReactNode;
       onSelect?: (event: { preventDefault: () => void }) => void;
       disabled?: boolean;
     }) =>
@@ -271,7 +276,7 @@ describe('BrowserChrome', () => {
   });
 
   it('disables system-browser opening when the host has no safe opener for the URL', () => {
-    const { onOpenInSystemBrowser, onCopyLink } = renderChrome('file:///tmp/notes.md', {
+    renderChrome('file:///tmp/notes.md', {
       canOpenInSystemBrowser: false,
     });
 

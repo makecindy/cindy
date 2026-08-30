@@ -182,18 +182,17 @@ describe('useBrowserWebview', () => {
   });
 
   it('restores the active tab zoom without letting hidden navigation override it', () => {
-    let result: UseBrowserWebviewResult | null = null;
     const view = render(createElement(HookProbe, {
       visible: true,
       zoomFactor: 1.25,
-      onResult: (next) => { result = next; },
+      onResult: () => undefined,
     }));
     expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
 
     view.rerender(createElement(HookProbe, {
       visible: false,
       zoomFactor: 1.25,
-      onResult: (next) => { result = next; },
+      onResult: () => undefined,
     }));
     mockWebview.setZoomFactor.mockClear();
     act(() => mockWebview.dispatch('did-navigate', { url: 'https://example.com/' }));
@@ -202,7 +201,7 @@ describe('useBrowserWebview', () => {
     view.rerender(createElement(HookProbe, {
       visible: true,
       zoomFactor: 1.25,
-      onResult: (next) => { result = next; },
+      onResult: () => undefined,
     }));
     expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
   });

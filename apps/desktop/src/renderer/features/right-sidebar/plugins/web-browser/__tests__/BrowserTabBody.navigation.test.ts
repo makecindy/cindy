@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { createElement, type ReactElement } from 'react';
+import {
+  createElement,
+  type ButtonHTMLAttributes,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import type { WebviewTag } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,14 +41,14 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 
-vi.mock('@/components/ui/dropdown-menu', () => {
-  const react = require('react') as typeof import('react');
+vi.mock('@/components/ui/dropdown-menu', async () => {
+  const react = await vi.importActual<typeof import('react')>('react');
   return {
     DropdownMenu: ({
       children,
       onOpenChange,
     }: {
-      children: React.ReactNode;
+      children: ReactNode;
       onOpenChange?: (open: boolean) => void;
     }) =>
       react.createElement(
@@ -61,13 +66,13 @@ vi.mock('@/components/ui/dropdown-menu', () => {
         }),
         children,
       ),
-    DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuTrigger: ({ children }: { children: ReactNode }) =>
       react.createElement(react.Fragment, null, children),
-    DropdownMenuContent: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuContent: ({ children }: { children: ReactNode }) =>
       react.createElement('div', null, children),
-    DropdownMenuGroup: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuGroup: ({ children }: { children: ReactNode }) =>
       react.createElement('div', null, children),
-    DropdownMenuLabel: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuLabel: ({ children }: { children: ReactNode }) =>
       react.createElement('div', null, children),
     DropdownMenuSeparator: () => react.createElement('hr'),
     DropdownMenuItem: ({
@@ -75,8 +80,8 @@ vi.mock('@/components/ui/dropdown-menu', () => {
       onSelect,
       disabled,
       ...props
-    }: Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onSelect'> & {
-      children: React.ReactNode;
+    }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onSelect'> & {
+      children: ReactNode;
       onSelect?: (event: { preventDefault: () => void }) => void;
       disabled?: boolean;
     }) =>
