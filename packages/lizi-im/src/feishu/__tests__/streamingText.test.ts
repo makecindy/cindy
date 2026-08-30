@@ -69,9 +69,10 @@ function terminalMirror(
   };
 }
 
-function pinRoot(root: string): Array<{ dev: number; ino: number }> {
-  const st = fsSync.statSync(fsSync.realpathSync(root));
-  return [{ dev: st.dev, ino: st.ino }];
+function pinRoot(root: string): Array<{ dev: number; ino: number; realPath: string }> {
+  const realPath = fsSync.realpathSync(root);
+  const st = fsSync.statSync(realPath);
+  return [{ dev: st.dev, ino: st.ino, realPath }];
 }
 
 function ancestorInodes(fileRealPath: string): Array<{ dev: number; ino: number }> {
@@ -795,6 +796,75 @@ describe('feishu streaming text', () => {
       expect(mocks.sendFileToChat).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('does not reuse a file_key when live root realpath and inode come from different lookups', async () => {
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-root-bind-allowed-'));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-root-bind-outside-'));
+    tempDirs.push(allowedRoot, outsideRoot);
+    await fs.writeFile(path.join(allowedRoot, 'report.txt'), 'ok');
+    const secret = path.join(outsideRoot, 'secret.txt');
+    await fs.writeFile(secret, 'secret');
+    const secretReal = fsSync.realpathSync(secret);
+    const secretStat = fsSync.statSync(secretReal);
+    const pinned = pinRoot(allowedRoot);
+    const outsideReal = fsSync.realpathSync(outsideRoot);
+    const allowedReal = fsSync.realpathSync(allowedRoot);
+    mocks.sendFile.mockResolvedValue({
+      ok: true,
+      messageId: 'om_primary_file',
+      reusableMessage: {
+        msgType: 'file',
+        content: JSON.stringify({ file_key: 'file-key' }),
+      },
+      uploadedSource: {
+        realPath: secretReal,
+        dev: secretStat.dev,
+        ino: secretStat.ino,
+        ancestors: pinned,
+      },
+    });
+
+    const realRealpath = fsSync.realpathSync.bind(fsSync);
+    const realStat = fsSync.statSync.bind(fsSync);
+    const pinStat = realStat(allowedReal);
+    const rootNames = new Set([allowedRoot, allowedReal]);
+    const outsideNames = new Set([outsideRoot, outsideReal]);
+    const spyRealpath = vi.spyOn(fsSync, 'realpathSync').mockImplementation(((
+      file: unknown,
+      options?: unknown,
+    ) => {
+      const target = String(file);
+      if (rootNames.has(target)) return outsideReal;
+      return realRealpath(
+        file as Parameters<typeof realRealpath>[0],
+        options as Parameters<typeof realRealpath>[1],
+      );
+    }) as typeof fsSync.realpathSync);
+    const spyStat = vi.spyOn(fsSync, 'statSync').mockImplementation(((
+      file: unknown,
+      options?: unknown,
+    ) => {
+      const target = String(file);
+      if (outsideNames.has(target)) return pinStat;
+      return realStat(
+        file as Parameters<typeof realStat>[0],
+        options as Parameters<typeof realStat>[1],
+      );
+    }) as typeof fsSync.statSync);
+
+    try {
+      const handle = await start('g/oc_group/omt_topic');
+      await handle.finalize(
+        `见 [secret](xdt-file://${secret})`,
+        terminalMirror('b'.repeat(64), [allowedRoot], pinned),
+      );
+      expect(mocks.sendFile).toHaveBeenCalled();
+      expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+    } finally {
+      spyRealpath.mockRestore();
+      spyStat.mockRestore();
     }
   });
 

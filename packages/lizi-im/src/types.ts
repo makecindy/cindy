@@ -188,10 +188,12 @@ export interface IMFinalReplyMirror {
   allowedFileRoots?: string[];
   /**
    * Filesystem identity of `allowedFileRoots`, captured before Agent execution.
-   * Parent-chat file reuse must prove the attested upload path is still inside
-   * a root whose live realpath inode matches this pin.
+   * `realPath` is the canonical path bound to that inode at pin time. Parent-chat
+   * file reuse must prove the attested upload path is still inside a pin whose
+   * live directory handle still has this inode — never a live realpath combined
+   * with a separately looked-up inode.
    */
-  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>;
+  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>;
   /**
    * Dual-delivery pairing was already confirmed at inbound. Terminal
    * parent-chat copies must not wait on a TTL-pruned confirmation map.

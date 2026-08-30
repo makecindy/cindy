@@ -201,47 +201,87 @@ function isRealPathWithinRoot(realFilePath: string, realRoot: string): boolean {
   return file.startsWith(rootWithSep);
 }
 
+function openDirectoryFd(target: string, noFollow: boolean): number {
+  let flags = fs.constants.O_RDONLY;
+  if (noFollow && fs.constants.O_NOFOLLOW) flags |= fs.constants.O_NOFOLLOW;
+  if (fs.constants.O_DIRECTORY) flags |= fs.constants.O_DIRECTORY;
+  return fs.openSync(target, flags);
+}
+
 /**
- * Live realpath of each allowed root that still names a pinned inode.
+ * Directory path bound to a handle. Pinned roots use the path frozen with the
+ * inode before Agent execution; the live handle only proves that inode is still
+ * what `root` opens. Unpinned roots open the realpath with O_NOFOLLOW so the
+ * string and inode come from the same directory, not realpathSync+statSync.
  * Empty `pinnedFileRoots` (explicit pin that resolved nothing) fail-closes.
  * A root whose path was swapped onto another directory after the pin is skipped.
  */
 function matchingLiveRootRealPaths(
   allowedFileRoots: readonly string[],
-  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>,
+  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>,
 ): string[] {
   const matching: string[] = [];
   for (const root of allowedFileRoots) {
     if (!root.trim()) continue;
-    try {
-      const real = fs.realpathSync(root);
-      const st = fs.statSync(real);
-      if (pinnedFileRoots) {
-        if (!pinnedFileRoots.some((pin) => sameInode({ dev: st.dev, ino: st.ino }, pin))) {
-          continue;
-        }
-      } else if (st.ino === 0) {
-        continue;
-      }
-      matching.push(real);
-    } catch {
-      /* skip unresolvable live roots */
-    }
+    const bound = pinnedFileRoots
+      ? bindPinnedLiveRoot(root, pinnedFileRoots)
+      : bindUnpinnedLiveRoot(root);
+    if (bound) matching.push(bound);
   }
   return matching;
+}
+
+function bindPinnedLiveRoot(
+  root: string,
+  pinnedFileRoots: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>,
+): string | null {
+  let fd: number | undefined;
+  try {
+    fd = openDirectoryFd(root, false);
+    const st = fs.fstatSync(fd);
+    if (!st.isDirectory()) return null;
+    const pin = pinnedFileRoots.find((candidate) => sameInode(st, candidate));
+    if (!pin?.realPath || isSyntheticFdPath(pin.realPath)) return null;
+    return pin.realPath;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function bindUnpinnedLiveRoot(root: string): string | null {
+  let real: string;
+  try {
+    real = fs.realpathSync(root);
+  } catch {
+    return null;
+  }
+  if (isSyntheticFdPath(real)) return null;
+  let fd: number | undefined;
+  try {
+    fd = openDirectoryFd(real, true);
+    const st = fs.fstatSync(fd);
+    if (!st.isDirectory() || st.ino === 0) return null;
+    return real;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 /**
  * Parent-chat reuse must not re-read disk. Authorize only when the frozen
  * attested realPath is still the uploaded inode and is contained in a root
- * whose live realpath inode still matches the turn pin. Ancestor inode lists
+ * whose live directory handle still matches the turn pin. Ancestor inode lists
  * are ignored: a full-path parent walk can be swapped onto the workingDir
  * between opens, and a caller can stuff the pin into `ancestors`.
  */
 function isSourceWithinAllowedFileRoots(
   source: FeishuUploadedFileSource,
   allowedFileRoots: readonly string[],
-  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>,
+  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>,
 ): boolean {
   if (source.ino === 0) return false;
   if (!source.realPath || isSyntheticFdPath(source.realPath)) return false;
@@ -265,7 +305,7 @@ function isSourceWithinAllowedFileRoots(
 
 function isWithinAllowedFileRoots(
   allowedFileRoots: readonly string[],
-  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number }>,
+  pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>,
   uploadedSource?: FeishuUploadedFileSource,
 ): boolean {
   if (!uploadedSource) return false;
