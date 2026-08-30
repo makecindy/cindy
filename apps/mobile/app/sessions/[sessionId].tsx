@@ -7987,9 +7987,12 @@ export default function SessionScreen() {
       return true;
     } catch (err) {
       const reason = formatRemoteError(err);
+      const isRemoteModelWindowUnsupported =
+        reason.includes('remote model-window rebuild is unsupported') ||
+        reason.includes('remote model-window confirmation is unsupported');
       if (
         !isPreconditionFailedRemoteError(err) ||
-        !reason.includes('remote model-window rebuild is unsupported')
+        !isRemoteModelWindowUnsupported
       ) {
         throw err;
       }

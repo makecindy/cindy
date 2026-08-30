@@ -56,9 +56,12 @@ describe('session Agent switch UI wiring', () => {
     expect(source).not.toContain('contextTokensForConfirmation');
     expect(source).not.toContain('confirmedContextWindow');
     expect(helper).toContain('const reason = formatRemoteError(err);');
+    expect(helper).toContain('const isRemoteModelWindowUnsupported =');
+    expect(helper).toContain("reason.includes('remote model-window rebuild is unsupported') ||");
+    expect(helper).toContain("reason.includes('remote model-window confirmation is unsupported')");
     expect(helper).toContain('!isPreconditionFailedRemoteError(err) ||');
-    expect(helper).toContain("!reason.includes('remote model-window rebuild is unsupported')");
-    expect(helper).toContain(') {\n        throw err;\n      }');
+    expect(helper).toContain('!isRemoteModelWindowUnsupported');
+    expect(helper).toContain('throw err;');
     expect(helper).not.toContain('Alert.alert(reason);');
     expect(helper).toContain("t('models.contextWindowSwitch.remoteTitle')");
     expect(helper).toContain("t('models.contextWindowSwitch.cancel')");
