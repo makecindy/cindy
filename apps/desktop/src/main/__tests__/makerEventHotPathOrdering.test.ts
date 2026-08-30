@@ -1057,10 +1057,10 @@ describe('maker:event hot path ordering', () => {
     expect(windowsSessionEndSource).toContain('if (options?.requireSuccess) throw error;');
   });
 
-  it('requires the session durable chain before settling a fallback done', () => {
+  it('requires the session durable chain before settling a fallback terminal', () => {
     const wireSessionSource = extractWireSessionSource();
     const resetIndex = wireSessionSource.indexOf('resetTurnPersistState(session.id);');
-    const doneBarrierIndex = wireSessionSource.indexOf(
+    const terminalBarrierIndex = wireSessionSource.indexOf(
       'whenSessionPersistedDurably(session.id)',
       resetIndex,
     );
@@ -1070,13 +1070,13 @@ describe('maker:event hot path ordering', () => {
     );
 
     expect(resetIndex).toBeGreaterThanOrEqual(0);
-    expect(doneBarrierIndex).toBeGreaterThan(resetIndex);
-    expect(summaryIndex).toBeGreaterThan(doneBarrierIndex);
+    expect(terminalBarrierIndex).toBeGreaterThan(resetIndex);
+    expect(summaryIndex).toBeGreaterThan(terminalBarrierIndex);
     expect(wireSessionSource.slice(resetIndex, summaryIndex)).toContain(
       'isWindowsSessionEndFallbackReplay &&',
     );
     expect(wireSessionSource.slice(resetIndex, summaryIndex)).toContain(
-      "event.type === 'done'",
+      "event.type === 'done' || isTerminalTurnErrorEvent(event)",
     );
     expect(wireSessionSource.slice(resetIndex, summaryIndex)).toContain(
       '{ requireSuccess: true }',

@@ -5630,7 +5630,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         resetTurnPersistState(session.id);
         if (
           isWindowsSessionEndFallbackReplay &&
-          event.type === 'done' &&
+          (event.type === 'done' || isTerminalTurnErrorEvent(event)) &&
           !isContinuationBoundary
         ) {
           trackWindowsSessionEndFallbackStorageTask(
