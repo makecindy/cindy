@@ -27,6 +27,7 @@ import { and, count, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzl
 
 import { getMaker } from './maker-host/index.js';
 import { isAgentOneShotRouteDisabled } from './maker-host/model-route-guard-live.js';
+import { isAuxiliaryModelCustomized } from './utility-model/auxiliary-model-settings-store.js';
 import { agentSupportsOneShot, requestUtilityText } from './utility-model/oneShotCandidates.js';
 import { getDbClient } from './localDb/client/current.js';
 import { latestMessageText, latestVisiblePreview } from './localDb/latestMessageText.js';
@@ -335,7 +336,9 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     // 那样跨 agent 兜底 —— 会话 agent 不支持 oneShot 时直接跳过兜底(仅靠 utility-model)。
     const text = utility.ok
       ? utility.text
-      : !agentSupportsOneShot(agentKind) || (await isAgentOneShotRouteDisabled(agentKind))
+      : isAuxiliaryModelCustomized()
+        || !agentSupportsOneShot(agentKind)
+        || (await isAgentOneShotRouteDisabled(agentKind))
         ? ''
         : await getMaker().oneShot(agentKind, prompt, { maxTokens: 120 });
     const summary = sanitize(text, maxCharsForTier(tier));

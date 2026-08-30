@@ -1001,15 +1001,12 @@
         },
         "refiner": {
           "label": "Refinement model",
-          "hint": "Model used to clean up dictated text.",
+          "hint": "Follows the auxiliary model.",
+          "followAuxiliary": "Follow auxiliary model",
+          "followHint": "Refinement follows Settings → Personalization → Auxiliary models. Cindy-hosted voice is unchanged; refinement still runs on the server.",
+          "openAuxiliary": "Open auxiliary models",
+          "cannotRefine": "The current auxiliary models cannot refine speech (for example Claude Messages only), so this dictation will not be refined.",
           "ariaLabel": "Voice refinement model"
-        },
-        "refinerFallback": {
-          "label": "Refinement fallback",
-          "hint": "Backup model used only when the primary refiner fails; off by default.",
-          "ariaLabel": "Voice refinement fallback model selection",
-          "none": "No fallback",
-          "noneDescription": "Keep the raw transcript when the primary model fails"
         },
         "customAsr": {
           "optionLabel": "Custom realtime ASR",
@@ -2692,28 +2689,40 @@
     },
     "auxiliaryModels": {
       "title": "Auxiliary models",
-      "description": "Choose one Agent and model pair for automatic task naming and another for composer prompt suggestions.",
-      "sessionTitle": {
-        "label": "Automatic task naming",
-        "description": "Applies to Claude Code, Codex, and Pi tasks, plus manual AI renaming.",
-        "ariaLabel": "Choose the automatic task naming model",
-        "automatic": "Automatic (follow the current task)"
+      "description": "Used for automatic task naming and AI rename, composer prompt suggestions, Help, pinned task summaries, IM / Feishu titles and group-context checks, scheduled-task scripts, plugin quick Q&A “follow default”, and BYOK voice refinement.",
+      "automatic": "Automatic recommendation",
+      "customize": "Custom",
+      "preferred": {
+        "label": "Preferred",
+        "description": "The first model used for short auxiliary text.",
+        "ariaLabel": "Choose the preferred auxiliary model"
       },
-      "promptRecommendation": {
-        "label": "Composer prompt suggestions",
-        "description": "Used only when prompt recommendations are enabled under Tips.",
-        "ariaLabel": "Choose the composer prompt suggestion model",
-        "automatic": "Automatic (keep current routing)"
+      "fallback1": {
+        "label": "Fallback 1",
+        "description": "Used if the preferred model is unavailable. Optional.",
+        "ariaLabel": "Choose the first fallback auxiliary model"
       },
+      "fallback2": {
+        "label": "Fallback 2",
+        "description": "Used if the first two models are unavailable. Optional.",
+        "ariaLabel": "Choose the second fallback auxiliary model"
+      },
+      "emptySlot": "Not selected",
+      "customHint": "A custom chain is tried in this order only. If none of them work, Cindy will not switch to another model.",
+      "signInHint": "Sign in to Cindy to use the automatic recommendations. While signed out, choose a configured model from another provider under Custom.",
       "chooseAgent": "Choose an Agent",
       "backToAgents": "Back to Agent selection",
-      "explicitRouteHint": "An explicit selection uses only that Agent and model. If unavailable, Cindy will not switch automatically.",
       "searchPlaceholder": "Search models or providers",
       "noResults": "No available models",
       "unavailable": "Currently unavailable",
       "budget": "Discount",
       "subscription": "Subscription",
-      "saveFailed": "Failed to save auxiliary model settings"
+      "saveFailed": "Failed to save auxiliary model settings",
+      "chain": {
+        "cindyHy3": "Hy3",
+        "cindyDeepseekV4Flash": "DeepSeek v4 flash",
+        "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
     },
     "compaction": {
       "title": "Context compaction",

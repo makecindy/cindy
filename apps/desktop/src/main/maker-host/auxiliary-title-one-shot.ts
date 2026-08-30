@@ -1,25 +1,15 @@
 /**
- * Session-title routing with an optional global catalog pin.
+ * Session-title routing through the shared auxiliary-model chain.
  *
- * Automatic mode delegates byte-for-byte to the existing session/provider
- * title path. An explicit selection is a single exact route and fails closed;
- * callers retain their existing heuristic/manual-error fallback semantics.
+ * Automatic and custom chains both go through `requestUtilityText`. Callers
+ * retain their existing heuristic/manual-error fallback semantics.
  */
 
 import type { AgentKind } from '@cindy/maker-core';
 
 import { createLogger } from '../logger.js';
-import type { AuxiliaryModelSelection } from '../utility-model/auxiliary-model-settings-store.js';
-import type {
-  requestExplicitUtilityText,
-  UtilityTextDispatchRoute,
-} from '../utility-model/oneShotCandidates.js';
-import type {
-  generateTitleViaProvider,
-  generateTitleViaProviderResult,
-  TitleOneShotDeps,
-  TitleOneShotResult,
-} from './title-one-shot.js';
+import type { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import type { TitleOneShotDeps, TitleOneShotResult } from './title-one-shot.js';
 import { validateTitleOutput } from './title-output-validation.js';
 
 const log = createLogger('maker-host/auxiliary-title-one-shot');
@@ -32,39 +22,31 @@ const AUXILIARY_TITLE_RESPONSE_INSTRUCTIONS =
   'Output only the short conversation title requested by the user message, without quotation marks or ending punctuation.';
 
 interface AuxiliaryTitleRuntimeDeps {
-  readSelection: (
-    key: 'sessionTitleModel',
-  ) => AuxiliaryModelSelection | null | Promise<AuxiliaryModelSelection | null>;
-  requestText: typeof requestExplicitUtilityText;
-  generateLegacy: typeof generateTitleViaProvider;
-  generateLegacyResult: typeof generateTitleViaProviderResult;
+  readModels: () => string[] | Promise<string[]>;
+  requestText: (
+    prompt: string,
+    opts: Parameters<typeof requestUtilityText>[2],
+  ) => ReturnType<typeof requestUtilityText>;
 }
 
 const DEFAULT_DEPS: AuxiliaryTitleRuntimeDeps = {
   // The settings store resolves owner-scoped Electron paths. Load it only when
   // title generation actually runs, not while title IPC modules are registered.
-  readSelection: async (key) => {
-    const { readAuxiliaryModelSelection } = await import(
+  readModels: async () => {
+    const { readAuxiliaryModelSettings } = await import(
       '../utility-model/auxiliary-model-settings-store.js'
     );
-    return readAuxiliaryModelSelection(key);
+    return readAuxiliaryModelSettings().models;
   },
   // Keep the heavyweight utility-model/provider runtime out of title.ts's
   // startup import graph. It also lets lightweight title IPC tests provide
   // their existing Electron mocks without loading app-bound runtime config.
   requestText: async (prompt, opts) => {
-    const { requestExplicitUtilityText: requestText } = await import(
-      '../utility-model/oneShotCandidates.js'
-    );
-    return requestText(prompt, opts);
-  },
-  generateLegacy: async (args, deps) => {
-    const { generateTitleViaProvider: generate } = await import('./title-one-shot.js');
-    return generate(args, deps);
-  },
-  generateLegacyResult: async (args, deps) => {
-    const { generateTitleViaProviderResult: generate } = await import('./title-one-shot.js');
-    return generate(args, deps);
+    const [{ requestUtilityText: requestText }, { getMaker }] = await Promise.all([
+      import('../utility-model/oneShotCandidates.js'),
+      import('./index.js'),
+    ]);
+    return requestText(getMaker(), prompt, opts);
   },
 };
 
@@ -75,26 +57,13 @@ type TitleRequest = {
   signal?: AbortSignal;
 };
 
-function selectionMatchesRoute(
-  selection: AuxiliaryModelSelection,
-  route: UtilityTextDispatchRoute,
-): boolean {
-  return (
-    selection.providerId === route.providerId &&
-    selection.agentKind === route.agentKind &&
-    selection.model === route.model
-  );
-}
-
-async function generateExplicitTitle(
+async function generateAuxiliaryTitle(
   args: TitleRequest,
-  selection: AuxiliaryModelSelection,
   deps: AuxiliaryTitleRuntimeDeps,
 ): Promise<TitleOneShotResult> {
+  const models = [...await deps.readModels()];
+  const snapshot = JSON.stringify(models);
   const result = await deps.requestText(args.prompt, {
-    providerId: selection.providerId,
-    agentKind: selection.agentKind,
-    model: selection.model,
     maxTokens: AUXILIARY_TITLE_MAX_TOKENS,
     timeoutMs: AUXILIARY_TITLE_TIMEOUT_MS,
     // Short title budgets cannot afford provider-default thinking. Messages /
@@ -104,17 +73,11 @@ async function generateExplicitTitle(
     reasoningEffort: 'minimal',
     responseInstructions: AUXILIARY_TITLE_RESPONSE_INSTRUCTIONS,
     signal: args.signal,
-    // Settings may change while OAuth refresh/credential discovery awaits. The
-    // paid request is dispatched only if the same exact pin is still active.
-    beforeDispatch: async (route) => {
-      const current = await deps.readSelection('sessionTitleModel');
-      return current?.pin === selection.pin && selectionMatchesRoute(current, route);
-    },
+    // Settings may change while OAuth refresh/credential discovery awaits.
+    beforeDispatch: async () => JSON.stringify(await deps.readModels()) === snapshot,
   });
   if (!result.ok) {
-    log.warn('explicit auxiliary title model failed', {
-      providerId: selection.providerId,
-      model: selection.model,
+    log.warn('auxiliary title model failed', {
       reason: result.reason,
     });
     return { status: 'failed' };
@@ -131,23 +94,19 @@ async function generateExplicitTitle(
 
 export async function generateTitleWithAuxiliaryModel(
   args: TitleRequest,
-  legacyDeps: TitleOneShotDeps = {},
+  _legacyDeps: TitleOneShotDeps = {},
   runtimeDeps: Partial<AuxiliaryTitleRuntimeDeps> = {},
 ): Promise<string | null> {
   const deps = { ...DEFAULT_DEPS, ...runtimeDeps };
-  const selection = await deps.readSelection('sessionTitleModel');
-  if (!selection) return deps.generateLegacy(args, legacyDeps);
-  const result = await generateExplicitTitle(args, selection, deps);
+  const result = await generateAuxiliaryTitle(args, deps);
   return result.status === 'ok' ? result.title : null;
 }
 
 export async function generateTitleWithAuxiliaryModelResult(
   args: TitleRequest,
-  legacyDeps: TitleOneShotDeps = {},
+  _legacyDeps: TitleOneShotDeps = {},
   runtimeDeps: Partial<AuxiliaryTitleRuntimeDeps> = {},
 ): Promise<TitleOneShotResult> {
   const deps = { ...DEFAULT_DEPS, ...runtimeDeps };
-  const selection = await deps.readSelection('sessionTitleModel');
-  if (!selection) return deps.generateLegacyResult(args, legacyDeps);
-  return generateExplicitTitle(args, selection, deps);
+  return generateAuxiliaryTitle(args, deps);
 }

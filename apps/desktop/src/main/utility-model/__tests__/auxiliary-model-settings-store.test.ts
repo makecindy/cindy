@@ -1,108 +1,168 @@
-import fs from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => '/tmp/cindy-auxiliary-model-test') },
+const h = vi.hoisted(() => ({
+  dir: '',
 }));
 
-vi.mock('../../maker-host/logger-adapter.js', () => ({
-  desktopMakerLogger: {
-    child: () => ({ info: vi.fn(), warn: vi.fn() }),
+vi.mock('electron', () => ({
+  app: {
+    getPath: (name: string) => {
+      if (name === 'userData') return h.dir;
+      throw new Error(`unexpected path ${name}`);
+    },
   },
 }));
 
 vi.mock('../../appSessionState.js', () => ({
-  activeOwnerScopeKey: () => 'test-owner:1',
-  ownerScopedUserDataPath: (...parts: string[]) =>
-    path.join('/tmp/cindy-auxiliary-model-test', ...parts),
+  ownerScopedUserDataPath: (...parts: string[]) => path.join(h.dir, 'owner', ...parts),
+  activeOwnerScopeKey: () => 'test-owner',
+}));
+
+vi.mock('../../maker-host/logger-adapter.js', () => ({
+  desktopMakerLogger: {
+    child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  },
 }));
 
 import {
-  __testing,
-  readAuxiliaryModelSelection,
+  isAuxiliaryModelCustomized,
   readAuxiliaryModelSettings,
   readAuxiliaryModelSettingsState,
-  resetAuxiliaryModelSettings,
   writeAuxiliaryModelSettingsPatch,
+  __testing,
 } from '../auxiliary-model-settings-store.js';
 
-const settingsDir = '/tmp/cindy-auxiliary-model-test';
-const settingsFile = path.join(settingsDir, 'auxiliary-model-settings.json');
-const TITLE_PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
-const RECOMMENDATION_PIN = 'cat:anthropic:claude-code:claude-haiku-4-5';
+const TITLE_PIN = 'cat:openai:codex:gpt-5.4-mini';
+const PROMPT_PIN = 'cat:xd:claude-code:kimi-k2.5';
 
-describe('auxiliary model settings store', () => {
-  beforeEach(async () => {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    await resetAuxiliaryModelSettings();
+function settingsPath(): string {
+  return path.join(h.dir, 'owner', 'auxiliary-model-settings.json');
+}
+
+function ownerVoicePath(): string {
+  return path.join(h.dir, 'owner', 'voice-input-models.json');
+}
+
+function unscopedVoicePath(): string {
+  return path.join(h.dir, 'voice-input-models.json');
+}
+
+function writeJson(file: string, value: unknown): void {
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(value), 'utf8');
+}
+
+function readJson(file: string): unknown {
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+describe('auxiliary-model-settings-store', () => {
+  beforeEach(() => {
+    h.dir = mkdtempSync(path.join(os.tmpdir(), 'cindy-auxiliary-model-'));
+    mkdirSync(path.join(h.dir, 'owner'), { recursive: true });
   });
 
-  afterEach(async () => {
-    await resetAuxiliaryModelSettings();
-    fs.rmSync(settingsDir, { recursive: true, force: true });
+  afterEach(() => {
+    rmSync(h.dir, { recursive: true, force: true });
   });
 
-  it('defaults both auxiliary tasks to their existing automatic routes', () => {
+  it('treats an empty models list as automatic', () => {
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [] });
+    expect(isAuxiliaryModelCustomized()).toBe(false);
+    expect(readAuxiliaryModelSettingsState().customizedKeys).toEqual([]);
+  });
+
+  it('persists a unique custom list and reports it as customized', async () => {
+    await writeAuxiliaryModelSettingsPatch({ models: [TITLE_PIN, PROMPT_PIN, TITLE_PIN] });
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    expect(isAuxiliaryModelCustomized()).toBe(true);
+    expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+  });
+
+  it('deletes the override file when restoring the empty automatic list', async () => {
+    await writeAuxiliaryModelSettingsPatch({ models: [TITLE_PIN] });
+    await writeAuxiliaryModelSettingsPatch({ models: [] });
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [] });
+    expect(isAuxiliaryModelCustomized()).toBe(false);
+    expect(() => readFileSync(settingsPath())).toThrow();
+  });
+
+  it('keeps an existing models array and only strips leftover voice keys', () => {
+    writeJson(settingsPath(), {
+      models: [TITLE_PIN],
+      sessionTitleModel: PROMPT_PIN,
+    });
+    writeJson(ownerVoicePath(), {
+      refinerProvider: 'litellm-kimi-k2.6',
+      sttProvider: 'cindy-voice',
+    });
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN] });
+    expect(readJson(settingsPath())).toEqual({
+      models: [TITLE_PIN],
+      sessionTitleModel: PROMPT_PIN,
+    });
+    expect(readJson(ownerVoicePath())).toEqual({ sttProvider: 'cindy-voice' });
+  });
+
+  it('migrates legacy dual pins with the title pin first', () => {
+    writeJson(settingsPath(), {
+      sessionTitleModel: TITLE_PIN,
+      promptRecommendationModel: PROMPT_PIN,
+    });
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+  });
+
+  it('migrates a legacy voice chain when auxiliary settings were never customized', () => {
+    writeJson(ownerVoicePath(), {
+      refinerProvider: 'codex-gpt-5.4-mini',
+      refinerProviderChain: ['codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
+      sttProvider: 'cindy-voice',
+    });
+
     expect(readAuxiliaryModelSettings()).toEqual({
-      sessionTitleModel: null,
-      promptRecommendationModel: null,
+      models: ['codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
     });
-    expect(readAuxiliaryModelSettingsState()).toMatchObject({
-      isCustomized: false,
-      customizedKeys: [],
-    });
+    expect(readJson(ownerVoicePath())).toEqual({ sttProvider: 'cindy-voice' });
   });
 
-  it('persists the two model selections independently as overrides', async () => {
-    await writeAuxiliaryModelSettingsPatch({ sessionTitleModel: TITLE_PIN });
-    await writeAuxiliaryModelSettingsPatch({
-      promptRecommendationModel: RECOMMENDATION_PIN,
-    });
-
-    expect(JSON.parse(fs.readFileSync(settingsFile, 'utf-8'))).toEqual({
+  it('lets a customized auxiliary list win over a customized voice chain', () => {
+    writeJson(settingsPath(), {
       sessionTitleModel: TITLE_PIN,
-      promptRecommendationModel: RECOMMENDATION_PIN,
+      promptRecommendationModel: PROMPT_PIN,
     });
-    expect(readAuxiliaryModelSelection('sessionTitleModel')).toEqual({
-      pin: TITLE_PIN,
-      providerId: 'openrouter',
-      agentKind: 'codex',
-      model: 'openai/gpt-5-mini',
+    writeJson(unscopedVoicePath(), {
+      refinerProvider: 'litellm-deepseek-v4-flash',
+      refinerProviderChain: ['litellm-deepseek-v4-flash', 'codex-gpt-5.4-mini'],
     });
-    expect(readAuxiliaryModelSelection('promptRecommendationModel')).toEqual({
-      pin: RECOMMENDATION_PIN,
-      providerId: 'anthropic',
-      agentKind: 'claude-code',
-      model: 'claude-haiku-4-5',
-    });
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    expect(readJson(unscopedVoicePath())).toEqual({});
   });
 
-  it('removes only the restored key, then removes the file at all defaults', async () => {
-    await writeAuxiliaryModelSettingsPatch({
-      sessionTitleModel: TITLE_PIN,
-      promptRecommendationModel: RECOMMENDATION_PIN,
-    });
-    await writeAuxiliaryModelSettingsPatch({ sessionTitleModel: null });
-
-    expect(JSON.parse(fs.readFileSync(settingsFile, 'utf-8'))).toEqual({
-      promptRecommendationModel: RECOMMENDATION_PIN,
+  it('does not migrate a leftover voice file a second time after models already exist', () => {
+    writeJson(settingsPath(), { models: [TITLE_PIN] });
+    writeJson(ownerVoicePath(), {
+      refinerProvider: 'litellm-kimi-k2.6',
+      refinerProviderChain: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
     });
 
-    await writeAuxiliaryModelSettingsPatch({ promptRecommendationModel: null });
-    expect(fs.existsSync(settingsFile)).toBe(false);
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN] });
+    expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN] });
+    expect(readJson(ownerVoicePath())).toEqual({});
   });
 
-  it('normalizes malformed or non-canonical disk values to automatic', () => {
-    expect(
-      __testing.normalize({
-        sessionTitleModel: 'cat:openrouter:pi:model',
-        promptRecommendationModel: '  cat:anthropic:claude-code:model  ',
-      }),
-    ).toEqual({
-      sessionTitleModel: null,
-      promptRecommendationModel: 'cat:anthropic:claude-code:model',
+  it('exposes the same list normalization used on persist', () => {
+    expect(__testing.normalize({ models: [TITLE_PIN, '  ', TITLE_PIN, PROMPT_PIN] })).toEqual({
+      models: [TITLE_PIN, PROMPT_PIN],
     });
   });
 });

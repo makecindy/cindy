@@ -8,6 +8,7 @@ import { createLogger } from '../logger.js';
 import { isAgentOneShotRouteDisabled } from '../maker-host/model-route-guard-live.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
+import { isAuxiliaryModelCustomized } from '../utility-model/auxiliary-model-settings-store.js';
 import { agentSupportsOneShot, requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { MAKER_INVOKE } from './channels.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
@@ -129,10 +130,10 @@ async function routeHelpTopics(
       timeoutMs: 12_000,
     });
     let raw = utility.ok ? utility.text : '';
-    // 停用轴:agent one-shot 兜底同样是新的付费调用,目标模型/默认路由被停用时
-    // 不派发(help 是 best-effort,静默降级到 summary-only,PR #744 review)。
+    // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
     if (
       !raw &&
+      !isAuxiliaryModelCustomized() &&
       target.agentKind &&
       !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
     ) {
@@ -335,9 +336,10 @@ export function registerMakerHelpIpc(maker: Maker): void {
           ...target.options,
         });
         let raw = utility.ok ? utility.text : '';
-        // 停用轴:同上,兜底一击的目标路由被停用则不派发(回落既有的失败文案路径)。
+        // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
         if (
           !raw &&
+          !isAuxiliaryModelCustomized() &&
           target.agentKind &&
           !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
         ) {

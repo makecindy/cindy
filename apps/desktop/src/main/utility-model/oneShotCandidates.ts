@@ -26,7 +26,9 @@ import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { parseAuxiliaryModelRef, type ParsedAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
+import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 import { getUtilityModelProfile, isUtilityModelProviderKind } from '../../shared/utilityModelProfiles.js';
 import type { UtilityModelProfile, UtilityModelTransport } from '../../shared/utilityModelProfiles.js';
 import type {
@@ -520,34 +522,42 @@ function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string |
   return matches.length === 1 ? matches[0]?.id : undefined;
 }
 
-async function requestDefaultUtilityText(
-  maker: Maker,
-  prompt: string,
-  opts?: UtilityTextRequestOptions & { capability?: UtilityTextCapability },
-): Promise<UtilityTextResult> {
-  const { candidates, attempts } = await resolveUtilityTextCandidates(
-    maker,
-    opts?.capability ?? { transports: ['codex-responses', 'litellm-chat-completions'] },
-    opts?.pinnedProfileId,
-  );
-  if (candidates.length === 0) {
-    return { ok: false, reason: 'no_candidate', attempts };
+function auxiliaryRefDispatchRoute(parsed: ParsedAuxiliaryModelRef): UtilityTextDispatchRoute {
+  if (parsed.kind === 'catalog') {
+    return {
+      providerId: parsed.route.providerId,
+      agentKind: parsed.route.agentKind,
+      model: parsed.route.model,
+    };
   }
+  const profile = getUtilityModelProfile(parsed.id);
+  return {
+    providerId: profile.transport === 'codex-responses' ? 'openai' : 'xd',
+    agentKind: 'codex',
+    model: profile.model,
+  };
+}
 
+async function runDefaultProfileCandidates(
+  prompt: string,
+  candidates: UtilityTextCandidate[],
+  attempts: UtilityTextAttempt[],
+  opts?: UtilityTextRequestOptions,
+): Promise<UtilityTextResult | null> {
   for (const candidate of candidates) {
-      // 逐候选执行前按**当前** override 重查(PR #744 review 第二十一轮):前一个
-      // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
-      // 记 model_unavailable 落到下一候选。
-      if (isUtilityRouteDisabled(candidate.profile)) {
-        attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
-        continue;
-      }
-      // 前一个 fallback 候选可能运行数十秒；在每个 XD 候选真正执行前重读
-      // owner-scoped v5 deny，避免订阅状态/模型目录刚变化后继续向网关下单。
-      if (isUtilityRoutePaymentRequired(candidate.profile)) {
-        attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
-        continue;
-      }
+    // 逐候选执行前按**当前** override 重查(PR #744 review 第二十一轮):前一个
+    // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
+    // 记 model_unavailable 落到下一候选。
+    if (isUtilityRouteDisabled(candidate.profile)) {
+      attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+      continue;
+    }
+    // 前一个 fallback 候选可能运行数十秒；在每个 XD 候选真正执行前重读
+    // owner-scoped v5 deny，避免订阅状态/模型目录刚变化后继续向网关下单。
+    if (isUtilityRoutePaymentRequired(candidate.profile)) {
+      attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+      continue;
+    }
     try {
       const text = (await candidate.execute(prompt, opts)).trim();
       if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
@@ -570,9 +580,83 @@ async function requestDefaultUtilityText(
       });
     }
   }
-  const reason = aggregateFailureReason(attempts.filter((attempt) => attempt.status === 'failed'));
+  return null;
+}
+
+function failedChainResult(attempts: UtilityTextAttempt[]): UtilityTextResult {
+  const failed = attempts.filter((attempt) => attempt.status === 'failed');
+  const reason = failed.length > 0
+    ? aggregateFailureReason(failed)
+    : attempts.length > 0
+      ? 'no_candidate'
+      : 'all_candidates_failed';
   log.warn('all utility text candidates failed', { reason, attempts: attempts.length });
   return { ok: false, reason, attempts };
+}
+
+async function requestDefaultUtilityText(
+  maker: Maker,
+  prompt: string,
+  opts?: UtilityTextRequestOptions & { capability?: UtilityTextCapability },
+): Promise<UtilityTextResult> {
+  const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
+    ...opts,
+    // Short auxiliary budgets cannot afford provider-default thinking. Callers
+    // that need reasoning must pass disableReasoning: false.
+    disableReasoning: opts?.disableReasoning ?? true,
+  };
+  const capability = opts?.capability ?? {
+    transports: ['codex-responses', 'litellm-chat-completions'],
+  };
+
+  if (opts?.pinnedProfileId) {
+    const { candidates, attempts } = await resolveUtilityTextCandidates(
+      maker,
+      capability,
+      opts.pinnedProfileId,
+    );
+    if (candidates.length === 0) {
+      return { ok: false, reason: 'no_candidate', attempts };
+    }
+    const success = await runDefaultProfileCandidates(prompt, candidates, attempts, requestOpts);
+    return success ?? failedChainResult(attempts);
+  }
+
+  const chain = getEffectiveAuxiliaryModelChain();
+  const attempts: UtilityTextAttempt[] = [];
+  for (const ref of chain.refs) {
+    const parsed = parseAuxiliaryModelRef(ref);
+    if (!parsed) continue;
+    if (
+      requestOpts.beforeDispatch
+      && !(await requestOpts.beforeDispatch(auxiliaryRefDispatchRoute(parsed)))
+    ) {
+      log.warn('utility text chain aborted before dispatch', { ref, source: chain.source });
+      return failedChainResult(attempts);
+    }
+    if (parsed.kind === 'profile') {
+      const resolved = await resolveUtilityTextCandidates(maker, capability, parsed.id);
+      attempts.push(...resolved.attempts);
+      if (resolved.candidates.length === 0) continue;
+      const success = await runDefaultProfileCandidates(
+        prompt,
+        resolved.candidates,
+        attempts,
+        requestOpts,
+      );
+      if (success) return success;
+      continue;
+    }
+    const result = await requestExplicitProviderText(prompt, {
+      ...requestOpts,
+      providerId: parsed.route.providerId,
+      agentKind: parsed.route.agentKind,
+      model: parsed.route.model,
+    });
+    if (result.ok) return result;
+    attempts.push(...result.attempts);
+  }
+  return failedChainResult(attempts);
 }
 
 function stableSnapshot(value: unknown): string {
@@ -1214,6 +1298,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
         reasoningEffort: opts?.reasoningEffort,
+        disableReasoning: opts?.disableReasoning,
         signal: opts?.signal,
         routeStillAllowed: () => !isUtilityRoutePaymentRequired(profile),
       }),
@@ -1229,6 +1314,7 @@ async function requestLiteLlmText(input: {
   maxTokens?: number;
   timeoutMs?: number;
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  disableReasoning?: boolean;
   signal?: AbortSignal;
   /** Synchronous owner entitlement fence immediately before the HTTP request. */
   routeStillAllowed?: () => boolean;
@@ -1253,7 +1339,11 @@ async function requestLiteLlmText(input: {
       body: JSON.stringify({
         model: input.model,
         ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-        ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
+        ...(input.disableReasoning
+          ? { thinking: { type: 'disabled' } }
+          : input.reasoningEffort
+            ? { reasoning_effort: input.reasoningEffort }
+            : {}),
         messages: [{ role: 'user', content: input.prompt }],
       }),
     });
@@ -1391,8 +1481,11 @@ async function requestProviderHttpText(input: {
     const instructions = [input.systemPrompt, input.responseInstructions]
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
       .join('\n');
+    // Responses-compatible routes do not have a reasoning "off" value. The
+    // lowest common supported effort for the subscribed GPT models is `low`;
+    // sending `minimal` to GPT-5.4 mini is rejected by ChatGPT with HTTP 400.
     const reasoningEffort = input.disableReasoning
-      ? 'minimal'
+      ? input.wire === 'responses' ? 'low' : 'minimal'
       : input.reasoningEffort;
     const supportsRequestedReasoning = Boolean(
       input.wire !== 'anthropic-messages'

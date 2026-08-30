@@ -1001,15 +1001,12 @@
         },
         "refiner": {
           "label": "整えモデル",
-          "hint": "話し言葉のテキストを整えるモデル。",
-          "ariaLabel": "音声整えモデルの選択"
-        },
-        "refinerFallback": {
-          "label": "整文フォールバック",
-          "hint": "メインの整文モデルが失敗したときのみ使う予備モデル。既定では無効。",
-          "ariaLabel": "音声整文フォールバックモデルの選択",
-          "none": "フォールバックなし",
-          "noneDescription": "メインモデルが失敗した場合は元の認識テキストを保持"
+          "hint": "補助モデルに従います。",
+          "followAuxiliary": "補助モデルに従う",
+          "followHint": "整えモデルは「設定 → パーソナライズ → 補助モデル」の順に従います。Cindy ホストの音声は影響を受けず、整えはサーバー側のままです。",
+          "openAuxiliary": "補助モデルへ",
+          "cannotRefine": "現在の補助モデルでは音声を整えられません（Claude Messages のみなど）。今回は整えません。",
+          "ariaLabel": "音声整えモデル"
         },
         "customAsr": {
           "optionLabel": "カスタムリアルタイム ASR",
@@ -2691,28 +2688,40 @@
     },
     "auxiliaryModels": {
       "title": "補助モデル",
-      "description": "タスクの自動命名と入力欄のおすすめプロンプトに、それぞれ Agent とモデルの組み合わせを指定します。",
-      "sessionTitle": {
-        "label": "タスクの自動命名",
-        "description": "Claude Code、Codex、Pi のタスクと、AI による手動の名前変更に適用されます。",
-        "ariaLabel": "タスクの自動命名モデルを選択",
-        "automatic": "自動選択（現在のタスクに従う）"
+      "description": "タスクの自動命名と AI による名前変更、入力欄のおすすめプロンプト、Help、ピン留めタスクの要約、IM / 飛書のタイトルとグループ文脈判定、スケジュール済みタスクのスクリプト、プラグインのクイック Q&A「デフォルトに従う」、および自分のキーによる音声整えに使います。",
+      "automatic": "自動おすすめ",
+      "customize": "カスタム",
+      "preferred": {
+        "label": "優先",
+        "description": "短い補助テキストで最初に使うモデル。",
+        "ariaLabel": "優先する補助モデルを選択"
       },
-      "promptRecommendation": {
-        "label": "入力欄のおすすめプロンプト",
-        "description": "「ヒント」で入力欄のおすすめを有効にした場合のみ使用します。",
-        "ariaLabel": "入力欄のおすすめプロンプト用モデルを選択",
-        "automatic": "自動選択（現在のルーティングを維持）"
+      "fallback1": {
+        "label": "予備 1",
+        "description": "優先モデルが使えないときに使うモデル。空でもかまいません。",
+        "ariaLabel": "1 番目の予備補助モデルを選択"
       },
+      "fallback2": {
+        "label": "予備 2",
+        "description": "最初の 2 つが使えないときに使うモデル。空でもかまいません。",
+        "ariaLabel": "2 番目の予備補助モデルを選択"
+      },
+      "emptySlot": "未選択",
+      "customHint": "カスタム後は選んだ順にだけ試します。どれも使えない場合、別のモデルへは切り替えません。",
+      "signInHint": "Cindy にログインすると自動おすすめを使えます。未ログイン時は「カスタム」で設定済みの他のプロバイダーのモデルを選択してください。",
       "chooseAgent": "Agent を選択",
       "backToAgents": "Agent の選択に戻る",
-      "explicitRouteHint": "明示的に指定した場合は、その Agent とモデルだけを使用します。利用できなくても自動では切り替えません。",
       "searchPlaceholder": "モデルまたはプロバイダーを検索",
       "noResults": "利用可能なモデルがありません",
       "unavailable": "現在利用不可",
       "budget": "割引",
       "subscription": "サブスクリプション",
-      "saveFailed": "補助モデル設定を保存できませんでした"
+      "saveFailed": "補助モデル設定を保存できませんでした",
+      "chain": {
+        "cindyHy3": "Hy3",
+        "cindyDeepseekV4Flash": "DeepSeek v4 flash",
+        "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
     },
     "compaction": {
       "title": "コンテキスト圧縮",

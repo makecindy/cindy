@@ -1001,15 +1001,12 @@
         },
         "refiner": {
           "label": "정리 모델",
-          "hint": "구어체 텍스트를 정리하는 모델.",
-          "ariaLabel": "음성 정리 모델 선택"
-        },
-        "refinerFallback": {
-          "label": "다듬기 대체 모델",
-          "hint": "기본 다듬기 모델이 실패할 때만 사용하는 대체 모델. 기본적으로 사용하지 않음.",
-          "ariaLabel": "음성 다듬기 대체 모델 선택",
-          "none": "대체 모델 없음",
-          "noneDescription": "기본 모델이 실패하면 원본 인식 텍스트를 유지"
+          "hint": "보조 모델을 따릅니다.",
+          "followAuxiliary": "보조 모델 따르기",
+          "followHint": "정리 모델은 「설정 → 개인화 → 보조 모델」 순서를 따릅니다. Cindy 호스팅 음성은 영향을 받지 않으며, 정리는 서버에서 계속 실행됩니다.",
+          "openAuxiliary": "보조 모델로 이동",
+          "cannotRefine": "현재 보조 모델로는 음성을 다듬을 수 없습니다(예: Claude Messages만 해당). 이번에는 다듬지 않습니다.",
+          "ariaLabel": "음성 정리 모델"
         },
         "customAsr": {
           "optionLabel": "사용자 지정 실시간 ASR",
@@ -2691,28 +2688,40 @@
     },
     "auxiliaryModels": {
       "title": "보조 모델",
-      "description": "작업 자동 이름 지정과 입력창 추천 프롬프트에 각각 Agent와 모델 조합을 지정합니다.",
-      "sessionTitle": {
-        "label": "작업 자동 이름 지정",
-        "description": "Claude Code, Codex, Pi 작업과 AI 수동 이름 바꾸기에 적용됩니다.",
-        "ariaLabel": "작업 자동 이름 지정 모델 선택",
-        "automatic": "자동 선택(현재 작업 따름)"
+      "description": "작업 자동 이름 지정과 AI 이름 바꾸기, 입력창 추천 프롬프트, Help, 고정된 작업 요약, IM / Feishu 제목과 그룹 맥락 판단, 예약 작업 스크립트, 플러그인 빠른 Q&A의 「기본값 따르기」, 그리고 자체 키 음성 다듬기에 사용합니다.",
+      "automatic": "자동 추천",
+      "customize": "사용자 지정",
+      "preferred": {
+        "label": "기본",
+        "description": "짧은 보조 텍스트에 먼저 사용하는 모델.",
+        "ariaLabel": "기본 보조 모델 선택"
       },
-      "promptRecommendation": {
-        "label": "입력창 추천 프롬프트",
-        "description": "‘팁’에서 입력창 추천을 켠 경우에만 사용합니다.",
-        "ariaLabel": "입력창 추천 프롬프트 모델 선택",
-        "automatic": "자동 선택(현재 라우팅 유지)"
+      "fallback1": {
+        "label": "대체 1",
+        "description": "기본 모델을 사용할 수 없을 때 쓰는 모델. 비워 둘 수 있습니다.",
+        "ariaLabel": "첫 번째 대체 보조 모델 선택"
       },
+      "fallback2": {
+        "label": "대체 2",
+        "description": "앞의 두 모델을 모두 사용할 수 없을 때 쓰는 모델. 비워 둘 수 있습니다.",
+        "ariaLabel": "두 번째 대체 보조 모델 선택"
+      },
+      "emptySlot": "선택 안 함",
+      "customHint": "사용자 지정 후에는 선택한 순서대로만 시도합니다. 모두 사용할 수 없어도 다른 모델로 바꾸지 않습니다.",
+      "signInHint": "Cindy에 로그인하면 자동 추천을 사용할 수 있습니다. 로그인하지 않은 상태에서는 「사용자 지정」에서 설정된 다른 제공자의 모델을 선택하세요.",
       "chooseAgent": "Agent 선택",
       "backToAgents": "Agent 선택으로 돌아가기",
-      "explicitRouteHint": "명시적으로 지정하면 해당 Agent와 모델만 사용합니다. 사용할 수 없어도 자동으로 전환하지 않습니다.",
       "searchPlaceholder": "모델 또는 제공자 검색",
       "noResults": "사용 가능한 모델이 없습니다",
       "unavailable": "현재 사용할 수 없음",
       "budget": "할인",
       "subscription": "구독",
-      "saveFailed": "보조 모델 설정을 저장하지 못했습니다"
+      "saveFailed": "보조 모델 설정을 저장하지 못했습니다",
+      "chain": {
+        "cindyHy3": "Hy3",
+        "cindyDeepseekV4Flash": "DeepSeek v4 flash",
+        "cindyQwen38Flash": "Qwen 3.8 Flash"
+      }
     },
     "compaction": {
       "title": "컨텍스트 압축",

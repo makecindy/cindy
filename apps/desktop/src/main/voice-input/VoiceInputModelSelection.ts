@@ -19,6 +19,8 @@ import {
   validateVoiceInputCustomAsrConfig,
   type VoiceInputCustomAsrConfig,
 } from '../../shared/voiceInputCustomAsr.js';
+import { getEffectiveAuxiliaryModelChain } from '../utility-model/resolveAuxiliaryModelChain.js';
+import { mapAuxiliaryRefsToVoiceRefiners } from './mapAuxiliaryRefsToVoiceRefiners.js';
 
 export {
   validateVoiceInputCustomAsrConfig,
@@ -261,6 +263,19 @@ function readDefaultVoiceInputModelSelectionEnv(): NodeJS.ProcessEnv {
   };
 }
 
+function overlayAuxiliaryRefinerChain(
+  selection: VoiceInputModelSelection,
+): VoiceInputModelSelection {
+  const chain = getEffectiveAuxiliaryModelChain();
+  const mapped = mapAuxiliaryRefsToVoiceRefiners(chain.refs);
+  return {
+    ...selection,
+    refinerProvider: mapped[0] ?? DEFAULT_VOICE_INPUT_REFINER_PROVIDER_KIND,
+    refinerProviderChain: mapped,
+    refinerProviderChainSource: chain.source === 'custom' ? 'configured' : 'default',
+  };
+}
+
 export function getVoiceInputModelSelection(): VoiceInputModelSelection {
   ensureVoiceInputModelSelectionFile();
   const configPath = getVoiceInputModelSelectionConfigPath();
@@ -268,7 +283,7 @@ export function getVoiceInputModelSelection(): VoiceInputModelSelection {
   if (!cachedConfig || cachedConfig.configPath !== configPath || cachedMtimeMs !== mtimeMs) {
     cachedConfig = loadVoiceInputModelSelection(configPath, mtimeMs);
   }
-  return cachedConfig;
+  return overlayAuxiliaryRefinerChain(cachedConfig);
 }
 
 export function reloadVoiceInputModelSelection(): VoiceInputModelSelection {

@@ -374,7 +374,10 @@ import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
-import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
+import {
+  formatAuxiliaryModelRefLabel,
+  getEffectiveAuxiliaryModelChain,
+} from '../utility-model/resolveAuxiliaryModelChain.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import {
@@ -7148,14 +7151,14 @@ export function registerGhostIpc(): void {
     };
     // 文本类(快问快答)的可选项 = 当前供应商目录里的全部文本模型(2026-08-05
     // 与刘佳黎定稿:安装插件即承担其成本,主机如实展示可选面)。每一项精确钉
-    // 一组 供应商×agent×模型(cat: 编码)。defaultModel = 系统默认链链首(轻量
-    // 档位),declaredModel = 身份卡声明的偏好(解析得到才给)——让"跟随默认"
+    // 一组 供应商×agent×模型(cat: 编码)。defaultModel = 当前辅助模型链链首,
+    // declaredModel = 身份卡声明的偏好(解析得到才给)——让"跟随默认"
     // 行如实说出当前实际跟的是谁。
-    const textChain = getUtilityModelChainProfiles();
-    const textDefaultId = textChain[0]?.id ?? null;
+    const textChain = getEffectiveAuxiliaryModelChain();
+    const textDefaultId = textChain.refs[0] ?? null;
     const textDefaultLabel = textDefaultId === null
       ? null
-      : (utilityModelPinOptions().find((o) => o.id === textDefaultId)?.label ?? textDefaultId);
+      : formatAuxiliaryModelRefLabel(textDefaultId);
     const textOptions = buildTextOneshotPinOptions(
       getActiveCatalog(),
       readModelDisableOverrides(),
