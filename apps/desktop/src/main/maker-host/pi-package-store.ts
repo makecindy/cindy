@@ -89,6 +89,7 @@ export type PiPackagesChangeOrigin = 'local' | 'external' | 'external-runtime';
 const changeListeners = new Set<(origin: PiPackagesChangeOrigin) => void>();
 const packageMutationMayHaveChangedErrors = new WeakSet<object>();
 let changeTokenWatcherActive = false;
+let changeTokenWatcherStartedAtMs: number | undefined;
 let lastObservedRuntimeChangeToken: string | null | undefined;
 let runtimeChangeTokenReadFailedBeforeBaseline = false;
 let runtimeRecoveryLegacyBaseline: string | null = null;
@@ -96,6 +97,7 @@ let runtimeRecoveryLegacyBaselineInitialized = false;
 let lastObservedLegacyChangeToken: string | null | undefined;
 let lastObservedViewChangeToken: string | null | undefined;
 let lastNotifiedRuntimeChangeToken: string | null | undefined;
+let lastExternallyNotifiedRuntimeChangeToken: string | null | undefined;
 let changeTokenReadInFlight: Promise<void> | undefined;
 let changeTokenReadQueued = false;
 const changeTokenWatchListener = () => void observePiPackageChangeToken();
@@ -151,6 +153,15 @@ function changeTokenReadFailureCategory(error: unknown): 'access-denied' | 'io-f
   return 'unavailable';
 }
 
+function runtimeTokenWasPublishedAfterWatcherStarted(token: string | null): boolean {
+  if (!token || changeTokenWatcherStartedAtMs === undefined) return false;
+  const match = token.match(/^runtime:(\d+)-/);
+  if (!match) return false;
+  const publishedAtMs = Number(match[1]);
+  return Number.isSafeInteger(publishedAtMs)
+    && publishedAtMs >= changeTokenWatcherStartedAtMs;
+}
+
 function observePiPackageChangeToken(): Promise<void> {
   if (changeTokenReadInFlight) {
     changeTokenReadQueued = true;
@@ -203,9 +214,10 @@ function observePiPackageChangeToken(): Promise<void> {
         // observation has never failed. After a failed read, an initialized
         // legacy baseline lets us distinguish a peer runtime edge from the
         // token that this Main had already observed.
-        runtimeChanged = runtimeChangeTokenReadFailedBeforeBaseline
-          && runtimeRecoveryLegacyBaselineInitialized
-          && runtimeToken !== runtimeRecoveryLegacyBaseline;
+        runtimeChanged = runtimeTokenWasPublishedAfterWatcherStarted(runtimeToken)
+          || (runtimeChangeTokenReadFailedBeforeBaseline
+            && runtimeRecoveryLegacyBaselineInitialized
+            && runtimeToken !== runtimeRecoveryLegacyBaseline);
         runtimeChangeTokenReadFailedBeforeBaseline = false;
         runtimeRecoveryLegacyBaseline = null;
         runtimeRecoveryLegacyBaselineInitialized = false;
@@ -221,8 +233,9 @@ function observePiPackageChangeToken(): Promise<void> {
     if (legacyResult.status === 'fulfilled' && legacyObservationCurrent) {
       legacyToken = legacyResult.value;
       if (lastObservedLegacyChangeToken === undefined) {
+        legacyChanged = runtimeTokenWasPublishedAfterWatcherStarted(legacyToken);
         lastObservedLegacyChangeToken = legacyToken;
-        if (lastNotifiedRuntimeChangeToken === undefined) {
+        if (!runtimeChanged && !legacyChanged && lastNotifiedRuntimeChangeToken === undefined) {
           lastNotifiedRuntimeChangeToken = legacyToken?.startsWith('view:') ? null : legacyToken;
         }
       } else {
@@ -237,7 +250,8 @@ function observePiPackageChangeToken(): Promise<void> {
       && !legacyChanged
       && lastObservedLegacyChangeToken !== undefined
       && (lastObservedLegacyChangeToken === null
-        || !lastObservedLegacyChangeToken.startsWith('view:'))) {
+        || (!lastObservedLegacyChangeToken.startsWith('view:')
+          && lastObservedLegacyChangeToken !== lastExternallyNotifiedRuntimeChangeToken))) {
       // Freeze the first trustworthy runtime-style legacy observation available
       // during the outage. A missing legacy token is a valid null baseline, not
       // an uninitialized one. Later legacy edges converge independently and must
@@ -263,6 +277,7 @@ function observePiPackageChangeToken(): Promise<void> {
         : null;
     if (runtimeCandidate && runtimeCandidate !== lastNotifiedRuntimeChangeToken) {
       lastNotifiedRuntimeChangeToken = runtimeCandidate;
+      lastExternallyNotifiedRuntimeChangeToken = runtimeCandidate;
       notifyPiPackagesChanged('external-runtime');
     } else if (viewChanged || (legacyChanged && legacyToken?.startsWith('view:'))) {
       notifyPiPackagesChanged('external');
@@ -285,6 +300,7 @@ function observePiPackageChangeToken(): Promise<void> {
 function startPiPackageChangeTokenWatcher(): void {
   if (changeTokenWatcherActive) return;
   changeTokenWatcherActive = true;
+  changeTokenWatcherStartedAtMs ??= Date.now();
   void observePiPackageChangeToken();
   for (const tokenPath of [
     runtimeChangeTokenPath(),

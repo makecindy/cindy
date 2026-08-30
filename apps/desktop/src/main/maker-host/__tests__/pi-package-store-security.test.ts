@@ -3110,6 +3110,10 @@ describe('Pi package executable-code boundary', () => {
         timeout: 2_000,
       });
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+      // Keep runtime observation down for another poll. The already-notified
+      // legacy edge must not become a new recovery comparison baseline.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
 
       runtimeReadBlocked = false;
       await fs.writeFile(runtimeToken, 'runtime:old\n');
@@ -3168,12 +3172,87 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  it('converges exactly once when a peer edge lands before the first observation completes', async () => {
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    const runtimeTokenPath = path.join(tokenDir, 'cindy-package-runtime-change-token');
+    const legacyTokenPath = path.join(tokenDir, 'cindy-package-change-token');
+    await fs.mkdir(tokenDir, { recursive: true });
+    const oldToken = `runtime:${Date.now() - 1_000}-111-old`;
+    await Promise.all([
+      fs.writeFile(runtimeTokenPath, `${oldToken}\n`),
+      fs.writeFile(legacyTokenPath, `${oldToken}\n`),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:old\n'),
+    ]);
+
+    let releaseInitialReads!: () => void;
+    const initialReadGate = new Promise<void>((resolve) => { releaseInitialReads = resolve; });
+    const delayedPaths = new Set<string>();
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      const resolvedTarget = path.resolve(String(target));
+      if ([runtimeTokenPath, legacyTokenPath].map((value) => path.resolve(value)).includes(resolvedTarget)
+        && !delayedPaths.has(resolvedTarget)) {
+        delayedPaths.add(resolvedTarget);
+        await initialReadGate;
+      }
+      return originalOpen(target, flags, mode);
+    }) as typeof fs.open);
+    const store = await import('../pi-package-store.js');
+    const { invalidateLocalPiPackageRuntimesForObservedChange } = await import(
+      '../pi-package-runtime-invalidation.js'
+    );
+    const originListener = vi.fn();
+    const closeSessionIfCurrent = vi.fn(async () => undefined);
+    const localPi = { id: 'first-observation-local', agentKind: 'pi' };
+    const remotePi = { id: 'first-observation-remote', agentKind: 'pi' };
+    const reviewPi = { id: 'first-observation-review', agentKind: 'pi' };
+    const nonPi = { id: 'first-observation-claude', agentKind: 'claude' };
+    const maker = {
+      advanceLocalPiPackageRuntimeGeneration: vi.fn(),
+      listActiveSessions: vi.fn(() => [localPi, remotePi, reviewPi, nonPi]),
+      getSessionMeta: vi.fn(async (sessionId: string) => ({
+        remoteHostId: sessionId === remotePi.id ? 'remote-host' : null,
+        reviewMode: sessionId === reviewPi.id,
+      })),
+      closeSessionIfCurrent,
+    };
+    const unsubscribe = store.onPiPackagesChanged((origin) => {
+      originListener(origin);
+      void invalidateLocalPiPackageRuntimesForObservedChange(maker as never, origin);
+    });
+    try {
+      await vi.waitFor(() => expect(delayedPaths.size).toBe(2));
+      const peerToken = `runtime:${Date.now()}-222-peer`;
+      await Promise.all([
+        fs.writeFile(runtimeTokenPath, `${peerToken}\n`),
+        fs.writeFile(legacyTokenPath, `${peerToken}\n`),
+      ]);
+      releaseInitialReads();
+
+      await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
+        localPi,
+        'requested',
+      ), { timeout: 2_000 });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(originListener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
+      expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
+      expect(closeSessionIfCurrent).toHaveBeenCalledTimes(1);
+      expect(closeSessionIfCurrent).not.toHaveBeenCalledWith(remotePi, 'requested');
+      expect(closeSessionIfCurrent).not.toHaveBeenCalledWith(reviewPi, 'requested');
+    } finally {
+      releaseInitialReads();
+      unsubscribe();
+      openSpy.mockRestore();
+    }
+  });
+
   it('uses the first successful runtime-token read as a cold-start baseline', async () => {
     const tokenDir = path.join(runtime.userData, 'pi-package-home');
     await fs.mkdir(tokenDir, { recursive: true });
+    const coldToken = `runtime:${Date.now() - 1_000}-111-cold`;
     await Promise.all([
-      fs.writeFile(path.join(tokenDir, 'cindy-package-runtime-change-token'), 'runtime:cold\n'),
-      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), 'runtime:cold\n'),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-runtime-change-token'), `${coldToken}\n`),
+      fs.writeFile(path.join(tokenDir, 'cindy-package-change-token'), `${coldToken}\n`),
       fs.writeFile(path.join(tokenDir, 'cindy-package-view-change-token'), 'view:cold\n'),
     ]);
     const store = await import('../pi-package-store.js');
