@@ -59,7 +59,7 @@ describe('relinkSharedCodexAuth', () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);
 
-    const out = await relinkSharedCodexAuth(systemAuth, myAuth);
+    const out = await relinkSharedCodexAuth(systemAuth, myAuth, 'darwin');
 
     expect(out.kind).toBe('linked');
     expect(out.linkType).toBe('symlink');
@@ -73,7 +73,7 @@ describe('relinkSharedCodexAuth', () => {
   it('POSIX:myAuth 不存在 → linked,直接建出 symlink', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
 
-    const out = await relinkSharedCodexAuth(systemAuth, myAuth);
+    const out = await relinkSharedCodexAuth(systemAuth, myAuth, 'darwin');
 
     expect(out.kind).toBe('linked');
     expect(out.linkType).toBe('symlink');

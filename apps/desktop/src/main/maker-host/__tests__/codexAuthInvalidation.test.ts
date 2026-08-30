@@ -16,6 +16,7 @@ import {
 } from '../codex-auth-invalidation.js';
 
 const dirs: string[] = [];
+const expectedSharedLinkType = process.platform === 'win32' ? 'hardlink' : 'symlink';
 const h = vi.hoisted(() => ({
   userDataDir: '',
   dataOwnerId: null as string | null,
@@ -70,6 +71,16 @@ function deferred<T = void>() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+function expectPlatformSharedLink(systemAuth: string, localAuth: string): void {
+  expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(process.platform !== 'win32');
+  const systemStat = fs.statSync(systemAuth);
+  const localStat = fs.statSync(localAuth);
+  expect({ dev: localStat.dev, ino: localStat.ino }).toEqual({
+    dev: systemStat.dev,
+    ino: systemStat.ino,
+  });
 }
 
 it('compares Codex hard-link identities without Windows number precision collisions', async () => {
@@ -1418,7 +1429,7 @@ describe('Codex system credential suppression marker', () => {
       authSource: 'oauth',
       credentialScope: 'system-shared',
     });
-    expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
+    expectPlatformSharedLink(systemAuth, localAuth);
 
     const replacement = path.join(path.dirname(systemAuth), 'auth.replacement.json');
     fs.writeFileSync(
@@ -1429,7 +1440,11 @@ describe('Codex system credential suppression marker', () => {
       }),
     );
     fs.renameSync(replacement, systemAuth);
-    expect(fs.readFileSync(localAuth, 'utf8')).toBe(fs.readFileSync(systemAuth, 'utf8'));
+    if (process.platform === 'win32') {
+      expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
+    } else {
+      expect(fs.readFileSync(localAuth, 'utf8')).toBe(fs.readFileSync(systemAuth, 'utf8'));
+    }
 
     const broadcast = vi.fn();
     adapter.setOnInvalidatedBroadcast(broadcast);
@@ -1497,7 +1512,7 @@ describe('Codex system credential suppression marker', () => {
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     await expect(adapter.getAccessToken()).resolves.toBe('system-f1-token');
-    expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
+    expectPlatformSharedLink(systemAuth, localAuth);
 
     const f2Replacement = path.join(path.dirname(systemAuth), 'auth.f2.json');
     fs.writeFileSync(
@@ -1578,12 +1593,12 @@ describe('Codex system credential suppression marker', () => {
       authenticated: true,
       credentialScope: 'system-shared',
       credentialDiagnostics: {
-        linkType: 'symlink',
+        linkType: expectedSharedLinkType,
         healthy: true,
         orphanRepair: 'relinked',
       },
     });
-    expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
+    expectPlatformSharedLink(systemAuth, localAuth);
     expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-token');
   });
 
