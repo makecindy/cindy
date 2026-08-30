@@ -9,6 +9,8 @@
  * 用法:
  *   node scripts/design-inventory.mjs          # 生成（root: pnpm design:inventory）
  *   node scripts/design-inventory.mjs --check  # 只校验 GENERATED 是否最新，不写盘
+ *   CINDY_INVENTORY_DOC=<path> 覆盖台账写读路径（测试用：指向临时目录拷贝，
+ *   不改真实 docs/design-rules/design-inventory.md）
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,7 +35,11 @@ import {
 } from './shared/design-inventory.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DOC_PATH = path.join(repoRoot, ...INVENTORY_REL_PATH.split('/'));
+// CINDY_INVENTORY_DOC 只重定向台账读写：统计仍扫真实源码（这正是被测行为），
+// 但 generate 不再改写仓库内受版本控制的文件——测试跨日运行不产生脏工作区。
+const DOC_PATH =
+  process.env.CINDY_INVENTORY_DOC ??
+  path.join(repoRoot, ...INVENTORY_REL_PATH.split('/'));
 const ROUTER_PATH = path.join(repoRoot, ...ROUTER_REL_PATH.split('/'));
 
 /**
@@ -56,7 +62,7 @@ function snapshotDateFromExisting(existing) {
 function buildGenerated(existing) {
   const routerSource = fs.readFileSync(ROUTER_PATH, 'utf8');
   const catalog = catalogSurfaces();
-  const surfaces = buildGeneratedSurfaces(repoRoot, { catalog });
+  const { surfaces, missingStyleRoots } = buildGeneratedSurfaces(repoRoot, { catalog });
   const routerCoverage = productionRouterCoverage(routerSource, catalog);
   const redirects = listRedirectExclusions(routerSource);
   const snapshotDate = checkOnly ? snapshotDateFromExisting(existing) : new Date().toISOString().slice(0, 10);
@@ -66,11 +72,11 @@ function buildGenerated(existing) {
     routerCoverage,
     redirects,
   });
-  return { surfaces, routerCoverage, generated };
+  return { surfaces, routerCoverage, generated, missingStyleRoots };
 }
 
 const existing = readExisting();
-const { surfaces, routerCoverage, generated } = buildGenerated(existing);
+const { surfaces, routerCoverage, generated, missingStyleRoots } = buildGenerated(existing);
 const orphanIds = findOrphanHumanIds(
   splitInventoryDocument(existing).suffix,
   surfaces.map((surface) => surface.id),
@@ -95,6 +101,31 @@ if (routerCoverage.stale.length > 0) {
     '[design-inventory] ❌ catalog 里登记的路由已不在 router.tsx 生产路由中：\n' +
       stale +
       '\n  路由已删除或改名时，请同步清理 catalogSurfaces() 对应 surface 的 routerPaths。',
+  );
+  process.exit(1);
+}
+
+if (routerCoverage.componentMismatch.length > 0) {
+  const mismatch = routerCoverage.componentMismatch
+    .map(
+      (row) =>
+        `  - ${row.path}: router 实际 ${row.actualComponent}, catalog 登记 ${row.catalogComponents.join(' / ')}（surface ${row.surfaceId}）`,
+    )
+    .join('\n');
+  console.error(
+    '[design-inventory] ❌ 路由入口组件与 catalog 不一致：\n' +
+      mismatch +
+      '\n  换组件时请同步更新 catalogSurfaces() 对应 surface 的 routeComponents / reachableComponents / productionEntry / styleRoots。',
+  );
+  process.exit(1);
+}
+
+if (missingStyleRoots.length > 0) {
+  const missing = missingStyleRoots.map((root) => `  - ${root}`).join('\n');
+  console.error(
+    '[design-inventory] ❌ catalog 里的 styleRoot 路径不存在：\n' +
+      missing +
+      '\n  源码移动或改名时请同步更新 catalogSurfaces() 对应 surface 的 styleRoots，统计不会静默归零。',
   );
   process.exit(1);
 }

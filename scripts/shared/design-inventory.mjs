@@ -94,11 +94,16 @@ function walkFiles(absDir, relDir, files) {
   }
 }
 
-function collectStyleFiles(repoRoot, roots) {
+function collectStyleFiles(repoRoot, roots, { missing = [] } = {}) {
   const files = [];
   for (const relRoot of uniqueSorted(roots)) {
     const abs = path.join(repoRoot, ...relRoot.split('/'));
-    if (!fs.existsSync(abs)) continue;
+    // 不存在的 root 记入 missing 交由调用方报错，而不是静默跳过：源码移动/误拼后
+    // 统计只会缩减甚至归零，--check 仍通过，台账会掩盖统计丢失。
+    if (!fs.existsSync(abs)) {
+      missing.push(posixRel(relRoot));
+      continue;
+    }
     const stat = fs.statSync(abs);
     if (stat.isFile()) {
       files.push(posixRel(relRoot));
@@ -111,8 +116,8 @@ function collectStyleFiles(repoRoot, roots) {
 
 const TOKEN_REF_RE = /(?:hsl\(\s*var\(|var\()(--[a-zA-Z0-9-]+)/g;
 
-function scanStyleStats(repoRoot, styleRoots) {
-  const files = collectStyleFiles(repoRoot, styleRoots);
+function scanStyleStats(repoRoot, styleRoots, { missingRoots = [] } = {}) {
+  const files = collectStyleFiles(repoRoot, styleRoots, { missing: missingRoots });
   let bareColors = 0;
   let bareRadii = 0;
   const tokenHits = new Set();
@@ -329,6 +334,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/components/login/loginDesignTokens.ts',
       ],
       routerPaths: ['/login'],
+      routeComponents: ['LoginPage'],
     },
     {
       id: 'desktop.auth.add-account',
@@ -341,6 +347,7 @@ export function catalogSurfaces() {
       styleRoots: ['apps/desktop/src/renderer/components/login/AddAccountLoginPage.tsx'],
       extraStyleRoots: ['desktop.auth.login'],
       routerPaths: ['/add-account'],
+      routeComponents: ['AddAccountLoginPage'],
     },
     {
       id: 'desktop.chat.session',
@@ -362,6 +369,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/components/new-chat',
       ],
       routerPaths: ['/cc-agent/:sessionId', '/cc-agent/boot'],
+      routeComponents: ['CCAgentSessionView', 'SecondaryWindowBootGate'],
     },
     {
       id: 'desktop.chat.new-draft',
@@ -371,6 +379,7 @@ export function catalogSurfaces() {
       reachableComponents: ['NewMakerDraftRoute'],
       styleRoots: ['apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx'],
       routerPaths: ['/cc-agent/new'],
+      routeComponents: ['NewMakerDraftRoute'],
     },
     {
       id: 'desktop.chat.orca-workflow',
@@ -384,6 +393,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/cc-agent/OrcaWorkerPanel.tsx',
       ],
       routerPaths: ['/cc-agent/orca/:sessionId'],
+      routeComponents: ['OrcaWorkflowRoute'],
     },
     {
       id: 'desktop.chat.scheduled',
@@ -393,6 +403,7 @@ export function catalogSurfaces() {
       reachableComponents: ['SchedulerPage'],
       styleRoots: ['apps/desktop/src/renderer/features/scheduler'],
       routerPaths: ['/cc-agent/scheduled'],
+      routeComponents: ['SchedulerPage'],
     },
     {
       id: 'desktop.chat.files',
@@ -402,6 +413,7 @@ export function catalogSurfaces() {
       reachableComponents: ['WorkdirBrowseRoute', 'FileTreeView', 'FileBodyView'],
       styleRoots: ['apps/desktop/src/renderer/features/cc-agent/workdir-browse'],
       routerPaths: ['/cc-agent/files/:sessionId'],
+      routeComponents: ['WorkdirBrowseRoute'],
     },
     {
       id: 'desktop.issues.guide',
@@ -411,6 +423,7 @@ export function catalogSurfaces() {
       reachableComponents: ['IssueTrackerFeatureLayout'],
       styleRoots: ['apps/desktop/src/renderer/features/issue-tracker'],
       routerPaths: ['/issues'],
+      routeComponents: ['IssueTrackerFeatureLayout'],
     },
     {
       id: 'desktop.skillhub.local',
@@ -429,6 +442,7 @@ export function catalogSurfaces() {
         '/skillhub/local/:kind/global/:name',
         '/skillhub/local/:kind/project/:projectHash/:name',
       ],
+      routeComponents: ['SkillhubHomeView', 'SkillhubDetailView'],
     },
     {
       id: 'desktop.skillhub.market',
@@ -438,6 +452,7 @@ export function catalogSurfaces() {
       reachableComponents: ['SkillhubMarketListView'],
       styleRoots: ['apps/desktop/src/renderer/features/skillhub/SkillhubMarketListView.tsx'],
       routerPaths: ['/skillhub/market'],
+      routeComponents: ['SkillhubMarketListView'],
     },
     {
       id: 'desktop.settings',
@@ -448,6 +463,7 @@ export function catalogSurfaces() {
       reachableComponents: ['SettingsView'],
       styleRoots: ['apps/desktop/src/renderer/components/settings'],
       routerPaths: ['/settings'],
+      routeComponents: ['SettingsView'],
     },
     {
       id: 'desktop.plugins.installed',
@@ -460,6 +476,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx',
       ],
       routerPaths: ['/plugins'],
+      routeComponents: ['GhostPluginPage'],
     },
     {
       id: 'desktop.plugins.app-main',
@@ -472,6 +489,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/plugin/GhostMainViewHost.tsx',
       ],
       routerPaths: ['/apps/:ghostId'],
+      routeComponents: ['GhostMainViewFeatureLayout'],
     },
     {
       id: 'desktop.dev.maker-experimental',
@@ -482,6 +500,7 @@ export function catalogSurfaces() {
       reachableComponents: ['MakerExperimentalView'],
       styleRoots: ['apps/desktop/src/renderer/features/maker-experimental'],
       routerPaths: ['/maker-experimental'],
+      routeComponents: ['MakerExperimentalView'],
     },
     {
       id: 'desktop.window.sidebar',
@@ -496,6 +515,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/right-sidebar-window',
       ],
       routerPaths: ['/sidebar-window'],
+      routeComponents: ['SidebarWindowLayout'],
     },
     {
       id: 'desktop.window.ghost-panel',
@@ -510,6 +530,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/ghost-panel-window',
       ],
       routerPaths: ['/ghost-panel-window'],
+      routeComponents: ['GhostPanelWindowLayout'],
     },
     {
       id: 'desktop.window.resource-usage',
@@ -644,9 +665,15 @@ export function catalogSurfaces() {
       id: 'desktop.overlay.splash',
       platform: 'desktop',
       title: '启动遮罩',
-      productionEntry: 'App → SplashScreen',
-      reachableComponents: ['SplashScreen'],
-      styleRoots: ['apps/desktop/src/renderer/components/splash'],
+      productionEntry:
+        'App → SplashScreen；同源 gating 下并挂 LoginBrandStage（z-9980 品牌画布，启动期即可见、Splash(z-9999) 之下）',
+      reachableComponents: ['SplashScreen', 'LoginBrandStage'],
+      // LoginBrandStage 同时是登录页品牌层（desktop.auth.login 已登记）；此处并挂是
+      // 同一组件的启动期可达事实，样式根共享故统计一致。
+      styleRoots: [
+        'apps/desktop/src/renderer/components/splash',
+        'apps/desktop/src/renderer/components/login/LoginBrandStage.tsx',
+      ],
       routerPaths: [],
     },
     {
@@ -699,7 +726,8 @@ export function catalogSurfaces() {
 
 export function productionRouterCoverage(routerSource, catalog = catalogSurfaces()) {
   const { production } = extractRouterFacts(routerSource);
-  const covered = new Set(catalog.flatMap((surface) => surface.routerPaths ?? []));
+  const byPath = new Map(catalog.flatMap((surface) => (surface.routerPaths ?? []).map((routePath) => [routePath, surface])));
+  const covered = new Set(byPath.keys());
   const mapped = [];
   const missing = [];
   for (const route of production) {
@@ -709,12 +737,33 @@ export function productionRouterCoverage(routerSource, catalog = catalogSurfaces
   // 检查，重新生成会把它从覆盖表悄悄抹掉，--check 照样通过，台账继续宣称它生产可达。
   const actualPaths = new Set(production.map((route) => route.path));
   const stale = [...covered].filter((routePath) => !actualPaths.has(routePath));
-  return { mapped, missing, stale, covered: [...covered].sort() };
+  // 组件核对：路径保留但 element 换成新组件时，路由覆盖表会显示新组件，而该 surface 的
+  // productionEntry / reachableComponents / styleRoots 仍来自旧 catalog——台账内部自相
+  // 矛盾。登记 surface 的路由入口组件，映射时逐路径核对，换组件必须显式更新 catalog。
+  const componentMismatch = production
+    .filter((route) => {
+      const surface = byPath.get(route.path);
+      if (!surface) return false;
+      const entryComponents = surface.routeComponents ?? [];
+      // 未登记 routeComponents 的 surface 只按路径映射（历史形态，不强制回填）。
+      return entryComponents.length > 0 && !entryComponents.includes(route.component);
+    })
+    .map((route) => {
+      const surface = byPath.get(route.path);
+      return {
+        path: route.path,
+        actualComponent: route.component,
+        catalogComponents: surface.routeComponents,
+        surfaceId: surface.id,
+      };
+    });
+  return { mapped, missing, stale, componentMismatch, covered: [...covered].sort() };
 }
 
 export function buildGeneratedSurfaces(repoRoot, { catalog = catalogSurfaces() } = {}) {
   const byId = new Map(catalog.map((surface) => [surface.id, surface]));
-  return catalog
+  const missingStyleRoots = [];
+  const surfaces = catalog
     .map((surface) => {
       // 渲染即委托的薄壳（如 AddAccountLoginPage → LoginPage）按 extraStyleRoots
       // 指向被委托 surface 的 styleRoots，统计口径与其保持同一组事实源。
@@ -722,7 +771,9 @@ export function buildGeneratedSurfaces(repoRoot, { catalog = catalogSurfaces() }
         ...surface.styleRoots,
         ...(surface.extraStyleRoots ?? []).flatMap((id) => byId.get(id)?.styleRoots ?? []),
       ];
-      const stats = scanStyleStats(repoRoot, roots);
+      const stats = scanStyleStats(repoRoot, roots, {
+        missingRoots: missingStyleRoots,
+      });
       return {
         id: surface.id,
         platform: surface.platform,
@@ -737,6 +788,7 @@ export function buildGeneratedSurfaces(repoRoot, { catalog = catalogSurfaces() }
       };
     })
     .sort((a, b) => a.id.localeCompare(b.id));
+  return { surfaces, missingStyleRoots: uniqueSorted(missingStyleRoots) };
 }
 
 /** 被排除的 redirect 路由，供 GENERATED 排除表使用。 */

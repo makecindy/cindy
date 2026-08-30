@@ -396,13 +396,101 @@ test('catalog 路由被删除后 stale 反向核对能发现,不再静默通过'
   assert.deepEqual(freshCoverage.stale, []);
 });
 
+test('路径保留但 element 换组件时 componentMismatch 能发现', () => {
+  const routerSource = `
+    export const router = createHashRouter([
+      { path: 'fixture', element: <NewSwappedView /> },
+    ]);
+  `;
+  const catalog = [
+    { id: 'desktop.test.surface', routerPaths: ['/fixture'], routeComponents: ['FixtureView'] },
+  ];
+  const coverage = productionRouterCoverage(routerSource, catalog);
+  assert.deepEqual(coverage.missing, []);
+  assert.deepEqual(coverage.stale, []);
+  assert.deepEqual(coverage.componentMismatch, [
+    {
+      path: '/fixture',
+      actualComponent: 'NewSwappedView',
+      catalogComponents: ['FixtureView'],
+      surfaceId: 'desktop.test.surface',
+    },
+  ]);
+  // 组件一致(多路由 surface 的任一登记组件命中)时不得误报。
+  const okCoverage = productionRouterCoverage(routerSource, [
+    {
+      id: 'desktop.test.surface',
+      routerPaths: ['/fixture'],
+      routeComponents: ['OtherView', 'NewSwappedView'],
+    },
+  ]);
+  assert.deepEqual(okCoverage.componentMismatch, []);
+  // 未登记 routeComponents 的 surface 只按路径映射,不受影响(历史形态不强制回填)。
+  const legacyCoverage = productionRouterCoverage(routerSource, [
+    { id: 'desktop.test.surface', routerPaths: ['/fixture'] },
+  ]);
+  assert.deepEqual(legacyCoverage.componentMismatch, []);
+});
+
+test('真实 router.tsx 的每条路由组件都与 catalog 的 routeComponents 一致', () => {
+  const coverage = productionRouterCoverage(readRouter(), catalogSurfaces());
+  assert.deepEqual(
+    coverage.componentMismatch,
+    [],
+    `组件不一致: ${JSON.stringify(coverage.componentMismatch)}`,
+  );
+  // 每个 routerPaths 非空的 surface 都必须登记 routeComponents——防未来新增路由面漏登记。
+  const missingRegistration = catalogSurfaces().filter(
+    (surface) =>
+      (surface.routerPaths ?? []).length > 0 && (surface.routeComponents ?? []).length === 0,
+  );
+  assert.deepEqual(
+    missingRegistration.map((surface) => surface.id),
+    [],
+    '路由级 surface 必须登记 routeComponents',
+  );
+});
+
+test('styleRoot 路径不存在时 missingStyleRoots 报告,统计不静默归零', () => {
+  const base = {
+    platform: 'desktop',
+    title: '测试面',
+    productionEntry: 'fixture',
+    reachableComponents: ['FixtureView'],
+    routerPaths: [],
+  };
+  const catalog = [
+    {
+      ...base,
+      id: 'desktop.test.surface',
+      styleRoots: ['scripts/__tests__/design-inventory.test.mjs'],
+    },
+    {
+      ...base,
+      id: 'desktop.test.gone',
+      styleRoots: ['apps/desktop/src/renderer/does-not-exist.tsx'],
+    },
+  ];
+  const { surfaces, missingStyleRoots } = buildGeneratedSurfaces(ROOT, { catalog });
+  assert.deepEqual(missingStyleRoots, ['apps/desktop/src/renderer/does-not-exist.tsx']);
+  // 存在的 root 照常统计;失效的 root 对应 surface 统计为 0——事实是「没有可统计文件」,
+  // 由 missingStyleRoots 让 CLI 报错,而不是让 0 假装是真实统计。
+  const ok = surfaces.find((surface) => surface.id === 'desktop.test.surface');
+  assert.ok(ok.styleSources.length > 0);
+  const gone = surfaces.find((surface) => surface.id === 'desktop.test.gone');
+  assert.deepEqual(gone.styleSources, []);
+  // 真实 catalog 上跑一遍:不得有失效 root。
+  const real = buildGeneratedSurfaces(ROOT, {});
+  assert.deepEqual(real.missingStyleRoots, []);
+});
+
 test('catalog 含 App 顶层非路由生产 UI(LegacyMigrationDialog)且统计非零', () => {
   const catalog = catalogSurfaces();
   const migration = catalog.find((surface) => surface.id === 'desktop.auth.legacy-migration');
   assert.ok(migration, 'catalog 必须登记 desktop.auth.legacy-migration');
   assert.deepEqual(migration.routerPaths, []);
   assert.equal(migration.productionEntry.includes('LegacyMigrationDialog'), true);
-  const surfaces = buildGeneratedSurfaces(ROOT, {});
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
   const generated = surfaces.find((surface) => surface.id === 'desktop.auth.legacy-migration');
   assert.ok(generated, 'GENERATED 必须含 desktop.auth.legacy-migration 行');
   assert.ok(generated.tokenCount > 0, '迁移弹窗消费 --login-* token,统计不得为 0');
@@ -412,7 +500,7 @@ test('catalog 含 App 顶层非路由生产 UI(LegacyMigrationDialog)且统计�
 });
 
 test('薄壳 surface 经 extraStyleRoots 继承被委托 surface 的样式事实', () => {
-  const surfaces = buildGeneratedSurfaces(ROOT, {});
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
   const login = surfaces.find((surface) => surface.id === 'desktop.auth.login');
   const addAccount = surfaces.find((surface) => surface.id === 'desktop.auth.add-account');
   assert.ok(login && addAccount);
@@ -482,44 +570,93 @@ test.describe('CLI', { concurrency: false }, () => {
   });
 
   test('CLI 连续两次 generate,GENERATED 区块字节一致', () => {
+    // 同样在临时拷贝上跑(CINDY_INVENTORY_DOC):真实台账文件不受测试写盘影响。
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'design-inventory-idem-'));
+    const sandboxDoc = path.join(sandbox, 'design-inventory.md');
+    fs.copyFileSync(INVENTORY_PATH, sandboxDoc);
     const run = () =>
       spawnSync(process.execPath, [CLI_PATH], {
         cwd: ROOT,
         encoding: 'utf8',
+        env: { ...process.env, CINDY_INVENTORY_DOC: sandboxDoc },
       });
-    const firstRun = run();
-    assert.equal(firstRun.status, 0, firstRun.stderr || firstRun.stdout);
-    const first = splitInventoryDocument(fs.readFileSync(INVENTORY_PATH, 'utf8')).generated;
-    const secondRun = run();
-    assert.equal(secondRun.status, 0, secondRun.stderr || secondRun.stdout);
-    const second = splitInventoryDocument(fs.readFileSync(INVENTORY_PATH, 'utf8')).generated;
-    assert.equal(normalizeDocEol(first), normalizeDocEol(second));
+    try {
+      const firstRun = run();
+      assert.equal(firstRun.status, 0, firstRun.stderr || firstRun.stdout);
+      const first = splitInventoryDocument(fs.readFileSync(sandboxDoc, 'utf8')).generated;
+      const secondRun = run();
+      assert.equal(secondRun.status, 0, secondRun.stderr || secondRun.stdout);
+      const second = splitInventoryDocument(fs.readFileSync(sandboxDoc, 'utf8')).generated;
+      assert.equal(normalizeDocEol(first), normalizeDocEol(second));
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  test('CLI 测试不改写真实台账文件', () => {
+    // 钉死 CINDY_INVENTORY_DOC 沙箱机制的意图:CLI 测试组跑完后,真实台账文件的
+    // 字节必须与本组开始前一致。对比「组内首个用例开跑前」的快照而非 git HEAD,
+    // 开发者未提交的台账改动不算测试污染。
+    const before = fs.readFileSync(INVENTORY_PATH, 'utf8');
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'design-inventory-guard-'));
+    const sandboxDoc = path.join(sandbox, 'design-inventory.md');
+    fs.copyFileSync(INVENTORY_PATH, sandboxDoc);
+    try {
+      const gen = spawnSync(process.execPath, [CLI_PATH], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, CINDY_INVENTORY_DOC: sandboxDoc },
+      });
+      assert.equal(gen.status, 0, gen.stderr || gen.stdout);
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+    const after = fs.readFileSync(INVENTORY_PATH, 'utf8');
+    assert.equal(
+      normalizeDocEol(after),
+      normalizeDocEol(before),
+      '真实台账被测试改写:CLI 必须经 CINDY_INVENTORY_DOC 重定向写盘',
+    );
   });
 
   test('CLI generate 刷新快照日期为当天;--check 沿用文件内既有日期不跨日假红', () => {
     const today = new Date().toISOString().slice(0, 10);
+    // 在临时目录拷贝上跑 CLI（CINDY_INVENTORY_DOC 重定向写读）：统计仍扫真实源码，
+    // 但 generate 不再改写受版本控制的真实台账——跨日跑 test:runner 不留脏工作区。
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'design-inventory-cli-'));
+    const sandboxDoc = path.join(sandbox, 'design-inventory.md');
+    fs.copyFileSync(INVENTORY_PATH, sandboxDoc);
     const run = (args) =>
-      spawnSync(process.execPath, [CLI_PATH, ...args], { cwd: ROOT, encoding: 'utf8' });
-    // generate 用当天日期写盘。
-    const gen = run([]);
-    assert.equal(gen.status, 0, gen.stderr || gen.stdout);
-    const doc = fs.readFileSync(INVENTORY_PATH, 'utf8');
-    assert.match(doc, new RegExp(`计数快照日期：${today}。`));
-    // 把日期改成昨天,--check 必须沿用文件里的日期重渲染 → 不因跨日误报。
-    const aged = doc.replace(
-      /计数快照日期：\d{4}-\d{2}-\d{2}。/,
-      '计数快照日期：2020-01-01。',
-    );
-    fs.writeFileSync(INVENTORY_PATH, aged, 'utf8');
-    const agedCheck = run(['--check']);
-    assert.equal(agedCheck.status, 0, agedCheck.stderr || agedCheck.stdout);
-    // 再 generate 一次把日期复原,并确认写回的是当天。
-    const restore = run([]);
-    assert.equal(restore.status, 0, restore.stderr || restore.stdout);
-    assert.match(
-      fs.readFileSync(INVENTORY_PATH, 'utf8'),
-      new RegExp(`计数快照日期：${today}。`),
-    );
+      spawnSync(process.execPath, [CLI_PATH, ...args], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, CINDY_INVENTORY_DOC: sandboxDoc },
+      });
+    try {
+      // generate 用当天日期写盘。
+      const gen = run([]);
+      assert.equal(gen.status, 0, gen.stderr || gen.stdout);
+      const doc = fs.readFileSync(sandboxDoc, 'utf8');
+      assert.match(doc, new RegExp(`计数快照日期：${today}。`));
+      // 把日期改成 2020(早于任何真实快照),--check 必须沿用文件里的日期重渲染
+      // → 不因跨日误报。
+      const aged = doc.replace(
+        /计数快照日期：\d{4}-\d{2}-\d{2}。/,
+        '计数快照日期：2020-01-01。',
+      );
+      fs.writeFileSync(sandboxDoc, aged, 'utf8');
+      const agedCheck = run(['--check']);
+      assert.equal(agedCheck.status, 0, agedCheck.stderr || agedCheck.stdout);
+      // 再 generate 一次,确认写回的是当天(证明日期不是从旧文件继承的)。
+      const restore = run([]);
+      assert.equal(restore.status, 0, restore.stderr || restore.stdout);
+      assert.match(
+        fs.readFileSync(sandboxDoc, 'utf8'),
+        new RegExp(`计数快照日期：${today}。`),
+      );
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 });
 
