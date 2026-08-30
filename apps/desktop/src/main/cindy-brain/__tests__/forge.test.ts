@@ -1508,6 +1508,7 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).toContain("op: 'saveAs'");
     expect(FORGE_GUIDE).toContain('path 永远是库内相对键,不是用户另存到的绝对路径');
     expect(FORGE_GUIDE).toContain('reveal 打开系统文件夹、saveAs 弹系统对话框');
+    expect(FORGE_GUIDE).toContain('标题/正文带已核验插件名');
     expect(FORGE_GUIDE).toContain('已有对话框在场');
     expect(FORGE_GUIDE).toContain('对话框期间账号切换');
     expect(FORGE_GUIDE).toContain('`BUSY`');

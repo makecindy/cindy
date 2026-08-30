@@ -63,8 +63,8 @@ export interface GhostLibrarySlotDeps {
   };
   /** 在 Finder/Explorer 显示库内已有文件(生产接 shell.showItemInFolder)。 */
   showItemInFolder?(absPath: string): void;
-  /** 系统另存为(生产接 dialog.showSaveDialog)。 */
-  showSaveDialog?(opts: { defaultPath: string }): Promise<{ canceled: boolean; filePath?: string }>;
+  /** 系统另存为(生产接 dialog.showSaveDialog;标题/正文由主机拼装并带已核验插件名)。 */
+  showSaveDialog?(opts: { defaultPath: string; ghostName: string }): Promise<{ canceled: boolean; filePath?: string }>;
   /** 可注入时钟(单测限速);默认 Date.now。 */
   now?(): number;
 }
@@ -377,6 +377,8 @@ export class GhostLibrarySlot {
         const abs = await vault.resolveExistingFile(relPath);
         if (!abs) return fail('NOT_FOUND', `库内没有这个文件:${relPath}`);
         if (!this.deps.showSaveDialog) return fail('UNSUPPORTED', '当前宿主不能弹出另存为');
+        const ghost = this.deps.getGhost(ghostId);
+        if (!ghost) return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力');
 
         // 骚扰钳制:限速按尝试记账(spam 顺延窗口),再看全局在场标记。
         const now = this.deps.now?.() ?? Date.now();
@@ -394,7 +396,10 @@ export class GhostLibrarySlot {
         this.saveAsDialogInFlight = true;
         let picked: { canceled: boolean; filePath?: string };
         try {
-          picked = await this.deps.showSaveDialog({ defaultPath: base });
+          picked = await this.deps.showSaveDialog({
+            defaultPath: base,
+            ghostName: ghost.manifest.name,
+          });
         } catch (error) {
           this.deps.log?.warn('ghost library saveAs dialog failed', {
             ghostId,

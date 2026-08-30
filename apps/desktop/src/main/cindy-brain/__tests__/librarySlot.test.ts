@@ -262,6 +262,10 @@ describe('GhostLibrarySlot', () => {
         op: 'saveAs', path: 'exports/a.psd', name: 'layers.psd',
       });
       expect(cancelled).toEqual({ ok: true, op: 'saveAs', cancelled: true });
+      expect(showSaveDialog).toHaveBeenCalledWith({
+        defaultPath: 'layers.psd',
+        ghostName: '测试意识',
+      });
 
       clock += 4_000;
       const dest = path.join(tmp, 'Desktop', 'out.psd');

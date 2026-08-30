@@ -3501,8 +3501,9 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   \`DB_ROW_LIMIT\`(结果集超 2000 行,自己加 LIMIT)、\`DB_MIGRATION_CONFLICT\`、
   \`BUSY\`、\`RATE_LIMITED\`;
 - **reveal / saveAs**:只收库内相对路径。成功不回用户另存目标的绝对路径;
-  取消是 \`{ cancelled:true }\`。reveal 打开系统文件夹、saveAs 弹系统对话框,
-  同插件 3 秒内连发 \`RATE_LIMITED\`;saveAs 已有对话框在场 \`BUSY\`(不排队)。
+  取消是 \`{ cancelled:true }\`。reveal 打开系统文件夹、saveAs 弹系统对话框
+  (标题/正文带已核验插件名),同插件 3 秒内连发 \`RATE_LIMITED\`;
+  saveAs 已有对话框在场 \`BUSY\`(不排队)。
   对话框期间账号切换则拒绝拷贝(\`LIBRARY_UNAVAILABLE\`);
 - **不可用 ≠ 空**:\`state:'unavailable'\` 时**不要**当空库重建、不要触发
   清理、不要把素材判成已删——如实向用户展示状态,等位置恢复;
