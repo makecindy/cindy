@@ -396,6 +396,57 @@ describe('feishu group thread routing', () => {
     expect(pendingTopicLeaseCountForTest()).toBe(0);
   });
 
+  it('abandons the topic lease in the stop/start gap during account replacement', async () => {
+    const events = collectMessages();
+    let releaseDownload: ((value: {
+      attachments: IMMessageEvent['attachments'];
+      unsupported: IMMessageEvent['unsupported'];
+    }) => void) | undefined;
+    let downloadStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      downloadStarted = resolve;
+    });
+    mocks.getBoundClient.mockReturnValue({});
+    mocks.downloadAttachments.mockImplementationOnce(() => {
+      downloadStarted();
+      return new Promise((resolve) => {
+        releaseDownload = resolve;
+      });
+    });
+    await connect();
+    const handling = mocks.eventHandlers['im.message.receive_v1'](
+      groupTopicImageMessage('omt_existing', 'om_topic_img_switch_gap'),
+    );
+    await started;
+    // unbindClient 位于 stop() 尾部；这里同步放行下载，让旧 handler 恰好在
+    // currentBotAppId 已清空、新账号尚未装入的微任务空窗恢复。
+    mocks.unbindClient.mockImplementationOnce(() => {
+      releaseDownload?.({
+        attachments: [
+          {
+            kind: 'image',
+            absPath: '/tmp/cindy-feishu-topic.png',
+            originalName: 'topic.png',
+            mimeType: 'image/png',
+          },
+        ],
+        unsupported: [],
+      });
+    });
+    wsClient.setBotOpenIdForTest(BOT);
+    const connecting = wsClient.start(
+      { appId: 'cli_other_bot', appSecret: 'secret', service: 'feishu' },
+      { announceLifecycle: false },
+    );
+    await vi.waitFor(() => expect(mocks.options).toHaveLength(2));
+    mocks.options.at(-1)?.onReady?.();
+    await connecting;
+    await handling;
+
+    expect(events).toHaveLength(0);
+    expect(pendingTopicLeaseCountForTest()).toBe(0);
+  });
+
   it('keeps the topic lease across same-account reconnect during attachment download', async () => {
     const events = collectMessages();
     let releaseDownload: ((value: {

@@ -74,6 +74,11 @@ let detector: ConflictDetector | null = null;
 let currentBotAppId: string | null = null;
 /** 当前连接的 service(feishu/lark)— 账号边界含 service, 同名 appId 也不可串。 */
 let currentService: BotCredentials['service'] | null = null;
+/**
+ * start() 等待旧连接 stop() 时即发布下一账号身份。旧入站 await 若在
+ * currentBotAppId 已清空、新账号尚未装入的空窗恢复，仍能区分同账号重连与换号。
+ */
+let pendingStartAccount: Pick<BotCredentials, 'appId' | 'service'> | null = null;
 let currentStatus: FeishuConnectionStatus = 'idle';
 let acceptingInbound = false;
 let lifecycleGeneration = 0;
@@ -550,16 +555,19 @@ function isSameBotActive(botAppId: string, service: BotCredentials['service']): 
 }
 
 /**
- * 入站 await 恢复时是否已经换成另一个 bot。同账号重连(换代但 appId+service
- * 未变)和停机间隙(currentBotAppId === null)都不是替换 —— pending topic
- * lease 必须留下, 已配对的重投才能再 dispatch; 只有当前已是另一个 bot 才
- * 显式放弃, 否则 pruneTopicLeases 永久跳过 pending, 反复换号会让 Map 无界
- * 增长, 切回旧账号还能沿旧 lease 起 turn。
+ * 入站 await 恢复时是否已经换成另一个 bot。同账号重连(appId+service 未变)
+ * 和没有下一账号的停机间隙都不是替换 —— pending topic lease 必须留下,
+ * 已配对的重投才能再 dispatch。start() 等待 stop() 的空窗优先比较待启动
+ * 账号；跨账号时显式放弃，否则 pruneTopicLeases 永久跳过 pending, 反复换号
+ * 会让 Map 无界增长, 切回旧账号还能沿旧 lease 起 turn。
  */
 function isReplacedBotAccount(
   botAppId: string,
   service: BotCredentials['service'],
 ): boolean {
+  if (pendingStartAccount) {
+    return pendingStartAccount.appId !== botAppId || pendingStartAccount.service !== service;
+  }
   return (
     currentBotAppId !== null &&
     (currentBotAppId !== botAppId || currentService !== service)
@@ -1100,17 +1108,26 @@ export async function start(
   log.info(
     `[feishu/wsClient] start requested reason=${opts.reason ?? 'unspecified'} announceLifecycle=${opts.announceLifecycle === false ? 'no' : 'yes'}`,
   );
-  if (client) {
-    await stop({
-      announceOffline: opts.announceLifecycle !== false,
-      reason: `${opts.reason ?? 'start'}:replace-existing-client`,
-    });
+  const pendingAccount = { appId: creds.appId, service: creds.service };
+  pendingStartAccount = pendingAccount;
+  try {
+    if (client) {
+      await stop({
+        announceOffline: opts.announceLifecycle !== false,
+        reason: `${opts.reason ?? 'start'}:replace-existing-client`,
+      });
+    }
+  } catch (err) {
+    if (pendingStartAccount === pendingAccount) pendingStartAccount = null;
+    throw err;
   }
 
   const startedGeneration = ++lifecycleGeneration;
   acceptingInbound = true;
   currentBotAppId = creds.appId;
   currentService = creds.service;
+  // 并发 start 时只清自己的标记，不覆盖更新一轮已经发布的待启动身份。
+  if (pendingStartAccount === pendingAccount) pendingStartAccount = null;
   setStatus('testing');
 
   const startDetector = new ConflictDetector({
