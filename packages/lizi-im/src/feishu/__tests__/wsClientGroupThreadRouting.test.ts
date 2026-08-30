@@ -371,7 +371,25 @@ describe('feishu group thread routing', () => {
       groupTopicImageMessage('omt_existing', 'om_topic_img_switch'),
     );
     await started;
-    await wsClient.stop({ announceOffline: false, reason: 'test-switch-account' });
+    mocks.unbindClient.mockImplementationOnce(() => {
+      releaseDownload?.({
+        attachments: [
+          {
+            kind: 'image',
+            absPath: '/tmp/cindy-feishu-topic.png',
+            originalName: 'topic.png',
+            mimeType: 'image/png',
+          },
+        ],
+        unsupported: [],
+      });
+    });
+    await wsClient.stop({
+      announceOffline: false,
+      reason: 'test-switch-account',
+      nextAccount: { appId: 'cli_other_bot', service: 'feishu' },
+    });
+    await handling;
     wsClient.setBotOpenIdForTest(BOT);
     const connecting = wsClient.start(
       { appId: 'cli_other_bot', appSecret: 'secret', service: 'feishu' },
@@ -379,18 +397,6 @@ describe('feishu group thread routing', () => {
     );
     mocks.options.at(-1)?.onReady?.();
     await connecting;
-    releaseDownload?.({
-      attachments: [
-        {
-          kind: 'image',
-          absPath: '/tmp/cindy-feishu-topic.png',
-          originalName: 'topic.png',
-          mimeType: 'image/png',
-        },
-      ],
-      unsupported: [],
-    });
-    await handling;
 
     expect(events).toHaveLength(0);
     expect(pendingTopicLeaseCountForTest()).toBe(0);
@@ -469,23 +475,75 @@ describe('feishu group thread routing', () => {
       groupTopicImageMessage('omt_existing', 'om_topic_img_reconnect'),
     );
     await started;
-    await wsClient.stop({ announceOffline: false, reason: 'test-reconnect' });
+    mocks.unbindClient.mockImplementationOnce(() => {
+      releaseDownload?.({
+        attachments: [
+          {
+            kind: 'image',
+            absPath: '/tmp/cindy-feishu-topic.png',
+            originalName: 'topic.png',
+            mimeType: 'image/png',
+          },
+        ],
+        unsupported: [],
+      });
+    });
+    await wsClient.stop({
+      announceOffline: false,
+      reason: 'test-reconnect',
+      nextAccount: credentials,
+    });
+    await handling;
     await connect();
-    releaseDownload?.({
-      attachments: [
-        {
-          kind: 'image',
-          absPath: '/tmp/cindy-feishu-topic.png',
-          originalName: 'topic.png',
-          mimeType: 'image/png',
-        },
-      ],
-      unsupported: [],
+
+    expect(events).toHaveLength(0);
+    expect(pendingTopicLeaseCountForTest()).toBe(1);
+  });
+
+  it('abandons the topic lease when credentials are cleared during attachment download', async () => {
+    const events = collectMessages();
+    let releaseDownload: ((value: {
+      attachments: IMMessageEvent['attachments'];
+      unsupported: IMMessageEvent['unsupported'];
+    }) => void) | undefined;
+    let downloadStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      downloadStarted = resolve;
+    });
+    mocks.getBoundClient.mockReturnValue({});
+    mocks.downloadAttachments.mockImplementationOnce(() => {
+      downloadStarted();
+      return new Promise((resolve) => {
+        releaseDownload = resolve;
+      });
+    });
+    await connect();
+    const handling = mocks.eventHandlers['im.message.receive_v1'](
+      groupTopicImageMessage('omt_existing', 'om_topic_img_logout'),
+    );
+    await started;
+    mocks.unbindClient.mockImplementationOnce(() => {
+      releaseDownload?.({
+        attachments: [
+          {
+            kind: 'image',
+            absPath: '/tmp/cindy-feishu-topic.png',
+            originalName: 'topic.png',
+            mimeType: 'image/png',
+          },
+        ],
+        unsupported: [],
+      });
+    });
+    await wsClient.stop({
+      announceOffline: false,
+      reason: 'test-credentials-cleared',
+      discardPendingTopicLeases: true,
     });
     await handling;
 
     expect(events).toHaveLength(0);
-    expect(pendingTopicLeaseCountForTest()).toBe(1);
+    expect(pendingTopicLeaseCountForTest()).toBe(0);
   });
 
   it('late topic after the cache TTL still takes over while the flat route is uncommitted', async () => {

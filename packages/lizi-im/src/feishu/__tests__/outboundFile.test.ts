@@ -285,10 +285,9 @@ describe('Feishu parent-chat file reuse', () => {
 
   it('keeps Darwin containment independent of Electron RunAsNode', async () => {
     // Windows CI may check out CRLF; the launcher marker below is LF-only.
-    const source = (await fs.readFile(new URL('../outbound.ts', import.meta.url), 'utf8')).replaceAll(
-      '\r\n',
-      '\n',
-    );
+    const source = (
+      await fs.readFile(new URL('../outbound.ts', import.meta.url), 'utf8')
+    ).replace(/\r\n/g, '\n');
     const helperStart = source.indexOf('const DARWIN_HANDLE_CONTAINMENT_SCRIPT');
     const helperEnd = source.indexOf('let client:', helperStart);
     const helper = source.slice(helperStart, helperEnd);

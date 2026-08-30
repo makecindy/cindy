@@ -173,9 +173,11 @@ describe('Feishu WebSocket conflict handling', () => {
 
       sdkClient.options.onError?.(new Error('exceed_conn_limit'));
 
-      await vi.waitFor(() => expect(wsClient.getCurrentStatus()).toBe('conflict'));
+      await vi.waitFor(() => {
+        expect(wsClient.getCurrentStatus()).toBe('conflict');
+        expect(onConflict).toHaveBeenCalledOnce();
+      });
       expect(sdkClient.close).toHaveBeenCalledWith({ force: true });
-      expect(onConflict).toHaveBeenCalledOnce();
       expect(onConflict).toHaveBeenCalledWith({ appId: credentials.appId });
     } finally {
       feishuEvents.off('conflict', onConflict);
