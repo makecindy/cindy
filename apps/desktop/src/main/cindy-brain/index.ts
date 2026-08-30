@@ -5158,12 +5158,18 @@ export function getGhostLibrarySlot(): GhostLibrarySlot {
             : candidates[0];
         if (!win) throw new Error('没有可挂靠的宿主窗口');
         // main 侧 t() 只插值 {{appName}},插件名在调用点替换(与 pick 槽同做法)。
+        // Electron SaveDialogOptions.message 仅 macOS;Windows 只看 title,
+        // 已核验插件名必须进跨平台标题,否则用户看不到是谁在另存为。
+        const title = t('settings.ghosts.saveAs.dialogTitle').replaceAll(
+          '{{name}}',
+          opts.ghostName,
+        );
         const message = t('settings.ghosts.saveAs.dialogMessage').replaceAll(
           '{{name}}',
           opts.ghostName,
         );
         const picked = await dialog.showSaveDialog(win, {
-          title: t('settings.ghosts.saveAs.dialogTitle'),
+          title,
           message,
           defaultPath: opts.defaultPath,
         });

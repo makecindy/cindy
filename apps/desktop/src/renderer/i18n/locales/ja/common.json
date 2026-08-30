@@ -4911,7 +4911,7 @@
         "dialogMessage": "プラグイン「{{name}}」がフォルダの選択を求めています"
       },
       "saveAs": {
-        "dialogTitle": "名前を付けて保存",
+        "dialogTitle": "プラグイン「{{name}}」名前を付けて保存",
         "dialogMessage": "プラグイン「{{name}}」がコピーの保存先選択を求めています"
       },
       "confirm": {

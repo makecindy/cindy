@@ -20,5 +20,10 @@ describe('library saveAs dialog parent wiring', () => {
     expect(body).toContain('candidates.includes(focused)');
     expect(body).toContain("throw new Error('没有可挂靠的宿主窗口')");
     expect(body).not.toContain('BrowserWindow.getAllWindows()[0]');
+    // Windows 对话框不展示 message,插件名必须进跨平台 title。
+    expect(body).toContain("t('settings.ghosts.saveAs.dialogTitle')");
+    expect(body).toMatch(
+      /t\('settings\.ghosts\.saveAs\.dialogTitle'\)[\s\S]{0,80}replaceAll\(\s*'{{name}}'/,
+    );
   });
 });

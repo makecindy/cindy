@@ -4912,7 +4912,7 @@
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
       },
       "saveAs": {
-        "dialogTitle": "Save As",
+        "dialogTitle": "Plugin “{{name}}” — Save As",
         "dialogMessage": "Plugin “{{name}}” is asking you to save a copy"
       },
       "confirm": {

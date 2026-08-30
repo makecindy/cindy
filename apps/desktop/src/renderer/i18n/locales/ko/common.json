@@ -4911,7 +4911,7 @@
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 폴더 선택을 요청합니다"
       },
       "saveAs": {
-        "dialogTitle": "다른 이름으로 저장",
+        "dialogTitle": "플러그인 \"{{name}}\" 다른 이름으로 저장",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 복사본 저장을 요청합니다"
       },
       "confirm": {

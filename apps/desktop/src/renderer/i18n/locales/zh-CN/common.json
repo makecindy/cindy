@@ -4903,7 +4903,7 @@
         "dialogMessage": "插件「{{name}}」请求你选择一个文件夹"
       },
       "saveAs": {
-        "dialogTitle": "另存为",
+        "dialogTitle": "插件「{{name}}」另存为",
         "dialogMessage": "插件「{{name}}」请求你另存一份拷贝"
       },
       "confirm": {
