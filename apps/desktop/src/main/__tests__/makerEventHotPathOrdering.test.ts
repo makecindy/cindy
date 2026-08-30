@@ -1182,6 +1182,21 @@ describe('maker:event hot path ordering', () => {
     expect(lifecycleObserverSource).toContain(
       'rollbackClaudeTurnBillingSnapshot(session.id, turnGeneration);',
     );
+    const lifecycleTerminalSource = lifecycleObserverSource.slice(
+      lifecycleObserverSource.indexOf(
+        'onTerminal: ({ turnGeneration, event, isCurrentGeneration })',
+      ),
+    );
+    expectOrder(lifecycleTerminalSource, 'const isSilentStop =', 'if (session.remoteHostId) {');
+    const remoteTerminalSource = lifecycleTerminalSource.slice(
+      lifecycleTerminalSource.indexOf('if (session.remoteHostId) {'),
+      lifecycleTerminalSource.indexOf(
+        'const turnLeaseId = providerTurnLeaseId(session.instanceId, turnGeneration);',
+      ),
+    );
+    expect(remoteTerminalSource).toContain(
+      'if (isSilentStop) clearClaudeTurnBillingSnapshot(session.id, turnGeneration);',
+    );
     expect(wireSessionSource).toContain('turnClaudeBillingSnapshots.read(');
     expect(wireSessionSource).toContain('captureClaudeTurnBillingSnapshot(session)');
     expect(claudeDoneSource).toContain(

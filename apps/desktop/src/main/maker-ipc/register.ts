@@ -4114,11 +4114,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       );
     },
     onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {
-      if (session.remoteHostId) return;
-      const turnLeaseId = providerTurnLeaseId(session.instanceId, turnGeneration);
       const isSilentStop =
         event.type === 'done' &&
         (event.data as { silentStop?: unknown } | null | undefined)?.silentStop === true;
+      if (session.remoteHostId) {
+        // Remote sessions do not enter the local auto-resume lease path, and
+        // their silent-stop event is consequently filtered before usage cleanup.
+        if (isSilentStop) clearClaudeTurnBillingSnapshot(session.id, turnGeneration);
+        return;
+      }
+      const turnLeaseId = providerTurnLeaseId(session.instanceId, turnGeneration);
       if (isSilentStop && isCurrentGeneration) {
         // The provider turn ended, but the product turn remains occupied while
         // the bounded auto-resume decision runs. Its exact lease is either
