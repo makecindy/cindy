@@ -18,6 +18,9 @@
     "configureAccessibility": "{{model}} 구성",
     "budgetDisabledHint": "이 모델을 사용하려면 먼저 제어 대상 기기에서 API 키를 설정해야 합니다",
     "priceLine": "입력 {{input}} · 출력 {{output}} / 100만 토큰",
+    "priceTitle": "100만 토큰당",
+    "priceAmounts": "입력 {{input}} · 출력 {{output}}",
+    "discountedVsStandard": "할인 중 · 표준가 대비 {{percent}}% 절약",
     "contextSuffix": "{{size}} 컨텍스트",
     "fastTag": "빠름"
   },

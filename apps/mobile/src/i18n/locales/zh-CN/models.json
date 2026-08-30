@@ -18,6 +18,9 @@
     "configureAccessibility": "配置 {{model}}",
     "budgetDisabledHint": "该模型需先在被控设备配置 API key 才能使用",
     "priceLine": "输入 {{input}} · 输出 {{output}} / 百万 token",
+    "priceTitle": "每百万 token",
+    "priceAmounts": "输入 {{input}} · 输出 {{output}}",
+    "discountedVsStandard": "折扣中，较标准价省 {{percent}}%",
     "contextSuffix": "{{size}} 上下文",
     "fastTag": "快速"
   },

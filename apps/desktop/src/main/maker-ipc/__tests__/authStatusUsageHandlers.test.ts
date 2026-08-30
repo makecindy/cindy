@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { parseCodexDeviceCodeProgress, registerMakerAuthHandlers } from '../authHandlers';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels';
 import { registerMakerStatusHandlers } from '../statusHandlers';
-import { registerMakerUsageHandlers } from '../usageHandlers';
+import { registerMakerUsageHandlers, toLegacyUsdModelPricing } from '../usageHandlers';
 import { CodexRateLimitResetRejectedError } from '../../usage/codexRateLimitReset';
 import { IpcHarness } from './helpers/ipcHarness';
 import { zeroUsageMoney } from '../../../shared/regionalMoney';
@@ -1302,6 +1302,55 @@ describe('maker usage IPC handlers', () => {
     });
     await expect(harness.invoke(MAKER_INVOKE.USAGE_MODEL_PRICING_V2)).resolves.toEqual(pricing);
     expect(readModelPricing).toHaveBeenCalledTimes(2);
+  });
+
+  it('appends a valid Gateway costDiscount onto the legacy USD pricing channel', () => {
+    expect(
+      toLegacyUsdModelPricing({
+        xd: {
+          'grok-4.6': {
+            providerId: 'xd',
+            modelId: 'grok-4.6',
+            currency: 'USD',
+            source: 'gateway',
+            approximate: false,
+            inputPerMtok: 2,
+            outputPerMtok: 6,
+            costDiscount: 0.4,
+          },
+          'invalid-discount': {
+            providerId: 'xd',
+            modelId: 'invalid-discount',
+            currency: 'USD',
+            source: 'gateway',
+            approximate: false,
+            inputPerMtok: 3,
+            outputPerMtok: 15,
+            costDiscount: 1.2,
+          },
+          'cny-discounted': {
+            providerId: 'xd',
+            modelId: 'cny-discounted',
+            currency: 'CNY',
+            source: 'gateway',
+            approximate: false,
+            inputPerMtok: 5,
+            outputPerMtok: 25,
+            costDiscount: 0.5,
+          },
+        },
+      }),
+    ).toEqual({
+      'grok-4.6': {
+        inputUsdPerMtok: 2,
+        outputUsdPerMtok: 6,
+        costDiscount: 0.4,
+      },
+      'invalid-discount': {
+        inputUsdPerMtok: 3,
+        outputUsdPerMtok: 15,
+      },
+    });
   });
 
   it('serves non-XD reference prices on a channel independent from XD pricing', async () => {

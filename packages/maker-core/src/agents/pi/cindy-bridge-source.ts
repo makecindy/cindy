@@ -68,6 +68,7 @@ import {
   createGrepTool,
   createLsTool,
 } from '@earendil-works/pi-coding-agent';
+import * as piCodingAgent from '@earendil-works/pi-coding-agent';
 
 const PERMISSION_TITLE = 'cindy:permission';
 const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
@@ -76,6 +77,9 @@ const PERMISSION_USER_DENY = 'user-deny';
 const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny';
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
+function isCindyShellTool(toolName: unknown): boolean {
+  return toolName === 'bash' || toolName === 'powershell';
+}
 const MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const SUBAGENT_RUN_DIR_ENV = 'CINDY_PI_SUBAGENT_RUN_DIR';
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
@@ -728,6 +732,235 @@ function bashExpandedPathCandidates(
   } catch {
     return { paths: [], unresolved: true };
   }
+}
+
+const POWERSHELL_DIRECT_FILE_READ_COMMANDS = new Set(['get-content', 'gc', 'cat', 'type']);
+const POWERSHELL_WORKING_DIRECTORY_COMMANDS = new Set([
+  'set-location', 'cd', 'chdir', 'sl',
+  'push-location', 'pushd', 'pop-location', 'popd',
+]);
+const POWERSHELL_GET_CONTENT_SWITCHES = new Set(['-raw', '-wait', '-force', '-asbytestream']);
+
+type PowerShellDirectArguments = { words: string[]; unresolved: boolean };
+type PowerShellDirectStatements = { statements: string[]; unresolved: boolean };
+
+function powershellDirectStatements(command: string): PowerShellDirectStatements {
+  const statements: string[] = [];
+  let current = '';
+  let quote: "'" | '"' | null = null;
+  const flush = () => {
+    const statement = current.trim();
+    if (statement) statements.push(statement);
+    current = '';
+  };
+  for (let cursor = 0; cursor < command.length; cursor += 1) {
+    const character = command[cursor];
+    if (quote) {
+      current += character;
+      if (character === quote) {
+        if (quote === "'" && command[cursor + 1] === "'") {
+          current += command[cursor + 1];
+          cursor += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      current += character;
+      continue;
+    }
+    if (character === '|') {
+      flush();
+      if (command[cursor + 1] === '|') cursor += 1;
+      continue;
+    }
+    if (character === String.fromCharCode(96) || /[&(){}<>]/.test(character)) {
+      return { statements, unresolved: true };
+    }
+    const startsComment = character === '#'
+      && (current.length === 0 || /\s/.test(current[current.length - 1]));
+    if (startsComment) {
+      while (cursor + 1 < command.length && command[cursor + 1] !== '\n') cursor += 1;
+      flush();
+      continue;
+    }
+    if (character === '\u2028' || character === '\u2029') {
+      return { statements, unresolved: true };
+    }
+    if (character === ';' || character === '\n' || character === '\r') {
+      flush();
+      continue;
+    }
+    current += character;
+  }
+  if (quote) return { statements, unresolved: true };
+  flush();
+  return { statements, unresolved: false };
+}
+
+function powershellMayHideDirectFileRead(command: string): boolean {
+  let surface = '';
+  let quote: "'" | '"' | null = null;
+  for (let cursor = 0; cursor < command.length; cursor += 1) {
+    const character = command[cursor];
+    if (quote) {
+      if (quote === '"' && character === String.fromCharCode(96)) {
+        cursor += 1;
+      } else if (character === quote) {
+        if (quote === "'" && command[cursor + 1] === "'") cursor += 1;
+        else quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    const startsComment = character === '#'
+      && (surface.length === 0 || /[\s;|&(){}<>]/.test(surface[surface.length - 1]));
+    if (startsComment) {
+      while (cursor + 1 < command.length && !/[\r\n]/.test(command[cursor + 1])) cursor += 1;
+      continue;
+    }
+    if (character === String.fromCharCode(96)) {
+      const escaped = command[cursor + 1];
+      if (escaped === '\r' && command[cursor + 2] === '\n') cursor += 2;
+      else if (escaped === '\r' || escaped === '\n') cursor += 1;
+      else if (escaped) {
+        surface += /[\s;|&(){}<>]/.test(escaped) ? '_' : escaped;
+        cursor += 1;
+      }
+      continue;
+    }
+    surface += character;
+  }
+  return /(?:^|[;\r\n\u2028\u2029|&(){}])\s*(?:[A-Za-z][A-Za-z0-9.-]*\\)?(?:get-content|gc|cat|type)(?=\s|[;|&(){}<>]|$)/i.test(surface);
+}
+
+function powershellDirectArguments(command: string, start: number): PowerShellDirectArguments {
+  const words: string[] = [];
+  let cursor = start;
+  while (cursor < command.length) {
+    while (/[ \t\r]/.test(command[cursor] ?? '')) cursor += 1;
+    if (cursor >= command.length || command[cursor] === '#') break;
+    if (/\s/.test(command[cursor])) return { words, unresolved: true };
+    const quote = command[cursor] === "'" || command[cursor] === '"' ? command[cursor] : null;
+    let word = '';
+    if (quote) {
+      cursor += 1;
+      let closed = false;
+      while (cursor < command.length) {
+        const character = command[cursor];
+        if (character === quote) {
+          if (quote === "'" && command[cursor + 1] === "'") {
+            word += "'";
+            cursor += 2;
+            continue;
+          }
+          cursor += 1;
+          closed = true;
+          break;
+        }
+        if (quote === '"' && (character === '$' || character === String.fromCharCode(96))) {
+          return { words, unresolved: true };
+        }
+        word += character;
+        cursor += 1;
+      }
+      if (!closed || (cursor < command.length && !/[ \t\r#]/.test(command[cursor]))) {
+        return { words, unresolved: true };
+      }
+    } else {
+      while (cursor < command.length && !/[ \t\r]/.test(command[cursor])) {
+        const character = command[cursor];
+        if (/\s/.test(character) || /[;|&(){}<>]/.test(character)) {
+          return { words, unresolved: true };
+        }
+        if (
+          character === '$'
+          || character === ','
+          || character === "'"
+          || character === '"'
+          || character === String.fromCharCode(96)
+        ) {
+          return { words, unresolved: true };
+        }
+        word += character;
+        cursor += 1;
+      }
+    }
+    if (!word) return { words, unresolved: true };
+    words.push(word);
+  }
+  return { words, unresolved: false };
+}
+
+function powershellDirectCommand(command: string): { name: string; end: number } | null {
+  const match = /^\s*(?:[A-Za-z][A-Za-z0-9.-]*\\)?([A-Za-z][A-Za-z0-9-]*)(?=\s|$)/.exec(command);
+  return match ? { name: match[1].toLowerCase(), end: match[0].length } : null;
+}
+
+function powershellStaticReadTarget(word: string, literal: boolean, cwd: string | null): string | null {
+  if (!word || word === '-' || word.startsWith('@') || word.startsWith('~')) return null;
+  if (/^[A-Za-z][A-Za-z0-9.-]*:/.test(word) && !/^[A-Za-z]:[\\/]/.test(word)) return null;
+  if (!literal && /[*?\[]/.test(word)) return null;
+  if (path.isAbsolute(word)) return path.normalize(word);
+  return cwd === null ? null : path.resolve(cwd, word);
+}
+
+function powershellDirectReadEvidence(command: string, cwd: string | null): BashInputReadEvidence {
+  const direct = powershellDirectCommand(command);
+  if (!direct || !POWERSHELL_DIRECT_FILE_READ_COMMANDS.has(direct.name)) {
+    // Invoke-Expression, the call operator, variable command names and other indirect forms
+    // are intentionally outside this narrow direct-read contract.
+    return { targets: [], unresolved: false };
+  }
+  const parsed = powershellDirectArguments(command, direct.end);
+  if (parsed.unresolved) return { targets: [], unresolved: true };
+  let targetWord: string | null = null;
+  let literal = false;
+  for (let index = 0; index < parsed.words.length; index += 1) {
+    const word = parsed.words[index];
+    const lower = word.toLowerCase();
+    if (lower === '-path' || lower === '-literalpath') {
+      if (targetWord !== null || index + 1 >= parsed.words.length) return { targets: [], unresolved: true };
+      literal = lower === '-literalpath';
+      targetWord = parsed.words[index + 1];
+      index += 1;
+      continue;
+    }
+    if (POWERSHELL_GET_CONTENT_SWITCHES.has(lower)) continue;
+    if (word.startsWith('-') || targetWord !== null) return { targets: [], unresolved: true };
+    targetWord = word;
+  }
+  const target = targetWord === null ? null : powershellStaticReadTarget(targetWord, literal, cwd);
+  return target ? { targets: [target], unresolved: false } : { targets: [], unresolved: true };
+}
+
+function powershellInputReadEvidence(input: unknown): BashInputReadEvidence {
+  if (!input || typeof input !== 'object') return { targets: [], unresolved: false };
+  const command = (input as Record<string, unknown>).command;
+  if (typeof command !== 'string' || !command) return { targets: [], unresolved: false };
+  const payload = powershellDirectStatements(command);
+  if (payload.unresolved) {
+    return powershellMayHideDirectFileRead(command)
+      ? { targets: [], unresolved: true }
+      : { targets: [], unresolved: false };
+  }
+  const targets: string[] = [];
+  let unresolved = false;
+  let cwd: string | null = process.cwd();
+  for (const statement of payload.statements) {
+    const direct = powershellDirectCommand(statement);
+    if (direct && POWERSHELL_WORKING_DIRECTORY_COMMANDS.has(direct.name)) cwd = null;
+    const evidence = powershellDirectReadEvidence(statement, cwd);
+    targets.push(...evidence.targets);
+    unresolved ||= evidence.unresolved;
+  }
+  return { targets: [...new Set(targets)], unresolved };
 }
 
 function bashInputReadEvidence(input: unknown): BashInputReadEvidence {
@@ -2968,6 +3201,52 @@ export default async function cindyBridge(pi: any) {
     },
   });
 
+  // Pi v0.84.3 Windows powershell is the same spawn family as bash. Overlay only
+  // on Windows and when the runtime exports the factory so 0.83.0 sessions keep loading.
+  const createPowerShellTool = (piCodingAgent as { createPowerShellTool?: typeof createBashTool }).createPowerShellTool;
+  if (process.platform === 'win32' && typeof createPowerShellTool === 'function') {
+    const powershellTool = createPowerShellTool(process.cwd(), {
+      exposeSessionEnvironment: false,
+      spawnHook: ({ command, cwd, env }) => ({
+        command,
+        cwd,
+        env: isolatedBashEnvironment(env, bashPackageHome),
+      }),
+    });
+    var powershellParameters = powershellTool.parameters;
+    if (
+      powershellParameters &&
+      typeof powershellParameters === 'object' &&
+      powershellParameters.properties &&
+      typeof powershellParameters.properties === 'object' &&
+      powershellParameters.properties.timeout &&
+      typeof powershellParameters.properties.timeout === 'object'
+    ) {
+      powershellParameters.properties.timeout.description = cindyBashTimeoutDescription();
+    }
+    if (typeof powershellTool.description === 'string') {
+      powershellTool.description =
+        powershellTool.description +
+        ' Cindy enforces a ' +
+        CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS +
+        's default and a ' +
+        CINDY_PI_BASH_MAX_TIMEOUT_SECONDS +
+        's maximum.';
+    }
+    pi.registerTool({
+      ...powershellTool,
+      execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown) => {
+        const nextParams = applyCindyBashTimeoutParams(params);
+        if (bashCommandMutatesPiPackages(nextParams)) {
+          throw new Error(
+            'Direct Pi extension changes are unavailable through bash. Use cindy_pi_extension so Cindy can request confirmation.',
+          );
+        }
+        return powershellTool.execute(id, nextParams as any, signal, onUpdate as any);
+      },
+    });
+  }
+
   // Cindy owns a separate Pi extension store. Directly running the bundled Pi
   // CLI from bash writes to Pi's default user home and bypasses Cindy's
   // compatibility/approval state. Normal local tasks therefore receive one
@@ -3175,7 +3454,7 @@ export default async function cindyBridge(pi: any) {
     // bash 读取任意进程的初始环境(/proc/<pid|self>/environ)是绕过密钥剥离的旁路:
     // spawn 边界虽删了子进程 env 的私密变量,父 pi 进程仍持有,cat /proc/PPID/environ
     // 同 UID 直取代理 token / 网关 / BYOM key(codex 报)→ 一律硬拦,含 Full access。
-    if (event.toolName === 'bash' && commandReadsProcessEnviron(event.input?.command)) {
+    if (isCindyShellTool(event.toolName) && commandReadsProcessEnviron(event.input?.command)) {
       return { block: true, reason: 'Cindy blocks reading process environment (/proc/*/environ), even with Full access.' };
     }
     // 凭证/密钥路径的内置只读工具与 bash 输入重定向都必须携带 canonical
@@ -3183,18 +3462,20 @@ export default async function cindyBridge(pi: any) {
     // parser 提取真实输入目标,才能识别工作区 symlink 指向的凭证文件。
     const bashReadEvidence = event.toolName === 'bash'
       ? bashInputReadEvidence(event.input)
-      : { targets: [], unresolved: false };
+      : event.toolName === 'powershell'
+        ? powershellInputReadEvidence(event.input)
+        : { targets: [], unresolved: false };
     const bashReadTargets = bashReadEvidence.targets;
     const readonlyCredentialEvidence = READONLY_BUILTINS.has(event.toolName)
       ? collectReadonlyCredentialEvidence(event.toolName, event.input)
       : null;
     const resolvedCredentialReadPaths = readonlyCredentialEvidence
       ? [...new Set(collectResolvedCredentialPaths(readonlyCredentialEvidence.paths))]
-      : event.toolName === 'bash'
+      : isCindyShellTool(event.toolName)
         ? [...new Set(collectResolvedCredentialPaths(bashReadTargets))]
         : [];
     const credentialRead = readonlyCredentialEvidence?.touchesCredential === true
-      || (event.toolName === 'bash' && (bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets)))
+      || (isCindyShellTool(event.toolName) && (bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets)))
       || resolvedCredentialReadPaths.length > 0;
     const credentialEvidenceForHost = resolvedCredentialEvidenceForHost(
       resolvedCredentialReadPaths,
@@ -3286,7 +3567,7 @@ export default async function cindyBridge(pi: any) {
       : null;
     const captureToolName = gatewayCall?.qualifiedName ?? event.toolName;
     const captureInput = gatewayCall?.args ?? event.input ?? {};
-    if (captureToolName !== 'bash' && !String(captureToolName ?? '').startsWith('mcp__')) return;
+    if (!isCindyShellTool(captureToolName) && !String(captureToolName ?? '').startsWith('mcp__')) return;
     try {
       await ctx.ui.confirm(
         TURN_CHANGE_CAPTURE_TITLE,

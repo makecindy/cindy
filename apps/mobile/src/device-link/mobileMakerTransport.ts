@@ -278,6 +278,8 @@ export interface MobileActiveSessionSnapshot {
 export interface MobileModelPrice {
   inputUsdPerMtok: number;
   outputUsdPerMtok: number;
+  /** Gateway 折扣比例 0..1;旧被控端不下发。计费金额 = 原价 × (1 - costDiscount)。 */
+  costDiscount?: number;
 }
 
 export type MobileModelPricingMap = Record<string, MobileModelPrice>;

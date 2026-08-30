@@ -18,6 +18,9 @@
     "configureAccessibility": "Configure {{model}}",
     "budgetDisabledHint": "This model needs an API key configured on the controlled device first",
     "priceLine": "Input {{input}} · Output {{output}} / million tokens",
+    "priceTitle": "Per 1M tokens",
+    "priceAmounts": "Input {{input}} · Output {{output}}",
+    "discountedVsStandard": "Discounted · {{percent}}% off standard",
     "contextSuffix": "{{size}} context",
     "fastTag": "Fast"
   },

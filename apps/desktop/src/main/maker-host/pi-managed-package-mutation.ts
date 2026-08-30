@@ -1,7 +1,6 @@
-import { BrowserWindow, dialog } from 'electron';
-
 import {
-  PiManagedPackageMutationCancelledError,
+  PiManagedPackageMutationFailedError,
+  type PiManagedPackageMutationFailureCode,
   type PiManagedPackageMutationRequest,
 } from '@cindy/maker-core';
 
@@ -9,65 +8,46 @@ import type {
   PiPackageMutationRequest,
   PiPackageMutationResult,
 } from '../../shared/piPackages.js';
-import { t } from '../i18n.js';
+import { createLogger } from '../logger.js';
 import {
   issuePiPackageMutationGrant,
   type PiPackageMutationGrant,
 } from './pi-package-mutation-grant.js';
-import { escapePiPackageNativeDialogText } from './pi-package-native-dialog.js';
-import { mutatePiPackage } from './pi-package-store.js';
+import {
+  mutatePiPackage,
+  piPackageMutationMayHaveChangedState,
+  type PiPackageMutationHooks,
+} from './pi-package-store.js';
+
+const log = createLogger('pi-managed-package-mutation');
 
 type ManagedMutationRequest = Pick<PiPackageMutationRequest, 'action' | 'source'>;
 
+function classifyMutationFailure(error: unknown): PiManagedPackageMutationFailureCode {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (message.includes('state is unavailable')) return 'state-unavailable';
+  if (/\betarget\b|no matching version|version[^\n]*not found/.test(message)) {
+    return 'version-not-found';
+  }
+  if (/\be404\b|package[^\n]*not found|repository[^\n]*not found|404 not found/.test(message)) {
+    return 'package-not-found';
+  }
+  if (/\benotfound\b|\beai_again\b|\beconnrefused\b|\betimedout\b|network|fetch failed|could not resolve host|unable to access/.test(message)) {
+    return 'source-unavailable';
+  }
+  return 'native-command-failed';
+}
+
 export interface PiManagedPackageMutationDeps {
-  confirmLocalMutation(request: ManagedMutationRequest): Promise<boolean>;
   issueGrant(request: ManagedMutationRequest): PiPackageMutationGrant;
   mutate(
     request: ManagedMutationRequest,
     grant: PiPackageMutationGrant,
+    hooks?: PiPackageMutationHooks,
   ): Promise<PiPackageMutationResult>;
 }
 
-export async function confirmLocalPiManagedPackageMutation(
-  request: ManagedMutationRequest,
-): Promise<boolean> {
-  const source = escapePiPackageNativeDialogText(request.source);
-  const copy = request.action === 'remove'
-    ? {
-        title: t('settings.piPackages.uninstallTitle'),
-        message: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
-        confirm: t('settings.piPackages.confirmUninstall'),
-      }
-    : request.action === 'update'
-      ? {
-          title: t('settings.piPackages.updateConfirmTitle'),
-          message: t('settings.piPackages.updateConfirmDescription').replace('{{source}}', source),
-          confirm: t('settings.piPackages.confirmUpdate'),
-        }
-      : {
-          title: t('settings.piPackages.confirmTitle'),
-          message: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
-          confirm: t('settings.piPackages.confirmInstall'),
-        };
-  const options = {
-    type: 'warning' as const,
-    title: copy.title,
-    message: copy.title,
-    detail: copy.message,
-    buttons: [copy.confirm, t('settings.piPackages.cancel')],
-    defaultId: 1,
-    cancelId: 1,
-    noLink: true,
-  };
-  const owner = BrowserWindow.getFocusedWindow();
-  const decision = owner
-    ? await dialog.showMessageBox(owner, options)
-    : await dialog.showMessageBox(options);
-  return decision.response === 0;
-}
-
 const defaultDeps: PiManagedPackageMutationDeps = {
-  confirmLocalMutation: confirmLocalPiManagedPackageMutation,
   issueGrant: issuePiPackageMutationGrant,
   mutate: mutatePiPackage,
 };
@@ -75,21 +55,39 @@ const defaultDeps: PiManagedPackageMutationDeps = {
 export async function mutateAuthorizedPiManagedPackage(
   request: PiManagedPackageMutationRequest,
   deps: PiManagedPackageMutationDeps = defaultDeps,
+  hooks?: PiPackageMutationHooks,
 ): Promise<PiPackageMutationResult> {
   const storeRequest = {
     action: request.action,
     source: request.source,
   } as const;
 
-  if (request.authorization === 'local-desktop-command') {
-    const confirmed = await deps.confirmLocalMutation(storeRequest);
-    if (!confirmed) throw new PiManagedPackageMutationCancelledError();
-  } else if (
-    request.authorization !== 'authenticated-im-command'
+  if (
+    request.authorization !== 'local-desktop-command'
+    && request.authorization !== 'authenticated-im-command'
     && request.authorization !== 'confirmed-tool-call'
   ) {
     throw new Error('Pi extension mutation is missing host-trusted authorization');
   }
 
-  return deps.mutate(storeRequest, deps.issueGrant(storeRequest));
+  try {
+    const grant = deps.issueGrant(storeRequest);
+    return await (hooks
+      ? deps.mutate(storeRequest, grant, hooks)
+      : deps.mutate(storeRequest, grant));
+  } catch (error) {
+    const failureCode = classifyMutationFailure(error);
+    const mayHaveChangedState = piPackageMutationMayHaveChangedState(error);
+    // This wrapper can receive raw Pi/npm/Git stderr containing source
+    // credentials. Persist only stable recovery metadata, never Error.message.
+    log.warn('Pi managed package native mutation failed', {
+      action: request.action,
+      failureCode,
+      mayHaveChangedState,
+    });
+    throw new PiManagedPackageMutationFailedError(
+      mayHaveChangedState,
+      failureCode,
+    );
+  }
 }
