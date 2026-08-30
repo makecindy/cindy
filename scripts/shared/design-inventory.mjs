@@ -52,8 +52,13 @@ const SKIP_DIR_NAMES = new Set([
   'coverage',
 ]);
 
-/** 与 hardcoded-color-audit 并列的粗粒度裸圆角匹配：不另造颜色规则。 */
-const BARE_RADIUS_RE = /\b(?:rounded(?:-(?:none|sm|md|lg|xl|2xl|3xl|full))?|border-radius\s*:)/g;
+/**
+ * 与 hardcoded-color-audit 并列的粗粒度裸圆角匹配：不另造颜色规则。
+ * 覆盖三种声明形态：tailwind `rounded*` class、CSS `border-radius:`、
+ * React style 对象的 camelCase `borderRadius:`（LoginCaptchaOverlay 等组件
+ * 用内联 style 声明圆角，kebab-case 正则会系统性漏掉它们）。
+ */
+const BARE_RADIUS_RE = /\b(?:rounded(?:-(?:none|sm|md|lg|xl|2xl|3xl|full))?|border-radius\s*:|borderRadius\s*:)/g;
 
 function posixRel(value) {
   return String(value).replace(/\\/g, '/');
@@ -313,6 +318,7 @@ export function extractRouterFacts(routerSource) {
 }
 
 export const MAIN_ENTRY_REL_PATH = 'apps/desktop/src/renderer/main-entry.tsx';
+export const RENDERER_INDEX_REL_PATH = 'apps/desktop/src/renderer/index.tsx';
 
 /**
  * 从 main-entry.tsx 抽出 `?view=` 分支事实：每个 `view === '<name>'` 分支渲染一个
@@ -323,6 +329,20 @@ export function extractViewEntries(mainEntrySource) {
   const source = stripJsComments(mainEntrySource);
   const branches = [...source.matchAll(/view\s*===\s*'([^']+)'/g)].map((match) => match[1]);
   return uniqueSorted(branches);
+}
+
+/**
+ * 从 renderer/index.tsx 抽出模块图分发入口：`urlParams.get('<param>')` 条件决定
+ * 加载哪个 entry 模块（resource-usage / sidebar-window / ghost-panel / main）。
+ * 与 view 分支同构的守卫：catalog 的 rendererEntries 必须双向核对，index.tsx
+ * 新增查询参数入口而未登记 surface 时 --check 失败。
+ */
+export function extractRendererEntries(indexSource) {
+  const source = stripJsComments(indexSource);
+  const params = [
+    ...source.matchAll(/urlParams\.get\('([^']+)'\)/g),
+  ].map((match) => match[1]);
+  return uniqueSorted(params);
 }
 
 /**
@@ -349,6 +369,10 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/components/sidebar',
         'apps/desktop/src/renderer/components/title-bar',
         'apps/desktop/src/renderer/layout',
+        // main-entry.tsx 无条件导入 globals.css，其中 CINDY 皮肤段直接改写
+        // MainLayout 根容器与侧栏的背景/token/模糊——全局基础样式是主窗口壳的
+        // 实际生效样式源（其它 surface 消费同一文件时同样按各自入口登记）。
+        'apps/desktop/src/renderer/styles/globals.css',
       ],
       routerPaths: [],
     },
@@ -601,6 +625,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/right-sidebar-window',
       ],
       routerPaths: ['/sidebar-window'],
+      rendererEntries: ['sidebarWindow'],
       routeComponents: ['SidebarWindowLayout'],
     },
     {
@@ -616,6 +641,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/ghost-panel-window',
       ],
       routerPaths: ['/ghost-panel-window'],
+      rendererEntries: ['ghostPanelWindow'],
       routeComponents: ['GhostPanelWindowLayout'],
     },
     {
@@ -631,6 +657,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/resource-usage-window',
       ],
       routerPaths: [],
+      rendererEntries: ['resourceUsageWindow'],
     },
     {
       id: 'desktop.window.voice-overlay',
@@ -853,13 +880,21 @@ export function productionRouterCoverage(routerSource, catalog = catalogSurfaces
 export function buildGeneratedSurfaces(repoRoot, { catalog = catalogSurfaces() } = {}) {
   const byId = new Map(catalog.map((surface) => [surface.id, surface]));
   const missingStyleRoots = [];
+  // extraStyleRoots 引用必须指向 catalog 里真实存在的 surface ID：被引用 ID 改名/删除/
+  // 误拼时可选链会静默展开为空数组，继承方统计骤减而 --check 照样通过——与文件型
+  // styleRoot 失效同罪，必须报出来。
+  const danglingExtraStyleRoots = [];
   const surfaces = catalog
     .map((surface) => {
+      const extraRefs = surface.extraStyleRoots ?? [];
+      for (const id of extraRefs) {
+        if (!byId.has(id)) danglingExtraStyleRoots.push(`${surface.id} → ${id}`);
+      }
       // 渲染即委托的薄壳（如 AddAccountLoginPage → LoginPage）按 extraStyleRoots
       // 指向被委托 surface 的 styleRoots，统计口径与其保持同一组事实源。
       const roots = [
         ...surface.styleRoots,
-        ...(surface.extraStyleRoots ?? []).flatMap((id) => byId.get(id)?.styleRoots ?? []),
+        ...extraRefs.flatMap((id) => byId.get(id)?.styleRoots ?? []),
       ];
       const stats = scanStyleStats(repoRoot, roots, {
         missingRoots: missingStyleRoots,
@@ -878,7 +913,11 @@ export function buildGeneratedSurfaces(repoRoot, { catalog = catalogSurfaces() }
       };
     })
     .sort((a, b) => a.id.localeCompare(b.id));
-  return { surfaces, missingStyleRoots: uniqueSorted(missingStyleRoots) };
+  return {
+    surfaces,
+    missingStyleRoots: uniqueSorted(missingStyleRoots),
+    danglingExtraStyleRoots: uniqueSorted(danglingExtraStyleRoots),
+  };
 }
 
 /** 被排除的 redirect 路由，供 GENERATED 排除表使用。 */
@@ -932,7 +971,7 @@ export function renderGeneratedBlock(
     '本区块由 `scripts/design-inventory.mjs` 生成，请勿手改。',
     '重新生成：`pnpm design:inventory`；校验：`pnpm check:design-inventory`。',
     '',
-    `计数快照日期：${snapshotDate}。生成命令：\`${generateCommand}\`。裸颜色匹配与 \`scripts/hardcoded-color-audit.mjs\` 共用 \`scripts/shared/hardcoded-color-match.mjs\`（HEX / rgb() / rgba() / hsl() / hsla()），台账统计层额外剔除 \`var()\` 包装与注释（TS/TSX 剥块注释与整行注释）——语义 token 消费与注释引用不是迁移债务；裸圆角为粗粒度（\`rounded*\` class 与 \`border-radius:\`）。Token 计数为样式源里 \`var(--token)\` / \`hsl(var(--token)\` 的去重 ID 数。`,
+    `计数快照日期：${snapshotDate}。生成命令：\`${generateCommand}\`。裸颜色匹配与 \`scripts/hardcoded-color-audit.mjs\` 共用 \`scripts/shared/hardcoded-color-match.mjs\`（HEX / rgb() / rgba() / hsl() / hsla()），台账统计层额外剔除 \`var()\` 包装与注释（TS/TSX 剥块注释与整行注释）——语义 token 消费与注释引用不是迁移债务；裸圆角为粗粒度（\`rounded*\` class、\`border-radius:\` 与 React style 对象的 \`borderRadius:\`）。Token 计数为样式源里 \`var(--token)\` / \`hsl(var(--token)\` 的去重 ID 数。`,
     '',
     `登记 surface 数：${surfaces.length}。平台本轮仅 Desktop。`,
     '',

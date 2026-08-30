@@ -19,12 +19,14 @@ import { fileURLToPath } from 'node:url';
 import {
   INVENTORY_REL_PATH,
   MAIN_ENTRY_REL_PATH,
+  RENDERER_INDEX_REL_PATH,
   ROUTER_REL_PATH,
   buildGeneratedSurfaces,
   catalogSurfaces,
   compareGenerated,
   defaultHumanSeed,
   ensureHumanRows,
+  extractRendererEntries,
   extractViewEntries,
   findOrphanHumanIds,
   formatOrphanReport,
@@ -44,6 +46,7 @@ const DOC_PATH =
   path.join(repoRoot, ...INVENTORY_REL_PATH.split('/'));
 const ROUTER_PATH = path.join(repoRoot, ...ROUTER_REL_PATH.split('/'));
 const MAIN_ENTRY_PATH = path.join(repoRoot, ...MAIN_ENTRY_REL_PATH.split('/'));
+const RENDERER_INDEX_PATH = path.join(repoRoot, ...RENDERER_INDEX_REL_PATH.split('/'));
 
 /**
  * 生成模式用当天日期快照计数事实；--check 用文件里已有日期重渲染，避免跨日假红。
@@ -64,7 +67,10 @@ function snapshotDateFromExisting(existing) {
 
 function buildGenerated(existing) {
   const routerSource = fs.readFileSync(ROUTER_PATH, 'utf8');
-  const { surfaces, missingStyleRoots } = buildGeneratedSurfaces(repoRoot, { catalog });
+  const { surfaces, missingStyleRoots, danglingExtraStyleRoots } = buildGeneratedSurfaces(
+    repoRoot,
+    { catalog },
+  );
   const routerCoverage = productionRouterCoverage(routerSource, catalog);
   const redirects = listRedirectExclusions(routerSource);
   const snapshotDate = checkOnly ? snapshotDateFromExisting(existing) : new Date().toISOString().slice(0, 10);
@@ -74,13 +80,14 @@ function buildGenerated(existing) {
     routerCoverage,
     redirects,
   });
-  return { surfaces, routerCoverage, generated, missingStyleRoots };
+  return { surfaces, routerCoverage, generated, missingStyleRoots, danglingExtraStyleRoots };
 }
 
 const catalog = catalogSurfaces();
 
 const existing = readExisting();
-const { surfaces, routerCoverage, generated, missingStyleRoots } = buildGenerated(existing);
+const { surfaces, routerCoverage, generated, missingStyleRoots, danglingExtraStyleRoots } =
+  buildGenerated(existing);
 const orphanIds = findOrphanHumanIds(
   splitInventoryDocument(existing).suffix,
   surfaces.map((surface) => surface.id),
@@ -134,6 +141,16 @@ if (missingStyleRoots.length > 0) {
   process.exit(1);
 }
 
+if (danglingExtraStyleRoots.length > 0) {
+  const dangling = danglingExtraStyleRoots.map((ref) => `  - ${ref}`).join('\n');
+  console.error(
+    '[design-inventory] ❌ extraStyleRoots 引用了 catalog 里不存在的 surface ID：\n' +
+      dangling +
+      '\n  被引用 surface 改名/删除时请同步更新引用方，继承的样式事实不会静默丢失。',
+  );
+  process.exit(1);
+}
+
 // ?view= 分支覆盖守卫：main-entry.tsx 的 view 分支是非 router 生产入口，源码新增
 // 分支而 catalog 未登记 surface 时，这里必须失败——否则权威台账会静默漏掉整个 surface。
 {
@@ -155,6 +172,32 @@ if (missingStyleRoots.length > 0) {
       '[design-inventory] ❌ ?view= 分支覆盖不完整：\n' +
         lines.join('\n') +
         '\n  请同步更新 catalogSurfaces() 对应 surface 的 viewEntries。',
+    );
+    process.exit(1);
+  }
+}
+
+// renderer 模块图入口守卫：index.tsx 的查询参数决定加载哪个 entry 模块，与 view
+// 分支同构——新增查询参数入口而 catalog 未登记 surface 时必须失败。
+{
+  const actualEntries = extractRendererEntries(fs.readFileSync(RENDERER_INDEX_PATH, 'utf8'));
+  const coveredEntries = new Set(catalog.flatMap((surface) => surface.rendererEntries ?? []));
+  const unmappedEntries = actualEntries.filter((entry) => !coveredEntries.has(entry));
+  const staleEntries = [...coveredEntries].filter((entry) => !actualEntries.includes(entry));
+  if (unmappedEntries.length > 0 || staleEntries.length > 0) {
+    const lines = [];
+    if (unmappedEntries.length > 0) {
+      lines.push('  renderer/index.tsx 有模块图入口未映射到 surface：');
+      for (const entry of unmappedEntries) lines.push(`  - ${entry}`);
+    }
+    if (staleEntries.length > 0) {
+      lines.push('  catalog 登记的模块图入口已不在 renderer/index.tsx 中：');
+      for (const entry of staleEntries) lines.push(`  - ${entry}`);
+    }
+    console.error(
+      '[design-inventory] ❌ renderer 模块图入口覆盖不完整：\n' +
+        lines.join('\n') +
+        '\n  请同步更新 catalogSurfaces() 对应 surface 的 rendererEntries。',
     );
     process.exit(1);
   }

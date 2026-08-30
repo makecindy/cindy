@@ -18,6 +18,7 @@ import {
   GENERATED_END,
   INVENTORY_REL_PATH,
   MAIN_ENTRY_REL_PATH,
+  RENDERER_INDEX_REL_PATH,
   ROUTER_REL_PATH,
   buildGeneratedSurfaces,
   catalogSurfaces,
@@ -25,6 +26,7 @@ import {
   defaultHumanSeed,
   ensureHumanRows,
   extractHumanSurfaceIds,
+  extractRendererEntries,
   extractRouterFacts,
   extractViewEntries,
   filterInventoryBareColors,
@@ -44,6 +46,7 @@ const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const INVENTORY_PATH = path.join(ROOT, ...INVENTORY_REL_PATH.split('/'));
 const ROUTER_PATH = path.join(ROOT, ...ROUTER_REL_PATH.split('/'));
 const MAIN_ENTRY_PATH = path.join(ROOT, ...MAIN_ENTRY_REL_PATH.split('/'));
+const RENDERER_INDEX_PATH = path.join(ROOT, ...RENDERER_INDEX_REL_PATH.split('/'));
 const CLI_PATH = path.join(ROOT, 'scripts', 'design-inventory.mjs');
 
 function readRouter() {
@@ -674,6 +677,87 @@ test('plugins.installed 纳入直接渲染子组件与 plugin-motion.css', () =>
   const generated = surfaces.find((surface) => surface.id === 'desktop.plugins.installed');
   assert.ok(generated.styleSources.some((file) => file.endsWith('plugin-motion.css')));
   assert.ok(generated.styleSources.some((file) => file.endsWith('MyPublishesSection.tsx')));
+});
+
+test('主窗口壳纳入全局基础样式 globals.css', () => {
+  const catalog = catalogSurfaces();
+  const shell = catalog.find((surface) => surface.id === 'desktop.shell.main-layout');
+  assert.ok(shell);
+  // main-entry.tsx 无条件导入 globals.css，其中 CINDY 皮肤段直接改写主窗口壳。
+  assert.ok(
+    shell.styleRoots.includes('apps/desktop/src/renderer/styles/globals.css'),
+  );
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const generated = surfaces.find((surface) => surface.id === 'desktop.shell.main-layout');
+  assert.ok(generated.styleSources.some((file) => file.endsWith('styles/globals.css')));
+  // globals.css 的 :root 渐变等真实色值进入统计,基线不再低报。
+  assert.ok(generated.bareColors > 3, `globals.css 并入后裸色应高于 3(实际 ${generated.bareColors})`);
+});
+
+test('裸圆角统计覆盖 React style 对象的 camelCase borderRadius', () => {
+  // 与 BARE_RADIUS_RE 同口径的行为级断言:经 scanStyleStats 出来的统计必须数到
+  // style 对象声明。用真实文件钉死:LoginCaptchaOverlay.tsx 的 borderRadius: 18。
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const login = surfaces.find((surface) => surface.id === 'desktop.auth.login');
+  // 上一轮口径(只认 rounded* 与 border-radius:)登录页裸圆角为 6;
+  // LoginCaptchaOverlay 的 borderRadius: 18 等内联声明并入后必须更高。
+  assert.ok(login.bareRadii > 6, `camelCase borderRadius 应计入裸圆角(实际 ${login.bareRadii})`);
+  // 会话工作台含 ImageLightbox 的 borderRadius: '9999px'。
+  const session = surfaces.find((surface) => surface.id === 'desktop.chat.session');
+  assert.ok(session.bareRadii > 408, `ImageLightbox 内联圆角应计入(实际 ${session.bareRadii})`);
+});
+
+test('renderer 模块图入口双向核对: index.tsx 的查询参数入口必须全部映射', () => {
+  const actualEntries = extractRendererEntries(fs.readFileSync(RENDERER_INDEX_PATH, 'utf8'));
+  // 与源码实况钉死:当前 3 个模块图入口参数。
+  assert.deepEqual(actualEntries, ['ghostPanelWindow', 'resourceUsageWindow', 'sidebarWindow']);
+  const covered = new Set(catalogSurfaces().flatMap((surface) => surface.rendererEntries ?? []));
+  const unmapped = actualEntries.filter((entry) => !covered.has(entry));
+  assert.deepEqual(unmapped, [], `未映射模块图入口: ${unmapped.join(', ')}`);
+  const stale = [...covered].filter((entry) => !actualEntries.includes(entry));
+  assert.deepEqual(stale, [], `已失效模块图入口登记: ${stale.join(', ')}`);
+});
+
+test('extractRendererEntries: 新增查询参数入口会被发现(fixture)', () => {
+  const fixture = `
+    const urlParams = new URLSearchParams(window.location.search);
+    const isNewWindow = urlParams.get('brandNewWindow') === '1';
+    void (isNewWindow ? import('./brand-new-entry') : import('./main-entry'));
+  `;
+  assert.deepEqual(extractRendererEntries(fixture), ['brandNewWindow']);
+  // 注释里的 urlParams.get 不算。
+  const withComment = `
+    // urlParams.get('retired-window') 已退役
+    const isX = urlParams.get('live-window') === '1';
+  `;
+  assert.deepEqual(extractRendererEntries(withComment), ['live-window']);
+});
+
+test('extraStyleRoots 失效引用会被报告,不静默展开为空', () => {
+  const base = {
+    platform: 'desktop',
+    title: '测试面',
+    productionEntry: 'fixture',
+    reachableComponents: ['FixtureView'],
+    routerPaths: [],
+  };
+  const catalog = [
+    { ...base, id: 'desktop.test.surface', styleRoots: ['scripts/__tests__/design-inventory.test.mjs'] },
+    {
+      ...base,
+      id: 'desktop.test.thin-shell',
+      styleRoots: [],
+      // 引用不存在的 surface ID —— 必须报 dangling,不能静默丢继承。
+      extraStyleRoots: ['desktop.test.does-not-exist'],
+    },
+  ];
+  const { surfaces, danglingExtraStyleRoots } = buildGeneratedSurfaces(ROOT, { catalog });
+  assert.deepEqual(danglingExtraStyleRoots, ['desktop.test.thin-shell → desktop.test.does-not-exist']);
+  const thin = surfaces.find((surface) => surface.id === 'desktop.test.thin-shell');
+  assert.deepEqual(thin.styleSources, []);
+  // 真实 catalog 上不得有失效引用。
+  const real = buildGeneratedSurfaces(ROOT, {});
+  assert.deepEqual(real.danglingExtraStyleRoots, []);
 });
 
 test('defaultHumanSeed: 全量 legacy + unassigned,protected 与迁移状态正交', () => {
