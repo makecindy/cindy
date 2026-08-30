@@ -52,6 +52,10 @@ function unscopedVoicePath(): string {
   return path.join(h.dir, 'voice-input-models.json');
 }
 
+function migrationStatePath(): string {
+  return path.join(h.dir, 'owner', 'auxiliary-model-settings-migration.json');
+}
+
 function writeJson(file: string, value: unknown): void {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(value), 'utf8');
@@ -148,6 +152,25 @@ describe('auxiliary-model-settings-store', () => {
       refinerProviderChain: ['codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
       sttProvider: 'cindy-voice',
     });
+    expect(readJson(migrationStatePath())).toEqual({ legacyVoiceMigrationCompleted: true });
+  });
+
+  it('does not re-import the legacy voice chain after restoring automatic defaults', async () => {
+    writeJson(ownerVoicePath(), {
+      refinerProvider: 'litellm-kimi-k2.6',
+      refinerProviderChain: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
+    });
+
+    expect(readAuxiliaryModelSettings()).toEqual({
+      models: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
+    });
+
+    await writeAuxiliaryModelSettingsPatch({ models: [] });
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [] });
+    expect(isAuxiliaryModelCustomized()).toBe(false);
+    expect(() => readFileSync(settingsPath())).toThrow();
+    expect(readJson(migrationStatePath())).toEqual({ legacyVoiceMigrationCompleted: true });
   });
 
   it('lets a customized auxiliary list win over a customized voice chain', () => {

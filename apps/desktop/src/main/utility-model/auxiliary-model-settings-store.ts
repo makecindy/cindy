@@ -33,6 +33,7 @@ import {
 
 const log = desktopMakerLogger.child('auxiliary-model-settings-store');
 const VOICE_INPUT_MODELS_FILE = 'voice-input-models.json';
+const AUXILIARY_MODEL_MIGRATION_FILE = 'auxiliary-model-settings-migration.json';
 
 function settingsFilePath(): string {
   return ownerScopedUserDataPath('auxiliary-model-settings.json');
@@ -44,6 +45,10 @@ function ownerVoiceModelsPath(): string {
 
 function unscopedVoiceModelsPath(): string {
   return path.join(app.getPath('userData'), VOICE_INPUT_MODELS_FILE);
+}
+
+function migrationStatePath(): string {
+  return ownerScopedUserDataPath(AUXILIARY_MODEL_MIGRATION_FILE);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -58,6 +63,20 @@ function readJsonObject(filePath: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function hasLegacyVoiceMigrationMarker(): boolean {
+  return readJsonObject(migrationStatePath())?.legacyVoiceMigrationCompleted === true;
+}
+
+function markLegacyVoiceMigrationComplete(): void {
+  const file = migrationStatePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    `${JSON.stringify({ legacyVoiceMigrationCompleted: true }, null, 2)}\n`,
+    'utf-8',
+  );
 }
 
 function collectUniqueRefs(values: Array<string | null>): string[] {
@@ -190,6 +209,11 @@ export function migrateLegacyAuxiliaryModelSettings(): void {
     return;
   }
 
+  // The legacy voice file stays in place for older clients and passive
+  // instances. Keep a separate owner-scoped tombstone so resetting the new
+  // override does not import that same legacy chain again on the next read.
+  if (hasLegacyVoiceMigrationMarker()) return;
+
   const ownerVoice = legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath()));
   const unscopedVoice = ownerVoice.length > 0
     ? []
@@ -198,6 +222,7 @@ export function migrateLegacyAuxiliaryModelSettings(): void {
 
   if (fromVoice.length > 0) {
     rewriteAuxiliarySettingsFile(fromVoice);
+    markLegacyVoiceMigrationComplete();
     log.info('migrated legacy voice refiner chain into auxiliary models', {
       count: fromVoice.length,
     });
