@@ -2209,23 +2209,37 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 否则 app-server 会拿同一份坏 token 继续 spawn/retry, 用户也看不到明确的重登录入口。
     const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
     const currentLocalFingerprint = currentCodexAuthFileFingerprint(localAuthPath);
-    if (
+    const credentialContentChanged = Boolean(
       capturedFingerprint &&
-      currentLocalFingerprint &&
-      capturedFingerprint.sha256 !== currentLocalFingerprint.sha256
-    ) {
-      // Maker Core 会独立 retire 报错的 host key。若当前 local auth 已换代，继续写 marker、
-      // unbind 或 logout 只会删除新登录凭证；此处仅忽略旧 host 的迟到失效。
+        currentLocalFingerprint &&
+        capturedFingerprint.sha256 !== currentLocalFingerprint.sha256,
+    );
+    const credentialIdentityChanged = Boolean(
+      credentialContentChanged &&
+        capturedFingerprint &&
+        currentLocalFingerprint &&
+        (capturedFingerprint.dev !== currentLocalFingerprint.dev ||
+          capturedFingerprint.ino !== currentLocalFingerprint.ino),
+    );
+    if (credentialContentChanged && (credentialIdentityChanged || this.loginCancellationOpen)) {
+      // A different file identity proves an external atomic replacement. An open login
+      // cancellation window means Cindy is still finalizing the replacement selected by the
+      // active login. In either case the old host may be retired, but must not delete it.
       log.info('ignoring stale Codex invalidation from an older credential generation', {
         reason,
       });
       return;
     }
+    // Same-inode content rotation is ambiguous: the app-server may have refreshed in place and
+    // then failed with F2, or another trusted process may have advanced the shared file while this
+    // host still held F1. The protocol exposes no refresh-adopted generation, so fail closed without
+    // attributing F1 to F2; the unknown marker blocks respawning the rejected current credential.
+    const invalidatedFingerprint = credentialContentChanged ? null : capturedFingerprint;
     const detectedCredentialScope = this.readCodexCredentialScope();
     // A host-bound invalidation without a valid spawn generation is ambiguous. Keep it fail-closed
     // instead of fingerprinting whichever system credential happens to be current now.
     const credentialScope =
-      context && detectedCredentialScope === 'system-shared' && !capturedFingerprint
+      context && detectedCredentialScope === 'system-shared' && !invalidatedFingerprint
         ? 'unknown'
         : detectedCredentialScope;
     const activeOwnerId = getActiveAppSession().dataOwnerId;
@@ -2245,7 +2259,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       localAuthPath,
       credentialScope,
       recoveryOwnerId,
-      capturedFingerprint ?? undefined,
+      invalidatedFingerprint ?? undefined,
     );
     let durableFallbackCommitted = false;
     let effectiveCredentialScope = credentialScope;

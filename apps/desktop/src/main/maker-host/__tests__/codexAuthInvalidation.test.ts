@@ -1734,6 +1734,69 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
+  it('fails closed when a host credential rotates in place before its F2 invalidation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-in-place-generation-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-b';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-f1-token', account_id: 'acct-1' } }),
+    );
+    fs.linkSync(systemAuth, localAuth);
+    fs.mkdirSync(h.userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ openai: 'owner-b' }));
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const f1Generation = adapter.captureCredentialGeneration();
+    const f1Stat = fs.statSync(systemAuth);
+    expect(f1Generation).not.toBeNull();
+
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-f2-token', account_id: 'acct-1' } }),
+    );
+    const f2Bytes = fs.readFileSync(systemAuth);
+    const f2Stat = fs.statSync(systemAuth);
+    expect({ dev: f2Stat.dev, ino: f2Stat.ino }).toEqual({ dev: f1Stat.dev, ino: f1Stat.ino });
+    const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);
+    const broadcast = vi.fn().mockResolvedValue(undefined);
+    adapter.setOnLogoutSuccess(onLogoutSuccess);
+    adapter.setOnInvalidatedBroadcast(broadcast);
+
+    await adapter.invalidate('f2_token_revoked', { credentialGeneration: f1Generation });
+
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
+      reason: 'f2_token_revoked',
+      credentialScope: 'unknown',
+    });
+    expect(onLogoutSuccess).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith('f2_token_revoked', 'unknown');
+    expect(fs.existsSync(localAuth)).toBe(false);
+    expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
+    const systemAfter = fs.statSync(systemAuth);
+    expect({ dev: systemAfter.dev, ino: systemAfter.ino, mode: systemAfter.mode }).toEqual({
+      dev: f2Stat.dev,
+      ino: f2Stat.ino,
+      mode: f2Stat.mode,
+    });
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'f2_token_revoked',
+      credentialScope: 'unknown',
+    });
+    await expect(adapter.getAccessToken()).resolves.toBeNull();
+  });
+
   it('preserves an in-flight Cindy F2 login when an F1 host reports a late invalidation', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-stale-host-login-'));
     dirs.push(root);
@@ -1774,6 +1837,7 @@ describe('Codex system credential suppression marker', () => {
         finishSuccessfulCodexLogin(): Promise<{ authenticated: boolean; credentialScope?: string }>;
       }
     ).finishSuccessfulCodexLogin.bind(adapter);
+    (adapter as unknown as { loginCancellationOpen: boolean }).loginCancellationOpen = true;
     const loginFinalization = finishSuccessfulCodexLogin();
     await vi.waitFor(() => expect(onLoginSuccess).toHaveBeenCalledOnce());
     fs.writeFileSync(cachePath, JSON.stringify({ models: [{ slug: 'f2-model' }] }));
