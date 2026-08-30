@@ -97,6 +97,14 @@ export interface AssistantTurnPersistenceIdentity {
  * live state.
  */
 const reservedAssistantBlocksBySession = new Map<string, Map<string, AssistantBlock>>();
+interface ReservedPersistedAssistant {
+  usagePersistId?: string;
+  boundaryPersistId?: string;
+}
+const reservedPersistedAssistantsBySession = new Map<
+  string,
+  Map<string, ReservedPersistedAssistant>
+>();
 
 function assistantTurnIdentityKey(identity: AssistantTurnPersistenceIdentity): string {
   return `${identity.sessionInstanceId}:${identity.turnGeneration}`;
@@ -142,7 +150,22 @@ function reserveActiveAssistantBlockForDifferentTurn(
 export function reserveAssistantBlockForSessionReplacement(
   sessionId: string,
   replacementSessionInstanceId: string,
+  supersededTurnIdentity?: AssistantTurnPersistenceIdentity,
 ): void {
+  if (supersededTurnIdentity) {
+    const usagePersistId = lastAssistantPersistIdBySession.get(sessionId);
+    const boundaryPersistId = lastTopLevelAssistantPersistIdBySession.get(sessionId);
+    if (usagePersistId || boundaryPersistId) {
+      const reserved = reservedPersistedAssistantsBySession.get(sessionId) ?? new Map();
+      reserved.set(assistantTurnIdentityKey(supersededTurnIdentity), {
+        ...(usagePersistId ? { usagePersistId } : {}),
+        ...(boundaryPersistId ? { boundaryPersistId } : {}),
+      });
+      reservedPersistedAssistantsBySession.set(sessionId, reserved);
+      lastAssistantPersistIdBySession.delete(sessionId);
+      lastTopLevelAssistantPersistIdBySession.delete(sessionId);
+    }
+  }
   const active = assistantBlocks.get(sessionId);
   if (
     !active?.turnIdentity ||
@@ -2251,6 +2274,12 @@ export function persistReservedStaleAssistantBlock(
   turnCompleted: boolean,
 ): string | undefined {
   const identityKey = assistantTurnIdentityKey(turnIdentity);
+  const reservedPersisted = reservedPersistedAssistantsBySession.get(sessionId);
+  const persistedAssistant = reservedPersisted?.get(identityKey);
+  if (persistedAssistant) {
+    reservedPersisted!.delete(identityKey);
+    if (reservedPersisted!.size === 0) reservedPersistedAssistantsBySession.delete(sessionId);
+  }
   const reserved = reservedAssistantBlocksBySession.get(sessionId);
   let block = reserved?.get(identityKey);
   if (block) {
@@ -2259,7 +2288,12 @@ export function persistReservedStaleAssistantBlock(
   } else {
     const active = assistantBlocks.get(sessionId);
     if (!active || !isSameAssistantTurnIdentity(active.turnIdentity, turnIdentity)) {
-      return undefined;
+      if (!persistedAssistant) return undefined;
+      const boundaryOutcome = turnCompleted
+        ? markAssistantTurnCompleted(sessionId, persistedAssistant.boundaryPersistId)
+        : markAssistantTurnFailed(sessionId, persistedAssistant.boundaryPersistId);
+      void boundaryOutcome.catch(() => undefined);
+      return persistedAssistant.usagePersistId ?? persistedAssistant.boundaryPersistId;
     }
     assistantBlocks.delete(sessionId);
     block = active;
@@ -2801,6 +2835,7 @@ export function clearSessionPersistState(sessionId: string): void {
   sessionPersistenceOutcomeBatches.delete(sessionId);
   assistantBlocks.delete(sessionId);
   reservedAssistantBlocksBySession.delete(sessionId);
+  reservedPersistedAssistantsBySession.delete(sessionId);
   sealedAssistantLateFinalBySession.delete(sessionId);
   backgroundTurnPersistStatesBySession.delete(sessionId);
   lastAgentMetaBySession.delete(sessionId);

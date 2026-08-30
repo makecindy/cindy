@@ -320,7 +320,10 @@ describe('maker:event hot path ordering', () => {
     expectOrder(
       replacementSource,
       'reserveStaleClaudeUsageForSessionReplacement(existing.session);',
-      'reserveAssistantBlockForSessionReplacement(session.id, session.instanceId);',
+      'reserveAssistantBlockForSessionReplacement(session.id, session.instanceId, {',
+    );
+    expect(replacementSource).toContain(
+      'sessionInstanceId: existing.session.instanceId,\n      turnGeneration: existing.session.getTurnGeneration(),',
     );
     expect(replacementSource).toContain(
       'clearReservedStaleClaudeUsage(existing.session.id, existing.session.instanceId);',
@@ -1684,9 +1687,7 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain("observedClaudeRoute === 'subscription'");
     expect(claudeDoneSource).toContain(': !readClaudeApiKey()');
     // 纯订阅轮无 recordTurnSpend push, 模型行落库后重广播今日 spend 触发仪表盘刷新
-    expect(claudeDoneSource).toContain(
-      'void Promise.allSettled(modelUsageWrites).then(() => rebroadcastTodaySpend());',
-    );
+    expect(claudeDoneSource).toContain('void rebroadcastTodaySpend();');
     // 保留 #216 的 tooltip token/cache 明细。
     expect(claudeDoneSource).toContain('buildClaudeTurnUsageDetails(');
     // 窄兜底: total_cost_usd 是进程累计；首次只建基线，且累计 usage 不得冒充本轮 token。
@@ -1710,7 +1711,14 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain(
       'trackWindowsSessionEndFallbackStorageTask(session.id, claudeUsagePersistenceTask, {',
     );
-    expect(claudeDoneSource).toContain('await Promise.all(modelUsageWrites);');
+    expect(claudeDoneSource).toContain(
+      'const modelUsageResults = await Promise.allSettled(modelUsageWrites);',
+    );
+    expectOrder(
+      claudeDoneSource,
+      'const modelUsageResults = await Promise.allSettled(modelUsageWrites);',
+      'propagateFirstRejectedUsageWrite(modelUsageResults);',
+    );
     expect(claudeDoneSource).toContain(
       'await Promise.all([\n                recordTurnSpend(turnMoney, undefined, { throwOnError: true }),\n                recordSessionTurnSpend(session.id, turnMoney, { throwOnError: true }),\n              ]);',
     );

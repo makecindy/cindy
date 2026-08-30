@@ -4388,7 +4388,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   }
   if (existing) {
     reserveStaleClaudeUsageForSessionReplacement(existing.session);
-    reserveAssistantBlockForSessionReplacement(session.id, session.instanceId);
+    reserveAssistantBlockForSessionReplacement(session.id, session.instanceId, {
+      sessionInstanceId: existing.session.instanceId,
+      turnGeneration: existing.session.getTurnGeneration(),
+      dbAgentKind: makerToDbAgentKind(existing.session.agentKind),
+    });
     reservePendingToolResultsForSessionReplacement(session.id, session.instanceId);
     // A runtime replacement invalidates any delayed direct-abort callback that
     // still belongs to the old Session instance.
@@ -5982,13 +5986,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             // Keep the fallback barrier open until every per-model usage row has
             // reached the durable queue.  The normal path remains fire-and-forget
             // at the event boundary because this whole task is still detached.
-            await Promise.all(modelUsageWrites);
+            const modelUsageResults = await Promise.allSettled(modelUsageWrites);
             // 无真实费用、但产生订阅价值或 provider 参考估值的轮次不走
             // recordTurnSpend。等模型行落库后重广播今日 spend 快照,通知已打开的首页
             // 仪表盘刷新(对齐 codex 订阅轮的 rebroadcastCodexTodayUsage)。
             if ((hasSubscriptionValueRow || estimatedTurnMoney) && !turnMoney) {
-              void Promise.allSettled(modelUsageWrites).then(() => rebroadcastTodaySpend());
+              void rebroadcastTodaySpend();
             }
+            propagateFirstRejectedUsageWrite(modelUsageResults);
             if (turnMoney && turnMoney.amount > 0) {
               // 保留 #216 的 token/cache 明细随费用落库 (MessageActionBar tooltip)。
               // deltas 非空 → buildClaudeTurnUsageDetails 用 deltas 里的 model, fallbackModel 不取用。

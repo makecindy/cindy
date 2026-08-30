@@ -2685,6 +2685,104 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
 });
 
 describe('onTurnErrorEvent — terminal error 持久化', () => {
+  it('preserves and seals an already queued stale assistant across replacement', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    const replacementIdentity = {
+      sessionInstanceId: 'replacement-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'codex' as const,
+    };
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'already queued response', isFinal: true },
+      { requestId: 'older-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      olderIdentity,
+    );
+    reserveAssistantBlockForSessionReplacement(
+      SESSION,
+      replacementIdentity.sessionInstanceId,
+      olderIdentity,
+    );
+    const replacementPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'replacement response', isFinal: false },
+      { requestId: 'replacement-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      replacementIdentity,
+    );
+
+    expect(
+      persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, true),
+    ).toBe(olderPersistId);
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'replacement response complete', isFinal: true, isFullText: true },
+      { requestId: 'replacement-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      replacementIdentity,
+    );
+    flushAssistantBlock(SESSION, null, replacementIdentity);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledTimes(2);
+    expect(createMessage).toHaveBeenNthCalledWith(
+      1,
+      SESSION,
+      expect.objectContaining({
+        clientId: olderPersistId,
+        content: 'already queued response',
+        agentKind: 'cc',
+      }),
+      expect.anything(),
+    );
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      olderPersistId,
+      { turnCompleted: true },
+    );
+    expect(createMessage).toHaveBeenNthCalledWith(
+      2,
+      SESSION,
+      expect.objectContaining({
+        clientId: replacementPersistId,
+        content: 'replacement response complete',
+        agentKind: 'codex',
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('keeps an already queued stale assistant insert in the durable barrier', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    vi.mocked(createMessage).mockRejectedValueOnce(
+      new Error('already queued stale assistant insert rejected'),
+    );
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'must remain required', isFinal: true },
+      { requestId: 'older-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      olderIdentity,
+    );
+    reserveAssistantBlockForSessionReplacement(
+      SESSION,
+      'replacement-instance',
+      olderIdentity,
+    );
+
+    expect(
+      persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, false),
+    ).toBe(olderPersistId);
+    await expect(whenSessionPersistedDurably(SESSION)).rejects.toThrow(
+      'already queued stale assistant insert rejected',
+    );
+  });
+
   it('persists an exact stale assistant block without consuming its replacement block', async () => {
     const olderIdentity = {
       sessionInstanceId: 'older-instance',
