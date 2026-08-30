@@ -8,6 +8,7 @@ import {
   type UserMessage,
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 
 import {
   createHostSendFailure,
@@ -80,6 +81,43 @@ type IpcUserMessage =
   string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
 
 export const TRUSTED_DESKTOP_QUEUE_ORIGIN = Symbol('trusted-desktop-queue-origin');
+interface TrustedDesktopQueueOriginReceipt {
+  clientId: string;
+  persistedContent: string;
+  text: string;
+}
+
+export function stampTrustedDesktopQueuedOrigin(
+  item: AgentInputQueuedMessage,
+  deviceLinkInvoke: boolean,
+): AgentInputQueuedMessage {
+  const { origin: _wireOrigin, ...explicitUserItem } = item;
+  const semanticOrigin = item.origin as { kind?: unknown } | undefined;
+  const hasStructuredAgentInput = (item.files?.length ?? 0) > 0
+    || (item.mentions?.length ?? 0) > 0
+    || (item.sessionRefs?.length ?? 0) > 0
+    || (item.agentReferences?.length ?? 0) > 0;
+  return (deviceLinkInvoke
+    || hasStructuredAgentInput
+    || item.fromMobileClient === true
+    || item.autoResume === true
+    || item.originalSyntheticTrigger !== undefined
+    || (semanticOrigin !== undefined && semanticOrigin.kind !== 'desktop')
+    || extractPlainText(item.persistedContent) !== item.text
+    ? explicitUserItem
+    : {
+        ...explicitUserItem,
+        origin: {
+          kind: 'desktop',
+          [TRUSTED_DESKTOP_QUEUE_ORIGIN]: {
+            clientId: explicitUserItem.clientId,
+            persistedContent: explicitUserItem.persistedContent,
+            text: explicitUserItem.text,
+          } satisfies TrustedDesktopQueueOriginReceipt,
+        },
+      }) as AgentInputQueuedMessage;
+}
+
 type MakerSendOptions = {
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   messageUuid?: string;
@@ -142,6 +180,26 @@ type MakerSendOptions = {
   /** Main-owned input generation used by the final vendor fence. */
   expectedInputGeneration?: unknown;
 };
+
+function readTrustedDesktopQueueReceipt(
+  persistUserMessage: MakerSendOptions['persistUserMessage'] | null,
+): TrustedDesktopQueueOriginReceipt | undefined {
+  if (!persistUserMessage || typeof persistUserMessage.origin !== 'object'
+    || persistUserMessage.origin === null
+    || (persistUserMessage.origin as { kind?: unknown }).kind !== 'desktop') return undefined;
+  const value = (persistUserMessage.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN];
+  if (typeof value !== 'object' || value === null) return undefined;
+  const receipt = value as Partial<TrustedDesktopQueueOriginReceipt>;
+  return typeof receipt.clientId === 'string'
+    && typeof receipt.persistedContent === 'string'
+    && typeof receipt.text === 'string'
+    ? receipt as TrustedDesktopQueueOriginReceipt
+    : undefined;
+}
+
+function extractIpcUserMessageText(message: IpcUserMessage): string {
+  return typeof message === 'string' ? extractPlainText(message) : extractPlainText(message.content);
+}
 
 export interface MakerSendTransactionSession {
   id: string;
@@ -390,7 +448,7 @@ function normalizeExpectedInputGeneration(value: unknown): number | undefined {
   return value;
 }
 
-function containsManagedAttachment(value: unknown): boolean {
+export function containsManagedAttachment(value: unknown): boolean {
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false;
@@ -909,16 +967,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : withPlanReconcile;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
-      const trustedDesktopQueueContent = persistUserMessage?.origin?.kind === 'desktop'
-        ? (persistUserMessage.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN] : undefined;
+      const trustedDesktopQueueReceipt = readTrustedDesktopQueueReceipt(persistUserMessage);
       const directDesktopContext =
-        typeof trustedDesktopQueueContent === 'string' &&
-        trustedDesktopQueueContent === persistUserMessage?.content &&
+        trustedDesktopQueueReceipt !== undefined &&
+        trustedDesktopQueueReceipt.clientId === persistUserMessage?.clientId &&
+        trustedDesktopQueueReceipt.persistedContent === persistUserMessage?.content &&
+        persistUserMessage.agentFacingWireContent !== undefined &&
+        extractIpcUserMessageText(persistUserMessage.agentFacingWireContent) === trustedDesktopQueueReceipt.text &&
         !containsManagedAttachment(persistUserMessage?.content) &&
+        !containsManagedAttachment(persistUserMessage.agentFacingWireContent) &&
         !persistUserMessage?.autoResume &&
         !so.origin &&
         !so.fromMobileClient
-          ? { origin: { kind: 'desktop' as const }, rawChannelText: extractPlainText(trustedDesktopQueueContent) }
+          ? { origin: { kind: 'desktop' as const }, rawChannelText: trustedDesktopQueueReceipt.text }
           : undefined;
       const mainOwnedSendContext = so[MAIN_OWNED_SEND_CONTEXT] ?? directDesktopContext;
       const topLevelClearBoundary = normalizeExpectedClearBoundary(so.expectedClearBoundaryMs);

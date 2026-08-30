@@ -11,6 +11,10 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const makerSendSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -29,6 +33,9 @@ describe('session runtime control wiring', () => {
     );
     expect(legacySend).toContain('assertTrustedAppRendererEvent(');
     expect(legacySend).toContain('attachTrustedDesktopSendContext(message, sendOpts)');
+    expect(registerSource).toContain('containsManagedAttachment(persisted?.content)');
+    expect(registerSource).toContain('persisted?.autoResume === true');
+    expect(registerSource).toContain('persisted?.origin !== undefined');
 
     const steerDispatch = handlerBody(
       registerSource,
@@ -47,18 +54,29 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
       expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
     }
-    expect(registerSource).toContain(
-      '[TRUSTED_DESKTOP_QUEUE_ORIGIN]: explicitUserItem.persistedContent',
+    expect(makerSendSource).toContain('clientId: explicitUserItem.clientId');
+    expect(makerSendSource).toContain(
+      'persistedContent: explicitUserItem.persistedContent',
     );
-    expect(registerSource).toContain(
-      'deviceLinkInvoke || (item.files?.length ?? 0) > 0',
-    );
+    expect(makerSendSource).toContain('return (deviceLinkInvoke');
+    expect(makerSendSource).toContain('|| hasStructuredAgentInput');
     expect(registerSource).toContain(
       'onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item)',
     );
-    expect(registerSource).toContain(
-      'revokeTrustedDesktopQueueOrigin(inputCoordinator.getQueueControlSnapshot(sid).pendingQueue.find',
+    const updateText = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.INPUT_UPDATE_TEXT,',
+      'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
     );
+    expect(updateText).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
+    expect(updateText).toContain('stampTrustedDesktopQueuedOrigin(updated, remote)');
+    const updateContent = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
+      'MAKER_INVOKE.INPUT_MOVE,',
+    );
+    expect(updateContent).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
+    expect(updateContent).toContain('stampTrustedDesktopQueuedOrigin(updated, remote)');
     const enqueue = handlerBody(
       registerSource,
       'MAKER_INVOKE.INPUT_ENQUEUE,',

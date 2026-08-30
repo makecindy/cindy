@@ -8786,6 +8786,27 @@ describe('AgentInputCoordinator queue mutations', () => {
     });
   });
 
+  it('finalizes only a real pending text edit', async () => {
+    const h = createHarness();
+    const sid = 'edit-text-finalizer';
+    const item = makeItem('q-2', 'old text');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'active'));
+    await flush();
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    const finalize = vi.fn((updated: AgentInputQueuedMessage) => ({ ...updated }));
+
+    h.coordinator.updateText(sid, item.clientId, 'old text', undefined, undefined, false, finalize);
+    expect(finalize).not.toHaveBeenCalled();
+
+    h.coordinator.updateText(sid, item.clientId, 'pi install npm:context-mode', undefined, undefined, false, finalize);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(finalize.mock.calls[0]?.[0]).toMatchObject({
+      text: 'pi install npm:context-mode',
+      persistedContent: 'pi install npm:context-mode',
+    });
+  });
+
   it('does not re-parse remote edits that omit trusted session refs', async () => {
     const h = createHarness();
     const sid = 'edit-remote-without-snapshot';
@@ -8805,6 +8826,55 @@ describe('AgentInputCoordinator queue mutations', () => {
     const updated = latestProjection(h.projections).pendingQueue[0];
     expect(updated?.sessionRefs).toBeUndefined();
     expect(updated?.sessionReferencesRequireTrustedSnapshot).toBeUndefined();
+  });
+
+  it('finalizes attachment-only edits so stale authorization cannot survive', async () => {
+    const h = createHarness();
+    const sid = 'edit-attachment-finalizer';
+    const item = makeItem('q-2', 'pi install npm:context-mode');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'active'));
+    await flush();
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    const next = makeItem(item.clientId, item.text, {
+      files: [{
+        id: 'file-new',
+        name: 'new.png',
+        path: '/tmp/new.png',
+        ext: '.png',
+        size: 10,
+        category: 'image',
+        mimeType: 'image/png',
+      }],
+    });
+    const finalize = vi.fn((updated: AgentInputQueuedMessage) => ({ ...updated }));
+
+    h.coordinator.updateContentWithResult(sid, item.clientId, next, finalize);
+
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(finalize.mock.calls[0]?.[0].files).toEqual(next.files);
+  });
+
+  it('finalizes full-content edits after merging the replacement', async () => {
+    const h = createHarness();
+    const sid = 'edit-content-finalizer';
+    const item = makeItem('q-2', 'old text');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'active'));
+    await flush();
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    const next = makeItem(item.clientId, 'pi remove npm:context-mode');
+    const finalize = vi.fn((updated: AgentInputQueuedMessage) => ({ ...updated }));
+
+    h.coordinator.updateContentWithResult(sid, item.clientId, next, finalize);
+
+    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: item.clientId,
+      text: 'pi remove npm:context-mode',
+      persistedContent: 'pi remove npm:context-mode',
+    }));
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.text)
+      .toBe('pi remove npm:context-mode');
   });
 
   it('replaces pending row content (text + files) in place while pinning identity fields', async () => {

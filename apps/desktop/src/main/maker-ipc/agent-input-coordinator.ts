@@ -2914,6 +2914,7 @@ export class AgentInputCoordinator {
     sessionRefs?: AgentInputQueuedMessage['sessionRefs'],
     trustedSessionReferenceContexts?: AgentInputSessionReferenceContext[],
     requireTrustedSnapshot = false,
+    finalizeUpdatedMessage?: (updated: AgentInputQueuedMessage) => AgentInputQueuedMessage,
   ): AgentInputProjection {
     const trimmed = newText.trim();
     if (!trimmed) return this.getProjection(sessionId);
@@ -2936,7 +2937,9 @@ export class AgentInputCoordinator {
         delete updated.sessionReferencesRequireTrustedSnapshot;
         delete updated.trustedSessionReferenceContexts;
       }
-      return updated;
+      return finalizeUpdatedMessage && newText !== entry.text
+        ? finalizeUpdatedMessage(updated)
+        : updated;
     });
     this.emit(sessionId);
     return this.getProjection(sessionId);
@@ -2967,6 +2970,7 @@ export class AgentInputCoordinator {
     sessionId: string,
     clientId: string,
     next: AgentInputQueuedMessage,
+    finalizeUpdatedMessage?: (updated: AgentInputQueuedMessage) => AgentInputQueuedMessage,
   ): { projection: AgentInputProjection; updated: boolean } {
     if (!next.text.trim() && !(next.files && next.files.length > 0)) {
       return { projection: this.getProjection(sessionId), updated: false };
@@ -2977,8 +2981,18 @@ export class AgentInputCoordinator {
     }
     const index = state.pendingQueue.findIndex((entry) => entry.clientId === clientId);
     if (index < 0) return { projection: this.getProjection(sessionId), updated: false };
+    const current = state.pendingQueue[index];
+    const updated = updateQueuedMessageContent(current, next);
+    const authorizationContentChanged = updated.text !== current.text
+      || updated.persistedContent !== current.persistedContent
+      || updated.files !== current.files
+      || updated.mentions !== current.mentions
+      || updated.sessionRefs !== current.sessionRefs
+      || updated.agentReferences !== current.agentReferences;
     const nextQueue = [...state.pendingQueue];
-    nextQueue[index] = updateQueuedMessageContent(state.pendingQueue[index], next);
+    nextQueue[index] = finalizeUpdatedMessage && authorizationContentChanged
+      ? finalizeUpdatedMessage(updated)
+      : updated;
     state.pendingQueue = nextQueue;
     this.emit(sessionId);
     return { projection: this.getProjection(sessionId), updated: true };

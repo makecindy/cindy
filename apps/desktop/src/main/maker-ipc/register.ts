@@ -676,8 +676,10 @@ import {
 import { startOrcaTeamWithPermissionGate } from './orcaStartTeamPermissionGate.js';
 import { createWorkerCreationPrefsSyncHandler } from './workerCreationPrefsSyncHandler.js';
 import {
+  containsManagedAttachment,
   createMakerSendTransaction,
   prepareDirectoryGrantsForBootstrap,
+  stampTrustedDesktopQueuedOrigin,
   TRUSTED_DESKTOP_QUEUE_ORIGIN,
 } from './makerSendTransaction.js';
 import {
@@ -12525,22 +12527,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       : record?.type === 'user' && typeof record.content === 'string'
         ? record.content
         : undefined;
-    if (rawChannelText === undefined || (expectedText !== undefined && rawChannelText !== expectedText)) return sendOpts;
+    const opts = sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
+      ? sendOpts as Record<string, unknown>
+      : undefined;
+    const persisted = opts?.persistUserMessage && typeof opts.persistUserMessage === 'object'
+      ? opts.persistUserMessage as Record<string, unknown>
+      : undefined;
+    if (rawChannelText === undefined
+      || (expectedText !== undefined && rawChannelText !== expectedText)
+      || containsManagedAttachment(message)
+      || containsManagedAttachment(persisted?.content)
+      || persisted?.autoResume === true
+      || persisted?.origin !== undefined
+      || opts?.origin !== undefined
+      || opts?.fromMobileClient === true) return sendOpts;
     return {
       ...(sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
         ? sendOpts as Record<string, unknown>
         : {}),
       [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' as const }, rawChannelText },
     };
-  };
-  const stampTrustedDesktopQueuedOrigin = (item: AgentInputQueuedMessage, deviceLinkInvoke: boolean): AgentInputQueuedMessage => {
-    const { origin: _wireOrigin, ...explicitUserItem } = item;
-    return (deviceLinkInvoke || (item.files?.length ?? 0) > 0
-      ? explicitUserItem
-      : {
-          ...explicitUserItem,
-          origin: { kind: 'desktop', [TRUSTED_DESKTOP_QUEUE_ORIGIN]: explicitUserItem.persistedContent },
-        }) as AgentInputQueuedMessage;
   };
   const revokeTrustedDesktopQueueOrigin = (item?: AgentInputQueuedMessage): void => { if (item?.origin) delete (item.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN]; };
   registerMakerSessionSendHandler(
@@ -14751,7 +14757,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(
     MAKER_INVOKE.INPUT_UPDATE_TEXT,
     async (
-      _e,
+      event,
       sessionId: unknown,
       clientId: unknown,
       newText: unknown,
@@ -14763,6 +14769,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const refs = requireSessionRefs(sessionRefs);
       const remote = isDeviceLinkInvoke();
       const sid = requireSessionId(sessionId);
+      const cid = requireClientId(clientId);
+      if (!remote) assertTrustedAppRendererEvent(event);
       await assertRemoteInputControlBoundary(sid, remote, opts);
       const contexts = remote ? requireTrustedReferenceContexts(refs, trustedContexts) : undefined;
       if (remote && (refs?.length ?? 0) > 0 && !contexts) {
@@ -14773,11 +14781,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return inputCoordinator.updateText(
         sid,
-        requireClientId(clientId),
+        cid,
         newText,
         refs,
         contexts,
         remote,
+        (updated) => stampTrustedDesktopQueuedOrigin(updated, remote),
       );
     },
   );
@@ -14785,10 +14794,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 与 enqueue/steer 同一套物化:远程编辑保存的新附件可能是 OSS 引用,入队前物化成本地文件。
   ipcMain.handle(
     MAKER_INVOKE.INPUT_UPDATE_CONTENT,
-    async (_e, sessionId: unknown, clientId: unknown, item: unknown, opts?: unknown) => {
+    async (event, sessionId: unknown, clientId: unknown, item: unknown, opts?: unknown) => {
       const sid = requireSessionId(sessionId);
       const cid = requireClientId(clientId);
       const remote = isDeviceLinkInvoke();
+      if (!remote) assertTrustedAppRendererEvent(event);
       const clearBoundaryPrecondition = readRemoteInputClearBoundaryPrecondition(opts);
       await assertRemoteInputControlBoundary(sid, remote, opts);
       const inputGeneration = inputCoordinator.getGeneration(sid);
@@ -14820,7 +14830,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!inputCoordinator.hasPendingQueueItem(sid, cid)) {
         return inputCoordinator.getProjection(sid);
       }
-      revokeTrustedDesktopQueueOrigin(inputCoordinator.getQueueControlSnapshot(sid).pendingQueue.find((entry) => entry.clientId === cid));
       const materialized = await materializeQueuedOssAttachmentsDeferred(sid, parsed);
       const attachmentOwnerId = registerQueuedAttachmentOwnership(
         sid,
@@ -14845,7 +14854,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           assertExpectedRemoteInputClearBoundary(sid, clearBoundaryPrecondition, row);
         }
         assertCurrentInputGeneration();
-        const result = inputCoordinator.updateContentWithResult(sid, cid, update);
+        const result = inputCoordinator.updateContentWithResult(
+          sid,
+          cid,
+          update,
+          (updated) => stampTrustedDesktopQueuedOrigin(updated, remote),
+        );
         acceptedByCoordinator = result.updated;
         if (result.updated) {
           // The replacement supersedes any older local materialisation owned by
