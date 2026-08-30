@@ -116,6 +116,24 @@ function collectStyleFiles(repoRoot, roots, { missing = [] } = {}) {
 
 const TOKEN_REF_RE = /(?:hsl\(\s*var\(|var\()(--[a-zA-Z0-9-]+)/g;
 
+/**
+ * 台账统计层的裸色过滤，与共享匹配器刻意分离：
+ * `matchBareColors` 与 hardcoded-color-audit 共用（治理合同：两边必须同一套正则），
+ * audit 扫 diff 新增行的宽松口径不能动；台账按「迁移债务」的语义收敛两类假命中——
+ *   1. `hsl(var(--token))`：HEX 正则的 `#` 不会命中，但 rgb/hsl 分支会把函数体前缀
+ *      `hsl(var(--content-area)` 整段当命中——这是语义 token 消费，不是裸值；
+ *   2. 注释里的 PR 编号（`PR #104`）、坐标（`@698,1046`）等 3-8 位十六进制形状文本
+ *      ——注释引用不是组件样式。
+ */
+export function filterInventoryBareColors(hits) {
+  return hits.filter((hit) => !/^(?:hsl|rgb)a?\(\s*var\(/.test(hit));
+}
+
+/** CSS 文件没有 JS 注释剥离问题，TS/TSX 先剥注释再统计颜色；radius/token 同口径处理。 */
+function statsSourceForColorScan(source, ext) {
+  return ext === '.css' ? source : stripJsComments(source);
+}
+
 function scanStyleStats(repoRoot, styleRoots, { missingRoots = [] } = {}) {
   const files = collectStyleFiles(repoRoot, styleRoots, { missing: missingRoots });
   let bareColors = 0;
@@ -123,8 +141,9 @@ function scanStyleStats(repoRoot, styleRoots, { missingRoots = [] } = {}) {
   const tokenHits = new Set();
   for (const relPath of files) {
     const source = fs.readFileSync(path.join(repoRoot, ...relPath.split('/')), 'utf8');
-    bareColors += matchBareColors(source).length;
-    bareRadii += (source.match(BARE_RADIUS_RE) ?? []).length;
+    const scanSource = statsSourceForColorScan(source, path.posix.extname(relPath));
+    bareColors += filterInventoryBareColors(matchBareColors(scanSource)).length;
+    bareRadii += (scanSource.match(BARE_RADIUS_RE) ?? []).length;
     for (const match of source.matchAll(TOKEN_REF_RE)) tokenHits.add(match[1]);
   }
   return { files, bareColors, bareRadii, tokenCount: tokenHits.size };
@@ -293,6 +312,19 @@ export function extractRouterFacts(routerSource) {
   return facts;
 }
 
+export const MAIN_ENTRY_REL_PATH = 'apps/desktop/src/renderer/main-entry.tsx';
+
+/**
+ * 从 main-entry.tsx 抽出 `?view=` 分支事实：每个 `view === '<name>'` 分支渲染一个
+ * 非 router 生产入口。与路由覆盖同构的守卫：catalog 的 viewEntries 必须覆盖全部
+ * 实际分支，源码新增 view 分支而未登记 surface 时 --check 失败。
+ */
+export function extractViewEntries(mainEntrySource) {
+  const source = stripJsComments(mainEntrySource);
+  const branches = [...source.matchAll(/view\s*===\s*'([^']+)'/g)].map((match) => match[1]);
+  return uniqueSorted(branches);
+}
+
 /**
  * 生产可达 surface 目录。ID 稳定,不随文件移动变化。
  * 路由级 surface 必须覆盖 router.tsx 里除 redirect 外的每条生产路径。
@@ -458,8 +490,21 @@ export function catalogSurfaces() {
       platform: 'desktop',
       title: 'SkillHub 市场',
       productionEntry: 'hash `/skillhub/market`（SkillhubMarketListView）',
-      reachableComponents: ['SkillhubMarketListView'],
-      styleRoots: ['apps/desktop/src/renderer/features/skillhub/SkillhubMarketListView.tsx'],
+      // 市场页直接渲染的子组件（MarketCard / InstallTargetPicker / 预览面板 / 两个编辑
+      // 弹窗）在 components/ 与同目录下，只扫入口文件会漏掉它们的全部样式事实。
+      reachableComponents: [
+        'SkillhubMarketListView',
+        'MarketCard',
+        'InstallTargetPicker',
+        'SkillhubMarketPreviewPanel',
+        'MarketInfoEditDialog',
+        'VisibilityEditorDialog',
+      ],
+      styleRoots: [
+        'apps/desktop/src/renderer/features/skillhub/SkillhubMarketListView.tsx',
+        'apps/desktop/src/renderer/features/skillhub/SkillhubMarketPreviewPanel.tsx',
+        'apps/desktop/src/renderer/features/skillhub/components',
+      ],
       routerPaths: ['/skillhub/market'],
       routeComponents: ['SkillhubMarketListView'],
     },
@@ -566,6 +611,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/voice-input/global.ts',
       ],
       routerPaths: [],
+      viewEntries: ['voice-input-overlay'],
     },
     {
       id: 'desktop.window.voice-dictionary-toast',
@@ -576,6 +622,7 @@ export function catalogSurfaces() {
       reachableComponents: ['VoiceInputDictionaryToast'],
       styleRoots: ['apps/desktop/src/renderer/voice-input/VoiceInputDictionaryToast.tsx'],
       routerPaths: [],
+      viewEntries: ['voice-input-dictionary-toast'],
     },
     {
       id: 'desktop.window.computer-permission-guide',
@@ -589,6 +636,8 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/computer-permission-guide',
       ],
       routerPaths: [],
+      // guide 与 backdrop 两个 view 分支渲染同文件的两个组件，同一 surface 承载。
+      viewEntries: ['computer-permission-guide', 'computer-permission-backdrop'],
     },
     {
       id: 'desktop.window.review-artifact-confirm',
@@ -851,7 +900,7 @@ export function renderGeneratedBlock(
     '本区块由 `scripts/design-inventory.mjs` 生成，请勿手改。',
     '重新生成：`pnpm design:inventory`；校验：`pnpm check:design-inventory`。',
     '',
-    `计数快照日期：${snapshotDate}。生成命令：\`${generateCommand}\`。裸颜色匹配与 \`scripts/hardcoded-color-audit.mjs\` 共用 \`scripts/shared/hardcoded-color-match.mjs\`（HEX / rgb() / rgba() / hsl() / hsla()）；裸圆角为粗粒度（\`rounded*\` class 与 \`border-radius:\`）。Token 计数为样式源里 \`var(--token)\` / \`hsl(var(--token)\` 的去重 ID 数。`,
+    `计数快照日期：${snapshotDate}。生成命令：\`${generateCommand}\`。裸颜色匹配与 \`scripts/hardcoded-color-audit.mjs\` 共用 \`scripts/shared/hardcoded-color-match.mjs\`（HEX / rgb() / rgba() / hsl() / hsla()），台账统计层额外剔除 \`var()\` 包装与注释（TS/TSX 剥块注释与整行注释）——语义 token 消费与注释引用不是迁移债务；裸圆角为粗粒度（\`rounded*\` class 与 \`border-radius:\`）。Token 计数为样式源里 \`var(--token)\` / \`hsl(var(--token)\` 的去重 ID 数。`,
     '',
     `登记 surface 数：${surfaces.length}。平台本轮仅 Desktop。`,
     '',

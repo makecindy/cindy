@@ -18,12 +18,14 @@ import { fileURLToPath } from 'node:url';
 
 import {
   INVENTORY_REL_PATH,
+  MAIN_ENTRY_REL_PATH,
   ROUTER_REL_PATH,
   buildGeneratedSurfaces,
   catalogSurfaces,
   compareGenerated,
   defaultHumanSeed,
   ensureHumanRows,
+  extractViewEntries,
   findOrphanHumanIds,
   formatOrphanReport,
   listRedirectExclusions,
@@ -41,6 +43,7 @@ const DOC_PATH =
   process.env.CINDY_INVENTORY_DOC ??
   path.join(repoRoot, ...INVENTORY_REL_PATH.split('/'));
 const ROUTER_PATH = path.join(repoRoot, ...ROUTER_REL_PATH.split('/'));
+const MAIN_ENTRY_PATH = path.join(repoRoot, ...MAIN_ENTRY_REL_PATH.split('/'));
 
 /**
  * 生成模式用当天日期快照计数事实；--check 用文件里已有日期重渲染，避免跨日假红。
@@ -61,7 +64,6 @@ function snapshotDateFromExisting(existing) {
 
 function buildGenerated(existing) {
   const routerSource = fs.readFileSync(ROUTER_PATH, 'utf8');
-  const catalog = catalogSurfaces();
   const { surfaces, missingStyleRoots } = buildGeneratedSurfaces(repoRoot, { catalog });
   const routerCoverage = productionRouterCoverage(routerSource, catalog);
   const redirects = listRedirectExclusions(routerSource);
@@ -74,6 +76,8 @@ function buildGenerated(existing) {
   });
   return { surfaces, routerCoverage, generated, missingStyleRoots };
 }
+
+const catalog = catalogSurfaces();
 
 const existing = readExisting();
 const { surfaces, routerCoverage, generated, missingStyleRoots } = buildGenerated(existing);
@@ -128,6 +132,32 @@ if (missingStyleRoots.length > 0) {
       '\n  源码移动或改名时请同步更新 catalogSurfaces() 对应 surface 的 styleRoots，统计不会静默归零。',
   );
   process.exit(1);
+}
+
+// ?view= 分支覆盖守卫：main-entry.tsx 的 view 分支是非 router 生产入口，源码新增
+// 分支而 catalog 未登记 surface 时，这里必须失败——否则权威台账会静默漏掉整个 surface。
+{
+  const actualViews = extractViewEntries(fs.readFileSync(MAIN_ENTRY_PATH, 'utf8'));
+  const coveredViews = new Set(catalog.flatMap((surface) => surface.viewEntries ?? []));
+  const unmappedViews = actualViews.filter((view) => !coveredViews.has(view));
+  const staleViews = [...coveredViews].filter((view) => !actualViews.includes(view));
+  if (unmappedViews.length > 0 || staleViews.length > 0) {
+    const lines = [];
+    if (unmappedViews.length > 0) {
+      lines.push('  main-entry.tsx 有 view 分支未映射到 surface：');
+      for (const view of unmappedViews) lines.push(`  - ${view}`);
+    }
+    if (staleViews.length > 0) {
+      lines.push('  catalog 登记的 view 分支已不在 main-entry.tsx 中：');
+      for (const view of staleViews) lines.push(`  - ${view}`);
+    }
+    console.error(
+      '[design-inventory] ❌ ?view= 分支覆盖不完整：\n' +
+        lines.join('\n') +
+        '\n  请同步更新 catalogSurfaces() 对应 surface 的 viewEntries。',
+    );
+    process.exit(1);
+  }
 }
 
 if (checkOnly) {

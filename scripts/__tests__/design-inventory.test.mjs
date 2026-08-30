@@ -17,6 +17,7 @@ import {
   GENERATED_BEGIN,
   GENERATED_END,
   INVENTORY_REL_PATH,
+  MAIN_ENTRY_REL_PATH,
   ROUTER_REL_PATH,
   buildGeneratedSurfaces,
   catalogSurfaces,
@@ -25,6 +26,8 @@ import {
   ensureHumanRows,
   extractHumanSurfaceIds,
   extractRouterFacts,
+  extractViewEntries,
+  filterInventoryBareColors,
   findOrphanHumanIds,
   formatOrphanReport,
   listLayoutExclusions,
@@ -40,6 +43,7 @@ import {
 const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const INVENTORY_PATH = path.join(ROOT, ...INVENTORY_REL_PATH.split('/'));
 const ROUTER_PATH = path.join(ROOT, ...ROUTER_REL_PATH.split('/'));
+const MAIN_ENTRY_PATH = path.join(ROOT, ...MAIN_ENTRY_REL_PATH.split('/'));
 const CLI_PATH = path.join(ROOT, 'scripts', 'design-inventory.mjs');
 
 function readRouter() {
@@ -525,6 +529,92 @@ test('Orca 工作台继承会话视图样式事实,不再把聊天界面统计�
   assert.ok(orca.tokenCount >= session.tokenCount && orca.tokenCount > 0);
   assert.ok(orca.bareColors >= session.bareColors && orca.bareColors > 0);
   assert.ok(orca.bareRadii >= session.bareRadii && orca.bareRadii > 0);
+});
+
+test('统计层排除 var() 包装与注释伪裸色,共享匹配器口径不变', () => {
+  // 1) hsl(var(--token)) 是语义 token 消费,不是裸值——audit 共享匹配器会命中
+  //    `hsl(var(--content-area)` 前缀,台账统计层必须过滤。
+  assert.deepEqual(
+    filterInventoryBareColors(['hsl(var(--content-area)', 'hsla(var(--accent)', '#fff']),
+    ['#fff'],
+  );
+  assert.deepEqual(filterInventoryBareColors(['rgba(var(--overlay)', 'rgb(1,2,3)']), ['rgb(1,2,3)']);
+  // 2) 共享匹配器本身不动:audit 侧仍按宽松口径命中(治理合同要求两边同一套正则)。
+  assert.equal(matchBareColors('hsl(var(--content-area))').length, 1);
+  assert.equal(matchBareColors('/* PR #104 */').includes('#104'), true);
+  // 3) 注释里的 PR 编号、坐标不是组件样式:TS/TSX 统计前剥注释(块注释与整行 //
+  //    注释;行尾 // 注释是已知边界,与本仓 stripJsComments 路由解析同口径)。
+  const withComments = `
+    // PR #104 撤 wave4 双红渐变
+    /* 坐标 @(698,1046) */
+    const style = { color: '#ff0000' };
+  `;
+  const hits = filterInventoryBareColors(matchBareColors(stripJsComments(withComments)));
+  assert.deepEqual(hits, ['#ff0000']);
+  // 4) 真实台账上不再有注释伪色:登录页的 #EDEDED/#1F1F1E/#104 全在注释里,
+  //    过滤后裸色基线只反映代码真实消费。
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const login = surfaces.find((surface) => surface.id === 'desktop.auth.login');
+  assert.ok(login.bareColors < 42, `注释剥离应移除登录页注释色(实际 ${login.bareColors})`);
+  const market = surfaces.find((surface) => surface.id === 'desktop.skillhub.market');
+  // market 的 2 个"裸颜色"全部是 hsl(var(--content-area)) → 归零。
+  assert.equal(market.bareColors, 0);
+});
+
+test('市场页直接渲染的子组件纳入样式统计', () => {
+  const catalog = catalogSurfaces();
+  const market = catalog.find((surface) => surface.id === 'desktop.skillhub.market');
+  assert.ok(market);
+  for (const component of ['MarketCard', 'InstallTargetPicker', 'SkillhubMarketPreviewPanel', 'MarketInfoEditDialog', 'VisibilityEditorDialog']) {
+    assert.ok(
+      market.reachableComponents.includes(component),
+      `${component} 必须列入市场页可达组件`,
+    );
+  }
+  assert.ok(market.styleRoots.includes('apps/desktop/src/renderer/features/skillhub/components'));
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const generated = surfaces.find((surface) => surface.id === 'desktop.skillhub.market');
+  // 子组件文件进统计后样式来源必须包含 MarketCard 等真实文件。
+  assert.ok(
+    generated.styleSources.some((file) => file.endsWith('components/MarketCard.tsx')),
+    'MarketCard.tsx 必须进样式来源',
+  );
+  assert.ok(generated.styleSources.length > 1, '不能只扫入口文件');
+});
+
+test('view 分支覆盖守卫: main-entry 的 view 分支必须全部映射到 surface', () => {
+  const actualViews = extractViewEntries(fs.readFileSync(MAIN_ENTRY_PATH, 'utf8'));
+  // 与源码实况钉死:当前 4 个 view 分支。
+  assert.deepEqual(actualViews, [
+    'computer-permission-backdrop',
+    'computer-permission-guide',
+    'voice-input-dictionary-toast',
+    'voice-input-overlay',
+  ]);
+  const covered = new Set(catalogSurfaces().flatMap((surface) => surface.viewEntries ?? []));
+  const unmapped = actualViews.filter((view) => !covered.has(view));
+  assert.deepEqual(unmapped, [], `未映射 view 分支: ${unmapped.join(', ')}`);
+  // 反向:catalog 登记的 view 必须仍存在于源码。
+  const stale = [...covered].filter((view) => !actualViews.includes(view));
+  assert.deepEqual(stale, [], `已失效 view 登记: ${stale.join(', ')}`);
+});
+
+test('extractViewEntries: 新增 view 分支会被发现(fixture)', () => {
+  const fixture = `
+    const view = new URLSearchParams(window.location.search).get('view');
+    const isNewOverlay = view === 'brand-new-overlay';
+    if (isNewOverlay) {
+      const { NewOverlay } = await import('./NewOverlay');
+      root.render(<NewOverlay />);
+    }
+  `;
+  assert.deepEqual(extractViewEntries(fixture), ['brand-new-overlay']);
+  // 注释里的 view === 不算。
+  const withComment = `
+    // view === 'commented-view' 已退役
+    const isX = view === 'live-view';
+  `;
+  assert.deepEqual(extractViewEntries(withComment), ['live-view']);
 });
 
 test('defaultHumanSeed: 全量 legacy + unassigned,protected 与迁移状态正交', () => {
