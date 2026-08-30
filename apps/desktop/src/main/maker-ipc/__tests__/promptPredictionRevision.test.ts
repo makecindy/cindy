@@ -132,6 +132,7 @@ describe('prompt prediction completion revision guard', () => {
       expect.objectContaining({
         disableReasoning: true,
         reasoningEffort: 'minimal',
+        systemPrompt: expect.stringContaining('terse predictive text engine'),
       }),
     );
   });

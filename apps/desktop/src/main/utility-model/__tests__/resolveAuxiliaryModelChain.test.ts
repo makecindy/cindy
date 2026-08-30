@@ -88,7 +88,7 @@ describe('getEffectiveAuxiliaryModelChain', () => {
     });
   });
 
-  it('represents an unknown legacy model override as an exact catalog pin', () => {
+  it('preserves an unknown legacy model override as an exact catalog pin', () => {
     vi.stubEnv('XDT_UTILITY_MODEL_PROVIDER', 'litellm');
     vi.stubEnv('XDT_UTILITY_MODEL', 'qwen/qwen3.8-flash-local');
 

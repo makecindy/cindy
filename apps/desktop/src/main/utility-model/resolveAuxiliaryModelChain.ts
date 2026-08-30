@@ -31,9 +31,10 @@ function firstNonBlank(...values: Array<string | undefined>): string | undefined
 }
 
 function resolveEnvHeadRef(providerRaw: string | undefined, modelRaw: string | undefined): string | null {
-  // An explicit legacy model override follows the same profile transport, but
-  // must be represented as an exact catalog pin so it cannot silently revert to
-  // the profile's default model after the auxiliary migration.
+  // Preserve the exact model identity when migrating a legacy provider/model
+  // override. The resulting catalog pin remains subject to active-catalog
+  // membership at dispatch; unknown models fail closed instead of becoming an
+  // unlisted profile override. Do not introduce a second persisted ref format.
   const provider = resolveUtilityModelProviderKindAlias(providerRaw ?? '')
     ?? resolveUtilityModelProviderKindAlias('');
   if (!provider) return null;
