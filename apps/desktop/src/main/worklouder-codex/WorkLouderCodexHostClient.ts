@@ -89,6 +89,8 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private wantsHidInput = false;
   private deviceEnabled = true;
   private wantsPresence = false;
+  /** Permission failures are user-actionable; stop automatic recovery until a probe or toggle. */
+  private permissionBlocked = false;
   /** True while the current host is stopping so re-enable cannot talk to it. */
   private hostStopping = false;
 
@@ -123,6 +125,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   setDeviceEnabled(enabled: boolean): void {
     if (this.deviceEnabled === enabled) return;
     this.deviceEnabled = enabled;
+    this.permissionBlocked = false;
     if (enabled) {
       this.updateHidListeningIntent();
       if (this.latestFrame) this.update(this.latestFrame);
@@ -152,13 +155,15 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   setPresenceHandler(
-    handler: ((
-      present: boolean,
-      identity?: {
-        deviceType: 'codex-micro' | 'creator-micro-2';
-        isUsbConnection: boolean;
-      },
-    ) => void) | null,
+    handler:
+      | ((
+          present: boolean,
+          identity?: {
+            deviceType: 'codex-micro' | 'creator-micro-2';
+            isUsbConnection: boolean;
+          },
+        ) => void)
+      | null,
   ): void {
     this.presenceHandler = handler;
   }
@@ -220,6 +225,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
 
   private ensureChild(): WorkLouderCodexChildLike | null {
     if (this.hostStopping) return null;
+    if (this.permissionBlocked) return null;
     if (!this.deviceEnabled && !this.wantsPresence) return null;
     if (this.child) return this.child;
     const sdk = this.deps.resolveSdk();
@@ -287,11 +293,18 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
    */
   probe(): void {
     if (this.disposed) return;
+    this.permissionBlocked = false;
     if (!this.deviceEnabled) {
       this.discoverPresence();
       return;
     }
-    if (!this.child) return;
+    if (!this.child) {
+      if (this.wantsHidInput) this.requestHidListening();
+      else if (this.latestFrame && !isWorkLouderCodexLightingFrameOff(this.latestFrame)) {
+        this.update(this.latestFrame);
+      }
+      return;
+    }
     try {
       const request: WorkLouderCodexHostRequest = { kind: 'probe' };
       this.child.postMessage(request);
@@ -372,7 +385,11 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     if (message.kind !== 'state') return;
     this.clearConnectWatchdog();
+    if (this.permissionBlocked && message.status === 'connected') return;
     this.updateConnectionReason(message.reason ?? null);
+    const permissionRequired =
+      message.status === 'error' && message.reason === 'permission-required';
+    if (permissionRequired) this.permissionBlocked = true;
     if (message.status === this.lastStatus) return;
     const previousStatus = this.lastStatus;
     this.lastStatus = message.status;
@@ -387,10 +404,33 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     } else {
       this.deps.log.warn('Codex Micro lighting host could not apply the current frame');
     }
+    if (permissionRequired) {
+      this.stopHostAfterPermission(child);
+      return;
+    }
     // Pairing / USB re-enumeration leaves the native SDK handle alive but
     // unusable. ChatGPT recovers by opening a fresh transport; we do the same
     // by recycling the utility process once the live session drops.
     if (previousStatus === 'connected') this.recycleStaleHost(child);
+  }
+
+  private stopHostAfterPermission(child: WorkLouderCodexChildLike): void {
+    if (this.disposed || this.child !== child) return;
+    this.clearConnectWatchdog();
+    this.clearStableConnection();
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.deps.log.warn(
+      'Codex Micro lighting paused because HID permission is required; retry after permission changes',
+    );
+    try {
+      child.kill();
+    } catch {
+      // Permission failure owns the stop; the host may already have exited.
+    }
+    this.handleExit(child, 0);
   }
 
   private recycleStaleHost(child: WorkLouderCodexChildLike): void {
@@ -426,8 +466,13 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       if (this.wantsPresence) this.scheduleRestart();
       return;
     }
+    if (this.permissionBlocked) {
+      this.updateConnectionReason('permission-required');
+      this.updateConnectionStatus('error');
+      return;
+    }
     if (recycled) {
-      this.restartHost();
+      this.scheduleRestart();
       return;
     }
     this.deps.log.warn('Codex Micro lighting host exited', { code });
@@ -445,7 +490,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private scheduleRestart(): void {
-    if (this.restartTimer || !this.shouldRestartHost()) return;
+    if (this.restartTimer || this.permissionBlocked || !this.shouldRestartHost()) return;
     this.consecutiveCrashes += 1;
     if (this.consecutiveCrashes > 5) {
       this.deps.log.error('Codex Micro lighting host repeatedly crashed; disabled until restart');
@@ -581,6 +626,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     this.lastStatus = null;
     this.consecutiveCrashes = 0;
+    this.permissionBlocked = false;
     this.updateConnectionReason(null);
     this.updateConnectionStatus('disabled');
   }

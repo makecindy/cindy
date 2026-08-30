@@ -351,7 +351,6 @@ describe('WorkLouderCodexHostClient', () => {
       'connecting',
       'connected',
       'not-detected',
-      'connecting',
     ]);
     expect(child.kill).toHaveBeenCalledOnce();
   });
@@ -521,21 +520,59 @@ describe('WorkLouderCodexHostClient', () => {
     }
   });
 
-  it('recycles the host immediately after a live session drops', () => {
-    const children = [new FakeChild(), new FakeChild()];
-    const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
-    const client = new WorkLouderCodexHostClient({
-      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
-      fork,
-      log: logger(),
-    });
-    client.setAgentKeyPressHandler(vi.fn());
-    children[0].emit('message', { kind: 'state', status: 'connected' });
-    children[0].emit('message', { kind: 'state', status: 'not-detected' });
+  it('backs off a host recycle after a live session drops', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', { kind: 'state', status: 'not-detected' });
 
-    expect(children[0].kill).toHaveBeenCalledOnce();
-    expect(fork).toHaveBeenCalledTimes(2);
-    expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+      expect(children[0].kill).toHaveBeenCalledOnce();
+      expect(fork).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+      expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not restart after a permission-required failure until an explicit probe', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', {
+        kind: 'state',
+        status: 'error',
+        reason: 'permission-required',
+      });
+
+      expect(children[0].kill).toHaveBeenCalledOnce();
+      expect(fork).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      client.probe();
+      expect(fork).toHaveBeenCalledTimes(2);
+      expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
