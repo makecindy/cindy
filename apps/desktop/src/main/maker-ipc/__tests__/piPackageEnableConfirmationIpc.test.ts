@@ -55,10 +55,24 @@ describe('Pi package Settings authorization IPC contract', () => {
     expect(failureLog).not.toContain('message:');
   });
 
-  it('retires stale local Pi runtimes after every attempted mutation without rewriting receipts', () => {
+  it('retires stale local Pi runtimes only after a committed mutation edge', () => {
     const handler = mutationHandlerSource();
     expect(handler).toContain('await invalidateRuntimes();');
-    expect(handler).toContain('best-effort follow-up');
+    expect(handler).toContain('piPackageMutationMayHaveChangedState(error)');
     expect(handler).not.toContain("request.action === 'remove'");
+  });
+
+  it('returns partial convergence without rewriting native mutation success', () => {
+    const handler = mutationHandlerSource();
+    expect(handler).toContain("runtimeConvergence: 'partial' as const");
+    expect(handler).toContain('runtimeConvergencePartial = true');
+    expect(handler).toContain("recoveryAction: 'restart-cindy'");
+    expect(handler).not.toContain('throw new Error(`failed to retire');
+  });
+
+  it('maps unavailable or stale toggle state to an actionable redacted IPC failure', () => {
+    const handler = mutationHandlerSource();
+    expect(handler).toContain("piPackageMutationFailureCategory(error) === 'state-unavailable'");
+    expect(handler).toContain("t('settings.piPackages.failure.stateUnavailable')");
   });
 });

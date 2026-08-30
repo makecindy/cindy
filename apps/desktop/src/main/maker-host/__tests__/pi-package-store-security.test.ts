@@ -2374,6 +2374,54 @@ describe('Pi package executable-code boundary', () => {
     expect(JSON.stringify(loggerRuntime.warn.mock.calls)).not.toContain('private host path');
   });
 
+  it.each([
+    { label: 'enable', enabled: true, code: 'EIO' },
+    { label: 'enable', enabled: true, code: 'EACCES' },
+    { label: 'disable', enabled: false, code: 'EIO' },
+    { label: 'disable', enabled: false, code: 'EACCES' },
+  ] as const)('does not publish $label enablement when the durable state write fails with $code', async ({
+    enabled,
+    code,
+  }) => {
+    const { source } = await createSkillOnlyPackage(`npm:toggle-write-${code.toLowerCase()}-${enabled}`);
+    const sibling = 'npm:keep-sibling-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const initialState = {
+      version: 3,
+      disabledSources: enabled ? [source, sibling] : [sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    };
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify(initialState));
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(stateFile)) {
+        throw Object.assign(new Error('private toggle write failure'), { code });
+      }
+      return originalRename(from, to);
+    });
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const runtimeFence = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      const failure = await mutateAuthorized(store, {
+        action: 'set-enabled', source, enabled,
+      }, { onRuntimeInvalidationPublished: runtimeFence }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(store.piPackageMutationMayHaveChangedState(failure)).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+      expect(runtimeFence).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+      renameSpy.mockRestore();
+    }
+    expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toEqual(initialState);
+  });
+
   it('lets an explicit disable cancel a pending reinstall enable without changing siblings', async () => {
     const { root, source } = await createSkillOnlyPackage('npm:pending-enable-disabled');
     const sibling = 'npm:keep-disabled';
@@ -2414,6 +2462,46 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([source, sibling].sort());
     await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(store.resolveManagedPiNativePackagePaths()).resolves.not.toContain(root);
+  });
+
+  it.each(['EIO', 'EACCES'])('converges a committed pending disable when the final state write fails with %s', async (code) => {
+    const { source } = await createSkillOnlyPackage(`npm:pending-disable-edge-${code.toLowerCase()}`);
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+    const initialState = {
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    };
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify(initialState));
+    await fs.writeFile(pendingFile, JSON.stringify([source]));
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(stateFile)) {
+        throw Object.assign(new Error('private state write failure'), { code });
+      }
+      return originalRename(from, to);
+    });
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    try {
+      const failure = await store.mutatePiPackage({
+        action: 'set-enabled', source, enabled: false,
+      }).catch((error: unknown) => error);
+      expect(store.piPackageMutationMayHaveChangedState(failure)).toBe(true);
+      expect(listener).toHaveBeenCalledWith('local');
+    } finally {
+      unsubscribe();
+      renameSpy.mockRestore();
+    }
+    expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toEqual(initialState);
+    await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each([
@@ -2565,6 +2653,8 @@ describe('Pi package executable-code boundary', () => {
   });
 
   it.each([
+    ['install', { action: 'install' as const }],
+    ['update', { action: 'update' as const }],
     ['remove', { action: 'remove' as const }],
     ['disable', { action: 'set-enabled' as const, enabled: false }],
   ])('publishes the %s runtime fence before starting slow result projection', async (
@@ -2858,7 +2948,7 @@ describe('Pi package executable-code boundary', () => {
     expect(lockRuntime.maxActive).toBe(1);
   });
 
-  it('does not turn a stale disable action into an irreversible package error', async () => {
+  it('rejects a stale toggle after external native removal without writing ghost state', async () => {
     const { source } = await createPackage();
     const installedList = runtime.listOutput;
     const firstStore = await import('../pi-package-store.js');
@@ -2875,17 +2965,30 @@ describe('Pi package executable-code boundary', () => {
     await mutateAuthorized(secondStore, { action: 'remove', source });
     runtime.listOutput = '';
 
-    await expect(firstStore.mutatePiPackage({
-      action: 'set-enabled',
-      source,
-      enabled: false,
-    })).resolves.toMatchObject({ changed: true });
+    const listener = vi.fn();
+    const runtimeFence = vi.fn();
+    const unsubscribe = firstStore.onPiPackagesChanged(listener);
+    try {
+      const failure = await firstStore.mutatePiPackage({
+        action: 'set-enabled',
+        source,
+        enabled: false,
+      }, undefined, { onRuntimeInvalidationPublished: runtimeFence })
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({ name: 'PiPackageStateUnavailableError' });
+      expect(String(failure)).not.toContain(source);
+      expect(firstStore.piPackageMutationMayHaveChangedState(failure)).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+      expect(runtimeFence).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
 
     const state = JSON.parse(await fs.readFile(
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',
     )) as { disabledSources: string[] };
-    expect(state.disabledSources).toEqual([source]);
+    expect(state.disabledSources).not.toContain(source);
   });
 
   it('re-inspects approval state under the shared lock before staging a session snapshot', async () => {
@@ -3009,6 +3112,7 @@ describe('Pi package executable-code boundary', () => {
     const listener = vi.fn();
     const unsubscribe = store.onPiPackagesChanged(listener);
     runtime.listOutcomes = [
+      { stdout: runtime.listOutput, exitCode: 0 },
       { stderr: 'list failed after state write', exitCode: 1 },
     ];
 

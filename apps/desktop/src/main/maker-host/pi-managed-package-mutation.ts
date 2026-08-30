@@ -16,6 +16,7 @@ import {
 import {
   mutatePiPackage,
   piPackageMutationMayHaveChangedState,
+  type PiPackageMutationHooks,
 } from './pi-package-store.js';
 
 const log = createLogger('pi-managed-package-mutation');
@@ -42,6 +43,7 @@ export interface PiManagedPackageMutationDeps {
   mutate(
     request: ManagedMutationRequest,
     grant: PiPackageMutationGrant,
+    hooks?: PiPackageMutationHooks,
   ): Promise<PiPackageMutationResult>;
 }
 
@@ -53,6 +55,7 @@ const defaultDeps: PiManagedPackageMutationDeps = {
 export async function mutateAuthorizedPiManagedPackage(
   request: PiManagedPackageMutationRequest,
   deps: PiManagedPackageMutationDeps = defaultDeps,
+  hooks?: PiPackageMutationHooks,
 ): Promise<PiPackageMutationResult> {
   const storeRequest = {
     action: request.action,
@@ -68,7 +71,10 @@ export async function mutateAuthorizedPiManagedPackage(
   }
 
   try {
-    return await deps.mutate(storeRequest, deps.issueGrant(storeRequest));
+    const grant = deps.issueGrant(storeRequest);
+    return await (hooks
+      ? deps.mutate(storeRequest, grant, hooks)
+      : deps.mutate(storeRequest, grant));
   } catch (error) {
     const failureCode = classifyMutationFailure(error);
     const mayHaveChangedState = piPackageMutationMayHaveChangedState(error);

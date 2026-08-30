@@ -12,8 +12,9 @@ import type {
 import { isRelativeLocalPiPackageSource } from '@/../shared/piPackages';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
+import { extractIpcError } from '@/utils/ipcError';
 import { SettingsTextInput } from './SettingsTextInput';
 
 const CARD_CLASS = cn(
@@ -217,13 +218,22 @@ export function PiPackagesSection() {
             : action === 'set-enabled' && options?.enabled === false
               ? 'settings.piPackages.success.settingsDisable'
               : `settings.piPackages.success.${action}`;
-      toast.success(t(successKey));
+      if (result.runtimeConvergence === 'partial') {
+        toast.error(t('settings.piPackages.failure.runtimeConvergencePartial'));
+      } else {
+        toast.success(t(successKey));
+      }
       if (result.projectionUnavailable) {
         toast.error(t('settings.piPackages.failure.stateUnavailable'));
       }
       return true;
-    } catch {
-      toast.error(t('settings.piPackages.operationFailed'));
+    } catch (error) {
+      const ipcError = extractIpcError(error);
+      toast.error(
+        ipcError?.code === 'PI_PACKAGE_MUTATION_FAILED'
+          ? ipcError.message
+          : t('settings.piPackages.operationFailed'),
+      );
       return false;
     } finally {
       mutationInFlightRef.current = false;

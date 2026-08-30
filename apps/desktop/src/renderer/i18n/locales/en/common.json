@@ -2943,6 +2943,7 @@
         "packageNotFound": "The package was not found. Check the package name or repository URL.",
         "versionNotFound": "That version was not found. Choose an available version and try again.",
         "stateUnavailable": "Cindy could not read the Pi extension state. Restart Cindy and try again.",
+        "runtimeConvergencePartial": "The Pi extension change was saved, but some local Pi tasks may still be running the old extension. Restart Cindy before using Pi again.",
         "nativeCommandFailed": "Pi's package command failed. Check the source or version and try again."
       },
       "success": {

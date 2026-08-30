@@ -1845,6 +1845,13 @@ export function getMaker(): Maker {
       },
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
+      // Fence in-flight startups at the durable package edge, but do not close
+      // the current caller before maker-core queues its host-owned receipt and
+      // sends the extension response. The settled callback below retires every
+      // published local ordinary Pi runtime immediately after that handoff.
+      onPiManagedPackageMutationCommitted: async () => {
+        _maker?.advanceLocalPiPackageRuntimeGeneration();
+      },
       onPiManagedPackageMutationSettled: async () => {
         const maker = _maker;
         if (!maker) return;

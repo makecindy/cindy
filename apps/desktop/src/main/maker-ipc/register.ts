@@ -7258,22 +7258,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return runPiPackageMutationIpcBoundary(
       async () => {
         let runtimesInvalidated = false;
+        let runtimeConvergencePartial = false;
         const invalidateRuntimes = async (): Promise<void> => {
           if (runtimesInvalidated) return;
           runtimesInvalidated = true;
           try {
             const invalidation = await invalidateLocalPiPackageRuntimes(maker);
             if (invalidation.failedSessionIds.length > 0) {
+              runtimeConvergencePartial = true;
               log.warn('Pi package changed but some local runtimes did not close', {
                 failedSessionIds: invalidation.failedSessionIds,
               });
             }
-          } catch (error) {
+          } catch {
             // The package mutation is already committed. Runtime convergence is
-            // best-effort follow-up and must not rewrite native Pi success as a
-            // contradictory mutation failure.
+            // a separately recoverable result, never a rewritten native failure.
+            runtimeConvergencePartial = true;
             log.warn('Pi package changed but local runtime invalidation failed', {
-              message: error instanceof Error ? error.message : String(error),
+              failureCategory: 'runtime-invalidation-failed',
+              recoveryAction: 'restart-cindy',
             });
           }
         };
@@ -7292,7 +7295,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // mutation must retire old local ordinary runtimes, including install,
           // update, and enable—not only revocation.
           await invalidateRuntimes();
-          return result;
+          return runtimeConvergencePartial
+            ? { ...result, runtimeConvergence: 'partial' as const }
+            : result;
         } catch (error) {
           // Retire snapshots only after the store reached a native command or
           // durable write. Pure validation/state-read failures must not cancel
@@ -7303,7 +7308,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           throw error;
         }
       },
-      t('settings.piPackages.operationFailed'),
+      (error) => piPackageMutationFailureCategory(error) === 'state-unavailable'
+        ? t('settings.piPackages.failure.stateUnavailable')
+        : t('settings.piPackages.operationFailed'),
       (error) => {
         log.warn('Pi extension mutation failed', {
           action: request.action,

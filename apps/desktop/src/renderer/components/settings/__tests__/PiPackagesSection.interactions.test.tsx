@@ -319,6 +319,42 @@ describe('PiPackagesSection interaction state machine', () => {
     expect(screen.queryByText('settings.piPackages.piUnavailable')).toBeNull();
   });
 
+  it('reports partial runtime convergence without claiming every task stopped', async () => {
+    installElectronApi({
+      mutatePiPackage: vi.fn(async () => ({
+        available: true,
+        packages: [packageView(1), packageView(2)],
+        changed: true,
+        runtimeConvergence: 'partial',
+      })),
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.updateAria' })[0]!);
+
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith(
+      'settings.piPackages.failure.runtimeConvergencePartial',
+    ));
+    expect(toastMocks.success).not.toHaveBeenCalled();
+  });
+
+  it('shows the Main-sanitized actionable mutation failure', async () => {
+    installElectronApi({
+      mutatePiPackage: vi.fn(async () => {
+        throw new Error('[PI_PACKAGE_MUTATION_FAILED] restart Cindy and refresh extensions');
+      }),
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+
+    fireEvent.click(screen.getAllByRole('switch')[0]!);
+
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith(
+      'restart Cindy and refresh extensions',
+    ));
+  });
+
   it('routes remove directly to Main without a dialog and retries after failure', async () => {
     const firstMutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const mutatePiPackage = vi

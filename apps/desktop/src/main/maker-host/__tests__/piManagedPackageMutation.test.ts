@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { PiManagedPackageMutationFailedError } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -62,6 +64,42 @@ describe('Pi managed package Main authorization', () => {
       { action: 'install', source: 'npm:context-mode' },
       grant,
     );
+  });
+
+  it.each(['update', 'remove'] as const)(
+    'forwards the host runtime hook to the native %s commit edge',
+    async (action) => {
+      const { deps, grant } = buildDeps();
+      const hooks = { onRuntimeInvalidationPublished: vi.fn() };
+
+      await mutateAuthorizedPiManagedPackage({
+        action,
+        source: 'npm:context-mode',
+        authorization: 'confirmed-tool-call',
+      }, deps, hooks);
+
+      expect(deps.mutate).toHaveBeenCalledWith(
+        { action, source: 'npm:context-mode' },
+        grant,
+        hooks,
+      );
+    },
+  );
+
+  it('fences at commit but keeps full caller retirement after the host-owned receipt', () => {
+    const piHostSource = readFileSync(new URL('../pi-host.ts', import.meta.url), 'utf8');
+    const makerHostSource = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+
+    expect(piHostSource).toContain(
+      '{ onRuntimeInvalidationPublished: opts.onPiManagedPackageMutationCommitted }',
+    );
+    expect(piHostSource).toContain(
+      'onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled',
+    );
+    expect(makerHostSource).toContain(
+      'onPiManagedPackageMutationCommitted: async () =>',
+    );
+    expect(makerHostSource).toContain('_maker?.advanceLocalPiPackageRuntimeGeneration();');
   });
 
   it('keeps the exact action and source bound to the one-shot grant', async () => {

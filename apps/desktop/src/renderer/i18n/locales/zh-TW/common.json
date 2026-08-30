@@ -2934,6 +2934,7 @@
         "packageNotFound": "找不到這個套件。請檢查套件名稱或儲存庫網址。",
         "versionNotFound": "找不到這個版本。請選擇可用版本後重試。",
         "stateUnavailable": "Cindy 無法讀取 Pi 擴充功能狀態。請重新啟動 Cindy 後重試。",
+        "runtimeConvergencePartial": "Pi 擴充功能變更已儲存，但部分本機 Pi 任務可能仍在執行舊擴充功能。請重新啟動 Cindy 後再使用 Pi。",
         "nativeCommandFailed": "Pi 原生套件命令失敗。請檢查來源或版本後重試。"
       },
       "success": {

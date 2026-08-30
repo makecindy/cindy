@@ -2942,6 +2942,7 @@
         "packageNotFound": "패키지를 찾지 못했습니다. 패키지 이름이나 저장소 URL을 확인하세요.",
         "versionNotFound": "해당 버전을 찾지 못했습니다. 사용 가능한 버전을 선택해 다시 시도하세요.",
         "stateUnavailable": "Cindy가 Pi 확장 상태를 읽지 못했습니다. Cindy를 다시 시작한 뒤 다시 시도하세요.",
+        "runtimeConvergencePartial": "Pi 확장 변경 사항은 저장되었지만 일부 로컬 Pi 작업에서 이전 확장이 계속 실행 중일 수 있습니다. Pi를 다시 사용하기 전에 Cindy를 다시 시작하세요.",
         "nativeCommandFailed": "Pi 기본 패키지 명령에 실패했습니다. 소스나 버전을 확인한 뒤 다시 시도하세요."
       },
       "success": {

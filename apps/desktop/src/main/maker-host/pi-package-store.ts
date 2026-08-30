@@ -697,14 +697,18 @@ async function readPendingEnabledSources(): Promise<Set<string>> {
   return pending;
 }
 
-async function writePendingEnabledSources(sources: ReadonlySet<string>): Promise<boolean> {
+function replacePendingEnabledSourcesInMemory(sources: ReadonlySet<string>): void {
   pendingEnabledSources.clear();
   for (const source of sources) pendingEnabledSources.add(source);
+}
+
+async function writePendingEnabledSources(sources: ReadonlySet<string>): Promise<boolean> {
   const durableSources = new Set([...sources].filter((source) => (
     !projectPackageSource(source).unsafe && !/[?#]/.test(source)
   )));
   if (durableSources.size === 0) {
     await fs.rm(pendingEnablePath(), { force: true });
+    replacePendingEnabledSourcesInMemory(sources);
     return durableSources.size === sources.size;
   }
   await fs.mkdir(packageHome(), { recursive: true, mode: 0o700 });
@@ -716,6 +720,7 @@ async function writePendingEnabledSources(sources: ReadonlySet<string>): Promise
       flag: 'wx',
     });
     await fs.rename(temporary, target);
+    replacePendingEnabledSourcesInMemory(sources);
     return durableSources.size === sources.size;
   } finally {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
@@ -2120,8 +2125,20 @@ function packageMutationTarget(source: string): string {
 async function resolvePackageMutationTarget(
   source: string,
   mutationTarget: string | undefined,
+  requireInstalled = false,
 ): Promise<string> {
-  if (!mutationTarget) return source;
+  if (!mutationTarget) {
+    if (!requireInstalled) return source;
+    try {
+      const aliases = new Set(sourceAliases(source));
+      const match = (await runPiPackageListCommand()).find((pkg) => aliases.has(pkg.source));
+      if (match) return match.source;
+    } catch {
+      // A toggle cannot safely create state for a target whose native roster is
+      // unavailable. Keep the public failure stable and free of source details.
+    }
+    throw new PiPackageStateUnavailableError();
+  }
   const digest = mutationTarget.slice(PACKAGE_MUTATION_TARGET_PREFIX.length);
   if (!mutationTarget.startsWith(PACKAGE_MUTATION_TARGET_PREFIX)
     || !/^[a-f0-9]{64}$/.test(digest)) {
@@ -2835,7 +2852,7 @@ async function buildMissingDeclaredPiExtensions(pkg: InspectedPackage): Promise<
 }
 
 export interface PiPackageMutationHooks {
-  /** Settings may retire its local runtimes immediately after the durable edge. */
+  /** Host callers may retire local runtimes immediately after the durable edge. */
   onRuntimeInvalidationPublished?: () => void | Promise<void>;
 }
 
@@ -2860,7 +2877,11 @@ export async function mutatePiPackage(
     // Renderer rows with credential/query/fragment-bearing sources carry only a
     // one-way opaque target. Resolve it from Pi's current native list inside the
     // mutation lock so the secret source never crosses into Renderer state.
-    const source = await resolvePackageMutationTarget(requestedSource, request.mutationTarget);
+    const source = await resolvePackageMutationTarget(
+      requestedSource,
+      request.mutationTarget,
+      request.action === 'set-enabled',
+    );
     const logSource = projectPackageSource(source).displaySource;
     try {
       await reconcilePendingEnabledSources();
@@ -2903,6 +2924,7 @@ export async function mutatePiPackage(
       // optional snapshot identity until that command succeeds. Native Pi
       // enablement never depends on this Cindy metadata.
       await runNativeMutationCommand(['install', source, '--no-approve']);
+      await publishRuntimeInvalidation();
       invalidateInspectionCache();
       let inspectedAfterInstall: InspectedPackage[] = [];
       try {
@@ -2976,7 +2998,6 @@ export async function mutatePiPackage(
           message: error instanceof Error ? error.message : String(error),
         });
       }
-      await publishRuntimeInvalidation();
     } else if (request.action === 'remove') {
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       await runNativeMutationCommand([
@@ -3101,23 +3122,25 @@ export async function mutatePiPackage(
           approvedFingerprints[affectedSource] = target.contentFingerprint;
         }
       } else {
-        // Remove only the target aliases from a previous install reconciliation
-        // before persisting the explicit toggle. No cancellation/replace state
-        // is introduced; failure leaves the operation unsuccessful.
-        mutationMayHaveChangedState = true;
+        // Removing an effective pending-enable overlay is its own durable edge:
+        // even if the following state write fails, an existing disable becomes
+        // active and callers must converge runtimes. A no-op journal write is
+        // not an enablement change.
         const pending = await readPendingEnabledSources();
-        for (const alias of toggleAliases) pending.delete(alias);
-        try {
-          await writePendingEnabledSources(pending);
-        } catch {
-          throw new PiPackageStateUnavailableError();
+        let pendingChanged = false;
+        for (const alias of toggleAliases) {
+          if (pending.delete(alias)) pendingChanged = true;
+        }
+        if (pendingChanged) {
+          try {
+            await writePendingEnabledSources(pending);
+            mutationMayHaveChangedState = true;
+          } catch {
+            throw new PiPackageStateUnavailableError();
+          }
         }
         disabled.add(affectedSource);
       }
-      // writeState atomically replaces the state file. Mark the mutation before
-      // entering that durable write so a successful write followed by a failed
-      // inspection still invalidates caches and notifies every open Renderer.
-      mutationMayHaveChangedState = true;
       await writeState({
         version: STATE_VERSION,
         disabledSources: [...disabled].sort(),
@@ -3127,6 +3150,8 @@ export async function mutatePiPackage(
         ),
         snapshotUnavailableRoots: state.snapshotUnavailableRoots,
       });
+      // Only a completed atomic replacement is a durable state enablement edge.
+      mutationMayHaveChangedState = true;
       await publishRuntimeInvalidation();
     }
     invalidateInspectionCache();

@@ -2942,6 +2942,7 @@
         "packageNotFound": "パッケージが見つかりません。パッケージ名またはリポジトリ URL を確認してください。",
         "versionNotFound": "そのバージョンが見つかりません。利用可能なバージョンを選んで再試行してください。",
         "stateUnavailable": "Cindy は Pi 拡張機能の状態を読み取れませんでした。Cindy を再起動して再試行してください。",
+        "runtimeConvergencePartial": "Pi 拡張機能の変更は保存されましたが、一部のローカル Pi タスクが古い拡張機能を実行中の可能性があります。Pi を再び使用する前に Cindy を再起動してください。",
         "nativeCommandFailed": "Pi のネイティブパッケージコマンドが失敗しました。ソースまたはバージョンを確認してください。"
       },
       "success": {

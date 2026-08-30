@@ -910,6 +910,8 @@ export interface BuildPiAgentOpts {
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  /** Commit-edge fence; live caller retirement remains post-receipt below. */
+  onPiManagedPackageMutationCommitted?: () => Promise<void>;
   onPiManagedPackageMutationSettled?: AgentDeps['onPiManagedPackageMutationSettled'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
@@ -1777,7 +1779,13 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     },
     resolvePiManagedPackageResources: resolveManagedPiPackageResources,
     resolvePiNativePackagePaths: resolveManagedPiNativePackagePaths,
-    mutatePiManagedPackage: mutateAuthorizedPiManagedPackage,
+    mutatePiManagedPackage: (request) => mutateAuthorizedPiManagedPackage(
+      request,
+      undefined,
+      opts.onPiManagedPackageMutationCommitted
+        ? { onRuntimeInvalidationPublished: opts.onPiManagedPackageMutationCommitted }
+        : undefined,
+    ),
     onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled,
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),

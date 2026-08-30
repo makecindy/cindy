@@ -139,6 +139,8 @@ export interface PiPackageMutationResult extends PiPackageListResult {
   affectedPackage?: PiPackageView;
   /** The mutation succeeded, but packages is not an authoritative full roster. */
   projectionUnavailable?: true;
+  /** The package change committed, but at least one local Pi runtime may remain alive. */
+  runtimeConvergence?: 'partial';
 }
 
 export function hasPiPackageCompatibilityWarning(pkg: PiPackageView): boolean {

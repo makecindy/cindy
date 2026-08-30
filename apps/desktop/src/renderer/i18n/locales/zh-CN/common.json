@@ -2934,6 +2934,7 @@
         "packageNotFound": "没有找到这个包。请检查包名或仓库地址。",
         "versionNotFound": "没有找到这个版本。请选择可用版本后重试。",
         "stateUnavailable": "Cindy 无法读取 Pi 扩展状态。请重启 Cindy 后重试。",
+        "runtimeConvergencePartial": "Pi 扩展更改已保存，但部分本机 Pi 任务可能仍在运行旧扩展。请重启 Cindy 后再使用 Pi。",
         "nativeCommandFailed": "Pi 原生包命令失败。请检查来源或版本后重试。"
       },
       "success": {
