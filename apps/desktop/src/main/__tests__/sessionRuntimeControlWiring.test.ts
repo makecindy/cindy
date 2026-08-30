@@ -688,7 +688,9 @@ describe('session runtime control wiring', () => {
       'const recoverRemoteRuntimeAxisPersistence',
     );
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    const closeRecovery = setModel.indexOf('const closeRejectedPiRuntime =');
     const finalWindow = setModel.indexOf('const finalPiWindow =');
+    const finalWindowEnd = setModel.indexOf('if (atomicSelection) {', finalWindow);
     const runtimeCommit = setModel.indexOf('let generation: number;');
     const finalPreparation = setModel.indexOf('let finalPreparation:');
     const smallerFinalWindow = setModel.indexOf('finalPiWindow < verifiedCurrentWindow!');
@@ -702,8 +704,17 @@ describe('session runtime control wiring', () => {
     );
     expect(piPreflightGuard).toBeGreaterThan(-1);
     expect(preflightPreparation - piPreflightGuard).toBeLessThan(700);
+    expect(closeRecovery).toBeGreaterThan(-1);
+    expect(closeRecovery).toBeLessThan(finalWindow);
     expect(finalWindow).toBeGreaterThan(apply);
     expect(finalWindow).toBeLessThan(runtimeCommit);
+    expect(setModel.match(/await closeRejectedPiRuntime\(/g)).toHaveLength(5);
+    expect(finalWindowEnd).toBeGreaterThan(finalWindow);
+    expect(setModel.slice(finalWindow, finalWindowEnd)).not.toContain(
+      'await withRehydrateCloseSuppressed',
+    );
+    expect(setModel).toContain('restoreControlStores,');
+    expect(setModel).toContain('failed to close Pi after rejected final-window selection');
     expect(setModel).toContain('recheckTargetPressure: true');
     expect(setModel).toContain("finalPreparation === 'confirmation-required'");
     expect(setModel).toContain('contextWindowConfirmationRequired: finalPiWindow');

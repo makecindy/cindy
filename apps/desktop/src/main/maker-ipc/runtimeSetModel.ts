@@ -113,6 +113,22 @@ export type ApplyRuntimeSetModelChangeResult =
   /** 凭证形态要换但会话自己在跑:已登记 pending,turn 结束后自动生效。 */
   | { status: 'deferred'; persistedRoute?: never };
 
+export async function closeRejectedRuntimeAndRestoreControlStores(input: {
+  closeRuntime: () => Promise<void>;
+  restoreControlStores: () => void;
+  reportCloseError: (error: unknown) => void;
+}): Promise<void> {
+  try {
+    await input.closeRuntime();
+  } catch (error) {
+    input.reportCloseError(error);
+  } finally {
+    // Runtime teardown is best-effort on a rejected selection. The old control
+    // route must still match the unchanged persistent route when close rejects.
+    input.restoreControlStores();
+  }
+}
+
 export function isRemoteModelSwitchRouteChangeError(error: unknown): boolean {
   return (
     (error as { code?: unknown } | null)?.code === 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE' ||

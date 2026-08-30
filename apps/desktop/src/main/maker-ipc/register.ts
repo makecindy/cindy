@@ -905,6 +905,7 @@ import {
 } from '../maker-host/codex-credential-switch.js';
 import {
   applyRuntimeSetModelChange,
+  closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
 import {
@@ -15623,6 +15624,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         setSessionEffort(sessionId, previousRuntime.effort);
         setSessionFastMode(sessionId, previousRuntime.fastMode);
       };
+      const closeRejectedPiRuntime = (reason: string): Promise<void> =>
+        closeRejectedRuntimeAndRestoreControlStores({
+          closeRuntime: () =>
+            withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId)),
+          restoreControlStores,
+          reportCloseError: (error) => {
+            log.warn('failed to close Pi after rejected final-window selection', {
+              sessionId,
+              reason,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        });
       const persistedSessionMeta = liveSessionBeforeRouteChange
         ? null
         : await maker.getSessionMeta(sessionId);
@@ -16032,8 +16046,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           const finalPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;
           if (typeof finalPiWindow !== 'number' || finalPiWindow <= 0) {
-            await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-            restoreControlStores();
+            await closeRejectedPiRuntime('final context window was not verified');
             throwIpcError(
               'PRECONDITION_FAILED',
               'Pi did not expose its verified final context window; runtime selection was not accepted',
@@ -16042,8 +16055,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetContextWindow = finalPiWindow;
           if (finalPiWindow < verifiedCurrentWindow!) {
             if (!contextOverflowRolloverHolder) {
-              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-              restoreControlStores();
+              await closeRejectedPiRuntime('model-window protection was unavailable');
               throwIpcError(
                 'PRECONDITION_FAILED',
                 'model window switch protection is unavailable; runtime selection was not changed',
@@ -16066,21 +16078,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 },
               );
             } catch (error) {
-              await withRehydrateCloseSuppressed(sessionId, () =>
-                maker.closeSession(sessionId),
-              ).catch((closeError) => {
-                log.warn('failed to close Pi after final-window preparation failed', {
-                  sessionId,
-                  error: closeError instanceof Error ? closeError.message : String(closeError),
-                });
-              });
-              restoreControlStores();
+              await closeRejectedPiRuntime('final-window preparation threw');
               throw error;
             }
             if (finalPreparation === 'confirmation-required') {
               assertRuntimeOwnerCurrent();
-              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-              restoreControlStores();
+              await closeRejectedPiRuntime('final-window confirmation was required');
               if (isDeviceLinkInvoke()) {
                 throwIpcError(
                   'PRECONDITION_FAILED',
@@ -16097,8 +16100,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               modelWindowRebuilt = true;
               targetContextWindow = finalPiWindow;
             } else if (finalPreparation !== 'not-needed') {
-              await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-              restoreControlStores();
+              await closeRejectedPiRuntime(`final-window preparation returned ${finalPreparation}`);
               throwIpcError(
                 'PRECONDITION_FAILED',
                 finalPreparation === 'remote-unsupported'

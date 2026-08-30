@@ -7,6 +7,7 @@ import {
 } from '../../maker-host/session-provider-store.js';
 import {
   applyRuntimeSetModelChange,
+  closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
   type RuntimeSetModelMaker,
 } from '../runtimeSetModel.js';
@@ -56,6 +57,50 @@ describe('isRemoteModelSwitchRouteChangeError', () => {
     expect(isRemoteModelSwitchRouteChangeError(new Error('ordinary set-model failure'))).toBe(
       false,
     );
+  });
+});
+
+describe('closeRejectedRuntimeAndRestoreControlStores', () => {
+  it('restores the old control route when runtime close rejects', async () => {
+    const closeError = new Error('close transport rejected');
+    const closeRuntime = vi.fn(async () => {
+      throw closeError;
+    });
+    const controlStores = {
+      providerId: 'target-provider',
+      effort: 'max',
+      fastMode: true,
+    };
+    const persistedRoute = {
+      model: 'old-model',
+      providerId: 'old-provider',
+      effort: 'low',
+      fastMode: false,
+    } as const;
+    const restoreControlStores = vi.fn(() => {
+      controlStores.providerId = persistedRoute.providerId;
+      controlStores.effort = persistedRoute.effort;
+      controlStores.fastMode = persistedRoute.fastMode;
+    });
+    const reportCloseError = vi.fn();
+
+    await expect(
+      closeRejectedRuntimeAndRestoreControlStores({
+        closeRuntime,
+        restoreControlStores,
+        reportCloseError,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(closeRuntime).toHaveBeenCalledOnce();
+    expect(reportCloseError).toHaveBeenCalledWith(closeError);
+    expect(restoreControlStores).toHaveBeenCalledOnce();
+    expect(controlStores).toEqual({
+      providerId: persistedRoute.providerId,
+      effort: persistedRoute.effort,
+      fastMode: persistedRoute.fastMode,
+    });
+    expect(persistedRoute.model).toBe('old-model');
   });
 });
 
