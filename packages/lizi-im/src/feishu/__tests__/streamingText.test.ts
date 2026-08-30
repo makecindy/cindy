@@ -372,6 +372,24 @@ describe('feishu streaming text', () => {
     expect(markdownContent(mocks.sendCardToChat.mock.calls[0][1])).toBe('正文');
   });
 
+  it('fits an oversized SSH streaming mirror card within Feishu request limits', async () => {
+    const handle = await start('g/oc_group/omt_topic');
+    const longMarkdown = [
+      '| 列一 | 列二 |',
+      '| --- | --- |',
+      '| 很长的内容 | 更多内容 |',
+      '```ts',
+      'const answer = "很长的代码块";',
+      '```',
+    ].join('\n').repeat(500);
+
+    await handle.finalize(longMarkdown, terminalMirror('z'.repeat(64), []));
+
+    const mirrored = mocks.sendCardToChat.mock.calls[0][1];
+    expect(requestBytes(mirrored)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
+    expect(markdownContent(mirrored)).toContain('完整内容仍可在 Cindy 桌面端查看');
+  });
+
   it('fails closed for one-shot file-only replies without a primary upload key', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-fileonly-'));
     tempDirs.push(root);

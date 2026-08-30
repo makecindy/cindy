@@ -488,8 +488,12 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
         if (skippedLocalMedia && mirrorText.length === 0) {
           mirrorCard = buildMarkdownCardV2(transportMessages.streaming.deliveryFailed);
         } else {
-          mirrorCard = buildMarkdownCardV2(
-            mirrorText.length > 0 ? mirrorText : transportMessages.streaming.emptyReply,
+          const remoteSafeText =
+            mirrorText.length > 0 ? mirrorText : transportMessages.streaming.emptyReply;
+          mirrorCard = fitCardToLimit(
+            remoteSafeText,
+            buildMarkdownCardV2(remoteSafeText),
+            (visibleText) => buildMarkdownCardV2(visibleText),
           );
         }
       }
