@@ -20,6 +20,9 @@ export function isAllowedBillingMailto(value: unknown): value is string {
     const parsed = new URL(value);
     const queryKeys = [...parsed.searchParams.keys()];
     const hasDuplicateQueryKey = new Set(queryKeys).size !== queryKeys.length;
+    const subject = parsed.searchParams.get('subject');
+    const hasSubjectControlCharacter =
+      subject !== null && /[\u0000-\u001f\u007f-\u009f]/u.test(subject);
     return (
       parsed.protocol === 'mailto:' &&
       decodeURIComponent(parsed.pathname).toLowerCase() === BILLING_SUPPORT_EMAIL &&
@@ -27,6 +30,7 @@ export function isAllowedBillingMailto(value: unknown): value is string {
       !parsed.password &&
       !parsed.host &&
       !hasDuplicateQueryKey &&
+      !hasSubjectControlCharacter &&
       queryKeys.every((key) => key === 'subject' || key === 'body')
     );
   } catch {
