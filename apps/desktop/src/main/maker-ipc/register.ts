@@ -16041,6 +16041,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         });
       };
+      // context.rebuild clears sdk_session_id, so the preflight Codex thread can no longer
+      // be forked. Persist the accepted target route and let the next send create a new thread.
+      const shouldRelinkCodexThread = requiresCodexThreadRelink && !modelWindowRebuilt;
       try {
         const result = routeExplicit
           ? await applyRuntimeSetModelChange({
@@ -16077,8 +16080,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
               // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
               codexAuthInjection: getCodexProxyAuthInjectionState(),
-              requiresCodexThreadRelink,
-              ...(relinkCodexThread ? { relinkCodexThread } : {}),
+              requiresCodexThreadRelink: shouldRelinkCodexThread,
+              ...(shouldRelinkCodexThread && relinkCodexThread ? { relinkCodexThread } : {}),
               logger: log,
             })
           : { status: 'applied' as const };

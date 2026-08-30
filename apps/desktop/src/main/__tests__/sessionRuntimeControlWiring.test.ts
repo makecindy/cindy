@@ -459,6 +459,34 @@ describe('session runtime control wiring', () => {
     expect(targetRoute).not.toContain('requiresCodexThreadRelink && atomicSelection');
   });
 
+  it('skips stale Codex thread relink after rebuild and still commits the target route', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const rebuilt = setModel.indexOf("modelWindowRebuilt = preparation === 'rebuilt'");
+    const relinkGate = setModel.indexOf(
+      'const shouldRelinkCodexThread = requiresCodexThreadRelink && !modelWindowRebuilt;',
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);');
+
+    expect(rebuilt).toBeGreaterThan(-1);
+    expect(relinkGate).toBeGreaterThan(rebuilt);
+    expect(relinkGate).toBeLessThan(apply);
+    expect(setModel.slice(apply, persist)).toContain(
+      'requiresCodexThreadRelink: shouldRelinkCodexThread',
+    );
+    expect(setModel.slice(apply, persist)).toContain(
+      'shouldRelinkCodexThread && relinkCodexThread',
+    );
+    expect(setModel.slice(apply, persist)).toContain(
+      'result.persistedRoute !== true &&\n          (modelWindowRebuilt ||',
+    );
+    expect(persist).toBeGreaterThan(apply);
+  });
+
   it('derives the Codex relink boundary from effective credential identities', () => {
     const setModel = handlerBody(
       registerSource,
