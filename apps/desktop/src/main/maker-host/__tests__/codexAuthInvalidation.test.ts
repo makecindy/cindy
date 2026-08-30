@@ -147,7 +147,10 @@ describe('Codex system credential suppression marker', () => {
       resolveWindowsAclPrincipal({ USERDOMAIN: 'WORKSTATION', USERNAME: 'alex' }, 'fallback'),
     ).toBe('WORKSTATION\\alex');
     expect(
-      resolveWindowsAclPrincipal({ USERDOMAIN: 'WORKSTATION', USERNAME: 'DOMAIN\\alex' }, 'fallback'),
+      resolveWindowsAclPrincipal(
+        { USERDOMAIN: 'WORKSTATION', USERNAME: 'DOMAIN\\alex' },
+        'fallback',
+      ),
     ).toBe('DOMAIN\\alex');
     expect(resolveWindowsAclPrincipal({}, 'fallback')).toBe('fallback');
   });
@@ -893,10 +896,9 @@ describe('Codex system credential suppression marker', () => {
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
     h.dataOwnerId = 'owner-a';
-    fs.mkdirSync(
-      path.join(h.userDataDir, 'native-provider-auth.json.mutation-lock.db'),
-      { recursive: true },
-    );
+    fs.mkdirSync(path.join(h.userDataDir, 'native-provider-auth.json.mutation-lock.db'), {
+      recursive: true,
+    });
 
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
@@ -1357,6 +1359,7 @@ describe('Codex system credential suppression marker', () => {
       authSource: 'oauth',
       credentialScope: 'system-shared',
     });
+    expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
 
     const replacement = path.join(path.dirname(systemAuth), 'auth.replacement.json');
     fs.writeFileSync(
@@ -1367,7 +1370,7 @@ describe('Codex system credential suppression marker', () => {
       }),
     );
     fs.renameSync(replacement, systemAuth);
-    expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
+    expect(fs.readFileSync(localAuth, 'utf8')).toBe(fs.readFileSync(systemAuth, 'utf8'));
 
     const broadcast = vi.fn();
     adapter.setOnInvalidatedBroadcast(broadcast);
@@ -1406,6 +1409,93 @@ describe('Codex system credential suppression marker', () => {
       legacyClaimOwner: 'owner-a',
       openai: 'owner-b',
     });
+  });
+
+  it('repairs an unproven local auth orphan instead of preserving its refresh token', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-orphan-repair-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-token', account_id: 'system-account' } }),
+    );
+    fs.writeFileSync(
+      localAuth,
+      JSON.stringify({ tokens: { access_token: 'orphan-token', account_id: 'old-account' } }),
+    );
+    fs.writeFileSync(
+      path.join(h.userDataDir, 'native-provider-auth.json'),
+      JSON.stringify({
+        openai: 'owner-a',
+        sources: { openai: 'native-harness-inherited' },
+      }),
+    );
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const state = await new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' });
+
+    expect(state).toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      credentialDiagnostics: {
+        linkType: 'symlink',
+        healthy: true,
+        orphanRepair: 'relinked',
+      },
+    });
+    expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-token');
+  });
+
+  it('preserves a different-account file with explicit Cindy OAuth provenance', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-isolated-preserve-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-token', account_id: 'system-account' } }),
+    );
+    fs.writeFileSync(
+      localAuth,
+      JSON.stringify({ tokens: { access_token: 'isolated-token', account_id: 'other-account' } }),
+    );
+    fs.writeFileSync(
+      path.join(h.userDataDir, 'native-provider-auth.json'),
+      JSON.stringify({
+        openai: 'owner-a',
+        selfAuthorized: { openai: 'owner-a' },
+        sources: { openai: 'explicit-provider-oauth' },
+      }),
+    );
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const state = await new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' });
+
+    expect(state).toMatchObject({
+      authenticated: true,
+      credentialScope: 'instance-isolated',
+      credentialDiagnostics: {
+        linkType: 'file',
+        healthy: true,
+        orphanRepair: 'none',
+      },
+    });
+    expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(localAuth, 'utf8')).toContain('isolated-token');
   });
 
   it('real token invalidation still surfaces its reason when no replacement local credential exists', () => {

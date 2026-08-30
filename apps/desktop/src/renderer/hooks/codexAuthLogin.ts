@@ -3,6 +3,15 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('codexAuthLogin');
 
+export type CodexCredentialDiagnostics = {
+  linkType: 'symlink' | 'hardlink' | 'file' | 'missing' | 'dangling-symlink' | 'unknown';
+  healthy: boolean;
+  devReadOnly: boolean;
+  systemAuthMtimeMs?: number;
+  systemAuthLinkCount?: number;
+  orphanRepair?: 'none' | 'relinked' | 'failed';
+};
+
 export type CodexLoginResult = {
   authenticated: boolean;
   identity?: string;
@@ -10,6 +19,7 @@ export type CodexLoginResult = {
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
   credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
+  credentialDiagnostics?: CodexCredentialDiagnostics;
   recoveryRequiredReason?: string;
 };
 

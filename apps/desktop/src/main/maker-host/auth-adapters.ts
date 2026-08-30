@@ -36,11 +36,12 @@ import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
-import { relinkSharedCodexAuth } from './codex-auth-link.js';
+import { inspectCodexAuthLink, relinkSharedCodexAuth } from './codex-auth-link.js';
 import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import {
   CODEX_USER_DISCONNECT_REASON,
   clearInvalidatedSystemCodexAuthMarker,
+  currentCodexAuthFileFingerprint,
   getActiveInvalidatedSystemCodexAuthMarker,
   isDurableDisconnectMarker,
   readInvalidatedSystemCodexAuthMarker,
@@ -49,6 +50,7 @@ import {
   shouldSuppressLocalCodexAuth,
   updateInvalidatedSystemCodexAuthMarkerCredentialScope,
   writeInvalidatedSystemCodexAuthMarker,
+  type CodexAuthFileFingerprint,
 } from './codex-auth-invalidation.js';
 import {
   codexLoginArgs,
@@ -530,8 +532,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
       const ownerId = getActiveAppSession().dataOwnerId;
       const result = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
         prepareSharedGlobalSkillLinks({
-          assertOwnerStable: () =>
-            assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
+          assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
         }),
       );
       for (const warning of result.warnings) {
@@ -785,6 +786,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private oauthRecoveryRequiredReason: string | null = null;
   private oauthRecoveryCredentialScope: AuthState['credentialScope'] = undefined;
   private suppressSystemCodexReconcile = false;
+  private sharedCredentialFingerprint: CodexAuthFileFingerprint | null = null;
+  private lastOrphanRepair: NonNullable<AuthState['credentialDiagnostics']>['orphanRepair'] =
+    'none';
   /** 运行期最近一次能够被文件/授权记录明确证明的来源，兜住系统 auth 原子替换后的旧硬链。 */
   private lastKnownCodexCredentialScope: AuthState['credentialScope'] = undefined;
 
@@ -1045,46 +1049,56 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
     if (!existsSync(systemAuth)) return;
 
-    // 热路径: 已经是同 inode 直接返回
-    if (existsSync(myAuth)) {
-      try {
-        if (await pathsReferToSameFile(systemAuth, myAuth)) {
-          this.lastKnownCodexCredentialScope = 'system-shared';
-          return;
-        }
-      } catch {
-        /* stat 失败走完整流程 */
-      }
+    const topology = await inspectCodexAuthLink(systemAuth, myAuth);
+    if (topology.healthy && !this.sharedCredentialFingerprint) {
+      this.sharedCredentialFingerprint = currentCodexAuthFileFingerprint(systemAuth);
+    }
+    if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
+      this.lastKnownCodexCredentialScope = 'system-shared';
+      return;
+    }
+
+    const hasLocalEntry = topology.linkType !== 'missing';
+    const hasIsolatedProvenance =
+      topology.linkType === 'file' &&
+      isNativeProviderAuthBound('openai') &&
+      isNativeProviderAuthSelfAuthorized('openai');
+    if (hasIsolatedProvenance) {
+      log.info('keeping explicitly authorized instance-isolated Codex auth');
+      return;
     }
 
     const sysAccount = await readCodexAccountId(systemAuth);
     if (!sysAccount) return; // 本机 auth.json 解析不出 account, 保守不动
 
-    if (existsSync(myAuth)) {
+    if (hasLocalEntry) {
       const myAccount = await readCodexAccountId(myAuth);
-      // 解析得出且不同 → 不同账号, 各管各
-      if (myAccount && myAccount !== sysAccount) {
-        log.info('system codex logged in as different account, keeping isolated auth');
-        return;
-      }
-      // myAccount === sysAccount, 或 myAccount 解析不出 (可能是损坏/旧 schema): 都按"可合并"处理
+      credPathLog.warn('unproven Codex auth is an orphan repair candidate', {
+        linkType: topology.linkType,
+        accountMatch: myAccount ? myAccount === sysAccount : 'unknown',
+        dryRunCandidate: true,
+      });
     }
 
-    // 同账号 (或 xdt-maker 没登过): 用本机的, 通过硬链共享, refresh 写回两端同步。
+    // 无显式隔离 provenance 时使用本机凭证：POSIX symlink / Windows hardlink。
     // 安全替换 (唯一 sidecar + 失败重建) 见 codex-auth-link.ts —— 避免并发撞临时文件、
     // 以及"myAuth 删了又建不回去导致用户被迫重登"的空窗。
-    // 硬链前幂等确保 codexHome 目录存在: 首启时 assets 预热可能尚未建好目录, ENOENT
+    // 建共享链接前幂等确保 codexHome 目录存在: 首启时 assets 预热可能尚未建好目录, ENOENT
     // 会让 relink 走 link-unsupported 回退, splash 后首次 auth 查询短暂误报未登录。
     await fsp.mkdir(this.codexHome, { recursive: true }).catch(() => undefined);
-    const { kind, error } = await relinkSharedCodexAuth(systemAuth, myAuth);
+    const { kind, error, linkType } = await relinkSharedCodexAuth(systemAuth, myAuth);
+    if (hasLocalEntry && !topology.healthy) {
+      this.lastOrphanRepair = kind === 'linked' ? 'relinked' : 'failed';
+    }
     switch (kind) {
       case 'linked':
         this.lastKnownCodexCredentialScope = 'system-shared';
-        log.info('codex auth.json linked with ~/.codex (shared)');
+        this.sharedCredentialFingerprint ??= currentCodexAuthFileFingerprint(systemAuth);
+        log.info('codex auth.json linked with ~/.codex (shared)', { linkType });
         break;
       case 'link-unsupported':
-        // 跨分区 / 权限 → 建不出硬链, myAuth 一字未动, xdt-maker 继续走自己的隔离 auth。
-        credPathLog.warn('hardlink to ~/.codex failed, fallback to isolated auth', {
+        // 共享链接不支持时 myAuth 一字未动。
+        credPathLog.warn('shared link to ~/.codex failed, auth.json left intact', {
           error: error?.message,
         });
         break;
@@ -1121,8 +1135,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const ownerId = getActiveAppSession().dataOwnerId;
     const sharedOutcome = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
       prepareSharedGlobalSkillLinks({
-        assertOwnerStable: () =>
-          assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
+        assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
       }),
     ).then(
       (r) => ({ ok: true as const, label: 'shared-skills' as const, warnings: r.warnings }),
@@ -1211,7 +1224,23 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
-    return this.readState({ credentialMode: options?.credentialMode });
+    const state = await this.readState({ credentialMode: options?.credentialMode });
+    if (!state.credentialScope && state.authSource !== 'oauth') return state;
+    const diagnostics = await inspectCodexAuthLink(
+      getSystemCodexAuthPath(),
+      path.join(this.codexHome, 'auth.json'),
+    );
+    return {
+      ...state,
+      credentialDiagnostics: {
+        ...diagnostics,
+        healthy:
+          diagnostics.healthy ||
+          (state.credentialScope === 'instance-isolated' && diagnostics.linkType === 'file'),
+        devReadOnly: !app.isPackaged && process.env.XDT_ALLOW_DEV_OAUTH_WRITE !== '1',
+        orphanRepair: this.lastOrphanRepair,
+      },
+    };
   }
 
   private async readState(options?: {
@@ -1396,6 +1425,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
     this.oauthRecoveryRequiredReason = null;
     this.oauthRecoveryCredentialScope = undefined;
+    this.sharedCredentialFingerprint = currentCodexAuthFileFingerprint(getSystemCodexAuthPath());
     return true;
   }
 
@@ -2120,6 +2150,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     this.oauthRecoveryRequiredReason = null;
     this.oauthRecoveryCredentialScope = undefined;
     this.suppressSystemCodexReconcile = true;
+    const currentSystemFingerprint = currentCodexAuthFileFingerprint(getSystemCodexAuthPath());
+    const replacedSystemCredential =
+      credentialScope === 'system-shared' &&
+      this.sharedCredentialFingerprint &&
+      currentSystemFingerprint &&
+      (this.sharedCredentialFingerprint.dev !== currentSystemFingerprint.dev ||
+        this.sharedCredentialFingerprint.ino !== currentSystemFingerprint.ino)
+        ? this.sharedCredentialFingerprint
+        : undefined;
     const markerCommitted = writeInvalidatedSystemCodexAuthMarker(
       this.codexHome,
       getSystemCodexAuthPath(),
@@ -2127,6 +2166,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       localAuthPath,
       credentialScope,
       recoveryOwnerId,
+      replacedSystemCredential,
     );
     let durableFallbackCommitted = false;
     let effectiveCredentialScope = credentialScope;
