@@ -2208,6 +2208,19 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 服务端已经明确判定 OAuth 凭证失效时, 不能再从 ~/.codex 自动 reconcile 回来。
     // 否则 app-server 会拿同一份坏 token 继续 spawn/retry, 用户也看不到明确的重登录入口。
     const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
+    const currentLocalFingerprint = currentCodexAuthFileFingerprint(localAuthPath);
+    if (
+      capturedFingerprint &&
+      currentLocalFingerprint &&
+      capturedFingerprint.sha256 !== currentLocalFingerprint.sha256
+    ) {
+      // Maker Core 会独立 retire 报错的 host key。若当前 local auth 已换代，继续写 marker、
+      // unbind 或 logout 只会删除新登录凭证；此处仅忽略旧 host 的迟到失效。
+      log.info('ignoring stale Codex invalidation from an older credential generation', {
+        reason,
+      });
+      return;
+    }
     const detectedCredentialScope = this.readCodexCredentialScope();
     // A host-bound invalidation without a valid spawn generation is ambiguous. Keep it fail-closed
     // instead of fingerprinting whichever system credential happens to be current now.
