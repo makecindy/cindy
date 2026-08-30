@@ -30,15 +30,16 @@ import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
-import type {
-  BillingCatalog,
-  BillingCatalogOffer,
-  BillingCatalogOfferUnavailableReason,
-  BillingCatalogProduct,
-  BillingPaymentOrder,
-  BillingPendingPlanChange,
-  BillingPurchaseOption,
-  BillingSubscription,
+import {
+  BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES,
+  type BillingCatalog,
+  type BillingCatalogOffer,
+  type BillingCatalogOfferUnavailableReason,
+  type BillingCatalogProduct,
+  type BillingPaymentOrder,
+  type BillingPendingPlanChange,
+  type BillingPurchaseOption,
+  type BillingSubscription,
 } from '../../../shared/billing';
 import type {
   ModelAccessBalance,
@@ -99,14 +100,7 @@ const SUPPORTED_SUBSCRIPTION_CAPABILITIES = new Set<BillingPurchaseOption['capab
 ]);
 
 // 未完成首购只属于当前 checkout 会话，不能展示为当前套餐或阻断重新购买。
-const SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: BillingSubscription['status'][] = [
-  'TRIALING',
-  'ACTIVE',
-  'PAST_DUE',
-  'UNPAID',
-  'PAUSED',
-];
-const SUBSCRIPTION_CANCELLABLE_STATUSES = SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
+const SUBSCRIPTION_CANCELLABLE_STATUSES = BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
 
 const PLAN_CHANGE_ENTRY_STATUSES: BillingSubscription['status'][] = ['ACTIVE'];
 
@@ -373,11 +367,13 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   }, [resetSelection]);
 
   /**
-   * 深链 `?tab=billing&intent=topup` —— 别处（供应商设置页的账户资产模块）想触发
-   * 充值时唯一的入口。充值弹窗依赖本 section 的目录 / 选项 / checkout 会话状态，
-   * 跨 feature 直接复用会把这一大摊状态拉到调用方，所以外部只投递意图、由这里
-   * 打开弹窗。消费即从 URL 摘除（replace，防返回/刷新重复弹窗），与
-   * ProvidersSection 的 `?connect` 同款契约。
+   * 深链 `?tab=billing&intent=topup|subscribe|plan-change` —— 供应商设置页账户资产
+   * 模块的入口。弹窗依赖本 section 的目录 / 订阅 / checkout 状态，跨 feature 只投递
+   * 意图。消费即从 URL 摘除（replace，防返回/刷新重复弹窗），与 ProvidersSection 的
+   * `?connect` 同款契约。
+   *
+   * topup 立即打开：充值弹窗自己会等目录。subscribe / plan-change 等目录和订阅都回来
+   * 再开，避免先弹出可购买再变成 blocked，或 plan-change 入口还没算出来就空弹。
    */
   const [searchParams, setSearchParams] = useSearchParams();
   useEffect(() => {
@@ -431,13 +427,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     try {
       const subscription = (await billingApi.getCurrentSubscription()).subscription;
       setCurrentSubscription(
-        subscription && SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(subscription.status)
+        subscription &&
+          BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(subscription.status)
           ? subscription
           : null,
       );
     } catch {
       const completedFallback =
-        fallback && SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(fallback.status)
+        fallback && BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(fallback.status)
           ? fallback
           : null;
       setCurrentSubscription(completedFallback);
@@ -484,10 +481,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       // state and the XD catalog are separate snapshots, so returning to Cindy must refresh
       // both explicitly; the app-wide focus refresh is throttled and cannot provide this
       // entitlement boundary.
-      void Promise.allSettled([
-        loadBillingState(),
-        refreshXdModelsAfterEntitlementChange(),
-      ]);
+      void Promise.allSettled([loadBillingState(), refreshXdModelsAfterEntitlementChange()]);
     };
     const onVisible = () => {
       if (document.visibilityState === 'visible') refreshAfterPortal();
@@ -590,7 +584,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const subscriptionPurchaseBlocked =
     currentSubscription !== null &&
-    SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(currentSubscription.status);
+    BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(currentSubscription.status);
   const currentSubscriptionOfferCode = subscriptionPurchaseBlocked
     ? (currentSubscription.effectivePlan?.offer.code ?? null)
     : null;
@@ -926,25 +920,51 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       }));
   }, [subscriptionOffers, showPlanChangeEntry, currentPlan, currentProvider]);
 
-  const openPurchaseDialog = (kind: PurchaseKind) => {
-    resetSelection();
-    if (kind === 'SUBSCRIPTION') {
-      const defaultProduct =
-        subscriptionProducts.find((product) =>
-          isSubscriptionOfferSelectable(product.defaultOffer, currentSubscriptionOfferCode),
-        ) ??
-        subscriptionProducts[0] ??
-        null;
-      setSelectedProductCode(defaultProduct?.product.code ?? null);
-      if (defaultProduct) {
-        selectSubscriptionOffer(defaultProduct.defaultOffer);
+  const openPurchaseDialog = useCallback(
+    (kind: PurchaseKind) => {
+      resetSelection();
+      if (kind === 'SUBSCRIPTION') {
+        const defaultProduct =
+          subscriptionProducts.find((product) =>
+            isSubscriptionOfferSelectable(product.defaultOffer, currentSubscriptionOfferCode),
+          ) ??
+          subscriptionProducts[0] ??
+          null;
+        setSelectedProductCode(defaultProduct?.product.code ?? null);
+        if (defaultProduct) {
+          selectSubscriptionOffer(defaultProduct.defaultOffer);
+        }
+        setSubscriptionDialogOpen(true);
+      } else {
+        setSelectedProductCode(null);
+        setTopupDialogOpen(true);
       }
-      setSubscriptionDialogOpen(true);
-    } else {
-      setSelectedProductCode(null);
-      setTopupDialogOpen(true);
+    },
+    [currentSubscriptionOfferCode, resetSelection, selectSubscriptionOffer, subscriptionProducts],
+  );
+
+  useEffect(() => {
+    const intent = searchParams.get('intent');
+    if (intent !== 'subscribe' && intent !== 'plan-change') return;
+    if (loadingCatalog || loadingSubscription) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('intent');
+    setSearchParams(next, { replace: true });
+    if (intent === 'subscribe') {
+      openPurchaseDialog('SUBSCRIPTION');
+      return;
     }
-  };
+    if (showPlanChangeEntry) {
+      setPlanChangeTargetOpen(true);
+    }
+  }, [
+    loadingCatalog,
+    loadingSubscription,
+    openPurchaseDialog,
+    searchParams,
+    setSearchParams,
+    showPlanChangeEntry,
+  ]);
 
   const selectOffer = (offerCode: string) => {
     if (selectedOfferCode === offerCode) return;
@@ -2036,9 +2056,7 @@ function BillingOfferDialog({
                         return (
                           <button
                             key={offer.code}
-                            ref={
-                              offer.code === initialTopupOfferCode ? primaryFocusRef : undefined
-                            }
+                            ref={offer.code === initialTopupOfferCode ? primaryFocusRef : undefined}
                             type="button"
                             onClick={() => onSelectOffer(offer.code)}
                             disabled={currentPlan || unavailableReason !== null}
@@ -2259,9 +2277,7 @@ function SubscriptionProductAccordion({
             {singleOfferEntry ? (
               <button
                 ref={
-                  productActive &&
-                  !singleOfferCurrentPlan &&
-                  singleOfferUnavailableReason === null
+                  productActive && !singleOfferCurrentPlan && singleOfferUnavailableReason === null
                     ? initialFocusRef
                     : undefined
                 }
@@ -2390,9 +2406,7 @@ function SubscriptionProductAccordion({
                     <button
                       key={offer.code}
                       ref={
-                        offerActive && !currentPlan && !unavailable
-                          ? initialFocusRef
-                          : undefined
+                        offerActive && !currentPlan && !unavailable ? initialFocusRef : undefined
                       }
                       type="button"
                       onClick={() => onSelectOffer(offer.code)}

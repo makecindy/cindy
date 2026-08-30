@@ -41,6 +41,7 @@ import { useApiKey } from '@/hooks/useApiKey';
 import { extractIpcError } from '@/utils/ipcError';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useModelAccessCreditUsage } from '@/hooks/useModelAccessCreditUsage';
+import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
@@ -854,18 +855,19 @@ function XaiAssetModule({ connected }: { connected: boolean }) {
             {t('settings.providers.xai.asset.resetsAt', { at: resetLabel })}
           </p>
         )}
-        {hasWeekly && (usage.productUsage ?? []).map((product) => (
-          <p
-            key={product.product}
-            className="mt-1 text-12 leading-tight tabular-nums"
-            style={{ color: 'var(--text-secondary)' }}
-          >
-            {t('settings.providers.xai.asset.productLine', {
-              product: formatXaiProductLabel(product.product),
-              percent: Math.round(product.usagePercent),
-            })}
-          </p>
-        ))}
+        {hasWeekly &&
+          (usage.productUsage ?? []).map((product) => (
+            <p
+              key={product.product}
+              className="mt-1 text-12 leading-tight tabular-nums"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              {t('settings.providers.xai.asset.productLine', {
+                product: formatXaiProductLabel(product.product),
+                percent: Math.round(product.usagePercent),
+              })}
+            </p>
+          ))}
       </div>
       <div className="flex shrink-0 items-center pt-3.5">
         <button
@@ -1211,7 +1213,8 @@ function BuiltinApiKeyHeader({
 // 脱敏 key / 轮换 / 重新获取这三件用户几乎不碰的事,而给「我还剩多少钱、去哪充」:
 //   - 标题行右端只留一个「···」溢出菜单(与所有供应商共用 DetailHeader 那一个),
 //     凭证管理三项 + 只读脱敏 key 收在里面,各自保留原有的二次确认;
-//   - 标题行下方是账户资产模块(1px 发丝线分隔):可用余额 + 查看用量 + 余额充值;
+//   - 标题行下方是账户资产模块(1px 发丝线分隔):可用余额 + 查看用量始终在;
+//     右侧一颗 Black Pill 按套餐状态切换购买 / 升级 / 充值（升满后才充值）;
 //   - 故障恢复(重试)只在凭据同步失败时浮现,正常态版面上没有重试按钮。
 // ---------------------------------------------------------------------------
 
@@ -1251,6 +1254,7 @@ function XdGatewayHeader({
     syncState: syncStatus.state,
     available: creditUsage?.available ?? null,
   });
+  const primaryAction = useXdAssetPrimaryAction(assetState.kind === 'balance');
 
   // 凭据一律由服务端自动下发(个人 / 已接入企业),**无手填入口**(2026-07-17 定案)。
   const serverManaged = syncStatus.state === 'ok' && syncStatus.source === 'server';
@@ -1317,8 +1321,8 @@ function XdGatewayHeader({
   }, [hasSavedKey, key, t]);
 
   const goToBilling = useCallback(
-    (intent?: 'topup') => {
-      navigate(intent ? '/settings?tab=billing&intent=topup' : '/settings?tab=billing');
+    (intent?: 'topup' | 'subscribe' | 'plan-change') => {
+      navigate(intent ? `/settings?tab=billing&intent=${intent}` : '/settings?tab=billing');
     },
     [navigate],
   );
@@ -1433,16 +1437,28 @@ function XdGatewayHeader({
                 )}
               </p>
             </div>
-            {/* 余额充值是主动作；查看用量为同区块内的次动作。 */}
+            {/* 一屏一颗 Black Pill。查看用量始终是次动作；右侧按套餐状态切换。 */}
             <div className="flex shrink-0 items-center gap-3">
               <PillButton
                 label={t('settings.providers.xd.asset.viewUsage')}
                 onClick={() => goToBilling()}
               />
-              <CtaPillButton
-                label={t('billing.settings.topupCard.action')}
-                onClick={() => goToBilling('topup')}
-              />
+              {primaryAction === 'buy-plan' ? (
+                <CtaPillButton
+                  label={t('settings.providers.xd.asset.buyPlan')}
+                  onClick={() => goToBilling('subscribe')}
+                />
+              ) : primaryAction === 'upgrade-plan' ? (
+                <CtaPillButton
+                  label={t('settings.providers.xd.asset.upgradePlan')}
+                  onClick={() => goToBilling('plan-change')}
+                />
+              ) : primaryAction === 'topup' ? (
+                <CtaPillButton
+                  label={t('billing.settings.topupCard.action')}
+                  onClick={() => goToBilling('topup')}
+                />
+              ) : null}
             </div>
           </>
         )}
@@ -2640,9 +2656,9 @@ export function ProvidersSection() {
                         )}
                       </div>
                     )}
-                {effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID && (
-                  <OllamaProviderDetail onChanged={refetch} />
-                )}
+                  {effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID && (
+                    <OllamaProviderDetail onChanged={refetch} />
+                  )}
                 </>
               </>
             ) : (
