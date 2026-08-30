@@ -103,7 +103,13 @@ describe('Feishu parent-chat file reuse', () => {
         ancestors: [],
       },
     });
-    expect(primary.uploadedSource!.realPath.length).toBeGreaterThan(0);
+    // Linux `/proc/self/fd` is a real symlink. Darwin `/dev/fd` is fdescfs
+    // (realpath is not the opened file); Windows has no Node fd path.
+    if (process.platform === 'linux') {
+      expect(primary.uploadedSource!.realPath.length).toBeGreaterThan(0);
+    } else {
+      expect(primary.uploadedSource!.realPath).toBe('');
+    }
 
     await expect(
       outbound.sendFileToChat('oc_group', primary.reusableMessage!, 'u1'),
@@ -181,6 +187,37 @@ describe('Feishu parent-chat file reuse', () => {
       expect(uploaded).toBe('trusted report');
       expect(primary.uploadedSource).toMatchObject({
         realPath: expect.any(String),
+        dev: expect.any(Number),
+        ino: expect.any(Number),
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not attest a path-based fallback when the OS has no handle-backed path', async () => {
+    const absPath = await fileFixture('report.txt', 'trusted report');
+
+    const realNative = fsSync.realpathSync.native.bind(fsSync.realpathSync);
+    const spy = vi.spyOn(fsSync.realpathSync, 'native').mockImplementation(((
+      file: unknown,
+      options?: unknown,
+    ) => {
+      const candidate = String(file);
+      if (candidate.includes('/dev/fd/') || candidate.includes('/proc/self/fd/')) {
+        throw new Error('no handle-backed path');
+      }
+      return realNative(
+        file as Parameters<typeof realNative>[0],
+        options as Parameters<typeof realNative>[1],
+      );
+    }) as typeof fsSync.realpathSync.native);
+
+    try {
+      const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
+      expect(primary.ok).toBe(true);
+      expect(primary.uploadedSource).toMatchObject({
+        realPath: '',
         dev: expect.any(Number),
         ino: expect.any(Number),
       });

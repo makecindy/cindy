@@ -1000,12 +1000,13 @@ function realPathIfInode(
 /**
  * Native canonical path for the opened handle. `realpathSync.native(absPath)` after open is
  * a separate lookup: the Agent can retarget the path between those two calls.
- * Bind via the fd where the OS exposes a real path, then accept absPath only
- * if it still names this inode. Unbound → empty string (fail closed).
+ * Bind only via the fd where the OS exposes a real path (`/proc/self/fd` on Linux).
+ * Darwin `/dev/fd` is fdescfs and does not canonicalize to the opened file;
+ * Windows has no Node-exposed handle path. Do not pair independent
+ * realpath+stat lookups on absPath. Unbound → empty string (fail closed).
  */
 function attestedRealPath(
   fd: number,
-  absPath: string,
   identity: { dev: number; ino: number },
 ): string {
   const fdHints =
@@ -1018,7 +1019,7 @@ function attestedRealPath(
     const bound = realPathIfInode(hint, identity);
     if (bound) return bound;
   }
-  return realPathIfInode(absPath, identity) ?? '';
+  return '';
 }
 
 async function sendFileToTarget(
@@ -1038,7 +1039,7 @@ async function sendFileToTarget(
 
   try {
     const stat = await handle.stat();
-    const realPath = attestedRealPath(handle.fd, absPath, stat);
+    const realPath = attestedRealPath(handle.fd, stat);
     const result = await sendFileSourceToTarget(
       c,
       target,
