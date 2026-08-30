@@ -1036,6 +1036,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   /** reconcile 真正的执行体 —— 只经由 reconcileWithSystemCodex(AfterLogin) 调用, 不直接对外。 */
   private async runReconcileWithSystemCodex(): Promise<void> {
     if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1') {
+      // XDT_ISOLATED_AUTH 可能被 shell / IDE 环境继承；单一 flag 不是删除凭证的授权。
+      // 与 OAuth 写门禁复用同一完整信任谓词，确保只有 restart 脚本本轮派生的
+      // isolated-auth 沙箱能清理自己的 auth.json。信号不完整时保持磁盘原样并返回，
+      // 既不删除普通实例文件，也不把它送入下方共享链接替换流程。
+      if (!this.trustedDevOAuthWriteOverride()) {
+        log.warn('isolated-auth: ignored untrusted cleanup request');
+        return;
+      }
       if (this.isolatedAuthSanitized) return;
       const isolatedMyAuth = path.join(this.codexHome, 'auth.json');
       try {

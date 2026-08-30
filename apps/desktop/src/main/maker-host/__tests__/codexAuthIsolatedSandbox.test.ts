@@ -5,7 +5,7 @@
  * 隔离沙箱里做 OAuth 登录/登出会改写正式实例与本机 CLI 共用的凭证文件 ——
  * 2026-08-13 Chris 实测:沙箱一登录,本机 OAuth 全部被退登。
  *
- * 期望:置 XDT_ISOLATED_AUTH=1(仅非 packaged)后,reconcile
+ * 期望:restart 脚本提供完整可信 isolated-auth 信号(仅非 packaged)后,reconcile
  *   1) 启动时清空旧 auth，之后显式允许的测试登录可写独立文件且不会被再次清掉;
  *   2) 已存在的共享硬链解除本沙箱一端(unlink 本地链),系统文件原样保留;
  *   3) 开关关闭时行为不变(既有 reconcile 测试覆盖,这里锁默认关)。
@@ -62,6 +62,13 @@ function fixture(): { codexHome: string; systemAuth: string; localAuth: string }
   return { codexHome, systemAuth, localAuth: path.join(codexHome, 'auth.json') };
 }
 
+function trustIsolatedAuthSandbox(): void {
+  vi.stubEnv('XDT_ISOLATED', '1');
+  vi.stubEnv('XDT_ISOLATED_AUTH', '1');
+  vi.stubEnv('XDT_USER_DATA_DIR_EPOCH', '1');
+  vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -72,7 +79,7 @@ afterEach(() => {
 describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
   it('开关开:不建共享硬链,本地保持无凭证(登录后走独立文件)', async () => {
     const { localAuth, systemAuth } = fixture();
-    vi.stubEnv('XDT_ISOLATED_AUTH', '1');
+    trustIsolatedAuthSandbox();
     h.dataOwnerId = 'owner-a';
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
@@ -88,7 +95,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.mkdirSync(codexHome, { recursive: true });
     fs.linkSync(systemAuth, localAuth);
     expect(fs.statSync(systemAuth).nlink).toBe(2);
-    vi.stubEnv('XDT_ISOLATED_AUTH', '1');
+    trustIsolatedAuthSandbox();
     h.dataOwnerId = 'owner-a';
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
@@ -105,7 +112,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     fs.mkdirSync(codexHome, { recursive: true });
     fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'orphan-token' } }));
-    vi.stubEnv('XDT_ISOLATED_AUTH', '1');
+    trustIsolatedAuthSandbox();
     h.dataOwnerId = 'owner-a';
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
@@ -346,14 +353,47 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(chmod).not.toHaveBeenCalled();
   });
 
+  it('ambient isolated-auth flag 不清理普通实例凭证或改写系统凭证', async () => {
+    const { codexHome, localAuth, systemAuth } = fixture();
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      localAuth,
+      JSON.stringify({ tokens: { access_token: 'instance-token', account_id: 'acct-local' } }),
+      { mode: 0o600 },
+    );
+    const localBytes = fs.readFileSync(localAuth);
+    const localStat = fs.statSync(localAuth);
+    const systemBytes = fs.readFileSync(systemAuth);
+    const systemStat = fs.statSync(systemAuth);
+    vi.stubEnv('XDT_ISOLATED_AUTH', '1');
+    h.dataOwnerId = 'owner-a';
+    const chmod = vi.spyOn(fs.promises, 'chmod');
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState()).resolves.toMatchObject({
+      authenticated: true,
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.triggerLogin()).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'dev_oauth_write_blocked',
+      oauthWritesBlocked: true,
+    });
+    expect(fs.readFileSync(localAuth)).toEqual(localBytes);
+    expect(fs.statSync(localAuth).ino).toBe(localStat.ino);
+    expect(fs.statSync(localAuth).mode).toBe(localStat.mode);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
+    expect(fs.statSync(systemAuth).ino).toBe(systemStat.ino);
+    expect(fs.statSync(systemAuth).mode).toBe(systemStat.mode);
+    expect(chmod).not.toHaveBeenCalled();
+  });
+
   it('受信 isolated-auth 沙箱可从空凭证启动并解除写门禁', async () => {
     const { localAuth, systemAuth } = fixture();
     const systemBytes = fs.readFileSync(systemAuth);
     const systemStat = fs.statSync(systemAuth);
-    vi.stubEnv('XDT_ISOLATED', '1');
-    vi.stubEnv('XDT_ISOLATED_AUTH', '1');
-    vi.stubEnv('XDT_USER_DATA_DIR_EPOCH', '1');
-    vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');
+    trustIsolatedAuthSandbox();
     h.dataOwnerId = 'owner-a';
     const chmod = vi.spyOn(fs.promises, 'chmod');
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
