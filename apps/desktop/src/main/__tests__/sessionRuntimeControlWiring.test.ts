@@ -828,6 +828,53 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('Pi current runtime could not be verified');
   });
 
+  it('closes a cold Pi runtime when route persistence fails after rehydrate', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const rehydrate = setModel.indexOf(
+      'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
+    );
+    const captureRuntime = setModel.indexOf(
+      'rehydratedColdPiRuntime = liveSessionBeforeRouteChange;',
+      rehydrate,
+    );
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);');
+    const persistenceFailure = setModel.indexOf('catch (persistenceError)', persist);
+    const persistenceRethrow = setModel.indexOf('throw persistenceError;', persistenceFailure);
+    const rollback = setModel.slice(
+      persistenceFailure,
+      persistenceRethrow + 'throw persistenceError;'.length,
+    );
+    const restoreControlStores = setModel.slice(
+      setModel.indexOf('const restoreControlStores ='),
+      setModel.indexOf('const closeRejectedPiRuntime ='),
+    );
+    const restoreStores = rollback.indexOf('restoreControlStores();');
+    const closeRuntime = rollback.indexOf(
+      'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
+    );
+
+    expect(rehydrate).toBeGreaterThan(-1);
+    expect(captureRuntime).toBeGreaterThan(rehydrate);
+    expect(captureRuntime).toBeLessThan(persist);
+    expect(rollback).toContain(
+      "(result.status !== 'deferred' && previousRuntime.hadLiveSession) ||",
+    );
+    expect(rollback).toContain('rehydratedColdPiRuntime !== undefined;');
+    expect(restoreStores).toBeGreaterThan(-1);
+    expect(closeRuntime).toBeGreaterThan(restoreStores);
+    expect(restoreControlStores).toContain(
+      'setSessionProvider(sessionId, previousRuntime.providerId);',
+    );
+    expect(restoreControlStores).toContain('setSessionEffort(sessionId, previousRuntime.effort);');
+    expect(restoreControlStores).toContain('setSessionFastMode(sessionId, previousRuntime.fastMode);');
+    expect(rollback).not.toContain('.send(');
+    expect(rollback).toContain('throw persistenceError;');
+  });
+
   it('fails closed for non-Pi remote danger, overflow, and confirmation payloads', () => {
     const setModel = handlerBody(
       registerSource,

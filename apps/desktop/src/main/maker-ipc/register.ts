@@ -15600,6 +15600,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         hadLiveSession: maker.getSession(sessionId) !== undefined,
       };
       let liveSessionBeforeRouteChange = maker.getSession(sessionId);
+      let rehydratedColdPiRuntime: typeof liveSessionBeforeRouteChange = undefined;
       const targetProviderId =
         effectiveProviderId === undefined
           ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
@@ -15826,6 +15827,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               'Pi current runtime could not be verified; runtime selection was not changed',
             );
           }
+          rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
           currentRuntimeModel = liveSessionBeforeRouteChange.model;
           runtimeRouteChanged =
             currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
@@ -16335,9 +16337,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             pendingCredentialSwitchHolder?.clear(sessionId);
             restoreControlStores();
             let recoveryError: unknown;
+            const shouldCloseRuntimeAfterPersistenceFailure =
+              (result.status !== 'deferred' && previousRuntime.hadLiveSession) ||
+              rehydratedColdPiRuntime !== undefined;
             if (
-              result.status !== 'deferred' &&
-              previousRuntime.hadLiveSession &&
+              shouldCloseRuntimeAfterPersistenceFailure &&
               maker.getSession(sessionId)
             ) {
               try {
