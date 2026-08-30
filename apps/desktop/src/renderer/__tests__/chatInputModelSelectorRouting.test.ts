@@ -37,6 +37,25 @@ describe('ChatInput model source switching wiring', () => {
     );
   });
 
+  it('guards model-only duplicate ids with the provider preserved by the final route', () => {
+    const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const modelChange = chatInputSource.slice(modelStart, providerStart);
+
+    expect(modelChange).toMatch(
+      /confirmModelSwitchContextGuard\(\s*newModelId,\s*sourceRemoteDeviceId,\s*effectiveSourceId,/,
+    );
+    expect(modelChange).toContain(
+      'const { efforts, defaultEffort } = resolveModelEfforts(newModelId, effectiveSourceId);',
+    );
+    expect(modelChange).toMatch(
+      /setModelWithFinalWindowConfirmation\(\s*newModelId,\s*effectiveSourceId,/,
+    );
+    expect(modelChange).toMatch(
+      /maker\.setModel\(\s*sessionId,\s*newModelId,\s*undefined,/,
+    );
+  });
+
   it('keeps exact-window confirmation local and removes it from device-link calls', () => {
     const guardStart = chatInputSource.indexOf(
       'const confirmModelSwitchContextGuard = useCallback(',

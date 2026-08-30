@@ -6810,7 +6810,11 @@ export function ChatInput({
       // 容量护栏最先跑: 用户取消时直接 return, 不留任何副作用(effort 快照都不动)。
       let confirmedGuardContextWindow: number | undefined;
       if (sessionId && newModelId !== activeModel) {
-        const proceed = await confirmModelSwitchContextGuard(newModelId, sourceRemoteDeviceId);
+        const proceed = await confirmModelSwitchContextGuard(
+          newModelId,
+          sourceRemoteDeviceId,
+          effectiveSourceId,
+        );
         if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
         if (typeof proceed === 'number') confirmedGuardContextWindow = proceed;
       }
@@ -6939,7 +6943,7 @@ export function ChatInput({
             const { accepted, result: setModelResult } =
               await setModelWithFinalWindowConfirmation(
                 newModelId,
-                undefined,
+                effectiveSourceId,
                 (confirmedFinalWindow) => {
                   const confirmedContextWindow =
                     confirmedFinalWindow ?? confirmedGuardContextWindow;

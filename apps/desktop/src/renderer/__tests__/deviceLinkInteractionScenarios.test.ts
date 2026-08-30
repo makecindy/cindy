@@ -1078,7 +1078,9 @@ describe('远程交互接线不变式', () => {
     const providerBody = src.slice(providerStart, providerEnd);
     expect(modelBody).toContain('remoteDeviceId: sourceRemoteDeviceId');
     expect(modelBody).toContain('onEffortDidChange?.(newEffort, sessionId, sourceRemoteDeviceId)');
-    expect(modelBody).toContain('confirmModelSwitchContextGuard(newModelId, sourceRemoteDeviceId)');
+    expect(modelBody).toMatch(
+      /confirmModelSwitchContextGuard\(\s*newModelId,\s*sourceRemoteDeviceId,\s*effectiveSourceId,/,
+    );
     expect(modelBody).toMatch(
       /persistFastModeChange\(restoredFast,\s*\{[\s\S]*?remoteDeviceId: sourceRemoteDeviceId/,
     );
