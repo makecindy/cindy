@@ -100,6 +100,36 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     );
   });
 
+  it.runIf(process.platform !== 'win32')(
+    '开关开:系统凭证缺失时清除悬空共享软链,恢复后仍保持隔离',
+    async () => {
+      const { codexHome, localAuth, systemAuth } = fixture();
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.rmSync(systemAuth);
+      fs.symlinkSync(systemAuth, localAuth);
+      expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
+      expect(fs.existsSync(localAuth)).toBe(false);
+
+      vi.stubEnv('XDT_ISOLATED_AUTH', '1');
+      h.dataOwnerId = 'owner-a';
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
+      expect(() => fs.lstatSync(localAuth)).toThrow();
+
+      fs.writeFileSync(
+        systemAuth,
+        JSON.stringify({
+          account: { email: 'restored@example.test' },
+          tokens: { access_token: 'restored-system-token', account_id: 'acct-restored' },
+        }),
+      );
+      expect(fs.existsSync(localAuth)).toBe(false);
+      await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
+      expect(fs.existsSync(localAuth)).toBe(false);
+    },
+  );
+
   it('开关关(默认):reconcile 照常建共享硬链', async () => {
     const { localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';

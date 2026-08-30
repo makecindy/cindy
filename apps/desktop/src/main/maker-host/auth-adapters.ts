@@ -1007,8 +1007,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   /** reconcile 真正的执行体 —— 只经由 reconcileWithSystemCodex(AfterLogin) 调用, 不直接对外。 */
   private async runReconcileWithSystemCodex(): Promise<void> {
     // dev 沙箱凭证隔离(XDT_ISOLATED_AUTH=1,仅非 packaged 生效):完全不与本机
-    // ~/.codex 协调 —— 不建共享硬链;当前 auth.json 若已是与系统文件同 inode 的
-    // 硬链,解除本沙箱这一端(系统文件与其它实例的链接不受影响),让沙箱回到
+    // ~/.codex 协调 —— 不建共享链接;当前 auth.json 若已是与系统文件共享的
+    // 硬链/软链(含系统文件暂时缺失后留下的悬空软链),解除本沙箱这一端,让沙箱回到
     // 未登录、之后的登录写独立文件。背景:共享硬链下沙箱内登录/登出会改写
     // 正式实例与本机 CLI 共用的凭证(2026-08-13 Chris 实测:沙箱一登录,本机
     // OAuth 全被退登),隔离沙箱要可安全测登录必须掐掉这条共享。
@@ -1016,14 +1016,41 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       const isolatedMyAuth = path.join(this.codexHome, 'auth.json');
       const isolatedSystemAuth = getSystemCodexAuthPath();
       try {
-        if (existsSync(isolatedMyAuth) && existsSync(isolatedSystemAuth)) {
-          if (await pathsReferToSameFile(isolatedSystemAuth, isolatedMyAuth)) {
-            await fsp.unlink(isolatedMyAuth);
-            log.info('isolated-auth: detached shared codex auth hardlink for this sandbox');
+        let isolatedEntry: fs.Stats;
+        try {
+          isolatedEntry = await fsp.lstat(isolatedMyAuth);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+          throw err;
+        }
+
+        let shouldDetach = false;
+        if (isolatedEntry.isSymbolicLink()) {
+          const linkTarget = await fsp.readlink(isolatedMyAuth);
+          const resolvedTarget = path.resolve(path.dirname(isolatedMyAuth), linkTarget);
+          shouldDetach = resolvedTarget === path.resolve(isolatedSystemAuth);
+          if (!shouldDetach) {
+            try {
+              await fsp.stat(isolatedMyAuth);
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code === 'ENOENT') shouldDetach = true;
+              else throw err;
+            }
           }
         }
+        if (
+          !shouldDetach &&
+          existsSync(isolatedSystemAuth) &&
+          (await pathsReferToSameFile(isolatedSystemAuth, isolatedMyAuth))
+        ) {
+          shouldDetach = true;
+        }
+        if (shouldDetach) {
+          await fsp.unlink(isolatedMyAuth);
+          log.info('isolated-auth: detached shared codex auth entry for this sandbox');
+        }
       } catch (err) {
-        log.warn('isolated-auth: failed to detach shared codex auth hardlink', {
+        log.warn('isolated-auth: failed to detach shared codex auth entry', {
           error: err instanceof Error ? err.message : String(err),
         });
       }
