@@ -144,7 +144,7 @@ function scanStyleStats(repoRoot, styleRoots, { missingRoots = [] } = {}) {
     const scanSource = statsSourceForColorScan(source, path.posix.extname(relPath));
     bareColors += filterInventoryBareColors(matchBareColors(scanSource)).length;
     bareRadii += (scanSource.match(BARE_RADIUS_RE) ?? []).length;
-    for (const match of source.matchAll(TOKEN_REF_RE)) tokenHits.add(match[1]);
+    for (const match of scanSource.matchAll(TOKEN_REF_RE)) tokenHits.add(match[1]);
   }
   return { files, bareColors, bareRadii, tokenCount: tokenHits.size };
 }
@@ -472,11 +472,24 @@ export function catalogSurfaces() {
       title: 'SkillHub 本地技能',
       productionEntry:
         'hash `/skillhub/local` 及详情 `/skillhub/local/:kind/global/:name`、`/skillhub/local/:kind/project/:projectHash/:name`',
-      reachableComponents: ['SkillhubHomeView', 'SkillhubDetailView', 'SkillhubFeatureLayout'],
+      // SkillhubHomeView 直接渲染 PluginManagementLayout（features/plugin 共享布局）、
+      // SkillhubMarketPreviewPanel 与 InstallTargetPicker——只扫三个路由组件文件
+      // 会漏掉这些子组件的样式事实。
+      reachableComponents: [
+        'SkillhubHomeView',
+        'SkillhubDetailView',
+        'SkillhubFeatureLayout',
+        'PluginManagementLayout',
+        'SkillhubMarketPreviewPanel',
+        'InstallTargetPicker',
+      ],
       styleRoots: [
         'apps/desktop/src/renderer/features/skillhub/SkillhubHomeView.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubDetailView.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubFeatureLayout.tsx',
+        'apps/desktop/src/renderer/features/skillhub/SkillhubMarketPreviewPanel.tsx',
+        'apps/desktop/src/renderer/features/skillhub/components/InstallTargetPicker.tsx',
+        'apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx',
       ],
       routerPaths: [
         '/skillhub/local',
@@ -524,10 +537,29 @@ export function catalogSurfaces() {
       platform: 'desktop',
       title: '已装插件',
       productionEntry: 'hash `/plugins`（GhostPluginPage）',
-      reachableComponents: ['GhostPluginPage', 'GhostPluginDetailView'],
+      // GhostPluginPage 直接渲染 PluginManagementLayout、MarketPluginDetailView、
+      // PluginScopePicker、MyPublishesSection、AddMarketplaceDialog、UpdateAllDialog,
+      // 并直接导入 plugin-motion.css——只扫页面与详情两个文件会漏掉这些样式事实。
+      reachableComponents: [
+        'GhostPluginPage',
+        'GhostPluginDetailView',
+        'PluginManagementLayout',
+        'MarketPluginDetailView',
+        'PluginScopePicker',
+        'MyPublishesSection',
+        'AddMarketplaceDialog',
+        'UpdateAllDialog',
+      ],
       styleRoots: [
         'apps/desktop/src/renderer/features/plugin/GhostPluginPage.tsx',
         'apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx',
+        'apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx',
+        'apps/desktop/src/renderer/features/plugin/MarketPluginDetailView.tsx',
+        'apps/desktop/src/renderer/features/plugin/PluginScopePicker.tsx',
+        'apps/desktop/src/renderer/features/plugin/MyPublishesSection.tsx',
+        'apps/desktop/src/renderer/features/plugin/AddMarketplaceDialog.tsx',
+        'apps/desktop/src/renderer/features/plugin/UpdateAllDialog.tsx',
+        'apps/desktop/src/renderer/features/plugin/plugin-motion.css',
       ],
       routerPaths: ['/plugins'],
       routeComponents: ['GhostPluginPage'],

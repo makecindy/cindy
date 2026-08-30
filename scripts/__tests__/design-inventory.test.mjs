@@ -617,6 +617,65 @@ test('extractViewEntries: 新增 view 分支会被发现(fixture)', () => {
   assert.deepEqual(extractViewEntries(withComment), ['live-view']);
 });
 
+test('Token 统计基于去注释源码,注释里的 var(--xxx) 占位符不进基线', () => {
+  const source = `
+    // 占位示例:var(--placeholder-doc-only)
+    /* var(--another-doc-token) */
+    const style = { color: 'var(--real-token)', bg: 'hsl(var(--real-hsl-token))' };
+  `;
+  const stripped = stripJsComments(source);
+  const tokens = new Set();
+  for (const match of stripped.matchAll(/(?:hsl\(\s*var\(|var\()(--[a-zA-Z0-9-]+)/g)) {
+    tokens.add(match[1]);
+  }
+  assert.deepEqual([...tokens].sort(), ['--real-hsl-token', '--real-token']);
+});
+
+test('skillhub.local 纳入直接渲染子组件的样式事实', () => {
+  const catalog = catalogSurfaces();
+  const local = catalog.find((surface) => surface.id === 'desktop.skillhub.local');
+  assert.ok(local);
+  for (const component of ['PluginManagementLayout', 'SkillhubMarketPreviewPanel', 'InstallTargetPicker']) {
+    assert.ok(
+      local.reachableComponents.includes(component),
+      `${component} 必须列入 skillhub.local 可达组件`,
+    );
+  }
+  assert.ok(
+    local.styleRoots.includes('apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx'),
+  );
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const generated = surfaces.find((surface) => surface.id === 'desktop.skillhub.local');
+  assert.ok(generated.styleSources.some((file) => file.endsWith('PluginManagementLayout.tsx')));
+  assert.ok(generated.tokenCount > 33, `子组件并入后 token 数应高于只扫路由组件(实际 ${generated.tokenCount})`);
+});
+
+test('plugins.installed 纳入直接渲染子组件与 plugin-motion.css', () => {
+  const catalog = catalogSurfaces();
+  const installed = catalog.find((surface) => surface.id === 'desktop.plugins.installed');
+  assert.ok(installed);
+  for (const component of [
+    'PluginManagementLayout',
+    'MarketPluginDetailView',
+    'PluginScopePicker',
+    'MyPublishesSection',
+    'AddMarketplaceDialog',
+    'UpdateAllDialog',
+  ]) {
+    assert.ok(
+      installed.reachableComponents.includes(component),
+      `${component} 必须列入 plugins.installed 可达组件`,
+    );
+  }
+  assert.ok(
+    installed.styleRoots.includes('apps/desktop/src/renderer/features/plugin/plugin-motion.css'),
+  );
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const generated = surfaces.find((surface) => surface.id === 'desktop.plugins.installed');
+  assert.ok(generated.styleSources.some((file) => file.endsWith('plugin-motion.css')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('MyPublishesSection.tsx')));
+});
+
 test('defaultHumanSeed: 全量 legacy + unassigned,protected 与迁移状态正交', () => {
   const seed = defaultHumanSeed(catalogSurfaces());
   const ids = extractHumanSurfaceIds(seed);
