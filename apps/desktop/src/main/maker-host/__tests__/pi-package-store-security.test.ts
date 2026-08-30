@@ -2294,7 +2294,7 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([sibling]);
   });
 
-  it('keeps private install sources memory-only when enable-ledger reconciliation is unavailable', async () => {
+  it('does not claim a private install enabled when enable-ledger reconciliation is unavailable', async () => {
     const source = 'https://alice:s3cr3t@packages.example/context-mode.git?token=query-secret#fragment-secret';
     await createSkillOnlyPackage(source);
     const stateDir = path.join(runtime.userData, 'pi-package-home');
@@ -2305,7 +2305,8 @@ describe('Pi package executable-code boundary', () => {
     const store = await import('../pi-package-store.js');
 
     const result = await mutateAuthorized(store, { action: 'install', source });
-    expect(result.affectedPackage).toMatchObject({ enabled: true });
+    expect(result).toMatchObject({ changed: true, available: false, projectionUnavailable: true });
+    expect(result).not.toHaveProperty('affectedPackage');
     expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
     await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(store.listPiPackages()).rejects.toThrow('state is unavailable');
@@ -2319,6 +2320,61 @@ describe('Pi package executable-code boundary', () => {
       { action: 'install', failureCategory: 'state-unavailable' },
     );
   });
+
+  it.each(['EIO', 'EACCES'])(
+    'does not claim enabled after state and pending reconciliation both fail with %s',
+    async (code) => {
+      const { source } = await createSkillOnlyPackage(`npm:double-write-${code.toLowerCase()}`);
+      const sibling = 'npm:keep-disabled';
+      const stateDir = path.join(runtime.userData, 'pi-package-home');
+      const stateFile = path.join(stateDir, 'cindy-package-state.json');
+      const pendingFile = path.join(stateDir, 'cindy-package-pending-enable.json');
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(stateFile, JSON.stringify({
+        version: 3,
+        disabledSources: [source, sibling],
+        approvedExtensionSources: [],
+        approvedExtensionFingerprints: {},
+        snapshotUnavailableRoots: {},
+      }));
+      const originalRename = fs.rename.bind(fs);
+      const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+        if ([stateFile, pendingFile].some((file) => path.resolve(String(to)) === path.resolve(file))) {
+          throw Object.assign(new Error(`private path ${code}`), { code });
+        }
+        return originalRename(from, to);
+      });
+      const runtimeFence = vi.fn();
+      try {
+        const store = await import('../pi-package-store.js');
+        const result = await mutateAuthorized(store, { action: 'install', source }, {
+          onRuntimeInvalidationPublished: runtimeFence,
+        });
+        expect(result).toMatchObject({
+          changed: true,
+          available: false,
+          packages: [],
+          projectionUnavailable: true,
+        });
+        expect(result).not.toHaveProperty('affectedPackage');
+        expect(runtimeFence).toHaveBeenCalledOnce();
+        expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args).toContain(source);
+        expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toMatchObject({
+          disabledSources: [source, sibling],
+        });
+        await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
+
+        vi.resetModules();
+        const peerStore = await import('../pi-package-store.js');
+        await expect(peerStore.listPiPackages()).resolves.toMatchObject({
+          packages: [expect.objectContaining({ source, enabled: false })],
+        });
+        await expect(peerStore.resolveManagedPiNativePackagePaths()).resolves.toEqual([]);
+      } finally {
+        renameSpy.mockRestore();
+      }
+    },
+  );
 
   it.each([
     ['transient I/O', 'EIO'],

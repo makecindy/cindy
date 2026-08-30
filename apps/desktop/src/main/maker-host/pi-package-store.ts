@@ -790,9 +790,17 @@ async function writePendingEnabledSources(sources: ReadonlySet<string>): Promise
 }
 
 async function persistPendingEnabledSources(sources: Iterable<string>): Promise<void> {
+  const previousMemory = new Set(pendingEnabledSources);
   const pending = await readPendingEnabledSources();
   for (const source of sources) pending.add(source);
-  if (!await writePendingEnabledSources(pending)) throw new PiPackageStateUnavailableError();
+  try {
+    if (!await writePendingEnabledSources(pending)) throw new PiPackageStateUnavailableError();
+  } catch (error) {
+    // A non-durable attempt must not become an enable override visible only to
+    // this Main. Preserve any overlay that predated this mutation.
+    replacePendingEnabledSourcesInMemory(previousMemory);
+    throw error;
+  }
 }
 
 async function reconcilePendingEnabledSources(): Promise<void> {
@@ -2998,6 +3006,7 @@ export async function mutatePiPackage(
     // package shape therefore cannot delay or veto the upstream command.
     const inspectedBeforeMutation: InspectedPackage[] = [];
     let affectedSource: string | undefined;
+    let installEnableProjectionUnavailable = false;
     const runNativeMutationCommand = async (args: string[]): Promise<void> => {
       try {
         await runPiPackageCommand(args);
@@ -3035,9 +3044,9 @@ export async function mutatePiPackage(
         try {
           await persistPendingEnabledSources(effectiveInstallAliases);
         } catch {
-          // Keep the effective overlay in this Main even if the journal itself
-          // is temporarily unwritable. Native Pi success is never rewritten.
-          for (const alias of effectiveInstallAliases) pendingEnabledSources.add(alias);
+          // Native install remains committed, but a process-local override
+          // cannot prove enabled state to another Main or after restart.
+          installEnableProjectionUnavailable = true;
         }
         log.warn('Pi package installed; enable-ledger reconciliation deferred', {
           action: 'install',
@@ -3280,13 +3289,21 @@ export async function mutatePiPackage(
       result = { available: false, packages: [] };
       projectionUnavailable = true;
     }
+    if (installEnableProjectionUnavailable) {
+      // Do not publish the stale disable ledger or a process-local override as
+      // an authoritative enabled result when neither existing store converged.
+      result = { available: false, packages: [] };
+      projectionUnavailable = true;
+    }
     const affectedLookupSource = affectedSource ?? source;
     const affectedPackage = findAffectedPiPackage(result.packages, affectedLookupSource)
       ?? result.packages.find((pkg) => (
         pkg.mutationTarget === request.mutationTarget
         || pkg.mutationTarget === packageMutationTarget(affectedLookupSource)
       ));
-    if (request.action === 'install' && affectedPackage?.enabled !== true) {
+    if (request.action === 'install'
+      && !installEnableProjectionUnavailable
+      && affectedPackage?.enabled !== true) {
       // Native Pi already accepted the package. Keep a useful receipt even if
       // Cindy could not project its new/unknown manifest shape.
       const fallbackProjection = projectPackageSource(source);
