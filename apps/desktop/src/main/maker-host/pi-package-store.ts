@@ -2966,6 +2966,37 @@ export async function mutatePiPackage(
       // optional snapshot identity until that command succeeds. Native Pi
       // enablement never depends on this Cindy metadata.
       await runNativeMutationCommand(['install', source, '--no-approve']);
+      const installAliases = [...new Set((await Promise.all([
+        sourceAliasesWithCanonical(requestedSource),
+        sourceAliasesWithCanonical(source),
+      ])).flat())];
+      let effectiveInstallAliases = installAliases;
+      // Explicit reinstall means enabled only after its precise aliases leave
+      // the durable disable ledger. Reconcile that effective state before the
+      // runtime fence so a startup admitted by the new generation cannot read
+      // the old disable projection and survive without the reinstalled package.
+      try {
+        effectiveInstallAliases = await expandAliasesWithDisabledSources(installAliases);
+        await clearDisabledPackageSources(effectiveInstallAliases);
+        const pending = await readPendingEnabledSources();
+        for (const alias of effectiveInstallAliases) pending.delete(alias);
+        await writePendingEnabledSources(pending);
+      } catch (error) {
+        // Pi install already succeeded. Persist an effective enable journal so
+        // every Main instance and the next runtime can honor that native result
+        // without erasing sibling disables; a later mutation reconciles it.
+        try {
+          await persistPendingEnabledSources(effectiveInstallAliases);
+        } catch {
+          // Keep the effective overlay in this Main even if the journal itself
+          // is temporarily unwritable. Native Pi success is never rewritten.
+          for (const alias of effectiveInstallAliases) pendingEnabledSources.add(alias);
+        }
+        log.warn('Pi package installed; enable-ledger reconciliation deferred', {
+          action: 'install',
+          failureCategory: 'state-unavailable',
+        });
+      }
       await publishRuntimeInvalidation();
       invalidateInspectionCache();
       let inspectedAfterInstall: InspectedPackage[] = [];
@@ -2997,40 +3028,11 @@ export async function mutatePiPackage(
         }
       }
       affectedSource = affected?.rawSource ?? previous?.rawSource ?? source;
-      const installAliases = [...new Set((await Promise.all([
-        sourceAliasesWithCanonical(requestedSource),
-        sourceAliasesWithCanonical(source),
-        ...(previous ? [sourceAliasesWithCanonical(previous.rawSource)] : []),
-        ...(affected ? [sourceAliasesWithCanonical(affected.rawSource)] : []),
-      ])).flat())];
-      let effectiveInstallAliases = installAliases;
-      // Explicit reinstall means enabled only after its precise aliases leave
-      // the durable disable ledger. Retry once for transient filesystem faults;
-      // a persistent failure must not produce a false enabled receipt.
+      const approvalAliases = affected
+        ? [...new Set([...installAliases, ...await sourceAliasesWithCanonical(affected.rawSource)])]
+        : installAliases;
       try {
-        effectiveInstallAliases = await expandAliasesWithDisabledSources(installAliases);
-        await clearDisabledPackageSources(effectiveInstallAliases);
-        const pending = await readPendingEnabledSources();
-        for (const alias of effectiveInstallAliases) pending.delete(alias);
-        await writePendingEnabledSources(pending);
-      } catch (error) {
-        // Pi install already succeeded. Persist an effective enable journal so
-        // every Main instance and the next runtime can honor that native result
-        // without erasing sibling disables; a later mutation reconciles it.
-        try {
-          await persistPendingEnabledSources(effectiveInstallAliases);
-        } catch {
-          // Keep the effective overlay in this Main even if the journal itself
-          // is temporarily unwritable. Native Pi success is never rewritten.
-          for (const alias of effectiveInstallAliases) pendingEnabledSources.add(alias);
-        }
-        log.warn('Pi package installed; enable-ledger reconciliation deferred', {
-          action: 'install',
-          failureCategory: 'state-unavailable',
-        });
-      }
-      try {
-        await revokeExtensionApproval(installAliases);
+        await revokeExtensionApproval(approvalAliases);
         await persistEnabledExtensionApprovals({
           ...(affected ? { enable: affected } : {}),
         });

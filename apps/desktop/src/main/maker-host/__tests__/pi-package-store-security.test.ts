@@ -2686,6 +2686,33 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  it('reconciles reinstall enablement before publishing the runtime fence', async () => {
+    const { source } = await createSkillOnlyPackage('npm:runtime-fence-reinstall');
+    const sibling = 'npm:keep-disabled';
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({
+      version: 3,
+      disabledSources: [source, sibling],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    const store = await import('../pi-package-store.js');
+    let disabledAtFence: string[] | undefined;
+
+    await mutateAuthorized(store, { action: 'install', source }, {
+      onRuntimeInvalidationPublished: async () => {
+        disabledAtFence = (JSON.parse(await fs.readFile(stateFile, 'utf8')) as {
+          disabledSources: string[];
+        }).disabledSources;
+      },
+    });
+
+    expect(disabledAtFence).toEqual([sibling]);
+  });
+
   it.each([
     ['install', 'EACCES', 'access-denied'],
     ['install', 'EIO', 'io-failure'],
