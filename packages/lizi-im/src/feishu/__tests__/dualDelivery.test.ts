@@ -171,6 +171,21 @@ describe('Feishu native thread/main dual delivery', () => {
     ).resolves.toEqual({ kind: 'suppress-main-copy' });
   });
 
+  it('keeps a committed topic lease until the main-feed copy confirms the pair', async () => {
+    const topic = await coordinateDualDelivery(input());
+    if (topic.kind !== 'dispatch' || !topic.commitTopic) {
+      throw new Error('elected topic must expose commitTopic');
+    }
+    expect(topic.commitTopic()).toBe(true);
+
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_topic_retry', threadId: 'omt_topic' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+    await expect(
+      coordinateDualDelivery(input({ messageId: 'om_flat', threadId: '' })),
+    ).resolves.toEqual({ kind: 'suppress-main-copy' });
+  });
+
   it('suppresses fresh flat message ids after the logical send is confirmed', async () => {
     vi.useFakeTimers();
     const topic = await coordinateDualDelivery(input());

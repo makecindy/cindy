@@ -233,7 +233,13 @@ function topicRouteCallbacks(
   existingLease?: RecentFlatRecord,
 ): { commitTopic: () => boolean; abandonTopic: () => void } {
   const existing = existingLease ?? topicLeases.get(key);
-  const lease = existing?.state === 'pending' ? existing : rememberTopicLease(key, Date.now());
+  // A committed lease must keep suppressing later topic message ids until
+  // `confirmPair`. Replacing it with a fresh pending rec would let a second
+  // delivery call `commitTopic()` and start another Agent turn.
+  const lease =
+    existing?.state === 'pending' || existing?.state === 'committed'
+      ? existing
+      : rememberTopicLease(key, Date.now());
   return {
     commitTopic: () => commitTopicRoute(key, lease),
     abandonTopic: () => abandonTopicRoute(key, lease),
@@ -368,6 +374,9 @@ export async function coordinateDualDelivery(
         return dispatchWithMirror(key, topicRouteCallbacks(key, lease));
       }
     }
+    return { kind: 'suppress-main-copy' };
+  }
+  if (input.threadId && topicLeases.get(key)?.state === 'committed') {
     return { kind: 'suppress-main-copy' };
   }
   if (!input.threadId && recentThreads.has(key)) {
