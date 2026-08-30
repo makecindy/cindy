@@ -358,6 +358,58 @@ test("isolated auth rejects an explicit userData even when it spoofs the derived
 	}), false);
 });
 
+test("isolated auth rejects a derived userData symlink or junction before minting proof", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-isolated-alias-"));
+	const savedEnv = {
+		APPDATA: process.env.APPDATA,
+		HOME: process.env.HOME,
+		USERPROFILE: process.env.USERPROFILE,
+		XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+	};
+	try {
+		if (process.platform === "win32") {
+			process.env.APPDATA = path.join(root, "appdata");
+			process.env.USERPROFILE = root;
+		} else if (process.platform === "darwin") {
+			process.env.HOME = root;
+		} else {
+			process.env.XDG_CONFIG_HOME = path.join(root, "config");
+		}
+		const isolatedArg = "--isolated=link-guard";
+		const derived = defaultIsolatedUserDataDir("link-guard", "global");
+		const unrelatedProfile = path.join(root, "unrelated-profile");
+		fs.mkdirSync(path.dirname(derived), { recursive: true });
+		fs.mkdirSync(unrelatedProfile, { recursive: true });
+		fs.symlinkSync(
+			unrelatedProfile,
+			derived,
+			process.platform === "win32" ? "junction" : "dir",
+		);
+
+		assert.equal(isTrustedIsolatedAuthUserDataDir({
+			isolatedArg,
+			userDataDir: derived,
+			userDataDirEpoch: "1",
+			userDataDerivedByRestart: true,
+			selectedRegion: "global",
+		}), false);
+		assert.throws(
+			() => createIsolatedAuthLaunchProof({ userDataDir: derived }),
+			/symlink or junction/,
+		);
+		assert.equal(
+			fs.existsSync(path.join(unrelatedProfile, ISOLATED_AUTH_LAUNCH_PROOF_FILE)),
+			false,
+		);
+	} finally {
+		for (const [key, value] of Object.entries(savedEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("isolated auth launch proof binds the current derived sandbox and is private", () => {
 	const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-isolated-proof-"));
 	try {

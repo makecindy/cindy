@@ -656,7 +656,18 @@ export function isTrustedIsolatedAuthUserDataDir({
     parseIsolationName(isolatedArg),
     selectedRegion,
   );
+  if (userDataDirEntryIsAliasOrUnverifiable(userDataDir)) return false;
   return canonicalizeUserDataDir(userDataDir) === canonicalizeUserDataDir(expectedDir);
+}
+
+function userDataDirEntryIsAliasOrUnverifiable(dir) {
+  try {
+    return fs.lstatSync(path.resolve(dir)).isSymbolicLink();
+  } catch (error) {
+    // A not-yet-created derived sandbox is valid at the early trust gate. Every other lstat
+    // failure is ambiguous and must not authorize credential cleanup or OAuth writes.
+    return error?.code !== 'ENOENT';
+  }
 }
 
 /**
@@ -670,6 +681,11 @@ export function createIsolatedAuthLaunchProof({
   now = Date.now(),
   nonce = randomBytes(32).toString('hex'),
 }) {
+  // Recheck at the write boundary: process cleanup between authorization and proof minting leaves
+  // time for the derived directory to be swapped for a symlink / Windows junction.
+  if (userDataDirEntryIsAliasOrUnverifiable(userDataDir)) {
+    throw new Error('Refusing isolated-auth launch proof for a symlink or junction userData path');
+  }
   const proofPath = path.join(userDataDir, ISOLATED_AUTH_LAUNCH_PROOF_FILE);
   const tempPath = `${proofPath}.${process.pid}.${nonce}.tmp`;
   const proof = {
