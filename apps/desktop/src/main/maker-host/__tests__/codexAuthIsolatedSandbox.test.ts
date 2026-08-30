@@ -63,10 +63,27 @@ function fixture(): { codexHome: string; systemAuth: string; localAuth: string }
 }
 
 function trustIsolatedAuthSandbox(): void {
+  const nonce = 'a'.repeat(64);
+  const now = Date.now();
+  fs.writeFileSync(
+    path.join(h.userDataDir, '.isolated-auth-launch-proof.json'),
+    `${JSON.stringify({
+      version: 1,
+      nonce,
+      userDataDir: fs.realpathSync.native(h.userDataDir),
+      profileKind: 'isolated-sandbox',
+      epoch: 1,
+      isolationName: '',
+      issuedAtMs: now,
+      expiresAtMs: now + 60_000,
+    })}\n`,
+    { mode: 0o600 },
+  );
   vi.stubEnv('XDT_ISOLATED', '1');
   vi.stubEnv('XDT_ISOLATED_AUTH', '1');
   vi.stubEnv('XDT_USER_DATA_DIR_EPOCH', '1');
   vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');
+  vi.stubEnv('XDT_ISOLATED_AUTH_PROOF', nonce);
 }
 
 afterEach(() => {
@@ -353,7 +370,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(chmod).not.toHaveBeenCalled();
   });
 
-  it('ambient isolated-auth flag 不清理普通实例凭证或改写系统凭证', async () => {
+  it('ambient 四变量与任意 userData 不能伪造 proof 或改写凭证', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     fs.mkdirSync(codexHome, { recursive: true });
     fs.writeFileSync(
@@ -365,7 +382,11 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const localStat = fs.statSync(localAuth);
     const systemBytes = fs.readFileSync(systemAuth);
     const systemStat = fs.statSync(systemAuth);
+    vi.stubEnv('XDT_USER_DATA_DIR', h.userDataDir);
+    vi.stubEnv('XDT_ISOLATED', '1');
     vi.stubEnv('XDT_ISOLATED_AUTH', '1');
+    vi.stubEnv('XDT_USER_DATA_DIR_EPOCH', '1');
+    vi.stubEnv('XDT_ALLOW_DEV_OAUTH_WRITE', '1');
     h.dataOwnerId = 'owner-a';
     const chmod = vi.spyOn(fs.promises, 'chmod');
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
@@ -403,7 +424,34 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(state).not.toHaveProperty('oauthWritesBlocked');
     expect(fs.existsSync(localAuth)).toBe(false);
     expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
+    expect(fs.statSync(systemAuth).ino).toBe(systemStat.ino);
     expect(fs.statSync(systemAuth).mode).toBe(systemStat.mode);
+    expect(chmod).not.toHaveBeenCalled();
+    expect(
+      fs.existsSync(path.join(h.userDataDir, '.isolated-auth-launch-proof.json')),
+    ).toBe(false);
+  });
+
+  it('proof 绑定其它 userData 时保持只读且不消费凭证', async () => {
+    const { localAuth, systemAuth } = fixture();
+    fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+    fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'instance-token' } }));
+    const localBytes = fs.readFileSync(localAuth);
+    const systemBytes = fs.readFileSync(systemAuth);
+    trustIsolatedAuthSandbox();
+    const proofPath = path.join(h.userDataDir, '.isolated-auth-launch-proof.json');
+    const proof = JSON.parse(fs.readFileSync(proofPath, 'utf8'));
+    proof.userDataDir = path.join(path.dirname(h.userDataDir), 'another-profile');
+    fs.writeFileSync(proofPath, `${JSON.stringify(proof)}\n`, { mode: 0o600 });
+    h.dataOwnerId = 'owner-a';
+    const chmod = vi.spyOn(fs.promises, 'chmod');
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+
+    await expect(new DesktopCodexAuthAdapter().getState()).resolves.toMatchObject({
+      oauthWritesBlocked: true,
+    });
+    expect(fs.readFileSync(localAuth)).toEqual(localBytes);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
     expect(chmod).not.toHaveBeenCalled();
   });
 });

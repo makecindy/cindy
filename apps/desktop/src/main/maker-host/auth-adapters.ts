@@ -14,7 +14,7 @@
  */
 
 import { app, safeStorage } from 'electron';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -733,6 +733,62 @@ type CodexDisconnectIntent = {
 };
 
 const MAX_COALESCED_LOGIN_PROGRESS_CHARS = 64 * 1024;
+const ISOLATED_AUTH_LAUNCH_PROOF_FILE = '.isolated-auth-launch-proof.json';
+const MAX_ISOLATED_AUTH_PROOF_BYTES = 4096;
+const MAX_ISOLATED_AUTH_PROOF_TTL_MS = 10 * 60_000;
+
+function canonicalizeIsolatedAuthProofDir(dir: string): string {
+  try {
+    return fs.realpathSync.native(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+function consumeIsolatedAuthLaunchProof(): boolean {
+  const expectedNonce = process.env.XDT_ISOLATED_AUTH_PROOF;
+  delete process.env.XDT_ISOLATED_AUTH_PROOF;
+  if (!expectedNonce || !/^[a-f0-9]{64}$/.test(expectedNonce)) return false;
+  const userDataDir = app.getPath('userData');
+  const proofPath = path.join(userDataDir, ISOLATED_AUTH_LAUNCH_PROOF_FILE);
+  try {
+    const stat = fs.lstatSync(proofPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_ISOLATED_AUTH_PROOF_BYTES) {
+      return false;
+    }
+    if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) return false;
+    if (process.getuid && stat.uid !== process.getuid()) return false;
+    const proof = JSON.parse(fs.readFileSync(proofPath, 'utf8')) as Record<string, unknown>;
+    const nonce = typeof proof.nonce === 'string' ? proof.nonce : '';
+    const expected = Buffer.from(expectedNonce, 'hex');
+    const actual = /^[a-f0-9]{64}$/.test(nonce) ? Buffer.from(nonce, 'hex') : Buffer.alloc(0);
+    const now = Date.now();
+    return (
+      actual.length === expected.length &&
+      timingSafeEqual(actual, expected) &&
+      proof.version === 1 &&
+      proof.profileKind === 'isolated-sandbox' &&
+      proof.epoch === 1 &&
+      proof.isolationName === (process.env.XDT_ISOLATED_NAME ?? '') &&
+      typeof proof.userDataDir === 'string' &&
+      canonicalizeIsolatedAuthProofDir(proof.userDataDir) ===
+        canonicalizeIsolatedAuthProofDir(userDataDir) &&
+      typeof proof.issuedAtMs === 'number' &&
+      typeof proof.expiresAtMs === 'number' &&
+      proof.issuedAtMs <= now &&
+      proof.expiresAtMs >= now &&
+      proof.expiresAtMs - proof.issuedAtMs <= MAX_ISOLATED_AUTH_PROOF_TTL_MS
+    );
+  } catch {
+    return false;
+  } finally {
+    try {
+      fs.unlinkSync(proofPath);
+    } catch {
+      // Missing/locked proof is already fail-closed.
+    }
+  }
+}
 
 export class DesktopCodexAuthAdapter implements AuthAdapter {
   private currentLoginProc: ChildProcess | null = null;
@@ -797,6 +853,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private devReadOnlyInvalidatedSystemCredential: InvalidatedSystemCodexAuthMarker | null = null;
   private devOAuthWriteOverrideWarned = false;
   private isolatedAuthSanitized = false;
+  private isolatedAuthLaunchProofTrusted: boolean | null = null;
   /** 运行期最近一次能够被文件/授权记录明确证明的来源，兜住系统 auth 原子替换后的旧硬链。 */
   private lastKnownCodexCredentialScope: AuthState['credentialScope'] = undefined;
 
@@ -839,13 +896,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   private trustedDevOAuthWriteOverride(): boolean {
-    return (
+    const declared =
       !app.isPackaged &&
       process.env.XDT_ISOLATED === '1' &&
       process.env.XDT_ISOLATED_AUTH === '1' &&
       process.env.XDT_USER_DATA_DIR_EPOCH === '1' &&
-      process.env.XDT_ALLOW_DEV_OAUTH_WRITE === '1'
-    );
+      process.env.XDT_ALLOW_DEV_OAUTH_WRITE === '1';
+    if (!declared) return false;
+    this.isolatedAuthLaunchProofTrusted ??= consumeIsolatedAuthLaunchProof();
+    return this.isolatedAuthLaunchProofTrusted;
   }
 
   private devOAuthWritesBlocked(): boolean {

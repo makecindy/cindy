@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +29,8 @@ const gracefulTimeoutMs = 3000;
 const forceTimeoutMs = 5000;
 const pollIntervalMs = 150;
 const startupReadyTimeoutMs = 120_000;
+export const ISOLATED_AUTH_LAUNCH_PROOF_FILE = '.isolated-auth-launch-proof.json';
+const isolatedAuthLaunchProofTtlMs = 10 * 60_000;
 const forceKillLabel = process.platform === 'win32' ? 'taskkill /F /T' : 'kill -9';
 const desktopDevCacheRelativeDirs = Object.freeze([
   path.join('apps', 'desktop', 'node_modules', '.vite'),
@@ -657,6 +660,40 @@ export function isTrustedIsolatedAuthUserDataDir({
 }
 
 /**
+ * Mint a single-use proof only after this restart invocation derived and accepted the sandbox.
+ * The nonce crosses Terminal/runner/Forge via env; the bound file is the second factor that an
+ * inherited ambient env does not carry. Desktop consumes it from its actual app userData path.
+ */
+export function createIsolatedAuthLaunchProof({
+  userDataDir,
+  isolationName = '',
+  now = Date.now(),
+  nonce = randomBytes(32).toString('hex'),
+}) {
+  const proofPath = path.join(userDataDir, ISOLATED_AUTH_LAUNCH_PROOF_FILE);
+  const tempPath = `${proofPath}.${process.pid}.${nonce}.tmp`;
+  const proof = {
+    version: 1,
+    nonce,
+    userDataDir: canonicalizeUserDataDir(userDataDir),
+    profileKind: 'isolated-sandbox',
+    epoch: 1,
+    isolationName,
+    issuedAtMs: now,
+    expiresAtMs: now + isolatedAuthLaunchProofTtlMs,
+  };
+  fs.rmSync(proofPath, { force: true });
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(proof)}\n`, { flag: 'wx', mode: 0o600 });
+    fs.renameSync(tempPath, proofPath);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
+  return nonce;
+}
+
+/**
  * Refuse when restarting would suicide this checkout's host, or when a shared
  * start is hosted by another checkout's desktop-dev (same official profile).
  * Isolated start from another checkout is safe: kill scope is ownRootDir.
@@ -821,6 +858,7 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     // 沙箱凭证隔离(--isolated-auth):不与 ~/.codex 共享 auth 硬链,auth-adapters 消费。
     ['XDT_ISOLATED_AUTH', env.XDT_ISOLATED_AUTH],
     ['XDT_ALLOW_DEV_OAUTH_WRITE', env.XDT_ALLOW_DEV_OAUTH_WRITE],
+    ['XDT_ISOLATED_AUTH_PROOF', env.XDT_ISOLATED_AUTH_PROOF],
     // CDP 端口覆写(bootstrap-electron 消费): 并行多开沙箱时给后起实例换端口。
     ['XDT_CDP_PORT', env.XDT_CDP_PORT],
     // 一次性 Grok wire 归因探针(dev-only;正常环境不设置,不产生额外日志)。
@@ -1014,6 +1052,8 @@ export function applyDesktopStartupConfigForPhase(options) {
 }
 
 async function main() {
+  // Proofs are minted below only for this invocation's accepted --isolated-auth request.
+  delete process.env.XDT_ISOLATED_AUTH_PROOF;
   let argv = normalizeDesktopRestartArgv(process.argv.slice(2), process.env);
   const sharedArgvConflict = desktopRestartArgvConflictMessage(argv, process.env);
   if (sharedArgvConflict) throw new Error(sharedArgvConflict);
@@ -1035,6 +1075,7 @@ async function main() {
   const startupConfig = applyDesktopStartupConfigForPhase({ argv, mode });
   const selectedRegion = startupConfig?.region ?? resolveDesktopDevRegion(argv, process.env);
   let userDataDerivedByRestart = false;
+  let isolatedAuthAuthorizedByRestart = false;
   if (isolatedArg && isolatedArg.includes('=')) {
     const derivedDir = defaultIsolatedUserDataDir(parseIsolationName(isolatedArg), selectedRegion);
     if (inheritedUserDataBlocksNamedIsolation(isolatedArg, process.env.XDT_USER_DATA_DIR, derivedDir)) {
@@ -1182,6 +1223,7 @@ async function main() {
     }
     process.env.XDT_ISOLATED_AUTH = '1';
     process.env.XDT_ALLOW_DEV_OAUTH_WRITE = '1';
+    isolatedAuthAuthorizedByRestart = true;
     console.log('==> Isolated auth: this sandbox will NOT share codex OAuth credentials with ~/.codex.');
   }
   if (startupConfig) ensureDesktopEnv();
@@ -1391,6 +1433,12 @@ async function main() {
     startupStatusPath = createStartupStatusPath();
     writeDesktopStartupStatus(startupStatusPath, { state: 'pending', at: Date.now() });
     process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE = startupStatusPath;
+  }
+  if (isolatedAuthAuthorizedByRestart) {
+    process.env.XDT_ISOLATED_AUTH_PROOF = createIsolatedAuthLaunchProof({
+      userDataDir: process.env.XDT_USER_DATA_DIR,
+      isolationName: process.env.XDT_ISOLATED_NAME || '',
+    });
   }
   startDesktopDev(mode);
   if (startupStatusPath) {
