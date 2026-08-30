@@ -7,45 +7,39 @@ import {
 } from '../modelSwitchAssessment';
 
 describe('legacy remote Pi model-window guard', () => {
-  const pressuredShrink = {
+  const legacyPiSwitch = {
     hostGuardSupported: false,
     contextTokens: 180_000,
     currentContextWindow: 1_000_000,
     targetContextWindow: 200_000,
   };
 
-  it('blocks old hosts at the exact 90% shrink boundary but delegates to guarded hosts', () => {
-    expect(shouldBlockLegacyRemotePiModelWindowSwitch(pressuredShrink)).toBe(true);
+  it('blocks every old-host Pi route estimate', () => {
+    const estimatedRoutes = {
+      lowPressure: { ...legacyPiSwitch, contextTokens: 100_000 },
+      exact90Percent: legacyPiSwitch,
+      sameWindow: { ...legacyPiSwitch, targetContextWindow: 1_000_000 },
+      expansion: { ...legacyPiSwitch, targetContextWindow: 2_000_000 },
+      unknownUsage: { ...legacyPiSwitch, contextTokens: undefined },
+      unknownCurrentWindow: { ...legacyPiSwitch, currentContextWindow: undefined },
+      unknownTargetWindow: { ...legacyPiSwitch, targetContextWindow: undefined },
+    };
+    for (const route of Object.values(estimatedRoutes)) {
+      expect(shouldBlockLegacyRemotePiModelWindowSwitch(route)).toBe(true);
+    }
+  });
+
+  it('delegates guarded Pi routes to host-side final runtime verification', () => {
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
+      ...legacyPiSwitch,
+      hostGuardSupported: true,
+    })).toBe(false);
     expect(shouldBlockLegacyRemotePiModelWindowSwitch({
       hostGuardSupported: true,
       contextTokens: undefined,
       currentContextWindow: undefined,
       targetContextWindow: undefined,
     })).toBe(false);
-    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
-      ...pressuredShrink,
-      contextTokens: 179_999,
-    })).toBe(false);
-  });
-
-  it('keeps same/expand and low pressure while failing closed on unknown shrink facts', () => {
-    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
-      ...pressuredShrink,
-      contextTokens: 0,
-      targetContextWindow: 1_000_000,
-    })).toBe(false);
-    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
-      ...pressuredShrink,
-      contextTokens: 100_000,
-    })).toBe(false);
-    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
-      ...pressuredShrink,
-      contextTokens: 0,
-    })).toBe(true);
-    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
-      ...pressuredShrink,
-      targetContextWindow: undefined,
-    })).toBe(true);
   });
 });
 

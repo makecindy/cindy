@@ -51,27 +51,8 @@ export function shouldBlockLegacyRemotePiModelWindowSwitch(input: {
   currentContextWindow: number | null | undefined;
   targetContextWindow: number | null | undefined;
 }): boolean {
-  if (input.hostGuardSupported) return false;
-  const { contextTokens, currentContextWindow, targetContextWindow } = input;
-  if (
-    typeof currentContextWindow !== 'number' ||
-    !Number.isFinite(currentContextWindow) ||
-    currentContextWindow <= 0 ||
-    typeof targetContextWindow !== 'number' ||
-    !Number.isFinite(targetContextWindow) ||
-    targetContextWindow <= 0
-  ) {
-    return true;
-  }
-  if (targetContextWindow >= currentContextWindow) return false;
-  if (
-    typeof contextTokens !== 'number' ||
-    !Number.isFinite(contextTokens) ||
-    contextTokens <= 0
-  ) {
-    return true;
-  }
-  return contextTokens / targetContextWindow >= MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT / 100;
+  // 旧 Host 无法通过 Pi set_model + get_state 裁决最终 runtime 窗口；目录估值不能放行。
+  return !input.hostGuardSupported;
 }
 
 export function assessModelSwitchContext(
