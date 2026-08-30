@@ -395,12 +395,15 @@ export function catalogSurfaces() {
         'UpdateNoticeDialog',
         'FeishuConflictDialogHost',
         'SessionShareImportWizard',
+        // RightSidebar 的内容实现:TabBar/下拉/插件体都在 features/right-sidebar。
+        'RightSidebarShell',
       ],
       styleRoots: [
         'apps/desktop/src/renderer/components/layout',
         'apps/desktop/src/renderer/components/sidebar',
         'apps/desktop/src/renderer/components/title-bar',
         'apps/desktop/src/renderer/layout',
+        'apps/desktop/src/renderer/features/right-sidebar',
         'apps/desktop/src/renderer/cindy-brain/GhostMediaLightboxHost.tsx',
         'apps/desktop/src/renderer/components/UpdateNoticeDialog.tsx',
         'apps/desktop/src/renderer/components/feishuBot',
@@ -660,10 +663,13 @@ export function catalogSurfaces() {
       title: '右侧栏独立窗口',
       productionEntry:
         '`?sidebarWindow=1` → renderer/sidebar-window-entry.tsx；hash `/sidebar-window`',
-      reachableComponents: ['SidebarWindowLayout', 'RightSidebar'],
+      reachableComponents: ['SidebarWindowLayout', 'RightSidebar', 'RightSidebarShell'],
       styleRoots: [
         'apps/desktop/src/renderer/sidebar-window-entry.tsx',
         'apps/desktop/src/renderer/components/layout/SidebarWindowLayout.tsx',
+        // SidebarWindowLayout 同样渲染 RightSidebarShell(features/right-sidebar),
+        // 该目录含 TabBar/下拉/插件体与 FileBrowserBody.css 等样式事实。
+        'apps/desktop/src/renderer/features/right-sidebar',
         'apps/desktop/src/main/right-sidebar-window',
         // sidebar-window-entry.tsx 直接导入 globals.css，body/#root 基础样式与
         // 窗口专用规则在该窗口实际生效——独立窗口与主窗口共享同一全局样式源。

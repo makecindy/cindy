@@ -802,6 +802,42 @@ test('主窗口壳纳入 MainLayout 直接挂载的全局浮层', () => {
   assert.ok(generated.styleSources.some((file) => file.endsWith('SessionShareImportWizard.tsx')));
 });
 
+test('主窗口壳与右侧栏独立窗口纳入 RightSidebarShell 的实现目录', () => {
+  // RightSidebar.tsx:26,263 与 SidebarWindowLayout.tsx:31 都渲染
+  // features/right-sidebar/RightSidebarShell——TabBar/下拉/插件体/FileBrowserBody.css
+  // 的样式事实在那棵树里,只扫 wrapper/layout 目录会系统性低报。
+  const rightSidebarTree = 'apps/desktop/src/renderer/features/right-sidebar';
+  const catalog = catalogSurfaces();
+  for (const surfaceId of ['desktop.shell.main-layout', 'desktop.window.sidebar']) {
+    const surface = catalog.find((entry) => entry.id === surfaceId);
+    assert.ok(surface, surfaceId);
+    assert.ok(
+      surface.styleRoots.includes(rightSidebarTree),
+      `${surfaceId} 必须登记 features/right-sidebar`,
+    );
+    assert.ok(
+      surface.reachableComponents.includes('RightSidebarShell'),
+      `${surfaceId} 可达组件须含 RightSidebarShell`,
+    );
+  }
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const shell = surfaces.find((surface) => surface.id === 'desktop.shell.main-layout');
+  assert.ok(shell.styleSources.some((file) => file.endsWith('right-sidebar/RightSidebarShell.tsx')));
+  assert.ok(shell.styleSources.some((file) => file.endsWith('TabBar.tsx')));
+  assert.ok(
+    shell.styleSources.some((file) => file.endsWith('FileBrowserBody.css')),
+    'file-browser 插件样式须进主窗口壳统计',
+  );
+  assert.ok(
+    shell.bareRadii > 103,
+    `并入右侧栏实现后主窗口裸圆角应高于 103(实际 ${shell.bareRadii})`,
+  );
+  const sidebarWindow = surfaces.find((surface) => surface.id === 'desktop.window.sidebar');
+  assert.ok(
+    sidebarWindow.styleSources.some((file) => file.endsWith('right-sidebar/RightSidebarShell.tsx')),
+  );
+});
+
 test('设置页纳入 sortable.css（providers tab 拖拽行样式）', () => {
   // ProvidersSection.tsx:2426 的 provider-settings-sortable-row 样式定义在
   // sortable.css:88-109,由 main-entry.tsx:53 无条件导入。
