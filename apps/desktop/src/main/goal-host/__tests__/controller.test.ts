@@ -64,6 +64,17 @@ describe('decideNextGoalState', () => {
     expect(d.lastReason).toContain('boom');
   });
 
+  it('projects a tool-loop terminal error as a stable reason', () => {
+    const d = decideNextGoalState(BASE, outcome({
+      errored: true,
+      errorMessage: '上游模型疑似陷入死循环: missing_required_field',
+      errorReason: 'tool_use_loop_detected',
+    }));
+    expect(d.status).toBe('blocked');
+    expect(d.lastReason).toBe('tool_use_loop_detected');
+    expect(d.lastReason).not.toContain('missing_required_field');
+  });
+
   it('pauses (not blocks) when the turn was aborted by the user', () => {
     const d = decideNextGoalState(BASE, outcome({ errored: true, errorMessage: 'AbortError: aborted' }));
     expect(d.status).toBe('paused');
@@ -238,6 +249,10 @@ class FakeSession implements SessionLike {
     return () => {
       if (this.listener === listener) this.listener = null;
     };
+  }
+
+  hasListener(): boolean {
+    return this.listener !== null;
   }
 
   isTurnRunning(): boolean {
@@ -3241,6 +3256,47 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(0);
   });
 
+  it('does not let a startup resume scan repopulate runtime state after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseList!: (states: GoalState[]) => void;
+    const blockedList = new Promise<GoalState[]>((resolve) => {
+      releaseList = resolve;
+    });
+    vi.spyOn(local.storage, 'listActive').mockReturnValueOnce(blockedList);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    local.controller.dispose();
+    releaseList([active]);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
+  });
+
+  it('does not let a per-goal startup lookup attach after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseGet!: (state: GoalState | null) => void;
+    const blockedGet = new Promise<GoalState | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    vi.spyOn(local.storage, 'get').mockReturnValueOnce(blockedGet);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    await vi.waitFor(() => expect(local.storage.get).toHaveBeenCalledWith('s1'));
+    local.controller.dispose();
+    releaseGet(active);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
+  });
+
   it('resumeOnOpen 在释放 route 锁前挂 listener，并在会话随即关闭后迁移到重建会话', async () => {
     const firstSession = new FakeSession('s1', 'claude-code');
     const recreatedSession = new FakeSession('s1', 'claude-code');
@@ -4131,6 +4187,20 @@ describe('GoalController', () => {
     expect(st?.usageResetAt).toBe(1000 + 60_000); // now() + OVERLOAD_RESUME_DELAY_MS
     expect(st?.lastReason).toBe('model service at capacity');
     expect(h.session.sends).toHaveLength(1); // 不立即续轮
+  });
+
+  it('persists a stable reason for a tool-loop terminal error', async () => {
+    await startGoal(h);
+    h.session.emitErrorTurn({
+      message: '上游模型疑似陷入死循环: missing_required_field',
+      reason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('blocked');
+    expect(st?.lastReason).toBe('tool_use_loop_detected');
+    expect(st?.lastReason).not.toContain('missing_required_field');
   });
 
   it('prefers the overload window over the account snapshot for a 529 turn error', async () => {

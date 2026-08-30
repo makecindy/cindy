@@ -12,7 +12,7 @@
  * resume 路径、启动 RPC 也不会即时拒),控制流本身才是被测对象。
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const knobs = vi.hoisted(() => ({
   ctorThrows: false,
   getStateRejects: false,
+  abortRejects: false,
   getStateGate: null as Promise<void> | null,
   closeRejects: false,
   closeFailuresRemaining: 0,
@@ -81,6 +82,9 @@ vi.mock('../rpc-client.js', () => ({
         if (knobs.getStateRejects) throw new Error('get_state rejected (mock)');
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
       }
+      if (cmd.type === 'abort' && knobs.abortRejects) {
+        return { success: false, error: 'abort rejected (mock)' };
+      }
       // switch_session / set_thinking_level / set_auto_compaction / get_entries 等一律成功。
       return { success: true, data: { entries: [] } };
     }
@@ -127,6 +131,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   beforeEach(() => {
     knobs.ctorThrows = false;
     knobs.getStateRejects = false;
+    knobs.abortRejects = false;
     knobs.getStateGate = null;
     knobs.closeRejects = false;
     knobs.closeFailuresRemaining = 0;
@@ -176,6 +181,18 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: () => {
+        const handle = {
+          pid: 4321,
+          killed: false,
+          once(event: 'spawn' | 'error' | 'exit' | 'close', listener: (...args: unknown[]) => void) {
+            if (event === 'spawn') queueMicrotask(listener);
+            return handle;
+          },
+          kill: () => true,
+        };
+        return handle as never;
+      },
       registerPiProxySession: () => () => {
         // Detached Subagent leases intentionally dispose after close. Ignore a previous
         // test's late lease callback instead of charging it to the next test's counters.
@@ -1640,6 +1657,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const run = pendingSubagentRun({
       toolName: 'write',
       input: { path: 'tmp/auto-safe.txt', content: 'safe' },
+      resolvedWritePath: path.join(cwd, 'tmp', 'auto-safe.txt'),
+      resolvedWritableRoots: [cwd],
     });
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
@@ -1658,6 +1677,112 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     ));
     expect(resolver).not.toHaveBeenCalled();
     await handle.close();
+  });
+
+  it('requires confirmation when an older durable bridge omits canonical writable roots', async () => {
+    const run = pendingSubagentRun({
+      toolName: 'write',
+      input: { path: 'tmp/legacy-safe.txt', content: 'legacy' },
+      resolvedWritePath: path.join(cwd, 'tmp', 'legacy-safe.txt'),
+    });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
+      ...opts(),
+      permissionMode: 'auto',
+    });
+    handle.setInteractionResolver(resolver);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: false }),
+    ));
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it('forces confirmation when a durable Subagent writable-root path resolves outside it', async () => {
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-writable-'));
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-outside-'));
+    const run = pendingSubagentRun({
+      toolName: 'write',
+      input: { path: path.join(writableDir, 'linked', 'result.txt'), content: 'unsafe' },
+      resolvedWritePath: path.join(outsideDir, 'result.txt'),
+      resolvedWritableRoots: [cwd, writableDir],
+    });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
+      ...opts(),
+      permissionMode: 'auto',
+      writableDirs: [writableDir],
+    });
+    handle.setInteractionResolver(resolver);
+
+    try {
+      await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+        expect.any(String),
+        run.taskId,
+        'approval',
+        expect.objectContaining({ confirmed: false }),
+      ));
+      expect(review).not.toHaveBeenCalled();
+      expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'write',
+        metadata: expect.objectContaining({ subagent: true }),
+      }));
+    } finally {
+      await handle.close();
+      rmSync(writableDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses Auto-review when a durable Subagent writable root is itself a link', async () => {
+    const realWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-real-writable-'));
+    const linkParent = mkdtempSync(path.join(tmpdir(), 'pi-subagent-linked-writable-'));
+    const linkedWritableDir = path.join(linkParent, 'output');
+    symlinkSync(
+      realWritableDir,
+      linkedWritableDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const run = pendingSubagentRun({
+      toolName: 'write',
+      input: { path: path.join(linkedWritableDir, 'result.txt'), content: 'safe' },
+      resolvedWritePath: path.join(realpathSync(realWritableDir), 'result.txt'),
+      resolvedWritableRoots: [cwd, realpathSync(realWritableDir)],
+    });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      permissionMode: 'auto',
+      writableDirs: [linkedWritableDir],
+    });
+    handle.setInteractionResolver(resolver);
+
+    try {
+      await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+        expect.any(String),
+        run.taskId,
+        'approval',
+        expect.objectContaining({ confirmed: true }),
+      ));
+      expect(resolver).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+      rmSync(linkParent, { recursive: true, force: true });
+      rmSync(realWritableDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps risky durable Subagent Auto actions behind the real Cindy prompt', async () => {
@@ -1760,6 +1885,67 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
     expect(knobs.requests).toEqual(['abort']);
     expect(knobs.closeCount).toBe(0);
+
+    await handle.close();
+  });
+
+  it('does not surface an aborted gateway error when Host stop beats agent_start', async () => {
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const events: Array<{ type: string; data?: unknown }> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const rawError = 'OpenAI Responses stream ended before a terminal response event';
+
+    await handle.send({ type: 'user', content: 'start a Pi turn' });
+    await handle.abort();
+    knobs.onEvent?.({ type: 'agent_start' });
+    knobs.onEvent?.({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'aborted',
+        errorMessage: rawError,
+      },
+    });
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+
+    await handle.close();
+  });
+
+  it('keeps a real gateway disconnect resumable when the Pi abort RPC is rejected', async () => {
+    knobs.abortRejects = true;
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const events: Array<{ type: string; data?: unknown }> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const rawError = 'OpenAI Responses stream ended before a terminal response event';
+
+    await handle.send({ type: 'user', content: 'start a Pi turn' });
+    await handle.abort();
+    knobs.onEvent?.({ type: 'agent_start' });
+    knobs.onEvent?.({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'aborted',
+        errorMessage: rawError,
+      },
+    });
+    knobs.onEvent?.({ type: 'agent_settled' });
+
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'error')).toBe(true));
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ message: rawError, isTerminal: true }),
+      }),
+    ]);
 
     await handle.close();
   });

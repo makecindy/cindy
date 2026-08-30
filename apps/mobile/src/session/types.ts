@@ -1,6 +1,7 @@
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
+import type { MobileToolLoopErrorDetails } from '@/session/toolLoopErrorI18n';
 
 export type RemoteSessionStatus = 'active' | 'archived' | 'deleted';
 export type RemoteMessageRole =
@@ -33,6 +34,11 @@ export interface RemoteSession {
   effort: string;
   permissionMode: string;
   fastMode: boolean;
+  /** Temporary host runtime route; optional for older controlled Desktop versions. */
+  runtimeGeneration?: number;
+  runtimeBaseline?: RemoteSessionRuntimeProfile;
+  runtimeEffective?: RemoteSessionRuntimeProfile;
+  runtimePending?: RemoteSessionRuntimePending | null;
   /** 计划模式一级开关(#494,与 permissionMode 正交)。被控端 sessionToCamel 带出,
    *  一次性消耗(plan_mode_changed)后经 sessions:patched 回流置 false;老被控端缺省。 */
   planModeEnabled?: boolean;
@@ -81,6 +87,20 @@ export interface RemoteSession {
    *  createSession 还没确认,会话页据此禁发(输入可编辑存草稿)、syncSession 守卫
    *  跳过 NOT_FOUND。fresh 对象来自服务器,天然无此标记,权威 upsert 后自净。 */
   pendingLocalCreation?: boolean;
+}
+
+export interface RemoteSessionRuntimeProfile {
+  agentKind: 'claude-code' | 'codex' | 'pi';
+  model: string;
+  providerId: string | null;
+  effort: string | null;
+  fastMode: boolean;
+}
+
+export interface RemoteSessionRuntimePending {
+  generation: number;
+  source: 'agent' | 'fallback';
+  profile: RemoteSessionRuntimeProfile;
 }
 
 export interface RemoteMessage {
@@ -220,6 +240,10 @@ export interface InputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /** Stable error reason for live projections; older controlled hosts may omit it. */
+  errorReason?: string | null;
+  /** Bounded details for tool-loop errors; older projections may omit them. */
+  toolLoop?: MobileToolLoopErrorDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
   autoResumePending?: Record<string, unknown> | null;

@@ -46,6 +46,19 @@ describe('mobile Home startup reads', () => {
 });
 
 describe('mobile home desktop-first surface', () => {
+  it('surfaces durable logout failures from the home drawer', () => {
+    const source = readSource('app/devices/index.tsx');
+    const logoutStart = source.indexOf('const logout = useCallback');
+    const logoutBody = source.slice(
+      logoutStart,
+      source.indexOf('const toggleProject', logoutStart),
+    );
+
+    expect(logoutBody).toContain('await auth.logout();');
+    expect(logoutBody).toContain("t('devices.list.alert.actionFailed')");
+    expect(logoutBody).toContain('formatRemoteError(error)');
+  });
+
   it('uses the desktop-sidebar Home as the authenticated root instead of a device picker route', () => {
     const indexSource = readSource('app/index.tsx');
     const layoutSource = readSource('app/_layout.tsx');
@@ -97,9 +110,11 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('<HomeChromeDrawer');
     expect(source).toContain('<HomeHeaderGlassButton');
     const headerGlass = readSource('src/session/HomeHeaderGlassButton.tsx');
-    expect(headerGlass).toContain('from \'expo-glass-effect\'');
+    expect(headerGlass).toMatch(/from ['"]expo-glass-effect['"]/);
     expect(headerGlass).toContain('glassEffectStyle="regular"');
-    expect(source).toContain('<HomeChromeFrost visible={headerFrosted} />');
+    expect(source).toContain('<HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>');
+    expect(source).toContain('</HomeChromeFrost>');
+    expect(source).toContain('<HomeNativeStackHeader');
     expect(source).toContain('onProjectDragStart={displayedProjectOrder === \'custom\'');
     expect(source).toContain('projectOrder={displayedProjectOrder}');
     expect(source).toContain('resolveDisplayedProjectOrder(');
@@ -116,15 +131,29 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('onScroll={onListScroll}');
     const chromeFrost = readSource('src/session/HomeChromeFrost.tsx');
     expect(chromeFrost).toContain('overlayColor={colors.surfaceTranslucent}');
-    expect(chromeFrost).toContain('backgroundColor: colors.surface');
+    expect(chromeFrost).toContain('intensity={50}');
+    expect(chromeFrost).toContain('<View style={styles.body}>{children}</View>');
     expect(chromeFrost).not.toContain('expo-glass-effect');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
     const chromeDrawer = readSource('src/session/HomeChromeDrawer.tsx');
     expect(chromeDrawer).toContain('testID="devices.settingsButton"');
     expect(chromeDrawer).toContain('testID="home.chromeDrawer.search"');
     expect(chromeDrawer).toContain('testID="home.chromeDrawer.account"');
+    expect(chromeDrawer).toContain('testID="home.chromeDrawer.accounts"');
+    expect(chromeDrawer).toContain('testID="home.chromeDrawer.logout"');
+    expect(chromeDrawer.indexOf('testID="devices.settingsButton"'))
+      .toBeLessThan(chromeDrawer.indexOf('testID="home.chromeDrawer.accounts"'));
+    expect(chromeDrawer.indexOf('testID="home.chromeDrawer.accounts"'))
+      .toBeLessThan(chromeDrawer.indexOf('testID="home.chromeDrawer.logout"'));
+    expect(chromeDrawer).toContain('<View style={styles.menuDivider} />');
+    expect(chromeDrawer.indexOf('<View style={styles.menuDivider} />'))
+      .toBeLessThan(chromeDrawer.indexOf('testID="home.chromeDrawer.logout"'));
+    expect(chromeDrawer.match(/onPress=\{onOpenAccounts\}/g)).toHaveLength(1);
+    expect(chromeDrawer).toContain("t('settings.account.logout')");
     expect(chromeDrawer).toContain('openSettingsImmediately');
     expect(chromeDrawer).toContain('closeInstant');
+    expect(chromeDrawer).toContain('FullWindowOverlay');
+    expect(chromeDrawer).toContain('GestureHandlerRootView');
     expect(chromeDrawer).not.toContain('remoteSettings');
     expect(source).toContain("guardedPush('/settings')");
     expect(source).toContain('setChromeMenuCloseInstant(true)');
@@ -169,11 +198,12 @@ describe('mobile home desktop-first surface', () => {
     const searchBar = readSource('src/session/HomeSearchBar.tsx');
     const filterSheet = readSource('src/session/ConversationSearchFilterSheet.tsx');
 
+    expect(searchBar).toContain('<NativePullDownMenu');
     expect(source).toContain('<HomeSearchBar');
     expect(source).toContain('onOpenFilter={() => setSearchFilterOpen(true)}');
     expect(source).not.toContain('onOpenFilter={openDisplaySettings}');
     expect(source).toContain('<ConversationSearchFilterSheet');
-    expect(searchBar).toContain('testID={testIDs?.filter ?? \'home.searchFilterButton\'}');
+    expect(searchBar).toMatch(/testID=\{testIDs\?\.filter \?\? ['"]home\.searchFilterButton['"]\}/);
     expect(filterSheet).toContain('testID="home.searchFilter"');
     expect(filterSheet).toContain('devices.list.search.filter.sortHeading');
     expect(filterSheet).toContain('devices.list.search.filter.statusHeading');
@@ -288,9 +318,9 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('if (isAccessRevokedError(error) || isDeviceOfflineError(error)) return false;');
     expect(source).toContain("if (text.includes('REMOTE_DISABLED')) return false;");
     expect(source).toContain('return true;');
-    expect(source).toContain('const [list, activeSessions, activeSessionSnapshotEpoch]');
+    expect(source).toMatch(/const \[\s*list,\s*activeSessions,\s*activeSessionSnapshotEpoch,/);
     expect(source).toContain('remoteSessionStore.captureActiveSessionSnapshotEpoch()');
-    expect(source).toContain('return [list, activeSessions, activeSessionSnapshotEpoch] as const;');
+    expect(source).toMatch(/return \[\s*list,\s*activeSessions,\s*activeSessionSnapshotEpoch,/);
     expect(source).toContain('activeSessionSnapshotEpoch,');
     expect(source).toContain('remoteScheduleEventStore.subscribe(() => {');
     expect(source).toContain('const snapshot = remoteScheduleEventStore.getSnapshot(deviceId)');
@@ -445,20 +475,50 @@ describe('mobile home desktop-first surface', () => {
     expect(stylesSource).not.toContain('automationGroupChildrenCindy');
   });
 
-  it('keeps presence updates local and refreshes full home sync on every reconnect', () => {
+  it('keeps presence global while reconnecting only the visible Home sync scope', () => {
     const source = readSource('app/devices/index.tsx');
 
     expect(source).toContain('void loadHome({ visible: false });');
     expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
     expect(source).toContain('await syncInFlightRef.current;');
     expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
+    expect(source).toMatch(/startBoundedStartupRead<HomeViewPreferences \| null>\(\s*readHomeViewPreferences\(\)/);
+    const preferenceHydration = source.slice(
+      source.indexOf('// 冷启动恢复上次的首页视图偏好'),
+      source.indexOf('// 卸载时取消所有延后中的 schedule-index hydration'),
+    );
+    expect(preferenceHydration).toContain('homeAccountGenerationRef.current !== expectedAccountGeneration');
+    expect(preferenceHydration).toContain('if (!cancelled) setHomeViewPreferencesHydrated(true);');
     expect(source).toContain('const deviceIdentityCachePersistPendingRef = useRef(false);');
-    // 重连(connectionEpoch 变化)必须无条件全量刷新:presence 只在变化时广播、无全量重放,
-    // 后台漏掉的上/下线事件只能靠重连重拉 REST 快照兜底,不能再用 hydrated 标记门控挡掉。
+    // 重连(connectionEpoch 变化)必须无条件重拉全量设备 REST:presence 只在变化时广播、无全量重放,
+    // 后台漏掉的上/下线事件只能靠重连快照兜底；每设备列表 fan-out 再按可见 scope 收窄。
     // homeListCacheHydrated 是一次性 gate(缓存种入完成后永久为 true,种入失败也置 true),
     // 只影响首次触发顺序(缓存先画、fresh 后覆盖),不会挡掉任何一次重连刷新。
     expect(source).not.toContain('homeSessionHydratedRef');
-    expect(source).toContain('}, [connectionEpoch, deviceIdentityCacheReady, homeListCacheHydrated, loadHome]);');
+    expect(source).toContain('!homeViewPreferencesHydrated');
+    expect(source).toContain('}, [connectionEpoch, deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);');
+    expect(source).toContain('resolveHomeDeviceSyncIds(');
+    expect(source).toContain('reconcileHomeDeviceSyncScope(syncDeviceIds);');
+    expect(source).toContain('runHomeDeviceSyncBatch(syncRows');
+    expect(source).toContain('while (syncInFlightRef.current)');
+    expect(source).toContain("unsubscribe(HOME_LIST_SUBSCRIPTION_OWNER, deviceId, ['sessions'])");
+    expect(source).toContain('homeSyncGenerationByDeviceRef');
+    expect(source).toContain('diffHomeDeviceSyncScope(homeSyncTargetDeviceIdsRef.current, desiredDeviceIds)');
+    expect(source).toContain('isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)');
+    expect(source).toContain('homeHydrateInFlightByDeviceRef');
+    expect(source).toContain('existing.homeSyncGeneration === expectedHomeSyncGeneration');
+    expect(source).toContain('if (options.trailingIfInFlight) existing.rerunRequested = true;');
+    expect(source).toContain('trailingIfInFlight: true');
+    expect(source).toContain('captureDeviceSessionListMutationEpoch(');
+    expect(source).toContain('isDeviceSessionListMutationEpochCurrent(');
+    expect(source).toContain('needsRerun: true');
+    expect(source).toContain('homeDeviceSyncLimiterRef.current.run');
+    const hydrateSource = source.slice(
+      source.indexOf('const hydrateDeviceSessions = useCallback'),
+      source.indexOf('const probeRevokedDeviceAccess'),
+    );
+    expect(hydrateSource).not.toContain('releaseHomeListOwner(');
+    expect(source).toContain('homeSyncGeneration: expectedHomeSyncGeneration');
     // REST 快照与飞行期间的 presence 补丁按新鲜度合并,防止过期快照把刚上线的设备改回离线。
     expect(source).toContain('mergeDeviceViewsWithFreshPresence(');
     expect(source).toContain('markPresenceFresh(presenceFreshnessRef.current, lastPresenceSnapshot.deviceId);');
@@ -472,6 +532,34 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('syncInFlightRef');
     expect(source).not.toContain('presenceVersion');
     expect(source).not.toContain('refreshControl={<RefreshControl refreshing={loading}');
+  });
+
+  it('binds every Home device projection and async continuation to the active account generation', () => {
+    const source = readSource('app/devices/index.tsx');
+
+    // Home remains mounted across saved-account activation, so clearing the shared DeviceLink
+    // stores is insufficient: page-local refs/state must disappear before the next paint too.
+    expect(source).toContain('const { accountGeneration, apiFetch, deviceId: selfDeviceId, user } = auth;');
+    expect(source).toContain('const homeAccountGenerationRef = useRef(accountGeneration);');
+    expect(source).toContain('useLayoutEffect(() => {');
+    expect(source).toContain('syncInFlightRef.current = null;');
+    expect(source).toContain('devicesRef.current = [];');
+    expect(source).toContain('setDevices([]);');
+    expect(source).toContain('setDeviceConnectionStates({});');
+    expect(source).toContain('setScheduleIndex(new Map());');
+
+    // Both REST and per-device WS hydrations capture the owner generation and refuse every late
+    // write. The old task's finally block must not drain a queue now owned by the next account.
+    expect(source).toContain('const accountGenerationAtStart = accountGeneration;');
+    expect(source).toContain('hydrateDeviceSessions(item.device, accountGenerationAtStart)');
+    expect(source).toContain('homeAccountGenerationRef.current !== expectedAccountGeneration');
+    expect(source).toContain('return { failure: null, offline: false, superseded: true };');
+    expect(source).toContain('if (syncInFlightRef.current !== task) return;');
+
+    // A late account-keyed startup cache read is another producer of the same projection and must
+    // pass the identical owner fence before hydrating the shared session store.
+    expect(source).toContain('const expectedAccountGeneration = accountGeneration;');
+    expect(source).toMatch(/cancelled\s*\|\| homeAccountGenerationRef\.current !== expectedAccountGeneration/);
   });
 
   it('does not show the no-device empty state before startup sync settles', () => {

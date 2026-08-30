@@ -96,6 +96,19 @@ const noopLogger: Logger = {
   child: () => noopLogger,
 };
 
+function testSubagentRunnerHost() {
+  const handle = {
+    pid: 4321,
+    killed: false,
+    once(event: 'spawn' | 'error' | 'exit' | 'close', listener: (...args: unknown[]) => void) {
+      if (event === 'spawn') queueMicrotask(listener);
+      return handle;
+    },
+    kill: () => true,
+  };
+  return handle as never;
+}
+
 describe('Pi provider-aware model routing', () => {
   let agentHome = '';
 
@@ -199,7 +212,7 @@ describe('Pi provider-aware model routing', () => {
         }>;
       }>;
     };
-    expect(apiResolver).toHaveBeenCalledWith('openai', 'shared-model');
+    expect(apiResolver).toHaveBeenCalledWith('openai', 'shared-model', { remote: false });
     expect(descriptorResolver).toHaveBeenCalledWith('openai', 'shared-model');
     expect(models.providers.cindy?.models.find((model) => model.id === 'shared-model')).toMatchObject({
       name: 'Subscription Shared',
@@ -212,7 +225,7 @@ describe('Pi provider-aware model routing', () => {
     expect(models.providers['native-b']?.models.some((model) => model.id === 'shared-model')).toBe(true);
 
     await expect(handle.setModel!('shared-model', { providerId: 'xd' })).rejects.toThrow(
-      /restart the Pi session to change provider wire protocol/,
+      /restart the Pi session to change provider API/,
     );
     expect(captured.requests).not.toContainEqual({
       type: 'set_model',
@@ -237,6 +250,89 @@ describe('Pi provider-aware model routing', () => {
     expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
       .toEqual(['--provider', 'native-a']);
     expect(authProviderIds).toEqual(['openai', 'native-a']);
+    await nativeHandle.close();
+  });
+
+  it('uses explicit output caps and a context-bounded fallback for gateway and native models', async () => {
+    const availableModels: ModelDescriptor[] = [
+      {
+        id: 'gateway-fallback-model', displayName: 'Gateway fallback', contextWindow: 128_000,
+        efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'gateway-explicit-model', displayName: 'Gateway explicit', contextWindow: 200_000,
+        maxOutputTokens: 90_000, efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'gateway-small-context-model', displayName: 'Gateway small context', contextWindow: 32_000,
+        efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'native-fallback-model', displayName: 'Native fallback', contextWindow: 200_000,
+        efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'native-explicit-model', displayName: 'Native explicit', contextWindow: 200_000,
+        efforts: [], defaultEffort: null,
+      },
+      {
+        id: 'native-small-context-model', displayName: 'Native small context', contextWindow: 32_000,
+        efforts: [], defaultEffort: null,
+      },
+    ];
+    const descriptorResolver = (_providerId: string | null | undefined, modelId: string) =>
+      availableModels.find((candidate) => candidate.id === modelId)!;
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: { availableModels },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelDescriptor: descriptorResolver,
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'native', name: 'Native', baseUrl: 'http://native.test', api: 'openai-completions',
+          models: [
+            { id: 'native-fallback-model', contextWindow: 200_000 },
+            { id: 'native-explicit-model', contextWindow: 200_000, maxTokens: 90_000 },
+            { id: 'native-small-context-model', contextWindow: 32_000 },
+          ],
+        }],
+        env: {},
+      }),
+    });
+
+    const gatewayHandle = await agent.startSession({
+      sessionId: 'max-tokens-gateway', workingDir: cwd, model: 'gateway-fallback-model', providerId: 'openai',
+    });
+    const gatewayModels = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { models?: Array<Record<string, unknown>> }> };
+    expect(gatewayModels.providers.cindy?.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'gateway-fallback-model', maxTokens: 65_536 }),
+      expect.objectContaining({ id: 'gateway-explicit-model', maxTokens: 90_000 }),
+      expect.objectContaining({ id: 'gateway-small-context-model', maxTokens: 32_000 }),
+    ]));
+    await gatewayHandle.close();
+
+    const nativeHandle = await agent.startSession({
+      sessionId: 'max-tokens-native', workingDir: cwd, model: 'native-fallback-model', providerId: 'native',
+    });
+    const nativeModels = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { models?: Array<Record<string, unknown>> }> };
+    expect(nativeModels.providers.native?.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'native-fallback-model', maxTokens: 65_536 }),
+      expect.objectContaining({ id: 'native-explicit-model', maxTokens: 90_000 }),
+      expect.objectContaining({ id: 'native-small-context-model', maxTokens: 32_000 }),
+    ]));
     await nativeHandle.close();
   });
 
@@ -289,6 +385,7 @@ describe('Pi provider-aware model routing', () => {
       logger: noopLogger,
       capabilityAdditions: { availableModels },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiGatewayModelApi: () => 'openai-responses',
       registerPiProxySession: (_sessionId, token, resolveProviderId, options) => {
         if (options?.scope !== 'subagent-route') resolveProxyProviderId = resolveProviderId;
@@ -414,7 +511,15 @@ describe('Pi provider-aware model routing', () => {
     ]);
     expect(models.providers.xai?.models?.[0]).not.toHaveProperty('api');
     expect(JSON.parse(readFileSync(path.join(configHome, 'settings.json'), 'utf8')))
-      .toEqual({ transport: 'sse' });
+      .toEqual({
+        transport: 'sse',
+        retry: {
+          enabled: true,
+          maxRetries: 6,
+          baseDelayMs: 2000,
+          provider: { maxRetries: 0 },
+        },
+      });
     const runtimeText = readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8');
     expect(runtimeText).not.toContain('proxySessionToken');
     expect(proxyRegistrations.filter((registration) => registration.scope === 'subagent-route'))
@@ -573,6 +678,7 @@ describe('Pi provider-aware model routing', () => {
         }],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiNativeProviders: async () => ({
         providers: [
           {
@@ -647,6 +753,7 @@ describe('Pi provider-aware model routing', () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiNativeProviders: async () => ({
         providers: [
           {
@@ -813,6 +920,7 @@ describe('Pi provider-aware model routing', () => {
         }],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiNativeProviders: async () => ({
         providers: [{
           id: 'xai',
@@ -865,6 +973,7 @@ describe('Pi provider-aware model routing', () => {
         }],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: testSubagentRunnerHost,
       resolvePiNativeProviders: async () => ({
         providers: [{
           id: 'xai',
@@ -931,7 +1040,7 @@ describe('Pi provider-aware model routing', () => {
     gatewayApi = 'openai-responses';
     captured.requests.length = 0;
     await expect(handle.setModel!('shared-model', { providerId: 'xd' })).rejects.toThrow(
-      /restart the Pi session to change provider wire protocol/,
+      /restart the Pi session to change provider API/,
     );
     expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
     await handle.close();
@@ -1018,6 +1127,93 @@ describe('Pi provider-aware model routing', () => {
     expect(models.providers.xai?.models).toEqual([
       expect.objectContaining({ id: 'grok-4.6', api: 'openai-responses' }),
     ]);
+    await handle.close();
+  });
+
+  it('keeps the live context window when a late catalog reload rewrites settings', async () => {
+    const xaiProvider = {
+      id: 'xai',
+      sourceProviderId: 'xai' as const,
+      name: 'xAI',
+      baseUrl: 'http://127.0.0.1:9/v1',
+      inheritModels: true,
+      apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+      modelIdAliases: {
+        'grok-4.6': 'grok-4.6',
+        'xai/grok-4.6': 'grok-4.6',
+      },
+      models: [{
+        id: 'grok-4.6',
+        wireId: 'grok-4.6',
+        name: 'Grok 4.6',
+        api: 'openai-responses' as const,
+        catalogAddition: true,
+        contextWindow: 100_000,
+      }],
+    };
+    let includeXai = false;
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'user', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: {
+        endpoint: 'http://127.0.0.1:9',
+        piAutoCompactThresholdPct: 75,
+      },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          { id: 'wide-model', displayName: 'Wide', contextWindow: 200_000, efforts: [], defaultEffort: null },
+          { id: 'narrow-model', displayName: 'Narrow', contextWindow: 100_000, efforts: [], defaultEffort: null },
+          {
+            id: 'xai/grok-4.6',
+            displayName: 'Grok 4.6',
+            contextWindow: 100_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => (includeXai
+        ? { providers: [xaiProvider], env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' } }
+        : {
+            providers: [{
+              id: 'native-a',
+              name: 'Native A',
+              baseUrl: 'http://a.test',
+              api: 'openai-completions',
+              models: [{ id: 'wide-model' }, { id: 'narrow-model' }],
+            }],
+            env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+          }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'catalog-keeps-live-window',
+      workingDir: cwd,
+      model: 'wide-model',
+      providerId: 'native-a',
+    });
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'set_model') {
+        return { success: true, data: { contextWindow: 100_000 } };
+      }
+      return { success: true, data: {} };
+    };
+    await handle.setModel!('narrow-model', { providerId: 'native-a' });
+    includeXai = true;
+    await handle.setModel!('xai/grok-4.6', { providerId: 'xai' });
+    const settings = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'settings.json'), 'utf8'),
+    ) as { compaction?: { reserveTokens?: number } };
+    expect(settings.compaction?.reserveTokens).toBe(25_000);
     await handle.close();
   });
 
@@ -1350,12 +1546,12 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await handle.setModel!('xai/grok-4.5', { providerId: 'xai' });
     expect(resolves).toBe(1);
-    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'switch_session' }));
     expect(captured.requests).toContainEqual({
       type: 'set_model',
       provider: 'xai',
       modelId: 'grok-4.5',
     });
+    expect(captured.requests.filter((request) => request.type === 'switch_session')).toHaveLength(1);
     await handle.close();
   });
 
@@ -1403,12 +1599,12 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await handle.setModel!('xai/grok-4.6', { providerId: null });
     expect(resolves).toBe(1);
-    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'switch_session' }));
     expect(captured.requests).toContainEqual({
       type: 'set_model',
       provider: 'cindy',
       modelId: 'xai/grok-4.6',
     });
+    expect(captured.requests.filter((request) => request.type === 'switch_session')).toHaveLength(1);
     await handle.close();
   });
 
@@ -1431,6 +1627,7 @@ describe('Pi provider-aware model routing', () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
       resolveRemotePiBinaryPath: async () => '/remote/pi',
       getRemotePiFileOps: () => ({
         mkdirp: async () => {},
@@ -1859,7 +2056,14 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
-  it('keeps provider cindy while applying a model-level Responses API and /v1 base URL', async () => {
+  it.each([
+    ['anthropic-messages', 'messages-model', undefined],
+    ['openai-responses', 'responses-model', 'http://127.0.0.1:9988/v1'],
+    ['openai-completions', 'moonshotai/kimi-k3', 'http://127.0.0.1:9988/v1'],
+    ['google-generative-ai', 'google/gemini-3.6-flash', 'http://127.0.0.1:9988/v1beta'],
+  ] as const)(
+    'keeps provider cindy while emitting Gateway API %s',
+    async (api, modelId, baseUrl) => {
     const deps: AgentDeps = {
       auth: {
         getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
@@ -1873,8 +2077,8 @@ describe('Pi provider-aware model routing', () => {
       capabilityAdditions: {
         availableModels: [
           {
-            id: 'responses-model',
-            displayName: 'Responses Model',
+            id: modelId,
+            displayName: modelId,
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
@@ -1882,14 +2086,26 @@ describe('Pi provider-aware model routing', () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
-      resolvePiGatewayModelApi: (_providerId, modelId) =>
-        modelId === 'responses-model' ? 'openai-responses' : 'anthropic-messages',
+      resolvePiGatewayModelApi: () => api,
+      resolvePiGatewayModelSpec: () => ({
+        api,
+        ...(api === 'openai-completions'
+          ? {
+              compat: {
+                maxTokensField: 'max_tokens',
+                thinkingFormat: 'openai',
+                requiresReasoningContentOnAssistantMessages: true,
+                deferredToolsMode: 'kimi',
+              },
+            }
+          : {}),
+      }),
     };
 
     const handle = await new PiAgent(deps).startSession({
-      sessionId: 'gateway-responses-model',
+      sessionId: `gateway-${api}`,
       workingDir: cwd,
-      model: 'responses-model',
+      model: modelId,
       providerId: 'xd',
     });
 
@@ -1900,15 +2116,33 @@ describe('Pi provider-aware model routing', () => {
     ) as {
       providers: Record<string, {
         api: string;
-        models: Array<{ id: string; api?: string; baseUrl?: string }>;
+        models: Array<{
+          id: string;
+          api?: string;
+          baseUrl?: string;
+          headers?: Record<string, string>;
+          compat?: Record<string, unknown>;
+        }>;
       }>;
     };
     expect(models.providers.cindy?.api).toBe('anthropic-messages');
-    expect(models.providers.cindy?.models.find((model) => model.id === 'responses-model'))
-      .toMatchObject({
-        api: 'openai-responses',
-        baseUrl: 'http://127.0.0.1:9988/v1',
+    const model = models.providers.cindy?.models.find((candidate) => candidate.id === modelId);
+    expect(model).toMatchObject({ api });
+    expect(model?.baseUrl).toBe(baseUrl);
+    if (api === 'openai-completions') {
+      expect(model?.compat).toMatchObject({
+        maxTokensField: 'max_tokens',
+        thinkingFormat: 'openai',
+        requiresReasoningContentOnAssistantMessages: true,
+        deferredToolsMode: 'kimi',
       });
+    }
+    if (api === 'google-generative-ai') {
+      expect(model?.headers).toEqual({
+        authorization: 'Bearer $CINDY_PI_API_KEY',
+        'x-goog-api-key': '$CINDY_PI_API_KEY',
+      });
+    }
     await handle.close();
   });
 
@@ -1974,7 +2208,7 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
-  it('still fails closed when an XD Pi model has no valid v3 wire protocol', async () => {
+  it('omits an unsupported Gateway route without aborting a same-id BYOM session', async () => {
     const deps: AgentDeps = {
       auth: {
         getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
@@ -1988,8 +2222,8 @@ describe('Pi provider-aware model routing', () => {
       capabilityAdditions: {
         availableModels: [
           {
-            id: 'invalid-xd-model',
-            displayName: 'Invalid XD Model',
+            id: 'shared-future-model',
+            displayName: 'Shared Future Model',
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
@@ -1998,15 +2232,34 @@ describe('Pi provider-aware model routing', () => {
       },
       resolvePiAgentHome: () => agentHome,
       resolvePiGatewayModelApi: () => null,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'my-local',
+            name: 'My Local',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            api: 'openai-completions',
+            models: [{ id: 'shared-future-model' }],
+          },
+        ],
+        env: {},
+      }),
     };
 
-    await expect(new PiAgent(deps).startSession({
-      sessionId: 'invalid-xd-v3-wire',
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'unsupported-xd-same-id-byom',
       workingDir: cwd,
-      model: 'invalid-xd-model',
-      providerId: 'xd',
-    })).rejects.toThrow(/Model Access v3 did not provide a Pi wire protocol/);
-    expect(captured.args).toEqual([]);
+      model: 'shared-future-model',
+      providerId: 'my-local',
+    });
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { models: Array<{ id: string }> }> };
+    expect(models.providers.cindy?.models.find((model) => model.id === 'shared-future-model'))
+      .toBeUndefined();
+    expect(models.providers['my-local']?.models.find((model) => model.id === 'shared-future-model'))
+      .toMatchObject({ id: 'shared-future-model' });
+    await handle.close();
   });
 
   it('reconciles a stale persisted effort to the selected BYOM model default before startup', async () => {
@@ -2270,8 +2523,66 @@ describe('Pi provider-aware model routing', () => {
       availableModels,
     },
     resolvePiAgentHome: () => agentHome,
+    spawnPiSubagentRunner: testSubagentRunnerHost,
     resolvePiGatewayModelApi: () => 'anthropic-messages',
     resolvePiNativeProviders,
+  });
+
+  it('omits remote Google Gateway routes that cannot sanitize x-goog-api-key', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const written = new Map<string, string>();
+    const modelId = 'google/gemini-3.6-flash';
+    const base = byomDeps(async () => ({ providers: [], env: {} }), [
+      {
+        id: modelId,
+        displayName: 'Gemini 3.6 Flash',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ]);
+    const agent = new PiAgent({
+      ...base,
+      runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+      resolvePiGatewayModelApi: () => 'google-generative-ai',
+      resolvePiGatewayModelSpec: () => ({ api: 'google-generative-ai' }),
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async () => remoteStub,
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async (filePath, content) => {
+          written.set(filePath, content);
+        },
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'remote-google-header-sanitizer',
+      workingDir: cwd,
+      model: modelId,
+      providerId: 'xd',
+      remoteHostId: 'remote-host',
+    })).rejects.toThrow(/\[PI_GATEWAY_PROTOCOL_UNAVAILABLE\]/);
+    const modelsJson = [...written.entries()].find(([filePath]) => filePath.endsWith('models.json'))?.[1];
+    expect(modelsJson).toBeTruthy();
+    expect(modelsJson).not.toContain('x-goog-api-key');
+    const models = JSON.parse(modelsJson!) as {
+      providers: Record<string, { models: Array<{ id: string }> }>;
+    };
+    expect(models.providers.cindy?.models).toEqual([]);
   });
 
   function installPlanModeExtension(): void {
@@ -2892,6 +3203,31 @@ describe('Pi provider-aware model routing', () => {
     expect(JSON.parse(readFileSync(permFile, 'utf8'))).toEqual({
       mode: 'ask',
       readOnlyRoots: ['/reference-only'],
+      writableRoots: [],
+    });
+    await handle.close();
+  });
+
+  it('persists writable directory grants separately from read-only references', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'perm-writable-dirs',
+      workingDir: cwd,
+      model: 'local-model',
+      permissionMode: 'auto',
+      extraDirs: ['/reference-only'],
+      writableDirs: ['/shared-output'],
+    });
+    const permFile = runtimeFileOf('perm', 'perm-writable-dirs');
+    expect(JSON.parse(readFileSync(permFile, 'utf8'))).toMatchObject({
+      mode: 'auto',
+      readOnlyRoots: ['/reference-only'],
+      writableRoots: ['/shared-output'],
+    });
+    await handle.setWritableDirs?.(['/replacement-output']);
+    expect(JSON.parse(readFileSync(permFile, 'utf8'))).toMatchObject({
+      readOnlyRoots: ['/reference-only'],
+      writableRoots: ['/replacement-output'],
     });
     await handle.close();
   });
@@ -3670,6 +4006,63 @@ describe('Pi provider-aware model routing', () => {
       .toContain((capturedRemoteEnvs[0]!.CINDY_PI_MODELS_JSON_HASH ?? '').slice(0, 16));
     expect(capturedRemoteEnvs[1]!.PI_CODING_AGENT_DIR)
       .toContain((capturedRemoteEnvs[1]!.CINDY_PI_MODELS_JSON_HASH ?? '').slice(0, 16));
+  });
+
+  it('includes settings.json in the remote launch identity so retry config restarts the child', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const written = new Map<string, string>();
+    const capturedRemoteEnvs: Array<Record<string, string | undefined>> = [];
+    const base = byomDeps(async () => ({ providers: [], env: {} }));
+    const agent = new PiAgent({
+      ...base,
+      runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async (_hostId, opts) => {
+        capturedRemoteEnvs.push({ ...(opts.env ?? {}) });
+        return remoteStub;
+      },
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async (filePath, content) => {
+          written.set(filePath, content);
+        },
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'remote-settings-hash',
+      workingDir: cwd,
+      model: 'local-model',
+      remoteHostId: 'remote-host',
+    });
+    await handle.close();
+
+    const modelsJson = [...written.entries()].find(([filePath]) => filePath.endsWith('models.json'))?.[1];
+    const settingsJson = [...written.entries()].find(([filePath]) => filePath.endsWith('settings.json'))?.[1];
+    expect(modelsJson).toBeTruthy();
+    expect(settingsJson).toBeTruthy();
+    const modelsOnlyHash = createHash('sha256').update(modelsJson!).digest('hex');
+    const launchHash = createHash('sha256')
+      .update(modelsJson!)
+      .update('\n')
+      .update(settingsJson!)
+      .digest('hex');
+    expect(launchHash).not.toBe(modelsOnlyHash);
+    expect(capturedRemoteEnvs).toHaveLength(1);
+    expect(capturedRemoteEnvs[0]!.CINDY_PI_MODELS_JSON_HASH).toBe(launchHash);
+    expect(capturedRemoteEnvs[0]!.PI_CODING_AGENT_DIR).toContain(launchHash.slice(0, 16));
   });
 
   it('inlines remote text attachments and rejects local path mentions before dispatch', async () => {

@@ -11,6 +11,11 @@ import {
   type StartupOtaOutcome,
 } from './startupOtaUpdate';
 import { updateChannelRequestHeaders } from './canaryChannelStore';
+import {
+  hasPrivacyConsent,
+  hydratePrivacyConsent,
+  subscribePrivacyConsent,
+} from './updateConsentGate';
 import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
 import {
   clearOtaReloadGuardIfLaunched,
@@ -57,8 +62,11 @@ export function useStartupOtaGate(channel: UpdateChannel = 'release'): boolean {
   // build-time 配置,不受此字段控制,边界见 maker-shared clientEndpoints 的
   // CLIENT_ENDPOINT_REVIEW_KEY)。REVIEW_MODE 是 live binding,本 hook 挂载在
   // 端点闸门 ready 之后,读到的必是清单匹配结果。
-  const enabled = IS_OTA_SELFHOST && !__DEV__ && Updates.isEnabled && !REVIEW_MODE;
-  const [ready, setReady] = useState(!enabled);
+  const baseEnabled = IS_OTA_SELFHOST && !__DEV__ && Updates.isEnabled && !REVIEW_MODE;
+  // 隐私同意状态三态:null = 尚未 hydrate;false = 未同意(不联网);true = 已同意。
+  // baseEnabled 为 false 时不需要读同意状态,直接置 false 走「非自建放行」路径。
+  const [consent, setConsent] = useState<boolean | null>(baseEnabled ? null : false);
+  const [ready, setReady] = useState(!baseEnabled);
   const started = useRef(false);
   const configuredChannelRef = useRef<UpdateChannel | null>(null);
 
@@ -73,26 +81,63 @@ export function useStartupOtaGate(channel: UpdateChannel = 'release'): boolean {
     configuredChannelRef.current = channel;
   }, [channel]);
 
+  // 冷启动先 hydrate 隐私同意状态;未同意前不联网、不配置 expo-updates 目标。
+  // 读失败 fail-closed 到 false(与 analyticsConsentStore 同口径)。同时订阅后续
+  // 同意变化:登录页 acceptPrivacyConsent 会在**本进程内**把 consent 翻 true,若这里
+  // 只保留一次性快照,设置页手动检查 / resume 检查(动态读 hasPrivacyConsent)会拿到
+  // true 却仍指向未覆写的占位 URL,更新检查失败且 canary/beta 通道 header 不生效。
+  useEffect(() => {
+    if (!baseEnabled) return;
+    let cancelled = false;
+    hydratePrivacyConsent().then(
+      (ok) => { if (!cancelled) setConsent(ok); },
+      () => { if (!cancelled) setConsent(false); },
+    );
+    const unsubscribe = subscribePrivacyConsent(() => {
+      if (cancelled) return;
+      setConsent((prev) => {
+        const ok = hasPrivacyConsent();
+        return prev === ok ? prev : ok;
+      });
+    });
+    return () => { cancelled = true; unsubscribe(); };
+  }, [baseEnabled]);
+
   // feature-flags 在登录/切账号后可能更新 channel；启动检查只跑一次，但
   // expo-updates 仍必须马上切换 request header，否则本进程会把下一个账号
   // 的请求发到上一个账号的 canary/stable 指针。stable 的空 header 也会
-  // 覆盖掉之前的 canary header。
+  // 覆盖掉之前的 canary header。仅在已同意后同步——未同意前不触碰联网目标。
   useEffect(() => {
-    if (!enabled || configuredChannelRef.current === channel) return;
+    if (!baseEnabled || consent !== true || configuredChannelRef.current === channel) return;
     try {
       configureUpdateUrl();
     } catch {
       // 真正的启动检查会把配置异常按 fail-open 处理；这里仅提前同步配置，
       // 失败不能阻断主界面或后续重试。
     }
-  }, [configureUpdateUrl, enabled, channel]);
+  }, [configureUpdateUrl, baseEnabled, consent, channel]);
 
   useEffect(() => {
-    if (!enabled || started.current) return;
+    // 非自建变体:ready 初值已是 true,无需处理。
+    if (!baseEnabled) return;
+    // 同意状态尚未决出:保持 ready=false,继续挡住业务树,避免「先挂出旧 UI、
+    // 待同意读回后再 reload」的闪帧,以及同意前误发 /manifest 请求。
+    if (consent === null) return;
+    // 未同意:直接放行,不发起任何更新检查(manifest / OTA 资源都不碰)。
+    if (consent === false) {
+      // 标记「启动检查已决定跳过」:此后即使用户在本进程内同意(consent 翻 true),
+      // 也只由 configureUpdateUrl effect 补配置 URL,绝不补跑一次 check→fetch→reload,
+      // 否则会把已进入登录页的会话闪屏重启。
+      started.current = true;
+      setReady(true);
+      return;
+    }
+    // 已同意:走既有启动 OTA 流程。
+    if (started.current) return;
     started.current = true; // 只冷启一次(不随 resume 重跑)
     let cancelled = false;
     const otaDeps = {
-      enabled,
+      enabled: true,
       configureUpdateUrl,
       checkForUpdateAsync: () => Updates.checkForUpdateAsync(),
       fetchUpdateAsync: () => Updates.fetchUpdateAsync(),
@@ -122,7 +167,7 @@ export function useStartupOtaGate(channel: UpdateChannel = 'release'): boolean {
       if (!cancelled) setReady(true);
     });
     return () => { cancelled = true; };
-  }, [configureUpdateUrl, enabled]);
+  }, [baseEnabled, consent, configureUpdateUrl]);
 
   return ready;
 }

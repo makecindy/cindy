@@ -31,10 +31,11 @@
  */
 
 import { useMemo, useState } from 'react';
-import { CirclePause, Play, X } from 'lucide-react';
+import { AlertCircle, CirclePause, Play, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import { ErrorBanner } from './ErrorBanner';
 
 export function InterruptedTurnBanner({
@@ -107,8 +108,51 @@ export function InterruptedTurnBanner({
   );
 }
 
+/** 定时任务失败/中断未读:只有「标为已读」,没有继续。继续走已有的 error/中断横幅。 */
+export function UnreadFailedScheduleBanner({
+  onDismiss,
+  className,
+  style,
+}: {
+  onDismiss: () => void;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div
+      className={cn(
+        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
+        'border bg-[var(--error-bg)] border-[var(--error-border)]',
+        className,
+      )}
+      style={style}
+      data-testid="unread-failed-schedule-banner"
+      data-banner-kind="unread-failed-schedule"
+    >
+      <AlertCircle size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
+      <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
+        {t('chat.unreadFailedScheduleBanner.text')}
+      </span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className={cn(
+          'shrink-0 text-xs font-medium',
+          'text-[var(--error-fg-strong)]',
+          'hover:opacity-70 transition-opacity',
+        )}
+        title={t('chat.unreadFailedScheduleBanner.markAsReadTitle')}
+      >
+        {t('chat.unreadFailedScheduleBanner.markAsRead')}
+      </button>
+    </div>
+  );
+}
+
 /** ErrorBanner 的 retryText 只是显示 Retry 的非空 typed token,onRetry 忽略它。 */
-const ERROR_TAIL_RETRY_TOKEN = '__xdt_error_tail_continue__';
+export const ERROR_TAIL_RETRY_TOKEN = '__xdt_error_tail_continue__';
 
 export function ErrorTailErrorBanner({
   errorText,
@@ -126,6 +170,7 @@ export function ErrorTailErrorBanner({
   onForkStripEncrypted,
   forkStripEncryptedRunning,
   errorReason,
+  toolLoop,
   onSilentStopContinue,
   className,
   style,
@@ -149,6 +194,7 @@ export function ErrorTailErrorBanner({
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
   errorReason?: string | null;
+  toolLoop?: ToolLoopErrorDetails;
   onSilentStopContinue?: () => void;
   className?: string;
   style?: React.CSSProperties;
@@ -162,6 +208,7 @@ export function ErrorTailErrorBanner({
     <ErrorBanner
       error={errorText}
       errorReason={errorReason}
+      toolLoop={toolLoop}
       retryText={ERROR_TAIL_RETRY_TOKEN}
       onRetry={() => void onContinue()}
       onCancel={onDismiss}

@@ -11,7 +11,17 @@
 
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
+import {
+  parseToolLoopErrorDetails,
+  type ToolLoopErrorDetails,
+} from '@cindy/maker-shared/tool-loop-error';
 import type { PiRuntimeCapabilityManifest } from './pi-runtime-capabilities.js';
+
+export {
+  parseToolLoopErrorDetails,
+  type ToolLoopErrorDetails,
+  type ToolLoopErrorKind,
+} from '@cindy/maker-shared/tool-loop-error';
 
 export type AgentEventType =
   | 'text'                  // 流式文本输出（增量或完整）
@@ -59,6 +69,8 @@ export interface AgentErrorEventData {
   willRetry?: boolean;
   sdkError?: string;
   reason?: string;
+  /** Structured details for reason='tool_use_loop_detected'. */
+  toolLoop?: ToolLoopErrorDetails;
   [key: string]: unknown;
 }
 
@@ -294,6 +306,11 @@ export type InteractionDecision =
       kind: 'ask_user_question';
       /** 用户对每道问题的回答, key=question(或 header), value=用户回答 */
       answers: Record<string, string>;
+      /**
+       * true = 系统性 dismissal(会话 abort/close、turn 失败等自动空答),
+       * 不是用户 Skip。Codex detached continuation 据此不发起续跑 turn。
+       */
+      dismissed?: boolean;
     }
   | {
       kind: 'plan_review';

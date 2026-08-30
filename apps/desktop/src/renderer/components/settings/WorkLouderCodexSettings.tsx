@@ -38,6 +38,12 @@ import {
   workLouderCodexCommandName,
 } from './workLouderCodexCommandCopy';
 import {
+  InputDeviceConnectionStatus,
+  inputDeviceConnectionTone,
+  inputDeviceStatusLabelKey,
+  resolveInputDeviceStatusKey,
+} from './InputDeviceConnectionStatus';
+import {
   WORKLOUDER_CODEX_AGENT_SOURCES,
   WORKLOUDER_CODEX_ANALOG_DIRECTIONS,
   WORKLOUDER_CODEX_AUTO_DIM_OPTIONS,
@@ -111,20 +117,27 @@ function compatibleKeycapForSlot(
 interface WorkLouderCodexEntryProps {
   state: WorkLouderCodexState | null;
   loading: boolean;
+  grouped?: boolean;
   onOpen(): void;
 }
 
-export function WorkLouderCodexEntry({ state, loading, onOpen }: WorkLouderCodexEntryProps) {
+export function WorkLouderCodexEntry({
+  state,
+  loading,
+  grouped = false,
+  onOpen,
+}: WorkLouderCodexEntryProps) {
   const { t } = useTranslation();
   const enabled = state?.settings.deviceEnabled ?? false;
-  const status = enabled ? (state?.connectionStatus ?? 'connecting') : 'disabled';
   return (
     <button
       type="button"
       onClick={onOpen}
       className={cn(
-        'flex w-full items-center gap-3 rounded-xl border p-4 text-left outline-none transition-colors',
-        'border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
+        'flex w-full items-center gap-3 text-left outline-none transition-colors',
+        grouped
+          ? 'rounded-none border-0 bg-transparent px-4 py-[14px]'
+          : 'rounded-xl border p-4 border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
         'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
       )}
       aria-label={t('settings.shortcuts.workLouderCodex.openAria')}
@@ -133,11 +146,8 @@ export function WorkLouderCodexEntry({ state, loading, onOpen }: WorkLouderCodex
         <CodexMicroGlyph />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-            {t('settings.shortcuts.workLouderCodex.title')}
-          </span>
-          <BetaBadge />
+        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
+          {t('settings.shortcuts.workLouderCodex.title')}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
           {t('settings.shortcuts.workLouderCodex.entryDescription')}
@@ -145,8 +155,9 @@ export function WorkLouderCodexEntry({ state, loading, onOpen }: WorkLouderCodex
       </span>
       <span className="flex shrink-0 items-center gap-2">
         <ConnectionStatus
-          status={status}
+          enabled={enabled}
           present={state?.devicePresent ?? null}
+          connectionStatus={state?.connectionStatus}
           loading={loading}
           compact
         />
@@ -387,7 +398,6 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
             {t('settings.shortcuts.workLouderCodex.title')}
           </h2>
-          <BetaBadge />
         </div>
         <button
           type="button"
@@ -413,12 +423,9 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
                 aria-label={t('settings.shortcuts.workLouderCodex.connection.toggle.aria')}
               />
               <ConnectionStatus
-                status={
-                  settings.deviceEnabled
-                    ? (state?.connectionStatus ?? 'connecting')
-                    : 'disabled'
-                }
+                enabled={settings.deviceEnabled}
                 present={state?.devicePresent ?? null}
+                connectionStatus={state?.connectionStatus}
                 loading={loading}
               />
             </div>
@@ -1087,15 +1094,6 @@ function SettingsDivider() {
   return <div className="my-1 h-px bg-[var(--settings-theme-card-border)]" />;
 }
 
-function BetaBadge() {
-  const { t } = useTranslation();
-  return (
-    <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
-      {t('settings.shortcuts.workLouderCodex.beta')}
-    </span>
-  );
-}
-
 function DeviceChip({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] px-2 py-1 text-11 text-[var(--text-secondary)]">
@@ -1106,44 +1104,33 @@ function DeviceChip({ icon, children }: { icon?: ReactNode; children: ReactNode 
 }
 
 function ConnectionStatus({
-  status,
+  enabled,
   present = null,
+  connectionStatus = null,
   loading,
   compact = false,
 }: {
-  status: WorkLouderCodexConnectionStatus;
+  enabled: boolean;
   present?: boolean | null;
+  connectionStatus?: WorkLouderCodexConnectionStatus | null;
   loading: boolean;
   compact?: boolean;
 }) {
   const { t } = useTranslation();
-  const effectiveStatus = loading && status !== 'disabled' ? 'connecting' : status;
-  const label =
-    effectiveStatus === 'disabled'
-      ? present === true
-        ? t('settings.shortcuts.workLouderCodex.connection.status.connected')
-        : present === false
-          ? t('settings.shortcuts.workLouderCodex.connection.status.not-detected')
-          : t('settings.shortcuts.workLouderCodex.connection.status.disabled')
-      : t(`settings.shortcuts.workLouderCodex.connection.status.${effectiveStatus}`);
-  const dotClass =
-    effectiveStatus === 'connected' || (effectiveStatus === 'disabled' && present === true)
-      ? 'bg-[var(--settings-badge-connected)]'
-      : effectiveStatus === 'error' || effectiveStatus === 'unavailable'
-        ? 'bg-[var(--error-fg)]'
-        : 'bg-[var(--text-tertiary)]';
+  const key = resolveInputDeviceStatusKey({
+    enabled,
+    present,
+    connectionStatus,
+    loading,
+  });
   return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full text-12 text-[var(--text-secondary)]',
-        compact
-          ? 'px-1.5 py-1'
-          : 'border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] px-2.5 py-1.5',
+    <InputDeviceConnectionStatus
+      label={t(
+        `settings.shortcuts.workLouderCodex.connection.status.${inputDeviceStatusLabelKey(key)}`,
       )}
-    >
-      <span className={cn('size-1.5 rounded-full', dotClass)} aria-hidden="true" />
-      {label}
-    </span>
+      tone={inputDeviceConnectionTone({ status: key, present })}
+      compact={compact}
+    />
   );
 }
 

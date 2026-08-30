@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { Children, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Alert,
+  DevSettings,
   FlatList,
   Image,
   Linking,
@@ -13,7 +14,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   View,
   useWindowDimensions,
 } from 'react-native';
@@ -32,6 +32,7 @@ import {
   subscribeAnalyticsConsent,
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
+import { hasPrivacyConsent } from '@/update/updateConsentGate';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
@@ -39,9 +40,15 @@ import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import {
   MainWindowActionButton,
   MainWindowActionGroup,
-  ScreenHeader,
   StatusDot,
 } from '@/components/MobilePrimitives';
+import {
+  NativePullDownMenu,
+  NativeSwitch,
+  SimpleStackHeader,
+  simpleScreenSafeAreaEdges,
+  usesNativePullDownMenu,
+} from '@/platform/chrome';
 import {
   APP_BINARY_VERSION,
   AUTH_API_BASE_URL,
@@ -52,6 +59,12 @@ import {
   IS_TESTFLIGHT_BUILD,
   REVIEW_MODE,
 } from '@/config/env';
+import {
+  DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED,
+  switchDevServerEnvironmentAndReload,
+  type DevServerEnvironment,
+} from '@/config/devServerEnvironment';
+import { useDevServerEnvironment } from '@/config/useDevServerEnvironment';
 import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
@@ -146,6 +159,14 @@ export default function SettingsScreen() {
   // beta 测试渠道(设备级)开关。真相在 betaChannelStore;hydrate 完成前禁用,避免对陈旧值取反。
   const { enabled: betaEnabled, ready: betaReady, setEnabled: setBetaEnabled } = useBetaChannel();
   const [betaBusy, setBetaBusy] = useState(false);
+  const showBetaBadge = betaReady && betaEnabled;
+  const {
+    environment: devServerEnvironment,
+    ready: devServerEnvironmentReady,
+    setEnvironment: setDevServerEnvironment,
+  } = useDevServerEnvironment();
+  const [devServerEnvironmentBusy, setDevServerEnvironmentBusy] =
+    useState(false);
   const updateCheckInFlightRef = useRef(false);
   // 语音词典:手机只读展示被控桌面的词典快照(正本在桌面,手机不参与合并)。
   const [dictionaryScreenOpen, setDictionaryScreenOpen] = useState(false);
@@ -323,6 +344,10 @@ export default function SettingsScreen() {
       const outcome = await runManualUpdateCheck({
         checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
         otaEnabled: updatesEnabled,
+        // OTA 检查会携带 eas-client-id,须经隐私同意闸门(企业 SSO 豁免协议门,可能未
+        // 同意;且检查进行中登出会撤销同意)。整包 /latest 为匿名请求,不在此列。动态
+        // 判定而非调用瞬间快照,manifest 请求前与资源下载前各问一次。
+        isConsented: hasPrivacyConsent,
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),
@@ -528,10 +553,95 @@ export default function SettingsScreen() {
     try {
       await auth.logout();
       router.replace('/login');
+    } catch (error) {
+      Alert.alert(t('devices.list.alert.actionFailed'), formatRemoteError(error));
     } finally {
       setLoggingOut(false);
     }
-  }, [auth, loggingOut, router]);
+  }, [auth, loggingOut, router, t]);
+
+  const switchDevServerEnvironment = useCallback(
+    async (next: DevServerEnvironment) => {
+      if (
+        !DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED ||
+        devServerEnvironmentBusy ||
+        !devServerEnvironmentReady ||
+        next === devServerEnvironment
+      ) {
+        return;
+      }
+      const reload = __DEV__
+        ? () => DevSettings.reload()
+        : Updates.isEnabled
+          ? () => Updates.reloadAsync()
+          : null;
+      if (!reload) {
+        Alert.alert(
+          t('settings.devServerEnvironment.title'),
+          t('settings.devServerEnvironment.switchFailed'),
+        );
+        return;
+      }
+      setDevServerEnvironmentBusy(true);
+      try {
+        // 旧环境的 push 注销、token 与账号缓存必须先在旧端点仍生效时清理。
+        await auth.logout();
+        await switchDevServerEnvironmentAndReload({
+          current: devServerEnvironment,
+          next,
+          reload,
+          setEnvironment: setDevServerEnvironment,
+        });
+      } catch {
+        Alert.alert(
+          t('settings.devServerEnvironment.title'),
+          t('settings.devServerEnvironment.switchFailed'),
+        );
+      } finally {
+        setDevServerEnvironmentBusy(false);
+      }
+    },
+    [
+      auth,
+      devServerEnvironment,
+      devServerEnvironmentBusy,
+      devServerEnvironmentReady,
+      setDevServerEnvironment,
+      t,
+    ],
+  );
+
+  const confirmDevServerEnvironmentSwitch = useCallback(() => {
+    if (
+      !DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED ||
+      devServerEnvironmentBusy ||
+      !devServerEnvironmentReady
+    ) {
+      return;
+    }
+    const next: DevServerEnvironment =
+      devServerEnvironment === 'dev' ? 'release' : 'dev';
+    Alert.alert(
+      t('settings.devServerEnvironment.confirmTitle', {
+        environment: t(`settings.devServerEnvironment.options.${next}`),
+      }),
+      t('settings.devServerEnvironment.confirmBody'),
+      [
+        { text: t('settings.devServerEnvironment.cancel'), style: 'cancel' },
+        {
+          text: t('settings.devServerEnvironment.switchAction'),
+          style: 'destructive',
+          onPress: () => void switchDevServerEnvironment(next),
+        },
+      ],
+    );
+  }, [
+    devServerEnvironment,
+    devServerEnvironmentBusy,
+    devServerEnvironmentReady,
+    switchDevServerEnvironment,
+    t,
+  ]);
 
   const openAccountDeletion = useCallback(() => {
     router.push('/account-deletion');
@@ -815,8 +925,8 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.screen">
+      <SimpleStackHeader
         backTestID="settings.backButton"
         onBack={() => goBackGuarded(router)}
         title={t('settings.title')}
@@ -853,7 +963,14 @@ export default function SettingsScreen() {
             <View key="version" style={styles.versionRow} testID="settings.version">
               <View style={styles.versionTexts}>
                 <Text style={styles.rowLabel}>{t('settings.version.currentLabel')}</Text>
-                <Text style={styles.versionValue} numberOfLines={1}>{t('settings.version.bundleVersion', { version: appVersion })}</Text>
+                <View style={styles.versionValueRow}>
+                  <Text style={styles.versionValue} numberOfLines={1}>{t('settings.version.bundleVersion', { version: appVersion })}</Text>
+                  {showBetaBadge ? (
+                    <View style={styles.betaChannelBadge} testID="settings.betaChannelBadge">
+                      <Text style={styles.betaChannelBadgeText}>{t('settings.betaChannel.badge')}</Text>
+                    </View>
+                  ) : null}
+                </View>
                 <Text style={styles.rowDetail} numberOfLines={1} testID="settings.otaVersion">{t('settings.version.otaVersion', { version: otaVersion })}</Text>
                 {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x),不是在线电脑的实时版本;仅自建线且已注入时显示 */}
                 {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
@@ -920,12 +1037,12 @@ export default function SettingsScreen() {
                     <Text style={styles.hint} testID="settings.pushMessage">{pushMessage}</Text>
                   ) : null}
                 </View>
-                <Switch
+                <NativeSwitch
                   accessibilityLabel={t('settings.notifications.taskDone')}
                   disabled={pushBusy}
                   onValueChange={() => void togglePushNotifications()}
+                  seedColor={colors.inputCaret}
                   testID="settings.pushToggle"
-                  trackColor={{ true: colors.inputCaret }}
                   value={pushEnabled}
                 />
               </View>,
@@ -955,13 +1072,22 @@ export default function SettingsScreen() {
           footer={t('settings.language.hint')}
           title={t('settings.language.title')}
         >
-          <LanguagePickerRow
-            expanded={languagePickerOpen}
-            label={t('settings.language.title')}
-            onPress={openLanguagePicker}
-            testID="settings.language.picker"
-            value={t(`settings.language.options.${locale}`)}
-          />
+          <NativePullDownMenu
+            actions={LANGUAGE_OPTIONS.map((option) => ({
+              id: option,
+              state: option === locale ? 'on' : 'off',
+              title: t(`settings.language.options.${option}`),
+            }))}
+            onAction={selectLanguage}
+          >
+            <LanguagePickerRow
+              expanded={languagePickerOpen}
+              label={t('settings.language.title')}
+              onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}
+              testID="settings.language.picker"
+              value={t(`settings.language.options.${locale}`)}
+            />
+          </NativePullDownMenu>
         </SettingsGroup>
 
         {/* 关于这台手机 */}
@@ -994,6 +1120,25 @@ export default function SettingsScreen() {
           >
             {debugExpanded
               ? [
+                ...(DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED
+                  ? [
+                      <ActionInfoRow
+                        accessibilityLabel={t('settings.devServerEnvironment.accessibility')}
+                        detail={t('settings.devServerEnvironment.description')}
+                        key="dev-server-environment"
+                        label={t('settings.devServerEnvironment.title')}
+                        onPress={confirmDevServerEnvironmentSwitch}
+                        testID="settings.devServerEnvironment"
+                        value={
+                          devServerEnvironmentBusy
+                            ? t('settings.devServerEnvironment.switching')
+                            : t(
+                                `settings.devServerEnvironment.options.${devServerEnvironment}`,
+                              )
+                        }
+                      />,
+                    ]
+                  : []),
                 ...debugSection.rows.map((row) => (
                   row.copyValue ? (
                     <CopyRow copied={copiedRowId === row.id} key={row.id} onCopy={copyRow} row={row} />
@@ -1006,12 +1151,12 @@ export default function SettingsScreen() {
                     <Text style={styles.rowLabel}>{t('settings.betaChannel.title')}</Text>
                     <Text style={styles.hint}>{t('settings.betaChannel.description')}</Text>
                   </View>
-                  <Switch
+                  <NativeSwitch
                     accessibilityLabel={t('settings.betaChannel.title')}
                     disabled={betaBusy || !betaReady}
                     onValueChange={() => void toggleBeta()}
+                    seedColor={colors.inputCaret}
                     testID="settings.betaChannelToggle"
-                    trackColor={{ true: colors.inputCaret }}
                     value={betaEnabled}
                   />
                 </View>,
@@ -1035,12 +1180,12 @@ export default function SettingsScreen() {
                 <Text style={styles.hint} testID="settings.analyticsMessage">{analyticsMessage}</Text>
               ) : null}
             </View>
-            <Switch
+            <NativeSwitch
               accessibilityLabel={t('settings.legal.analytics')}
               disabled={analyticsBusy || !analyticsReady}
               onValueChange={() => void toggleAnalytics()}
+              seedColor={colors.inputCaret}
               testID="settings.analyticsToggle"
-              trackColor={{ true: colors.inputCaret }}
               value={analyticsEnabled}
             />
           </View>
@@ -1338,8 +1483,8 @@ function VoiceDictionaryScreen({
       : t('settings.voiceDictionary.readOnlyHint');
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.voiceDictionary.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.voiceDictionary.screen">
+      <SimpleStackHeader
         backTestID="settings.voiceDictionary.backButton"
         onBack={onBack}
         title={t('settings.voiceDictionary.screenTitle')}
@@ -1426,8 +1571,8 @@ function RenameSelfDeviceScreen({
   const { colors } = useTheme();
   const { t } = useTranslation();
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.renameSelfDevice.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.renameSelfDevice.screen">
+      <SimpleStackHeader
         backTestID="settings.renameSelfDevice.backButton"
         onBack={onDone}
         title={t('settings.deviceNameEditor.screenTitle')}
@@ -1614,7 +1759,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   versionTexts: { flex: 1, gap: 2, minWidth: 0 },
-  versionValue: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
+  versionValueRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  versionValue: { color: colors.textPrimary, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
+  betaChannelBadge: {
+    backgroundColor: colors.betaChannelBadgeBackground,
+    borderRadius: radius.pill,
+    flexShrink: 0,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 1,
+  },
+  betaChannelBadgeText: {
+    color: colors.betaChannelBadgeForeground,
+    fontSize: typeScale.micro,
+    fontWeight: fontWeight.semibold,
+  },
   versionButton: { flexShrink: 0, minWidth: 84 },
   // —— 可复制行 ——
   copyRow: {

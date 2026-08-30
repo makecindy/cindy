@@ -38,7 +38,9 @@ import { cn } from '@/lib/utils';
  *   Chromium "ResizeObserver loop" 告警)。
  * - prefers-reduced-motion 降级为直切(红线 a);焦点/Esc/outside-click 语义
  *   与 §14.2 相同(红线 d):打开聚焦 [data-morph-autofocus] → 首个 input →
- *   面板容器,关闭后焦点归还 trigger。
+ *   面板容器,关闭后焦点归还 trigger。composer 工具条可另传 restoreFocusTarget:
+ *   仅指针关闭(选完模型 / 点空白)在收合一开始就把焦点送回输入框;Esc 等键盘关闭
+ *   仍回 trigger(§14.2)。其它控件已接走焦点时仍不抢。
  * - Esc 分层:面板内嵌套的 Radix 浮层(role=dialog,如模型行 effort 子面板)
  *   开着时先让内层关。必须挂 capture —— keydown 是 discrete 事件,Radix 的
  *   capture 处理器关层后 React 同步 flush DOM 移除,bubble 阶段已看不到 dialog;
@@ -137,6 +139,26 @@ interface MorphPopoverProps {
   panelAriaLabel?: string;
   /** 打开完成后的外部焦点目标；未提供时按面板内默认规则聚焦。 */
   autoFocusTarget?: () => HTMLElement | null;
+  /**
+   * 指针关闭时的回焦目标。composer 工具条用它在选完模型 / 点空白后立刻把焦点
+   * 送回输入框(收合动画一开始就回,不等卸掉)。键盘关闭(Esc)仍回 trigger,
+   * 遵守 §14.2。未提供时指针关闭不回焦。目标已被其它控件接走时仍不抢。
+   */
+  restoreFocusTarget?: () => HTMLElement | null;
+}
+
+/** 焦点是否已被面板 / trigger 之外的控件接走(body 不算)。 */
+function isFocusClaimedElsewhere(
+  active: Element | null,
+  panel: HTMLElement,
+  wrap: HTMLElement,
+): boolean {
+  return (
+    active instanceof Node &&
+    active !== document.body &&
+    !panel.contains(active) &&
+    !wrap.contains(active)
+  );
 }
 
 /** 是否处于 reduced-motion(SSR/jsdom 无 matchMedia 时按 false) */
@@ -176,6 +198,7 @@ export function MorphPopover({
   wrapperClassName,
   panelAriaLabel,
   autoFocusTarget,
+  restoreFocusTarget,
 }: MorphPopoverProps) {
   // mounted 独立于 open:关闭时先播收合动画,动画完再卸载 portal
   const [mounted, setMounted] = useState(false);
@@ -410,9 +433,9 @@ export function MorphPopover({
       // pointerdown 走 capture 先触发关闭,浏览器把焦点移交给被点控件的默认动作发生在
       // 事件派发结束之后 —— 同步快照会误判"焦点还在面板内",动画完抢回 trigger,偷走
       // 用户刚点的控件焦点(codex P2)。setTimeout(0) 落在默认聚焦之后:此刻焦点仍在
-      // 面板 / trigger 内 = 键盘关闭(Enter/Space 选项、Esc、点 trigger 收起)→ 归还
-      // trigger;已被外部控件 / body 接走(点空白、动作交接)→ 不抢回,避免点空白
-      // 关闭后凭空冒 trigger 的 tooltip。
+      // 面板 / trigger 内 = 键盘关闭(Enter/Space 选项、Esc)→ 收合结束后归还 trigger;
+      // 指针关闭(选模型 / 点空白)inert 后焦点掉到 body → 立刻送回 restoreFocusTarget
+      // (不等 240ms 卸掉,否则选完接着打的字会丢);已被外部控件接走 → 不抢。
       let ownedFocusAtClose = false;
       focusSnapTimerRef.current = setTimeout(() => {
         focusSnapTimerRef.current = null;
@@ -424,23 +447,21 @@ export function MorphPopover({
         // pointer-events-none 只挡鼠标不挡 Tab,键盘用户 Esc/选完后立刻 Tab 会摸进
         // 隐形面板里的按钮/选项(codex P2)。inert 把收合余辉整体移出 tab order 与辅助树。
         panel.inert = true;
+        if (ownedFocusAtClose) return;
+        if (isFocusClaimedElsewhere(document.activeElement, panel, wrap)) return;
+        const preferredHome = restoreFocusTarget?.();
+        if (preferredHome instanceof HTMLElement && preferredHome.isConnected) {
+          preferredHome.focus({ preventScroll: true });
+        }
       }, 0);
       closeTimerRef.current = setTimeout(
         () => {
           setMounted(false);
-          if (ownedFocusAtClose) {
-            const active = document.activeElement;
-            const focusClaimedElsewhere =
-              active instanceof Node &&
-              active !== document.body &&
-              !panel.contains(active) &&
-              !wrap.contains(active);
-            if (!focusClaimedElsewhere) {
-              wrap.querySelector<HTMLElement>('button, [tabindex]')?.focus({
-                preventScroll: true,
-              });
-            }
-          }
+          if (!ownedFocusAtClose) return;
+          if (isFocusClaimedElsewhere(document.activeElement, panel, wrap)) return;
+          wrap.querySelector<HTMLElement>('button, [tabindex]')?.focus({
+            preventScroll: true,
+          });
         },
         reducedClose ? 0 : MORPH_MS + 20,
       );
@@ -461,6 +482,7 @@ export function MorphPopover({
     endBorderColor,
     syncPanelToContent,
     autoFocusTarget,
+    restoreFocusTarget,
   ]);
 
   /** 打开稳定后跟随内容尺寸变化(搜索过滤 / Edit 面板展宽),同曲线平滑过渡 */

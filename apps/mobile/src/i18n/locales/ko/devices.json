@@ -98,9 +98,13 @@
       "time": {
         "unknown": "최근 활동 시간 알 수 없음",
         "justNow": "방금",
-        "minutesAgo": "{{count}}분 전",
-        "hoursAgo": "{{count}}시간 전",
-        "daysAgo": "{{count}}일 전",
+        "minutesAgo_one": "{{count}}분 전",
+        "minutesAgo_other": "{{count}}분 전",
+        "hoursAgo_one": "{{count}}시간 전",
+        "hoursAgo_other": "{{count}}시간 전",
+        "daysAgo_one": "{{count}}일 전",
+        "hoursAgo_other": "{{count}}시간 전",
+        "daysAgo_other": "{{count}}일 전",
         "minutes": "{{count}}분",
         "hours": "{{count}}시간",
         "days": "{{count}}일",
@@ -185,6 +189,14 @@
       "close": "닫기",
       "cancelRename": "이름 변경 취소"
     },
+    "accounts": {
+      "title": "계정 전환",
+      "add": "다른 계정으로 로그인",
+      "syncFailed": "계정 정보를 업데이트할 수 없습니다",
+      "runningTitle": "계정을 전환할까요?",
+      "runningMessage": "실행 중인 작업이 있습니다. 전환 후에도 컴퓨터에서는 계속 실행되지만 이 휴대폰에서는 해당 작업을 받거나 제어할 수 없습니다.",
+      "switchConfirm": "계속"
+    },
     "menu": {
       "groupByProject": "프로젝트별 그룹화",
       "groupDialogue": "대화 묶기",
@@ -204,7 +216,10 @@
       "projectOrderActivity": "최근 활동순",
       "projectOrderManual": "수동",
       "projectOrderManualTip": "프로젝트 행을 길게 누른 뒤 드래그하면 순서를 바꿀 수 있습니다. 그룹 안 작업은 위 정렬을 따릅니다.",
-      "statusHeading": "상태"
+      "statusHeading": "상태",
+      "showDeviceTasks": "작업 보기",
+      "openDevice": "열기",
+      "renameDevice": "이름 변경"
     },
     "search": {
       "placeholder": "제목 또는 내용 검색…",

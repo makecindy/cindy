@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   outboundFetch: vi.fn(),
   ingestMedia: vi.fn(),
   readBlob: vi.fn(),
+  resolveBlob: vi.fn(),
+  resolveLegacyImage: vi.fn(),
+  resolveLegacyVideo: vi.fn(),
   db: {
     owner: 'media-user-0',
     drizzle: { owner: 'media-user-0' },
@@ -92,10 +95,16 @@ vi.mock('../providerMediaRuntime.js', () => ({
 vi.mock('../ingest.js', () => ({ ingestMedia: mocks.ingestMedia }));
 vi.mock('../blobStore.js', () => ({
   readFile: mocks.readBlob,
+  parseBlobUrl: (url: string) => {
+    const match = /^cindy-media:\/\/blobs\/([0-9a-f]{64})(\.[a-z0-9]+)$/.exec(url);
+    return match ? { hash: match[1], ext: match[2] } : null;
+  },
+  resolveSafe: mocks.resolveBlob,
   supportedMime: (mime: string) =>
     ['image/png', 'video/mp4', 'audio/mpeg'].includes(mime),
 }));
-vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: vi.fn() }));
+vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyImage }));
+vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyVideo }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
@@ -239,8 +248,41 @@ describe('Cindy Core media invocation state and security boundary', () => {
       url: `cindy-media://blobs/${'a'.repeat(64)}.png`,
     });
     mocks.readBlob.mockReset();
+    mocks.resolveBlob.mockReset().mockReturnValue({
+      absPath: process.execPath,
+      mimeType: 'image/png',
+      hash: 'a'.repeat(64),
+    });
+    mocks.resolveLegacyImage.mockReset().mockReturnValue({
+      absPath: process.execPath,
+      mimeType: 'image/jpeg',
+    });
+    mocks.resolveLegacyVideo.mockReset().mockReturnValue({
+      absPath: process.execPath,
+      mimeType: 'video/mp4',
+    });
     mocks.recover.mockClear();
     mocks.prune.mockClear();
+  });
+
+  it('把当前及历史受管媒体地址解析为本机文件路径', async () => {
+    const cases = [
+      [`cindy-media://blobs/${'a'.repeat(64)}.png`, 'image/png'],
+      ['xdt-image://session-1/image.jpg', 'image/jpeg'],
+      ['xdt-video://lizi-art-media-videos/video.mp4', 'video/mp4'],
+    ] as const;
+
+    for (const [url, mimeType] of cases) {
+      await expect(callCindyMedia({ action: 'resolve_local_path', url })).resolves.toEqual({
+        ok: true,
+        url,
+        local_path: process.execPath,
+        mime_type: mimeType,
+      });
+    }
+    await expect(
+      callCindyMedia({ action: 'resolve_local_path', url: 'xdt-audio://local/?path=/tmp/a.mp3' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
   });
 
   it('按 modelId 取 Guide、覆盖 body.model，并以一次性 invocation 完成同步结果入仓', async () => {
@@ -266,7 +308,12 @@ describe('Cindy Core media invocation state and security boundary', () => {
       body: { prompt: 'cat', model: 'agent-must-not-control-this' },
     });
 
-    expect(result).toMatchObject({ ok: true, status: 'complete' });
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'complete',
+    });
+    expect(String(result.hint)).toContain('只嵌入展示一次');
+    expect(result).not.toHaveProperty('_xdt_render_image');
     const [, init] = mocks.outboundFetch.mock.calls[0];
     expect(mocks.outboundFetch.mock.calls[0][0]).toBe(
       'https://gateway.example.com/images/generations',
@@ -996,11 +1043,13 @@ describe('Cindy Core media invocation state and security boundary', () => {
     await expect(
       callCindyMedia({ action: 'request', invocationId, body: { content: [] } }),
     ).resolves.toMatchObject({ ok: true, status: 'pending' });
-    await expect(callCindyMedia({ action: 'poll', invocationId })).resolves.toMatchObject({
+    const completed = await callCindyMedia({ action: 'poll', invocationId });
+    expect(completed).toMatchObject({
       ok: true,
       status: 'complete',
       xdt_video_urls: [`cindy-media://blobs/${'b'.repeat(64)}.mp4`],
     });
+    expect(completed).not.toHaveProperty('_xdt_render_image');
     expect(mocks.outboundFetch.mock.calls[1][0]).toBe(
       'https://gateway.example.com/video/tasks/task-1',
     );

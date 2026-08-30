@@ -35,6 +35,7 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
+import { isCindyProviderCodexRemoteCompactionRoute } from '@cindy/maker-core';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   createResponsesCustomToolFunctionAdapter,
@@ -46,8 +47,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isCuratedQwen38Tag } from '../../shared/localModelRuntime.js';
-import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-config.js';
+import {
+  buildCodexGatewayBaseUrl,
+  CODEX_OAUTH_UPSTREAM,
+} from './codex-gateway-config.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import {
   getActiveCatalog,
@@ -322,8 +325,9 @@ function subagentRouteFromHeaders(
  * Resolve only the independent Subagent route carried by this WS upgrade.
  *
  * A registered child already owns a frozen route snapshot. Its first
- * collab_spawn upgrade can race thread/started, so fall back to the explicit
- * parent header without mutating thread ownership from the handshake path.
+ * collab_spawn upgrade can race thread/started; when the handshake already
+ * carries a real child thread id, bind it before returning 426 so Codex's HTTP
+ * fallback can still resolve the frozen route if it omits parent metadata.
  */
 function subagentRouteForWebSocketUpgrade(
   headers: Readonly<Record<string, string>>,
@@ -334,8 +338,16 @@ function subagentRouteForWebSocketUpgrade(
 
   const parentThreadId = headerValue(headers, 'x-codex-parent-thread-id');
   if (!parentThreadId) return undefined;
-  return subagentRouteByThread.get(parentThreadId)
+  const inheritedRoute = subagentRouteByThread.get(parentThreadId)
     ?? subagentRouteByParentThread.get(parentThreadId);
+  if (!inheritedRoute) return undefined;
+
+  const childThreadId = headerValue(headers, 'thread-id');
+  if (childThreadId) {
+    registerChildThread(parentThreadId, childThreadId);
+    return subagentRouteByThread.get(childThreadId) ?? inheritedRoute;
+  }
+  return inheritedRoute;
 }
 
 interface ProviderRequestContext {
@@ -745,6 +757,10 @@ function isGoogleGeminiChatUpstream(upstream: string): boolean {
 }
 
 const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
+/** Kimi Code (coding plan) official endpoint DNS boundary. */
+const KIMI_CODING_CHAT_HOST = 'api.kimi.com';
+/** Model ids on the Kimi Code Codex (openai-chat) route verified for image input. */
+const KIMI_CODING_IMAGE_CHAT_MODELS = new Set(['k3', 'k3-256k']);
 /** 火山方舟(豆包)官方 DNS 边界:ark.<region>.volces.com(如 ark.cn-beijing.volces.com)。 */
 const VOLCENGINE_ARK_CHAT_HOST_RE = /^ark\.[a-z0-9-]+\.volces\.com$/;
 /** 阿里云百炼 Coding Plan / Token Plan / 按量付费官方 DNS 边界。 */
@@ -789,6 +805,7 @@ function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined):
  * 在模型级多模态能力元数据接入路由前,图片桥接先按已验证的上游能力显式开启。
  *
  * 当前覆盖:
+ * - Kimi Code（编程计划包月）K3
  * - Moonshot Kimi K3
  * - Volcengine Doubao Seed 系列
  * - Alibaba Cloud Bailian Coding Plan Qwen 3.7 Plus
@@ -797,6 +814,44 @@ function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined):
  * id),也不对所有 openai-chat 供应商放开。未命中继续沿用 fail-closed 默认——
  * 无图片能力的上游(如 DeepSeek)保持发送前显式报错,不静默吞图。
  */
+/**
+ * Chat bridge 的 system 消息策略(#3531)。
+ *
+ * 本地模板运行器(Ollama / LM Studio / llama.cpp 的 OpenAI 兼容层)用 Jinja
+ * chat template 渲染消息,Qwen3 系等模板硬校验 system 必须在开头,消息中段的
+ * system/developer 直接 500(Ornith 实测 `System message must be at the
+ * beginning`);这类运行器也不支持 developer 角色,合并成唯一首条 system 是
+ * 严格更安全的形态。因此**回环上游一律 coalesce-leading**(内置 Ollama 面板
+ * 与指向 127.0.0.1 等本机端点的自定义供应商都覆盖,不再限 Qwen3.8 白名单)。
+ * 远程供应商保持 preserve 缺省:coalesce 会把 developer 并为 system,对原生
+ * 区分 developer 角色的云端兼容层是语义变更,不能默认开。
+ */
+export function chatBridgeSystemMessagePolicyForRoute(
+  providerId: string,
+  upstream: string,
+): 'coalesce-leading' | undefined {
+  if (providerId === 'cindy-local-ollama') return 'coalesce-leading';
+  return isLoopbackChatUpstream(upstream) ? 'coalesce-leading' : undefined;
+}
+
+function isLoopbackChatUpstream(upstream: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(upstream);
+  } catch {
+    return false;
+  }
+  // 精确 loopback 判定(与 pi-host 同裁决):不能用 startsWith('127.'),
+  // 会误伤 127.example.com 这类合法域名。URL.hostname 已去方括号。
+  const host = url.hostname.toLowerCase();
+  return (
+    host === 'localhost' ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === '::1' ||
+    host === '[::1]'
+  );
+}
+
 export function chatBridgeCapabilitiesForRoute(
   upstream: string,
   realModel: string,
@@ -819,6 +874,7 @@ function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean 
   if (url.protocol !== 'https:') return false;
   const host = url.hostname.toLowerCase();
   if (realModel === 'kimi-k3') return MOONSHOT_CHAT_HOSTS.has(host);
+  if (KIMI_CODING_IMAGE_CHAT_MODELS.has(realModel)) return host === KIMI_CODING_CHAT_HOST;
   if (isDoubaoVisionModel(realModel)) return VOLCENGINE_ARK_CHAT_HOST_RE.test(host);
   if (isQwenImageChatModel(realModel)) return DASHSCOPE_CODING_CHAT_HOSTS.has(host);
   return false;
@@ -863,10 +919,13 @@ function createChatBridgeDecision(
     realModel,
     baseCapabilities,
   );
-  const capabilities =
-    route.providerId === 'cindy-local-ollama' && isCuratedQwen38Tag(realModel)
-      ? { ...routedCapabilities, systemMessagePolicy: 'coalesce-leading' as const }
-      : routedCapabilities;
+  const systemMessagePolicy = chatBridgeSystemMessagePolicyForRoute(
+    route.providerId,
+    route.routing.upstream,
+  );
+  const capabilities = systemMessagePolicy
+    ? { ...routedCapabilities, systemMessagePolicy }
+    : routedCapabilities;
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
@@ -2106,17 +2165,13 @@ function createGatewayGrokResponsesCompatTransform(
 /**
  * 跨来源恢复的加密压缩历史兼容(Greptile P1, PR #265):
  *
- * OpenAI 远端压缩会把早期历史替换成加密 compaction 块(只有 ChatGPT 后端能解)。
- * 该会话切到 XD / xAI / 自定义供应商后按原 thread id resume,持久化历史里的加密块
- * 会被逐请求重放给读不懂它的上游 → 请求被拒、会话卡死。客户端无法解密转换,
- * 唯一可行的降级是:发往**非 ChatGPT 上游**时把加密块替换成明文占位 user message,
- * 明确告知模型「压缩点之前的上下文不可用」,保留压缩点之后仍在历史里的对话继续跑。
+ * 远端压缩会把早期历史替换成加密 compaction 块。ChatGPT 和 Cindy Provider
+ * codex/* 都需要原样回放；切到 xAI / 自定义供应商后仍按既有明文占位降级。
  * 判断去向用 ctx.upstreamBase(引擎按最终路由注入),不复刻路由逻辑。
- * ChatGPT 路由(chatgpt.com)原样透传,远端压缩语义不受影响。
  */
 const COMPACTION_UNAVAILABLE_NOTE =
   '[context note] Earlier conversation history was compacted into an encrypted snapshot by the ' +
-  'OpenAI subscription backend and is not readable on the current model provider. Treat the ' +
+  'previous Codex backend and is not readable on the current model provider. Treat the ' +
   'conversation from this point on as the available context; ask the user if earlier details are needed.';
 
 function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
@@ -2139,12 +2194,16 @@ function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
  * - reasoning.encrypted_content 不属于本故障；继续交给后续供应商兼容层判断，
  *   不在这里扩大删除面。
  */
-function rewriteCrossProviderHistoryItems(body: unknown): Record<string, unknown> | null {
+function rewriteCrossProviderHistoryItems(
+  body: unknown,
+  opts: { preserveCompaction?: boolean } = {},
+): Record<string, unknown> | null {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
   let changed = false;
   const input: unknown[] = [];
   for (const item of body.input) {
     if (
+      opts.preserveCompaction !== true &&
       isPlainObject(item) &&
       (item.type === 'compaction' || item.type === 'context_compaction') &&
       typeof item.encrypted_content === 'string' &&
@@ -2175,10 +2234,18 @@ function rewriteCrossProviderHistoryItems(body: unknown): Record<string, unknown
 
 export function createCrossProviderCompactionCompatTransform(): RequestTransform {
   return (body, ctx) => {
-    // upstreamBase 未注入(理论不发生)按非 ChatGPT 保守处理?否——保守方向是不改写:
-    // 改写会丢加密块,误伤真 ChatGPT 请求的代价(远端压缩语义被破坏)高于维持现状。
-    if (!ctx.upstreamBase || isChatGptUpstreamBase(ctx.upstreamBase)) return null;
-    const replaced = rewriteCrossProviderHistoryItems(body);
+    // upstreamBase 未注入(理论不发生)时不猜目标后端，避免误删合法加密快照。
+    if (!ctx.upstreamBase) return null;
+    const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+    const providerContext = providerContextForRequest(ctx.headers, requestModel);
+    const isCindyCodexRoute = isCindyProviderCodexRemoteCompactionRoute({
+      providerId: providerContext.providerId,
+      model: providerContext.catalogModel,
+    });
+    if (isChatGptUpstreamBase(ctx.upstreamBase)) return null;
+    const replaced = rewriteCrossProviderHistoryItems(body, {
+      preserveCompaction: isCindyCodexRoute,
+    });
     if (!replaced) return null;
     log.info('rewrote incompatible Codex history for non-ChatGPT upstream', {
       reqId: ctx.reqId,
@@ -2857,6 +2924,9 @@ function createCodexProxyHandle(
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,
     resolveOutboundProxy: resolveDesktopOutboundProxy,
+    // 仅 resolveWebSocketUpstream 真正返回 OAuth 上游时生效。已成功走过 WS 的单个 thread
+    // 在瞬时断网后由 Cindy 原地回探，不让 Codex 因握手失败把该 session 固定到 HTTP。
+    retryProvenWebSocketUpgrades: true,
     /**
      * WS upgrade 的上游固定为 ChatGPT 订阅后端。
      *
@@ -3146,6 +3216,10 @@ function clearSessionThreads(sessionId: string): string[] {
   reviewerModelBySession.delete(sessionId);
   for (const threadId of threadIds) {
     if (threadToSession.get(threadId) === sessionId) {
+      // Session 关闭既可能是普通释放，也可能是 OAuth ↔ 第三方模型的 route 切换。
+      // 两种情况都必须撤销旧 thread 的 WS 成功证明：第三方恢复使用 cindy_gateway/HTTP，
+      // 迟到的旧 upgrade 不能命中本次新增的 Cindy 侧 WS 保活；其他 thread 不受影响。
+      _handle?.forgetWebSocketStateForThread?.(threadId);
       threadToSession.delete(threadId);
       registry.delete(threadId);
       subagentRouteByParentThread.delete(threadId);

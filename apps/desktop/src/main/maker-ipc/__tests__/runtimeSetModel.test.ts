@@ -5,7 +5,11 @@ import {
   getSessionProvider,
   setSessionProvider,
 } from '../../maker-host/session-provider-store.js';
-import { applyRuntimeSetModelChange, type RuntimeSetModelMaker } from '../runtimeSetModel.js';
+import {
+  applyRuntimeSetModelChange,
+  isRemoteModelSwitchRouteChangeError,
+  type RuntimeSetModelMaker,
+} from '../runtimeSetModel.js';
 
 const sessionProviderWriteObserver = vi.hoisted(() => ({
   current: null as ((sessionId: string, providerId: string | null) => void) | null,
@@ -38,6 +42,22 @@ function rememberSession(sessionId: string): string {
   touchedSessions.add(sessionId);
   return sessionId;
 }
+
+describe('isRemoteModelSwitchRouteChangeError', () => {
+  it('recognizes both IPC codes and remote daemon message markers', () => {
+    expect(
+      isRemoteModelSwitchRouteChangeError({ code: 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE' }),
+    ).toBe(true);
+    expect(
+      isRemoteModelSwitchRouteChangeError(
+        new Error('[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] close and recreate'),
+      ),
+    ).toBe(true);
+    expect(isRemoteModelSwitchRouteChangeError(new Error('ordinary set-model failure'))).toBe(
+      false,
+    );
+  });
+});
 
 describe('applyRuntimeSetModelChange', () => {
   it('rolls back provider route when live setModel rejects', async () => {
@@ -219,6 +239,43 @@ describe('applyRuntimeSetModelChange', () => {
 
     expect(closeSession).toHaveBeenCalledWith(sessionId);
     expect(setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('xd');
+  });
+
+  it('keeps an idle Cindy Codex thread local when its independent subagent is incompatible', async () => {
+    const sessionId = rememberSession('runtime-set-model-cindy-local-compaction');
+    setSessionProvider(sessionId, 'xd');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        codexThreadModelProviderId: 'cindy_gateway',
+        codexCindyRemoteCompactionCompatible: false,
+        model: 'codex/gpt-5.5',
+        setModel,
+      }),
+      listActiveSessions: () => [{
+        id: sessionId,
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => false,
+      }],
+      closeSession,
+    };
+
+    const result = await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+    });
+
+    expect(result).toEqual({ status: 'applied' });
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(setModel).toHaveBeenCalledWith('codex/gpt-5.6-sol', { providerId: 'xd' });
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
@@ -832,6 +889,71 @@ describe('applyRuntimeSetModelChange', () => {
     expect(order).toEqual(['close', 'route', 'wake']);
     expect(closeSession).toHaveBeenCalledOnce();
     expect(wakeSessionInputQueue).toHaveBeenCalledOnce();
+  });
+
+  it('rebuilds an idle Orca Worker instead of hot-switching its live model', async () => {
+    const sessionId = rememberSession('runtime-set-model-orca-worker-rebuild');
+    setSessionProvider(sessionId, 'xd');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.5',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.4',
+      providerId: 'xd',
+      forceSessionRebuild: true,
+      clearPendingCredentialSwitch: vi.fn(),
+    })).resolves.toEqual({ status: 'applied' });
+
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('defers a busy Orca Worker rebuild to the turn boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-orca-worker-defer');
+    setSessionProvider(sessionId, 'xd');
+    const registerPendingCredentialSwitch = vi.fn();
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.5',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => true },
+      ],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.4',
+      providerId: 'xd',
+      forceSessionRebuild: true,
+      registerPendingCredentialSwitch,
+    })).resolves.toEqual({ status: 'deferred' });
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      model: 'gpt-5.4',
+      providerId: 'xd',
+    });
+    expect(setModel).not.toHaveBeenCalled();
   });
 
   it('falls back to the busy throw when no pending channel is injected', async () => {

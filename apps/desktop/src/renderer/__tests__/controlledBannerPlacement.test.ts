@@ -109,6 +109,12 @@ describe('controlled banner placement', () => {
     );
     expect(todoListSource).toContain('data-plan-pill-anchor="true"');
     expect(todoListSource).toContain('data-plan-flyout-positioner="composer"');
+    expect(sessionViewSource).toContain(
+      'const mutationObserver = new MutationObserver(syncResizeTargetsAndMeasure);',
+    );
+    expect(sessionViewSource).toContain(
+      'mutationObserver.observe(overlayEl, { childList: true, subtree: true });',
+    );
     expect(sessionViewSource).not.toContain('fitContent=');
     expect(pinnedPlanSource).not.toContain('fitContent');
     expect(todoListSource).not.toContain('fitContent');

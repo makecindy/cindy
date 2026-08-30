@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DbSlimmingStartupProgress } from '../../../../shared/localDbMaintenance';
 
 /**
  * SplashScreen wave4 统一面板版测试(implementation-plan Step 3b WHAT1/WHAT3)。
@@ -96,6 +97,42 @@ function setPhase(phase: string) {
 function renderSplash(phase: string) {
   setPhase(phase);
   return render(<SplashScreen />);
+}
+
+function installDatabaseCleanupApi(
+  progress: DbSlimmingStartupProgress,
+  cancelStartup = vi.fn(async () => ({ cancelled: true })),
+) {
+  let listener: ((next: DbSlimmingStartupProgress | null) => void) | null = null;
+  (
+    window as unknown as {
+      electronAPI: {
+        platform: string;
+        localDb: {
+          maintenance: {
+            getStartupProgress: () => Promise<DbSlimmingStartupProgress | null>;
+            cancelStartup: () => Promise<{ cancelled: boolean }>;
+            onStartupProgress: (
+              callback: (next: DbSlimmingStartupProgress | null) => void,
+            ) => () => void;
+          };
+        };
+      };
+    }
+  ).electronAPI = {
+    platform: 'win32',
+    localDb: {
+      maintenance: {
+        getStartupProgress: vi.fn(async () => progress),
+        cancelStartup,
+        onStartupProgress: vi.fn((callback) => {
+          listener = callback;
+          return vi.fn();
+        }),
+      },
+    },
+  };
+  return { cancelStartup, emit: (next: DbSlimmingStartupProgress | null) => listener?.(next) };
 }
 
 function panel(): HTMLElement {
@@ -323,6 +360,26 @@ describe('SplashScreen wave4 统一面板', () => {
       'spawnFailed.title',
       'spawnFailed.description',
       'spawnFailed.confirm',
+      'databaseCleanup.title',
+      'databaseCleanup.progressLabel',
+      'databaseCleanup.phase.preparing',
+      'databaseCleanup.phase.backingUp',
+      'databaseCleanup.phase.copying',
+      'databaseCleanup.phase.cleaning',
+      'databaseCleanup.phase.compacting',
+      'databaseCleanup.phase.verifying',
+      'databaseCleanup.phase.finalizing',
+      'databaseCleanup.phase.cancelling',
+      'databaseCleanup.elapsedAndRemaining',
+      'databaseCleanup.elapsedFinalizing',
+      'databaseCleanup.duration.seconds',
+      'databaseCleanup.duration.minutes',
+      'databaseCleanup.cancelAction',
+      'databaseCleanup.cancellingAction',
+      'databaseCleanup.finalizingAction',
+      'databaseCleanup.cancelHint',
+      'databaseCleanup.cancellingHint',
+      'databaseCleanup.finalizingHint',
     ];
     for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
       const json = JSON.parse(
@@ -407,5 +464,51 @@ describe('SplashScreen wave4 统一面板', () => {
     mocks.coverHeld = false;
     view.rerender(<SplashScreen />);
     expect(view.container.firstElementChild).toBeNull();
+  });
+
+  it('shows startup database cleanup progress, time estimate, and a safe cancel action', async () => {
+    const progress: DbSlimmingStartupProgress = {
+      requestId: 'request-1',
+      phase: 'compacting',
+      progress: 72,
+      cancellable: true,
+      startedAt: Date.now() - 5_000,
+      updatedAt: Date.now(),
+      estimatedTotalMs: 15_000,
+    };
+    const api = installDatabaseCleanupApi(progress);
+    mocks.coverHeld = true;
+    renderSplash('splash_done');
+
+    expect(await screen.findByText('splash.databaseCleanup.title')).toBeTruthy();
+    expect(screen.getByText('splash.databaseCleanup.phase.compacting · 72%')).toBeTruthy();
+    expect(screen.getByTestId('database-cleanup-progress-fill').style.width).toBe('72%');
+    expect(screen.getByTestId('database-cleanup-time').textContent).toBe(
+      'splash.databaseCleanup.elapsedAndRemaining',
+    );
+    expect(screen.queryByTestId('window-controls')).toBeNull();
+    fireEvent.click(screen.getByTestId('database-cleanup-cancel'));
+    await waitFor(() => expect(api.cancelStartup).toHaveBeenCalledTimes(1));
+  });
+
+  it('disables cancellation while the compacted database is being installed', async () => {
+    installDatabaseCleanupApi({
+      requestId: 'request-1',
+      phase: 'finalizing',
+      progress: 96,
+      cancellable: false,
+      startedAt: Date.now() - 5_000,
+      updatedAt: Date.now(),
+      estimatedTotalMs: 6_000,
+    });
+    mocks.coverHeld = true;
+    renderSplash('splash_done');
+
+    const cancel = await screen.findByTestId('database-cleanup-cancel');
+    expect((cancel as HTMLButtonElement).disabled).toBe(true);
+    expect(cancel.textContent).toBe('splash.databaseCleanup.finalizingAction');
+    expect(screen.getByTestId('database-cleanup-safety-hint').textContent).toBe(
+      'splash.databaseCleanup.finalizingHint',
+    );
   });
 });

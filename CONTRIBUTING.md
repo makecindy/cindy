@@ -51,7 +51,12 @@ Git LFS 和依赖安装。该文档是安装命令的唯一权威说明；本指
    [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)。
 3. Review 完整 diff，确认没有凭证、无关生成文件或意外的 submodule 指针变化。
 4. 按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md) 填写变更范围、验证、风险和回滚方式。
-5. 等待 CI 和 review；不要直接向 `main` 推送。
+5. 从个人 Fork 提交 PR 时，建议保持 `Allow edits from maintainers` 开启，方便维护者和 QA
+   直接在原 PR 分支协作修复。若 Fork 包含 GitHub Actions workflow，该选项会显示为
+   `Allow edits and access to secrets by maintainers`；开启后，拥有上游仓库 push 权限的维护者
+   也能编辑 Fork 中的 workflow，可能暴露 Actions secrets 或取得其他分支的访问权限。
+   请仅在接受这一权限范围时开启。
+6. 等待 CI 和 review；不要直接向 `main` 推送。
 
 小型文档修正也欢迎直接提交 PR。较大的架构、协议、数据库 migration、权限或用户数据
 变更，建议先开 issue 讨论范围和兼容性。

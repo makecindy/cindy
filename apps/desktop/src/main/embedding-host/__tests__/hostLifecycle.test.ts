@@ -296,11 +296,14 @@ describe('embedding-host 多 consumer 启停', () => {
 });
 
 describe('chat embedding availability wiring', () => {
-  it('reconciles the runtime whenever provider access changes', () => {
+  it('reconciles the runtime whenever provider access or another process changes settings', () => {
     expect(makerHostSource).toContain('providerAccessRuntimeRefreshListener?.();');
     expect(bootstrapSource).toContain(
       'setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);',
     );
+    expect(bootstrapSource).toContain('createChatEmbeddingSettingsWatcher(() => {');
+    expect(bootstrapSource).toContain('rebindChatEmbeddingSettingsWatcher();');
+    expect(bootstrapSource).toContain('MAKER_PUSH.CHAT_EMBEDDING_CHANGED');
   });
   it('keeps provider broadcasts alive when runtime reconciliation throws', () => {
     const refreshStart = makerHostSource.indexOf(
@@ -326,26 +329,67 @@ describe('chat embedding availability wiring', () => {
       "setEmbeddingSourceSuspended('chat', !chatAvailable);",
     );
     expect(bootstrapSource).toContain(
-      'if (!chatAvailable) setChatEmbeddingEnabled(false);',
+      'if (!chatEnabled) setChatEmbeddingEnabled(false);',
     );
     expect(bootstrapSource).toContain(
-      'if (isChatEmbeddingAvailable() && readChatEmbeddingSettings().enabled)',
+      'readChatEmbeddingSettings(chatEmbeddingDefaultContext()).enabled',
     );
     expect(bootstrapSource).toContain('await shutdownChatEmbeddingConsumer();');
   });
 
   it('routes unavailable enable requests through the stable capability error', () => {
-    const start = bootstrapSource.indexOf(
-      'ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET',
-    );
-    const end = bootstrapSource.indexOf(
-      'ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET',
-      start,
-    );
+    const start = bootstrapSource.indexOf('MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET');
+    const end = bootstrapSource.indexOf('MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET', start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const handler = bootstrapSource.slice(start, end);
     expect(handler).toMatch(/throwIpcError\(\s*'UNSUPPORTED_CAPABILITY'/);
     expect(handler).not.toContain("requireAppCapability('canUseCindyGateway'");
+  });
+
+  it('rejects stale renderer owner stamps before mutating an account setting', () => {
+    const setStart = bootstrapSource.indexOf('MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET');
+    const resetStart = bootstrapSource.indexOf('MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET', setStart);
+    const resetEnd = bootstrapSource.indexOf('MAKER_IPC_INVOKE.GIT_SAFETY_GET', resetStart);
+    const setHandler = bootstrapSource.slice(setStart, resetStart);
+    const resetHandler = bootstrapSource.slice(resetStart, resetEnd);
+
+    const setGuard = setHandler.indexOf('assertChatEmbeddingMutationOwner(owner);');
+    const setWrite = setHandler.indexOf('await writeChatEmbeddingEnabled');
+    const resetGuard = resetHandler.indexOf('assertChatEmbeddingMutationOwner(owner);');
+    const resetWrite = resetHandler.indexOf('await resetChatEmbeddingSettings');
+    expect(setGuard).toBeGreaterThanOrEqual(0);
+    expect(setWrite).toBeGreaterThan(setGuard);
+    expect(resetGuard).toBeGreaterThanOrEqual(0);
+    expect(resetWrite).toBeGreaterThan(resetGuard);
+    expect(bootstrapSource).toMatch(/throwIpcError\(\s*'PRECONDITION_FAILED'/);
+  });
+
+  it('converts persist failures to a stable IPC error after runtime reconcile', () => {
+    expect(bootstrapSource).toContain(
+      "import { rethrowChatEmbeddingPersistError } from './maker-host/chat-embedding-persist-error.js';",
+    );
+
+    const setStart = bootstrapSource.indexOf('MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET');
+    const resetStart = bootstrapSource.indexOf('MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET', setStart);
+    const resetEnd = bootstrapSource.indexOf('MAKER_IPC_INVOKE.GIT_SAFETY_GET', resetStart);
+    const setHandler = bootstrapSource.slice(setStart, resetStart);
+    const resetHandler = bootstrapSource.slice(resetStart, resetEnd);
+
+    const setReconcile = setHandler.indexOf('await scheduleChatEmbeddingRuntimeReconcile();');
+    const setRethrow = setHandler.indexOf(
+      "rethrowChatEmbeddingPersistError(error, 'Failed to save chat embedding settings')",
+    );
+    expect(setReconcile).toBeGreaterThanOrEqual(0);
+    expect(setRethrow).toBeGreaterThan(setReconcile);
+    expect(setHandler).not.toMatch(/throw error;?/);
+
+    const resetReconcile = resetHandler.indexOf('await scheduleChatEmbeddingRuntimeReconcile();');
+    const resetRethrow = resetHandler.indexOf(
+      "rethrowChatEmbeddingPersistError(error, 'Failed to reset chat embedding settings')",
+    );
+    expect(resetReconcile).toBeGreaterThanOrEqual(0);
+    expect(resetRethrow).toBeGreaterThan(resetReconcile);
+    expect(resetHandler).not.toMatch(/throw error;?/);
   });
 });

@@ -305,8 +305,20 @@ describe('withCardToken(令牌注入纯函数)', () => {
 
   it('inFlightCallInfoOf 只认真正在途:交卷/重开/查无一律 null(workspace 凭证语义)', () => {
     const { svc } = makeService();
-    svc.registerCall('c1', { ghostId: 'g1', toolUseId: null, sessionId: 's1' });
-    expect(svc.inFlightCallInfoOf('c1')).toEqual({ ghostId: 'g1', sessionId: 's1', scriptWorkdir: null, scriptWritePath: null, channel: 'session' });
+    svc.registerCall('c1', {
+      ghostId: 'g1',
+      toolUseId: null,
+      sessionId: 's1',
+      remoteHostId: 'ssh-host-1',
+    });
+    expect(svc.inFlightCallInfoOf('c1')).toEqual({
+      ghostId: 'g1',
+      sessionId: 's1',
+      remoteHostId: 'ssh-host-1',
+      scriptWorkdir: null,
+      scriptWritePath: null,
+      channel: 'session',
+    });
     // 交卷后:宽限窗内 callInfoOf 仍可查(卡片供片语义),但在途凭证必须失效。
     svc.finalizeCall('c1');
     expect(svc.callInfoOf('c1')).not.toBeNull();
@@ -324,7 +336,7 @@ describe('withCardToken(令牌注入纯函数)', () => {
     expect(svc.callInfoOf('c1')).toEqual({ ghostId: 'g1', sessionId: null, scriptWorkdir: 'D:\\proj' });
     // 在途期间严格查询命中(带 scriptWorkdir);交卷后立即失效——不等宽限窗、
     // 不等懒清扫(目录授权上下文用完即废,review M1)。
-    expect(svc.inFlightCallInfoOf('c1')).toEqual({ ghostId: 'g1', sessionId: null, scriptWorkdir: 'D:\\proj', scriptWritePath: null, channel: 'script' });
+    expect(svc.inFlightCallInfoOf('c1')).toEqual({ ghostId: 'g1', sessionId: null, remoteHostId: undefined, scriptWorkdir: 'D:\\proj', scriptWritePath: null, channel: 'script' });
     svc.finalizeCall('c1');
     expect(svc.callInfoOf('c1')).not.toBeNull(); // 宽限窗:卡片供片语义保留
     expect(svc.inFlightCallInfoOf('c1')).toBeNull(); // 目录授权:交卷即失效

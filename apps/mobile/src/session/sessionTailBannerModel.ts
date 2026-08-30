@@ -29,12 +29,17 @@ import {
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import { i18n } from '@/i18n';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
+import {
+  localizeToolLoopError,
+  parseMobileToolLoopErrorDetails,
+  type MobileToolLoopErrorDetails,
+} from '@/session/toolLoopErrorI18n';
 
 export interface SessionTailErrorBanner {
   kind: 'error-tail';
   /** 错误行 clientId:忽略(dismiss)与本地隐藏态都按它归属。 */
   clientId: string;
-  /** 展示文案(agent 未鉴权错误已换成中文引导,其余保持原文)。 */
+  /** 展示文案(agent 未鉴权与工具循环错误会本地化,其余保持原文)。 */
   text: string;
   /** 主按钮语义:中断标记行 →「继续任务」;普通失败行 →「重试」。 */
   continueKind: 'interrupted' | 'error';
@@ -64,6 +69,8 @@ export interface ResolveSessionTailBannerInput {
    * (review P1 第五轮收敛,model 不再自己扫队列)。
    */
   continuationInFlight: boolean;
+  /** 当前任务元数据已在本 relay 连接代完成权威同步。只门控双时间戳中断推断。 */
+  sessionMetadataSyncedForConnection: boolean;
   /** interrupted 已被本视图操作过(继续/忽略)或本窗口内会话跑起来过 → 熄灭。 */
   interruptAcked: boolean;
   /**
@@ -92,18 +99,23 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
-    const guidance = describeNonRetryableTailError(tail.text);
+    const nonRetryableGuidance = describeNonRetryableTailError(tail.text);
+    const toolLoopGuidance = localizeToolLoopError(tail.reason, tail.toolLoop);
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
-      text: guidance ?? tail.text,
+      text: nonRetryableGuidance ?? toolLoopGuidance ?? tail.text,
       continueKind: tail.reason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error',
-      retryable: guidance === null,
+      retryable: nonRetryableGuidance === null,
     };
   }
   // 历史中断行优先;无 error-tail 才轮到 session 双时间戳判定(对齐桌面互斥渲染)。
   if (tail) return null;
 
+  // 连接恢复或首次打开时，store 可能先呈现上一代的 activeTurnStartedAt / lastTurnEndedAt。
+  // 在本代 session 元数据完成同步前，这两个时间戳不能证明任务真的中断；持久 error-tail
+  // 已在上面独立处理，不受此门影响。
+  if (!input.sessionMetadataSyncedForConnection) return null;
   if (input.interruptAcked || !input.session) return null;
   const started = input.session.activeTurnStartedAt ?? null;
   if (!started) return null;
@@ -124,7 +136,9 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
  * session-expired 的登录引导等),手机端拿不到对应信号,不搬——这些场景重试
  * 失败后错误会重新浮现,不破坏数据。
  */
-function describeNonRetryableTailError(text: string): string | null {
+function describeNonRetryableTailError(
+  text: string,
+): string | null {
   const authGuidance = describeAgentAuthError(text);
   if (authGuidance) return authGuidance;
   if (/thread not found/i.test(text)) {
@@ -140,6 +154,7 @@ interface ErrorTailMessage {
   clientId: string;
   text: string;
   reason: string | null;
+  toolLoop: MobileToolLoopErrorDetails | null;
 }
 
 /**
@@ -172,6 +187,7 @@ function findErrorTailMessage(messages: readonly RemoteMessage[]): ErrorTailMess
       clientId: message.clientId,
       text: rawText,
       reason: typeof content?.reason === 'string' ? content.reason : null,
+      toolLoop: parseMobileToolLoopErrorDetails(content?.toolLoop),
     };
   }
   return null;

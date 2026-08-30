@@ -27,7 +27,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, MoreHorizontal, RefreshCw, Search } from 'lucide-react';
+import { ChevronDown, Lock, MoreHorizontal, RefreshCw, Search } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -168,7 +168,12 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
           existing.avail.push(agent);
         }
       } else {
-        const row: UnionModelRow = { id: key, name: m.name, byAgent: { [agent]: m }, avail: [agent] };
+        const row: UnionModelRow = {
+          id: key,
+          name: m.name,
+          byAgent: { [agent]: m },
+          avail: [agent],
+        };
         byKey.set(key, row);
         rows.push(row);
       }
@@ -192,6 +197,7 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
     id: string;
     name: string;
     disabled?: boolean;
+    availability?: CatalogModel['availability'];
     group: 'image' | 'video' | 'embedding';
   }> = [
     ...(provider.imageModels ?? []).map((m) => ({ ...m, group: 'image' as const })),
@@ -208,6 +214,7 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
       defaultEffort: null,
       group: m.group,
       ...(m.disabled === true ? { disabled: true } : {}),
+      ...(m.availability !== undefined ? { availability: m.availability } : {}),
     };
     const row: UnionModelRow = {
       id: m.id,
@@ -232,6 +239,18 @@ export function isRowDisabled(row: UnionModelRow): boolean {
   return row.avail.some((a) => row.byAgent[a]?.disabled === true);
 }
 
+export function isRowPaymentRequired(row: UnionModelRow): boolean {
+  return row.avail.some((agent) => row.byAgent[agent]?.availability === 'requires_payment');
+}
+
+/** 付费锁定优先于本地停用偏好：命中时任何批量恢复都不得改写该行的历史 override。 */
+export function hasPaymentRequiredDisabledRow(
+  rows: readonly UnionModelRow[],
+  isDisabled: (row: UnionModelRow) => boolean = isRowDisabled,
+): boolean {
+  return rows.some((row) => isDisabled(row) && isRowPaymentRequired(row));
+}
+
 /** 该行是否是「能力模型」(图像/音频/视频/向量等,没有显示轴;见头注)。
  *  `userProvider` = 行来自用户自定义供应商 —— 自定义对话模型的未知 group 不吃 id
  *  启发式(`gpt-4o-audio-preview` 是合法对话模型,见 isAgentSelectableModel 注释)。 */
@@ -254,7 +273,8 @@ export function getHiddenAgents(providerId: string, row: UnionModelRow): AgentKi
 
 /**
  * 每个 Agent 各自的模型显示数;UI 必须保留 Agent 维度,不能汇总成模型条目总数。
- * 口径 = 对话模型(能力模型没有显示轴)且未停用(停用行不可显示,不计入分母)。
+ * 口径 = 对话模型(能力模型没有显示轴)且未停用、非付费锁定行。付费锁定行与停用行
+ * 都不可写显示偏好，不计入批量开关分母，与 handleBulk targets 保持同一口径。
  * `isDisabled` 允许调用方注入停用判定(组件里 = 快照标志叠加 pendingDisabled 乐观
  * 覆盖,否则乐观窗口内「全部显示/隐藏」的方向与分母陈旧,PR #744 review);缺省读
  * 快照的 model.disabled。
@@ -272,6 +292,7 @@ export function countModelsByAgent(
     const models = (provider.models[agent] ?? []).filter(
       (model) =>
         isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) &&
+        model.availability !== 'requires_payment' &&
         !isDisabled(agent, model),
     );
     return {
@@ -381,6 +402,10 @@ export function UnifiedModelList({
     (row: UnionModelRow) => pendingDisabled[row.id] ?? isRowDisabled(row),
     [pendingDisabled],
   );
+  const hasLockedDisabledRow = useMemo(
+    () => hasPaymentRequiredDisabledRow(unionRows, rowDisabledEffective),
+    [unionRows, rowDisabledEffective],
+  );
 
   /** 写停用轴:乐观覆盖 + IPC;失败回滚并提示(错误 = 发生了什么 + 下一步)。 */
   const setRowDisabled = useCallback(
@@ -435,6 +460,9 @@ export function UnifiedModelList({
    *  清不掉;若该模型日后回到目录会被静默停用)。乐观覆盖同 setRowDisabled 口径;
    *  失败整组回滚(只回滚仍属于本次的乐观值)。 */
   const resetDisableOverrides = useCallback(() => {
+    // `kind:'reset'` 会删除整组 override，无法排除付费锁定行；保持 fail-closed，
+    // 让其它非锁定行继续使用逐行恢复入口。
+    if (hasLockedDisabledRow) return;
     const rows = unionRows.filter((r) => pendingDisabled[r.id] ?? isRowDisabled(r));
     setPendingDisabled((prev) => {
       const next = { ...prev };
@@ -453,7 +481,7 @@ export function UnifiedModelList({
         });
         toast.error(t('settings.providers.models.accessWriteFailed'));
       });
-  }, [unionRows, pendingDisabled, provider.id, t]);
+  }, [hasLockedDisabledRow, unionRows, pendingDisabled, provider.id, t]);
 
   // 分组(仅未停用的行)+「已停用」分区(停用的行,跨分组沉底)。搜索两边都过滤。
   // 分组沿用现有口径:用每行第一个可用 agent 的目录条目作代表参与分组。
@@ -475,9 +503,7 @@ export function UnifiedModelList({
     return {
       groups: groupModelsForDisplay(reps).map((g) => ({
         category: g.category,
-        rows: g.models
-          .map((m) => repByRow.get(m.id))
-          .filter((r): r is UnionModelRow => !!r),
+        rows: g.models.map((m) => repByRow.get(m.id)).filter((r): r is UnionModelRow => !!r),
       })),
       disabledRows: disabled,
     };
@@ -499,7 +525,8 @@ export function UnifiedModelList({
     [provider, visibilityVersion, pendingDisabled],
   );
   const totalModelsAcrossAgents = agentCounts.reduce((sum, count) => sum + count.total, 0);
-  const allOn = totalModelsAcrossAgents > 0 && agentCounts.every((count) => count.on === count.total);
+  const allOn =
+    totalModelsAcrossAgents > 0 && agentCounts.every((count) => count.on === count.total);
   const refreshLabel = refreshing
     ? t('settings.providers.models.refreshingAria')
     : (refreshIdleLabel ?? t('settings.providers.models.refreshAria'));
@@ -534,6 +561,7 @@ export function UnifiedModelList({
         .filter(
           (m) =>
             isAgentSelectableModel(m, { userProvider: provider.source === 'user' }) &&
+            m.availability !== 'requires_payment' &&
             (pendingDisabled[canonicalModelKey(provider, agent, m.id)] ?? m.disabled === true) !==
               true,
         )
@@ -551,6 +579,7 @@ export function UnifiedModelList({
         <button
           type="button"
           aria-label={t('settings.providers.detail.moreActionsAria')}
+          disabled={isRowPaymentRequired(row)}
           className={cn(
             'flex h-6 w-6 shrink-0 items-center justify-center rounded-full opacity-0 transition-opacity',
             'hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100',
@@ -561,12 +590,11 @@ export function UnifiedModelList({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        {provider.id !== 'xd' &&
-          !isCapabilityRow(row, provider.source === 'user') && (
-            <DropdownMenuItem onClick={() => setPriceRow(row)}>
-              {t('settings.providers.models.priceOverride.menu')}
-            </DropdownMenuItem>
-          )}
+        {provider.id !== 'xd' && !isCapabilityRow(row, provider.source === 'user') && (
+          <DropdownMenuItem onClick={() => setPriceRow(row)}>
+            {t('settings.providers.models.priceOverride.menu')}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={() => setRowDisabled(row, true)}>
           {t('settings.providers.models.disableModel')}
         </DropdownMenuItem>
@@ -593,68 +621,81 @@ export function UnifiedModelList({
           本机 Ollama 空列表不渲染工具行:没有可显示的模型时,「在模型选择中显示」
           没有对象,空间留给下方推荐。 */}
       {!compactEmpty && (
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5">
-        <span className="shrink-0 text-13 font-medium" style={{ color: 'var(--text-secondary)' }}>
-          {t('settings.providers.models.available')}
-        </span>
-        <span className="min-w-0 flex-1" />
-        {showSearch && (
-          /* basis 200px 但允许收缩:窄窗口(右栏可被压到 ~270px)时先压缩搜索框,
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5">
+          <span className="shrink-0 text-13 font-medium" style={{ color: 'var(--text-secondary)' }}>
+            {t('settings.providers.models.available')}
+          </span>
+          <span className="min-w-0 flex-1" />
+          {showSearch && (
+            /* basis 200px 但允许收缩:窄窗口(右栏可被压到 ~270px)时先压缩搜索框,
              不让右侧操作被 overflow-hidden 裁掉(PR #1102 review)。 */
-          <div
-            className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full px-3"
-            style={{ backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--border-default)' }}
-          >
-            <Search size={14} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t('settings.providers.models.search')}
-              aria-label={t('settings.providers.models.search')}
-              className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
-              style={{ color: 'var(--settings-section-title)' }}
-            />
-          </div>
-        )}
-        {onRefresh && (
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={refreshing || refreshDisabled}
-            aria-busy={refreshing}
-            aria-label={refreshLabel}
-            title={refreshLabel}
-            className={cn(
-              'flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              (refreshing || refreshDisabled) && 'cursor-not-allowed opacity-60',
-            )}
-            style={{ color: 'var(--text-secondary)' }}
-          >
-            <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
-          </button>
-        )}
-        {unionRows.length > 0 && multiAgent && (
-          <button
-            type="button"
-            onClick={() => setSplitMode((v) => !v)}
-            className="shrink-0 text-12 font-medium transition-opacity hover:opacity-80"
-            style={{ color: splitMode ? 'var(--settings-section-title)' : 'var(--text-secondary)' }}
-          >
-            {t(splitMode ? 'settings.providers.models.splitDone' : 'settings.providers.models.splitAdjust')}
-          </button>
-        )}
-        {unionRows.length > 0 && (
-          <button
-            type="button"
-            onClick={handleBulk}
-            className="shrink-0 text-12 font-medium transition-opacity hover:opacity-80"
-            style={{ color: 'var(--text-secondary)' }}
-          >
-            {t(allOn ? 'settings.providers.models.disableAll' : 'settings.providers.models.enableAll')}
-          </button>
-        )}
-      </div>
+            <div
+              className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full px-3"
+              style={{
+                backgroundColor: 'var(--surface-elevated)',
+                border: '1px solid var(--border-default)',
+              }}
+            >
+              <Search size={14} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t('settings.providers.models.search')}
+                aria-label={t('settings.providers.models.search')}
+                className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
+                style={{ color: 'var(--settings-section-title)' }}
+              />
+            </div>
+          )}
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={refreshing || refreshDisabled}
+              aria-busy={refreshing}
+              aria-label={refreshLabel}
+              title={refreshLabel}
+              className={cn(
+                'flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                (refreshing || refreshDisabled) && 'cursor-not-allowed opacity-60',
+              )}
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
+            </button>
+          )}
+          {unionRows.length > 0 && multiAgent && (
+            <button
+              type="button"
+              onClick={() => setSplitMode((v) => !v)}
+              className="shrink-0 text-12 font-medium transition-opacity hover:opacity-80"
+              style={{
+                color: splitMode ? 'var(--settings-section-title)' : 'var(--text-secondary)',
+              }}
+            >
+              {t(
+                splitMode
+                  ? 'settings.providers.models.splitDone'
+                  : 'settings.providers.models.splitAdjust',
+              )}
+            </button>
+          )}
+          {unionRows.length > 0 && (
+            <button
+              type="button"
+              onClick={handleBulk}
+              className="shrink-0 text-12 font-medium transition-opacity hover:opacity-80"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              {t(
+                allOn
+                  ? 'settings.providers.models.disableAll'
+                  : 'settings.providers.models.enableAll',
+              )}
+            </button>
+          )}
+        </div>
       )}
 
       {/* 分别模式列头(与行内双列同宽对齐)。 */}
@@ -704,181 +745,219 @@ export function UnifiedModelList({
                 g.rows.length > 0 &&
                 g.rows.every((r) => isCapabilityRow(r, userProvider));
               return (
-              <div key={g.category} className="flex flex-col">
-                {showGroupHeaders && (
-                  <button
-                    type="button"
-                    onClick={() => toggleCollapsed(g.category)}
-                    aria-expanded={!collapsed}
-                    className="flex items-center gap-1 self-start px-2 pb-0.5 text-left transition-opacity hover:opacity-80"
-                  >
-                    {/* chevron 用 transform 旋转(compositor-only,规则 7);折叠时 -90°。 */}
-                    <span
-                      className="inline-flex transition-transform duration-150"
-                      style={{ color: 'var(--text-tertiary)', transform: collapsed ? 'rotate(-90deg)' : 'none' }}
+                <div key={g.category} className="flex flex-col">
+                  {showGroupHeaders && (
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(g.category)}
+                      aria-expanded={!collapsed}
+                      className="flex items-center gap-1 self-start px-2 pb-0.5 text-left transition-opacity hover:opacity-80"
                     >
-                      <ChevronDown size={12} />
-                    </span>
-                    <span
-                      className="text-11 font-medium uppercase"
-                      style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
-                    >
-                      {t(CATEGORY_LABEL_KEY[g.category])}
-                    </span>
-                    <span
-                      className="text-11 tabular-nums"
-                      style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}
-                    >
-                      {g.rows.length}
-                    </span>
-                  </button>
-                )}
-                {/* 能力模型组的消歧说明:这组不参与对话模型选择、行内没有显示开关 ——
-                    语义与上面的对话模型组不同,必须就地讲清,不能指望用户猜。 */}
-                {wholeGroupCapability && !collapsed && (
-                  <span
-                    className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-[24px]')}
-                    style={{ color: 'var(--text-tertiary)' }}
-                  >
-                    {t('settings.providers.models.capabilityGroupHint')}
-                  </span>
-                )}
-                {!collapsed &&
-                  g.rows.map((row) => {
-                  const rep = row.byAgent[row.avail[0]]!;
-                  const capability = isCapabilityRow(row, userProvider);
-                  const diverged = !capability && isRowDiverged(provider.id, row);
-                  const anyOn = rowAnyEnabled(provider.id, row);
-                  // 能力注记:多 agent 供应商里缺少任一通道就标(单 agent 供应商头部已说明);
-                  // 能力模型行不标(它们本来就不参与 agent 维度)。
-                  const missingAgents = provider.agents.filter(
-                    (agent) => !row.avail.includes(agent),
-                  );
-                  const capNote =
-                    !capability && multiAgent && missingAgents.length > 0
-                      ? t('settings.providers.models.capabilityNote', {
-                          agent: missingAgents.map((agent) => AGENT_LABEL[agent]).join(' / '),
-                        })
-                      : null;
-                  // 上下文窗口取代表值;双端不同用原生 title 提示。
-                  const ctxValues = row.avail
-                    .map((a) => row.byAgent[a]?.contextWindow)
-                    .filter((v): v is number => typeof v === 'number');
-                  const ctxDiffers = new Set(ctxValues).size > 1;
-                  const ctxTitle = ctxDiffers
-                    ? row.avail
-                        .map((a) => `${AGENT_LABEL[a]} ${formatContextWindow(row.byAgent[a]!.contextWindow)}`)
-                        .join(' · ')
-                    : undefined;
-                  const hiddenAgents = diverged ? getHiddenAgents(provider.id, row) : [];
-                  const divergedChipLabel =
-                    hiddenAgents.length > 0
-                      ? t('settings.providers.models.divergedChip', {
-                          agent: hiddenAgents.map((agent) => AGENT_LABEL[agent]).join(' / '),
-                        })
-                      : '';
-                  return (
-                    <div
-                      key={row.id}
-                      className="group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
-                    >
+                      {/* chevron 用 transform 旋转(compositor-only,规则 7);折叠时 -90°。 */}
                       <span
-                        className="min-w-0 truncate text-14 font-medium"
+                        className="inline-flex transition-transform duration-150"
                         style={{
-                          color:
-                            capability || anyOn
-                              ? 'var(--settings-section-title)'
-                              : 'var(--text-tertiary)',
+                          color: 'var(--text-tertiary)',
+                          transform: collapsed ? 'rotate(-90deg)' : 'none',
                         }}
                       >
-                        {rep.name}
+                        <ChevronDown size={12} />
                       </span>
-                      {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
-                        <LocalPackagingTag libraryName={row.id} />
-                      )}
-                      {capNote && (
-                        /* 注记可收缩截断:窄栏(最小窗口右栏 ~275px)下先压缩次要
+                      <span
+                        className="text-11 font-medium uppercase"
+                        style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
+                      >
+                        {t(CATEGORY_LABEL_KEY[g.category])}
+                      </span>
+                      <span
+                        className="text-11 tabular-nums"
+                        style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}
+                      >
+                        {g.rows.length}
+                      </span>
+                    </button>
+                  )}
+                  {/* 能力模型组的消歧说明:这组不参与对话模型选择、行内没有显示开关 ——
+                    语义与上面的对话模型组不同,必须就地讲清,不能指望用户猜。 */}
+                  {wholeGroupCapability && !collapsed && (
+                    <span
+                      className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-[24px]')}
+                      style={{ color: 'var(--text-tertiary)' }}
+                    >
+                      {t('settings.providers.models.capabilityGroupHint')}
+                    </span>
+                  )}
+                  {!collapsed &&
+                    g.rows.map((row) => {
+                      const rep = row.byAgent[row.avail[0]]!;
+                      const capability = isCapabilityRow(row, userProvider);
+                      const diverged = !capability && isRowDiverged(provider.id, row);
+                      const anyOn = rowAnyEnabled(provider.id, row);
+                      const paymentRequired = isRowPaymentRequired(row);
+                      // 能力注记:多 agent 供应商里缺少任一通道就标(单 agent 供应商头部已说明);
+                      // 能力模型行不标(它们本来就不参与 agent 维度)。
+                      const missingAgents = provider.agents.filter(
+                        (agent) => !row.avail.includes(agent),
+                      );
+                      const capNote =
+                        !capability && multiAgent && missingAgents.length > 0
+                          ? t('settings.providers.models.capabilityNote', {
+                              agent: missingAgents.map((agent) => AGENT_LABEL[agent]).join(' / '),
+                            })
+                          : null;
+                      // 上下文窗口取代表值;双端不同用原生 title 提示。
+                      const ctxValues = row.avail
+                        .map((a) => row.byAgent[a]?.contextWindow)
+                        .filter((v): v is number => typeof v === 'number');
+                      const ctxDiffers = new Set(ctxValues).size > 1;
+                      const ctxTitle = ctxDiffers
+                        ? row.avail
+                            .map(
+                              (a) =>
+                                `${AGENT_LABEL[a]} ${formatContextWindow(row.byAgent[a]!.contextWindow)}`,
+                            )
+                            .join(' · ')
+                        : undefined;
+                      const hiddenAgents = diverged ? getHiddenAgents(provider.id, row) : [];
+                      const divergedChipLabel =
+                        hiddenAgents.length > 0
+                          ? t('settings.providers.models.divergedChip', {
+                              agent: hiddenAgents.map((agent) => AGENT_LABEL[agent]).join(' / '),
+                            })
+                          : '';
+                      return (
+                        <div
+                          key={row.id}
+                          className={cn(
+                            'group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+                            paymentRequired && 'opacity-55',
+                          )}
+                        >
+                          <span
+                            className="min-w-0 truncate text-14 font-medium"
+                            style={{
+                              color:
+                                capability || anyOn
+                                  ? 'var(--settings-section-title)'
+                                  : 'var(--text-tertiary)',
+                            }}
+                          >
+                            {rep.name}
+                          </span>
+                          {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
+                            <LocalPackagingTag libraryName={row.id} />
+                          )}
+                          {capNote && (
+                            /* 注记可收缩截断:窄栏(最小窗口右栏 ~275px)下先压缩次要
                             元数据,保住右侧上下文/菜单/开关列(PR #1102 review 第五轮);
                             截断时悬停可见全文。 */
-                        <span
-                          className="min-w-0 truncate text-12"
-                          style={{ color: 'var(--text-tertiary)' }}
-                          title={capNote}
-                        >
-                          {capNote}
-                        </span>
-                      )}
-                      <span className="min-w-0 flex-1" />
-                      {!splitMode && diverged && hiddenAgents.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setSplitMode(true)}
-                          className="flex h-[18px] min-w-0 max-w-32 items-center rounded-full px-2 text-11 font-medium transition-opacity hover:opacity-80"
-                          style={{
-                            backgroundColor: 'var(--surface-chip)',
-                            color: 'var(--text-secondary)',
-                          }}
-                          title={divergedChipLabel}
-                        >
-                          <span className="truncate">{divergedChipLabel}</span>
-                        </button>
-                      )}
-                      {/* 固定 44px 右对齐列:上下扫读时数字齐成一条线;合成媒体行
+                            <span
+                              className="min-w-0 truncate text-12"
+                              style={{ color: 'var(--text-tertiary)' }}
+                              title={capNote}
+                            >
+                              {capNote}
+                            </span>
+                          )}
+                          <span className="min-w-0 flex-1" />
+                          {paymentRequired && (
+                            <span
+                              data-payment-required-unlock
+                              className="invisible shrink-0 select-none text-11 font-medium text-[var(--text-secondary)] group-hover:visible group-focus-within:visible"
+                            >
+                              {t('settings.providers.models.paymentUnlock')}
+                            </span>
+                          )}
+                          {paymentRequired && (
+                            <span
+                              data-payment-required-badge
+                              className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-secondary)]"
+                            >
+                              <Lock size={11} />
+                              {t('settings.providers.models.paymentRequired')}
+                            </span>
+                          )}
+                          {!splitMode && diverged && hiddenAgents.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setSplitMode(true)}
+                              className="flex h-[18px] min-w-0 max-w-32 items-center rounded-full px-2 text-11 font-medium transition-opacity hover:opacity-80"
+                              style={{
+                                backgroundColor: 'var(--surface-chip)',
+                                color: 'var(--text-secondary)',
+                              }}
+                              title={divergedChipLabel}
+                            >
+                              <span className="truncate">{divergedChipLabel}</span>
+                            </button>
+                          )}
+                          {/* 固定 44px 右对齐列:上下扫读时数字齐成一条线;合成媒体行
                           (专属清单下发)没有上下文窗口元数据(=0),留空占位保持列对齐。 */}
-                      {/* 分别调整模式隐藏上下文列:两列开关 + 菜单在最小窗口
+                          {/* 分别调整模式隐藏上下文列:两列开关 + 菜单在最小窗口
                           (右栏 ~275px)下必须完整可见,上下文是次要元数据,
                           普通模式仍展示(PR #1102 review 第二轮)。 */}
-                      {!splitMode && (
-                        <span
-                          className="w-11 shrink-0 text-right text-12 tabular-nums"
-                          style={{ color: 'var(--text-tertiary)' }}
-                          title={ctxTitle}
-                        >
-                          {rep.contextWindow > 0 ? formatContextWindow(rep.contextWindow) : ''}
-                        </span>
-                      )}
-                      {rowMenu(row)}
-                      {/* 能力模型行没有显示轴 ⇒ 没有开关(全页开关语义唯一 = 显示);
+                          {!splitMode && (
+                            <span
+                              className="w-11 shrink-0 text-right text-12 tabular-nums"
+                              style={{ color: 'var(--text-tertiary)' }}
+                              title={ctxTitle}
+                            >
+                              {rep.contextWindow > 0 ? formatContextWindow(rep.contextWindow) : ''}
+                            </span>
+                          )}
+                          {rowMenu(row)}
+                          {/* 能力模型行没有显示轴 ⇒ 没有开关(全页开关语义唯一 = 显示);
                           占同宽空位,保证开关/上下文列跨行对齐。 */}
-                      {capability && (
-                        <span
-                          className="shrink-0"
-                          style={{ width: splitMode ? provider.agents.length * 80 : 36 }}
-                        />
-                      )}
-                      {!capability &&
-                        (splitMode ? (
-                          <div className="flex shrink-0 items-center">
-                            {provider.agents.map((a) => {
-                              const m = row.byAgent[a];
-                              return (
-                                <span key={a} className="flex w-20 items-center justify-center">
-                                  {m ? (
-                                    <Switch
-                                      checked={isModelEnabled(a, provider.id, m)}
-                                      onCheckedChange={(v) => {
-                                        if (setModelVisibility(a, provider.id, m.id, v) === false) {
-                                          showVisibilityWriteFailure();
-                                        }
-                                      }}
-                                      aria-label={`${rep.name} · ${AGENT_LABEL[a]}`}
-                                    />
-                                  ) : (
-                                    <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
-                                      —
+                          {capability && (
+                            <span
+                              className="shrink-0"
+                              style={{ width: splitMode ? provider.agents.length * 80 : 36 }}
+                            />
+                          )}
+                          {!capability &&
+                            (splitMode ? (
+                              <div className="flex shrink-0 items-center">
+                                {provider.agents.map((a) => {
+                                  const m = row.byAgent[a];
+                                  return (
+                                    <span key={a} className="flex w-20 items-center justify-center">
+                                      {m ? (
+                                        <Switch
+                                          checked={isModelEnabled(a, provider.id, m)}
+                                          disabled={paymentRequired}
+                                          onCheckedChange={(v) => {
+                                            if (
+                                              setModelVisibility(a, provider.id, m.id, v) === false
+                                            ) {
+                                              showVisibilityWriteFailure();
+                                            }
+                                          }}
+                                          aria-label={`${rep.name} · ${AGENT_LABEL[a]}`}
+                                        />
+                                      ) : (
+                                        <span
+                                          className="text-12"
+                                          style={{ color: 'var(--text-tertiary)' }}
+                                        >
+                                          —
+                                        </span>
+                                      )}
                                     </span>
-                                  )}
-                                </span>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <Switch checked={anyOn} onCheckedChange={() => toggleRow(row)} aria-label={rep.name} />
-                        ))}
-                    </div>
-                  );
-                })}
-              </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <Switch
+                                disabled={paymentRequired}
+                                checked={anyOn}
+                                onCheckedChange={() => toggleRow(row)}
+                                aria-label={rep.name}
+                              />
+                            ))}
+                        </div>
+                      );
+                    })}
+                </div>
               );
             })
           )}
@@ -889,100 +968,126 @@ export function UnifiedModelList({
               下架模型的陈旧条目 —— 逐行启用清不掉它们;configuration-and-overrides.md §4)。
               渲染条件独立于当前渲染行:只剩陈旧条目(disabledRows 为空)或搜索过滤后
               无匹配行时,恢复入口都不能消失(PR #744 review 第二十六轮)。 */}
-          {(disabledRows.length > 0 || (provider.disableOverrideCount ?? 0) > 0) && (() => {
-            const collapsed = !query.trim() && isCollapsed(DISABLED_GROUP_KEY);
-            return (
-              <div className="flex flex-col">
-                <div className="flex items-center gap-2 pb-0.5">
-                  <button
-                    type="button"
-                    onClick={() => toggleCollapsed(DISABLED_GROUP_KEY)}
-                    aria-expanded={!collapsed}
-                    className="flex items-center gap-1 px-2 text-left transition-opacity hover:opacity-80"
-                  >
-                    <span
-                      className="inline-flex transition-transform duration-150"
-                      style={{ color: 'var(--text-tertiary)', transform: collapsed ? 'rotate(-90deg)' : 'none' }}
+          {(disabledRows.length > 0 || (provider.disableOverrideCount ?? 0) > 0) &&
+            (() => {
+              const collapsed = !query.trim() && isCollapsed(DISABLED_GROUP_KEY);
+              return (
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-2 pb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(DISABLED_GROUP_KEY)}
+                      aria-expanded={!collapsed}
+                      className="flex items-center gap-1 px-2 text-left transition-opacity hover:opacity-80"
                     >
-                      <ChevronDown size={12} />
-                    </span>
-                    <span
-                      className="text-11 font-medium uppercase"
-                      style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
-                    >
-                      {t('settings.providers.models.disabledGroup')}
-                    </span>
-                    <span className="text-11 tabular-nums" style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}>
-                      {/* 行数为 0 而 override 仍在(陈旧条目 / 搜索过滤)时显示 override 数,
-                          让「还有 N 条停用配置」可感知。 */}
-                      {disabledRows.length > 0 ? disabledRows.length : provider.disableOverrideCount ?? 0}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetDisableOverrides}
-                    className="rounded-lg px-1.5 py-0.5 text-11 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  >
-                    {t('settings.providers.models.enableAllModels')}
-                  </button>
-                </div>
-                {!collapsed &&
-                  disabledRows.map((row) => {
-                    const rep = row.byAgent[row.avail[0]]!;
-                    // 可折行:最小窗口(右栏 ~275px)下「启用此模型」(日文更长)放
-                    // 不下时换行,恢复入口始终可达(PR #1102 review 第四轮)。
-                    return (
-                      <div
-                        key={row.id}
-                        className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-[7px]"
+                      <span
+                        className="inline-flex transition-transform duration-150"
+                        style={{
+                          color: 'var(--text-tertiary)',
+                          transform: collapsed ? 'rotate(-90deg)' : 'none',
+                        }}
                       >
-                        <span
-                          className="min-w-0 truncate text-14 font-medium"
-                          style={{ color: 'var(--text-disabled)' }}
+                        <ChevronDown size={12} />
+                      </span>
+                      <span
+                        className="text-11 font-medium uppercase"
+                        style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
+                      >
+                        {t('settings.providers.models.disabledGroup')}
+                      </span>
+                      <span
+                        className="text-11 tabular-nums"
+                        style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}
+                      >
+                        {/* 行数为 0 而 override 仍在(陈旧条目 / 搜索过滤)时显示 override 数,
+                          让「还有 N 条停用配置」可感知。 */}
+                        {disabledRows.length > 0
+                          ? disabledRows.length
+                          : (provider.disableOverrideCount ?? 0)}
+                      </span>
+                    </button>
+                    {!hasLockedDisabledRow && (
+                      <button
+                        type="button"
+                        onClick={resetDisableOverrides}
+                        className="rounded-lg px-1.5 py-0.5 text-11 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                        style={{ color: 'var(--text-tertiary)' }}
+                      >
+                        {t('settings.providers.models.enableAllModels')}
+                      </button>
+                    )}
+                  </div>
+                  {!collapsed &&
+                    disabledRows.map((row) => {
+                      const rep = row.byAgent[row.avail[0]]!;
+                      const paymentRequired = isRowPaymentRequired(row);
+                      // 可折行:最小窗口(右栏 ~275px)下「启用此模型」(日文更长)放
+                      // 不下时换行,恢复入口始终可达(PR #1102 review 第四轮)。
+                      return (
+                        <div
+                          key={row.id}
+                          className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-[7px]"
                         >
-                          {rep.name}
-                        </span>
-                        {/* 来源分组注记:启用后会回到哪个组,别让用户猜。 */}
-                        <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
-                          {t(CATEGORY_LABEL_KEY[rowCategory(row)])}
-                        </span>
-                        <span className="min-w-0 flex-1" />
-                        {rep.contextWindow > 0 && (
                           <span
-                            className="w-11 shrink-0 text-right text-12 tabular-nums"
+                            className="min-w-0 truncate text-14 font-medium"
                             style={{ color: 'var(--text-disabled)' }}
                           >
-                            {formatContextWindow(rep.contextWindow)}
+                            {rep.name}
                           </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setRowDisabled(row, false)}
-                          className="ml-auto flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                          style={{
-                            borderColor: 'var(--settings-btn-secondary-border)',
-                            color: 'var(--settings-btn-secondary-text)',
-                          }}
-                        >
-                          {t('settings.providers.models.enableModel')}
-                        </button>
-                        {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
-                          <button
-                            type="button"
-                            onClick={() => void deleteInstalledModel(row)}
-                            className="flex h-6 shrink-0 items-center rounded-full px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                            style={{ color: 'var(--error-fg)' }}
+                          {/* 来源分组注记:启用后会回到哪个组,别让用户猜。 */}
+                          <span
+                            className="shrink-0 text-12"
+                            style={{ color: 'var(--text-tertiary)' }}
                           >
-                            {t('settings.providers.local.deleteModel')}
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-              </div>
-            );
-          })()}
+                            {t(CATEGORY_LABEL_KEY[rowCategory(row)])}
+                          </span>
+                          <span className="min-w-0 flex-1" />
+                          {paymentRequired && (
+                            <span
+                              data-payment-required-badge
+                              className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-secondary)]"
+                            >
+                              <Lock size={11} />
+                              {t('settings.providers.models.paymentRequired')}
+                            </span>
+                          )}
+                          {rep.contextWindow > 0 && (
+                            <span
+                              className="w-11 shrink-0 text-right text-12 tabular-nums"
+                              style={{ color: 'var(--text-disabled)' }}
+                            >
+                              {formatContextWindow(rep.contextWindow)}
+                            </span>
+                          )}
+                          {!paymentRequired && (
+                            <button
+                              type="button"
+                              onClick={() => setRowDisabled(row, false)}
+                              className="ml-auto flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                              style={{
+                                borderColor: 'var(--settings-btn-secondary-border)',
+                                color: 'var(--settings-btn-secondary-text)',
+                              }}
+                            >
+                              {t('settings.providers.models.enableModel')}
+                            </button>
+                          )}
+                          {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
+                            <button
+                              type="button"
+                              onClick={() => void deleteInstalledModel(row)}
+                              className="flex h-6 shrink-0 items-center rounded-full px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                              style={{ color: 'var(--error-fg)' }}
+                            >
+                              {t('settings.providers.local.deleteModel')}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              );
+            })()}
         </div>
       </div>
       {priceRow && (

@@ -694,9 +694,11 @@ describe('provider OAuth and upstream URL validation', () => {
           authStrategy: 'oauth-token',
         },
       };
-      catalog.providers[0]!.models = { 'claude-code': [model('m1', { route })] };
+      catalog.providers[0]!.models = {
+        'claude-code': [model('m1', { route: route as never })],
+      };
     } else {
-      catalog.providers[0]!.models.codex![0] = model('m1', { route });
+      catalog.providers[0]!.models.codex![0] = model('m1', { route: route as never });
     }
     expect(() => parseCatalog(catalog)).toThrow(/model\.route invalid/);
   });

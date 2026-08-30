@@ -15,12 +15,14 @@ describe('auth weak-network bootstrap', () => {
   );
 
   it('bootstrap 只在会话 realm 端点激活后用本地痕迹恢复登录视图', () => {
-    // 快照恢复必须双条件:refresh token 还在 + 有缓存资料;二者缺一不得凭空造登录态。
-    expect(authSource).toContain('if (storedSession && cachedUser) {');
+    // 快照恢复必须三条件:refresh token、缓存资料、vault 当前 owner 一致。
+    expect(authSource).toContain(
+      'if (storedSession && cachedUser && cachedProfileMatchesActiveAccount) {',
+    );
     expect(authSource).toContain('userRef.current = cachedUser;');
     expect(authSource).toContain('setUser(cachedUser);');
     const restoreStart = authSource.indexOf(
-      'if (storedSession && cachedUser) {',
+      'if (storedSession && cachedUser && cachedProfileMatchesActiveAccount) {',
     );
     const restoreEnd = authSource.indexOf(
       '\n        if (!storedSession)',
@@ -40,6 +42,13 @@ describe('auth weak-network bootstrap', () => {
     expect(publishOwnerAt).toBeGreaterThan(activateRealmAt);
     expect(publishUserAt).toBeGreaterThan(publishOwnerAt);
     expect(restoreBody).toContain('setDeferredSessionRecovery(true);');
+    expect(authSource).toContain(
+      'persistedAccountVault?.activeAccountKey === cachedAccountKey',
+    );
+    expect(authSource).toContain('cachedProfile?.accountKey === cachedAccountKey');
+    expect(authSource).toContain(
+      'writeCachedUserProfile(cachedUser, cachedAccountKey)',
+    );
     // bootstrap 里的 refresh 失败必须是"保留降级会话",不许再出现坍缩式 .catch(() => null)。
     expect(authSource).not.toContain('await refresh(did).catch(() => null)');
     expect(authSource).toMatch(
@@ -56,6 +65,12 @@ describe('auth weak-network bootstrap', () => {
     const applyUserBody = authSource.slice(applyUserStart, applyUserEnd);
     expect(applyUserBody.indexOf('setMobileAuthOwner(next?.id);'))
       .toBeLessThan(applyUserBody.indexOf('setUser(next);'));
+    expect(applyUserBody).toContain(
+      'accountVaultKey(activeAuthRealmRef.current, next.id)',
+    );
+    expect(applyUserBody).toContain(
+      'writeCachedUserProfile(next, profileAccountKey)',
+    );
 
     const initializeFailure = authSource.indexOf(
       "console.warn('[auth] initialize failed; normalized to signed-out'",
@@ -120,15 +135,28 @@ describe('auth weak-network bootstrap', () => {
       refreshStart,
       authSource.indexOf('\n  useEffect(() => {', refreshStart),
     );
-    const readSessionAt = refreshBody.indexOf(
-      'const session = await serializeRefreshTokenMutation(',
+    const reconcileAt = refreshBody.indexOf(
+      'reconcileMobileActiveAuthSession({',
     );
-    const emptySessionAt = refreshBody.indexOf('if (!session) {');
+    const readCandidatesAt = refreshBody.indexOf(
+      'const refreshCandidates = reconciledAuth.refreshCandidates;',
+      reconcileAt,
+    );
+    const emptyCandidatesAt = refreshBody.indexOf(
+      'if (refreshCandidates.length === 0) {',
+      readCandidatesAt,
+    );
     const loadRealmAt = refreshBody.indexOf(
-      'await loadMobileEndpointsForRealm(session.realm);',
+      'await loadMobileEndpointsForRealm(candidate.realm);',
+      emptyCandidatesAt,
+    );
+    const requestRefreshAt = refreshBody.indexOf(
+      'pair = await authClientFor(did, candidate.realm).refresh(',
+      loadRealmAt,
     );
     const activateRealmAt = refreshBody.indexOf(
       'activateMobileSessionRealm(session.realm);',
+      requestRefreshAt,
     );
     const guards = [
       ...refreshBody.matchAll(
@@ -136,34 +164,47 @@ describe('auth weak-network bootstrap', () => {
       ),
     ].map((match) => match.index);
 
-    expect(readSessionAt).toBeGreaterThanOrEqual(0);
+    expect(reconcileAt).toBeGreaterThanOrEqual(0);
+    expect(readCandidatesAt).toBeGreaterThan(reconcileAt);
     expect(
-      guards.some((index) => index > readSessionAt && index < emptySessionAt),
+      guards.some(
+        (index) => index > readCandidatesAt && index < emptyCandidatesAt,
+      ),
     ).toBe(true);
-    expect(loadRealmAt).toBeGreaterThan(emptySessionAt);
+    expect(loadRealmAt).toBeGreaterThan(emptyCandidatesAt);
     expect(
-      guards.some((index) => index > loadRealmAt && index < activateRealmAt),
+      guards.some((index) => index > loadRealmAt && index < requestRefreshAt),
     ).toBe(true);
+    expect(activateRealmAt).toBeGreaterThan(requestRefreshAt);
   });
 
   it('换账号或区域时先用旧会话撤销旧区域推送，再激活新区域', () => {
+    const teardownStart = authSource.indexOf(
+      'const clearAccountScopedRuntimeForSwitch = useCallback',
+    );
+    const teardownBody = authSource.slice(
+      teardownStart,
+      authSource.indexOf('\n  const clearAuthError', teardownStart),
+    );
     const acceptStart = authSource.indexOf('const acceptOutcome = useCallback');
     const acceptBody = authSource.slice(
       acceptStart,
       authSource.indexOf('const refresh = useCallback', acceptStart),
     );
-    const revokeAt = acceptBody.indexOf('await unregisterPushTokenBestEffort(');
+    const teardownAt = acceptBody.indexOf(
+      'await clearAccountScopedRuntimeForSwitch();',
+    );
     const activateAt = acceptBody.indexOf(
       'activateMobileSessionRealm(committedRealm);',
     );
+    expect(teardownBody).toContain('unregisterPushTokenBestEffort(');
+    expect(teardownBody).toContain('accessTokenRef.current');
+    expect(teardownBody).toContain('activeAuthRealmRef.current');
     expect(acceptBody).toContain(
       'const previousRealm = activeAuthRealmRef.current;',
     );
-    expect(acceptBody).toMatch(
-      /unregisterPushTokenBestEffort\(\s*previousAccessToken,\s*previousRealm,?\s*\)/,
-    );
-    expect(revokeAt).toBeGreaterThanOrEqual(0);
-    expect(activateAt).toBeGreaterThan(revokeAt);
+    expect(teardownAt).toBeGreaterThanOrEqual(0);
+    expect(activateAt).toBeGreaterThan(teardownAt);
   });
 
   it('自愈路径处理 refresh 无异常返回 null:凭证确不在才登出,读取异常只退避(不静默卡死、不误登出)', () => {

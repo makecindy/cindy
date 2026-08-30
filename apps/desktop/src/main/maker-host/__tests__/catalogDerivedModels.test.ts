@@ -248,27 +248,33 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       model('shared-default-route', {
         name: 'Subscription Shared',
         contextWindow: 128_000,
+        efforts: ['low'],
+        defaultEffort: 'low',
       }),
     ];
     xd!.models.pi = [
       model('shared-default-route', {
         name: 'XD Shared',
         contextWindow: 200_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
       }),
     ];
 
     expect(resolvePiGatewayDescriptorProviderId(null)).toBe('xd');
     expect(resolvePiGatewayDescriptorProviderId('cindy')).toBe('xd');
-    expect(resolvePiGatewayDescriptorProviderId('openai')).toBe('openai');
+    expect(resolvePiGatewayDescriptorProviderId('openai')).toBe('xd');
     expect(
       resolvePiRuntimeModelDescriptor(
         catalog,
-        resolvePiGatewayDescriptorProviderId(null),
+        resolvePiGatewayDescriptorProviderId('openai'),
         'shared-default-route',
       ),
     ).toMatchObject({
       displayName: 'XD Shared',
       contextWindow: 200_000,
+      efforts: ['high'],
+      defaultEffort: 'high',
     });
   });
 

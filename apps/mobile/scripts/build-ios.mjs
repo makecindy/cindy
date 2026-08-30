@@ -62,7 +62,10 @@ import {
 import { buildExportOptionsPlist, resolveIosSigningEnv } from './lib/ios-local.mjs';
 import { clearBundlerCache } from './lib/bundler-cache.mjs';
 import { readEmbeddedRuntimeVersionFromIpa } from './lib/embedded-runtime.mjs';
-import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import {
+  mobileClientBundleEnv,
+  mobileClientBundleProcessEnv,
+} from '../../../scripts/shared/client-endpoint-build-env.mjs';
 import { SELF_HOST_REGIONS, loadSelfHostRegions, missingSelfHostBakeFields, stripSelfHostRegionEnv } from './lib/self-host-region.mjs';
 
 const MOBILE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,11 +73,51 @@ const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 function log(msg) { console.error(msg); }
 
+const IOS_BUILD_FAILURE_STAGE = Object.freeze({
+  arguments: 'arguments',
+  regionConfig: 'region-config',
+  buildPlan: 'build-plan',
+  preflight: 'preflight',
+  toolchain: 'toolchain',
+  artifactValidation: 'artifact-validation',
+  output: 'output',
+});
+
+let iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.arguments;
+
+// 只按脚本控制的阶段输出固定诊断，不打印异常消息或环境变量值。
+function reportIosBuildFailure() {
+  switch (iosBuildFailureStage) {
+    case IOS_BUILD_FAILURE_STAGE.arguments:
+      console.error('iOS 构建失败（参数检查）：请确认已传 --region cn|global|dev，且其它参数合法。');
+      break;
+    case IOS_BUILD_FAILURE_STAGE.regionConfig:
+      console.error('iOS 构建失败（区域配置）：请检查 apps/mobile/scripts/self-host-regions.json 及对应 endpoint 配置是否存在且有效。');
+      break;
+    case IOS_BUILD_FAILURE_STAGE.buildPlan:
+      console.error('iOS 构建失败（构建计划）：请检查 apps/mobile/app.json 与区域产物配置。');
+      break;
+    case IOS_BUILD_FAILURE_STAGE.preflight:
+      console.error('iOS 构建失败（构建前检查）：请检查 Git 门禁、签名描述符、macOS/Xcode 与必需的 EXPO_PUBLIC_* 配置。');
+      break;
+    case IOS_BUILD_FAILURE_STAGE.toolchain:
+      console.error('iOS 构建失败（工具链）：请查看上方 Expo/CocoaPods/Xcode 输出；若无输出，请检查 npx、CocoaPods、Xcode 与本机签名材料。');
+      break;
+    case IOS_BUILD_FAILURE_STAGE.artifactValidation:
+      console.error('iOS 构建失败（产物校验）：请检查 IPA 路径与内嵌 runtimeVersion。');
+      break;
+    case IOS_BUILD_FAILURE_STAGE.output:
+      console.error('iOS 构建失败（复制产物）：请检查 --out 目录权限与磁盘空间。');
+      break;
+    default:
+      console.error('iOS 构建失败；未能确定失败阶段。');
+  }
+}
+
 // self-host 变体的构建环境(与原发布线同源:prebuild/fingerprint 与安装包一致)。
 function selfhostEnv(region, desktopVersion) {
   const env = {
-    ...process.env,
-    ...mobileClientBundleEnv({ authRegion: region.authRegion }),
+    ...mobileClientBundleProcessEnv({ authRegion: region.authRegion }),
     EXPO_PUBLIC_XDT_OTA_SELFHOST: '1',
   };
   // 防止本机 shell / 旧 .env 残留变量混入构建;真实地址只认 config/endpoint*.json。
@@ -173,6 +216,7 @@ function buildIpa(env, region) {
 }
 
 async function main() {
+  iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.arguments;
   const args = parseArgs(process.argv.slice(2));
   // --region 必填(cn|global|dev):选出本次出包身份 + 签名描述符(见 lib/self-host-region.mjs)。
   // 不走 resolveSelfHostRegion:它对 dev 强校验发布专用的 npkgExpectBundle,与纯构建
@@ -186,10 +230,12 @@ async function main() {
   if (!SELF_HOST_REGIONS.includes(rawRegion)) {
     throw new Error(`--region 只能是 ${SELF_HOST_REGIONS.join(' 或 ')},收到: ${rawRegion}`);
   }
+  iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.regionConfig;
   const region = loadSelfHostRegions({ mode: 'local' })[rawRegion];
   if (!region.iosBundleId?.trim()) {
     throw new Error(`self-host-regions.json 的 ${region.authRegion}.iosBundleId 未填(构建必需)`);
   }
+  iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.buildPlan;
   const desktopVersion = typeof args.desktopVersion === 'string' ? args.desktopVersion : '';
   const env = selfhostEnv(region, desktopVersion);
   const appJson = readAppJson();
@@ -202,6 +248,7 @@ async function main() {
 
   // git 闸门只管真构建:dry-run 纯本地(不做 origin/main 远端比对,分支/离线可跑)。
   if (args.execute) {
+    iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.preflight;
     if (!args.skipGitGate) assertProductionGitGate();
     else log('  warn: --skip-git-gate,跳过 main/clean/HEAD 校验(仅本地迭代用)');
     if (missingBake.length) {
@@ -237,20 +284,24 @@ async function main() {
     return;
   }
 
+  iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.preflight;
   if (process.platform !== 'darwin') throw new Error('--execute 需在 macOS 上运行(xcodebuild)');
 
   // region / endpoint manifest 自举基址必须齐全(读仓内 config/endpoint*.json,离线可用)。
   assertPublicEnv(env, { variant: 'production', requiredKeys: SELF_HOST_PUBLIC_ENV_KEYS });
 
+  iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.toolchain;
   const ipaPath = buildIpa(env, region);
   log(`  ✓ ipa: ${ipaPath}`);
 
+  iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.artifactValidation;
   // 权威 runtimeVersion = 真正烤进 .ipa 的 EXUpdates.bundle/fingerprint(仅报告,供发布侧比对)。
   const runtimeVersion = readEmbeddedRuntimeVersionFromIpa(ipaPath);
   log(`  ✓ runtimeVersion(读自 .ipa 内嵌 fingerprint): ${runtimeVersion}`);
 
   let finalPath = ipaPath;
   if (typeof args.out === 'string' && args.out) {
+    iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.output;
     const outDir = resolve(String(args.out));
     if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
     finalPath = join(outDir, basename(ipaPath));
@@ -266,23 +317,7 @@ async function main() {
   console.log('======================================================');
 }
 
-// 兜底脱敏:错误文案若意外携带签名/证书口令等秘密类 env 值,输出前抹掉。
-// 用 IIFE 构建正则——RegExp 对象切断 CodeQL 对 env 值的 taint 追踪链。
-const _secretScrubRe = (() => {
-  const pats = [];
-  for (const [name, value] of Object.entries(process.env)) {
-    if (!value || value.length < 6 || value.length > 512 || value.includes("\n")) continue;
-    if (/(password|passwd|secret|token|api[_-]?key|credential|private)/i.test(name)) {
-      pats.push(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    }
-  }
-  pats.sort((a, b) => b.length - a.length);
-  return pats.length > 0 ? new RegExp(pats.join('|'), 'g') : null;
-})();
-
-function scrubSecretsFromText(text) {
-  const s = String(text ?? '');
-  return _secretScrubRe ? s.replace(_secretScrubRe, '***') : s;
-}
-
-main().catch((err) => { console.error(scrubSecretsFromText(err?.message)); process.exit(1); }); // lgtm[js/clear-text-logging]
+main().catch(() => {
+  reportIosBuildFailure();
+  process.exit(1);
+});

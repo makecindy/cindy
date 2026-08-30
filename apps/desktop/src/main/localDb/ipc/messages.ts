@@ -11,8 +11,9 @@ import { and, asc, eq, inArray, lt, lte, gt, gte, desc, isNull, or, sql, type SQ
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
-import { latestVisiblePreview, latestVisiblePreviewRow } from '../latestMessageText';
+import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
+import { persistSessionListPreview } from '../sessionListProjection';
 import {
   messageToCamel,
   messageCreateToRow,
@@ -47,6 +48,7 @@ import {
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
+import { maybeUpgradeCodexHistoryOversizedError } from '../codexHistoryOversizedUpgrade';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 
 const log = createLogger('localDb/messages');
@@ -169,9 +171,13 @@ async function maybeBroadcastSessionListPreview(
   }
   if (latest?.clientId !== row.clientId) return;
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+  const preview = extractMessagePreview(row.content, row.role);
+  // 不在这里落库。insert/update 事务已经把 list_preview 置空；事后 persist 无法
+  // 校验同一 clientId 的内容版本，交错改写会把旧正文写回非 NULL 缓存。
+  // 侧栏即时刷新靠广播；下次 list/回填从 messages 现算。
   broadcastOwnedPayload(
     'local-db:sessions:patched',
-    { sessionId, patch: { preview: extractMessagePreview(row.content, row.role) } },
+    { sessionId, patch: { preview } },
     ownerScope,
   );
 }
@@ -190,24 +196,6 @@ function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
     return false;
   }
 }
-
-// DbClient uses better-sqlite3 `.all()`: never return whole message bodies for
-// retention bookkeeping. JSON1 extracts only the distinct paths that startup
-// cleanup needs, while LIKE avoids invoking json_each for unrelated history.
-const PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN = '%chat-attachment-cache%';
-const PERSISTED_CHAT_ATTACHMENT_PATHS_SQL = `SELECT DISTINCT
-         attachment.atom AS filePath
-   FROM messages AS m
-   JOIN sessions AS s ON s.id = m.session_id
-   JOIN json_tree(
-          CASE WHEN json_valid(m.content) THEN m.content ELSE '{}' END,
-          '$.files'
-        ) AS attachment
-  WHERE s.status != 'deleted'
-    AND m.rewind_at IS NULL
-    AND m.content LIKE ?
-    AND attachment.key = 'path'
-    AND attachment.type = 'text'`;
 
 export interface EstimatedSessionValueEntry {
   clientId: string;
@@ -235,15 +223,6 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'plan_review',
   'thinking',
 ] as const);
-
-/** Return all staged attachment paths retained by the current owner's message DB. */
-export async function listPersistedChatAttachmentPaths(): Promise<string[]> {
-  const rows = await getDbClient().query<{ filePath: unknown }>(
-    PERSISTED_CHAT_ATTACHMENT_PATHS_SQL,
-    [PERSISTED_CHAT_ATTACHMENT_CONTENT_PATTERN],
-  );
-  return rows.flatMap((row) => (typeof row.filePath === 'string' ? [row.filePath] : []));
-}
 
 export function registerMessageIpc(): void {
   ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
@@ -335,7 +314,24 @@ export function registerMessageIpc(): void {
       )
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;
-    return hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
+    const listed = hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
+    // 不阻塞首屏。旧 reconnect-stalled 横幅只在首页扫描一次，分页不再读 rollout。
+    if (!before && beforeTs == null && !after) {
+      const ownerScope = captureOwnerBroadcastScope();
+      void maybeUpgradeCodexHistoryOversizedError(sid)
+        .then((upgrade) => {
+          if (upgrade.result !== 'upgraded' || !upgrade.message) return;
+          if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+          broadcastMessageRow(sid, upgrade.message, ownerScope);
+        })
+        .catch((error) => {
+          log.warn('codex oversized history upgrade rejected', {
+            sessionId: sid,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
+    return listed;
   });
 
   ipcMain.handle(
@@ -625,6 +621,10 @@ export function registerMessageIpc(): void {
     async (_e, sessionId: unknown, clientId: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      // 动态 import:messagePersistBroadcaster 已静态依赖本模块 createMessage,
+      // 静态反向 import 会成环。落库前点关闭/重试时先等同一 persistId 写完。
+      const { whenTurnErrorPersisted } = await import('../../messagePersistBroadcaster.js');
+      await whenTurnErrorPersisted(sid, cid);
       const msg = await dismissErrorMessage(sid, cid);
       if (!msg) throwIpcError('NOT_FOUND', 'Error message 不存在');
       return msg;
@@ -972,10 +972,18 @@ export async function commitMessageDeletion(
   // 口径要动得连 maker-shared/sessionList 的 messageCountLabel 一起改。
   let preview: string | null = null;
   try {
-    preview = await latestVisiblePreview(sessionId);
+    const latest = await latestVisiblePreviewRow(sessionId);
+    preview = extractMessagePreview(latest?.content, latest?.role);
+    await persistSessionListPreview(
+      sessionId,
+      preview,
+      latest?.role ?? null,
+      latest?.createdAt,
+      latest?.clientId,
+    );
   } catch (error) {
-    // 删除已经原子提交；投影查询失败不能把成功操作伪装成失败。广播保守空值，
-    // 后续 sessions:list / reseed 会按 DB 真相收敛。
+    // 删除已经原子提交；message.delete 事务已把 list_preview / role / count 置 NULL，
+    // 投影刷新失败不能把成功操作伪装成失败。广播保守空值，list 回落子查询。
     log.warn('message delete session projection refresh failed', {
       sessionId,
       deletedClientIds: clientIds,
@@ -1124,15 +1132,11 @@ export async function rewindPersistedUserMessageAfterClear(
   if (!row) return;
 
   const rewoundAt = Date.now();
-  const updated = await dbClient.exec(
-    `UPDATE messages
-        SET rewind_at = ?
-      WHERE session_id = ?
-        AND client_id = ?
-        AND role = 'user'
-        AND rewind_at IS NULL`,
-    [rewoundAt, sessionId, clientId],
-  );
+  const updated = await dbClient.tx('message.rewindUserAfterClear', {
+    sessionId,
+    clientId,
+    rewoundAt,
+  });
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
 
@@ -1296,16 +1300,33 @@ export async function updateMessageContent(
   content: unknown,
 ): Promise<Message | null> {
   const ownerScope = captureOwnerBroadcastScope();
-  const db = getDbClient().drizzle;
-  await db
-    .update(messages)
-    .set({ content: safeStringify(content) })
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
-  const [row] = await db
-    .select()
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
+  const serialized = safeStringify(content);
+  await dbClient.tx('message.updateContent', {
+    sessionId,
+    clientId,
+    content: serialized,
+  });
+  // 窄回读:刻意不选 content——tool_result 全文可达 MB 级,整行回读会把大字段
+  // 经 DB worker 的 postMessage 结构化克隆再送回主进程一次。content 就是本次
+  // 写入值,用 serialized 回填;行不存在(clientId 未落库)仍以回读判 null。
+  const [narrow] = await db
+    .select({
+      id: messages.id,
+      clientId: messages.clientId,
+      sessionId: messages.sessionId,
+      role: messages.role,
+      toolUseId: messages.toolUseId,
+      agentMeta: messages.agentMeta,
+      agentKind: messages.agentKind,
+      createdAt: messages.createdAt,
+      rewindAt: messages.rewindAt,
+    })
     .from(messages)
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
     .limit(1);
+  const row: MessageRow | undefined = narrow ? { ...narrow, content: serialized } : undefined;
   if (row) {
     // 挂账钩子同样覆盖"先摘要 create、后全文 update"的 tool_result 顺序
     // (review P2:vendor 事件顺序一变,首现于 update 的 blob URL 若不在这里
@@ -1461,35 +1482,20 @@ export async function createMessage(
       : (body.createdAt ?? now);
   const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
   try {
-    if (guarded) {
-      // Keep the session compare and message insert in one SQLite statement.
-      // A separate SELECT would allow /clear to win between the check and the
-      // INSERT on the DB worker.
-      const inserted = await dbClient.exec(
-        `INSERT INTO messages (
-           id, client_id, session_id, role, content, tool_use_id,
-           agent_meta, agent_kind, created_at
-         )
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
-           FROM sessions AS s
-          WHERE s.id = ?
-            AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1)
-         ON CONFLICT(session_id, client_id) DO NOTHING`,
-        [
-          insertRow.id,
-          insertRow.clientId,
-          insertRow.sessionId,
-          insertRow.role,
-          insertRow.content,
-          insertRow.toolUseId,
-          insertRow.agentMeta,
-          insertRow.agentKind,
-          insertRow.createdAt,
-          sessionId,
-          expected,
-        ],
-      );
-      if (inserted.changes === 0) {
+    const inserted = await dbClient.tx('message.insert', {
+      id: insertRow.id,
+      clientId: insertRow.clientId,
+      sessionId,
+      role: insertRow.role,
+      content: insertRow.content,
+      toolUseId: insertRow.toolUseId ?? null,
+      agentMeta: insertRow.agentMeta ?? null,
+      agentKind: insertRow.agentKind ?? null,
+      createdAt: insertRow.createdAt,
+      guarded,
+      expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+    });
+    if (guarded && inserted.changes === 0) {
         const [existingAfterGuard] = await db
           .select()
           .from(messages)
@@ -1519,9 +1525,6 @@ export async function createMessage(
         }
         throw new Error('Message insert skipped without a clear-boundary change');
       }
-    } else {
-      await db.insert(messages).values(insertRow);
-    }
   } catch (err) {
     const after = await db
       .select()
@@ -1557,8 +1560,23 @@ export async function createMessage(
     }
     throw err;
   }
-  const [row] = await db.select().from(messages).where(eq(messages.id, id));
-  if (!row) throw new Error('Message 创建后查询失败');
+  // 插入成功后不再整行回读:大 content(tool_result 全文)会经 DB worker 的
+  // postMessage 再送回主进程一次。insertRow 就是刚写入的行(新行 rewind_at 恒
+  // NULL);必须过 messageToCamel 走与回读完全相同的解析路径(JSON.parse 失败
+  // 回退裸串、assistant 引文剥离),否则返回值/广播行的类型语义会漂移。幂等命中
+  // 与 UNIQUE / guarded 回退路径仍保留各自的回读(上方),不受影响。
+  const row: MessageRow = {
+    id: insertRow.id,
+    clientId: insertRow.clientId,
+    sessionId: insertRow.sessionId,
+    role: insertRow.role,
+    content: insertRow.content,
+    toolUseId: insertRow.toolUseId ?? null,
+    agentMeta: insertRow.agentMeta ?? null,
+    agentKind: insertRow.agentKind ?? null,
+    createdAt: insertRow.createdAt,
+    rewindAt: null,
+  };
   const msg = messageToCamel(row);
   // 媒体总仓挂账钩子(规则 25):消息落库是"blob 归属本会话"的
   // 确定时点,覆盖所有落库来源(renderer IPC / hook / im / agent echo / 合成

@@ -18,6 +18,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -29,6 +30,14 @@ const captured = vi.hoisted(() => ({
   onEvent: null as ((event: unknown) => void) | null,
   requests: [] as Array<Record<string, unknown>>,
   sent: [] as Array<Record<string, unknown>>,
+  runnerLaunches: [] as Array<{
+    runId: string;
+    runDir: string;
+    runnerFile: string;
+    configFile: string;
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+  }>,
   proxyRegistrations: [] as Array<{
     sessionId: string;
     token: string;
@@ -136,7 +145,10 @@ import {
   PiManagedPackageMutationCancelledError,
   type TurnPermissionPolicy,
 } from '../../base-agent.js';
-import { PiAgent } from '../index.js';
+import {
+  constrainPiDestructivePathResolution,
+  PiAgent,
+} from '../index.js';
 import { Session } from '../../../session.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -171,6 +183,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.onEvent = null;
     captured.requests = [];
     captured.sent = [];
+    captured.runnerLaunches = [];
     captured.proxyRegistrations = [];
     captured.mcpVendorOptions = undefined;
     captured.failSetModel = false;
@@ -193,6 +206,24 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     writeFileSync(managedRipgrepPath, 'fake managed ripgrep');
     savedNoProxy = process.env.NO_PROXY;
     savedNoProxyLower = process.env.no_proxy;
+  });
+
+  it('uses the same remote destructive-path constraint in root and durable approval flows', () => {
+    const localAction = { kind: 'exec' as const, command: 'rm -rf build' };
+    expect(constrainPiDestructivePathResolution(localAction, false)).toBe(localAction);
+    expect(constrainPiDestructivePathResolution(localAction, true)).toEqual({
+      ...localAction,
+      destructivePathResolution: 'unavailable',
+    });
+
+    const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+    const durableStart = source.indexOf('const resolvePiSubagentApproval');
+    const durableEnd = source.indexOf('const refreshPiSubagentRuns', durableStart);
+    const rootStart = source.indexOf('private handleExtensionUiRequest');
+    expect(source.slice(durableStart, durableEnd)).toContain(
+      'constrainPiDestructivePathResolution',
+    );
+    expect(source.slice(rootStart)).toContain('constrainPiDestructivePathResolution');
   });
 
   afterEach(() => {
@@ -248,6 +279,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
       runtimeConfig: {
         endpoint: 'http://127.0.0.1:9',
+        remoteEndpoint: 'https://gateway.example.test',
         systemPrompt: 'You are Cindy.',
         managedExecutablePaths: { ripgrep: managedRipgrepPath },
       },
@@ -286,6 +318,48 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async () => ({
+        writeLine: async () => {},
+        onLine: () => () => {},
+        onStderr: () => () => {},
+        onClose: () => () => {},
+        close: async () => {},
+        pid: 4321,
+        isClosed: () => false,
+        remoteBinaryPath: '/remote/pi',
+      }),
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {},
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+      spawnPiSubagentRunner: (request) => {
+        captured.runnerLaunches.push(request);
+        const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+        const emit = (event: string, ...args: unknown[]): void => {
+          for (const listener of listeners.get(event) ?? []) listener(...args);
+        };
+        const handle = {
+          pid: 4321,
+          killed: false,
+          once(event: 'spawn' | 'error' | 'exit' | 'close', listener: (...args: unknown[]) => void) {
+            const queued = listeners.get(event) ?? [];
+            queued.push(listener);
+            listeners.set(event, queued);
+            if (event === 'spawn') queueMicrotask(listener);
+            return handle;
+          },
+          kill: () => {
+            handle.killed = true;
+            queueMicrotask(() => emit('exit', 0, 'SIGTERM'));
+            return true;
+          },
+        };
+        return handle as never;
+      },
       registerPiProxySession: (sessionId, token, _resolveProviderId, options) => {
         captured.proxyRegistrations.push({
           sessionId,
@@ -302,6 +376,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
     mcp?: McpSetup,
+    directories?: {
+      extraDirs?: string[];
+      writableDirs?: string[];
+      remoteHostId?: string;
+    },
   ): Promise<PiTestSessionHandle> {
     const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel, mcp));
     return agent.startSession({
@@ -309,6 +388,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       workingDir: cwd,
       model: 'm',
       ...(permissionMode ? { permissionMode: permissionMode as never } : {}),
+      ...directories,
     }) as Promise<PiTestSessionHandle>;
   }
 
@@ -330,14 +410,28 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     id: string,
     toolName: string,
     input: Record<string, unknown>,
-    options?: { resolvedCredentialPaths: unknown },
+    options?: {
+      resolvedCredentialPaths?: unknown;
+      resolvedWritePath?: unknown;
+      resolvedWritableRoots?: unknown;
+    },
   ): void {
+    const writeEvidence = toolName === 'write' || toolName === 'edit'
+      ? {
+          resolvedWritePath: options && Object.hasOwn(options, 'resolvedWritePath')
+            ? options.resolvedWritePath
+            : (typeof input.path === 'string' ? input.path : null),
+          resolvedWritableRoots: options && Object.hasOwn(options, 'resolvedWritableRoots')
+            ? options.resolvedWritableRoots
+            : [cwd],
+        }
+      : {};
     captured.onEvent!({
       type: 'extension_ui_request',
       method: 'confirm',
       id,
       title: 'cindy:permission',
-      message: JSON.stringify({ toolName, input, ...options }),
+      message: JSON.stringify({ toolName, input, ...options, ...writeEvidence }),
     });
   }
 
@@ -346,12 +440,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     toolName: string,
     input: Record<string, unknown>,
   ): void {
+    const writeEvidence = toolName === 'write' || toolName === 'edit'
+      ? {
+          resolvedWritePath: typeof input.path === 'string' ? input.path : null,
+          resolvedWritableRoots: [cwd],
+        }
+      : {};
     captured.onEvent!({
       type: 'extension_ui_request',
       method: 'input',
       id,
       title: 'cindy:permission',
-      placeholder: JSON.stringify({ toolName, input }),
+      placeholder: JSON.stringify({ toolName, input, ...writeEvidence }),
     });
   }
 
@@ -366,6 +466,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         source,
         token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT,
       }),
+    });
+  }
+
+  function fireSubagentRunnerRequest(
+    id: string,
+    action: 'launch' | 'terminate',
+    runId: string,
+  ): void {
+    captured.onEvent!({
+      type: 'extension_ui_request',
+      method: 'input',
+      id,
+      title: 'cindy:pi-subagent-runner',
+      placeholder: JSON.stringify({ action, runId }),
     });
   }
 
@@ -420,6 +534,68 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(noProxy).toContain(entry);
     }
     expect(captured.env.no_proxy).toBeUndefined();
+  });
+
+  it('asks the host to launch a durable runner without treating the app executable as Node', async () => {
+    const previousNode = process.env.ELECTRON_RUN_AS_NODE;
+    const previousLegacy = process.env.CINDY_PI_SUBAGENT_NODE;
+    process.env.ELECTRON_RUN_AS_NODE = '1';
+    process.env.CINDY_PI_SUBAGENT_NODE = '/Applications/Cindy.app/Contents/MacOS/Cindy';
+    try {
+    await start();
+    expect(captured.env.CINDY_PI_SUBAGENT_NODE).toBeUndefined();
+    expect(captured.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    const runRoot = captured.env.CINDY_PI_SUBAGENT_RUN_ROOT;
+    const ownerId = captured.env.CINDY_PI_SUBAGENT_OWNER_ID;
+    expect(runRoot).toBeTruthy();
+    expect(ownerId).toBeTruthy();
+
+    const runId = '123e4567-e89b-42d3-a456-4266141740aa';
+    const runDir = path.join(runRoot!, runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, 'runner.cjs'), "'use strict';\n");
+    writeFileSync(path.join(runDir, 'config.json'), '{}\n');
+    writeFileSync(path.join(runDir, 'status.json'), `${JSON.stringify({
+      version: 1,
+      runId,
+      taskId: 'tool-runner-host',
+      parentSessionId: 's1',
+      runtimeOwnerId: ownerId,
+      runnerInstanceId: `launch-pending-${runId}`,
+      state: 'queued',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      tasks: [{
+        childId: `${runId}-1`,
+        sessionId: `${runId}-1`,
+        agent: 'scout',
+        status: 'queued',
+      }],
+    })}\n`);
+
+    fireSubagentRunnerRequest('runner-launch', 'launch', runId);
+    const response = await waitForResponse('runner-launch');
+    expect(JSON.parse(String(response.value))).toEqual({ ok: true, confirmed: true });
+    expect(captured.runnerLaunches).toHaveLength(1);
+    expect(captured.runnerLaunches[0]).toMatchObject({
+      runId,
+      runDir,
+      runnerFile: path.join(runDir, 'runner.cjs'),
+      configFile: path.join(runDir, 'config.json'),
+      cwd,
+    });
+    expect(captured.runnerLaunches[0]?.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    expect(captured.runnerLaunches[0]?.env.CINDY_PI_SUBAGENT_NODE).toBeUndefined();
+
+    fireSubagentRunnerRequest('runner-stop', 'terminate', runId);
+    const stop = await waitForResponse('runner-stop');
+    expect(JSON.parse(String(stop.value))).toEqual({ ok: true, confirmed: true });
+    } finally {
+      if (previousNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+      else process.env.ELECTRON_RUN_AS_NODE = previousNode;
+      if (previousLegacy === undefined) delete process.env.CINDY_PI_SUBAGENT_NODE;
+      else process.env.CINDY_PI_SUBAGENT_NODE = previousLegacy;
+    }
   });
 
   it('routes chat-requested Pi extension installs into the host-managed store', async () => {
@@ -2367,6 +2543,289 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(resolverCalls).toBe(0);
   });
 
+  it('separates external writable roots from read-only references in real approval dispatch', async () => {
+    const referenceDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-reference-'));
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const replacementWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const review = vi.fn(async () => ({ verdict: 'block' as const, reason: 'read-only reference' }));
+    const handle = await start('auto', review, false, undefined, {
+      extraDirs: [referenceDir],
+      writableDirs: [writableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'external-writable',
+      'edit',
+      { path: path.join(writableDir, 'result.txt') },
+      { resolvedWritableRoots: [cwd, writableDir] },
+    );
+    expect(await waitForResponse('external-writable')).toEqual({
+      type: 'extension_ui_response',
+      id: 'external-writable',
+      confirmed: true,
+    });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+
+    firePermissionRequest('readonly-reference', 'edit', { path: path.join(referenceDir, 'spec.md') });
+    expect(await waitForResponse('readonly-reference')).toEqual({
+      type: 'extension_ui_response',
+      id: 'readonly-reference',
+      confirmed: false,
+    });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoots: [cwd, referenceDir, writableDir],
+      writableRoots: [cwd, writableDir],
+    }));
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.setWritableDirs!([replacementWritableDir]);
+    firePermissionRequest(
+      'replacement-writable',
+      'edit',
+      { path: path.join(replacementWritableDir, 'new-result.txt') },
+      { resolvedWritableRoots: [cwd, replacementWritableDir] },
+    );
+    expect(await waitForResponse('replacement-writable')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledTimes(1);
+    firePermissionRequest('revoked-writable', 'edit', {
+      path: path.join(writableDir, 'stale-result.txt'),
+    });
+    expect(await waitForResponse('revoked-writable')).toMatchObject({ confirmed: false });
+    expect(review).toHaveBeenCalledTimes(2);
+
+    await handle.close();
+    rmSync(referenceDir, { recursive: true, force: true });
+    rmSync(writableDir, { recursive: true, force: true });
+    rmSync(replacementWritableDir, { recursive: true, force: true });
+  });
+
+  it('forces confirmation for remote Pi destructive paths instead of using controller realpath', async () => {
+    const localSafeTarget = path.join(cwd, 'controller-safe-target');
+    const remoteLink = path.join(cwd, 'remote-link');
+    mkdirSync(localSafeTarget);
+    symlinkSync(
+      localSafeTarget,
+      remoteLink,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const review = vi.fn(async () => ({
+      verdict: 'allow' as const,
+      reason: 'model allow',
+    }));
+    const handle = await start('auto', review, false, undefined, {
+      remoteHostId: 'remote-host',
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'remote-destructive-link',
+      'bash',
+      { command: `rm -rf ${path.join(remoteLink, 'subdir')}` },
+      { resolvedCredentialPaths: [] },
+    );
+
+    expect(await waitForResponse('remote-destructive-link')).toMatchObject({ confirmed: false });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it('never silently approves a writable-root path whose real target escapes through a link', async () => {
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-outside-'));
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const handle = await start('auto', review, false, undefined, { writableDirs: [writableDir] });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    const linkedPath = path.join(writableDir, 'link', 'result.txt');
+    const cases = [
+      ['ordinary-escape', path.join(outsideDir, 'result.txt')],
+      ['system-escape', '/etc/hosts'],
+      ['credential-escape', path.join(outsideDir, '.ssh', 'id_rsa')],
+      ['unresolved-escape', null],
+    ] as const;
+    for (const [id, resolvedWritePath] of cases) {
+      firePermissionRequest(id, 'write', { path: linkedPath }, { resolvedWritePath });
+      expect(await waitForResponse(id)).toMatchObject({ confirmed: false });
+    }
+    firePermissionRequest('malformed-root-evidence', 'write', { path: linkedPath }, {
+      resolvedWritePath: path.join(writableDir, 'real', 'result.txt'),
+      resolvedWritableRoots: [''],
+    });
+    expect(await waitForResponse('malformed-root-evidence')).toMatchObject({ confirmed: false });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledTimes(cases.length + 1);
+
+    firePermissionRequest('authorized-real-target', 'write', { path: linkedPath }, {
+      resolvedWritePath: path.join(writableDir, 'real', 'result.txt'),
+      resolvedWritableRoots: [cwd, writableDir],
+    });
+    expect(await waitForResponse('authorized-real-target')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledTimes(cases.length + 1);
+
+    await handle.close();
+    rmSync(writableDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('auto-approves a canonical target when the writable root itself is a link', async () => {
+    const realWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-real-writable-'));
+    const linkParent = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-linked-writable-'));
+    const linkedWritableDir = path.join(linkParent, 'output');
+    symlinkSync(
+      realWritableDir,
+      linkedWritableDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const handle = await start('auto', undefined, false, undefined, {
+      writableDirs: [linkedWritableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'linked-writable-root',
+      'write',
+      { path: path.join(linkedWritableDir, 'result.txt') },
+      {
+        resolvedWritePath: path.join(realpathSync(realWritableDir), 'result.txt'),
+        resolvedWritableRoots: [realpathSync(cwd), realpathSync(realWritableDir)],
+      },
+    );
+    expect(await waitForResponse('linked-writable-root')).toMatchObject({ confirmed: true });
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.close();
+    rmSync(linkParent, { recursive: true, force: true });
+    rmSync(realWritableDir, { recursive: true, force: true });
+  });
+
+  it('discards an in-flight allow when external directory permissions change', async () => {
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    let resolveReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const review = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+      resolveReview = resolve;
+    }));
+    const handle = await start('auto', review, false, undefined, {
+      writableDirs: [writableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'late-directory-revoke',
+      'bash',
+      { command: 'npm install left-pad', cwd: writableDir },
+      { resolvedCredentialPaths: [] },
+    );
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+    await handle.setWritableDirs!([]);
+    resolveReview!({ verdict: 'allow', reason: 'reviewed before revoke' });
+
+    expect(await waitForResponse('late-directory-revoke')).toEqual({
+      type: 'extension_ui_response',
+      id: 'late-directory-revoke',
+      confirmed: true,
+    });
+    expect(resolver).toHaveBeenCalledOnce();
+    await handle.close();
+    rmSync(writableDir, { recursive: true, force: true });
+  });
+
+  it('asks instead of auto-reviewing while writable directories are still being persisted', async () => {
+    const fsp = await import('node:fs');
+    const currentWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const nextWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const handle = await start('auto', review, false, undefined, {
+      writableDirs: [currentWritableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve; });
+    let releaseWrite!: () => void;
+    const blockedWrite = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const writeSpy = vi.spyOn(fsp.promises, 'writeFile').mockImplementationOnce(async () => {
+      markWriteStarted();
+      await blockedWrite;
+    });
+
+    const update = handle.setWritableDirs!([nextWritableDir]);
+    await writeStarted;
+    firePermissionRequest(
+      'pending-writable-persist',
+      'edit',
+      { path: path.join(nextWritableDir, 'pending.txt') },
+      {
+        resolvedWritePath: path.join(realpathSync(nextWritableDir), 'pending.txt'),
+        resolvedWritableRoots: [realpathSync(cwd), realpathSync(nextWritableDir)],
+      },
+    );
+    expect(await waitForResponse('pending-writable-persist')).toMatchObject({ confirmed: false });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+
+    releaseWrite();
+    await update;
+    writeSpy.mockRestore();
+    firePermissionRequest(
+      'persisted-writable',
+      'edit',
+      { path: path.join(nextWritableDir, 'persisted.txt') },
+      {
+        resolvedWritePath: path.join(realpathSync(nextWritableDir), 'persisted.txt'),
+        resolvedWritableRoots: [realpathSync(cwd), realpathSync(nextWritableDir)],
+      },
+    );
+    expect(await waitForResponse('persisted-writable')).toMatchObject({ confirmed: true });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+
+    await handle.close();
+    rmSync(currentWritableDir, { recursive: true, force: true });
+    rmSync(nextWritableDir, { recursive: true, force: true });
+  });
+
+  it('restores auto-review to the persisted writable roots after a directory write fails', async () => {
+    const fsp = await import('node:fs');
+    const persistedWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const failedWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const handle = await start('auto', review, false, undefined, {
+      writableDirs: [persistedWritableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    const writeSpy = vi.spyOn(fsp.promises, 'writeFile').mockRejectedValueOnce(new Error('transient EIO'));
+    await expect(handle.setWritableDirs!([failedWritableDir])).rejects.toThrow('transient EIO');
+    writeSpy.mockRestore();
+
+    firePermissionRequest(
+      'review-after-writable-rollback',
+      'bash',
+      { command: 'npm install left-pad', cwd: persistedWritableDir },
+      { resolvedCredentialPaths: [] },
+    );
+    expect(await waitForResponse('review-after-writable-rollback')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoots: [cwd, persistedWritableDir],
+      writableRoots: [cwd, persistedWritableDir],
+    }));
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.close();
+    rmSync(persistedWritableDir, { recursive: true, force: true });
+    rmSync(failedWritableDir, { recursive: true, force: true });
+  });
+
   it('auto mode silently approves first-party Subagent spawn through the source-aware envelope', async () => {
     const handle = await start('auto');
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
@@ -2520,7 +2979,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         agentKind: 'pi',
         model: 'm',
         userIntent: 'Update the shared scratch file for this test.',
-        action: { kind: 'file-write', path: '/tmp/outside.txt' },
+        action: {
+          kind: 'file-write',
+          path: '/tmp/outside.txt',
+          resolvedPath: '/tmp/outside.txt',
+          resolvedWritableRoots: [cwd],
+        },
       }),
     );
     expect(resolverCalls).toBe(0);

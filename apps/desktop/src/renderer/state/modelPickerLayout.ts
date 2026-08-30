@@ -1,16 +1,16 @@
 /**
  * modelPickerLayout —— 模型选择器的**形态**本机偏好(三档并存试用,Chris 2026-08-17
- * 裁决:保留最原始选择器,测试版默认用它,新选择器靠入口自选)。
+ * 裁决:保留最原始选择器供回退；2026-08-27 起新用户默认使用 A 版)。
  *
  *   - 'original':最原始的选择器(unifiedPanel 之前的浏览式面板,含旧 harness 分段
- *                切换)。**默认**。footer 右侧「尝试新选择器」切到 'classic'。
- *   - 'classic' :新选择器 A 版(统一面板现行样式:来源图标行首、引擎在行尾三元组)。
+ *                切换)。footer 右侧「尝试新选择器」切到 'classic'。
+ *   - 'classic' :新选择器 A 版(统一面板现行样式:来源图标行首、引擎在行尾三元组)。**默认**。
  *   - 'badge'   :新选择器 B 版(v7 设计稿:行首 22px 引擎徽标、右缘来源字签、
  *                滚动题头、价格按实付比例上色)。
  *   新选择器 footer 右侧两个文字按钮:A/B 互切 + 切回老版('original')。
  *
  * 纯呈现偏好,不进用户数据、不分账号、不跨端同步 —— 与 modelEnginePrefs 那类
- * 用户配置不同,这里丢了就丢了(回落 original),所以不做 owner 分区与迁移。
+ * 用户配置不同,这里丢了就丢了(回落 classic),所以不做 owner 分区与迁移。
  * 同步写 localStorage(与本目录其它 store 同取舍:热更 relaunch 走 app.exit(),
  * 异步写会丢最近一次切换)。
  */
@@ -28,9 +28,9 @@ function load(): ModelPickerLayout {
   if (cache !== null) return cache;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    cache = raw === 'badge' || raw === 'classic' ? raw : 'original';
+    cache = raw === 'badge' || raw === 'classic' || raw === 'original' ? raw : 'classic';
   } catch {
-    cache = 'original';
+    cache = 'classic';
   }
   return cache;
 }
@@ -82,7 +82,7 @@ if (import.meta.hot) {
 }
 
 export function useModelPickerLayout(): ModelPickerLayout {
-  return useSyncExternalStore(subscribe, load, () => 'original' as const);
+  return useSyncExternalStore(subscribe, load, () => 'classic' as const);
 }
 
 /** 测试用:重置缓存与存储。 */

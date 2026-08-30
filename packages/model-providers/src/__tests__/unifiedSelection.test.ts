@@ -922,6 +922,32 @@ describe('unifiedModelEntries', () => {
     expect(find(entries, 'zhipu', 'glm-5.2')?.candidates).toEqual(['claude-code', 'codex']);
   });
 
+  it('付费模型仅在显式展示模式下进入联合列表，并保留锁定状态', () => {
+    const gated = view({
+      id: 'xd',
+      models: {
+        'claude-code': [
+          m('free-model', { availability: 'available' }),
+          m('paid-model', { availability: 'requires_payment' }),
+        ],
+      },
+    });
+
+    expect(
+      unifiedModelEntries({ providers: [gated], isVisible: alwaysVisible }).map(
+        (entry) => entry.modelId,
+      ),
+    ).toEqual(['free-model']);
+
+    const visible = unifiedModelEntries({
+      providers: [gated],
+      isVisible: alwaysVisible,
+      includePaymentRequired: true,
+    });
+    expect(visible.map((entry) => entry.modelId)).toEqual(['free-model', 'paid-model']);
+    expect(find(visible, 'xd', 'paid-model')?.availability).toBe('requires_payment');
+  });
+
   it('选中行豁免(keepModel):停用 / retired 的选中条目仍成行,并带上候选与能力', () => {
     const mixed = view({
       id: 'anthropic',

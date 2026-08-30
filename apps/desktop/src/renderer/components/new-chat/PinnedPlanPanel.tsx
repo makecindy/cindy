@@ -46,7 +46,7 @@ export function PinnedPlanPanel({
   messages: readonly ChatMessage[];
   /**
    * 会话是否真的在跑(调用方传 isStreaming)。胶囊上的进度环始终静态;该值只
-   * 透传给浮层里 in_progress 行的呼吸动画——空闲时静止,不谎报步骤仍在执行。
+   * 透传给浮层里 in_progress 行的慢转——空闲时静止,不谎报步骤仍在执行。
    */
   animated: boolean;
   /** 与 composer 同宽(inputWidth),胶囊在该宽度内居中,浮层不超出。 */

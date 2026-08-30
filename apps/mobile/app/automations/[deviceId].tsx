@@ -26,9 +26,12 @@ import {
   MainWindowOptionButton,
   MainWindowRowButton,
   RemoteListSyncingPlaceholder,
-  ScreenHeader,
   SummaryStrip,
 } from '@/components/MobilePrimitives';
+import {
+  SimpleStackHeader,
+  simpleScreenSafeAreaEdges,
+} from '@/platform/chrome';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -794,8 +797,8 @@ export default function AutomationsScreen() {
   }, [busyAction, deviceId, maker, openLink, subscribe, syncRuns]);
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="automations.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="automations.screen">
+      <SimpleStackHeader
         action={{
           label: t('devices.common.create'),
           onPress: busyAction ? undefined : startCreateSchedule,

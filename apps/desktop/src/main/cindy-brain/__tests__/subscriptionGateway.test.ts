@@ -265,7 +265,6 @@ function ghost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['subscribe'],
       ...(subscribe ? { subscribe } : {}),
     },
     dir: `/fake/${id}`,

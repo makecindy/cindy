@@ -5,6 +5,7 @@ import {
   UI_ACTION_TRIGGER_PREFIX,
 } from '@cindy/maker-shared/synthetic-trigger';
 import { composerDocumentFromSerializedMessage } from '@/session/composerDocument';
+import { buildMobileMessageCopyText } from '@/session/messageActions';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { RemoteMessage } from '@/session/types';
 
@@ -476,6 +477,37 @@ describe('normalizeRemoteMessages', () => {
     });
   });
 
+  it('renders and copies compacted tool results without exposing the internal marker', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'tool-compacted',
+        role: 'tool_use',
+        content: {
+          toolUseId: 'tu_compacted',
+          toolName: 'Read',
+          input: { file_path: '/repo/a.ts' },
+        },
+      }),
+      message({
+        id: 'result-compacted',
+        role: 'tool_result',
+        toolUseId: 'tu_compacted',
+        content: {
+          type: 'tool_result_compacted',
+          version: 1,
+          originalBytes: 128 * 1024,
+          compactedAt: 500,
+        },
+      }),
+    ]);
+
+    expect(item.secondaryBody).toBe('Full tool output was released (original size 128 KB)');
+    expect(buildMobileMessageCopyText(item)).toContain(
+      'Full tool output was released (original size 128 KB)',
+    );
+    expect(buildMobileMessageCopyText(item)).not.toContain('tool_result_compacted');
+  });
+
   it('marks tools settled by result arrival, including hidden orca empty results', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -630,6 +662,64 @@ describe('normalizeRemoteMessages', () => {
         previewable: false,
       },
     ]);
+  });
+
+  it('keeps tool image fallback unless the same turn embeds that URL as Markdown', () => {
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const items = normalizeRemoteMessages([
+      message({ id: 'u1', role: 'user', content: 'draw one', createdAt: '2026-01-01T00:00:01.000Z' }),
+      message({
+        id: 'tool-1',
+        role: 'tool_use',
+        toolUseId: 'tu-1',
+        content: { toolUseId: 'tu-1', toolName: 'image_generate', input: {} },
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }),
+      message({
+        id: 'result-1',
+        role: 'tool_result',
+        toolUseId: 'tu-1',
+        content: JSON.stringify({ xdt_image_url: url }),
+        createdAt: '2026-01-01T00:00:03.000Z',
+      }),
+      message({
+        id: 'steer-1',
+        role: 'user',
+        content: 'make it warmer',
+        agentMeta: { delivery: 'steer' },
+        createdAt: '2026-01-01T00:00:03.500Z',
+      }),
+      message({
+        id: 'a1',
+        role: 'assistant',
+        content: `![生成结果](${url})`,
+        createdAt: '2026-01-01T00:00:04.000Z',
+      }),
+      message({ id: 'u2', role: 'user', content: 'draw again', createdAt: '2026-01-01T00:00:05.000Z' }),
+      message({
+        id: 'tool-2',
+        role: 'tool_use',
+        toolUseId: 'tu-2',
+        content: { toolUseId: 'tu-2', toolName: 'image_generate', input: {} },
+        createdAt: '2026-01-01T00:00:06.000Z',
+      }),
+      message({
+        id: 'result-2',
+        role: 'tool_result',
+        toolUseId: 'tu-2',
+        content: JSON.stringify({ xdt_image_url: url }),
+        createdAt: '2026-01-01T00:00:07.000Z',
+      }),
+      message({
+        id: 'a2',
+        role: 'assistant',
+        content: `文件地址：${url}`,
+        createdAt: '2026-01-01T00:00:08.000Z',
+      }),
+    ]);
+
+    expect(items.find((item) => item.source.id === 'tool-1')?.media).toEqual([]);
+    expect(items.find((item) => item.source.id === 'tool-2')?.media).toMatchObject([{ url }]);
   });
 
   it('keeps desktop media action metadata as mobile read-only actions', () => {
@@ -906,6 +996,47 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0].body).toContain('设置 → 模型供应商');
     // 非鉴权错误维持原文
     expect(items[1].body).toBe('something exploded');
+  });
+
+  it('localizes persisted tool-loop errors from reason and bounded details', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'tool-loop-generic',
+        role: 'error',
+        content: JSON.stringify({
+          message: '上游模型疑似陷入死循环，category=missing_required_field',
+          reason: 'tool_use_loop_detected',
+        }),
+      }),
+      message({
+        id: 'tool-loop-contract',
+        role: 'error',
+        content: JSON.stringify({
+          message: 'internal contract failure: missing_required_field',
+          reason: 'tool_use_loop_detected',
+          toolLoop: { kind: 'contract', count: 3 },
+        }),
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+      message({
+        id: 'tool-loop-invalid-details',
+        role: 'error',
+        content: JSON.stringify({
+          message: 'raw malformed loop category=missing_required_field',
+          reason: 'tool_use_loop_detected',
+          toolLoop: { kind: 'unknown', count: 999999999 },
+        }),
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }),
+    ]);
+
+    expect(items[0].body).toBe(i18n.t('session.tail.toolUseLoopDetected'));
+    expect(items[0].body).not.toContain('missing_required_field');
+    expect(items[1].body).toBe(
+      i18n.t('session.tail.toolUseLoopDetectedWithCount', { count: 3 }),
+    );
+    expect(items[1].body).not.toContain('missing_required_field');
+    expect(items[2].body).toBe(i18n.t('session.tail.toolUseLoopDetected'));
   });
 
   it('extracts scheduler automation origin from user agentMeta', () => {

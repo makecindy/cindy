@@ -44,10 +44,26 @@ const TOP_TASKS = 8;
 const WINDOW_DAYS = 30;
 const UNKNOWN_VALUE = '—';
 
+/**
+ * 列宽口径: 右侧五列 (模型/供应商/token/上下文/最后活跃) 都是短的定长内容, 让它们
+ * 按各自内容取满宽 —— 这几列是要被读数的, 不能被挤窄或截断; pl-3 是列间距, 否则
+ * 相邻两列的数字会贴到一起。任务名是用户输入的自由文本, 长度没有上限, 只能反过来
+ * 吃右侧列分完后剩下的空间。
+ *
+ * 列间距取 12px 而不是 16px: 侧栏可拉到 480 (useSidebarResize MAX_WIDTH), 主窗下限
+ * 800, 此时设置页卡片内的表格只剩约 230px。列间距落在 nowrap 单元格上是**不可收缩**
+ * 宽度, 五列就是 5 份 —— 12px 比 16px 省下 20px, 直接抬高开始溢出的窗口宽度。
+ * 12 与 16 同在 DESIGN.md §5 间距刻度上, 这个字号下的分隔效果没有可见差别。
+ *
+ * 实现上靠 `w-full + max-w-0` (任务列自身 pl-0): 自动布局的表格若不加这一对,
+ * 会先按 nowrap 的最长任务名算出列宽、把整张卡片横向撑开, 内层的 truncate 因为
+ * 没有可收缩的宽度而失效。max-w-0 让这一列先塌到 0, w-full 再让它领走余量。
+ */
 const TH_CLASS =
-  'whitespace-nowrap border-b border-[var(--border-default)] pb-2 text-right text-11 font-medium text-[var(--text-tertiary)]';
+  'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-11 font-medium text-[var(--text-tertiary)]';
 const TD_CLASS =
-  'whitespace-nowrap border-b border-[var(--border-default)] py-2 text-right text-12 tabular-nums';
+  'whitespace-nowrap border-b border-[var(--border-default)] py-2 pl-3 text-right text-12 tabular-nums';
+const TASK_COL_CLASS = 'w-full max-w-0 pl-0';
 
 /** 与 SessionItem 一致: 取两者中较新的值, 兼容只写 userSendAt 的存量行。 */
 function lastActiveIso(session: { updatedAt: string; userSendAt: string | null }): string {
@@ -92,7 +108,9 @@ export function UsageTaskTable({ rows }: { rows: Session[] }): React.JSX.Element
     <table className="w-full border-collapse">
       <thead>
         <tr>
-          <th className={cn(TH_CLASS, 'text-left')}>{t('usageHistory.tasks.col.task')}</th>
+          <th className={cn(TH_CLASS, TASK_COL_CLASS, 'text-left')}>
+            {t('usageHistory.tasks.col.task')}
+          </th>
           <th className={TH_CLASS}>{t('usageHistory.tasks.col.model')}</th>
           <th className={TH_CLASS} title={t('usageHistory.tasks.providerTooltip')}>
             {t('usageHistory.tasks.col.provider')}
@@ -113,13 +131,15 @@ export function UsageTaskTable({ rows }: { rows: Session[] }): React.JSX.Element
             session.contextWindow > 0 ? session.contextTokens / session.contextWindow : null;
           return (
             <tr key={session.id}>
-              <td className={cn(TD_CLASS, 'text-left')}>
+              <td className={cn(TD_CLASS, TASK_COL_CLASS, 'text-left')}>
                 <span className="flex min-w-0 items-center gap-2">
                   <span
                     className="size-2 shrink-0 rounded-[2px]"
                     style={{ backgroundColor: usageRankColor(index) }}
                   />
-                  <span className="truncate">{session.title}</span>
+                  <span className="truncate" title={session.title}>
+                    {session.title}
+                  </span>
                 </span>
               </td>
               <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>

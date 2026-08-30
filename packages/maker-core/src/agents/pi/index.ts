@@ -68,8 +68,11 @@ import {
   type MainOwnedSendContext,
   type PiExtraSpawnConfig,
   type PiExtensionUiStrings,
+  type PiNativeApi,
   type PiNativeModelSpec,
   type PiNativeProviderSpec,
+  type PiSubagentRunnerLaunchRequest,
+  type PiSubagentRunnerProcess,
   type SendOptions,
   type StartSessionOptions,
   type TurnPermissionPolicy,
@@ -81,7 +84,7 @@ import {
   CINDY_SUBAGENT_ENV,
   CINDY_SUBAGENT_EXTENSION_FILENAME,
   CINDY_SUBAGENT_EXTENSION_SOURCE,
-  CINDY_SUBAGENT_TOOL_NAME,
+  CINDY_SUBAGENT_RUNNER_CONTROL_TITLE,
 } from './cindy-subagent-source.js';
 import {
   CINDY_SUBAGENT_RUNNER_FILENAME,
@@ -94,12 +97,16 @@ import {
   controlPiSubagentRuns,
   countPiSubagentRunDirectories,
   isPiSubagentTerminal,
+  killVerifiedPiSubagentRunner,
   listPiSubagentRunDiagnostics,
   listPiSubagentRunDirectoryIds,
   listPiSubagentRuns,
   piSubagentRunRoot,
   piSubagentApprovalScope,
   piSubagentRuntimeOwnerId,
+  PiSubagentRunnerExitUnconfirmedError,
+  PiSubagentRunnerHostExitedError,
+  recordPiSubagentRunnerFailure,
   resumePiSubagentRun,
   stopPiSubagentRunsForAccountBoundary,
   syncPiSubagentPermissions,
@@ -146,7 +153,7 @@ import {
   rewriteContextModeDoctorPath,
   shouldRewriteContextModeDoctorNotification,
 } from './context-mode-doctor-path.js';
-import { AutoCompactController, isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
+import { isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
@@ -172,6 +179,10 @@ import {
   createPiTranslateContext,
   disposePiTranslateContext,
   isFailedOrAbortedPiCompaction,
+  markPiHostAbortRequested,
+  markPiHostTurnStartPending,
+  rollbackPiHostAbortRequest,
+  rollbackPiHostTurnStart,
   translatePiEvent,
   usageSnapshotOf,
   type PiTranslateContext,
@@ -220,14 +231,22 @@ const PI_PROVIDER_ID = 'cindy';
 // 路由,必须在本会话解析出的 nativeProviders 里;缺席时不得静默回落网关(见 startSession /
 // setModel 的 fail-closed)。xAI 已改走 Pi 原生 provider，同样必须解析成功。
 const NON_BYOM_PROVIDER_IDS = new Set([PI_PROVIDER_ID, 'xd', 'openai', 'anthropic']);
+
+function isExplicitPiGatewayProviderId(providerId: string | null | undefined): boolean {
+  return providerId === null || providerId === 'xd' || providerId === PI_PROVIDER_ID;
+}
+
 const PI_API_KEY_ENV = 'CINDY_PI_API_KEY';
 const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
 const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
 const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
+const PI_LEGACY_SUBAGENT_NODE_ENV = 'CINDY_PI_SUBAGENT_NODE';
+const PI_ELECTRON_RUN_AS_NODE_ENV = 'ELECTRON_RUN_AS_NODE';
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
 const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
+const PI_SUBAGENT_RUN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 /** 轮 42 P1:models.json 内容指纹(远端 daemon 启动身份的一部分, 值无凭证)。 */
 const PI_MODELS_JSON_HASH_ENV = 'CINDY_PI_MODELS_JSON_HASH';
@@ -249,6 +268,16 @@ type PiPermissionResolution =
   | 'user-deny'
   | 'auto-review-deny'
   | 'system-deny';
+
+/** Remote paths belong to the execution host, never the controller filesystem. */
+export function constrainPiDestructivePathResolution(
+  action: ReviewableAction,
+  remote: boolean,
+): ReviewableAction {
+  return remote && action.kind === 'exec'
+    ? { ...action, destructivePathResolution: 'unavailable' }
+    : action;
+}
 
 /**
  * baseUrl 是否指向本机 loopback(远端会话不可达)。与 host 侧 isLoopbackUrl 同口径:
@@ -313,10 +342,31 @@ const PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS = new Set([
 /** 分支摘要同样可能触发一次完整 LLM 调用。 */
 const PI_BRANCH_NAVIGATION_TIMEOUT_MS = 600_000;
 
-/** PI 的 OpenAI Responses client 以 baseUrl 为 `/v1` 根；Anthropic client 则自行追加 `/v1/messages`。 */
-function piResponsesBaseUrl(endpoint: string): string {
+/** PI 的 OpenAI client 以 baseUrl 为 `/v1` 根；Anthropic client 则自行追加 `/v1/messages`。 */
+function piOpenAiBaseUrl(endpoint: string): string {
   const trimmed = endpoint.replace(/\/+$/, '');
   return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+}
+
+type PiGatewayApi = Exclude<PiNativeApi, 'openai-codex-responses'>;
+
+function isPiGatewayApi(value: PiNativeApi | null | undefined): value is PiGatewayApi {
+  return (
+    value === 'anthropic-messages' ||
+    value === 'openai-responses' ||
+    value === 'openai-completions' ||
+    value === 'google-generative-ai'
+  );
+}
+
+function piGatewayModelBaseUrl(endpoint: string, api: PiGatewayApi): string | undefined {
+  if (api === 'anthropic-messages') return undefined;
+  if (api !== 'google-generative-ai') return piOpenAiBaseUrl(endpoint);
+  const trimmed = endpoint.replace(/\/+$/, '');
+  if (trimmed.endsWith('/v1beta')) return trimmed;
+  return trimmed.endsWith('/v1')
+    ? `${trimmed.slice(0, -'/v1'.length)}/v1beta`
+    : `${trimmed}/v1beta`;
 }
 
 class PiImageInputUnsupportedError extends Error {
@@ -442,6 +492,21 @@ function effortToPiThinkingLevel(effort: Effort): string {
 }
 
 const PI_NATIVE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/**
+ * Last-resort maxTokens for models that provide no authoritative output limit.
+ * Explicit Model Access / native-provider metadata always wins. Pi separately clamps each
+ * request to the remaining context window, so keep this fallback context-bounded as well.
+ *
+ * This is deliberately a compatibility fallback rather than a claimed model capability:
+ * unknown upstreams may still have a lower output limit and should publish explicit metadata.
+ * Raising the legacy gateway/native defaults (32k/16k) to 64k prevents known long-thinking
+ * turns from being cut off solely by Cindy's synthetic value without making the fallback
+ * unbounded.
+ */
+function piMaxTokensFallback(contextWindow: number | undefined): number {
+  return contextWindow && contextWindow > 0 ? Math.min(contextWindow, 65_536) : 65_536;
+}
 
 /** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
 function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
@@ -932,14 +997,25 @@ async function buildPiPrompt(message: UserMessage, opts?: { remote?: boolean }):
   return { text: textParts.join(' ').trim(), images };
 }
 
-function piExtraDirsPrompt(dirs: readonly string[]): string {
-  if (dirs.length === 0) return '';
-  return [
-    '<cindy-extra-reference-directories>',
-    'The following absolute directories are available as read-only references. Do not modify them:',
-    ...dirs.map((dir) => `- ${dir}`),
-    '</cindy-extra-reference-directories>',
-  ].join('\n');
+function piExtraDirsPrompt(readOnlyDirs: readonly string[], writableDirs: readonly string[]): string {
+  const sections: string[] = [];
+  if (readOnlyDirs.length > 0) {
+    sections.push(
+      '<cindy-extra-reference-directories>',
+      'The following absolute directories are available as read-only references. Do not modify them:',
+      ...readOnlyDirs.map((dir) => `- ${dir}`),
+      '</cindy-extra-reference-directories>',
+    );
+  }
+  if (writableDirs.length > 0) {
+    sections.push(
+      '<cindy-extra-writable-directories>',
+      'The user explicitly allowed reading and writing inside these absolute directories:',
+      ...writableDirs.map((dir) => `- ${dir}`),
+      '</cindy-extra-writable-directories>',
+    );
+  }
+  return sections.join('\n');
 }
 
 interface FailedPiStartupCleanup {
@@ -948,16 +1024,149 @@ interface FailedPiStartupCleanup {
   cleanupLocal?: () => void;
 }
 
+export function buildPiSettingsJsonContent(
+  contextWindow: number,
+  piCompactionPct?: number,
+): string {
+  const effectiveContextWindow = contextWindow > 0 ? contextWindow : 128_000;
+  const reserveTokens = piCompactionPct === undefined
+    ? undefined
+    : Math.max(1, Math.ceil(effectiveContextWindow * (1 - piCompactionPct / 100)));
+  return JSON.stringify({
+    transport: 'sse',
+    retry: {
+      enabled: true,
+      maxRetries: 6,
+      baseDelayMs: 2000,
+      provider: { maxRetries: 0 },
+    },
+    ...(reserveTokens !== undefined
+      ? { compaction: { reserveTokens } }
+      : {}),
+  }, null, 2) + '\n';
+}
+
 export class PiAgent extends BaseAgent {
   readonly kind: AgentKind = 'pi';
   readonly capabilities: Capabilities;
   private readonly failedStartupCleanups = new Map<string, FailedPiStartupCleanup>();
   private readonly inFlightStartups = new Set<Promise<AgentSessionHandle>>();
+  private readonly subagentRunners = new Map<string, PiSubagentRunnerProcess>();
+  private readonly subagentRunnerExitErrors = new Map<string, string>();
   private disposeStarted = false;
 
   constructor(deps: AgentDeps) {
     super(deps);
     this.capabilities = this.buildCapabilities(PiAgent.baseCapabilities());
+  }
+
+  private async launchSubagentRunner(request: PiSubagentRunnerLaunchRequest): Promise<void> {
+    const spawnRunner = this.deps.spawnPiSubagentRunner;
+    if (!spawnRunner) throw new Error('PI Subagent runner host is unavailable');
+    if (this.subagentRunners.has(request.runId)) return;
+
+    const runner = spawnRunner(request);
+    this.subagentRunners.set(request.runId, runner);
+    const recordFailure = (message: string): void => {
+      this.subagentRunnerExitErrors.set(request.runId, message);
+      if (this.subagentRunners.get(request.runId) === runner) {
+        this.subagentRunners.delete(request.runId);
+      }
+      void recordPiSubagentRunnerFailure(request.runDir, message).catch((error) => {
+        this.deps.logger.warn('pi Subagent runner failure status could not be persisted', {
+          runId: request.runId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
+    runner.once('error', (error) => {
+      recordFailure(`Durable runner failed: ${error.message}`);
+    });
+    runner.once('exit', (code, signal) => {
+      recordFailure(
+        `Durable runner exited${signal ? ` with signal ${signal}` : ''}`
+          + (typeof code === 'number' ? ` with code ${code}` : ''),
+      );
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timedOut = false;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        void this.requestSubagentRunnerExit(runner, request.runId).then((confirmed) => {
+          finish(confirmed
+            ? new Error('PI Subagent runner did not become ready')
+            : new PiSubagentRunnerExitUnconfirmedError(
+              'PI Subagent runner did not become ready',
+            ));
+        });
+      }, 5_000);
+      runner.once('spawn', () => {
+        if (!timedOut) finish();
+      });
+      runner.once('error', (error) => finish(error));
+      runner.once('exit', (code, signal) => {
+        finish(new Error(
+          `PI Subagent runner exited before ready${signal ? ` (${signal})` : ''}`
+            + (typeof code === 'number' ? ` (exit ${code})` : ''),
+        ));
+      });
+    });
+  }
+
+  private requestSubagentRunnerExit(
+    runner: PiSubagentRunnerProcess,
+    runId: string,
+  ): Promise<boolean> {
+    const dropHandle = (): void => {
+      if (this.subagentRunners.get(runId) === runner) {
+        this.subagentRunners.delete(runId);
+      }
+    };
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (ok: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(termTimer);
+        if (killTimer) clearTimeout(killTimer);
+        resolve(ok);
+      };
+      const onGone = (): void => {
+        dropHandle();
+        finish(true);
+      };
+      runner.once('exit', onGone);
+      runner.once('close', onGone);
+      runner.kill('SIGTERM');
+      const termTimer = setTimeout(() => {
+        runner.kill('SIGKILL');
+        killTimer = setTimeout(() => finish(false), 200);
+      }, 1_500);
+    }).then((confirmed) => {
+      // Unconfirmed exit keeps the handle so a later terminate or account-boundary
+      // sweep can still reach the live process. A delayed exit/close still drops it.
+      if (confirmed) dropHandle();
+      return confirmed;
+    });
+  }
+
+  private async terminateSubagentRunner(runId: string, runDir: string): Promise<boolean> {
+    const runner = this.subagentRunners.get(runId);
+    if (!runner) {
+      const status = (await listPiSubagentRuns(path.dirname(runDir))).find((entry) => entry.runId === runId);
+      return status ? killVerifiedPiSubagentRunner(status) : false;
+    }
+    return this.requestSubagentRunnerExit(runner, runId);
   }
 
   private async retryFailedStartupCleanup(
@@ -984,6 +1193,10 @@ export class PiAgent extends BaseAgent {
 
   override async dispose(): Promise<void> {
     this.disposeStarted = true;
+    const runnerSnapshot = Array.from(this.subagentRunners.entries());
+    const runnerResults = await Promise.allSettled(
+      runnerSnapshot.map(([runId, runner]) => this.requestSubagentRunnerExit(runner, runId)),
+    );
     const startupSnapshot = Array.from(this.inFlightStartups);
     await Promise.allSettled(startupSnapshot);
 
@@ -995,9 +1208,20 @@ export class PiAgent extends BaseAgent {
         this.retryFailedStartupCleanup(sessionId, entry),
       ),
     );
-    const errors = results.flatMap((result) =>
-      result.status === 'rejected' ? [result.reason] : [],
-    );
+    const errors = [
+      ...runnerResults.flatMap((result) => {
+        if (result.status === 'rejected') return [result.reason];
+        if (!result.value) {
+          return [new PiSubagentRunnerExitUnconfirmedError(
+            'PI Subagent runner did not confirm exit',
+          )];
+        }
+        return [];
+      }),
+      ...results.flatMap((result) =>
+        result.status === 'rejected' ? [result.reason] : [],
+      ),
+    ];
     if (errors.length > 0) {
       throw new AggregateError(errors, 'Pi startup process cleanup remains unconfirmed');
     }
@@ -1093,6 +1317,7 @@ export class PiAgent extends BaseAgent {
         },
       },
       extraDirs: { supported: true },
+      writableDirs: { supported: true },
       // pi 原生 export_html RPC:自带 export-html 渲染器,离线、无网关。
       sessionHtmlExport: { supported: true },
       // pi 原生 compact RPC:手动压缩(可带聚焦指令,调 LLM 生成摘要)。
@@ -1178,6 +1403,26 @@ export class PiAgent extends BaseAgent {
     };
   }
 
+  private buildCurrentPiSettingsJson(contextWindow?: number, piCompactionPct?: number): string {
+    return buildPiSettingsJsonContent(
+      contextWindow && contextWindow > 0 ? contextWindow : 128_000,
+      piCompactionPct,
+    );
+  }
+
+  private async writePiRuntimeSettings(
+    agentHome: string,
+    opts: { fileOps?: PiRemoteFileOps; contextWindow?: number; piCompactionPct?: number } = {},
+  ): Promise<void> {
+    const settingsJsonPath = joinRemotePosixPath(agentHome, 'settings.json');
+    const settingsJsonContent = this.buildCurrentPiSettingsJson(opts.contextWindow, opts.piCompactionPct);
+    if (opts.fileOps) {
+      await opts.fileOps.writeFile(settingsJsonPath, settingsJsonContent);
+      return;
+    }
+    await fs.writeFile(settingsJsonPath, settingsJsonContent, { mode: 0o600 });
+  }
+
   /**
    * 生成 agentHome/models.json:
    *   - 网关模型 → 单一 provider `cindy`(baseUrl = compat proxy);
@@ -1195,11 +1440,15 @@ export class PiAgent extends BaseAgent {
       fileOps?: PiRemoteFileOps;
       preview?: boolean;
       offlineValidationOnly?: boolean;
+      /** Current model context window used to translate the Pi percentage setting. */
+      contextWindow?: number;
+      /** Session-frozen Pi auto-compact percentage. Do not re-read the live getter. */
+      piCompactionPct?: number;
     } = {},
   ): Promise<{
     gatewayImageInputByModel: Map<string, boolean>;
-    gatewayApiByModel: Map<string, 'anthropic-messages' | 'openai-responses'>;
-    /** models.json 内容 sha256 —— 远端 daemon 启动身份的一部分(轮 42 P1)。 */
+    gatewayApiByModel: Map<string, PiGatewayApi>;
+    /** models.json + settings.json 内容 sha256 —— 远端 daemon 启动身份的一部分。 */
     modelsJsonHash: string;
   }> {
     // 远端:baseUrl 用 host 注入的 upstream endpoint(remoteEndpoint,gateway key 同源),
@@ -1226,43 +1475,76 @@ export class PiAgent extends BaseAgent {
         ? [...publicModels, retainedRuntimeModel]
         : publicModels;
     const gatewayImageInputByModel = new Map<string, boolean>();
-    const gatewayApiByModel = new Map<string, 'anthropic-messages' | 'openai-responses'>();
+    const gatewayApiByModel = new Map<string, PiGatewayApi>();
     const models = runtimeModels.flatMap((publicModel: ModelDescriptor) => {
       // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
       // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
       // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
       // host 未注入 resolver 或只有 BYOM 条目时保留旧 flat fallback。
       const m = this.deps.resolvePiGatewayModelDescriptor?.(gatewayProviderId, publicModel.id) ?? publicModel;
-      const resolvedApi = this.deps.resolvePiGatewayModelApi?.(gatewayProviderId, m.id);
+      const resolverContext = { remote: opts.remote === true };
+      const resolvedSpec = this.deps.resolvePiGatewayModelSpec?.(gatewayProviderId, m.id, resolverContext);
+      const resolvedApi = resolvedSpec?.api ?? this.deps.resolvePiGatewayModelApi?.(
+        gatewayProviderId,
+        m.id,
+        resolverContext,
+      );
       if (
+        resolvedSpec === null ||
         resolvedApi === null ||
-        (resolvedApi !== undefined && resolvedApi !== 'anthropic-messages' && resolvedApi !== 'openai-responses')
+        (resolvedApi !== undefined && !isPiGatewayApi(resolvedApi))
       ) {
-        throw new Error(`Model Access v3 did not provide a Pi wire protocol for model: ${m.id}`);
+        // Fail this Gateway member closed without aborting unrelated subscription/BYOM sessions
+        // that happen to expose the same flattened model id.
+        return [];
       }
-      // undefined means no protocol was declared for this concrete gateway route. Native
+      // undefined means Model Access did not declare this concrete Gateway membership. Native
       // subscription/BYOM models remain in their own provider blocks; normal sessions must not
-      // copy them into `cindy` under a guessed Claude protocol. Offline fork only needs Pi to
-      // parse a historical JSONL file and never sends a model request, so it gets a local-only
-      // structural placeholder.
+      // copy them into `cindy`. Offline fork only parses historical JSONL and gets a structural
+      // placeholder without creating a live request route.
       if (resolvedApi === undefined && !opts.offlineValidationOnly) return [];
       const api = resolvedApi ?? 'anthropic-messages';
+      if (opts.remote && api === 'google-generative-ai') {
+        // Pi's Google SDK synthesizes x-goog-api-key from the provider key. Local sessions pass
+        // through the Cindy proxy, which strips that header; remote sessions currently bypass the
+        // proxy and would leak the Gateway credential as a second auth header. Fail this route
+        // closed until remote Pi can use an equivalent header-sanitizing forwarder.
+        this.deps.logger.warn('pi: remote Google Gateway route disabled without header sanitizer', {
+          modelId: m.id,
+        });
+        return [];
+      }
+      const modelBaseUrl = endpoint ? piGatewayModelBaseUrl(endpoint, api) : undefined;
       gatewayApiByModel.set(m.id, api);
       const supportsImageInput = m.supportsImageInput === true;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
       return [{
         id: m.id,
         name: m.displayName,
-        // Pi 0.83 支持同一 provider 下逐模型覆盖 API/baseUrl。provider 身份仍是
-        // `cindy`；Model Access v3 让 PI 固定命中 Gateway 的 `/v1/responses` 前门。
-        // 该前门可由 Gateway 翻译到不同上游，不代表底层模型原生实现 Responses。
+        // Pi 0.83 支持同一 provider 下逐模型覆盖 API/baseUrl。Host 按 Cindy Server >
+        // 本地 Pi 目录 > Cindy AI Gateway 顺序解析 API，并仅注入协议一致的 compat。
         api,
-        ...(api === 'openai-responses' && endpoint ? { baseUrl: piResponsesBaseUrl(endpoint) } : {}),
+        ...(modelBaseUrl ? { baseUrl: modelBaseUrl } : {}),
+        ...(api === 'google-generative-ai'
+          ? {
+              headers: {
+                authorization: `Bearer $${PI_API_KEY_ENV}`,
+                'x-goog-api-key': `$${PI_API_KEY_ENV}`,
+              },
+            }
+          : {}),
+        ...(resolvedSpec?.thinkingLevelMap
+          ? { thinkingLevelMap: { ...resolvedSpec.thinkingLevelMap } }
+          : {}),
+        ...(resolvedSpec?.compat ? { compat: structuredClone(resolvedSpec.compat) } : {}),
+        ...(resolvedSpec?.samplingParams
+          ? { samplingParams: structuredClone(resolvedSpec.samplingParams) }
+          : {}),
         reasoning: m.efforts.length > 0,
         input: supportsImageInput ? ['text', 'image'] : ['text'],
         // Model Access v3 requires this value; never replace the server limit with a client guess.
         contextWindow: m.contextWindow,
-        maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
+        maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : piMaxTokensFallback(m.contextWindow),
         // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
         cost: {
           input: m.cost?.input ?? 0,
@@ -1277,7 +1559,7 @@ export class PiAgent extends BaseAgent {
         name: 'Cindy AI',
         baseUrl: endpoint ?? 'http://127.0.0.1:0',
         // Structural provider default for Pi's models.json schema only. Every selectable Cindy
-        // gateway model above carries its authoritative model-level api from Model Access v3.
+        // gateway model above carries its resolved model-level API.
         api: 'anthropic-messages',
         apiKey: `$${PI_API_KEY_ENV}`,
         // 本地 loopback compat proxy 用 session headers 做订阅 OAuth 注入;远端打真上游
@@ -1300,21 +1582,24 @@ export class PiAgent extends BaseAgent {
       }
       const nativeModels = (
         np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true) : np.models
-      ).map((m) => ({
-        id: m.wireId ?? m.id,
-        name: m.name ?? m.id,
-        ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
-        ...(m.headers && Object.keys(m.headers).length > 0 ? { headers: m.headers } : {}),
-        ...(m.api ? { api: m.api } : {}),
-        reasoning: m.reasoning ?? false,
-        ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
-        input: m.input ?? ['text'],
-        contextWindow: m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
-        maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : 16_000,
-        ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
-        ...(m.compat ? { compat: structuredClone(m.compat) } : {}),
-        ...(m.samplingParams ? { samplingParams: structuredClone(m.samplingParams) } : {}),
-      }));
+      ).map((m) => {
+        const contextWindow = m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000;
+        return {
+          id: m.wireId ?? m.id,
+          name: m.name ?? m.id,
+          ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
+          ...(m.headers && Object.keys(m.headers).length > 0 ? { headers: m.headers } : {}),
+          ...(m.api ? { api: m.api } : {}),
+          reasoning: m.reasoning ?? false,
+          ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
+          input: m.input ?? ['text'],
+          contextWindow,
+          maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
+          ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
+          ...(m.compat ? { compat: structuredClone(m.compat) } : {}),
+          ...(m.samplingParams ? { samplingParams: structuredClone(m.samplingParams) } : {}),
+        };
+      });
       if (!np.inheritModels && !np.api) {
         throw new Error(`pi: native provider '${np.id}' has no default api`);
       }
@@ -1330,12 +1615,20 @@ export class PiAgent extends BaseAgent {
     }
     const modelsJsonPath = joinRemotePosixPath(agentHome, 'models.json');
     const modelsJsonContent = JSON.stringify({ providers }, null, 2) + '\n';
-    const modelsJsonHash = createHash('sha256').update(modelsJsonContent).digest('hex');
     const settingsJsonPath = joinRemotePosixPath(agentHome, 'settings.json');
     // The native ChatGPT adapter prefers WebSocket in auto mode. Cindy's
     // authenticated loopback proxy is an HTTP/SSE boundary, so pin SSE for the
     // isolated embedded runtime. Other PI providers ignore this transport knob.
-    const settingsJsonContent = JSON.stringify({ transport: 'sse' }, null, 2) + '\n';
+    // Agent-level retries stay with Pi (provider maxRetries stays 0 — Pi docs:
+    // SDK retries can swallow quota errors before the agent sees them).
+    const settingsJsonContent = this.buildCurrentPiSettingsJson(opts.contextWindow, opts.piCompactionPct);
+    // 远端 launch identity 必须覆盖进程启动才读的快照。只 hash models.json 时，
+    // retry/transport/compaction 改写会落到旧 configHome，daemon 纯 attach。
+    const modelsJsonHash = createHash('sha256')
+      .update(modelsJsonContent)
+      .update('\n')
+      .update(settingsJsonContent)
+      .digest('hex');
     if (!opts.preview) {
       // 诊断(排查 LAZY_CREATE_FAILED):远端写前留痕 —— 确认 writeModelsJson 是否
       // 执行、endpoint 是否有值、路径形态。
@@ -1365,9 +1658,8 @@ export class PiAgent extends BaseAgent {
     return {
       gatewayImageInputByModel,
       gatewayApiByModel,
-      // 轮 42 P1(codex-connector):models.json 内容 hash 纳入远端 daemon 启动身份
-      // —— BYOM baseUrl/wire 或 gateway endpoint 变更会改写此文件, 但 env/cmd
-      // 可能不变; 不加这个 daemon 会误判纯 attach 用旧配置。
+      // 远端 daemon 启动身份:models.json + settings.json。BYOM/gateway 或 retry
+      // 策略变更都必须杀旧进程，不能纯 attach 沿用内存里的旧快照。
       modelsJsonHash,
     };
   }
@@ -1403,6 +1695,7 @@ export class PiAgent extends BaseAgent {
     assertRemotePiContextProfileAvailable(opts.remoteHostId, opts.model, opts.providerId);
     const reviewMode = opts.reviewMode === true;
     const remote = Boolean(opts.remoteHostId);
+    const sessionPiAutoCompactPct = this.deps.runtimeConfig.piAutoCompactThresholdPct;
 
     // BYOM:host 解析当前会话可用的原生 provider(用户自定义/本地模型)+ 需注入的 env(keys)。
     // 缺省 → 空,只有网关 provider `cindy`(现状不变)。失败不致命,降级为无原生 provider。
@@ -1584,6 +1877,8 @@ export class PiAgent extends BaseAgent {
         });
       }
     }
+    const startupContextWindow =
+      selectedRuntimeModel?.contextWindow ?? publicRuntimeModel?.contextWindow ?? 128_000;
 
     // 普通远端会话直连网关(remoteEndpoint),不生成本地 proxy token。只有显式声明
     // hostProxyForward 的 provider（当前为 xAI）仍通过 Desktop compat proxy：
@@ -1708,8 +2003,14 @@ export class PiAgent extends BaseAgent {
     // authority; adding a guessed gateway candidate can make a bare alias pick
     // the current `cindy` provider and leak an invalid unnamespaced model id.
     const routedGatewaySubagentModels = gatewaySubagentModels.filter((model) => {
-      const api = this.deps.resolvePiGatewayModelApi?.(PI_PROVIDER_ID, model.id);
-      return api === 'anthropic-messages' || api === 'openai-responses';
+      const resolverContext = { remote };
+      const spec = this.deps.resolvePiGatewayModelSpec?.(PI_PROVIDER_ID, model.id, resolverContext);
+      const api = spec?.api ?? this.deps.resolvePiGatewayModelApi?.(
+        PI_PROVIDER_ID,
+        model.id,
+        resolverContext,
+      );
+      return spec !== null && isPiGatewayApi(api);
     });
     const gatewaySubagentRouteKey = 'cindy-gateway';
     const gatewaySubagentProxyToken =
@@ -1887,9 +2188,9 @@ export class PiAgent extends BaseAgent {
     // → 纯 attach 复用同一路径, 无并发写; envHash 不同(如模型变更) → kill
     // 先于 spawn, 旧进程已死, 路径复用安全。本地会话无 envHash 约束, 保持
     // randomBytes 隔离(多实例并发启动)。
-    // 远端再叠 models.json hash:startSession 在 pi/ensure 之前就会写
-    // models.json, 若只按 sessionId 分目录, 另一实例改路由会先覆盖仍在跑的
-    // 旧 Pi / 子代理热读快照。
+    // 远端再叠 models.json+settings.json hash:startSession 在 pi/ensure 之前就会写
+    // 这两份快照。若只按 sessionId 分目录, 另一实例改路由或 retry 策略会先覆盖
+    // 仍在跑的旧 Pi / 子代理热读快照。
     let configHome = remote
       ? joinRemotePosixPath(agentHome, 'run-tmp', stableSessionPathSegment(opts.sessionId))
       : joinRemotePosixPath(agentHome, 'run-tmp', randomBytes(8).toString('hex'));
@@ -1925,6 +2226,8 @@ export class PiAgent extends BaseAgent {
         remote,
         fileOps,
         preview: true,
+        contextWindow: startupContextWindow,
+        piCompactionPct: sessionPiAutoCompactPct,
       });
       configHome = joinRemotePosixPath(
         agentHome,
@@ -1937,8 +2240,19 @@ export class PiAgent extends BaseAgent {
       nativeProviders,
       retainedRuntimeModel,
       authProviderId,
-      { remote, fileOps },
+      { remote, fileOps, contextWindow: startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
     );
+    const explicitlyRequestedGateway = isExplicitPiGatewayProviderId(opts.providerId);
+    if (
+      explicitlyRequestedGateway &&
+      initialProvider === PI_PROVIDER_ID &&
+      !gatewayApiByModel.has(opts.model)
+    ) {
+      throw new Error(
+        `[PI_GATEWAY_PROTOCOL_UNAVAILABLE] Cindy Gateway has no safe Pi route for model '${opts.model}'` +
+          (remote ? ' in a remote session' : ''),
+      );
+    }
     const bashPackageHome = joinRemotePosixPath(configHome, 'bash-package-home');
     await mkdirp(bashPackageHome);
     const sessionDir = joinRemotePosixPath(agentHome, 'sessions');
@@ -1966,7 +2280,11 @@ export class PiAgent extends BaseAgent {
     // the remote host while Cindy observes and controls an unrelated local
     // directory. Keep the capability absent until the wire protocol owns those
     // files remotely end-to-end.
-    const localSubagentSupported = !reviewMode && !remote;
+    const localSubagentSupported = Boolean(
+      !reviewMode
+      && !remote
+      && this.deps.spawnPiSubagentRunner,
+    );
     if (localSubagentSupported) {
       await writeFile(subagentExtensionPath, CINDY_SUBAGENT_EXTENSION_SOURCE);
       await writeFile(subagentRunnerPath, CINDY_SUBAGENT_RUNNER_SOURCE, 0o600);
@@ -2028,6 +2346,7 @@ export class PiAgent extends BaseAgent {
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
     let permissionMode = reviewMode ? 'ask' : normalizePermissionMode(opts.permissionMode);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
+    let mutableWritableDirs = [...(opts.writableDirs ?? [])];
     const reviewReadGrants = reviewMode ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? []) : [];
     const reviewReadPaths = reviewReadGrants.map((grant) => grant.realPath);
     // Keep ordinary permission files shape-compatible with older Cindy/Pi
@@ -2043,6 +2362,7 @@ export class PiAgent extends BaseAgent {
     type PermissionSnapshot = {
       mode: 'ask' | 'auto' | 'bypassPermissions';
       readOnlyRoots: string[];
+      writableRoots: string[];
       reviewReadPaths?: string[];
       reviewOnly?: true;
     };
@@ -2050,11 +2370,13 @@ export class PiAgent extends BaseAgent {
     let requestedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
+      writableRoots: [...mutableWritableDirs],
       ...reviewPathSnapshot,
     };
     let persistedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
+      writableRoots: [...mutableWritableDirs],
       ...reviewPathSnapshot,
     };
     const permissionSnapshotHash = createHash('sha256').update(JSON.stringify(requestedPermissionSnapshot)).digest('hex').slice(0, 16);
@@ -2088,10 +2410,24 @@ export class PiAgent extends BaseAgent {
     // 仅文件写按代际串行,被更晚意图取代的写直接跳过,保证文件最终收敛到最新意图、绝不 stale 覆盖。
     let permissionWriteChain: Promise<void> = Promise.resolve();
     let permissionWriteGen = 0;
+    let autoReviewDirectoryGeneration = 0;
+    const directoryPermissionsPendingPersistence = (): boolean => (
+      requestedPermissionSnapshot.readOnlyRoots.length !== mutableExtraDirs.length
+      || requestedPermissionSnapshot.readOnlyRoots.some((dir, index) => dir !== mutableExtraDirs[index])
+      || requestedPermissionSnapshot.writableRoots.length !== mutableWritableDirs.length
+      || requestedPermissionSnapshot.writableRoots.some((dir, index) => dir !== mutableWritableDirs[index])
+    );
     const writePermissionFile = (next: PermissionSnapshot): Promise<void> => {
+      const directoryPermissionsChanged =
+        requestedPermissionSnapshot.readOnlyRoots.length !== next.readOnlyRoots.length
+        || requestedPermissionSnapshot.readOnlyRoots.some((dir, index) => dir !== next.readOnlyRoots[index])
+        || requestedPermissionSnapshot.writableRoots.length !== next.writableRoots.length
+        || requestedPermissionSnapshot.writableRoots.some((dir, index) => dir !== next.writableRoots[index]);
+      if (directoryPermissionsChanged) autoReviewDirectoryGeneration++;
       requestedPermissionSnapshot = {
         mode: next.mode,
         readOnlyRoots: [...next.readOnlyRoots],
+        writableRoots: [...next.writableRoots],
         ...reviewPathSnapshot,
       };
       // 收紧必须立刻约束 host 侧审批门；等待磁盘 I/O 才改闭包会留下一个 Full access
@@ -2104,6 +2440,7 @@ export class PiAgent extends BaseAgent {
       const snapshot = {
         ...requestedPermissionSnapshot,
         readOnlyRoots: [...requestedPermissionSnapshot.readOnlyRoots],
+        writableRoots: [...requestedPermissionSnapshot.writableRoots],
         ...reviewPathSnapshot,
       };
       const run = permissionWriteChain.then(async () => {
@@ -2139,6 +2476,7 @@ export class PiAgent extends BaseAgent {
               // 放宽失败时 permissionMode 仍是旧的已提交 mode，同样达到回滚效果。
               mode: permissionMode,
               readOnlyRoots: [...persistedPermissionSnapshot.readOnlyRoots],
+              writableRoots: [...persistedPermissionSnapshot.writableRoots],
               ...reviewPathSnapshot,
             };
           }
@@ -2149,9 +2487,11 @@ export class PiAgent extends BaseAgent {
         if (gen === permissionWriteGen) {
           permissionMode = snapshot.mode;
           mutableExtraDirs = [...snapshot.readOnlyRoots];
+          mutableWritableDirs = [...snapshot.writableRoots];
           persistedPermissionSnapshot = {
             mode: snapshot.mode,
             readOnlyRoots: [...snapshot.readOnlyRoots],
+            writableRoots: [...snapshot.writableRoots],
             ...reviewPathSnapshot,
           };
         }
@@ -2188,7 +2528,7 @@ export class PiAgent extends BaseAgent {
      * 用它当"撤销开关"(上一版就是这么用的,那是个空操作,review 连点两轮)。运行期要收回子代理
      * 能力只有一条可证明有效的路:终止会话。
      */
-    let subagentRoutingEnabled = localSubagentSupported;
+    const subagentRoutingEnabled = localSubagentSupported;
     const writeSubagentRuntimeFile = async (
       next: { model?: string; provider?: string; pending?: boolean }): Promise<boolean> => {
       const gen = ++subagentRuntimeWriteGen;
@@ -2320,7 +2660,7 @@ export class PiAgent extends BaseAgent {
       this.deps.runtimeConfig.systemPrompt?.trim(),
       ghostRosterPrompt.trim(),
       reviewMode ? undefined : opts.userPrompt?.trim(),
-      piExtraDirsPrompt(mutableExtraDirs),
+      piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs),
     ].filter((s): s is string => !!s && s.length > 0);
     const appendSystemPrompt = appendSections.join('\n\n');
 
@@ -2463,6 +2803,7 @@ export class PiAgent extends BaseAgent {
     let mutablePiProviderId = initialProvider;
     let mutableProviderId: string | null | undefined = opts.providerId ?? authProviderId;
     let activeEffortSnapshot = initialEffortSnapshot;
+    let mutableEffort: Effort | null = startupEffort ?? null;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
@@ -2563,6 +2904,17 @@ export class PiAgent extends BaseAgent {
     const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
     const autoReviewConfirmUndeliveredNotice = createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
     const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
+      // Directory grants become active only after their permission snapshot is
+      // durable. While persistence is pending, neither the requested roots nor
+      // the old runtime roots are a complete authorization view, so fail closed
+      // instead of letting a reviewer decision bridge that transaction window.
+      if (directoryPermissionsPendingPersistence()) {
+        return Promise.resolve({
+          verdict: 'ask',
+          reason: 'Directory permissions are still being persisted.',
+        });
+      }
+      const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'pi' as const,
@@ -2570,7 +2922,8 @@ export class PiAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         action,
-        workspaceRoots: [opts.workingDir, ...mutableExtraDirs],
+        workspaceRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+        writableRoots: [opts.workingDir, ...mutableWritableDirs],
         platform: opts.remoteHostId ? ('linux' as const) : process.platform,
       };
       const cacheKey = JSON.stringify(request);
@@ -2579,7 +2932,15 @@ export class PiAgent extends BaseAgent {
         pending = resolveAutoReviewDecision(request, this.deps.reviewAutoPermissionAction);
         autoReviewDecisionCache.set(cacheKey, pending);
       }
-      return pending;
+      return pending.then((decision) => (
+        directoryGeneration === autoReviewDirectoryGeneration
+          && !directoryPermissionsPendingPersistence()
+          ? decision
+          : {
+              verdict: 'ask',
+              reason: 'Directory permissions changed while this action was under review.',
+            }
+      ));
     };
     let closed = false;
     /**
@@ -2621,6 +2982,7 @@ export class PiAgent extends BaseAgent {
      * which is exactly what has to be over before the stop sweep runs.
      */
     const piSubagentApprovalWrites = new Set<Promise<void>>();
+    const inFlightSubagentLaunches = new Set<Promise<void>>();
     /**
      * Publish an approval answer, keeping its mailbox-write phase awaitable and
      * refusing the write itself if the account boundary went up in the meantime.
@@ -2920,19 +3282,48 @@ export class PiAgent extends BaseAgent {
       }
       let toolName = 'tool';
       let input: Record<string, unknown> = {};
+      let resolvedWritePath: string | null | undefined;
+      let resolvedWritableRoots: string[] | null | undefined;
       const approvalPayload = approval.method === 'input'
         ? approval.placeholder
         : approval.message;
       if (approval.title === 'cindy:permission' && approvalPayload) {
         try {
-          const payload = JSON.parse(approvalPayload) as { toolName?: unknown; input?: unknown };
+          const payload = JSON.parse(approvalPayload) as {
+            toolName?: unknown;
+            input?: unknown;
+            resolvedWritePath?: unknown;
+            resolvedWritableRoots?: unknown;
+          };
           if (typeof payload.toolName === 'string' && payload.toolName) toolName = payload.toolName;
           if (payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)) {
             input = payload.input as Record<string, unknown>;
           }
+          if (Object.hasOwn(payload, 'resolvedWritePath')) {
+            resolvedWritePath = typeof payload.resolvedWritePath === 'string'
+              && payload.resolvedWritePath.length > 0
+              ? payload.resolvedWritePath
+              : null;
+          }
+          if (Object.hasOwn(payload, 'resolvedWritableRoots')) {
+            resolvedWritableRoots = Array.isArray(payload.resolvedWritableRoots)
+              && payload.resolvedWritableRoots.length <= 64
+              && payload.resolvedWritableRoots.every(
+                (root) => typeof root === 'string' && root.length > 0,
+              )
+              ? payload.resolvedWritableRoots as string[]
+              : null;
+          }
         } catch {
           /* malformed permission payload remains a generic, deny-by-default prompt */
         }
+      }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritePath === undefined) {
+        // Durable child 可能来自旧 bridge；缺少执行期真实路径时不能回退成字面绿灯。
+        resolvedWritePath = null;
+      }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritableRoots === undefined) {
+        resolvedWritableRoots = null;
       }
       const requestId = `pi-subagent:${key}`;
       const turnPolicyForcePrompt = (() => {
@@ -3077,12 +3468,21 @@ export class PiAgent extends BaseAgent {
           return requestUserDecision({ forcePrompt: turnPolicyForcePrompt });
         }
         try {
-          const decision = await reviewAutoAction(normalizePiToolForAutoReview({
-            toolName,
-            input,
-            workspaceRoots: [opts.workingDir],
-            readRoots: [opts.workingDir, ...mutableExtraDirs],
-          }));
+          const action = constrainPiDestructivePathResolution(
+            normalizePiToolForAutoReview({
+              toolName,
+              input,
+              workspaceRoots: [opts.workingDir],
+              readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+              writableRoots: [opts.workingDir, ...mutableWritableDirs],
+            }),
+            Boolean(opts.remoteHostId),
+          );
+          if (action.kind === 'file-write') {
+            action.resolvedPath = resolvedWritePath;
+            action.resolvedWritableRoots = resolvedWritableRoots;
+          }
+          const decision = await reviewAutoAction(action);
           if (permissionMode !== 'auto' || turnPolicyForcePrompt) {
             return requestUserDecision({ forcePrompt: true });
           }
@@ -3260,18 +3660,9 @@ export class PiAgent extends BaseAgent {
     // preparePiExtraSpawnConfig 注册、但 handle 尚未交出,close() 不会跑 → 单独
     // 兜底注销 ctx 再抛(构造失败没有 proc 可关)。catch 必抛,故其后 proc 恒已赋值。
     let proc: PiRpcProcess;
-    const getAutoCompactThresholdPct = (): number | undefined =>
-      this.deps.runtimeConfig.autoCompactThresholdPct;
-    const autoCompactController =
-      getAutoCompactThresholdPct() === undefined
-        ? null
-        : new AutoCompactController({
-            logger: this.deps.logger.child('auto-compact'),
-            workdir: opts.workingDir,
-            agentKind: 'pi',
-            getThresholdPct: getAutoCompactThresholdPct,
-            compactWhenFull: Boolean(opts.remoteHostId),
-          });
+    // Pi owns automatic threshold and overflow compaction. Cindy only records a
+    // deterministic native failure so Desktop can rebuild before the next send.
+    let nativeAutoCompactNeedsRollover = false;
     // compact / 所有 prompt(/plan、分支切换、用户发送) / set_model / set_thinking_level
     // 共用一条双向串行链。只等 compact 再发控制 RPC 是单向的。
     let sessionRpcChain: Promise<void> = Promise.resolve();
@@ -3304,37 +3695,6 @@ export class PiAgent extends BaseAgent {
     };
     const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
       runExclusivePiRpc(() => requestPiCompact(instructions));
-    const maybeHostAutoCompact = (): void => {
-      if (closed || ctx.isStreaming) return;
-      if (!autoCompactController?.shouldCompactNow()) return;
-      const snapshot = autoCompactController.getLatestSnapshot();
-      this.deps.logger.info('pi host auto-compact triggered', {
-        threshold: autoCompactController.getCurrentThresholdPct(),
-        ratio: snapshot ? Number(snapshot.ratio.toFixed(3)) : undefined,
-        contextTokens: snapshot?.contextTokens,
-        contextWindow: snapshot?.contextWindow,
-      });
-      ctx.hostAutoCompactInFlight = true;
-      void runPiCompact()
-        .then((result) => {
-          if (result.noop) {
-            ctx.hostAutoCompactInFlight = false;
-            autoCompactController.onCompactCanceled('host_auto_compact_noop');
-          }
-        })
-        .catch((err) => {
-          ctx.hostAutoCompactInFlight = false;
-          const message = err instanceof Error ? err.message : String(err);
-          if (!opts.remoteHostId && isDeterministicHostCompactFailure(message)) {
-            autoCompactController.markNeedsRollover('host_auto_compact_failed');
-          } else {
-            autoCompactController.onCompactCanceled('host_auto_compact_failed');
-          }
-          this.deps.logger.warn('pi host auto-compact failed', {
-            message,
-          });
-        });
-    };
     let sessionTransport: PiTransport | undefined;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
     let runtimeCapabilityGeneration = 0;
@@ -3450,6 +3810,10 @@ export class PiAgent extends BaseAgent {
         this.deps.logger.warn('pi detached Subagent approval writes did not settle before the account boundary deadline', {
           sessionId: opts.sessionId,
         });
+      }
+      while (converged && inFlightSubagentLaunches.size > 0) {
+        const launches = Promise.allSettled([...inFlightSubagentLaunches]).then(() => 'done' as const);
+        converged = await Promise.race([launches, budget]) === 'done';
       }
       try {
         const stopped = await stopPiSubagentRunsForAccountBoundary(subagentRunRoot, {
@@ -3709,7 +4073,6 @@ export class PiAgent extends BaseAgent {
           [CINDY_SUBAGENT_ENV.runtimeFile]: subagentRuntimeFile,
           [CINDY_SUBAGENT_ENV.runRoot]: subagentRunRoot,
           [CINDY_SUBAGENT_ENV.runnerFile]: subagentRunnerPath,
-          [CINDY_SUBAGENT_ENV.nodeExecutable]: process.execPath,
           [CINDY_SUBAGENT_ENV.ownerId]: subagentRuntimeOwnerId,
         } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
@@ -3723,11 +4086,18 @@ export class PiAgent extends BaseAgent {
       // 不继承宿主进程里碰巧存在的同名变量；Windows 环境键大小写不敏感，必须先清掉
       // 所有 casing 再写入 host 校验并 stage 后的唯一绝对路径。
       for (const key of Object.keys(spawnEnv)) {
-        if (key.toLowerCase() === PI_MANAGED_RG_PATH_ENV.toLowerCase()) delete spawnEnv[key];
+        const normalizedKey = key.toLowerCase();
+        if (
+          normalizedKey === PI_MANAGED_RG_PATH_ENV.toLowerCase()
+          || normalizedKey === PI_LEGACY_SUBAGENT_NODE_ENV.toLowerCase()
+          || normalizedKey === PI_ELECTRON_RUN_AS_NODE_ENV.toLowerCase()
+        ) {
+          delete spawnEnv[key];
+        }
       }
       if (managedRipgrepPath) spawnEnv[PI_MANAGED_RG_PATH_ENV] = managedRipgrepPath;
-      // 轮 42 P1:models.json 内容 hash 进 spawn env —— 远端 daemon 的 envHash
-      // 覆盖它, 配置变更(models.json 改写)时条件 restart 判定生效, 不误 attach。
+      // models.json + settings.json 内容 hash 进 spawn env —— 远端 daemon 的
+      // envHash 覆盖它, 路由或 retry/transport 改写时条件 restart, 不误 attach。
       // 仅远端注入(本地无 envHash 机制); 值本身无凭证(只是内容指纹)。
       if (remote) {
         spawnEnv[PI_MODELS_JSON_HASH_ENV] = modelsJsonHash;
@@ -3773,7 +4143,8 @@ export class PiAgent extends BaseAgent {
               permissionMode,
               currentModelIds: [mutableModel, mutableWireModel],
               workspaceRoots: [opts.workingDir],
-              readRoots: [opts.workingDir, ...mutableExtraDirs],
+              readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+              writableRoots: [opts.workingDir, ...mutableWritableDirs],
               reviewAutoAction,
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
               notifyAutoReviewConfirmUndelivered: () => autoReviewConfirmUndeliveredNotice.notify(),
@@ -3786,6 +4157,62 @@ export class PiAgent extends BaseAgent {
               remote: Boolean(opts.remoteHostId),
               allowPiPackageManagement,
               piPackageManagementToken,
+              controlSubagentRunner: async (action, runId) => {
+                if (!localSubagentSupported || !PI_SUBAGENT_RUN_ID_RE.test(runId)) {
+                  throw new Error('PI Subagent runner request is unavailable');
+                }
+                const runDir = path.join(subagentRunRoot, runId);
+                const live = this.subagentRunners.has(runId);
+                if (action === 'status') {
+                  const message = this.subagentRunnerExitErrors.get(runId);
+                  if (message) throw new PiSubagentRunnerHostExitedError(message);
+                  if (live) return true;
+                }
+                if (action === 'terminate' && live) {
+                  return this.terminateSubagentRunner(runId, runDir);
+                }
+                const status = (await listPiSubagentRuns(subagentRunRoot))
+                  .find((candidate) => candidate.runId === runId);
+                if (!status || status.runtimeOwnerId !== subagentRuntimeOwnerId) {
+                  if (action === 'terminate') return false;
+                  throw new Error('PI Subagent runner request does not belong to this task');
+                }
+                if (action === 'status') {
+                  return true;
+                }
+                if (action === 'terminate') {
+                  return this.terminateSubagentRunner(runId, runDir);
+                }
+                if (isPiSubagentTerminal(status.state)) {
+                  throw new Error('PI Subagent runner request is already terminal');
+                }
+                if (accountBoundaryTeardown) {
+                  throw new Error('PI Subagent runner request is unavailable');
+                }
+                const launching = this.launchSubagentRunner({
+                  runId,
+                  runDir,
+                  runnerFile: path.join(runDir, 'runner.cjs'),
+                  configFile: path.join(runDir, 'config.json'),
+                  cwd: opts.workingDir,
+                  env: durableSpawnEnv,
+                });
+                inFlightSubagentLaunches.add(launching);
+                try {
+                  await launching;
+                } finally {
+                  inFlightSubagentLaunches.delete(launching);
+                }
+                if (accountBoundaryTeardown) {
+                  const confirmed = await this.terminateSubagentRunner(runId, runDir);
+                  throw confirmed
+                    ? new Error('PI Subagent runner request is unavailable')
+                    : new PiSubagentRunnerExitUnconfirmedError(
+                      'PI Subagent runner request is unavailable',
+                    );
+                }
+                return true;
+              },
               emitExtensionNotification: (message, event) => {
                 const text = shouldRewriteContextModeDoctorNotification(
                   message,
@@ -3839,33 +4266,25 @@ export class PiAgent extends BaseAgent {
             });
           }
           translatePiEvent(event, queue, ctx);
-          if (autoCompactController) {
-            if (event.type === 'compaction_end') {
-              if (isFailedOrAbortedPiCompaction(event)) {
-                const hostAutoFailed = ctx.hostAutoCompactInFlight && event.aborted !== true;
-                const failureText = [
-                  typeof event.errorMessage === 'string' ? event.errorMessage : '',
-                  'Error during compaction',
-                ].join(': ');
-                if (
-                  !opts.remoteHostId &&
-                  hostAutoFailed &&
-                  isDeterministicHostCompactFailure(failureText)
-                ) {
-                  autoCompactController.markNeedsRollover('compaction_failed');
-                } else {
-                  autoCompactController.onCompactCanceled(
-                    event.aborted === true ? 'compaction_aborted' : 'compaction_failed',
-                  );
-                }
-              } else {
-                autoCompactController.onCompactBoundary();
+          if (event.type === 'compaction_end') {
+            const nativeAutomaticFailure =
+              event.aborted !== true &&
+              (event.reason === 'threshold' || event.reason === 'overflow') &&
+              isFailedOrAbortedPiCompaction(event);
+            if (nativeAutomaticFailure && !opts.remoteHostId) {
+              const failureText = [
+                typeof event.errorMessage === 'string' ? event.errorMessage : '',
+                'Error during compaction',
+              ].join(': ');
+              if (isDeterministicHostCompactFailure(failureText)) {
+                nativeAutoCompactNeedsRollover = true;
+                this.deps.logger.info('pi native auto-compact failure latched for rollover', {
+                  reason: event.reason,
+                  contextTokens: ctx.contextTokens,
+                  contextWindow: ctx.contextWindow,
+                });
               }
-              ctx.hostAutoCompactInFlight = false;
-            } else if (event.type === 'message_end' || event.type === 'agent_settled') {
-              autoCompactController.onUsageUpdate(ctx.contextTokens, ctx.contextWindow);
             }
-            if (event.type === 'agent_settled') maybeHostAutoCompact();
           }
         },
         onExit: ({ code, signal }) => {
@@ -4218,14 +4637,14 @@ export class PiAgent extends BaseAgent {
         }
       }
 
-      // 上下文接近满时由 host 换干净原生会话(handoff),不再让 PI 先自动压缩。
-      // 自动压缩在大窗口上往往先卡住/超时,用户看不到交接。失败不致命。
+      // Pi owns threshold and overflow compaction. Cindy consumes the native
+      // compaction events and only rebuilds the session after a deterministic failure.
       {
-        const resp = await proc.request({ type: 'set_auto_compaction', enabled: false });
+        const resp = await proc.request({ type: 'set_auto_compaction', enabled: true });
         if (!resp.success) {
-          this.deps.logger.warn('pi set_auto_compaction failed (non-fatal)', {
-            error: resp.error,
-          });
+          throw new Error(
+            `pi set_auto_compaction failed: ${resp.error ?? 'unknown'} — refusing to start without native auto-compaction`,
+          );
         }
       }
 
@@ -4323,6 +4742,8 @@ export class PiAgent extends BaseAgent {
       throw err;
     }
 
+    const launchSubagentRunner = (request: PiSubagentRunnerLaunchRequest): Promise<void> =>
+      this.launchSubagentRunner(request);
     const deps = this.deps;
     const agentKind = this.kind;
 
@@ -4400,7 +4821,7 @@ export class PiAgent extends BaseAgent {
         previousProviders,
         retainedRuntimeModel,
         authProviderId,
-        { remote, fileOps },
+        { remote, fileOps, contextWindow: ctx.contextWindow || startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
       );
       nativeProviders = previousProviders;
       nativeProviderById.clear();
@@ -4472,7 +4893,7 @@ export class PiAgent extends BaseAgent {
           nativeProviders,
           retainedRuntimeModel,
           authProviderId,
-          { remote, fileOps },
+          { remote, fileOps, contextWindow: ctx.contextWindow || startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
         );
         gatewayApiByModel.clear();
         for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
@@ -4510,26 +4931,35 @@ export class PiAgent extends BaseAgent {
         const routeProviderId = nextRequestedProviderId !== undefined
           ? nextRequestedProviderId
           : mutableProviderId;
-        const resolvedApi = this.deps.resolvePiGatewayModelApi?.(routeProviderId, nextModel);
+        const resolverContext = { remote };
+        const resolvedSpec = this.deps.resolvePiGatewayModelSpec?.(
+          routeProviderId,
+          nextModel,
+          resolverContext,
+        );
+        const resolvedApi = resolvedSpec?.api ?? this.deps.resolvePiGatewayModelApi?.(
+          routeProviderId,
+          nextModel,
+          resolverContext,
+        );
         if (
+          resolvedSpec === null ||
           resolvedApi === null ||
-          (resolvedApi !== undefined &&
-            resolvedApi !== 'anthropic-messages' &&
-            resolvedApi !== 'openai-responses')
+          (resolvedApi !== undefined && !isPiGatewayApi(resolvedApi))
         ) {
           throw new Error(
-            `Model Access v3 did not provide a Pi wire protocol for model: ${nextModel}`,
+            `No supported Gateway Pi API is available for model: ${nextModel}`,
           );
         }
         if (resolvedApi === undefined) {
-          throw new Error(`Pi wire protocol is not configured for model: ${nextModel}`);
+          throw new Error(`Pi API is not configured for model: ${nextModel}`);
         }
         const desiredApi = resolvedApi;
         const configuredApi = gatewayApiByModel.get(nextModel);
         if (configuredApi && configuredApi !== desiredApi) {
           throw new Error(
             `pi: provider switch for model '${nextModel}' requires API '${desiredApi}', but this session ` +
-              `started with '${configuredApi}'; restart the Pi session to change provider wire protocol.`,
+              `started with '${configuredApi}'; restart the Pi session to change provider API.`,
           );
         }
       };
@@ -4775,11 +5205,50 @@ export class PiAgent extends BaseAgent {
       // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
       autoReviewConfirmUndeliveredNotice.reset();
+      const previousWindow = ctx.contextWindow;
       const data = (resp.data ?? {}) as { contextWindow?: number };
-      if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
-        ctx.contextWindow = data.contextWindow;
-        autoCompactController?.onContextWindowChanged(data.contextWindow);
-        maybeHostAutoCompact();
+      const nextWindow =
+        typeof data.contextWindow === 'number' && data.contextWindow > 0
+          ? data.contextWindow
+          : (this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)?.contextWindow
+            ?? this.capabilities.availableModels.find((candidate) => candidate.id === model)?.contextWindow
+            ?? ctx.contextWindow);
+      if (nextWindow > 0) ctx.contextWindow = nextWindow;
+      if (nextWindow > 0 && nextWindow !== previousWindow) {
+        try {
+          await this.writePiRuntimeSettings(configHome, {
+            fileOps,
+            contextWindow: nextWindow,
+            piCompactionPct: sessionPiAutoCompactPct,
+          });
+          if (!sdkSessionId) {
+            throw new Error('pi: missing session path after model switch; cannot reload compaction settings');
+          }
+          const reloaded = await proc.request({
+            type: 'switch_session',
+            sessionPath: sdkSessionId,
+          });
+          if (!reloaded.success) {
+            throw new Error(
+              `pi: failed to reload settings after context window change: ${reloaded.error ?? 'unknown'}`,
+            );
+          }
+        } catch (err) {
+          this.deps.logger.error('pi: compaction settings reload unconfirmed after model switch', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+          try {
+            await proc.close();
+          } catch (closeErr) {
+            this.deps.logger.warn(
+              'pi: session termination after compaction settings reload failure also failed',
+              { message: closeErr instanceof Error ? closeErr.message : String(closeErr) },
+            );
+          }
+          throw new Error(
+            'pi: 模型切换后未能重载压缩阈值，已终止本任务以免继续按旧 reserveTokens 压缩。请重新打开任务。',
+          );
+        }
       }
     };
 
@@ -4857,7 +5326,11 @@ export class PiAgent extends BaseAgent {
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           // setExtraDirs 是热更新；Pi 没有独立的 mid-session system-prompt RPC，所以在
           // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
-          const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs), runtimeCapabilityManifest);
+          const promptText = composePiPromptText(
+            text,
+            piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs),
+            runtimeCapabilityManifest,
+          );
           const managedExtensionCommandName = managedExtensionSlashCommandName(
             promptText,
             runtimeCapabilityManifest,
@@ -4880,6 +5353,7 @@ export class PiAgent extends BaseAgent {
             ? await readPiUserEntryIds()
             : null;
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
+          const pendingTurnStartToken = markPiHostTurnStartPending(ctx);
           promptRequestStarted = true;
           try {
             doctorCommandActivity.enter(isDoctorCommand);
@@ -4892,6 +5366,7 @@ export class PiAgent extends BaseAgent {
                 PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
             }));
             if (!resp.success) {
+              rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
               if (managedPackageRoute.accepted) {
                 // The host-owned package mutation and its deterministic visible
                 // receipt already crossed the dispatch boundary. The follow-up
@@ -4961,6 +5436,7 @@ export class PiAgent extends BaseAgent {
                   data.isCompacting !== true &&
                   (typeof data.pendingMessageCount !== 'number' || data.pendingMessageCount === 0);
                 if (runtimeIdle && piAgentLifecycleSequence === lifecycleSequenceBeforePrompt) {
+                  rollbackPiHostTurnStart(ctx, pendingTurnStartToken);
                   const result = capturedExtensionNotifications?.join('\n\n') ?? '';
                   // prompt success is only the RPC acceptance boundary. Let
                   // handle.send() resolve before publishing a synthetic terminal;
@@ -5063,7 +5539,11 @@ export class PiAgent extends BaseAgent {
         await awaitRuntimeCapabilitiesForSlashCommand(text);
         if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'steer');
         // /skill: 起始时不前置 Extra Dir 引用段(否则命令退化成文本),与 send 同口径。
-        const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs), runtimeCapabilityManifest);
+        const promptText = composePiPromptText(
+          text,
+          piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs),
+          runtimeCapabilityManifest,
+        );
         const managedExtensionCommandName = managedExtensionSlashCommandName(
           promptText,
           runtimeCapabilityManifest,
@@ -5121,13 +5601,14 @@ export class PiAgent extends BaseAgent {
             fs.readFile(subagentRunnerPath),
           ]);
           const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
-            nodeExecutable: process.execPath,
+            launchRunner: launchSubagentRunner,
             env: durableSpawnEnv,
             runtimeOwnerId: subagentRuntimeOwnerId,
             permissionSnapshot: {
               ...requestedPermissionSnapshot,
               mode: permissionMode,
               readOnlyRoots: [...requestedPermissionSnapshot.readOnlyRoots],
+              writableRoots: [...requestedPermissionSnapshot.writableRoots],
               ...reviewPathSnapshot,
             },
             runnerFallbackFile: subagentRunnerPath,
@@ -5159,9 +5640,17 @@ export class PiAgent extends BaseAgent {
 
       async requestGracefulStop(): Promise<void> {
         if (proc.isClosed) throw new Error('No active Pi turn to stop');
+        const hostAbortToken = markPiHostAbortRequested(ctx);
         dismissAllPendingPrompts('turn_aborted', 'deny');
-        const resp = await proc.request({ type: 'abort' });
+        let resp: Awaited<ReturnType<typeof proc.request>>;
+        try {
+          resp = await proc.request({ type: 'abort' });
+        } catch (error) {
+          rollbackPiHostAbortRequest(ctx, hostAbortToken);
+          throw error;
+        }
         if (!resp.success) {
+          rollbackPiHostAbortRequest(ctx, hostAbortToken);
           throw new Error(`Pi graceful stop rejected: ${resp.error ?? 'unknown'}`);
         }
         clearActiveTurnPermissionPolicy('turn_aborted');
@@ -5169,6 +5658,7 @@ export class PiAgent extends BaseAgent {
 
       async abort(): Promise<void> {
         if (proc.isClosed) return;
+        const hostAbortToken = markPiHostAbortRequested(ctx);
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
         // 停止的那次工具继续等一张已失效的卡。policy 仅在 Pi 确认接受 abort 后清空，
         // RPC 失败时继续保留，防止仍在运行的 turn 失去渠道安全边界。
@@ -5178,11 +5668,13 @@ export class PiAgent extends BaseAgent {
           if (resp.success) {
             clearActiveTurnPermissionPolicy('turn_aborted');
           } else {
+            rollbackPiHostAbortRequest(ctx, hostAbortToken);
             deps.logger.warn('pi abort request rejected', {
               message: resp.error ?? 'unknown',
             });
           }
         } catch (err) {
+          rollbackPiHostAbortRequest(ctx, hostAbortToken);
           deps.logger.warn('pi abort request failed', {
             message: err instanceof Error ? err.message : String(err),
           });
@@ -5261,7 +5753,7 @@ export class PiAgent extends BaseAgent {
       getUsageSnapshot(): UsageSnapshot {
         return {
           ...usageSnapshotOf(ctx),
-          ...(autoCompactController?.needsRollover() ? { needsRollover: true } : {}),
+          ...(nativeAutoCompactNeedsRollover ? { needsRollover: true } : {}),
         };
       },
 
@@ -5297,6 +5789,11 @@ export class PiAgent extends BaseAgent {
           level: effortToPiThinkingLevel(effort),
         }));
         if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
+        mutableEffort = effort;
+      },
+
+      getEffort() {
+        return mutableEffort;
       },
 
       async setThinkingEnabled(enabled: boolean): Promise<void> {
@@ -5356,6 +5853,14 @@ export class PiAgent extends BaseAgent {
         await writePermissionSnapshotOrFailClosed({
           ...requestedPermissionSnapshot,
           readOnlyRoots: [...dirs],
+        });
+      },
+
+      async setWritableDirs(dirs: string[]): Promise<void> {
+        if (reviewMode) return;
+        await writePermissionSnapshotOrFailClosed({
+          ...requestedPermissionSnapshot,
+          writableRoots: [...dirs],
         });
       },
 
@@ -5428,7 +5933,7 @@ export class PiAgent extends BaseAgent {
       },
 
       async compactSession(instructions?: string): Promise<ManualCompactResult> {
-        // 与 host 百分比闸共用 runPiCompact，避免手动/自动双发。
+        // Manual compact shares the session RPC chain with prompts and model controls.
         return runPiCompact(instructions);
       },
 
@@ -5878,6 +6383,7 @@ export class PiAgent extends BaseAgent {
       currentModelIds: readonly string[];
       workspaceRoots: string[];
       readRoots: string[];
+      writableRoots: string[];
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
@@ -5900,6 +6406,10 @@ export class PiAgent extends BaseAgent {
       remote: boolean;
       allowPiPackageManagement: boolean;
       piPackageManagementToken?: string;
+      controlSubagentRunner: (
+        action: 'launch' | 'terminate' | 'status',
+        runId: string,
+      ) => Promise<boolean>;
       emitExtensionNotification: (message: string, event?: PiRpcEvent) => void;
       notifyUnsupportedExtensionUi: (method: string, reason: 'unsupported-ui' | 'timed-dialog') => void;
       /**
@@ -5936,6 +6446,71 @@ export class PiAgent extends BaseAgent {
         message.slice(0, MAX_PI_EXTENSION_NOTIFICATION_LENGTH),
         event,
       );
+      return;
+    }
+
+    if (method === 'input' && event.title === CINDY_SUBAGENT_RUNNER_CONTROL_TITLE) {
+      const context = getPermissionCtx();
+      if (context.remote) {
+        proc.send({ type: 'extension_ui_response', id, cancelled: true });
+        return;
+      }
+      if (context.isAccountBoundaryTornDown()) {
+        proc.send({
+          type: 'extension_ui_response',
+          id,
+          value: JSON.stringify({ ok: false, unconfirmed: true }),
+        });
+        return;
+      }
+      void (async () => {
+        try {
+          const payload = JSON.parse(
+            typeof event.placeholder === 'string' ? event.placeholder : '{}',
+          ) as { action?: unknown; runId?: unknown };
+          if (
+            (payload.action !== 'launch'
+              && payload.action !== 'terminate'
+              && payload.action !== 'status')
+            || typeof payload.runId !== 'string'
+            || !PI_SUBAGENT_RUN_ID_RE.test(payload.runId)
+          ) {
+            throw new Error('Invalid PI Subagent runner request');
+          }
+          const accepted = await context.controlSubagentRunner(payload.action, payload.runId);
+          proc.send({
+            type: 'extension_ui_response',
+            id,
+            value: JSON.stringify(
+              accepted
+                ? { ok: true, confirmed: true }
+                : { ok: false, unconfirmed: true },
+            ),
+          });
+        } catch (error) {
+          if (error instanceof PiSubagentRunnerHostExitedError) {
+            proc.send({
+              type: 'extension_ui_response',
+              id,
+              value: JSON.stringify({ ok: false, exited: true, error: error.message }),
+            });
+            return;
+          }
+          this.deps.logger.warn('pi Subagent runner control failed', {
+            sessionId: context.sessionId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          proc.send({
+            type: 'extension_ui_response',
+            id,
+            value: JSON.stringify(
+              error instanceof PiSubagentRunnerExitUnconfirmedError
+                ? { ok: false, unconfirmed: true }
+                : { ok: false, error: 'PI Subagent runner control failed' },
+            ),
+          });
+        }
+      })();
       return;
     }
 
@@ -6142,12 +6717,16 @@ export class PiAgent extends BaseAgent {
       let toolName = 'tool';
       let input: Record<string, unknown> = {};
       let resolvedCredentialPaths: string[] | null | undefined;
+      let resolvedWritePath: string | null | undefined;
+      let resolvedWritableRoots: string[] | null | undefined;
       try {
         const rawPayload = method === 'input' ? event.placeholder : event.message;
         const payload = JSON.parse(typeof rawPayload === 'string' ? rawPayload : '{}') as {
           toolName?: unknown;
           input?: unknown;
           resolvedCredentialPaths?: unknown;
+          resolvedWritePath?: unknown;
+          resolvedWritableRoots?: unknown;
         };
         if (typeof payload.toolName === 'string' && payload.toolName.length > 0) toolName = payload.toolName;
         if (payload.input && typeof payload.input === 'object') input = payload.input as Record<string, unknown>;
@@ -6156,6 +6735,21 @@ export class PiAgent extends BaseAgent {
             && payload.resolvedCredentialPaths.length <= 64
             && payload.resolvedCredentialPaths.every((item) => typeof item === 'string' && item.length > 0)
             ? payload.resolvedCredentialPaths as string[]
+            : null;
+        }
+        if (Object.hasOwn(payload, 'resolvedWritePath')) {
+          resolvedWritePath = typeof payload.resolvedWritePath === 'string'
+            && payload.resolvedWritePath.length > 0
+            ? payload.resolvedWritePath
+            : null;
+        }
+        if (Object.hasOwn(payload, 'resolvedWritableRoots')) {
+          resolvedWritableRoots = Array.isArray(payload.resolvedWritableRoots)
+            && payload.resolvedWritableRoots.length <= 64
+            && payload.resolvedWritableRoots.every(
+              (root) => typeof root === 'string' && root.length > 0,
+            )
+            ? payload.resolvedWritableRoots as string[]
             : null;
         }
       } catch {
@@ -6170,12 +6764,20 @@ export class PiAgent extends BaseAgent {
         // not a safe read; require explicit consent instead of trusting a link name.
         resolvedCredentialPaths = null;
       }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritePath === undefined) {
+        // 旧版或畸形 bridge 没有执行期 canonical 证据时，Auto 不得回退到字面路径绿灯。
+        resolvedWritePath = null;
+      }
+      if ((toolName === 'write' || toolName === 'edit') && resolvedWritableRoots === undefined) {
+        resolvedWritableRoots = null;
+      }
       const {
         resolver,
         permissionMode,
         currentModelIds,
         workspaceRoots,
         readRoots,
+        writableRoots,
         reviewAutoAction,
         notifyAutoReviewUnavailable,
         notifyAutoReviewConfirmUndelivered,
@@ -6438,13 +7040,21 @@ export class PiAgent extends BaseAgent {
           return;
         }
         try {
-          const action = normalizePiToolForAutoReview({
-            toolName,
-            input,
-            resolvedCredentialPaths,
-            workspaceRoots,
-            readRoots,
-          });
+          const action = constrainPiDestructivePathResolution(
+            normalizePiToolForAutoReview({
+              toolName,
+              input,
+              resolvedCredentialPaths,
+              workspaceRoots,
+              readRoots,
+              writableRoots,
+            }),
+            getPermissionCtx().remote,
+          );
+          if (action.kind === 'file-write') {
+            action.resolvedPath = resolvedWritePath;
+            action.resolvedWritableRoots = resolvedWritableRoots;
+          }
           const decision = await reviewAutoAction(action);
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,
           // 不能用进入审查前捕获的旧 auto 档直接放行(Pi 明确支持热切换,codex review P1):

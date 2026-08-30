@@ -26,11 +26,11 @@ import { getResolvedMainLocale } from '../i18n.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import type { TitleOneShotResult } from '../maker-host/title-one-shot.js';
 import {
-  generateTitleViaProvider,
-  generateTitleViaProviderResult,
-  type TitleOneShotResult,
-} from '../maker-host/title-one-shot.js';
+  generateTitleWithAuxiliaryModel,
+  generateTitleWithAuxiliaryModelResult,
+} from '../maker-host/auxiliary-title-one-shot.js';
 import { validateTitleOutput } from '../maker-host/title-output-validation.js';
 import {
   regenerateTitleMaterial,
@@ -111,7 +111,7 @@ export async function generateMakerSessionTitle(
   // "请提供用户消息内容"式回复当标题返回。直接放弃,调用方保留默认名。
   const trimmed = message.trim();
   if (!trimmed) return null;
-  return generateTitleViaProvider(
+  return generateTitleWithAuxiliaryModel(
     {
       sessionId: sessionId ?? '',
       agentKind,
@@ -159,7 +159,7 @@ const defaultRegenerateDeps: RegenerateTitleDeps = {
   readSessionAgentKind: readSessionAgentKindFromDb,
   collectMaterial: regenerateTitleMaterial,
   generateTitle: (sessionId, agentKind, prompt) =>
-    generateTitleViaProviderResult(
+    generateTitleWithAuxiliaryModelResult(
       { sessionId, agentKind, prompt },
       {
         readSessionProviderId: readSessionProviderIdFromDb,

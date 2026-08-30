@@ -48,6 +48,53 @@ export function resolveEffort(args: {
 }
 
 /**
+ * 面板 / 收藏交出来的**显式档** vs 本端再查一遍目录。
+ *
+ * `resolveEffort` 在 efforts 为空时回落占位 `'low'`。那是「模型不可调档」的 UI 占位,
+ * 不能拿来消化一次查找失败:统一选择器已经按目标引擎解析过这一档(收藏副本、行上
+ * 显示的 high),本端若因 wire id 形态(Pi `grok-4.6` vs 订阅 `xai/grok-4.6`)查空,
+ * 再走 `resolveEffort` 就会把用户点的 high 写成 low。
+ *
+ * 面板只在 `config.effort` 非空时才把档交出来(不可调档行传空串,进不了 requested),
+ * 所以查空时信任 requested 不会给「真的没有档位的模型」塞一个假档。
+ *
+ * 目录非空且不含 requested → 不硬塞,回落 `resolveEffort`(目标引擎词表里没有这一档,
+ * 例如 xhigh 落到只有 high 的模型)。
+ */
+export function resolveRequestedEffort(args: {
+  requested?: Effort;
+  efforts: readonly Effort[];
+  defaultEffort: Effort | null;
+  activeEffort: Effort;
+  preferred?: Effort;
+  providerEffort?: Effort;
+  rememberedEffort?: Effort;
+}): Effort {
+  const { requested, efforts, ...rest } = args;
+  if (requested && (efforts.length === 0 || efforts.includes(requested))) {
+    return requested;
+  }
+  return resolveEffort({ efforts, ...rest });
+}
+
+/**
+ * 意图期内改选模型/来源时,面板交出来的档 vs 旧意图档。
+ *
+ * ModelSelector 对无思考档的行传空串(`rowEffortOf ?? ''`)。空串是「目标明确没有可调档」,
+ * 不能当成 falsy 再回落到旧意图的 high —— 否则会把目标不支持的档登记进意图、下次发送应用。
+ * 调用方没给新档(`undefined`)时才继承旧意图。
+ */
+export function resolveIntentReselectEffort(
+  selectedEffort: string | undefined,
+  intentEffort?: string,
+): string | undefined {
+  if (typeof selectedEffort === 'string') {
+    return selectedEffort || undefined;
+  }
+  return intentEffort || undefined;
+}
+
+/**
  * 「同模型只切来源」时落档。与 resolveEffort 的关键区别是没有 activeEffort 沿用档:
  * 有显式模型预设就按目标来源支持范围恢复;没有预设则回落模型默认,避免把当前会话 live 值
  * 意外写成全局默认。

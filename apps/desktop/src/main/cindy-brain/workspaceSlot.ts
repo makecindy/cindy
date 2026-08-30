@@ -114,8 +114,8 @@ export class GhostWorkspaceSlot {
 
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeWorkspaceResult> {
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('workspace')) {
-      return fail('PERMISSION_DENIED', '插件未申请工作区会话权限(workspace 槽),或当前未启用');
+    if (!ghost?.enabled || ghost.manifest.workspace !== true) {
+      return fail('PERMISSION_DENIED', '插件未申请工作区会话权限(workspace),或当前未启用');
     }
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return fail('INVALID_REQUEST', 'workspace-request 载荷必须是对象');

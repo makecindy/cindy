@@ -665,12 +665,32 @@ export function applyAgentIslandEvent(
   if (event.type === 'done') {
     clearAssistantStream(session);
     session.running = false;
-    session.pendingInteractionIds.clear();
-    clearPendingInteractionMetadata(session);
-    session.permissionRequestId = null;
-    session.permissionCanAllowForSession = false;
     session.currentToolUseId = null;
     session.toolDetailUntil = null;
+    // Codex ask_user / plan_review can outlive a successful turn. Permission
+    // cards belong to the dead turn and must not keep the island waiting.
+    for (const [requestId, kind] of [...session.pendingInteractionKinds.entries()]) {
+      if (kind === 'ask_user_question' || kind === 'plan_review') continue;
+      dismissPendingInteraction(state, session, requestId, now, {
+        requirePending: true,
+        pruneIfIdle: false,
+      });
+    }
+    if (session.pendingInteractionIds.size > 0) {
+      session.phase = 'needs-interaction';
+      restorePendingInteractionKind(session);
+      session.detail = session.interactionKind
+        ? (session.pendingInteractionDetails.get(
+            [...session.pendingInteractionIds][0] ?? '',
+          ) ?? session.detail)
+        : session.detail;
+      session.detailSource = 'interaction';
+      session.completedUntil = null;
+      session.lastActivityAt = now;
+      return true;
+    }
+    session.permissionRequestId = null;
+    session.permissionCanAllowForSession = false;
     session.detailSource = null;
     completeAgentIslandSession(state, session, now, {
       suppressAttention: options.suppressCompletionAttention === true,
@@ -710,9 +730,16 @@ export function applyAgentIslandEvent(
     session.interactionRevealDismissed = false;
     session.currentToolUseId = null;
     session.toolDetailUntil = null;
-    session.detail = typeof data?.message === 'string' && data.message.trim()
-      ? data.message.trim()
-      : '';
+    // Tool-loop terminal errors carry a maker-core diagnostic message for logs and
+    // the chat transcript, but Agent Island has its own localized string bundle.
+    // Do not surface the producer's Chinese/internal category in this main-side
+    // display path; other terminal errors keep their existing detail behavior.
+    const isToolLoopError = data?.reason === 'tool_use_loop_detected';
+    session.detail = isToolLoopError
+      ? state.strings.error
+      : typeof data?.message === 'string' && data.message.trim()
+        ? data.message.trim()
+        : '';
     session.detailSource = session.detail ? 'status' : null;
     if (session.detail) appendActivityLine(session, 'status', session.detail);
     session.errorUntil = now + AGENT_ISLAND_ERROR_DWELL_MS;
@@ -796,7 +823,7 @@ function dismissPendingInteraction(
   session: AgentIslandSessionState,
   requestId: string,
   now: number,
-  options: { requirePending?: boolean } = {},
+  options: { requirePending?: boolean; pruneIfIdle?: boolean } = {},
 ): void {
   if (options.requirePending === true && !session.pendingInteractionIds.has(requestId)) return;
   session.pendingInteractionIds.delete(requestId);
@@ -845,6 +872,9 @@ function dismissPendingInteraction(
   }
   // errorUntil 已过期但未读的 error 账本仍在,不能删 —— 岛面 TTL 只影响展示。
   if (preserveErrorUnread) return;
+  // done 会先清死 turn 的 permission，再记 completed。这里若立刻 prune，
+  // 后续 complete 只能改到已脱离 state.sessions 的孤儿对象，岛面丢完成态。
+  if (options.pruneIfIdle === false) return;
   state.sessions.delete(session.sessionId);
 }
 

@@ -36,6 +36,7 @@ import {
   type CatalogXdMediaKind,
   type CatalogModel,
   type CustomProviderConfig,
+  type PiModelApi,
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
@@ -43,6 +44,11 @@ import {
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 import { projectUnverifiedCatalogFallbackForBuildRegion } from './provider-access-policy.js';
+import {
+  isCatalogPiGatewayModelRetired,
+  resolveBundledPiGatewayModelProfile,
+  resolveCatalogPiGatewayModelApi,
+} from './pi-gateway-model-catalog.js';
 import {
   applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
@@ -66,6 +72,8 @@ import {
 
 /** OSS / bundled 加载来的基础目录;null = 尚未加载(回落 BUNDLED_CATALOG)。 */
 let base: Catalog | null = null;
+/** Exact accepted Cindy Server/local/LKG snapshot before bundled compatibility backfill. */
+let piGatewayAuthorityCatalog: Catalog | null = null;
 /** 当前基础目录是否由本次配置的 Catalog 真源明确证明；fallback 只保兼容元数据。 */
 let baseCapabilityEvidence: CatalogCapabilityEvidence = 'fallback';
 /** XD media fields inherited from bundled rather than proven by the current source. */
@@ -131,7 +139,7 @@ export interface XdGatewayAgentOverride {
   defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
-  wireProtocol?: Extract<ProviderWireProtocol, 'anthropic-messages' | 'openai-responses'>;
+  wireProtocol?: PiModelApi;
 }
 
 /**
@@ -143,6 +151,7 @@ export interface XdGatewayAgentOverride {
  */
 export interface XdGatewayModelInfo {
   id: string;
+  availability?: 'available' | 'requires_payment';
   /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
   mode?: string;
   /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
@@ -187,8 +196,15 @@ export interface XdGatewayModelInfo {
  * v3 必需字段在协议边界严格校验；这里不读取公共 Catalog，也不按模型 id 或固定常量补值。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
-/** 当前账号最近一次 `/models` 成功响应；false 时空/旧数组都不能作为 deny 证据。 */
+/** 当前账号最近一次 `/models` 成功响应；false 时清单缺席不能作为模型不存在的 deny 证据。 */
 let xdGatewayModelsAuthoritative = false;
+/**
+ * 最近一次成功 v5 响应明确拒绝的 XD 对话路由。
+ *
+ * 刷新失败时活动目录会隐藏过期的付费营销行，但既有会话的派发终检仍须保留这份
+ * fail-closed 证据；只有更新的成功响应或账号边界清空才能撤销。
+ */
+let xdGatewayPaymentRequiredRoutes = new Set<string>();
 /**
  * XD 模型里「由客户端投影给 Codex、但走 Anthropic Messages bridge」的 id 集合。
  * Responses → Anthropic Messages bridge，不能误用 XD 的原生 Responses 路由。
@@ -310,31 +326,88 @@ function preserveNonGrok46DiscoveryEfforts(
   });
 }
 
-function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
-  return (model.agents ?? []).filter((agent) => {
-    if (agent !== 'pi') return true;
-    const wireProtocol = model.perAgent?.pi?.wireProtocol;
-    return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses';
-  });
+function isPiModelApi(value: unknown): value is PiModelApi {
+  return (
+    value === 'anthropic-messages' ||
+    value === 'openai-responses' ||
+    value === 'openai-completions' ||
+    value === 'google-generative-ai'
+  );
 }
 
-/**
- * XD 下发模型给 Pi 时的真实 wire protocol。
- *
- * Pi provider 始终叫 `cindy`；这里只读取 v3 服务端给该模型的 transport，供
- * models.json 写入模型级 `api`。三态语义：非 XD Pi 模型返回 undefined；XD Pi 模型
- * 缺失或协议非法返回 null，由 maker-core fail closed；有效配置返回服务端声明值。
- */
-export function resolveXdPiGatewayWireProtocol(
-  modelId: string,
-): Extract<ProviderWireProtocol, 'anthropic-messages' | 'openai-responses'> | null | undefined {
+function resolveXdPiGatewayServerModelApi(model: XdGatewayModelInfo): PiModelApi | null | undefined {
+  return piGatewayAuthorityCatalog
+    ? resolveCatalogPiGatewayModelApi(piGatewayAuthorityCatalog, model.id)
+    : undefined;
+}
+
+function resolveXdPiGatewayHintModelApi(model: XdGatewayModelInfo): PiModelApi | null {
+  const gatewayApi: unknown = model.perAgent?.pi?.wireProtocol;
+  return isPiModelApi(gatewayApi) ? gatewayApi : null;
+}
+
+function resolveXdPiGatewayModelApi(model: XdGatewayModelInfo): PiModelApi | null {
+  // Source authority is deliberate and must not be inverted:
+  // Cindy Server downloaded Catalog > version-matched local Pi table > Cindy AI Gateway hint.
+  const catalogApi = resolveXdPiGatewayServerModelApi(model);
+  if (catalogApi !== undefined) return catalogApi;
+  const localApi = resolveBundledPiGatewayModelProfile(model.id)?.api;
+  if (localApi !== undefined) return localApi;
+  return resolveXdPiGatewayHintModelApi(model);
+}
+
+function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
+  // Pi's exact binary catalog is probed only when a session starts, after capabilities are built.
+  // Keep declared Pi membership provisional here unless Cindy Server has an exact Registry
+  // tombstone; the final resolver removes or rejects any other unsafe Gateway route, while same-id
+  // subscription/BYOM models remain usable.
+  const serverRetired =
+    piGatewayAuthorityCatalog !== null &&
+    isCatalogPiGatewayModelRetired(piGatewayAuthorityCatalog, model.id);
+  return (model.agents ?? []).filter((agent) => agent !== 'pi' || !serverRetired);
+}
+
+/** Resolve only Cindy Server's highest-priority protocol declaration. */
+export function resolveXdPiGatewayServerApi(modelId: string): PiModelApi | null | undefined {
   const normalized = modelId.replace(/\[1m\]$/, '');
   const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
   if (!gatewayModel?.agents?.includes('pi')) return undefined;
-  const wireProtocol = gatewayModel.perAgent?.pi?.wireProtocol;
-  return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses'
-    ? wireProtocol
-    : null;
+  return resolveXdPiGatewayServerModelApi(gatewayModel);
+}
+
+/** Resolve only Cindy AI Gateway's last-priority protocol hint. */
+export function resolveXdPiGatewayHintApi(modelId: string): PiModelApi | null | undefined {
+  const normalized = modelId.replace(/\[1m\]$/, '');
+  const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
+  if (!gatewayModel?.agents?.includes('pi')) return undefined;
+  return resolveXdPiGatewayHintModelApi(gatewayModel);
+}
+
+/** Resolve Pi API in Cindy Server > local Pi table > Cindy AI Gateway order. */
+export function resolveXdPiGatewayApi(modelId: string): PiModelApi | null | undefined {
+  const normalized = modelId.replace(/\[1m\]$/, '');
+  const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
+  if (!gatewayModel?.agents?.includes('pi')) return undefined;
+  return resolveXdPiGatewayModelApi(gatewayModel);
+}
+
+/** Legacy wire vocabulary for HTTP-only consumers that cannot represent Google's native API. */
+export function resolveXdPiGatewayWireProtocol(
+  modelId: string,
+): ProviderWireProtocol | null | undefined {
+  const api = resolveXdPiGatewayApi(modelId);
+  switch (api) {
+    case 'anthropic-messages':
+      return 'anthropic-messages';
+    case 'openai-responses':
+      return 'openai-responses';
+    case 'openai-completions':
+      return 'openai-chat';
+    case 'google-generative-ai':
+      return null;
+    default:
+      return api;
+  }
 }
 
 /** 派生 XD 中「仅 claude-code 面（投影给 Claude）、无 codex 原生」的模型 id 集合。 */
@@ -798,6 +871,7 @@ function projectXdGatewayMediaModels(
     .map((model) => ({
       id: model.id,
       name: model.name ?? model.id,
+      ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
   const videoModels = gatewayModels
@@ -805,6 +879,7 @@ function projectXdGatewayMediaModels(
     .map((model) => ({
       id: model.id,
       name: model.name ?? model.id,
+      ...(model.availability ? { availability: model.availability } : {}),
       ...(model.modalities ? { modalities: model.modalities } : {}),
     }));
   const identity = { ...provider };
@@ -1151,8 +1226,10 @@ function computeMerged(): Catalog {
         const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
         const cost = effectiveGatewayModelCost(gm);
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
+        const piApi = agent === 'pi' ? resolveXdPiGatewayModelApi(gm) : undefined;
         const merged: CatalogModel = {
           id: gm.id,
+          ...(gm.availability ? { availability: gm.availability } : {}),
           // name / contextWindow are required by Model Access v3 and therefore never synthesized.
           name: gm.name as string,
           ...(gm.group !== undefined ? { group: gm.group } : {}),
@@ -1174,9 +1251,9 @@ function computeMerged(): Catalog {
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
-          // Pi 的协议是 Model Access 按模型下发的权威路由元数据。重建 CatalogModel 时
-          // 必须一并投影，否则模型虽然保留在 Pi tab，统一路由器却会因协议缺失而 fail closed。
-          ...(agent === 'pi' && ov.wireProtocol ? { piApi: ov.wireProtocol } : {}),
+          // Unknown pre-probe Pi routes stay provisional; models.json only emits a route after the
+          // current binary/server/local/Gateway resolver produces one of the supported APIs.
+          ...(agent === 'pi' && piApi ? { piApi } : {}),
         };
         models[agent]!.push(merged);
       }
@@ -1234,6 +1311,7 @@ export function getCatalogModelContextWindow(
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
 function installActiveCatalog(
   catalog: Catalog,
+  authorityCatalog: Catalog | null,
   capabilityEvidence: CatalogCapabilityEvidence,
   unverifiedXdMediaKinds: readonly CatalogXdMediaKind[],
   force: boolean,
@@ -1245,6 +1323,7 @@ function installActiveCatalog(
     base !== null &&
     baseCapabilityEvidence === capabilityEvidence &&
     isDeepStrictEqual(baseUnverifiedXdMediaKinds, nextUnverifiedXdMediaKinds) &&
+    isDeepStrictEqual(piGatewayAuthorityCatalog, authorityCatalog) &&
     isDeepStrictEqual(base, catalog)
   ) {
     return false;
@@ -1253,6 +1332,7 @@ function installActiveCatalog(
     catalog.modelRegistry ?? previous.modelRegistry ?? trustedCustomProviderRegistry;
   trustedCustomProviderRegistry = projectionRegistry;
   base = catalog;
+  piGatewayAuthorityCatalog = authorityCatalog;
   baseCapabilityEvidence = capabilityEvidence;
   baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
   if (customConfigs) {
@@ -1267,6 +1347,7 @@ function installActiveCatalog(
 export function setActiveCatalog(
   catalog: Catalog,
   options: {
+    authorityCatalog?: Catalog | null;
     capabilityEvidence?: CatalogCapabilityEvidence;
     unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
   } = {},
@@ -1274,6 +1355,7 @@ export function setActiveCatalog(
   const capabilityEvidence = options.capabilityEvidence ?? 'current';
   installActiveCatalog(
     catalog,
+    options.authorityCatalog ?? null,
     capabilityEvidence,
     options.unverifiedXdMediaKinds ??
       (capabilityEvidence === 'fallback' ? ['image', 'video', 'embedding'] : []),
@@ -1289,6 +1371,7 @@ export function setActiveCatalog(
 export function commitActiveCatalogSnapshot(
   catalog: Catalog,
   options: {
+    authorityCatalog?: Catalog | null;
     capabilityEvidence?: CatalogCapabilityEvidence;
     unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
   } = {},
@@ -1296,6 +1379,7 @@ export function commitActiveCatalogSnapshot(
   const capabilityEvidence = options.capabilityEvidence ?? 'current';
   return installActiveCatalog(
     catalog,
+    options.authorityCatalog ?? null,
     capabilityEvidence,
     options.unverifiedXdMediaKinds ??
       (capabilityEvidence === 'fallback' ? ['image', 'video', 'embedding'] : []),
@@ -1445,11 +1529,20 @@ export function setDiscoveredProviderMediaModels(
  */
 export function setXdGatewayModels(
   models: XdGatewayModelInfo[],
-  options?: { authoritative?: boolean },
+  options?: { authoritative?: boolean; preservePaymentRequiredRoutes?: boolean },
 ): void {
   xdGatewayModels = [...models];
   if (options?.authoritative !== undefined) {
     xdGatewayModelsAuthoritative = options.authoritative;
+  }
+  if (options?.preservePaymentRequiredRoutes !== true) {
+    xdGatewayPaymentRequiredRoutes = new Set(
+      models.flatMap((model) =>
+        model.availability === 'requires_payment'
+          ? (model.agents ?? []).map((agent) => `${agent}\n${model.id}`)
+          : [],
+      ),
+    );
   }
   xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
@@ -1460,12 +1553,27 @@ export function getXdGatewayModels(): readonly XdGatewayModelInfo[] {
   return xdGatewayModels;
 }
 
+/** Main 派发边界查询最近一次明确的付费拒绝；不用于 Renderer 营销展示。 */
+export function isXdGatewayPaymentRequiredRoute(modelId: string, agent: AgentKind): boolean {
+  return xdGatewayPaymentRequiredRoutes.has(`${agent}\n${modelId}`);
+}
+
 /** 子代理模型预检只在此标记为 true 时，才可把清单缺席解释为权威拒绝。 */
 export function getXdGatewayModelAccessSnapshot(): {
   authoritative: boolean;
   models: readonly XdGatewayModelInfo[];
+  paymentRequiredModelIds: readonly string[];
 } {
-  return { authoritative: xdGatewayModelsAuthoritative, models: xdGatewayModels };
+  const claudeCodeRoutePrefix = 'claude-code\n';
+  return {
+    authoritative: xdGatewayModelsAuthoritative,
+    models: xdGatewayModels,
+    paymentRequiredModelIds: [...xdGatewayPaymentRequiredRoutes].flatMap((route) =>
+      route.startsWith(claudeCodeRoutePrefix)
+        ? [route.slice(claudeCodeRoutePrefix.length)]
+        : [],
+    ),
+  };
 }
 
 /** 新一轮 `/models` 未完成或失败后撤销负向证明，但保留 LKG 供 UI 展示。 */

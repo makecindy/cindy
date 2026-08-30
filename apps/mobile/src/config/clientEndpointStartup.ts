@@ -21,6 +21,7 @@
 import {
   resolveClientEndpointsStrict,
   type ClientEndpointMap,
+  type ClientEndpointRegion,
 } from '@cindy/maker-shared/client-endpoints';
 
 import {
@@ -70,9 +71,12 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchManifestViaCdn(timeoutMs: number): Promise<ManifestFetchResult> {
+async function fetchManifestViaCdn(
+  timeoutMs: number,
+  manifestBaseUrl: string = ENDPOINT_MANIFEST_BASE_URL,
+): Promise<ManifestFetchResult> {
   // 构建缺自举基址属打包配置事故:CDN 级不可用,交给启动闸门阻断。
-  if (!ENDPOINT_MANIFEST_BASE_URL) return { ok: false, detail: 'missing-manifest-base-url' };
+  if (!manifestBaseUrl) return { ok: false, detail: 'missing-manifest-base-url' };
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -81,7 +85,7 @@ async function fetchManifestViaCdn(timeoutMs: number): Promise<ManifestFetchResu
   }, timeoutMs);
   try {
     const response = await fetch(
-      `${ENDPOINT_MANIFEST_BASE_URL}${MANIFEST_RELATIVE_PATH}?t=${Date.now()}`,
+      `${manifestBaseUrl}${MANIFEST_RELATIVE_PATH}?t=${Date.now()}`,
       { signal: controller.signal },
     );
     if (!response.ok) return { ok: false, detail: `http-${response.status}` };
@@ -104,6 +108,12 @@ export interface StartupEndpointResolveDeps {
     isTestFlight: boolean;
     region: 'cn' | 'global' | null;
   }) => void;
+  /** CindyDev 切换 Release 时传入第二个受信任清单基址。 */
+  manifestBaseUrl?: string;
+  /** 目标清单必须匹配的 auth 物理区域；默认仍为安装包构建区域。 */
+  expectedRegion?: ClientEndpointRegion;
+  /** 只切业务端点，保留 CindyDev 构建清单决定的 OTA / 审核元数据。 */
+  preserveBuildReleaseMetadata?: boolean;
   timeoutMs?: number;
   /** 自动重试节奏,默认 AUTO_RETRY_DELAYS_MS;传 `[]` 关闭(单次尝试)。 */
   autoRetryDelaysMs?: readonly number[];
@@ -159,8 +169,20 @@ export async function runStartupEndpointResolve(
   deps: StartupEndpointResolveDeps = {},
 ): Promise<StartupEndpointResolveOutcome> {
   try {
-    const fetchManifest = deps.fetchManifest ?? fetchManifestViaCdn;
-    const apply = deps.apply ?? applyResolvedClientEndpoints;
+    const fetchManifest =
+      deps.fetchManifest ??
+      ((requestTimeoutMs: number) =>
+        fetchManifestViaCdn(
+          requestTimeoutMs,
+          deps.manifestBaseUrl ?? ENDPOINT_MANIFEST_BASE_URL,
+        ));
+    const apply =
+      deps.apply ??
+      ((resolved) =>
+        applyResolvedClientEndpoints(resolved, {
+          preserveBuildReleaseMetadata:
+            deps.preserveBuildReleaseMetadata === true,
+        }));
     const timeoutMs = deps.timeoutMs ?? ATTEMPT_TIMEOUT_MS;
     const retryDelays = deps.autoRetryDelaysMs ?? AUTO_RETRY_DELAYS_MS;
     const sleep = deps.sleep ?? defaultSleep;
@@ -177,10 +199,11 @@ export async function runStartupEndpointResolve(
     const result = resolveClientEndpointsStrict(fetched.text);
     if (!result.ok) return { ok: false, reason: result.reason };
     // 老清单缺 region 时保持兼容；一旦自报 region，就必须与安装包构建区域一致。
-    if (result.region !== null && result.region !== BUILD_AUTH_REGION) {
+    const expectedRegion = deps.expectedRegion ?? BUILD_AUTH_REGION;
+    if (result.region !== null && result.region !== expectedRegion) {
       return {
         ok: false,
-        reason: `region-mismatch:${BUILD_AUTH_REGION}:${result.region}`,
+        reason: `region-mismatch:${expectedRegion}:${result.region}`,
       };
     }
 

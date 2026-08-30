@@ -186,7 +186,7 @@ export function providerOAuthStorageKey(providerId: string): string {
 export const GHOST_SECRET_PREFIX = 'ghost_secret_';
 
 /**
- * 官方内置意识凭证 → 历史机器级 provider key 的别名表(老用户兼容)。
+ * 官方意识凭证 → 历史机器级 provider key 的别名表(老用户兼容)。
  *
  * cindy-web-search 的两条凭证与「工具密钥」时代的 Brave / Tavily key 是**同一
  * 把钥匙**,直接映射到同一存储键(.enc 同一文件):
@@ -195,7 +195,7 @@ export const GHOST_SECRET_PREFIX = 'ghost_secret_';
  * - 卸载意识不删这两个键(removeGhostSecrets 只扫 ghost_secret_ 前缀,别名键
  *   天然不在扫描面内)——它们是用户填的机器级 key,归属机器不归属意识,
  *   重装意识即恢复可用;换账号仍随 clearAll 清扫(在 PROVIDER_SECRET_IDS 里)。
- * 仅限官方内置意识登记(key 必须是官方保留前缀 id,见
+ * 仅限官方意识登记(key 必须是官方保留前缀 id,见
  * GHOST_OFFICIAL_ID_PREFIXES):第三方意识一律走 ghost_secret_ 命名空间;
  * packaged 版本的用户装入通道对官方前缀 id 拒装(cindy-brain/index.ts
  * rejectReservedGhostId),抢注官方 id 蹭别名的路被封死。

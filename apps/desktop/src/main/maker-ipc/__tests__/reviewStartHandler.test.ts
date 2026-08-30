@@ -184,6 +184,7 @@ describe('maker:review:start IPC lifecycle', () => {
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
 
     expect(deps.assertCaller).toHaveBeenCalledTimes(2);
+    expect(deps.waitUntilReady).not.toHaveBeenCalled();
     expect(deps.prepareRun).not.toHaveBeenCalled();
   });
 
@@ -202,6 +203,7 @@ describe('maker:review:start IPC lifecycle', () => {
       reviewerSessionId: 'reviewer-1',
     });
 
+    expect(deps.waitUntilReady).toHaveBeenCalledWith('source-1');
     expect(deps.createSourceCard).toHaveBeenCalledWith(
       expect.objectContaining({
         sourceSessionId: 'source-1',
@@ -284,6 +286,39 @@ describe('maker:review:start IPC lifecycle', () => {
     expect(meta).not.toHaveProperty('error');
   });
 
+  it('does not publish a partial result when the user stops Review', async () => {
+    const harness = new IpcHarness();
+    const reviewer = new FakeReviewer();
+    const deps = makeDeps(reviewer);
+    const control = registerReviewStartHandler(harness, deps);
+    await harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest());
+
+    expect(control.noteReviewerStopRequested('reviewer-1')).toBe(true);
+    expect(control.noteReviewerStopRequested('reviewer-1')).toBe(true);
+    // Pi and some Claude stop paths close with an ordinary done event, so the
+    // host-owned stop marker must win over any partial provider result.
+    reviewer.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(deps.updateSourceCard).toHaveBeenCalledTimes(1));
+
+    expect(deps.readReviewerResult).not.toHaveBeenCalled();
+    expect(deps.updateSourceCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: '',
+        meta: expect.objectContaining({
+          status: 'failed',
+          failureCode: 'reviewer-closed',
+        }),
+      }),
+    );
+    expect(deps.closeReviewer).toHaveBeenCalledTimes(1);
+    expect(deps.releaseSourceLease).toHaveBeenCalledTimes(1);
+    expect(control.noteReviewerStopRequested('reviewer-1')).toBe(false);
+
+    await expect(harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest())).resolves.toMatchObject(
+      { ok: true, runId: 'run-2' },
+    );
+  });
+
   it('uses a stable provider failure code only when no diagnostic detail exists', async () => {
     const harness = new IpcHarness();
     const reviewer = new FakeReviewer();
@@ -292,6 +327,28 @@ describe('maker:review:start IPC lifecycle', () => {
     await harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest());
 
     reviewer.emit({ type: 'error', data: { isTerminal: true } });
+    await vi.waitFor(() => expect(deps.updateSourceCard).toHaveBeenCalledTimes(1));
+
+    const meta = vi.mocked(deps.updateSourceCard).mock.calls[0]?.[0].meta;
+    expect(meta).toMatchObject({ status: 'failed', failureCode: 'provider-failed' });
+    expect(meta).not.toHaveProperty('error');
+  });
+
+  it('uses a localized provider failure code for tool-loop terminal diagnostics', async () => {
+    const harness = new IpcHarness();
+    const reviewer = new FakeReviewer();
+    const deps = makeDeps(reviewer);
+    registerReviewStartHandler(harness, deps);
+    await harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest());
+
+    reviewer.emit({
+      type: 'error',
+      data: {
+        message: '上游模型 claude 连续 3 次 Edit 调用因同类参数错误被拒',
+        reason: 'tool_use_loop_detected',
+        isTerminal: true,
+      },
+    });
     await vi.waitFor(() => expect(deps.updateSourceCard).toHaveBeenCalledTimes(1));
 
     const meta = vi.mocked(deps.updateSourceCard).mock.calls[0]?.[0].meta;
@@ -729,7 +786,7 @@ describe('maker:review:start IPC lifecycle', () => {
     expect(deps.readReviewerResult).not.toHaveBeenCalled();
   });
 
-  it('publishes no stale result when final freshness verification fails', async () => {
+  it('preserves a completed result as stale when final freshness verification fails', async () => {
     const harness = new IpcHarness();
     const reviewer = new FakeReviewer();
     const staleReason = {
@@ -750,7 +807,7 @@ describe('maker:review:start IPC lifecycle', () => {
 
     expect(deps.updateSourceCard).toHaveBeenCalledWith(
       expect.objectContaining({
-        result: '',
+        result: 'P1: real finding',
         meta: expect.objectContaining({ status: 'failed', failureCode: staleReason.code }),
       }),
     );

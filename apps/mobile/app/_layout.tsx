@@ -159,6 +159,10 @@ function NavigationGate() {
       >
         {/* 设置从左侧抽屉进入:接着抽屉方向从左边推出,不要默认从右边盖上来。 */}
         <Stack.Screen name="settings" options={{ animation: 'slide_from_left' }} />
+        <Stack.Screen
+          name="add-account"
+          options={{ animation: 'fade', gestureEnabled: false }}
+        />
       </Stack>
     </NavigationThemeProvider>
   );
@@ -379,8 +383,14 @@ function RootLayout() {
             '{reason}',
             endpointGate.reason ?? 'unknown',
           )}
-          actionLabel={loginText('retry')}
-          onAction={endpointGate.retry}
+          actionLabel={loginText(
+            endpointGate.canResetToDev ? 'endpointGateResetToDev' : 'retry',
+          )}
+          onAction={
+            endpointGate.canResetToDev
+              ? endpointGate.resetToDev
+              : endpointGate.retry
+          }
         />
       </MobileLoginHandoffStage>
     );
@@ -429,7 +439,7 @@ function RootLayout() {
  * 品牌视觉由 MobileLoginHandoffStage 宿主拥有,本层背景透明、内容沉到下半屏
  * (避开品牌三要素),仅承载标题/说明/唯一动作。端点闸门与强更闸门共用本层
  * ——阻断语义一致:没有"跳过 / 稍后再说",只有一个出口。端点错误屏的文案 key 化
- * 契约不变(endpointGateTitle / endpointGateSubtitle{reason} / retry)。
+ * Release 覆盖失败时唯一动作改为返回 Dev；其它失败仍为 retry。
  */
 function StartupGateBlockedContent({
   title,

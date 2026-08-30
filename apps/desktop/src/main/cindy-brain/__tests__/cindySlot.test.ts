@@ -21,7 +21,7 @@ import type { InstalledGhost } from '../../../shared/ghost';
 function fakeGhost(
   overrides: {
     enabled?: boolean;
-    slots?: string[];
+    cindy?: boolean;
     model?: {
       image?: string[];
       video?: string[];
@@ -41,10 +41,9 @@ function fakeGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: overrides.slots ?? ['tool', 'cindy', 'panel'],
       tools: [{ name: 'gen_image', description: '生成图片' }],
       // null = 模拟老包缺详单;undefined = 默认全能力(image + video + media)。
-      ...(overrides.model === null
+      ...(overrides.cindy === false || overrides.model === null
         ? {}
         : {
             cindy:
@@ -403,7 +402,7 @@ describe('Cindy Web Search', () => {
     const searchWeb = vi.fn();
     for (const getGhost of [
       () => fakeGhost({ enabled: false, model: { search: ['web'] } }),
-      () => fakeGhost({ slots: ['tool'], model: { search: ['web'] } }),
+      () => fakeGhost({ cindy: false, model: { search: ['web'] } }),
       () => fakeGhost(),
     ]) {
       const denied = makeSlot({ getGhost, searchWeb });
@@ -998,11 +997,11 @@ describe('能力粒度资格审(model 详单)', () => {
     expect(editImage).not.toHaveBeenCalled();
   });
 
-  it('老包缺详单 = 零能力,一切代办拒且提示更新声明', async () => {
+  it('老包缺详单 = 零能力,一切代办拒且明确未声明 cindy 能力', async () => {
     const { slot, generateImage } = makeSlot({ getGhost: () => fakeGhost({ model: null }) });
     const r = await slot.handleModelRequest('art', REQ);
     expect(r).toMatchObject({ ok: false });
-    expect((r as { message: string }).message).toContain('更新');
+    expect((r as { message: string }).message).toContain('未声明 cindy 能力');
     expect(generateImage).not.toHaveBeenCalled();
   });
 });
@@ -1015,8 +1014,8 @@ describe('资格审', () => {
     expect(await asleep.slot.handleModelRequest('art', REQ)).toMatchObject({ ok: false });
   });
 
-  it('身份卡未声明 cindy 卡槽 → 结构上无此器官,拒', async () => {
-    const { slot, generateImage } = makeSlot({ getGhost: () => fakeGhost({ slots: ['tool', 'panel'] }) });
+  it('身份卡未声明 cindy 能力 → 结构上无此器官,拒', async () => {
+    const { slot, generateImage } = makeSlot({ getGhost: () => fakeGhost({ cindy: false }) });
     const r = await slot.handleModelRequest('art', REQ);
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('cindy');
@@ -1619,7 +1618,7 @@ describe('寄存(deposit_media / release_media)', () => {
     expect(noMedia.depositMedia).not.toHaveBeenCalled();
 
     const noSlot = makeSlot({
-      getGhost: () => fakeGhost({ slots: ['tool'], model: null }),
+      getGhost: () => fakeGhost({ model: null }),
     } as Partial<CindySlotDeps>);
     expect(await noSlot.slot.handleModelRequest('art', depositReq(b64(PNG)))).toMatchObject({
       ok: false,

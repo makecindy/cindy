@@ -80,6 +80,16 @@ const store = createOverrideSettingsFile<PersistedAppSessionSettings>({
 
 let active: ActiveAppSession | null = null;
 let boundaryDepth = 0;
+let appSessionCommitBoundaryHook: (() => void) | null = null;
+
+/**
+ * Register synchronous owner-scoped runtime invalidation at the exact commit edge.
+ * The hook runs after the commit has been accepted but before the new owner is
+ * visible, so stale async work cannot resume into the next owner's process state.
+ */
+export function setAppSessionCommitBoundaryHook(hook: (() => void) | null): void {
+  appSessionCommitBoundaryHook = hook;
+}
 
 function ensureLoaded(): ActiveAppSession {
   if (active) return active;
@@ -168,16 +178,14 @@ export function commitActiveAppSession(
     if (!normalized) throw new Error('cloud app session requires a verified data owner');
     dataOwnerId = normalized;
   }
+  const ownerChanged = previous.mode !== mode || previous.dataOwnerId !== dataOwnerId;
 
-  if (
-    previous.mode === mode
-    && previous.dataOwnerId === dataOwnerId
-    && !forceBumpGeneration
-  ) {
+  if (!ownerChanged && !forceBumpGeneration) {
     return { ...previous };
   }
 
   store.writePatch({ activeMode: mode });
+  if (ownerChanged) appSessionCommitBoundaryHook?.();
   active = {
     mode,
     dataOwnerId,
@@ -205,6 +213,10 @@ export function commitVolatileAppSession(
     if (!normalized) throw new Error('cloud app session requires a verified data owner');
     dataOwnerId = normalized;
   }
+  if (previous.mode === mode && previous.dataOwnerId === dataOwnerId) {
+    return { ...previous };
+  }
+  appSessionCommitBoundaryHook?.();
   active = {
     mode,
     dataOwnerId,

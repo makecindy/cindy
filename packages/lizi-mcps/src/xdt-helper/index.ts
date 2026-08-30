@@ -62,10 +62,10 @@ export {
   type SendToWorkerDeps,
 } from './send_to_worker.js';
 export {
-  registerListWorkerQueueTool,
-  type ListWorkerQueueDeps,
+  registerGetWorkerQueueStatusTool,
+  type GetWorkerQueueStatusDeps,
   type WorkerQueuedMessageEntry,
-} from './list_worker_queue.js';
+} from './get_worker_queue_status.js';
 export {
   registerUpdateQueuedMessageTool,
   type QueuedMessageControlErrorCode,
@@ -75,6 +75,10 @@ export {
   registerCancelQueuedMessageTool,
   type CancelQueuedMessageDeps,
 } from './cancel_queued_message.js';
+export {
+  registerMergeQueuedMessagesTool,
+  type MergeQueuedMessagesDeps,
+} from './merge_queued_messages.js';
 export {
   registerIdleWorkerTool,
   type IdleWorkerDeps,
@@ -112,8 +116,10 @@ export {
   registerSteerSessionTool,
   registerStopSessionTurnTool,
   registerGetSessionRuntimeTool,
+  registerSetSessionRuntimeTool,
   type SessionControlDeps,
   type SessionQueueControlErrorCode,
+  type SessionRuntimeProfile,
   type SessionRuntimeSnapshot,
   type SessionSteerErrorCode,
   type SessionStopErrorCode,

@@ -18,16 +18,21 @@
  */
 
 import { createElement, Fragment } from 'react';
-import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { Session } from '@/lib/ccAgent.types';
-import {
-  addSessionAttention,
-  clearSessionAttention,
-} from '@/lib/sessionAttentionStore';
+import { addSessionAttention, clearSessionAttention } from '@/lib/sessionAttentionStore';
 import { SessionAttentionUrgencyProvider } from '../../contexts/SessionAttentionUrgencyContext';
 import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
 
@@ -48,8 +53,7 @@ vi.mock('../SessionStatusIcon', () => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: unknown) =>
-      typeof fallback === 'string' ? fallback : key,
+    t: (key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : key),
   }),
   // 某些传递依赖(renderer/i18n/index.ts)在 import 期就调 initReactI18next,
   // 提供最小 3rdParty 插件桩让它安静通过。
@@ -82,6 +86,7 @@ vi.mock('@/features/scheduler/lib/scheduleSessionBinding', () => {
 
 vi.mock('@/features/scheduler/lib/scheduleSidebarIndexRuns', () => ({
   loadScheduleSidebarIndexRuns: async () => [],
+  findLatestSidebarIndexRunForSession: () => undefined,
 }));
 
 vi.mock('@/components/sidebar/WorktreeBadge', () => ({
@@ -423,10 +428,7 @@ describe('父层 — 行级 handler 的引用稳定性', () => {
   ];
 
   it('deps 里不得出现每条消息都换引用的 sessions / sessionsById', () => {
-    const source = readFileSync(
-      resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'),
-      'utf8',
-    );
+    const source = readFileSync(resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'), 'utf8');
     for (const name of ROW_HANDLERS) {
       const deps = useCallbackDeps(source, name);
       // 词边界保证 sessionsRef / sessionsByIdRef 不误伤。
@@ -439,10 +441,7 @@ describe('父层 — 行级 handler 的引用稳定性', () => {
     // useSidebarFilter / useCollapsedProjects 都返回裸对象字面量,每次调用换引用。
     // 必须依赖到具体成员(filter.promotePin、collapse.expand …),故用 (?!\.) 放行
     // 成员访问、只拦整个对象。
-    const source = readFileSync(
-      resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'),
-      'utf8',
-    );
+    const source = readFileSync(resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'), 'utf8');
     for (const name of ROW_HANDLERS) {
       const deps = useCallbackDeps(source, name);
       expect(deps, `${name} 的 deps 不得含整个 filter`).not.toMatch(/\bfilter\b(?!\.)/);
@@ -451,29 +450,59 @@ describe('父层 — 行级 handler 的引用稳定性', () => {
   });
 
   it('deps 里不得出现随路由切换而变的 viewedSessionId', () => {
-    const source = readFileSync(
-      resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'),
-      'utf8',
-    );
+    const source = readFileSync(resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'), 'utf8');
     for (const name of ROW_HANDLERS) {
       const deps = useCallbackDeps(source, name);
-      expect(deps, `${name} 的 deps 不得含 viewedSessionId`).not.toMatch(
-        /\bviewedSessionId\b/,
-      );
+      expect(deps, `${name} 的 deps 不得含 viewedSessionId`).not.toMatch(/\bviewedSessionId\b/);
     }
   });
 
   it('handleSessionClick 的 deps 不得含每次点击/切换都变的选择态', () => {
     // 这三个只在点击那一刻读,却会被 setSelectionAnchorSessionId(每次点击必调)
     // 和路由切换带着变 —— 留在 deps 里等于每切换一次就整表重画一遍。
-    const source = readFileSync(
-      resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'),
-      'utf8',
-    );
+    const source = readFileSync(resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'), 'utf8');
     const deps = useCallbackDeps(source, 'handleSessionClick');
     expect(deps).not.toMatch(/\bactiveSessionId\b/);
     expect(deps).not.toMatch(/\bselectedSessionIds\b/);
     expect(deps).not.toMatch(/\bselectionAnchorSessionId\b/);
+  });
+
+  it('handleSessionClick 的 deps 不得含点击清通知就会换引用的集合', () => {
+    // 点进去会先 clearNotification / 清 attention。这些 Set/Map 若留在 deps 里,
+    // 刚点的那一下就会重建 onClick,把「切任务」打成整表重画。
+    const source = readFileSync(resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'), 'utf8');
+    const deps = useCallbackDeps(source, 'handleSessionClick');
+    expect(deps).not.toMatch(/\burgentSet\b/);
+    expect(deps).not.toMatch(/\battentionKinds\b/);
+    expect(deps).not.toMatch(/\brunningSessionIds\b/);
+    expect(deps).not.toMatch(/\bsidebarNotifications\b/);
+  });
+
+  it('无多选时不得每渲染扫描可见行', () => {
+    const source = readFileSync(resolve(__dirname, '..', '..', 'CCAgentSidebarUpper.tsx'), 'utf8');
+    expect(source).not.toMatch(
+      /useEffect\(\s*\(\)\s*=>\s*\{\s*pruneSelectionToRenderedRows\(\);\s*\}\s*\)/,
+    );
+    expect(source).toMatch(/if \(!hasSidebarSelection\) return undefined;/);
+    // 单击锚点不算多选:handleSessionClick 每次普通点击都会写
+    // selectionAnchorSessionId,观察器必须只由非空 selectedSessionIds 驱动。
+    expect(source).toMatch(/const hasSidebarSelection = selectedSessionIds\.size > 0;/);
+    expect(source).not.toMatch(/hasSidebarSelection = selectedSessionIds\.size > 0 \|\|/);
+  });
+
+  it('SessionCard / ProjectNode / AutomationSessionGroupItem 必须 memo 包裹', () => {
+    const sessionCard = readFileSync(resolve(__dirname, '..', 'SessionCard.tsx'), 'utf8');
+    const projectNode = readFileSync(
+      resolve(__dirname, '..', 'sections', 'ProjectNode.tsx'),
+      'utf8',
+    );
+    const automationGroup = readFileSync(
+      resolve(__dirname, '..', 'AutomationSessionGroupItem.tsx'),
+      'utf8',
+    );
+    expect(sessionCard).toMatch(/export const SessionCard = memo\(/);
+    expect(projectNode).toMatch(/export const ProjectNode = memo\(/);
+    expect(automationGroup).toMatch(/export const AutomationSessionGroupItem = memo\(/);
   });
 
   it('runningSessionIds 必须 memo 化(否则每渲染 new Set 打穿整表)', () => {

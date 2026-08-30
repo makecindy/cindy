@@ -1,4 +1,4 @@
-import { Star, Zap } from 'lucide-react';
+import { Lock, Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type {
   FocusEvent as ReactFocusEvent,
@@ -187,6 +187,10 @@ export function UnifiedModelRow({
   layout = 'classic',
   channelLabel,
   onEngineCycle,
+  paymentRequired = false,
+  paymentRequiredLabel,
+  paymentRequiredUnlockLabel,
+  onPaymentRequired,
 }: {
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
@@ -226,34 +230,63 @@ export function UnifiedModelRow({
   channelLabel?: string;
   /** badge 样式行首徽标点按 = 切到下一个候选引擎;单候选行不传(徽标不可点)。 */
   onEngineCycle?: () => void;
+  /** 付费锁定行保留在原位置，可聚焦但不能选中、收藏或打开配置。 */
+  paymentRequired?: boolean;
+  paymentRequiredLabel?: string;
+  paymentRequiredUnlockLabel?: string;
+  onPaymentRequired?: () => void;
 }) {
   const { t } = useTranslation();
   const provider = providers.find((item) => item.id === entry.providerId);
   const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);
-  const reveal = (event: ReactPointerEvent<HTMLDivElement>) => onReveal(anchor, event.currentTarget);
+  const reveal = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!paymentRequired) onReveal(anchor, event.currentTarget);
+  };
   const tripleTitle = `${engineOption.label}${
     config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
   }${config.fast ? ' · Fast' : ''}`;
+  const paymentRequiredActionLabel = paymentRequired
+    ? [entry.displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
+        .filter(Boolean)
+        .join(' · ')
+    : undefined;
 
   // 行根节点的交互与语义两种样式完全一致(选中/浮层/键盘),只有布局不同 —— 抽成
   // 共享 props,badge 分支不复制一遍手写事件导致行为漂移。
   const rowRootProps = {
     role: 'option' as const,
     'aria-selected': selected,
+    // 付费行不能被选为模型，但它本身是“查看付费说明”的可执行入口；只有真正
+    // 阻断全部交互的状态才声明 disabled，避免读屏软件抑制 Enter / Space 激活。
+    'aria-disabled': interactionDisabled ? true : undefined,
+    'aria-label': paymentRequiredActionLabel,
     // ← 开配置浮层是这一行唯一的键盘入口,不声明就只有摸索得到(读屏用户尤甚)。
-    'aria-keyshortcuts': 'ArrowLeft',
+    'aria-keyshortcuts': paymentRequired ? undefined : 'ArrowLeft',
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
     'data-unified-anchor': anchorKey(anchor),
     onPointerEnter: reveal,
     onPointerMove: reveal,
     onPointerLeave: onLeave,
-    onFocus: (event: ReactFocusEvent<HTMLDivElement>) => onReveal(anchor, event.currentTarget),
+    onFocus: (event: ReactFocusEvent<HTMLDivElement>) => {
+      if (!paymentRequired) onReveal(anchor, event.currentTarget);
+    },
     onBlur: (event: ReactFocusEvent<HTMLDivElement>) => onBlurAway(event.relatedTarget),
-    onClick: onSelect,
+    onClick: () => {
+      if (interactionDisabled) return;
+      if (paymentRequired) onPaymentRequired?.();
+      else onSelect();
+    },
     onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (event.target !== event.currentTarget || interactionDisabled) return;
+      if (paymentRequired) {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onPaymentRequired?.();
+        }
+        return;
+      }
       if (event.key === 'ArrowLeft') {
         event.preventDefault();
         onRevealForKeyboard(anchor, event.currentTarget);
@@ -268,7 +301,7 @@ export function UnifiedModelRow({
   const starButton = (
     <button
       type="button"
-      disabled={interactionDisabled}
+      disabled={interactionDisabled || paymentRequired}
       onClick={(event) => {
         event.stopPropagation();
         onStar();
@@ -293,6 +326,25 @@ export function UnifiedModelRow({
       <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
     </button>
   );
+  const paymentRequiredBadge =
+    paymentRequired && paymentRequiredLabel ? (
+      <span
+        data-payment-required-badge
+        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
+      >
+        <Lock size={10} />
+        {paymentRequiredLabel}
+      </span>
+    ) : null;
+  const paymentRequiredUnlock =
+    paymentRequired && paymentRequiredUnlockLabel ? (
+      <span
+        data-payment-required-unlock
+        className="invisible shrink-0 select-none text-11 font-medium text-[var(--text-secondary)] group-hover/row:visible group-focus-within/row:visible"
+      >
+        {paymentRequiredUnlockLabel}
+      </span>
+    ) : null;
 
   if (layout === 'badge') {
     const tint = ENGINE_BADGE_TINT[config.engine];
@@ -320,12 +372,12 @@ export function UnifiedModelRow({
           'group/row flex h-[38px] w-full cursor-pointer items-center gap-2 rounded-[10px] px-2.5 transition-colors duration-100',
           'hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
           (selected || active) && 'bg-[var(--model-item-hover)]',
-          interactionDisabled && 'cursor-not-allowed opacity-50',
+          (interactionDisabled || paymentRequired) && 'cursor-not-allowed opacity-50',
         )}
       >
         {/* 引擎徽标 = 本样式唯一的图标系统:官方 mark + 品牌色底。可点时在候选引擎间
             快切(与浮层引擎胶囊同一条 applyEngine 链路,语义一致);单候选行只作标识。 */}
-        {onEngineCycle && !interactionDisabled ? (
+        {onEngineCycle && !interactionDisabled && !paymentRequired ? (
           <button
             type="button"
             data-engine-badge={config.engine}
@@ -351,7 +403,9 @@ export function UnifiedModelRow({
           </span>
         )}
         <span
-          title={entry.description ? `${entry.displayName} — ${entry.description}` : entry.displayName}
+          title={
+            entry.description ? `${entry.displayName} — ${entry.description}` : entry.displayName
+          }
           className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--model-item-text)]"
         >
           {entry.displayName}
@@ -391,6 +445,7 @@ export function UnifiedModelRow({
             引擎不再进右簇 —— 行首徽标已承载。 */}
         <span
           title={tripleTitle}
+          data-model-row-meta
           // 外侧簇颜色恒定(Chris 2026-08-16 实测:调过思考深度后行右侧不该变色;
           // 「已自定义」的信号由浮层底栏承载,不再用行内提亮表达)。
           className="ml-auto flex shrink-0 items-center gap-2 text-12 text-[var(--text-tertiary)]"
@@ -404,6 +459,8 @@ export function UnifiedModelRow({
             />
           )}
           {config.effort && <span>{effortLabelOf(config.agent, config.effort)}</span>}
+          {paymentRequiredUnlock}
+          {paymentRequiredBadge}
           {channelLabel && (
             <span
               data-channel-tag
@@ -424,7 +481,7 @@ export function UnifiedModelRow({
         'group/row flex w-full cursor-pointer flex-col rounded-[10px] px-2.5 py-2 transition-colors duration-100',
         'hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         (selected || active) && 'bg-[var(--model-item-hover)]',
-        interactionDisabled && 'cursor-not-allowed opacity-50',
+        (interactionDisabled || paymentRequired) && 'cursor-not-allowed opacity-50',
       )}
     >
       <div className="flex items-center gap-2">
@@ -485,22 +542,28 @@ export function UnifiedModelRow({
         {starButton}
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
             设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
-        <span
-          title={tripleTitle}
-          data-unified-triple
-          // 颜色恒定,不随「已自定义」提亮(Chris 2026-08-16 裁决,同 badge 样式)。
-          className="ml-auto flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 text-[var(--text-tertiary)]"
-        >
-          <engineOption.Mark size={12} className="shrink-0" />
-          {config.effort && <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>}
-          {config.fast && (
-            <Zap
-              size={11}
-              fill="currentColor"
-              className="shrink-0"
-              aria-label={t('newChat.modelSelector.meta.fastBadge')}
-            />
-          )}
+        <span data-model-row-meta className="ml-auto flex shrink-0 items-center gap-2">
+          <span
+            title={tripleTitle}
+            data-unified-triple
+            // 颜色恒定,不随「已自定义」提亮(Chris 2026-08-16 裁决,同 badge 样式)。
+            className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 text-[var(--text-tertiary)]"
+          >
+            <engineOption.Mark size={12} className="shrink-0" />
+            {config.effort && (
+              <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>
+            )}
+            {config.fast && (
+              <Zap
+                size={11}
+                fill="currentColor"
+                className="shrink-0"
+                aria-label={t('newChat.modelSelector.meta.fastBadge')}
+              />
+            )}
+          </span>
+          {paymentRequiredUnlock}
+          {paymentRequiredBadge}
         </span>
         {/* 行尾不放 ✅(Chris 2026-08-13 裁决:选中已有整行底色,再加勾是重复信号,
             还平白吃掉一列宽度);选中态语义由 aria-selected 承载。 */}

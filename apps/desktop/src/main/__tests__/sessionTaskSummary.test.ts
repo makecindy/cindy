@@ -240,19 +240,22 @@ describe('sessionListPreviewPatch', () => {
 
 describe('turn-done list preview refresh', () => {
   it('回合结束后先刷新列表预览,再按需生成置顶摘要', () => {
-    const registerSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'register.ts'), 'utf8');
+    const registerSource = readFileSync(
+      resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
+      'utf8',
+    );
     const summarySource = readFileSync(resolve(__dirname, '..', 'sessionTaskSummary.ts'), 'utf8');
     expect(registerSource).toContain('await refreshSessionListPreview(session.id);');
-    expect(registerSource).toContain('await maybeGenerateSessionTaskSummary(session.id, { force: true });');
+    expect(registerSource).toContain(
+      'await maybeGenerateSessionTaskSummary(session.id, { force: true });',
+    );
     expect(registerSource.indexOf('await refreshSessionListPreview(session.id);')).toBeLessThan(
       registerSource.indexOf('await maybeGenerateSessionTaskSummary(session.id, { force: true });'),
     );
     expect(summarySource).toContain('export async function refreshSessionListPreview');
     expect(summarySource).toContain('const ownerScope = captureOwnerScope();');
     expect(summarySource).toContain('if (!isOwnerScopeCurrent(ownerScope)) return;');
-    expect(summarySource).toContain(
-      'broadcastSessionListPreview(sessionId, preview, ownerScope);',
-    );
+    expect(summarySource).toContain('broadcastSessionListPreview(sessionId, preview, ownerScope);');
     expect(summarySource).toContain(
       "import { latestMessageText, latestVisiblePreview } from './localDb/latestMessageText.js';",
     );
@@ -271,8 +274,9 @@ describe('turn-done list preview refresh', () => {
     const updateEnd = messagesSource.indexOf('function clampLimit', updateStart);
     const updateBlock = messagesSource.slice(updateStart, updateEnd);
     expect(updateBlock).toContain('const ownerScope = captureOwnerBroadcastScope();');
+    expect(updateBlock).toContain("await dbClient.tx('message.updateContent'");
     expect(updateBlock.indexOf('const ownerScope = captureOwnerBroadcastScope();')).toBeLessThan(
-      updateBlock.indexOf('.update(messages)'),
+      updateBlock.indexOf("await dbClient.tx('message.updateContent'"),
     );
     expect(updateBlock).toContain(
       'await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);',
@@ -285,17 +289,17 @@ describe('turn-done list preview refresh', () => {
     expect(broadcastBlock).toContain('latest = await latestVisiblePreviewRow(sessionId);');
     expect(broadcastBlock).toContain('if (latest?.clientId !== row.clientId) return;');
     expect(broadcastBlock).toContain(
-      'preview: extractMessagePreview(row.content, row.role)',
+      'const preview = extractMessagePreview(row.content, row.role);',
     );
+    expect(broadcastBlock).not.toContain('await persistSessionListPreview');
+    expect(broadcastBlock).toContain('patch: { preview }');
     expect(broadcastBlock).not.toContain('if (!preview) return;');
     expect(latestSource).toContain('export async function latestVisiblePreviewRow');
     expect(latestSource).toContain(
       'or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt))',
     );
     expect(latestSource).toContain('const joinedMessageRowid = sql<number>`"messages"."rowid"`;');
-    expect(latestSource).toContain(
-      '.orderBy(desc(messages.createdAt), desc(joinedMessageRowid))',
-    );
+    expect(latestSource).toContain('.orderBy(desc(messages.createdAt), desc(joinedMessageRowid))');
     expect(latestSource).toContain(
       "CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1",
     );

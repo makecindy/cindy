@@ -85,8 +85,35 @@ function toRegistryEffortMetadata(
   return { efforts: [...efforts], defaultEffort };
 }
 
+function consensusRegistryEffortMetadata(
+  entries: readonly ModelRegistry["models"][number][],
+  agent: AgentKind,
+): RegistryEffortMetadata | undefined {
+  const uniqueEntries = [
+    ...new Map(entries.map((entry) => [entry.id, entry])).values(),
+  ];
+  const metadata = uniqueEntries.map((entry) =>
+    toRegistryEffortMetadata(entry, agent),
+  );
+  const first = metadata[0];
+  if (
+    !first ||
+    metadata.some(
+      (value) =>
+        !value ||
+        value.defaultEffort !== first.defaultEffort ||
+        value.efforts.length !== first.efforts.length ||
+        value.efforts.some((effort, index) => effort !== first.efforts[index]),
+    )
+  ) {
+    return undefined;
+  }
+  return first;
+}
+
 /**
- * 仅在模型能由当前 agent 的 Registry route 唯一识别时复用 effort 元数据。
+ * 仅在模型能由当前 agent 的 Registry route 唯一识别，或所有匹配
+ * 条目的 effort 元数据完全一致时复用该能力。
  * 自定义 provider 的 id、model id 与路由保持原值；Pi 能力继续只认逐模型显式配置。
  */
 function registryEffortMetadata(
@@ -104,11 +131,9 @@ function registryEffortMetadata(
         (entry.id === modelId || route.modelId === modelId),
     ),
   );
-  const exactUnique = [
-    ...new Map(exactMatches.map((entry) => [entry.id, entry])).values(),
-  ];
-  if (exactUnique.length === 1) return toRegistryEffortMetadata(exactUnique[0]!, agent);
-  if (exactUnique.length > 1) return undefined; // ambiguous, don't strip
+  if (exactMatches.length > 0) {
+    return consensusRegistryEffortMetadata(exactMatches, agent);
+  }
 
   // Stage 2 — prefix fallback: only when Stage 1 found nothing.
   // Strip common provider prefixes so third-party custom API models
@@ -126,11 +151,7 @@ function registryEffortMetadata(
         (stripped.has(entry.id) || stripped.has(route.modelId)),
     ),
   );
-  const fallbackUnique = [
-    ...new Map(fallbackMatches.map((entry) => [entry.id, entry])).values(),
-  ];
-  if (fallbackUnique.length !== 1) return undefined;
-  return toRegistryEffortMetadata(fallbackUnique[0]!, agent);
+  return consensusRegistryEffortMetadata(fallbackMatches, agent);
 }
 
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */

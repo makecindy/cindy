@@ -19,6 +19,7 @@ const readSource = (...segments: string[]): string =>
   readFileSync(resolve(__dirname, '..', ...segments), 'utf8').replace(/\r\n?/g, '\n');
 
 const newMakerDraftRouteSource = readSource('features', 'cc-agent', 'NewMakerDraftRoute.tsx');
+const ccAgentSessionViewSource = readSource('features', 'cc-agent', 'CCAgentSessionView.tsx');
 
 const worktreeChipsSource = readSource('components', 'new-chat', 'WorktreeChipsRow.tsx');
 
@@ -551,6 +552,9 @@ describe('Shared create project picker', () => {
     );
     // claude-code → cc 归一,fail-open(未加载不隐藏)。
     expect(availableAgentsHookSource).toContain("agent === 'claude-code' ? 'cc' : agent");
+    expect(availableAgentsHookSource).toContain('refreshLocalCapabilities');
+    expect(availableAgentsHookSource).toContain('evictDeviceCapabilities');
+    expect(availableAgentsHookSource).toContain('prefetchDeviceCapabilities');
     // 未加载完成时不隐藏任何入口(loaded 保持 false → 空 hidden)。
     expect(availableAgentsHookSource).toMatch(/loaded/);
 
@@ -560,11 +564,14 @@ describe('Shared create project picker', () => {
       /opt\.vendor === value \|\| !hiddenVendors\.includes\(opt\.vendor\)/,
     );
 
-    // 路由:以被控端(deviceId)为准计算 hidden;选中值被隐藏时 coerce 到首个可用。
+    // 路由以被控端(deviceId)为准计算 hidden。不可用性变化只收窄可选入口；不得由
+    // 监听旧 draft 的 effect 再写回选中值，否则会覆盖同轮刚应用的新默认组合。
     expect(newMakerDraftRouteSource).toMatch(
       /useAvailableAgents\(\s*effectiveDeviceLinkDeviceId,?\s*\)/,
     );
-    expect(newMakerDraftRouteSource).toMatch(/hiddenSwitcherVendors\.includes\(draft\.vendor\)/);
+    expect(newMakerDraftRouteSource).not.toMatch(
+      /hiddenSwitcherVendors\.includes\(draft\.vendor\)/,
+    );
 
     // 2026-08-12 统一模型选择器(M5):新会话工具条上的引擎下拉常态已撤除(只在
     // device-link 老被控端的降级分支里保留),上面那条 hiddenVendors 断言因此不再是
@@ -835,7 +842,7 @@ describe('Shared create project picker', () => {
     // extraDirs 只在换设备、或进入「对话」时清 —— 同机换项目那些目录仍然有效,
     // 不传则 store 保持原值。
     expect(action).toContain(
-      '...(deviceChanged || req.workingDir == null ? { extraDirs: [] } : {}),',
+      '...(deviceChanged || req.workingDir == null ? { extraDirs: [], writableDirs: [] } : {}),',
     );
     // 但 worktree 的 repo/branch 探测态照常重置 —— 换项目就是换 repo；用户偏好保留。
     expect(action).toContain('if (deviceChanged || workingDirChanged) {');
@@ -1507,7 +1514,39 @@ describe('Shared create project picker', () => {
     // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
     expect(chatInputSource).toContain('if (onExtraDirsChange) {');
     expect(chatInputSource).toContain(
-      'hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}',
+      'hasReferenceDirs={!settingsLocked && (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)}',
+    );
+  });
+
+  // Writable-directory selection uses the controller's native picker. SSH and device-link
+  // workspaces both execute on another filesystem, so a local absolute path must never be
+  // offered as a remote writable root. Existing remote grants remain visible/removable when
+  // the executing side explicitly supports the setter.
+  it('hides remote add while preserving capability-gated writable grant revocation', () => {
+    expect(newMakerDraftRouteSource).toContain(
+      'isDeviceLinkDraft || isRemoteProjectDraft\n                        ? undefined\n                        : handleWritableDirsChange',
+    );
+    expect(agentCapabilitiesHookSource).toContain('writableDirs?: CapabilityStatus;');
+    expect(ccAgentSessionViewSource).toContain(
+      'canExposeWritableDirsChange({\n      capabilities: sessionCaps,',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'writableDirsChangeSupported ? handleWritableDirsChange : undefined',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'writableDirsChangeSupported ? handleWritableDirRemove : undefined',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true',
+    );
+    expect(chatInputSource).toContain('&& writableGrantScope');
+    expect(chatInputSource).toContain('&& !remoteHostId');
+    expect(chatInputSource).toContain('&& deviceLinkDeviceId === null');
+    expect(chatInputSource).toContain('!settingsLocked && onWritableDirsChange');
+    expect(chatInputSource).toContain('void onWritableDirRemove(path);');
+    expect(chatInputSource).toContain('(writableDirs ?? []).filter((item) => item !== path)');
+    expect(ccAgentSessionViewSource).toContain(
+      'const isRemoteWorktreeSession = Boolean(session?.deviceLinkDeviceId || session?.remoteHostId)',
     );
   });
 
