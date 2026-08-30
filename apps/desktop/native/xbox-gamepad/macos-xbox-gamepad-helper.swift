@@ -24,15 +24,40 @@ func emit(_ payload: [String: Any]) {
   fflush(stdout)
 }
 
-func isXboxController(_ controller: GCController) -> Bool {
-  if controller.extendedGamepad is GCXboxGamepad { return true }
+func isSupportedGamepad(_ controller: GCController) -> Bool {
+  controller.extendedGamepad != nil
+}
+
+func resolveGamepadFamily(from controller: GCController) -> String {
+  if controller.extendedGamepad is GCXboxGamepad { return "xbox" }
+  if controller.extendedGamepad is GCDualShockGamepad { return "playstation" }
   let vendor = controller.vendorName?.lowercased() ?? ""
   let category = controller.productCategory.lowercased()
   let haystack = vendor + " " + category
+  if haystack.contains("dualsense")
+    || haystack.contains("dualshock")
+    || haystack.contains("playstation")
+    || haystack.contains("sony")
+    || haystack.range(of: #"\bps[45]\b"#, options: .regularExpression) != nil
+  {
+    return "playstation"
+  }
+  if haystack.contains("nintendo")
+    || haystack.contains("switch")
+    || haystack.contains("joy-con")
+    || haystack.contains("joycon")
+  {
+    return "nintendo"
+  }
   // Wired Xbox pads often advertise USB product "Controller" and vendor Microsoft.
-  return haystack.contains("xbox")
+  if haystack.contains("xbox")
+    || haystack.contains("elite")
     || haystack.contains("microsoft")
     || vendor == "controller"
+  {
+    return "xbox"
+  }
+  return "generic"
 }
 
 func homePressed(_ controller: GCController) -> Bool {
@@ -54,7 +79,12 @@ func controllerTransport(for controller: GCController) -> String {
   if controllerTokens.isEmpty { return "unknown" }
 
   let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-  IOHIDManagerSetDeviceMatching(manager, [kIOHIDVendorIDKey as String: 0x45e] as CFDictionary)
+  let matching = [
+    [kIOHIDVendorIDKey as String: 0x045E],
+    [kIOHIDVendorIDKey as String: 0x054C],
+    [kIOHIDVendorIDKey as String: 0x057E],
+  ] as CFArray
+  IOHIDManagerSetDeviceMatchingMultiple(manager, matching)
   IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
   defer { IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone)) }
   guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return "unknown" }
@@ -84,7 +114,10 @@ func transportMatchTokens(_ values: String?...) -> Set<String> {
     }
   }
   // Generic Microsoft HID tokens would match keyboards, mice, and dongles.
-  tokens.subtract(["usb", "hid", "device", "microsoft", "controller"])
+  tokens.subtract([
+    "usb", "hid", "device", "microsoft", "sony", "nintendo", "controller",
+    "interactive", "entertainment",
+  ])
   return tokens
 }
 
@@ -102,6 +135,7 @@ func presencePayload(from controller: GCController) -> [String: Any] {
     "present": true,
     "name": controller.vendorName ?? controller.productCategory,
     "category": controller.productCategory,
+    "family": resolveGamepadFamily(from: controller),
     "transport": controllerTransport(for: controller),
     "batteryState": "unknown",
   ]
@@ -115,11 +149,13 @@ func presencePayload(from controller: GCController) -> [String: Any] {
   return payload
 }
 
+let GAMEPAD_FAMILIES = ["xbox", "playstation", "nintendo", "generic"]
+
 final class XboxGamepadReporter {
-  private var observed: GCController?
+  private var observed: [String: GCController] = [:]
   /// nil until the first refresh, so an empty device list still gets logged once.
   private var lastSeenSummary: String?
-  private var lastPresenceSignature = ""
+  private var lastPresenceSignature: [String: String] = [:]
 
   func start() {
     if #available(macOS 11.3, *) {
@@ -148,8 +184,8 @@ final class XboxGamepadReporter {
       .map { controller in
         let vendor = controller.vendorName ?? "?"
         let category = controller.productCategory
-        let xboxPad = controller.extendedGamepad is GCXboxGamepad
-        return "\(vendor)/\(category)/xboxPad=\(xboxPad)"
+        let family = resolveGamepadFamily(from: controller)
+        return "\(vendor)/\(category)/family=\(family)"
       }
       .joined(separator: "; ")
     if summary != lastSeenSummary {
@@ -160,37 +196,49 @@ final class XboxGamepadReporter {
         "message": summary.isEmpty ? "no GameController devices" : "controllers: \(summary)",
       ])
     }
-    let next = all.first(where: isXboxController)
-    if next == nil {
-      observed = nil
-      lastPresenceSignature = ""
-      emit(["kind": "presence", "present": false])
-      return
+
+    var next: [String: GCController] = [:]
+    for controller in all where isSupportedGamepad(controller) {
+      let family = resolveGamepadFamily(from: controller)
+      if next[family] == nil { next[family] = controller }
     }
-    if observed !== next {
-      observed = next
-      attach(next!)
+
+    for family in GAMEPAD_FAMILIES {
+      guard let controller = next[family] else {
+        if observed[family] != nil || lastPresenceSignature[family] != "absent" {
+          observed[family] = nil
+          lastPresenceSignature[family] = "absent"
+          emit(["kind": "presence", "present": false, "family": family])
+        }
+        continue
+      }
+      if observed[family] !== controller {
+        observed[family] = controller
+        attach(controller)
+      }
+      emitPresence(from: controller, family: family)
+      emitFrame(from: controller, family: family)
     }
-    emitPresence(from: next!)
-    emitFrame(from: next!)
   }
 
   private func attach(_ controller: GCController) {
     guard let pad = controller.extendedGamepad else { return }
     pad.valueChangedHandler = { [weak self] _, _ in
-      self?.emitFrame(from: controller)
+      let family = resolveGamepadFamily(from: controller)
+      self?.emitFrame(from: controller, family: family)
     }
   }
 
-  private func emitPresence(from controller: GCController) {
-    let payload = presencePayload(from: controller)
+  private func emitPresence(from controller: GCController, family: String) {
+    var payload = presencePayload(from: controller)
+    payload["family"] = family
     let signature = String(describing: payload)
-    if signature == lastPresenceSignature { return }
-    lastPresenceSignature = signature
+    if signature == lastPresenceSignature[family] { return }
+    lastPresenceSignature[family] = signature
     emit(payload)
   }
 
-  private func emitFrame(from controller: GCController) {
+  private func emitFrame(from controller: GCController, family: String) {
     guard let pad = controller.extendedGamepad else { return }
     let buttons: [String: Any] = [
       "a": pad.buttonA.isPressed,
@@ -219,6 +267,7 @@ final class XboxGamepadReporter {
     ]
     emit([
       "kind": "frame",
+      "family": family,
       "buttons": buttons,
       "axes": axes,
       "ltAnalog": Double(pad.leftTrigger.value),

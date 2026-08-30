@@ -483,6 +483,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     const sourceKey = catalogSourceKey(source);
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
+    let authorityCatalog: CatalogLoadResult['authorityCatalog'] = null;
     let capabilityEvidence: CatalogCapabilityEvidence = 'fallback';
     let unverifiedXdMediaKinds: CatalogLoadResult['unverifiedXdMediaKinds'] = [
       'image',
@@ -490,12 +491,13 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
       'embedding',
     ];
     activeInflight = loadCatalog(source, io, (result) => {
+      authorityCatalog = result.authorityCatalog;
       capabilityEvidence = result.capabilityEvidence;
       unverifiedXdMediaKinds = result.unverifiedXdMediaKinds;
     })
       .then(async (catalog) => {
         activeCatalogSourceKey = sourceKey;
-        setActiveCatalog(catalog, { capabilityEvidence, unverifiedXdMediaKinds });
+        setActiveCatalog(catalog, { authorityCatalog, capabilityEvidence, unverifiedXdMediaKinds });
         syncLocalCatalogOverridesIntoActiveCatalog();
         getActiveCatalog();
         logModelPlaneWarnings();
@@ -557,6 +559,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   setActiveCatalog(BUNDLED_CATALOG, { capabilityEvidence: 'fallback' });
   broadcastReferenceModelPricing();
 
+  let authorityCatalog: CatalogLoadResult['authorityCatalog'] = null;
   let capabilityEvidence: CatalogCapabilityEvidence = 'fallback';
   let unverifiedXdMediaKinds: CatalogLoadResult['unverifiedXdMediaKinds'] = [
     'image',
@@ -564,6 +567,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
     'embedding',
   ];
   const flight = loadCatalog(source, io, (result) => {
+    authorityCatalog = result.authorityCatalog;
     capabilityEvidence = result.capabilityEvidence;
     unverifiedXdMediaKinds = result.unverifiedXdMediaKinds;
   })
@@ -575,7 +579,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
         return getActiveCatalog();
       }
       activeCatalogSourceKey = sourceKey;
-      setActiveCatalog(catalog, { capabilityEvidence, unverifiedXdMediaKinds });
+      setActiveCatalog(catalog, { authorityCatalog, capabilityEvidence, unverifiedXdMediaKinds });
       broadcastReferenceModelPricing();
       return getActiveCatalog();
     })
@@ -615,7 +619,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   }
   const generation = endpointReloadGeneration;
   const flight = loadCatalogWithSource(sourceConfig, io)
-    .then(({ catalog, source, capabilityEvidence, unverifiedXdMediaKinds }) => {
+    .then(({ catalog, authorityCatalog, source, capabilityEvidence, unverifiedXdMediaKinds }) => {
       if (source === 'bundled') {
         throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
       }
@@ -639,6 +643,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
           // 选中 current 还是 fallback，都必须把完整快照与能力证据原子安装。
           // commitActiveCatalogSnapshot 会保留完整快照与证据均相同的精确 no-op。
           commitActiveCatalogSnapshot(catalog, {
+            authorityCatalog,
             capabilityEvidence,
             unverifiedXdMediaKinds,
           });
@@ -663,7 +668,11 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
           return getActiveCatalog();
         }
       }
-      commitActiveCatalogSnapshot(catalog, { capabilityEvidence, unverifiedXdMediaKinds });
+      commitActiveCatalogSnapshot(catalog, {
+        authorityCatalog,
+        capabilityEvidence,
+        unverifiedXdMediaKinds,
+      });
       // computeMerged 在这里同步完成，确保告警属于刚提交的同一代目录；不能读取
       // 上一代惰性缓存留下的 warnings。
       const activeCatalog = getActiveCatalog();

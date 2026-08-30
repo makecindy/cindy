@@ -423,6 +423,11 @@
     "continueTask": "Continue Task",
     "retry": "Retry",
     "ignore": "Ignore",
+    "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
+    "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",
+    "toolUseLoopDetectedConsecutiveWithCount": "The model repeated the same tool call {{count}} times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
+    "toolUseLoopDetectedPingPongWithCount": "The model kept cycling between tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
+    "toolUseLoopDetectedRotationWithCount": "The model kept rotating through tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
     "codexThreadLost": "The Codex auth mode changed, so this session can't continue — start a new session to apply it.",
     "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (you can Fork to drop the encrypted protocol content and continue in a new session)."
   },

@@ -49,6 +49,7 @@ import type {
   RecoveryRule,
   RequestTransform,
   RequestTransformCtx,
+  OversizedRequestCompactor,
   ResponseObserver,
   ResponseObserverSink,
   ResponseTransform,
@@ -59,6 +60,9 @@ import type {
 // 留 32MB 给极端的长上下文 + 大附件;超出回 413,避免内存被打爆。
 // 调用方可用 ProxyOptions.maxRequestBodyBytes 覆盖(codex 全量重发历史的场景需要更大)。
 const DEFAULT_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
+// Oversized compaction is intentionally bounded.  A request beyond this
+// ingress window is rejected without buffering it into memory.
+const MAX_REQUEST_INGRESS_BYTES = 64 * 1024 * 1024;
 
 // 413 响应写回后,等客户端读到响应自行断开的宽限期;超时强制 destroy 防连接悬挂。
 const REQUEST_TOO_LARGE_DRAIN_TIMEOUT_MS = 10 * 1000;
@@ -595,6 +599,18 @@ function collectRequestBody(req: IncomingMessage, maxBytes: number): Promise<Buf
   });
 }
 
+/** 丢弃未读完的请求体。early 503 必须先 drain 再结束响应,否则 Node 会 RST 客户端。 */
+function drainRequest(req: IncomingMessage): Promise<void> {
+  if (req.readableEnded || req.destroyed) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = (): void => resolve();
+    req.once('end', done);
+    req.once('close', done);
+    req.once('error', done);
+    req.resume();
+  });
+}
+
 /**
  * 请求 body 超限的统一收尾:先把**完整的 413 响应**写回、再让连接关闭,顺序不能反。
  * 历史实现是先 req.destroy() 再写 413 —— socket 已死,413 永远到不了客户端,
@@ -621,6 +637,7 @@ function respondRequestTooLarge(opts: {
   /** Content-Length 预检命中时的声明字节数;流式守卫命中时为 null。 */
   declaredBytes: number | null;
   receivedBytes: number;
+  reason?: 'request_body_too_large';
 }): void {
   const { req, res, logger } = opts;
   logger.warn?.('✖ request body exceeds proxy limit → 413', {
@@ -635,6 +652,7 @@ function respondRequestTooLarge(opts: {
   const payload = Buffer.from(JSON.stringify({
     error: {
       type: 'proxy_error',
+      reason: opts.reason ?? 'request_body_too_large',
       message: `request body too large: ${opts.declaredBytes ?? `>${opts.receivedBytes}`} bytes exceeds proxy limit of ${opts.limitBytes} bytes`,
     },
   }));
@@ -682,16 +700,19 @@ async function runTransforms(
   transforms: RequestTransform[],
   ctx: RequestTransformCtx,
   logger: ProxyLogger,
+  preParsed?: unknown,
 ): Promise<Buffer | null> {
   if (transforms.length === 0) return null;
   if (!contentType.toLowerCase().startsWith('application/json')) return null;
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawBody.toString('utf8'));
-  } catch (err) {
-    logger.warn?.('json parse failed, falling back to passthrough', { err: String(err) });
-    return null;
+  let parsed: unknown = preParsed;
+  if (preParsed === undefined) {
+    try {
+      parsed = JSON.parse(rawBody.toString('utf8'));
+    } catch (err) {
+      logger.warn?.('json parse failed, falling back to passthrough', { err: String(err) });
+      return null;
+    }
   }
 
   let current: unknown = parsed;
@@ -892,6 +913,9 @@ function forward(
   // 为 true 时启用 2xx 成功响应的流式有效性门(#2242):空 2xx / 非 SSE 2xx /
   // 零事件 SSE 不再原样透传给客户端,转成结构化 502。false 保持字节级透传。
   requestDeclaredStream = false,
+  // 透明重试前再跑同一条 dispatch gate。返回 false = 已改道(典型 503),
+  // 不得带着旧 headerOverride 再发一次。省略 = 与扩展前一样直接重发。
+  beforeRetry?: () => Promise<boolean>,
 ): void {
   // 客户端已断开(典型:400 缓冲期间断开后走到透明重试)——'close' 已经发过,
   // 下面挂的中断传播 listener 永远不会触发,直接不发起上游请求。
@@ -1138,29 +1162,55 @@ function forward(
               appliedRule.onRetry?.(threadId, model);
             }
           }
-          forward(
-            target,
-            method,
-            path,
-            headers,
-            retryBody,
-            clientRes,
-            logger,
-            recoveryRules,
-            reqId,
-            false,
-            overrideTarget,
-            headerOverride,
-            headerDelete,
-            responseObserver,
-            transformResponse,
-            clientModel,
-            outboundProxy,
-            pathOverride,
-            responseToolUseIds,
-            threadMintedIdCache,
-            requestDeclaredStream,
-          );
+          const retry = (): void => {
+            forward(
+              target,
+              method,
+              path,
+              headers,
+              retryBody,
+              clientRes,
+              logger,
+              recoveryRules,
+              reqId,
+              false,
+              overrideTarget,
+              headerOverride,
+              headerDelete,
+              responseObserver,
+              transformResponse,
+              clientModel,
+              outboundProxy,
+              pathOverride,
+              responseToolUseIds,
+              threadMintedIdCache,
+              requestDeclaredStream,
+              beforeRetry,
+            );
+          };
+          if (!beforeRetry) {
+            retry();
+            return;
+          }
+          void beforeRetry().then((proceed) => {
+            if (!proceed) return;
+            if (clientRes.destroyed) return;
+            retry();
+          }).catch((err) => {
+            logger.error?.('retry dispatch gate failed', {
+              reqId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+            if (clientRes.destroyed || clientRes.headersSent) return;
+            clientRes.writeHead(503, {
+              'content-type': 'application/json',
+              'cache-control': 'no-store',
+              'retry-after': '1',
+            });
+            clientRes.end(JSON.stringify({
+              error: { type: 'proxy_error', message: 'dispatch revalidation failed' },
+            }));
+          });
           return;
         }
         // 无规则命中: 把这条 400 原样回给客户端 + 记 warn 日志 (与下方非 2xx 分支同语义)。
@@ -1636,6 +1686,28 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const logger = opts.logger ?? {};
   const host = opts.host ?? '127.0.0.1';
   const maxBodyBytes = opts.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
+  const oversizedRequestCompactor: OversizedRequestCompactor | undefined = opts.oversizedRequestCompactor;
+  // Treat a malformed ingress override as unset.  Letting NaN reach the
+  // stream guard would make `total > NaN` false forever and turn the bounded
+  // ingress into an unbounded read.
+  const configuredOversizedIngressBytes = opts.oversizedRequestIngressBytes;
+  const oversizedIngressOverride =
+    typeof configuredOversizedIngressBytes === 'number'
+      && Number.isFinite(configuredOversizedIngressBytes)
+      && configuredOversizedIngressBytes > 0
+      ? configuredOversizedIngressBytes
+      : undefined;
+  const oversizedIngressBytes = oversizedRequestCompactor
+    ? maxBodyBytes >= MAX_REQUEST_INGRESS_BYTES
+      ? maxBodyBytes
+      : Math.max(
+        maxBodyBytes,
+        Math.min(
+          MAX_REQUEST_INGRESS_BYTES,
+          oversizedIngressOverride ?? maxBodyBytes * 2,
+        ),
+      )
+    : maxBodyBytes;
   // 入站请求 body dump 默认关(仅显式诊断时开):高并发下 64KiB×每请求的日志
   // 构造/落盘/终端镜像会占满宿主 main event loop,详见 ProxyOptions 注释。
   const dumpRequestBody = opts.debugDumpRequestBody === true;
@@ -1690,6 +1762,42 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       headerDelete: decision?.headerDelete,
       pathOverride,
     };
+  };
+
+  /**
+   * 凭证出站前的同步门。请求开始(读 body 前)盖章,routing 后、异步 transform /
+   * outbound 后、透明重试前再看一眼 owner-boundary:返回 localHandler 则改道本地
+   * 响应,不再 forward。hook 抛错也 fail-closed,避免把决策时选中的 headerOverride /
+   * 占位 key 打出去。
+   */
+  const applyDispatchGate = (
+    decision: RoutingDecision | null,
+    reqId: number,
+    ctx: RequestTransformCtx,
+  ): RoutingDecision | null => {
+    const hook = opts.revalidateBeforeDispatch;
+    if (!hook) return decision;
+    try {
+      return hook(decision, ctx) ?? decision;
+    } catch (err) {
+      logger.warn?.('revalidateBeforeDispatch threw; refusing dispatch', {
+        reqId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return {
+        localHandler: async ({ res }) => {
+          if (res.headersSent) return;
+          res.writeHead(503, {
+            'content-type': 'application/json',
+            'cache-control': 'no-store',
+            'retry-after': '1',
+          });
+          res.end(JSON.stringify({
+            error: { type: 'proxy_error', message: 'dispatch revalidation failed' },
+          }));
+        },
+      };
+    }
   };
 
   // 出站代理:CONNECT 隧道 agent 按代理地址缓存(keep-alive 连接池),随 dispose 销毁。
@@ -1791,13 +1899,48 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const requestCtx: RequestTransformCtx = { reqId, method, url, headers };
     const threadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
     const contentType = headers['content-type'] ?? '';
+    // The compactor only understands JSON request histories.  Keep the normal
+    // hard limit for other media types so enabling it cannot accidentally make
+    // binary/form uploads consume the larger ingress window.
+    const requestIngressBytes =
+      oversizedRequestCompactor && contentType.toLowerCase().startsWith('application/json')
+        ? oversizedIngressBytes
+        : maxBodyBytes;
+
+    // 请求一开始就盖章:collectRequestBody 是第一段 await,拖到 routingTransform
+    // 会把 body 上传期间完成的 owner 切换当成「起始」scope。
+    let decision: RoutingDecision | null = applyDispatchGate(null, reqId, requestCtx);
+    const beforeRetry = async (): Promise<boolean> => {
+      const gated = applyDispatchGate(decision, reqId, requestCtx);
+      if (gated?.localHandler) {
+        await runLocalHandler(
+          gated.localHandler,
+          { rawBody: Buffer.alloc(0), parsedBody: undefined, ctx: requestCtx, res },
+          logger,
+          reqId,
+        );
+        return false;
+      }
+      return true;
+    };
+    if (decision?.localHandler) {
+      if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+        await drainRequest(req);
+      }
+      await runLocalHandler(
+        decision.localHandler,
+        { rawBody: Buffer.alloc(0), parsedBody: undefined, ctx: requestCtx, res },
+        logger,
+        reqId,
+      );
+      return;
+    }
 
     // 非 POST / 没 body(GET / HEAD / DELETE 等)→ 不收集 stream,但仍跑一次路由决策:
     // 这类请求没有 body,routingTransform 以 `undefined` body 调用,可据 method/url/headers 路由
     // 控制面请求(典型: codex models-manager 的 `GET /models` 轮询)。transform 对 undefined body
     // 应自行短路返回 null(= 默认上游 + 透传 headers,向后兼容)。
     if (method !== 'POST' && method !== 'PUT' && method !== 'PATCH') {
-      let decision: RoutingDecision | null = null;
       if (opts.routingTransform) {
         try {
           const maybeDecision = opts.routingTransform(undefined, requestCtx);
@@ -1808,6 +1951,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           logger.warn?.('routingTransform threw, using default upstream', { reqId, err: String(err) });
         }
       }
+      decision = applyDispatchGate(decision, reqId, requestCtx);
       // 本地 handler 命中:不转发上游,由 handler 直接写回响应(见 LocalRequestHandler 契约)。
       if (decision?.localHandler) {
         logger.debug?.('▶ inbound request from client', { reqId, method, upstreamBase: 'local-handler', url, bytes: 0 });
@@ -1830,6 +1974,17 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           bytes: 0,
         });
       }
+      const outbound = await resolveOutboundForTarget(route.target, reqId);
+      decision = applyDispatchGate(decision, reqId, requestCtx);
+      if (decision?.localHandler) {
+        await runLocalHandler(
+          decision.localHandler,
+          { rawBody: Buffer.alloc(0), parsedBody: undefined, ctx: requestCtx, res },
+          logger,
+          reqId,
+        );
+        return;
+      }
       forward(
         route.target,
         method,
@@ -1847,8 +2002,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         opts.responseObserver,
         opts.transformResponse,
         '',
-        await resolveOutboundForTarget(route.target, reqId),
+        outbound,
         route.pathOverride,
+        undefined,
+        undefined,
+        false,
+        beforeRetry,
       );
       return;
     }
@@ -1858,7 +2017,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 只有 chunked 上传才落到 collectRequestBody 的流式守卫)。
     // 注意读原始 req.headers —— flattenRequestHeaders 会剥掉 content-length(转发时重算)。
     const declaredBytes = Number(req.headers['content-length'] ?? '');
-    if (Number.isFinite(declaredBytes) && declaredBytes > maxBodyBytes) {
+    if (Number.isFinite(declaredBytes) && declaredBytes > requestIngressBytes) {
       respondRequestTooLarge({
         req, res, logger, reqId, method, url, headers,
         limitBytes: maxBodyBytes,
@@ -1870,7 +2029,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
 
     let rawBody: Buffer;
     try {
-      rawBody = await collectRequestBody(req, maxBodyBytes);
+      rawBody = await collectRequestBody(req, requestIngressBytes);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'REQUEST_TOO_LARGE') {
@@ -1893,7 +2052,6 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 提前到 ▶ inbound 日志**之前**计算: 路由只依赖 rawBody / headers / contentType,与下方
     // runTransforms 的输出无关,提前是安全的; 这样 inbound 日志能直接打出本请求**最终**发往的
     // upstream(订阅直连 api.anthropic.com / 走网关 endpoint),而非静态默认上游。
-    let decision: RoutingDecision | null = null;
     let rawParsed: unknown = undefined;
     if (opts.routingTransform && contentType.toLowerCase().startsWith('application/json')) {
       try {
@@ -1913,23 +2071,82 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         logger.warn?.('routingTransform threw, using default upstream', { reqId, err: String(err) });
       }
     }
+    decision = applyDispatchGate(decision, reqId, requestCtx);
 
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。
     // parsedBody 复用路由阶段的解析结果,不二次 parse。
     if (decision?.localHandler) {
+      // PI native subscription handlers also receive provider-native JSON and
+      // can carry the same accumulated vision history as forwarded requests.
+      // Apply the bounded compactor before the local-handler hard-limit check;
+      // non-JSON or unparseable bodies still retain the historical 413 path.
+      let localRawBody = rawBody;
+      let localParsedBody = rawParsed;
+      if (rawBody.length > maxBodyBytes && oversizedRequestCompactor) {
+        const originalLocalBodyBytes = rawBody.length;
+        const compactStartedAt = Date.now();
+        let oversizedParsed: unknown = rawParsed;
+        if (oversizedParsed === undefined && contentType.toLowerCase().startsWith('application/json')) {
+          try {
+            oversizedParsed = JSON.parse(rawBody.toString('utf8'));
+          } catch {
+            oversizedParsed = undefined;
+          }
+        }
+        if (oversizedParsed !== undefined) {
+          try {
+            const compacted = oversizedRequestCompactor(oversizedParsed, requestCtx, maxBodyBytes);
+            const compactedBody = isPromiseLike<unknown | null>(compacted)
+              ? await compacted
+              : compacted;
+            if (compactedBody !== null && compactedBody !== undefined) {
+              const serialized = JSON.stringify(compactedBody);
+              if (typeof serialized !== 'string') throw new Error('compactor returned a non-serializable body');
+              localRawBody = Buffer.from(serialized, 'utf8');
+              // Do not retain the original oversized Buffer through local
+              // handler execution; compaction already produced the bytes the
+              // handler will consume.
+              rawBody = localRawBody;
+              localParsedBody = compactedBody;
+              logger.info?.('oversized request body compacted before local dispatch', {
+                reqId,
+                originalBytes: originalLocalBodyBytes,
+                compactedBytes: localRawBody.length,
+                compactionMs: Date.now() - compactStartedAt,
+              });
+            }
+          } catch (err) {
+            logger.warn?.('oversized request compactor failed; enforcing hard limit', {
+              reqId,
+              originalBytes: originalLocalBodyBytes,
+              compactionMs: Date.now() - compactStartedAt,
+              err: String(err),
+            });
+          }
+        }
+      }
+      if (localRawBody.length > maxBodyBytes) {
+        respondRequestTooLarge({
+          req, res, logger, reqId, method, url, headers,
+          limitBytes: maxBodyBytes,
+          declaredBytes: Number.isFinite(declaredBytes) ? declaredBytes : null,
+          receivedBytes: localRawBody.length,
+        });
+        return;
+      }
       if (logger.isDebugEnabled?.()) {
         logger.debug?.('▶ inbound request from client', {
           reqId,
           method,
           upstreamBase: 'local-handler',
           url,
-          bytes: rawBody.length,
-          ...(dumpRequestBody ? { body: dumpBody(rawBody, DEBUG_REQUEST_DUMP_MAX_BYTES) } : {}),
+          bytes: localRawBody.length,
+          ...(dumpRequestBody ? { body: dumpBody(localRawBody, DEBUG_REQUEST_DUMP_MAX_BYTES) } : {}),
         });
       }
       await runLocalHandler(
         decision.localHandler,
-        { rawBody, parsedBody: rawParsed, ctx: requestCtx, res },
+        { rawBody: localRawBody, parsedBody: localParsedBody, ctx: requestCtx, res },
         logger,
         reqId,
       );
@@ -1958,9 +2175,63 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       ...requestCtx,
       upstreamBase: formatUpstreamBase(route.target),
     };
+    const originalRawBodyBytes = rawBody.length;
+    let bodyForTransforms = rawBody;
+    let parsedForTransforms: unknown = undefined;
+    if (rawBody.length > maxBodyBytes && oversizedRequestCompactor) {
+      const compactStartedAt = Date.now();
+      let oversizedParsed: unknown = rawParsed;
+      if (oversizedParsed === undefined && contentType.toLowerCase().startsWith('application/json')) {
+        try {
+          oversizedParsed = JSON.parse(rawBody.toString('utf8'));
+        } catch {
+          oversizedParsed = undefined;
+        }
+      }
+      if (oversizedParsed !== undefined) {
+        // Reuse the parsed object even when the image compactor is a no-op;
+        // this avoids a second JSON.parse for the regular transform chain.
+        parsedForTransforms = oversizedParsed;
+        try {
+          const compacted = oversizedRequestCompactor(oversizedParsed, transformCtx, maxBodyBytes);
+          const compactedBody = isPromiseLike<unknown | null>(compacted)
+            ? await compacted
+            : compacted;
+          if (compactedBody !== null && compactedBody !== undefined) {
+            const serialized = JSON.stringify(compactedBody);
+            if (typeof serialized !== 'string') throw new Error('compactor returned a non-serializable body');
+            bodyForTransforms = Buffer.from(serialized, 'utf8');
+            parsedForTransforms = compactedBody;
+            // No later stage needs the pre-compaction bytes. Releasing that
+            // reference avoids retaining two large Buffers through forwarding.
+            rawBody = bodyForTransforms;
+            logger.info?.('oversized request body compacted before forwarding', {
+              reqId,
+              originalBytes: originalRawBodyBytes,
+              compactedBytes: bodyForTransforms.length,
+              compactionMs: Date.now() - compactStartedAt,
+            });
+          }
+        } catch (err) {
+          logger.warn?.('oversized request compactor failed; enforcing hard limit', {
+            reqId,
+            originalBytes: originalRawBodyBytes,
+            compactionMs: Date.now() - compactStartedAt,
+            err: String(err),
+          });
+        }
+      }
+    }
     let transformed: Buffer | null;
     try {
-      transformed = await runTransforms(rawBody, contentType, transforms, transformCtx, logger);
+      transformed = await runTransforms(
+        bodyForTransforms,
+        contentType,
+        transforms,
+        transformCtx,
+        logger,
+        parsedForTransforms,
+      );
     } catch (err) {
       transformsCompleted = true;
       notifyTransformSettlement();
@@ -1976,9 +2247,18 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     }
     transformsCompleted = true;
     notifyTransformSettlement();
-    const outBody = transformed ?? rawBody;
+    const outBody = transformed ?? bodyForTransforms;
+    if (outBody.length > maxBodyBytes) {
+      respondRequestTooLarge({
+        req, res, logger, reqId, method, url, headers,
+        limitBytes: maxBodyBytes,
+        declaredBytes: Number.isFinite(declaredBytes) ? declaredBytes : null,
+        receivedBytes: outBody.length,
+      });
+      return;
+    }
 
-    let parsedForRewrite: unknown = rawParsed;
+    let parsedForRewrite: unknown = rawParsed ?? parsedForTransforms;
     if (parsedForRewrite === undefined && contentType.toLowerCase().startsWith('application/json')) {
       try {
         parsedForRewrite = JSON.parse(rawBody.toString('utf8'));
@@ -2039,9 +2319,21 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         reqId,
         method,
         url,
-        originalBytes: rawBody.length,
+        originalBytes: originalRawBodyBytes,
         outBytes: outBody.length,
       });
+    }
+
+    const outbound = await resolveOutboundForTarget(route.target, reqId);
+    decision = applyDispatchGate(decision, reqId, requestCtx);
+    if (decision?.localHandler) {
+      await runLocalHandler(
+        decision.localHandler,
+        { rawBody, parsedBody: rawParsed, ctx: requestCtx, res },
+        logger,
+        reqId,
+      );
+      return;
     }
 
     forward(
@@ -2061,11 +2353,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       opts.responseObserver,
       opts.transformResponse,
       extractBodyModel(rawBody),
-      await resolveOutboundForTarget(route.target, reqId),
+      outbound,
       route.pathOverride,
       responseToolUseIds,
       threadMintedIdCache,
       requestDeclaredStream,
+      beforeRetry,
     );
   });
 

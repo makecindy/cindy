@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, EllipsisVertical, Play } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -96,7 +96,7 @@ function isAutomationGroupInlineAction(target: EventTarget | null): boolean {
   );
 }
 
-export function AutomationSessionGroupItem({
+export const AutomationSessionGroupItem = memo(function AutomationSessionGroupItem({
   group,
   activeSessionId,
   runningSessionIds,
@@ -835,4 +835,4 @@ export function AutomationSessionGroupItem({
       )}
     </div>
   );
-}
+});

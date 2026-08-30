@@ -24,6 +24,7 @@ export {
 // default profile between managed and real-Chrome takeover) WITHOUT recreating
 // the runtime — config reads hot-reload per request inside the dispatcher.
 export { setBrowserRuntimeConfig as setBrowserControlRuntimeConfig } from './shim/runtime-config-snapshot.js';
+export { refreshBrowserRuntimeConfigDir } from './shim/_local/text-utils.js';
 export { isPublicHttpResourceUrl } from './resource-url-policy.js';
 // Re-export the effective-config type under a neutral name so host code stays
 // free of the vendored type's product-specific identifier.

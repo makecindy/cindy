@@ -273,13 +273,14 @@ export function setRemoteSettingsPersist(fn: RemoteSettingsPersist | null): void
 }
 
 /** set-* channel → 持久化的 session 字段名(args[0]=sessionId, args[1]=value)。 */
-const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs'> = {
+const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs' | 'writableDirs'> = {
   'maker:set-model': 'model',
   'maker:set-effort': 'effort',
   'maker:set-permission-mode': 'permissionMode',
   'maker:set-fast-mode': 'fastMode',
   'maker:set-plan-mode': 'planModeEnabled',
   'maker:set-extra-dirs': 'extraDirs',
+  'maker:set-writable-dirs': 'writableDirs',
 };
 
 async function persistRemoteSetting(channel: string, args: unknown[], result: unknown): Promise<void> {
@@ -301,6 +302,11 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
   if (channel === 'maker:set-extra-dirs') {
     if (!Array.isArray(result)) return;
     await settingsPersist(sessionId, { extraDirs: result });
+    return;
+  }
+  if (channel === 'maker:set-writable-dirs') {
+    if (!Array.isArray(result)) return;
+    await settingsPersist(sessionId, { writableDirs: result });
     return;
   }
   // set-model 特例:可携带第 3 参 providerId(per-session 来源选择,见 register.ts SET_MODEL handler)。

@@ -45,7 +45,10 @@ vi.mock('../claude-fast-mode-log', () => ({
 
 import {
   createModelRoutingTransform,
+  piGatewayRequestAgent,
   setClaudeProxyGatewayKeyReader,
+  setClaudeProxyOwnerBoundaryPendingChecker,
+  setClaudeProxyOwnerScopeKeyReader,
   setClaudeProxySessionIdResolver,
 } from '../anthropic-compat-proxy-host';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store';
@@ -59,6 +62,17 @@ import {
   registerPiProxySession,
   resetPiProxySessionsForTest,
 } from '../pi-proxy-session-auth';
+
+describe('Pi Gateway request front door', () => {
+  it.each([
+    ['/v1/messages', 'claude-code'],
+    ['/v1/responses', 'codex'],
+    ['/v1/chat/completions', 'codex'],
+    ['/v1beta/models/gemini-3.6-flash:streamGenerateContent', 'codex'],
+  ] as const)('routes %s through the Gateway %s credential surface', (url, agent) => {
+    expect(piGatewayRequestAgent(url)).toBe(agent);
+  });
+});
 
 const SESSION_HEADER = { 'x-claude-code-session-id': 'sdk-grok' };
 
@@ -81,6 +95,8 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
   afterEach(() => {
     clearSessionProvider('sess-grok');
     setPendingCredentialSwitchReader(() => undefined);
+    setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setClaudeProxyOwnerScopeKeyReader(() => '');
   });
 
   it('订阅直连目标也在进入 bridge 前拦截 pending switch', async () => {
@@ -266,6 +282,202 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
   });
 });
 
+describe('cc routingTransform — owner boundary 不得把占位 key fail-open 到 LiteLLM', () => {
+  const PLACEHOLDER = 'xdt-provider-auth-placeholder-key';
+  const throwingResolver = () => {
+    throw new Error('[PRECONDITION_FAILED] App session is switching; retry after the owner boundary settles.');
+  };
+
+  let gatewayKey: string | null;
+
+  beforeEach(() => {
+    resetClaudeSessionRouteRegistryForTest();
+    gatewayKey = 'sk-gw';
+    setClaudeProxyGatewayKeyReader(() => gatewayKey);
+    setClaudeProxySessionIdResolver(throwingResolver);
+    setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setClaudeProxyOwnerScopeKeyReader(() => '');
+    setPendingCredentialSwitchReader(() => undefined);
+  });
+
+  afterEach(() => {
+    setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setClaudeProxyOwnerScopeKeyReader(() => '');
+    setPendingCredentialSwitchReader(() => undefined);
+    resetPiProxySessionsForTest();
+  });
+
+  async function invokeLocalHandler(decision: Awaited<ReturnType<ReturnType<typeof createModelRoutingTransform>>>) {
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end, headersSent: false } } as never);
+    return { writeHead, end };
+  }
+
+  it('resolver 抛 PRECONDITION_FAILED 时 xai/grok-4.6 仍走订阅桥/拒绝,不 passthrough', async () => {
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'xai/grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    expect(decision?.localHandler).toEqual(expect.any(Function));
+    expect(decision).not.toEqual(expect.objectContaining({
+      headerOverride: expect.anything(),
+    }));
+  });
+
+  it('boundary pending + 占位 key + 非订阅模型 → 503 Retry-After,不是 null', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'claude-haiku-4-5-20251001' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    expect(decision).not.toBeNull();
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('boundary pending + 占位 key + 无 body(GET) → 503,不打默认上游', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        undefined,
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }, '/v1/models'),
+      ),
+    );
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('boundary pending 时订阅前缀模型也 503,不把旧 owner 的 OAuth 打到 SuperGrok', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'xai/grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('boundary pending 时 chatgpt/ 前缀同样 503,不读旧 owner 的 Codex OAuth', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'chatgpt/gpt-5.5' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('boundary pending 时 PI 原生 xai 转发也 503,不读旧 owner 的 Grok OAuth', async () => {
+    gatewayKey = null;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => true);
+    registerPiProxySession('sess-pi', 'session-secret', () => 'xai');
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'grok-4.6' },
+        ctxWith({
+          'x-cindy-pi-session-id': 'sess-pi',
+          'x-cindy-pi-session-token': 'session-secret',
+          'x-cindy-pi-provider-id': 'xai',
+          'x-api-key': PLACEHOLDER,
+        }),
+      ),
+    );
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('finalize 之后、localHandler 调用前才 pending → 503,不读旧 owner OAuth', async () => {
+    gatewayKey = null;
+    let pending = false;
+    setClaudeProxyOwnerBoundaryPendingChecker(() => pending);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'xai/grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    expect(decision?.localHandler).toEqual(expect.any(Function));
+    pending = true;
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('finalize 之后 owner scope 变了但 pending 仍 false → 503,不读旧 owner OAuth', async () => {
+    gatewayKey = null;
+    let scopeKey = 'cloud:owner-a:1';
+    setClaudeProxyOwnerBoundaryPendingChecker(() => false);
+    setClaudeProxyOwnerScopeKeyReader(() => scopeKey);
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'xai/grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+      ),
+    );
+    expect(decision?.localHandler).toEqual(expect.any(Function));
+    scopeKey = 'cloud:owner-b:2';
+    const { writeHead, end } = await invokeLocalHandler(decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('resolver 抛错但有网关 key 时分类器仍换 key(#831),不 passthrough 占位', () => {
+    const decision = createModelRoutingTransform()(
+      { model: 'claude-haiku-4-5-20251001' },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
+    );
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
+    });
+  });
+});
+
 describe('pi routingTransform — xdt session header selects the Pi provider route', () => {
   afterEach(() => {
     clearSessionProvider('sess-pi');
@@ -309,6 +521,90 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
       },
       headerDelete: [
         'x-api-key',
+        'x-cindy-pi-session-id',
+        'x-cindy-pi-session-token',
+        'x-cindy-pi-provider-id',
+      ],
+    });
+  });
+
+  it.each([
+    ['/v1/messages', { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' }],
+    ['/v1/responses', { authorization: 'Bearer sk-gw' }],
+    ['/v1/chat/completions', { authorization: 'Bearer sk-gw' }],
+    ['/v1beta/models/google/gemini-3.6-flash:streamGenerateContent', { authorization: 'Bearer sk-gw' }],
+  ] as const)(
+    'routes a cindy Gateway Pi request on %s through the matching Claude/Codex surface',
+    async (url, headerOverride) => {
+      setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+      setSessionProvider('sess-pi', 'xd');
+      registerPiProxySession('sess-pi', 'gateway-session-secret', () => null);
+      const decision = createModelRoutingTransform()(
+        { model: 'gateway-model' },
+        ctxWith({
+          'x-cindy-pi-session-id': 'sess-pi',
+          'x-cindy-pi-session-token': 'gateway-session-secret',
+          ...(url.includes('/v1beta/')
+            ? { 'x-goog-api-key': 'cindy-pi-provider-auth-placeholder' }
+            : {}),
+        }, url),
+      );
+
+      await expect(Promise.resolve(decision)).resolves.toEqual({
+        headerOverride,
+        headerDelete: [
+          ...(url.includes('/v1beta/') ? ['x-goog-api-key'] : []),
+          'x-cindy-pi-session-id',
+          'x-cindy-pi-session-token',
+          'x-cindy-pi-provider-id',
+        ],
+      });
+    },
+  );
+
+  it('strips Google placeholder auth even when the live Gateway key is temporarily unavailable', async () => {
+    setClaudeProxyGatewayKeyReader(() => null);
+    setSessionProvider('sess-pi', 'xd');
+    registerPiProxySession('sess-pi', 'gateway-session-secret', () => null);
+    const decision = createModelRoutingTransform()(
+      { model: 'google/gemini-3.6-flash' },
+      ctxWith({
+        'x-cindy-pi-session-id': 'sess-pi',
+        'x-cindy-pi-session-token': 'gateway-session-secret',
+        'x-goog-api-key': 'stale-gateway-key',
+      }, '/v1beta/models/google/gemini-3.6-flash:streamGenerateContent'),
+    );
+
+    await expect(Promise.resolve(decision)).resolves.toEqual({
+      headerDelete: [
+        'x-goog-api-key',
+        'x-cindy-pi-session-id',
+        'x-cindy-pi-session-token',
+        'x-cindy-pi-provider-id',
+      ],
+    });
+  });
+
+  it('routes a provider-null cindy Subagent by its API instead of inheriting the Anthropic parent', async () => {
+    setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+    setSessionProvider('sess-pi', 'anthropic');
+    registerPiProxySession(
+      'sess-pi',
+      'gateway-subagent-secret',
+      () => null,
+      { scope: 'subagent-route' },
+    );
+    const decision = createModelRoutingTransform()(
+      { model: 'moonshotai/kimi-k3' },
+      ctxWith({
+        'x-cindy-pi-session-id': 'sess-pi',
+        'x-cindy-pi-session-token': 'gateway-subagent-secret',
+      }, '/v1/chat/completions'),
+    );
+
+    await expect(Promise.resolve(decision)).resolves.toEqual({
+      headerOverride: { authorization: 'Bearer sk-gw' },
+      headerDelete: [
         'x-cindy-pi-session-id',
         'x-cindy-pi-session-token',
         'x-cindy-pi-provider-id',

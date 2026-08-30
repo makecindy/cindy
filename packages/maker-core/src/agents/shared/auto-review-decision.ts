@@ -227,12 +227,12 @@ export interface AutoReviewRequest {
   model: string;
   userIntent: string;
   action: ReviewableAction;
-  /**
-   * 位置语义(reviewAction 同契约):`[0]` 是唯一可写的工作目录,其余是只读引用目录
-   * (additionalDirectories)。所有 agent 一律传 `[workingDir, ...extraDirs]`;host 侧
-   * reviewer prompt 依赖该顺序区分可写/只读,不得打乱或拍平。
-   */
+  /** 全部可读根；首项必须是主工作目录，供相对路径解析。 */
   workspaceRoots: string[];
+  /**
+   * 显式可写根。旧请求缺省时仍仅 workspaceRoots[0] 可写，保证跨版本 fail-closed。
+   */
+  writableRoots?: string[];
   platform: NodeJS.Platform;
 }
 
@@ -345,7 +345,7 @@ export function classifyLocalAutoReviewTier(
   const verdict = reviewAction(
     request.action,
     request.workspaceRoots,
-    { platform: request.platform },
+    { platform: request.platform, writableRoots: request.writableRoots },
   );
   return verdict === 'prompt' ? 'needs-review' : verdict;
 }

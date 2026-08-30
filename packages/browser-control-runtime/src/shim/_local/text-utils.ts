@@ -39,10 +39,24 @@ export function shortenHomePath(input: string): string {
   return input;
 }
 
+function defaultBrowserRuntimeConfigDir(): string {
+  return path.join(os.homedir(), '.xdt-maker', 'browser-runtime');
+}
+
 /**
  * Scratch/config directory for browser runtime state. Neutral, overridable.
  * Not tied to any product config layout.
+ *
+ * Vendored Chrome launch joins this with `browser/<profile>/user-data` at call
+ * time. Vite's main bundle `require()`s this module before `index.ts` can pin
+ * `XDT_BROWSER_RUNTIME_DIR`, so the value must be refreshable after that pin.
  */
-export const CONFIG_DIR: string =
-  process.env.XDT_BROWSER_RUNTIME_DIR?.trim() ||
-  path.join(os.homedir(), '.xdt-maker', 'browser-runtime');
+export function resolveBrowserRuntimeConfigDir(): string {
+  return process.env.XDT_BROWSER_RUNTIME_DIR?.trim() || defaultBrowserRuntimeConfigDir();
+}
+
+export let CONFIG_DIR: string = resolveBrowserRuntimeConfigDir();
+
+export function refreshBrowserRuntimeConfigDir(): void {
+  CONFIG_DIR = resolveBrowserRuntimeConfigDir();
+}

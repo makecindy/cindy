@@ -5,6 +5,7 @@ import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
@@ -273,11 +274,12 @@ export interface Session {
    */
   usedProjectContext?: boolean;
   /**
-   * 附加只读引用目录列表(绝对路径)。Claude session 才会真正用到;
-   * Codex session 此字段恒为空数组(capability 不支持,UI 不暴露入口)。
+   * 附加只读引用目录列表(绝对路径)。支持该能力的 Harness 都保持只读语义。
    * 未升级到 0019 migration 之前的老 session 反序列化时也是 [],无追溯。
    */
   extraDirs: string[];
+  /** 用户为本任务明确授予的附加可读写目录；旧版远程 payload 可能缺失。 */
+  writableDirs?: string[];
   /**
    * Remote codex (P2): 远端 SSH host alias (`@cindy/maker-remote-ssh`
    * ConnectionPool 里的 id)。设置后 codex agent 跑在远端机器, workingDir
@@ -372,5 +374,7 @@ export interface Message {
    * null = 切换功能上线前的老消息(回落 session.agentKind)。
    */
   agentKind?: 'cc' | 'codex' | 'pi' | null;
+  /** Structured guard details for a persisted tool-loop terminal error. */
+  toolLoop?: ToolLoopErrorDetails;
   createdAt: string; // ISO 8601
 }

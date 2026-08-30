@@ -199,6 +199,15 @@ export interface BridgeProviderConfig {
    */
   supportsReasoning?: (model: string) => boolean;
   /**
+   * 该(去前缀后的)model 是否启用 strict function-tool 约束解码。这是生产唯一控制面
+   * (不走环境变量)。开启后 translate 层仍**逐工具**做 strict 子集兼容检查
+   * (见 strict-schema.ts),不合规工具回落 strict:false,不改写 schema。
+   * 返回值按 model 决定、**同一会话内必须恒定** —— strict 位进请求前缀,会话中途翻转
+   * 会破坏 prompt 前缀稳定性(docs/dev-rules/maker-core-and-agent-behavior.md §3.1)。
+   * 省略 = 全部 false(所有 provider 的默认)。
+   */
+  strictFunctionTools?: (model: string) => boolean;
+  /**
    * 该(去前缀后的)model 恒定附加的上游**服务端工具**声明(如 xAI 的 `{ type: 'x_search' }`)。
    * 返回值按 model 决定、**同一会话内必须恒定**——服务端工具同样进请求前缀,会话中途增删会
    * 破坏 prompt 前缀稳定性(见 docs/dev-rules/maker-core-and-agent-behavior.md §3.1)。

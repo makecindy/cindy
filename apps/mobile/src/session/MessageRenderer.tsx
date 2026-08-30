@@ -66,6 +66,7 @@ import {
   parseChatQuoteSegments,
   type ChatQuote,
 } from '@cindy/maker-shared/chat-quotes';
+import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { StreamingStatusText } from '@/session/StreamingStatusText';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
@@ -3092,7 +3093,7 @@ function AgentTaskStatusIcon({ status, size = iconSize.md }: { status: AgentTask
 
 function buildAgentTaskMeta(model: AgentTaskCardModel): string[] {
   const parts: string[] = [AGENT_TASK_PROVIDER_LABEL[model.provider], agentTaskStatusLabel(model.status)];
-  if (typeof model.totalTokens === 'number') parts.push(`${model.totalTokens} tokens`);
+  if (typeof model.totalTokens === 'number') parts.push(`${formatCompactTokens(model.totalTokens)} tokens`);
   if (typeof model.toolUses === 'number') parts.push(i18n.t('message.renderer.toolUseCount', { n: model.toolUses }));
   if (typeof model.durationMs === 'number') parts.push(formatDuration(model.durationMs));
   return parts;

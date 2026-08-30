@@ -423,6 +423,11 @@
     "continueTask": "继续任务",
     "retry": "重试",
     "ignore": "忽略",
+    "toolUseLoopDetected": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
+    "toolUseLoopDetectedWithCount": "模型连续触发了无效的工具调用，Cindy 已在 {{count}} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。",
+    "toolUseLoopDetectedConsecutiveWithCount": "模型重复调用同一个工具 {{count}} 次，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
+    "toolUseLoopDetectedPingPongWithCount": "模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
+    "toolUseLoopDetectedRotationWithCount": "模型持续轮转调用多个工具，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "codexThreadLost": "Codex 鉴权模式已切换，当前任务无法继续 —— 请新建任务后生效。",
     "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可 Fork 丢弃协议加密内容后在新任务继续）。"
   },
