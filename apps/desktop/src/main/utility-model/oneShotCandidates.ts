@@ -764,6 +764,7 @@ async function requestExplicitProviderText(
   const routeStillCurrent = (): boolean => {
     if (isProviderRouteMutationInProgress(provider.id)) return false;
     if (isProviderModelRouteDisabled(provider.id, model)) return false;
+    if (provider.id === 'xd' && isXdGatewayPaymentRequiredRoute(model, agentKind)) return false;
     const currentProvider = getActiveCatalog().providers.find((item) => item.id === provider.id);
     if (!currentProvider || !currentProvider.agents.includes(agentKind)) return false;
     const currentModel = currentProvider.models[agentKind]?.find((item) => item.id === model);
@@ -982,6 +983,12 @@ async function requestBuiltinProviderText(
   // Codex 2026-08-06。
   if (routing.disabled) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
+  }
+  // XD catalog entries can lose entitlement after they are selected. Recheck
+  // the owner-scoped payment snapshot before resolving credentials or creating
+  // an HTTP candidate, matching the profile-chain guard above.
+  if (input.provider.id === 'xd' && isXdGatewayPaymentRequiredRoute(input.model, input.agentKind)) {
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
   }
 
   // 插件显式传了 maxTokens 时,钳到该模型目录声明的输出上限(maxOutput),

@@ -10,6 +10,7 @@ import {
   parseAuxiliaryModelRef,
   type ParsedAuxiliaryModelRef,
 } from '../../shared/auxiliaryModelChain.js';
+import { encodeCatalogModelPin } from '../../shared/catalogModelPin.js';
 import {
   getUtilityModelProfile,
   resolveUtilityModelProviderKindAlias,
@@ -24,9 +25,49 @@ export type EffectiveAuxiliaryModelChain = {
   refs: string[];
 };
 
+function firstNonBlank(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => typeof value === 'string' && value.trim().length > 0)?.trim();
+}
+
+function resolveEnvHeadRef(providerRaw: string | undefined, modelRaw: string | undefined): string | null {
+  // An explicit legacy model override follows the same profile transport, but
+  // must be represented as an exact catalog pin so it cannot silently revert to
+  // the profile's default model after the auxiliary migration.
+  const provider = resolveUtilityModelProviderKindAlias(providerRaw ?? '')
+    ?? resolveUtilityModelProviderKindAlias('');
+  if (!provider) return null;
+  const profile = getUtilityModelProfile(provider);
+  const model = modelRaw?.trim();
+  if (!model || model === profile.model) return provider;
+  const modelAlias = resolveUtilityModelProviderKindAlias(model);
+  if (
+    modelAlias
+    && getUtilityModelProfile(modelAlias).transport === profile.transport
+  ) {
+    return modelAlias;
+  }
+  return encodeCatalogModelPin({
+    providerId: profile.transport === 'codex-responses' ? 'openai' : 'xd',
+    agentKind: 'codex',
+    model,
+  });
+}
+
 function readEnvUtilityChain(): string[] | null {
-  const chainRaw = process.env.XDT_UTILITY_MODEL_PROVIDER_CHAIN;
-  const headRaw = process.env.XDT_UTILITY_MODEL_PROVIDER;
+  // Keep both generations of the escape hatch alive. Utility names take
+  // precedence when both are set, matching the legacy utility selection.
+  const chainRaw = firstNonBlank(
+    process.env.XDT_UTILITY_MODEL_PROVIDER_CHAIN,
+    process.env.XDT_VOICE_INPUT_REFINER_PROVIDER_CHAIN,
+  );
+  const headRaw = firstNonBlank(
+    process.env.XDT_UTILITY_MODEL_PROVIDER,
+    process.env.XDT_VOICE_INPUT_REFINER_PROVIDER,
+  );
+  const modelRaw = firstNonBlank(
+    process.env.XDT_UTILITY_MODEL,
+    process.env.XDT_VOICE_INPUT_REFINER_MODEL,
+  );
   const entries: string[] = [];
   if (typeof chainRaw === 'string' && chainRaw.trim()) {
     for (const part of chainRaw.split(',')) {
@@ -34,11 +75,14 @@ function readEnvUtilityChain(): string[] | null {
       if (resolved && !entries.includes(resolved)) entries.push(resolved);
     }
   }
-  if (typeof headRaw === 'string' && headRaw.trim()) {
-    const resolved = resolveUtilityModelProviderKindAlias(headRaw.trim());
-    if (resolved) {
-      const rest = entries.filter((entry) => entry !== resolved);
-      return [resolved, ...rest];
+  const hasHeadOrModelOverride = Boolean(headRaw || modelRaw);
+  if (hasHeadOrModelOverride) {
+    const headRef = resolveEnvHeadRef(headRaw, modelRaw);
+    if (headRef) {
+      const headProvider = resolveUtilityModelProviderKindAlias(headRaw ?? '')
+        ?? resolveUtilityModelProviderKindAlias('');
+      const rest = entries.filter((entry) => entry !== headProvider && entry !== headRef);
+      return [headRef, ...rest];
     }
   }
   return entries.length > 0 ? entries : null;

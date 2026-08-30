@@ -38,6 +38,7 @@ import {
 
 const TITLE_PIN = 'cat:openai:codex:gpt-5.4-mini';
 const PROMPT_PIN = 'cat:xd:claude-code:kimi-k2.5';
+const CUSTOM_MODEL_PIN = 'cat:xd:codex:moonshotai/kimi-k2.6-custom';
 
 function settingsPath(): string {
   return path.join(h.dir, 'owner', 'auxiliary-model-settings.json');
@@ -93,7 +94,7 @@ describe('auxiliary-model-settings-store', () => {
     expect(() => readFileSync(settingsPath())).toThrow();
   });
 
-  it('keeps an existing models array and only strips leftover voice keys', () => {
+  it('keeps an existing models array and leaves legacy voice settings untouched', () => {
     writeJson(settingsPath(), {
       models: [TITLE_PIN],
       sessionTitleModel: PROMPT_PIN,
@@ -108,7 +109,10 @@ describe('auxiliary-model-settings-store', () => {
       models: [TITLE_PIN],
       sessionTitleModel: PROMPT_PIN,
     });
-    expect(readJson(ownerVoicePath())).toEqual({ sttProvider: 'cindy-voice' });
+    expect(readJson(ownerVoicePath())).toEqual({
+      refinerProvider: 'litellm-kimi-k2.6',
+      sttProvider: 'cindy-voice',
+    });
   });
 
   it('migrates legacy dual pins with the title pin first', () => {
@@ -123,15 +127,27 @@ describe('auxiliary-model-settings-store', () => {
 
   it('migrates a legacy voice chain when auxiliary settings were never customized', () => {
     writeJson(ownerVoicePath(), {
+      utilityModelProvider: 'litellm-kimi-k2.6',
+      utilityModel: 'moonshotai/kimi-k2.6-custom',
+      utilityModelProviderChain: ['codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
       refinerProvider: 'codex-gpt-5.4-mini',
+      refinerModel: 'gpt-5.4-mini-custom',
       refinerProviderChain: ['codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
       sttProvider: 'cindy-voice',
     });
 
     expect(readAuxiliaryModelSettings()).toEqual({
-      models: ['codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
+      models: [CUSTOM_MODEL_PIN, 'codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
     });
-    expect(readJson(ownerVoicePath())).toEqual({ sttProvider: 'cindy-voice' });
+    expect(readJson(ownerVoicePath())).toEqual({
+      utilityModelProvider: 'litellm-kimi-k2.6',
+      utilityModel: 'moonshotai/kimi-k2.6-custom',
+      utilityModelProviderChain: ['codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
+      refinerProvider: 'codex-gpt-5.4-mini',
+      refinerModel: 'gpt-5.4-mini-custom',
+      refinerProviderChain: ['codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
+      sttProvider: 'cindy-voice',
+    });
   });
 
   it('lets a customized auxiliary list win over a customized voice chain', () => {
@@ -145,7 +161,10 @@ describe('auxiliary-model-settings-store', () => {
     });
 
     expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
-    expect(readJson(unscopedVoicePath())).toEqual({});
+    expect(readJson(unscopedVoicePath())).toEqual({
+      refinerProvider: 'litellm-deepseek-v4-flash',
+      refinerProviderChain: ['litellm-deepseek-v4-flash', 'codex-gpt-5.4-mini'],
+    });
   });
 
   it('does not migrate a leftover voice file a second time after models already exist', () => {
@@ -157,12 +176,22 @@ describe('auxiliary-model-settings-store', () => {
 
     expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN] });
     expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN] });
-    expect(readJson(ownerVoicePath())).toEqual({});
+    expect(readJson(ownerVoicePath())).toEqual({
+      refinerProvider: 'litellm-kimi-k2.6',
+      refinerProviderChain: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
+    });
   });
 
   it('exposes the same list normalization used on persist', () => {
     expect(__testing.normalize({ models: [TITLE_PIN, '  ', TITLE_PIN, PROMPT_PIN] })).toEqual({
       models: [TITLE_PIN, PROMPT_PIN],
     });
+  });
+
+  it('preserves a legacy provider model override as the matching profile', () => {
+    expect(__testing.legacyVoiceOverrideRefs({
+      refinerProvider: 'litellm',
+      refinerModel: 'qwen/qwen3.6-plus',
+    })).toEqual(['litellm-qwen3.6-plus']);
   });
 });

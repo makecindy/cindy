@@ -18,8 +18,12 @@ import {
   type AuxiliaryModelSettings,
   type AuxiliaryModelSettingsPatch,
 } from '../../shared/auxiliaryModelSettings.js';
-import { isUtilityModelProviderKind } from '../../shared/utilityModelProfiles.js';
-import { resolveUtilityModelProviderKindAlias } from '../../shared/utilityModelProfiles.js';
+import { encodeCatalogModelPin } from '../../shared/catalogModelPin.js';
+import {
+  getUtilityModelProfile,
+  isUtilityModelProviderKind,
+  resolveUtilityModelProviderKindAlias,
+} from '../../shared/utilityModelProfiles.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
@@ -80,6 +84,49 @@ function refsFromUnknownList(value: unknown): string[] {
   return collectUniqueRefs(value.map((entry) => refFromUnknown(entry)));
 }
 
+function firstNonBlankString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+function legacyVoiceHeadRef(raw: Record<string, unknown>): string | null {
+  const providerValue = firstNonBlankString(raw.utilityModelProvider, raw.refinerProvider);
+  const providerRef = refFromUnknown(providerValue);
+  const model = firstNonBlankString(raw.utilityModel, raw.refinerModel);
+  if (!providerRef && !model) return null;
+  const effectiveProviderRef = providerRef ?? resolveUtilityModelProviderKindAlias('');
+  if (!effectiveProviderRef) return null;
+  if (!model) return effectiveProviderRef;
+
+  // Preserve known model aliases as their exact profile key. This keeps the
+  // old `litellm` + `qwen/qwen3.6-plus` form on the same credential transport
+  // without freezing the provider's default model.
+  const modelAlias = resolveUtilityModelProviderKindAlias(model);
+  if (
+    modelAlias
+    && isUtilityModelProviderKind(effectiveProviderRef)
+    && getUtilityModelProfile(effectiveProviderRef).transport === getUtilityModelProfile(modelAlias).transport
+  ) {
+    return modelAlias;
+  }
+
+  // Unknown model ids can still be represented as an exact catalog route. The
+  // active catalog remains the final availability gate at dispatch time.
+  if (isUtilityModelProviderKind(effectiveProviderRef)) {
+    const profile = getUtilityModelProfile(effectiveProviderRef);
+    return normalizeAuxiliaryModelRef(encodeCatalogModelPin({
+      providerId: profile.transport === 'codex-responses' ? 'openai' : 'xd',
+      agentKind: 'codex',
+      model,
+    }));
+  }
+  return effectiveProviderRef;
+}
+
 /**
  * A voice/utility file counts as customized only when the user (or an old
  * settings page) wrote a non-empty refiner/utility chain or a non-empty head.
@@ -87,48 +134,18 @@ function refsFromUnknownList(value: unknown): string[] {
  */
 function legacyVoiceOverrideRefs(raw: Record<string, unknown> | null): string[] {
   if (!raw) return [];
-  const head = refFromUnknown(
-    raw.utilityModelProvider ?? raw.refinerProvider,
-  );
-  const chain = [
-    ...refsFromUnknownList(raw.utilityModelProviderChain),
-    ...refsFromUnknownList(raw.refinerProviderChain),
-  ];
+  const head = legacyVoiceHeadRef(raw);
+  const chain = refsFromUnknownList(raw.utilityModelProviderChain).length > 0
+    ? refsFromUnknownList(raw.utilityModelProviderChain)
+    : refsFromUnknownList(raw.refinerProviderChain);
   const refs = collectUniqueRefs([head, ...chain]);
-  const hasExplicitHead = typeof (raw.utilityModelProvider ?? raw.refinerProvider) === 'string'
-    && String(raw.utilityModelProvider ?? raw.refinerProvider).trim().length > 0;
+  const hasExplicitHead = Boolean(
+    firstNonBlankString(raw.utilityModelProvider, raw.refinerProvider)
+      || firstNonBlankString(raw.utilityModel, raw.refinerModel),
+  );
   const hasExplicitChain = chain.length > 0;
   if (!hasExplicitHead && !hasExplicitChain) return [];
   return refs;
-}
-
-function stripLegacyVoiceRefinerKeys(filePath: string): void {
-  const raw = readJsonObject(filePath);
-  if (!raw) return;
-  const keys = [
-    'refinerProvider',
-    'refinerModel',
-    'refinerProviderChain',
-    'utilityModelProvider',
-    'utilityModel',
-    'utilityModelProviderChain',
-  ] as const;
-  let changed = false;
-  for (const key of keys) {
-    if (key in raw) {
-      delete raw[key];
-      changed = true;
-    }
-  }
-  if (!changed) return;
-  try {
-    fs.writeFileSync(filePath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
-  } catch (error) {
-    log.warn('failed to strip legacy voice refiner keys', {
-      path: filePath,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 function rewriteAuxiliarySettingsFile(models: string[]): void {
@@ -149,16 +166,14 @@ function rewriteAuxiliarySettingsFile(models: string[]): void {
  * One-shot on-disk migration:
  * - old dual pins (title + recommendation) collapse into `models`, title first
  * - if auxiliary was never customized, a customized voice/utility chain moves in
- * - both customized → auxiliary wins; voice refiner keys are still stripped so
- *   we do not migrate twice
+ * - both customized → auxiliary wins; the legacy voice file is left untouched
+ *   so older clients and passive instances can continue reading it
  */
 export function migrateLegacyAuxiliaryModelSettings(): void {
   const file = settingsFilePath();
   const raw = readJsonObject(file);
 
   if (raw && Array.isArray(raw.models)) {
-    stripLegacyVoiceRefinerKeys(ownerVoiceModelsPath());
-    stripLegacyVoiceRefinerKeys(unscopedVoiceModelsPath());
     return;
   }
 
@@ -171,8 +186,6 @@ export function migrateLegacyAuxiliaryModelSettings(): void {
 
   if (fromOldPins.length > 0) {
     rewriteAuxiliarySettingsFile(fromOldPins);
-    stripLegacyVoiceRefinerKeys(ownerVoiceModelsPath());
-    stripLegacyVoiceRefinerKeys(unscopedVoiceModelsPath());
     log.info('migrated legacy auxiliary model pins', { count: fromOldPins.length });
     return;
   }
@@ -191,9 +204,6 @@ export function migrateLegacyAuxiliaryModelSettings(): void {
   } else if (raw && ('sessionTitleModel' in raw || 'promptRecommendationModel' in raw)) {
     rewriteAuxiliarySettingsFile([]);
   }
-
-  stripLegacyVoiceRefinerKeys(ownerVoiceModelsPath());
-  stripLegacyVoiceRefinerKeys(unscopedVoiceModelsPath());
 }
 
 function normalize(raw: unknown): AuxiliaryModelSettings {

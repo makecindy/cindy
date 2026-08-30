@@ -1804,6 +1804,45 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('fails closed when an explicit XD catalog model becomes payment-required', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD Gateway',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'managed' },
+        routing: {
+          codex: { upstream: 'https://ignored.invalid', authStrategy: 'gateway-key' },
+        },
+        models: {
+          codex: [{ id: 'paid-model', name: 'Paid model', contextWindow: 1_000_000 }],
+        },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+    xdPaymentRequiredRoute.mockImplementation((model, agent) => model === 'paid-model' && agent === 'codex');
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'paid-model',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [{
+        providerId: 'xd',
+        model: 'paid-model',
+        transport: 'codex-responses',
+        status: 'skipped',
+        reason: 'model_unavailable',
+      }],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('uses Anthropic OAuth and the selected Anthropic routing for an explicit builtin provider', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
