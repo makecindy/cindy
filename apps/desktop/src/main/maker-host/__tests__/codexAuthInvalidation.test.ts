@@ -1827,7 +1827,12 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  it('fails closed when a host credential rotates in place before its F2 invalidation', async () => {
+  it.each([
+    { identity: 'same inode', zeroInode: false },
+    { identity: 'zero inode', zeroInode: true },
+  ])('fails closed when a host credential rotates in place with $identity', async ({
+    zeroInode,
+  }) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-in-place-generation-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -1848,11 +1853,20 @@ describe('Codex system credential suppression marker', () => {
     fs.mkdirSync(h.userDataDir, { recursive: true });
     fs.writeFileSync(bindingFile, JSON.stringify({ openai: 'owner-b' }));
 
+    if (zeroInode) {
+      const realFstatSync = fs.fstatSync.bind(fs);
+      vi.spyOn(fs, 'fstatSync').mockImplementation(((fd: number) => ({
+        ...realFstatSync(fd, { bigint: true }),
+        ino: 0n,
+      })) as typeof fs.fstatSync);
+    }
+
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     const f1Generation = adapter.captureCredentialGeneration();
     const f1Stat = fs.statSync(systemAuth);
     expect(f1Generation).not.toBeNull();
+    if (zeroInode) expect(JSON.parse(f1Generation!).ino).toBe('0');
 
     fs.writeFileSync(
       systemAuth,
@@ -1957,6 +1971,61 @@ describe('Codex system credential suppression marker', () => {
       credentialScope: 'instance-isolated',
     });
     await expect(adapter.getAccessToken()).resolves.toBe('cindy-f2-token');
+  });
+
+  it('does not apply a stale orphan reconcile after a login writes local auth', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-login-reconcile-race-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-a-token', account_id: 'acct-a' } }),
+    );
+
+    const originalReadFile = fs.promises.readFile;
+    const systemReadStarted = deferred();
+    const continueSystemRead = deferred();
+    let heldSystemRead = false;
+    vi.spyOn(fs.promises, 'readFile').mockImplementation(((target: unknown, ...rest: unknown[]) => {
+      if (!heldSystemRead && path.resolve(String(target)) === path.resolve(systemAuth)) {
+        heldSystemRead = true;
+        systemReadStarted.resolve();
+        return continueSystemRead.promise.then(() =>
+          (originalReadFile as (...args: unknown[]) => unknown)(target, ...rest),
+        );
+      }
+      return (originalReadFile as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as typeof fs.promises.readFile);
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const reconcile = (
+      adapter as unknown as { reconcileWithSystemCodex(): Promise<void> }
+    ).reconcileWithSystemCodex.bind(adapter);
+    const inFlightReconcile = reconcile();
+    await systemReadStarted.promise;
+
+    (adapter as unknown as { loginCancellationOpen: boolean }).loginCancellationOpen = true;
+    fs.writeFileSync(
+      localAuth,
+      JSON.stringify({ tokens: { access_token: 'cindy-b-token', account_id: 'acct-b' } }),
+    );
+    const localBeforeResume = fs.readFileSync(localAuth);
+    const systemBeforeResume = fs.readFileSync(systemAuth);
+    continueSystemRead.resolve();
+    await inFlightReconcile;
+
+    expect(fs.readFileSync(localAuth)).toEqual(localBeforeResume);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBeforeResume);
+    expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(false);
+    expect(fs.existsSync(path.join(h.userDataDir, 'native-provider-auth.json'))).toBe(false);
   });
 
   it('repairs an unproven local auth orphan instead of preserving its refresh token', async () => {

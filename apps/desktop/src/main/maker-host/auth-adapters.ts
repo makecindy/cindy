@@ -960,6 +960,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * dedup 包装: 并发调用复用同一次在途 reconcile (见 pendingReconcile 字段)。
    */
   private reconcileWithSystemCodex(): Promise<void> {
+    // 登录流程会直接改写 auth.json；此时任何预热/getState reconcile 都不能依据旧拓扑
+    // 启动 orphan repair。登录完成后的显式 provenance 会决定下一轮 reconcile。
+    if (this.pendingLogin || this.loginCancellationOpen) return Promise.resolve();
     if (this.pendingReconcile) return this.pendingReconcile;
     // 发起时刻固定会话快照:reconcile 是异步的,期间可能发生账号切换;绑定自愈
     // 只允许写给「发起时与完成时都是同一个已提交会话」的 owner(见 claim 内校验)。
@@ -993,6 +996,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * reconcile 会带着自己的快照重试,自愈不丢,只是绝不把 A 时代发起的认领写到 B 名下。
    */
   private claimDetectedCodexOAuthBinding(sessionAtStart: ActiveAppSession): void {
+    if (this.pendingLogin || this.loginCancellationOpen) return;
     const session = getActiveAppSession();
     if (isAppSessionBoundaryPending()) return;
     if (
@@ -1057,9 +1061,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   /**
-   * 登录成功后专用: 先等在途的 reconcile 结束, 再保证用刚写好的 auth.json 重新跑一遍。
-   * 否则 dedup 可能把这次"必须基于最新 auth.json"的 reconcile 合并到一个用登录前状态
-   * 启动的在途调用上, 导致刚登录的凭证没被正确共享 (规则 9: 用代码而非侥幸保证确定性)。
+   * 登录成功后专用:先等登录前的 reconcile 结束。新 reconcile 在 pending login 期间会被
+   * 门禁延后到登录 Promise 收口后的下一次读取；此时显式 provenance 已持久化，不会再把
+   * 刚写入的 auth.json 当成孤岛覆盖。
    */
   private async reconcileWithSystemCodexAfterLogin(): Promise<void> {
     const inflight = this.pendingReconcile;
@@ -1174,6 +1178,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         dryRunCandidate: true,
       });
     }
+
+    // topology/account reads above cross await boundaries. A login may have started and written a
+    // new local credential since that snapshot; never replace it using the stale orphan decision.
+    if (this.pendingLogin || this.loginCancellationOpen) return;
 
     // 无显式隔离 provenance 时使用本机凭证：POSIX symlink / Windows hardlink。
     // 安全替换 (唯一 sidecar + 失败重建) 见 codex-auth-link.ts —— 避免并发撞临时文件、
@@ -1668,6 +1676,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     this.ensureInvalidationMarkerLoaded();
     this.loginAborted = false;
     this.loginCancellationOpen = true;
+    // A reconcile that started before triggerLogin may already be inside the relink primitive.
+    // Let it finish before cleanup/spawn; the open login gate prevents any successor from starting.
+    const inflightReconcile = this.pendingReconcile;
+    if (inflightReconcile) await inflightReconcile.catch(() => undefined);
+    if (this.loginAborted || isCancelled()) {
+      return { authenticated: false, errorReason: 'login_cancelled' };
+    }
     await this.ensureGlobalCodexAssets();
 
     // Binary 必须在应用启动时就绪 (bootstrap-electron 的 ready 钩子会阻塞预下载)。
@@ -2253,9 +2268,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       credentialContentChanged &&
       capturedFingerprint &&
       currentLocalFingerprint &&
-      (capturedFingerprint.ino === '0' ||
-        currentLocalFingerprint.ino === '0' ||
-        capturedFingerprint.dev !== currentLocalFingerprint.dev ||
+      capturedFingerprint.ino !== '0' &&
+      currentLocalFingerprint.ino !== '0' &&
+      (capturedFingerprint.dev !== currentLocalFingerprint.dev ||
         capturedFingerprint.ino !== currentLocalFingerprint.ino),
     );
     if (credentialContentChanged && (credentialIdentityChanged || this.loginCancellationOpen)) {
@@ -2267,10 +2282,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       });
       return;
     }
-    // Same-inode content rotation is ambiguous: the app-server may have refreshed in place and
-    // then failed with F2, or another trusted process may have advanced the shared file while this
-    // host still held F1. The protocol exposes no refresh-adopted generation, so fail closed without
-    // attributing F1 to F2; the unknown marker blocks respawning the rejected current credential.
+    // Same-inode content rotation or unavailable file identity is ambiguous: the app-server may
+    // have refreshed in place and then failed with F2, or another trusted process may have advanced
+    // the shared file while this host still held F1. The protocol exposes no refresh-adopted
+    // generation, so fail closed without attributing F1 to F2; the unknown marker blocks respawning
+    // the rejected current credential.
     const invalidatedFingerprint: CodexAuthFileFingerprint | null =
       credentialContentChanged || !capturedFingerprint
         ? null
