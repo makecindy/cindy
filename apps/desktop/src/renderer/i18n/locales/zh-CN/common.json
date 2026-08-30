@@ -10861,6 +10861,9 @@
         "emailCopied": "客服邮箱已复制",
         "emailCopyFailed": "复制客服邮箱失败，请重试",
         "sendFailed": "无法打开邮件应用，请手动发送邮件至 {{email}}。",
+        "gmailFallbackTitle": "改用 Gmail 打开？",
+        "gmailFallbackDescription": "开票申请中包含订单信息。打开 Gmail 会将这些信息分享给 Google，是否继续？",
+        "gmailFallbackConfirm": "打开 Gmail",
         "notAvailable": "暂无信息",
         "fields": {
           "orderId": "订单号",

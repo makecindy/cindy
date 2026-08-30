@@ -2902,7 +2902,7 @@ describe('BillingPage order history', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
 
-    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
     const sendButton = screen.getByRole('button', {
       name: 'billing.orders.invoice.sendAction',
     });
@@ -2912,7 +2912,7 @@ describe('BillingPage order history', () => {
     expect(supportEmailButton.getAttribute('href')).toBeNull();
     expect(screen.getByText(fullOrderId)).toBeTruthy();
     expect(
-      within(await screen.findByRole('dialog')).getByText(
+      within(await screen.findByRole('alertdialog')).getByText(
         'billing.orders.invoice.notAvailable',
       ),
     ).toBeTruthy();
@@ -2942,6 +2942,7 @@ describe('BillingPage order history', () => {
     install([order({ orderId: 'o-gmail-fallback' })]);
     const openExternal = vi.mocked(window.electronAPI.openExternal);
     openExternal.mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ success: true });
+    uiMocks.confirm.mockResolvedValueOnce(true);
 
     render(<BillingPage />);
     fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
@@ -2957,7 +2958,14 @@ describe('BillingPage order history', () => {
     expect(gmailUrl.searchParams.get('to')).toBe('xd-billing@xd.com');
     expect(gmailUrl.searchParams.get('su')).toContain('o-gmail-fallback');
     expect(gmailUrl.searchParams.get('body')).toContain('o-gmail-fallback');
-    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(uiMocks.confirm).toHaveBeenCalledWith({
+      title: 'billing.orders.invoice.gmailFallbackTitle',
+      description: 'billing.orders.invoice.gmailFallbackDescription',
+      confirmText: 'billing.orders.invoice.gmailFallbackConfirm',
+      cancelText: 'billing.actions.close',
+      autoFocusConfirm: true,
+    });
   });
 
   it('also tries Gmail when opening the mail app rejects', async () => {
@@ -2966,6 +2974,7 @@ describe('BillingPage order history', () => {
     openExternal
       .mockRejectedValueOnce(new Error('no mail handler'))
       .mockResolvedValueOnce({ success: true });
+    uiMocks.confirm.mockResolvedValueOnce(true);
 
     render(<BillingPage />);
     fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
@@ -2975,7 +2984,50 @@ describe('BillingPage order history', () => {
 
     await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
     expect(openExternal.mock.calls[1][0]).toContain('https://mail.google.com/mail/?view=cm&fs=1');
-    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('does not open Gmail without explicit consent after the mail app fails', async () => {
+    install([order({ orderId: 'o-gmail-no-consent' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    openExternal.mockResolvedValueOnce({ success: false });
+    uiMocks.confirm.mockResolvedValueOnce(false);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+    );
+
+    await waitFor(() => expect(uiMocks.confirm).toHaveBeenCalledTimes(1));
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(uiMocks.toastError).toHaveBeenCalledWith(
+      'billing.orders.invoice.sendFailed:{"email":"xd-billing@xd.com"}',
+    );
+  });
+
+  it('ignores repeated send activations while the mail request is pending', async () => {
+    install([order({ orderId: 'o-gmail-double-click' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    let resolveOpenExternal: ((result: { success: boolean }) => void) | undefined;
+    openExternal.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOpenExternal = resolve;
+        }),
+    );
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    const sendButton = await screen.findByRole('button', {
+      name: 'billing.orders.invoice.sendAction',
+    });
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    resolveOpenExternal?.({ success: true });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
   });
 
   it('only offers invoice requests for completed orders', async () => {

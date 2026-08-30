@@ -10869,6 +10869,9 @@
         "emailCopied": "サポートメールアドレスをコピーしました",
         "emailCopyFailed": "サポートメールアドレスをコピーできませんでした。もう一度お試しください。",
         "sendFailed": "メールアプリを開けませんでした。{{email}} まで手動でメールをお送りください。",
+        "gmailFallbackTitle": "Gmailを開きますか？",
+        "gmailFallbackDescription": "請求書の申請には注文情報が含まれます。Gmailを開くと、この情報がGoogleに共有されます。続行しますか？",
+        "gmailFallbackConfirm": "Gmailを開く",
         "notAvailable": "情報なし",
         "fields": {
           "orderId": "注文 ID",

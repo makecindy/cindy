@@ -10869,6 +10869,9 @@
         "emailCopied": "고객센터 이메일을 복사했습니다",
         "emailCopyFailed": "고객센터 이메일을 복사하지 못했습니다. 다시 시도해 주세요.",
         "sendFailed": "이메일 앱을 열 수 없습니다. {{email}}로 직접 이메일을 보내 주세요.",
+        "gmailFallbackTitle": "Gmail을 대신 열까요?",
+        "gmailFallbackDescription": "청구서 신청에 주문 정보가 포함되어 있습니다. Gmail을 열면 이 정보가 Google에 공유됩니다. 계속하시겠어요?",
+        "gmailFallbackConfirm": "Gmail 열기",
         "notAvailable": "정보 없음",
         "fields": {
           "orderId": "주문 ID",

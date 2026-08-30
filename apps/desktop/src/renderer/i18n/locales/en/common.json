@@ -10886,6 +10886,9 @@
         "emailCopied": "Support email copied",
         "emailCopyFailed": "Support email wasn’t copied — try again",
         "sendFailed": "Couldn’t open your email app. Please email {{email}} manually.",
+        "gmailFallbackTitle": "Open Gmail instead?",
+        "gmailFallbackDescription": "Your invoice request includes order details. Opening Gmail will share this information with Google. Continue?",
+        "gmailFallbackConfirm": "Open Gmail",
         "notAvailable": "Not available",
         "fields": {
           "orderId": "Order ID",

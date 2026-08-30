@@ -10861,6 +10861,9 @@
         "emailCopied": "客服信箱已複製",
         "emailCopyFailed": "複製客服信箱失敗，請再試一次",
         "sendFailed": "無法開啟郵件應用程式，請手動寄送郵件至 {{email}}。",
+        "gmailFallbackTitle": "改用 Gmail 開啟？",
+        "gmailFallbackDescription": "開票申請中包含訂單資訊。開啟 Gmail 會將這些資訊分享給 Google，是否繼續？",
+        "gmailFallbackConfirm": "開啟 Gmail",
         "notAvailable": "暫無資訊",
         "fields": {
           "orderId": "訂單號",

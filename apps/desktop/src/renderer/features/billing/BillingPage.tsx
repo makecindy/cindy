@@ -18,6 +18,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -1890,8 +1891,9 @@ function InvoiceRequestDialog({
   onClose: () => void;
 }) {
   const { t, i18n } = useTranslation();
+  const { confirm } = useConfirmDialog();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
-  const sendButtonRef = useRef<HTMLButtonElement>(null);
+  const sendInvoiceLockRef = useRef(false);
   // BillingPaymentOrder does not carry the actual acquiring provider, and a
   // terminal order usually has no paymentAction. Never present an action type
   // such as QR_CODE/REDIRECT as the user's payment method.
@@ -1925,9 +1927,7 @@ function InvoiceRequestDialog({
   const description = t('billing.orders.invoice.description', {
     email: BILLING_SUPPORT_EMAIL,
   });
-  const [descriptionBeforeEmail, descriptionAfterEmail] = description.split(
-    BILLING_SUPPORT_EMAIL,
-  );
+  const [descriptionBeforeEmail, descriptionAfterEmail] = description.split(BILLING_SUPPORT_EMAIL);
   const copySupportEmail = async () => {
     try {
       await navigator.clipboard.writeText(BILLING_SUPPORT_EMAIL);
@@ -1939,6 +1939,14 @@ function InvoiceRequestDialog({
   const openGmailFallback = async () => {
     if (!gmailComposeUrl) return false;
     try {
+      const confirmed = await confirm({
+        title: t('billing.orders.invoice.gmailFallbackTitle'),
+        description: t('billing.orders.invoice.gmailFallbackDescription'),
+        confirmText: t('billing.orders.invoice.gmailFallbackConfirm'),
+        cancelText: t('billing.actions.close'),
+        autoFocusConfirm: true,
+      });
+      if (!confirmed) return false;
       const result = await window.electronAPI.openExternal(gmailComposeUrl);
       return result.success;
     } catch {
@@ -1949,7 +1957,8 @@ function InvoiceRequestDialog({
     toast.error(t('billing.orders.invoice.sendFailed', { email: BILLING_SUPPORT_EMAIL }));
   };
   const sendInvoiceRequest = () => {
-    if (!order || !invoiceMailto) return;
+    if (!order || !invoiceMailto || sendInvoiceLockRef.current) return;
+    sendInvoiceLockRef.current = true;
     void window.electronAPI
       .openExternal(invoiceMailto)
       .then(async (result) => {
@@ -1969,96 +1978,69 @@ function InvoiceRequestDialog({
           return;
         }
         showSendFailed();
+      })
+      .finally(() => {
+        sendInvoiceLockRef.current = false;
       });
   };
 
-  return (
-    <Dialog.Root open={order !== null} onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
-        <Dialog.Content
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            sendButtonRef.current?.focus();
-          }}
-          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,480px)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-none focus:outline-none"
+  const invoiceContent = order ? (
+    <div>
+      <p className="text-12 leading-5 text-[var(--confirm-desc)]">
+        {descriptionBeforeEmail}
+        <button
+          type="button"
+          onClick={() => void copySupportEmail()}
+          className="font-mono text-[var(--text-primary)] underline decoration-[var(--border-default)] underline-offset-2 transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
-          <div className="flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-5 py-4">
-            <div>
-              <Dialog.Title className="text-16 font-medium tracking-[-0.01em]">
-                {t('billing.orders.invoice.title')}
-              </Dialog.Title>
-              <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                {descriptionBeforeEmail}
-                <button
-                  type="button"
-                  onClick={() => void copySupportEmail()}
-                  className="font-mono text-[var(--text-primary)] underline decoration-[var(--border-default)] underline-offset-2 transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                >
-                  {BILLING_SUPPORT_EMAIL}
-                </button>
-                {descriptionAfterEmail}
-              </Dialog.Description>
-            </div>
-          </div>
+          {BILLING_SUPPORT_EMAIL}
+        </button>
+        {descriptionAfterEmail}
+      </p>
 
-          {order && (
-            <div className="px-5 py-4">
-              <div className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
-                <InvoiceInfoRow
-                  label={t('billing.orders.invoice.fields.orderId')}
-                  value={order.orderId}
-                  mono
-                />
-                <InvoiceInfoRow
-                  label={t('billing.orders.invoice.fields.application')}
-                  value="Cindy"
-                />
-                <InvoiceInfoRow
-                  label={t('billing.orders.invoice.fields.paymentMethod')}
-                  value={paymentMethod}
-                />
-                <InvoiceInfoRow
-                  label={t('billing.orders.invoice.fields.amount')}
-                  value={formatMoney(order.amount, order.currency, billingLocale)}
-                />
-              </div>
+      <div className="mt-4 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
+        <InvoiceInfoRow
+          label={t('billing.orders.invoice.fields.orderId')}
+          value={order.orderId}
+          mono
+        />
+        <InvoiceInfoRow label={t('billing.orders.invoice.fields.application')} value="Cindy" />
+        <InvoiceInfoRow
+          label={t('billing.orders.invoice.fields.paymentMethod')}
+          value={paymentMethod}
+        />
+        <InvoiceInfoRow
+          label={t('billing.orders.invoice.fields.amount')}
+          value={formatMoney(order.amount, order.currency, billingLocale)}
+        />
+      </div>
 
-              <div className="mt-5 py-3">
-                <p className="text-12 leading-5 text-[var(--text-primary)]">
-                  {t('billing.orders.invoice.requiredInfo')}
-                </p>
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-12 leading-5 text-[var(--text-primary)]">
-                  {INVOICE_REQUIRED_FIELDS.map((field) => (
-                    <li key={field}>{t(`billing.orders.invoice.fields.${field}`)}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
+      <div className="mt-4 py-3">
+        <p className="text-12 leading-5 text-[var(--confirm-title)]">
+          {t('billing.orders.invoice.requiredInfo')}
+        </p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-12 leading-5 text-[var(--confirm-desc)]">
+          {INVOICE_REQUIRED_FIELDS.map((field) => (
+            <li key={field}>{t(`billing.orders.invoice.fields.${field}`)}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  ) : null;
 
-          <div className="flex justify-end gap-2 border-t border-[var(--border-default)] px-5 py-3">
-            <Dialog.Close asChild>
-              <button
-                type="button"
-                className="h-8 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-              >
-                {t('billing.actions.close')}
-              </button>
-            </Dialog.Close>
-            <button
-              type="button"
-              ref={sendButtonRef}
-              onClick={sendInvoiceRequest}
-              className="flex h-8 items-center gap-1.5 rounded-full bg-[var(--text-primary)] px-3.5 text-12 font-medium text-[var(--surface)] transition-colors hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-            >
-              <Mail aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.8} />
-              {t('billing.orders.invoice.sendAction')}
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+  return (
+    <ConfirmDialog
+      open={order !== null}
+      onOpenChange={(open) => !open && onClose()}
+      title={t('billing.orders.invoice.title')}
+      content={invoiceContent}
+      maxWidth={460}
+      confirmText={t('billing.orders.invoice.sendAction')}
+      cancelText={t('billing.actions.close')}
+      autoFocusConfirm
+      confirmIcon={<Mail className="h-3.5 w-3.5" strokeWidth={1.8} />}
+      onConfirm={sendInvoiceRequest}
+    />
   );
 }
 
