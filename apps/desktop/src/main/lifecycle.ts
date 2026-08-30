@@ -715,19 +715,29 @@ export function installWindowsSessionEndHandler(
     const markerBarrier = Promise.all([Promise.all(markerWrites), fallbackPreparation]).then(
       async () => {
         let fallbackSettlementQueue = Promise.resolve();
-        await settleWindowsSessionEndRecoveryMarkers(durableSessionIds, (fallbackSessionId) => {
-          // Fallback replay synchronously reaches the event listeners, but
-          // terminal message persistence is queued behind
-          // messagePersistBroadcaster's async write chain. Settle each late
-          // fallback independently so another session without a terminal event
-          // cannot strand this session's recovery marker.
-          const settlement = fallbackSettlementQueue.then(async () => {
-            await options.drainPersistQueue();
-            await options.settleActiveTurnMarkers([fallbackSessionId]);
-          });
-          fallbackSettlementQueue = settlement.catch(() => undefined);
-          return settlement;
-        });
+        await settleWindowsSessionEndRecoveryMarkers(
+          durableSessionIds,
+          (fallbackSessionId) => {
+            // Fallback replay synchronously reaches the event listeners, but
+            // terminal message persistence is queued behind
+            // messagePersistBroadcaster's async write chain. Settle each late
+            // fallback independently so another session without a terminal event
+            // cannot strand this session's recovery marker.
+            const settlement = fallbackSettlementQueue.then(async () => {
+              await options.drainPersistQueue();
+              await options.settleActiveTurnMarkers([fallbackSessionId]);
+            });
+            fallbackSettlementQueue = settlement.catch(() => undefined);
+            return settlement;
+          },
+          (prerequisite, identity) => {
+            registerShutdownStoragePrerequisite(
+              prerequisite,
+              `late Windows provider usage for ${identity.sessionInstanceId}:` +
+                identity.turnGeneration,
+            );
+          },
+        );
       },
     );
     registerShutdownStoragePrerequisite(markerBarrier, 'Windows session-end recovery');

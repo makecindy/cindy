@@ -128,6 +128,11 @@ async function shutdownMaker(): Promise<{ piSessionFailures: number }> {
   // recovery marker its generation-exact fallback terminal first, while the
   // original Session gate and event consumers are still guaranteed alive.
   await prepareWindowsSessionEndFallbackBeforeSessionTeardown();
+  // Marker settlement normally preceded this disposer. If the generic wait
+  // timed out, this monotonic signal detaches retained replacement gates only
+  // after their fallback has eventually replayed. Active Session gates close
+  // later inside maker.shutdown().
+  beginWindowsSessionEndFallbackProviderTeardown();
   // Do not terminate Main while one workspace patch command is settling.
   await waitForTurnChangeSetActions();
   // 退出前先把 onClose 重副作用(worktree stash/删除、临时附件清理)一刀切抑制掉:
@@ -408,7 +413,10 @@ import {
   installWindowsSessionEndHandler,
   onQuit,
 } from './lifecycle';
-import { prepareWindowsSessionEndFallbackBeforeSessionTeardown } from './windowsSessionEnd';
+import {
+  beginWindowsSessionEndFallbackProviderTeardown,
+  prepareWindowsSessionEndFallbackBeforeSessionTeardown,
+} from './windowsSessionEnd';
 import {
   cancelIOSSimulatorSessionOperations,
   cleanupIOSSimulatorRemovedSession,

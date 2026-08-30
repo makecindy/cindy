@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __resetWindowsSessionEndForTests,
+  beginWindowsSessionEndFallbackProviderTeardown,
   beginWindowsSessionEndQuery,
   cancelWindowsSessionEndQuery,
   createWindowsSessionEndEventGate,
   deferRetainedWindowsSessionEndFallback,
   deferWindowsSessionEndEvent,
   deferWindowsSessionEndWiringTeardown,
+  finishWindowsSessionEndFallbackProviderEvents,
   finishWindowsSessionEndProductTurn,
   finishWindowsSessionEndSessionClosed,
   isWindowsSessionEndFallbackSession,
@@ -1137,6 +1139,110 @@ describe('Windows session-end terminal error classification', () => {
       sessionTurnGeneration: turn.turnGeneration,
     };
     expect(gate.shouldRun?.(replacementText)).toBe(false);
+  });
+
+  it('keeps late done usage behind the storage hold after fallback drain returns', async () => {
+    const turn = activeTurn('late-usage-session', 4, 'late-usage-instance');
+    let releaseUsage!: () => void;
+    const usageTask = new Promise<void>((resolve) => {
+      releaseUsage = resolve;
+    });
+    const gate = createWindowsSessionEndEventGate(
+      turn.sessionId,
+      'claude-code',
+      turn.sessionInstanceId,
+      () => usageTask,
+    );
+    const storagePrerequisites: Promise<void>[] = [];
+    markWindowsSessionEnding([turn]);
+    expect(
+      deferWindowsSessionEndEvent(
+        turn.sessionId,
+        'claude-code',
+        {
+          ...claudeTerminalError,
+          sessionInstanceId: turn.sessionInstanceId,
+          sessionTurnGeneration: turn.turnGeneration,
+        },
+        vi.fn(),
+        undefined,
+        turn.sessionInstanceId,
+      ),
+    ).toBe(true);
+
+    await expect(
+      settleWindowsSessionEndRecoveryMarkers([], undefined, (prerequisite) => {
+        storagePrerequisites.push(prerequisite);
+      }),
+    ).resolves.toEqual([turn.sessionId]);
+    expect(storagePrerequisites).toHaveLength(1);
+    let storageSettled = false;
+    void storagePrerequisites[0]?.then(() => {
+      storageSettled = true;
+    });
+    await Promise.resolve();
+    expect(storageSettled).toBe(false);
+
+    const lateDone = {
+      ...claudeDone,
+      sessionInstanceId: turn.sessionInstanceId,
+      sessionTurnGeneration: turn.turnGeneration,
+    };
+    expect(gate(lateDone, vi.fn())).toBe(true);
+    // Session teardown can now disable the gate, but it cannot release a usage
+    // write that the done callback already captured synchronously.
+    finishWindowsSessionEndFallbackProviderEvents(turn.sessionId, turn.sessionInstanceId);
+    await Promise.resolve();
+    expect(storageSettled).toBe(false);
+
+    releaseUsage();
+    await expect(storagePrerequisites[0]).resolves.toBeUndefined();
+    expect(storageSettled).toBe(true);
+  });
+
+  it('defers a timed-out teardown request until fallback replay completes', async () => {
+    const turn = activeTurn('timed-out-session', 2, 'retained-instance');
+    const calls: string[] = [];
+    const storagePrerequisites: Promise<void>[] = [];
+    beginWindowsSessionEndQuery([turn]);
+    expect(
+      deferWindowsSessionEndWiringTeardown(turn.sessionId, 'claude-code', () => {
+        calls.push('teardown');
+        finishWindowsSessionEndFallbackProviderEvents(
+          turn.sessionId,
+          turn.sessionInstanceId,
+        );
+      }),
+    ).toBe(true);
+    markWindowsSessionEnding([]);
+    const settlement = settleWindowsSessionEndRecoveryMarkers(
+      [],
+      undefined,
+      (prerequisite) => storagePrerequisites.push(prerequisite),
+    );
+
+    beginWindowsSessionEndFallbackProviderTeardown();
+    await Promise.resolve();
+    expect(calls).toEqual([]);
+    expect(
+      deferWindowsSessionEndEvent(
+        turn.sessionId,
+        'claude-code',
+        {
+          ...claudeTerminalError,
+          sessionInstanceId: turn.sessionInstanceId,
+          sessionTurnGeneration: turn.turnGeneration,
+        },
+        () => calls.push('replay'),
+        undefined,
+        turn.sessionInstanceId,
+      ),
+    ).toBe(true);
+
+    await expect(settlement).resolves.toEqual([turn.sessionId]);
+    expect(calls).toEqual(['replay', 'teardown']);
+    expect(storagePrerequisites).toHaveLength(1);
+    await expect(storagePrerequisites[0]).resolves.toBeUndefined();
   });
 
   it('drops a deferred query error paired tail that arrives after confirmation', () => {

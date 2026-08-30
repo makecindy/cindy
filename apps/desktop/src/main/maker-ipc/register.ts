@@ -229,6 +229,7 @@ import {
   deferRetainedWindowsSessionEndFallback,
   deferWindowsSessionEndEvent,
   deferWindowsSessionEndWiringTeardown,
+  finishWindowsSessionEndFallbackProviderEvents,
   finishWindowsSessionEndProductTurn,
   finishWindowsSessionEndSessionClosed,
   isWindowsSessionEndFallbackSession,
@@ -4589,7 +4590,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     installInteractionLifecycleObserver(session, null);
     clearPendingTurnChangeSets(session.id);
   });
-  const handleLateWindowsFallbackProviderDoneUsage = (event: AgentEvent): void => {
+  const handleLateWindowsFallbackProviderDoneUsage = (
+    event: AgentEvent,
+  ): void | Promise<void> => {
     if (
       event.type !== 'done' ||
       event.source !== 'claude-code' ||
@@ -4622,6 +4625,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         error: error instanceof Error ? error.message : String(error),
       });
     });
+    return usageTask;
   };
   const windowsSessionEndEventGate = createWindowsSessionEndEventGate(
     session.id,
@@ -4632,6 +4636,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   session.setEventDispatchGate(windowsSessionEndEventGate);
   registration.replayConsumerDisposers.push(() => {
     session.setEventDispatchGate(null);
+    finishWindowsSessionEndFallbackProviderEvents(session.id, session.instanceId);
     clearReservedStaleClaudeUsage(session.id, session.instanceId);
   });
   // A confirmed Session can close before shutdown-maker reaches its global

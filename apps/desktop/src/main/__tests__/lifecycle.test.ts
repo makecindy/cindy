@@ -1255,7 +1255,10 @@ describe('installWindowsSessionEndHandler', () => {
   it('keeps DB-closing disposal behind marker settlement after the generic timeout', async () => {
     const { createShutdownStorageDisposer, installWindowsSessionEndHandler, onQuit } =
       await freshLifecycle();
-    const { deferWindowsSessionEndEvent } = await import('../windowsSessionEnd');
+    const {
+      deferWindowsSessionEndEvent,
+      finishWindowsSessionEndFallbackProviderEvents,
+    } = await import('../windowsSessionEnd');
     const listeners = new Map<string, (...args: unknown[]) => void>();
     const calls: string[] = [];
     let rejectMarker!: (error: Error) => void;
@@ -1318,6 +1321,16 @@ describe('installWindowsSessionEndHandler', () => {
     expect(calls).toEqual([]);
 
     rejectMarker(new Error('marker RPC rejected independently'));
+    await vi.waitFor(() => expect(calls).toContain('settle-marker'));
+    expect(calls).toEqual(['replay', 'drain', 'settle-marker']);
+
+    // The fallback drain has returned, but an exact provider done can still
+    // arrive through the Session gate. DB disposal waits until gate teardown
+    // proves that no later accounting task can be admitted.
+    finishWindowsSessionEndFallbackProviderEvents(
+      'pending-marker-session',
+      'pending-marker-session',
+    );
     await vi.waitFor(() => expect(calls).toContain('local-db'));
     expect(calls).toEqual(['replay', 'drain', 'settle-marker', 'db-client', 'local-db']);
   });

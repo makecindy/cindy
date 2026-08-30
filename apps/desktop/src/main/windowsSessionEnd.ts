@@ -17,7 +17,7 @@ import { createLogger } from './logger.js';
 const log = createLogger('windows-session-end');
 
 let windowsSessionEnding = false;
-interface WindowsSessionEndTurnIdentity {
+export interface WindowsSessionEndTurnIdentity {
   sessionInstanceId: string;
   turnGeneration: number;
 }
@@ -34,6 +34,19 @@ type RecoveryMarkerState = 'pending' | 'awaiting-fallback' | 'durable' | 'fallba
 const confirmedRecoveryMarkerStates = new Map<string, RecoveryMarkerState>();
 const pendingFallbackEventResolvers = new Map<string, () => void>();
 const pendingFallbackStorageTasks = new Map<string, Set<Promise<void>>>();
+interface LateProviderDoneStorageHold {
+  identity: WindowsSessionEndTurnIdentity;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+  taskBound: boolean;
+}
+const lateProviderDoneStorageHolds = new Map<
+  string,
+  Map<string, LateProviderDoneStorageHold>
+>();
+const finishedFallbackProviderEventInstances = new Set<string>();
+const completedRecoveryMarkerSessionIds = new Set<string>();
+let fallbackProviderTeardownStarted = false;
 const protectedWiringTeardownSessionIds = new Set<string>();
 const pendingWiringTeardowns = new Map<string, Set<() => void>>();
 const fallbackTerminalEmitters = new Map<string, Map<string, () => boolean | void>>();
@@ -61,6 +74,10 @@ function turnIdentityKey(identity: WindowsSessionEndTurnIdentity): string {
 
 function fallbackTurnKey(sessionId: string, identity: WindowsSessionEndTurnIdentity): string {
   return `${sessionId}\u0001${turnIdentityKey(identity)}`;
+}
+
+function providerEventInstanceKey(sessionId: string, sessionInstanceId: string): string {
+  return `${sessionId}\u0002${sessionInstanceId}`;
 }
 
 function createTurnIdentity(
@@ -162,6 +179,118 @@ function settlePendingWiringTeardowns(sessionId: string): void {
     } catch (error) {
       log.warn('deferred session wiring teardown failed', { sessionId, error });
     }
+  }
+}
+
+function maybeSettlePendingWiringTeardowns(sessionId: string): void {
+  if (!completedRecoveryMarkerSessionIds.has(sessionId)) return;
+  if (
+    confirmedRecoveryMarkerStates.get(sessionId) === 'durable' ||
+    !lateProviderDoneStorageHolds.has(sessionId) ||
+    fallbackProviderTeardownStarted
+  ) {
+    settlePendingWiringTeardowns(sessionId);
+  }
+}
+
+function settleLateProviderDoneStorageHold(
+  sessionId: string,
+  hold: LateProviderDoneStorageHold,
+  rejected?: { error: unknown },
+): void {
+  const holds = lateProviderDoneStorageHolds.get(sessionId);
+  if (holds?.get(turnIdentityKey(hold.identity)) !== hold) return;
+  holds.delete(turnIdentityKey(hold.identity));
+  if (holds.size === 0) lateProviderDoneStorageHolds.delete(sessionId);
+  if (rejected) hold.reject(rejected.error);
+  else hold.resolve();
+  if (!lateProviderDoneStorageHolds.has(sessionId)) {
+    maybeSettlePendingWiringTeardowns(sessionId);
+  }
+}
+
+function registerLateProviderDoneStorageHolds(
+  sessionId: string,
+  registerStoragePrerequisite:
+    | ((prerequisite: Promise<void>, identity: WindowsSessionEndTurnIdentity) => void)
+    | undefined,
+): void {
+  if (!registerStoragePrerequisite) return;
+  const holds = lateProviderDoneStorageHolds.get(sessionId) ?? new Map();
+  for (const identity of confirmedInterruptedTurnGenerations.get(sessionId)?.values() ?? []) {
+    const identityKey = turnIdentityKey(identity);
+    if (
+      holds.has(identityKey) ||
+      finishedFallbackProviderEventInstances.has(
+        providerEventInstanceKey(sessionId, identity.sessionInstanceId),
+      )
+    ) {
+      continue;
+    }
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    const hold: LateProviderDoneStorageHold = {
+      identity,
+      resolve,
+      reject,
+      taskBound: false,
+    };
+    holds.set(identityKey, hold);
+    registerStoragePrerequisite(promise, identity);
+  }
+  if (holds.size > 0) lateProviderDoneStorageHolds.set(sessionId, holds);
+}
+
+function bindLateProviderDoneStorageTask(
+  sessionId: string,
+  identity: WindowsSessionEndTurnIdentity,
+  task: Promise<void>,
+): void {
+  const hold = lateProviderDoneStorageHolds.get(sessionId)?.get(turnIdentityKey(identity));
+  if (!hold || hold.taskBound) return;
+  hold.taskBound = true;
+  void task.then(
+    () => settleLateProviderDoneStorageHold(sessionId, hold),
+    (error) => settleLateProviderDoneStorageHold(sessionId, hold, { error }),
+  );
+}
+
+/**
+ * Close the exact provider-event fence only after no later done can enter it.
+ * A done whose accounting task was already captured keeps its storage hold;
+ * otherwise teardown proves that the placeholder can resolve without a write.
+ */
+export function finishWindowsSessionEndFallbackProviderEvents(
+  sessionId: string,
+  sessionInstanceId: string,
+): void {
+  if (!windowsSessionEnding) return;
+  finishedFallbackProviderEventInstances.add(
+    providerEventInstanceKey(sessionId, sessionInstanceId),
+  );
+  for (const hold of [
+    ...(lateProviderDoneStorageHolds.get(sessionId)?.values() ?? []),
+  ]) {
+    if (hold.identity.sessionInstanceId === sessionInstanceId && !hold.taskBound) {
+      settleLateProviderDoneStorageHold(sessionId, hold);
+    }
+  }
+}
+
+/**
+ * `shutdown-maker` is the lifecycle point at which retained replacement wiring
+ * may be detached. If its generic prerequisite timed out, remember the intent
+ * and apply it when marker settlement eventually makes replay safe.
+ */
+export function beginWindowsSessionEndFallbackProviderTeardown(): void {
+  if (!windowsSessionEnding) return;
+  fallbackProviderTeardownStarted = true;
+  for (const sessionId of [...pendingWiringTeardowns.keys()]) {
+    maybeSettlePendingWiringTeardowns(sessionId);
   }
 }
 
@@ -386,7 +515,13 @@ async function drainWindowsSessionEndFallbackStorageTasks(sessionId: string): Pr
   }
 }
 
-async function settleFailedRecoveryMarker(sessionId: string): Promise<string | null> {
+async function settleFailedRecoveryMarker(
+  sessionId: string,
+  registerStoragePrerequisite?: (
+    prerequisite: Promise<void>,
+    identity: WindowsSessionEndTurnIdentity,
+  ) => void,
+): Promise<string | null> {
   if (!hasFallbackTerminalForEveryInterruptedGeneration(sessionId)) {
     confirmedRecoveryMarkerStates.set(sessionId, 'awaiting-fallback');
     await new Promise<void>((resolve) => {
@@ -398,6 +533,10 @@ async function settleFailedRecoveryMarker(sessionId: string): Promise<string | n
   confirmedRecoveryMarkerStates.set(sessionId, 'fallback');
   confirmedTerminalTurnGenerations.delete(sessionId);
   fallbackTerminalEmitters.delete(sessionId);
+  // Register the lifecycle hold before synchronous replay can drain its first
+  // storage batch. A real provider done may arrive after that batch is empty;
+  // its exact-generation usage task will bind to this still-live placeholder.
+  registerLateProviderDoneStorageHolds(sessionId, registerStoragePrerequisite);
   if (!settlePendingEventCallbacks(sessionId, false)) return null;
   await drainWindowsSessionEndFallbackStorageTasks(sessionId);
   return sessionId;
@@ -670,7 +809,7 @@ export function gateWindowsSessionEndEvent(
   event: AgentEvent,
   getReplay: SessionEventReplayFactory,
   sessionInstanceId?: string,
-  onLateProviderDoneUsage?: (event: AgentEvent) => void,
+  onLateProviderDoneUsage?: (event: AgentEvent) => void | Promise<void>,
 ): boolean {
   if (agentKind !== 'claude-code') return false;
   const identity = eventTurnIdentity(sessionId, event, sessionInstanceId);
@@ -682,8 +821,9 @@ export function gateWindowsSessionEndEvent(
     hasConfirmedInterruptedTurn(sessionId, sessionInstanceId, event)
   ) {
     if (isProductTurnTerminalDoneEvent(event)) {
+      let usageTask: Promise<void>;
       try {
-        onLateProviderDoneUsage?.(event);
+        usageTask = Promise.resolve(onLateProviderDoneUsage?.(event));
       } catch (error) {
         // A bookkeeping callback must never reopen Session fan-out after the
         // fallback terminal became authoritative.
@@ -692,7 +832,9 @@ export function gateWindowsSessionEndEvent(
           ...identity,
           error,
         });
+        usageTask = Promise.reject(error);
       }
+      bindLateProviderDoneStorageTask(sessionId, identity, usageTask);
     }
     log.debug('ignored late Windows provider event after fallback replay', {
       sessionId,
@@ -831,7 +973,7 @@ export function createWindowsSessionEndEventGate(
   sessionId: string,
   agentKind: AgentKind,
   sessionInstanceId = sessionId,
-  onLateProviderDoneUsage?: (event: AgentEvent) => void,
+  onLateProviderDoneUsage?: (event: AgentEvent) => void | Promise<void>,
 ): SessionEventDispatchGate {
   const gate: SessionEventDispatchGate = (event, getReplay) =>
     gateWindowsSessionEndEvent(
@@ -1059,6 +1201,10 @@ export function prepareWindowsSessionEndFallbackBeforeSessionClose(
 export async function settleWindowsSessionEndRecoveryMarkers(
   durableSessionIds: Iterable<string>,
   settleFallbackSession?: (sessionId: string) => void | Promise<void>,
+  registerLateProviderDoneStoragePrerequisite?: (
+    prerequisite: Promise<void>,
+    identity: WindowsSessionEndTurnIdentity,
+  ) => void,
 ): Promise<string[]> {
   if (!windowsSessionEnding) return [];
   const durableSessions = new Set(durableSessionIds);
@@ -1074,7 +1220,10 @@ export async function settleWindowsSessionEndRecoveryMarkers(
       fallbackTerminalEmitters.delete(sessionId);
     } else {
       failedMarkerSettlements.push(
-        settleFailedRecoveryMarker(sessionId).then(async (fallbackSessionId) => {
+        settleFailedRecoveryMarker(
+          sessionId,
+          registerLateProviderDoneStoragePrerequisite,
+        ).then(async (fallbackSessionId) => {
           if (fallbackSessionId !== null) await settleFallbackSession?.(fallbackSessionId);
           return fallbackSessionId;
         }),
@@ -1095,10 +1244,14 @@ export async function settleWindowsSessionEndRecoveryMarkers(
       (result): result is PromiseFulfilledResult<string | null> => result.status === 'fulfilled',
     )
     .map((result) => result.value);
-  // Durable markers have discarded their held events; fallback markers have
-  // replayed and drained them. Only now may an instance replacement detach the
-  // callbacks that owned those outcomes.
-  for (const sessionId of settlingSessionIds) settlePendingWiringTeardowns(sessionId);
+  // Durable markers have discarded their held events and can detach now.
+  // Fallback gates remain alive for a possible real provider done unless the
+  // shutdown-maker phase already started. Captured usage continues to hold DB
+  // disposal even after its gate is detached.
+  for (const sessionId of settlingSessionIds) {
+    completedRecoveryMarkerSessionIds.add(sessionId);
+    maybeSettlePendingWiringTeardowns(sessionId);
+  }
   return fallbackSessionIds.filter((sessionId): sessionId is string => sessionId !== null);
 }
 
@@ -1140,6 +1293,13 @@ export function __resetWindowsSessionEndForTests(): void {
   fallbackTerminalEmitters.clear();
   syntheticFallbackEmissionKeys.clear();
   pendingFallbackStorageTasks.clear();
+  for (const holds of lateProviderDoneStorageHolds.values()) {
+    for (const hold of holds.values()) hold.resolve();
+  }
+  lateProviderDoneStorageHolds.clear();
+  finishedFallbackProviderEventInstances.clear();
+  completedRecoveryMarkerSessionIds.clear();
+  fallbackProviderTeardownStarted = false;
   pendingEventCallbacks = [];
   const fallbackEventResolvers = [...pendingFallbackEventResolvers.values()];
   pendingFallbackEventResolvers.clear();

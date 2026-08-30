@@ -79,6 +79,16 @@ describe('maker:event hot path ordering', () => {
     ]) {
       expectOrder(shutdownMakerSource, prepareFallback, laterPrework);
     }
+    expectOrder(
+      shutdownMakerSource,
+      prepareFallback,
+      'beginWindowsSessionEndFallbackProviderTeardown();',
+    );
+    expectOrder(
+      shutdownMakerSource,
+      'beginWindowsSessionEndFallbackProviderTeardown();',
+      'await waitForTurnChangeSetActions();',
+    );
   });
 
   it('does not snapshot an idle replacement for a tracked Windows turn', () => {
@@ -392,6 +402,33 @@ describe('maker:event hot path ordering', () => {
       'trackWindowsSessionEndFallbackStorageTask(session.id, staleClaudeUsageTask, {',
     );
     expect(staleSource).toContain('requireSuccess: true');
+
+    const lateUsageStart = wireSessionSource.indexOf(
+      'const handleLateWindowsFallbackProviderDoneUsage =',
+    );
+    const lateUsageEnd = wireSessionSource.indexOf(
+      'const windowsSessionEndEventGate =',
+      lateUsageStart,
+    );
+    const lateUsageSource = wireSessionSource.slice(lateUsageStart, lateUsageEnd);
+    expect(lateUsageStart).toBeGreaterThanOrEqual(0);
+    expect(lateUsageEnd).toBeGreaterThan(lateUsageStart);
+    expectOrder(
+      lateUsageSource,
+      'trackWindowsSessionEndFallbackStorageTask(session.id, usageTask, {',
+      'return usageTask;',
+    );
+    const gateDisposerStart = wireSessionSource.indexOf(
+      'registration.replayConsumerDisposers.push(() => {\n    session.setEventDispatchGate(null);',
+    );
+    const gateDisposerEnd = wireSessionSource.indexOf('\n  });', gateDisposerStart);
+    const gateDisposerSource = wireSessionSource.slice(gateDisposerStart, gateDisposerEnd);
+    expect(gateDisposerStart).toBeGreaterThanOrEqual(0);
+    expectOrder(
+      gateDisposerSource,
+      'session.setEventDispatchGate(null);',
+      'finishWindowsSessionEndFallbackProviderEvents(session.id, session.instanceId);',
+    );
   });
 
   it('runs the paid-model fence in the shared Session lifecycle boundary', () => {
