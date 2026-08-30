@@ -13,9 +13,17 @@ describe('mapAuxiliaryRefsToVoiceRefiners', () => {
   });
 
   it('maps OpenAI and Cindy gateway catalog pins onto matching refiner transports', () => {
-    expect(mapAuxiliaryRefToVoiceRefiner('cat:openai:codex:gpt-5.4-mini')).toBe('codex-gpt-5.4-mini');
+    expect(mapAuxiliaryRefToVoiceRefiner('cat:openai:codex:gpt-5.4-mini')).toBe(
+      'cat:openai:codex:gpt-5.4-mini',
+    );
     expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:deepseek/deepseek-v4-flash')).toBe(
-      'litellm-deepseek-v4-flash',
+      'cat:xd:codex:deepseek/deepseek-v4-flash',
+    );
+    expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:tencent/hy3')).toBe(
+      'cat:xd:codex:tencent/hy3',
+    );
+    expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:qwen/qwen3.8-flash')).toBe(
+      'cat:xd:codex:qwen/qwen3.8-flash',
     );
   });
 

@@ -6,9 +6,9 @@
  */
 
 import { parseAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
-import { UTILITY_MODEL_PROFILES } from '../../shared/utilityModelProfiles.js';
 import {
-  isVoiceInputRefinerProviderKind,
+  getVoiceInputRefinerProfile,
+  voiceInputRefinerProviderKindForCatalogRoute,
   type VoiceInputRefinerProviderKind,
 } from '../../shared/voiceInputRefinerProfiles.js';
 
@@ -16,27 +16,9 @@ export function mapAuxiliaryRefToVoiceRefiner(ref: string): VoiceInputRefinerPro
   const parsed = parseAuxiliaryModelRef(ref);
   if (!parsed) return null;
   if (parsed.kind === 'profile') {
-    return isVoiceInputRefinerProviderKind(parsed.id) ? parsed.id : null;
+    return parsed.id;
   }
-  if (parsed.route.agentKind === 'claude-code' || parsed.route.providerId === 'anthropic') {
-    return null;
-  }
-  if (parsed.route.providerId === 'openai') {
-    for (const profile of Object.values(UTILITY_MODEL_PROFILES)) {
-      if (profile.transport === 'codex-responses' && profile.model === parsed.route.model) {
-        return isVoiceInputRefinerProviderKind(profile.id) ? profile.id : null;
-      }
-    }
-    return null;
-  }
-  if (parsed.route.providerId === 'xd') {
-    for (const profile of Object.values(UTILITY_MODEL_PROFILES)) {
-      if (profile.transport === 'litellm-chat-completions' && profile.model === parsed.route.model) {
-        return isVoiceInputRefinerProviderKind(profile.id) ? profile.id : null;
-      }
-    }
-  }
-  return null;
+  return voiceInputRefinerProviderKindForCatalogRoute(parsed.route);
 }
 
 export function mapAuxiliaryRefsToVoiceRefiners(
@@ -45,7 +27,14 @@ export function mapAuxiliaryRefsToVoiceRefiners(
   const out: VoiceInputRefinerProviderKind[] = [];
   for (const ref of refs) {
     const mapped = mapAuxiliaryRefToVoiceRefiner(ref);
-    if (mapped && !out.includes(mapped)) out.push(mapped);
+    if (!mapped) continue;
+    const mappedProfile = getVoiceInputRefinerProfile(mapped);
+    const duplicate = out.some((existing) => {
+      const existingProfile = getVoiceInputRefinerProfile(existing);
+      return existingProfile.transport === mappedProfile.transport
+        && existingProfile.model === mappedProfile.model;
+    });
+    if (!duplicate) out.push(mapped);
   }
   return out;
 }

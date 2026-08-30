@@ -9,13 +9,16 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../');
 describe('custom auxiliary chain does not hit the session agent', () => {
   it('Help keeps the session oneShot fallback behind isAuxiliaryModelCustomized', () => {
     const source = readFileSync(path.join(root, 'maker-ipc/help.ts'), 'utf8');
-    expect(source).toContain('!isAuxiliaryModelCustomized()');
+    expect(
+      source.match(/const auxiliaryModelCustomized = isAuxiliaryModelCustomized\(\);/g)?.length,
+    ).toBe(2);
+    expect(source).toContain('!auxiliaryModelCustomized');
     expect(source.match(/maker\.oneShot/g)?.length).toBeGreaterThan(0);
   });
 
   it('pinned-card summaries skip agent oneShot when the auxiliary list is customized', () => {
     const source = readFileSync(path.join(root, 'sessionTaskSummary.ts'), 'utf8');
-    expect(source).toContain('isAuxiliaryModelCustomized()');
-    expect(source).toMatch(/isAuxiliaryModelCustomized\(\)[\s\S]{0,180}\.oneShot/);
+    expect(source).toContain('const auxiliaryModelCustomized = isAuxiliaryModelCustomized();');
+    expect(source).toMatch(/auxiliaryModelCustomized[\s\S]{0,180}\.oneShot/);
   });
 });

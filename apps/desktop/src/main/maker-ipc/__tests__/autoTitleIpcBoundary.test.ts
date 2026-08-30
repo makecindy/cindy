@@ -76,6 +76,11 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
     }
   },
 }));
+// title.ts imports promptPrediction statically; this boundary suite does not
+// exercise prediction itself, so keep the maker-host graph out of collection.
+vi.mock('../promptPrediction.js', () => ({
+  generatePromptPrediction: vi.fn(),
+}));
 
 import { registerMakerTitleIpc } from '../title.js';
 import { getDbClient } from '../../localDb/client/current.js';

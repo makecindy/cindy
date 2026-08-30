@@ -271,6 +271,11 @@ function overlayAuxiliaryRefinerChain(
   return {
     ...selection,
     refinerProvider: mapped[0] ?? DEFAULT_VOICE_INPUT_REFINER_PROVIDER_KIND,
+    // The legacy voice-input file may still contain a custom `refinerModel`.
+    // Once the shared auxiliary chain is active, every model (including exact
+    // catalog pins) comes from that chain; retaining this field would let the
+    // old model override the new chain head in resolveVoiceInputRefinerChainProfiles.
+    refinerModel: undefined,
     refinerProviderChain: mapped,
     refinerProviderChainSource: chain.source === 'custom' ? 'configured' : 'default',
   };

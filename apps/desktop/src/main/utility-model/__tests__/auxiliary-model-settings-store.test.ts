@@ -119,13 +119,14 @@ describe('auxiliary-model-settings-store', () => {
     });
   });
 
-  it('migrates legacy dual pins with the title pin first', () => {
+  it('migrates legacy dual pins with the title pin first', async () => {
     writeJson(settingsPath(), {
       sessionTitleModel: TITLE_PIN,
       promptRecommendationModel: PROMPT_PIN,
     });
 
     expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    await __testing.flushLegacyMigration();
     expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
   });
 
@@ -140,6 +141,7 @@ describe('auxiliary-model-settings-store', () => {
     });
 
     expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+    await __testing.flushLegacyMigration();
     expect(readJson(migrationStatePath())).toEqual({ legacyVoiceMigrationCompleted: true });
 
     await writeAuxiliaryModelSettingsPatch({ models: [] });
@@ -150,7 +152,7 @@ describe('auxiliary-model-settings-store', () => {
     expect(readJson(migrationStatePath())).toEqual({ legacyVoiceMigrationCompleted: true });
   });
 
-  it('migrates a legacy voice chain when auxiliary settings were never customized', () => {
+  it('migrates a legacy voice chain when auxiliary settings were never customized', async () => {
     writeJson(ownerVoicePath(), {
       utilityModelProvider: 'litellm-kimi-k2.6',
       utilityModel: 'moonshotai/kimi-k2.6-custom',
@@ -164,6 +166,7 @@ describe('auxiliary-model-settings-store', () => {
     expect(readAuxiliaryModelSettings()).toEqual({
       models: [CUSTOM_MODEL_PIN, 'codex-gpt-5.4-mini', 'litellm-kimi-k2.6'],
     });
+    await __testing.flushLegacyMigration();
     expect(readJson(ownerVoicePath())).toEqual({
       utilityModelProvider: 'litellm-kimi-k2.6',
       utilityModel: 'moonshotai/kimi-k2.6-custom',
@@ -185,6 +188,7 @@ describe('auxiliary-model-settings-store', () => {
     expect(readAuxiliaryModelSettings()).toEqual({
       models: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
     });
+    await __testing.flushLegacyMigration();
 
     await writeAuxiliaryModelSettingsPatch({ models: [] });
 

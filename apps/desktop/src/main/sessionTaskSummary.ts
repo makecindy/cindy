@@ -322,6 +322,11 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
         ? session.agentKind
         : 'claude-code';
     const prompt = SUMMARY_PROMPT(session.title, userMsg, assistantMsg, tier);
+    // Freeze the fallback policy for this request. The auxiliary setting may
+    // change while the utility request is in flight; the result must not then
+    // be routed through a different policy merely because the user switched
+    // modes before the request completed.
+    const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
     // 模型走系统统一配置:优先用"轻量任务模型链"(utility-model,与起标题同源,
     // 由 getUtilityModelChainProfiles 决定),配置缺失/不可用时再回退到 agent 自带的
     // oneShot 兜底——不再写死 haiku/mini。maxTokens 120:长档 30+ CJK 字可能超 80 token,留余量防截断。
@@ -336,9 +341,9 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     // 那样跨 agent 兜底 —— 会话 agent 不支持 oneShot 时直接跳过兜底(仅靠 utility-model)。
     const text = utility.ok
       ? utility.text
-      : isAuxiliaryModelCustomized()
-        || !agentSupportsOneShot(agentKind)
-        || (await isAgentOneShotRouteDisabled(agentKind))
+      : auxiliaryModelCustomized ||
+          !agentSupportsOneShot(agentKind) ||
+          (await isAgentOneShotRouteDisabled(agentKind))
         ? ''
         : await getMaker().oneShot(agentKind, prompt, { maxTokens: 120 });
     const summary = sanitize(text, maxCharsForTier(tier));

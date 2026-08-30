@@ -31,6 +31,11 @@ vi.mock('../../maker-host/auxiliary-title-one-shot.js', () => ({
 vi.mock('../../i18n.js', () => ({
   getResolvedMainLocale: vi.fn(() => 'en'),
 }));
+// title.ts imports promptPrediction statically; this suite covers the
+// dependency-injected title flow and should not initialize maker-host.
+vi.mock('../promptPrediction.js', () => ({
+  generatePromptPrediction: vi.fn(),
+}));
 
 import {
   generateMakerSessionTitle,

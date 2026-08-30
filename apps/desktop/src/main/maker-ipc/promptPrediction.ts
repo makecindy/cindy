@@ -9,7 +9,9 @@ import type { AgentKind } from '@cindy/maker-core';
 
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { getResolvedMainLocale } from '../i18n.js';
+import { getMaker } from '../maker-host/index.js';
 import { validateTitleOutput } from '../maker-host/title-output-validation.js';
+import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { readAuxiliaryModelSettings } from '../utility-model/auxiliary-model-settings-store.js';
 import { eq } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
@@ -224,10 +226,6 @@ export async function generatePromptPrediction(
   }
 
   const modelsSnapshot = JSON.stringify(readAuxiliaryModelSettings().models);
-  const [{ requestUtilityText }, { getMaker }] = await Promise.all([
-    import('../utility-model/oneShotCandidates.js'),
-    import('../maker-host/index.js'),
-  ]);
 
   const result = await requestUtilityText(getMaker(), truncated, {
     maxTokens: 96,

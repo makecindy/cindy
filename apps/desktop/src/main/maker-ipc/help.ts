@@ -125,6 +125,10 @@ async function routeHelpTopics(
   if (HELP_KNOWLEDGE.length === 0) return [];
   try {
     const prompt = buildRouterPrompt(history);
+    // Freeze this request's fallback policy before dispatch. Settings can be
+    // changed while the utility model is in flight; completion must not read a
+    // newer mode and accidentally cross the custom/automatic boundary.
+    const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
     const utility = await requestUtilityText(maker, prompt, {
       maxTokens: 30,
       timeoutMs: 12_000,
@@ -133,7 +137,7 @@ async function routeHelpTopics(
     // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
     if (
       !raw &&
-      !isAuxiliaryModelCustomized() &&
+      !auxiliaryModelCustomized &&
       target.agentKind &&
       !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
     ) {
@@ -332,6 +336,9 @@ export function registerMakerHelpIpc(maker: Maker): void {
         const docs = HELP_KNOWLEDGE.filter((d) => routedIds.includes(d.id));
         // Stage 2: answer grounded in the routed docs (or summaries on miss).
         const prompt = buildHelpPrompt(history, locale, target.agentKind, docs);
+        // As with topic routing, pin the fallback policy for this answer
+        // request before awaiting the utility model.
+        const auxiliaryModelCustomized = isAuxiliaryModelCustomized();
         const utility = await requestUtilityText(maker, prompt, {
           ...target.options,
         });
@@ -339,7 +346,7 @@ export function registerMakerHelpIpc(maker: Maker): void {
         // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
         if (
           !raw &&
-          !isAuxiliaryModelCustomized() &&
+          !auxiliaryModelCustomized &&
           target.agentKind &&
           !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
         ) {
