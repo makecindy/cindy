@@ -14,6 +14,7 @@ import {
 	desktopDevCacheDirs,
 	devEnvPrefix,
 	hasIsolationIntent,
+	isTrustedIsolatedAuthUserDataDir,
 	isOfficialProductionUserDataDir,
 	isRepositoryDesktopDevProcess,
 	officialProductionUserDataDirs,
@@ -317,6 +318,44 @@ test("env-only XDT_ISOLATED=1 derives the default sandbox, not the official prof
 	assert.equal(named, defaultIsolatedUserDataDir("review", "global"));
 });
 
+test("isolated auth accepts only the epoch sandbox derived by this restart", () => {
+	const isolatedArg = "--isolated=oauth-review";
+	const derived = defaultIsolatedUserDataDir("oauth-review", "global");
+	const trusted = {
+		isolatedArg,
+		userDataDir: derived,
+		userDataDirEpoch: "1",
+		userDataDerivedByRestart: true,
+		selectedRegion: "global",
+	};
+
+	// A freshly derived sandbox does not need an existing credential file.
+	assert.equal(isTrustedIsolatedAuthUserDataDir(trusted), true);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDerivedByRestart: false,
+	}), false);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDirEpoch: undefined,
+	}), false);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDir: path.join(os.tmpdir(), "shared-cindy-profile"),
+	}), false);
+});
+
+test("isolated auth rejects an explicit userData even when it spoofs the derived path and epoch", () => {
+	const isolatedArg = "--isolated=oauth-review";
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		isolatedArg,
+		userDataDir: defaultIsolatedUserDataDir("oauth-review", "global"),
+		userDataDirEpoch: "1",
+		userDataDerivedByRestart: false,
+		selectedRegion: "global",
+	}), false);
+});
+
 test("isolated=@worktree derives the named sandbox from the checkout directory", () => {
 	const root = path.join("/repo", "cindy-local-ollama-models");
 	const name = isolationNameFromWorktree(root);
@@ -362,6 +401,16 @@ test("isolated official-profile refuse happens before mkdir in the restart main 
 	const mkdirIdx = source.indexOf("fs.mkdirSync(process.env.XDT_USER_DATA_DIR");
 	assert.ok(refuseIdx > 0);
 	assert.ok(mkdirIdx > refuseIdx);
+});
+
+test("isolated auth trust gate runs before credential write flags and userData creation", () => {
+	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
+	const trustIdx = source.lastIndexOf("if (!isTrustedIsolatedAuthUserDataDir({");
+	const authFlagIdx = source.indexOf("process.env.XDT_ISOLATED_AUTH = '1';");
+	const mkdirIdx = source.indexOf("fs.mkdirSync(process.env.XDT_USER_DATA_DIR");
+	assert.ok(trustIdx > 0);
+	assert.ok(authFlagIdx > trustIdx);
+	assert.ok(mkdirIdx > authFlagIdx);
 });
 
 test("preserve-running only shares a target with live records from the same region", () => {

@@ -630,6 +630,33 @@ export function resolveRestartTargetUserDataDir({
 }
 
 /**
+ * Credential cleanup/write access is more destructive than ordinary isolated
+ * startup. Trust only the v2 sandbox selected by this restart invocation; an
+ * ambient userData path must not gain that authority by spoofing the epoch.
+ */
+export function isTrustedIsolatedAuthUserDataDir({
+  isolatedArg,
+  userDataDir,
+  userDataDirEpoch,
+  userDataDerivedByRestart,
+  selectedRegion,
+}) {
+  if (
+    !isolatedArg
+    || !userDataDir
+    || userDataDirEpoch !== '1'
+    || userDataDerivedByRestart !== true
+  ) {
+    return false;
+  }
+  const expectedDir = defaultIsolatedUserDataDir(
+    parseIsolationName(isolatedArg),
+    selectedRegion,
+  );
+  return canonicalizeUserDataDir(userDataDir) === canonicalizeUserDataDir(expectedDir);
+}
+
+/**
  * Refuse when restarting would suicide this checkout's host, or when a shared
  * start is hosted by another checkout's desktop-dev (same official profile).
  * Isolated start from another checkout is safe: kill scope is ownRootDir.
@@ -1007,6 +1034,7 @@ async function main() {
   const mode = argv.includes('--local') ? 'local' : 'remote';
   const startupConfig = applyDesktopStartupConfigForPhase({ argv, mode });
   const selectedRegion = startupConfig?.region ?? resolveDesktopDevRegion(argv, process.env);
+  let userDataDerivedByRestart = false;
   if (isolatedArg && isolatedArg.includes('=')) {
     const derivedDir = defaultIsolatedUserDataDir(parseIsolationName(isolatedArg), selectedRegion);
     if (inheritedUserDataBlocksNamedIsolation(isolatedArg, process.env.XDT_USER_DATA_DIR, derivedDir)) {
@@ -1120,6 +1148,7 @@ async function main() {
       // 进入)或旧 checkout 启动都不带该信号 → 观察模式,防旧代码对同一显式
       // 路径以默认身份打开造成双身份互写(#912 review P1)。
       process.env.XDT_USER_DATA_DIR_EPOCH = '1';
+      userDataDerivedByRestart = true;
     }
   }
   // --isolated-auth: 沙箱凭证隔离 —— 启动时清掉本沙箱旧 auth(共享硬链与独立孤岛
@@ -1133,6 +1162,22 @@ async function main() {
         'INVALID_ISOLATED_NAME',
         '--isolated-auth requires --isolated: shared userData must not isolate credentials alone',
         ['==> --isolated-auth requires --isolated: 共享 userData 的实例不该单独隔离凭证'],
+      );
+    }
+    if (!isTrustedIsolatedAuthUserDataDir({
+      isolatedArg,
+      userDataDir: process.env.XDT_USER_DATA_DIR,
+      userDataDirEpoch: process.env.XDT_USER_DATA_DIR_EPOCH,
+      userDataDerivedByRestart,
+      selectedRegion,
+    })) {
+      exitWithFailure(
+        'STARTUP_FAILED',
+        '--isolated-auth requires a userData sandbox derived by this restart invocation',
+        [
+          '==> Refusing --isolated-auth for an inherited or explicit XDT_USER_DATA_DIR.',
+          '    Unset XDT_USER_DATA_DIR and retry with --isolated-auth --isolated[=<name>].',
+        ],
       );
     }
     process.env.XDT_ISOLATED_AUTH = '1';
