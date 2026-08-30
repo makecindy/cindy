@@ -2709,7 +2709,6 @@ export class CodexAgent extends BaseAgent {
     // 往远端 config.toml 写 mcp_servers 段, daemon 经 SSH remote-forward 直连
     // 本机 HTTP bridge, tool call 按 params._meta.threadId 路由(与本地一致)。
     let createTransport: () => import('./app-server/transport.js').Transport;
-    let credentialGeneration: string | null = null;
     if (remoteHostId) {
       if (!this.deps.getRemoteCodexTransport) {
         throw new Error(
@@ -2753,25 +2752,17 @@ export class CodexAgent extends BaseAgent {
       subagentRoute,
       codexOpenAiWebSocketsEnabled,
       codexSubagentRoutingProfile,
-      // initialize acknowledgement is the first point at which this exact app-server has
-      // confirmed reading its auth environment. A spawn-time snapshot can precede that read.
-      onInitialized: remoteHostId
+      // Bind each structured Auth failure to the generation captured immediately before its
+      // correlated request entered this transport. Never resnapshot auth.json in the failure
+      // callback: the child may have consumed F1 before an external atomic replacement to F2.
+      captureCredentialGeneration: remoteHostId
         ? undefined
-        : () => {
-            try {
-              credentialGeneration = this.deps.auth.captureCredentialGeneration?.() ?? null;
-            } catch (error) {
-              credentialGeneration = null;
-              this.deps.logger.warn('codex credential generation capture failed', {
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-          },
+        : () => this.deps.auth.captureCredentialGeneration?.() ?? null,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
       // 防止在 JSON-RPC response 分发回调里同步收割自己。远端也走同一结构化协议路径。
-      onAuthInvalidated: (reason) => {
+      onAuthInvalidated: (reason, context) => {
         const usesLocalAuth = !remoteHostId;
         this.deps.logger.warn('codex auth invalidated', {
           reason,
@@ -2780,12 +2771,18 @@ export class CodexAgent extends BaseAgent {
         });
         Promise.resolve()
           .then(async () => {
-            if (usesLocalAuth) {
+            if (usesLocalAuth && context?.credentialGeneration) {
               try {
-                await this.deps.auth.invalidate?.(reason, { credentialGeneration });
+                await this.deps.auth.invalidate?.(reason, context);
               } catch (e) {
                 this.deps.logger.error('auth.invalidate threw', { message: (e as Error).message });
               }
+            } else if (usesLocalAuth) {
+              // Without a request-bound generation, destructive invalidation could attribute an
+              // old host's F1 failure to a newly published F2. Retiring this host is still safe.
+              this.deps.logger.warn('skipping unbound local Codex credential invalidation', {
+                reason,
+              });
             }
             // 防御兜底: 只收掉报错的 host key。远端 daemon 的 auth 失效不应该扩散到
             // local host 或其它 remote host,否则无关会话会绕过 Session.close 变 stale。
