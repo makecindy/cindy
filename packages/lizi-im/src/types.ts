@@ -334,10 +334,24 @@ export interface StreamingTextHandle {
    * 可选 — 不实现也合法 (e.g. 单纯 patch markdown 的轻量 handle 不支持图片)。
    */
   addExtraImageAbsPath?(absPath: string): void;
+  /**
+   * Return tool-result image paths that this handle has positively confirmed
+   * as delivered. Callers use this acknowledgement to retire only proven
+   * entries from their retry ledger after an interaction boundary.
+   */
+  getDeliveredExtraImageAbsPaths?(): readonly string[];
+  /** Paths with an ambiguous remote outcome that must not be retried. */
+  getNonRetryableExtraImageAbsPaths?(): readonly string[];
 }
 
 export interface SendFileResult {
   ok: boolean;
-  reason?: 'NOT_FOUND' | 'EMPTY' | 'TOO_LARGE' | 'UPLOAD_FAIL' | 'SEND_FAIL';
+  reason?:
+    | 'NOT_FOUND'
+    | 'EMPTY'
+    | 'TOO_LARGE'
+    | 'UPLOAD_FAIL'
+    | 'UPLOAD_UNCERTAIN'
+    | 'SEND_FAIL';
   messageId?: string;
 }

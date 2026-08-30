@@ -31,6 +31,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -83,6 +84,7 @@ import type {
   TurnPermissionPolicy,
   UserMessage,
 } from '@cindy/maker-core';
+import { sanitizeBareXdtFileUrls, transformXdtRefs } from '@cindy/im';
 import type { IMAttachment, InteractiveCardSpec, StreamingTextHandle } from '@cindy/im';
 
 import { persistUserMessage } from '../messagePersistence';
@@ -129,7 +131,11 @@ import {
   generateImSessionTitleText,
   persistGeneratedSessionTitle,
 } from './fbotTitle';
-import { materializeLocalMarkdownImages } from './localMarkdownImages';
+import {
+  materializeLocalMarkdownFiles,
+  materializeLocalMarkdownImages,
+  sanitizeLocalMarkdownImageRefs,
+} from './localMarkdownImages';
 import {
   createTurnActivity,
   markActivityWriting,
@@ -168,6 +174,7 @@ function askMultiExtras(req: InteractionRequest) {
 }
 
 const PRE_DISPATCH_ACK_CLEANUP_TIMEOUT_MS = 1500;
+const TERMINAL_FINALIZATION_CLEANUP_TIMEOUT_MS = 5_000;
 /** SESSION_RUNNING 竞态 / desktop turn 仍在跑时的兜底重试间隔。 */
 const DISPATCH_RETRY_MS = 500;
 
@@ -181,10 +188,9 @@ interface TurnState {
   /** First text-delta resolves this lazily (avoids creating a card for empty turns). */
   streamingHandle: StreamingTextHandle | null;
   /**
-   * In-flight promise for the streaming handle creation. Singleton: when a
-   * burst of deltas arrives before the channel returns the first message_id,
-   * all callers await this same promise instead of each minting a new card.
-   * Without it we get one card per delta — a flood of orphan cards.
+   * Cached streaming surface result: a handle, or null after initialization
+   * fails. Singleton: a burst of deltas shares this promise instead of minting
+   * duplicate cards or retrying a failed initialization on every event.
    */
   streamingHandlePromise: Promise<StreamingTextHandle | null> | null;
   /**
@@ -199,10 +205,20 @@ interface TurnState {
    * 累积缓冲, 流式增量追加。过程区时间线状态经 presenter.activity 暴露。
    */
   presenter: TurnPresenter;
-  /** Managed images discovered in tool output for durable text channels. */
+  /** Managed images discovered in tool output for terminal delivery. */
   mediaAbsPaths: string[];
+  /** Image subset of the media ledger, retained across interaction stream boundaries. */
+  imageMediaAbsPaths: Set<string>;
+  /** Optional user-facing names for file paths in the terminal media ledger. */
+  mediaDisplayNames: Map<string, string>;
+  /** Private staging directories created for race-safe local-file fallback. */
+  mediaTempDirs: Set<string>;
+  /** Session teardown won ownership while async fallback materialization was in flight. */
+  cleanupRequested: boolean;
   /** Current session root used to confine model-authored local file links. */
   workingDir: string;
+  /** SSH host when the session workdir lives on a remote machine. */
+  remoteHostId: string | null;
   done: boolean;
   /** 过程区耗时刷新的低频 ticker(首个 tool_use 启动, 收口清除)。 */
   activityTicker: ReturnType<typeof setInterval> | null;
@@ -293,6 +309,8 @@ interface SessionState {
   workingDir: string;
   /** FIFO of turns. Events route to queue[0]; done/error shifts. */
   queue: TurnState[];
+  /** Turns shifted from the event queue but still finishing terminal delivery/cleanup. */
+  finalizingTurns: Map<TurnState, Promise<void>>;
   /** 等待当前 turn 结束后再 send 的消息 — FIFO, 见模块头"消息排队"。 */
   sendQueue: QueuedSend[];
   /** thread = session 模型下该 session 对应的 thread root ts;feishu undefined。 */
@@ -650,6 +668,7 @@ export function createTurnRunner(
             fastMode: row.fastMode,
             sdkSessionId: row.sdkSessionId,
             providerId: row.providerId ?? null,
+            remoteHostId: row.remoteHostId ?? null,
           },
           attached: true,
           scopeKey,
@@ -788,7 +807,12 @@ export function createTurnRunner(
       streamingStartFailed: false,
       presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
+      imageMediaAbsPaths: new Set(),
+      mediaDisplayNames: new Map(),
+      mediaTempDirs: new Set(),
+      cleanupRequested: false,
       workingDir: row.workingDir,
+      remoteHostId: row.remoteHostId ?? null,
       done: false,
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,
@@ -912,6 +936,7 @@ export function createTurnRunner(
     // 不再以 SESSION_RUNNING pre-dispatch failure 报错打回(对齐 desktop 排队体验)。
     if (
       state.queue.length > 0 ||
+      state.finalizingTurns.size > 0 ||
       state.sendQueue.length > 0 ||
       state.makerSession.isTurnRunning()
     ) {
@@ -925,7 +950,7 @@ export function createTurnRunner(
       // done/error 触发;若该事件在 enqueue 前已送达(isTurnRunning 释放略晚于
       // 事件 fanout 的窄竞态)或被错过, 队列会永久卡住。挂兜底 timer 自愈 —
       // maybeDispatchNextQueued 发现仍在跑会自动续挂, 直到队列排空。
-      if (state.queue.length === 0) {
+      if (state.queue.length === 0 && state.finalizingTurns.size === 0) {
         armDispatchRetry(state, userId);
       }
       await notifyQueuedPosition(userId, item, state.sendQueue.length);
@@ -1385,6 +1410,7 @@ export function createTurnRunner(
   function maybeDispatchNextQueued(state: SessionState, userId: string): void {
     if (state.sendQueue.length === 0) return;
     if (state.queue.length > 0) return;
+    if (state.finalizingTurns.size > 0) return;
     if (state.makerSession.isTurnRunning()) {
       armDispatchRetry(state, userId);
       return;
@@ -1579,6 +1605,7 @@ export function createTurnRunner(
       workingDir: row.workingDir,
       scopeKey: target.scopeKey,
       queue: [],
+      finalizingTurns: new Map(),
       sendQueue: [],
       dispatchRetryTimer: null,
       unsubscribers: [],
@@ -2160,22 +2187,31 @@ export function createTurnRunner(
     if (!data || typeof data.fullText !== 'string') return;
     const urls = extractRenderableXdtImageUrls(data.fullText);
     if (urls.length === 0) return;
+    const absPaths: string[] = [];
+    for (const url of urls) {
+      try {
+        const { absPath } = url.startsWith('cindy-media://')
+          ? resolveCindyMediaUrl(url)
+          : resolveXdtImageUrl(url);
+        absPaths.push(absPath);
+        if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+        turn.imageMediaAbsPaths.add(absPath);
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`[${channel}/turn] resolve managed image failed`, {
+          kind: 'managed-image-resolve',
+          source: url.startsWith('cindy-media://') ? 'cindy-media' : 'xdt-image',
+          error,
+        });
+      }
+    }
+    if (absPaths.length === 0) return;
     // streamingHandle 可能还没 spawn (e.g. 工具调用先于任何 text delta) — 触发
     // 一下 ensureStreamingHandle 让 card 先建出来, 再投递。投递接口本身是
     // O(1) 同步 push, 不阻塞事件循环。
     void ensureStreamingHandle(turn).then((handle) => {
-      if (!handle?.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力 / 创建失败(null)
-      for (const url of urls) {
-        try {
-          const { absPath } = url.startsWith('cindy-media://')
-            ? resolveCindyMediaUrl(url)
-            : resolveXdtImageUrl(url);
-          handle.addExtraImageAbsPath(absPath);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`[${channel}/turn] resolve managed image failed for ${url}: ${msg}`);
-        }
-      }
+      if (!handle?.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力
+      for (const absPath of absPaths) handle.addExtraImageAbsPath(absPath);
     });
   }
 
@@ -2753,15 +2789,21 @@ export function createTurnRunner(
                   threadTs: turn.scopeKey,
                 });
         turn.streamingHandle = handle;
+        // An interaction finalizes and detaches the previous handle. Media that
+        // channel did not confirm as delivered stays in the turn ledger and must
+        // be attached to the replacement handle as well.
+        if (handle.addExtraImageAbsPath) {
+          for (const absPath of turn.imageMediaAbsPaths) handle.addExtraImageAbsPath(absPath);
+        }
         return handle;
       } catch (err) {
         turn.streamingStartFailed = true;
-        // 只记渠道 / 阶段 / 错误摘要,不记 token、消息正文与完整用户标识。
-        log.warn(
-          `[${channel}/turn] initial streaming output start failed (phase=initial_stream_start): ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`${channel} streaming output initialization failed`, {
+          kind: 'streaming-output-init',
+          source: 'startStreamingText',
+          error,
+        });
         return null;
       }
     })();
@@ -2838,9 +2880,39 @@ export function createTurnRunner(
     }
   }
 
-  async function handleTurnDoneAsync(state: SessionState, userId: string): Promise<void> {
+  function handleTurnDoneAsync(state: SessionState, userId: string): Promise<void> {
     const turn = state.queue.shift();
-    if (!turn) return;
+    if (!turn) return Promise.resolve();
+    const finalization = finalizeTurnDoneAsync(state, userId, turn);
+    return trackFinalizingTurn(state, turn, finalization);
+  }
+
+  function trackFinalizingTurn(
+    state: SessionState,
+    turn: TurnState,
+    finalization: Promise<void>,
+  ): Promise<void> {
+    state.finalizingTurns.set(turn, finalization);
+    const onSettled = () => {
+      state.finalizingTurns.delete(turn);
+      settleTurnTerminal(turn);
+      if (!finishDeferredDetachIfIdle(state)) {
+        maybeDispatchNextQueued(state, state.userId);
+      }
+    };
+    void finalization.then(onSettled, onSettled);
+    return finalization;
+  }
+
+  async function stopCancelledFinalization(turn: TurnState): Promise<void> {
+    await cleanupFallbackMedia(turn);
+  }
+
+  async function finalizeTurnDoneAsync(
+    state: SessionState,
+    userId: string,
+    turn: TurnState,
+  ): Promise<void> {
     clearSilentStopSettleWait(turn);
     turn.done = true;
     clearActivityTicker(turn);
@@ -2855,12 +2927,20 @@ export function createTurnRunner(
     // tool_use / tool_result / thinking 过程消息,desktop 重开历史能完整回放)。
     // 这里再写一份会产生重复记录。
     await materializeTurnLocalImages(state, turn);
+    if (turn.cleanupRequested) {
+      await stopCancelledFinalization(turn);
+      return;
+    }
     if (!turn.streamingHandle && turn.streamingHandlePromise) {
       try {
         await turn.streamingHandlePromise;
       } catch {
         // The terminal branch below handles the missing output surface.
       }
+    }
+    if (turn.cleanupRequested) {
+      await stopCancelledFinalization(turn);
+      return;
     }
     if (turn.streamingHandle) {
       try {
@@ -2875,14 +2955,28 @@ export function createTurnRunner(
           `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    } else if (turn.presenter.wholeText().length === 0) {
-      // No streamed text at all — send a one-shot text so the user knows the
-      // turn ended. (Rare; normally agents emit at least one text block.)
+    } else {
+      // The output surface may fail before the first card exists. The Agent
+      // reply is already durable at this point, so use the independent plain
+      // text API instead of silently dropping a non-empty final response.
+      if (output.kind === 'rich-card') {
+        await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+        if (turn.cleanupRequested) {
+          await stopCancelledFinalization(turn);
+          return;
+        }
+        await materializeTurnLocalFiles(state, turn);
+        if (turn.cleanupRequested) {
+          await stopCancelledFinalization(turn);
+          return;
+        }
+      }
+      const fallbackText = composeStreamingView(turn) || '✅ (本轮无文本输出)';
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
-            text: '✅ (本轮无文本输出)',
+            text: fallbackText,
             terminal: turn.terminalKind,
             threadTs: state.scopeKey,
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
@@ -2895,44 +2989,32 @@ export function createTurnRunner(
           const isMyOpener = triggerId === turn.userMessageId;
           const consumed =
             isMyOpener
-              ? ((await output.im.consumePendingOpenerCard?.(userId, '✅ (本轮无文本输出)')) ??
-                false)
+              ? ((await output.im.consumePendingOpenerCard?.(userId, fallbackText)) ?? false)
               : false;
           if (!consumed) {
-            await sendTextClaimingOpener(userId, '✅ (本轮无文本输出)', state.scopeKey);
+            await sendTextClaimingOpener(userId, fallbackText, state.scopeKey);
           }
         }
-      } catch {
-        /* swallow */
-      }
-    } else {
-      // 初始流式输出面创建失败但正文已生成(#2164):此前两条分支都不命中,
-      // 已持久化的助手回复在渠道侧静默消失。收口时一次性降级为普通文本发送
-      // (turn.done 已置,composeStreamingView 只含干净正文;长度限制由渠道发送
-      // 实现兑现)。发送失败只记脱敏日志,不阻塞 settle / 队列放行。
-      try {
-        const fallbackText = composeStreamingView(turn);
-        if (output.kind === 'chunked-text') {
-          await output.commitFinal({
-            userId,
-            text: fallbackText,
-            terminal: turn.terminalKind,
-            threadTs: state.scopeKey,
-            ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
-          });
-        } else {
-          await output.im.sendText(userId, fallbackText, { threadTs: state.scopeKey });
-        }
-        log.info(`[${channel}/turn] streaming surface unavailable — final text delivered via plain send`);
       } catch (err) {
-        log.warn(
-          `[${channel}/turn] plain-text fallback send failed (non-fatal): ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+        if (output.kind === 'chunked-text') {
+          turn.terminalKind = 'error';
+          turn.terminalErrorCode = 'terminal_output_commit_failed';
+        }
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} plain-text fallback failed`, {
+          kind: 'terminal-output-fallback',
+          source: output.kind === 'chunked-text' ? 'commitFinal' : 'sendText',
+          error,
+        });
+      }
+      if (output.kind === 'rich-card') {
+        try {
+          await sendFallbackMedia(turn, userId, state.scopeKey);
+        } finally {
+          await cleanupFallbackMedia(turn);
+        }
       }
     }
-    settleTurnTerminal(turn);
     log.info(
       `turn done for session=...${(state.makerSession.id ?? '').slice(-8)}, queueDepth=${state.queue.length}`,
     );
@@ -2942,12 +3024,143 @@ export function createTurnRunner(
     maybeDispatchNextQueued(state, userId);
   }
 
-  async function handleTurnErrorAsync(
+  async function sendFallbackMedia(
+    turn: TurnState,
+    userId: string,
+    threadTs: string | undefined,
+  ): Promise<void> {
+    const delivered = new Set<string>();
+    const nonRetryable = new Set<string>();
+    for (const absPath of turn.mediaAbsPaths) {
+      if (turn.cleanupRequested) break;
+      try {
+        const result = await output.im.sendFile(
+          userId,
+          absPath,
+          turn.mediaDisplayNames.get(absPath),
+          { threadTs },
+        );
+        if (result.ok) {
+          delivered.add(absPath);
+          continue;
+        }
+        if (result.reason === 'UPLOAD_UNCERTAIN') {
+          nonRetryable.add(absPath);
+        }
+        log.error(`${channel} media fallback failed`, {
+          kind: 'terminal-media-fallback',
+          source: 'sendFile',
+          reason: result.reason ?? 'UNKNOWN',
+        });
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} media fallback failed`, {
+          kind: 'terminal-media-fallback',
+          source: 'sendFile',
+          error,
+        });
+      }
+    }
+    const settled = new Set([...delivered, ...nonRetryable]);
+    if (settled.size > 0) {
+      await cleanupDeliveredStagedMedia(turn, settled);
+      turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !settled.has(absPath));
+      for (const absPath of settled) {
+        turn.imageMediaAbsPaths.delete(absPath);
+        turn.mediaDisplayNames.delete(absPath);
+      }
+    }
+  }
+
+  async function cleanupDeliveredStagedMedia(
+    turn: TurnState,
+    delivered: ReadonlySet<string>,
+  ): Promise<void> {
+    const ownedTempDirs = new Map(
+      [...turn.mediaTempDirs].map((tempDir) => [path.resolve(tempDir), tempDir]),
+    );
+    const touchedTempDirs = new Set<string>();
+
+    for (const absPath of delivered) {
+      const tempDir = ownedTempDirs.get(path.dirname(path.resolve(absPath)));
+      if (!tempDir) continue;
+      touchedTempDirs.add(tempDir);
+      try {
+        await fs.rm(absPath, { force: true, maxRetries: 2, retryDelay: 50 });
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`${channel} delivered media cleanup failed`, {
+          kind: 'delivered-media-cleanup',
+          source: 'rm',
+          error,
+        });
+      }
+    }
+
+    for (const tempDir of touchedTempDirs) {
+      try {
+        const remaining = await fs.readdir(tempDir);
+        if (remaining.length > 0) continue;
+        await fs.rm(tempDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 2,
+          retryDelay: 50,
+        });
+        turn.mediaTempDirs.delete(tempDir);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          turn.mediaTempDirs.delete(tempDir);
+          continue;
+        }
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`${channel} delivered media directory cleanup failed`, {
+          kind: 'delivered-media-cleanup',
+          source: 'readdir-or-rm',
+          error,
+        });
+      }
+    }
+  }
+
+  async function cleanupFallbackMedia(turn: TurnState): Promise<void> {
+    const tempDirs = [...turn.mediaTempDirs];
+    for (const tempDir of tempDirs) {
+      try {
+        await fs.rm(tempDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 2,
+          retryDelay: 50,
+        });
+        turn.mediaTempDirs.delete(tempDir);
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`${channel} media fallback cleanup failed`, {
+          kind: 'terminal-media-cleanup',
+          source: 'rm',
+          error,
+        });
+      }
+    }
+  }
+
+  function handleTurnErrorAsync(
     state: SessionState,
     userId: string,
     errData: unknown,
   ): Promise<void> {
     const turn = state.queue.shift();
+    const finalization = finalizeTurnErrorAsync(state, userId, errData, turn);
+    return turn ? trackFinalizingTurn(state, turn, finalization) : finalization;
+  }
+
+  async function finalizeTurnErrorAsync(
+    state: SessionState,
+    userId: string,
+    errData: unknown,
+    turn: TurnState | undefined,
+  ): Promise<void> {
     const rawMsg =
       errData && typeof errData === 'object' && 'message' in errData
         ? String((errData as { message: unknown }).message)
@@ -2970,7 +3183,13 @@ export function createTurnRunner(
     // 而下面 composeStreamingView 会把它一起写进 finalize 的正文——最终卡片会在
     // 失败说明的正上方永久显示"仍在重试"（review #844 codex P1）。
     if (turn) setActivityNotice(turn.presenter.activity, null);
-    if (turn) await materializeTurnLocalImages(state, turn);
+    if (turn) {
+      await materializeTurnLocalImages(state, turn);
+      if (turn.cleanupRequested) {
+        await stopCancelledFinalization(turn);
+        return;
+      }
+    }
     // 建卡请求可能还在飞: 过载重试提示会惰性建一张进度卡(handleRetryNoticeEvent),
     // 而终态错误可能恰好在 startStreamingText 回来之前到达。此时 streamingHandle
     // 还是 null → 走下面"另发一条错误消息"的分支并把 turn 出队, 随后那个 promise
@@ -2984,6 +3203,10 @@ export function createTurnRunner(
         // 建卡失败 → 下面按"没有输出面"处理(另发一条消息)。
       }
     }
+    if (turn?.cleanupRequested) {
+      await stopCancelledFinalization(turn);
+      return;
+    }
     if (turn?.streamingHandle) {
       try {
         const view = composeStreamingView(turn);
@@ -2993,55 +3216,145 @@ export function createTurnRunner(
         /* swallow */
       }
     } else {
+      if (turn && output.kind === 'rich-card') {
+        await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+        if (turn.cleanupRequested) {
+          await stopCancelledFinalization(turn);
+          return;
+        }
+        await materializeTurnLocalFiles(state, turn);
+        if (turn.cleanupRequested) {
+          await stopCancelledFinalization(turn);
+          return;
+        }
+      }
+      const view = turn ? composeStreamingView(turn) : '';
+      const fallbackText = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
-            text: `❌ 错误：${msg}`,
+            text: fallbackText,
             terminal: 'error',
             threadTs: state.scopeKey,
             errorCode: turn?.terminalErrorCode ?? 'agent_turn_error',
             ...(turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          const errorText = `❌ 错误：${msg}`;
           const triggerId = output.im.getPendingOpenerTrigger?.(userId);
           const isMyOpener = triggerId === turn?.userMessageId;
           const consumed =
             isMyOpener
-              ? ((await output.im.consumePendingOpenerCard?.(userId, errorText)) ?? false)
+              ? ((await output.im.consumePendingOpenerCard?.(userId, fallbackText)) ?? false)
               : false;
           if (!consumed) {
-            await sendTextClaimingOpener(userId, errorText, state.scopeKey);
+            await sendTextClaimingOpener(userId, fallbackText, state.scopeKey);
           }
         }
-      } catch {
-        /* swallow */
+      } catch (err) {
+        if (output.kind === 'chunked-text') {
+          if (turn) turn.terminalErrorCode = 'terminal_output_commit_failed';
+        }
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} plain-text fallback failed`, {
+          kind: 'terminal-output-fallback',
+          source: output.kind === 'chunked-text' ? 'commitFinal' : 'sendText',
+          error,
+        });
+      }
+      if (turn && output.kind === 'rich-card') {
+        try {
+          await sendFallbackMedia(turn, userId, state.scopeKey);
+        } finally {
+          await cleanupFallbackMedia(turn);
+        }
       }
     }
-    if (turn) settleTurnTerminal(turn);
     if (finishDeferredDetachIfIdle(state)) return;
     // error 收口同样要继续放行排队消息 — 一条失败不能卡死后面的队列。
     maybeDispatchNextQueued(state, userId);
   }
 
-  async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
-    if (output.kind !== 'chunked-text' || !turn.presenter.wholeText().includes('![')) return;
+  async function materializeTurnLocalImages(
+    state: SessionState,
+    turn: TurnState,
+    options: { richCardFallback?: boolean } = {},
+  ): Promise<void> {
+    const richCardFallback = options.richCardFallback === true;
+    if (
+      (!richCardFallback && output.kind !== 'chunked-text') ||
+      !turn.presenter.wholeText().includes('![')
+    ) {
+      return;
+    }
     try {
       const materialized = await materializeLocalMarkdownImages({
         text: turn.presenter.wholeText(),
         workingDir: state.workingDir,
         sessionId: state.makerSession.id,
         maxImages: 4,
-        existingAbsPaths: [...turn.mediaAbsPaths],
+        existingAbsPaths: [...turn.imageMediaAbsPaths],
+        remoteHostId: turn.remoteHostId,
       });
       turn.presenter.replaceBody(materialized.text);
       for (const absPath of materialized.absPaths) {
         if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+        turn.imageMediaAbsPaths.add(absPath);
       }
     } catch (err) {
-      log.warn(
-        `local markdown image materialization failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      const error = sanitizeSendOutcomeError(err);
+      log.warn('local markdown image materialization failed (non-fatal)', {
+        kind: 'terminal-media-materialization',
+        source: 'materializeLocalMarkdownImages',
+        error,
+      });
+    } finally {
+      if (richCardFallback) {
+        turn.presenter.replaceBody(
+          sanitizeLocalMarkdownImageRefs(
+            transformXdtRefs(turn.presenter.wholeText(), {
+              image: ({ alt }) => alt.trim() || '图片',
+            }),
+          ),
+        );
+      }
+    }
+  }
+
+  async function materializeTurnLocalFiles(state: SessionState, turn: TurnState): Promise<void> {
+    if (!turn.presenter.wholeText().includes('xdt-file://')) return;
+    try {
+      const materialized = await materializeLocalMarkdownFiles({
+        text: turn.presenter.wholeText(),
+        workingDir: state.workingDir,
+        maxFiles: 8,
+        existingAbsPaths: [...turn.mediaAbsPaths],
+        remoteHostId: turn.remoteHostId,
+      });
+      for (const tempDir of materialized.tempDirs) turn.mediaTempDirs.add(tempDir);
+      if (turn.cleanupRequested) {
+        await cleanupFallbackMedia(turn);
+        return;
+      }
+      turn.presenter.replaceBody(materialized.text);
+      for (const file of materialized.files) {
+        if (!turn.mediaAbsPaths.includes(file.absPath)) turn.mediaAbsPaths.push(file.absPath);
+        if (file.displayName) turn.mediaDisplayNames.set(file.absPath, file.displayName);
+      }
+    } catch (err) {
+      const error = sanitizeSendOutcomeError(err);
+      log.warn('local markdown file materialization failed (non-fatal)', {
+        kind: 'terminal-file-materialization',
+        source: 'materializeLocalMarkdownFiles',
+        error,
+      });
+    } finally {
+      turn.presenter.replaceBody(
+        sanitizeBareXdtFileUrls(
+          transformXdtRefs(turn.presenter.wholeText(), {
+            file: ({ alt }) => alt.trim() || '附件',
+          }),
+        ),
       );
     }
   }
@@ -3172,6 +3485,12 @@ export function createTurnRunner(
       const ownerDmSourceMessageId =
         sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
       await finalizeActiveStream(localSessionId);
+      const currentTurn = sessionStates.get(localSessionId)?.queue[0];
+      if (!currentTurn || currentTurn.cleanupRequested) {
+        const kind = req.kind as InteractionDecision['kind'];
+        if (kind === 'ask_user_question') return { kind, answers: {} };
+        return { kind, behavior: 'deny', reason: 'session_cleanup' };
+      }
 
       let messageId: string;
       try {
@@ -3250,14 +3569,53 @@ export function createTurnRunner(
    * sending an interaction card so the post-decision reply lands chronologically
    * after the user's selection patch — not in a card that pre-dates the ask.
    *
-   * No-op when there's no active streaming handle (typical when the agent goes
-   * straight to ask_user_question without emitting prior text).
+   * If card creation failed after text was buffered, send that segment as
+   * plain text before the interaction card and reset the output surface.
    */
   async function finalizeActiveStream(localSessionId: string): Promise<void> {
     const state = sessionStates.get(localSessionId);
     const turn = state?.queue[0];
-    if (!turn?.streamingHandle) return;
+    if (!turn) return;
+    if (!turn.streamingHandle && turn.streamingHandlePromise) {
+      await turn.streamingHandlePromise;
+    }
+    if (!turn.streamingHandle) {
+      if (output.kind !== 'rich-card') return;
+      if (composeStreamingView(turn).length === 0) {
+        // If media exists but its failed card never received it, keep the
+        // cached-null surface so terminal fallback remains responsible for a
+        // retry instead of opening a fresh card that cannot accept files.
+        if (turn.mediaAbsPaths.length === 0) turn.streamingHandlePromise = null;
+        return;
+      }
+      await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+      await materializeTurnLocalFiles(state, turn);
+      if (turn.cleanupRequested) return;
+      const fallbackText = composeStreamingView(turn);
+      try {
+        if (fallbackText.length > 0) {
+          await output.im.sendText(turn.userId, fallbackText, { threadTs: turn.scopeKey });
+        }
+        await sendFallbackMedia(turn, turn.userId, turn.scopeKey);
+        if (turn.mediaAbsPaths.length === 0) {
+          await cleanupFallbackMedia(turn);
+          turn.streamingHandlePromise = null;
+          turn.streamingStartFailed = false;
+        }
+        turn.presenter.replaceBody('');
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} interaction output fallback failed`, {
+          kind: 'interaction-output-fallback',
+          source: 'sendText',
+          error,
+        });
+      }
+      return;
+    }
     const view = composeStreamingView(turn);
+    let deliveredMediaAbsPaths: readonly string[] = [];
+    let nonRetryableMediaAbsPaths: readonly string[] = [];
     if (view.length > 0) {
       try {
         await turn.streamingHandle.finalize(view);
@@ -3265,6 +3623,12 @@ export function createTurnRunner(
         log.warn(
           `finalizeActiveStream: finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
+      } finally {
+        // A channel can confirm early batches and then fail a later one. Read
+        // the ledger even on rejection so already-delivered media is not retried.
+        deliveredMediaAbsPaths = turn.streamingHandle.getDeliveredExtraImageAbsPaths?.() ?? [];
+        nonRetryableMediaAbsPaths =
+          turn.streamingHandle.getNonRetryableExtraImageAbsPaths?.() ?? [];
       }
     } else {
       // Empty card was minted but never written to — close it without a final
@@ -3273,6 +3637,14 @@ export function createTurnRunner(
     }
     turn.streamingHandle = null;
     turn.streamingHandlePromise = null;
+    if (deliveredMediaAbsPaths.length > 0 || nonRetryableMediaAbsPaths.length > 0) {
+      const settled = new Set([...deliveredMediaAbsPaths, ...nonRetryableMediaAbsPaths]);
+      turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !settled.has(absPath));
+      for (const absPath of settled) {
+        turn.imageMediaAbsPaths.delete(absPath);
+        turn.mediaDisplayNames.delete(absPath);
+      }
+    }
     turn.presenter.replaceBody('');
   }
 
@@ -3318,7 +3690,7 @@ export function createTurnRunner(
   function detachFromSession(sessionId: string): void {
     const state = sessionStates.get(sessionId);
     if (!state?.attached) return;
-    if (state.queue.length > 0) {
+    if (state.queue.length > 0 || state.finalizingTurns.size > 0) {
       clearPendingSends(state);
       if (!state.detachDrainPromise) {
         state.detachDrainPromise = new Promise<DetachDrainOutcome>((resolve) => {
@@ -3334,14 +3706,20 @@ export function createTurnRunner(
   }
 
   function finishDeferredDetachIfIdle(state: SessionState): boolean {
-    if (!state.detachDrainPromise || state.queue.length > 0) return false;
+    if (
+      !state.detachDrainPromise ||
+      state.queue.length > 0 ||
+      state.finalizingTurns.size > 0
+    ) {
+      return false;
+    }
     detachSessionStateNow(state.makerSession.id, state);
     return true;
   }
 
   function detachSessionStateNow(sessionId: string, state: SessionState): void {
     sessionStates.delete(sessionId);
-    cleanupSessionState(state);
+    void cleanupSessionState(state);
     settleDetachDrain(state, 'rewire');
     log.info(`detached ${channel} hook from session=${sessionId.slice(-8)}`);
   }
@@ -3360,7 +3738,7 @@ export function createTurnRunner(
       // attached desktop-originated turn may make isTurnRunning() true while
       // queue stays empty; logout must not abort that desktop-owned work.
       const hasImTurnInFlight = state.queue.length > 0;
-      cleanupSessionState(state);
+      aborts.push(cleanupSessionState(state));
       settleDetachDrain(state, 'cancelled');
       if (hasImTurnInFlight) {
         aborts.push(
@@ -3445,7 +3823,10 @@ export function createTurnRunner(
     const state = target ? sessionStates.get(target.row.id) : undefined;
     if (!state) return { stopped: false, droppedQueued: 0 };
     const running =
-      state.queue.length > 0 || state.sendQueue.length > 0 || state.makerSession.isTurnRunning();
+      state.queue.length > 0 ||
+      state.finalizingTurns.size > 0 ||
+      state.sendQueue.length > 0 ||
+      state.makerSession.isTurnRunning();
     if (!running) return { stopped: false, droppedQueued: 0 };
     const droppedQueued = state.sendQueue.length;
     // 先清排队再 abort — abort 触发的 done/error 会走 maybeDispatchNextQueued,
@@ -3457,6 +3838,14 @@ export function createTurnRunner(
     // 重置后守卫判 superseded → settle('skip') → 挂起 turn 经现有订阅按 done 收口。
     noteSilentStopSessionReset(state.makerSession.id);
     if (state.queue[0]) state.queue[0].terminalKind = 'aborted';
+    const finalizingMediaCleanups: Promise<void>[] = [];
+    for (const turn of state.finalizingTurns.keys()) {
+      turn.cleanupRequested = true;
+      releaseTurnInteractionRoute(turn, 'user_stop');
+      turn.terminalKind = 'aborted';
+      finalizingMediaCleanups.push(cleanupFallbackMedia(turn));
+    }
+    await Promise.all(finalizingMediaCleanups);
     await state.makerSession.abort();
     log.info(
       `!stop aborted turn for session=...${state.makerSession.id.slice(-8)} droppedQueued=${droppedQueued}`,
@@ -3473,7 +3862,7 @@ export function createTurnRunner(
     const state = sessionStates.get(sessionId);
     if (!state) return;
     sessionStates.delete(sessionId);
-    cleanupSessionState(state);
+    await cleanupSessionState(state);
     settleDetachDrain(state, 'cancelled');
     try {
       await state.makerSession.close();
@@ -3487,12 +3876,12 @@ export function createTurnRunner(
     const state = sessionStates.get(sessionId);
     if (!state) return;
     sessionStates.delete(sessionId);
-    cleanupSessionState(state);
+    void cleanupSessionState(state);
     settleDetachDrain(state, 'cancelled');
     log.info(`forgot cached ${channel} session=${sessionId.slice(-8)} after ${reason}`);
   }
 
-  function cleanupSessionState(state: SessionState): void {
+  function cleanupSessionState(state: SessionState): Promise<void> {
     clearPendingSends(state);
     clearQueuedTurnTimers(state);
     for (const u of state.unsubscribers) {
@@ -3502,11 +3891,49 @@ export function createTurnRunner(
         /* swallow */
       }
     }
-    for (const turn of state.queue) {
+    const mediaCleanups: Promise<void>[] = [];
+    const turns = new Set([...state.queue, ...state.finalizingTurns.keys()]);
+    for (const turn of turns) {
+      turn.cleanupRequested = true;
       releaseTurnInteractionRoute(turn, 'session_cleanup');
       turn.terminalKind = 'aborted';
       turn.terminalErrorCode ??= 'session_cleanup';
       settleTurnTerminal(turn);
+      mediaCleanups.push(cleanupFallbackMedia(turn));
+    }
+    const finalizations = [...state.finalizingTurns.values()].map((finalization) =>
+      finalization.catch(() => undefined),
+    );
+    return Promise.all(mediaCleanups)
+      .then(() => waitForTerminalFinalizationsBounded(finalizations))
+      .then(() => undefined);
+  }
+
+  async function waitForTerminalFinalizationsBounded(
+    finalizations: Promise<void>[],
+  ): Promise<void> {
+    if (finalizations.length === 0) return;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    try {
+      await Promise.race([
+        Promise.all(finalizations),
+        new Promise<void>((resolve) => {
+          timeoutId = setTimeout(() => {
+            timedOut = true;
+            resolve();
+          }, TERMINAL_FINALIZATION_CLEANUP_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+    if (timedOut) {
+      log.warn(`${channel} terminal finalization cleanup timed out`, {
+        kind: 'terminal-media-cleanup',
+        source: 'session-dispose',
+        pending: finalizations.length,
+      });
     }
   }
 

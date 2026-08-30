@@ -274,6 +274,9 @@ describe('CallbackListener(xAI loopback 回调)', () => {
       origin: XAI_ORIGIN,
     });
     await expectStillPending(retry);
+    await vi.waitFor(() => {
+      expect((listener as unknown as { pending: unknown[] }).pending).toHaveLength(2);
+    });
 
     listener.fail('exchange exploded');
     const [first, second] = await Promise.all([firstGet, retry]);

@@ -2,6 +2,7 @@
  * 群 lane 出站路由: open_id / chat_id / reply 三分支与回挂锚点领取语义。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fileURLToPath } from 'node:url';
 
 const larkMocks = vi.hoisted(() => {
   const create = vi.fn(async (payload: { params: unknown; data: { content: string } }) => {
@@ -27,13 +28,13 @@ const larkMocks = vi.hoisted(() => {
     },
   );
   const deleteMessage = vi.fn(
-    function (this: unknown): Promise<{ code?: number; msg?: string; data?: {} }> {
+    function (this: unknown): Promise<{ code?: number; msg?: string; data?: object }> {
       deleteOwners.push(this);
       return Promise.resolve({ data: {} });
     },
   );
   const patch = vi.fn(
-    async (): Promise<{ code?: number; msg?: string; data?: {} }> => ({ data: {} }),
+    async (): Promise<{ code?: number; msg?: string; data?: object }> => ({ data: {} }),
   );
   const getMessage = vi.fn(
     function (
@@ -60,7 +61,20 @@ const larkMocks = vi.hoisted(() => {
       return Promise.resolve({ data: { items: [] } });
     },
   );
-  return { create, reply, deleteMessage, getMessage, patch, replyOwners, getOwners, deleteOwners };
+  const fileCreate = vi.fn(async () => ({ file_key: 'file_key_1' }));
+  const imageCreate = vi.fn(async () => ({ image_key: 'image_key_1' }));
+  return {
+    create,
+    reply,
+    deleteMessage,
+    getMessage,
+    patch,
+    fileCreate,
+    imageCreate,
+    replyOwners,
+    getOwners,
+    deleteOwners,
+  };
 });
 
 vi.mock('@larksuiteoapi/node-sdk', () => ({
@@ -75,9 +89,9 @@ vi.mock('@larksuiteoapi/node-sdk', () => ({
           patch: larkMocks.patch,
         },
         messageReaction: { create: vi.fn(), delete: vi.fn() },
-        image: { create: vi.fn() },
+        image: { create: larkMocks.imageCreate },
       },
-      file: { create: vi.fn() },
+      file: { create: larkMocks.fileCreate },
     };
   },
   Domain: { Feishu: 'feishu-domain', Lark: 'lark-domain' },
@@ -125,6 +139,29 @@ describe('feishu outbound lane routing', () => {
       }),
     );
     expect(larkMocks.reply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['network failure', Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })],
+    ['server failure', Object.assign(new Error('server error'), { response: { status: 500 } })],
+    ['rate limit', Object.assign(new Error('rate limited'), { status: 429 })],
+  ])('marks an uncertain file message %s as non-retryable', async (_label, failure) => {
+    larkMocks.create.mockRejectedValueOnce(failure);
+
+    await expect(
+      outbound.sendFile('ou_someone', fileURLToPath(import.meta.url), 'attachment.txt'),
+    ).resolves.toEqual({ ok: false, reason: 'UPLOAD_UNCERTAIN' });
+  });
+
+  it.each([
+    ['HTTP 400', Object.assign(new Error('bad request'), { response: { status: 400 } })],
+    ['Feishu business rejection', Object.assign(new Error('permission denied'), { code: 99991663 })],
+  ])('keeps an explicit %s file message retryable', async (_label, failure) => {
+    larkMocks.create.mockRejectedValueOnce(failure);
+
+    await expect(
+      outbound.sendFile('ou_someone', fileURLToPath(import.meta.url), 'attachment.txt'),
+    ).resolves.toEqual({ ok: false, reason: 'SEND_FAIL' });
   });
 
   it('group lane: first send replies to the trigger anchor, later sends go to chat_id', async () => {

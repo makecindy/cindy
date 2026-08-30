@@ -83,12 +83,20 @@ export {
 export {
   collectXdtFileRefs,
   collectXdtImageRefs,
+  isMarkdownCodePosition,
+  markdownCodeRanges,
   normalizeXdtAbsPath,
   stripXdtFileLinks,
   stripXdtImageLinks,
   transformXdtRefs,
+  sanitizeBareXdtFileUrls,
 } from './xdtRefs.js';
-export type { XdtFileRef, XdtImageRef, XdtRefTransform } from './xdtRefs.js';
+export type {
+  MarkdownCodeRange,
+  XdtFileRef,
+  XdtImageRef,
+  XdtRefTransform,
+} from './xdtRefs.js';
 export {
   decodeLaneUserId as decodeTelegramLaneUserId,
   encodeLaneUserId as encodeTelegramLaneUserId,

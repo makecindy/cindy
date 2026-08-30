@@ -262,6 +262,11 @@ async function fetchRemoteBigFile(
         hostId,
         args.workdir,
         args.relPath,
+        {
+          expectedSize: args.size,
+          expectedMtimeMs: args.mtimeMs,
+          maxBytes: args.size,
+        },
       ),
       onProgress,
     );
