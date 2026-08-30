@@ -117,16 +117,18 @@ export async function closeRejectedRuntimeAndRestoreControlStores(input: {
   closeRuntime: () => Promise<void>;
   restoreControlStores: () => void;
   reportCloseError: (error: unknown) => void;
+  assertRuntimeClosed: () => void;
 }): Promise<void> {
   try {
     await input.closeRuntime();
   } catch (error) {
     input.reportCloseError(error);
   } finally {
-    // Runtime teardown is best-effort on a rejected selection. The old control
-    // route must still match the unchanged persistent route when close rejects.
+    // The old control route must match the unchanged persistent route even when
+    // teardown rejects. The caller then verifies that no rejected handle remains.
     input.restoreControlStores();
   }
+  input.assertRuntimeClosed();
 }
 
 export function isRemoteModelSwitchRouteChangeError(error: unknown): boolean {

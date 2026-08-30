@@ -875,7 +875,7 @@ describe('session runtime control wiring', () => {
     expect(rollback).toContain('throw persistenceError;');
   });
 
-  it('fails closed for non-Pi remote danger, overflow, and confirmation payloads', () => {
+  it('rejects remote Pi and non-Pi rebuild pressure before applying the runtime model', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -886,18 +886,30 @@ describe('session runtime control wiring', () => {
     expect(deviceLinkHostSource).not.toContain(
       'CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1',
     );
-    expect(setModel).toContain("remoteTargetAssessment.level === 'danger'");
-    expect(setModel).toContain("remoteTargetAssessment.level === 'overflow'");
     const remoteAssessment = setModel.indexOf('const remoteTargetAssessment');
+    const remoteGuard = setModel.indexOf('const remoteRouteCannotRebuild', remoteAssessment);
     const remotePressureRejection = setModel.indexOf(
       'remote model-window rebuild is unsupported; runtime selection was not changed',
+      remoteGuard,
     );
-    const nonPiRemoteGuard = setModel.indexOf("runtimeAgentKind !== 'pi'", remoteAssessment);
-    expect(nonPiRemoteGuard).toBeGreaterThan(remoteAssessment);
-    expect(nonPiRemoteGuard).toBeLessThan(remotePressureRejection);
-    expect(setModel).toContain(
-      'remote model-window rebuild is unsupported; runtime selection was not changed',
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    expect(remoteGuard).toBeGreaterThan(remoteAssessment);
+    expect(setModel.slice(remoteGuard, remotePressureRejection)).toContain(
+      "runtimeAgentKind === 'pi' || (isDeviceLinkInvoke() && targetRequiresRebuild)",
     );
+    expect(setModel.slice(remoteGuard, remotePressureRejection)).toContain(
+      '!!runtimeStatus.remoteHostId',
+    );
+    // A Pi catalog estimate cannot prove the final get_state window before mutation.
+    // Therefore both SSH and device-link Pi reject unconditionally, even when the
+    // estimate looks same-window or larger; apply below is unreachable.
+    expect(setModel.slice(remoteGuard, remotePressureRejection)).not.toContain(
+      '? verifiedTargetWindow',
+    );
+    expect(remotePressureRejection).toBeGreaterThan(remoteGuard);
+    expect(remotePressureRejection).toBeLessThan(apply);
+    expect(setModel).toContain("remoteTargetAssessment.level === 'danger'");
+    expect(setModel).toContain("remoteTargetAssessment.level === 'overflow'");
     expect(setModel).toContain(
       'remote model-window confirmation is unsupported; runtime selection was not changed',
     );
@@ -959,6 +971,11 @@ describe('session runtime control wiring', () => {
     );
     expect(setModel).toContain('restoreControlStores,');
     expect(setModel).toContain('failed to close Pi after rejected final-window selection');
+    expect(setModel).toContain('assertRuntimeClosed: () => {');
+    expect(setModel).toContain('if (maker.getSession(sessionId)) {');
+    expect(setModel).toContain(
+      'rejected Pi runtime could not be closed; runtime selection was not changed',
+    );
     expect(setModel).toContain('recheckTargetPressure: true');
     expect(setModel).toContain("finalPreparation === 'confirmation-required'");
     expect(setModel).toContain('contextWindowConfirmationRequired: finalPiWindow');

@@ -30,7 +30,11 @@ import {
   isCodexResumeNotReadyProjectionError,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
-import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
+import {
+  connectedProvidersForAgent,
+  EFFORT_VALUES,
+  providerOffersModel,
+} from '@cindy/model-providers';
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
@@ -3715,6 +3719,11 @@ export function CCAgentSessionView({
     if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
     const model = session.model;
     const previousProviderId = session.providerId ?? null;
+    const retryEffort =
+      typeof session.effort === 'string' &&
+      (EFFORT_VALUES as readonly string[]).includes(session.effort)
+        ? session.effort
+        : null;
     const fmtTokens = (value: number): string =>
       value >= 1_000_000
         ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
@@ -3729,7 +3738,7 @@ export function CCAgentSessionView({
           undefined,
           confirmedContextWindow
             ? ({
-                effort: session.effort,
+                effort: retryEffort,
                 fastMode,
                 confirmedContextWindow,
               } as { effort: string; fastMode: boolean })

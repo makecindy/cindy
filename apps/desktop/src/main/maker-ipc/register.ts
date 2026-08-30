@@ -15787,6 +15787,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               error: error instanceof Error ? error.message : String(error),
             });
           },
+          assertRuntimeClosed: () => {
+            if (maker.getSession(sessionId)) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'rejected Pi runtime could not be closed; runtime selection was not changed',
+              );
+            }
+          },
         });
       const persistedSessionMeta = liveSessionBeforeRouteChange
         ? null
@@ -15923,11 +15931,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetContextWindow: verifiedTargetWindow ?? undefined,
           autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
         });
-        if (
-          isDeviceLinkInvoke() &&
-          runtimeAgentKind !== 'pi' &&
+        const remoteRouteCannotRebuild = isDeviceLinkInvoke() || !!runtimeStatus.remoteHostId;
+        const targetRequiresRebuild =
           !targetDoesNotShrink &&
-          (remoteTargetAssessment.level === 'danger' || remoteTargetAssessment.level === 'overflow')
+          (remoteTargetAssessment.level === 'danger' || remoteTargetAssessment.level === 'overflow');
+        if (
+          remoteRouteCannotRebuild &&
+          (runtimeAgentKind === 'pi' || (isDeviceLinkInvoke() && targetRequiresRebuild))
         ) {
           throwIpcError(
             'PRECONDITION_FAILED',

@@ -61,8 +61,9 @@ describe('isRemoteModelSwitchRouteChangeError', () => {
 });
 
 describe('closeRejectedRuntimeAndRestoreControlStores', () => {
-  it('restores the old control route when runtime close rejects', async () => {
+  it('restores the old control route and rejects when runtime close leaves the handle alive', async () => {
     const closeError = new Error('close transport rejected');
+    const retainedRuntimeError = new Error('rejected runtime is still live');
     const closeRuntime = vi.fn(async () => {
       throw closeError;
     });
@@ -83,18 +84,28 @@ describe('closeRejectedRuntimeAndRestoreControlStores', () => {
       controlStores.fastMode = persistedRoute.fastMode;
     });
     const reportCloseError = vi.fn();
+    const assertRuntimeClosed = vi.fn(() => {
+      expect(controlStores).toEqual({
+        providerId: persistedRoute.providerId,
+        effort: persistedRoute.effort,
+        fastMode: persistedRoute.fastMode,
+      });
+      throw retainedRuntimeError;
+    });
 
     await expect(
       closeRejectedRuntimeAndRestoreControlStores({
         closeRuntime,
         restoreControlStores,
         reportCloseError,
+        assertRuntimeClosed,
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toBe(retainedRuntimeError);
 
     expect(closeRuntime).toHaveBeenCalledOnce();
     expect(reportCloseError).toHaveBeenCalledWith(closeError);
     expect(restoreControlStores).toHaveBeenCalledOnce();
+    expect(assertRuntimeClosed).toHaveBeenCalledOnce();
     expect(controlStores).toEqual({
       providerId: persistedRoute.providerId,
       effort: persistedRoute.effort,
