@@ -550,6 +550,23 @@ function isSameBotActive(botAppId: string, service: BotCredentials['service']): 
 }
 
 /**
+ * 入站 await 恢复时是否已经换成另一个 bot。同账号重连(换代但 appId+service
+ * 未变)和停机间隙(currentBotAppId === null)都不是替换 —— pending topic
+ * lease 必须留下, 已配对的重投才能再 dispatch; 只有当前已是另一个 bot 才
+ * 显式放弃, 否则 pruneTopicLeases 永久跳过 pending, 反复换号会让 Map 无界
+ * 增长, 切回旧账号还能沿旧 lease 起 turn。
+ */
+function isReplacedBotAccount(
+  botAppId: string,
+  service: BotCredentials['service'],
+): boolean {
+  return (
+    currentBotAppId !== null &&
+    (currentBotAppId !== botAppId || currentService !== service)
+  );
+}
+
+/**
  * 该 opener 当前**正在执行**的提示发送(in-flight 去重)。重试的 timer 条目
  * 在 setTimeout 回调里先删后发 — 仅凭 orphanNoticeRetries 看不到执行中的
  * 发送; 这里单独记账, 任何路径的发送开始前先查: 冷却后的重投不会与执行
@@ -1616,6 +1633,7 @@ async function processClaimedMessage(
     }
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
     abandonUnpairedFlat?.();
+    if (isReplacedBotAccount(botAppId, service)) abandonTopic?.();
     return;
   }
 
@@ -1654,6 +1672,7 @@ async function processClaimedMessage(
         }
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
         abandonUnpairedFlat?.();
+        if (isReplacedBotAccount(botAppId, service)) abandonTopic?.();
         return;
       }
       // 孤儿开场白不会派发副本 turn: 先 peek 是否已被迟到话题接管, 再决定

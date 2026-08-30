@@ -27,6 +27,7 @@ const mocks = {
   bindClient: vi.fn(),
   unbindClient: vi.fn(),
   getBoundClient: vi.fn(() => null),
+  downloadAttachments: vi.fn(async () => ({ attachments: [], unsupported: [] })),
   getAccountEpoch: vi.fn(() => 1),
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
   replyText: vi.fn(async () => ({ messageId: 'om_reply' })),
@@ -82,6 +83,10 @@ vi.doMock('@larksuiteoapi/node-sdk', () => ({
   },
   LoggerLevel: { info: 'info' },
   Domain: { Feishu: 'feishu-domain', Lark: 'lark-domain' },
+}));
+
+vi.doMock('../attachmentDownloader.js', () => ({
+  downloadAttachments: mocks.downloadAttachments,
 }));
 
 vi.doMock('../outbound.js', () => ({
@@ -147,6 +152,15 @@ function groupTopicMessage(text: string, threadId: string): unknown {
   return raw;
 }
 
+function groupTopicImageMessage(threadId: string, messageId: string): unknown {
+  const raw = groupTopicMessage('unused', threadId) as { message: Record<string, unknown> };
+  raw.message.message_id = messageId;
+  raw.message.message_type = 'image';
+  raw.message.content = JSON.stringify({ image_key: 'img_topic_1' });
+  raw.message.create_time = '1788000000001';
+  return raw;
+}
+
 async function connect(): Promise<void> {
   wsClient.setBotOpenIdForTest(BOT);
   const connecting = wsClient.start(credentials, { announceLifecycle: false });
@@ -173,6 +187,11 @@ beforeEach(async () => {
   feishuEvents.removeAllListeners('message');
   mocks.firstAllowed.mockReturnValue(OWNER);
   mocks.checkOwner.mockImplementation((id: string) => id === OWNER);
+  mocks.getBoundClient.mockImplementation(() => null);
+  mocks.downloadAttachments.mockImplementation(async () => ({
+    attachments: [],
+    unsupported: [],
+  }));
 });
 
 afterEach(async () => {
@@ -189,6 +208,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   vi.doUnmock('@larksuiteoapi/node-sdk');
+  vi.doUnmock('../attachmentDownloader.js');
   vi.doUnmock('../outbound.js');
   vi.doUnmock('../ownerGuard.js');
   vi.doUnmock('../storage.js');
@@ -320,6 +340,94 @@ describe('feishu group thread routing', () => {
     expect(events).toHaveLength(0);
     expect(mocks.openThread).not.toHaveBeenCalled();
     expect(pendingTopicLeaseCountForTest()).toBe(0);
+  });
+
+  it('abandons the topic lease when the account is replaced during attachment download', async () => {
+    const events = collectMessages();
+    let releaseDownload: ((value: {
+      attachments: IMMessageEvent['attachments'];
+      unsupported: IMMessageEvent['unsupported'];
+    }) => void) | undefined;
+    let downloadStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      downloadStarted = resolve;
+    });
+    mocks.getBoundClient.mockReturnValue({});
+    mocks.downloadAttachments.mockImplementationOnce(() => {
+      downloadStarted();
+      return new Promise((resolve) => {
+        releaseDownload = resolve;
+      });
+    });
+    await connect();
+    const handling = mocks.eventHandlers['im.message.receive_v1'](
+      groupTopicImageMessage('omt_existing', 'om_topic_img_switch'),
+    );
+    await started;
+    await wsClient.stop({ announceOffline: false, reason: 'test-switch-account' });
+    wsClient.setBotOpenIdForTest(BOT);
+    const connecting = wsClient.start(
+      { appId: 'cli_other_bot', appSecret: 'secret', service: 'feishu' },
+      { announceLifecycle: false },
+    );
+    mocks.options.at(-1)?.onReady?.();
+    await connecting;
+    releaseDownload?.({
+      attachments: [
+        {
+          kind: 'image',
+          absPath: '/tmp/cindy-feishu-topic.png',
+          originalName: 'topic.png',
+          mimeType: 'image/png',
+        },
+      ],
+      unsupported: [],
+    });
+    await handling;
+
+    expect(events).toHaveLength(0);
+    expect(pendingTopicLeaseCountForTest()).toBe(0);
+  });
+
+  it('keeps the topic lease across same-account reconnect during attachment download', async () => {
+    const events = collectMessages();
+    let releaseDownload: ((value: {
+      attachments: IMMessageEvent['attachments'];
+      unsupported: IMMessageEvent['unsupported'];
+    }) => void) | undefined;
+    let downloadStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      downloadStarted = resolve;
+    });
+    mocks.getBoundClient.mockReturnValue({});
+    mocks.downloadAttachments.mockImplementationOnce(() => {
+      downloadStarted();
+      return new Promise((resolve) => {
+        releaseDownload = resolve;
+      });
+    });
+    await connect();
+    const handling = mocks.eventHandlers['im.message.receive_v1'](
+      groupTopicImageMessage('omt_existing', 'om_topic_img_reconnect'),
+    );
+    await started;
+    await wsClient.stop({ announceOffline: false, reason: 'test-reconnect' });
+    await connect();
+    releaseDownload?.({
+      attachments: [
+        {
+          kind: 'image',
+          absPath: '/tmp/cindy-feishu-topic.png',
+          originalName: 'topic.png',
+          mimeType: 'image/png',
+        },
+      ],
+      unsupported: [],
+    });
+    await handling;
+
+    expect(events).toHaveLength(0);
+    expect(pendingTopicLeaseCountForTest()).toBe(1);
   });
 
   it('late topic after the cache TTL still takes over while the flat route is uncommitted', async () => {
