@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   REMOTE_INVOKE_ALLOWLIST,
 } from '@cindy/device-link';
@@ -286,46 +287,45 @@ describe('mobile maker transport', () => {
     ]);
   });
 
-  it('adds exact overflow confirmation only to the explicit atomic set-model call', async () => {
+  it('does not advertise or emit the unimplemented model-window confirmation protocol', async () => {
+    const contextSource = readFileSync(
+      resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'),
+      'utf8',
+    );
+    const transportSource = readFileSync(
+      resolve(process.cwd(), 'src/device-link/mobileMakerTransport.ts'),
+      'utf8',
+    );
     const { calls, maker } = harness();
 
-    await maker.setModel('s1', 'small-model', undefined, {
-      contextWindow: 200_000,
-      effort: 'high',
-      fastMode: false,
-    });
+    await maker.setModel('s1', 'small-model', 'anthropic');
 
+    expect(contextSource).not.toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
+    expect(contextSource).not.toContain('model-window-confirmation-v1');
+    expect(transportSource).not.toContain('confirmedOverflow');
+    expect(transportSource).not.toContain('confirmedContextWindow');
     expect(calls).toEqual([
       {
         deviceId: 'dev-1',
         channel: 'maker:set-model',
-        args: [
-          's1',
-          'small-model',
-          undefined,
-          undefined,
-          {
-            effort: 'high',
-            fastMode: false,
-            confirmedContextWindow: 200_000,
-            modelWindowConfirmationCapability:
-              CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
-          },
-        ],
+        args: ['s1', 'small-model', 'anthropic'],
       },
     ]);
   });
 
-  it('returns Pi final-window confirmation data to the Mobile caller', async () => {
-    const finalPressure = {
+  it('fails closed when a legacy Desktop returns model-window confirmation data', async () => {
+    const invoke: RemoteInvoke = async () => ({
       deferred: false,
       contextWindowConfirmationRequired: 272_000,
       contextTokensForConfirmation: 244_800,
-    };
-    const invoke: RemoteInvoke = async () => finalPressure as never;
+    }) as never;
     const maker = createMobileMakerTransport({ deviceId: 'dev-1', invoke });
 
-    await expect(maker.setModel('s1', 'pi-model')).resolves.toEqual(finalPressure);
+    await expect(maker.setModel('s1', 'pi-model')).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message:
+        'remote model-window confirmation is unsupported; runtime selection was not changed',
+    });
   });
 
   it('routes runtime controls and queue operations with stable channel names', async () => {

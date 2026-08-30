@@ -48,6 +48,13 @@ describe('session Agent switch UI wiring', () => {
 
     expect(helper).toContain('await maker.setModel(sessionId, args.model, args.providerId)');
     expect(rowSelector).toContain('setComposerModel({');
+    expect(rowSelector).toContain('if (!applied) return false;');
+    expect(rowSelector.indexOf('if (!applied) return false;')).toBeLessThan(
+      rowSelector.indexOf('await maker.setEffort('),
+    );
+    expect(rowSelector.indexOf('if (!applied) return false;')).toBeLessThan(
+      rowSelector.indexOf('await maker.setFastMode('),
+    );
     expect(flatSelector).toContain('setComposerModel({ model: option.id })');
     expect(source).not.toContain('confirmMobileModelWindowSwitch');
     expect(source).not.toContain('confirmComposerModelWindowSwitch');

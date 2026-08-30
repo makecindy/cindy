@@ -20,10 +20,7 @@ import {
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   MOBILE_REMOTE_INVOKE_CHANNELS,
 } from '@cindy/maker-shared/device-link-contract';
-import {
-  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
-  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
-} from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import type {
   MobileGoalLimitsInput,
   MobileGoalStatusPayload,
@@ -432,17 +429,7 @@ export interface MobileMakerTransport {
     sessionId: string,
     model: string,
     providerId?: string,
-    confirmedOverflow?: {
-      contextWindow: number;
-      effort: string;
-      fastMode: boolean;
-    },
-  ): Promise<{
-    deferred?: boolean;
-    superseded?: boolean;
-    contextWindowConfirmationRequired?: unknown;
-    contextTokensForConfirmation?: unknown;
-  } | undefined>;
+  ): Promise<{ deferred?: boolean; superseded?: boolean } | undefined>;
   /** 登记跨 Agent 切换意图；真正切换在下一条消息发送时由 desktop main 执行。 */
   switchSessionAgent(
     sessionId: string,
@@ -696,27 +683,26 @@ export function createMobileMakerTransport({
     send: (sessionId, message, createOpts, sendOpts) =>
       call('maker:send', [sessionId, message, createOpts, sendOpts]),
     listActiveSessions: () => call('maker:list-active'),
-    setModel: (sessionId, model, providerId, confirmedOverflow) =>
-      call(
+    setModel: async (sessionId, model, providerId) => {
+      const result = await call<{ deferred?: boolean; superseded?: boolean } | undefined>(
         'maker:set-model',
-        confirmedOverflow
-          ? [
-              sessionId,
-              model,
-              providerId,
-              undefined,
-              {
-                effort: confirmedOverflow.effort,
-                fastMode: confirmedOverflow.fastMode,
-                confirmedContextWindow: confirmedOverflow.contextWindow,
-                modelWindowConfirmationCapability:
-                  CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1,
-              },
-            ]
-          : providerId
-            ? [sessionId, model, providerId]
-            : [sessionId, model],
-      ),
+        providerId ? [sessionId, model, providerId] : [sessionId, model],
+      );
+      if (
+        result !== null &&
+        typeof result === 'object' &&
+        ('contextWindowConfirmationRequired' in result ||
+          'contextTokensForConfirmation' in result)
+      ) {
+        throw Object.assign(
+          new Error(
+            'remote model-window confirmation is unsupported; runtime selection was not changed',
+          ),
+          { code: 'PRECONDITION_FAILED' },
+        );
+      }
+      return result;
+    },
     switchSessionAgent: (
       sessionId,
       targetAgentKind,
