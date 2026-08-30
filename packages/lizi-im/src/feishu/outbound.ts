@@ -987,7 +987,7 @@ function realPathIfInode(
   identity: { dev: number; ino: number },
 ): string | null {
   try {
-    const realPath = fs.realpathSync(candidate);
+    const realPath = fs.realpathSync.native(candidate);
     if (isSyntheticFdPath(realPath)) return null;
     const leaf = fs.statSync(realPath);
     if (leaf.dev === identity.dev && leaf.ino === identity.ino) return realPath;
@@ -998,7 +998,7 @@ function realPathIfInode(
 }
 
 /**
- * Canonical path for the opened handle. `realpathSync(absPath)` after open is
+ * Native canonical path for the opened handle. `realpathSync.native(absPath)` after open is
  * a separate lookup: the Agent can retarget the path between those two calls.
  * Bind via the fd where the OS exposes a real path, then accept absPath only
  * if it still names this inode. Unbound → empty string (fail closed).

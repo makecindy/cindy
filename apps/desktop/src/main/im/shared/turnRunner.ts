@@ -184,6 +184,13 @@ function resolveTurnFileRoots(
   return remoteHostId ? [] : [workingDir];
 }
 
+function openRootDirectory(target: string): number {
+  let flags = fs.constants.O_RDONLY;
+  if (fs.constants.O_NOFOLLOW) flags |= fs.constants.O_NOFOLLOW;
+  if (fs.constants.O_DIRECTORY) flags |= fs.constants.O_DIRECTORY;
+  return fs.openSync(target, flags);
+}
+
 function pinTurnFileRoots(
   roots: readonly string[],
 ): Array<{ dev: number; ino: number; realPath: string }> {
@@ -192,13 +199,10 @@ function pinTurnFileRoots(
     if (!root.trim()) continue;
     let fd: number | undefined;
     try {
-      const realPath = fs.realpathSync(root);
+      const realPath = fs.realpathSync.native(root);
       const normalized = realPath.replaceAll('\\', '/');
       if (/(?:^|\/)(?:proc\/self\/fd|dev\/fd)\/\d+$/.test(normalized)) continue;
-      let flags = fs.constants.O_RDONLY;
-      if (fs.constants.O_NOFOLLOW) flags |= fs.constants.O_NOFOLLOW;
-      if (fs.constants.O_DIRECTORY) flags |= fs.constants.O_DIRECTORY;
-      fd = fs.openSync(realPath, flags);
+      fd = openRootDirectory(realPath);
       const st = fs.fstatSync(fd);
       if (!st.isDirectory() || st.ino === 0) continue;
       pinned.push({ dev: st.dev, ino: st.ino, realPath });

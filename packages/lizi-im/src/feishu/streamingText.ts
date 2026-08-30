@@ -159,42 +159,10 @@ function normalizePathForContainment(value: string): string {
   return resolved.replace(/^([A-Za-z]):/, (_, drive: string) => `${drive.toLowerCase()}:`);
 }
 
-function flipPathCase(value: string): string {
-  return value.replace(/[a-zA-Z]/g, (char) =>
-    char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase(),
-  );
-}
-
-/**
- * True when `rootReal` and its letter-case flip name the same inode. APFS and
- * Windows realpath keep the input spelling, so a host-cased root would otherwise
- * fail prefix comparison against the attested file path. Do not assume every
- * win32 volume is case-insensitive: NTFS can enable per-directory sensitivity.
- */
-function rootIsCaseInsensitive(rootReal: string): boolean {
-  const flipped = flipPathCase(rootReal);
-  if (flipped === rootReal) return false;
-  try {
-    const original = fs.statSync(rootReal);
-    const flippedStat = fs.statSync(flipped);
-    return sameInode(
-      { dev: original.dev, ino: original.ino },
-      { dev: flippedStat.dev, ino: flippedStat.ino },
-    );
-  } catch {
-    return false;
-  }
-}
-
 /** `child` is `parent` itself or nested inside it after both are resolved. */
 function isRealPathWithinRoot(realFilePath: string, realRoot: string): boolean {
-  const fold = rootIsCaseInsensitive(realRoot);
-  let file = normalizePathForContainment(realFilePath);
-  let root = normalizePathForContainment(realRoot);
-  if (fold) {
-    file = file.toLowerCase();
-    root = root.toLowerCase();
-  }
+  const file = normalizePathForContainment(realFilePath);
+  const root = normalizePathForContainment(realRoot);
   if (file === root) return true;
   // path.win32.relative is case-insensitive even when this directory is not.
   const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
@@ -211,8 +179,8 @@ function openDirectoryFd(target: string, noFollow: boolean): number {
 /**
  * Directory path bound to a handle. Pinned roots use the path frozen with the
  * inode before Agent execution; the live handle only proves that inode is still
- * what `root` opens. Unpinned roots open the realpath with O_NOFOLLOW so the
- * string and inode come from the same directory, not realpathSync+statSync.
+ * what `root` opens. Unpinned roots open the native realpath with O_NOFOLLOW so
+ * the string and inode come from the same directory, not realpathSync+statSync.
  * Empty `pinnedFileRoots` (explicit pin that resolved nothing) fail-closes.
  * A root whose path was swapped onto another directory after the pin is skipped.
  */
@@ -253,7 +221,7 @@ function bindPinnedLiveRoot(
 function bindUnpinnedLiveRoot(root: string): string | null {
   let real: string;
   try {
-    real = fs.realpathSync(root);
+    real = fs.realpathSync.native(root);
   } catch {
     return null;
   }
@@ -289,7 +257,7 @@ function isSourceWithinAllowedFileRoots(
 
   let liveReal: string;
   try {
-    liveReal = fs.realpathSync(source.realPath);
+    liveReal = fs.realpathSync.native(source.realPath);
     const st = fs.statSync(liveReal);
     if (!sameInode({ dev: st.dev, ino: st.ino }, source)) return false;
   } catch {

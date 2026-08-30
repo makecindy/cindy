@@ -19,6 +19,10 @@ import { feishuEvents } from '../events.js';
 import type { IMMessageEvent } from '../../types.js';
 
 type EventHandler = (data: unknown) => Promise<unknown> | unknown;
+type DownloadResult = {
+  attachments: IMMessageEvent['attachments'];
+  unsupported: IMMessageEvent['unsupported'];
+};
 
 const mocks = {
   options: [] as Array<{ onReady?: () => void }>,
@@ -26,8 +30,11 @@ const mocks = {
   close: vi.fn(),
   bindClient: vi.fn(),
   unbindClient: vi.fn(),
-  getBoundClient: vi.fn(() => null),
-  downloadAttachments: vi.fn(async () => ({ attachments: [], unsupported: [] })),
+  getBoundClient: vi.fn<() => unknown>(() => null),
+  downloadAttachments: vi.fn<(...args: unknown[]) => Promise<DownloadResult>>(async () => ({
+    attachments: [],
+    unsupported: [],
+  })),
   getAccountEpoch: vi.fn(() => 1),
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
   replyText: vi.fn(async () => ({ messageId: 'om_reply' })),

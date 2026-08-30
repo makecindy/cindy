@@ -55,7 +55,7 @@ function requestBytes(card: unknown): number {
 function terminalMirror(
   key: string,
   allowedFileRoots?: string[],
-  pinnedFileRoots?: Array<{ dev: number; ino: number }>,
+  pinnedFileRoots?: Array<{ dev: number; ino: number; realPath?: string }>,
 ) {
   return {
     finalReplyMirror: {
@@ -70,7 +70,7 @@ function terminalMirror(
 }
 
 function pinRoot(root: string): Array<{ dev: number; ino: number; realPath: string }> {
-  const realPath = fsSync.realpathSync(root);
+  const realPath = fsSync.realpathSync.native(root);
   const st = fsSync.statSync(realPath);
   return [{ dev: st.dev, ino: st.ino, realPath }];
 }
@@ -103,7 +103,7 @@ function fileSourceFromPath(absPath: string): {
   ino: number;
   ancestors: Array<{ dev: number; ino: number }>;
 } {
-  const realPath = fsSync.realpathSync(absPath);
+  const realPath = fsSync.realpathSync.native(absPath);
   const st = fsSync.statSync(realPath);
   return { realPath, dev: st.dev, ino: st.ino, ancestors: ancestorInodes(realPath) };
 }
@@ -695,7 +695,12 @@ describe('feishu streaming text', () => {
     const secretFile = path.join(secretRoot, 'secret.txt');
     await fs.writeFile(secretFile, 'secret');
     const link = path.join(allowedRoot, 'link.txt');
-    await fs.symlink(secretFile, link);
+    try {
+      await fs.symlink(secretFile, link);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw error;
+    }
     const handle = await start('g/oc_group/omt_topic');
 
     await handle.finalize(
@@ -714,7 +719,7 @@ describe('feishu streaming text', () => {
     const secret = path.join(outsideRoot, 'secret.txt');
     await fs.writeFile(secret, 'secret');
     await fs.writeFile(path.join(allowedRoot, 'report.txt'), 'ok');
-    const secretReal = fsSync.realpathSync(secret);
+    const secretReal = fsSync.realpathSync.native(secret);
     const secretStat = fsSync.statSync(secretReal);
     const pinned = pinRoot(allowedRoot);
     mocks.sendFile.mockResolvedValue({
@@ -749,7 +754,7 @@ describe('feishu streaming text', () => {
     const secret = path.join(outsideRoot, 'secret.txt');
     await fs.writeFile(secret, 'secret');
     await fs.writeFile(path.join(allowedRoot, 'decoy.txt'), 'decoy');
-    const secretReal = fsSync.realpathSync(secret);
+    const secretReal = fsSync.realpathSync.native(secret);
     const secretStat = fsSync.statSync(secretReal);
     const pinned = pinRoot(allowedRoot);
     mocks.sendFile.mockResolvedValue({
@@ -806,11 +811,11 @@ describe('feishu streaming text', () => {
     await fs.writeFile(path.join(allowedRoot, 'report.txt'), 'ok');
     const secret = path.join(outsideRoot, 'secret.txt');
     await fs.writeFile(secret, 'secret');
-    const secretReal = fsSync.realpathSync(secret);
+    const secretReal = fsSync.realpathSync.native(secret);
     const secretStat = fsSync.statSync(secretReal);
     const pinned = pinRoot(allowedRoot);
-    const outsideReal = fsSync.realpathSync(outsideRoot);
-    const allowedReal = fsSync.realpathSync(allowedRoot);
+    const outsideReal = fsSync.realpathSync.native(outsideRoot);
+    const allowedReal = fsSync.realpathSync.native(allowedRoot);
     mocks.sendFile.mockResolvedValue({
       ok: true,
       messageId: 'om_primary_file',
@@ -826,12 +831,12 @@ describe('feishu streaming text', () => {
       },
     });
 
-    const realRealpath = fsSync.realpathSync.bind(fsSync);
+    const realRealpath = fsSync.realpathSync.native.bind(fsSync.realpathSync);
     const realStat = fsSync.statSync.bind(fsSync);
     const pinStat = realStat(allowedReal);
     const rootNames = new Set([allowedRoot, allowedReal]);
     const outsideNames = new Set([outsideRoot, outsideReal]);
-    const spyRealpath = vi.spyOn(fsSync, 'realpathSync').mockImplementation(((
+    const spyRealpath = vi.spyOn(fsSync.realpathSync, 'native').mockImplementation(((
       file: unknown,
       options?: unknown,
     ) => {
@@ -841,7 +846,7 @@ describe('feishu streaming text', () => {
         file as Parameters<typeof realRealpath>[0],
         options as Parameters<typeof realRealpath>[1],
       );
-    }) as typeof fsSync.realpathSync);
+    }) as typeof fsSync.realpathSync.native);
     const spyStat = vi.spyOn(fsSync, 'statSync').mockImplementation(((
       file: unknown,
       options?: unknown,
@@ -876,7 +881,7 @@ describe('feishu streaming text', () => {
     const secret = path.join(secretRoot, 'secret.txt');
     await Promise.all([fs.writeFile(decoy, 'decoy'), fs.writeFile(secret, 'secret')]);
     const secretStat = fsSync.statSync(secret);
-    const decoyReal = fsSync.realpathSync(decoy);
+    const decoyReal = fsSync.realpathSync.native(decoy);
     mocks.sendFile.mockResolvedValue({
       ok: true,
       messageId: 'om_primary_file',
@@ -888,7 +893,7 @@ describe('feishu streaming text', () => {
         realPath: decoyReal,
         dev: secretStat.dev,
         ino: secretStat.ino,
-        ancestors: ancestorInodes(fsSync.realpathSync(secret)),
+        ancestors: ancestorInodes(fsSync.realpathSync.native(secret)),
       },
     });
     const handle = await start('g/oc_group/omt_topic');
@@ -907,7 +912,7 @@ describe('feishu streaming text', () => {
     tempDirs.push(root);
     const allowedFile = path.join(root, 'report.txt');
     await fs.writeFile(allowedFile, 'report');
-    const realPath = fsSync.realpathSync(allowedFile);
+    const realPath = fsSync.realpathSync.native(allowedFile);
     mocks.sendFile.mockResolvedValue({
       ok: true,
       messageId: 'om_primary_file',
@@ -933,14 +938,14 @@ describe('feishu streaming text', () => {
     expect(mocks.sendFileToChat).not.toHaveBeenCalled();
   });
 
-  it('does not fold case when the case-flipped root names a different inode', async () => {
+  it('does not probe a mutable case alias during terminal containment', async () => {
     const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-cs-allowed-'));
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-cs-outside-'));
     tempDirs.push(allowedRoot, outsideRoot);
     await fs.writeFile(path.join(allowedRoot, 'report.txt'), 'ok');
     const secret = path.join(outsideRoot, 'secret.txt');
     await fs.writeFile(secret, 'secret');
-    const rootReal = fsSync.realpathSync(allowedRoot);
+    const rootReal = fsSync.realpathSync.native(allowedRoot);
     const flippedRoot = flipPathCase(rootReal);
     if (flippedRoot === rootReal) return;
     const collidingPath = path.join(flippedRoot, 'outside.txt');
@@ -961,10 +966,9 @@ describe('feishu streaming text', () => {
       },
     });
 
-    const realRealpath = fsSync.realpathSync.bind(fsSync);
+    const realRealpath = fsSync.realpathSync.native.bind(fsSync.realpathSync);
     const realStat = fsSync.statSync.bind(fsSync);
-    const rootStat = realStat(rootReal);
-    const spyRealpath = vi.spyOn(fsSync, 'realpathSync').mockImplementation(((
+    const spyRealpath = vi.spyOn(fsSync.realpathSync, 'native').mockImplementation(((
       file: unknown,
       options?: unknown,
     ) => {
@@ -973,16 +977,13 @@ describe('feishu streaming text', () => {
         file as Parameters<typeof realRealpath>[0],
         options as Parameters<typeof realRealpath>[1],
       );
-    }) as typeof fsSync.realpathSync);
+    }) as typeof fsSync.realpathSync.native);
     const spyStat = vi.spyOn(fsSync, 'statSync').mockImplementation(((
       file: unknown,
       options?: unknown,
     ) => {
       const target = String(file);
       if (target === collidingPath) return secretStat;
-      if (target === flippedRoot) {
-        return { ...rootStat, ino: rootStat.ino + 1 };
-      }
       return realStat(
         file as Parameters<typeof realStat>[0],
         options as Parameters<typeof realStat>[1],
@@ -997,6 +998,7 @@ describe('feishu streaming text', () => {
       );
       expect(mocks.sendFile).toHaveBeenCalled();
       expect(mocks.sendFileToChat).not.toHaveBeenCalled();
+      expect(spyStat.mock.calls.some(([file]) => String(file) === flippedRoot)).toBe(false);
     } finally {
       spyRealpath.mockRestore();
       spyStat.mockRestore();
@@ -1018,7 +1020,7 @@ describe('feishu streaming text', () => {
     const handle = await start('g/oc_group/omt_topic');
     await handle.finalize(
       `见 [Report.txt](xdt-file://${allowedFile})`,
-      terminalMirror('z'.repeat(64), [flipped]),
+      terminalMirror('z'.repeat(64), [flipped], pinRoot(flipped)),
     );
 
     expect(mocks.sendFileToChat).toHaveBeenCalledWith(

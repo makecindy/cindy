@@ -188,10 +188,10 @@ export interface IMFinalReplyMirror {
   allowedFileRoots?: string[];
   /**
    * Filesystem identity of `allowedFileRoots`, captured before Agent execution.
-   * `realPath` is the canonical path bound to that inode at pin time. Parent-chat
-   * file reuse must prove the attested upload path is still inside a pin whose
-   * live directory handle still has this inode — never a live realpath combined
-   * with a separately looked-up inode.
+   * `realPath` is the native canonical path bound to that inode at pin time.
+   * Parent-chat file reuse must prove the attested upload path is still inside
+   * a pin whose live directory handle still has this inode — never combine a
+   * live path with a separately looked-up inode.
    */
   pinnedFileRoots?: ReadonlyArray<{ dev: number; ino: number; realPath?: string }>;
   /**

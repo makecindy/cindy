@@ -203,8 +203,8 @@ describe('Feishu parent-chat file reuse', () => {
     }
     const secretStat = fsSync.statSync(secret);
 
-    const realRealpath = fsSync.realpathSync.bind(fsSync);
-    const spy = vi.spyOn(fsSync, 'realpathSync').mockImplementation(((
+    const realRealpath = fsSync.realpathSync.native.bind(fsSync.realpathSync);
+    const spy = vi.spyOn(fsSync.realpathSync, 'native').mockImplementation(((
       file: unknown,
       options?: unknown,
     ) => {
@@ -223,7 +223,7 @@ describe('Feishu parent-chat file reuse', () => {
         file as Parameters<typeof realRealpath>[0],
         options as Parameters<typeof realRealpath>[1],
       );
-    }) as typeof fsSync.realpathSync);
+    }) as typeof fsSync.realpathSync.native);
 
     try {
       const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
