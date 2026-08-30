@@ -1238,7 +1238,6 @@ export async function settleWindowsSessionEndRecoveryMarkers(
   const failedSettlement = settlementResults.find(
     (result): result is PromiseRejectedResult => result.status === 'rejected',
   );
-  if (failedSettlement) throw failedSettlement.reason;
   const fallbackSessionIds = settlementResults
     .filter(
       (result): result is PromiseFulfilledResult<string | null> => result.status === 'fulfilled',
@@ -1252,6 +1251,11 @@ export async function settleWindowsSessionEndRecoveryMarkers(
     completedRecoveryMarkerSessionIds.add(sessionId);
     maybeSettlePendingWiringTeardowns(sessionId);
   }
+  // A rejected required write keeps the recovery marker, but it must not keep
+  // an unbound provider-event placeholder or retained replacement gate alive
+  // forever. Publish teardown readiness only after every session settlement
+  // above has stopped scheduling storage, then propagate the original failure.
+  if (failedSettlement) throw failedSettlement.reason;
   return fallbackSessionIds.filter((sessionId): sessionId is string => sessionId !== null);
 }
 

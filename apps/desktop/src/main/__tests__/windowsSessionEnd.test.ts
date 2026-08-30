@@ -780,26 +780,40 @@ describe('Windows session-end terminal error classification', () => {
   it('keeps the recovery marker when a required fallback storage task fails', async () => {
     const persistenceError = new Error('fallback error insert rejected');
     const settleMarker = vi.fn(async () => undefined);
-    markWindowsSessionEnding([activeTurn('failed-fallback-persist-session')]);
+    const sessionId = 'failed-fallback-persist-session';
+    const storagePrerequisites: Promise<void>[] = [];
+    const teardown = vi.fn(() =>
+      finishWindowsSessionEndFallbackProviderEvents(sessionId, sessionId),
+    );
+    markWindowsSessionEnding([activeTurn(sessionId)]);
+    expect(deferWindowsSessionEndWiringTeardown(sessionId, 'claude-code', teardown)).toBe(true);
     expect(
       deferWindowsSessionEndEvent(
-        'failed-fallback-persist-session',
+        sessionId,
         'claude-code',
         claudeTerminalError,
         () => {
           trackWindowsSessionEndFallbackStorageTask(
-            'failed-fallback-persist-session',
+            sessionId,
             Promise.reject(persistenceError),
             { requireSuccess: true },
           );
         },
       ),
     ).toBe(true);
+    // Model a generic-prerequisite timeout: shutdown-maker has asked to detach
+    // retained wiring, but fallback settlement has not completed yet.
+    beginWindowsSessionEndFallbackProviderTeardown();
 
     await expect(
-      settleWindowsSessionEndRecoveryMarkers([], settleMarker),
+      settleWindowsSessionEndRecoveryMarkers([], settleMarker, (prerequisite) => {
+        storagePrerequisites.push(prerequisite);
+      }),
     ).rejects.toBe(persistenceError);
     expect(settleMarker).not.toHaveBeenCalled();
+    expect(teardown).toHaveBeenCalledOnce();
+    expect(storagePrerequisites).toHaveLength(1);
+    await expect(storagePrerequisites[0]).resolves.toBeUndefined();
   });
 
   it('waits for every fallback storage task in one session before propagating a failure', async () => {
