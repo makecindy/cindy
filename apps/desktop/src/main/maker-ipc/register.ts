@@ -2831,12 +2831,17 @@ function stageClaudeTurnBillingSnapshot(
   continuation: SessionProductTurnContinuation | null,
 ): boolean {
   if (session.agentKind !== 'claude-code') return false;
-  turnClaudeBillingSnapshots.stage(
+  const stagedSnapshot = turnClaudeBillingSnapshots.stage(
     session.id,
     turnGeneration,
     () => captureClaudeTurnBillingSnapshot(session),
     continuation,
   );
+  // A successful continuation transfers ownership away from the predecessor.
+  // Retire its proxy-route evidence alongside the snapshot consumed by stage().
+  if (stagedSnapshot.inherited && continuation) {
+    clearClaudeSessionTurnRoute(session.id, continuation.predecessorGeneration);
+  }
   beginClaudeSessionTurnRoute(session.id, turnGeneration);
   return true;
 }
@@ -3909,6 +3914,9 @@ async function handleSilentStopTurnEnd(
       sessionId: session.id,
       turnLeaseId,
     });
+    // An independent turn superseded this timer. Its generation is distinct,
+    // so retire only the stale silent-stop predecessor's billing evidence.
+    clearClaudeTurnBillingSnapshot(session.id, turnGeneration);
     return;
   }
   if (agentInputCoordinatorHolder?.hasPendingQueuedWork(session.id)) {

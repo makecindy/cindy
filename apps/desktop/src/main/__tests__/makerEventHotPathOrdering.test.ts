@@ -1191,6 +1191,17 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'turnClaudeBillingSnapshots.replace(session.id, turnGeneration, resolvedSnapshot);',
     );
+    const billingStageSource = source.slice(
+      source.indexOf('function stageClaudeTurnBillingSnapshot('),
+      source.indexOf('function rollbackClaudeTurnBillingSnapshot('),
+    );
+    expect(billingStageSource).toContain(
+      'const stagedSnapshot = turnClaudeBillingSnapshots.stage(',
+    );
+    expect(billingStageSource).toContain('stagedSnapshot.inherited && continuation');
+    expect(billingStageSource).toContain(
+      'clearClaudeSessionTurnRoute(session.id, continuation.predecessorGeneration);',
+    );
     expect(claudeDoneSource).toContain(
       'clearClaudeTurnBillingSnapshot(session.id, claudeTurnGeneration);',
     );
@@ -1204,6 +1215,19 @@ describe('maker:event hot path ordering', () => {
     );
     expect(silentStopSettleSource).toContain(
       'turnClaudeBillingSnapshots.releaseContinuation(sessionId, turnLeaseId);',
+    );
+    const silentStopHandlerSource = source.slice(
+      source.indexOf('async function handleSilentStopTurnEnd('),
+      source.indexOf('function isFencedStaleProductTerminal('),
+    );
+    const supersededTimerSource = silentStopHandlerSource.slice(
+      silentStopHandlerSource.indexOf('if (!silentStopTurnLeaseGate.claim('),
+      silentStopHandlerSource.indexOf(
+        'if (agentInputCoordinatorHolder?.hasPendingQueuedWork(session.id))',
+      ),
+    );
+    expect(supersededTimerSource).toContain(
+      'clearClaudeTurnBillingSnapshot(session.id, turnGeneration);',
     );
     expect(claudeDoneSource).toContain(
       'const sessionProviderForBilling = claudeBillingSnapshot.providerId;',
