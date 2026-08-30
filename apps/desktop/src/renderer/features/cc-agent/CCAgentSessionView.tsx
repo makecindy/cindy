@@ -3729,7 +3729,7 @@ export function CCAgentSessionView({
           undefined,
           confirmedContextWindow
             ? ({
-                effort: session.effort as Effort,
+                effort: session.effort,
                 fastMode,
                 confirmedContextWindow,
               } as { effort: string; fastMode: boolean })

@@ -15157,21 +15157,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) {
       throwIpcError('INVALID_PARAMS', 'expectedAgentSwitchRevision must be a non-negative integer');
     }
+    const confirmedContextWindow = (selection as { confirmedContextWindow?: unknown } | undefined)
+      ?.confirmedContextWindow;
+    const selectionEffort = (selection as { effort?: unknown } | undefined)?.effort;
     if (
       selection !== undefined &&
       (selection === null ||
         typeof selection !== 'object' ||
         Array.isArray(selection) ||
-        (!isSupportedRuntimeEffort((selection as { effort?: unknown }).effort) &&
+        (!isSupportedRuntimeEffort(selectionEffort) &&
           !(
-            internalOptions.source !== 'user' && (selection as { effort?: unknown }).effort === null
+            selectionEffort === null &&
+            (internalOptions.source !== 'user' || confirmedContextWindow !== undefined)
           )) ||
         typeof (selection as { fastMode?: unknown }).fastMode !== 'boolean')
     ) {
       throwIpcError('INVALID_PARAMS', 'selection must contain effort + fastMode');
     }
-    const confirmedContextWindow = (selection as { confirmedContextWindow?: unknown } | undefined)
-      ?.confirmedContextWindow;
     if (
       confirmedContextWindow !== undefined &&
       (typeof confirmedContextWindow !== 'number' ||
@@ -15345,6 +15347,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             'INVALID_PARAMS',
             `model "${model}" is unavailable from provider "${actualProviderId ?? 'default'}"`,
           );
+        }
+        if (
+          internalOptions.source === 'user' &&
+          atomicSelection.effort === null &&
+          catalogModel.efforts.length > 0
+        ) {
+          throwIpcError('INVALID_PARAMS', `effort "null" is unavailable for model "${model}"`);
         }
         const axes = resolveSessionRuntimeAxes({
           model: catalogModel,

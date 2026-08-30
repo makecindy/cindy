@@ -19,6 +19,8 @@ describe('Claude subscription model-window confirmation', () => {
 
     expect(handler).toContain('setModelWithWindowConfirmation({');
     expect(handler).toContain('confirmedContextWindow');
+    expect(handler).toContain('effort: session.effort,');
+    expect(handler).not.toContain('effort: session.effort as Effort');
     expect(handler.indexOf('if (!switched) return;')).toBeLessThan(
       handler.indexOf('sessionService.update(sessionId'),
     );

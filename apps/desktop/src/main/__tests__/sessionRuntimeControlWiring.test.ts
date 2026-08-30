@@ -184,15 +184,39 @@ describe('session runtime control wiring', () => {
     expect(setModel.indexOf('assertTrustedAppRendererEvent(')).toBeLessThan(
       setModel.indexOf("typeof sessionId !== 'string'"),
     );
-    expect(setModel).toContain(
-      '!isSupportedRuntimeEffort((selection as { effort?: unknown }).effort)',
-    );
+    expect(setModel).toContain('!isSupportedRuntimeEffort(selectionEffort)');
     expect(setModel).toContain("internalOptions.source !== 'user'");
     expect(registerSource).toMatch(
       /handleSetModel\(\s*undefined,\s*sessionId,\s*model,\s*providerId,\s*undefined,\s*selection,\s*options,?\s*\)/,
     );
     expect(setModel).toMatch(/\{\s*source:\s*'user',?\s*\}/);
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
+  });
+
+  it('accepts null effort only for fixed-effort local confirmation retries before rebuild', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const confirmation = setModel.indexOf('const confirmedContextWindow =');
+    const selectionValidation = setModel.indexOf('!isSupportedRuntimeEffort(selectionEffort)');
+    const fixedEffortValidation = setModel.indexOf('atomicSelection.effort === null');
+    const prepare = setModel.indexOf('prepareModelWindowSwitch(');
+    const apply = setModel.indexOf('applyRuntimeSetModelChange({');
+
+    expect(confirmation).toBeGreaterThan(-1);
+    expect(confirmation).toBeLessThan(selectionValidation);
+    expect(setModel).toContain(
+      "selectionEffort === null &&\n            (internalOptions.source !== 'user' || confirmedContextWindow !== undefined)",
+    );
+    expect(setModel).toContain('catalogModel.efforts.length > 0');
+    expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
+    expect(fixedEffortValidation).toBeLessThan(prepare);
+    expect(prepare).toBeLessThan(apply);
+    expect(setModel).toContain(
+      '!isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow',
+    );
   });
 
   it('validates atomic user axes against the selected catalog model before side effects', () => {

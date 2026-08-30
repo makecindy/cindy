@@ -434,6 +434,12 @@ describe('createContextOverflowRollover', () => {
       }),
     ).resolves.toBe('rebuilt');
     expect(deps.commitRebuild).toHaveBeenCalledTimes(1);
+    const commitCalls = deps.commitRebuild.mock.calls as unknown as Array<[string, string]>;
+    expect(String(commitCalls[0]?.[1] ?? '')).toContain(
+      'switching to a model with a smaller context window',
+    );
+    expect(deps.setPendingHandoff).toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
   it('does not rebuild after Pi final-window verification below the pressure line', async () => {
