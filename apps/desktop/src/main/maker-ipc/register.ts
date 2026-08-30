@@ -2840,6 +2840,7 @@ const reservedStaleClaudeUsageBySession = new Map<
 
 function reserveStaleClaudeUsageForSessionReplacement(session: WiredSession): void {
   if (session.agentKind !== 'claude-code') return;
+  if (reservedStaleClaudeUsageBySession.get(session.id)?.has(session.instanceId)) return;
   const providerId = getSessionProvider(session.id);
   const observedRoute = providerId == null ? readClaudeSessionRoute(session.id) : null;
   const explicitProviderRoute = billingRouteForExplicitProvider(
@@ -4588,13 +4589,51 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     installInteractionLifecycleObserver(session, null);
     clearPendingTurnChangeSets(session.id);
   });
+  const handleLateWindowsFallbackProviderDoneUsage = (event: AgentEvent): void => {
+    if (
+      event.type !== 'done' ||
+      event.source !== 'claude-code' ||
+      typeof event.sessionTurnGeneration !== 'number'
+    ) {
+      return;
+    }
+    reserveStaleClaudeUsageForSessionReplacement(session);
+    const turnIdentity: AssistantTurnPersistenceIdentity = {
+      sessionInstanceId: event.sessionInstanceId ?? session.instanceId,
+      turnGeneration: event.sessionTurnGeneration,
+      dbAgentKind: 'cc',
+    };
+    const usageTask = recordReservedStaleClaudeDoneUsage(
+      session.id,
+      event,
+      turnIdentity,
+      undefined,
+      whenSessionPersistedDurably(session.id, turnIdentity),
+    );
+    if (!usageTask) return;
+    trackWindowsSessionEndFallbackStorageTask(session.id, usageTask, {
+      requireSuccess: true,
+    });
+    void usageTask.catch((error) => {
+      log.warn('late Windows provider done accounting failed', {
+        sessionId: session.id,
+        sessionInstanceId: turnIdentity.sessionInstanceId,
+        sessionTurnGeneration: turnIdentity.turnGeneration,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  };
   const windowsSessionEndEventGate = createWindowsSessionEndEventGate(
     session.id,
     session.agentKind,
     session.instanceId,
+    handleLateWindowsFallbackProviderDoneUsage,
   );
   session.setEventDispatchGate(windowsSessionEndEventGate);
-  registration.replayConsumerDisposers.push(() => session.setEventDispatchGate(null));
+  registration.replayConsumerDisposers.push(() => {
+    session.setEventDispatchGate(null);
+    clearReservedStaleClaudeUsage(session.id, session.instanceId);
+  });
   // A confirmed Session can close before shutdown-maker reaches its global
   // fallback preparation. Fire while Session dispatch is still available and
   // retain this exact-instance observer across replacement with the gate.

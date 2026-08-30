@@ -155,7 +155,10 @@ describe('maker:event hot path ordering', () => {
       'session.onEvent((event: AgentEvent) => handleForwardSessionEvent(event))',
     );
     expect(wireSessionSource).toContain(
-      'registration.replayConsumerDisposers.push(() => session.setEventDispatchGate(null))',
+      'session.setEventDispatchGate(null);',
+    );
+    expect(wireSessionSource).toContain(
+      'clearReservedStaleClaudeUsage(session.id, session.instanceId);',
     );
     expectOrder(
       wireSessionSource,
@@ -1003,6 +1006,31 @@ describe('maker:event hot path ordering', () => {
     const ghostHandler = wireSessionSource.slice(ghostHandlerStart, forwardHandlerStart);
     const forwardHandler = wireSessionSource.slice(forwardHandlerStart, forwardHandlerEnd);
     const gateSource = wireSessionSource.slice(gateIndex, ghostHandlerStart);
+    const lateDoneAccountingStart = wireSessionSource.indexOf(
+      'const handleLateWindowsFallbackProviderDoneUsage =',
+    );
+    const lateDoneAccountingEnd = wireSessionSource.indexOf(
+      'const windowsSessionEndEventGate =',
+      lateDoneAccountingStart,
+    );
+    const lateDoneAccountingSource = wireSessionSource.slice(
+      lateDoneAccountingStart,
+      lateDoneAccountingEnd,
+    );
+    expect(lateDoneAccountingStart).toBeGreaterThanOrEqual(0);
+    expect(lateDoneAccountingEnd).toBeGreaterThan(lateDoneAccountingStart);
+    expectOrder(
+      lateDoneAccountingSource,
+      'reserveStaleClaudeUsageForSessionReplacement(session);',
+      'recordReservedStaleClaudeDoneUsage(',
+    );
+    expectOrder(
+      lateDoneAccountingSource,
+      'recordReservedStaleClaudeDoneUsage(',
+      'trackWindowsSessionEndFallbackStorageTask(',
+    );
+    expect(lateDoneAccountingSource).not.toContain('broadcastToAllWindows(MAKER_PUSH.EVENT');
+    expect(lateDoneAccountingSource).not.toContain('handleAgentIslandEventAfterBroadcast');
     expect(ghostHandler).toContain('event.sessionEventReplay === undefined');
     expect(forwardHandler).toContain('event.sessionEventReplay === undefined');
     expect(ghostHandler).toContain('isWindowsSessionEndSensitiveEvent(event)');
@@ -1010,6 +1038,7 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain("event.type === 'done' || isTerminalTurnErrorEvent(event)");
     expect(gateSource).toContain('createWindowsSessionEndEventGate(');
     expect(gateSource).toContain('session.instanceId');
+    expect(gateSource).toContain('handleLateWindowsFallbackProviderDoneUsage');
     expect(gateSource).toContain('session.setEventDispatchGate(windowsSessionEndEventGate)');
     expect(gateSource).not.toContain('replay.discard');
     expect(windowsSessionEndSource).toMatch(
@@ -1025,13 +1054,13 @@ describe('maker:event hot path ordering', () => {
     const gatePreflight = windowsSessionEndSource.slice(gatePreflightStart, gatePreflightEnd);
     expectOrder(
       gatePreflight,
-      "event.type !== 'done' && event.type !== 'error' && event.type !== 'status'",
       'confirmedRecoveryMarkerStates.get(sessionId)',
+      "event.type !== 'done' && event.type !== 'error' && event.type !== 'status'",
     );
     expectOrder(
       gatePreflight,
-      '!windowsSessionEnding && pendingQuerySessionTurnGenerations === null',
-      'confirmedRecoveryMarkerStates.get(sessionId)',
+      "event.type !== 'done' && event.type !== 'error' && event.type !== 'status'",
+      'const recoveryMarkerState = confirmedRecoveryMarkerStates.get(sessionId);',
     );
     expectOrder(ghostHandler, 'deferWindowsSessionEndEvent(', 'noteTurnDiffEvent(');
     expectOrder(forwardHandler, 'deferWindowsSessionEndEvent(', "if (event.type === 'turn_diff')");

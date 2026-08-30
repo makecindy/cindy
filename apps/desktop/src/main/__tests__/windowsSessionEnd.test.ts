@@ -1057,6 +1057,88 @@ describe('Windows session-end terminal error classification', () => {
     expect(failedDiscard).not.toHaveBeenCalled();
   });
 
+  it('drops exact post-fallback output but routes the real done to usage only', async () => {
+    const turn = activeTurn('post-fallback-session', 3, 'post-fallback-instance');
+    const fallbackReplay = vi.fn();
+    const lateDoneUsage = vi.fn();
+    const gate = createWindowsSessionEndEventGate(
+      turn.sessionId,
+      'claude-code',
+      turn.sessionInstanceId,
+      lateDoneUsage,
+    );
+    markWindowsSessionEnding([turn]);
+    expect(
+      deferWindowsSessionEndEvent(
+        turn.sessionId,
+        'claude-code',
+        {
+          ...claudeTerminalError,
+          sessionInstanceId: turn.sessionInstanceId,
+          sessionTurnGeneration: turn.turnGeneration,
+        },
+        fallbackReplay,
+        undefined,
+        turn.sessionInstanceId,
+      ),
+    ).toBe(true);
+    await expect(settleWindowsSessionEndRecoveryMarkers([])).resolves.toEqual([
+      turn.sessionId,
+    ]);
+    expect(fallbackReplay).toHaveBeenCalledOnce();
+
+    const getReplay = vi.fn(() =>
+      Object.assign(vi.fn(), {
+        discard: vi.fn(),
+      }),
+    );
+    for (const event of [
+      {
+        ...claudeText,
+        sessionInstanceId: turn.sessionInstanceId,
+        sessionTurnGeneration: turn.turnGeneration,
+      },
+      {
+        type: 'thinking' as const,
+        source: 'claude-code' as const,
+        data: { text: 'late thought' },
+        sessionInstanceId: turn.sessionInstanceId,
+        sessionTurnGeneration: turn.turnGeneration,
+      },
+      {
+        type: 'tool_use' as const,
+        source: 'claude-code' as const,
+        data: { toolUseId: 'late-tool', toolName: 'Bash', input: {} },
+        sessionInstanceId: turn.sessionInstanceId,
+        sessionTurnGeneration: turn.turnGeneration,
+      },
+    ]) {
+      expect(gate.shouldRun?.(event)).toBe(true);
+      expect(gate(event, getReplay)).toBe(true);
+    }
+    expect(lateDoneUsage).not.toHaveBeenCalled();
+    expect(getReplay).not.toHaveBeenCalled();
+
+    const lateDone = {
+      ...claudeDone,
+      sessionInstanceId: turn.sessionInstanceId,
+      sessionTurnGeneration: turn.turnGeneration,
+      data: { modelUsage: { opus: { inputTokens: 2, outputTokens: 1 } } },
+    };
+    expect(gate.shouldRun?.(lateDone)).toBe(true);
+    expect(gate(lateDone, getReplay)).toBe(true);
+    expect(lateDoneUsage).toHaveBeenCalledOnce();
+    expect(lateDoneUsage).toHaveBeenCalledWith(lateDone);
+    expect(getReplay).not.toHaveBeenCalled();
+
+    const replacementText = {
+      ...claudeText,
+      sessionInstanceId: 'replacement-instance',
+      sessionTurnGeneration: turn.turnGeneration,
+    };
+    expect(gate.shouldRun?.(replacementText)).toBe(false);
+  });
+
   it('drops a deferred query error paired tail that arrives after confirmation', () => {
     const replay = vi.fn();
     beginWindowsSessionEndQuery([activeTurn('active-session')]);

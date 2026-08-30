@@ -606,8 +606,20 @@ export function shouldGateWindowsSessionEndEvent(
   sessionInstanceId?: string,
 ): boolean {
   if (agentKind !== 'claude-code') return false;
-  // Text/thinking/tool/usage events dominate the stream and can never be held.
-  // Reject them before coordinator Map lookups or turn-identity allocation.
+  if (
+    windowsSessionEnding &&
+    confirmedRecoveryMarkerStates.get(sessionId) === 'fallback'
+  ) {
+    const identity = eventTurnIdentity(sessionId, event, sessionInstanceId);
+    if (
+      identity &&
+      hasConfirmedInterruptedTurn(sessionId, sessionInstanceId, event)
+    ) {
+      return true;
+    }
+  }
+  // Outside the post-fallback exact-generation fence above, text/thinking/tool
+  // events dominate the stream and never need coordinator allocation.
   if (event.type !== 'done' && event.type !== 'error' && event.type !== 'status') return false;
   if (event.type === 'error' && !isTerminalAgentErrorEvent(event)) return false;
   if (event.type === 'status' && !isTerminalStatusEvent(event)) return false;
@@ -658,6 +670,7 @@ export function gateWindowsSessionEndEvent(
   event: AgentEvent,
   getReplay: SessionEventReplayFactory,
   sessionInstanceId?: string,
+  onLateProviderDoneUsage?: (event: AgentEvent) => void,
 ): boolean {
   if (agentKind !== 'claude-code') return false;
   const identity = eventTurnIdentity(sessionId, event, sessionInstanceId);
@@ -666,10 +679,22 @@ export function gateWindowsSessionEndEvent(
     windowsSessionEnding &&
     recoveryMarkerState === 'fallback' &&
     identity &&
-    hasConfirmedInterruptedTurn(sessionId, sessionInstanceId, event) &&
-    isWindowsSessionEndTerminalEvent(event)
+    hasConfirmedInterruptedTurn(sessionId, sessionInstanceId, event)
   ) {
-    log.debug('ignored late Windows provider terminal after fallback replay', {
+    if (isProductTurnTerminalDoneEvent(event)) {
+      try {
+        onLateProviderDoneUsage?.(event);
+      } catch (error) {
+        // A bookkeeping callback must never reopen Session fan-out after the
+        // fallback terminal became authoritative.
+        log.warn('late Windows provider done accounting failed to start', {
+          sessionId,
+          ...identity,
+          error,
+        });
+      }
+    }
+    log.debug('ignored late Windows provider event after fallback replay', {
       sessionId,
       ...identity,
       eventType: event.type,
@@ -806,9 +831,17 @@ export function createWindowsSessionEndEventGate(
   sessionId: string,
   agentKind: AgentKind,
   sessionInstanceId = sessionId,
+  onLateProviderDoneUsage?: (event: AgentEvent) => void,
 ): SessionEventDispatchGate {
   const gate: SessionEventDispatchGate = (event, getReplay) =>
-    gateWindowsSessionEndEvent(sessionId, agentKind, event, getReplay, sessionInstanceId);
+    gateWindowsSessionEndEvent(
+      sessionId,
+      agentKind,
+      event,
+      getReplay,
+      sessionInstanceId,
+      onLateProviderDoneUsage,
+    );
   gate.shouldRun = (event) =>
     shouldGateWindowsSessionEndEvent(sessionId, agentKind, event, sessionInstanceId);
   return gate;
