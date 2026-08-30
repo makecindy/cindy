@@ -24,6 +24,12 @@ describe('billing mailto policy', () => {
     );
   });
 
+  it('rejects fragments that could be interpreted differently by native mail handlers', () => {
+    expect(
+      isAllowedBillingMailto('mailto:xd-billing@xd.com?subject=x#&bcc=attacker@example.com'),
+    ).toBe(false);
+  });
+
   it.each(['%0D%0ABcc%3Aattacker%40example.com', '%09Bcc%3Aattacker%40example.com'])
     ('rejects control characters in the subject', (subject) => {
       expect(

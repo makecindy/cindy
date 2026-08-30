@@ -29,6 +29,7 @@ export function isAllowedBillingMailto(value: unknown): value is string {
       !parsed.username &&
       !parsed.password &&
       !parsed.host &&
+      !parsed.hash &&
       !hasDuplicateQueryKey &&
       !hasSubjectControlCharacter &&
       queryKeys.every((key) => key === 'subject' || key === 'body')
