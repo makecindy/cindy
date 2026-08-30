@@ -15730,7 +15730,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               restoreControlStores();
               throwIpcError(
                 'PRECONDITION_FAILED',
-                `Pi final-window context preparation failed: ${finalPreparation}`,
+                finalPreparation === 'remote-unsupported'
+                  ? 'remote model-window rebuild is unsupported; runtime selection was not changed'
+                  : `Pi final-window context preparation failed: ${finalPreparation}`,
               );
             }
           }

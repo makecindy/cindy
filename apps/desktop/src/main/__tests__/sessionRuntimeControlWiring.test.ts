@@ -609,6 +609,11 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('confirmedContextWindow === finalPiWindow');
     expect(finalPreparation).toBeGreaterThan(smallerFinalWindow);
     expect(setModel).toContain("finalPreparation === 'rebuilt'");
+    expect(setModel).toContain("finalPreparation === 'remote-unsupported'");
+    expect(setModel).toContain(
+      "? 'remote model-window rebuild is unsupported; runtime selection was not changed'",
+    );
+    expect(setModel).toContain('`Pi final-window context preparation failed: ${finalPreparation}`');
   });
 
   it('commits runtime control before best-effort context bookkeeping', () => {
