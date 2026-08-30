@@ -44,6 +44,36 @@ export interface AssessModelSwitchContextInput {
   autoCompactThresholdPct?: number;
 }
 
+/** Mixed-version device-link Pi guard; this only vetoes unsafe switches and never rebuilds remotely. */
+export function shouldBlockLegacyRemotePiModelWindowSwitch(input: {
+  hostGuardSupported: boolean;
+  contextTokens: number | null | undefined;
+  currentContextWindow: number | null | undefined;
+  targetContextWindow: number | null | undefined;
+}): boolean {
+  if (input.hostGuardSupported) return false;
+  const { contextTokens, currentContextWindow, targetContextWindow } = input;
+  if (
+    typeof currentContextWindow !== 'number' ||
+    !Number.isFinite(currentContextWindow) ||
+    currentContextWindow <= 0 ||
+    typeof targetContextWindow !== 'number' ||
+    !Number.isFinite(targetContextWindow) ||
+    targetContextWindow <= 0
+  ) {
+    return true;
+  }
+  if (targetContextWindow >= currentContextWindow) return false;
+  if (
+    typeof contextTokens !== 'number' ||
+    !Number.isFinite(contextTokens) ||
+    contextTokens <= 0
+  ) {
+    return true;
+  }
+  return contextTokens / targetContextWindow >= MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT / 100;
+}
+
 export function assessModelSwitchContext(
   input: AssessModelSwitchContextInput,
 ): ModelSwitchContextAssessment {

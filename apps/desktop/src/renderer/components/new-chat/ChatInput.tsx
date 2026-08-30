@@ -352,6 +352,7 @@ import {
 import {
   assessModelSwitchContext,
   MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
+  shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
@@ -6107,8 +6108,13 @@ export function ChatInput({
       // 显式来源必须按完整 route 查窗口：同 model id 在不同 provider 可分别为 1M / 200K。
       // 无来源的旧 flat 入口才沿用设备能力缓存的 model-id 回退。
       const remoteDeviceId = sourceRemoteDeviceId ?? getSessionDeviceId(sessionId) ?? undefined;
-      // Pi 目录窗口只是展示估值；device-link 必须交给被控端切换并以最终 get_state 裁决。
-      if (remoteDeviceId && runtimeAgentKind === 'pi') return true;
+      // Pi 目录窗口只是展示估值；只有明确声明最终 runtime 窗口护栏的新 host
+      // 才能跳过控制端估值，并交给被控端 set_model + get_state 裁决。
+      const remotePiWindowGuardSupported =
+        remoteDeviceId === deviceLinkDeviceId &&
+        (piCaps.capabilities as { supportsModelWindowSwitchGuard?: unknown } | null)
+          ?.supportsModelWindowSwitchGuard === true;
+      if (remoteDeviceId && runtimeAgentKind === 'pi' && remotePiWindowGuardSupported) return true;
       const targetRouteProviderId =
         targetProviderId !== undefined && currentModelAgentKind
           ? effectiveSourceIdForModel(
@@ -6135,6 +6141,18 @@ export function ChatInput({
         typeof targetContextWindow === 'number' &&
         Number.isFinite(targetContextWindow) && targetContextWindow > 0;
       const hasVerifiedUsage = Number.isFinite(contextTokens) && contextTokens >= 0;
+      if (
+        remoteDeviceId &&
+        runtimeAgentKind === 'pi' &&
+        shouldBlockLegacyRemotePiModelWindowSwitch({
+          hostGuardSupported: remotePiWindowGuardSupported,
+          contextTokens,
+          currentContextWindow,
+          targetContextWindow,
+        })
+      ) {
+        return false;
+      }
       if (remoteHostId && agentStatus.isRunning) return false;
       // 同窗或扩窗不需要 handoff；本地与 SSH 都保留普通切换。
       if (hasVerifiedWindows && targetContextWindow >= currentContextWindow) return true;
@@ -6185,7 +6203,17 @@ export function ChatInput({
       });
       return accepted && targetContextWindow ? targetContextWindow : accepted;
     },
-    [sessionId, remoteHostId, confirmDialog, t, providers, currentModelAgentKind, runtimeAgentKind],
+    [
+      sessionId,
+      remoteHostId,
+      confirmDialog,
+      t,
+      providers,
+      currentModelAgentKind,
+      runtimeAgentKind,
+      deviceLinkDeviceId,
+      piCaps.capabilities,
+    ],
   );
 
   const setModelWithFinalWindowConfirmation = useCallback(

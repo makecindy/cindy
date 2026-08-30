@@ -2,8 +2,52 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assessModelSwitchContext,
+  shouldBlockLegacyRemotePiModelWindowSwitch,
   shouldHandoffAfterContextAssessment,
 } from '../modelSwitchAssessment';
+
+describe('legacy remote Pi model-window guard', () => {
+  const pressuredShrink = {
+    hostGuardSupported: false,
+    contextTokens: 180_000,
+    currentContextWindow: 1_000_000,
+    targetContextWindow: 200_000,
+  };
+
+  it('blocks old hosts at the exact 90% shrink boundary but delegates to guarded hosts', () => {
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch(pressuredShrink)).toBe(true);
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
+      hostGuardSupported: true,
+      contextTokens: undefined,
+      currentContextWindow: undefined,
+      targetContextWindow: undefined,
+    })).toBe(false);
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
+      ...pressuredShrink,
+      contextTokens: 179_999,
+    })).toBe(false);
+  });
+
+  it('keeps same/expand and low pressure while failing closed on unknown shrink facts', () => {
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
+      ...pressuredShrink,
+      contextTokens: 0,
+      targetContextWindow: 1_000_000,
+    })).toBe(false);
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
+      ...pressuredShrink,
+      contextTokens: 100_000,
+    })).toBe(false);
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
+      ...pressuredShrink,
+      contextTokens: 0,
+    })).toBe(true);
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
+      ...pressuredShrink,
+      targetContextWindow: undefined,
+    })).toBe(true);
+  });
+});
 
 describe('assessModelSwitchContext', () => {
   it('fail-open: unknown context tokens → ok', () => {

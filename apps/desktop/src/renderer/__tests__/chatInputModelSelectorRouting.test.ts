@@ -124,15 +124,17 @@ describe('ChatInput model source switching wiring', () => {
     expect(chatInputSource).toContain('? { confirmedContextWindow }');
   });
 
-  it('defers device-link Pi pressure to final runtime verification while blocking other remote shrinks', () => {
+  it('gates the device-link Pi estimate bypass on the controlled host window guard', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);
     const guard = chatInputSource.slice(start, end);
+    const piCapability = guard.indexOf('const remotePiWindowGuardSupported =');
     const piRuntimeBypass = guard.indexOf(
-      "if (remoteDeviceId && runtimeAgentKind === 'pi') return true;",
+      "if (remoteDeviceId && runtimeAgentKind === 'pi' && remotePiWindowGuardSupported) return true;",
     );
     const catalogTargetResolution = guard.indexOf('const targetRouteProviderId =');
     const remoteGuard = guard.indexOf('const hasVerifiedWindows =');
+    const legacyPiGuard = guard.indexOf('shouldBlockLegacyRemotePiModelWindowSwitch({');
     const remoteUnknownBlock = guard.indexOf(
       'if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;',
     );
@@ -141,9 +143,16 @@ describe('ChatInput model source switching wiring', () => {
     const warningPath = guard.indexOf("verdict.level === 'warn'");
     const confirmPath = guard.indexOf('const accepted = await confirmDialog({');
 
-    expect(piRuntimeBypass).toBeGreaterThan(-1);
+    expect(piCapability).toBeGreaterThan(-1);
+    expect(piCapability).toBeLessThan(piRuntimeBypass);
     expect(piRuntimeBypass).toBeLessThan(catalogTargetResolution);
+    expect(guard).toContain('remoteDeviceId === deviceLinkDeviceId');
+    expect(guard).toContain('supportsModelWindowSwitchGuard === true');
+    expect(guard).not.toContain("if (remoteDeviceId && runtimeAgentKind === 'pi') return true;");
     expect(remoteGuard).toBeGreaterThan(catalogTargetResolution);
+    expect(legacyPiGuard).toBeGreaterThan(remoteGuard);
+    expect(legacyPiGuard).toBeLessThan(zeroUsagePass);
+    expect(guard.slice(legacyPiGuard, remoteUnknownBlock)).toContain('return false;');
     expect(remoteGuard).toBeLessThan(remoteBlock);
     const shrinkGate = guard.slice(remoteGuard, remoteBlock);
     expect(shrinkGate).toContain('agentStatus.isRunning');
@@ -152,7 +161,7 @@ describe('ChatInput model source switching wiring', () => {
       'const hasVerifiedUsage = Number.isFinite(contextTokens) && contextTokens >= 0;',
     );
     expect(shrinkGate).toContain('!hasVerifiedWindows || !hasVerifiedUsage');
-    expect(remoteUnknownBlock).toBeGreaterThan(remoteGuard);
+    expect(remoteUnknownBlock).toBeGreaterThan(legacyPiGuard);
     expect(zeroUsagePass).toBeGreaterThan(remoteUnknownBlock);
     expect(shrinkGate).toContain('return true;');
     expect(remoteBlock).toBeLessThan(warningPath);
