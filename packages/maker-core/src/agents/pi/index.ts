@@ -604,16 +604,20 @@ const DEFAULT_PI_EXTENSION_UI_STRINGS: PiExtensionUiStrings = {
 
 async function notifyPiManagedPackageMutationSettled(
   deps: AgentDeps,
-): Promise<PiManagedPackageRuntimeConvergence> {
+  callerSessionId: string | undefined,
+  publishOutcome: (outcome: PiManagedPackageRuntimeConvergence) => void,
+): Promise<void> {
+  const partial = (): void => publishOutcome({
+    runtimeConvergence: 'partial',
+    recoveryAction: 'restart-cindy-to-refresh-packages',
+  });
   const callback = deps.onPiManagedPackageMutationSettled;
   if (!callback) {
-    return {
-      runtimeConvergence: 'partial',
-      recoveryAction: 'restart-cindy-to-refresh-packages',
-    };
+    partial();
+    return;
   }
   try {
-    return await callback() ?? { runtimeConvergence: 'complete' };
+    await callback(callerSessionId, publishOutcome);
   } catch {
     // Native success remains authoritative. Expose only a stable recovery
     // outcome; raw host/session errors stay out of logs and receipts.
@@ -621,10 +625,7 @@ async function notifyPiManagedPackageMutationSettled(
       failureCategory: 'runtime-convergence-partial',
       recoveryAction: 'restart-cindy-to-refresh-packages',
     });
-    return {
-      runtimeConvergence: 'partial',
-      recoveryAction: 'restart-cindy-to-refresh-packages',
-    };
+    partial();
   }
 }
 
@@ -4758,13 +4759,17 @@ export class PiAgent extends BaseAgent {
         source: 'pi',
       });
       if (shouldInvalidateRuntimes) {
-        void notifyPiManagedPackageMutationSettled(this.deps).then((convergence) => {
-          queue.push({
-            type: 'text',
-            data: { text: piManagedPackageRuntimeConvergenceReceipt(convergence), isFinal: false },
-            source: 'pi',
-          });
-        });
+        void notifyPiManagedPackageMutationSettled(
+          this.deps,
+          opts.sessionId,
+          (convergence) => {
+            queue.push({
+              type: 'text',
+              data: { text: piManagedPackageRuntimeConvergenceReceipt(convergence), isFinal: false },
+              source: 'pi',
+            });
+          },
+        );
       }
       return {
         text: piManagedPackageReceiptPrompt(command, outcome),
@@ -6838,9 +6843,12 @@ export class PiAgent extends BaseAgent {
             });
             if (error instanceof PiManagedPackageMutationFailedError
               && error.mayHaveChangedState) {
-              const convergence = await notifyPiManagedPackageMutationSettled(this.deps);
-              context.emitExtensionNotification(
-                piManagedPackageRuntimeConvergenceReceipt(convergence),
+              await notifyPiManagedPackageMutationSettled(
+                this.deps,
+                context.sessionId,
+                (convergence) => context.emitExtensionNotification(
+                  piManagedPackageRuntimeConvergenceReceipt(convergence),
+                ),
               );
             }
             return;
@@ -6860,9 +6868,12 @@ export class PiAgent extends BaseAgent {
             id,
             value: responseValue,
           });
-          const convergence = await notifyPiManagedPackageMutationSettled(this.deps);
-          context.emitExtensionNotification(
-            piManagedPackageRuntimeConvergenceReceipt(convergence),
+          await notifyPiManagedPackageMutationSettled(
+            this.deps,
+            context.sessionId,
+            (convergence) => context.emitExtensionNotification(
+              piManagedPackageRuntimeConvergenceReceipt(convergence),
+            ),
           );
         } catch (error) {
           proc.send({

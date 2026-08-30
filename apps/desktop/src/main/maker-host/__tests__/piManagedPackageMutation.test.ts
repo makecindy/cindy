@@ -86,7 +86,7 @@ describe('Pi managed package Main authorization', () => {
     },
   );
 
-  it('fences at commit but keeps full caller retirement after the host-owned receipt', () => {
+  it('publishes sibling convergence before retiring the exact caller snapshot', () => {
     const piHostSource = readFileSync(new URL('../pi-host.ts', import.meta.url), 'utf8');
     const makerHostSource = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
 
@@ -106,12 +106,16 @@ describe('Pi managed package Main authorization', () => {
       'pendingPiPackageRuntimeSnapshots[pendingPiPackageRuntimeSnapshots.length - 1] = snapshot',
     );
     expect(makerHostSource).toContain(
-      'invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot)',
+      'snapshot.entries.filter(({ session }) => session.id === callerSessionId)',
     );
-    expect(makerHostSource).toContain("runtimeConvergence: 'partial' as const");
-    expect(makerHostSource).toContain("recoveryAction: 'restart-cindy-to-refresh-packages' as const");
-    expect(makerHostSource).toContain("runtimeConvergence: 'complete' as const");
-    expect(makerHostSource).not.toContain('failed to retire ${invalidation.failedSessionIds.length}');
+    expect(makerHostSource).toContain(
+      'snapshot.entries.filter(({ session }) => session.id !== callerSessionId)',
+    );
+    expect(makerHostSource).toContain("recoveryAction: 'restart-cindy-to-refresh-packages'");
+    const publishIndex = makerHostSource.indexOf('if (initiallyPartial) partial()');
+    const callerRetirementIndex = makerHostSource.indexOf('{ entries: callerEntries }');
+    expect(publishIndex).toBeGreaterThan(-1);
+    expect(callerRetirementIndex).toBeGreaterThan(publishIndex);
   });
 
   it('keeps the exact action and source bound to the one-shot grant', async () => {

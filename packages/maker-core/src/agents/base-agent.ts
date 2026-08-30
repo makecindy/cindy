@@ -604,10 +604,14 @@ export interface AgentDeps {
 
   /**
    * Pi-only: host callback after a package mutation receipt has been queued/sent.
-   * Desktop retires stale local ordinary Pi runtimes and returns only a bounded
-   * convergence outcome; native package success remains authoritative.
+   * Desktop publishes a bounded convergence outcome before retiring the caller,
+   * then retires its exact stale local ordinary Pi snapshot. Native package
+   * success remains authoritative.
    */
-  onPiManagedPackageMutationSettled?: () => Promise<PiManagedPackageRuntimeConvergence | void>;
+  onPiManagedPackageMutationSettled?: (
+    callerSessionId: string | undefined,
+    publishOutcome: (outcome: PiManagedPackageRuntimeConvergence) => void,
+  ) => Promise<void>;
 
   /**
    * Pi-only: host-localized copy for extension dialogs and deterministic

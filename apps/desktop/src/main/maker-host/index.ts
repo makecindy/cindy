@@ -1869,22 +1869,45 @@ export function getMaker(): Maker {
           pendingPiPackageRuntimeSnapshots.push(snapshot);
         }
       },
-      onPiManagedPackageMutationSettled: async () => {
+      onPiManagedPackageMutationSettled: async (callerSessionId, publishOutcome) => {
+        const partial = () => publishOutcome({
+          runtimeConvergence: 'partial',
+          recoveryAction: 'restart-cindy-to-refresh-packages',
+        });
         const maker = _maker;
         const snapshot = pendingPiPackageRuntimeSnapshots.shift();
         if (!maker || !snapshot) {
-          return {
-            runtimeConvergence: 'partial' as const,
-            recoveryAction: 'restart-cindy-to-refresh-packages' as const,
-          };
+          partial();
+          return;
         }
-        const invalidation = await invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot);
-        return invalidation.failedSessionIds.length > 0
-          ? {
-              runtimeConvergence: 'partial' as const,
-              recoveryAction: 'restart-cindy-to-refresh-packages' as const,
-            }
-          : { runtimeConvergence: 'complete' as const };
+        const callerEntries = snapshot.entries.filter(({ session }) => session.id === callerSessionId);
+        const siblingEntries = snapshot.entries.filter(({ session }) => session.id !== callerSessionId);
+        let siblingFailed = false;
+        try {
+          const siblingResult = await invalidateLocalPiPackageRuntimeSnapshot(
+            maker,
+            { entries: siblingEntries },
+          );
+          siblingFailed = siblingResult.failedSessionIds.length > 0;
+        } catch {
+          siblingFailed = true;
+        }
+        const initiallyPartial = siblingFailed
+          || callerEntries.length === 0
+          || callerEntries.some(({ metadataFailed }) => metadataFailed);
+        if (initiallyPartial) partial();
+        else publishOutcome({ runtimeConvergence: 'complete' });
+
+        if (callerEntries.length === 0) return;
+        try {
+          const callerResult = await invalidateLocalPiPackageRuntimeSnapshot(
+            maker,
+            { entries: callerEntries },
+          );
+          if (!initiallyPartial && callerResult.failedSessionIds.length > 0) partial();
+        } catch {
+          if (!initiallyPartial) partial();
+        }
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。

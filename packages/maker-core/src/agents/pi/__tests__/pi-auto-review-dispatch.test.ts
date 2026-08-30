@@ -649,7 +649,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }));
     const deps = buildDeps();
     let handle!: Awaited<ReturnType<PiAgent['startSession']>>;
-    const onPiManagedPackageMutationSettled = vi.fn(async () => handle.close());
+    const onPiManagedPackageMutationSettled = vi.fn(async (_callerSessionId, publishOutcome) => {
+      publishOutcome({ runtimeConvergence: 'complete' });
+      await handle.close();
+    });
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
     deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
     deps.getPiExtensionUiStrings = () => ({
@@ -707,18 +710,22 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it('keeps approved tool success and publishes bounded restart recovery on convergence failure', async () => {
+  it('publishes sibling partial recovery before retiring the approved-tool caller', async () => {
     const deps = buildDeps();
-    const warn = vi.fn();
-    deps.logger = { ...noopLogger, warn };
     deps.mutatePiManagedPackage = vi.fn(async () => ({
       changed: true,
       affectedPackage: { source: 'npm:context-mode', enabled: true },
     }));
-    deps.onPiManagedPackageMutationSettled = vi.fn(async () => {
-      throw new Error('/Users/private/session close failed with secret');
+    let handle!: Awaited<ReturnType<PiAgent['startSession']>>;
+    deps.onPiManagedPackageMutationSettled = vi.fn(async (callerSessionId, publishOutcome) => {
+      expect(callerSessionId).toBe('managed-package-tool-partial-session');
+      publishOutcome({
+        runtimeConvergence: 'partial',
+        recoveryAction: 'restart-cindy-to-refresh-packages',
+      });
+      await handle.close();
     });
-    const handle = await new PiAgent(deps).startSession({
+    handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-tool-partial-session',
       workingDir: cwd,
       model: 'm',
@@ -741,17 +748,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         event.type === 'text'
         && String((event.data as { text?: string }).text).includes('"runtimeConvergence":"partial"')
       ))).toBe(true));
-      const published = JSON.stringify({ response, events, warnings: warn.mock.calls });
+      const published = JSON.stringify({ response, events });
       expect(published).toContain('restart-cindy-to-refresh-packages');
-      expect(published).not.toContain('/Users/private');
-      expect(published).not.toContain('secret');
-      expect(warn).toHaveBeenCalledWith(
-        'Pi package runtime invalidation incomplete after receipt',
-        {
-          failureCategory: 'runtime-convergence-partial',
-          recoveryAction: 'restart-cindy-to-refresh-packages',
-        },
-      );
+      expect(captured.closed).toBe(true);
     } finally {
       await handle.close();
     }
@@ -1484,9 +1483,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
     }));
     const deps = buildDeps();
-    const onPiManagedPackageMutationSettled = vi.fn(async () => ({
-      runtimeConvergence: 'complete' as const,
-    }));
+    const onPiManagedPackageMutationSettled = vi.fn(async (_callerSessionId, publishOutcome) => {
+      publishOutcome({ runtimeConvergence: 'complete' });
+    });
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
     deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
     const handle = await new PiAgent(deps).startSession({
@@ -1523,16 +1522,17 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it('keeps direct native success while publishing partial runtime convergence recovery', async () => {
+  it('keeps direct native success while publishing bounded recovery on host failure', async () => {
     const deps = buildDeps();
+    const warn = vi.fn();
+    deps.logger = { ...noopLogger, warn };
     deps.mutatePiManagedPackage = vi.fn(async () => ({
       changed: true,
       affectedPackage: { source: 'npm:context-mode', enabled: true },
     }));
-    deps.onPiManagedPackageMutationSettled = vi.fn(async () => ({
-      runtimeConvergence: 'partial' as const,
-      recoveryAction: 'restart-cindy-to-refresh-packages' as const,
-    }));
+    deps.onPiManagedPackageMutationSettled = vi.fn(async () => {
+      throw new Error('/Users/private/session close failed with secret');
+    });
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-command-partial-session',
       workingDir: cwd,
@@ -1557,6 +1557,17 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         event.type === 'text'
         && String((event.data as { text?: string }).text).includes('"runtimeConvergence":"partial"')
       ))).toBe(true));
+      const published = JSON.stringify({ events, warnings: warn.mock.calls });
+      expect(published).toContain('restart-cindy-to-refresh-packages');
+      expect(published).not.toContain('/Users/private');
+      expect(published).not.toContain('secret');
+      expect(warn).toHaveBeenCalledWith(
+        'Pi package runtime invalidation incomplete after receipt',
+        {
+          failureCategory: 'runtime-convergence-partial',
+          recoveryAction: 'restart-cindy-to-refresh-packages',
+        },
+      );
     } finally {
       await handle.close();
     }
