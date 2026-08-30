@@ -2897,9 +2897,13 @@ async function buildMissingDeclaredPiExtensions(pkg: InspectedPackage): Promise<
   return true;
 }
 
+export type PiPackageRuntimeInvalidationPhase = 'commit' | 'post-build';
+
 export interface PiPackageMutationHooks {
-  /** Host callers may retire local runtimes immediately after the durable edge. */
-  onRuntimeInvalidationPublished?: () => void | Promise<void>;
+  /** Host callers may retire local runtimes immediately after each package-byte edge. */
+  onRuntimeInvalidationPublished?: (
+    phase?: PiPackageRuntimeInvalidationPhase,
+  ) => void | Promise<void>;
 }
 
 export async function mutatePiPackage(
@@ -2918,12 +2922,16 @@ export async function mutatePiPackage(
   }
   let mutationMayHaveChangedState = false;
   let runtimeInvalidationPublished = false;
-  const publishRuntimeInvalidation = async (invalidateCache = false): Promise<void> => {
-    if (runtimeInvalidationPublished) return;
+  const publishRuntimeInvalidation = async (
+    invalidateCache = false,
+    phase: PiPackageRuntimeInvalidationPhase = 'commit',
+  ): Promise<void> => {
+    if (runtimeInvalidationPublished && phase === 'commit') return;
     runtimeInvalidationPublished = true;
     try {
-      // Fence startup and bind pre-commit runtimes before token I/O yields.
-      await hooks?.onRuntimeInvalidationPublished?.();
+      // Fence startup and bind runtimes before token I/O yields. A post-build
+      // edge advances the fence again for runtimes admitted during assistance.
+      await hooks?.onRuntimeInvalidationPublished?.(phase);
     } catch {
       // Convergence is best-effort after the durable package mutation edge;
       // never rewrite native success because a local runtime did not close.
@@ -3019,17 +3027,21 @@ export async function mutatePiPackage(
         // Best-effort convenience for Git packages that omit generated output.
         // Pi already accepted the install, so a Cindy-added build attempt may
         // improve it but can never reverse that native success.
+        let built = false;
         try {
-          if (await buildMissingDeclaredPiExtensions(buildTarget)) {
-            invalidateInspectionCache();
-            inspectedAfterInstall = await inspectAllPackages();
-            affected = await findAffectedInspectedPackage(inspectedAfterInstall, source);
-          }
+          built = await buildMissingDeclaredPiExtensions(buildTarget);
         } catch (error) {
           log.warn('optional Pi package build assistance failed', {
             failureCategory: piPackageMutationFailureCategory(error),
             mayHaveChangedState: true,
           });
+        } finally {
+          await publishRuntimeInvalidation(true, 'post-build');
+        }
+        if (built) {
+          invalidateInspectionCache();
+          inspectedAfterInstall = await inspectAllPackages();
+          affected = await findAffectedInspectedPackage(inspectedAfterInstall, source);
         }
       }
       affectedSource = affected?.rawSource ?? previous?.rawSource ?? source;
@@ -3117,17 +3129,21 @@ export async function mutatePiPackage(
       let affected = await findAffectedInspectedPackage(inspectedAfterUpdate, source);
       if (affected?.missingDeclaredExtensions) {
         const buildTarget = affected;
+        let built = false;
         try {
-          if (await buildMissingDeclaredPiExtensions(buildTarget)) {
-            invalidateInspectionCache();
-            inspectedAfterUpdate = await inspectAllPackages();
-            affected = await findAffectedInspectedPackage(inspectedAfterUpdate, source);
-          }
+          built = await buildMissingDeclaredPiExtensions(buildTarget);
         } catch (error) {
           log.warn('optional Pi package update build assistance failed', {
             failureCategory: piPackageMutationFailureCategory(error),
             mayHaveChangedState: true,
           });
+        } finally {
+          await publishRuntimeInvalidation(true, 'post-build');
+        }
+        if (built) {
+          invalidateInspectionCache();
+          inspectedAfterUpdate = await inspectAllPackages();
+          affected = await findAffectedInspectedPackage(inspectedAfterUpdate, source);
         }
       }
       affectedSource = affected?.rawSource ?? previous?.rawSource ?? source;

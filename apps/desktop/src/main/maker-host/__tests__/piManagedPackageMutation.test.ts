@@ -97,10 +97,13 @@ describe('Pi managed package Main authorization', () => {
       'onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled',
     );
     expect(makerHostSource).toContain(
-      'onPiManagedPackageMutationCommitted: async () =>',
+      "onPiManagedPackageMutationCommitted: async (phase = 'commit') =>",
     );
     expect(makerHostSource).toContain(
       'await captureLocalPiPackageRuntimeInvalidationSnapshot(maker)',
+    );
+    expect(makerHostSource).toContain(
+      'pendingPiPackageRuntimeSnapshots[pendingPiPackageRuntimeSnapshots.length - 1] = snapshot',
     );
     expect(makerHostSource).toContain(
       'invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot)',

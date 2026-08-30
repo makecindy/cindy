@@ -568,6 +568,7 @@ import {
   onPiPackagesChanged,
   piPackageMutationFailureCategory,
   piPackageMutationMayHaveChangedState,
+  type PiPackageRuntimeInvalidationPhase,
 } from '../maker-host/pi-package-store.js';
 import {
   invalidateLocalPiPackageRuntimes,
@@ -7261,8 +7262,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       async () => {
         let runtimesInvalidated = false;
         let runtimeConvergencePartial = false;
-        const invalidateRuntimes = async (): Promise<void> => {
-          if (runtimesInvalidated) return;
+        const invalidateRuntimes = async (
+          phase: PiPackageRuntimeInvalidationPhase = 'commit',
+        ): Promise<void> => {
+          if (runtimesInvalidated && phase === 'commit') return;
           runtimesInvalidated = true;
           try {
             const invalidation = await invalidateLocalPiPackageRuntimes(maker);

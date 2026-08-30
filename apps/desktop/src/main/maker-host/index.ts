@@ -1823,7 +1823,7 @@ export function getMaker(): Maker {
     _initialCustomMcpRefresh = refreshCustomMcpProviders();
 
     // Store mutations are serialized; each settled callback consumes the exact
-    // pre-mutation runtime snapshot captured by its durable commit edge.
+    // latest-byte-edge runtime snapshot for its durable mutation.
     const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
     const buildPiAgentForDesktop = () => buildPiAgent({
       logger: desktopMakerLogger,
@@ -1855,13 +1855,19 @@ export function getMaker(): Maker {
       // Fence in-flight startups at the durable package edge, but do not close
       // the current caller before maker-core queues its host-owned receipt and
       // sends the extension response. The settled callback below retires only
-      // the exact pre-commit local runtimes captured before that handoff.
-      onPiManagedPackageMutationCommitted: async () => {
+      // the exact local runtimes captured at the mutation's latest byte edge.
+      onPiManagedPackageMutationCommitted: async (phase = 'commit') => {
         const maker = _maker;
         if (!maker) return;
-        pendingPiPackageRuntimeSnapshots.push(
-          await captureLocalPiPackageRuntimeInvalidationSnapshot(maker),
-        );
+        const snapshot = await captureLocalPiPackageRuntimeInvalidationSnapshot(maker);
+        if (phase === 'post-build' && pendingPiPackageRuntimeSnapshots.length > 0) {
+          // The mutation lock prevents another commit edge from interleaving.
+          // Replace the earlier snapshot so settled retirement includes every
+          // runtime admitted while optional package bytes were being written.
+          pendingPiPackageRuntimeSnapshots[pendingPiPackageRuntimeSnapshots.length - 1] = snapshot;
+        } else {
+          pendingPiPackageRuntimeSnapshots.push(snapshot);
+        }
       },
       onPiManagedPackageMutationSettled: async () => {
         const maker = _maker;
