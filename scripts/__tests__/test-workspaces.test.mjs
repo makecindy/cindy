@@ -100,7 +100,7 @@ test("root db and guard delegate to the workspace runner", () => {
 	const scripts = readRootScripts();
 	assert.equal(
 		scripts["test:git-integration"],
-		"pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
+		"pnpm test:runner && node --test scripts/__tests__/check-git-hygiene.git-integration.test.mjs && node scripts/test-workspaces.mjs --tier git-integration",
 	);
 	assert.equal(
 		scripts["test:db"],

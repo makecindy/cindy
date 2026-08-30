@@ -58,6 +58,19 @@ Git LFS 和依赖安装。该文档是安装命令的唯一权威说明；本指
    请仅在接受这一权限范围时开启。
 6. 等待 CI 和 review；不要直接向 `main` 推送。
 
+提交 PR 前请先 commit 本地改动，再运行 `pnpm check:git-hygiene`（它会扫描已提交的
+`base..head` 历史，不会扫到未提交的工作树文件）。它检查相对 `main` 的整段提交历史，
+拒绝 `tmp/`（任意路径层级）、review／CI 导出物，以及未在
+`.github/git-hygiene-allowlist.json` 按精确路径、blob SHA 和原因登记的超过 50 MiB blob、
+可执行文件或压缩包。临时产物不能加入白名单。后续提交里删除文件不会移除历史 blob；
+发现误提交时请在合并前 rebase／squash 整理分支。长期分支同步 `main` 时优先 rebase；
+需要保留原子提交时使用整理后的 rebase merge，否则优先 squash merge，避免把反复同步
+`main` 的 merge commit 带进仓库历史。
+
+门禁自身故障（非内容违规）会以退出码 2 报错并提示 `checker error, not a violation`；
+仅当门禁故障导致 CI 被阻塞时，维护者才可临时设置仓库变量 `SKIP_GIT_HYGIENE=1` 解锁，
+这不是给违规 PR 开的口，修好门禁后应立即清除。
+
 小型文档修正也欢迎直接提交 PR。较大的架构、协议、数据库 migration、权限或用户数据
 变更，建议先开 issue 讨论范围和兼容性。
 

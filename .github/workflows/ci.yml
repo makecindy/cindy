@@ -37,6 +37,15 @@ jobs:
           fetch-depth: 0
           lfs: true
 
+      # 历史卫生门禁紧跟 checkout、用 runner 自带 Node 直跑，不依赖 pnpm/setup-node
+      # 成功：纯本地 git 元数据扫描（秒级），在 install 前快速失败。检查器自身错误退出码
+      # 为 2、内容违规为 1；仓库变量 SKIP_GIT_HYGIENE=1 是应急阀（仅用于门禁自身故障时
+      # 解锁 CI，不是给违规 PR 开口）。单独设上限以防异常情况下拖住整 job。
+      - name: Check pull request Git history hygiene
+        if: ${{ github.event_name == 'pull_request' && vars.SKIP_GIT_HYGIENE != '1' }}
+        timeout-minutes: 10
+        run: node scripts/check-git-hygiene.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
