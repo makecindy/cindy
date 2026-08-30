@@ -70,12 +70,24 @@ function catalogVoiceRefinerProfile(
   const providerKind = voiceInputRefinerProviderKindForCatalogRoute(route);
   if (providerKind !== provider) return null;
   const isCodexResponses = route.providerId === 'openai';
+  const transport: VoiceInputRefinerTransport = isCodexResponses
+    ? 'codex-responses'
+    : 'litellm-chat-completions';
+  // Catalog pins are intentionally kept as the runtime identity, but known
+  // models should still use the static quote already used by the matching
+  // utility transport. Unknown catalog models remain unpriced rather than
+  // pretending that a reference quote is a live Gateway price.
+  const pricing = getUtilityModelProfiles().find(
+    (profile) => profile.transport === transport
+      && profile.model.trim().toLowerCase() === route.model.trim().toLowerCase(),
+  )?.pricing;
   return {
     id: provider,
     model: route.model,
-    transport: isCodexResponses ? 'codex-responses' : 'litellm-chat-completions',
+    transport,
     auth: isCodexResponses ? 'codex' : 'api-key',
     settingsTab: 'providers',
+    ...(pricing ? { pricing } : {}),
     missingCredentialMessage: isCodexResponses
       ? 'Codex ChatGPT login is required for voice input refinement.'
       : 'API key is required for LiteLLM voice input refinement.',
