@@ -763,23 +763,9 @@ export function getMaker(): Maker {
 
     const resolveIOSSimulatorAccess = (context?: IOSSimulatorMcpCallContext) => {
       const workingDir = context?.workingDir?.trim() || null;
-      const pluginAccess = getIOSSimulatorPluginAccessDecision(workingDir);
-      if (!pluginAccess.allowed) return pluginAccess;
-      if (!pluginRegistry.isEnabled('ios-simulator', workingDir ?? undefined)) {
-        return {
-          allowed: false as const,
-          errorCode: 'IOS_SIMULATOR_DISABLED' as const,
-          message:
-            'The embedded iOS Simulator capability is disabled for the current project. Enable it in the project plugin settings before retrying the embedded tool; other iOS workflows are unaffected.',
-          data: {
-            reason: 'disabled-in-workdir',
-            action: 'enable-plugin',
-            pluginId: 'ios-simulator',
-            pluginName: 'iOS Simulator',
-          },
-        };
-      }
-      return { allowed: true as const };
+      // Product access is the installed plugin (enable + workdir disable).
+      // Leftover Tools-page `builtinTools['ios-simulator']` must not gate runtime.
+      return getIOSSimulatorPluginAccessDecision(workingDir);
     };
 
     const makerMemoryProviderDeps = {
@@ -1847,8 +1833,8 @@ export function getMaker(): Maker {
           localOverrides: getLocalCatalogOverridesSnapshot(),
         }),
       resolvePiGatewayModelDescriptor: (providerId, modelId) => {
-        // `cindy` / null 是 Pi 的默认 gateway 路由；其 wire 由 v3 XD runtime plan
-        // 决定，因此描述符也必须锁定 XD，不能让复合 `cindy` 按目录顺序命中同 id 订阅模型。
+        // `cindy` 始终是 XD Gateway 路由；其成员、能力与显式 API 都由 Model Access
+        // 决定，不能随当前订阅/BYOM provider 命中同 id 的另一条目录记录。
         return resolvePiRuntimeModelDescriptor(
           getDesktopSelectableCatalog(),
           resolvePiGatewayDescriptorProviderId(providerId),

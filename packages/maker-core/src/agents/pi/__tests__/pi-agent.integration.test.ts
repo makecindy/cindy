@@ -263,6 +263,35 @@ function responsesStreamBody(text: string, model: string): string {
   ]);
 }
 
+/** 最小 OpenAI Chat Completions SSE 流：验证 PI 内置模型表的 completions 分配。 */
+function chatCompletionsStreamBody(text: string, model: string): string {
+  return [
+    `data: ${JSON.stringify({
+      id: 'chatcmpl_pi_native_1',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      id: 'chatcmpl_pi_native_1',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model,
+      choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      id: 'chatcmpl_pi_native_1',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })}\n\n`,
+    'data: [DONE]\n\n',
+  ].join('');
+}
+
 /** 让"模型"发起一次工具调用的 SSE 流(stop_reason=tool_use)。 */
 function anthropicToolUseBody(toolName: string, input: Record<string, unknown>): string {
   return sse([
@@ -501,6 +530,76 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
+    'sends the locally selected Gateway Kimi API with matching compat to /v1/chat/completions',
+    { timeout: 60_000 },
+    async () => {
+      const deps = buildDeps();
+      deps.capabilityAdditions = {
+        ...deps.capabilityAdditions,
+        availableModels: [
+          ...(deps.capabilityAdditions?.availableModels ?? []),
+          {
+            id: 'moonshotai/kimi-k3',
+            displayName: 'Kimi K3',
+            contextWindow: 1_000_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'max',
+          },
+        ],
+      };
+      deps.resolvePiGatewayModelApi = (_providerId, modelId) =>
+        modelId === 'moonshotai/kimi-k3' ? 'openai-completions' : 'anthropic-messages';
+      deps.resolvePiGatewayModelSpec = (_providerId, modelId) =>
+        modelId === 'moonshotai/kimi-k3'
+          ? {
+              api: 'openai-completions',
+              compat: {
+                maxTokensField: 'max_tokens',
+                thinkingFormat: 'openai',
+                requiresReasoningContentOnAssistantMessages: true,
+                deferredToolsMode: 'kimi',
+              },
+              thinkingLevelMap: { low: 'low', high: 'high', max: 'max' },
+            }
+          : { api: 'anthropic-messages' };
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-kimi-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      scriptedResponses.push(chatCompletionsStreamBody('pong from kimi gateway', 'moonshotai/kimi-k3'));
+      try {
+        handle = await new PiAgent(deps).startSession({
+          sessionId: 'itest-kimi-session',
+          workingDir,
+          model: 'moonshotai/kimi-k3',
+          providerId: 'xd',
+          effort: 'max',
+        });
+        const events: AgentEvent[] = [];
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+
+        await handle.send({ type: 'user', content: 'ping kimi' });
+        await collected;
+
+        const requests = seenRequests.slice(requestsBefore);
+        expect(requests.some((request) => request.url === '/v1/chat/completions')).toBe(true);
+        expect(requests.some((request) => request.url === '/v1/responses')).toBe(false);
+        expect(events.some((event) =>
+          event.type === 'text'
+          && (event.data as { text?: string }).text?.includes('pong from kimi gateway'),
+        )).toBe(true);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
     'uses the bundled openai-codex adapter for a host subscription model',
     { timeout: 60_000 },
     async () => {
@@ -653,7 +752,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'uses PI bundled xAI Responses API as the baseline for native models',
+    'uses the current PI bundled xAI Responses API for both official models',
     { timeout: 60_000 },
     async () => {
       const deps = buildDeps();

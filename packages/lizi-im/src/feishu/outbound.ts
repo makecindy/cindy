@@ -29,7 +29,11 @@ import * as ownerGuard from './ownerGuard.js';
 import { parseIncoming } from './incomingContent.js';
 import type { AttachmentRef } from './incomingContent.js';
 import { messages as transportMessages } from './messages.js';
-import type { InteractiveCardSpec, SendFileResult } from '../types.js';
+import type {
+  IMMessageEvent,
+  InteractiveCardSpec,
+  SendFileResult,
+} from '../types.js';
 import type { BotCredentials } from './internal-types.js';
 
 /** 30 MB per file — feishu's upper limit for `im.file.create`. */
@@ -954,6 +958,94 @@ export async function uploadImage(absPath: string): Promise<string | null> {
   }
 }
 
+// ── exact reply context ───────────────────────────────────────────────────────
+
+export interface ResolvedReplyMessage {
+  replyContext: NonNullable<IMMessageEvent['replyContext']>;
+}
+
+function renderReplyMessageText(
+  parsed: ReturnType<typeof parseIncoming>,
+): string {
+  const parts: string[] = [];
+  if (parsed.text) parts.push(parsed.text);
+  for (const attachment of parsed.attachments) {
+    parts.push(attachment.kind === 'image' ? '[图片]' : `[文件: ${attachment.fileName}]`);
+  }
+  for (const unsupported of parsed.unsupported) parts.push(`[${unsupported.label}]`);
+  return parts.join('\n').trim();
+}
+
+function replaceFetchedMentions(
+  text: string,
+  mentions: Array<{ key: string; name?: unknown }> | undefined,
+): string {
+  let out = text;
+  for (const mention of mentions ?? []) {
+    if (!mention.key) continue;
+    const rawName = typeof mention.name === 'string' ? mention.name : '';
+    const name = rawName.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 64);
+    out = out.split(mention.key).join(`@${name || 'user'}`);
+  }
+  return out;
+}
+
+/**
+ * 精确读取一条飞书普通回复所引用的原消息。全程 pin 到开始时的 client;
+ * 账号换代后调用方会用 connection generation 丢弃结果, 不会串进新账号。
+ *
+ * 任何读取、解析失败都降级为 null, 当前 turn 继续走既有群历史上下文路径。
+ * 跨群 parent_id fail closed, 防止异常事件带出别处内容。被引附件只渲染
+ * [图片]/[文件] 占位, 不在 transport 层提前下载或并入当前消息附件:正文要先
+ * 经 host 的注入扫描, 且引用附件不应按触发消息语义落库。
+ */
+export async function resolveReplyMessage(
+  messageId: string,
+  expectedChatId: string,
+): Promise<ResolvedReplyMessage | null> {
+  const c = client;
+  if (!c) return null;
+  const log = getLog();
+  try {
+    const res = await c.im.v1.message.get({
+      params: { user_id_type: 'open_id', with_sender_name: true },
+      path: { message_id: messageId },
+    });
+    const rejected = feishuBusinessRejectReason(res);
+    if (rejected) {
+      log.warn(`[feishu/outbound] reply context fetch rejected: ${rejected}`);
+      return null;
+    }
+    const item = res.data?.items?.[0];
+    if (!item || item.deleted) return null;
+    if (item.chat_id !== expectedChatId) {
+      log.warn('[feishu/outbound] reply context dropped: parent message belongs to another chat');
+      return null;
+    }
+
+    const parsed = parseIncoming(item.msg_type ?? '', item.body?.content ?? '');
+    const text = replaceFetchedMentions(
+      renderReplyMessageText(parsed),
+      item.mentions,
+    );
+    if (!text) return null;
+
+    const isBot = item.sender?.sender_type === 'app';
+    const author = item.sender?.sender_name?.trim() || (isBot ? 'bot' : 'user');
+    return {
+      replyContext: {
+        author,
+        text,
+        ...(isBot ? { isBot: true } : {}),
+      },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/outbound] reply context fetch failed (degraded): ${msg}`);
+    return null;
+  }
+}
+
 // ── group history (context assembly for group lanes) ──────────────────────────
 
 export interface RecentChatMessage {
@@ -1013,12 +1105,17 @@ export async function fetchChatHistoryPage(args: {
     const rawContent = item.body?.content ?? '';
     let text = '';
     let attachments: AttachmentRef[] = [];
-    if (msgType === 'text' || msgType === 'post' || msgType === 'image' || msgType === 'file') {
+    if (
+      msgType === 'text' ||
+      msgType === 'post' ||
+      msgType === 'image' ||
+      msgType === 'file' ||
+      msgType === 'interactive' ||
+      msgType === 'card'
+    ) {
       const parsed = parseIncoming(msgType, rawContent);
       text = parsed.text;
       attachments = parsed.attachments;
-    } else if (msgType === 'interactive') {
-      text = '[卡片消息]';
     } else {
       continue; // audio/media/sticker 等对上下文无意义, 跳过
     }

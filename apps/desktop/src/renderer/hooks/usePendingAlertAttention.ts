@@ -27,7 +27,12 @@
  * 重算触发点(全量重查 + 差分,不做增量推断):
  *  - 错误行落库脏信号(local-db:session:error-persisted)—— 正是 makerChatStore 清掉
  *    live error 的同一个信号,交接窗口红点不掉;
- *  - refreshPendingAlerts() 显式调用 —— 横幅处置(dismiss / 继续 / 批量已读)后触发。
+ *  - 已认领错误尾行的会话插入新 user 行(messages:created)—— 文件头不变量:
+ *    turn 一起就插 user 行,error 不再是尾行。自动续跑的 UI_ACTION_TRIGGER 也是
+ *    user 行;此前只订 error 行,续跑成功、横幅已灭时红点不掉。
+ *  - refreshPendingAlerts() 显式调用 —— 横幅处置(dismiss / 继续 / 批量已读)后触发;
+ *  - noteSessionTurnStartedForAlerts() —— 新一轮启动时补一次,覆盖 running 投影
+ *    早于 user 行落库的窗口。
  *
  * 打点范围限定:只清**本 hook 自己打过**且当前仍是 'error' 的点,不误伤 live error、
  * done、awaiting 等其它来源。
@@ -172,6 +177,18 @@ function noteInterruptedAck(sessionId: string): void {
   clearAlertIfStillError(sessionId);
 }
 
+/**
+ * 新一轮启动时收敛错误尾行红点。中断腿仍只认 lastTurnEndedAt(side-task 上升沿
+ * 也会把 isRunning 翻成 true,不能当成「继续 / 忽略」)。
+ *
+ * 只在本 hook 仍认领该会话的错误尾行时才打 IPC;查询结果若已不是尾行,差分会
+ * explicit 清点。生产调用点 fire-and-forget。
+ */
+export function noteSessionTurnStartedForAlerts(sessionId: string): void {
+  if (!_errorTailOwned.has(sessionId)) return;
+  void refreshPendingAlerts();
+}
+
 /** 启动首拉:中断腿 + 错误尾行腿各拉一次,分别记账。 */
 async function initialFetch(): Promise<void> {
   const gen = ++_queryGen;
@@ -246,14 +263,23 @@ export function usePendingAlertAttention(): void {
   // error 行的**更新**广播(peer 收敛):另一个窗口 / device-link 端点点「忽略」时,
   // dismissErrorMessage 会把 merge 后的行经 messages:created 广播出去,peer 的横幅
   // 据此即时熄灭 —— 但 error-persisted 只在错误**首次落库**时发,peer 的红点因此会
-  // 一直残留到某个无关的重算(PR #879 review P1)。这里按 role 过滤后重算,把
-  // dismiss / 新错误行两种情况都收敛掉;非 error 行不触发,避免每条消息都查一次库。
+  // 一直残留到某个无关的重算(PR #879 review P1)。
+  //
+  // user 行:只在本 hook 仍认领该会话的错误尾行时重算。文件头不变量是「新 turn
+  // 的 user 行会让 error 不再是尾行」;自动续跑的 UI_ACTION_TRIGGER 也是 user 行,
+  // 若不订这条,横幅已灭、任务已在跑,红点却一直亮。其它会话 / 非 user 行不打 IPC。
   useEffect(() => {
     const onCreated = window.electronAPI?.localDb?.messages?.onCreated;
     if (!onCreated) return;
-    return onCreated(({ message }, ownerStamp) => {
+    return onCreated(({ sessionId, message }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
-      if (message?.role === 'error') void refreshPendingAlerts();
+      if (message?.role === 'error') {
+        void refreshPendingAlerts();
+        return;
+      }
+      if (message?.role === 'user' && _errorTailOwned.has(sessionId)) {
+        void refreshPendingAlerts();
+      }
     });
   }, []);
 }

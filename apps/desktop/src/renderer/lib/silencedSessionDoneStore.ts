@@ -8,8 +8,9 @@
  *     `silenced` 事件,但**建立标记的时机相对 turn 完全不同**(一条在 turn 之前、
  *     一条在 turn 中间),任何依赖「事件序」的判断都会在其中一条上翻车。
  *   - schedulerOwned:普通自动任务 —— scheduler notifier 已按 `schedule.notify`
- *     发过这次终态通知,renderer 不能再发第二条;但侧栏 / Dock attention 仍按
- *     普通 done/error 逻辑保留。
+ *     发过这次终态通知,renderer 不能再发第二条。成功完成不再从 running→done
+ *     点 `done` attention(绿点改认 schedule 未读 + `completed && !silenced`
+ *     乐观未读);失败仍立即点 `error` 红点。
  *
  * **标记的生命周期跟随 run,不是「被第一次 done 消费掉」**:一个 run 内 session
  * 的 running→done 会翻转多次(后台 subagent 完成后 SDK 自动续 turn、silent-stop
@@ -209,9 +210,71 @@ export function reconcileRunMarkers(
   return { needsRecheck };
 }
 
+/** 与 IPC 快照里的 `inflightPolicies` 同形,避免本 store 去依赖 maker-scheduler。 */
+export interface InflightRunPolicySnapshot {
+  runId: string;
+  sessionId?: string;
+  silenced: boolean;
+}
+
+/**
+ * 用引擎的 in-flight 策略快照重建从未建成(或已被误清)的标记。
+ *
+ * hook 晚挂、事件早于订阅时,reconcile 只能清已有标记、不能凭空恢复。本函数补那条腿:
+ *   - 已绑定 session 的 in-flight run 一律重建 schedulerOwned;
+ *   - `silenced` 才重建静默;非静默则丢掉该 run 上过期的 silenced(可能错过了 notified);
+ *   - in-flight 要取消误排的 linger(只清 timer,不删标记)—— `markNext*` 会顺带清 timer。
+ */
+export function restoreInflightRunMarkers(
+  policies: ReadonlyArray<InflightRunPolicySnapshot>,
+  hadAttention: (sessionId: string) => boolean,
+): void {
+  for (const policy of policies) {
+    if (!policy.runId || !policy.sessionId) continue;
+    markNextSessionTerminalNotificationOwnedByScheduler(policy.runId, policy.sessionId);
+    if (policy.silenced) {
+      markNextSessionDoneSilenced(policy.runId, policy.sessionId, hadAttention(policy.sessionId));
+    } else if (silencedRunSessionIds.has(policy.runId)) {
+      clearSilencedRun(policy.runId);
+    }
+  }
+}
+
+export interface RecentlyReadSilentRunSnapshot {
+  runId: string;
+  sessionId?: string;
+  status: string;
+  readAt?: number;
+}
+
+/**
+ * 刚静默成功落库的 run(`success` + `readAt`)若还在 linger 窗口内,补回标记并排 linger。
+ * 已有 timer 不重置。启发式:用户在 2s 内点已读也可能被当成静默,可接受。
+ */
+export function restoreRecentlyReadSilentMarkers(
+  runs: ReadonlyArray<RecentlyReadSilentRunSnapshot>,
+  now: number,
+  hadAttention: (sessionId: string) => boolean,
+  inflightRunIds: ReadonlySet<string> = new Set(),
+): void {
+  for (const run of runs) {
+    if (inflightRunIds.has(run.runId)) continue;
+    if (run.status !== 'success' || !run.sessionId || run.readAt == null) continue;
+    if (now - run.readAt >= MARKER_TERMINAL_LINGER_MS) continue;
+    if (!silencedRunSessionIds.has(run.runId)) {
+      markNextSessionDoneSilenced(run.runId, run.sessionId, hadAttention(run.sessionId));
+    }
+    if (!schedulerOwnedRunSessionIds.has(run.runId)) {
+      markNextSessionTerminalNotificationOwnedByScheduler(run.runId, run.sessionId);
+    }
+    scheduleClearSilencedRun(run.runId, MARKER_TERMINAL_LINGER_MS);
+    scheduleClearSchedulerOwnedRun(run.runId, MARKER_TERMINAL_LINGER_MS);
+  }
+}
+
 export function scheduleClearSchedulerOwnedRun(runId: string, delayMs: number): void {
   if (!schedulerOwnedRunSessionIds.has(runId)) return;
-  clearSchedulerOwnedTimer(runId);
+  if (schedulerOwnedClearTimers.has(runId)) return;
   const timer = setTimeout(() => {
     schedulerOwnedClearTimers.delete(runId);
     clearSchedulerOwnedRun(runId);
@@ -243,7 +306,7 @@ export function clearCompletedSchedulerOwnedRunForNewActivity(sessionId: string)
 
 export function scheduleClearSilencedRun(runId: string, delayMs: number): void {
   if (!silencedRunSessionIds.has(runId)) return;
-  clearPendingTimer(runId);
+  if (clearTimers.has(runId)) return;
   const timer = setTimeout(() => {
     clearTimers.delete(runId);
     clearSilencedRun(runId);

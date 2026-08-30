@@ -423,6 +423,11 @@
     "continueTask": "작업 계속",
     "retry": "다시 시도",
     "ignore": "무시",
+    "toolUseLoopDetected": "모델이 도구 호출을 너무 많이 반복하여 무한 루프를 방지하기 위해 이번 턴을 중지했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+    "toolUseLoopDetectedWithCount": "모델이 잘못된 도구 호출을 반복하여 무한 루프를 방지하기 위해 {{count}}회 실패 후 이번 턴을 중지했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+    "toolUseLoopDetectedConsecutiveWithCount": "모델이 동일한 도구 호출을 {{count}}회 반복하여 무한 루프를 막기 위해 이번 턴을 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+    "toolUseLoopDetectedPingPongWithCount": "모델이 여러 도구 호출 사이를 오가며 반복하여 이번 턴에서 {{count}}회의 호출을 감지한 뒤 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+    "toolUseLoopDetectedRotationWithCount": "모델이 여러 도구 호출을 계속 순환하여 이번 턴에서 {{count}}회의 호출을 감지한 뒤 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
     "codexThreadLost": "Codex 인증 모드가 전환되어 이 세션을 계속할 수 없습니다 —— 새 세션을 만들면 적용됩니다.",
     "encryptedContentInvalid": "제공자 변경으로 암호화를 사용할 수 없게 되어 이 세션은 원래 제공자에서만 사용할 수 있습니다. 컴퓨터에서 처리하세요(Fork하여 프로토콜 암호화 콘텐츠를 버린 후 새 세션에서 계속할 수 있습니다)."
   },

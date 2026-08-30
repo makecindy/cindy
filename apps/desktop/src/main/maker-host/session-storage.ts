@@ -231,3 +231,22 @@ export async function readSessionExtraDirsFromDb(id: string): Promise<string[]> 
   }
   return [];
 }
+
+/** 读 sessions.writable_dirs；旧库迁移后默认 []，绝不从 extra_dirs 推导。 */
+export async function readSessionWritableDirsFromDb(id: string): Promise<string[]> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({ writableDirs: sessions.writableDirs })
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .limit(1);
+  const raw = rows[0]?.writableDirs;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) return parsed;
+  } catch {
+    /* fall through */
+  }
+  return [];
+}

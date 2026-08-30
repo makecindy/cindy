@@ -334,6 +334,28 @@ describe('maker:review:start IPC lifecycle', () => {
     expect(meta).not.toHaveProperty('error');
   });
 
+  it('uses a localized provider failure code for tool-loop terminal diagnostics', async () => {
+    const harness = new IpcHarness();
+    const reviewer = new FakeReviewer();
+    const deps = makeDeps(reviewer);
+    registerReviewStartHandler(harness, deps);
+    await harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest());
+
+    reviewer.emit({
+      type: 'error',
+      data: {
+        message: '上游模型 claude 连续 3 次 Edit 调用因同类参数错误被拒',
+        reason: 'tool_use_loop_detected',
+        isTerminal: true,
+      },
+    });
+    await vi.waitFor(() => expect(deps.updateSourceCard).toHaveBeenCalledTimes(1));
+
+    const meta = vi.mocked(deps.updateSourceCard).mock.calls[0]?.[0].meta;
+    expect(meta).toMatchObject({ status: 'failed', failureCode: 'provider-failed' });
+    expect(meta).not.toHaveProperty('error');
+  });
+
   it('accepts a synchronously dispatched terminal failure after failing the card once', async () => {
     const harness = new IpcHarness();
     const reviewer = new FakeReviewer();

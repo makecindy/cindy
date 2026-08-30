@@ -1,7 +1,10 @@
+import { AuthApiError } from '@cindy/auth-client';
+
 /**
  * 冷启动 auth 流程的「限时等待」编排 —— 与 Electron / 网络层解耦的纯逻辑,
- * 供 authManager 的 `initialize()` 使用,并可独立单测(authManager 本身依赖
- * Electron,无法在 node 测试环境直接 import,同 authRefreshFailure.ts 的拆分理由)。
+ * 供 authManager 的 `initialize()`(splash)与 `loadLoginProviders()`(登录准备态)
+ * 使用,并可独立单测(authManager 本身依赖 Electron,无法在 node 测试环境直接
+ * import,同 authRefreshFailure.ts 的拆分理由)。
  *
  * 背景:冷启动 refresh 是 token-rotating 端点,**禁止 abort**(服务端已轮换而客户端
  * abort 后,重试旧 token 会命中 INVALID_REFRESH_TOKEN 永久登出)。因此在黑洞 / captive
@@ -70,4 +73,57 @@ export async function awaitWithStartupTimeout<T>(
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+/**
+ * 登录准备态(「正在连接登录服务」)最多阻塞 UI 的时长。getProviders 走
+ * CindyAuthClient 默认 15s AbortController,但黑洞 / captive-portal 下 Electron
+ * `net.fetch` 可能无视 abort,请求永不 settle → renderer 的 preparing 转圈永不
+ * 结束。冷启动 splash 的 `awaitWithStartupTimeout` 闸只包 initialize();登录页是
+ * initialize 完成、GuestRoute 放行之后才出现的。这里复用同一把闸,时限更保守
+ * (30s),超时后走既有 error 步(「暂时无法登录」+ 重试);不 abort 在途 getProviders。
+ */
+export const LOGIN_PREPARING_GATE_TIMEOUT_MS = 30_000;
+
+export interface PreparingGateLog {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+}
+
+export type LoginProvidersLoadFailure = {
+  success: false;
+  code: string;
+  state: { step: 'error'; code: string; recoverTo: 'identifier' };
+};
+
+/** 把 getProviders 失败(含准备态超时)映射成既有可重试错误步。 */
+export function mapLoginProvidersLoadFailure(error: unknown): LoginProvidersLoadFailure {
+  const code = error instanceof AuthApiError ? error.code : 'AUTH_SERVICE_UNAVAILABLE';
+  return { success: false, code, state: { step: 'error', code, recoverTo: 'identifier' } };
+}
+
+/**
+ * 限时等待登录 providers。超时抛 AUTH_SERVICE_UNAVAILABLE,不 abort 在途请求;
+ * 迟到 settle 只打日志。`getProviders` 由调用方注入,单测可挂起 Promise + 假计时器。
+ */
+export async function awaitLoginProvidersWithPreparingGate<T>(
+  getProviders: Promise<T>,
+  log: PreparingGateLog,
+): Promise<T> {
+  return awaitWithStartupTimeout(getProviders, {
+    timeoutMs: LOGIN_PREPARING_GATE_TIMEOUT_MS,
+    onTimeout: () => {
+      log.warn(
+        `login providers still pending after ${LOGIN_PREPARING_GATE_TIMEOUT_MS}ms — unlocking the preparing UI`,
+      );
+      throw new AuthApiError(
+        'AUTH_SERVICE_UNAVAILABLE',
+        0,
+        'Authentication server did not respond in time',
+      );
+    },
+    onLateResult: () => log.info('login providers settled after preparing gate timeout'),
+    onLateError: (err) =>
+      log.warn('login providers request failed after preparing gate timeout', err),
+  });
 }

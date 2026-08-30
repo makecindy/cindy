@@ -79,6 +79,9 @@ export const HOSTED_ELSEWHERE_PLUGIN_IDS: ReadonlySet<string> = new Set([
   // 智能通讯录的开关在 Settings → 智能通讯录 专属页(contacts-settings-store),
   // 「内置工具」列表再出现一个 toggle 会造成双开关困惑。
   'contacts',
+  // iOS 模拟器的产品开关只在「插件」页（安装 / 启用 / 当前项目停用）。
+  // Host MCP cindy_ios_simulator 仍留给 Agent 自动化，但不再出现在「内置工具」列表。
+  'ios-simulator',
 ]);
 
 /** Builtin plugins that are intentionally opt-in by default.
