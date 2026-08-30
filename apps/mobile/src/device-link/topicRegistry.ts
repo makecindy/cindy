@@ -69,12 +69,29 @@ export class DeviceLinkTopicRegistry {
   }
 
   snapshot(): RehydratePlan[] {
-    const ids = new Set<string>([...this.openLinks, ...this.topicOwners.keys()]);
-    return [...ids].sort().map((deviceId) => ({
-      deviceId,
-      openLink: this.openLinks.has(deviceId),
-      topics: [...(this.topicOwners.get(deviceId)?.keys() ?? [])].sort(),
-    }));
+    return this.deviceIds().map((deviceId) => this.snapshotDevice(deviceId)!);
+  }
+
+  /** Current recovery intent for one peer; null means this peer has no held work. */
+  snapshotDevice(deviceId: string): RehydratePlan | null {
+    const openLink = this.openLinks.has(deviceId);
+    const topics = [...(this.topicOwners.get(deviceId)?.keys() ?? [])].sort();
+    if (!openLink && topics.length === 0) return null;
+    return { deviceId, openLink, topics };
+  }
+
+  /**
+   * Stable peer order used to seed the fair recovery scheduler. Peers with visible
+   * topic work go first; historical open-link-only intent must not delay the machine
+   * whose Home/session content is currently on screen.
+   */
+  deviceIds(): string[] {
+    return [...new Set<string>([...this.openLinks, ...this.topicOwners.keys()])].sort((a, b) => {
+      const aHasTopics = (this.topicOwners.get(a)?.size ?? 0) > 0;
+      const bHasTopics = (this.topicOwners.get(b)?.size ?? 0) > 0;
+      if (aHasTopics !== bHasTopics) return aHasTopics ? -1 : 1;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
   }
 
   hasTopic(deviceId: string, topic: string): boolean {
@@ -138,4 +155,22 @@ export function markRemoteTopicsUnsubscribed(
   if (!current) return;
   for (const topic of topics) current.delete(topic);
   if (current.size === 0) acked.delete(deviceId);
+}
+
+/**
+ * Combines durable screen/topic intent with a transient transport-forced reopen.
+ * ACK reset can happen after the final topic owner has already released, while a reliable
+ * request is still pending in the client. In that case the synthetic open-only plan is the
+ * only way to thaw the peer without rebuilding the shared WSS.
+ */
+export function resolvePeerRecoveryPlan(
+  deviceId: string,
+  durablePlan: RehydratePlan | null,
+  forceOpen: boolean,
+): RehydratePlan | null {
+  if (!durablePlan) {
+    return forceOpen ? { deviceId, openLink: true, topics: [] } : null;
+  }
+  if (!forceOpen || durablePlan.openLink) return durablePlan;
+  return { ...durablePlan, openLink: true };
 }

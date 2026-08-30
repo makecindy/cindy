@@ -133,10 +133,9 @@ describe("CindyAuthClient", () => {
   it("carries captchaToken in the email request-code body only when provided", async () => {
     const fetch = vi.fn(async () => response(200, { status: "sent" }));
     await client(fetch).requestCode("email", "user@example.com");
-    const bare = JSON.parse((fetch.mock.calls[0]?.[1] as { body: string }).body) as Record<
-      string,
-      unknown
-    >;
+    const bare = JSON.parse(
+      (fetch.mock.calls[0]?.[1] as { body: string }).body,
+    ) as Record<string, unknown>;
     expect(bare).toEqual({ email: "user@example.com", locale: "zh-CN" });
     await client(fetch).requestCode("email", "user@example.com", {
       captchaToken: "captcha-token-1",
@@ -333,21 +332,43 @@ describe("CindyAuthClient", () => {
             orgName: "Corp",
           },
         }),
-      );
+      )
+      .mockResolvedValueOnce(
+        response(200, {
+          accountToken: "rotated-account-access",
+          accountRefreshToken: "rotated-account-refresh",
+        }),
+      )
+      .mockResolvedValueOnce(response(200, { status: "ok" }));
     const auth = client(fetch);
-    expect(auth).not.toHaveProperty("refreshAccount");
-    expect(auth).not.toHaveProperty("logoutAccount");
     await expect(
       auth.getAccountMemberships("account-access"),
     ).resolves.toHaveLength(1);
     await expect(
       auth.exchangeAccountMembership("account-access", "org-membership"),
     ).resolves.toMatchObject({ accessToken: "org-access" });
+    await expect(auth.refreshAccount("account-refresh")).resolves.toEqual({
+      accountToken: "rotated-account-access",
+      accountRefreshToken: "rotated-account-refresh",
+    });
+    await expect(
+      auth.logoutAccount("rotated-account-access"),
+    ).resolves.toBeUndefined();
     expect(fetch.mock.calls[0]?.[1]?.headers).toMatchObject({
       Authorization: "Bearer account-access",
     });
     expect(fetch.mock.calls[1]?.[1]?.headers).toMatchObject({
       Authorization: "Bearer account-access",
+    });
+    expect(fetch.mock.calls[2]?.[0]).toBe(
+      "https://auth.example.com/api/auth/account/refresh",
+    );
+    expect(fetch.mock.calls[3]?.[1]?.headers).toMatchObject({
+      Authorization: "Bearer rotated-account-access",
+    });
+    expect(fetch.mock.calls[3]?.[1]).toMatchObject({
+      method: "POST",
+      body: "{}",
     });
   });
 

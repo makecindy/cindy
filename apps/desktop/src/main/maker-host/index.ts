@@ -225,6 +225,7 @@ import {
 } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import {
   buildCodexProxySpawnArgs,
+  CODEX_CINDY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
 import {
@@ -275,6 +276,7 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
+let _registerPiAgent: (() => boolean) | null = null;
 /** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
 let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
 
@@ -766,23 +768,9 @@ export function getMaker(): Maker {
 
     const resolveIOSSimulatorAccess = (context?: IOSSimulatorMcpCallContext) => {
       const workingDir = context?.workingDir?.trim() || null;
-      const pluginAccess = getIOSSimulatorPluginAccessDecision(workingDir);
-      if (!pluginAccess.allowed) return pluginAccess;
-      if (!pluginRegistry.isEnabled('ios-simulator', workingDir ?? undefined)) {
-        return {
-          allowed: false as const,
-          errorCode: 'IOS_SIMULATOR_DISABLED' as const,
-          message:
-            'The embedded iOS Simulator capability is disabled for the current project. Enable it in the project plugin settings before retrying the embedded tool; other iOS workflows are unaffected.',
-          data: {
-            reason: 'disabled-in-workdir',
-            action: 'enable-plugin',
-            pluginId: 'ios-simulator',
-            pluginName: 'iOS Simulator',
-          },
-        };
-      }
-      return { allowed: true as const };
+      // Product access is the installed plugin (enable + workdir disable).
+      // Leftover Tools-page `builtinTools['ios-simulator']` must not gate runtime.
+      return getIOSSimulatorPluginAccessDecision(workingDir);
     };
 
     const makerMemoryProviderDeps = {
@@ -1623,8 +1611,10 @@ export function getMaker(): Maker {
                 codexBrowserUseStartupTimeoutMs: browserCompanion.startupTimeoutMs,
               }
             : {}),
-          // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
-          // 「订阅直连路由」的 thread 用它开 OpenAI 远端压缩,其余 thread 保持本地压缩。
+          ...(ready
+            ? { codexCindyRemoteCompactionProviderId: CODEX_CINDY_COMPACT_PROVIDER_ID }
+            : {}),
+          // oauth spawn 额外定义订阅直连 identity；Cindy codex/* 使用上面的 HTTP identity。
           ...(useOAuthBearer && ready
             ? { codexRemoteCompactionProviderId: CODEX_OPENAI_COMPACT_PROVIDER_ID }
             : {}),
@@ -1669,7 +1659,9 @@ export function getMaker(): Maker {
         text,
         subagentRoute,
       }) =>
-        registerCodexProxyComposed(sessionId, threadId, text, { subagentRoute }),
+        registerCodexProxyComposed(sessionId, threadId, text, {
+          ...(subagentRoute ? { subagentRoute } : {}),
+        }),
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);
@@ -1734,10 +1726,12 @@ export function getMaker(): Maker {
     _codexAgent = codexAgent;
 
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
-    attachAgentsToMakerMemory(makerMemoryManager, {
+    // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。
+    const makerAgents: ConstructorParameters<typeof Maker>[0]['agents'] = {
       'claude-code': claudeAgent,
       codex: codexAgent,
-    });
+    };
+    attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
     if (makerMemoryManager.isEnabled()) {
       void makerMemoryManager.enable();
     }
@@ -1877,7 +1871,7 @@ export function getMaker(): Maker {
     registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
     _initialCustomMcpRefresh = refreshCustomMcpProviders();
 
-    const piAgent = buildPiAgent({
+    const buildPiAgentForDesktop = () => buildPiAgent({
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,
@@ -1893,8 +1887,8 @@ export function getMaker(): Maker {
           localOverrides: getLocalCatalogOverridesSnapshot(),
         }),
       resolvePiGatewayModelDescriptor: (providerId, modelId) => {
-        // `cindy` / null 是 Pi 的默认 gateway 路由；其 wire 由 v3 XD runtime plan
-        // 决定，因此描述符也必须锁定 XD，不能让复合 `cindy` 按目录顺序命中同 id 订阅模型。
+        // `cindy` 始终是 XD Gateway 路由；其成员、能力与显式 API 都由 Model Access
+        // 决定，不能随当前订阅/BYOM provider 命中同 id 的另一条目录记录。
         return resolvePiRuntimeModelDescriptor(
           getDesktopSelectableCatalog(),
           resolvePiGatewayDescriptorProviderId(providerId),
@@ -2088,6 +2082,8 @@ export function getMaker(): Maker {
         return getRemoteAgentProxyEnv(remoteHost);
       },
     });
+    const piAgent = buildPiAgentForDesktop();
+    if (piAgent) makerAgents.pi = piAgent;
 
     setVisionGatewayKeyReader(readClaudeApiKey);
     _visionBridgeInstance = createVisionBridge({
@@ -2112,11 +2108,7 @@ export function getMaker(): Maker {
     });
 
     _maker = new Maker({
-      agents: {
-        'claude-code': claudeAgent,
-        codex: codexAgent,
-        ...(piAgent ? { pi: piAgent } : {}),
-      },
+      agents: makerAgents,
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,
       makerMemory: makerMemoryManager,
@@ -2201,6 +2193,21 @@ export function getMaker(): Maker {
         },
       },
     });
+    _registerPiAgent = () => {
+      if (!_maker || _maker.listAvailableAgents().includes('pi')) return false;
+      const next = buildPiAgentForDesktop();
+      if (!next) return false;
+      const registered = _maker.registerAgent('pi', next);
+      if (!registered) {
+        void next.dispose().catch((error) => {
+          desktopMakerLogger.warn('discarding Pi agent after registration race failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+        return false;
+      }
+      return true;
+    };
     setVisionBridgeController({
       shouldBridge: _visionBridgeInstance.isTargetModel,
       describeImage: _visionBridgeInstance.describeImage,
@@ -2265,12 +2272,39 @@ export function getMakerIfReady(): Maker | null {
   return _maker;
 }
 
+/** Register Pi after a managed runtime retry and notify local renderers. */
+export function registerPiAgentIfAvailable(): boolean {
+  const register = _registerPiAgent;
+  if (!register) return false;
+  try {
+    if (_maker?.listAvailableAgents().includes('pi')) return true;
+    const registered = register();
+    if (!registered) return false;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(MAKER_PUSH.AGENTS_CHANGED);
+      } catch {
+        // Window teardown may race the broadcast; other windows still receive it.
+      }
+    }
+    tapWindowBroadcast(MAKER_PUSH.AGENTS_CHANGED, {});
+    return true;
+  } catch (error) {
+    desktopMakerLogger.warn('Pi agent registration after runtime recovery failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 /**
  * 重置 Maker 单例（切账号 / 测试用）。
  */
 export function resetMaker(): void {
   cancelCodexAuthModeChange();
   _maker = null;
+  _registerPiAgent = null;
   _codexAgent = null;
   // coordinator 闭包捕获了刚作废的那个 maker —— 不清掉的话,换账号窗口期内到达的 auth
   // 事件会拿旧实例去拉模型清单(串号)。下次 getMaker() 会带着干净记账重建它。

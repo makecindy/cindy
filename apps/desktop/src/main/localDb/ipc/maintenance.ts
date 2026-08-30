@@ -50,6 +50,7 @@ interface DirectoryGrant {
 }
 
 interface ScanAggregateRow {
+  activeTaskCount: number | null;
   deletedTaskCount: number | null;
   archivedTaskCount: number | null;
   messageCount: number;
@@ -65,6 +66,7 @@ export interface LocalDbMaintenanceIpcDeps {
   getUserDataDir(): string;
   canSchedule(): boolean;
   selectBackupDirectory(): Promise<string | null>;
+  confirmActiveTaskCleanup(input: { backupEnabled: boolean }): Promise<boolean>;
   confirmWithoutBackup(): Promise<boolean>;
   revealFile(filePath: string): Promise<boolean>;
   relaunch(requestId: string): void;
@@ -114,6 +116,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
   return {
     async scan(input: DbSlimmingScanInput): Promise<DbSlimmingScanResult> {
       const archiveAgeMonths = validateArchiveAge(input?.archiveAgeMonths);
+      const includeActiveTasks = validateIncludeActiveTasks(input?.includeActiveTasks);
       const owner = captureReadyOwner();
       const scannedAt = Date.now();
       const archivedBeforeMs = archiveCutoffForAge(scannedAt, archiveAgeMonths);
@@ -122,10 +125,12 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
            SELECT id, status
              FROM sessions
             WHERE ((status = 'deleted' AND updated_at <= ?)
-               OR (status = 'archived' AND updated_at <= ?))
+               OR (status = 'archived' AND updated_at <= ?)
+               OR (? = 1 AND status = 'active' AND updated_at <= ?))
               AND EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id)
          )
          SELECT
+           (SELECT COUNT(*) FROM target_sessions WHERE status = 'active') AS activeTaskCount,
            (SELECT COUNT(*) FROM target_sessions WHERE status = 'deleted') AS deletedTaskCount,
            (SELECT COUNT(*) FROM target_sessions WHERE status = 'archived') AS archivedTaskCount,
            (SELECT COUNT(*)
@@ -142,7 +147,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
                    ), 0)
               FROM messages message
               JOIN target_sessions target ON target.id = message.session_id) AS estimatedMessageBytes`,
-        [scannedAt, archivedBeforeMs],
+        [archivedBeforeMs, archivedBeforeMs, includeActiveTasks ? 1 : 0, archivedBeforeMs],
       );
       assertOwnerCurrent(owner);
       const dbFilePath = deps.getCurrentDbPath();
@@ -154,8 +159,10 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
       const result: DbSlimmingScanResult = {
         scanId,
         archiveAgeMonths,
+        includeActiveTasks,
         scannedAt,
         archivedBeforeMs,
+        activeTaskCount: row?.activeTaskCount ?? 0,
         deletedTaskCount: row?.deletedTaskCount ?? 0,
         archivedTaskCount: row?.archivedTaskCount ?? 0,
         messageCount: row?.messageCount ?? 0,
@@ -238,7 +245,17 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
           backupDirectory = directoryGrant.directory;
         }
 
-        if (!input.backupEnabled && !(await deps.confirmWithoutBackup())) {
+        if (
+          scan.includeActiveTasks &&
+          !(await deps.confirmActiveTaskCleanup({ backupEnabled: input.backupEnabled }))
+        ) {
+          return { scheduled: false };
+        }
+        if (
+          !scan.includeActiveTasks &&
+          !input.backupEnabled &&
+          !(await deps.confirmWithoutBackup())
+        ) {
           return { scheduled: false };
         }
 
@@ -292,6 +309,8 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
           scannedAt: scan.scannedAt,
           archivedBeforeMs: scan.archivedBeforeMs,
           archiveAgeMonths: scan.archiveAgeMonths,
+          includeActiveTasks: scan.includeActiveTasks,
+          activeTaskCount: scan.activeTaskCount,
           deletedTaskCount: scan.deletedTaskCount,
           archivedTaskCount: scan.archivedTaskCount,
           messageCount: scan.messageCount,
@@ -334,6 +353,15 @@ function validateArchiveAge(value: unknown): DbSlimmingArchiveAge {
     throwIpcError('INVALID_PARAMS', 'invalid database maintenance archive threshold');
   }
   return value as DbSlimmingArchiveAge;
+}
+
+function validateIncludeActiveTasks(value: unknown): boolean {
+  // Missing means the legacy, safest scope for older callers.
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'invalid active-task database maintenance option');
+  }
+  return value;
 }
 
 /** Uses an exact seven-day duration or calendar months with month-end clamping. */

@@ -15,6 +15,7 @@ import { GHOST_IMAGE_ASPECT_RATIOS, type GhostImageAspectRatio } from '../../sha
 import { getAppCapabilities } from '../appCapabilities.js';
 import * as authManager from '../authManager.js';
 import * as imageCacheStore from '../imageCacheStore.js';
+import * as videoCacheStore from '../videoCacheStore.js';
 import { createLogger } from '../logger.js';
 import { ServerApiError } from '../serverApiClient.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
@@ -912,6 +913,11 @@ function completedInvocationResult(invocation: StoredMediaInvocation): Record<st
   }
   return {
     ...(media as Record<string, unknown>),
+    ...(invocation.capability === 'image.generate' || invocation.capability === 'image.edit'
+      ? {
+          hint: '请在最终回复中使用返回的 cindy-media:// 地址只嵌入展示一次；若未嵌入，客户端会用工具结果兜底展示。',
+        }
+      : {}),
     ok: true,
     status: 'complete',
     invocation_id: invocation.id,
@@ -1680,6 +1686,41 @@ export async function callCindyMedia(
   request: CindyMediaToolRequest,
 ): Promise<Record<string, unknown>> {
   try {
+    if (request.action === 'resolve_local_path') {
+      let resolved: { absPath: string; mimeType: string };
+      try {
+        if (request.url.startsWith('cindy-media://')) {
+          if (!blobStore.parseBlobUrl(request.url)) throw new Error('invalid cindy-media url');
+          resolved = blobStore.resolveSafe(request.url);
+        } else if (request.url.startsWith('xdt-image://')) {
+          resolved = imageCacheStore.resolveSafe(request.url);
+        } else if (request.url.startsWith('xdt-video://')) {
+          resolved = videoCacheStore.resolveSafe(request.url);
+        } else {
+          return failure(
+            'INVALID_INPUT',
+            'url 必须是 cindy-media://、xdt-image:// 或 xdt-video:// 受管地址',
+          );
+        }
+      } catch {
+        return failure(
+          'MEDIA_REFERENCE_INVALID',
+          '受管媒体地址不合法或无法解析',
+        );
+      }
+      try {
+        const stat = await fs.stat(resolved.absPath);
+        if (!stat.isFile()) throw new Error('not a file');
+      } catch {
+        return failure('MEDIA_FILE_NOT_FOUND', '该受管媒体文件在本机已不存在');
+      }
+      return {
+        ok: true,
+        url: request.url,
+        local_path: resolved.absPath,
+        mime_type: resolved.mimeType,
+      };
+    }
     if (request.action === 'list_models') {
       const capability = request.capability as MediaCapability | undefined;
       const availability = await listExecutableMediaModels(

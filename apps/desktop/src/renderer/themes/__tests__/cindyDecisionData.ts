@@ -400,7 +400,6 @@ export const RED_EXCEPTION_ALLOWED_IDS = [
   'brand-login-bg',
   'brand-login-error-border',
   'brand-login-error-text',
-  'beta-channel-badge-bg', // 用户指定 Beta 状态徽标红底,2026-08-25
   // hover/soft token(中性,但 token 名保留在 allowed 防误报)
   'accent-soft',
   'accent-hover',

@@ -783,11 +783,12 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
     return await screen.findByTestId('unified-model-config-flyout');
   }
 
-  it('草稿 live 选中行:清 override 之外,深度 / Fast 走实时回调真的落下去', async () => {
+  it('草稿同引擎恢复推荐:走整行直通且不把推荐档重新写成 override', async () => {
     // 行落在 codex(= 草稿当前引擎,推荐引擎也是 codex),live 深度 low、Fast 开着。
     setModelEngineOverride('xd', 'gpt-5.5', 'cc');
     const onEffortChange = vi.fn();
     const onFastModeChange = vi.fn();
+    const onUnifiedSelect = vi.fn();
     renderPanel({
       vendorKey: 'codex',
       currentProviderId: 'xd',
@@ -796,15 +797,49 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
       fastMode: true,
       onEffortChange,
       onFastModeChange,
+      onUnifiedSelect,
     });
     const flyout = await openFlyoutFor('GPT-5.5');
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
-    // codex 那条目录条目的默认档是 high;推荐态恒无 Fast。
-    expect(onEffortChange).toHaveBeenCalledWith('high');
-    expect(onFastModeChange).toHaveBeenCalledWith(false);
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+    expect(onUnifiedSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'high',
+      engine: 'codex',
+      fast: false,
+      favoriteUid: null,
+      resetToRecommended: true,
+    });
+  });
+
+  it('草稿跨引擎恢复推荐:把删除 override 的语义完整传到草稿层', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      vendorKey: 'cc',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onUnifiedSelect,
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(onUnifiedSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'high',
+      engine: 'codex',
+      fast: false,
+      favoriteUid: null,
+      resetToRecommended: true,
+    });
   });
 
   it('会话内同引擎:同样走实时回调,不走跨引擎事务', async () => {
@@ -982,6 +1017,7 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
       effort: 'high',
       fast: false,
       favoriteUid: null,
+      resetToRecommended: true,
     });
     expect(listModelFavorites()).toHaveLength(0);
   });
@@ -1266,6 +1302,12 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
  * 任务还在旧配置上跑。跨引擎那条早就是「事务真成功才收尾」,这一组把同引擎路径拉齐。
  */
 describe('统一面板 · 同引擎实时写入成功才清存储', () => {
+  const sameEngineSession = () => ({
+    currentAgent: 'codex' as const,
+    runtimeAgent: 'codex' as const,
+    onCrossEngineSelect: vi.fn(),
+  });
+
   async function openFlyoutFor(name: string): Promise<HTMLElement> {
     await act(async () => {
       fireEvent.pointerEnter(rowFor(name));
@@ -1281,6 +1323,7 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
     const onEffortChange = vi.fn(() => false);
     const onFastModeChange = vi.fn();
     renderPanel({
+      sessionEngineFilter: sameEngineSession(),
       vendorKey: 'codex',
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1303,6 +1346,7 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
     setModelEngineOverride('xd', 'gpt-5.5', 'cc');
     const onFastModeChange = vi.fn(async () => false);
     renderPanel({
+      sessionEngineFilter: sameEngineSession(),
       vendorKey: 'codex',
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1322,6 +1366,7 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
   it('恢复推荐:两笔都成功才清 override(成功路径回归)', async () => {
     setModelEngineOverride('xd', 'gpt-5.5', 'cc');
     renderPanel({
+      sessionEngineFilter: sameEngineSession(),
       vendorKey: 'codex',
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1379,6 +1424,12 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
  * override / 收藏再度分离。现在第二笔失败要把第一笔按进入前的实时值写回去。
  */
 describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
+  const sameEngineSession = () => ({
+    currentAgent: 'codex' as const,
+    runtimeAgent: 'codex' as const,
+    onCrossEngineSelect: vi.fn(),
+  });
+
   async function openFlyoutFor(name: string): Promise<HTMLElement> {
     await act(async () => {
       fireEvent.pointerEnter(rowFor(name));
@@ -1391,6 +1442,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
     const onEffortChange = vi.fn();
     const onFastModeChange = vi.fn(async () => false);
     renderPanel({
+      sessionEngineFilter: sameEngineSession(),
       vendorKey: 'codex',
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1418,6 +1470,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
       return effortCalls === 1 ? undefined : false;
     });
     renderPanel({
+      sessionEngineFilter: sameEngineSession(),
       vendorKey: 'codex',
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1439,6 +1492,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
     setModelEngineOverride('xd', 'gpt-5.5', 'cc');
     const onEffortChange = vi.fn(async () => true);
     renderPanel({
+      sessionEngineFilter: sameEngineSession(),
       vendorKey: 'codex',
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -2149,28 +2203,43 @@ describe('统一面板 · 恢复推荐删记忆键', () => {
   }
 
   it('恢复推荐后记忆槽里没有该键(不是写了一份「等于当前默认」的快照)', async () => {
-    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    setModelEngineOverride('openai', 'gpt-5.6', 'cc');
     const memory = makeMemory({
-      effort: { 'codex|xd|gpt-5.5': 'low' },
-      fast: { 'codex|xd|gpt-5.5': true },
+      effort: {
+        'claude-code|openai|chatgpt/gpt-5.6': 'low',
+        'codex|openai|gpt-5.6': 'low',
+        'pi|openrouter|other-model': 'medium',
+      },
+      fast: {
+        'claude-code|openai|chatgpt/gpt-5.6': true,
+        'codex|openai|gpt-5.6': true,
+        'pi|openrouter|other-model': true,
+      },
     });
-    // 选中的是 Opus 5 → GPT-5.5 那一行不是 live 行,只走持久化那一半。
+    // 选中的是 Opus 5 → GPT-5.6 那一行不是 live 行,只走持久化那一半。
     renderPanel({
       modelMemory: memory.accessors,
       currentProviderId: 'anthropic',
       modelId: 'claude-opus-5',
     });
     await act(async () => {
-      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+      fireEvent.pointerEnter(rowFor('GPT-5.6'));
     });
     const flyout = await screen.findByTestId('unified-model-config-flyout');
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
-    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
-    // 键被**删掉**:留一份 'high' / false 的快照就是把这一版的默认固化成用户配置。
-    expect(memory.effort.has('codex|xd|gpt-5.5')).toBe(false);
-    expect(memory.fast.has('codex|xd|gpt-5.5')).toBe(false);
+    expect(getModelEngineOverride('openai', 'gpt-5.6')).toBeUndefined();
+    // 当前 Claude Code bridge 与推荐 Codex root 的 wire ID 不同，两格都必须删除。
+    for (const key of [
+      'claude-code|openai|chatgpt/gpt-5.6',
+      'codex|openai|gpt-5.6',
+    ]) {
+      expect(memory.effort.has(key)).toBe(false);
+      expect(memory.fast.has(key)).toBe(false);
+    }
+    expect(memory.effort.get('pi|openrouter|other-model')).toBe('medium');
+    expect(memory.fast.get('pi|openrouter|other-model')).toBe(true);
   });
 
   it('恢复推荐之后目录默认档变了 → 行展示跟随新默认(不被旧值钉死)', async () => {
@@ -2239,7 +2308,9 @@ describe('统一面板 · 恢复推荐删记忆键', () => {
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
+    expect(setEffort).toHaveBeenCalledWith('claude-code', 'xd', 'gpt-5.5', 'medium');
     expect(setEffort).toHaveBeenCalledWith('codex', 'xd', 'gpt-5.5', 'high');
+    expect(setFast).toHaveBeenCalledWith('claude-code', 'xd', 'gpt-5.5', false);
     expect(setFast).toHaveBeenCalledWith('codex', 'xd', 'gpt-5.5', false);
   });
 });

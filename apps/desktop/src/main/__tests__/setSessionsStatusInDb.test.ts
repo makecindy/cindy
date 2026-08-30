@@ -29,6 +29,7 @@ const h = vi.hoisted(() => ({
   cleanupRemovedSession: vi.fn(),
   runtimeCleanup: vi.fn(),
   removeSessionRefs: vi.fn(),
+  hasRegisteredWorktreeForSession: vi.fn(),
   recycleWorktreeForRemovedSession: vi.fn(),
   isOwnerScopeCurrent: vi.fn(),
   drizzle: {},
@@ -75,6 +76,7 @@ vi.mock('../maker-ipc/register.js', () => ({
 }));
 vi.mock('../worktree/sessionRemovalRecycle.js', () => ({
   isSessionStillRemovable: h.isSessionStillRemovable,
+  hasRegisteredWorktreeForSession: h.hasRegisteredWorktreeForSession,
   recycleWorktreeForRemovedSession: h.recycleWorktreeForRemovedSession,
 }));
 import {
@@ -95,6 +97,7 @@ beforeEach(() => {
   h.cancelSessionOperations.mockResolvedValue(undefined);
   h.cleanupRemovedSession.mockResolvedValue(undefined);
   h.removeSessionRefs.mockResolvedValue(0);
+  h.hasRegisteredWorktreeForSession.mockReturnValue(true);
   h.recycleWorktreeForRemovedSession.mockResolvedValue(undefined);
   h.isOwnerScopeCurrent.mockReturnValue(true);
   setSessionRemovalCancelOperations(h.cancelSessionOperations);
@@ -287,8 +290,8 @@ describe('setSessionsStatusInDb', () => {
   });
 
   it('broadcasts worktree:changed only after the recycle chain finishes', async () => {
-    // renderer 的 WorktreeContext 靠这条推送才能拿到回收后的快照 —— 回收是异步链,
-    // 状态 IPC 返回时 store 条目还在,归档动作里那次「顺手 refresh」必然是旧的。
+    // renderer 靠这条推送按 sessionId 查询回收后的真实状态；状态 IPC 返回时
+    // store 条目仍可能存在，不能提前发送。
     h.tx.mockResolvedValueOnce([
       {
         sessionId: 's1',
@@ -329,7 +332,7 @@ describe('setSessionsStatusInDb', () => {
   });
 
   it('still broadcasts worktree:changed when the recycle chain fails', async () => {
-    // 回收失败/跳过时条目仍在 store 里，重拉拿到「徽标还在」也是真实状态。
+    // 回收失败时条目仍在 store 里，单条查询拿到「徽标还在」也是真实状态。
     h.tx.mockResolvedValueOnce([
       {
         sessionId: 's1',
@@ -348,6 +351,18 @@ describe('setSessionsStatusInDb', () => {
     await vi.waitFor(() => {
       expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
     });
+  });
+
+  it('does not broadcast worktree:changed for a session without a registered worktree', async () => {
+    h.hasRegisteredWorktreeForSession.mockReturnValue(false);
+
+    await recycleSessionWorktreeForStatusChange('notification', 'archived');
+
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
+      'notification',
+      expect.objectContaining({ scanOwners: true }),
+    );
+    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
   });
 
   it('does not broadcast worktree:changed when restoring to active', async () => {
@@ -484,6 +499,9 @@ describe('recycleSessionWorktreeForStatusChange', () => {
         if (sessionId === 'shared') await options?.recycleOwner?.('owner');
       },
     );
+    h.hasRegisteredWorktreeForSession.mockImplementation(
+      (sessionId: string) => sessionId === 'owner',
+    );
 
     await recycleSessionWorktreeForStatusChange('shared', 'archived');
 
@@ -506,6 +524,12 @@ describe('recycleSessionWorktreeForStatusChange', () => {
         recycleOwner: expect.any(Function),
       }),
     );
+    expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', {
+      sessionId: 'owner',
+    });
+    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', {
+      sessionId: 'shared',
+    });
   });
 
   it('passes current Maker runtime liveness into the low-level live-reference guard', async () => {
@@ -559,7 +583,7 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.isSessionStillRemovable).not.toHaveBeenCalled();
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
-    expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
+    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
   });
 
   it('does not remove media or recycle the worktree when Simulator cleanup fails', async () => {
@@ -572,7 +596,7 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.removeSessionRefs).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
-    expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
+    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
   });
 
   it('does not dynamically import the Simulator Host from the recycle path', () => {

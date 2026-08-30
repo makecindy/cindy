@@ -1139,11 +1139,18 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
-  const reason = data?.reason === 'pi-prompt-timeout' ? 'timeout' : 'overflow';
+  const reason =
+    data?.reason === 'pi-prompt-timeout'
+      ? 'timeout'
+      : data?.reason === 'codex-history-strip'
+        ? 'strip'
+        : 'overflow';
   const label = t(
     reason === 'timeout'
       ? 'chat.systemCard.contextRebuild.labelTimeout'
-      : 'chat.systemCard.contextRebuild.labelOverflow',
+      : reason === 'strip'
+        ? 'chat.systemCard.contextRebuild.labelStrip'
+        : 'chat.systemCard.contextRebuild.labelOverflow',
   );
 
   return (

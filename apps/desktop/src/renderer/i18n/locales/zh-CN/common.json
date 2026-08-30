@@ -853,16 +853,22 @@
           "chatAttachmentsClearFailed": "无法清理消息附件缓存，请重试",
           "dbSlimmingBackupDirectoryDialogTitle": "选择数据库清理备份目录",
           "dbSlimmingLabel": "数据库清理",
-          "dbSlimmingDescription": "扫描软删除任务和长时间归档任务中的历史消息，确认后重启 Cindy，在数据库打开前清理并压缩。不会删除磁盘附件或生成媒体。",
+          "dbSlimmingDescription": "扫描超过所选时间未更新的软删除和已归档任务历史，可选择同时纳入活跃任务。确认后重启 Cindy，在数据库打开前清理并压缩。不会删除磁盘附件或生成媒体。",
           "dbSlimmingScanButton": "扫描数据库",
           "dbSlimmingScanLoading": "正在扫描数据库，请稍候…",
           "dbSlimmingScanResultTitle": "数据库扫描结果",
           "dbSlimmingExecutionLoading": "正在准备数据库清理，Cindy 即将重启…",
-          "dbSlimmingArchiveAgeLabel": "清理归档时间超过",
+          "dbSlimmingArchiveAgeLabel": "清理未更新时间超过",
           "dbSlimmingArchiveAgeOption7Days": "7 天",
           "dbSlimmingArchiveAgeOption1": "1 个月",
           "dbSlimmingArchiveAgeOption3": "3 个月",
           "dbSlimmingArchiveAgeOption6": "6 个月",
+          "dbSlimmingIncludeActiveLabel": "清理活跃任务历史",
+          "dbSlimmingIncludeActiveDescription": "同时清理超过所选时间的活跃任务历史",
+          "dbSlimmingIncludeActiveConfirmTitle": "将活跃任务纳入数据库清理？",
+          "dbSlimmingIncludeActiveConfirmDescription": "活跃任务即使超过所选时间，也可能仍在运行。清理不会等待任务停止，任务在扫描后继续产生的消息也可能被清除。启用后，超过所选时间的活跃、已归档和软删除任务都会被清理。符合范围的活跃任务历史消息和 Agent 上下文将被清除；任务条目仍会保留。数据库备份可以恢复任务和消息数据；不创建备份时，这些数据也无法恢复。用于审查或撤销这些消息所产生文件改动的记录不包含在数据库备份中，无法恢复。",
+          "dbSlimmingIncludeActiveConfirmButton": "纳入活跃任务",
+          "dbSlimmingIncludeActiveCancelButton": "保留活跃任务",
           "dbSlimmingBackupLabel": "清理前备份数据库",
           "dbSlimmingBackupDefaultLocation": "数据库所在目录（只保留最近一次清理备份）",
           "dbSlimmingUseDefaultDirectoryButton": "使用默认目录",
@@ -873,6 +879,7 @@
           "dbSlimmingBackupMissing": "没有找到最近一次清理备份",
           "dbSlimmingBackupOpenFailed": "无法打开清理备份位置，请重试",
           "dbSlimmingReportTasks": "将清理软删除任务 {{deleted}} 个、归档任务 {{archived}} 个",
+          "dbSlimmingReportTasksWithActive": "将清理活跃任务 {{active}} 个、软删除任务 {{deleted}} 个、归档任务 {{archived}} 个",
           "dbSlimmingReportMessages": "预计清理 {{count}} 条消息内容（约 {{size}}）",
           "dbSlimmingReportSpace": "数据库 {{database}}；临时空间至少需要 {{temporary}}；当前可用 {{free}}",
           "dbSlimmingSpaceUnknown": "未知",
@@ -2031,7 +2038,7 @@
       "restartBusyDescription": "当前有任务正在进行中，重启会打断它们。确定要立即重启吗？",
       "unavailable": "Beta 测试渠道暂不可用，无法连接到 Beta 更新服务器。",
       "toast": {
-        "disabled": "Beta 测试渠道已关闭，重启后生效",
+        "disabled": "Beta 测试渠道已关闭，将继续使用当前版本，等正式版推出更高版本后自动切换",
         "toggleFailed": "切换 Beta 测试渠道失败"
       }
     },
@@ -2688,11 +2695,16 @@
     },
     "linkOpen": {
       "title": "链接打开方式",
-      "description": "消息里左键点击网页链接或 HTML 文件时的默认打开位置。",
-      "card": {
-        "label": "默认打开位置",
-        "description": "右键点击链接可随时临时选择另一种打开方式。",
-        "ariaLabel": "选择链接默认打开位置"
+      "description": "消息里左键点击网页或本机链接时的默认打开位置。右键仍可临时选择另一种方式。",
+      "web": {
+        "label": "外部网页",
+        "description": "互联网上的网页链接。",
+        "ariaLabel": "选择外部网页的默认打开位置"
+      },
+      "local": {
+        "label": "内部网页",
+        "description": "本地硬盘上的 HTML 文件，以及本机地址（localhost）。",
+        "ariaLabel": "选择内部网页的默认打开位置"
       },
       "options": {
         "sidebar": "内置侧边栏浏览器",
@@ -2959,10 +2971,30 @@
           "disabled": "已禁用浏览器自动化",
           "toggleFailed": "切换浏览器自动化失败",
           "openedForLogin": "已打开自动化浏览器，请在其中登录需要的网站",
-          "openForLoginFailed": "打开浏览器失败"
+          "openForLoginFailed": "打开浏览器失败",
+          "foreignInstance": "本机已有另一个 Cindy 占用了 Agent 专用浏览器。请先退出其它 Cindy 窗口再试。"
         },
         "openForLogin": "打开 Agent 专用浏览器",
         "openForLoginHint": "这是 Agent 专用的独立浏览器：基于你本机的 Chrome，但用一份独立配置（右上角显示为 Cindy），不会动你日常 Chrome 的标签页、书签和登录态。Agent 会在这里替你打开网页、阅读内容、点击和截图。需要登录的网站，点上面「打开 Agent 专用浏览器」手动登录一次即可——登录态会长期保留，之后 Agent 就能以你的身份继续操作。"
+      },
+      "realProfile": {
+        "title": "使用我的浏览器登录态",
+        "description": "Agent 会用你在 Chrome、Edge 或 Brave 里已登录的身份访问网站。",
+        "toggleAria": "使用我的浏览器登录态",
+        "unavailableEmbedded": "仅独立外置浏览器可用。侧边栏内置浏览器无法读取 Chrome 的登录文件。",
+        "confirmTitle": "允许 Agent 使用你的浏览器登录态？",
+        "confirmDescription": "Agent 将能以你已登录的身份打开网页，包括邮箱、网盘和公司后台。可以随时关掉，拷贝会被删除。",
+        "confirmDescriptionMac": "Agent 将能以你已登录的身份打开网页，包括邮箱、网盘和公司后台。读取 Chrome 登录文件还需要「完全磁盘访问权限」。可以随时关掉，拷贝会被删除。",
+        "confirm": "使用我的登录态",
+        "readDeniedTitle": "需要完全磁盘访问权限",
+        "readDeniedDescription": "读取 Chrome 登录文件需要系统允许 Cindy。请在「隐私与安全性 → 完全磁盘访问权限」中打开 Cindy，然后回到这里再试。",
+        "openFullDiskAccess": "打开系统设置",
+        "readDeniedLater": "稍后再说",
+        "toast": {
+          "enabled": "Agent 专用浏览器将使用你的 Chrome 登录态",
+          "disabled": "已删除拷贝的登录态，Agent 浏览器恢复为隔离身份",
+          "failed": "更新浏览器登录态设置失败"
+        }
       },
       "browserBackend": {
         "title": "浏览器自动化目标",
@@ -4149,6 +4181,92 @@
           "leftStick": "左摇杆",
           "rightStick": "右摇杆"
         },
+        "familyControls": {
+          "xbox": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Xbox",
+            "ls": "左摇杆按下",
+            "rs": "右摇杆按下",
+            "dpadUp": "方向键上",
+            "dpadDown": "方向键下",
+            "dpadLeft": "方向键左",
+            "dpadRight": "方向键右",
+            "leftStick": "左摇杆",
+            "rightStick": "右摇杆"
+          },
+          "playstation": {
+            "a": "✕",
+            "b": "○",
+            "x": "□",
+            "y": "△",
+            "lb": "L1",
+            "rb": "R1",
+            "lt": "L2",
+            "rt": "R2",
+            "view": "Create",
+            "menu": "Options",
+            "xbox": "PS",
+            "ls": "左摇杆按下",
+            "rs": "右摇杆按下",
+            "dpadUp": "方向键上",
+            "dpadDown": "方向键下",
+            "dpadLeft": "方向键左",
+            "dpadRight": "方向键右",
+            "leftStick": "左摇杆",
+            "rightStick": "右摇杆"
+          },
+          "nintendo": {
+            "a": "B",
+            "b": "A",
+            "x": "Y",
+            "y": "X",
+            "lb": "L",
+            "rb": "R",
+            "lt": "ZL",
+            "rt": "ZR",
+            "view": "−",
+            "menu": "+",
+            "xbox": "HOME",
+            "ls": "左摇杆按下",
+            "rs": "右摇杆按下",
+            "dpadUp": "方向键上",
+            "dpadDown": "方向键下",
+            "dpadLeft": "方向键左",
+            "dpadRight": "方向键右",
+            "leftStick": "左摇杆",
+            "rightStick": "右摇杆"
+          },
+          "generic": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "主页",
+            "ls": "左摇杆按下",
+            "rs": "右摇杆按下",
+            "dpadUp": "方向键上",
+            "dpadDown": "方向键下",
+            "dpadLeft": "方向键左",
+            "dpadRight": "方向键右",
+            "leftStick": "左摇杆",
+            "rightStick": "右摇杆"
+          }
+        },
         "actions": {
           "none": "未设置",
           "voice": "语音输入",
@@ -4191,6 +4309,57 @@
           "bluetooth": "蓝牙",
           "battery": "{{percent}}%",
           "charging": "充电中 {{percent}}%"
+        }
+      },
+      "playstationGamepad": {
+        "title": "PlayStation 手柄",
+        "openAria": "打开 PlayStation 手柄设置",
+        "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
+        "connection": {
+          "toggle": { "aria": "让这个 Cindy 在前台时使用 PlayStation 手柄" },
+          "descriptions": {
+            "connecting": "Cindy 正在查找 PlayStation 手柄。",
+            "connected": "Cindy 在前台时会监听这只手柄。",
+            "disabled": "启用后，Cindy 在前台时会监听手柄。",
+            "present": "启用后，Cindy 在前台时会监听手柄。",
+            "not-detected": "请用 USB 或蓝牙连接 DualSense 或 DualShock。",
+            "error": "Cindy 暂时无法读取手柄，正在重试。",
+            "unavailable": "这台电脑还不能读取 PlayStation 手柄。"
+          }
+        }
+      },
+      "nintendoGamepad": {
+        "title": "Switch 手柄",
+        "openAria": "打开 Switch 手柄设置",
+        "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
+        "connection": {
+          "toggle": { "aria": "让这个 Cindy 在前台时使用 Switch 手柄" },
+          "descriptions": {
+            "connecting": "Cindy 正在查找 Switch 手柄。",
+            "connected": "Cindy 在前台时会监听这只手柄。",
+            "disabled": "启用后，Cindy 在前台时会监听手柄。",
+            "present": "启用后，Cindy 在前台时会监听手柄。",
+            "not-detected": "请用 USB 或蓝牙连接 Switch Pro 或 Joy-Con。",
+            "error": "Cindy 暂时无法读取手柄，正在重试。",
+            "unavailable": "这台电脑还不能读取 Switch 手柄。"
+          }
+        }
+      },
+      "genericGamepad": {
+        "title": "通用手柄",
+        "openAria": "打开通用手柄设置",
+        "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
+        "connection": {
+          "toggle": { "aria": "让这个 Cindy 在前台时使用通用手柄" },
+          "descriptions": {
+            "connecting": "Cindy 正在查找手柄。",
+            "connected": "Cindy 在前台时会监听这只手柄。",
+            "disabled": "启用后，Cindy 在前台时会监听手柄。",
+            "present": "启用后，Cindy 在前台时会监听手柄。",
+            "not-detected": "请用 USB 或蓝牙连接手柄。",
+            "error": "Cindy 暂时无法读取手柄，正在重试。",
+            "unavailable": "这台电脑还不能读取手柄。"
+          }
         }
       }
     },
@@ -6491,12 +6660,30 @@
     "user": {
       "settingsLink": "设置，当前用户：{{name}}",
       "settingsLinkBeta": "设置，当前用户：{{name}}，Beta 测试渠道已开启",
+      "moreLabel": "更多，当前用户：{{name}}",
+      "menuSettings": "设置",
+      "menuAddAccount": "登录更多账号",
+      "menuLogout": "退出",
       "canaryBadge": "灰度用户",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "viewReleaseNotes": "查看版本日志",
       "reopenUpdateBanner": "有更新待重启，点击查看",
       "downloadMobile": "下载 Cindy 移动端"
+    },
+    "accountSwitcher": {
+      "title": "切换账号",
+      "description": "选择这台设备上登录过的账号",
+      "syncing": "正在检查登录状态…",
+      "syncFailed": "部分账号状态暂时无法更新",
+      "switchFailed": "切换失败，请重新登录该账号",
+      "runningTaskTitle": "中断任务并切换账号？",
+      "runningTaskDescription": "当前有任务正在运行。切换账号会先中断这些任务，未完成的执行不会继续。",
+      "runningTaskConfirm": "中断任务并切换",
+      "startFailed": "无法打开登录页面，请稍后重试",
+      "addAccount": "登录更多账号",
+      "back": "返回",
+      "close": "关闭"
     },
     "mobileDownload": {
       "title": "远程控制 Cindy",
@@ -7386,7 +7573,13 @@
       "turnCostEstimated": "本轮 token 价值(按 API 单价折算)",
       "turnCostEstimatedValue": "价值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "本轮明细"
+      "userTurnCostDetailsTitle": "本轮明细",
+      "relative": {
+        "justNow": "刚刚",
+        "minutesAgo_other": "{{count}} 分钟前",
+        "hoursAgo_other": "{{count}} 小时前",
+        "daysAgo_other": "{{count}} 天前"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
@@ -7446,6 +7639,9 @@
       "forkStripEncrypted": "Fork 并剥离",
       "forkStripEncryptedRunning": "Fork 中…",
       "forkStripEncryptedTitle": "Fork 并剥离出新任务(去掉加密推理内容)",
+      "forkStripOversizedHistory": "瘦身后继续",
+      "forkStripOversizedHistoryRunning": "Fork 中…",
+      "forkStripOversizedHistoryTitle": "去掉过大的历史图片后 Fork 成新任务",
       "codexSessionExpiredLogin": "重新连接 ChatGPT",
       "codexSessionReconnected": "ChatGPT 账号已重新连接。点击「重试」继续。",
       "networkUnreachable": "网络异常，服务暂时不可达，可点击「重试」。",
@@ -7811,6 +8007,7 @@
       "contextRebuild": {
         "labelOverflow": "已整理上下文并继续",
         "labelTimeout": "上一轮没有响应，已整理后继续",
+        "labelStrip": "已去掉过大图片并继续",
         "toggleHint": "查看交接内容",
         "handoffTitle": "交接内容——整理后发送给后续对话的上下文摘要(不计入对话记录，仅在此展示)",
         "handoffTitleEnglishSource": "交接内容——整理后发送给后续对话的上下文摘要，原文为英文(不计入对话记录，仅在此展示)"
@@ -9056,7 +9253,7 @@
       "sessionCost": "任务开销 {{cost}}",
       "sessionValue": "任务价值 {{value}}",
       "runCost": "本次开销 {{cost}}",
-      "runValue": "本次估算价值 {{value}}",
+      "runTokens": "Token 消耗 {{tokens}}",
       "costUnavailable": "费用不可用",
       "legacyCostUnavailable": "历史费用无法拆分",
       "persistentSessionGroup": "持续任务 {{session}} · {{count}} 次运行",
@@ -9656,7 +9853,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "我想给 {{appName}} 提交一条反馈。请协助我整理成一个高质量、信息完整的 GitHub issue：先确认反馈类型(bug 还是功能建议)，只针对缺失或含糊的信息追问；整理时默认概括或泛化用户提供的原话和示例，不要直接复制可识别个人、对话或业务的信息；Bug 尽量补齐现象、复现步骤、期望与实际行为、复现频率、已尝试的方法，并在用户同意后纳入经过脱敏的诊断摘要，禁止提交密码、令牌、邮箱、个人路径或无关文件内容；功能建议补齐使用场景、当前痛点和期望结果。信息足够后用 cindy_helper 的 call_tool 调用 submit_github_issue 工具提交(category=feedback，可先 list_tools 查看参数要求；提交前系统会弹确认卡片给我看)。这不需要安装或配置 GitHub 插件：默认由 Cindy 官方 Bot 提交；若当前有可用的 GitHub 账号，确认卡会额外提供本人账号选项。创建成功后告诉我 issue 编号和链接，并说明 Cindy 是开源软件，询问我是否希望通过源码一起复现、修复 Bug、开发功能或准备 PR。如果提交失败，如实告诉我原因。{{details}}",
+      "instruction": "我想给 {{appName}} 提交一条反馈。请协助我整理成一个高质量的 GitHub issue：先弄清这是缺陷还是建议，缺什么问什么，不要套固定问卷。普通建议不必按缺陷清单追问，和环境无关不必追问 Harness、模型或推理强度。整理时默认概括或泛化用户提供的原话和示例，不要直接复制可识别个人、对话或业务的信息。对话里的图不会传到 GitHub，不要写「已提供截图」，用文字描述图上内容即可；用户同意后再纳入脱敏诊断摘要，禁止提交密码、令牌、邮箱、个人路径或无关文件内容。功能建议写用户能看见的场景和诉求，不要写仓库路径、实现方案或验收清单。信息足够后用 cindy_helper 的 call_tool 调用 submit_github_issue 工具提交(category=feedback，可先 list_tools 查看参数要求；提交前系统会弹确认卡片给我看)。这不需要安装或配置 GitHub 插件：默认由 Cindy 官方 Bot 提交；若当前有可用的 GitHub 账号，确认卡会额外提供本人账号选项。创建成功后告诉我 issue 编号和链接，并说明 Cindy 是开源软件，询问我是否希望通过源码一起复现、修复 Bug、开发功能或准备 PR。如果提交失败，如实告诉我原因。{{details}}",
       "detailsPrefix": "\n我的初始描述：{{details}}"
     },
     "confirm": {
@@ -9676,8 +9873,8 @@
       "publicNameHint": "该署名会公开显示在 Issue 正文中",
       "anonymous": "匿名",
       "useAnonymous": "使用匿名署名",
-      "envLine": "提交时将自动附加：客户端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 界面语言 {{uiLanguage}}",
-      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
+      "envLine": "提交客户端环境（提交时自动附加）：客户端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 界面语言 {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（当前任务）",
       "regionLine": "版本区域：{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -9706,10 +9903,12 @@
   "ghostGrant": {
     "confirm": {
       "title": "「{{name}}」请求使用你的文件",
+      "titleRevealPath": "允许 Agent 获取这个媒体文件的本机路径？",
       "count": "{{count}} 个文件",
       "descriptionAttachments": "以下文件在当前任务的工作目录之外。允许后，这些文件会交给该插件处理(它只拿到内容指纹，拿不到路径)。",
       "descriptionDir": "以下目录/文件在当前任务的工作目录之外。允许后，其中的文件会交给该插件上传(它只拿到一次性票据，拿不到路径)。",
       "descriptionSaveDir": "以下目录在当前任务的工作目录之外。允许后，该插件可以把下载的文件存入其中(不会覆盖已有文件)。",
+      "descriptionRevealPath": "该路径只会在你允许后返回给当前 Agent，并进入对话记录；配对设备可能同步到这条记录。此操作不授予插件读取文件的权限。",
       "descriptionFsWrite": "该插件请求在当前任务的工作目录写入以下文件。允许后，本任务内它写同一目录不再询问。",
       "descriptionWorkspace": "该文件夹在当前任务的工作目录之外。允许后，Cindy 会以它为工作目录在侧边栏创建一个空任务(已有任务时直接复用)，不会读取其中的文件。",
       "dirMeta": "{{count}} 个文件 · {{size}}",
@@ -10349,9 +10548,16 @@
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "hostShellCommandBlocked": "Cindy 已阻止会绕过内嵌模拟器的 Shell 命令。请改用模拟器工具控制设备、启动应用、操作界面、截图和诊断。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
+      "codexHistoryOversized": "这段历史里有过大的图片，远端压缩发不出去。Cindy 会自动略去这些图片，并在当前任务里继续。",
+      "codexHistoryOversizedRemote": "这段历史里有过大的图片，远端压缩发不出去。请在运行 Codex 的那台电脑上打开任务后再发送，Cindy 会自动略去这些图片并继续。",
       "codexCompactionNotConverging": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。压不动的部分通常不在对话里——system prompt 与工具定义占掉的空间压缩清不掉。新开一个任务可以继续。",
       "codexCompactionNotConvergingModelSwitch": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。本任务中途切换过模型，而 Codex 仍按切换前那个模型的上下文上限来判断。切回原模型可以继续，或者新开一个任务。",
-      "turnNoEventTimeout": "本轮长时间没有任何进展（模型、工具与后台进程都没有动静），已自动中断以免无限等待。可以直接发下一条消息继续。"
+      "turnNoEventTimeout": "本轮长时间没有任何进展（模型、工具与后台进程都没有动静），已自动中断以免无限等待。可以直接发下一条消息继续。",
+      "toolUseLoopDetected": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
+      "toolUseLoopDetectedWithCount": "模型连续触发了无效的工具调用，Cindy 已在 {{count}} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。",
+      "toolUseLoopDetectedConsecutiveWithCount": "模型重复调用同一个工具 {{count}} 次，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
+      "toolUseLoopDetectedPingPongWithCount": "模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
+      "toolUseLoopDetectedRotationWithCount": "模型持续轮转调用多个工具，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。"
     },
     "validation": {
       "feishuFieldsRequired": "App ID 和 App Secret 都需要填写",
@@ -10365,7 +10571,7 @@
     },
     "confirm": {
       "logoutTitle": "退出登录",
-      "logoutDescription": "确定要退出当前账号吗？",
+      "logoutDescription": "确定要退出这台设备上的所有账号吗？",
       "logoutConfirm": "退出",
       "cancel": "取消",
       "sessionExpiredTitle": "登录已过期",
@@ -10490,7 +10696,7 @@
   "extraDirs": {
     "menuAria": "操作菜单",
     "tooltipEmpty": "更多操作",
-    "tooltipCount": "{{count}} 个附加引用目录",
+    "tooltipCount": "{{count}} 个附加目录",
     "addFiles": "添加文件、图片或视频…",
     "pluginsTitle": "已安装的插件",
     "pluginDisabled": "已停用",
@@ -10499,10 +10705,16 @@
     "sectionTitle": "引用目录(只读)",
     "empty": "还没有引用目录",
     "add": "添加目录…",
+    "addReadOnly": "添加只读目录…",
+    "addWritable": "添加可读写目录…",
+    "writableSectionTitle": "可读写目录",
+    "writableEmpty": "还没有可读写目录",
     "atLimit": "已达上限 {{max}} 个",
     "remove": "移除 {{name}}",
     "parentConfirmTitle": "添加父目录？",
     "parentConfirmDescription": "选中的目录是当前工作目录的父级或祖先。这会扩大 Agent 的可见范围，使其能看到工作目录之外的内容。\n\n仍要添加吗？\n\n{{path}}",
+    "writableParentConfirmTitle": "允许读写父目录？",
+    "writableParentConfirmDescription": "选中的目录是当前工作目录的父级或祖先。Agent 将能读取、创建、修改和删除其中的文件。\n\n仍要允许吗？\n\n{{path}}",
     "parentConfirmAccept": "仍然添加",
     "parentConfirmCancel": "取消"
   },

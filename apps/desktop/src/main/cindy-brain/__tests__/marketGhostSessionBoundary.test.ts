@@ -41,10 +41,10 @@ describe('market Ghost session boundary', () => {
       'beforePackagePlacement: () => {\n            requireSameMarketOwner(owner);',
     );
     expect(installBody).toContain(
-      'afterCommit: async (_installed, packagedManifest) => {',
+      'afterCommit: async (_installed, _packagedManifest, evidence) => {',
     );
     const afterCommitStart = installBody.indexOf(
-      'afterCommit: async (_installed, packagedManifest) => {',
+      'afterCommit: async (_installed, _packagedManifest, evidence) => {',
     );
     const afterCommitEnd = installBody.indexOf('\n          },\n        }).catch', afterCommitStart);
     const afterCommitBody = installBody.slice(afterCommitStart, afterCommitEnd);
@@ -60,10 +60,10 @@ describe('market Ghost session boundary', () => {
     const installEnd = source.indexOf('\n}\n\ntype GhostUninstallLedgerCompletion', installStart);
     const installBody = source.slice(installStart, installEnd);
     const firstAfterCommit = installBody.indexOf(
-      'await expected.afterCommitInLock?.(installedGhost);',
+      'await expected.afterCommitInLock?.(installedGhost, commitEvidence);',
     );
     const updateAfterCommit = installBody.indexOf(
-      'await expected.afterCommitInLock?.(result.ghost);',
+      'await expected.afterCommitInLock?.(result.ghost, commitEvidence);',
     );
     const release = installBody.indexOf('releaseMutation?.();');
 
@@ -71,7 +71,7 @@ describe('market Ghost session boundary', () => {
     expect(updateAfterCommit).toBeGreaterThan(firstAfterCommit);
     expect(release).toBeGreaterThan(updateAfterCommit);
     const serverCommitStart = marketServiceSource.indexOf(
-      'afterCommitInLock: async (committed) => {',
+      'afterCommitInLock: async (_committed, evidence) => {',
     );
     const serverCommitEnd = marketServiceSource.indexOf('\n        },\n      }).catch', serverCommitStart);
     const serverCommitBody = marketServiceSource.slice(serverCommitStart, serverCommitEnd);
@@ -173,7 +173,7 @@ describe('market Ghost session boundary', () => {
     );
     const managerUpdateIndex = helperBody.indexOf('manager.update(cindyFilePath,');
     const detachIndex = helperBody.indexOf(
-      'marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject)',
+      'marketLedger.markRemoved(inspected.manifest.id, null)',
     );
 
     expect(captureIndex).toBeGreaterThan(-1);
@@ -190,9 +190,10 @@ describe('market Ghost session boundary', () => {
     expect(detachIndex).toBeGreaterThan(stopAndWaitIndex);
     expect(oauthLockIndex).toBeGreaterThan(detachIndex);
     expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
-    expect(helperBody).toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(helperBody).toContain('marketLedger.restoreInstallation(');
-    expect(helperBody).toContain('suppressed: marketRecordWasSuppressed');
+    expect(helperBody).not.toContain('marketLedger.isDefaultInstallSuppressed(');
+    expect(helperBody).not.toContain('marketInstallSubject');
+    expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
     expect(helperBody).toContain('onPackagePlaced: () => {');
     expect(helperBody).toContain('packagePlaced = true;');
     expect(helperBody).toContain('if (!packagePlaced) {\n      restoreMarketRecord();');

@@ -570,18 +570,21 @@ describe('loadCatalog', () => {
       capabilityEvidence: 'current',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: { version: 'test' },
+      authorityCatalog: { version: 'test' },
     });
     expect(remote).toMatchObject({
       source: 'remote',
       capabilityEvidence: 'current',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: { version: 'test' },
+      authorityCatalog: { version: 'test' },
     });
     expect(bundled).toEqual({
       source: 'bundled',
       capabilityEvidence: 'fallback',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: BUNDLED_CATALOG,
+      authorityCatalog: null,
     });
   });
 
@@ -650,6 +653,9 @@ describe('loadCatalog', () => {
     for (const loaded of [local, remote, cache]) {
       expect(loaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
         .toEqual(bundledPreset.runtimes.pi);
+      expect(
+        loaded.authorityCatalog?.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi,
+      ).toBeUndefined();
     }
 
     const currentLoaded = await loadCatalogWithSource(
@@ -836,6 +842,7 @@ describe('loadCatalog', () => {
       capabilityEvidence: 'fallback',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: BUNDLED_CATALOG,
+      authorityCatalog: null,
     });
   });
 
@@ -902,6 +909,7 @@ describe('loadCatalog', () => {
       source: 'remote',
       capabilityEvidence: 'fallback',
       catalog: { version: 'test' },
+      authorityCatalog: null,
     });
   });
   it('falls back from invalid public API payload to legacy OSS before bundled', async () => {
@@ -957,6 +965,7 @@ describe('loadCatalog', () => {
     expect(result.capabilityEvidence).toBe('fallback');
     expect(result.catalog.version).toBe('test');
     expect(result.catalog).not.toHaveProperty('cindyModelMeta');
+    expect(result.authorityCatalog).toBeNull();
   });
 
   it('shares one remote budget across the public API and legacy OSS fallback', async () => {
@@ -1072,6 +1081,7 @@ describe('loadCatalog', () => {
       capabilityEvidence: 'fallback',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: BUNDLED_CATALOG,
+      authorityCatalog: null,
     });
     expect((Object.prototype as { polluted?: unknown }).polluted).toBeUndefined();
   });

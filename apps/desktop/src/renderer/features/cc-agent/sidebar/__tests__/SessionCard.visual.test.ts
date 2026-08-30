@@ -154,6 +154,7 @@ vi.mock('@/features/scheduler/lib/scheduleSessionBinding', () => ({
 
 vi.mock('@/features/scheduler/lib/scheduleSidebarIndexRuns', () => ({
   loadScheduleSidebarIndexRuns: async () => [],
+  findLatestSidebarIndexRunForSession: () => undefined,
 }));
 
 function scheduleForCase(id: string, status: 'active' | 'paused') {

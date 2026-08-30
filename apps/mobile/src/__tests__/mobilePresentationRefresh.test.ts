@@ -31,6 +31,21 @@ describe('mobile localized presentation refresh', () => {
     expect(composerProjection).toContain('i18nInstance.language');
   });
 
+  it('rebuilds localized session history and tail errors when the language changes', () => {
+    const source = read('app/sessions/[sessionId].tsx');
+    const renderItems = source.slice(
+      source.indexOf('const renderItems = useMemo'),
+      source.indexOf('// 只在本次 render 真正 commit 后更新 reconcile 基准'),
+    );
+    const tailBanner = source.slice(
+      source.indexOf('const tailBannerState = useMemo'),
+      source.indexOf('// 主按钮(重试 / 继续任务)'),
+    );
+
+    expect(renderItems).toContain('i18nInstance.language');
+    expect(tailBanner).toContain('i18nInstance.language');
+  });
+
   it('rebuilds open interaction cards when the language changes', () => {
     const source = read('src/session/InteractionPanel.tsx');
 

@@ -74,6 +74,7 @@ import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
 import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
+import { consumeWritableDirectoryPickerGrants } from '../../maker-ipc/writableDirectoryPickerGrant.js';
 
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
@@ -249,13 +250,11 @@ export function broadcastSessionPatched(
 }
 
 /**
- * worktree 回收真正跑完后通知本机所有窗口重拉 worktree 快照。
+ * worktree 回收真正跑完后通知本机所有窗口更新对应 session 的 worktree 缓存。
  *
- * 没有这条推送,renderer 只能在归档/删除动作里"顺手"刷一次 worktree map,而回收
- * 是下面 fire-and-forget 的异步链(动态 import → 关子进程 → git worktree remove →
- * 文件系统清理),store 条目被移除的时刻远晚于状态 IPC 返回。renderer 那次刷新会
- * 快照到仍然存在的旧条目,归档列表上的 worktree 徽标就一直陈旧,直到某次无关的
- * 刷新才纠正(codex review P1)。
+ * 回收是下面 fire-and-forget 的异步链(动态 import → 关子进程 → git worktree remove →
+ * 文件系统清理),store 条目被移除的时刻远晚于状态 IPC 返回。这条推送提供回收完成的
+ * 权威时机；payload 保持为单个 sessionId，renderer 不需要重拉全表。
  *
  * 只广播给本机窗口、不进 device-link tap:控制端(手机/另一台桌面)的远程会话
  * worktree 元数据走 device-link 自己的镜像链路,不经本机 WorktreeContext。
@@ -277,8 +276,10 @@ function broadcastWorktreeChanged(sessionId: string): void {
  * 反向 import 本文件的 setWorktreePathInDb)。Simulator 清理由启动组合层静态注入，
  * 避免在回收临界路径上延迟加载带原生副作用的 Host 模块。
  *
- * 回收链结束后(无论成功、跳过还是失败)都广播一次 worktree:changed —— 失败/跳过
- * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
+ * 只为真正进入低层 worktree 回收的 session 广播。普通通知任务没有 worktree，仍会
+ * 完成 runtime / media / owner 扫描，但不会让 renderer 扫描全部 worktree。共享路径
+ * 扫描若找到另一个终态 owner，则通知 owner 的 sessionId，而不是原任务的 sessionId。
+ * 回收失败时仍广播：renderer 单条查询后会保留仍在 store 中的真实状态。
  */
 export async function recycleSessionWorktreeForStatusChange(
   sessionId: string,
@@ -286,6 +287,7 @@ export async function recycleSessionWorktreeForStatusChange(
   capturedScope?: SessionRecycleScope,
 ): Promise<void> {
   if (status !== 'deleted' && status !== 'archived') return;
+  const affectedWorktreeSessionIds = new Set<string>();
   try {
     // Callers that already crossed an async status write pass the owner/DB
     // captured at operation entry. The fallback is only for direct callers.
@@ -336,6 +338,9 @@ export async function recycleSessionWorktreeForStatusChange(
             });
           });
         if (!ownerIsCurrent()) return;
+        if (recycle.hasRegisteredWorktreeForSession(targetSessionId)) {
+          affectedWorktreeSessionIds.add(targetSessionId);
+        }
         await recycle.recycleWorktreeForRemovedSession(targetSessionId, {
           scanOwners,
           db: mediaDb,
@@ -353,7 +358,9 @@ export async function recycleSessionWorktreeForStatusChange(
       err: err instanceof Error ? err.message : String(err),
     });
   } finally {
-    broadcastWorktreeChanged(sessionId);
+    for (const affectedSessionId of affectedWorktreeSessionIds) {
+      broadcastWorktreeChanged(affectedSessionId);
+    }
   }
 }
 
@@ -406,6 +413,7 @@ const REMOTE_PERSIST_FIELDS = new Set([
   'fastMode',
   'planModeEnabled',
   'extraDirs',
+  'writableDirs',
 ]);
 
 /**
@@ -1118,7 +1126,8 @@ export function registerSessionIpc(
     },
   );
 
-  ipcMain.handle('local-db:sessions:create', async (_e, body) => {
+  ipcMain.handle('local-db:sessions:create', async (event, body) => {
+    assertTrustedAppRendererEvent(event);
     const db = getDbClient().drizzle;
     const now = Date.now();
     const bodyObj = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
@@ -1156,6 +1165,33 @@ export function registerSessionIpc(
         : explicitWorkingDir;
     if (workspaceKind === 'dialogue' && !explicitWorkingDir) {
       log.info('[localDb] allocated dialogue workspace', { sessionId: id, workingDir });
+    }
+    const requestedWritableDirs = createBody?.writableDirs ?? [];
+    if (!Array.isArray(requestedWritableDirs)
+      || !requestedWritableDirs.every((dir) => typeof dir === 'string')) {
+      throwIpcError('INVALID_PARAMS', 'writableDirs must be string[]');
+    }
+    const requestedRemoteHostId = normalizeRemoteHostId(createBody?.remoteHostId);
+    if (requestedRemoteHostId && requestedWritableDirs.length > 0) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'remote writable directories can only be revoked from an existing task',
+      );
+    }
+    if (!requestedRemoteHostId && requestedWritableDirs.length > 0) {
+      try {
+        await consumeWritableDirectoryPickerGrants({
+          scopeId: id,
+          senderId: event.sender.id,
+          requestedDirs: requestedWritableDirs,
+          previousDirs: [],
+        });
+      } catch (error) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          error instanceof Error ? error.message : 'Writable directory authorization failed',
+        );
+      }
     }
     // body 透传 agentKind / orcaRole 给 mapper；非法值已由上方校验拦截，默认值由 mapper 兜底。
     const insertRow = sessionCreateToRow(id, { ...createBody, workspaceKind, workingDir }, now);
@@ -1424,6 +1460,12 @@ export function registerSessionIpc(
     const sid = requireString(id, 'id');
     const ownerScope = captureOwnerScope();
     const p = requireObject(patch, 'patch');
+    if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
+      throwIpcError(
+        'UNSUPPORTED_CAPABILITY',
+        'directory grants must be changed through maker:set-*-dirs',
+      );
+    }
     const dbClient = getDbClient();
     const db = dbClient.drizzle;
     // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
@@ -1457,6 +1499,7 @@ export function registerSessionIpc(
       'planModeEnabled',
       'orcaRole',
       'extraDirs',
+      'writableDirs',
     ]);
     if (Object.keys(p).some((key) => REVIEW_IMMUTABLE_FIELDS.has(key))) {
       const [target] = await db
@@ -1519,6 +1562,7 @@ export function registerSessionIpc(
       'providerId',
       'orcaRole',
       'extraDirs',
+      'writableDirs',
       'pinnedAt',
       'workingDir',
       'workspaceKind',

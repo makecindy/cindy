@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = vi.hoisted(() => new Map<string, string>());
@@ -100,6 +102,21 @@ describe('push notification realm routing', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('re-registers the restored owner after an account-switch rollback', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/notifications/PushNotificationsBridge.tsx'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const registrationStart = source.indexOf('// 登录态就绪后同步注册状态');
+    const registrationBody = source.slice(
+      registrationStart,
+      source.indexOf('// APNs token 轮换', registrationStart),
+    );
+
+    expect(registrationBody).toContain('auth.accountGeneration');
+    expect(registrationBody).toContain('syncPushRegistration(');
   });
 
   it('向当前会话区域注册，但推送构建线仍保持安装包区域', async () => {

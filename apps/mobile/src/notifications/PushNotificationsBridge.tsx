@@ -65,7 +65,7 @@ export function PushNotificationsBridge() {
     return () => {
       cancelled = true;
     };
-  }, [auth.initialized, auth.isAuthenticated, auth.user]);
+  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, auth.user]);
 
   // APNs token 轮换 → 重新上报(仅开关开启且已登录时)
   useEffect(() => {

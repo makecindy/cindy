@@ -133,7 +133,9 @@ describe('Plugin Market IPC error boundary', () => {
     expect(serviceSource).toContain("onDefaultReconciliationOutcome?: (outcome: 'completed' | 'failed') => void;");
     expect(serviceSource).toContain("const outcome = completed ? 'completed' : 'failed';");
     expect(serviceSource).toContain('options.onDefaultReconciliationOutcome?.(outcome);');
-    expect(serviceSource).toContain('if (!(await this.applyDefaultInstalls(plugins, owner, ledger))) completed = false;');
+    expect(serviceSource).toContain(
+      'await this.applyDefaultInstalls(plugins, currentOrganization, owner, ledger)',
+    );
     expect(serviceSource).toContain('await this.applyAutomaticUpgrades(plugins, customDiscovery.entries, owner, ledger)');
     expect(serviceSource).toContain('if (error instanceof SilentUpgradeBusyError) {');
 

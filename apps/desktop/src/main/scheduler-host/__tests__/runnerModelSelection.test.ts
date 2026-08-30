@@ -549,6 +549,81 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setModel).not.toHaveBeenCalled();
     });
 
+    it('复用 Codex 的 context Host 身份变化时先关闭旧 handle，再 cold resume', async () => {
+      mocks.getSessionProvider.mockReturnValue('mygpt');
+      const h = createSessionHarness();
+      Object.assign(h.session as unknown as Record<string, unknown>, {
+        agentKind: 'codex',
+        model: 'gpt-5.6-sol',
+      });
+      const requiresModelSwitchRebuild = vi.fn(async () => true);
+      Object.assign(h.session as unknown as Record<string, unknown>, {
+        requiresModelSwitchRebuild,
+      });
+      const harness = createRunnerHarness(
+        h,
+        { model: 'gpt-5.6-sol', effort: 'high', workDir: '/work', sdkSessionId: 'sdk-codex-1' },
+        { sessionAlive: true },
+      );
+
+      const opts = await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'codex',
+          model: 'gpt-5.6-sol',
+          providerId: 'mygpt',
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('gpt-5.6-sol', {
+        providerId: 'mygpt',
+      });
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.createSession.mock.invocationCallOrder[0],
+      );
+      expect(opts.model).toBe('gpt-5.6-sol');
+      expect(h.setModel).not.toHaveBeenCalled();
+    });
+
+    it('Codex context Host 身份在 preflight 后变化时不沿用旧模型派发', async () => {
+      mocks.getSessionProvider.mockReturnValue('mygpt');
+      const h = createSessionHarness();
+      Object.assign(h.session as unknown as Record<string, unknown>, {
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        requiresModelSwitchRebuild: vi.fn(async () => false),
+      });
+      const rebuildError = Object.assign(
+        new Error('Codex model switch requires rebuilding the current session handle'),
+        { code: 'CODEX_MODEL_SWITCH_REQUIRES_REBUILD' },
+      );
+      h.setModel.mockRejectedValue(rebuildError);
+      const harness = createRunnerHarness(
+        h,
+        { model: 'gpt-5.4', effort: 'high', workDir: '/work', sdkSessionId: 'sdk-codex-1' },
+        { sessionAlive: true },
+      );
+
+      await expect(
+        harness.runner.fire(
+          baseSchedule({
+            agentKind: 'codex',
+            model: 'gpt-5.6-sol',
+            providerId: 'mygpt',
+            targetSessionId: 'scheduler-session',
+          }),
+          createFireContext(),
+        ),
+      ).rejects.toThrow('schedule model switch requires rebuilding the session before dispatch');
+
+      expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol');
+      expect(h.send).not.toHaveBeenCalled();
+      expect(mocks.backfillSessionMeta).not.toHaveBeenCalled();
+    });
+
     it('setModel 失败不阻断 fire（非致命，fresh spawn 路径 opts.model 已生效）', async () => {
       const h = createSessionHarness();
       h.setModel.mockRejectedValue(new Error('switchModel not supported'));

@@ -5,6 +5,8 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
+import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/config-dir';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
@@ -220,7 +222,7 @@ if (devFlags.needsIsolatedDeviceId) {
 // userData 双开是受支持的工作流(bootstrap-electron 单例锁注释),owner-namespace
 // 迁移的独占检查靠本注册表发现「还有谁共享这份 userData」——packaged 不登记的话,
 // dev 实例会在 release 实例仍存活时误判独占并搬走 legacy 配置。
-{
+const desktopDevInstanceOptions = (() => {
   const rootDir = app.isPackaged
     ? path.resolve(app.getAppPath())
     : path.resolve(app.getAppPath(), '..', '..');
@@ -240,8 +242,9 @@ if (devFlags.needsIsolatedDeviceId) {
   const mode: DesktopDevMode = declaredMode === 'remote' || declaredMode === 'local'
     ? declaredMode
     : 'unknown';
-  const cleanupDevInstance = beginDesktopDevInstance({
+  return {
     userDataDir: app.getPath('userData'),
+    dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
     rootDir,
     commit,
     mode,
@@ -250,13 +253,23 @@ if (devFlags.needsIsolatedDeviceId) {
     isolated: devFlags.profileKind === 'isolated-sandbox',
     isolationIntent: devFlags.isolated,
     profileKind: devFlags.profileKind,
-  });
+  };
+})();
+
+// Pin after the last userData setPath. Vite's main bundle require()s
+// @cindy/browser-control-runtime at chunk load (before this body), so
+// CONFIG_DIR is already the ~/.xdt-maker fallback. Setting env is not
+// enough — refresh the live binding Chrome launch actually joins.
+if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
+  process.env.XDT_BROWSER_RUNTIME_DIR = path.join(app.getPath('userData'), 'browser-runtime');
+}
+refreshBrowserRuntimeConfigDir();
+
+async function dispatch(): Promise<void> {
+  const cleanupDevInstance = await beginDesktopDevInstance(desktopDevInstanceOptions);
   // Windows updater forceQuit() ends in process.exit(0), which bypasses Electron will-quit.
   process.once('exit', cleanupDevInstance);
   app.once('will-quit', cleanupDevInstance);
-}
-
-async function dispatch(): Promise<void> {
   const mod = await import('./bootstrap-electron.js');
   await mod.bootstrapElectron();
 }

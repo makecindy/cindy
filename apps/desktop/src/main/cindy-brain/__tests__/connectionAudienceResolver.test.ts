@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { GhostManifest } from '../../../shared/ghost.js';
 import {
   ghostManifestDigest,
@@ -53,6 +53,7 @@ const marketInstallation: PluginMarketInstallationRecord = {
   installed: true,
   updatedAt: '2026-08-04T00:00:00.000Z',
   manifestDigest: ghostManifestDigest(manifest),
+  rawManifestSha256: ghostManifestDigest(manifest),
 };
 
 function resolverOptions(
@@ -60,9 +61,15 @@ function resolverOptions(
   installation: PluginMarketInstallationRecord | null = marketInstallation,
 ) {
   return {
-    readInstalledManifest: () => installedManifest,
-    readInstalledManifestDigest: () =>
-      installedManifest ? ghostManifestDigest(installedManifest) : null,
+    readInstalledManifestIdentity: () =>
+      installedManifest
+        ? {
+            manifest: installedManifest,
+            rawManifestSha256: ghostManifestDigest(installedManifest),
+            legacyManifestDigest: ghostManifestDigest(installedManifest),
+            legacyManifestDigests: [ghostManifestDigest(installedManifest)],
+          }
+        : null,
     readMarketInstallation: () => installation,
   };
 }
@@ -84,6 +91,19 @@ describe('installed Plugin Connection audience resolver', () => {
       pluginSlug: 'plugin-a',
       allowedHosts: ['service-a.x.test'],
     });
+  });
+
+  it('reads the installed manifest and byte identity only once', () => {
+    const readInstalledManifestIdentity = vi.fn(
+      resolverOptions().readInstalledManifestIdentity,
+    );
+    const resolver = loadConnectionAudienceResolver({
+      ...resolverOptions(),
+      readInstalledManifestIdentity,
+    });
+
+    expect(resolver.resolve('plugin-a', identity)).not.toBeNull();
+    expect(readInstalledManifestIdentity).toHaveBeenCalledTimes(1);
   });
 
   it('requires a current organization market installation record', () => {
@@ -109,14 +129,37 @@ describe('installed Plugin Connection audience resolver', () => {
     ).toBeNull();
     expect(
       loadConnectionAudienceResolver(
-        resolverOptions(manifest, { ...marketInstallation, manifestDigest: undefined }),
+        resolverOptions(manifest, {
+          ...marketInstallation,
+          manifestDigest: undefined,
+          rawManifestSha256: undefined,
+        }),
       ).resolve('plugin-a', identity),
     ).toBeNull();
+  });
+
+  it('uses raw manifest bytes when the legacy digest is absent', () => {
+    const resolver = loadConnectionAudienceResolver(
+      resolverOptions(manifest, { ...marketInstallation, manifestDigest: undefined }),
+    );
+
+    expect(resolver.resolve('plugin-a', identity)).not.toBeNull();
   });
 
   it('rejects a changed installed manifest digest', () => {
     const changedManifest = { ...manifest, version: '2.0.0' };
     const resolver = loadConnectionAudienceResolver(resolverOptions(changedManifest));
+    expect(resolver.resolve('plugin-a', identity)).toBeNull();
+  });
+
+  it('does not fall back to a matching legacy digest after raw identity mismatches', () => {
+    const resolver = loadConnectionAudienceResolver(
+      resolverOptions(manifest, {
+        ...marketInstallation,
+        rawManifestSha256: 'f'.repeat(64),
+      }),
+    );
+
     expect(resolver.resolve('plugin-a', identity)).toBeNull();
   });
 

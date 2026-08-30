@@ -268,10 +268,11 @@ export interface AppServerHostOptions {
   /** Maximum wait for the provisioned Browser companion to publish its MCP tools. */
   codexBrowserUseStartupTimeoutMs?: number;
   /**
-   * Host 创建时冻结的事实:spawn args 里定义的 OpenAI 身份 provider id(仅
-   * oauth-bearer spawn 存在)。thread/start|resume 据此对订阅直连会话开远端压缩。
+   * Host 创建时冻结的 ChatGPT OpenAI transport identity，仅 oauth-bearer spawn 存在。
    */
   remoteCompactionProviderId?: string;
+  /** Cindy Provider codex/* 的内部 OpenAI transport identity。 */
+  cindyRemoteCompactionProviderId?: string;
   /** Per-thread host-owned MCP URL overrides keyed by the Session instance. */
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   /** Cindy-side fallback used only when a subagent's actual model is not reported. */
@@ -429,6 +430,10 @@ export class AppServerHost {
   /** oauth spawn 定义的 OpenAI 身份 provider id;非 oauth spawn / 未下发 → null。 */
   getRemoteCompactionProviderId(): string | null {
     return this.opts.remoteCompactionProviderId ?? null;
+  }
+
+  getCindyRemoteCompactionProviderId(): string | null {
+    return this.opts.cindyRemoteCompactionProviderId ?? null;
   }
 
   /**

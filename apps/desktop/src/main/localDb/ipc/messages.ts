@@ -48,6 +48,7 @@ import {
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
+import { maybeUpgradeCodexHistoryOversizedError } from '../codexHistoryOversizedUpgrade';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 
 const log = createLogger('localDb/messages');
@@ -313,7 +314,24 @@ export function registerMessageIpc(): void {
       )
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;
-    return hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
+    const listed = hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
+    // 不阻塞首屏。旧 reconnect-stalled 横幅只在首页扫描一次，分页不再读 rollout。
+    if (!before && beforeTs == null && !after) {
+      const ownerScope = captureOwnerBroadcastScope();
+      void maybeUpgradeCodexHistoryOversizedError(sid)
+        .then((upgrade) => {
+          if (upgrade.result !== 'upgraded' || !upgrade.message) return;
+          if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+          broadcastMessageRow(sid, upgrade.message, ownerScope);
+        })
+        .catch((error) => {
+          log.warn('codex oversized history upgrade rejected', {
+            sessionId: sid,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
+    return listed;
   });
 
   ipcMain.handle(
@@ -603,6 +621,10 @@ export function registerMessageIpc(): void {
     async (_e, sessionId: unknown, clientId: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      // 动态 import:messagePersistBroadcaster 已静态依赖本模块 createMessage,
+      // 静态反向 import 会成环。落库前点关闭/重试时先等同一 persistId 写完。
+      const { whenTurnErrorPersisted } = await import('../../messagePersistBroadcaster.js');
+      await whenTurnErrorPersisted(sid, cid);
       const msg = await dismissErrorMessage(sid, cid);
       if (!msg) throwIpcError('NOT_FOUND', 'Error message 不存在');
       return msg;

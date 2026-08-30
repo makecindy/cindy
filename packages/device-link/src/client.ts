@@ -195,9 +195,23 @@ export interface DeviceLinkClientOptions {
   getHello(): HelloPayload;
   createWebSocket: WsFactory;
   logger?: DeviceLinkLogger;
+  /**
+   * 可靠传输对单个 peer 重试耗尽后的故障半径。
+   *
+   * - `legacy`(默认):保留既有兼容行为。无法通过已协商的
+   *   `transport-timeout` 瞬时重置 peer 时,重建整条 relay 连接。
+   * - `isolate-peer`:只复位该 peer 并通过 `onPeerTransportReset` 通知 host
+   *   使用既有 `link-open` 恢复；不关闭共享 WSS,也不发送旧对端不理解的新
+   *   wire 值。仅适合能独立重开每个出站 peer 的纯控制端(当前为 Mobile)。
+   *
+   * 这是 additive、host opt-in 的本地策略；Desktop 不传时行为完全不变。
+   */
+  peerFailurePolicy?: DeviceLinkPeerFailurePolicy;
   /** 测试注入:覆盖重连/心跳的时间参数 */
   timing?: Partial<DeviceLinkTiming>;
 }
+
+export type DeviceLinkPeerFailurePolicy = 'legacy' | 'isolate-peer';
 
 export interface DeviceLinkTiming {
   reconnectBaseMs: number;
@@ -395,6 +409,20 @@ export interface DeviceLinkPeerRouteStateChanged {
   connectionEpoch: number;
   /** 本地已接受的 peer link 代次；同一 WebSocket 内重开也会递增。 */
   linkGeneration: number;
+}
+
+/**
+ * 单个 peer 的可靠传输已在本地复位，需要 host 独立重建该 peer。
+ *
+ * 该事件不是 relay/WSS 断线信号；其它 peer 必须继续收发。代次字段供 host
+ * 丢弃排队期间已经过期的恢复任务。`seq` 只用于诊断，不代表业务请求 id。
+ */
+export interface DeviceLinkPeerTransportReset {
+  deviceId: string;
+  reason: 'ack-timeout';
+  connectionEpoch: number;
+  linkGeneration: number;
+  seq: number;
 }
 
 /**
@@ -645,6 +673,9 @@ export class DeviceLinkClient {
   private issueHandlers = new Set<(issue: DeviceLinkConnectionIssue | null) => void>();
   private peerRouteStateHandlers = new Set<
     (change: DeviceLinkPeerRouteStateChanged) => void
+  >();
+  private peerTransportResetHandlers = new Set<
+    (change: DeviceLinkPeerTransportReset) => void
   >();
   /** Avoid emitting the same authoritative route failure once per queued frame. */
   private peerOfflineNotifiedGeneration = new Map<
@@ -902,6 +933,14 @@ export class DeviceLinkClient {
     return () => this.peerRouteStateHandlers.delete(cb);
   }
 
+  /** 订阅单 peer 可靠传输复位；host 应只重建 `change.deviceId`。 */
+  onPeerTransportReset(
+    cb: (change: DeviceLinkPeerTransportReset) => void,
+  ): () => void {
+    this.peerTransportResetHandlers.add(cb);
+    return () => this.peerTransportResetHandlers.delete(cb);
+  }
+
   getConnectionIssue(): DeviceLinkConnectionIssue | null {
     return this.connectionIssue;
   }
@@ -941,6 +980,28 @@ export class DeviceLinkClient {
         cb(change);
       } catch (err) {
         this.log.error('device-link peer route state handler failed', err);
+      }
+    }
+  }
+
+  private notifyPeerTransportReset(
+    deviceId: string,
+    seq: number,
+    linkGeneration: number,
+  ): void {
+    if (this.peerTransportResetHandlers.size === 0) return;
+    const change: DeviceLinkPeerTransportReset = {
+      deviceId,
+      reason: 'ack-timeout',
+      connectionEpoch: this.connEpoch,
+      linkGeneration,
+      seq,
+    };
+    for (const cb of this.peerTransportResetHandlers) {
+      try {
+        cb(change);
+      } catch (err) {
+        this.log.error('device-link peer transport reset handler failed', err);
       }
     }
   }
@@ -3731,16 +3792,29 @@ export class DeviceLinkClient {
    *     dispatchEnvelope 的 link-close 分支),并由 app 层立即重建:mobile
    *     触发 rehydrate,desktop 控制端重新 openLink;真休眠的对端收不到
    *     该帧,唤醒后自会 rehydrate → link-open。
-   * - 出站发起的 link(本机是控制端,单 peer):维持原语义——整连接重连兼作
-   *   恢复探测,与 mobile 现有 rehydrate/熔断流程耦合,不在此改变。
+   * - 出站发起的 link(本机是控制端):默认维持原语义——整连接重连兼作恢复
+   *   探测；Mobile 可显式选择 `peerFailurePolicy='isolate-peer'`,改为只复位
+   *   该 peer 并通知 host 独立 openLink。该路径不发任何新 wire 值,所以目标
+   *   Desktop 无需同步升级。
    */
   private handleReliableRetryExhausted(dst: string, seq: number): void {
     if (this.stopped || this.status !== 'online') return;
     const peer = this.peerTransport.get(dst);
+    // retry callback 与显式 close/stop 竞态时 peer 可能已经被回收。Mobile 的
+    // 隔离策略不能把迟到计时器升级成连接级重建；默认策略仍保留历史语义。
+    if (!peer) {
+      if (this.opts.peerFailurePolicy !== 'isolate-peer') {
+        this.forceReconnectForReliableTimeout(dst, seq);
+      }
+      return;
+    }
     // 能力门:旧控制端(未声明 transport-timeout-close-v1)把未知 reason 当永久
     // 关闭且不会自动重开——relay/presence 保持在线时订阅与在途请求会静默挂死。
     // 对这类对端保留整连接重连的兼容恢复路径(presence 闪断触发其既有 rehydrate)。
-    if (!peer?.linkAcceptedInbound || !peer.supportsTransportTimeoutClose) {
+    if (
+      (!peer.linkAcceptedInbound || !peer.supportsTransportTimeoutClose)
+      && this.opts.peerFailurePolicy !== 'isolate-peer'
+    ) {
       this.forceReconnectForReliableTimeout(dst, seq);
       return;
     }
@@ -3753,7 +3827,14 @@ export class DeviceLinkClient {
       clearInterval(peer.retryTimer);
       peer.retryTimer = null;
     }
-    this.notifyTransportTimeoutClose(dst, 1);
+    // 已协商瞬时关闭语义的入站控制方向仍通知对端主动重开。Mobile 的纯出站
+    // 隔离路径不发送 transport-timeout:旧 Desktop 可能把未知 reason 当永久
+    // 关闭；host 收到本地事件后用所有版本都支持的 link-open 恢复。
+    if (peer.linkAcceptedInbound && peer.supportsTransportTimeoutClose) {
+      this.notifyTransportTimeoutClose(dst, 1);
+    } else if (this.opts.peerFailurePolicy === 'isolate-peer') {
+      this.notifyPeerTransportReset(dst, seq, peer.linkGeneration);
+    }
   }
 
   /**

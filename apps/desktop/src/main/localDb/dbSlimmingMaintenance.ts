@@ -6,6 +6,10 @@ import type {
   DbSlimmingFailureReason,
   DbSlimmingMaintenanceProgress,
 } from '../../shared/localDbMaintenance';
+import {
+  isSafeTurnChangeSetSessionId,
+  turnChangeSetSessionDirectory,
+} from '../turn-change-set/storagePaths';
 import { createBetterSqliteDatabase, restrictDbFilePermissions } from './betterSqliteFactory';
 import {
   adoptDbSlimmingBackup,
@@ -54,6 +58,8 @@ interface MaintenancePaths {
 }
 
 interface TargetCounts {
+  activeTaskCount: number;
+  activeTaskIds: string[];
   deletedTaskCount: number;
   archivedTaskCount: number;
   messageCount: number;
@@ -183,7 +189,7 @@ export async function runDbSlimmingMaintenance(
         writeDbSlimmingResult(options.userDataDir, result);
       }
       try {
-        finalizeCommittedCleanup(options.userDataDir, paths);
+        finalizeCommittedCleanup(options.userDataDir, paths, request.activeTaskIds);
       } catch (error) {
         options.log.warn('database slimming committed cleanup will be retried', {
           requestId: request.id,
@@ -219,7 +225,7 @@ export async function runDbSlimmingMaintenance(
       try {
         writeDbSlimmingRequest(options.userDataDir, request);
         committed = true;
-        finalizeCommittedCleanup(options.userDataDir, paths);
+        finalizeCommittedCleanup(options.userDataDir, paths, request.activeTaskIds);
       } catch (error) {
         options.log.warn('database slimming recovery cleanup will be retried', {
           requestId: request.id,
@@ -305,7 +311,7 @@ export async function runDbSlimmingMaintenance(
     try {
       writeDbSlimmingRequest(options.userDataDir, request);
       committed = true;
-      finalizeCommittedCleanup(options.userDataDir, paths);
+      finalizeCommittedCleanup(options.userDataDir, paths, request.activeTaskIds);
     } catch (error) {
       // The replacement and the completed result are already durable. Keep the
       // on-disk committed marker so the next startup can retry artifact cleanup
@@ -318,6 +324,7 @@ export async function runDbSlimmingMaintenance(
     }
     options.log.info('database slimming completed', {
       requestId: request.id,
+      activeTasks: request.activeTaskCount ?? 0,
       deletedTasks: request.deletedTaskCount,
       archivedTasks: request.archivedTaskCount,
       messages: request.messageCount,
@@ -586,13 +593,20 @@ function compactWorkingCopy(
        SELECT id, status
          FROM sessions
         WHERE ((status = 'deleted' AND updated_at <= ?)
-           OR (status = 'archived' AND updated_at <= ?))
+           OR (status = 'archived' AND updated_at <= ?)
+           OR (? = 1 AND status = 'active' AND updated_at <= ?))
           AND EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id)`,
-    ).run(request.scannedAt, request.archivedBeforeMs);
+    ).run(
+      request.archivedBeforeMs,
+      request.archivedBeforeMs,
+      request.includeActiveTasks === true ? 1 : 0,
+      request.archivedBeforeMs,
+    );
 
     const counts = db
       .prepare(
         `SELECT
+           SUM(CASE WHEN t.status = 'active' THEN 1 ELSE 0 END) AS activeTaskCount,
            SUM(CASE WHEN t.status = 'deleted' THEN 1 ELSE 0 END) AS deletedTaskCount,
            SUM(CASE WHEN t.status = 'archived' THEN 1 ELSE 0 END) AS archivedTaskCount,
            (SELECT COUNT(*)
@@ -601,11 +615,22 @@ function compactWorkingCopy(
          FROM temp.db_slimming_targets t`,
       )
       .get() as {
+      activeTaskCount: number | null;
       deletedTaskCount: number | null;
       archivedTaskCount: number | null;
       messageCount: number;
     };
     const targetCounts: TargetCounts = {
+      activeTaskCount: counts.activeTaskCount ?? 0,
+      activeTaskIds: (
+        db
+          .prepare(
+            "SELECT id FROM temp.db_slimming_targets WHERE status = 'active' ORDER BY id",
+          )
+          .all() as Array<{ id: string }>
+      )
+        .map(({ id }) => id)
+        .filter(isSafeTurnChangeSetSessionId),
       deletedTaskCount: counts.deletedTaskCount ?? 0,
       archivedTaskCount: counts.archivedTaskCount ?? 0,
       messageCount: counts.messageCount ?? 0,
@@ -684,6 +709,48 @@ function compactWorkingCopy(
               SET ${listProjectionColumns.map((column) => `${column} = NULL`).join(', ')}
             WHERE id IN (SELECT id FROM temp.db_slimming_targets)`,
         );
+      }
+      if (request.includeActiveTasks === true) {
+        if (tableExists(activeDb, 'session_goals')) {
+          activeDb.exec(
+            `DELETE FROM session_goals
+              WHERE session_id IN (
+                SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
+              )`,
+          );
+        }
+        if (tableExists(activeDb, 'session_pr_refs')) {
+          activeDb.exec(
+            `DELETE FROM session_pr_refs
+              WHERE session_id IN (
+                SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
+              )`,
+          );
+        }
+        const hasClearedAt = sessionColumns.has('cleared_at');
+        const hasUpdatedAt = sessionColumns.has('updated_at');
+        const activeResetAssignments = [
+          sessionColumns.has('sdk_session_id') ? 'sdk_session_id = NULL' : null,
+          sessionColumns.has('codex_plan_json') ? 'codex_plan_json = NULL' : null,
+          sessionColumns.has('summary') ? 'summary = NULL' : null,
+          hasClearedAt ? 'cleared_at = MAX(COALESCE(cleared_at, 0), ?)' : null,
+          hasUpdatedAt ? 'updated_at = MAX(COALESCE(updated_at, 0), ?)' : null,
+        ].filter((assignment): assignment is string => assignment !== null);
+        const activeResetBoundaryParameters = [
+          ...(hasClearedAt ? [Math.floor(request.scannedAt)] : []),
+          ...(hasUpdatedAt ? [Math.floor(request.scannedAt)] : []),
+        ];
+        if (activeResetAssignments.length > 0) {
+          activeDb
+            .prepare(
+              `UPDATE sessions
+                SET ${activeResetAssignments.join(', ')}
+              WHERE id IN (
+                SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
+              )`,
+            )
+            .run(...activeResetBoundaryParameters);
+        }
       }
       if (messagesFtsDeleteTriggerSql) activeDb.exec(messagesFtsDeleteTriggerSql);
     });
@@ -826,6 +893,7 @@ function completedResult(
     status: 'completed',
     finishedAt,
     archiveAgeMonths: request.archiveAgeMonths,
+    activeTaskCount: request.activeTaskCount ?? 0,
     deletedTaskCount: request.deletedTaskCount,
     archivedTaskCount: request.archivedTaskCount,
     messageCount: request.messageCount,
@@ -909,7 +977,17 @@ function tableExists(db: Database.Database, tableName: string): boolean {
   );
 }
 
-function finalizeCommittedCleanup(userDataDir: string, paths: MaintenancePaths): void {
+function finalizeCommittedCleanup(
+  userDataDir: string,
+  paths: MaintenancePaths,
+  activeTaskIds: string[] | undefined,
+): void {
+  for (const sessionId of activeTaskIds ?? []) {
+    fs.rmSync(turnChangeSetSessionDirectory(userDataDir, sessionId), {
+      recursive: true,
+      force: true,
+    });
+  }
   if (!cleanupAfterCommit(paths)) {
     throw new Error('database slimming committed artifacts could not be removed');
   }

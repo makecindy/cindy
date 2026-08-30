@@ -192,6 +192,8 @@ export const sessions = sqliteTable(
      * 反序列化由 mapper 兜底 (失败 fallback []), 不抛错。
      */
     extraDirs: text('extra_dirs').notNull().default('[]'),
+    /** Session 附加可读写目录(JSON 字符串数组)。旧会话默认空，不从 extra_dirs 提权。 */
+    writableDirs: text('writable_dirs').notNull().default('[]'),
     /**
      * 远端目标 host id (`@cindy/maker-remote-ssh` ConnectionPool 里的 alias)。
      * 非空 = 这个 session 跑在远端机器上 (agent 在远端、workingDir 是远端路径)。
@@ -404,6 +406,9 @@ export const messages = sqliteTable(
     // 游标分页先用 createdAt 过滤；同毫秒次序在 IPC 层用 SQLite rowid 保持写入顺序。
     idxCreatedAtId: index('idx_messages_created_at').on(t.createdAt, t.id),
     idxRewindAt: index('idx_messages_rewind_at').on(t.rewindAt),
+    idxActiveErrorTail: index('idx_messages_active_error_tail')
+      .on(t.sessionId, t.createdAt)
+      .where(sql`${t.role} = 'error' AND ${t.rewindAt} IS NULL`),
   }),
 );
 
@@ -1095,6 +1100,39 @@ export const scheduleRuns = sqliteTable(
   },
   (t) => ({
     idxBySchedule: index('idx_schedule_runs_schedule').on(t.scheduleId, t.firedAt),
+    idxRunningSchedule: index('idx_schedule_runs_running_schedule')
+      .on(t.scheduleId)
+      .where(sql`${t.status} = 'running'`),
+    idxRunningHeartbeat: index('idx_schedule_runs_running_heartbeat')
+      .on(t.heartbeatAt)
+      .where(sql`${t.status} = 'running' AND ${t.heartbeatAt} IS NOT NULL`),
+    idxRunningLegacy: index('idx_schedule_runs_running_legacy')
+      .on(t.firedAt)
+      .where(sql`${t.status} = 'running' AND ${t.heartbeatAt} IS NULL`),
+    idxUnreadTerminal: index('idx_schedule_runs_unread_terminal')
+      .on(t.scheduleId, t.status, t.firedAt)
+      .where(
+        sql`${t.readAt} IS NULL AND ${t.status} IN ('success', 'failed', 'aborted', 'interrupted')`,
+      ),
+    idxSessionLatest: index('idx_schedule_runs_session_latest')
+      .on(t.sessionId, t.firedAt, t.id)
+      .where(sql`${t.sessionId} IS NOT NULL`),
+  }),
+);
+
+export const scheduleSessionLatestRuns = sqliteTable(
+  'schedule_session_latest_runs',
+  {
+    sessionId: text('session_id')
+      .primaryKey()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    runId: text('run_id')
+      .notNull()
+      .references(() => scheduleRuns.id, { onDelete: 'cascade' }),
+    firedAt: integer('fired_at').notNull(),
+  },
+  (t) => ({
+    idxRun: uniqueIndex('idx_schedule_session_latest_runs_run').on(t.runId),
   }),
 );
 

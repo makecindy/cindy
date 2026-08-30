@@ -98,9 +98,12 @@
       "time": {
         "unknown": "最近のアクティビティ時刻は不明です",
         "justNow": "たった今",
-        "minutesAgo": "{{count}} 分前",
-        "hoursAgo": "{{count}} 時間前",
-        "daysAgo": "{{count}} 日前",
+        "minutesAgo_one": "{{count}} 分前",
+        "minutesAgo_other": "{{count}} 分前",
+        "hoursAgo_one": "{{count}} 時間前",
+        "hoursAgo_other": "{{count}} 時間前",
+        "daysAgo_one": "{{count}} 日前",
+        "daysAgo_other": "{{count}} 日前",
         "minutes": "{{count}} 分",
         "hours": "{{count}} 時間",
         "days": "{{count}} 日",
@@ -185,6 +188,14 @@
       "close": "閉じる",
       "cancelRename": "名前の変更をキャンセル"
     },
+    "accounts": {
+      "title": "アカウントを切り替え",
+      "add": "別のアカウントでログイン",
+      "syncFailed": "アカウント情報を更新できませんでした",
+      "runningTitle": "アカウントを切り替えますか？",
+      "runningMessage": "実行中のタスクがあります。切り替え後もコンピューターでは実行が続きますが、このスマートフォンでは受信や操作ができなくなります。",
+      "switchConfirm": "切り替える"
+    },
     "menu": {
       "groupByProject": "プロジェクトごとにグループ化",
       "groupDialogue": "チャットをまとめる",
@@ -204,7 +215,10 @@
       "projectOrderActivity": "最近のアクティビティ順",
       "projectOrderManual": "手動",
       "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
-      "statusHeading": "ステータス"
+      "statusHeading": "ステータス",
+      "showDeviceTasks": "タスクを表示",
+      "openDevice": "開く",
+      "renameDevice": "名前を変更"
     },
     "search": {
       "placeholder": "タイトルまたは内容を検索…",

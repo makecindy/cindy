@@ -687,6 +687,20 @@
       "when": 1787739425748,
       "tag": "0097_fresh_stryfe",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "6",
+      "when": 1787833091152,
+      "tag": "0098_bright_baron_zemo",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "6",
+      "when": 1787938177701,
+      "tag": "0099_boring_champions",
+      "breakpoints": true
     }
   ]
 }

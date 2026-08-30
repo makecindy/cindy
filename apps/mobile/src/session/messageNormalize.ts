@@ -11,6 +11,7 @@ import {
   type MessageNormalizeToolUse,
   type MessageToolResultPairing,
 } from '@cindy/maker-shared/message-normalize';
+import { collectMobileMarkdownImages } from '@/session/messageMarkdown';
 import {
   normalizeAgentTaskTerminalStatus,
   type AgentTaskTerminalStatus,
@@ -46,6 +47,10 @@ import {
   normalizeRemoteMoney,
   type RemoteMoney,
 } from '@/session/remoteMoney';
+import {
+  localizeToolLoopError,
+  parseMobileToolLoopErrorDetails,
+} from '@/session/toolLoopErrorI18n';
 
 export type NormalizedRemoteMessageKind =
   | 'user'
@@ -248,12 +253,14 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
 
     // turn 失败终态的持久化行(desktop main 落库):content = { message, reason? },
     // 提取 message 文案按 system 样式展示 —— 不加分支会 fall through 到通用兜底,
-    // body 变成整段生 JSON。agent 未鉴权错误换成带引导的中文提示(describeAgentAuthError),
-    // 其余 reason 的本地化 / 红色错误卡样式留待手机版专项跟进。
+    // body 变成整段生 JSON。稳定的 tool-loop reason/toolLoop 走本地化，agent 未鉴权错误
+    // 换成带引导的中文提示(describeAgentAuthError)，其余未知错误保留原始 message。
     if (message.role === 'error') {
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
-      const errText = describeAgentAuthError(rawText) ?? rawText;
+      const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
+      const errText =
+        describeAgentAuthError(rawText) ?? localizeToolLoopError(c?.reason, toolLoop) ?? rawText;
       result.push({
         key: messageNormalizeKey(message),
         source: message,
@@ -416,7 +423,46 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     });
   }
 
+  dedupeToolImagesAgainstAssistantMarkdown(result);
   return result;
+}
+
+/**
+ * 与 Desktop 同口径：Agent 正文内联同一 URL 时由正文负责排版；否则保留
+ * tool_result 图片作为可靠兜底。只在同一真实 user turn 内去重。
+ */
+function dedupeToolImagesAgainstAssistantMarkdown(
+  messages: NormalizedRemoteMessage[],
+): void {
+  const dedupeTurn = (lo: number, hi: number): void => {
+    if (hi <= lo) return;
+    const inlineUrls = new Set<string>();
+    for (const message of messages.slice(lo, hi)) {
+      if (message.kind !== 'assistant') continue;
+      for (const image of collectMobileMarkdownImages(message.body)) inlineUrls.add(image.url);
+    }
+    if (inlineUrls.size === 0) return;
+    for (const message of messages.slice(lo, hi)) {
+      if (message.kind !== 'tool' || !message.media?.length) continue;
+      message.media = message.media.filter(
+        (item) => item.kind !== 'image' || !inlineUrls.has(item.url),
+      );
+    }
+  };
+
+  let turnStart = 0;
+  for (let index = 0; index <= messages.length; index += 1) {
+    const message = messages[index];
+    const isBoundary =
+      message?.kind === 'user' &&
+      !message.isSyntheticTrigger &&
+      message.source.agentMeta?.delivery !== 'steer';
+    if (isBoundary && index > turnStart) {
+      dedupeTurn(turnStart, index);
+      turnStart = index;
+    }
+    if (index === messages.length) dedupeTurn(turnStart, index);
+  }
 }
 
 function toolResultContentToPreview(content: unknown): string {

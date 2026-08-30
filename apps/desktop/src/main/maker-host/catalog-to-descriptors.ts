@@ -156,7 +156,10 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       const userProvider = provider.source === 'user';
       if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
       const descriptor = toDescriptor(m, agent, {
-        preserveExplicitPiEfforts: userProvider || (provider.id === 'xai' && isOfficialGrok46Id(m.id)),
+        preserveExplicitPiEfforts:
+          userProvider ||
+          provider.id === 'xd' ||
+          (provider.id === 'xai' && isOfficialGrok46Id(m.id)),
       });
       const previous = seen.get(m.id);
       if (previous) {
@@ -203,7 +206,9 @@ export function resolvePiRuntimeModelDescriptor(
     if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
       return toDescriptor(model, 'pi', {
         preserveExplicitPiEfforts:
-          provider.source === 'user' || (provider.id === 'xai' && isOfficialGrok46Id(model.id)),
+          provider.source === 'user' ||
+          provider.id === 'xd' ||
+          (provider.id === 'xai' && isOfficialGrok46Id(model.id)),
       });
     }
   }
@@ -223,12 +228,12 @@ export function resolvePiRuntimeModelDescriptor(
   return null;
 }
 
-/** Pi 默认 gateway 的 v3 transport 来自 XD；描述符必须使用同一来源。 */
+/** `cindy` provider 始终代表 XD Gateway；其能力描述符不得继承当前订阅/BYOM。 */
 export function resolvePiGatewayDescriptorProviderId(
   providerId: string | null | undefined,
 ): string {
-  const source = providerId?.trim();
-  return !source || source === 'cindy' ? 'xd' : source;
+  void providerId;
+  return 'xd';
 }
 
 /**

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Flame, Shield, Smartphone, UserRound } from 'lucide-react';
+import { Flame, LogOut, Settings, Shield, Smartphone, UserPlus, UserRound } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -9,9 +9,18 @@ import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
 import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';
 import { Tip } from '@/components/ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { useLogout } from '@/hooks/useLogout';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { shouldLabelRegion } from '../../../shared/regionCode';
 import { MobileDownloadDialog } from './MobileDownloadDialog';
+import { AccountSwitcherDialog } from './AccountSwitcherDialog';
 
 interface UserInfoSectionProps {
   isCollapsed: boolean;
@@ -19,12 +28,15 @@ interface UserInfoSectionProps {
 }
 
 export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSectionProps) {
-  const { user, mode, isCanary } = useAuth();
+  const { user, mode, isCanary, beginAddAccount } = useAuth();
+  const { handleLogout } = useLogout();
   const navigate = useNavigate();
   const location = useLocation();
   const [avatarError, setAvatarError] = useState(false);
   const [mobileDownloadOpen, setMobileDownloadOpen] = useState(false);
+  const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const mobileDownloadButtonRef = useRef<HTMLButtonElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
   const { t } = useTranslation();
 
   // 火焰按钮双职责:
@@ -36,16 +48,13 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const { state: betaChannelState } = useBetaChannelSettings();
   const hasPendingUpdate = status === 'ready' || status === 'superseding';
   const isFlameReopen = hasPendingUpdate && dismissed;
-  const showBetaBadge = !betaChannelState.loading && betaChannelState.enableBeta;
+  const showBetaLabel = !betaChannelState.loading && betaChannelState.enableBeta;
 
   // 头像地址变化(设置页改头像 / 服务端资料更新)时重置加载失败标记,
   // 让新地址有机会渲染,而不是永远停在首字母兜底。
   const isLocal = mode === 'local';
   const displayName = user?.name ?? (isLocal ? t('settings.userProfile.local.name') : '');
-  const settingsLinkLabel = t('sidebar.user.settingsLink', { name: displayName });
-  const settingsLinkAriaLabel = showBetaBadge
-    ? t('sidebar.user.settingsLinkBeta', { name: displayName })
-    : settingsLinkLabel;
+  const moreLabel = t('sidebar.user.moreLabel', { name: displayName });
   const avatarUrl = user?.avatar ?? null;
   useEffect(() => {
     setAvatarError(false);
@@ -79,11 +88,46 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     : appDisplayVersionDetail;
   const remoteAvailable = mode === 'cloud';
 
-  const handleClick = () => {
-    if (location.pathname !== '/settings') {
-      navigate('/settings');
-    }
+  const openSettings = () => {
+    if (location.pathname !== '/settings') navigate('/settings');
   };
+
+  const openAddAccount = async () => {
+    const result = await beginAddAccount();
+    if (!result.success) return;
+    setAccountSwitcherOpen(false);
+    navigate('/add-account', {
+      state: { returnTo: `${location.pathname}${location.search}` },
+    });
+  };
+
+  const renderMoreMenu = (trigger: ReactNode) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-[190px]">
+        <DropdownMenuItem onSelect={openSettings} className="gap-2.5">
+          <Settings className="h-4 w-4" aria-hidden="true" />
+          {t('sidebar.user.menuSettings')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => setAccountSwitcherOpen(true)} className="gap-2.5">
+          <UserPlus className="h-4 w-4" aria-hidden="true" />
+          {t('sidebar.user.menuAddAccount')}
+        </DropdownMenuItem>
+        {mode === 'cloud' ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => void handleLogout()}
+              className="gap-2.5 text-[var(--error-fg-strong)] focus:text-[var(--error-fg-strong)]"
+            >
+              <LogOut className="h-4 w-4" aria-hidden="true" />
+              {t('sidebar.user.menuLogout')}
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   const openRemoteSettings = () => {
     setMobileDownloadOpen(false);
@@ -120,11 +164,10 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     return (
       <>
         <div className="mt-auto flex h-[66px] flex-col items-center justify-center gap-1 px-3">
-          <Tip text={settingsLinkLabel} side="right">
-            <button
-              onClick={handleClick}
-              role="link"
-              aria-label={settingsLinkLabel}
+          <Tip text={moreLabel} side="right">
+            {renderMoreMenu(<button
+              ref={moreButtonRef}
+              aria-label={moreLabel}
               className="flex min-w-0 items-center justify-center text-left"
             >
               <div className="relative h-9 w-9 shrink-0">
@@ -162,7 +205,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
                   </span>
                 )}
               </div>
-            </button>
+            </button>)}
           </Tip>
           {mobileDownloadEntry}
         </div>
@@ -173,6 +216,12 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
           onOpenRemoteSettings={openRemoteSettings}
           onOpenDevices={openLinkedDevices}
           triggerRef={mobileDownloadButtonRef}
+        />
+        <AccountSwitcherDialog
+          open={accountSwitcherOpen}
+          onOpenChange={setAccountSwitcherOpen}
+          onAddAccount={() => void openAddAccount()}
+          triggerRef={moreButtonRef}
         />
       </>
     );
@@ -190,10 +239,9 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
           'has-[.mobile-download-btn:hover]:bg-[var(--sidebar-user-card-bg)]',
         )}
       >
-        <button
-          onClick={handleClick}
-          role="link"
-          aria-label={settingsLinkAriaLabel}
+        {renderMoreMenu(<button
+          ref={moreButtonRef}
+          aria-label={moreLabel}
           className={cn('flex min-w-0 flex-1 items-center gap-[10px]', 'text-left')}
         >
           {/* Avatar — admin 用户加 1.5px 反色描边 + 右下角盾牌角标 */}
@@ -256,23 +304,24 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               title={appVersionLabelDetail}
             >
               <span className="truncate opacity-80">{appVersionLabel}</span>
-              {showBetaBadge ? (
+              {showBetaLabel ? (
                 <span
-                  className="shrink-0 select-none rounded-full bg-[var(--beta-channel-badge-bg)] px-1 font-medium text-[var(--beta-channel-badge-fg)]"
-                  data-testid="sidebar-beta-channel-badge"
+                  className="shrink-0 select-none opacity-80"
+                  data-testid="sidebar-beta-channel-label"
                 >
                   {t('settings.betaChannel.badge')}
                 </span>
               ) : null}
             </p>
           </div>
-        </button>
+        </button>)}
 
         {mobileDownloadEntry}
 
         {/* Flame icon button — 默认打开更新历史;banner 被 dismiss 且有 pending
           update 时切换为「唤回 banner」入口,视觉涂黑(fill 实心 + foreground 主色)
-          告诉用户还有更新等待确认。 */}
+          告诉用户还有更新等待确认。rail 走上面的头像-only 分支,不会渲染这颗;
+          busy 让路时折叠火焰才是最小化提醒,展开态才用这颗涂黑入口。 */}
         {(onOpenUpdateNotice || isFlameReopen) && (
           <Tip
             text={
@@ -325,6 +374,12 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
         onOpenRemoteSettings={openRemoteSettings}
         onOpenDevices={openLinkedDevices}
         triggerRef={mobileDownloadButtonRef}
+      />
+      <AccountSwitcherDialog
+        open={accountSwitcherOpen}
+        onOpenChange={setAccountSwitcherOpen}
+        onAddAccount={() => void openAddAccount()}
+        triggerRef={moreButtonRef}
       />
     </div>
   );

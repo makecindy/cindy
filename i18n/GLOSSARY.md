@@ -209,7 +209,7 @@ Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 a
 
 ### Database cleanup
 
-设置 → 存储空间内主动备份、清理非活跃任务消息并压缩本地数据库的功能名称。先登记为 proposed，待实际使用后再固化。
+设置 → 存储空间内主动备份、清理任务消息并压缩本地数据库的功能名称。默认只清理非活跃任务；用户确认开启可选项后，也会清理活跃任务的历史。先登记为 proposed，待实际使用后再固化。
 
 ### Release
 
@@ -368,6 +368,10 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 ### Upload code
 
 客户端日志上报后返回给用户的短标识, 用户报障时口述给我们。zh-CN 取「编号」而不是「码」——它是一次上报的检索标识, 不是验证码或错误码, 「上传码」容易被读成验证码。proposed: 日志上报是新链路, 等实际排障流程跑一段后再固化。
+
+### Use my browser logins
+
+设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。
 
 ### Vision Bridge
 

@@ -168,6 +168,9 @@ function isRemoteSessionListSession(
     (session.extraDirs === undefined ||
       (Array.isArray(session.extraDirs) &&
         session.extraDirs.every((dir) => typeof dir === 'string'))) &&
+    (session.writableDirs === undefined ||
+      (Array.isArray(session.writableDirs) &&
+        session.writableDirs.every((dir) => typeof dir === 'string'))) &&
     (count === undefined ||
       count === null ||
       (isRecord(count) &&

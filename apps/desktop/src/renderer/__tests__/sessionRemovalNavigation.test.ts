@@ -180,6 +180,22 @@ describe('getVisibleSidebarSessionIds', () => {
     }
   });
 
+  it('skips rows inside a collapsed sidebar section without walking computed style', () => {
+    const root = document.createElement('div');
+    const collapsed = document.createElement('div');
+    collapsed.dataset.sidebarSectionCollapsed = 'true';
+    const hidden = document.createElement('div');
+    hidden.dataset.sidebarSessionRow = 'true';
+    hidden.dataset.sessionId = 'hidden';
+    collapsed.append(hidden);
+    const visible = document.createElement('div');
+    visible.dataset.sidebarSessionRow = 'true';
+    visible.dataset.sessionId = 'visible';
+    root.append(collapsed, visible);
+
+    expect(getVisibleSidebarSessionIds(root)).toEqual(['visible']);
+  });
+
   it('keeps the real sidebar list when only the resident search input is marked', () => {
     const aside = document.createElement('aside');
     const search = document.createElement('div');

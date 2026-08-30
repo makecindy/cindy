@@ -913,6 +913,8 @@ interface ModelSelectorContentProps {
     engine: 'cc' | 'codex' | 'pi';
     fast: boolean;
     favoriteUid: string | null;
+    /** 配置浮层「恢复推荐」的应用动作；调用方应删除 override，不得重新记忆推荐值。 */
+    resetToRecommended?: true;
   }) => void;
   /** 语义同 ModelSelectorProps.reselectEmitsChange(点当前行照常回调)。 */
   reselectEmitsChange?: boolean;
@@ -2852,6 +2854,9 @@ function ModelSelectorContentView({
                   engine: rowConfig.engine,
                   fast: rowConfig.fast,
                   favoriteUid: rowConfig.favoriteUid,
+                  ...(rowConfig.resetToRecommended
+                    ? { resetToRecommended: true as const }
+                    : {}),
                 });
                 closeOptionsPanel();
                 onDismiss?.();

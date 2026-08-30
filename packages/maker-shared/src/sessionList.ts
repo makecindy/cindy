@@ -1,6 +1,6 @@
 import { messageContentToPreview } from './messageNormalize.js';
 import { stripTrailingPathSeparators } from './pathText.js';
-import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
+import { presentationDate, presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
 import type { RemoteSchedule, RemoteScheduleRun, RemoteScheduleRunStatus } from './scheduleTypes.js';
 import { toMillis } from './scheduleModel.js';
@@ -162,6 +162,8 @@ export interface RemoteSessionListOptions {
    * 共享层刻意不兜中文串,见 {@link remoteSessionDisplayTitle}。
    */
   unnamedLabel?: string;
+  /** Optional localizer so relative timestamps follow the app language. */
+  localizer?: PresentationLocalizer;
 }
 
 export function buildRemoteSessionSections(
@@ -190,6 +192,7 @@ export function buildRemoteSessionSections(
       options.messagePreviewIndex?.get(session.id) ?? sessionRowMessagePreview(session),
       options.liveActivityIndex?.get(session.id) ?? null,
       options.unnamedLabel,
+      options.localizer,
     ));
 
   const pinned = items.filter((item) => !!item.session.pinnedAt);
@@ -200,7 +203,7 @@ export function buildRemoteSessionSections(
     sections.push({ key: 'pinned', title: '置顶', data: pinned });
   }
 
-  sections.push(...buildProjectSections(rest, now, groupAutomations));
+  sections.push(...buildProjectSections(rest, now, groupAutomations, options.localizer));
 
   return sections;
 }
@@ -362,8 +365,9 @@ function buildProjectSections(
   items: readonly RemoteSessionListItem[],
   now: number,
   groupAutomations = true,
+  localizer?: PresentationLocalizer,
 ): RemoteSessionSection[] {
-  const dialogue = groupAutomationListItems(items.filter((item) => isDialogueSession(item.session)), now, groupAutomations);
+  const dialogue = groupAutomationListItems(items.filter((item) => isDialogueSession(item.session)), now, groupAutomations, undefined, localizer);
   const sections: RemoteSessionSection[] = [];
   if (dialogue.length > 0) {
     sections.push({ key: 'dialogue', title: '对话', data: dialogue });
@@ -383,7 +387,7 @@ function buildProjectSections(
     sections.push({
       key: `project:${workingDir}`,
       title: projectTitle(workingDir),
-      data: groupAutomationListItems(data, now, groupAutomations),
+      data: groupAutomationListItems(data, now, groupAutomations, undefined, localizer),
     });
   }
   return sections;
@@ -423,6 +427,7 @@ export function toRemoteSessionListItem(
   liveActivity: RemoteSessionLiveActivity | null = null,
   /** 「尚未起名」任务的显示文案,由调用方传已解析的 i18n 值(见 remoteSessionDisplayTitle)。 */
   unnamedLabel?: string,
+  localizer?: PresentationLocalizer,
 ): RemoteSessionListItem {
   const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
   const scheduleInfo = scheduleIndex?.get(session.id) ?? fallbackScheduleInfo(session);
@@ -439,7 +444,7 @@ export function toRemoteSessionListItem(
     ].filter(Boolean).join(' · '),
     detail: [
       sessionStatusLabel(session.status),
-      relativeTime(lastActivityAt, now),
+      relativeTime(lastActivityAt, now, localizer),
       scheduleInfo?.running ? '自动化执行中' : null,
       scheduleInfo && scheduleInfo.unreadCount > 0 ? `${scheduleInfo.unreadCount} 个自动化未读` : null,
       pendingInteractionCount > 0 ? `等待处理 ${pendingInteractionCount} 个` : null,
@@ -799,6 +804,7 @@ export function groupAutomationListItems(
   now: number,
   enabled = true,
   scopeKey?: (item: RemoteSessionListItem) => string | null | undefined,
+  localizer?: PresentationLocalizer,
 ): RemoteSessionListItem[] {
   // 关闭折叠时每个 run 各自成行(项目作用域精简页用,详见 RemoteSessionListOptions.groupAutomations)。
   if (!enabled) return [...items];
@@ -825,7 +831,7 @@ export function groupAutomationListItems(
     }
     if (emitted.has(key)) continue;
     emitted.add(key);
-    next.push(toAutomationGroupListItem(key, group, now));
+    next.push(toAutomationGroupListItem(key, group, now, localizer));
   }
   return next;
 }
@@ -847,6 +853,7 @@ function toAutomationGroupListItem(
   key: string,
   group: readonly RemoteSessionListItem[],
   now: number,
+  localizer?: PresentationLocalizer,
 ): RemoteSessionListItem {
   const primary = pickAutomationPrimaryItem(group);
   const scheduleInfo = mergeScheduleInfo(group);
@@ -871,7 +878,7 @@ function toAutomationGroupListItem(
     ].filter(Boolean).join(' · '),
     detail: [
       `${group.length} 个任务`,
-      relativeTime(latestActivityAt, now),
+      relativeTime(latestActivityAt, now, localizer),
       scheduleInfo?.running ? '自动化执行中' : null,
       scheduleInfo && scheduleInfo.unreadCount > 0 ? `${scheduleInfo.unreadCount} 个自动化未读` : null,
       pendingInteractionCount > 0 ? `等待处理 ${pendingInteractionCount} 个` : null,
@@ -1072,20 +1079,49 @@ function contentRefName(value: unknown): string | null {
   return null;
 }
 
-function relativeTime(iso: string, now: number): string {
+function relativeTime(iso: string, now: number, localizer?: PresentationLocalizer): string {
   const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return '最近活动时间未知';
+  if (!Number.isFinite(ts)) {
+    return presentationText(localizer, 'devices.presentation.sessionList.time.unknown', 'Recent activity time unknown');
+  }
   const diffMinutes = Math.max(0, Math.floor((now - ts) / 60_000));
-  if (diffMinutes < 1) return '刚刚';
-  if (diffMinutes < 60) return `${diffMinutes} 分钟前`;
+  if (diffMinutes < 1) {
+    return presentationText(localizer, 'devices.presentation.sessionList.time.justNow', 'Just now');
+  }
+  if (diffMinutes < 60) {
+    return presentationText(
+      localizer,
+      'devices.presentation.sessionList.time.minutesAgo',
+      diffMinutes === 1 ? '1 minute ago' : `${diffMinutes} minutes ago`,
+      { count: diffMinutes },
+    );
+  }
   const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours} 小时前`;
+  if (diffHours < 24) {
+    return presentationText(
+      localizer,
+      'devices.presentation.sessionList.time.hoursAgo',
+      diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`,
+      { count: diffHours },
+    );
+  }
   const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays} 天前`;
-  return new Date(ts).toLocaleDateString();
+  if (diffDays < 7) {
+    return presentationText(
+      localizer,
+      'devices.presentation.sessionList.time.daysAgo',
+      diffDays === 1 ? '1 day ago' : `${diffDays} days ago`,
+      { count: diffDays },
+    );
+  }
+  return presentationDate(localizer, new Date(ts));
 }
 
-export function formatRemoteSessionSidebarTime(iso: string | undefined, now = Date.now()): string {
+export function formatRemoteSessionSidebarTime(
+  iso: string | undefined,
+  now = Date.now(),
+  localizer?: PresentationLocalizer,
+): string {
   if (!iso) return '';
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return '';
@@ -1098,11 +1134,29 @@ export function formatRemoteSessionSidebarTime(iso: string | undefined, now = Da
   const monthMs = 30 * dayMs;
   const yearMs = 365 * dayMs;
 
-  if (diffMs < minuteMs) return '刚刚';
-  if (diffMs < hourMs) return `${Math.max(1, Math.floor(diffMs / minuteMs))} 分钟`;
-  if (diffMs < dayMs) return `${Math.max(1, Math.floor(diffMs / hourMs))} 小时`;
-  if (diffMs < weekMs) return `${Math.max(1, Math.floor(diffMs / dayMs))} 天`;
-  if (diffMs < monthMs) return `${Math.max(1, Math.floor(diffMs / weekMs))} 周`;
-  if (diffMs < yearMs) return `${Math.max(1, Math.floor(diffMs / monthMs))} 月`;
-  return `${Math.max(1, Math.floor(diffMs / yearMs))} 年`;
+  if (diffMs < minuteMs) {
+    return presentationText(localizer, 'devices.presentation.sessionList.time.justNow', 'Just now');
+  }
+  if (diffMs < hourMs) {
+    const count = Math.max(1, Math.floor(diffMs / minuteMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.minutes', `${count} min`, { count });
+  }
+  if (diffMs < dayMs) {
+    const count = Math.max(1, Math.floor(diffMs / hourMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.hours', `${count} hr`, { count });
+  }
+  if (diffMs < weekMs) {
+    const count = Math.max(1, Math.floor(diffMs / dayMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.days', `${count} d`, { count });
+  }
+  if (diffMs < monthMs) {
+    const count = Math.max(1, Math.floor(diffMs / weekMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.weeks', `${count} wk`, { count });
+  }
+  if (diffMs < yearMs) {
+    const count = Math.max(1, Math.floor(diffMs / monthMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.months', `${count} mo`, { count });
+  }
+  const count = Math.max(1, Math.floor(diffMs / yearMs));
+  return presentationText(localizer, 'devices.presentation.sessionList.time.years', `${count} yr`, { count });
 }

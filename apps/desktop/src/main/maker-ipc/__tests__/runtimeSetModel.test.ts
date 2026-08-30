@@ -242,6 +242,43 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
+  it('keeps an idle Cindy Codex thread local when its independent subagent is incompatible', async () => {
+    const sessionId = rememberSession('runtime-set-model-cindy-local-compaction');
+    setSessionProvider(sessionId, 'xd');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        codexThreadModelProviderId: 'cindy_gateway',
+        codexCindyRemoteCompactionCompatible: false,
+        model: 'codex/gpt-5.5',
+        setModel,
+      }),
+      listActiveSessions: () => [{
+        id: sessionId,
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => false,
+      }],
+      closeSession,
+    };
+
+    const result = await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'codex/gpt-5.6-sol',
+      providerId: 'xd',
+    });
+
+    expect(result).toEqual({ status: 'applied' });
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(setModel).toHaveBeenCalledWith('codex/gpt-5.6-sol', { providerId: 'xd' });
+    expect(getSessionProvider(sessionId)).toBe('xd');
+  });
+
   it('soft-closes a local Codex session before switching into xAI provider OAuth routing', async () => {
     const sessionId = rememberSession('runtime-set-model-close-codex-xai');
     setSessionProvider(sessionId, 'xd');
@@ -917,6 +954,45 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'mygpt',
     });
     expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes a provider thread relink over context-host rebuild preflight', async () => {
+    const sessionId = rememberSession('runtime-set-model-relink-before-context-host');
+    setSessionProvider(sessionId, 'mygpt');
+    const order: string[] = [];
+    const requiresModelSwitchRebuild = vi.fn(async () => true);
+    const setModel = vi.fn(async () => {});
+    const relinkCodexThread = vi.fn(async () => {
+      order.push('relink');
+    });
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.6-sol',
+        setModel,
+        requiresModelSwitchRebuild,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession: vi.fn(async () => {
+        order.push('close');
+      }),
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'mygpt',
+      requiresCodexThreadRelink: true,
+      relinkCodexThread,
+    })).resolves.toEqual({ status: 'applied', persistedRoute: true });
+
+    expect(order).toEqual(['close', 'relink']);
+    expect(requiresModelSwitchRebuild).not.toHaveBeenCalled();
     expect(setModel).not.toHaveBeenCalled();
   });
 

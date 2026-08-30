@@ -28,9 +28,15 @@ class FakeWebContents extends EventEmitter {
   readonly id = nextWebContentsId++;
   loadedUrl = '';
   openHandler: (() => { action: 'deny' }) | null = null;
+  executedScripts: string[] = [];
 
   setWindowOpenHandler(handler: () => { action: 'deny' }): void {
     this.openHandler = handler;
+  }
+
+  executeJavaScript(script: string): Promise<unknown> {
+    this.executedScripts.push(script);
+    return Promise.resolve(undefined);
   }
 }
 
@@ -68,25 +74,19 @@ function createHarness(timeoutMs = 60_000) {
   const parent = new FakeWindow();
   const dialog = new FakeWindow();
   let windowOptions: BrowserWindowConstructorOptions | null = null;
-  const result = showReviewArtifactConfirmWindow(
-    parent as unknown as BrowserWindow,
-    MODEL,
-    {
-      timeoutMs,
-      isDark: false,
-      createWindow: (options) => {
-        windowOptions = options;
-        return dialog as unknown as BrowserWindow;
-      },
+  const result = showReviewArtifactConfirmWindow(parent as unknown as BrowserWindow, MODEL, {
+    timeoutMs,
+    isDark: false,
+    createWindow: (options) => {
+      windowOptions = options;
+      return dialog as unknown as BrowserWindow;
     },
-  );
+  });
   return { parent, dialog, result, getWindowOptions: () => windowOptions };
 }
 
 function readEmbeddedStylesheet(document: string): string {
-  const match = document.match(
-    /<link rel="stylesheet" href="data:text\/css;base64,([^"]+)">/,
-  );
+  const match = document.match(/<link rel="stylesheet" href="data:text\/css;base64,([^"]+)">/);
   expect(match).not.toBeNull();
   return Buffer.from(match?.[1] ?? '', 'base64').toString('utf8');
 }
@@ -115,13 +115,18 @@ describe('Review artifact confirmation window', () => {
 
     expect(document).toContain('data-theme="dark"');
     expect(document).toContain("default-src 'none'; style-src data:");
+    expect(document).toContain('form-action cindy-review-artifact-confirm:');
     expect(document).not.toContain("'unsafe-inline'");
     expect(document).not.toContain('<script>');
     expect(document).not.toContain('<img');
     expect(document).not.toContain('<svg');
     expect(document).toContain('&lt;script&gt;bad&lt;/script&gt;');
-    expect(document).toContain('class="button primary" href="#allow" autofocus');
-    expect(document).not.toContain('href="#cancel" autofocus');
+    expect(document).toContain('action="cindy-review-artifact-confirm://allow" method="get"');
+    expect(document).toContain(
+      'id="review-confirm-allow" class="button primary" type="submit" autofocus',
+    );
+    expect(document).toContain('action="cindy-review-artifact-confirm://cancel" method="get"');
+    expect(document).not.toContain('href="#');
   });
 
   it('uses a hardened modal with no preload or renderer authorization bridge', async () => {
@@ -153,18 +158,30 @@ describe('Review artifact confirmation window', () => {
     harness.dialog.emit('ready-to-show');
     expect(harness.dialog.shown).toBe(true);
     expect(harness.dialog.focused).toBe(true);
+    expect(harness.dialog.webContents.executedScripts).toEqual([
+      "document.getElementById('review-confirm-allow')?.focus()",
+    ]);
 
     const preventDefault = vi.fn();
     harness.dialog.webContents.emit('will-navigate', { preventDefault }, 'https://example.com');
     expect(preventDefault).toHaveBeenCalledOnce();
 
+    const malformedDecisionPreventDefault = vi.fn();
     harness.dialog.webContents.emit(
-      'did-navigate-in-page',
-      {},
-      `${harness.dialog.webContents.loadedUrl}#allow`,
-      true,
+      'will-navigate',
+      { preventDefault: malformedDecisionPreventDefault },
+      'cindy-review-artifact-confirm://allow/forged',
+    );
+    expect(malformedDecisionPreventDefault).toHaveBeenCalledOnce();
+
+    const allowPreventDefault = vi.fn();
+    harness.dialog.webContents.emit(
+      'will-navigate',
+      { preventDefault: allowPreventDefault },
+      'cindy-review-artifact-confirm://allow?',
     );
     await expect(harness.result).resolves.toBe(true);
+    expect(allowPreventDefault).toHaveBeenCalledOnce();
     expect(harness.dialog.destroyed).toBe(true);
   });
 
@@ -192,13 +209,14 @@ describe('Review artifact confirmation window', () => {
 
   it('fails closed on cancel, timeout, parent close, and renderer failure', async () => {
     const cancelled = createHarness();
+    const cancelPreventDefault = vi.fn();
     cancelled.dialog.webContents.emit(
-      'did-navigate-in-page',
-      {},
-      `${cancelled.dialog.webContents.loadedUrl}#cancel`,
-      true,
+      'will-navigate',
+      { preventDefault: cancelPreventDefault },
+      'cindy-review-artifact-confirm://cancel?',
     );
     await expect(cancelled.result).resolves.toBe(false);
+    expect(cancelPreventDefault).toHaveBeenCalledOnce();
 
     vi.useFakeTimers();
     const timedOut = createHarness(10);

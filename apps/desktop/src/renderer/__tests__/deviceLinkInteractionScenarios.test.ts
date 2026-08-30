@@ -1387,13 +1387,21 @@ describe('远程交互接线不变式', () => {
     expect(src).toContain('if (!disposed && linkOnline && eligible.has(deviceId))');
   });
 
-  it('F4: extraDirs 远程跳过 sessionService.update(getSessionDeviceId 守卫,避免阻断 setExtraDirs)', () => {
+  it('F4: extraDirs 的本地/远程持久化均由 Main 会话事务拥有', () => {
     const src = read('features/cc-agent/CCAgentSessionView.tsx');
     const start = src.indexOf('handleExtraDirsChange');
     expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, start + 700);
-    expect(body).toContain('if (!getSessionDeviceId(sessionId))');
+    const body = src.slice(start, start + 1_000);
+    expect(body).toContain('applyDirectoryGrantUpdate');
     expect(body).toContain('setExtraDirs');
+    expect(body).not.toContain('persist:');
+
+    const main = mainSrc('maker-ipc/register.ts');
+    const transactionStart = main.indexOf('const applyDirectoryGrants = (');
+    expect(transactionStart).toBeGreaterThan(-1);
+    const transaction = main.slice(transactionStart, transactionStart + 4_000);
+    expect(transaction).toContain('withSendToSessionLock(sessionId');
+    expect(transaction).toContain('persist: (patch) => persistSessionFields(sessionId, patch)');
   });
 
   it('F5: loadAroundMessage 经 aroundMessagesFor 路由(远程隧道,不查控制端空库)', () => {

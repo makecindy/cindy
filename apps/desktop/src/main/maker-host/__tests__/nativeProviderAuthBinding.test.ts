@@ -3,6 +3,8 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createBetterSqliteDatabase } from '../../localDb/betterSqliteFactory.js';
+
 const userDataDir = '/tmp/native-provider-auth-binding-test';
 const session = { dataOwnerId: 'owner-a' as string | null, boundaryPending: false };
 
@@ -11,6 +13,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../../appSessionState.js', () => ({
+  LOCAL_DATA_OWNER_ID: 'local-v1',
   getActiveAppSession: () => ({
     mode: session.dataOwnerId ? 'cloud' : 'signed-out',
     dataOwnerId: session.dataOwnerId,
@@ -26,14 +29,23 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
+  migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
+  readLegacyNativeProviderAuthOwner,
+  recoverPendingLegacyNativeProviderAuthOwner,
+  reserveCommittedLegacyNativeProviderAuthOwner,
+  reserveLegacyNativeProviderAuthOwner,
+  reserveLegacyNativeProviderAuthOwnerDetailed,
+  releaseLegacyNativeProviderAuthOwner,
   restoreNativeProviderAuthForRecovery,
   unbindNativeProviderAuth,
 } from '../nativeProviderAuthBinding.js';
 
 const bindingFile = path.join(userDataDir, 'native-provider-auth.json');
+const bindingLockDb = `${bindingFile}.mutation-lock.db`;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   session.dataOwnerId = 'owner-a';
   session.boundaryPending = false;
   fs.rmSync(userDataDir, { recursive: true, force: true });
@@ -66,6 +78,398 @@ describe('native provider auth legacy binding', () => {
     migrateLegacyNativeProviderAuthBindings('owner-b', { xai: true });
 
     expect(isNativeProviderAuthBound('xai')).toBe(false);
+  });
+
+  it('lets the reserved owner finish legacy migration after credentials become available', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+
+    migrateLegacyNativeProviderAuthBindings('owner-a', { xai: true });
+
+    expect(isNativeProviderAuthBound('xai')).toBe(true);
+    expect(getNativeProviderAuthSource('xai')).toBe('explicit-provider-oauth');
+    expect(isNativeProviderAuthSelfAuthorized('xai')).toBe(true);
+  });
+
+  it('does not rewrite an unchanged legacy binding for the reserved owner', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    const renameSpy = vi.spyOn(fs, 'renameSync');
+    fs.rmSync(bindingLockDb, { force: true });
+
+    migrateLegacyNativeProviderAuthBindings('owner-a', {});
+
+    expect(renameSpy).not.toHaveBeenCalledWith(expect.any(String), bindingFile);
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it('treats a malformed provider owner slot as occupied during repeatable migration', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({ legacyClaimOwner: 'owner-a', openai: '' }),
+    );
+
+    migrateLegacyNativeProviderAuthBindings('owner-a', { openai: true });
+
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({
+      legacyClaimOwner: 'owner-a',
+      openai: '',
+    });
+  });
+
+  it('does not acquire the mutation lock for a known no-op claim', () => {
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    fs.rmSync(bindingLockDb, { force: true });
+    const hasCredential = vi.fn(() => true);
+
+    expect(claimDetectedNativeProviderAuth('openai', hasCredential)).toBe(false);
+
+    expect(hasCredential).not.toHaveBeenCalled();
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+});
+
+describe('local → cloud native provider binding migration', () => {
+  it('flushes the binding file and parent directory before reporting a reservation', () => {
+    const openSpy = vi.spyOn(fs, 'openSync');
+    const fsyncSpy = vi.spyOn(fs, 'fsyncSync');
+
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+
+    expect(openSpy).toHaveBeenCalledWith(bindingFile, 'r+');
+    if (process.platform !== 'win32') {
+      expect(openSpy).toHaveBeenCalledWith(userDataDir, 'r');
+    }
+    expect(fsyncSpy).toHaveBeenCalled();
+  });
+
+  it('retries transient Windows-style binding publication locks', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    const originalRenameSync = fs.renameSync.bind(fs);
+    let blocked = false;
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (!blocked && to === bindingFile) {
+        blocked = true;
+        throw Object.assign(new Error('file is temporarily busy'), { code: 'EBUSY' });
+      }
+      return originalRenameSync(from, to);
+    });
+
+    expect(recoverPendingLegacyNativeProviderAuthOwner('owner-a')).toBe('finalized');
+    expect(blocked).toBe(true);
+    expect(renameSpy.mock.calls.filter(([, to]) => to === bindingFile)).toHaveLength(2);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      legacyClaimOwner: 'owner-a',
+    });
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).not.toHaveProperty(
+      'legacyClaimToken',
+    );
+  });
+
+  it('restores the atomic backup before deriving a binding update', () => {
+    const retained = {
+      openai: 'owner-a',
+      legacyClaimOwner: 'owner-a',
+      revoked: { anthropic: 'owner-a' },
+    };
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(`${bindingFile}.bak`, JSON.stringify(retained));
+
+    bindNativeProviderAuth('xai');
+
+    expect(fs.existsSync(`${bindingFile}.bak`)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      ...retained,
+      xai: 'owner-a',
+      selfAuthorized: { xai: 'owner-a' },
+    });
+  });
+
+  it('restores a backup only while holding the shared mutation lock', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      `${bindingFile}.bak`,
+      JSON.stringify({ openai: 'owner-a', legacyClaimOwner: 'owner-a' }),
+    );
+    const originalRenameSync = fs.renameSync.bind(fs);
+    const lockObserved: boolean[] = [];
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (from === `${bindingFile}.bak` && to === bindingFile) {
+        const contender = createBetterSqliteDatabase(bindingLockDb);
+        contender.pragma('busy_timeout = 1');
+        try {
+          contender.exec('BEGIN IMMEDIATE');
+          contender.exec('ROLLBACK');
+          lockObserved.push(false);
+        } catch (error) {
+          lockObserved.push((error as { code?: string }).code === 'SQLITE_BUSY');
+        } finally {
+          contender.close();
+        }
+      }
+      return originalRenameSync(from, to);
+    });
+
+    expect(isNativeProviderAuthBound('openai')).toBe(true);
+    expect(lockObserved).toEqual([true]);
+  });
+
+  it('uses a crash-released SQLite transaction lock instead of a reclaimable lease file', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+
+    expect(fs.existsSync(bindingLockDb)).toBe(true);
+    expect(fs.existsSync(`${bindingFile}.legacy-claim-lease`)).toBe(false);
+  });
+
+  it('surfaces mutation-lock acquisition failure during explicit unbind', () => {
+    fs.mkdirSync(bindingLockDb, { recursive: true });
+
+    expect(() => unbindNativeProviderAuth('openai', { revoked: true })).toThrow(
+      'failed to acquire native provider binding mutation lock',
+    );
+  });
+
+  it('avoids the mutation lock for a known no-op invalidation unbind', () => {
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    unbindNativeProviderAuth('openai');
+    fs.rmSync(bindingLockDb, { force: true });
+
+    unbindNativeProviderAuth('openai');
+
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it('removes a stale source field even when the provider slot is already absent', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({ sources: { openai: 'native-harness-inherited' } }),
+    );
+
+    unbindNativeProviderAuth('openai');
+
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({ sources: {} });
+  });
+
+  it('reads every binding mutation while holding the shared SQLite writer lock', () => {
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    const leaseObserved: boolean[] = [];
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((file, ...args: unknown[]) => {
+      if (file === bindingFile) {
+        const contender = createBetterSqliteDatabase(bindingLockDb);
+        contender.pragma('busy_timeout = 1');
+        try {
+          contender.exec('BEGIN IMMEDIATE');
+          contender.exec('ROLLBACK');
+          leaseObserved.push(false);
+        } catch (error) {
+          leaseObserved.push((error as { code?: string }).code === 'SQLITE_BUSY');
+        } finally {
+          contender.close();
+        }
+      }
+      return originalReadFileSync(file as fs.PathOrFileDescriptor, ...(args as []));
+    }) as typeof fs.readFileSync);
+
+    bindNativeProviderAuth('anthropic');
+    unbindNativeProviderAuth('anthropic', { revoked: true });
+
+    expect(leaseObserved.length).toBeGreaterThanOrEqual(2);
+    expect(leaseObserved.every(Boolean)).toBe(true);
+  });
+
+  it('reserves the first cloud owner even when no local provider slot exists', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      legacyClaimOwner: 'owner-a',
+    });
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8')).legacyClaimToken).toEqual(
+      expect.any(String),
+    );
+
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+  });
+
+  it('releases only the native reservation created by the matching claim token', () => {
+    const reservation = reserveLegacyNativeProviderAuthOwnerDetailed('owner-a');
+    expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
+    expect(reserveLegacyNativeProviderAuthOwnerDetailed('owner-a')).toEqual({
+      status: 'already-owned',
+    });
+    const beforeWrongToken = fs.readFileSync(bindingFile, 'utf8');
+    expect(releaseLegacyNativeProviderAuthOwner('owner-a', 'wrong-token')).toBe(false);
+    expect(fs.readFileSync(bindingFile, 'utf8')).toBe(beforeWrongToken);
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+    session.dataOwnerId = 'owner-a';
+    expect(releaseLegacyNativeProviderAuthOwner('owner-a', reservation.claimToken!)).toBe(true);
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('claimed');
+  });
+
+  it('finalizes a pending native reservation for the committed owner', () => {
+    const reservation = reserveLegacyNativeProviderAuthOwnerDetailed('owner-a');
+    expect(reservation).toMatchObject({ status: 'claimed', claimToken: expect.any(String) });
+
+    expect(recoverPendingLegacyNativeProviderAuthOwner('owner-a')).toBe('finalized');
+    expect(releaseLegacyNativeProviderAuthOwner('owner-a', reservation.claimToken!)).toBe(false);
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+  });
+
+  it('creates a tokenless native reservation for an already durable cloud owner', () => {
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    const bindings = JSON.parse(fs.readFileSync(bindingFile, 'utf8'));
+    expect(bindings).toMatchObject({ legacyClaimOwner: 'owner-a' });
+    expect(bindings).not.toHaveProperty('legacyClaimToken');
+    expect(recoverPendingLegacyNativeProviderAuthOwner(null)).toBe('none');
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('owned-by-other');
+  });
+
+  it('exposes only a valid tokenless native owner for profile-marker bootstrap', () => {
+    expect(readLegacyNativeProviderAuthOwner()).toEqual({ status: 'none' });
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    expect(readLegacyNativeProviderAuthOwner()).toEqual({ status: 'owned', ownerId: 'owner-a' });
+
+    fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: '' }));
+    expect(readLegacyNativeProviderAuthOwner()).toEqual({ status: 'failed' });
+  });
+
+  it.each([
+    ['owner-a', 'already-owned'],
+    ['owner-b', 'owned-by-other'],
+  ] as const)('avoids the mutation lock for a stable-owner no-op (%s)', (ownerId, expected) => {
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    fs.rmSync(bindingLockDb, { force: true });
+
+    expect(reserveCommittedLegacyNativeProviderAuthOwner(ownerId)).toBe(expected);
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it.each([
+    ['owner-a', 'already-owned'],
+    ['owner-b', 'owned-by-other'],
+  ] as const)('avoids the mutation lock for a provisional no-op (%s)', (ownerId, expected) => {
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    fs.rmSync(bindingLockDb, { force: true });
+
+    expect(reserveLegacyNativeProviderAuthOwnerDetailed(ownerId)).toEqual({ status: expected });
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it('avoids the mutation lock when there is no pending native claim to recover', () => {
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    fs.rmSync(bindingLockDb, { force: true });
+
+    expect(recoverPendingLegacyNativeProviderAuthOwner('owner-a')).toBe('none');
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it('recovers an interrupted native reservation before a different owner commits', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+
+    expect(recoverPendingLegacyNativeProviderAuthOwner(null)).toBe('released');
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('claimed');
+  });
+
+  it('keeps a pending native reservation recoverable after a binding write failure', () => {
+    expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('binding write failed'), { code: 'EIO' });
+    });
+
+    expect(recoverPendingLegacyNativeProviderAuthOwner(null)).toBe('failed');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      legacyClaimOwner: 'owner-a',
+      legacyClaimToken: expect.any(String),
+    });
+
+    renameSpy.mockRestore();
+    expect(recoverPendingLegacyNativeProviderAuthOwner(null)).toBe('released');
+    session.dataOwnerId = 'owner-b';
+    expect(reserveLegacyNativeProviderAuthOwner('owner-b')).toBe('claimed');
+  });
+
+  it('persists the local claim when the first cloud owner has no credential to migrate', () => {
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({
+      legacyClaimOwner: 'owner-a',
+    });
+
+    session.dataOwnerId = 'owner-b';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(false);
+  });
+
+  it('moves local-mode Harness bindings to the first cloud owner and preserves source metadata', () => {
+    session.dataOwnerId = 'local-v1';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'local-v1',
+      sources: { openai: 'native-harness-inherited' },
+    });
+
+    session.dataOwnerId = 'owner-a';
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(true);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'owner-a',
+      legacyClaimOwner: 'owner-a',
+      sources: { openai: 'native-harness-inherited' },
+    });
+    expect(isNativeProviderAuthBound('openai')).toBe(true);
+  });
+
+  it('avoids the mutation lock when no local binding can move', () => {
+    expect(reserveCommittedLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+    fs.rmSync(bindingLockDb, { force: true });
+
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(false);
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it('does not let a later cloud owner migrate local residue after another owner won the claim', () => {
+    session.dataOwnerId = 'local-v1';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    const current = JSON.parse(fs.readFileSync(bindingFile, 'utf8')) as Record<string, unknown>;
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({ ...current, openai: 'local-v1', legacyClaimOwner: 'owner-a' }),
+    );
+
+    session.dataOwnerId = 'owner-b';
+    expect(migrateLocalNativeProviderAuthBindings('owner-b')).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'local-v1',
+      legacyClaimOwner: 'owner-a',
+    });
+    expect(isNativeProviderAuthBound('openai')).toBe(false);
+  });
+
+  it('keeps explicitly revoked local credentials suppressed', () => {
+    session.dataOwnerId = 'local-v1';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    unbindNativeProviderAuth('openai', { revoked: true });
+
+    session.dataOwnerId = 'owner-a';
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      revoked: { openai: 'local-v1' },
+    });
+    expect(isNativeProviderAuthBound('openai')).toBe(false);
+  });
+
+  it('does not write for a different active owner or while the session boundary is pending', () => {
+    session.dataOwnerId = 'local-v1';
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    session.dataOwnerId = 'owner-a';
+    session.boundaryPending = true;
+    expect(migrateLocalNativeProviderAuthBindings('owner-a')).toBe(false);
+    session.boundaryPending = false;
+    expect(migrateLocalNativeProviderAuthBindings('owner-b')).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      openai: 'local-v1',
+    });
   });
 });
 
@@ -301,6 +705,30 @@ describe('claimDetectedNativeProviderAuth', () => {
 });
 
 describe('restoreNativeProviderAuthForRecovery', () => {
+  it('avoids the mutation lock when recovery has no credential to restore', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: 'owner-a' }));
+    fs.rmSync(bindingLockDb, { force: true });
+
+    expect(restoreNativeProviderAuthForRecovery('openai', 'owner-a', () => false)).toBe(false);
+    expect(fs.existsSync(bindingLockDb)).toBe(false);
+  });
+
+  it.each([
+    ['owner-a', true],
+    ['owner-b', false],
+  ] as const)(
+    'avoids the mutation lock when recovery finds an existing slot for %s',
+    (slotOwner, expected) => {
+      fs.mkdirSync(userDataDir, { recursive: true });
+      fs.writeFileSync(bindingFile, JSON.stringify({ openai: slotOwner }));
+      fs.rmSync(bindingLockDb, { force: true });
+
+      expect(restoreNativeProviderAuthForRecovery('openai', 'owner-a', () => true)).toBe(expected);
+      expect(fs.existsSync(bindingLockDb)).toBe(false);
+    },
+  );
+
   it('restores the invalidated owner even when another owner won the legacy claim', () => {
     fs.mkdirSync(userDataDir, { recursive: true });
     fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: 'owner-a' }));

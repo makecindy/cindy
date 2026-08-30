@@ -103,6 +103,8 @@ export interface UnifiedSelectedRow {
    * 不同的 wire id,用 wire id 当身份会让「换个引擎再打开」认不出是同一行。
    */
   rowModelId: string;
+  /** 该次选中由配置浮层的「恢复推荐」触发；草稿层据此删除 override 而不是重新记忆。 */
+  resetToRecommended?: true;
 }
 
 export interface UnifiedModelPanelProps {

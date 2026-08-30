@@ -12,6 +12,10 @@
 import { isValidGhostId, isValidGhostNetworkHostPattern } from '../../shared/ghost.js';
 import type { GhostManifest } from '../../shared/ghost.js';
 import type { PluginMarketInstallationRecord } from '../plugin-market/ledger.js';
+import {
+  verifyInstalledMarketManifest,
+  type InstalledMarketManifestIdentity,
+} from '../plugin-market/installedManifestIdentity.js';
 import { PLUGIN_MEMBER_PUBLISHER_GHOST_ID } from '../plugin-publisher/types.js';
 import { PLUGIN_PREFIX_PATTERN } from '@cindy/plugin-protocol';
 
@@ -83,8 +87,8 @@ export type MarketInstallationLookup =
   | { kind: 'invalid' };
 
 export interface LoadConnectionAudienceResolverOptions {
-  readInstalledManifest(ghostId: string): GhostManifest | null;
-  readInstalledManifestDigest(ghostId: string): string | null;
+  /** Manifest and byte identity from one bounded read of the installed ghost.json. */
+  readInstalledManifestIdentity(ghostId: string): InstalledMarketManifestIdentity | null;
   readMarketInstallation(
     ghostId: string,
   ): PluginMarketInstallationRecord | MarketInstallationLookup | null;
@@ -141,9 +145,9 @@ export function loadConnectionAudienceResolver(
         };
       };
 
-      const readManifest = (): GhostManifest | null => {
+      const readManifestIdentity = (): InstalledMarketManifestIdentity | null => {
         try {
-          return options.readInstalledManifest(ghostId);
+          return options.readInstalledManifestIdentity(ghostId);
         } catch {
           return null;
         }
@@ -161,10 +165,10 @@ export function loadConnectionAudienceResolver(
           if (!approvedSha || !/^[a-f0-9]{64}$/.test(approvedSha)) {
             return reject('forge-package-sha-missing');
           }
-          const manifest = readManifest();
-          if (!manifest) return reject('plugin-not-installed');
-          if (manifest.id !== ghostId) return reject('plugin-id-mismatch');
-          return finish(manifest);
+          const identitySnapshot = readManifestIdentity();
+          if (!identitySnapshot) return reject('plugin-not-installed');
+          if (identitySnapshot.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+          return finish(identitySnapshot.manifest);
         }
       }
 
@@ -189,17 +193,17 @@ export function loadConnectionAudienceResolver(
         // Named exception after the org gate and before market-missing reject.
         // Any persisted market row, including installed:false, still takes digest.
         if (ghostId === LOCAL_OIDC_ALLOWLIST_GHOST_ID) {
-          const allowlisted = readManifest();
+          const allowlisted = readManifestIdentity();
           if (!allowlisted) return reject('plugin-not-installed');
-          if (allowlisted.id !== ghostId) return reject('plugin-id-mismatch');
-          const allowlistedHosts = declaredOidcTokenHosts(allowlisted);
+          if (allowlisted.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+          const allowlistedHosts = declaredOidcTokenHosts(allowlisted.manifest);
           if (
             allowlistedHosts.length !== 1 ||
             allowlistedHosts[0] !== LOCAL_OIDC_ALLOWLIST_HOST
           ) {
             return reject('oidc-host-not-allowlisted');
           }
-          return finish(allowlisted);
+          return finish(allowlisted.manifest);
         }
         return reject('market-installation-missing');
       }
@@ -211,28 +215,22 @@ export function loadConnectionAudienceResolver(
       if (installation.organizationId !== identity.orgId) {
         return reject('market-installation-org-mismatch');
       }
-      if (!installation.manifestDigest) {
-        return reject('market-manifest-digest-missing');
+      if (!installation.rawManifestSha256 && !installation.manifestDigest) {
+        return reject('market-manifest-identity-missing');
       }
 
-      let manifest: GhostManifest | null = null;
+      let identitySnapshot: InstalledMarketManifestIdentity | null = null;
       try {
-        manifest = options.readInstalledManifest(ghostId);
+        identitySnapshot = options.readInstalledManifestIdentity(ghostId);
       } catch {
         return reject('installed-manifest-read-failed');
       }
-      if (!manifest) return reject('plugin-not-installed');
-      if (manifest.id !== ghostId) return reject('plugin-id-mismatch');
-      let installedManifestDigest: string | null = null;
-      try {
-        installedManifestDigest = options.readInstalledManifestDigest(ghostId);
-      } catch {
-        return reject('installed-manifest-digest-read-failed');
+      if (!identitySnapshot) return reject('plugin-not-installed');
+      if (identitySnapshot.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+      if (!verifyInstalledMarketManifest(installation, identitySnapshot)) {
+        return reject('installed-manifest-identity-mismatch');
       }
-      if (installedManifestDigest !== installation.manifestDigest) {
-        return reject('installed-manifest-digest-mismatch');
-      }
-      return finish(manifest);
+      return finish(identitySnapshot.manifest);
     },
   };
 }
