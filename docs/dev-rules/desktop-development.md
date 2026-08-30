@@ -115,6 +115,38 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
 `--isolated=@worktree` 或 `--isolated=<名字>`**，各自使用独立沙箱；默认 `dev`
 沙箱跨 worktree 共用，适合单人常规开发但不能并行多开同一份 userData。
 
+**内置 worktree 内的裸 dev 启动自动按隔离沙箱处理**（issue #2635）：`pnpm dev:remote`
+（不经 restart 包装的人类/agent 入口）从 `<repo>/.cindy-worktrees/<名字>`（含迁移前
+`.xdt-worktrees/<名字>`）下启动时，若没有显式传 `--isolated` / `--passive`（也未设
+`XDT_ISOLATED=1` / `XDT_USER_DATA_DIR` / `XDT_RESTART_MANAGED=1`），启动包装自动注入
+`XDT_ISOLATED=1` + `XDT_ISOLATED_NAME=<worktree 名>`，并在控制台打印提示——否则
+dev 会沿用区域默认 profile + 物理机 deviceId，登录后把同机正式版的设备连接顶掉、
+覆盖其服务端 refresh token（4409 → `INVALID_REFRESH_TOKEN` → 正式版被登出）。显式
+传入任一模式时保持原语义；baseRepo 直跑 `pnpm dev:remote` 仍是共库 + 正常调度。
+注意 `--preserve-running` 与单独设置的 `XDT_SCHEDULER_PASSIVE=1` **不豁免**自动隔离
+（见下方说明）。
+**restart 链路（`restart-desktop-remote.mjs`）不受此自动隔离影响**：restart 会置
+`XDT_RESTART_MANAGED=1` 显式表态（其参数契约即语义：无参=共库+正常调度、
+`--isolated`=隔离、`--passive` / `--preserve-running`=共享），自动隔离判定识别后一律
+不干预——避免 worktree 内无参 restart 被静默改造成隔离沙箱。该标记是**一跳（one-hop）
+启动标记**：`dev-remote-env.mjs` 判定完成后即从传给 Electron 的环境删除，避免被
+agent 子进程继承后禁用自动隔离（agent 在 worktree 跑裸 `dev:remote` 时防护必须恢复）。
+裸 dev 路径上的 `--preserve-running` **不豁免**自动隔离：Electron 侧不认该参数
+（只有 restart 会翻译成 `XDT_SCHEDULER_PASSIVE=1`），豁免会导致共享 userData 却
+正常调度 + 正常单实例锁（定时任务重复 / 无法再开预览）。
+`XDT_SCHEDULER_PASSIVE=1` **单独出现也不豁免**自动隔离：该标记会沿 Electron →
+agent 子进程继承（Codex / Claude / PI 的 spawn env 复制 process.env），若凭它豁免，
+agent 在 worktree 跑裸 `dev:remote` 会重新共享 profile/deviceId 互踢。restart 链路
+的 `--passive` / `--preserve-running` 由 `XDT_RESTART_MANAGED`（one-hop）识别，不依赖
+这个可长期继承的 passive 标记；人类裸跑 `pnpm dev:remote -- --passive` 走 argv 豁免
+（Electron 侧认识并收敛为被动模式）。
+同理，`XDT_ISOLATED` / `XDT_USER_DATA_DIR` **单独出现也不豁免**自动隔离：它们可能是
+宿主 Desktop（以 `--isolated` 模式运行）留在 `process.env` 的变量，会沿同一继承路径
+到达 agent——agent 在 worktree 跑裸 `dev:remote` 时若凭它们豁免，会复用宿主 userData
+（宿主已持单实例锁则立即退出 / 同时继承 passive 则并发开沙箱）。restart 链路的
+`--isolated` 已由 `XDT_RESTART_MANAGED` 识别（隔离沙箱目录由 restart 自己派生），不
+依赖这些可长期继承的变量。**判定豁免只认 argv 显式参数与 `XDT_RESTART_MANAGED` 标记。**
+
 配套护栏与工具：
 
 - **userData 冲突门**：目标 userData（按 `--isolated` 名字推导）已被其他 checkout 的

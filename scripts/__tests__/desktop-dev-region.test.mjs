@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import {
   applyDesktopDevStartupConfig,
+  clearInheritedIsolationOverrides,
   desktopUserDataDirForRegion,
   desktopUserDataDirNameForRegion,
   resolveDesktopDevRegion,
   resolveDesktopDevStartupConfig,
+  resolveWorktreeIsolationFromCwd,
   stripDesktopDevRegionArgs,
+  worktreeNameFromPath,
 } from "../shared/desktop-dev-region.mjs";
 
 test("desktop shared userData follows the region identity", () => {
@@ -188,4 +192,280 @@ test("an explicit endpoint manifest override remains higher priority than the re
       endpointManifestFile: "config/custom-endpoint.json",
     },
   );
+});
+
+// ── worktree 自动隔离（issue #2635）──────────────────────────────────────────
+
+const worktreeCwd = (...segments) => path.join(".cindy-worktrees", ...segments);
+
+test("worktreeNameFromPath extracts the name from worktree root and nested cwd", () => {
+  assert.equal(worktreeNameFromPath(worktreeCwd("epic-thompson")), "epic-thompson");
+  assert.equal(
+    worktreeNameFromPath(worktreeCwd("epic-thompson", "apps", "desktop")),
+    "epic-thompson",
+  );
+  // 迁移前的旧目录形态同样识别
+  assert.equal(
+    worktreeNameFromPath(path.join(".xdt-worktrees", "legacy-tree")),
+    "legacy-tree",
+  );
+  // 非 worktree 路径一律 null
+  assert.equal(worktreeNameFromPath(path.join("somewhere", "else")), null);
+  assert.equal(worktreeNameFromPath("."), null);
+});
+
+test("worktree dev launch auto-derives the named isolation sandbox", () => {
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson", "apps", "desktop"),
+      argv: ["start", "--"],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  // 旧目录形态同样命中
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: path.join(".xdt-worktrees", "legacy-tree"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: "legacy-tree" },
+  );
+});
+
+test("worktree dev launch honors explicit isolation/sharing intent and never overrides it", () => {
+  for (const argv of [
+    ["--isolated"],
+    ["--isolated=feature-a"],
+    ["--passive"],
+    ["start", "--", "--isolated=feature-a"],
+  ]) {
+    assert.equal(
+      resolveWorktreeIsolationFromCwd({
+        cwd: worktreeCwd("epic-thompson"),
+        argv,
+        env: {},
+      }),
+      null,
+      `argv ${JSON.stringify(argv)} must suppress auto-isolation`,
+    );
+  }
+  // 裸 dev 路径上的 --preserve-running 不豁免自动隔离：Electron 侧不认这个参数
+  // （只有 restart 会翻译成 XDT_SCHEDULER_PASSIVE=1），豁免它会共享 userData 却
+  // 正常调度 + 正常单实例锁，造成定时任务重复 / 无法再开预览（review-pr P1）。
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: ["--preserve-running"],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  // XDT_ISOLATED / XDT_USER_DATA_DIR / XDT_SCHEDULER_PASSIVE 单独出现**均不豁免**：
+  // 它们都可能是宿主 Desktop（以 --isolated / --passive 模式运行）留在 process.env
+  // 的变量，会沿 Electron → agent 子进程继承（buildCodexEnv / PI spawn env 复制
+  // process.env）——agent 在 worktree 跑裸 dev:remote 时若凭它们豁免会复用宿主
+  // userData（单实例锁冲突退出 / passive 并发开沙箱）或重新共享 profile/deviceId
+  // 互踢（review-pr P1×3，PR #2640）。restart 链路仅由 XDT_RESTART_MANAGED 识别。
+  for (const env of [
+    { XDT_ISOLATED: "1" },
+    { XDT_USER_DATA_DIR: "C:\\custom\\profile" },
+    { XDT_SCHEDULER_PASSIVE: "1" },
+    { XDT_ISOLATED: "1", XDT_USER_DATA_DIR: "C:\\custom\\profile", XDT_SCHEDULER_PASSIVE: "1" },
+  ]) {
+    assert.deepEqual(
+      resolveWorktreeIsolationFromCwd({
+        cwd: worktreeCwd("epic-thompson"),
+        argv: [],
+        env,
+      }),
+      { worktreeName: "epic-thompson" },
+      `env ${JSON.stringify(env)} must not suppress auto-isolation (agent inheritance)`,
+    );
+  }
+  // restart 链路显式表态：参数契约由 restart 自己负责（无参=共库+正常调度），
+  // 自动隔离兜底不得静默覆盖（review-pr P1，PR #2640）
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1" },
+    }),
+    null,
+  );
+  // restart --passive：XDT_RESTART_MANAGED + XDT_SCHEDULER_PASSIVE 都在 → 不干预
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1", XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    null,
+  );
+});
+
+test("worktree dev launch outside a managed worktree keeps the shared-profile semantics", () => {
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({ cwd: path.join("base", "repo"), argv: [], env: {} }),
+    null,
+  );
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({ cwd: ".", argv: [], env: {} }),
+    null,
+  );
+});
+
+test("worktree dev launch falls back to the default sandbox for invalid names", () => {
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("invalid-name-with-1234567890-1234567890-1234567890-123"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: null },
+  );
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("has space"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: null },
+  );
+});
+
+// ── restart 一跳标记 / 裸 preserve-running（review-pr P1，PR #2640）─────────────
+
+test("restart marker is one-hop: honored during launch decision but stripped from the Electron env", () => {
+  // 判定必须用含 XDT_RESTART_MANAGED 的环境：restart 链路（无参）靠它识别「受 restart
+  // 管理」而免于自动隔离（无参=共库+正常调度契约，review-pr P2 指正）。标记的删除
+  // 发生在 dev-remote-env 判定之后、传给 Electron 的 env 上（防 agent 子进程继承）。
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1" },
+    }),
+    null,
+  );
+  // restart --passive 透传 XDT_SCHEDULER_PASSIVE=1 → 共享意图被识别不干预
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1", XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    null,
+  );
+  // restart --isolated：XDT_RESTART_MANAGED + XDT_ISOLATED 都在 → 豁免（restart 链路
+  // 参数契约，隔离沙箱语义由 restart 自己管理）
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1", XDT_ISOLATED: "1", XDT_USER_DATA_DIR: "C:\\custom\\profile" },
+    }),
+    null,
+  );
+  // 无标记（agent 子进程场景）→ worktree 裸启动命中自动隔离（#2635 防护恢复）
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+});
+
+test("bare dev:remote with --preserve-running in a worktree is isolated (no silent shared userData)", () => {
+  // 裸路径（不经 restart）--preserve-running 不被豁免：Electron 侧不认该参数，
+  // 豁免会导致共享 userData 却正常调度 + 正常单实例锁（定时任务重复 / 预览失败）。
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: ["--preserve-running"],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  // 继承的 XDT_SCHEDULER_PASSIVE 单独出现不豁免（agent 子进程场景，防绕过隔离）
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  // 但 restart 链路的 --preserve-running 经 XDT_RESTART_MANAGED 表达共享意图
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1", XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    null,
+  );
+});
+
+test("clearInheritedIsolationOverrides drops host-inherited launch overrides", () => {
+  // 宿主 --isolated Desktop → agent 继承的启动覆写，会覆盖 worktree 自动隔离注入的
+  // 沙箱语义（review-pr P1，PR #2640）。命中隔离时必须清除，让沙箱目录/deviceId
+  // 由注入的 XDT_ISOLATED / XDT_ISOLATED_NAME 正常派生。
+  const base = {
+    XDT_USER_DATA_DIR: "C:\\host\\sandbox",
+    XDT_USER_DATA_DIR_EPOCH: "1",
+    XDT_DEVICE_ID_OVERRIDE: "dev-host-abc",
+    XDT_ISOLATED: "1",
+    XDT_ISOLATED_NAME: "host-sandbox",
+    XDT_SCHEDULER_PASSIVE: "1",
+  };
+  const cleared = clearInheritedIsolationOverrides(base);
+  assert.equal(cleared.XDT_USER_DATA_DIR, undefined);
+  assert.equal(cleared.XDT_USER_DATA_DIR_EPOCH, undefined);
+  assert.equal(cleared.XDT_DEVICE_ID_OVERRIDE, undefined);
+  // 其它字段保留（注入的隔离意图 + 无关变量不动）
+  assert.equal(cleared.XDT_ISOLATED, "1");
+  assert.equal(cleared.XDT_ISOLATED_NAME, "host-sandbox");
+  assert.equal(cleared.XDT_SCHEDULER_PASSIVE, "1");
+  // 纯函数：不改入参
+  assert.equal(base.XDT_USER_DATA_DIR, "C:\\host\\sandbox");
+  // 无覆写时原样返回
+  assert.deepEqual(clearInheritedIsolationOverrides({ A: "1" }), { A: "1" });
+});
+
+test("isolation injection must truly delete inherited keys (Object.assign would keep them)", () => {
+  // 回归钉住（review-pr P1, PR #2640）：Object.assign(env, cleared) 只复制存在的属性、
+  // 不删除目标上的旧键——继承的宿主覆写会残留并覆盖沙箱语义。注入块必须直接 delete。
+  const env = {
+    XDT_USER_DATA_DIR: "C:\\host\\sandbox",
+    XDT_USER_DATA_DIR_EPOCH: "1",
+    XDT_DEVICE_ID_OVERRIDE: "dev-host-abc",
+    XDT_SCHEDULER_PASSIVE: "1",
+    XDT_ISOLATED_NAME: "old",
+  };
+  // 模拟 dev-remote-env 命中自动隔离的注入块
+  delete env.XDT_USER_DATA_DIR;
+  delete env.XDT_USER_DATA_DIR_EPOCH;
+  delete env.XDT_DEVICE_ID_OVERRIDE;
+  delete env.XDT_SCHEDULER_PASSIVE;
+  env.XDT_ISOLATED = "1";
+  env.XDT_ISOLATED_NAME = "epic-thompson";
+  assert.equal(env.XDT_USER_DATA_DIR, undefined);
+  assert.equal(env.XDT_USER_DATA_DIR_EPOCH, undefined);
+  assert.equal(env.XDT_DEVICE_ID_OVERRIDE, undefined);
+  // 继承的 passive 也清除：独立沙箱无 primary，不该被动模式（review-pr P1）
+  assert.equal(env.XDT_SCHEDULER_PASSIVE, undefined);
+  assert.equal(env.XDT_ISOLATED, "1");
+  assert.equal(env.XDT_ISOLATED_NAME, "epic-thompson");
 });

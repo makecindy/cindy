@@ -782,6 +782,25 @@ test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () =
 	assert.equal(devEnvPrefix({}, "darwin"), "");
 });
 
+test("devEnvPrefix passes the restart-managed marker so auto-isolation never overrides restart semantics", () => {
+	// XDT_RESTART_MANAGED 是 restart 链路的显式表态（无参=共库+正常调度），必须
+	// 经白名单透传给 dev 进程；worktree 内裸 dev:remote 的自动隔离判定据此跳过
+	// restart 链路（review-pr P1，PR #2640）。
+	const prefix = devEnvPrefix(
+		{ XDT_RESTART_MANAGED: "1", XDT_SCHEDULER_PASSIVE: "1" },
+		"win32",
+	);
+	assert.ok(
+		prefix.includes('set "XDT_RESTART_MANAGED=1"'),
+		`XDT_RESTART_MANAGED must be passed through: ${prefix}`,
+	);
+	assert.ok(
+		prefix.includes('set "XDT_SCHEDULER_PASSIVE=1"'),
+		`XDT_SCHEDULER_PASSIVE must be passed through: ${prefix}`,
+	);
+	assert.equal(devEnvPrefix({}, "win32"), "");
+});
+
 test("devEnvPrefix passes explicit model catalog test controls to Desktop", () => {
 	const prefix = devEnvPrefix(
 		{
