@@ -1940,15 +1940,32 @@ function snapshotUnavailableWarningForPackage(
   return warning;
 }
 
+async function readNativePackageSettingsText(home: string): Promise<string> {
+  const { handle, stat } = await openConstrainedRegularFile(
+    home,
+    path.join(home, 'settings.json'),
+    'Pi package settings contain an escaped link',
+    'Pi package settings changed before reading',
+  );
+  try {
+    // This is Pi's native launch configuration, not advisory package metadata.
+    // Match Pi's file-backed behavior instead of applying Cindy's inspection
+    // byte budget, while retaining confinement and stable-file checks.
+    const buffer = await handle.readFile();
+    const after = await handle.stat();
+    if (!sameStableFileIdentity(stat, after) || buffer.length !== after.size) {
+      throw new Error('Pi package settings changed while reading');
+    }
+    return buffer.toString('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
 async function readNativePackageObjectSpecs(): Promise<Map<string, Record<string, unknown>> | null> {
   try {
     const home = await fs.realpath(packageHome());
-    const { text } = await readUtf8FileBounded(
-      path.join(home, 'settings.json'),
-      MAX_PACKAGE_JSON_BYTES,
-      home,
-    );
-    const parsed = JSON.parse(text) as { packages?: unknown };
+    const parsed = JSON.parse(await readNativePackageSettingsText(home)) as { packages?: unknown };
     if (!Array.isArray(parsed.packages)) return new Map();
     return new Map(parsed.packages.flatMap((entry) => {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];

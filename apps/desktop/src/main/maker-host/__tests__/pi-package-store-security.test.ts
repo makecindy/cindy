@@ -612,18 +612,12 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([]);
   });
 
-  it.each([
-    ['invalid', '{"packages":'],
-    ['oversized', 'x'.repeat(1_048_577)],
-  ])('fails explicitly instead of dropping a filtered package when settings are %s', async (
-    label,
-    settingsContents,
-  ) => {
-    const { root, source } = await createPackage({ source: `npm:filtered-${label}` });
+  it('fails explicitly instead of widening a filtered package when settings are invalid', async () => {
+    const { root, source } = await createPackage({ source: 'npm:filtered-invalid' });
     runtime.listOutput = `User packages:\n  ${source} (filtered)\n    ${root}\n`;
     const packageHome = path.join(runtime.userData, 'pi-package-home');
     await fs.mkdir(packageHome, { recursive: true });
-    await fs.writeFile(path.join(packageHome, 'settings.json'), settingsContents);
+    await fs.writeFile(path.join(packageHome, 'settings.json'), '{"packages":');
     const store = await import('../pi-package-store.js');
 
     await expect(store.resolveManagedPiNativePackagePaths()).rejects.toThrow('state is unavailable');
@@ -631,6 +625,31 @@ describe('Pi package executable-code boundary', () => {
       'Pi package filter settings unavailable',
       { failureCategory: 'state-unavailable' },
     );
+  });
+
+  it('preserves native filters from a valid settings file above the inspection byte limit', async () => {
+    const { root, source } = await createPackage({ source: 'npm:filtered-large-settings' });
+    runtime.listOutput = `User packages:\n  ${source} (filtered)\n    ${root}\n`;
+    const packageHome = path.join(runtime.userData, 'pi-package-home');
+    const settingsContents = JSON.stringify({
+      packages: [{
+        source,
+        extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+        skills: [],
+      }],
+      nativePadding: 'x'.repeat(1_048_576),
+    });
+    expect(Buffer.byteLength(settingsContents)).toBeGreaterThan(1_048_576);
+    await fs.mkdir(packageHome, { recursive: true });
+    await fs.writeFile(path.join(packageHome, 'settings.json'), settingsContents);
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([{
+      source: root,
+      extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+      skills: [],
+    }]);
+    expect(loggerRuntime.warn.mock.calls).toEqual([]);
   });
 
   it('keeps an unfiltered native package when optional filter settings are unavailable', async () => {
