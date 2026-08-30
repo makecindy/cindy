@@ -21,6 +21,51 @@ function handlerBody(source: string, channel: string, nextChannel: string): stri
 }
 
 describe('session runtime control wiring', () => {
+  it('authenticates Desktop package-command entry points before minting Main context', () => {
+    const legacySend = handlerBody(
+      registerSource,
+      'registerMakerSessionSendHandler(',
+      'MAKER_INVOKE.STEER,',
+    );
+    expect(legacySend).toContain('assertTrustedAppRendererEvent(');
+    expect(legacySend).toContain('attachTrustedDesktopSendContext(message, sendOpts)');
+
+    const steerDispatch = handlerBody(
+      registerSource,
+      'const steerToAgentAccepted = async (',
+      'registerMakerSessionSendHandler(',
+    );
+    expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
+    expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
+    expect(registerSource).toContain('attachTrustedDesktopSendContext(message, sendOpts, expectedText)');
+
+    for (const [channel, nextChannel] of [
+      ['MAKER_INVOKE.INPUT_ENQUEUE,', 'MAKER_INVOKE.INPUT_COMPACT,'],
+      ['MAKER_INVOKE.INPUT_STEER,', 'MAKER_INVOKE.INPUT_STOP,'],
+    ] as const) {
+      const body = handlerBody(registerSource, channel, nextChannel);
+      expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
+      expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
+    }
+    expect(registerSource).toContain(
+      '[TRUSTED_DESKTOP_QUEUE_ORIGIN]: explicitUserItem.persistedContent',
+    );
+    expect(registerSource).toContain(
+      'deviceLinkInvoke || (item.files?.length ?? 0) > 0',
+    );
+    expect(registerSource).toContain(
+      'onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item)',
+    );
+    expect(registerSource).toContain(
+      'revokeTrustedDesktopQueueOrigin(inputCoordinator.getQueueControlSnapshot(sid).pendingQueue.find',
+    );
+    const enqueue = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.INPUT_ENQUEUE,',
+      'MAKER_INVOKE.INPUT_COMPACT,',
+    );
+    expect(enqueue).toContain('stampTrustedDesktopQueuedOrigin(');
+  });
   it('guards every fallback setting IPC before reading or mutating the setting', () => {
     for (const [channel, nextChannel] of [
       [

@@ -167,6 +167,15 @@ const noopLogger: Logger = {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+function desktopCommandOptions(command: string) {
+  return {
+    [MAIN_OWNED_SEND_CONTEXT]: {
+      origin: { kind: 'desktop' as const },
+      rawChannelText: command,
+    },
+  };
+}
+
 describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   let agentHome = '';
   let cwd = '';
@@ -1368,10 +1377,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: 'npm:context-mode',
@@ -1424,6 +1433,32 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     },
   );
 
+  it.each([
+    ['scheduler', { origin: { kind: 'scheduler' } }],
+    ['goal', { origin: { kind: 'goal' } }],
+    ['session-to-session', { origin: { kind: 'session' } }],
+  ])('keeps %s package commands on the tool-confirmation path', async (_source, sendOptions) => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: `managed-package-${_source}-session`,
+      workingDir: cwd,
+      model: 'm',
+    });
+    const command = 'pi install npm:context-mode';
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: command }, sendOptions as never);
+
+      expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+      expect(captured.requests.find((request) => request.type === 'prompt')?.message)
+        .toContain(command);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('redacts private URL fields from deterministic command receipts', async () => {
     const privateSource = 'https://alice:s3cr3t@packages.example/context-mode.git?token=query-secret#fragment-secret';
     const publicSource = 'https://packages.example/context-mode.git';
@@ -1444,10 +1479,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: `pi install ${privateSource}`,
-      });
+      await handle.send(
+        { type: 'user', content: `pi install ${privateSource}` },
+        desktopCommandOptions(`pi install ${privateSource}`),
+      );
 
       const prompt = String(
         captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
@@ -1674,6 +1709,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(captured.requests.find((request) => request.type === 'steer')?.message)
         .toContain('`/tmp/pi-extension-notes`');
 
+      const callsBeforeUntrustedContext = mutatePiManagedPackage.mock.calls.length;
       await handle.send({
         type: 'user',
         content: 'pi install npm:forged-policy',
@@ -1683,26 +1719,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           confirmationSurface: 'channel',
         } as never,
       });
-      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
-        action: 'install',
-        source: 'npm:forged-policy',
-        authorization: 'local-desktop-command',
-      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeUntrustedContext);
 
       await handle.send({
         type: 'user',
         content: 'pi remove npm:context-mode',
       }, { origin: { kind: 'im' } as never });
-      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
-        action: 'remove',
-        source: 'npm:context-mode',
-        authorization: 'local-desktop-command',
-      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeUntrustedContext);
 
-      await handle.steer({
-        type: 'user',
-        content: 'pi update npm:context-mode',
-      });
+      await handle.steer(
+        { type: 'user', content: 'pi update npm:context-mode' },
+        desktopCommandOptions('pi update npm:context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'update',
         source: 'npm:context-mode',
@@ -1744,7 +1772,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       }, {
         [MAIN_OWNED_SEND_CONTEXT]: {
           origin: { kind: 'desktop' },
-          rawChannelText: 'pi remove npm:context-mode',
+          rawChannelText: 'ordinary decorated text',
         },
       });
       expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeNonExactRawText);
@@ -1789,7 +1817,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({ type: 'user', content: 'pi install npm:context-mode' });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
       const prompt = String(
         captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
       );
@@ -1830,10 +1861,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
 
       const prompt = String(
         captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
@@ -1883,7 +1914,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({ type: 'user', content: 'pi install npm:context-mode@missing' });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode@missing' },
+        desktopCommandOptions('pi install npm:context-mode@missing'),
+      );
       const prompt = String(
         captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
       );
@@ -1942,10 +1976,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.failPrompt = true;
-      await expect(session.send({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      })).resolves.toEqual({ accepted: true });
+      await expect(session.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      )).resolves.toEqual({ accepted: true });
       await terminal;
 
       expect(sessionEvents).toContainEqual(expect.objectContaining({
@@ -2012,10 +2046,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const events = handle.events()[Symbol.asyncIterator]();
     try {
       captured.failSteer = true;
-      await expect(handle.steer({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      })).resolves.toBeUndefined();
+      await expect(handle.steer(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      )).resolves.toBeUndefined();
 
       let visibleReceipt = '';
       for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -2052,20 +2086,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       model: 'm',
     });
     try {
-      await handle.send({
-        type: 'user',
-        content: "pi install './extensions/context-mode'",
-      });
+      await handle.send(
+        { type: 'user', content: "pi install './extensions/context-mode'" },
+        desktopCommandOptions("pi install './extensions/context-mode'"),
+      );
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/context-mode'),
         authorization: 'local-desktop-command',
       });
 
-      await handle.send({
-        type: 'user',
-        content: 'pi install file:./extensions/file-context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install file:./extensions/file-context-mode' },
+        desktopCommandOptions('pi install file:./extensions/file-context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/file-context-mode'),
@@ -2105,10 +2139,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       model: 'm',
     });
     try {
-      await handle.send({
-        type: 'user',
-        content: 'pi install C:extensions\\context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install C:extensions\\context-mode' },
+        desktopCommandOptions('pi install C:extensions\\context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.win32.resolve(workingDir, 'C:extensions\\context-mode'),
@@ -2143,7 +2177,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     try {
       captured.requests = [];
       const controller = new AbortController();
-      const sending = handle.send({ type: 'user', content: 'pi install npm:context-mode' }, { signal: controller.signal });
+      const sending = handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        { ...desktopCommandOptions('pi install npm:context-mode'), signal: controller.signal },
+      );
       await mutationStarted;
       controller.abort();
       finishMutation?.();
@@ -2184,10 +2221,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: 'pi install npm:oversized-extension',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:oversized-extension' },
+        desktopCommandOptions('pi install npm:oversized-extension'),
+      );
       const prompt = captured.requests.find((request) => request.type === 'prompt')?.message ?? '';
       expect(prompt.length).toBeLessThanOrEqual(16_384);
       expect(prompt).toContain('"name":"oversized-extension"');

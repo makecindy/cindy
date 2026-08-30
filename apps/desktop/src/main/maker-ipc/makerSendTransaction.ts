@@ -1,6 +1,8 @@
 import {
   CodexResumePreparationBlockedError,
+  MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
+  type MainOwnedSendContext,
   type SessionSendOptions,
   type SessionSendResult,
   type UserMessage,
@@ -32,7 +34,9 @@ type CreateOpts = MakerSessionCreateOpts;
 type IpcUserMessage =
   string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
 
+export const TRUSTED_DESKTOP_QUEUE_ORIGIN = Symbol('trusted-desktop-queue-origin');
 type MakerSendOptions = {
+  readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   messageUuid?: string;
   userName?: string;
   throwOnStartFailure?: boolean;
@@ -847,6 +851,18 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : withPlanReconcile;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
+      const trustedDesktopQueueContent = persistUserMessage?.origin?.kind === 'desktop'
+        ? (persistUserMessage.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN] : undefined;
+      const directDesktopContext =
+        typeof trustedDesktopQueueContent === 'string' &&
+        trustedDesktopQueueContent === persistUserMessage?.content &&
+        !containsManagedAttachment(persistUserMessage?.content) &&
+        !persistUserMessage?.autoResume &&
+        !so.origin &&
+        !so.fromMobileClient
+          ? { origin: { kind: 'desktop' as const }, rawChannelText: extractPlainText(trustedDesktopQueueContent) }
+          : undefined;
+      const mainOwnedSendContext = so[MAIN_OWNED_SEND_CONTEXT] ?? directDesktopContext;
       const topLevelClearBoundary = normalizeExpectedClearBoundary(so.expectedClearBoundaryMs);
       const topLevelInputGeneration = normalizeExpectedInputGeneration(so.expectedInputGeneration);
       if (
@@ -951,6 +967,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
           ...(so.origin ? { origin: so.origin } : {}),
+          ...(mainOwnedSendContext
+            ? { [MAIN_OWNED_SEND_CONTEXT]: mainOwnedSendContext }
+            : {}),
           // 本条消息的计划意图快照(点击发送/入队瞬间的勾选,排队行透传)。对已
           // 存活会话是权威——排队期间用户改勾选不影响已排队行,反向也不误消耗
           // (语义见 maker-core SendOptions.planMode;undefined = 旧的消耗武装态)。

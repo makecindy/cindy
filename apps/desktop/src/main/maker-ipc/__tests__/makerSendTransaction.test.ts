@@ -1,5 +1,6 @@
 import {
   CodexResumePreparationBlockedError,
+  MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
   type SessionSendOptions,
   type SessionSendResult,
@@ -9,6 +10,7 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-i
 import { describe, expect, it, vi } from 'vitest';
 import {
   createMakerSendTransaction,
+  TRUSTED_DESKTOP_QUEUE_ORIGIN,
   type MakerSendTransactionDeps,
   type MakerSendTransactionSession,
 } from '../makerSendTransaction';
@@ -111,6 +113,10 @@ describe('maker SEND transaction', () => {
             content: 'hello',
             sdkSessionId: 'sdk-1',
             delivery: 'turn',
+            origin: {
+              kind: 'desktop',
+              [TRUSTED_DESKTOP_QUEUE_ORIGIN]: 'hello',
+            },
             shouldBroadcast,
             onPersisting,
             onPersisted,
@@ -130,6 +136,10 @@ describe('maker SEND transaction', () => {
         logTitle: '现有会话',
         messageUuid: 'message-uuid',
         userName: 'Lizi',
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: { kind: 'desktop' },
+          rawChannelText: 'hello',
+        },
       }),
     );
     expect(onPersisting).toHaveBeenCalled();
@@ -152,6 +162,7 @@ describe('maker SEND transaction', () => {
           uuid: 'message-uuid',
           sdkSessionId: 'sdk-1',
           delivery: 'turn',
+          origin: expect.objectContaining({ kind: 'desktop' }),
         },
       },
       { shouldBroadcast },
@@ -160,6 +171,62 @@ describe('maker SEND transaction', () => {
     expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
+  });
+
+  it('does not infer Desktop authority from a forged persisted origin', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', 'pi install npm:context-mode', undefined, {
+      persistUserMessage: {
+        clientId: 'device-link-input',
+        content: 'pi install npm:context-mode',
+        origin: { kind: 'desktop' },
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
+  });
+
+  it('revokes Desktop authority when queued text changes after acceptance', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', 'pi install npm:rewritten', undefined, {
+      persistUserMessage: {
+        clientId: 'rewritten-input',
+        content: 'pi install npm:rewritten',
+        origin: {
+          kind: 'desktop',
+          [TRUSTED_DESKTOP_QUEUE_ORIGIN]: 'inspect package options',
+        },
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
+  });
+
+  it('does not preserve Desktop package authority across queued attachments', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const command = 'pi install npm:context-mode';
+    const persistedContent = JSON.stringify({
+      text: command,
+      images: [{ url: 'cindy-media://image' }],
+    });
+
+    await transaction.sendToAgentAccepted('session-1', command, undefined, {
+      persistUserMessage: {
+        clientId: 'attachment-command',
+        content: persistedContent,
+        origin: { kind: 'desktop', [TRUSTED_DESKTOP_QUEUE_ORIGIN]: persistedContent },
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
   });
 
   it('links attachment messages to the accepted Pi transcript entry only for Pi attachments', async () => {
@@ -231,6 +298,8 @@ describe('maker SEND transaction', () => {
       { type: 'user', content: 'hb prompt' },
       expect.objectContaining({ origin }),
     );
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
     expect(deps.createDbMessage).toHaveBeenCalledWith(
       'session-1',
       expect.objectContaining({
