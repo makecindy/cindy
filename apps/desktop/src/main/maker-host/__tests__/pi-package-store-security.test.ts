@@ -652,6 +652,30 @@ describe('Pi package executable-code boundary', () => {
     expect(loggerRuntime.warn.mock.calls).toEqual([]);
   });
 
+  it.skipIf(!canLinkFile)('preserves native filters from a settings symlink outside package home', async () => {
+    const { root, source } = await createPackage({ source: 'npm:filtered-linked-settings' });
+    runtime.listOutput = `User packages:\n  ${source} (filtered)\n    ${root}\n`;
+    const packageHome = path.join(runtime.userData, 'pi-package-home');
+    const externalSettings = path.join(runtime.userData, 'dotfiles-settings.json');
+    await fs.mkdir(packageHome, { recursive: true });
+    await fs.writeFile(externalSettings, JSON.stringify({
+      packages: [{
+        source,
+        extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+        skills: [],
+      }],
+    }));
+    await fs.symlink(externalSettings, path.join(packageHome, 'settings.json'), 'file');
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([{
+      source: root,
+      extensions: ['extensions/*.ts', '!extensions/legacy.ts'],
+      skills: [],
+    }]);
+    expect(loggerRuntime.warn.mock.calls).toEqual([]);
+  });
+
   it('keeps an unfiltered native package when optional filter settings are unavailable', async () => {
     const { root } = await createPackage({ source: 'npm:unfiltered-settings-failure' });
     const settingsFile = path.join(runtime.userData, 'pi-package-home', 'settings.json');

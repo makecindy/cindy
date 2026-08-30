@@ -1941,19 +1941,27 @@ function snapshotUnavailableWarningForPackage(
 }
 
 async function readNativePackageSettingsText(home: string): Promise<string> {
-  const { handle, stat } = await openConstrainedRegularFile(
-    home,
-    path.join(home, 'settings.json'),
-    'Pi package settings contain an escaped link',
-    'Pi package settings changed before reading',
-  );
+  const settingsPath = path.join(home, 'settings.json');
+  // This is Pi's native launch configuration, not advisory package metadata.
+  // Follow the same user-managed symlink Pi follows instead of applying Cindy's
+  // package confinement or inspection byte budget to this projection.
+  const handle = await fs.open(settingsPath, 'r');
   try {
-    // This is Pi's native launch configuration, not advisory package metadata.
-    // Match Pi's file-backed behavior instead of applying Cindy's inspection
-    // byte budget, while retaining confinement and stable-file checks.
+    const stat = await handle.stat();
+    const followedStat = await fs.stat(settingsPath);
+    if (!stat.isFile() || !sameStableFileIdentity(stat, followedStat)) {
+      throw new Error('Pi package settings changed before reading');
+    }
     const buffer = await handle.readFile();
-    const after = await handle.stat();
-    if (!sameStableFileIdentity(stat, after) || buffer.length !== after.size) {
+    const [after, followedAfter] = await Promise.all([
+      handle.stat(),
+      fs.stat(settingsPath),
+    ]);
+    if (
+      !sameStableFileIdentity(stat, after)
+      || !sameStableFileIdentity(after, followedAfter)
+      || buffer.length !== after.size
+    ) {
       throw new Error('Pi package settings changed while reading');
     }
     return buffer.toString('utf8');
