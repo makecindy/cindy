@@ -293,10 +293,16 @@ const WINDOWS_HANDLE_CONTAINMENT_COMMAND = Buffer.from(
   'utf16le',
 ).toString('base64');
 
+/**
+ * Darwin `/dev/fd` is fdescfs: `chdir("/dev/fd/N")` is ENOTDIR even when N is
+ * a directory fd. Walk with `openat` from the inherited root handle instead.
+ */
 const DARWIN_HANDLE_CONTAINMENT_SCRIPT = String.raw`
 use strict;
 use warnings;
 use Fcntl qw(O_RDONLY O_NONBLOCK O_DIRECTORY O_NOFOLLOW :mode);
+
+use constant SYS_openat => 463;
 
 sub fail_closed { exit 1; }
 
@@ -309,20 +315,23 @@ for my $segment (@segments) {
 
 my @source = stat(STDERR);
 fail_closed() unless @source && S_ISREG($source[2]) && $source[1] != 0;
-chdir('/dev/fd/0') or fail_closed();
+my $parent = fileno(STDIN);
+fail_closed() unless defined $parent && $parent >= 0;
 
 my @opened;
 for (my $index = 0; $index < @segments; $index += 1) {
   my $directory = $index < @segments - 1;
   my $flags = O_RDONLY | O_NOFOLLOW | O_NONBLOCK;
   $flags |= O_DIRECTORY if $directory;
-  sysopen(my $handle, $segments[$index], $flags) or fail_closed();
+  my $fd = syscall(SYS_openat, $parent, $segments[$index], $flags, 0);
+  fail_closed() if !defined($fd) || $fd < 0;
+  open(my $handle, '<&=', $fd) or fail_closed();
   push @opened, $handle;
   my @opened_stat = stat($handle);
   fail_closed() unless @opened_stat;
   if ($directory) {
     fail_closed() unless S_ISDIR($opened_stat[2]);
-    chdir('/dev/fd/' . fileno($handle)) or fail_closed();
+    $parent = $fd;
   } else {
     fail_closed() unless S_ISREG($opened_stat[2]) && $opened_stat[1] != 0 &&
       $opened_stat[0] == $source[0] && $opened_stat[1] == $source[1];
@@ -1375,16 +1384,40 @@ async function windowsHandlePath(fd: number): Promise<string | null> {
   return output ? normalizeWindowsHandlePath(output.toString('utf8')) : null;
 }
 
+function decodeLsofFileName(raw: string): string {
+  if (!raw.includes('\\')) return raw;
+  const bytes: number[] = [];
+  for (let i = 0; i < raw.length; ) {
+    if (raw.startsWith('\\x', i) && /^[0-9a-fA-F]{2}/.test(raw.slice(i + 2, i + 4))) {
+      bytes.push(Number.parseInt(raw.slice(i + 2, i + 4), 16));
+      i += 4;
+      continue;
+    }
+    const code = raw.charCodeAt(i);
+    if (code > 255) {
+      bytes.push(...Buffer.from(raw[i]!, 'utf8'));
+    } else {
+      bytes.push(code);
+    }
+    i += 1;
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
 async function darwinHandlePath(fd: number): Promise<string | null> {
   const output = await runHandlePathHelper(
     '/usr/sbin/lsof',
     ['-w', '-a', '-p', String(process.pid), '-d', String(fd), '-F0n'],
     'ignore',
+    'ignore',
+    { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
   );
   if (!output) return null;
   for (const rawField of output.toString('utf8').split('\0')) {
     const field = rawField.startsWith('\n') ? rawField.slice(1) : rawField;
-    if (field.startsWith('n') && field.length > 1) return field.slice(1);
+    if (field.startsWith('n') && field.length > 1) {
+      return decodeLsofFileName(field.slice(1));
+    }
   }
   return null;
 }
