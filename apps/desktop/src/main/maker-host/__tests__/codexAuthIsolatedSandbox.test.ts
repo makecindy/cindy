@@ -30,6 +30,11 @@ vi.mock('electron', () => ({
 
 vi.mock('@cindy/maker-core', () => ({}));
 
+vi.mock('../../agent-binaries/index.js', () => ({
+  getCachedBinaryStatus: () => ({ binaryReady: false, binaryPath: null }),
+  isVettedAgentBinaryPath: () => false,
+}));
+
 vi.mock('../../appSessionState.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../appSessionState.js')>();
   return {
@@ -466,6 +471,44 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(
       fs.existsSync(path.join(h.userDataDir, '.isolated-auth-launch-proof.json')),
     ).toBe(false);
+  });
+
+  it('排队登录在 logout barrier 后执行自己的 isolated-auth 清理', async () => {
+    const { codexHome, localAuth, systemAuth } = fixture();
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'stale-sandbox-token' } }));
+    const systemBytes = fs.readFileSync(systemAuth);
+    trustIsolatedAuthSandbox();
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    let finishLogout!: () => void;
+    const logoutOperation = new Promise<void>((resolve) => {
+      finishLogout = resolve;
+    });
+    const privateState = adapter as unknown as {
+      logoutOperation: Promise<void> | null;
+      isolatedAuthSanitized: boolean;
+      pendingLogin: unknown;
+    };
+    privateState.logoutOperation = logoutOperation;
+
+    const login = adapter.triggerLogin({ mode: 'device-code' });
+    await Promise.resolve();
+    expect(fs.existsSync(localAuth)).toBe(true);
+    expect(privateState.isolatedAuthSanitized).toBe(false);
+
+    privateState.logoutOperation = null;
+    finishLogout();
+    await expect(login).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'codex_binary_missing',
+    });
+
+    expect(fs.existsSync(localAuth)).toBe(false);
+    expect(privateState.isolatedAuthSanitized).toBe(true);
+    expect(privateState.pendingLogin).toBeNull();
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
   });
 
   it('proof 绑定其它 userData 时保持只读且不消费凭证', async () => {

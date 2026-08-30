@@ -1054,10 +1054,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    *
    * dedup 包装: 并发调用复用同一次在途 reconcile (见 pendingReconcile 字段)。
    */
-  private reconcileWithSystemCodex(): Promise<void> {
+  private reconcileWithSystemCodex(options?: { allowCurrentLogin?: boolean }): Promise<void> {
     // 登录流程会直接改写 auth.json；此时任何预热/getState reconcile 都不能依据旧拓扑
     // 启动 orphan repair。登录完成后的显式 provenance 会决定下一轮 reconcile。
-    if (this.pendingLogin || this.loginCancellationOpen) return Promise.resolve();
+    if (!options?.allowCurrentLogin && (this.pendingLogin || this.loginCancellationOpen)) {
+      return Promise.resolve();
+    }
     if (this.pendingReconcile) return this.pendingReconcile;
     // 发起时刻固定会话快照:reconcile 是异步的,期间可能发生账号切换;绑定自愈
     // 只允许写给「发起时与完成时都是同一个已提交会话」的 owner(见 claim 内校验)。
@@ -1785,12 +1787,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     opts?: AuthLoginOptions,
     isCancelled: () => boolean = () => false,
   ): Promise<AuthState> {
-    if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1' && !this.isolatedAuthSanitized) {
-      await this.reconcileWithSystemCodex();
-      if (!this.isolatedAuthSanitized) {
-        return { authenticated: false, errorReason: 'isolated_auth_cleanup_failed' };
-      }
-    }
     this.ensureInvalidationMarkerLoaded();
     this.loginAborted = false;
     this.loginCancellationOpen = true;
@@ -1800,6 +1796,18 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (inflightReconcile) await inflightReconcile.catch(() => undefined);
     if (this.loginAborted || isCancelled()) {
       return { authenticated: false, errorReason: 'login_cancelled' };
+    }
+    if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1' && !this.isolatedAuthSanitized) {
+      // This tracked login is itself the owner of the pending-login gate. After its logout barrier
+      // has settled, allow only its trusted isolated-auth cleanup through that gate; ordinary
+      // warmup/state reconciles remain blocked until the login finishes.
+      await this.reconcileWithSystemCodex({ allowCurrentLogin: true });
+      if (this.loginAborted || isCancelled()) {
+        return { authenticated: false, errorReason: 'login_cancelled' };
+      }
+      if (!this.isolatedAuthSanitized) {
+        return { authenticated: false, errorReason: 'isolated_auth_cleanup_failed' };
+      }
     }
     await this.ensureGlobalCodexAssets();
 
