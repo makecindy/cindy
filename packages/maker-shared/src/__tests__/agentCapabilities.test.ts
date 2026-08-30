@@ -105,7 +105,7 @@ describe('agent capabilities shared model', () => {
       targetContextWindow: 200_000,
     };
 
-    it('blocks non-Pi shrinks at 90% while preserving safe bypasses, including SSH', () => {
+    it('blocks legacy shrinks at 90% while preserving same/expand, low pressure, and SSH semantics', () => {
       expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredShrink)).toBe(true);
       expect(shouldBlockLegacyRemoteModelWindowSwitch({
         ...pressuredShrink,
@@ -119,16 +119,33 @@ describe('agent capabilities shared model', () => {
         ...pressuredShrink,
         targetContextWindow: 2_000_000,
       })).toBe(false);
-      expect(shouldBlockLegacyRemoteModelWindowSwitch({
-        ...pressuredShrink,
-        agentKind: 'pi',
-      })).toBe(false);
-      expect(shouldBlockLegacyRemoteModelWindowSwitch({
-        ...pressuredShrink,
-        hostGuardSupported: true,
-      })).toBe(false);
       const pressuredSshShrink = { ...pressuredShrink, isSsh: true };
       expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredSshShrink)).toBe(true);
+    });
+
+    it('bypasses Pi only on guarded hosts and evaluates legacy Pi pressure facts', () => {
+      const legacyPiShrink = { ...pressuredShrink, agentKind: 'pi' };
+      expect(shouldBlockLegacyRemoteModelWindowSwitch(legacyPiShrink)).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...legacyPiShrink,
+        contextTokens: 179_999,
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...legacyPiShrink,
+        targetContextWindow: 1_000_000,
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...legacyPiShrink,
+        hostGuardSupported: true,
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...legacyPiShrink,
+        contextTokens: undefined,
+      })).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...legacyPiShrink,
+        targetContextWindow: undefined,
+      })).toBe(true);
     });
 
     it('fails closed when legacy-host window or usage facts are unknown', () => {
