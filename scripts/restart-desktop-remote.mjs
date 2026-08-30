@@ -793,6 +793,7 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_ISOLATED_NAME', env.XDT_ISOLATED_NAME],
     // 沙箱凭证隔离(--isolated-auth):不与 ~/.codex 共享 auth 硬链,auth-adapters 消费。
     ['XDT_ISOLATED_AUTH', env.XDT_ISOLATED_AUTH],
+    ['XDT_ALLOW_DEV_OAUTH_WRITE', env.XDT_ALLOW_DEV_OAUTH_WRITE],
     // CDP 端口覆写(bootstrap-electron 消费): 并行多开沙箱时给后起实例换端口。
     ['XDT_CDP_PORT', env.XDT_CDP_PORT],
     // 一次性 Grok wire 归因探针(dev-only;正常环境不设置,不产生额外日志)。
@@ -1121,8 +1122,8 @@ async function main() {
       process.env.XDT_USER_DATA_DIR_EPOCH = '1';
     }
   }
-  // --isolated-auth: 沙箱凭证隔离 —— 不与本机 ~/.codex 共享 auth 硬链(已共享的
-  // 解除本沙箱一端),沙箱内的 OAuth 登录/登出不再触碰正式实例与本机 CLI 的凭证。
+  // --isolated-auth: 沙箱凭证隔离 —— 启动时清掉本沙箱旧 auth(共享硬链与独立孤岛
+  // 都处理),再显式允许沙箱自己的 OAuth 写入；正式实例与本机 CLI 凭证不受影响。
   // 隔离沙箱里测登录流程时必用:共享硬链下沙箱登录会改写共用凭证文件,把正式版
   // 一起退登(2026-08-13 实测)。实现:置 XDT_ISOLATED_AUTH=1,经 devEnvPrefix
   // 白名单透传,maker-host auth-adapters 消费(仅非 packaged 生效)。
@@ -1135,6 +1136,7 @@ async function main() {
       );
     }
     process.env.XDT_ISOLATED_AUTH = '1';
+    process.env.XDT_ALLOW_DEV_OAUTH_WRITE = '1';
     console.log('==> Isolated auth: this sandbox will NOT share codex OAuth credentials with ~/.codex.');
   }
   if (startupConfig) ensureDesktopEnv();

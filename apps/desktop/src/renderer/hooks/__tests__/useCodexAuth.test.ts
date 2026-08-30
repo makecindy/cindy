@@ -19,6 +19,7 @@ type TestAuthState = {
   identity?: string;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  oauthWritesBlocked?: boolean;
   credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
   recoveryRequiredReason?: string;
 };
@@ -187,6 +188,36 @@ describe('useCodexAuth lifecycle', () => {
     });
 
     expect(result.current.state).toEqual({ kind: 'error', message: 'login_timeout' });
+  });
+
+  it('surfaces the dev read-only policy and reports blocked without hiding it', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({
+      authenticated: false,
+      oauthWritesBlocked: true,
+    });
+    auth.triggerLogin.mockResolvedValue({
+      authenticated: false,
+      errorReason: 'dev_oauth_write_blocked',
+      oauthWritesBlocked: true,
+    });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        kind: 'unauthenticated',
+        oauthWritesBlocked: true,
+      }),
+    );
+    await act(async () => {
+      await expect(result.current.triggerLogin()).resolves.toBe('blocked');
+    });
+
+    expect(result.current.state).toEqual({
+      kind: 'error',
+      message: 'dev_oauth_write_blocked',
+      oauthWritesBlocked: true,
+    });
   });
 
   it('restores reconnect-required from a persisted OAuth invalidation', async () => {

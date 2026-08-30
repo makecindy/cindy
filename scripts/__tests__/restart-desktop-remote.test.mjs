@@ -782,6 +782,16 @@ test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () =
 	assert.equal(devEnvPrefix({}, "darwin"), "");
 });
 
+test("devEnvPrefix passes the explicit isolated OAuth write escape hatch", () => {
+	assert.equal(
+		devEnvPrefix(
+			{ XDT_ISOLATED_AUTH: "1", XDT_ALLOW_DEV_OAUTH_WRITE: "1" },
+			"darwin",
+		),
+		"XDT_ISOLATED_AUTH='1' XDT_ALLOW_DEV_OAUTH_WRITE='1' ",
+	);
+});
+
 test("devEnvPrefix passes explicit model catalog test controls to Desktop", () => {
 	const prefix = devEnvPrefix(
 		{

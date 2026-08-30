@@ -37,6 +37,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
+import { useCodexSessionExpiredPrompt } from '@/hooks/useCodexSessionExpiredPrompt';
 import { useApiKey } from '@/hooks/useApiKey';
 import { extractIpcError } from '@/utils/ipcError';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
@@ -585,6 +586,11 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   const credentialScope = reconnectRequired
     ? (state.credentialScope ?? 'unknown')
     : (reconnectCredentialScope ?? 'unknown');
+  const oauthWritesBlocked = state.oauthWritesBlocked === true;
+  const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
+    onAuthenticated: () => onChanged(),
+    confirmBeforeLogin: false,
+  });
 
   const handleLogout = useCallback(async () => {
     const confirmed = await confirm({
@@ -610,6 +616,8 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       onChanged();
     } else if (outcome === 'unverified') {
       toast.error(t('chatgptAuthRecovery.verificationFailed'));
+    } else if (outcome === 'blocked') {
+      toast.error(t('chatgptAuthRecovery.devWriteBlocked'));
     } else if (outcome === 'failed') {
       toast.error(t('settings.connections.codex.toast.loginFailed'));
     }
@@ -621,8 +629,8 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       await refresh();
       return;
     }
-    await handleLogin();
-  }, [handleLogin, loggingIn, recoveryCheck, refresh]);
+    if (reconnectRequired) promptCodexSessionExpired(state.reason);
+  }, [loggingIn, promptCodexSessionExpired, reconnectRequired, recoveryCheck, refresh, state]);
 
   const recoveryDetail = reconnectRequired ? (
     <p className="text-12 leading-relaxed text-[var(--settings-integration-subtitle)]">
@@ -653,19 +661,28 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
             ? 'chatgptAuthRecovery.checking'
             : recoveryCheck === 'failed'
               ? 'chatgptAuthRecovery.recheck'
-              : 'chatgptAuthRecovery.relogin',
+              : credentialScope === 'system-shared'
+                ? 'chatgptAuthRecovery.recheck'
+                : 'chatgptAuthRecovery.relogin',
         )}
         onClick={() => void handleRecovery()}
-        disabled={recoveryCheck === 'checking' || loggingIn}
+        disabled={
+          recoveryCheck === 'checking' ||
+          loggingIn ||
+          (oauthWritesBlocked && credentialScope !== 'system-shared')
+        }
       />
     </div>
   ) : (
     <PillButton
       label={
-        loggingIn
-          ? t('settings.providers.openai.cancelConnect')
-          : t('settings.providers.openai.connect')
+        oauthWritesBlocked
+          ? t('chatgptAuthRecovery.devReadOnly')
+          : loggingIn
+            ? t('settings.providers.openai.cancelConnect')
+            : t('settings.providers.openai.connect')
       }
+      disabled={oauthWritesBlocked}
       onClick={() => {
         if (loggingIn) void cancelLogin();
         else void handleLogin();
