@@ -813,6 +813,28 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('`Pi final-window context preparation failed: ${finalPreparation}`');
   });
 
+  it('refreshes model-only context snapshots against the retained target provider route', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const refreshStart = setModel.indexOf(
+      "if (!response.deferred) {\n          try {\n            const currentAgentKind =",
+    );
+    const refreshEnd = setModel.indexOf('const projectionMeta =', refreshStart);
+    const refresh = setModel.slice(refreshStart, refreshEnd);
+
+    expect(setModel).toContain(
+      "effectiveProviderId === undefined\n          ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)",
+    );
+    expect(refresh).toContain('model,\n              targetRouteProviderId,');
+    expect(refresh).not.toContain(
+      "typeof effectiveProviderId === 'string' ? effectiveProviderId : null",
+    );
+    expect(refresh).toContain('await recordSessionContextSnapshot(');
+  });
+
   it('commits runtime control before best-effort context bookkeeping', () => {
     const setModel = handlerBody(
       registerSource,

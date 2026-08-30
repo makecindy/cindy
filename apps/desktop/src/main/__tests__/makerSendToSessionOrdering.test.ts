@@ -545,6 +545,8 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain('patch.fastMode = atomicSelection.fastMode;');
     expect(setModelBlock).toContain('await persistSessionFields(sessionId, patch);');
     expect(setModelBlock).toContain('markRemoteSettingPersistedInsideHandler(response);');
+    expect(setModelBlock).toContain('return Object.assign(response, {');
+    expect(setModelBlock).not.toContain('return {\n          ...response,');
     expectOrder(
       setModelBlock,
       'applyRuntimeSetModelChange({',

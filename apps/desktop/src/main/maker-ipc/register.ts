@@ -16354,7 +16354,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                   modelId,
                 ),
               model,
-              typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
+              targetRouteProviderId,
               currentAgentKind,
             );
             const piRuntimeWindow = maker.getSession(sessionId)?.getUsageSnapshot?.().contextWindow;
@@ -16411,11 +16411,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             error: error instanceof Error ? error.message : String(error),
           });
         });
-        return {
-          ...response,
+        // Preserve object identity so a device-link in-lock persistence mark remains visible
+        // to dispatch and cannot be followed by a stale lock-free route write.
+        return Object.assign(response, {
           generation,
           effectiveProviderId: normalizeSessionProviderId(effectiveProviderId) ?? null,
-        };
+        });
       } catch (err) {
         if (err instanceof CredentialModeSwitchBusyError) {
           // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,

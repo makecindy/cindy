@@ -2657,8 +2657,12 @@ describe('远程 set-* 持久化回流', () => {
   it('set-model handler 已在 session 锁内持久化时 dispatch 不重复回流', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
-    const handlerResult = { deferred: false, superseded: false };
-    markRemoteSettingPersistedInsideHandler(handlerResult);
+    const response = { deferred: false, superseded: false };
+    markRemoteSettingPersistedInsideHandler(response);
+    const handlerResult = Object.assign(response, {
+      generation: 2,
+      effectiveProviderId: 'anthropic',
+    });
     registry.register('maker:set-model', () => handlerResult);
 
     const r = await runInvoke('ctrl-a', {
