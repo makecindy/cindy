@@ -475,8 +475,10 @@ import {
   persistReservedStaleAssistantBlock,
   persistReservedStaleOrphanToolResults,
   preserveTurnPersistStateForBackground,
+  releaseReservedSessionReplacementPersistState,
   reserveAssistantBlockForSessionReplacement,
   reservePendingToolResultsForSessionReplacement,
+  retainReservedSessionReplacementPersistState,
   type AssistantTurnPersistenceIdentity,
   sealAssistantBlockForLateFinal,
   markAutoResumeOutcome,
@@ -4408,6 +4410,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     goalDeferredResumeCancelObserver?.(session.id);
     const teardownExistingReplayConsumers = (): void => {
       for (const dispose of existing.replayConsumerDisposers) dispose();
+      releaseReservedSessionReplacementPersistState(
+        existing.session.id,
+        supersededTurnIdentity,
+      );
       clearReservedStaleClaudeUsage(existing.session.id, existing.session.instanceId);
     };
     const keepsReplayConsumers = deferWindowsSessionEndWiringTeardown(
@@ -4422,6 +4428,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         supersededTurnIdentity,
       );
       reservePendingToolResultsForSessionReplacement(session.id, session.instanceId);
+      retainReservedSessionReplacementPersistState(session.id, supersededTurnIdentity);
     } else {
       // Ordinary provider/runtime replacement has no replay owner. Flush the
       // superseded turn's visible buffers before its consumers are disposed so

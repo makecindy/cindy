@@ -112,8 +112,10 @@ import {
   noteTurnStarted,
   saveTurnStartedAtForDeferred,
   preserveTurnPersistStateForBackground,
+  releaseReservedSessionReplacementPersistState,
   reserveAssistantBlockForSessionReplacement,
   reservePendingToolResultsForSessionReplacement,
+  retainReservedSessionReplacementPersistState,
 } from '../messagePersistBroadcaster.js';
 
 const SESSION = 'sess-tr';
@@ -2685,6 +2687,161 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
 });
 
 describe('onTurnErrorEvent — terminal error 持久化', () => {
+  it('keeps exact deferred assistant and orphan buffers across replacement cleanup', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'cc' as const,
+    };
+    const replacementIdentity = {
+      sessionInstanceId: 'replacement-instance',
+      turnGeneration: 1,
+      dbAgentKind: 'codex' as const,
+    };
+    const olderMeta = {
+      requestId: 'older-request',
+    } as import('@/lib/ccAgent.types').AgentMeta;
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'held older response', isFinal: false },
+      olderMeta,
+      olderIdentity,
+    );
+    expect(
+      onToolResultFullEvent(
+        SESSION,
+        { toolUseId: 'held-older-orphan', fullText: 'held older tool output' },
+        olderMeta,
+        'turn',
+        olderIdentity,
+      ),
+    ).toBeNull();
+    reserveAssistantBlockForSessionReplacement(SESSION, 'replacement-instance');
+    reservePendingToolResultsForSessionReplacement(SESSION, 'replacement-instance');
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'replacement response to clear', isFinal: false },
+      null,
+      replacementIdentity,
+    );
+    onToolResultFullEvent(
+      SESSION,
+      {
+        toolUseId: 'replacement-orphan-to-clear',
+        fullText: 'replacement tool output to clear',
+      },
+      null,
+      'turn',
+      replacementIdentity,
+    );
+
+    try {
+      // The replacement Session owns this business-id cleanup. The older
+      // exact-instance replay pipeline still owns its reserved buffers.
+      clearSessionPersistState(SESSION);
+      expect(flushAssistantBlock(SESSION, null, replacementIdentity)).toBeUndefined();
+      flushOrphanToolResults(SESSION, null, replacementIdentity);
+      expect(
+        persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, false),
+      ).toBe(olderPersistId);
+      expect(persistReservedStaleOrphanToolResults(SESSION, null, olderIdentity)).toBe(1);
+      await flushWrites();
+
+      expect(createMessage).toHaveBeenCalledTimes(2);
+      expect(createMessage).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({
+          clientId: olderPersistId,
+          role: 'assistant',
+          content: 'held older response',
+          agentKind: 'cc',
+        }),
+        expect.anything(),
+      );
+      expect(createMessage).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({
+          role: 'tool_result',
+          content: 'held older tool output',
+          toolUseId: 'held-older-orphan',
+          agentKind: 'cc',
+        }),
+        expect.anything(),
+      );
+    } finally {
+      releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    }
+  });
+
+  it('keeps an exact already-persisted assistant across replacement cleanup', async () => {
+    const olderIdentity = {
+      sessionInstanceId: 'older-persisted-instance',
+      turnGeneration: 2,
+      dbAgentKind: 'cc' as const,
+    };
+    const olderPersistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'already persisted older response', isFinal: true },
+      { requestId: 'older-persisted-request' } as import('@/lib/ccAgent.types').AgentMeta,
+      olderIdentity,
+    );
+    await flushWrites();
+    reserveAssistantBlockForSessionReplacement(
+      SESSION,
+      'replacement-instance',
+      olderIdentity,
+    );
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+
+    try {
+      clearSessionPersistState(SESSION);
+      expect(
+        persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, true),
+      ).toBe(olderPersistId);
+      await flushWrites();
+      expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+        SESSION,
+        olderPersistId,
+        { turnCompleted: true },
+      );
+    } finally {
+      releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    }
+  });
+
+  it('drops exact deferred buffers when replay teardown discards them', () => {
+    const olderIdentity = {
+      sessionInstanceId: 'discarded-instance',
+      turnGeneration: 3,
+      dbAgentKind: 'cc' as const,
+    };
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'discarded response', isFinal: false },
+      null,
+      olderIdentity,
+    );
+    onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'discarded-orphan', fullText: 'discarded tool output' },
+      null,
+      'turn',
+      olderIdentity,
+    );
+    reserveAssistantBlockForSessionReplacement(SESSION, 'replacement-instance');
+    reservePendingToolResultsForSessionReplacement(SESSION, 'replacement-instance');
+    retainReservedSessionReplacementPersistState(SESSION, olderIdentity);
+    clearSessionPersistState(SESSION);
+
+    releaseReservedSessionReplacementPersistState(SESSION, olderIdentity);
+
+    expect(
+      persistReservedStaleAssistantBlock(SESSION, null, olderIdentity, false),
+    ).toBeUndefined();
+    expect(persistReservedStaleOrphanToolResults(SESSION, null, olderIdentity)).toBe(0);
+  });
+
   it('preserves and seals an already queued stale assistant across replacement', async () => {
     const olderIdentity = {
       sessionInstanceId: 'older-instance',

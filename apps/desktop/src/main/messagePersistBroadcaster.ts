@@ -105,9 +105,48 @@ const reservedPersistedAssistantsBySession = new Map<
   string,
   Map<string, ReservedPersistedAssistant>
 >();
+const retainedSessionReplacementPersistStateBySession = new Map<string, Set<string>>();
 
 function assistantTurnIdentityKey(identity: AssistantTurnPersistenceIdentity): string {
   return `${identity.sessionInstanceId}:${identity.turnGeneration}`;
+}
+
+function deleteReservedIdentity<V>(
+  states: Map<string, Map<string, V>>,
+  sessionId: string,
+  identityKey: string,
+): void {
+  const byIdentity = states.get(sessionId);
+  if (!byIdentity) return;
+  byIdentity.delete(identityKey);
+  if (byIdentity.size === 0) states.delete(sessionId);
+}
+
+function clearUnretainedReservedIdentities<V>(
+  states: Map<string, Map<string, V>>,
+  sessionId: string,
+  retainedIdentityKeys: ReadonlySet<string> | undefined,
+): void {
+  const byIdentity = states.get(sessionId);
+  if (!byIdentity) return;
+  if (!retainedIdentityKeys || retainedIdentityKeys.size === 0) {
+    states.delete(sessionId);
+    return;
+  }
+  for (const identityKey of byIdentity.keys()) {
+    if (!retainedIdentityKeys.has(identityKey)) byIdentity.delete(identityKey);
+  }
+  if (byIdentity.size === 0) states.delete(sessionId);
+}
+
+/** Keep one superseded turn's reserved buffers until its deferred replay pipeline settles. */
+export function retainReservedSessionReplacementPersistState(
+  sessionId: string,
+  identity: AssistantTurnPersistenceIdentity,
+): void {
+  const retained = retainedSessionReplacementPersistStateBySession.get(sessionId) ?? new Set();
+  retained.add(assistantTurnIdentityKey(identity));
+  retainedSessionReplacementPersistStateBySession.set(sessionId, retained);
 }
 
 function isSameAssistantTurnIdentity(
@@ -1513,6 +1552,21 @@ const reservedPendingFullTextBySession = new Map<
 >();
 const toolResultContentByClientId = new Map<string, Map<string, string>>();
 
+/** Release one exact replay owner's assistant/tool buffers after replay or discard. */
+export function releaseReservedSessionReplacementPersistState(
+  sessionId: string,
+  identity: AssistantTurnPersistenceIdentity,
+): void {
+  const identityKey = assistantTurnIdentityKey(identity);
+  deleteReservedIdentity(reservedAssistantBlocksBySession, sessionId, identityKey);
+  deleteReservedIdentity(reservedPersistedAssistantsBySession, sessionId, identityKey);
+  deleteReservedIdentity(reservedPendingFullTextBySession, sessionId, identityKey);
+  const retained = retainedSessionReplacementPersistStateBySession.get(sessionId);
+  if (!retained) return;
+  retained.delete(identityKey);
+  if (retained.size === 0) retainedSessionReplacementPersistStateBySession.delete(sessionId);
+}
+
 function reservePendingFullTextWhere(
   sessionId: string,
   shouldReserve: (identity: AssistantTurnPersistenceIdentity) => boolean,
@@ -2834,8 +2888,22 @@ export function clearSessionPersistState(sessionId: string): void {
   clearCodexPlanRowsForSession(sessionId);
   sessionPersistenceOutcomeBatches.delete(sessionId);
   assistantBlocks.delete(sessionId);
-  reservedAssistantBlocksBySession.delete(sessionId);
-  reservedPersistedAssistantsBySession.delete(sessionId);
+  // A replacement Session can close while an older exact instance still owns
+  // a Windows query-time replay. Clear the current business-id state without
+  // deleting those retained buffers; their deferred replay teardown releases
+  // each exact identity after replay or discard.
+  const retainedReplacementIdentities =
+    retainedSessionReplacementPersistStateBySession.get(sessionId);
+  clearUnretainedReservedIdentities(
+    reservedAssistantBlocksBySession,
+    sessionId,
+    retainedReplacementIdentities,
+  );
+  clearUnretainedReservedIdentities(
+    reservedPersistedAssistantsBySession,
+    sessionId,
+    retainedReplacementIdentities,
+  );
   sealedAssistantLateFinalBySession.delete(sessionId);
   backgroundTurnPersistStatesBySession.delete(sessionId);
   lastAgentMetaBySession.delete(sessionId);
@@ -2846,7 +2914,11 @@ export function clearSessionPersistState(sessionId: string): void {
   clearAgentTaskPersistState(sessionId);
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
-  reservedPendingFullTextBySession.delete(sessionId);
+  clearUnretainedReservedIdentities(
+    reservedPendingFullTextBySession,
+    sessionId,
+    retainedReplacementIdentities,
+  );
   toolResultContentByClientId.delete(sessionId);
   lastPersistedMsgBySession.delete(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);

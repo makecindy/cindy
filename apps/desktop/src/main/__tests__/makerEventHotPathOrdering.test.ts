@@ -142,6 +142,9 @@ describe('maker:event hot path ordering', () => {
     expect(replayTeardownStart).toBeGreaterThanOrEqual(0);
     expect(replayTeardownEnd).toBeGreaterThan(replayTeardownStart);
     expect(replayTeardownSource).toContain('existing.replayConsumerDisposers');
+    expect(replayTeardownSource).toContain(
+      'releaseReservedSessionReplacementPersistState(',
+    );
     expect(replayTeardownSource).not.toContain('existing.disposers');
     expect(replayTeardownSource).not.toContain('setInteractionListener');
     expect(replayTeardownSource).not.toContain('sessionTurnLeaseTracker');
@@ -153,6 +156,11 @@ describe('maker:event hot path ordering', () => {
     );
     expect(wireSessionSource).toContain(
       'registration.replayConsumerDisposers.push(() => session.setEventDispatchGate(null))',
+    );
+    expectOrder(
+      wireSessionSource,
+      'reservePendingToolResultsForSessionReplacement(session.id, session.instanceId);',
+      'retainReservedSessionReplacementPersistState(session.id, supersededTurnIdentity);',
     );
     expect(
       wireSessionSource.match(/registration\.replayConsumerDisposers\.push\(/g),
