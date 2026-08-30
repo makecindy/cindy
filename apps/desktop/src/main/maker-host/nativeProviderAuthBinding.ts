@@ -59,12 +59,24 @@ type BindingFile = Partial<Record<NativeProviderId, string>> & {
    * 系统新凭证，且不覆盖 sources 里真实的「最初由 Cindy 显式授权」来路。
    */
   sharedSystemCredential?: Partial<Record<NativeProviderId, string>>;
+  /**
+   * 已在登录收尾当场确认是实例隔离普通文件的 owner。旧 selfAuthorized / sources 只证明
+   * owner 曾显式授权，不能证明眼前文件没有先被共享成 hardlink 再因系统换代而断链。
+   */
+  instanceIsolatedCredential?: Partial<Record<NativeProviderId, string>>;
 };
 
 function sharedSystemCredentialOwners(
   bindings: BindingFile,
 ): Partial<Record<NativeProviderId, string>> {
   const value = bindings.sharedSystemCredential;
+  return value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+}
+
+function instanceIsolatedCredentialOwners(
+  bindings: BindingFile,
+): Partial<Record<NativeProviderId, string>> {
+  const value = bindings.instanceIsolatedCredential;
   return value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
 }
 
@@ -135,11 +147,13 @@ function readBindingsOrFail(): BindingRead {
     const ownerFields = value as {
       selfAuthorized?: unknown;
       sharedSystemCredential?: unknown;
+      instanceIsolatedCredential?: unknown;
     };
     if (
       hasInvalidProviderOwnerSlot(value) ||
       hasInvalidProviderOwnerSlot(ownerFields.selfAuthorized) ||
-      hasInvalidProviderOwnerSlot(ownerFields.sharedSystemCredential)
+      hasInvalidProviderOwnerSlot(ownerFields.sharedSystemCredential) ||
+      hasInvalidProviderOwnerSlot(ownerFields.instanceIsolatedCredential)
     ) {
       // Owner provenance is an authorization boundary. A syntactically valid JSON value with
       // the wrong runtime type is not proof and must never reach downstream string operations.
@@ -450,7 +464,10 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
 }
 
 /** Bind newly completed native OAuth to the current data owner. */
-export function bindNativeProviderAuth(provider: NativeProviderId): void {
+export function bindNativeProviderAuth(
+  provider: NativeProviderId,
+  opts?: { instanceIsolated?: boolean },
+): void {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner) throw new Error('cannot bind native provider auth without an active data owner');
   const written = withNativeBindingMutationLock(false, () => {
@@ -459,6 +476,9 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
       const bindings = read.bindings;
       const sharedSystemCredential = sharedSystemCredentialOwners(bindings);
       delete sharedSystemCredential[provider];
+      const instanceIsolatedCredential = instanceIsolatedCredentialOwners(bindings);
+      if (opts?.instanceIsolated) instanceIsolatedCredential[provider] = owner;
+      else delete instanceIsolatedCredential[provider];
       // 显式授权 = 用户重新表达了「我要连它」，撤销标记就此作废。
       if (bindings.revoked && provider in bindings.revoked) {
         const revoked = { ...bindings.revoked };
@@ -474,6 +494,7 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
           [provider]: 'explicit-provider-oauth',
         },
         sharedSystemCredential,
+        instanceIsolatedCredential,
         [provider]: owner,
       });
       return true;
@@ -493,6 +514,9 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
     const salvaged = read.reason === 'badRevoked' ? read.bindings : {};
     const sharedSystemCredential = sharedSystemCredentialOwners(salvaged);
     delete sharedSystemCredential[provider];
+    const instanceIsolatedCredential = instanceIsolatedCredentialOwners(salvaged);
+    if (opts?.instanceIsolated) instanceIsolatedCredential[provider] = owner;
+    else delete instanceIsolatedCredential[provider];
     const suppressed: Partial<Record<NativeProviderId, string>> = {};
     for (const other of NATIVE_PROVIDER_IDS) {
       if (other !== provider) suppressed[other] = owner;
@@ -506,6 +530,7 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
         [provider]: 'explicit-provider-oauth',
       },
       sharedSystemCredential,
+      instanceIsolatedCredential,
       [provider]: owner,
     });
     return true;
@@ -541,9 +566,11 @@ export function readExplicitNativeProviderAuthOwner(
   if (!boundOwner) return null;
   const source = read.bindings.sources?.[provider];
   const selfAuthorizedOwner = read.bindings.selfAuthorized?.[provider]?.trim();
+  const isolatedOwner = instanceIsolatedCredentialOwners(read.bindings)[provider]?.trim();
   if (source !== undefined && source !== 'explicit-provider-oauth') return null;
   if (selfAuthorizedOwner !== undefined && selfAuthorizedOwner !== boundOwner) return null;
-  return source === 'explicit-provider-oauth' || selfAuthorizedOwner === boundOwner
+  return isolatedOwner === boundOwner &&
+    (source === 'explicit-provider-oauth' || selfAuthorizedOwner === boundOwner)
     ? boundOwner
     : null;
 }
@@ -556,7 +583,10 @@ export function markNativeProviderAuthSharedSystemCredential(
   if (!snapshot.ok) return false;
   const snapshotOwner = snapshot.bindings[provider]?.trim();
   if (!snapshotOwner) return false;
-  if (sharedSystemCredentialOwners(snapshot.bindings)[provider]?.trim() === snapshotOwner) {
+  if (
+    sharedSystemCredentialOwners(snapshot.bindings)[provider]?.trim() === snapshotOwner &&
+    instanceIsolatedCredentialOwners(snapshot.bindings)[provider] === undefined
+  ) {
     return true;
   }
   return withNativeBindingMutationLock(false, () => {
@@ -565,10 +595,17 @@ export function markNativeProviderAuthSharedSystemCredential(
     const owner = read.bindings[provider]?.trim();
     if (!owner) return false;
     const sharedSystemCredential = sharedSystemCredentialOwners(read.bindings);
-    if (sharedSystemCredential[provider]?.trim() === owner) return true;
+    const instanceIsolatedCredential = instanceIsolatedCredentialOwners(read.bindings);
+    if (
+      sharedSystemCredential[provider]?.trim() === owner &&
+      instanceIsolatedCredential[provider] === undefined
+    )
+      return true;
+    delete instanceIsolatedCredential[provider];
     writeBindings({
       ...read.bindings,
       sharedSystemCredential: { ...sharedSystemCredential, [provider]: owner },
+      instanceIsolatedCredential,
     });
     return true;
   });
@@ -627,11 +664,14 @@ export function unbindNativeProviderAuth(
       const hasSource = bindings.sources?.[provider] !== undefined;
       const hasSharedSystemCredential =
         sharedSystemCredentialOwners(bindings)[provider] !== undefined;
+      const hasInstanceIsolatedCredential =
+        instanceIsolatedCredentialOwners(bindings)[provider] !== undefined;
       if (
         !(provider in bindings) &&
         !hasSelfAuthorized &&
         !hasSource &&
-        !hasSharedSystemCredential
+        !hasSharedSystemCredential &&
+        !hasInstanceIsolatedCredential
       )
         return;
     }
@@ -646,12 +686,15 @@ export function unbindNativeProviderAuth(
     const hadSource = bindings.sources?.[provider] !== undefined;
     const sharedSystemCredential = sharedSystemCredentialOwners(bindings);
     const hadSharedSystemCredential = sharedSystemCredential[provider] !== undefined;
+    const instanceIsolatedCredential = instanceIsolatedCredentialOwners(bindings);
+    const hadInstanceIsolatedCredential = instanceIsolatedCredential[provider] !== undefined;
     if (
       !(provider in bindings) &&
       !marking &&
       !hadSelfAuthorized &&
       !hadSource &&
-      !hadSharedSystemCredential
+      !hadSharedSystemCredential &&
+      !hadInstanceIsolatedCredential
     )
       return;
     delete bindings[provider];
@@ -670,6 +713,10 @@ export function unbindNativeProviderAuth(
     if (hadSharedSystemCredential) {
       delete sharedSystemCredential[provider];
       bindings.sharedSystemCredential = sharedSystemCredential;
+    }
+    if (hadInstanceIsolatedCredential) {
+      delete instanceIsolatedCredential[provider];
+      bindings.instanceIsolatedCredential = instanceIsolatedCredential;
     }
     if (marking) bindings.revoked = { ...(bindings.revoked ?? {}), [provider]: owner as string };
     writeBindings(bindings);

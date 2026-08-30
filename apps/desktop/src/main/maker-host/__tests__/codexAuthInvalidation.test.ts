@@ -547,6 +547,7 @@ describe('Codex system credential suppression marker', () => {
       openai: 'owner-a',
       selfAuthorized: { openai: 'owner-a' },
       sources: { openai: 'explicit-provider-oauth' },
+      instanceIsolatedCredential: { openai: 'owner-a' },
     });
   });
 
@@ -1491,7 +1492,7 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  it('relinks a legacy Windows hardlink after system auth rotation without preserving the old token', async () => {
+  it('repairs a pre-upgrade Windows hardlink rotated before provenance migration', async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
@@ -1524,20 +1525,6 @@ describe('Codex system credential suppression marker', () => {
         }),
       );
 
-      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
-      await expect(
-        new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
-      ).resolves.toMatchObject({
-        authenticated: true,
-        credentialScope: 'system-shared',
-      });
-      expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
-        openai: 'owner-a',
-        selfAuthorized: { openai: 'owner-a' },
-        sources: { openai: 'explicit-provider-oauth' },
-        sharedSystemCredential: { openai: 'owner-a' },
-      });
-
       const replacement = path.join(path.dirname(systemAuth), 'auth.f2.json');
       fs.writeFileSync(
         replacement,
@@ -1549,6 +1536,7 @@ describe('Codex system credential suppression marker', () => {
       const systemBeforeReconcile = fs.readFileSync(systemAuth);
       const systemStatBeforeReconcile = fs.statSync(systemAuth);
 
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
       await expect(
         new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
       ).resolves.toMatchObject({
@@ -1588,7 +1576,7 @@ describe('Codex system credential suppression marker', () => {
     }
   });
 
-  it('relinks a proven legacy POSIX hardlink after system auth rotation', async () => {
+  it('repairs a pre-upgrade POSIX hardlink rotated before provenance migration', async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     try {
@@ -1615,7 +1603,6 @@ describe('Codex system credential suppression marker', () => {
           openai: 'owner-a',
           selfAuthorized: { openai: 'owner-a' },
           sources: { openai: 'explicit-provider-oauth' },
-          sharedSystemCredential: { openai: 'owner-a' },
         }),
       );
 
@@ -2096,6 +2083,7 @@ describe('Codex system credential suppression marker', () => {
         openai: 'owner-a',
         selfAuthorized: { openai: 'owner-a' },
         sources: { openai: 'explicit-provider-oauth' },
+        instanceIsolatedCredential: { openai: 'owner-a' },
       }),
     );
 

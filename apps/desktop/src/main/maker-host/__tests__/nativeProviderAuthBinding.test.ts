@@ -821,6 +821,29 @@ describe('凭证来路(selfAuthorized)—— 显式授权 vs 自动继承', () =
     expect(isNativeProviderAuthSharedSystemCredential('openai')).toBe(false);
   });
 
+  it('只有登录收尾证明的当前隔离凭证才可阻止 orphan repair', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({
+        openai: 'owner-a',
+        selfAuthorized: { openai: 'owner-a' },
+        sources: { openai: 'explicit-provider-oauth' },
+      }),
+    );
+
+    expect(readExplicitNativeProviderAuthOwner('openai')).toBeNull();
+
+    bindNativeProviderAuth('openai', { instanceIsolated: true });
+    expect(readExplicitNativeProviderAuthOwner('openai')).toBe('owner-a');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      instanceIsolatedCredential: { openai: 'owner-a' },
+    });
+
+    expect(markNativeProviderAuthSharedSystemCredential('openai')).toBe(true);
+    expect(readExplicitNativeProviderAuthOwner('openai')).toBeNull();
+  });
+
   it('从没绑定过的 provider 不算自己授权过', () => {
     expect(isNativeProviderAuthSelfAuthorized('xai')).toBe(false);
   });
@@ -834,6 +857,10 @@ describe('凭证来路(selfAuthorized)—— 显式授权 vs 自动继承', () =
   it.each([
     ['provider owner', { openai: 42, selfAuthorized: { openai: 'owner-a' } }],
     ['self-authorized owner', { openai: 'owner-a', selfAuthorized: { openai: 42 } }],
+    [
+      'isolated credential owner',
+      { openai: 'owner-a', instanceIsolatedCredential: { openai: 42 } },
+    ],
   ])('treats a non-string %s as unproven without rewriting the binding', (_case, value) => {
     fs.mkdirSync(userDataDir, { recursive: true });
     fs.writeFileSync(bindingFile, JSON.stringify(value));

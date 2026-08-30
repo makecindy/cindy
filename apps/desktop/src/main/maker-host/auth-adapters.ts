@@ -1895,7 +1895,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // `codex login` 的成功已经由刚写入的真实 access_token 证明。先持久化显式来源，
     // 再允许 reconcile 检查本地普通文件；否则首次登录会被当成无 provenance 孤岛，
     // 用系统账号覆盖后才把错误的系统凭证标成 Cindy 显式授权。
-    bindNativeProviderAuth('openai');
+    bindNativeProviderAuth('openai', {
+      instanceIsolated: finalizedCredentialScope === 'instance-isolated',
+    });
     if (this.suppressSystemCodexReconcile) {
       log.warn(
         'system codex auth.json marker still active; keeping reconcile suppressed after login',
