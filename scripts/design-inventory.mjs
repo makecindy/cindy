@@ -126,7 +126,7 @@ if (routerCoverage.componentMismatch.length > 0) {
   console.error(
     '[design-inventory] ❌ 路由入口组件与 catalog 不一致：\n' +
       mismatch +
-      '\n  换组件时请同步更新 catalogSurfaces() 对应 surface 的 routeComponents / reachableComponents / productionEntry / styleRoots。',
+      '\n  换组件时请同步更新 catalogSurfaces() 对应 surface 的 routeEntryComponents / reachableComponents / productionEntry / styleRoots。',
   );
   process.exit(1);
 }

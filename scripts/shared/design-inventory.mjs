@@ -134,9 +134,13 @@ export function filterInventoryBareColors(hits) {
   return hits.filter((hit) => !/^(?:hsl|rgb)a?\(\s*var\(/.test(hit));
 }
 
-/** CSS 文件没有 JS 注释剥离问题，TS/TSX 先剥注释再统计颜色；radius/token 同口径处理。 */
-function statsSourceForColorScan(source, ext) {
-  return ext === '.css' ? source : stripJsComments(source);
+/**
+ * 统计前统一剥注释：CSS 的 `/* ... *​/` 块注释与 TS/TSX 的块/行注释同样不是生产
+ * 消费（globals.css 注释里的示例色值曾被计入权威基线）；`//` 行注释对 CSS 无害
+ * （CSS 没有该语法）。radius/token 同口径。
+ */
+function statsSourceForColorScan(source) {
+  return stripJsComments(source);
 }
 
 function scanStyleStats(repoRoot, styleRoots, { missingRoots = [] } = {}) {
@@ -146,7 +150,7 @@ function scanStyleStats(repoRoot, styleRoots, { missingRoots = [] } = {}) {
   const tokenHits = new Set();
   for (const relPath of files) {
     const source = fs.readFileSync(path.join(repoRoot, ...relPath.split('/')), 'utf8');
-    const scanSource = statsSourceForColorScan(source, path.posix.extname(relPath));
+    const scanSource = statsSourceForColorScan(source);
     bareColors += filterInventoryBareColors(matchBareColors(scanSource)).length;
     bareRadii += (scanSource.match(BARE_RADIUS_RE) ?? []).length;
     for (const match of scanSource.matchAll(TOKEN_REF_RE)) tokenHits.add(match[1]);
@@ -399,7 +403,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/components/login/loginDesignTokens.ts',
       ],
       routerPaths: ['/login'],
-      routeComponents: ['LoginPage'],
+      routeEntryComponents: { '/login': 'LoginPage' },
     },
     {
       id: 'desktop.auth.add-account',
@@ -412,7 +416,7 @@ export function catalogSurfaces() {
       styleRoots: ['apps/desktop/src/renderer/components/login/AddAccountLoginPage.tsx'],
       extraStyleRoots: ['desktop.auth.login'],
       routerPaths: ['/add-account'],
-      routeComponents: ['AddAccountLoginPage'],
+      routeEntryComponents: { '/add-account': 'AddAccountLoginPage' },
     },
     {
       id: 'desktop.chat.session',
@@ -434,7 +438,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/components/new-chat',
       ],
       routerPaths: ['/cc-agent/:sessionId', '/cc-agent/boot'],
-      routeComponents: ['CCAgentSessionView', 'SecondaryWindowBootGate'],
+      routeEntryComponents: { '/cc-agent/:sessionId': 'CCAgentSessionView', '/cc-agent/boot': 'SecondaryWindowBootGate' },
     },
     {
       id: 'desktop.chat.new-draft',
@@ -444,7 +448,7 @@ export function catalogSurfaces() {
       reachableComponents: ['NewMakerDraftRoute'],
       styleRoots: ['apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx'],
       routerPaths: ['/cc-agent/new'],
-      routeComponents: ['NewMakerDraftRoute'],
+      routeEntryComponents: { '/cc-agent/new': 'NewMakerDraftRoute' },
     },
     {
       id: 'desktop.chat.orca-workflow',
@@ -467,7 +471,7 @@ export function catalogSurfaces() {
       // 只扫三个 Orca 包装文件会把完整聊天界面统计成全 0。
       extraStyleRoots: ['desktop.chat.session'],
       routerPaths: ['/cc-agent/orca/:sessionId'],
-      routeComponents: ['OrcaWorkflowRoute'],
+      routeEntryComponents: { '/cc-agent/orca/:sessionId': 'OrcaWorkflowRoute' },
     },
     {
       id: 'desktop.chat.scheduled',
@@ -477,7 +481,7 @@ export function catalogSurfaces() {
       reachableComponents: ['SchedulerPage'],
       styleRoots: ['apps/desktop/src/renderer/features/scheduler'],
       routerPaths: ['/cc-agent/scheduled'],
-      routeComponents: ['SchedulerPage'],
+      routeEntryComponents: { '/cc-agent/scheduled': 'SchedulerPage' },
     },
     {
       id: 'desktop.chat.files',
@@ -487,7 +491,7 @@ export function catalogSurfaces() {
       reachableComponents: ['WorkdirBrowseRoute', 'FileTreeView', 'FileBodyView'],
       styleRoots: ['apps/desktop/src/renderer/features/cc-agent/workdir-browse'],
       routerPaths: ['/cc-agent/files/:sessionId'],
-      routeComponents: ['WorkdirBrowseRoute'],
+      routeEntryComponents: { '/cc-agent/files/:sessionId': 'WorkdirBrowseRoute' },
     },
     {
       id: 'desktop.issues.guide',
@@ -497,7 +501,7 @@ export function catalogSurfaces() {
       reachableComponents: ['IssueTrackerFeatureLayout'],
       styleRoots: ['apps/desktop/src/renderer/features/issue-tracker'],
       routerPaths: ['/issues'],
-      routeComponents: ['IssueTrackerFeatureLayout'],
+      routeEntryComponents: { '/issues': 'IssueTrackerFeatureLayout' },
     },
     {
       id: 'desktop.skillhub.local',
@@ -529,7 +533,7 @@ export function catalogSurfaces() {
         '/skillhub/local/:kind/global/:name',
         '/skillhub/local/:kind/project/:projectHash/:name',
       ],
-      routeComponents: ['SkillhubHomeView', 'SkillhubDetailView'],
+      routeEntryComponents: { '/skillhub/local': 'SkillhubHomeView', '/skillhub/local/:kind/global/:name': 'SkillhubDetailView', '/skillhub/local/:kind/project/:projectHash/:name': 'SkillhubDetailView' },
     },
     {
       id: 'desktop.skillhub.market',
@@ -552,7 +556,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/skillhub/components',
       ],
       routerPaths: ['/skillhub/market'],
-      routeComponents: ['SkillhubMarketListView'],
+      routeEntryComponents: { '/skillhub/market': 'SkillhubMarketListView' },
     },
     {
       id: 'desktop.settings',
@@ -563,7 +567,7 @@ export function catalogSurfaces() {
       reachableComponents: ['SettingsView'],
       styleRoots: ['apps/desktop/src/renderer/components/settings'],
       routerPaths: ['/settings'],
-      routeComponents: ['SettingsView'],
+      routeEntryComponents: { '/settings': 'SettingsView' },
     },
     {
       id: 'desktop.plugins.installed',
@@ -595,7 +599,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/plugin/plugin-motion.css',
       ],
       routerPaths: ['/plugins'],
-      routeComponents: ['GhostPluginPage'],
+      routeEntryComponents: { '/plugins': 'GhostPluginPage' },
     },
     {
       id: 'desktop.plugins.app-main',
@@ -608,7 +612,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/plugin/GhostMainViewHost.tsx',
       ],
       routerPaths: ['/apps/:ghostId'],
-      routeComponents: ['GhostMainViewFeatureLayout'],
+      routeEntryComponents: { '/apps/:ghostId': 'GhostMainViewFeatureLayout' },
     },
     {
       id: 'desktop.dev.maker-experimental',
@@ -619,7 +623,7 @@ export function catalogSurfaces() {
       reachableComponents: ['MakerExperimentalView'],
       styleRoots: ['apps/desktop/src/renderer/features/maker-experimental'],
       routerPaths: ['/maker-experimental'],
-      routeComponents: ['MakerExperimentalView'],
+      routeEntryComponents: { '/maker-experimental': 'MakerExperimentalView' },
     },
     {
       id: 'desktop.window.sidebar',
@@ -638,7 +642,7 @@ export function catalogSurfaces() {
       ],
       routerPaths: ['/sidebar-window'],
       rendererEntryModules: { sidebarWindow: './sidebar-window-entry' },
-      routeComponents: ['SidebarWindowLayout'],
+      routeEntryComponents: { '/sidebar-window': 'SidebarWindowLayout' },
     },
     {
       id: 'desktop.window.ghost-panel',
@@ -656,7 +660,7 @@ export function catalogSurfaces() {
       ],
       routerPaths: ['/ghost-panel-window'],
       rendererEntryModules: { ghostPanelWindow: './ghost-panel-window-entry' },
-      routeComponents: ['GhostPanelWindowLayout'],
+      routeEntryComponents: { '/ghost-panel-window': 'GhostPanelWindowLayout' },
     },
     {
       id: 'desktop.window.resource-usage',
@@ -872,21 +876,23 @@ export function productionRouterCoverage(routerSource, catalog = catalogSurfaces
   const stale = [...covered].filter((routePath) => !actualPaths.has(routePath));
   // 组件核对：路径保留但 element 换成新组件时，路由覆盖表会显示新组件，而该 surface 的
   // productionEntry / reachableComponents / styleRoots 仍来自旧 catalog——台账内部自相
-  // 矛盾。登记 surface 的路由入口组件，映射时逐路径核对，换组件必须显式更新 catalog。
+  // 矛盾。routeEntryComponents 是「路径 → 入口组件」映射，逐路径精确比对：
+  // surface 级并集不够——多路由 surface 内部把 A 路径的入口换成同集合内 B 组件时，
+  // 并集检查照样通过，但该路径的生产入口事实已经错误。
   const componentMismatch = production
     .filter((route) => {
       const surface = byPath.get(route.path);
       if (!surface) return false;
-      const entryComponents = surface.routeComponents ?? [];
-      // 未登记 routeComponents 的 surface 只按路径映射（历史形态，不强制回填）。
-      return entryComponents.length > 0 && !entryComponents.includes(route.component);
+      const entryComponents = surface.routeEntryComponents ?? {};
+      // 未登记 routeEntryComponents 的 surface 只按路径映射（历史形态，不强制回填）。
+      return Object.keys(entryComponents).length > 0 && entryComponents[route.path] !== route.component;
     })
     .map((route) => {
       const surface = byPath.get(route.path);
       return {
         path: route.path,
         actualComponent: route.component,
-        catalogComponents: surface.routeComponents,
+        catalogComponents: surface.routeEntryComponents[route.path],
         surfaceId: surface.id,
       };
     });

@@ -410,7 +410,11 @@ test('路径保留但 element 换组件时 componentMismatch 能发现', () => {
     ]);
   `;
   const catalog = [
-    { id: 'desktop.test.surface', routerPaths: ['/fixture'], routeComponents: ['FixtureView'] },
+    {
+      id: 'desktop.test.surface',
+      routerPaths: ['/fixture'],
+      routeEntryComponents: { '/fixture': 'FixtureView' },
+    },
   ];
   const coverage = productionRouterCoverage(routerSource, catalog);
   assert.deepEqual(coverage.missing, []);
@@ -419,42 +423,80 @@ test('路径保留但 element 换组件时 componentMismatch 能发现', () => {
     {
       path: '/fixture',
       actualComponent: 'NewSwappedView',
-      catalogComponents: ['FixtureView'],
+      catalogComponents: 'FixtureView',
       surfaceId: 'desktop.test.surface',
     },
   ]);
-  // 组件一致(多路由 surface 的任一登记组件命中)时不得误报。
+  // 组件一致(路径级映射逐字对上)时不得误报。
   const okCoverage = productionRouterCoverage(routerSource, [
     {
       id: 'desktop.test.surface',
       routerPaths: ['/fixture'],
-      routeComponents: ['OtherView', 'NewSwappedView'],
+      routeEntryComponents: { '/fixture': 'NewSwappedView' },
     },
   ]);
   assert.deepEqual(okCoverage.componentMismatch, []);
-  // 未登记 routeComponents 的 surface 只按路径映射,不受影响(历史形态不强制回填)。
+  // 未登记 routeEntryComponents 的 surface 只按路径映射,不受影响(历史形态不强制回填)。
   const legacyCoverage = productionRouterCoverage(routerSource, [
     { id: 'desktop.test.surface', routerPaths: ['/fixture'] },
   ]);
   assert.deepEqual(legacyCoverage.componentMismatch, []);
 });
 
-test('真实 router.tsx 的每条路由组件都与 catalog 的 routeComponents 一致', () => {
+test('多路由 surface 内部换入口组件(并集内)也会被发现', () => {
+  // surface 级并集防不住的场景:两条路径各有入口,把 A 路径换成同 surface 的 B 组件。
+  const routerSource = `
+    export const router = createHashRouter([
+      { path: 'home', element: <DetailView /> },
+      { path: 'detail/:id', element: <DetailView /> },
+    ]);
+  `;
+  const catalog = [
+    {
+      id: 'desktop.test.multi',
+      routerPaths: ['/home', '/detail/:id'],
+      routeEntryComponents: { '/home': 'HomeView', '/detail/:id': 'DetailView' },
+    },
+  ];
+  const coverage = productionRouterCoverage(routerSource, catalog);
+  assert.deepEqual(coverage.componentMismatch, [
+    {
+      path: '/home',
+      actualComponent: 'DetailView',
+      catalogComponents: 'HomeView',
+      surfaceId: 'desktop.test.multi',
+    },
+  ]);
+});
+
+test('真实 router.tsx 的每条路由组件都与 catalog 的 routeEntryComponents 一致', () => {
   const coverage = productionRouterCoverage(readRouter(), catalogSurfaces());
   assert.deepEqual(
     coverage.componentMismatch,
     [],
     `组件不一致: ${JSON.stringify(coverage.componentMismatch)}`,
   );
-  // 每个 routerPaths 非空的 surface 都必须登记 routeComponents——防未来新增路由面漏登记。
+  // 每个 routerPaths 非空的 surface 都必须登记 routeEntryComponents 且逐路径覆盖
+  // ——防未来新增路由面漏登记、或多路由 surface 漏某条路径的映射。
   const missingRegistration = catalogSurfaces().filter(
     (surface) =>
-      (surface.routerPaths ?? []).length > 0 && (surface.routeComponents ?? []).length === 0,
+      (surface.routerPaths ?? []).length > 0 &&
+      Object.keys(surface.routeEntryComponents ?? {}).length === 0,
   );
   assert.deepEqual(
     missingRegistration.map((surface) => surface.id),
     [],
-    '路由级 surface 必须登记 routeComponents',
+    '路由级 surface 必须登记 routeEntryComponents',
+  );
+  const incomplete = catalogSurfaces().filter((surface) => {
+    const paths = surface.routerPaths ?? [];
+    const entries = surface.routeEntryComponents ?? {};
+    return paths.length > 0 && paths.some((routePath) => entries[routePath] === undefined);
+  });
+  assert.deepEqual(
+    incomplete.map((surface) => surface.id),
+    [],
+    'routeEntryComponents 必须覆盖 routerPaths 的每条路径',
   );
 });
 
@@ -632,6 +674,30 @@ test('Token 统计基于去注释源码,注释里的 var(--xxx) 占位符不进�
     tokens.add(match[1]);
   }
   assert.deepEqual([...tokens].sort(), ['--real-hsl-token', '--real-token']);
+});
+
+test('CSS 文件同样剥块注释后统计,globals.css 注释色值不进基线', () => {
+  const cssWithComments = `
+    /* 高亮主题示例:#ffffff / #f0fff4 / #ffeef0 */
+    :root {
+      --real-value: #102030;
+    }
+    .card { border-radius: 8px; }
+  `;
+  const stripped = stripJsComments(cssWithComments);
+  assert.equal(stripped.includes('#ffffff'), false);
+  assert.equal(stripped.includes('#102030'), true);
+  const hits = filterInventoryBareColors(matchBareColors(stripped));
+  assert.deepEqual(hits, ['#102030']);
+  // 真实 globals.css 上验证:剥注释后裸色显著低于未剥(注释示例色被剔除)。
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const shell = surfaces.find((surface) => surface.id === 'desktop.shell.main-layout');
+  // 上一轮口径(CSS 不剥注释)主窗口裸色为 92;剥注释后应显著下调。
+  assert.ok(
+    shell.bareColors < 92,
+    `CSS 注释剥离后主窗口裸色应低于 92(实际 ${shell.bareColors})`,
+  );
+  assert.ok(shell.bareColors > 0, '真实规则色值仍应计入');
 });
 
 test('skillhub.local 纳入直接渲染子组件的样式事实', () => {
