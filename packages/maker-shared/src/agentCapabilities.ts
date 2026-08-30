@@ -170,19 +170,21 @@ export function shouldBlockLegacyRemoteModelWindowSwitch(args: {
 }): boolean {
   if (args.hostGuardSupported || args.agentKind === 'pi') return false;
   const { contextTokens, currentContextWindow, targetContextWindow } = args;
+  const hasKnownWindows =
+    typeof currentContextWindow === 'number' &&
+    Number.isFinite(currentContextWindow) &&
+    currentContextWindow > 0 &&
+    typeof targetContextWindow === 'number' &&
+    Number.isFinite(targetContextWindow) &&
+    targetContextWindow > 0;
+  if (!hasKnownWindows) return true;
+  if (targetContextWindow >= currentContextWindow) return false;
   if (
     typeof contextTokens !== 'number' ||
     !Number.isFinite(contextTokens) ||
-    contextTokens < 0 ||
-    typeof currentContextWindow !== 'number' ||
-    !Number.isFinite(currentContextWindow) ||
-    currentContextWindow <= 0 ||
-    typeof targetContextWindow !== 'number' ||
-    !Number.isFinite(targetContextWindow) ||
-    targetContextWindow <= 0 ||
-    targetContextWindow >= currentContextWindow
+    contextTokens < 0
   ) {
-    return false;
+    return true;
   }
   return contextTokens / targetContextWindow >= 0.9;
 }

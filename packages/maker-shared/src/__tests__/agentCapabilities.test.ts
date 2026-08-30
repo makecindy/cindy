@@ -96,46 +96,60 @@ describe('agent capabilities shared model', () => {
     })?.supportsModelWindowSwitchGuard).toBe(true);
   });
 
-  it('fails closed for known pressured non-Pi shrinks on legacy hosts, including SSH', () => {
+  describe('legacy host model-window guard', () => {
     const pressuredShrink = {
       hostGuardSupported: false,
       agentKind: 'codex',
-      contextTokens: 250_000,
+      contextTokens: 180_000,
       currentContextWindow: 1_000_000,
       targetContextWindow: 200_000,
     };
 
-    expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredShrink)).toBe(true);
-    expect(shouldBlockLegacyRemoteModelWindowSwitch({
-      ...pressuredShrink,
-      contextTokens: 180_000,
-    })).toBe(true);
-    expect(shouldBlockLegacyRemoteModelWindowSwitch({
-      ...pressuredShrink,
-      contextTokens: 179_999,
-    })).toBe(false);
-    expect(shouldBlockLegacyRemoteModelWindowSwitch({
-      ...pressuredShrink,
-      targetContextWindow: 1_000_000,
-    })).toBe(false);
-    expect(shouldBlockLegacyRemoteModelWindowSwitch({
-      ...pressuredShrink,
-      agentKind: 'pi',
-    })).toBe(false);
-    expect(shouldBlockLegacyRemoteModelWindowSwitch({
-      ...pressuredShrink,
-      hostGuardSupported: true,
-    })).toBe(false);
-    const pressuredSshShrink = {
-      ...pressuredShrink,
-      isSsh: true,
-      contextTokens: 180_000,
-    };
-    expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredSshShrink)).toBe(true);
-    expect(shouldBlockLegacyRemoteModelWindowSwitch({
-      ...pressuredShrink,
-      currentContextWindow: undefined,
-    })).toBe(false);
+    it('blocks non-Pi shrinks at 90% while preserving safe bypasses, including SSH', () => {
+      expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredShrink)).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        contextTokens: 179_999,
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        targetContextWindow: 1_000_000,
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        targetContextWindow: 2_000_000,
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        agentKind: 'pi',
+      })).toBe(false);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        hostGuardSupported: true,
+      })).toBe(false);
+      const pressuredSshShrink = { ...pressuredShrink, isSsh: true };
+      expect(shouldBlockLegacyRemoteModelWindowSwitch(pressuredSshShrink)).toBe(true);
+    });
+
+    it('fails closed when legacy-host window or usage facts are unknown', () => {
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        contextTokens: undefined,
+      })).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        currentContextWindow: undefined,
+      })).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        targetContextWindow: undefined,
+      })).toBe(true);
+      expect(shouldBlockLegacyRemoteModelWindowSwitch({
+        ...pressuredShrink,
+        contextTokens: undefined,
+        targetContextWindow: 1_000_000,
+      })).toBe(false);
+    });
   });
 
   it('uses the current model efforts and model-specific labels', () => {
