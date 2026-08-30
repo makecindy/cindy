@@ -18,9 +18,11 @@ import {
   GENERATED_END,
   INVENTORY_REL_PATH,
   ROUTER_REL_PATH,
+  buildGeneratedSurfaces,
   catalogSurfaces,
   compareGenerated,
   defaultHumanSeed,
+  ensureHumanRows,
   extractHumanSurfaceIds,
   extractRouterFacts,
   findOrphanHumanIds,
@@ -80,7 +82,10 @@ test('stripJsComments: 去掉插在对象字面量里的行注释,不碰 https:/
   const stripped = stripJsComments(source);
   assert.equal(stripped.includes('Issue Tracker'), false);
   assert.equal(stripped.includes("path: 'issues'"), true);
-  assert.equal(stripped.includes('https://example.test/agent'), true);
+  // 不用 includes(URL) 子串断言(CodeQL js/incomplete-url-substring-sanitization 会拦):
+  // 检查行注释剥离后该行完整保留即可。
+  const urlLine = stripped.split('\n').find((line) => line.includes('const url'));
+  assert.equal(urlLine, "    const url = 'https://example.test/agent';");
 });
 
 test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => {
@@ -249,6 +254,11 @@ test('router.tsx 每条生产路由都能映射到 surface,布局壳在排除清
     [],
     `未映射生产路由: ${coverage.missing.map((row) => row.path).join(', ')}`,
   );
+  assert.deepEqual(
+    coverage.stale,
+    [],
+    `catalog 已失效路由: ${coverage.stale.join(', ')}`,
+  );
   const mappedPaths = coverage.mapped.map((row) => row.path);
   assert.ok(mappedPaths.includes('/issues'));
   assert.ok(mappedPaths.includes('/login'));
@@ -366,6 +376,53 @@ test('fixture 新增或删除一条生产路由会改变 GENERATED,使 compare �
   assert.equal(compareGenerated(doc, removed).equal, false);
 });
 
+test('catalog 路由被删除后 stale 反向核对能发现,不再静默通过', () => {
+  const routerSource = `
+    export const router = createHashRouter([
+      { path: 'fixture', element: <FixtureView /> },
+    ]);
+  `;
+  const catalog = [
+    { id: 'desktop.test.surface', routerPaths: ['/fixture'] },
+    { id: 'desktop.test.renamed', routerPaths: ['/old-name'] },
+  ];
+  const coverage = productionRouterCoverage(routerSource, catalog);
+  assert.deepEqual(coverage.missing, []);
+  assert.deepEqual(coverage.stale, ['/old-name']);
+  // 反向也钉死:真实路由全部在册时 stale 必须为空。
+  const freshCoverage = productionRouterCoverage(routerSource, [
+    { id: 'desktop.test.surface', routerPaths: ['/fixture'] },
+  ]);
+  assert.deepEqual(freshCoverage.stale, []);
+});
+
+test('catalog 含 App 顶层非路由生产 UI(LegacyMigrationDialog)且统计非零', () => {
+  const catalog = catalogSurfaces();
+  const migration = catalog.find((surface) => surface.id === 'desktop.auth.legacy-migration');
+  assert.ok(migration, 'catalog 必须登记 desktop.auth.legacy-migration');
+  assert.deepEqual(migration.routerPaths, []);
+  assert.equal(migration.productionEntry.includes('LegacyMigrationDialog'), true);
+  const surfaces = buildGeneratedSurfaces(ROOT, {});
+  const generated = surfaces.find((surface) => surface.id === 'desktop.auth.legacy-migration');
+  assert.ok(generated, 'GENERATED 必须含 desktop.auth.legacy-migration 行');
+  assert.ok(generated.tokenCount > 0, '迁移弹窗消费 --login-* token,统计不得为 0');
+  assert.ok(
+    generated.styleSources.includes('apps/desktop/src/renderer/components/auth/LegacyMigrationDialog.tsx'),
+  );
+});
+
+test('薄壳 surface 经 extraStyleRoots 继承被委托 surface 的样式事实', () => {
+  const surfaces = buildGeneratedSurfaces(ROOT, {});
+  const login = surfaces.find((surface) => surface.id === 'desktop.auth.login');
+  const addAccount = surfaces.find((surface) => surface.id === 'desktop.auth.add-account');
+  assert.ok(login && addAccount);
+  // AddAccountLoginPage 渲染即委托 LoginPage;统计必须与登录页同一组事实源,不再全 0。
+  assert.deepEqual(
+    { tokens: addAccount.tokenCount, colors: addAccount.bareColors, radii: addAccount.bareRadii },
+    { tokens: login.tokenCount, colors: login.bareColors, radii: login.bareRadii },
+  );
+});
+
 test('defaultHumanSeed: 全量 legacy + unassigned,protected 与迁移状态正交', () => {
   const seed = defaultHumanSeed(catalogSurfaces());
   const ids = extractHumanSurfaceIds(seed);
@@ -393,6 +450,27 @@ test('真实台账文件含 GENERATED 标记,人工区覆盖全部 surface ID', 
   assert.equal(findOrphanHumanIds(splitInventoryDocument(doc).suffix, catalogIds).length, 0);
 });
 
+test('ensureHumanRows 补行后人工表仍按 surface ID 有序', () => {
+  const generated = renderGeneratedBlock([tinySurface()], {
+    snapshotDate: '2026-08-30',
+    generateCommand: 'pnpm design:inventory',
+    routerCoverage: { mapped: [], missing: [] },
+    redirects: [],
+  });
+  const human =
+    '\n## 人工标注\n\n| ID | owner | 迁移状态 | protected | 目标道路 | 下一动作 |\n| --- | --- | --- | --- | --- | --- |\n| `desktop.test.surface` | kiro | pilot | x | y | z |\n| `desktop.test.zz-tail` | kiro | pilot | x | y | z |\n';
+  const existing = `# Cindy 生产 UI 台账\n${generated}${human}`;
+  const nextSurfaces = [
+    { id: 'desktop.test.surface' },
+    { id: 'desktop.test.a-new' },
+    { id: 'desktop.test.zz-tail' },
+  ];
+  const merged = ensureHumanRows(existing, nextSurfaces);
+  const ids = extractHumanSurfaceIds(splitInventoryDocument(merged).suffix);
+  assert.deepEqual(ids, [...ids].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(ids, ['desktop.test.a-new', 'desktop.test.surface', 'desktop.test.zz-tail']);
+});
+
 test.describe('CLI', { concurrency: false }, () => {
   test('CLI --check 在当前台账上通过', () => {
     const result = spawnSync(process.execPath, [CLI_PATH, '--check'], {
@@ -416,6 +494,32 @@ test.describe('CLI', { concurrency: false }, () => {
     assert.equal(secondRun.status, 0, secondRun.stderr || secondRun.stdout);
     const second = splitInventoryDocument(fs.readFileSync(INVENTORY_PATH, 'utf8')).generated;
     assert.equal(normalizeDocEol(first), normalizeDocEol(second));
+  });
+
+  test('CLI generate 刷新快照日期为当天;--check 沿用文件内既有日期不跨日假红', () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const run = (args) =>
+      spawnSync(process.execPath, [CLI_PATH, ...args], { cwd: ROOT, encoding: 'utf8' });
+    // generate 用当天日期写盘。
+    const gen = run([]);
+    assert.equal(gen.status, 0, gen.stderr || gen.stdout);
+    const doc = fs.readFileSync(INVENTORY_PATH, 'utf8');
+    assert.match(doc, new RegExp(`计数快照日期：${today}。`));
+    // 把日期改成昨天,--check 必须沿用文件里的日期重渲染 → 不因跨日误报。
+    const aged = doc.replace(
+      /计数快照日期：\d{4}-\d{2}-\d{2}。/,
+      '计数快照日期：2020-01-01。',
+    );
+    fs.writeFileSync(INVENTORY_PATH, aged, 'utf8');
+    const agedCheck = run(['--check']);
+    assert.equal(agedCheck.status, 0, agedCheck.stderr || agedCheck.stdout);
+    // 再 generate 一次把日期复原,并确认写回的是当天。
+    const restore = run([]);
+    assert.equal(restore.status, 0, restore.stderr || restore.stdout);
+    assert.match(
+      fs.readFileSync(INVENTORY_PATH, 'utf8'),
+      new RegExp(`计数快照日期：${today}。`),
+    );
   });
 });
 

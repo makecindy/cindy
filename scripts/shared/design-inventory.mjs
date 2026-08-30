@@ -336,7 +336,10 @@ export function catalogSurfaces() {
       title: '添加账号',
       productionEntry: 'hash `/add-account`（ProtectedRoute → AddAccountLoginPage）',
       reachableComponents: ['AddAccountLoginPage'],
+      // AddAccountLoginPage 是薄壳,渲染即委托 <LoginPage intent="add-account">;
+      // 样式事实在 LoginPage 一侧,只扫壳会得到全 0 的假统计,故并入登录皮肤同组 roots。
       styleRoots: ['apps/desktop/src/renderer/components/login/AddAccountLoginPage.tsx'],
+      extraStyleRoots: ['desktop.auth.login'],
       routerPaths: ['/add-account'],
     },
     {
@@ -577,6 +580,16 @@ export function catalogSurfaces() {
       routerPaths: [],
     },
     {
+      id: 'desktop.auth.legacy-migration',
+      platform: 'desktop',
+      title: '首登数据迁移弹窗',
+      productionEntry:
+        'App 顶层挂载 LegacyMigrationDialog（仅主窗；main 检测到旧版 userData 经 `legacy-migration:state` 驱动）',
+      reachableComponents: ['LegacyMigrationDialog'],
+      styleRoots: ['apps/desktop/src/renderer/components/auth/LegacyMigrationDialog.tsx'],
+      routerPaths: [],
+    },
+    {
       id: 'desktop.overlay.toast',
       platform: 'desktop',
       title: 'Toast',
@@ -692,13 +705,24 @@ export function productionRouterCoverage(routerSource, catalog = catalogSurfaces
   for (const route of production) {
     (covered.has(route.path) ? mapped : missing).push(route);
   }
-  return { mapped, missing, covered: [...covered].sort() };
+  // 反向核对：catalog 里登记的路径必须仍是真实生产路由。route 删除/改名后若只做正向
+  // 检查，重新生成会把它从覆盖表悄悄抹掉，--check 照样通过，台账继续宣称它生产可达。
+  const actualPaths = new Set(production.map((route) => route.path));
+  const stale = [...covered].filter((routePath) => !actualPaths.has(routePath));
+  return { mapped, missing, stale, covered: [...covered].sort() };
 }
 
 export function buildGeneratedSurfaces(repoRoot, { catalog = catalogSurfaces() } = {}) {
+  const byId = new Map(catalog.map((surface) => [surface.id, surface]));
   return catalog
     .map((surface) => {
-      const stats = scanStyleStats(repoRoot, surface.styleRoots);
+      // 渲染即委托的薄壳（如 AddAccountLoginPage → LoginPage）按 extraStyleRoots
+      // 指向被委托 surface 的 styleRoots，统计口径与其保持同一组事实源。
+      const roots = [
+        ...surface.styleRoots,
+        ...(surface.extraStyleRoots ?? []).flatMap((id) => byId.get(id)?.styleRoots ?? []),
+      ];
+      const stats = scanStyleStats(repoRoot, roots);
       return {
         id: surface.id,
         platform: surface.platform,
@@ -900,6 +924,9 @@ export function defaultHumanSeed(surfaces) {
 const PROTECTED_TAGS = {
   'desktop.auth.login': ['DESIGN.md §16 登录链路'],
   'desktop.auth.add-account': ['DESIGN.md §16 登录链路'],
+  'desktop.auth.legacy-migration': [
+    'DESIGN.md §16 登录链路（消费 --login-callback-* 品牌豁免族 component token）',
+  ],
   'desktop.overlay.splash': ['DESIGN.md §16 登录链路'],
   'desktop.shell.main-layout': [
     'DESIGN.md §15 CINDY 皮肤族（侧栏 vibrancy / 选中 pill）',
@@ -955,15 +982,26 @@ export function ensureHumanRows(existingMarkdown, surfaces) {
 
 function appendRowsToHumanTable(suffix, extraRows) {
   const lines = suffix.split('\n');
-  let lastTable = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (HUMAN_ID_RE.test(lines[i])) lastTable = i;
+  // 人工表按 surface ID 排序是既有不变量；新行按 ID 插到正确位置，不是无脑追加到表尾。
+  const pending = extraRows
+    .map((row) => ({ row, id: HUMAN_ID_RE.exec(row)?.[1] ?? '' }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const result = [];
+  let insertAt = -1;
+  for (const line of lines) {
+    const id = HUMAN_ID_RE.exec(line)?.[1];
+    while (pending.length > 0 && id && pending[0].id.localeCompare(id) < 0) {
+      result.push(pending.shift().row);
+    }
+    result.push(line);
+    if (id) insertAt = result.length;
   }
-  if (lastTable === -1) {
-    return `${suffix.trimEnd()}\n${extraRows.join('\n')}\n`;
+  const rest = pending.map((item) => item.row);
+  if (rest.length > 0) {
+    if (insertAt === -1) return `${suffix.trimEnd()}\n${rest.join('\n')}\n`;
+    result.splice(insertAt, 0, ...rest);
   }
-  lines.splice(lastTable + 1, 0, ...extraRows);
-  return lines.join('\n');
+  return result.join('\n');
 }
 
 export function formatOrphanReport(orphanIds) {

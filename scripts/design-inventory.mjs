@@ -36,8 +36,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const DOC_PATH = path.join(repoRoot, ...INVENTORY_REL_PATH.split('/'));
 const ROUTER_PATH = path.join(repoRoot, ...ROUTER_REL_PATH.split('/'));
 
-/** 计数快照日期。写入 GENERATED 后即冻结；--check 用文件里已有日期重渲染，避免跨日假红。 */
-const SNAPSHOT_DATE = '2026-08-30';
+/**
+ * 生成模式用当天日期快照计数事实；--check 用文件里已有日期重渲染，避免跨日假红。
+ * 日期只在生成时求值（不进 shared 纯函数），保证同一天内连续两次生成字节一致。
+ */
 const GENERATE_COMMAND = 'pnpm design:inventory';
 
 const checkOnly = process.argv.includes('--check');
@@ -48,7 +50,7 @@ function readExisting() {
 
 function snapshotDateFromExisting(existing) {
   const match = /计数快照日期：(\d{4}-\d{2}-\d{2})/.exec(existing);
-  return match?.[1] ?? SNAPSHOT_DATE;
+  return match?.[1] ?? new Date().toISOString().slice(0, 10);
 }
 
 function buildGenerated(existing) {
@@ -57,7 +59,7 @@ function buildGenerated(existing) {
   const surfaces = buildGeneratedSurfaces(repoRoot, { catalog });
   const routerCoverage = productionRouterCoverage(routerSource, catalog);
   const redirects = listRedirectExclusions(routerSource);
-  const snapshotDate = checkOnly ? snapshotDateFromExisting(existing) : SNAPSHOT_DATE;
+  const snapshotDate = checkOnly ? snapshotDateFromExisting(existing) : new Date().toISOString().slice(0, 10);
   const generated = renderGeneratedBlock(surfaces, {
     snapshotDate,
     generateCommand: GENERATE_COMMAND,
@@ -83,6 +85,16 @@ if (routerCoverage.missing.length > 0) {
     '[design-inventory] ❌ router.tsx 有生产路由未映射到 surface：\n' +
       missing +
       '\n  请在 scripts/shared/design-inventory.mjs 的 catalogSurfaces() 补 routerPaths。',
+  );
+  process.exit(1);
+}
+
+if (routerCoverage.stale.length > 0) {
+  const stale = routerCoverage.stale.map((path) => `  - ${path}`).join('\n');
+  console.error(
+    '[design-inventory] ❌ catalog 里登记的路由已不在 router.tsx 生产路由中：\n' +
+      stale +
+      '\n  路由已删除或改名时，请同步清理 catalogSurfaces() 对应 surface 的 routerPaths。',
   );
   process.exit(1);
 }
