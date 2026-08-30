@@ -3594,6 +3594,65 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([source]);
   });
 
+  it('durably disables a secret-bearing opaque row when the native roster is unavailable', async () => {
+    const secretSource = 'https://user:credential-secret@example.com/pkg.git?token=query-secret#fragment-secret';
+    await createPackage({ source: secretSource });
+    const store = await import('../pi-package-store.js');
+    const listed = await store.listPiPackages();
+    const row = listed.packages[0]!;
+    expect(row.source).toBe('https://example.com/pkg.git');
+    expect(row.mutationTarget).toMatch(/^cindy-pi-package:[a-f0-9]{64}$/);
+
+    runtime.spawns = [];
+    runtime.listOutcomes = [{ stderr: 'list unavailable during opaque disable', exitCode: 1 }];
+    const runtimeFence = vi.fn();
+    const receipt = await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: row.source,
+      mutationTarget: row.mutationTarget,
+      enabled: false,
+    }, { onRuntimeInvalidationPublished: runtimeFence });
+
+    expect(receipt).toMatchObject({
+      changed: true,
+      available: false,
+      projectionUnavailable: true,
+    });
+    expect(runtimeFence).toHaveBeenCalledOnce();
+    expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
+    const stateFile = path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json');
+    const stateText = await fs.readFile(stateFile, 'utf8');
+    expect(JSON.parse(stateText)).toMatchObject({ disabledSources: [row.mutationTarget] });
+    expect(stateText).not.toContain('credential-secret');
+    expect(stateText).not.toContain('query-secret');
+    expect(stateText).not.toContain('fragment-secret');
+    runtime.listOutcomes = [{ stdout: runtime.listOutput, exitCode: 0 }];
+    await expect(store.resolveManagedPiNativePackagePaths()).resolves.toEqual([]);
+
+    runtime.listOutcomes = [{ stderr: 'list unavailable during opaque enable', exitCode: 1 }];
+    const enableFence = vi.fn();
+    await expect(mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: row.source,
+      mutationTarget: row.mutationTarget,
+      enabled: true,
+    }, { onRuntimeInvalidationPublished: enableFence })).rejects.toThrow('state is unavailable');
+    expect(enableFence).not.toHaveBeenCalled();
+    expect(await fs.readFile(stateFile, 'utf8')).toBe(stateText);
+
+    runtime.listOutcomes = Array.from({ length: 2 }, () => ({
+      stdout: runtime.listOutput,
+      exitCode: 0,
+    }));
+    await expect(mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: row.source,
+      mutationTarget: row.mutationTarget,
+      enabled: true,
+    })).resolves.toMatchObject({ affectedPackage: { enabled: true } });
+    expect(JSON.parse(await fs.readFile(stateFile, 'utf8'))).toMatchObject({ disabledSources: [] });
+  });
+
   it('still requires a fresh native roster before enabling a source without an opaque target', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
@@ -4055,7 +4114,7 @@ describe('Pi package executable-code boundary', () => {
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',
     )) as { disabledSources: string[] };
-    expect(state.disabledSources).toEqual([source]);
+    expect(state.disabledSources).toEqual([listed.packages[0]!.mutationTarget]);
   });
 
   it('redacts sensitive URL fields without disabling a source accepted by Pi', async () => {
@@ -4089,7 +4148,9 @@ describe('Pi package executable-code boundary', () => {
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',
     )) as { disabledSources: string[] };
-    expect(state.disabledSources).toEqual([unsafeSource]);
+    expect(state.disabledSources).toEqual([result.packages[0]!.mutationTarget]);
+    expect(JSON.stringify(state)).not.toContain('secret');
+    expect(JSON.stringify(state)).not.toContain('private');
     await expect(store.resolveManagedPiPackageResources({
       snapshotRoot: path.join(runtime.userData, 'unsafe-snapshot'),
     })).resolves.toEqual({

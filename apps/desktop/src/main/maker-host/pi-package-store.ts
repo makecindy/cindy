@@ -1512,7 +1512,7 @@ async function inspectPackage(
     extensions: [], skills: [], promptTemplates: [], packageRoots: [],
   };
   const { displaySource, unsafe } = projectPackageSource(pkg.source);
-  const explicitlyDisabled = state.disabledSources.includes(pkg.source);
+  const explicitlyDisabled = isPackageSourceDisabled(new Set(state.disabledSources), pkg.source);
   if (unsafe) {
     return {
       rawSource: pkg.source,
@@ -1874,7 +1874,7 @@ async function projectNativePackageViews(
     return {
       ...view,
       ...(mutationTarget ? { mutationTarget } : {}),
-      enabled: installed && !disabled.has(pkg.rawSource),
+      enabled: installed && !isPackageSourceDisabled(disabled, pkg.rawSource),
       ...(!installed && canToggle === false ? { canToggle: false as const } : {}),
       ...(warning ? { warning } : {}),
     };
@@ -1971,7 +1971,7 @@ export async function resolveManagedPiNativePackagePaths(): Promise<PiNativePack
   // Feed Pi installed roots while preserving any native object-form filters.
   // Pi then owns resource discovery without reinstalling the package.
   const entries = listed.flatMap((pkg): PiNativePackageEntry[] => {
-    if (!pkg.installedPath || disabled.has(pkg.source)) return [];
+    if (!pkg.installedPath || isPackageSourceDisabled(disabled, pkg.source)) return [];
     const spec = objectSpecs?.get(pkg.source);
     if (spec) return [{ ...spec, source: pkg.installedPath }];
     // Never silently drop or widen a natively filtered package. If its exact
@@ -2184,6 +2184,10 @@ function packageMutationTarget(source: string): string {
   return `${PACKAGE_MUTATION_TARGET_PREFIX}${createHash('sha256').update(source).digest('hex')}`;
 }
 
+function isPackageSourceDisabled(disabled: ReadonlySet<string>, source: string): boolean {
+  return disabled.has(source) || disabled.has(packageMutationTarget(source));
+}
+
 async function resolvePackageMutationTarget(
   source: string,
   mutationTarget: string | undefined,
@@ -2206,7 +2210,15 @@ async function resolvePackageMutationTarget(
     || !/^[a-f0-9]{64}$/.test(digest)) {
     throw new Error('Invalid Pi package mutation target');
   }
-  const listed = await runPiPackageListCommand();
+  // An opaque disable is a durable deny keyed by the Main-minted identity. It
+  // neither needs the secret-bearing source nor grants authority to enable it.
+  if (!requireInstalled) return mutationTarget;
+  let listed: ListedPackage[];
+  try {
+    listed = await runPiPackageListCommand();
+  } catch {
+    throw new PiPackageStateUnavailableError();
+  }
   const match = listed.find((pkg) => (
     packageMutationTarget(pkg.source) === mutationTarget
   ));
@@ -2771,10 +2783,12 @@ async function expandAliasesWithDisabledSources(sources: Iterable<string>): Prom
   const targetAliases = new Set((await Promise.all(
     [...expanded].map((source) => sourceAliasesWithCanonical(source)),
   )).flat());
+  const opaqueTargets = new Set([...targetAliases].map(packageMutationTarget));
   const state = await requireState();
   for (const disabledSource of state.disabledSources) {
     const aliases = await sourceAliasesWithCanonical(disabledSource);
-    if (aliases.some((alias) => targetAliases.has(alias))) expanded.add(disabledSource);
+    if (opaqueTargets.has(disabledSource)
+      || aliases.some((alias) => targetAliases.has(alias))) expanded.add(disabledSource);
   }
   return [...expanded];
 }
@@ -2965,9 +2979,11 @@ export async function mutatePiPackage(
     const source = await resolvePackageMutationTarget(
       requestedSource,
       request.mutationTarget,
-      // Enabling must resolve to Pi's current roster. Disabling is a revocation:
-      // the trusted row source can be durably denied even if Pi list is unavailable.
-      request.action === 'set-enabled' && request.enabled === true,
+      // Enabling and native commands must resolve an opaque row against Pi's
+      // current roster. Disabling can durably deny the Main-minted opaque target.
+      request.action === 'set-enabled'
+        ? request.enabled === true
+        : Boolean(request.mutationTarget),
     );
     const logSource = projectPackageSource(source).displaySource;
     try {
@@ -3089,7 +3105,8 @@ export async function mutatePiPackage(
         const state = await requireState();
         const removedSources = new Set([
           ...sourceAliases(source),
-          ...(previous ? sourceAliases(previous.rawSource) : []),
+          packageMutationTarget(source),
+          ...(previous ? [...sourceAliases(previous.rawSource), packageMutationTarget(previous.rawSource)] : []),
         ]);
         await writeState({
           version: STATE_VERSION,
@@ -3115,7 +3132,10 @@ export async function mutatePiPackage(
       ];
       const stateBeforeUpdate = await readState();
       const wasExplicitlyDisabled = stateBeforeUpdate.ok
-        ? updateAliases.some((item) => stateBeforeUpdate.state.disabledSources.includes(item))
+        ? updateAliases.some((item) => isPackageSourceDisabled(
+            new Set(stateBeforeUpdate.state.disabledSources),
+            item,
+          ))
         : null;
       // Keep the last optional snapshot identity until Pi's update command
       // succeeds. Cindy may retire a stale snapshot after byte changes, but
@@ -3198,7 +3218,9 @@ export async function mutatePiPackage(
         // inspector or fingerprint format, decides whether the package loads.
         // Preserve a fingerprint when available only for Cindy's optional
         // snapshot metadata; absence or mismatch is never an enable blocker.
-        disabled.delete(affectedSource);
+        for (const alias of toggleAliases) disabled.delete(alias);
+        if (request.mutationTarget) disabled.delete(request.mutationTarget);
+        disabled.delete(packageMutationTarget(affectedSource));
         if (target?.contentFingerprint
           && target.view.resources.some((resource) => resource.kind === 'extension')) {
           approved.add(affectedSource);
@@ -3213,6 +3235,14 @@ export async function mutatePiPackage(
         let pendingChanged = false;
         for (const alias of toggleAliases) {
           if (pending.delete(alias)) pendingChanged = true;
+        }
+        if (request.mutationTarget) {
+          for (const pendingSource of pending) {
+            if (packageMutationTarget(pendingSource) === request.mutationTarget) {
+              pending.delete(pendingSource);
+              pendingChanged = true;
+            }
+          }
         }
         if (pendingChanged) {
           try {
@@ -3253,7 +3283,8 @@ export async function mutatePiPackage(
     const affectedLookupSource = affectedSource ?? source;
     const affectedPackage = findAffectedPiPackage(result.packages, affectedLookupSource)
       ?? result.packages.find((pkg) => (
-        pkg.mutationTarget === packageMutationTarget(affectedLookupSource)
+        pkg.mutationTarget === request.mutationTarget
+        || pkg.mutationTarget === packageMutationTarget(affectedLookupSource)
       ));
     if (request.action === 'install' && affectedPackage?.enabled !== true) {
       // Native Pi already accepted the package. Keep a useful receipt even if
