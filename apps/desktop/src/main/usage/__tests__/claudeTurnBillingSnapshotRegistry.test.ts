@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ClaudeTurnBillingSnapshotRegistry,
+  shouldResolveClaudeTurnBillingSnapshotAtUsage,
   type ClaudeTurnBillingSnapshot,
 } from '../claudeTurnBillingSnapshotRegistry';
 import { resolveClaudeTurnCostSinks } from '../turnCostCalculator';
@@ -16,6 +17,12 @@ const PROVIDER_A: ClaudeTurnBillingSnapshot = {
 const USER_PROVIDER_B: ClaudeTurnBillingSnapshot = {
   providerId: 'xd',
   billingRoute: 'xd-gateway',
+  subscriptionSession: false,
+};
+
+const UNKNOWN_LOCAL: ClaudeTurnBillingSnapshot = {
+  providerId: null,
+  billingRoute: 'unknown',
   subscriptionSession: false,
 };
 
@@ -156,4 +163,40 @@ describe('ClaudeTurnBillingSnapshotRegistry', () => {
       inherited: false,
     });
   });
+
+  it.each([
+    ['xd-gateway', false],
+    ['subscription', true],
+  ] as const)(
+    'preserves an inherited provider-less %s route when the replacement has no observation',
+    (billingRoute, subscriptionSession) => {
+      const registry = new ClaudeTurnBillingSnapshotRegistry();
+      registry.stage('session-1', 1, () => UNKNOWN_LOCAL);
+      const resolvedPredecessor = {
+        providerId: null,
+        billingRoute,
+        subscriptionSession,
+      } satisfies ClaudeTurnBillingSnapshot;
+      expect(registry.replace('session-1', 1, resolvedPredecessor)).toBe(true);
+      const continuation = registry.claimContinuation('session-1', 1, 'lease-1');
+      expect(continuation).not.toBeNull();
+
+      // SET_MODEL (or an independent user turn) selects an explicit provider
+      // before the delayed replacement dispatches. The replacement therefore
+      // has no new default-route observation and must retain its inherited route.
+      registry.stage('session-1', 2, () => USER_PROVIDER_B);
+      const replacement = registry.stage(
+        'session-1',
+        3,
+        () => USER_PROVIDER_B,
+        continuation,
+      );
+
+      expect(replacement).toEqual({ snapshot: resolvedPredecessor, inherited: true });
+      expect(shouldResolveClaudeTurnBillingSnapshotAtUsage(replacement.snapshot, false)).toBe(
+        false,
+      );
+      expect(shouldResolveClaudeTurnBillingSnapshotAtUsage(UNKNOWN_LOCAL, false)).toBe(true);
+    },
+  );
 });

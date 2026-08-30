@@ -29,6 +29,19 @@ const UNKNOWN_BILLING_SNAPSHOT: ClaudeTurnBillingSnapshot = {
 };
 
 /**
+ * Only a fresh provider-less local request needs its loopback route resolved at
+ * usage time. A silent-stop replacement may already own the predecessor's
+ * resolved default route; re-resolving that inherited snapshot from the
+ * replacement generation would discard it when no new default route was used.
+ */
+export function shouldResolveClaudeTurnBillingSnapshotAtUsage(
+  snapshot: ClaudeTurnBillingSnapshot,
+  remote: boolean,
+): boolean {
+  return !remote && snapshot.providerId === null && snapshot.billingRoute === 'unknown';
+}
+
+/**
  * Owns generation-scoped Claude billing evidence and one-shot silent-stop handoffs.
  *
  * A claimed predecessor is copied into a token slot before any independent turn can

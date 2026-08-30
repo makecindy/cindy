@@ -545,6 +545,7 @@ import {
 } from '../usage/turnCostCalculator.js';
 import {
   ClaudeTurnBillingSnapshotRegistry,
+  shouldResolveClaudeTurnBillingSnapshotAtUsage,
   type ClaudeTurnBillingSnapshot,
 } from '../usage/claudeTurnBillingSnapshotRegistry.js';
 import {
@@ -2800,7 +2801,11 @@ function resolveClaudeTurnBillingSnapshotAtUsage(
   turnGeneration: number,
   snapshot: ClaudeTurnBillingSnapshot,
 ): ClaudeTurnBillingSnapshot {
-  if (snapshot.providerId !== null || session.remoteHostId !== null) return snapshot;
+  if (
+    !shouldResolveClaudeTurnBillingSnapshotAtUsage(snapshot, session.remoteHostId !== null)
+  ) {
+    return snapshot;
+  }
   const observedRoute = readClaudeSessionTurnRoute(session.id, turnGeneration);
   const billingRoute = billingRouteForClaudeSession({
     remote: false,
