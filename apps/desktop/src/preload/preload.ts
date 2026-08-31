@@ -42,6 +42,13 @@ import {
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior';
 import {
+  CODEX_MICRO_GUARD_GET_STATE_CHANNEL,
+  CODEX_MICRO_GUARD_RECOVER_CHANNEL,
+  CODEX_MICRO_GUARD_SET_ENABLED_CHANNEL,
+  CODEX_MICRO_GUARD_STATE_CHANGED_CHANNEL,
+  type CodexMicroGuardState,
+} from '../shared/codexMicroGuard';
+import {
   WORKLOUDER_CODEX_ACTION_CHANNEL,
   WORKLOUDER_CODEX_GET_STATE_CHANNEL,
   WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL,
@@ -1619,6 +1626,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     notifyWindowsCloseBehaviorPromptShown: (): void =>
       ipcRenderer.send(WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL),
+  },
+
+  codexMicroGuard: {
+    getState: (): Promise<CodexMicroGuardState> =>
+      ipcRenderer.invoke(CODEX_MICRO_GUARD_GET_STATE_CHANNEL),
+    setEnabled: (enabled: boolean): Promise<CodexMicroGuardState> =>
+      ipcRenderer.invoke(CODEX_MICRO_GUARD_SET_ENABLED_CHANNEL, enabled),
+    recover: (): Promise<CodexMicroGuardState> =>
+      ipcRenderer.invoke(CODEX_MICRO_GUARD_RECOVER_CHANNEL),
+    onStateChanged: (callback: (state: CodexMicroGuardState) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: CodexMicroGuardState): void => {
+        callback(state);
+      };
+      ipcRenderer.on(CODEX_MICRO_GUARD_STATE_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(CODEX_MICRO_GUARD_STATE_CHANGED_CHANNEL, listener);
+    },
   },
 
   workLouderCodex: {

@@ -3685,6 +3685,28 @@
       "recording": "Press new shortcut…",
       "editAria": "Change shortcut for {{name}}",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex compatibility",
+          "label": "Prevent Codex from occupying the device",
+          "aria": "Prevent Codex from occupying Codex Micro",
+          "recover": "Restore environment",
+          "status": {
+            "unsupported": "macOS only",
+            "disabled": "Off",
+            "protecting": "Restart Codex",
+            "intercepted": "Protected",
+            "recovery-required": "Recovery needed",
+            "error": "Unavailable"
+          },
+          "descriptions": {
+            "unsupported": "This protection is available on macOS only.",
+            "disabled": "While Cindy is running, stop Codex from connecting to Codex Micro. Cindy itself is not restricted.",
+            "protecting": "Protection is ready. Completely quit and reopen Codex; an already-running Codex is unaffected.",
+            "intercepted": "Codex's Work Louder service was blocked. Cindy can keep using the device.",
+            "recovery-required": "Protection stopped, but NODE_OPTIONS has not been safely restored. Retry the recovery before enabling it again.",
+            "error": "Cindy could not update Codex protection. Your previous NODE_OPTIONS value was preserved or queued for recovery."
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "Previous task",

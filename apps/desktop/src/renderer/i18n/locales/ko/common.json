@@ -3684,6 +3684,28 @@
       "recording": "새 단축키를 누르세요…",
       "editAria": "{{name}} 단축키 변경",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex 호환성",
+          "label": "Codex의 장치 점유 방지",
+          "aria": "Codex의 Codex Micro 점유 방지",
+          "recover": "환경 복원",
+          "status": {
+            "unsupported": "macOS 전용",
+            "disabled": "꺼짐",
+            "protecting": "Codex 재시작 필요",
+            "intercepted": "보호 중",
+            "recovery-required": "복원 필요",
+            "error": "사용 불가"
+          },
+          "descriptions": {
+            "unsupported": "이 보호 기능은 macOS에서만 사용할 수 있습니다.",
+            "disabled": "Cindy가 실행되는 동안 Codex가 Codex Micro에 연결하지 못하게 합니다. Cindy 자체는 제한하지 않습니다.",
+            "protecting": "보호 준비가 완료되었습니다. Codex를 완전히 종료한 뒤 다시 여세요. 이미 실행 중인 Codex에는 영향을 주지 않습니다.",
+            "intercepted": "Codex의 Work Louder 서비스를 차단했습니다. Cindy는 장치를 계속 사용할 수 있습니다.",
+            "recovery-required": "보호가 중지되었지만 NODE_OPTIONS가 안전하게 복원되지 않았습니다. 다시 켜기 전에 복원을 재시도하세요.",
+            "error": "Codex 보호를 업데이트하지 못했습니다. 기존 NODE_OPTIONS는 유지되었거나 복원 대기 중입니다."
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "이전 작업",

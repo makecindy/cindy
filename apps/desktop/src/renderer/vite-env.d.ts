@@ -73,6 +73,7 @@ type PendingRemotePrecreatedWorktreeTarget =
 type RemotePrecreatedWorktreeLedgerSnapshot =
   import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
 type RawReleaseNotesPayload = import('../shared/releaseNotesContent').RawReleaseNotes;
+type CodexMicroGuardState = import('../shared/codexMicroGuard').CodexMicroGuardState;
 type WorkLouderCodexSettingsPatch =
   import('../shared/workLouderCodex').WorkLouderCodexSettingsPatch;
 type WorkLouderCodexState = import('../shared/workLouderCodex').WorkLouderCodexState;
@@ -1845,6 +1846,13 @@ interface ElectronAPI {
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
     onWindowsCloseBehaviorRequested: (callback: () => void) => () => void;
     notifyWindowsCloseBehaviorPromptShown: () => void;
+  };
+
+  codexMicroGuard: {
+    getState: () => Promise<CodexMicroGuardState>;
+    setEnabled: (enabled: boolean) => Promise<CodexMicroGuardState>;
+    recover: () => Promise<CodexMicroGuardState>;
+    onStateChanged: (callback: (state: CodexMicroGuardState) => void) => () => void;
   };
 
   workLouderCodex: {

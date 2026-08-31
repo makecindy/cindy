@@ -3684,6 +3684,28 @@
       "recording": "新しいショートカットを入力…",
       "editAria": "{{name}} のショートカットを変更",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex との互換性",
+          "label": "Codex によるデバイスの占有を防ぐ",
+          "aria": "Codex による Codex Micro の占有を防ぐ",
+          "recover": "環境を復元",
+          "status": {
+            "unsupported": "macOS のみ",
+            "disabled": "オフ",
+            "protecting": "Codex を再起動",
+            "intercepted": "保護中",
+            "recovery-required": "復元が必要",
+            "error": "利用不可"
+          },
+          "descriptions": {
+            "unsupported": "この保護機能は macOS でのみ利用できます。",
+            "disabled": "Cindy の実行中、Codex が Codex Micro に接続するのを防ぎます。Cindy 自体は制限されません。",
+            "protecting": "保護の準備ができました。Codex を完全に終了してから開き直してください。実行中の Codex には影響しません。",
+            "intercepted": "Codex の Work Louder サービスをブロックしました。Cindy は引き続きデバイスを使用できます。",
+            "recovery-required": "保護は停止しましたが、NODE_OPTIONS は安全に復元されていません。再度有効にする前に復元を再試行してください。",
+            "error": "Codex の保護を更新できませんでした。以前の NODE_OPTIONS は保持されているか、復元待ちです。"
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "前のタスク",

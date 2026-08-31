@@ -3670,6 +3670,28 @@
       "recording": "按下新快捷键…",
       "editAria": "修改 {{name}} 的快捷键",
       "workLouderCodex": {
+        "codexGuard": {
+          "title": "Codex 兼容性",
+          "label": "防止 Codex 占用设备",
+          "aria": "防止 Codex 占用 Codex Micro",
+          "recover": "恢复环境",
+          "status": {
+            "unsupported": "仅 macOS",
+            "disabled": "已关闭",
+            "protecting": "请重启 Codex",
+            "intercepted": "保护中",
+            "recovery-required": "需要恢复",
+            "error": "不可用"
+          },
+          "descriptions": {
+            "unsupported": "此保护仅在 macOS 上可用。",
+            "disabled": "Cindy 运行期间阻止 Codex 连接 Codex Micro；不会限制 Cindy 本身。",
+            "protecting": "保护已就绪。请完全退出后重新打开 Codex；已经运行的 Codex 不受影响。",
+            "intercepted": "已阻止 Codex 的 Work Louder 服务，Cindy 可以继续使用设备。",
+            "recovery-required": "保护已停止，但 NODE_OPTIONS 尚未安全恢复。请先重试恢复，再重新开启。",
+            "error": "Cindy 无法更新 Codex 保护；原有 NODE_OPTIONS 已保留或等待恢复。"
+          }
+        },
         "commands": {
           "session.selectPrevious": {
             "name": "上一个任务",
