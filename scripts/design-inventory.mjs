@@ -17,11 +17,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  BARE_RADIUS_RE,
   INVENTORY_REL_PATH,
   MAIN_ENTRY_REL_PATH,
   RENDERER_INDEX_REL_PATH,
   ROUTER_REL_PATH,
   buildGeneratedSurfaces,
+  stripJsComments,
   catalogSurfaces,
   compareGenerated,
   defaultHumanSeed,
@@ -262,6 +264,17 @@ if (checkOnly) {
       diffLines.push(`  - ${id}:`);
       diffLines.push(`    文件: ${currentLine ? statsOf(currentLine) : '(缺行)'}`);
       diffLines.push(`    重算: ${statsOf(nextLine)}`);
+      // 逐文件计数表：定位跨平台分歧到具体文件（CI 日志与本地表逐行对比）。
+      const surface = surfaces.find((s) => s.id === id);
+      if (surface) {
+        const perFile = surface.styleSources.map((file) => {
+          const src = fs.readFileSync(path.join(repoRoot, ...file.split('/')), 'utf8');
+          const scan = stripJsComments(src);
+          const radii = (scan.match(BARE_RADIUS_RE) ?? []).length;
+          return `    ${radii} ${file}`;
+        });
+        diffLines.push(...perFile);
+      }
     }
     console.error(
       '[design-inventory] ❌ GENERATED 区块与源码不同步。\n' +

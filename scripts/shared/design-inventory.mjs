@@ -58,7 +58,7 @@ const SKIP_DIR_NAMES = new Set([
  * React style 对象的 camelCase `borderRadius:`（LoginCaptchaOverlay 等组件
  * 用内联 style 声明圆角，kebab-case 正则会系统性漏掉它们）。
  */
-const BARE_RADIUS_RE = /\b(?:rounded(?:-(?:none|sm|md|lg|xl|2xl|3xl|full))?|border-radius\s*:|borderRadius\s*:)/g;
+export const BARE_RADIUS_RE = /\b(?:rounded(?:-(?:none|sm|md|lg|xl|2xl|3xl|full))?|border-radius\s*:|borderRadius\s*:)/g;
 
 function posixRel(value) {
   return String(value).replace(/\\/g, '/');
