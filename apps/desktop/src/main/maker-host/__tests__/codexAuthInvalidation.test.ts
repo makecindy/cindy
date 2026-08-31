@@ -1266,6 +1266,77 @@ describe('Codex system credential suppression marker', () => {
     expect(chmodSpy).not.toHaveBeenCalled();
   });
 
+  it('keeps unproven shared suppression across restart when marker commit fails', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-unproven-marker-fail-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    const markerPath = getCodexAuthInvalidationMarkerPath(codexHome);
+    const bindingPath = path.join(h.userDataDir, 'native-provider-auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-f2-token', account_id: 'acct-1' } }),
+      { mode: 0o600 },
+    );
+    if (process.platform === 'win32') fs.linkSync(systemAuth, localAuth);
+    else fs.symlinkSync(systemAuth, localAuth);
+    fs.writeFileSync(
+      bindingPath,
+      JSON.stringify({
+        openai: 'owner-a',
+        sharedSystemCredential: { openai: 'owner-a' },
+        sources: { openai: 'native-harness-inherited' },
+      }),
+    );
+    const f2Bytes = fs.readFileSync(systemAuth);
+    const f2Stat = fs.statSync(systemAuth);
+    const realRenameSync = fs.renameSync.bind(fs);
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(to) === markerPath) throw new Error('EIO: marker rename failed');
+      return realRenameSync(from, to);
+    });
+    const rm = vi.spyOn(fs.promises, 'rm');
+    const chmod = vi.spyOn(fs.promises, 'chmod');
+    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const broadcast = vi.fn();
+    adapter.setOnInvalidatedBroadcast(broadcast);
+
+    await adapter.invalidate('child_auth_rejected', { credentialAttribution: 'unproven' });
+
+    expect(broadcast).toHaveBeenCalledWith('child_auth_rejected', 'unknown', false);
+    expect(fs.existsSync(markerPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingPath, 'utf8'))).toMatchObject({
+      revoked: { openai: 'owner-a' },
+    });
+    expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
+    expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
+    expect(fs.statSync(systemAuth)).toMatchObject({ ino: f2Stat.ino, mode: f2Stat.mode });
+    expect(rm).not.toHaveBeenCalled();
+    expect(chmod).not.toHaveBeenCalled();
+
+    const restartedAdapter = new DesktopCodexAuthAdapter();
+    await expect(
+      restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toMatchObject({ authenticated: false });
+    await expect(restartedAdapter.getAccessToken()).resolves.toBeNull();
+    expect(readCodexOneShotCreds(restartedAdapter)).toBeNull();
+    expect(JSON.parse(fs.readFileSync(bindingPath, 'utf8'))).toMatchObject({
+      revoked: { openai: 'owner-a' },
+    });
+    expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
+    expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
+    expect(rm).not.toHaveBeenCalled();
+    expect(chmod).not.toHaveBeenCalled();
+  });
+
   it('keeps an unproven isolated boundary until the local credential changes', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-unproven-isolated-'));
     dirs.push(root);

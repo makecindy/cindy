@@ -2524,13 +2524,33 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         credentialScope,
         recoveryOwnerId,
       );
+      let durableFallbackCommitted = false;
+      let effectiveCredentialScope = credentialScope;
+      if (!markerCommitted) {
+        log.error('failed to persist unproven Codex suppression marker; revoking provider claim', {
+          reason,
+          credentialScope,
+        });
+        try {
+          // The child generation is unknown, so this revokes only Cindy's provider claim. Keep
+          // auth.json byte-for-byte intact; a later explicit Cindy login proves the replacement
+          // credential and clears this coarse cross-restart boundary.
+          unbindNativeProviderAuth('openai', { revoked: true });
+          durableFallbackCommitted = isNativeProviderAuthRevoked('openai');
+          if (durableFallbackCommitted) effectiveCredentialScope = 'unknown';
+        } catch (err) {
+          log.error('failed to persist fallback Codex provider revocation', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       this.memoryOnlyInvalidatedSystemCredential = markerCommitted
         ? null
         : credentialScope === 'system-shared'
           ? currentCodexAuthMarker(localAuthPath, reason, credentialScope)
           : null;
       this.oauthInvalidatedReason = reason;
-      this.oauthInvalidatedCredentialScope = credentialScope;
+      this.oauthInvalidatedCredentialScope = effectiveCredentialScope;
       this.oauthRecoveryRequiredReason = null;
       this.oauthRecoveryCredentialScope = undefined;
       this.suppressSystemCodexReconcile = true;
@@ -2538,10 +2558,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         reason,
         credentialScope,
         markerCommitted,
+        durableFallbackCommitted,
       });
       if (this.onInvalidatedBroadcast) {
         try {
-          await this.onInvalidatedBroadcast(reason, credentialScope, this.devOAuthWritesBlocked());
+          await this.onInvalidatedBroadcast(
+            reason,
+            effectiveCredentialScope,
+            this.devOAuthWritesBlocked(),
+          );
         } catch (error) {
           log.warn('onInvalidatedBroadcast threw', {
             error: error instanceof Error ? error.message : String(error),
