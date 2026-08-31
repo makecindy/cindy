@@ -951,8 +951,9 @@ export async function handleGhostCall(
     // 内联意图令牌(意识声明,读取类意识用):xdt_media_inline: true = 这些媒体
     // 是"文档/消息里读出来的素材",桌面呈现应由模型在最终回复里 markdown 内联
     // (聊天正文渲染器支持 cindy-media:// / xdt-image://),主机不画卡也不注
-    // "别嵌 markdown"禁令;IM/hook 出站仍照常消费 xdt_media_produced 自动送图
-    // (IM 出站对正文 markdown 托管图与账本图按 absPath 去重)。仅在未声明
+    // "别嵌 markdown"禁令;IM/hook 出站仍照常消费 xdt_media_produced,在
+    // turn 收口时尝试送图(IM 出站对正文 markdown 托管图与账本图按 absPath
+    // 去重)。仅在未声明
     // 复数媒体字段(即走兜底账本分支)时有意义——声明了媒体字段仍走卡片语义。
     const inlineIntent =
       !declaredMedia &&

@@ -962,6 +962,10 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
     expect(payload.xdt_media_produced).toEqual(["cindy-media://blobs/def.png"]);
     expect(String(payload.hint)).toContain("markdown");
     expect(String(payload.hint)).toContain("![](");
+    expect(String(payload.hint)).toContain(
+      "将在 turn 收口时按 xdt_media_produced 尝试送达",
+    );
+    expect(String(payload.hint)).not.toContain("自动送达");
     expect(String(payload.hint)).not.toContain("不要在回复文本里用 markdown");
     // 无账本媒体时令牌不触发任何 hint(读了文档但没下图的常态)。
     const noMedia = parsePayload(
