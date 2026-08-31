@@ -778,7 +778,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       ))).toBe(true));
       const published = JSON.stringify({ response, events });
       expect(published).toContain('restart-cindy-to-refresh-packages');
-      expect(captured.closed).toBe(true);
+      // The receipt is intentionally published before async runtime retirement.
+      // Wait for teardown instead of assuming both become observable in one tick.
+      await vi.waitFor(() => expect(captured.closed).toBe(true));
     } finally {
       await handle.close();
     }
