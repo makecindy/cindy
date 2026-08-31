@@ -91,7 +91,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private wantsHidInput = false;
   private deviceEnabled = true;
   private wantsPresence = false;
-  /** Permission failures are user-actionable; stop automatic recovery until a probe or toggle. */
+  /** Permission failures are user-actionable; stop automatic recovery until an explicit retry or toggle. */
   private permissionBlocked = false;
   /** True while the current host is stopping so re-enable cannot talk to it. */
   private hostStopping = false;
@@ -227,6 +227,9 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
 
   private ensureChild(): WorkLouderCodexChildLike | null {
     if (this.hostStopping) return null;
+    // A scheduled recycle owns recovery; work/presence callers must not
+    // recreate the host early and bypass its exponential backoff.
+    if (this.restartTimer) return null;
     if (this.permissionBlocked) return null;
     if (this.isCrashBudgetExhausted()) return null;
     if (!this.deviceEnabled && !this.wantsPresence) return null;
@@ -300,13 +303,10 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.discoverPresence();
       return;
     }
-    if (!this.child) {
-      if (this.wantsHidInput) this.requestHidListening();
-      else if (this.latestFrame && !isWorkLouderCodexLightingFrameOff(this.latestFrame)) {
-        this.update(this.latestFrame);
-      }
-      return;
-    }
+    // A background probe is observational only. If the host is gone, either
+    // the restart backoff or the crash budget owns recovery; do not recreate
+    // it indirectly through requestHidListening/update.
+    if (!this.child || this.restartTimer) return;
     try {
       const request: WorkLouderCodexHostRequest = { kind: 'probe' };
       this.child.postMessage(request);
@@ -328,7 +328,11 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   retryPermission(): void {
     if (this.disposed || !this.permissionBlocked) return;
     this.permissionBlocked = false;
-    this.probe();
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.restartHost();
   }
 
   private requestHidListening(): void {

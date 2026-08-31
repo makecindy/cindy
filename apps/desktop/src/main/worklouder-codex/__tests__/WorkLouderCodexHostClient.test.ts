@@ -222,6 +222,7 @@ describe('WorkLouderCodexHostClient', () => {
       expect(fork).toHaveBeenCalledTimes(1);
 
       child.emit('exit', 1);
+      client.probe();
       expect(fork).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(500);
@@ -575,6 +576,42 @@ describe('WorkLouderCodexHostClient', () => {
       await vi.advanceTimersByTimeAsync(500);
       expect(fork).toHaveBeenCalledTimes(2);
       expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let background probes bypass host recycle backoff', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', { kind: 'state', status: 'not-detected' });
+
+      expect(fork).toHaveBeenCalledTimes(1);
+      client.probe();
+      client.probe();
+      client.update(
+        createWorkLouderCodexLightingFrame([
+          {
+            sessionId: 'session-1',
+            phase: 'running',
+            compactDetail: '',
+            attention: false,
+          },
+        ]),
+      );
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
