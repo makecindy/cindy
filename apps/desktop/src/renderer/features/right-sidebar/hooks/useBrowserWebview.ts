@@ -30,6 +30,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WebviewTag } from 'electron';
 
 import { selectPersistableFavicon } from '../../../../shared/faviconPersistence';
+import { browserPageZoomScript } from '../../../../shared/rsbNativePopup';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
 import {
   consumePendingKillCause,
@@ -100,7 +101,6 @@ export interface UseBrowserWebviewResult {
   goForward: () => void;
   /** 停止当前加载(loading 时给 abort 按钮用)。 */
   stop: () => void;
-  /** Set the zoom for this guest only, independently from the host window. */
   setZoomFactor: (zoomFactor: number) => void;
   /** 关闭资源提示条(用户点「忽略」)。 */
   dismissResourceAlert: () => void;
@@ -151,11 +151,14 @@ export function useBrowserWebview(
   zoomFactorRef.current = zoomFactor;
 
   const applyZoomFactor = useCallback(() => {
-    if (!visibleRef.current) return;
+    const webview = webviewRef.current;
+    if (!visibleRef.current || !webview) return;
     try {
-      webviewRef.current?.setZoomFactor(zoomFactorRef.current);
+      void webview
+        .executeJavaScript(browserPageZoomScript(zoomFactorRef.current))
+        .catch(() => undefined);
     } catch {
-      // The guest may not be attached yet. did-attach/dom-ready will retry.
+      // dom-ready will retry after attachment.
     }
   }, []);
 
@@ -272,12 +275,10 @@ export function useBrowserWebview(
         setFavicon('');
       }
       refreshNav();
-      applyZoomFactor();
     };
     const onDidNavigateInPage = (e: Electron.DidNavigateInPageEvent) => {
       setObservedUrl(e.url);
       refreshNav();
-      applyZoomFactor();
     };
     const onStartLoading = () => {
       setIsLoading(true);
@@ -318,7 +319,6 @@ export function useBrowserWebview(
     // did-attach 在导航提交前触发且 getWebContentsId 已可取,提早送映射进 main。
     // report 幂等,与 dom-ready 的兜底上报共存。
     const onDidAttach = () => {
-      applyZoomFactor();
       if (!sessionId) return;
       try {
         const webContentsId = entry.webview.getWebContentsId();

@@ -23,7 +23,7 @@ interface MockWebview {
   goBack: ReturnType<typeof vi.fn>;
   goForward: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
-  setZoomFactor: ReturnType<typeof vi.fn>;
+  executeJavaScript: ReturnType<typeof vi.fn>;
 }
 
 let mockWebview: MockWebview;
@@ -121,7 +121,7 @@ function makeMockWebview(initialUrl: string): MockWebview {
     goBack: vi.fn(),
     goForward: vi.fn(),
     stop: vi.fn(),
-    setZoomFactor: vi.fn(),
+    executeJavaScript: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -165,7 +165,7 @@ describe('useBrowserWebview', () => {
     expect(result!.webview).toBeNull();
   });
 
-  it('reapplies page zoom after navigation', () => {
+  it('reapplies document-local page zoom after navigation', () => {
     let result: UseBrowserWebviewResult | null = null;
     render(
       createElement(HookProbe, {
@@ -177,12 +177,12 @@ describe('useBrowserWebview', () => {
     );
 
     act(() => result!.setZoomFactor(1.25));
-    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
-    const callsBeforeNavigation = mockWebview.setZoomFactor.mock.calls.length;
+    expect(mockWebview.executeJavaScript.mock.lastCall?.[0]).toMatch(/documentElement.*1\.25/);
+    const callsBeforeNavigation = mockWebview.executeJavaScript.mock.calls.length;
 
-    act(() => mockWebview.dispatch('did-navigate', { url: 'https://example.com/' }));
-    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
-    expect(mockWebview.setZoomFactor).toHaveBeenCalledTimes(callsBeforeNavigation + 1);
+    act(() => mockWebview.dispatch('dom-ready'));
+    expect(mockWebview.executeJavaScript.mock.lastCall?.[0]).toMatch(/documentElement.*1\.25/);
+    expect(mockWebview.executeJavaScript).toHaveBeenCalledTimes(callsBeforeNavigation + 1);
   });
 
   it('restores the active tab zoom without letting hidden navigation override it', () => {
@@ -193,7 +193,7 @@ describe('useBrowserWebview', () => {
         onResult: () => undefined,
       }),
     );
-    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+    expect(mockWebview.executeJavaScript).toHaveBeenLastCalledWith(expect.stringContaining('1.25'));
 
     view.rerender(
       createElement(HookProbe, {
@@ -202,9 +202,9 @@ describe('useBrowserWebview', () => {
         onResult: () => undefined,
       }),
     );
-    mockWebview.setZoomFactor.mockClear();
-    act(() => mockWebview.dispatch('did-navigate', { url: 'https://example.com/' }));
-    expect(mockWebview.setZoomFactor).not.toHaveBeenCalled();
+    mockWebview.executeJavaScript.mockClear();
+    act(() => mockWebview.dispatch('dom-ready'));
+    expect(mockWebview.executeJavaScript).not.toHaveBeenCalled();
 
     view.rerender(
       createElement(HookProbe, {
@@ -213,7 +213,7 @@ describe('useBrowserWebview', () => {
         onResult: () => undefined,
       }),
     );
-    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+    expect(mockWebview.executeJavaScript).toHaveBeenLastCalledWith(expect.stringContaining('1.25'));
   });
 
   it('does not materialize a hidden tab until it becomes visible', async () => {

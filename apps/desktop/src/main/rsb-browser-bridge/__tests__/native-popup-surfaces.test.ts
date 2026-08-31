@@ -77,7 +77,7 @@ function makeContents(id: number) {
     canGoForward: () => boolean;
     isCurrentlyAudible: () => boolean;
     getZoomFactor: () => number;
-    setZoomFactor: ReturnType<typeof vi.fn>;
+    executeJavaScript: ReturnType<typeof vi.fn>;
   };
   contents.id = id;
   contents.destroyed = false;
@@ -96,7 +96,7 @@ function makeContents(id: number) {
   contents.canGoForward = () => false;
   contents.isCurrentlyAudible = () => false;
   contents.getZoomFactor = () => 1;
-  contents.setZoomFactor = vi.fn();
+  contents.executeJavaScript = vi.fn(() => Promise.resolve());
   return contents;
 }
 
@@ -234,7 +234,7 @@ describe('main-owned RSB native popup surfaces', () => {
     });
   });
 
-  it('sets and reapplies tab zoom only while a native popup surface is visible', async () => {
+  it('sets and reapplies document-local zoom only while a native popup surface is visible', async () => {
     const host = makeContents(1);
     const popup = makeContents(42);
     electronMocks.windows.set(host, makeWindow());
@@ -246,10 +246,10 @@ describe('main-owned RSB native popup surfaces', () => {
     expect(
       command({ sender: host }, { surfaceId, command: 'set-zoom-factor', zoomFactor: 1.25 }),
     ).toEqual({ ok: true });
-    expect(popup.setZoomFactor).not.toHaveBeenCalled();
+    expect(popup.executeJavaScript).not.toHaveBeenCalled();
 
-    popup.emit('did-navigate');
-    expect(popup.setZoomFactor).not.toHaveBeenCalled();
+    popup.emit('dom-ready');
+    expect(popup.executeJavaScript).not.toHaveBeenCalled();
 
     const setBounds = electronMocks.handlers.get(RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL)!;
     setBounds(
@@ -260,12 +260,12 @@ describe('main-owned RSB native popup surfaces', () => {
         visible: true,
       },
     );
-    expect(popup.setZoomFactor).toHaveBeenCalledTimes(1);
-    expect(popup.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+    expect(popup.executeJavaScript).toHaveBeenCalledTimes(1);
+    expect(popup.executeJavaScript.mock.lastCall?.[0]).toMatch(/documentElement.*1\.25/);
 
-    popup.emit('did-navigate');
-    expect(popup.setZoomFactor).toHaveBeenCalledTimes(2);
-    expect(popup.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+    popup.emit('dom-ready');
+    expect(popup.executeJavaScript).toHaveBeenCalledTimes(2);
+    expect(popup.executeJavaScript.mock.lastCall?.[0]).toMatch(/documentElement.*1\.25/);
 
     expect(() =>
       command({ sender: host }, { surfaceId, command: 'set-zoom-factor', zoomFactor: 10 }),

@@ -48,3 +48,7 @@ export interface RsbNativePopupClaimInput {
 
 export type RsbNativePopupClaimResult =
   { alive: true; snapshot: RsbNativePopupSnapshot } | { alive: false };
+
+/** Native Electron zoom is shared by origin; CSS zoom stays local to this document. */
+export const browserPageZoomScript = (zoomFactor: number): string =>
+  `document.documentElement.style.setProperty("zoom",${JSON.stringify(String(zoomFactor))},"important")`;

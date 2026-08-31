@@ -98,7 +98,6 @@ export interface BrowserChromeProps {
   onOpenInSystemBrowser: () => void;
   /** 「更多」菜单项:复制当前页链接到剪贴板(反馈 toast 由 TabBody 做)。 */
   onCopyLink: () => void;
-  /** Current page zoom for this browser tab. */
   zoomFactor: number;
   /** Apply a standard page-zoom step to this browser tab only. */
   onZoomChange: (zoomFactor: number) => void;

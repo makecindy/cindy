@@ -15,6 +15,7 @@ import {
   RSB_NATIVE_POPUP_COMMAND_CHANNEL,
   RSB_NATIVE_POPUP_EVENT_CHANNEL,
   RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL,
+  browserPageZoomScript,
   type RsbNativePopupBounds,
   type RsbNativePopupClaimResult,
   type RsbNativePopupCommand,
@@ -94,7 +95,11 @@ function publishState(record: SurfaceRecord): void {
 function applyZoomFactor(record: SurfaceRecord): void {
   if (!record.requestedVisible) return;
   try {
-    record.webContents.setZoomFactor(record.zoomFactor);
+    void record.webContents
+      .executeJavaScript(browserPageZoomScript(record.zoomFactor))
+      .catch((err) =>
+        log.warn('failed to update native popup zoom', { surfaceId: record.surfaceId, err }),
+      );
   } catch (err) {
     log.warn('failed to update native popup zoom', { surfaceId: record.surfaceId, err });
   }
@@ -173,14 +178,9 @@ function installSurfaceObservers(record: SurfaceRecord): void {
     publish();
   });
   wc.on('did-stop-loading', publish);
-  wc.on('did-navigate', () => {
-    applyZoomFactor(record);
-    publish();
-  });
-  wc.on('did-navigate-in-page', () => {
-    applyZoomFactor(record);
-    publish();
-  });
+  wc.on('dom-ready', () => applyZoomFactor(record));
+  wc.on('did-navigate', publish);
+  wc.on('did-navigate-in-page', publish);
   wc.on('page-title-updated', publish);
   wc.on('page-favicon-updated', (_event, favicons) => {
     // 与 renderer WebView 保持三态语义:null = 尚未观测到;'' = Chromium
