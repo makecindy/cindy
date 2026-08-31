@@ -60,6 +60,14 @@ const SKIP_DIR_NAMES = new Set([
  */
 export const BARE_RADIUS_RE = /\b(?:rounded(?:-(?:none|sm|md|lg|xl|2xl|3xl|full))?|border-radius\s*:|borderRadius\s*:)/g;
 
+/**
+ * 裸圆角匹配（工厂：每次调用返回全新 /g 正则，杜绝共享 lastIndex 状态）。
+ * 模式与 BARE_RADIUS_RE 完全一致；BARE_RADIUS_RE 保留导出仅供诊断展示。
+ */
+export function createBareRadiusRe() {
+  return /\b(?:rounded(?:-(?:none|sm|md|lg|xl|2xl|3xl|full))?|border-radius\s*:|borderRadius\s*:)/g;
+}
+
 function posixRel(value) {
   return String(value).replace(/\\/g, '/');
 }
@@ -161,7 +169,7 @@ function scanStyleStats(repoRoot, styleRoots, { missingRoots = [] } = {}) {
     const source = fs.readFileSync(path.join(repoRoot, ...relPath.split('/')), 'utf8');
     const scanSource = statsSourceForColorScan(source);
     bareColors += filterInventoryBareColors(matchBareColors(scanSource)).length;
-    bareRadii += (scanSource.match(BARE_RADIUS_RE) ?? []).length;
+    bareRadii += (scanSource.match(createBareRadiusRe()) ?? []).length;
     for (const match of scanSource.matchAll(TOKEN_REF_RE)) tokenHits.add(match[1]);
   }
   return { files, bareColors, bareRadii, tokenCount: tokenHits.size };

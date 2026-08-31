@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   BARE_RADIUS_RE,
+  createBareRadiusRe,
   INVENTORY_REL_PATH,
   MAIN_ENTRY_REL_PATH,
   RENDERER_INDEX_REL_PATH,
@@ -270,8 +271,9 @@ if (checkOnly) {
         const perFile = surface.styleSources.map((file) => {
           const src = fs.readFileSync(path.join(repoRoot, ...file.split('/')), 'utf8');
           const scan = stripJsComments(src);
-          const radii = (scan.match(BARE_RADIUS_RE) ?? []).length;
-          return `    ${radii} ${file}`;
+          const re = createBareRadiusRe();
+          const matches = [...scan.matchAll(re)];
+          return `    ${matches.length} ${file}` + (matches.length > 0 ? '' : '');
         });
         diffLines.push(...perFile);
       }
