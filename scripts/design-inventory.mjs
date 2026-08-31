@@ -235,20 +235,39 @@ if (danglingExtraStyleRoots.length > 0) {
 if (checkOnly) {
   const comparison = compareGenerated(existing, generated);
   if (!comparison.equal) {
-    // 报告首个差异行：跨平台排查（ICU/EOL/大小写）需要看到 diff 本身。
-    const currentLines = normalizeDocEol(comparison.current).split('\n');
-    const nextLines = normalizeDocEol(comparison.next).split('\n');
-    let diffLine = '';
-    for (let i = 0; i < Math.max(currentLines.length, nextLines.length); i++) {
-      if (currentLines[i] !== nextLines[i]) {
-        diffLine = `\n  首个差异(第 ${i + 1} 行):\n  - 文件: ${(currentLines[i] ?? '').slice(0, 160)}\n  - 重算: ${(nextLines[i] ?? '').slice(0, 160)}`;
-        break;
-      }
+    // 报告差异细节：跨平台排查（ICU/EOL/大小写/文件集）需要看到 diff 本身。
+    // 逐 surface 对比主表行,打印每个分歧 surface 的统计三元组与来源文件数——
+    // 统计数字或文件集的分歧一眼可见,不再被长 styleSources 列表淹没。
+    const rowRe = /^\| `([^`]+)` \|/;
+    const currentRows = new Map();
+    for (const line of normalizeDocEol(comparison.current).split('\n')) {
+      const m = rowRe.exec(line);
+      if (m) currentRows.set(m[1], line);
+    }
+    const nextRows = new Map();
+    for (const line of normalizeDocEol(comparison.next).split('\n')) {
+      const m = rowRe.exec(line);
+      if (m) nextRows.set(m[1], line);
+    }
+    const diffLines = [];
+    for (const [id, nextLine] of nextRows) {
+      const currentLine = currentRows.get(id);
+      if (currentLine === nextLine) continue;
+      const statsOf = (line) => {
+        const cells = line.split('|').map((c) => c.trim());
+        // | ID | 平台 | 标题 | 生产入口 | 可达组件 | 样式来源 | Token | 裸色 | 圆角 |
+        const sources = (cells[6] ?? '').split(',').filter(Boolean);
+        return `tokens=${cells[7]} colors=${cells[8]} radii=${cells[9]} files=${sources.length}`;
+      };
+      diffLines.push(`  - ${id}:`);
+      diffLines.push(`    文件: ${currentLine ? statsOf(currentLine) : '(缺行)'}`);
+      diffLines.push(`    重算: ${statsOf(nextLine)}`);
     }
     console.error(
       '[design-inventory] ❌ GENERATED 区块与源码不同步。\n' +
-        '  运行 pnpm design:inventory 重新生成。' +
-        diffLine,
+        '  运行 pnpm design:inventory 重新生成。\n' +
+        '  分歧 surface 统计对比:\n' +
+        (diffLines.length > 0 ? diffLines.join('\n') : '  (主表行一致,差异在其他段落)'),
     );
     if (orphanReport) console.error(orphanReport);
     process.exit(1);
