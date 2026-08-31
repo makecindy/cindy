@@ -89,28 +89,32 @@ describe('Codex Micro preload guard', () => {
     expect(source).toMatch(/O_NOFOLLOW/u);
     expect(source).toMatch(/captureSupportChain/u);
     expect(source).toMatch(/assertSupportChainStable/u);
+    expect(source).not.toMatch(/process\.platform !== 'win32'/u);
     expect(source).toMatch(/HID topology watcher addon not found/u);
     expect(source).toMatch(/@worklouder\/device-kit-oai/u);
   });
 
-  it('intercepts only the marked service under a main bundle parent', () => {
-    const value = fixture();
-    const result = run(value, SERVICE_SOURCE);
-    expect(result.status, String(result.stderr)).toBe(0);
-    expect(JSON.parse(String(result.stdout))).toEqual({
-      status: 'unavailable',
-      controlPlaneStatus: 'unavailable',
-      transport: null,
-      model: null,
-      error: null,
-      battery: null,
-    });
-    const receiptPath = path.join(value.support, 'receipt.json');
-    expect(JSON.parse(fs.readFileSync(receiptPath, 'utf8')).service).toBe('service-fixture.js');
-    if (process.platform !== 'win32') {
+  it.skipIf(process.platform === 'win32')(
+    'intercepts only the marked service under a main bundle parent',
+    () => {
+      const value = fixture();
+      const result = run(value, SERVICE_SOURCE);
+      expect(result.status, String(result.stderr)).toBe(0);
+      expect(JSON.parse(String(result.stdout))).toEqual({
+        status: 'unavailable',
+        controlPlaneStatus: 'unavailable',
+        transport: null,
+        model: null,
+        error: null,
+        battery: null,
+      });
+      const receiptPath = path.join(value.support, 'receipt.json');
+      expect(JSON.parse(fs.readFileSync(receiptPath, 'utf8')).service).toBe(
+        'service-fixture.js',
+      );
       expect(fs.statSync(receiptPath).mode & 0o777).toBe(0o600);
-    }
-  });
+    },
+  );
 
   it.each([
     [
