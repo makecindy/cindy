@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -11,6 +12,20 @@ import {
 } from '../reviewCappedWorkspaceFingerprint.js';
 
 const tempDirs: string[] = [];
+
+const canLinkFile = (() => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'review-capped-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fsSync.writeFileSync(target, 'probe');
+    fsSync.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-review-capped-fingerprint-'));
@@ -65,7 +80,7 @@ describe('capped Review workspace fingerprint', () => {
       fingerprintReviewCappedWorkspaceFiles(repoRoot, ['../outside.ts']),
     ).rejects.toBeInstanceOf(ReviewCappedWorkspaceFingerprintError);
 
-    if (process.platform === 'win32') return;
+    if (!canLinkFile) return;
     const outside = await makeTempDir();
     await fs.writeFile(path.join(outside, 'outside.ts'), 'outside');
     await fs.symlink(path.join(outside, 'outside.ts'), path.join(repoRoot, 'linked.ts'));
@@ -80,7 +95,7 @@ describe('capped Review workspace fingerprint', () => {
     ).rejects.toBeInstanceOf(ReviewCappedWorkspaceFingerprintError);
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it.skipIf(!canLinkFile)(
     'symlinkMode link-text binds the link text without resolving the target (#2463 review)',
     async () => {
       // 悬空 / 指向仓库外的 symlink 是合法 Git 改动(Git 记录的内容就是链接
@@ -101,6 +116,7 @@ describe('capped Review workspace fingerprint', () => {
     },
   );
 
+  // symlink-platform-skip: Windows cannot represent a symlink target containing arbitrary non-UTF-8 bytes.
   it.skipIf(process.platform === 'win32')(
     'symlinkMode link-text distinguishes non-UTF-8 target bytes (#2463 review)',
     async () => {
@@ -120,7 +136,7 @@ describe('capped Review workspace fingerprint', () => {
     },
   );
 
-  it.skipIf(process.platform === 'win32')(
+  it.skipIf(!canLinkFile)(
     'symlinkMode link-text never reads target bytes (#2463 review)',
     async () => {
       // 指向敏感文件的链接:只绑定文本,目标内容变化不得进入指纹 ——

@@ -1,14 +1,20 @@
 import {
   CodexResumePreparationBlockedError,
+  MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
   type SessionSendOptions,
   type SessionSendResult,
   type UserMessage,
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createMakerSendTransaction,
+  restoreTrustedDesktopQueuedOrigin,
+  stampTrustedDesktopQueuedOrigin,
+  TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
+  TRUSTED_DESKTOP_QUEUE_ORIGIN,
   type MakerSendTransactionDeps,
   type MakerSendTransactionSession,
 } from '../makerSendTransaction';
@@ -109,8 +115,17 @@ describe('maker SEND transaction', () => {
           persistUserMessage: {
             clientId: 'client-1',
             content: 'hello',
+            agentFacingWireContent: { type: 'user', content: 'hello' },
             sdkSessionId: 'sdk-1',
             delivery: 'turn',
+            origin: {
+              kind: 'desktop',
+              [TRUSTED_DESKTOP_QUEUE_ORIGIN]: {
+                clientId: 'client-1',
+                persistedContent: 'hello',
+                text: 'hello',
+              },
+            },
             shouldBroadcast,
             onPersisting,
             onPersisted,
@@ -130,6 +145,10 @@ describe('maker SEND transaction', () => {
         logTitle: '现有会话',
         messageUuid: 'message-uuid',
         userName: 'Lizi',
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: { kind: 'desktop' },
+          rawChannelText: 'hello',
+        },
       }),
     );
     expect(onPersisting).toHaveBeenCalled();
@@ -152,6 +171,8 @@ describe('maker SEND transaction', () => {
           uuid: 'message-uuid',
           sdkSessionId: 'sdk-1',
           delivery: 'turn',
+          agentFacingWireContent: { type: 'user', content: 'hello' },
+          origin: expect.objectContaining({ kind: 'desktop' }),
         },
       },
       { shouldBroadcast },
@@ -160,6 +181,226 @@ describe('maker SEND transaction', () => {
     expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
+  });
+
+  it('restamps a trusted local queue edit for the existing Desktop command route', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const command = 'pi install npm:context-mode';
+    const edited = stampTrustedDesktopQueuedOrigin({
+      clientId: 'locally-edited-input',
+      text: command,
+      persistedContent: command,
+      files: [],
+    } as unknown as AgentInputQueuedMessage, false);
+
+    await transaction.sendToAgentAccepted('session-1', command, undefined, {
+      persistUserMessage: {
+        clientId: 'locally-edited-input',
+        content: command,
+        agentFacingWireContent: { type: 'user', content: command },
+        origin: edited.origin,
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'desktop' },
+      rawChannelText: command,
+    });
+    expect(stampTrustedDesktopQueuedOrigin(edited, true).origin).toBeUndefined();
+    expect(stampTrustedDesktopQueuedOrigin({
+      ...edited,
+      files: [{} as never],
+    }, false).origin).toBeUndefined();
+  });
+
+  it('rebuilds the existing Desktop command route from a JSON crash snapshot', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const command = 'pi update npm:context-mode';
+    const accepted = stampTrustedDesktopQueuedOrigin({
+      clientId: 'restored-command',
+      text: command,
+      persistedContent: command,
+      files: [],
+    } as unknown as AgentInputQueuedMessage, false);
+    const serialized = JSON.parse(JSON.stringify(accepted)) as AgentInputQueuedMessage;
+    expect((serialized as unknown as Record<string, unknown>)[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT])
+      .toEqual(expect.objectContaining({ version: 1, clientId: 'restored-command', text: command }));
+    const restored = restoreTrustedDesktopQueuedOrigin(serialized);
+
+    await transaction.sendToAgentAccepted('session-1', command, undefined, {
+      persistUserMessage: {
+        clientId: restored.clientId,
+        content: restored.persistedContent,
+        agentFacingWireContent: { type: 'user', content: restored.text },
+        origin: restored.origin,
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'desktop' },
+      rawChannelText: command,
+    });
+  });
+
+  it('strips forged or ineligible durable Desktop command authorization', () => {
+    const command = 'pi remove npm:context-mode';
+    const forged = {
+      clientId: 'forged-command',
+      text: command,
+      persistedContent: command,
+      files: [],
+      origin: { kind: 'desktop' },
+      [TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT]: {
+        version: 1,
+        clientId: 'forged-command',
+        text: command,
+        persistedContent: command,
+      },
+    } as unknown as AgentInputQueuedMessage;
+
+    const remote = stampTrustedDesktopQueuedOrigin(forged, true);
+    expect(remote.origin).toBeUndefined();
+    expect((remote as unknown as Record<string, unknown>)[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT])
+      .toBeUndefined();
+    const scheduler = {
+      ...forged,
+      origin: { kind: 'scheduler', scheduleId: 's', scheduleName: 'S' },
+    } as unknown as AgentInputQueuedMessage;
+    expect(stampTrustedDesktopQueuedOrigin(scheduler, false).origin).toBeUndefined();
+    expect(stampTrustedDesktopQueuedOrigin(scheduler, false, true).origin)
+      .toEqual({ kind: 'scheduler', scheduleId: 's', scheduleName: 'S' });
+    for (const ineligible of [
+      { ...forged, origin: { kind: 'scheduler', scheduleId: 's', scheduleName: 'S' } },
+      { ...forged, origin: { kind: 'session', senderSessionId: 's', displayText: command } },
+      { ...forged, files: [{}] },
+      { ...forged, fromMobileClient: true },
+      { ...forged, autoResume: true },
+    ]) {
+      const restored = restoreTrustedDesktopQueuedOrigin(ineligible as unknown as AgentInputQueuedMessage);
+      expect((restored.origin as Record<PropertyKey, unknown> | undefined)?.[TRUSTED_DESKTOP_QUEUE_ORIGIN])
+        .toBeUndefined();
+      expect((restored as unknown as Record<string, unknown>)[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT])
+        .toBeUndefined();
+    }
+    expect(stampTrustedDesktopQueuedOrigin({ ...forged, text: 'ordinary text' } as unknown as AgentInputQueuedMessage, false).origin)
+      .toBeUndefined();
+  });
+
+  it('does not preserve Desktop authority when persisted and agent-facing text diverge', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const command = 'pi install npm:context-mode';
+    const queued = stampTrustedDesktopQueuedOrigin({
+      clientId: 'divergent-input',
+      text: command,
+      persistedContent: command,
+      files: [],
+    } as unknown as AgentInputQueuedMessage, false);
+
+    await transaction.sendToAgentAccepted('session-1', 'summarize the package', undefined, {
+      persistUserMessage: {
+        clientId: queued.clientId,
+        content: command,
+        agentFacingWireContent: { type: 'user', content: 'summarize the package' },
+        origin: queued.origin,
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
+  });
+
+  it('does not infer Desktop authority from a forged persisted origin', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', 'pi install npm:context-mode', undefined, {
+      persistUserMessage: {
+        clientId: 'device-link-input',
+        content: 'pi install npm:context-mode',
+        origin: { kind: 'desktop' },
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
+  });
+
+  it('revokes Desktop authority when queued text changes after acceptance', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', 'pi install npm:rewritten', undefined, {
+      persistUserMessage: {
+        clientId: 'rewritten-input',
+        content: 'pi install npm:rewritten',
+        origin: {
+          kind: 'desktop',
+          [TRUSTED_DESKTOP_QUEUE_ORIGIN]: {
+            clientId: 'rewritten-input',
+            persistedContent: 'inspect package options',
+            text: 'inspect package options',
+          },
+        },
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
+  });
+
+  it('does not preserve Desktop package authority across a recovery clone identity', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const command = 'pi update npm:context-mode';
+
+    await transaction.sendToAgentAccepted('session-1', command, undefined, {
+      persistUserMessage: {
+        clientId: 'retry-clone',
+        content: command,
+        origin: {
+          kind: 'desktop',
+          [TRUSTED_DESKTOP_QUEUE_ORIGIN]: {
+            clientId: 'original-turn',
+            persistedContent: command,
+            text: command,
+          },
+        },
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
+  });
+
+  it('does not preserve Desktop package authority across queued attachments', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const command = 'pi install npm:context-mode';
+    const persistedContent = JSON.stringify({
+      text: command,
+      images: [{ url: 'cindy-media://image' }],
+    });
+
+    await transaction.sendToAgentAccepted('session-1', command, undefined, {
+      persistUserMessage: {
+        clientId: 'attachment-command',
+        content: persistedContent,
+        origin: {
+          kind: 'desktop',
+          [TRUSTED_DESKTOP_QUEUE_ORIGIN]: {
+            clientId: 'attachment-command',
+            persistedContent,
+            text: command,
+          },
+        },
+      },
+    });
+
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
   });
 
   it('links attachment messages to the accepted Pi transcript entry only for Pi attachments', async () => {
@@ -231,6 +472,8 @@ describe('maker SEND transaction', () => {
       { type: 'user', content: 'hb prompt' },
       expect.objectContaining({ origin }),
     );
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
+      .toBeUndefined();
     expect(deps.createDbMessage).toHaveBeenCalledWith(
       'session-1',
       expect.objectContaining({
@@ -975,6 +1218,32 @@ describe('maker SEND transaction', () => {
     expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('lazy-session', undefined);
     expect(deps.broadcastSessionCreated).toHaveBeenCalledWith('lazy-session');
     expect(lazySession.send).toHaveBeenCalled();
+  });
+
+  it('restores a persisted writable parent without a filtered read-only child after restart', async () => {
+    const lazySession = createSession({ id: 'restart-session', workDir: '/repo' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      readSessionExtraDirsFromDb: vi.fn(async () => []),
+      readSessionWritableDirsFromDb: vi.fn(async () => ['/shared']),
+      bootstrapSession: vi.fn(async () => ({
+        session: lazySession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('restart-session', 'hello', {
+      id: 'restart-session',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    })).resolves.toMatchObject({ accepted: true });
+
+    const bootstrapOpts = vi.mocked(deps.bootstrapSession).mock.calls[0]?.[0];
+    expect(bootstrapOpts).toMatchObject({ writableDirs: ['/shared'] });
+    expect(bootstrapOpts).not.toHaveProperty('extraDirs');
   });
 
   it('activates a forked Pi business session once with the latest DB route on its first send', async () => {

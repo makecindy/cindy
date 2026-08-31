@@ -3839,13 +3839,17 @@ export function ModelSelector({
               )}
               <span
                 title={fullEffortLabel ?? undefined}
+                // 紧凑工具条的固定宽度可能把尾部档名挤到不足一行；允许它收缩并显示省略号，
+                // 同时保留 title / aria-label 中的完整档名，避免固定宽度下发生硬裁切。
                 className={cn(
                   'min-w-0 font-normal',
                   isCreateAgentVariant
                     ? 'text-[var(--create-agent-control-text)]'
                     : 'text-[var(--text-primary)]',
                   engineMarkOption
-                    ? 'shrink-0 whitespace-nowrap'
+                    ? isCompactToolbar
+                      ? 'min-w-0 shrink truncate'
+                      : 'shrink-0 whitespace-nowrap'
                     : isCreateAgentVariant
                       ? 'truncate'
                       : isFieldTrigger

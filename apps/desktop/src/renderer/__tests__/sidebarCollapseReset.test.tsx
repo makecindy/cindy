@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 
-import { act, renderHook } from '@testing-library/react';
+import { act, render, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SECTION_COLLAPSE_DURATION_MS } from '../features/cc-agent/sidebar/SectionCollapse';
+import {
+  SectionCollapse,
+  SECTION_COLLAPSE_DURATION_MS,
+} from '../features/cc-agent/sidebar/SectionCollapse';
 import { useCollapsibleShowAll } from '../features/cc-agent/sidebar/hooks/useCollapsibleShowAll';
 
 function renderShowAll(initialCollapsed = false) {
@@ -73,5 +76,57 @@ describe('useCollapsibleShowAll', () => {
     });
 
     expect(result.current.showAll).toBe(true);
+  });
+});
+
+describe('SectionCollapse unmount after animation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it('does not mount children when first rendered collapsed', () => {
+    const { queryByText } = render(<SectionCollapse collapsed>hidden</SectionCollapse>);
+    expect(queryByText('hidden')).toBeNull();
+  });
+
+  it('keeps children during collapse and unmounts after the animation ends', () => {
+    const { rerender, queryByText } = render(
+      <SectionCollapse collapsed={false}>visible</SectionCollapse>,
+    );
+    expect(queryByText('visible')).not.toBeNull();
+
+    rerender(<SectionCollapse collapsed>visible</SectionCollapse>);
+    expect(queryByText('visible')).not.toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(SECTION_COLLAPSE_DURATION_MS - 1);
+    });
+    expect(queryByText('visible')).not.toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(queryByText('visible')).toBeNull();
+  });
+
+  it('remounts immediately when re-expanded before the animation ends', () => {
+    const { rerender, queryByText } = render(
+      <SectionCollapse collapsed={false}>visible</SectionCollapse>,
+    );
+    rerender(<SectionCollapse collapsed>visible</SectionCollapse>);
+    act(() => {
+      vi.advanceTimersByTime(SECTION_COLLAPSE_DURATION_MS / 2);
+    });
+    rerender(<SectionCollapse collapsed={false}>visible</SectionCollapse>);
+    expect(queryByText('visible')).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(SECTION_COLLAPSE_DURATION_MS);
+    });
+    expect(queryByText('visible')).not.toBeNull();
   });
 });

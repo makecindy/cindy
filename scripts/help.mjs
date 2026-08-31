@@ -53,6 +53,9 @@ export function printHelp(log = console.log) {
   log('    pnpm mobile:sim:start');
   log('    # 中国大陆版模拟器：先 rebuild 安装，再 start 启动 Metro');
   log('    pnpm mobile:sim:rebuild -- --region=cn');
+  log('    # Windows 一键复用/启动 cindy-api36、配置 adb reverse，并启动中国大陆版 Metro');
+  log('    pnpm mobile:sim:start:cn');
+  log('    # 等价的显式区域写法；--no-emulator 可只启动 Metro');
   log('    pnpm mobile:sim:start -- --region=cn');
   log('    # 查看当前 Metro 对应的 checkout / branch');
   log('    pnpm mobile:sim:whoami');

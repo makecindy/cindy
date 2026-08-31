@@ -850,59 +850,59 @@
         "chatAttachmentsClearConfirmDescription": "Only files in the message attachment cache directory will be deleted; the message database will not be queried. Some attachments in message history may become unavailable, and this cannot be undone.",
         "chatAttachmentsClearConfirmButton": "Clear attachment cache",
         "chatAttachmentsCleared": "Message attachment cache cleaned up",
-          "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
-          "dbSlimmingBackupDirectoryDialogTitle": "Choose database cleanup backup folder",
-          "dbSlimmingLabel": "Database cleanup",
-          "dbSlimmingDescription": "Scan history in soft-deleted and archived tasks not updated for the selected period, with an option to include active tasks. After confirmation, Cindy restarts and compacts the database before opening it. Files and generated media on disk are not deleted.",
-          "dbSlimmingScanButton": "Scan database",
-          "dbSlimmingScanLoading": "Scanning the database…",
-          "dbSlimmingScanResultTitle": "Database scan results",
-          "dbSlimmingExecutionLoading": "Preparing database cleanup. Cindy will restart shortly…",
-          "dbSlimmingArchiveAgeLabel": "Clean tasks not updated for more than",
-          "dbSlimmingArchiveAgeOption7Days": "7 days",
-          "dbSlimmingArchiveAgeOption1": "1 month",
-          "dbSlimmingArchiveAgeOption3": "3 months",
-          "dbSlimmingArchiveAgeOption6": "6 months",
-          "dbSlimmingIncludeActiveLabel": "Clean active task history",
-          "dbSlimmingIncludeActiveDescription": "Also clean history from active tasks older than the selected period",
-          "dbSlimmingIncludeActiveConfirmTitle": "Include active tasks in database cleanup?",
-          "dbSlimmingIncludeActiveConfirmDescription": "An active task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, active, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible active tasks and their Agent context will be reset; task entries remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
-          "dbSlimmingIncludeActiveConfirmButton": "Include active tasks",
-          "dbSlimmingIncludeActiveCancelButton": "Keep active tasks",
-          "dbSlimmingBackupLabel": "Back up database before cleanup",
-          "dbSlimmingBackupDefaultLocation": "Database folder (keeps only the latest cleanup backup)",
-          "dbSlimmingUseDefaultDirectoryButton": "Use default folder",
-          "dbSlimmingChooseDirectoryButton": "Choose backup folder",
-          "dbSlimmingBackupDirectoryFailed": "Could not choose a backup folder. Try again.",
-          "dbSlimmingScanFailed": "Could not scan the database. Try again.",
-          "dbSlimmingScheduleFailed": "Could not schedule database cleanup. Scan again and retry.",
-          "dbSlimmingBackupMissing": "The latest cleanup backup could not be found.",
-          "dbSlimmingBackupOpenFailed": "Could not open the cleanup backup location. Try again.",
-          "dbSlimmingReportTasks": "Will clean {{deleted}} soft-deleted tasks and {{archived}} archived tasks",
-          "dbSlimmingReportTasksWithActive": "Will clean {{active}} active tasks, {{deleted}} soft-deleted tasks, and {{archived}} archived tasks",
-          "dbSlimmingReportMessages": "Estimated message content to clean: {{count}} messages (about {{size}})",
-          "dbSlimmingReportSpace": "Database: {{database}}; temporary space needed: at least {{temporary}}; available: {{free}}",
-          "dbSlimmingSpaceUnknown": "unknown",
-          "dbSlimmingInsufficientSpace": "There is not enough disk space to safely create a working copy and compact the database.",
-          "dbSlimmingConfirmButton": "Confirm database cleanup",
-          "dbSlimmingConfirmTitle": "Restart and clean up the database?",
-          "dbSlimmingConfirmDescriptionWithBackup": "Cindy will restart gracefully, then back up, clean history, compact, and verify the database before opening it. Data is cleaned only after the backup is written and verified.",
-          "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy will restart gracefully, then clean and compact the database before opening it. No backup will be created, and cleaned history cannot be recovered.",
-          "dbSlimmingRestartButton": "Restart and clean up database",
-          "dbSlimmingResultCompleted": "Removed {{messages}} messages from {{tasks}} tasks and reduced the database by {{size}}.",
-          "dbSlimmingOpenBackupButton": "Open cleanup backup",
-          "dbSlimmingToastCompleted": "Database cleanup complete; freed {{size}}",
-          "dbSlimmingHistoryCleared": "History has been cleared",
-          "dbSlimmingFailure": {
-            "backup-failed": "The database backup could not be created or retained. No history was cleaned.",
-            "cleanup-failed": "Database cleanup did not finish. The original database is unchanged.",
-            "database-in-use": "Another instance is using the database, so cleanup was not run.",
-            "insufficient-space": "There was not enough disk space to clean up the database.",
-            "integrity-check-failed": "The database integrity check failed. The original database was restored.",
-            "replacement-failed": "The compacted database could not be installed. The original database was restored.",
-            "recovery-failed": "Database recovery failed. Cindy stopped opening the database to protect the original data.",
-            "unknown": "Database cleanup did not finish. Try again."
-          },
+        "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
+        "dbSlimmingBackupDirectoryDialogTitle": "Choose database cleanup backup folder",
+        "dbSlimmingLabel": "Database cleanup",
+        "dbSlimmingDescription": "Scan history in soft-deleted and archived tasks not updated for the selected period, with an option to include active tasks. After confirmation, Cindy restarts and compacts the database before opening it. Files and generated media on disk are not deleted.",
+        "dbSlimmingScanButton": "Scan database",
+        "dbSlimmingScanLoading": "Scanning the database…",
+        "dbSlimmingScanResultTitle": "Database scan results",
+        "dbSlimmingExecutionLoading": "Preparing database cleanup. Cindy will restart shortly…",
+        "dbSlimmingArchiveAgeLabel": "Clean tasks not updated for more than",
+        "dbSlimmingArchiveAgeOption7Days": "7 days",
+        "dbSlimmingArchiveAgeOption1": "1 month",
+        "dbSlimmingArchiveAgeOption3": "3 months",
+        "dbSlimmingArchiveAgeOption6": "6 months",
+        "dbSlimmingIncludeActiveLabel": "Clean active task history",
+        "dbSlimmingIncludeActiveDescription": "Also clean history from active tasks older than the selected period",
+        "dbSlimmingIncludeActiveConfirmTitle": "Include active tasks in database cleanup?",
+        "dbSlimmingIncludeActiveConfirmDescription": "An active task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, active, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible active tasks and their Agent context will be reset; task entries remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
+        "dbSlimmingIncludeActiveConfirmButton": "Include active tasks",
+        "dbSlimmingIncludeActiveCancelButton": "Keep active tasks",
+        "dbSlimmingBackupLabel": "Back up database before cleanup",
+        "dbSlimmingBackupDefaultLocation": "Database folder (keeps only the latest cleanup backup)",
+        "dbSlimmingUseDefaultDirectoryButton": "Use default folder",
+        "dbSlimmingChooseDirectoryButton": "Choose backup folder",
+        "dbSlimmingBackupDirectoryFailed": "Could not choose a backup folder. Try again.",
+        "dbSlimmingScanFailed": "Could not scan the database. Try again.",
+        "dbSlimmingScheduleFailed": "Could not schedule database cleanup. Scan again and retry.",
+        "dbSlimmingBackupMissing": "The latest cleanup backup could not be found.",
+        "dbSlimmingBackupOpenFailed": "Could not open the cleanup backup location. Try again.",
+        "dbSlimmingReportTasks": "Will clean {{deleted}} soft-deleted tasks and {{archived}} archived tasks",
+        "dbSlimmingReportTasksWithActive": "Will clean {{active}} active tasks, {{deleted}} soft-deleted tasks, and {{archived}} archived tasks",
+        "dbSlimmingReportMessages": "Estimated message content to clean: {{count}} messages (about {{size}})",
+        "dbSlimmingReportSpace": "Database: {{database}}; temporary space needed: at least {{temporary}}; available: {{free}}",
+        "dbSlimmingSpaceUnknown": "unknown",
+        "dbSlimmingInsufficientSpace": "There is not enough disk space to safely create a working copy and compact the database.",
+        "dbSlimmingConfirmButton": "Confirm database cleanup",
+        "dbSlimmingConfirmTitle": "Restart and clean up the database?",
+        "dbSlimmingConfirmDescriptionWithBackup": "Cindy will restart gracefully, then back up, clean history, compact, and verify the database before opening it. Data is cleaned only after the backup is written and verified.",
+        "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy will restart gracefully, then clean and compact the database before opening it. No backup will be created, and cleaned history cannot be recovered.",
+        "dbSlimmingRestartButton": "Restart and clean up database",
+        "dbSlimmingResultCompleted": "Removed {{messages}} messages from {{tasks}} tasks and reduced the database by {{size}}.",
+        "dbSlimmingOpenBackupButton": "Open cleanup backup",
+        "dbSlimmingToastCompleted": "Database cleanup complete; freed {{size}}",
+        "dbSlimmingHistoryCleared": "History has been cleared",
+        "dbSlimmingFailure": {
+          "backup-failed": "The database backup could not be created or retained. No history was cleaned.",
+          "cleanup-failed": "Database cleanup did not finish. The original database is unchanged.",
+          "database-in-use": "Another instance is using the database, so cleanup was not run.",
+          "insufficient-space": "There was not enough disk space to clean up the database.",
+          "integrity-check-failed": "The database integrity check failed. The original database was restored.",
+          "replacement-failed": "The compacted database could not be installed. The original database was restored.",
+          "recovery-failed": "Database recovery failed. Cindy stopped opening the database to protect the original data.",
+          "unknown": "Database cleanup did not finish. Try again."
+        },
         "cleanupLabel": "Disk cleanup",
         "cleanupDescription": "Scans for media files no session references anymore, oversized caches, and obsolete folders. Shows the numbers first and deletes only after you confirm; images in composer drafts and queued messages are protected automatically.",
         "scanButton": "Scan",
@@ -1458,6 +1458,8 @@
         "copyKeyFailed": "Copy failed, please try again later",
         "asset": {
           "viewUsage": "View usage",
+          "buyPlan": "Buy a plan",
+          "upgradePlan": "Upgrade plan",
           "syncFailed": "Credential sync failed, so the balance is unavailable right now. Your saved model settings are unaffected."
         }
       },
@@ -2770,11 +2772,16 @@
     },
     "linkOpen": {
       "title": "Link open behavior",
-      "description": "Where web links and HTML files in messages open on left click.",
-      "card": {
-        "label": "Default open target",
-        "description": "Right-click a link anytime to pick the other option for a single open.",
-        "ariaLabel": "Select default link open target"
+      "description": "Where message links open on left click. Right-click still lets you pick the other option once.",
+      "web": {
+        "label": "Web pages",
+        "description": "Links on the public internet.",
+        "ariaLabel": "Choose where web pages open"
+      },
+      "local": {
+        "label": "Local pages",
+        "description": "HTML files on this computer, and localhost addresses.",
+        "ariaLabel": "Choose where local pages open"
       },
       "options": {
         "sidebar": "Sidebar browser",
@@ -2860,7 +2867,7 @@
       "installSectionDescription": "Paste the install source from a pi.dev page, or enter an npm package name, Git URL, or absolute local path.",
       "installedSectionTitle": "Installed",
       "sourcePlaceholder": "npm package, Git URL, or absolute local path",
-      "inspectionHint": "Cindy warns you once about the risk. After you confirm, Cindy installs it, checks its resources, and automatically enables runnable resources when inspection succeeds.",
+      "inspectionHint": "Packages are installed and loaded by Pi’s native package system. Cindy only displays advisory compatibility details; unknown, unsupported, or failed analysis never blocks installation or enablement.",
       "install": "Install",
       "update": "Update",
       "remove": "Uninstall",
@@ -2882,12 +2889,7 @@
       "retry": "Retry",
       "operationInProgress": "Working on {{name}}…",
       "relativePathUnsupported": "Use an absolute path for local extensions in Settings. Relative paths such as ./extension can be installed from a Pi task.",
-      "confirmTitle": "Install This Pi Extension?",
-      "confirmDescription": "{{source}} is third-party code. It will run in the same process as Cindy's Pi and may read files and credentials Pi can access. Install does not run npm lifecycle scripts. Confirming installs it. Cindy automatically enables runnable resources after a successful inspection, even when it reports compatibility limits.",
-      "confirmInstall": "Accept Risk, Install",
       "updateConfirmTitle": "Update This Pi Extension?",
-      "updateConfirmDescription": "{{source}} will download a new third-party version and replace the installed code. Update does not run npm lifecycle scripts. The code runs in the same process as Pi and may read files and credentials. Confirming updates it. If you turned it off, it stays off; otherwise, Cindy enables it after a successful inspection.",
-      "confirmUpdate": "Accept Risk, Update",
       "uninstallTitle": "Uninstall Pi extension?",
       "uninstallDescription": "{{name}} will be removed from this device. Pi tasks that are already open keep the old extension until they are closed.",
       "confirmUninstall": "Uninstall",
@@ -2931,30 +2933,29 @@
       "runtimeMismatch": "{{packageName}} requires Pi {{range}}, but Cindy currently uses {{currentVersion}}.",
       "runtimeLegacyPackage": "{{packageName}} belongs to Pi's legacy runtime namespace. Extensions built against it may not load in Cindy's current Pi.",
       "runtimeUnknown": "{{packageName}} requires Pi {{range}}, but Cindy could not determine whether its current Pi version satisfies it.",
-      "compatibilityNoticeTitle": "Installed with compatibility limits",
-      "compatibilityNoticeDescription": "{{name}} finished installing or updating. Cindy's inspection is shown below; its current enabled state remains visible in the extension list, and changes affect only new or restarted Pi tasks.",
-      "extensionApprovalTitle": "Enable executable Extension code?",
-      "extensionApprovalDescription": "When enabled, third-party Extension code runs in the same process as Pi and can read files and environment variables available to Pi, including model or API credentials. Cindy cannot isolate that access today. Enable only sources you fully trust.",
-      "parserDisclaimer": "This static compatibility check is not a security audit and cannot prove arbitrary third-party code is fully compatible.",
-      "disableAfterInstall": "Disable this extension",
-      "keepEnabled": "Keep enabled",
-      "keepDisabled": "Keep disabled",
-      "approveAndEnable": "Accept risk and enable",
-      "done": "Done",
       "warning": {
         "no-resources": "No Pi resources were found in this extension.",
-        "inspection-failed": "The extension is configured, but its installed contents could not be inspected.",
-        "inspection-limit": "The extension exceeded safe inspection limits and remains disabled.",
-        "unsupported-filter": "This extension uses Pi resource filters that Cindy cannot safely reproduce yet, so it remains disabled.",
-        "unsafe-source": "This extension's saved source contains credentials or private URL parameters. Cindy hid the sensitive parts, kept it disabled, and blocked in-app update or removal.",
-        "lifecycle-scripts-disabled": "This extension declares install scripts, but Cindy did not run them for safety. Features that depend on generated files may not work."
+        "inspection-failed": "Cindy could not inspect the installed contents. This does not disable the package; Pi still handles it natively.",
+        "inspection-limit": "Cindy stopped displaying analysis after its inspection limit. The package remains available through Pi’s native loader.",
+        "unsupported-filter": "Cindy cannot display this Pi resource filter yet. Pi still handles the package and filter natively.",
+        "unsafe-source": "The saved source contains credentials or private URL parameters. Cindy hid those fields in this view without blocking Pi’s package behavior."
+      },
+      "failure": {
+        "sourceUnavailable": "The source is unavailable. Check the network or URL, or try another source.",
+        "packageNotFound": "The package was not found. Check the package name or repository URL.",
+        "versionNotFound": "That version was not found. Choose an available version and try again.",
+        "stateUnavailable": "Cindy could not read the Pi extension state. Restart Cindy and try again.",
+        "runtimeConvergencePartial": "The Pi extension change was saved, but some local Pi tasks may still be running the old extension. Restart Cindy before using Pi again.",
+        "nativeCommandFailed": "Pi's package command failed. Check the source or version and try again."
       },
       "success": {
-        "install": "Pi extension installed. Check its enabled state below; the current task is unchanged.",
-        "installEnabled": "Pi extension installed and enabled. The current task is unchanged; start or restart a Pi task to use it.",
-        "remove": "Pi extension removed. The current task keeps the old extension until it is closed.",
-        "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.",
-        "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it."
+        "install": "Pi extension installed. Active local Pi tasks were stopped; start a Pi task to use it.",
+        "installEnabled": "Pi extension installed and enabled. Active local Pi tasks were stopped; start a Pi task to use it.",
+        "remove": "Pi extension removed. Active local Pi tasks were stopped so its tools can no longer run.",
+        "settingsRemove": "Pi extension removed. Active local Pi tasks were stopped so its tools can no longer run.",
+        "settingsDisable": "Pi extension disabled. Active local Pi tasks were stopped so its tools can no longer run.",
+        "update": "Pi extension updated. Active local Pi tasks were stopped; start a Pi task to use the update.",
+        "set-enabled": "Pi extension state saved. Active local Pi tasks were stopped; start a Pi task to use the new state."
       }
     },
     "computerUse": {
@@ -2975,10 +2976,30 @@
           "disabled": "Browser automation disabled",
           "toggleFailed": "Failed to toggle browser automation",
           "openedForLogin": "Automation browser opened — sign into the sites you need",
-          "openForLoginFailed": "Failed to open the browser"
+          "openForLoginFailed": "Failed to open the browser",
+          "foreignInstance": "Another Cindy window is already using the agent browser. Quit the other instance and try again."
         },
         "openForLogin": "Open agent browser",
         "openForLoginHint": "This is a dedicated browser for agents: it runs on your installed Chrome but with a separate profile (shown as “Cindy”), so it never touches your everyday Chrome's tabs, bookmarks, or logins. Agents open pages, read, click, and take screenshots here on your behalf. For sites that need a login, click “Open agent browser” above and sign in once — your session is kept, so the agent can keep acting as you afterward."
+      },
+      "realProfile": {
+        "title": "Use my browser logins",
+        "description": "The agent will open sites with your signed-in Chrome, Edge, or Brave accounts.",
+        "toggleAria": "Use my browser logins",
+        "unavailableEmbedded": "Only available with the standalone external browser. The sidebar browser cannot load Chrome’s login files.",
+        "confirmTitle": "Let the agent use your browser logins?",
+        "confirmDescription": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. You can turn it off anytime; the copy will be deleted.",
+        "confirmDescriptionMac": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. Reading Chrome’s login files also needs Full Disk Access. You can turn this off anytime; the copy will be deleted.",
+        "confirm": "Use my logins",
+        "readDeniedTitle": "Full Disk Access Needed",
+        "readDeniedDescription": "Cindy needs this permission to read Chrome’s login files. Turn on Cindy under Privacy & Security → Full Disk Access, then try again.",
+        "openFullDiskAccess": "Open System Settings",
+        "readDeniedLater": "Not Now",
+        "toast": {
+          "enabled": "Agent browser will use your Chrome logins",
+          "disabled": "Copied logins removed. Agent browser is isolated again.",
+          "failed": "Failed to update browser login setting"
+        }
       },
       "browserBackend": {
         "title": "Automation browser target",
@@ -3536,7 +3557,7 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "Model",
-        "effortLabel": "Reasoning effort",
+        "effortLabel": "Reasoning Effort",
         "permissionLabel": "Permission mode",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
@@ -3932,7 +3953,7 @@
             "options": {
               "session-switch": "Switch tasks",
               "composer-navigation": "Navigate the composer",
-              "reasoning": "Reasoning effort",
+              "reasoning": "Reasoning Effort",
               "conversation-scroll": "Scroll the conversation",
               "custom": "Custom"
             }
@@ -4165,6 +4186,92 @@
           "leftStick": "Left stick",
           "rightStick": "Right stick"
         },
+        "familyControls": {
+          "xbox": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Xbox",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          },
+          "playstation": {
+            "a": "✕",
+            "b": "○",
+            "x": "□",
+            "y": "△",
+            "lb": "L1",
+            "rb": "R1",
+            "lt": "L2",
+            "rt": "R2",
+            "view": "Create",
+            "menu": "Options",
+            "xbox": "PS",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          },
+          "nintendo": {
+            "a": "B",
+            "b": "A",
+            "x": "Y",
+            "y": "X",
+            "lb": "L",
+            "rb": "R",
+            "lt": "ZL",
+            "rt": "ZR",
+            "view": "−",
+            "menu": "+",
+            "xbox": "HOME",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          },
+          "generic": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Home",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          }
+        },
         "actions": {
           "none": "Unmapped",
           "voice": "Voice input",
@@ -4207,6 +4314,63 @@
           "bluetooth": "Bluetooth",
           "battery": "{{percent}}%",
           "charging": "Charging {{percent}}%"
+        }
+      },
+      "playstationGamepad": {
+        "title": "PlayStation controller",
+        "openAria": "Open PlayStation controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "connection": {
+          "toggle": {
+            "aria": "Let this Cindy use a PlayStation controller while it is in the foreground"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for a PlayStation controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect a DualSense or DualShock with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read a PlayStation controller yet."
+          }
+        }
+      },
+      "nintendoGamepad": {
+        "title": "Switch controller",
+        "openAria": "Open Switch controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "connection": {
+          "toggle": {
+            "aria": "Let this Cindy use a Switch controller while it is in the foreground"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for a Switch controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect a Switch Pro or Joy-Con with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read a Switch controller yet."
+          }
+        }
+      },
+      "genericGamepad": {
+        "title": "Generic controller",
+        "openAria": "Open generic controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "connection": {
+          "toggle": {
+            "aria": "Let this Cindy use a generic controller while it is in the foreground"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for a controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect a controller with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read a controller yet."
+          }
         }
       }
     },
@@ -4529,7 +4693,7 @@
         "fsWrite": "Can write files (create / modify)",
         "fsWriteDetail": "Its own private data folder is always writable. Writes into the current session's working directory follow the session's permission mode (auto-approve modes write directly; per-action modes ask you first). Any other folder always requires your confirmation. Files are always written by the host — the plugin itself never touches your file system.",
         "libraryPersist": "Can use a durable library (large files and databases)",
-        "libraryPersistDetail": "It gets a Cindy-managed storage area for your work (canvases, images, databases) with no normal plugin data quota. All file and database operations are executed by the host; the plugin only uses relative paths inside its own library and cannot touch your other files. Uninstalling the plugin does not delete this data; deletion requires separate confirmation in Cindy settings.",
+        "libraryPersistDetail": "It gets a Cindy-managed storage area for your work (canvases, images, databases) with no normal plugin data quota. All file and database operations are executed by the host; the plugin only uses relative paths inside its own library and cannot touch your other files. It can also ask Cindy to show a library file in Finder or Explorer, or open the system Save As dialog so you choose where a copy goes; cancelling Save As copies nothing. Uninstalling the plugin does not delete this data; deletion requires separate confirmation in Cindy settings.",
         "networkHost": "Accesses the network domain {{host}}",
         "networkSecret": "Needs a credential from you: \"{{name}}\"",
         "networkSecretGhostInputDetail": "Collected by this plugin's own settings UI — the plugin page sees the value at entry time. It is then handed to the host in one step for encrypted storage; once stored, the plugin can never read it back, and the host injects it only for the domains it declares.",
@@ -4748,6 +4912,10 @@
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
+      },
+      "saveAs": {
+        "dialogTitle": "Plugin “{{name}}” — Save As",
+        "dialogMessage": "Plugin “{{name}}” is asking you to save a copy"
       },
       "confirm": {
         "dialogTitle": "Plugin “{{name}}” needs your confirmation"
@@ -6779,7 +6947,7 @@
       "remoteLoadFailedShort": "Model loading failed",
       "retryRemoteModels": "Reload models",
       "remoteEmpty": "This device has no available models",
-      "effortLabel": "Effort level",
+      "effortLabel": "Reasoning Effort",
       "thinking": "Thinking",
       "edit": "Edit",
       "options": "Options",
@@ -6922,7 +7090,7 @@
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Routine tools run without asking. Installing, updating, or removing Pi extensions still requires confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine tools run without asking. Pi extension commands you send directly run as requested; agent-initiated changes still require tool approval. Highest risk; use only for trusted tasks."
           }
         }
       }
@@ -7286,12 +7454,17 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT Sign-In Is No Longer Valid",
-    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
+    "systemSharedInvalidated": "Cindy is using this computer’s ChatGPT sign-in. Restore it in the ChatGPT App first; this avoids creating a second credential or signing this computer out.",
     "instanceIsolatedInvalidated": "Cindy is currently using a separately signed-in ChatGPT account. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
     "unknownInvalidated": "Cindy’s current ChatGPT sign-in is no longer valid. Sign in again, then retry.",
     "recovered": "ChatGPT sign-in has been restored. Please retry.",
     "openApp": "Open ChatGPT App",
     "relogin": "Sign In to ChatGPT Again",
+    "reloginRiskTitle": "Still sign in through Cindy?",
+    "reloginRiskDescription": "This creates a new OpenAI OAuth authorization and may immediately sign the ChatGPT App and Codex CLI out on this computer. You will need to sign in to those apps again afterward.",
+    "reloginRiskConfirm": "Accept Risk and Continue",
+    "devWriteBlocked": "Development builds use this computer’s ChatGPT sign-in read-only by default and cannot start OAuth or change its credentials. To test OAuth, use an isolated sandbox and explicitly set XDT_ALLOW_DEV_OAUTH_WRITE=1.",
+    "devReadOnly": "Read-only in Development",
     "checking": "Checking…",
     "recheck": "Check Again",
     "later": "Later",
@@ -8044,7 +8217,13 @@
       "showLess": "Show less",
       "artifactLabel": "Artifact",
       "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
-      "summary": { "pages": "{{count}} pages", "slides": "{{count}} slides", "sheets": "{{count}} sheets", "rows": "{{count}} rows", "bytes": "{{count}}" }
+      "summary": {
+        "pages": "{{count}} pages",
+        "slides": "{{count}} slides",
+        "sheets": "{{count}} sheets",
+        "rows": "{{count}} rows",
+        "bytes": "{{count}}"
+      }
     },
     "turnChanges": {
       "title": "Changed {{count}} files",
@@ -8919,7 +9098,7 @@
     "medium": "Medium",
     "high": "High",
     "xhigh": "Extra High",
-    "max": "Max",
+    "max": "Maximum",
     "ultra": "Ultra"
   },
   "scheduler": {
@@ -9359,13 +9538,13 @@
           "google": "Google",
           "china": "China"
         },
-        "effortHeading": "Effort",
+        "effortHeading": "Reasoning Effort",
         "effortDefault": "Default",
         "followSession": "Follow session",
         "modelListAria": "Model list",
         "modelSelectorAria": "Model selector",
         "categoryListAria": "{{category}} models",
-        "effortListAria": "Effort level"
+        "effortListAria": "Reasoning effort"
       }
     },
     "toast": {
@@ -9715,7 +9894,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a complete, clear GitHub issue: confirm whether it is a bug or feature request, and ask only for missing or ambiguous details. Summarize or generalize user-provided quotes and examples by default instead of copying information that could identify a person, conversation, or business context. For bugs, collect the symptoms, reproduction steps, expected and actual behavior, frequency, attempted fixes, and—only with my consent—redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, clarify the use case, current pain point, and desired outcome. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
+      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a clear GitHub issue: figure out whether it is a bug or a suggestion, and ask only what is actually missing—do not run a fixed questionnaire. Ordinary suggestions do not need a bug checklist; skip Harness, model, and Effort questions when they are unrelated. Summarize or generalize user-provided quotes and examples by default instead of copying information that could identify a person, conversation, or business context. Screenshots in this chat are not uploaded to GitHub—never write that screenshots were attached; describe what they showed instead. With my consent, include redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, write the visible use case and ask; do not write repo paths, implementation plans, or acceptance checklists unless I ask. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
       "detailsPrefix": "\nMy initial description: {{details}}"
     },
     "confirm": {
@@ -9735,8 +9914,8 @@
       "publicNameHint": "This attribution will appear publicly in the Issue body",
       "anonymous": "Anonymous",
       "useAnonymous": "Use Anonymous Attribution",
-      "envLine": "Attached automatically on submit: client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
-      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
+      "envLine": "Submitting client environment (attached automatically on submit): client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (this session)",
       "regionLine": "Build region: {{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -10326,7 +10505,7 @@
     "workingDirPlaceholder": "Click the button on the right to pick a directory",
     "selectButton": "Select…",
     "modelLabel": "Model:",
-    "effortLabel": "Effort:",
+    "effortLabel": "Reasoning Effort:",
     "permissionLabel": "Permission:",
     "warningHint": "Modes marked ⚠ (ask/default/plan/acceptEdits) have no UI approval popup wired in stage 1; the experimental page hook auto-denies tool calls — only auto / bypassPermissions are recommended for real testing.",
     "createSession": "Create Session",
@@ -10414,7 +10593,12 @@
       "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
       "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
       "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",
-      "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue."
+      "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue.",
+      "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
+      "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",
+      "toolUseLoopDetectedConsecutiveWithCount": "The model repeated the same tool call {{count}} times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
+      "toolUseLoopDetectedPingPongWithCount": "The model kept cycling between tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
+      "toolUseLoopDetectedRotationWithCount": "The model kept rotating through tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue."
     },
     "validation": {
       "feishuFieldsRequired": "App ID and App Secret are both required",
@@ -10502,7 +10686,7 @@
       "modelLabel": "Model",
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
-      "effortLabel": "Effort",
+      "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",
       "optional": "(optional)",
       "initialTaskPlaceholder": "Optional first task for this worker",
@@ -10554,7 +10738,7 @@
   "extraDirs": {
     "menuAria": "Composer actions",
     "tooltipEmpty": "More actions",
-    "tooltipCount": "{{count}} reference directories",
+    "tooltipCount": "{{count}} additional directories",
     "addFiles": "Add files, images, or videos…",
     "pluginsTitle": "Installed Plugins",
     "pluginDisabled": "Disabled",
@@ -10563,10 +10747,16 @@
     "sectionTitle": "Reference directories (read-only)",
     "empty": "No reference directories yet",
     "add": "Add directory…",
+    "addReadOnly": "Add read-only directory…",
+    "addWritable": "Add read-write directory…",
+    "writableSectionTitle": "Read-write directories",
+    "writableEmpty": "No read-write directories yet",
     "atLimit": "Limit reached ({{max}})",
     "remove": "Remove {{name}}",
     "parentConfirmTitle": "Add a parent directory?",
     "parentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. This expands the Agent's visible scope beyond the working directory.\n\nAdd it anyway?\n\n{{path}}",
+    "writableParentConfirmTitle": "Allow read-write access to a parent directory?",
+    "writableParentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. The Agent will be able to read, create, modify, and delete files inside it.\n\nAllow it anyway?\n\n{{path}}",
     "parentConfirmAccept": "Add anyway",
     "parentConfirmCancel": "Cancel"
   },

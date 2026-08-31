@@ -320,7 +320,8 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
 
         {/* Flame icon button — 默认打开更新历史;banner 被 dismiss 且有 pending
           update 时切换为「唤回 banner」入口,视觉涂黑(fill 实心 + foreground 主色)
-          告诉用户还有更新等待确认。 */}
+          告诉用户还有更新等待确认。rail 走上面的头像-only 分支,不会渲染这颗;
+          busy 让路时折叠火焰才是最小化提醒,展开态才用这颗涂黑入口。 */}
         {(onOpenUpdateNotice || isFlameReopen) && (
           <Tip
             text={

@@ -2165,8 +2165,14 @@ describe('PI durable subagent run store', () => {
     const terminalId = '123e4567-e89b-42d3-a456-426614174007';
     await writeStatus(root, status(activeId));
     await writeStatus(root, status(terminalId, { state: 'completed' }));
-    await expect(syncPiSubagentPermissions(root, { mode: 'ask', readOnlyRoots: [] })).resolves.toBe(1);
-    await expect(readFile(path.join(root, activeId, 'permission.json'), 'utf8')).resolves.toContain('"mode":"ask"');
+    await expect(syncPiSubagentPermissions(root, {
+      mode: 'auto',
+      readOnlyRoots: ['/ref'],
+      writableRoots: ['/out'],
+    })).resolves.toBe(1);
+    await expect(readFile(path.join(root, activeId, 'permission.json'), 'utf8')).resolves.toBe(
+      '{"mode":"auto","readOnlyRoots":["/ref"],"writableRoots":["/out"]}\n',
+    );
     await expect(readFile(path.join(root, terminalId, 'permission.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -2181,11 +2187,13 @@ describe('PI durable subagent run store', () => {
 
     await expect(syncPiSubagentPermissions(
       root,
-      { mode: 'bypassPermissions', readOnlyRoots: [] },
+      { mode: 'bypassPermissions', readOnlyRoots: ['/ref'], writableRoots: ['/out'] },
       'owner-a',
     )).resolves.toBe(1);
     await expect(readFile(path.join(root, ownedId, 'permission.json'), 'utf8'))
-      .resolves.toContain('bypassPermissions');
+      .resolves.toBe(
+        '{"mode":"bypassPermissions","readOnlyRoots":["/ref"],"writableRoots":["/out"]}\n',
+      );
     await expect(readFile(path.join(root, foreignId, 'permission.json'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(path.join(root, legacyId, 'permission.json'), 'utf8'))
@@ -2798,12 +2806,16 @@ describe('PI durable subagent run store', () => {
     expect(new Set(controls.map((control) => control.requestId)).size).toBe(2);
   });
 
-  it.skipIf(process.platform === 'win32')('refuses a control mailbox redirected through a symlink', async () => {
+  it('refuses a control mailbox redirected through a symlink', async () => {
     const root = await makeRoot();
     const runId = '123e4567-e89b-42d3-a456-426614174014';
     const outside = await makeRoot();
     await writeStatus(root, status(runId));
-    await symlink(outside, path.join(root, runId, 'controls'), 'dir');
+    await symlink(
+      outside,
+      path.join(root, runId, 'controls'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
 
     await expect(controlPiSubagentRuns(root, runId, 'stop')).rejects.toThrow(/control directory is unavailable/);
     await expect(readdir(outside)).resolves.toEqual([]);

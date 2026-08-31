@@ -42,6 +42,18 @@ describe('classifyPiToolForAutoReview', () => {
       toolName: 'write', input: { path: '/Users/t/reference/spec.md' }, workspaceRoots: roots, readRoots,
     })).toBe('prompt');
   });
+  it('allows structured writes only in explicitly writable extra roots', () => {
+    const readRoots = [WS, '/Users/t/reference', '/Users/t/output'];
+    const writableRoots = [WS, '/Users/t/output'];
+    expect(classifyPiToolForAutoReview({
+      toolName: 'write', input: { path: '/Users/t/output/result.md' },
+      workspaceRoots: roots, readRoots, writableRoots,
+    })).toBe('auto-approve');
+    expect(classifyPiToolForAutoReview({
+      toolName: 'write', input: { path: '/Users/t/reference/spec.md' },
+      workspaceRoots: roots, readRoots, writableRoots,
+    })).toBe('prompt');
+  });
 
   it('routes bash through the shell classifier', () => {
     expect(verdict('bash', { command: 'ls -la' })).toBe('auto-approve');
@@ -62,6 +74,18 @@ describe('classifyPiToolForAutoReview', () => {
     expect(verdict('bash', { command: 'rm -rf /' })).toBe('prompt-each-time');
     // 入参缺失/非字符串 → 空命令 → 无法判定,升级
     expect(verdict('bash', {})).not.toBe('auto-approve');
+  });
+
+  it('routes Pi 0.84.3 powershell through the same shell classifier, not unknown-tool gray', () => {
+    expect(verdict('powershell', { command: 'git status' })).toBe('auto-approve');
+    expect(verdict('powershell', { command: 'sudo whoami' })).toBe('prompt-each-time');
+    expect(verdict('powershell', { command: 'rm -rf /' })).toBe('prompt-each-time');
+    expect(verdict('powershell', {})).not.toBe('auto-approve');
+    expect(verdict(
+      'powershell',
+      { command: 'Get-Content innocent.txt' },
+      ['/Users/t/.ssh/id_rsa'],
+    )).toBe('prompt-each-time');
   });
 
   it('approves plain reads but always prompts for credential paths (bridge-drift defense)', () => {

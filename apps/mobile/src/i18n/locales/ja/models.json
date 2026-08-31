@@ -18,6 +18,9 @@
     "configureAccessibility": "{{model}} を設定",
     "budgetDisabledHint": "このモデルを使うには、先に操作対象のデバイスで API キーを設定してください",
     "priceLine": "入力 {{input}} · 出力 {{output}} / 100万トークン",
+    "priceTitle": "100万トークンあたり",
+    "priceAmounts": "入力 {{input}} · 出力 {{output}}",
+    "discountedVsStandard": "割引中 · 標準価格から {{percent}}% お得",
     "contextSuffix": "{{size}} コンテキスト",
     "fastTag": "高速"
   },

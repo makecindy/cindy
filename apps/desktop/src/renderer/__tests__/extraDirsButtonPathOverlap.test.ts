@@ -56,4 +56,33 @@ describe('pickAndAddExtraDir', () => {
     });
     expect(onChange).toHaveBeenCalledWith(['D:/repo']);
   });
+
+  it('在只读与可写授权组之间去重,不把同一路径加入第二组', async () => {
+    vi.stubGlobal('window', {
+      electronAPI: {
+        dialog: {
+          showOpenDirectory: vi.fn(async () => ({ success: true, path: '/shared/output/' })),
+        },
+      },
+    });
+    const confirm = vi.fn(async () => true);
+    const onChange = vi.fn();
+
+    await pickAndAddExtraDir({
+      extraDirs: [],
+      otherDirs: ['/shared/output'],
+      workingDir: '/workspace',
+      onChange,
+      confirm,
+      parentDirectoryConfirm: {
+        title: 'title',
+        description: (path) => path,
+        confirmText: 'confirm',
+        cancelText: 'cancel',
+      },
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

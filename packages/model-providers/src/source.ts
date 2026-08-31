@@ -76,6 +76,12 @@ const ALL_XD_MEDIA_KINDS: readonly CatalogXdMediaKind[] = [
 
 export interface CatalogLoadResult {
   catalog: Catalog;
+  /**
+   * Exact validated source snapshot before bundled compatibility backfill. `null` means no Cindy
+   * Server/local/LKG snapshot was accepted. Consumers must use this field, never `catalog`, when
+   * they need to distinguish an explicit source declaration from a bundled supplement.
+   */
+  authorityCatalog: Catalog | null;
   source: CatalogLoadSource;
   /**
    * `current` means this exact snapshot came from the configured current catalog source
@@ -521,6 +527,7 @@ export async function loadCatalogWithSource(
         log(io, 'info', 'loaded catalog from local path', { path: cfg.localPath });
         return {
           catalog: mergeWithBundled(parsed),
+          authorityCatalog: parsed,
           source: 'local',
           capabilityEvidence: 'current',
           unverifiedXdMediaKinds: unverifiedXdMediaKindsForPrimary(parsed),
@@ -617,6 +624,8 @@ export async function loadCatalogWithSource(
           log(io, 'info', 'loaded catalog from remote', { url: logUrl });
           return {
             catalog: mergeWithBundled(parsed),
+            // The migration OSS fallback is compatibility data, not the daily Cindy Server source.
+            authorityCatalog: allowLegacyModelMeta ? null : parsed,
             source: 'remote',
             capabilityEvidence,
             unverifiedXdMediaKinds:
@@ -643,6 +652,8 @@ export async function loadCatalogWithSource(
             log(io, 'info', 'loaded last-known-good catalog snapshot', { url: logUrl });
             return {
               catalog: mergeWithBundled(parsed),
+              // A cached legacy OSS snapshot stays below the local Pi protocol authorities.
+              authorityCatalog: allowLegacyModelMeta ? null : parsed,
               source: 'cache',
               capabilityEvidence: 'fallback',
               unverifiedXdMediaKinds: ALL_XD_MEDIA_KINDS,
@@ -662,6 +673,7 @@ export async function loadCatalogWithSource(
   log(io, 'info', 'using bundled catalog');
   return {
     catalog: BUNDLED_CATALOG,
+    authorityCatalog: null,
     source: 'bundled',
     capabilityEvidence: 'fallback',
     unverifiedXdMediaKinds: ALL_XD_MEDIA_KINDS,

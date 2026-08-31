@@ -5,7 +5,7 @@
  *
  * pi 侧的到达面与 CC 不同:bridge 在 pi 进程内直通「只读内置四件套且入参不碰凭证
  * 路径」(见 cindy-bridge-source.ts READONLY_BUILTINS + touchesCredentialPath),
- * `bypassPermissions` 全放行 —— 能到这里的是 bash / edit / write / 桥接 MCP 工具 /
+ * `bypassPermissions` 全放行 —— 能到这里的是 bash / powershell / edit / write / 桥接 MCP 工具 /
  * 凭证路径的只读调用 / 未来新增内置工具。只读分支扫全部字符串入参判凭证,与 bridge
  * 同判定:bridge 升级上来的凭证读在 auto 档必须落弹窗,不能被 path 字段缺失反向放行。
  *
@@ -39,6 +39,8 @@ export interface PiAutoReviewContext {
   workspaceRoots: string[];
   /** 可读根:工作区 + Pi 附加只读引用目录。写操作仍只看 workspaceRoots。 */
   readRoots?: string[];
+  /** 工作目录与用户明确授权的附加可写目录。 */
+  writableRoots?: string[];
 }
 
 /** 给当前模型 reviewer 的完整 MCP/未知工具证据；输入来自 JSON RPC，可安全序列化。 */
@@ -64,6 +66,9 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 'find', 'l
 
 /** 会改文件、带结构化 `path` 入参的 pi 内置工具。 */
 const FILE_WRITE_TOOLS: ReadonlySet<string> = new Set(['write', 'edit']);
+
+/** Pi v0.84.3 起 Windows 可选 powershell 与 bash 同为 shell 执行面，入参都是 `command`。 */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'powershell']);
 
 function stringField(input: Record<string, unknown>, key: string): string | undefined {
   const v = input[key];
@@ -141,7 +146,7 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
   if (FILE_WRITE_TOOLS.has(toolName)) {
     return { kind: 'file-write', path: stringField(input, 'path') };
   }
-  if (toolName === 'bash') {
+  if (SHELL_TOOLS.has(toolName)) {
     const evidenceAction = canonicalCredentialEvidenceAction(ctx.resolvedCredentialPaths);
     if (evidenceAction) return evidenceAction;
     return { kind: 'exec', command: stringField(input, 'command') ?? '' };
@@ -151,5 +156,9 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
 }
 
 export function classifyPiToolForAutoReview(ctx: PiAutoReviewContext): PiAutoReviewVerdict {
-  return reviewAction(normalizePiToolForAutoReview(ctx), ctx.readRoots ?? ctx.workspaceRoots);
+  return reviewAction(
+    normalizePiToolForAutoReview(ctx),
+    ctx.readRoots ?? ctx.workspaceRoots,
+    { writableRoots: ctx.writableRoots ?? ctx.workspaceRoots },
+  );
 }

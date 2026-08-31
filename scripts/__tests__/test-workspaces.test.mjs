@@ -53,6 +53,7 @@ import {
 	resolvePnpmInvocation,
 	usablePnpmExecPath,
 } from "../shared/pnpm-invocation.mjs";
+import { findSymlinkPlatformSkips } from "../shared/symlink-test-guard.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -526,6 +527,65 @@ test("tests never bind a fixed numeric port", () => {
 			for (const match of source.matchAll(pattern)) {
 				if (Number(match[1]) !== 0) violations.push(`${file}:${match[1]}`);
 			}
+		}
+	}
+	assert.deepEqual(violations, []);
+});
+
+test("symlink platform-skip guard detects hard skips without flagging capability probes", () => {
+	assert.deepEqual(
+		findSymlinkPlatformSkips(`
+			it.skipIf(process.platform === "win32")("rejects escape", async () => {
+				await fs.symlink(outside, link);
+			});
+		`),
+		[{ line: 2 }],
+	);
+	assert.deepEqual(
+		findSymlinkPlatformSkips(`
+			it.skipIf(!canCreateSymlink)("rejects escape", async () => {
+				await fs.symlink(outside, link);
+			});
+			it.skipIf(process.platform === "win32")("sends SIGTERM", async () => {
+				await stopProcess();
+			});
+		`),
+		[],
+	);
+	assert.deepEqual(
+		findSymlinkPlatformSkips(`
+			it("rejects escape", async () => {
+				if (process.platform === "win32") return;
+				await fs.symlink(outside, link);
+			});
+		`),
+		[{ line: 3 }],
+	);
+});
+
+test("symlink platform-skip guard requires a concrete POSIX-only exception", () => {
+	const skippedTest = `
+		// symlink-platform-skip: Windows cannot represent non-UTF-8 link target bytes.
+		it.skipIf(process.platform === "win32")("hashes raw link bytes", async () => {
+			await fs.symlink(Buffer.from([0xff]), link);
+		});
+	`;
+	assert.deepEqual(findSymlinkPlatformSkips(skippedTest), []);
+	assert.deepEqual(
+		findSymlinkPlatformSkips(skippedTest.replace(
+			"Windows cannot represent non-UTF-8 link target bytes.",
+			"POSIX only",
+		)),
+		[{ line: 3 }],
+	);
+});
+
+test("symlink tests never skip solely because the host is Windows", () => {
+	const violations = [];
+	for (const file of discoverTestFiles(readAllFiles(ROOT))) {
+		const source = fs.readFileSync(path.join(ROOT, file), "utf8");
+		for (const violation of findSymlinkPlatformSkips(source)) {
+			violations.push(`${file}:${violation.line}`);
 		}
 	}
 	assert.deepEqual(violations, []);

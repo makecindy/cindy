@@ -1,9 +1,9 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, ne } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from './client/current.js';
-import { orcaWorkers, orcaTeams, sessions } from './schema.js';
+import { orcaWorkers, orcaTeams, orcaWorkerCreationReservations, sessions } from './schema.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -199,6 +199,47 @@ export async function getActiveTeamByLead(
   }
 
   return teamToRecord(latest);
+}
+
+/**
+ * #3555:判定 active team 是否为「初始化被进程退出打断」遗留的孤儿。
+ * 判据取最保守的一档:该 team 从未挂上任何 worker 行(任意状态,含归档——
+ * 全员归档的 team 是用户可继续 create_worker 的合法状态,不算孤儿),且没有
+ * 仍在租期内的创建 reservation(有则说明另一进程正在为它建 worker)。两条都
+ * 满足的 team 不可能承载任何用户状态,调用方可安全按 failed 收口重新启用。
+ */
+/** #3555 review:太年轻的 team 视为「可能仍在别处初始化」,不判孤儿。 */
+const ORPHAN_TEAM_MIN_AGE_MS = 60_000;
+
+export async function isOrphanedTeamInit(teamId: string): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  // 并发初始化兜底(同进程窗口已由 lifecycle 的 in-flight 集合覆盖,这里
+  // 挡住其余场景):创建后不足 ORPHAN_TEAM_MIN_AGE_MS 的 team 不判孤儿——
+  // 进程中断遗留的孤儿在用户重启重试时天然老于该地板,收敛性不受影响。
+  const [team] = await db
+    .select({ createdAt: orcaTeams.createdAt })
+    .from(orcaTeams)
+    .where(eq(orcaTeams.id, teamId))
+    .limit(1);
+  if (!team) return false;
+  if (Date.now() - team.createdAt < ORPHAN_TEAM_MIN_AGE_MS) return false;
+  const [worker] = await db
+    .select({ id: orcaWorkers.id })
+    .from(orcaWorkers)
+    .where(eq(orcaWorkers.teamId, teamId))
+    .limit(1);
+  if (worker) return false;
+  const [reservation] = await db
+    .select({ id: orcaWorkerCreationReservations.id })
+    .from(orcaWorkerCreationReservations)
+    .where(
+      and(
+        eq(orcaWorkerCreationReservations.teamId, teamId),
+        gt(orcaWorkerCreationReservations.expiresAt, Date.now()),
+      ),
+    )
+    .limit(1);
+  return !reservation;
 }
 
 /**

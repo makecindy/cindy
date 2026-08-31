@@ -1,7 +1,7 @@
 export type SchedulerEvent =
   | { type: 'fired'; scheduleId: string; runId: string }
   | { type: 'completed'; scheduleId: string; runId: string; sessionId: string }
-  | { type: 'failed'; scheduleId: string; runId: string; error: string }
+  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string }
   | { type: 'deferred'; scheduleId: string; runId: string }
   /** 前置检查脚本(preRunHook)exit 2 拦截:run 记 'skipped' 生而已读;sessionId 为留痕会话 id,可为空串(留痕失败时)。 */
   | { type: 'skipped'; scheduleId: string; runId: string; sessionId: string }
@@ -62,7 +62,10 @@ export function normalizeSchedulerEvent(value: unknown): NormalizedSchedulerEven
       const scheduleId = readString(value.scheduleId);
       const runId = readString(value.runId);
       if (!scheduleId || !runId) return unknownEvent(type);
-      return { type, scheduleId, runId, error: readString(value.error) ?? '' };
+      const sessionId = readString(value.sessionId);
+      return sessionId
+        ? { type, scheduleId, runId, error: readString(value.error) ?? '', sessionId }
+        : { type, scheduleId, runId, error: readString(value.error) ?? '' };
     }
     case 'skipped': {
       // sessionId 与 completed 不同**允许空串**:desktop engine 在留痕会话创建失败时
@@ -141,7 +144,7 @@ export function projectNormalizedScheduleEvent(event: NormalizedSchedulerEvent):
         scheduleList: false,
         sessionIndex: true,
         unreadSummary: true,
-      }, 'may-increase', runPatch(event.scheduleId, event.runId, null, 'terminal'));
+      }, 'may-increase', runPatch(event.scheduleId, event.runId, event.sessionId ?? null, 'terminal'));
     case 'session-bound':
       return projection(event, {
         runRefresh: { mode: 'schedule', scheduleId: event.scheduleId },

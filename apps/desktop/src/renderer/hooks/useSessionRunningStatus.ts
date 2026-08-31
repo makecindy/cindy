@@ -53,6 +53,7 @@ import {
   isSessionTerminalNotificationOwnedByScheduler,
   isSessionDoneSilenced,
 } from '@/lib/silencedSessionDoneStore';
+import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
 
 // Codex maker 化后, codex session 也走 makerChatStore;
 // 不再需要双 store 合并 —— 直接订阅 makerChatStore 即可。
@@ -157,12 +158,16 @@ export function useSessionRunningStatus(
         // 重新挂角标,提醒不丢失。
         // 与派生红点(usePendingAlertAttention)一致:turn 启动会插入新的 user 行,
         // 原 error 行不再是尾行,pending-alerts 也不再命中 —— 两条路径同向收敛。
+        // hasSessionTerminalError 仍为 true 时不清(mivo 等 skipTurnReset 上升沿
+        // 不拆横幅);派生账本另走 noteSessionTurnStartedForAlerts,只在仍认领
+        // 错误尾行时重算,横幅已灭则差分熄灭红点。
         if (
           getSessionAttentionKind(sessionId) === 'error' &&
           !makerChatStore.hasSessionTerminalError(sessionId)
         ) {
           clearSessionAttention(sessionId, { intent: 'explicit' });
         }
+        noteSessionTurnStartedForAlerts(sessionId);
         // Queue auto-drain cancellation:如果此 session 有 pending done 定时器
         // (刚 turn done 还在 debounce 窗口内),说明 main 正在自动衔接下一条队列
         // 消息 —— 取消这次通知/角标 fire。用户视角这是一条完整任务的中间态。
@@ -198,7 +203,9 @@ export function useSessionRunningStatus(
         // silencedSessionDoneStore 的文件头注释。
         const isSilencedDone = !hasError && isSessionDoneSilenced(sessionId);
         // Scheduler 已按 schedule.notify 接管这次终态的桌面 / 飞书通知。这里只
-        // 抑制 callback，侧栏 / Dock attention 仍按普通 done/error 逻辑保留。
+        // 抑制 callback。成功绿点改认 schedule 未读,不再从这条 running→done 点
+        // `done` attention;失败红点仍立即挂。debounce 落地还会再读一次标记,
+        // 免得 silenced 落在 500ms 窗口里。
         const notificationOwnedByScheduler =
           isSessionTerminalNotificationOwnedByScheduler(sessionId);
         // error 立刻处理:队列会被 abort,不存在"下一条自动接着跑"的场景;红角标 +
@@ -247,16 +254,20 @@ export function useSessionRunningStatus(
               cur.hasPendingPermission ||
               cur.hasPendingPlanReview ||
               cur.hasPendingPluginSetup);
+          // silenced 可能在 debounce 窗口内才到:转换当时没静默、进了 debounce,落地必须再读。
+          if (!hasTerminalError && isSessionDoneSilenced(sessionId)) return;
+          const ownedNow = isSessionTerminalNotificationOwnedByScheduler(sessionId);
           if (
             !wasActiveAtCompletion &&
             !isActive &&
             !isRunning &&
             !hasTerminalError &&
-            !stillPending
+            !stillPending &&
+            !ownedNow
           ) {
             addSessionAttention(sessionId, 'done');
           }
-          if (!notificationOwnedByScheduler && !hasTerminalError) {
+          if (!ownedNow && !hasTerminalError) {
             onSessionDoneRef.current?.(sessionId);
           }
         }, QUEUE_DEBOUNCE_MS);

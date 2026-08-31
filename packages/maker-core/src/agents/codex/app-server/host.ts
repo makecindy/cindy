@@ -255,7 +255,12 @@ export interface AppServerHostOptions {
    * 关联中的 JSON-RPC response 明确返回 cloudRequirements Auth/relogin 时调用一次
    * (单次 latch 在 client 内)。stderr 始终只作为诊断日志。
    */
-  onAuthInvalidated?: (reason: string) => void;
+  onAuthInvalidated?: (
+    reason: string,
+    context?: { credentialGeneration?: string | null },
+  ) => void;
+  /** Returns the credential generation frozen for the current concrete transport. */
+  captureCredentialGeneration?: () => string | null;
   /**
    * Host 创建时冻结的事实:该 app-server 的 model_provider.base_url 是否走
    * 本机 codex proxy。session 级 prompt gate 只读这个值,不再 live 读取全局状态。
@@ -532,6 +537,7 @@ export class AppServerHost {
       logger: this.opts.logger,
       onTransportError: (err) => this.handleTransportError(err),
       onAuthInvalidated: this.opts.onAuthInvalidated,
+      captureCredentialGeneration: this.opts.captureCredentialGeneration,
     });
     this.client = client;
 

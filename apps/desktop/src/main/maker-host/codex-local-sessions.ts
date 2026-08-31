@@ -1564,6 +1564,68 @@ export async function dumpCodexThreadStateRows(threadId: string): Promise<CodexT
   return dump;
 }
 
+/** Capture only a newly forked thread's exact private DB row and rollout identity. */
+export function reserveCodexForkCleanup(
+  threadId: string,
+  sourceThreadId: string,
+): (() => Promise<void>) | null {
+  if (!isLikelyThreadId(threadId) || threadId === sourceThreadId) return null;
+  const home = getDesktopCodexHome();
+  const stateDbPath = findLatestStateDb(home);
+  if (!stateDbPath || !isPathInside(home, stateDbPath)) return null;
+  const row = readRawThreadRow(stateDbPath, threadId);
+  const rolloutPath = stringValue(row?.rollout_path);
+  if (
+    !rolloutPath ||
+    !isPathInside(home, rolloutPath) ||
+    threadIdFromRolloutPath(rolloutPath) !== threadId
+  ) return null;
+  try {
+    const stateDb = fs.lstatSync(stateDbPath);
+    const rollout = fs.lstatSync(rolloutPath);
+    if (!stateDb.isFile() || !rollout.isFile()) return null;
+    return async () => {
+      let db: Database.Database | null = null;
+      try {
+        const currentDb = fs.lstatSync(stateDbPath);
+        const currentRollout = fs.lstatSync(rolloutPath);
+        if (
+          !currentDb.isFile() || currentDb.dev !== stateDb.dev || currentDb.ino !== stateDb.ino ||
+          !currentRollout.isFile() || currentRollout.dev !== rollout.dev || currentRollout.ino !== rollout.ino
+        ) return;
+        db = createBetterSqliteDatabase(stateDbPath);
+        db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+        const targetDb = db;
+        let stateRemoved = false;
+        targetDb.transaction(() => {
+          const current = targetDb.prepare('SELECT rollout_path FROM threads WHERE id = ? LIMIT 1')
+            .get(threadId) as { rollout_path?: string } | undefined;
+          if (current?.rollout_path !== rolloutPath) return;
+          if (tableExists(targetDb, 'thread_dynamic_tools')) {
+            targetDb.prepare('DELETE FROM thread_dynamic_tools WHERE thread_id = ?').run(threadId);
+          }
+          if (tableExists(targetDb, 'thread_spawn_edges')) {
+            targetDb.prepare('DELETE FROM thread_spawn_edges WHERE parent_thread_id = ?').run(threadId);
+          }
+          stateRemoved = targetDb.prepare('DELETE FROM threads WHERE id = ? AND rollout_path = ?')
+            .run(threadId, rolloutPath).changes > 0;
+        })();
+        if (stateRemoved) await fsp.rm(rolloutPath, { force: true });
+      } catch (error) {
+        log.warn('forked Codex thread cleanup failed', {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      } finally {
+        closeDbQuietly(db);
+      }
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** 只读取一个 state DB 里该 thread 的三表行并转成 JSON 可序列化形态。 */
 function readThreadStateRows(
   dbPath: string,
@@ -4762,20 +4824,26 @@ async function upsertLocalSession(thread: CodexThreadSummary): Promise<'inserted
       0, '[]', ?, ?, ?
     )
     ON CONFLICT(id) DO UPDATE SET
-      title = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.title ELSE sessions.title END,
-      working_dir = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.working_dir ELSE sessions.working_dir END,
+      -- 复活语义(#3548,与 claude 侧同口径):旧行已软删时按全新导入对待,
+      -- 元数据与 updated_at 一并收敛回源值,不残留删除时刻的旧快照。
+      title = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.title ELSE sessions.title END,
+      working_dir = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.working_dir ELSE sessions.working_dir END,
       -- Classification follows Codex global state, not local edit recency.
       -- This lets a re-import fix rows previously misclassified as projects
       -- while preserving newer local title/metadata via the CASE clauses.
       workspace_kind = excluded.workspace_kind,
-      model = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.model ELSE sessions.model END,
-      effort = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.effort ELSE sessions.effort END,
-      permission_mode = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.permission_mode ELSE sessions.permission_mode END,
-      status = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.status ELSE sessions.status END,
+      model = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.model ELSE sessions.model END,
+      effort = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.effort ELSE sessions.effort END,
+      permission_mode = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.permission_mode ELSE sessions.permission_mode END,
+      status = CASE
+        WHEN sessions.status = 'deleted' THEN excluded.status
+        WHEN sessions.updated_at <= excluded.updated_at THEN excluded.status
+        ELSE sessions.status
+      END,
       sdk_session_id = excluded.sdk_session_id,
-      total_token_usage = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.total_token_usage ELSE sessions.total_token_usage END,
+      total_token_usage = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.total_token_usage ELSE sessions.total_token_usage END,
       user_send_at = COALESCE(sessions.user_send_at, excluded.user_send_at),
-      updated_at = MAX(sessions.updated_at, excluded.updated_at)
+      updated_at = CASE WHEN sessions.status = 'deleted' THEN excluded.updated_at ELSE MAX(sessions.updated_at, excluded.updated_at) END
   `, [
     localId,
     thread.title,

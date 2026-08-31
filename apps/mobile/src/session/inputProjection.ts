@@ -9,6 +9,7 @@ import {
 } from '@cindy/maker-shared/agent-input-projection';
 import type { InputProjection, QueuedRemoteMessage, RemoteImageRef, RemoteSession } from '@/session/types';
 import type { RemoteSerializedAttachment } from '@/session/types';
+import { parseMobileToolLoopErrorDetails } from '@/session/toolLoopErrorI18n';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   composerDocumentsEqual,
@@ -67,6 +68,8 @@ export const EMPTY_INPUT_PROJECTION: InputProjection = Object.freeze({
   queueEditLocks: [],
   queueAbortPending: false,
   error: null,
+  errorReason: null,
+  toolLoop: null,
   recovery: null,
   errorRetryText: null,
   credentialSwitchWait: null,
@@ -92,6 +95,8 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     queueEditLocks: readStringArray(record?.queueEditLocks),
     queueAbortPending: record?.queueAbortPending === true,
     error: readString(record?.error),
+    errorReason: readString(record?.errorReason),
+    toolLoop: parseMobileToolLoopErrorDetails(record?.toolLoop),
     recovery: record?.recovery,
     errorRetryText: readString(record?.errorRetryText),
     autoResumePending: readRecord(record?.autoResumePending),

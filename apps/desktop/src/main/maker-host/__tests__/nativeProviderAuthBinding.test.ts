@@ -29,8 +29,11 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
+  isNativeProviderAuthSharedSystemCredential,
+  markNativeProviderAuthSharedSystemCredential,
   migrateLocalNativeProviderAuthBindings,
   migrateLegacyNativeProviderAuthBindings,
+  readExplicitNativeProviderAuthOwner,
   readLegacyNativeProviderAuthOwner,
   recoverPendingLegacyNativeProviderAuthOwner,
   reserveCommittedLegacyNativeProviderAuthOwner,
@@ -140,6 +143,37 @@ describe('local → cloud native provider binding migration', () => {
       expect(openSpy).toHaveBeenCalledWith(userDataDir, 'r');
     }
     expect(fsyncSpy).toHaveBeenCalled();
+  });
+
+  it('keeps directory durability bound to the real host when link tests spoof the platform', () => {
+    const hostPlatform = process.platform;
+    const realFsync = fs.fsyncSync.bind(fs);
+    vi.spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
+      if (fs.fstatSync(fd).isDirectory()) {
+        throw Object.assign(new Error('directory fsync is unsupported'), { code: 'EPERM' });
+      }
+      realFsync(fd);
+    });
+    Object.defineProperty(process, 'platform', {
+      value: hostPlatform === 'win32' ? 'darwin' : 'win32',
+      configurable: true,
+    });
+
+    try {
+      if (hostPlatform === 'win32') {
+        expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('claimed');
+        expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+          legacyClaimOwner: 'owner-a',
+        });
+      } else {
+        expect(reserveLegacyNativeProviderAuthOwner('owner-a')).toBe('failed');
+      }
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: hostPlatform,
+        configurable: true,
+      });
+    }
   });
 
   it('retries transient Windows-style binding publication locks', () => {
@@ -805,6 +839,42 @@ describe('凭证来路(selfAuthorized)—— 显式授权 vs 自动继承', () =
     expect(isNativeProviderAuthSelfAuthorized('openai')).toBe(false);
   });
 
+  it('新显式授权和登出都会清除旧的系统共享 provenance', () => {
+    bindNativeProviderAuth('openai');
+    expect(markNativeProviderAuthSharedSystemCredential('openai')).toBe(true);
+    expect(isNativeProviderAuthSharedSystemCredential('openai')).toBe(true);
+
+    bindNativeProviderAuth('openai');
+    expect(isNativeProviderAuthSharedSystemCredential('openai')).toBe(false);
+
+    expect(markNativeProviderAuthSharedSystemCredential('openai')).toBe(true);
+    unbindNativeProviderAuth('openai');
+    expect(isNativeProviderAuthSharedSystemCredential('openai')).toBe(false);
+  });
+
+  it('只有登录收尾证明的当前隔离凭证才可阻止 orphan repair', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({
+        openai: 'owner-a',
+        selfAuthorized: { openai: 'owner-a' },
+        sources: { openai: 'explicit-provider-oauth' },
+      }),
+    );
+
+    expect(readExplicitNativeProviderAuthOwner('openai')).toBeNull();
+
+    bindNativeProviderAuth('openai', { instanceIsolated: true });
+    expect(readExplicitNativeProviderAuthOwner('openai')).toBe('owner-a');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      instanceIsolatedCredential: { openai: 'owner-a' },
+    });
+
+    expect(markNativeProviderAuthSharedSystemCredential('openai')).toBe(true);
+    expect(readExplicitNativeProviderAuthOwner('openai')).toBeNull();
+  });
+
   it('从没绑定过的 provider 不算自己授权过', () => {
     expect(isNativeProviderAuthSelfAuthorized('xai')).toBe(false);
   });
@@ -813,5 +883,24 @@ describe('凭证来路(selfAuthorized)—— 显式授权 vs 自动继承', () =
     fs.mkdirSync(userDataDir, { recursive: true });
     fs.writeFileSync(bindingFile, '{ this is not json');
     expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(true);
+  });
+
+  it.each([
+    ['provider owner', { openai: 42, selfAuthorized: { openai: 'owner-a' } }],
+    ['self-authorized owner', { openai: 'owner-a', selfAuthorized: { openai: 42 } }],
+    [
+      'isolated credential owner',
+      { openai: 'owner-a', instanceIsolatedCredential: { openai: 42 } },
+    ],
+  ])('treats a non-string %s as unproven without rewriting the binding', (_case, value) => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify(value));
+    const before = fs.readFileSync(bindingFile);
+
+    expect(() => readExplicitNativeProviderAuthOwner('openai')).not.toThrow();
+    expect(readExplicitNativeProviderAuthOwner('openai')).toBeNull();
+    expect(isNativeProviderAuthBound('openai')).toBe(false);
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(false);
+    expect(fs.readFileSync(bindingFile)).toEqual(before);
   });
 });
