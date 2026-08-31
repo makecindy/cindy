@@ -887,6 +887,27 @@ test('独立窗口 surface 纳入各自 entry 导入的 globals.css', () => {
   }
 });
 
+test('语音浮窗纳入 globals.css 与直接渲染的 VoiceInputStatusNotice', () => {
+  // main-entry.tsx 无条件加载 globals.css（含 data-voice-input-overlay 透明根规则）；
+  // VoiceInputOverlay.tsx:1521 直接渲染 VoiceInputStatusNotice。
+  const catalog = catalogSurfaces();
+  const overlay = catalog.find((surface) => surface.id === 'desktop.window.voice-overlay');
+  assert.ok(overlay);
+  assert.ok(overlay.styleRoots.includes('apps/desktop/src/renderer/styles/globals.css'));
+  assert.ok(
+    overlay.reachableComponents.includes('VoiceInputStatusNotice'),
+    'VoiceInputStatusNotice 必须列入可达组件',
+  );
+  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
+  const generated = surfaces.find((surface) => surface.id === 'desktop.window.voice-overlay');
+  assert.ok(generated.styleSources.some((file) => file.endsWith('VoiceInputStatusNotice.tsx')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('styles/globals.css')));
+  // 此前 8/2/10——并入全局样式与状态条后基线显著上调。
+  assert.ok(generated.tokenCount > 8, `token 应高于 8(实际 ${generated.tokenCount})`);
+  assert.ok(generated.bareColors > 2, `裸色应高于 2(实际 ${generated.bareColors})`);
+  assert.ok(generated.bareRadii > 10, `裸圆角应高于 10(实际 ${generated.bareRadii})`);
+});
+
 test('裸圆角统计覆盖 React style 对象的 camelCase borderRadius', () => {
   // 与 BARE_RADIUS_RE 同口径的行为级断言:经 scanStyleStats 出来的统计必须数到
   // style 对象声明。用真实文件钉死:LoginCaptchaOverlay.tsx 的 borderRadius: 18。

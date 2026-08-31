@@ -719,10 +719,15 @@ export function catalogSurfaces() {
       platform: 'desktop',
       title: '语音输入浮窗',
       productionEntry: '`?view=voice-input-overlay` → main-entry.tsx → VoiceInputOverlay',
-      reachableComponents: ['VoiceInputOverlay'],
+      // VoiceInputOverlay 直接渲染 VoiceInputStatusNotice(状态提示条);
+      // main-entry.tsx 无条件加载 globals.css,其中 data-voice-input-overlay
+      // 透明根节点规则是该浮窗专用。
+      reachableComponents: ['VoiceInputOverlay', 'VoiceInputStatusNotice'],
       styleRoots: [
         'apps/desktop/src/renderer/voice-input/VoiceInputOverlay.tsx',
+        'apps/desktop/src/renderer/voice-input/VoiceInputStatusNotice.tsx',
         'apps/desktop/src/main/voice-input/global.ts',
+        'apps/desktop/src/renderer/styles/globals.css',
       ],
       routerPaths: [],
       viewEntryComponents: { 'voice-input-overlay': 'VoiceInputOverlay' },
