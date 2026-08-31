@@ -326,7 +326,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
    * paths call this method when a permission change may have happened.
    */
   retryPermission(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.permissionBlocked) return;
     this.permissionBlocked = false;
     this.probe();
   }

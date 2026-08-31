@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { classifyConnectionError } from '../workLouderCodexHostProcess.js';
+import { classifyConnectionError, postDeviceStatus } from '../workLouderCodexHostProcess.js';
 
 const originalPlatform = process.platform;
 
@@ -35,5 +35,24 @@ describe('Work Louder connection error classification', () => {
     setPlatform('linux');
 
     expect(classifyConnectionError('not permitted')).toBe('connection-failed');
+  });
+});
+
+describe('Work Louder device status', () => {
+  it('keeps the HID connection usable when optional status telemetry fails', async () => {
+    const getDeviceStatus = vi.fn().mockRejectedValue(new Error('status RPC unsupported'));
+
+    await expect(
+      postDeviceStatus(
+        {
+          sendLightingConfig: vi.fn(),
+          sendThreadsLighting: vi.fn(),
+          getDeviceStatus,
+        },
+        'codex-micro',
+        true,
+      ),
+    ).resolves.toBeUndefined();
+    expect(getDeviceStatus).toHaveBeenCalledOnce();
   });
 });

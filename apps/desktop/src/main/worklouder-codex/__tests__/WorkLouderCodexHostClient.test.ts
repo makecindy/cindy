@@ -612,6 +612,20 @@ describe('WorkLouderCodexHostClient', () => {
       vi.useRealTimers();
     }
   });
+
+  it('does not discover presence when unlock arrives without a permission breaker', () => {
+    const fork = vi.fn(() => new FakeChild());
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+
+    client.setDeviceEnabled(false);
+    client.retryPermission();
+
+    expect(fork).not.toHaveBeenCalled();
+  });
 });
 
 describe('Work Louder SDK resolution', () => {
