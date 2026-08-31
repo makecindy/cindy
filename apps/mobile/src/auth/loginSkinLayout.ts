@@ -441,6 +441,53 @@ export const LOGIN_METHOD_ROW = {
   firstRowTopSsoOrg: 148,
   rowStep: 120,
 } as const;
+
+/**
+ * 身份选择列表的独立滚动视口。
+ *
+ * 标题 / 返回按钮留在面板固定层；视口从原首行 y=148 开始，到错误提示槽 y=380
+ * 结束，因此默认完整显示两行且不会与错误文案重叠。更多身份在该区域内滚动。
+ */
+export const LOGIN_ACCOUNT_LIST = {
+  viewportTop: LOGIN_METHOD_ROW.firstRowTopSsoOrg,
+  viewportHeight:
+    LOGIN_ERROR_TEXT.y - LOGIN_METHOD_ROW.firstRowTopSsoOrg,
+  visibleRowCount: 2,
+} as const;
+
+export interface LoginAccountListLayout {
+  viewportHeight: number;
+  contentHeight: number;
+  maxScrollOffset: number;
+  lastRowTopAtMaxScroll: number;
+  rowTops: number[];
+}
+
+/** 纯几何：给定身份数，计算滚动内容高度与最大滚动位置。 */
+export function resolveLoginAccountListLayout(
+  accountCount: number,
+): LoginAccountListLayout {
+  const count = Math.max(0, Math.floor(accountCount));
+  const rowTops = Array.from(
+    { length: count },
+    (_, index) => index * LOGIN_METHOD_ROW.rowStep,
+  );
+  const rowsHeight =
+    count === 0
+      ? 0
+      : LOGIN_METHOD_ROW.height + (count - 1) * LOGIN_METHOD_ROW.rowStep;
+  const contentHeight = Math.max(LOGIN_ACCOUNT_LIST.viewportHeight, rowsHeight);
+  const maxScrollOffset = contentHeight - LOGIN_ACCOUNT_LIST.viewportHeight;
+  const lastRowTop = rowTops.at(-1) ?? 0;
+
+  return {
+    viewportHeight: LOGIN_ACCOUNT_LIST.viewportHeight,
+    contentHeight,
+    maxScrollOffset,
+    lastRowTopAtMaxScroll: lastRowTop - maxScrollOffset,
+    rowTops,
+  };
+}
 /** 大 loading 环(figma §5.2:64×64 @(308,158 browser / 193 preparing))。 */
 export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size: 64 } as const;
 /** Text_link / 倒计时(figma §4.7:@(70,238) 540×50 20;行高走 LOGIN_COPY_LINE_HEIGHT)。 */

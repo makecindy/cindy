@@ -289,6 +289,10 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
     expect(loginSource).toContain(
       "account.orgName || account.email || loginText('personalAccount')",
     );
+    expect(loginSource).toContain('ref={accountSelectionScrollRef}');
+    expect(loginSource).toContain('showsVerticalScrollIndicator={');
+    expect(loginSource).toContain('resolveLoginAccountListLayout(');
+    expect(loginSource).toContain('top={index * LOGIN_METHOD_ROW.rowStep}');
   });
 
   it('binding-contact:outcome:binding-phone 真链→绑定阶段一(输入+发送)', async () => {
