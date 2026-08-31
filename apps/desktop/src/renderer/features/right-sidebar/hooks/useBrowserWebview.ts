@@ -528,10 +528,13 @@ export function useBrowserWebview(
       setIsLoading(false);
     }
   }, []);
-  const setZoomFactor = useCallback((zoomFactor: number) => {
-    zoomFactorRef.current = zoomFactor;
-    applyZoomFactor();
-  }, [applyZoomFactor]);
+  const setZoomFactor = useCallback(
+    (zoomFactor: number) => {
+      zoomFactorRef.current = zoomFactor;
+      applyZoomFactor();
+    },
+    [applyZoomFactor],
+  );
   const dismissResourceAlert = useCallback(() => setResourceAlert(null), []);
   const currentEntry = enabled ? browserWebviewPool.peek(tabId) : undefined;
   const currentWebview = currentEntry?.wrapper === wrapper ? currentEntry.webview : null;

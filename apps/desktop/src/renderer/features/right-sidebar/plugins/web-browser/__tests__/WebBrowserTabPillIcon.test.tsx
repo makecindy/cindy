@@ -3,11 +3,7 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  hydrateWebBrowserState,
-  WebBrowserTabPillIcon,
-  type WebBrowserState,
-} from '../index';
+import { hydrateWebBrowserState, WebBrowserTabPillIcon, type WebBrowserState } from '../index';
 
 function browserState(favicon: string | null): WebBrowserState {
   return {

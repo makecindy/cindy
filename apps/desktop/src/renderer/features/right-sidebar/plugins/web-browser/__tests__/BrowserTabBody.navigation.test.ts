@@ -1,12 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import {
-  createElement,
-  type ButtonHTMLAttributes,
-  type ReactElement,
-  type ReactNode,
-} from 'react';
+import { createElement, type ButtonHTMLAttributes, type ReactElement, type ReactNode } from 'react';
 import type { WebviewTag } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -243,12 +238,7 @@ describe('BrowserTabBody navigation', () => {
     const patchState = vi.fn();
     browserState = makeBrowserState({ setZoomFactor });
 
-    render(renderBrowserTab(
-      'https://www.taptap.cn/',
-      patchState,
-      true,
-      { zoomFactor: 1.25 },
-    ));
+    render(renderBrowserTab('https://www.taptap.cn/', patchState, true, { zoomFactor: 1.25 }));
 
     expect(setZoomFactor).toHaveBeenCalledWith(1.25);
     fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.zoomIn' }));

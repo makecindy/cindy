@@ -30,10 +30,7 @@ import type { TabKindPlugin } from '../../types';
 const BrowserTabBody = lazy(() =>
   import('./BrowserTabBody').then((module) => ({ default: module.BrowserTabBody })),
 );
-import {
-  DEFAULT_BROWSER_ZOOM_FACTOR,
-  normalizeBrowserZoomFactor,
-} from './lib/browserZoom';
+import { DEFAULT_BROWSER_ZOOM_FACTOR, normalizeBrowserZoomFactor } from './lib/browserZoom';
 
 /** plugin state shape —— 反序列化口径:JSON identity 即可恢复。 */
 export interface WebBrowserState {
@@ -73,8 +70,8 @@ export function hydrateWebBrowserState(raw: unknown): WebBrowserState {
     typeof obj.favicon === 'string'
       ? normalizePersistableFavicon(obj.favicon)
       : obj.favicon === null
-      ? null
-      : DEFAULT_STATE.favicon;
+        ? null
+        : DEFAULT_STATE.favicon;
   return {
     url,
     title,

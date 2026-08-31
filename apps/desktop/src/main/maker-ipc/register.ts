@@ -10,6 +10,7 @@
  * 老的 cc-agent:* / codex:* IPC handler 完全不动，新链路与老链路并行。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,12 +23,14 @@ import {
   listPiSubagentRuns,
   piSubagentRunRoot,
 } from '@cindy/maker-core/pi-subagent-runs';
+import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 import type {
   AgentEvent,
   AgentKind,
   ContextUsageData,
   InteractionDecision,
   InteractionRequest,
+  MainOwnedSendContext,
   Maker,
   SendOrigin,
   Session,
@@ -559,17 +562,22 @@ import {
   type PiPackageMutationRequest,
 } from '../../shared/piPackages.js';
 import {
-  capturePiPackageEnableIdentity,
   listManagedPiPromptCommands,
   listPiPackages,
   mutatePiPackage,
   onPiPackagesChanged,
+  piPackageMutationFailureCategory,
+  piPackageMutationMayHaveChangedState,
+  type PiPackageRuntimeInvalidationPhase,
 } from '../maker-host/pi-package-store.js';
+import {
+  invalidateLocalPiPackageRuntimes,
+  invalidateLocalPiPackageRuntimesForObservedChange,
+} from '../maker-host/pi-package-runtime-invalidation.js';
 import {
   issuePiPackageMutationGrant,
   piPackageMutationNeedsGrant,
 } from '../maker-host/pi-package-mutation-grant.js';
-import { escapePiPackageNativeDialogText } from '../maker-host/pi-package-native-dialog.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   triggerClaudeSubscriptionUsageRefresh,
@@ -669,8 +677,11 @@ import {
 import { startOrcaTeamWithPermissionGate } from './orcaStartTeamPermissionGate.js';
 import { createWorkerCreationPrefsSyncHandler } from './workerCreationPrefsSyncHandler.js';
 import {
+  containsManagedAttachment,
   createMakerSendTransaction,
   prepareDirectoryGrantsForBootstrap,
+  stampTrustedDesktopQueuedOrigin,
+  TRUSTED_DESKTOP_QUEUE_ORIGIN,
 } from './makerSendTransaction.js';
 import {
   installDesktopInteractionHandler,
@@ -6168,7 +6179,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
   });
   disposePiPackagesChangedBroadcast?.();
-  disposePiPackagesChangedBroadcast = onPiPackagesChanged(() => {
+  disposePiPackagesChangedBroadcast = onPiPackagesChanged((origin) => {
+    void invalidateLocalPiPackageRuntimesForObservedChange(maker, origin)
+      .then((invalidation) => {
+        if (invalidation && invalidation.failedSessionIds.length > 0) {
+          log.warn('Cross-process Pi package change did not retire every local runtime', {
+            failedSessionIds: invalidation.failedSessionIds,
+          });
+        }
+      })
+      .catch((error) => {
+        log.warn('Cross-process Pi package runtime invalidation failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
         win.webContents.send(MAKER_PUSH.PI_PACKAGES_CHANGED);
@@ -7221,82 +7245,82 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (payload.enabled !== undefined && typeof payload.enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
     }
+    if (payload.mutationTarget !== undefined
+      && (typeof payload.mutationTarget !== 'string'
+        || !/^cindy-pi-package:[a-f0-9]{64}$/.test(payload.mutationTarget))) {
+      throwIpcError('INVALID_PARAMS', 'invalid Pi extension mutation target');
+    }
     const request: PiPackageMutationRequest = {
       action,
       source: payload.source,
+      ...(typeof payload.mutationTarget === 'string'
+        ? { mutationTarget: payload.mutationTarget }
+        : {}),
       ...(typeof payload.enabled === 'boolean' ? { enabled: payload.enabled } : {}),
     };
     return runPiPackageMutationIpcBoundary(
       async () => {
-        if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
-
-        const enableIdentity =
-          request.action === 'set-enabled' && request.enabled === true
-            ? await capturePiPackageEnableIdentity(request.source)
-            : undefined;
-        const grantBinding = enableIdentity
-          ? { expectedPackageFingerprint: enableIdentity.expectedPackageFingerprint }
-          : undefined;
-
-        const source = escapePiPackageNativeDialogText(request.source);
-        const copy =
-          request.action === 'set-enabled'
-            ? {
-                title: t('settings.piPackages.extensionApprovalTitle'),
-                message: enableIdentity?.displayLabel ?? '',
-                detail: t('settings.piPackages.extensionApprovalDescription'),
-                confirm: t('settings.piPackages.approveAndEnable'),
-              }
-            : request.action === 'remove'
-              ? {
-                  title: t('settings.piPackages.uninstallTitle'),
-                  message: t('settings.piPackages.uninstallTitle'),
-                  detail: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
-                  confirm: t('settings.piPackages.confirmUninstall'),
-                }
-              : request.action === 'update'
-                ? {
-                    title: t('settings.piPackages.updateConfirmTitle'),
-                    message: t('settings.piPackages.updateConfirmTitle'),
-                    detail: t('settings.piPackages.updateConfirmDescription').replace(
-                      '{{source}}',
-                      source,
-                    ),
-                    confirm: t('settings.piPackages.confirmUpdate'),
-                  }
-                : {
-                    title: t('settings.piPackages.confirmTitle'),
-                    message: t('settings.piPackages.confirmTitle'),
-                    detail: t('settings.piPackages.confirmDescription').replace(
-                      '{{source}}',
-                      source,
-                    ),
-                    confirm: t('settings.piPackages.confirmInstall'),
-                  };
-        const owner = BrowserWindow.fromWebContents(event.sender);
-        const options = {
-          type: 'warning' as const,
-          title: copy.title,
-          message: copy.message,
-          detail: copy.detail,
-          buttons: [copy.confirm, t('settings.piPackages.cancel')],
-          defaultId: 1,
-          cancelId: 1,
-          noLink: true,
+        let runtimesInvalidated = false;
+        let runtimeConvergencePartial = false;
+        const invalidateRuntimes = async (
+          phase: PiPackageRuntimeInvalidationPhase = 'commit',
+        ): Promise<void> => {
+          if (runtimesInvalidated && phase === 'commit') return;
+          runtimesInvalidated = true;
+          try {
+            const invalidation = await invalidateLocalPiPackageRuntimes(maker);
+            if (invalidation.failedSessionIds.length > 0) {
+              runtimeConvergencePartial = true;
+              log.warn('Pi package changed but some local runtimes did not close', {
+                failedSessionIds: invalidation.failedSessionIds,
+              });
+            }
+          } catch {
+            // The package mutation is already committed. Runtime convergence is
+            // a separately recoverable result, never a rewritten native failure.
+            runtimeConvergencePartial = true;
+            log.warn('Pi package changed but local runtime invalidation failed', {
+              failureCategory: 'runtime-invalidation-failed',
+              recoveryAction: 'restart-cindy',
+            });
+          }
         };
-        const decision = owner
-          ? await dialog.showMessageBox(owner, options)
-          : await dialog.showMessageBox(options);
-        if (decision.response !== 0) {
-          throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
+        try {
+          const mutationHooks = { onRuntimeInvalidationPublished: invalidateRuntimes };
+          const result = !piPackageMutationNeedsGrant(request)
+            ? await mutatePiPackage(request, undefined, mutationHooks)
+            : await mutatePiPackage(
+                request,
+                // The trusted Settings action is the user's one authorization;
+                // this grant binds only the exact request.
+                issuePiPackageMutationGrant(request),
+                mutationHooks,
+              );
+          // Pi discovers packages at process start. Every successful roster
+          // mutation must retire old local ordinary runtimes, including install,
+          // update, and enable—not only revocation.
+          await invalidateRuntimes();
+          return runtimeConvergencePartial
+            ? { ...result, runtimeConvergence: 'partial' as const }
+            : result;
+        } catch (error) {
+          // Retire snapshots only after the store reached a native command or
+          // durable write. Pure validation/state-read failures must not cancel
+          // unrelated running Pi tasks.
+          if (piPackageMutationMayHaveChangedState(error)) {
+            await invalidateRuntimes();
+          }
+          throw error;
         }
-        return mutatePiPackage(request, issuePiPackageMutationGrant(request, grantBinding));
       },
-      t('settings.piPackages.operationFailed'),
+      (error) => piPackageMutationFailureCategory(error) === 'state-unavailable'
+        ? t('settings.piPackages.failure.stateUnavailable')
+        : t('settings.piPackages.operationFailed'),
       (error) => {
         log.warn('Pi extension mutation failed', {
           action: request.action,
-          message: error instanceof Error ? error.message : String(error),
+          failureCategory: piPackageMutationFailureCategory(error),
+          mayHaveChangedState: piPackageMutationMayHaveChangedState(error),
         });
       },
     );
@@ -12390,6 +12414,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       expectedInputGeneration?: number;
       expectedTurnSession?: object;
       expectedTurnGeneration?: number;
+      readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
     };
     const readCurrentSteerSession = () => {
       const current = maker.getSession(sessionId);
@@ -12473,6 +12498,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         messageUuid: so.messageUuid,
         userName: so.userName,
         signal: so.signal,
+        [MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT],
       });
       log.info('steer: delivered', { sessionId, agentKind: sess.agentKind });
     } catch (err) {
@@ -12496,15 +12522,63 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
 
-  registerMakerSessionSendHandler(makerSessionRegistry, {
-    sendToAgentAccepted,
-    assertRemoteInputControlBoundary: (sessionId, opts) =>
-      assertRemoteInputControlBoundary(sessionId, isDeviceLinkInvoke(), opts),
-  });
+  const trustedDesktopSteerText = new AsyncLocalStorage<string>();
+  const attachTrustedDesktopSendContext = (message: unknown, sendOpts: unknown, expectedText?: string): unknown => {
+    const record = message as { type?: unknown; content?: unknown } | null;
+    const rawChannelText = typeof message === 'string'
+      ? message
+      : record?.type === 'user' && typeof record.content === 'string'
+        ? record.content
+        : undefined;
+    const opts = sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
+      ? sendOpts as Record<string, unknown>
+      : undefined;
+    const persisted = opts?.persistUserMessage && typeof opts.persistUserMessage === 'object'
+      ? opts.persistUserMessage as Record<string, unknown>
+      : undefined;
+    if (rawChannelText === undefined
+      || (expectedText !== undefined && rawChannelText !== expectedText)
+      || containsManagedAttachment(message)
+      || containsManagedAttachment(persisted?.content)
+      || persisted?.autoResume === true
+      || persisted?.origin !== undefined
+      || opts?.origin !== undefined
+      || opts?.fromMobileClient === true) return sendOpts;
+    return {
+      ...(sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
+        ? sendOpts as Record<string, unknown>
+        : {}),
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' as const }, rawChannelText },
+    };
+  };
+  const revokeTrustedDesktopQueueOrigin = (item?: AgentInputQueuedMessage): void => { if (item?.origin) delete (item.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN]; };
+  registerMakerSessionSendHandler(
+    {
+      handle(channel, handler) {
+        makerSessionRegistry.handle(channel, (event, ...args) => {
+          if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event as never);
+          return handler(event, ...args);
+        });
+      },
+    },
+    {
+      sendToAgentAccepted: (sessionId, message, createOpts, sendOpts) =>
+        sendToAgentAccepted(
+          sessionId,
+          message,
+          createOpts,
+          isDeviceLinkInvoke()
+            ? sendOpts
+            : attachTrustedDesktopSendContext(message, sendOpts),
+        ),
+      assertRemoteInputControlBoundary: (sessionId, opts) =>
+        assertRemoteInputControlBoundary(sessionId, isDeviceLinkInvoke(), opts),
+    },
+  );
 
   ipcMain.handle(
     MAKER_INVOKE.STEER,
-    async (_e, sessionId: unknown, message: unknown, sendOpts?: unknown) => {
+    async (event, sessionId: unknown, message: unknown, sendOpts?: unknown) => {
       // **wire sendOpts 必须消毒**(review P1/P2,两个 bot 各报一次):这个 channel 在
       // device-link allowlist 里开放,`sendOpts` 是调用方可控输入。不剥的话,桌面 renderer
       // 或任意获准远控的非手机客户端只要传 `{ fromMobileClient: true }`,就能让本轮拿到伪造
@@ -12513,15 +12587,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 契约与 maker:send 一致(sessionSendHandler 同样在 IPC 边界剥):**该字段只由 main
       // 盖章**。coordinator 的内部 steerToAgent 调用不经过这里,透传值不受影响。
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      const deviceLinkInvoke = isDeviceLinkInvoke();
+      if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);
       const boundaryStamp = await assertRemoteInputControlBoundary(
         sessionId,
-        isDeviceLinkInvoke(),
+        deviceLinkInvoke,
         sendOpts,
+      );
+      const sanitizedSendOpts = attachMainOwnedInputBoundary(
+        stripMainOnlySendOpts(sendOpts),
+        boundaryStamp,
       );
       await steerToAgentAccepted(
         sessionId,
         message,
-        attachMainOwnedInputBoundary(stripMainOnlySendOpts(sendOpts), boundaryStamp),
+        deviceLinkInvoke
+          ? sanitizedSendOpts
+          : attachTrustedDesktopSendContext(message, sanitizedSendOpts),
       );
     },
   );
@@ -13199,8 +13281,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sessionTotal: decision.sessionTotal,
       };
     },
-    steerToAgent: (sessionId, message, sendOpts) =>
-      steerToAgentAccepted(sessionId, message, sendOpts),
+    steerToAgent: (sessionId, message, sendOpts) => {
+      const expectedText = trustedDesktopSteerText.getStore();
+      return steerToAgentAccepted(
+        sessionId,
+        message,
+        expectedText === undefined
+          ? sendOpts
+          : attachTrustedDesktopSendContext(message, sendOpts, expectedText),
+      );
+    },
     abortSession: async (sessionId) => {
       resetAutomaticRecoveryForExplicitStop(sessionId);
       markWorkerManualInterruptIfKnown(sessionId, 'input_stop');
@@ -13483,8 +13573,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...verdict,
       });
     },
-    onUserMessageRewritten: (sessionId, item, info) =>
-      broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info }),
+    onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item), broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info })),
     beforeDispatchUserTurn: async (sessionId, item) => {
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
@@ -14205,10 +14294,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 本机会话无 OSS 引用 → materializeQueuedOssAttachments 原样返回,零开销。
   ipcMain.handle(
     MAKER_INVOKE.INPUT_ENQUEUE,
-    async (_e, sessionId: unknown, item: unknown, opts?: unknown) => {
+    async (event, sessionId: unknown, item: unknown, opts?: unknown) => {
       const sid = requireSessionId(sessionId);
       await assertReviewExternalInputAllowed(sid);
       const deviceLinkInvoke = isDeviceLinkInvoke();
+      if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);
       const parsed = requireQueuedMessage(item);
       assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
       const clearBoundaryPrecondition = readRemoteInputClearBoundaryPrecondition(opts);
@@ -14272,9 +14362,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputGeneration();
         // 手机来源在**入队这一刻**盖章:drain 派发时已脱离本 invoke 的 async context。
         // 无条件覆盖 —— item 来自 wire,客户端自填的 fromMobileClient 一律不生效。
-        const queued = stampMobileClientOrigin(
-          await hydrateQueuedAgentReferences(queuedWithAttachments),
-          isMobileControllerInvoke(),
+        const queued = stampTrustedDesktopQueuedOrigin(
+          stampMobileClientOrigin(
+            await hydrateQueuedAgentReferences(queuedWithAttachments),
+            isMobileControllerInvoke(),
+          ),
+          deviceLinkInvoke,
         );
         assertCurrentInputGeneration();
         const commitAutoTitle = await prepareDeviceLinkAutoTitle(sid, queued);
@@ -14355,10 +14448,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   ipcMain.handle(
     MAKER_INVOKE.INPUT_STEER,
-    async (_e, sessionId: unknown, item: unknown, opts?: unknown) => {
+    async (event, sessionId: unknown, item: unknown, opts?: unknown) => {
       const sid = requireSessionId(sessionId);
       await assertReviewExternalInputAllowed(sid);
       const deviceLinkInvoke = isDeviceLinkInvoke();
+      if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);
       const steerOpts =
         opts && typeof opts === 'object'
           ? (opts as {
@@ -14477,9 +14571,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const queuedWithAttachments = materialized.item as AgentInputQueuedMessage;
         assertCurrentInputGeneration();
         // 与 enqueue 同:steer 投递也在本 invoke 的 async context 之外发生。
-        const queued = stampMobileClientOrigin(
-          await hydrateQueuedAgentReferences(queuedWithAttachments),
-          isMobileControllerInvoke(),
+        const queued = stampTrustedDesktopQueuedOrigin(
+          stampMobileClientOrigin(
+            await hydrateQueuedAgentReferences(queuedWithAttachments),
+            isMobileControllerInvoke(),
+          ),
+          deviceLinkInvoke,
         );
         assertCurrentInputGeneration();
         // 插话也补起名:远控用户完全可能趁这一轮还在跑就写下第一句话,只认入队的话
@@ -14516,7 +14613,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             attachmentOwnerId,
           );
         }
-        const accepted = await inputCoordinator.steer(sid, queued, steerOpts);
+        const runSteer = () => inputCoordinator.steer(sid, queued, steerOpts);
+        const accepted = await (deviceLinkInvoke
+          ? runSteer()
+          : trustedDesktopSteerText.run(queued.text, runSteer));
         acceptedByCoordinator = accepted;
         assertCurrentInputGeneration();
         if (accepted) {
@@ -14660,7 +14760,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(
     MAKER_INVOKE.INPUT_UPDATE_TEXT,
     async (
-      _e,
+      event,
       sessionId: unknown,
       clientId: unknown,
       newText: unknown,
@@ -14672,6 +14772,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const refs = requireSessionRefs(sessionRefs);
       const remote = isDeviceLinkInvoke();
       const sid = requireSessionId(sessionId);
+      const cid = requireClientId(clientId);
+      if (!remote) assertTrustedAppRendererEvent(event);
       await assertRemoteInputControlBoundary(sid, remote, opts);
       const contexts = remote ? requireTrustedReferenceContexts(refs, trustedContexts) : undefined;
       if (remote && (refs?.length ?? 0) > 0 && !contexts) {
@@ -14682,11 +14784,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return inputCoordinator.updateText(
         sid,
-        requireClientId(clientId),
+        cid,
         newText,
         refs,
         contexts,
         remote,
+        (updated) => stampTrustedDesktopQueuedOrigin(updated, remote, true),
       );
     },
   );
@@ -14694,10 +14797,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 与 enqueue/steer 同一套物化:远程编辑保存的新附件可能是 OSS 引用,入队前物化成本地文件。
   ipcMain.handle(
     MAKER_INVOKE.INPUT_UPDATE_CONTENT,
-    async (_e, sessionId: unknown, clientId: unknown, item: unknown, opts?: unknown) => {
+    async (event, sessionId: unknown, clientId: unknown, item: unknown, opts?: unknown) => {
       const sid = requireSessionId(sessionId);
       const cid = requireClientId(clientId);
       const remote = isDeviceLinkInvoke();
+      if (!remote) assertTrustedAppRendererEvent(event);
       const clearBoundaryPrecondition = readRemoteInputClearBoundaryPrecondition(opts);
       await assertRemoteInputControlBoundary(sid, remote, opts);
       const inputGeneration = inputCoordinator.getGeneration(sid);
@@ -14753,7 +14857,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           assertExpectedRemoteInputClearBoundary(sid, clearBoundaryPrecondition, row);
         }
         assertCurrentInputGeneration();
-        const result = inputCoordinator.updateContentWithResult(sid, cid, update);
+        const result = inputCoordinator.updateContentWithResult(
+          sid,
+          cid,
+          update,
+          (updated) => stampTrustedDesktopQueuedOrigin(updated, remote, true),
+        );
         acceptedByCoordinator = result.updated;
         if (result.updated) {
           // The replacement supersedes any older local materialisation owned by

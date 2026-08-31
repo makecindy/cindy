@@ -452,6 +452,8 @@ export interface TurnChangeCaptureHooks {
   }): void;
 }
 
+export type PiNativePackageEntry = string | ({ source: string } & Record<string, unknown>);
+
 export interface PiManagedPackageMutationRequest {
   action: 'install' | 'update' | 'remove';
   source: string;
@@ -472,11 +474,37 @@ export class PiManagedPackageMutationCancelledError extends Error {
   }
 }
 
+export type PiManagedPackageMutationFailureCode =
+  | 'source-unavailable'
+  | 'package-not-found'
+  | 'version-not-found'
+  | 'state-unavailable'
+  | 'native-command-failed';
+
+/** Host-classified package failure; raw cause remains Main-local. */
+export class PiManagedPackageMutationFailedError extends Error {
+  readonly code = 'PI_PACKAGE_MUTATION_FAILED';
+
+  constructor(
+    readonly mayHaveChangedState: boolean,
+    readonly failureCode: PiManagedPackageMutationFailureCode,
+  ) {
+    super('Pi extension mutation failed');
+    this.name = 'PiManagedPackageMutationFailedError';
+  }
+}
+
 export interface PiExtensionUiStrings {
   confirm: string;
   cancel: string;
   mutationFailed: string;
+  mutationFailure?: Partial<Record<PiManagedPackageMutationFailureCode, string>>;
   mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
+}
+
+export interface PiManagedPackageRuntimeConvergence {
+  runtimeConvergence: 'complete' | 'partial';
+  recoveryAction?: 'restart-cindy-to-refresh-packages';
 }
 
 export interface PiSubagentRunnerProcess {
@@ -549,10 +577,9 @@ export interface AgentDeps {
   resolvePiAgentHome?: (remoteHostId?: string | null) => string | undefined;
 
   /**
-   * Pi-only: Cindy-owned packages explicitly enabled for a new runtime on this device.
-   * The host owns package installation, compatibility inspection, persistence,
-   * and path confinement. Device-link remote control still executes on this host
-   * and therefore uses these resources. SSH remoteHostId and Review runtimes do not.
+   * Pi-only: advisory metadata for Cindy UI/command projection. This resolver
+   * may inspect or snapshot known resources, but its result is never the launch
+   * allowlist; resolvePiNativePackagePaths preserves Pi-native discovery.
    */
   resolvePiManagedPackageResources?: (options?: { snapshotRoot: string }) => Promise<{
     extensions: string[];
@@ -562,11 +589,29 @@ export interface AgentDeps {
   }>;
 
   /**
-   * Pi-only: mutate Cindy's host-owned Pi extension store. This is deliberately
-   * separate from the Pi CLI so chat requests cannot fall through to the
-   * user's ~/.pi directory or bypass Cindy's inspection/approval state.
+   * Pi-only: installed local package roots that Pi must discover natively.
+   * Cindy inspection metadata is advisory; a host analyzer that does not
+   * understand a valid future package shape must not remove Pi functionality.
+   */
+  resolvePiNativePackagePaths?: () => Promise<PiNativePackageEntry[]>;
+
+  /**
+   * Pi-only: mutate the shared package home through Pi's own package CLI.
+   * Host routing binds an exact user/tool action but must not add a second
+   * compatibility, fingerprint, or content-approval decision.
    */
   mutatePiManagedPackage?: (request: PiManagedPackageMutationRequest) => Promise<unknown>;
+
+  /**
+   * Pi-only: host callback after a package mutation receipt has been queued/sent.
+   * Desktop publishes a bounded convergence outcome before retiring the caller,
+   * then retires its exact stale local ordinary Pi snapshot. Native package
+   * success remains authoritative.
+   */
+  onPiManagedPackageMutationSettled?: (
+    callerSessionId: string | undefined,
+    publishOutcome: (outcome: PiManagedPackageRuntimeConvergence) => void,
+  ) => Promise<void>;
 
   /**
    * Pi-only: host-localized copy for extension dialogs and deterministic

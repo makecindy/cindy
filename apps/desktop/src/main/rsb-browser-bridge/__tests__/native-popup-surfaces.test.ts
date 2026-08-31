@@ -243,10 +243,9 @@ describe('main-owned RSB native popup surfaces', () => {
     await claim({ sender: host }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
 
     const command = electronMocks.handlers.get(RSB_NATIVE_POPUP_COMMAND_CHANNEL)!;
-    expect(command(
-      { sender: host },
-      { surfaceId, command: 'set-zoom-factor', zoomFactor: 1.25 },
-    )).toEqual({ ok: true });
+    expect(
+      command({ sender: host }, { surfaceId, command: 'set-zoom-factor', zoomFactor: 1.25 }),
+    ).toEqual({ ok: true });
     expect(popup.setZoomFactor).not.toHaveBeenCalled();
 
     popup.emit('did-navigate');
@@ -268,10 +267,9 @@ describe('main-owned RSB native popup surfaces', () => {
     expect(popup.setZoomFactor).toHaveBeenCalledTimes(2);
     expect(popup.setZoomFactor).toHaveBeenLastCalledWith(1.25);
 
-    expect(() => command(
-      { sender: host },
-      { surfaceId, command: 'set-zoom-factor', zoomFactor: 10 },
-    )).toThrow(/INVALID_PARAMS/);
+    expect(() =>
+      command({ sender: host }, { surfaceId, command: 'set-zoom-factor', zoomFactor: 10 }),
+    ).toThrow(/INVALID_PARAMS/);
   });
 
   it('pins opener and popup, rejects a foreign owner, and closes idempotently', async () => {

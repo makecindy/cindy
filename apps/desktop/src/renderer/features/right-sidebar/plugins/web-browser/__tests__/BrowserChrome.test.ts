@@ -2,12 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  createElement,
-  createRef,
-  type ButtonHTMLAttributes,
-  type ReactNode,
-} from 'react';
+import { createElement, createRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 
 import tailwindConfig from '../../../../../../../tailwind.config';
 import { BrowserChrome, type BrowserChromeHandle } from '../BrowserChrome';
@@ -230,8 +225,9 @@ describe('BrowserChrome', () => {
   it('shows the current page zoom and applies standard zoom actions', () => {
     const { onZoomChange } = renderChrome('https://www.taptap.cn/', { zoomFactor: 1.25 });
 
-    expect(screen.getByRole('button', { name: 'rightSidebar.browser.resetZoom' }).textContent)
-      .toBe('125%');
+    expect(screen.getByRole('button', { name: 'rightSidebar.browser.resetZoom' }).textContent).toBe(
+      '125%',
+    );
     fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.zoomOut' }));
     fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.resetZoom' }));
     fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.zoomIn' }));
