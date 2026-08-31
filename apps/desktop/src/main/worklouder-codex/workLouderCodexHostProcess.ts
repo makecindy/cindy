@@ -280,9 +280,9 @@ async function probeConnection(): Promise<void> {
     let probeError: string | null = null;
     if (typeof api.getDeviceStatus === 'function' && !faulted) {
       try {
-        // Call it directly rather than through postDeviceStatus, which swallows
-        // failures — swallowing here would make every probe "succeed" and defeat
-        // the whole point. Same round trip also keeps battery and firmware fresh.
+        // Call it directly so a successful round trip keeps battery and firmware
+        // values fresh while still letting a rejected optional RPC trigger a
+        // reconnect below.
         const status = await api.getDeviceStatus();
         if (!transportFaulted) {
           const device = connectedDevice;
@@ -295,13 +295,18 @@ async function probeConnection(): Promise<void> {
         hostLog('debug', `probe found the device gone: ${probeError}`);
       }
     }
-    const transportError = transportFaulted ? lastTransportError : probeError;
+    const transportError = transportFaulted ? lastTransportError : null;
     if (transportError) {
       await disconnect();
       reportConnectionError(transportError);
       return;
     }
-    hostLog('debug', 'probe dropped a stale Work Louder transport');
+    hostLog(
+      'debug',
+      probeError
+        ? `probe status failed; reconnecting Work Louder transport: ${probeError}`
+        : 'probe dropped a stale Work Louder transport',
+    );
     await disconnect();
   }
 
