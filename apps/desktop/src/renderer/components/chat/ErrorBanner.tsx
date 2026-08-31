@@ -147,8 +147,8 @@ export function ErrorBanner({
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
-    // 横幅已说明影响范围；用户点击“重新连接 ChatGPT”后直接进入浏览器连接流程，
-    // 不再叠一层重复确认弹窗。
+    // 非共享凭证已有横幅说明，可直接重连；system-shared 始终由 hook 强制走
+    // “打开 ChatGPT App / 风险确认后由 Cindy 登录”的保护分支。
     confirmBeforeLogin: false,
   });
   // SSH 与 device-link 是两种互斥的远端来源，但都不能读取或修复控制端本机认证。
@@ -632,8 +632,8 @@ export function ErrorBanner({
         )}
       </div>
       {openAiReconnectRequired && (
-        // 所有凭证来源都由 Cindy 启动可产生新 Codex 凭据的登录流程；登录候选出现后
-        // 先走账号级服务端探测，探测成功前继续隐藏请求 Retry。
+        // 先走账号级服务端探测；共享凭证由恢复弹窗优先引导到 ChatGPT App，
+        // 不直接产生第二条可 refresh 的 OAuth 凭证链。
         <button
           type="button"
           onClick={() => void handleOpenAiRecovery()}
@@ -649,7 +649,9 @@ export function ErrorBanner({
               ? 'chatgptAuthRecovery.recheck'
               : openAiRecoveryBusy
                 ? 'chatgptAuthRecovery.checking'
-                : 'chatgptAuthRecovery.relogin',
+                : openAiCredentialScope === 'system-shared'
+                  ? 'chatgptAuthRecovery.recheck'
+                  : 'chatgptAuthRecovery.relogin',
           )}
         >
           <Spinner icon={RefreshCw} size={12} spinning={openAiRecoveryBusy} />
@@ -658,7 +660,9 @@ export function ErrorBanner({
               ? 'chatgptAuthRecovery.checking'
               : openAiRecoveryCheck === 'failed'
                 ? 'chatgptAuthRecovery.recheck'
-                : 'chatgptAuthRecovery.relogin',
+                : openAiCredentialScope === 'system-shared'
+                  ? 'chatgptAuthRecovery.recheck'
+                  : 'chatgptAuthRecovery.relogin',
           )}
         </button>
       )}

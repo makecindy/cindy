@@ -4824,20 +4824,26 @@ async function upsertLocalSession(thread: CodexThreadSummary): Promise<'inserted
       0, '[]', ?, ?, ?
     )
     ON CONFLICT(id) DO UPDATE SET
-      title = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.title ELSE sessions.title END,
-      working_dir = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.working_dir ELSE sessions.working_dir END,
+      -- 复活语义(#3548,与 claude 侧同口径):旧行已软删时按全新导入对待,
+      -- 元数据与 updated_at 一并收敛回源值,不残留删除时刻的旧快照。
+      title = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.title ELSE sessions.title END,
+      working_dir = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.working_dir ELSE sessions.working_dir END,
       -- Classification follows Codex global state, not local edit recency.
       -- This lets a re-import fix rows previously misclassified as projects
       -- while preserving newer local title/metadata via the CASE clauses.
       workspace_kind = excluded.workspace_kind,
-      model = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.model ELSE sessions.model END,
-      effort = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.effort ELSE sessions.effort END,
-      permission_mode = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.permission_mode ELSE sessions.permission_mode END,
-      status = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.status ELSE sessions.status END,
+      model = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.model ELSE sessions.model END,
+      effort = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.effort ELSE sessions.effort END,
+      permission_mode = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.permission_mode ELSE sessions.permission_mode END,
+      status = CASE
+        WHEN sessions.status = 'deleted' THEN excluded.status
+        WHEN sessions.updated_at <= excluded.updated_at THEN excluded.status
+        ELSE sessions.status
+      END,
       sdk_session_id = excluded.sdk_session_id,
-      total_token_usage = CASE WHEN sessions.updated_at <= excluded.updated_at THEN excluded.total_token_usage ELSE sessions.total_token_usage END,
+      total_token_usage = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.total_token_usage ELSE sessions.total_token_usage END,
       user_send_at = COALESCE(sessions.user_send_at, excluded.user_send_at),
-      updated_at = MAX(sessions.updated_at, excluded.updated_at)
+      updated_at = CASE WHEN sessions.status = 'deleted' THEN excluded.updated_at ELSE MAX(sessions.updated_at, excluded.updated_at) END
   `, [
     localId,
     thread.title,

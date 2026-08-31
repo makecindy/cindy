@@ -767,7 +767,7 @@ const CLAUDE_EFFORTS: EffortDescriptor[] = [
   { id: 'medium', displayName: 'Medium',     description: 'Balanced capability and token use' },
   { id: 'high',   displayName: 'High',       description: 'High capability for complex work' },
   { id: 'xhigh',  displayName: 'Extra High', description: 'Extended capability for long-horizon work' },
-  { id: 'max',    displayName: 'Max',        description: 'Maximum capability with unconstrained token use' },
+  { id: 'max',    displayName: 'Maximum',   description: 'Maximum capability with unconstrained token use' },
 ];
 
 // 注: plan 不再作为权限档暴露 —— 计划模式已独立成 Capabilities.planMode 一级开关
