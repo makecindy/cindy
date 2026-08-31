@@ -16044,10 +16044,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const targetRequiresRebuild =
           !targetDoesNotShrink &&
           (remoteTargetAssessment.level === 'danger' || remoteTargetAssessment.level === 'overflow');
-        if (
-          remoteRouteCannotRebuild &&
-          (runtimeAgentKind === 'pi' || (isDeviceLinkInvoke() && targetRequiresRebuild))
-        ) {
+        if (remoteRouteCannotRebuild && targetRequiresRebuild) {
           throwIpcError(
             'PRECONDITION_FAILED',
             'remote model-window rebuild is unsupported; runtime selection was not changed',

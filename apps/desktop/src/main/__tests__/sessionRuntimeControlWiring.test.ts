@@ -942,7 +942,7 @@ describe('session runtime control wiring', () => {
     expect(rollback).toContain('throw persistenceError;');
   });
 
-  it('rejects remote Pi and non-Pi rebuild pressure before applying the runtime model', () => {
+  it('rejects only remote rebuild pressure before applying the runtime model', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -961,18 +961,12 @@ describe('session runtime control wiring', () => {
     );
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
     expect(remoteGuard).toBeGreaterThan(remoteAssessment);
-    expect(setModel.slice(remoteGuard, remotePressureRejection)).toContain(
-      "runtimeAgentKind === 'pi' || (isDeviceLinkInvoke() && targetRequiresRebuild)",
-    );
-    expect(setModel.slice(remoteGuard, remotePressureRejection)).toContain(
-      '!!runtimeStatus.remoteHostId',
-    );
-    // A Pi catalog estimate cannot prove the final get_state window before mutation.
-    // Therefore both SSH and device-link Pi reject unconditionally, even when the
-    // estimate looks same-window or larger; apply below is unreachable.
-    expect(setModel.slice(remoteGuard, remotePressureRejection)).not.toContain(
-      '? verifiedTargetWindow',
-    );
+    const remoteGuardBody = setModel.slice(remoteGuard, remotePressureRejection);
+    expect(remoteGuardBody).toContain('!!runtimeStatus.remoteHostId');
+    expect(remoteGuardBody).toContain('remoteRouteCannotRebuild && targetRequiresRebuild');
+    expect(remoteGuardBody).not.toContain("runtimeAgentKind === 'pi'");
+    // Protected Hosts may apply same-window, expansion, and low-pressure Pi routes,
+    // then use final get_state below to reject only an actual unsafe shrink.
     expect(remotePressureRejection).toBeGreaterThan(remoteGuard);
     expect(remotePressureRejection).toBeLessThan(apply);
     expect(setModel).toContain("remoteTargetAssessment.level === 'danger'");
