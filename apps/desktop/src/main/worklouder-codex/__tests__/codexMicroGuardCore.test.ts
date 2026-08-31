@@ -123,8 +123,10 @@ describe('Codex Micro guard store and manager', () => {
   it('writes private files and rejects a symlinked support directory', () => {
     const store = temporaryStore();
     store.writeState({ version: 1, originalNodeOptions: null, installedNodeOptions: 'x' });
-    expect(fs.statSync(store.supportPath).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(store.statePath).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(store.supportPath).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(store.statePath).mode & 0o777).toBe(0o600);
+    }
 
     const linkedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-guard-link-'));
     roots.push(linkedRoot);

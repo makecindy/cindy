@@ -78,7 +78,9 @@ function openPrivateRegularFile(name) {
   try {
     const stat = fs.fstatSync(descriptor);
     if (!stat.isFile()) throw new Error('guard marker is not a regular file');
-    if ((stat.mode & 0o077) !== 0) throw new Error('guard marker permissions are not private');
+    if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
+      throw new Error('guard marker permissions are not private');
+    }
     if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
       throw new Error('guard marker owner mismatch');
     }

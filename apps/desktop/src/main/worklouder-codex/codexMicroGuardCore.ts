@@ -191,7 +191,7 @@ export class CodexMicroGuardStore {
         !opened.isFile() ||
         opened.isSymbolicLink() ||
         !ownedByCurrentUser(opened) ||
-        (opened.mode & 0o077) !== 0 ||
+        !hasPrivatePermissions(opened) ||
         opened.dev !== linked.dev ||
         opened.ino !== linked.ino
       ) {
@@ -486,6 +486,12 @@ function boundedTokenRange(value: string, token: string): [number, number] | nul
 
 function ownedByCurrentUser(stat: fs.Stats): boolean {
   return typeof process.getuid !== 'function' || stat.uid === process.getuid();
+}
+
+function hasPrivatePermissions(stat: fs.Stats): boolean {
+  // Windows does not expose POSIX permission bits and this guard is unsupported
+  // there. Keep the store testable without weakening the macOS runtime check.
+  return process.platform === 'win32' || (stat.mode & 0o077) === 0;
 }
 
 function isNotFound(error: unknown): boolean {
