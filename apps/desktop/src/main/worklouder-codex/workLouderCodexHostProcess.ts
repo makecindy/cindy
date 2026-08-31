@@ -554,10 +554,17 @@ function postDeviceState(
   });
 }
 
-function classifyConnectionError(message: string): 'connection-failed' | 'permission-required' {
-  return /permission|not permitted|access denied|input monitoring|operation not allowed/i.test(
+export function classifyConnectionError(message: string):
+  | 'connection-failed'
+  | 'permission-required' {
+  const looksLikePermissionError = /permission|not permitted|access denied|input monitoring|operation not allowed/i.test(
     message,
-  )
+  );
+  // Input Monitoring is a macOS authorization boundary. On Windows, the HID
+  // backend also reports transient handle contention as "access denied"; that
+  // must stay on the bounded connection retry path instead of tripping the
+  // permanent permission circuit breaker.
+  return process.platform === 'darwin' && looksLikePermissionError
     ? 'permission-required'
     : 'connection-failed';
 }
