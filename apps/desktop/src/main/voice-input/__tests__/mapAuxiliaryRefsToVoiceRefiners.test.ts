@@ -1,4 +1,37 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const activeCatalog = {
+  providers: [
+    {
+      id: 'openai',
+      source: 'builtin',
+      agents: ['codex'],
+      models: {
+        codex: [
+          { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', contextWindow: 272_000 },
+        ],
+      },
+    },
+    {
+      id: 'xd',
+      source: 'builtin',
+      agents: ['codex'],
+      models: {
+        codex: [
+          { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 272_000 },
+          { id: 'tencent/hy3', name: 'Hy3', contextWindow: 272_000 },
+          { id: 'qwen/qwen3.8-flash', name: 'Qwen3.8 Flash', contextWindow: 272_000 },
+          { id: 'disabled-model', name: 'Disabled', contextWindow: 272_000, disabled: true },
+          { id: 'paid-model', name: 'Paid', contextWindow: 272_000, availability: 'requires_payment' },
+        ],
+      },
+    },
+  ],
+};
+
+vi.mock('../../maker-host/active-catalog.js', () => ({
+  getActiveCatalog: () => activeCatalog,
+}));
 
 import {
   mapAuxiliaryRefToVoiceRefiner,
@@ -25,6 +58,15 @@ describe('mapAuxiliaryRefsToVoiceRefiners', () => {
     expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:qwen/qwen3.8-flash')).toBe(
       'cat:xd:codex:qwen/qwen3.8-flash',
     );
+  });
+
+  it('skips catalog pins that are no longer active or selectable', () => {
+    expect(mapAuxiliaryRefToVoiceRefiner('cat:openai:codex:gpt-5.4-mini')).toBe(
+      'cat:openai:codex:gpt-5.4-mini',
+    );
+    expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:missing-model')).toBeNull();
+    expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:disabled-model')).toBeNull();
+    expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:paid-model')).toBeNull();
   });
 
   it('returns an empty chain when nothing in the list can refine speech', () => {

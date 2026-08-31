@@ -1313,6 +1313,8 @@ async function resolveCodexCandidate(
         model: profile.model,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
+        systemPrompt: opts?.systemPrompt,
+        responseInstructions: opts?.responseInstructions,
       }),
     },
   };
@@ -1345,6 +1347,8 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         reasoningEffort: opts?.reasoningEffort,
         disableReasoning: opts?.disableReasoning,
         signal: opts?.signal,
+        systemPrompt: opts?.systemPrompt,
+        responseInstructions: opts?.responseInstructions,
         routeStillAllowed: () => !isUtilityRoutePaymentRequired(profile),
       }),
     },
@@ -1361,6 +1365,8 @@ async function requestLiteLlmText(input: {
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   disableReasoning?: boolean;
   signal?: AbortSignal;
+  systemPrompt?: string;
+  responseInstructions?: string;
   /** Synchronous owner entitlement fence immediately before the HTTP request. */
   routeStillAllowed?: () => boolean;
 }): Promise<string> {
@@ -1374,6 +1380,9 @@ async function requestLiteLlmText(input: {
     if (input.routeStillAllowed && !input.routeStillAllowed()) {
       throw new UtilityTextExecutionError({ reason: 'request_failed' });
     }
+    const instructions = [input.systemPrompt, input.responseInstructions]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n');
     const response = await undiciFetch(joinProxyPath(input.baseUrl, '/v1/chat/completions'), {
       method: 'POST',
       signal: controller.signal,
@@ -1389,7 +1398,15 @@ async function requestLiteLlmText(input: {
           : input.reasoningEffort
             ? { reasoning_effort: input.reasoningEffort }
             : {}),
-        messages: [{ role: 'user', content: input.prompt }],
+        messages: [
+          ...(instructions
+            ? [{
+                role: 'system',
+                content: instructions,
+              }]
+            : []),
+          { role: 'user', content: input.prompt },
+        ],
       }),
     });
     if (!response.ok) {

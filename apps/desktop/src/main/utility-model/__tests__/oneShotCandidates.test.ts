@@ -317,6 +317,34 @@ describe('utility one-shot candidates', () => {
     );
   });
 
+  it('passes system and response instructions through profile candidates', async () => {
+    const maker = makerMock(true);
+    chainState.refs = ['codex-gpt-5.4-mini', 'litellm-gpt-5.4-mini'];
+    readKey.mockReturnValue('proxy-key');
+    vi.mocked(maker.oneShot).mockRejectedValueOnce(new Error('codex unavailable'));
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'lite text' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(maker, 'reference', {
+      systemPrompt: 'SYSTEM POLICY',
+      responseInstructions: 'ONE LINE ONLY',
+    });
+
+    expect(result).toMatchObject({ ok: true, providerId: 'litellm-gpt-5.4-mini' });
+    expect(maker.oneShot).toHaveBeenCalledWith('codex', 'reference', expect.objectContaining({
+      systemPrompt: 'SYSTEM POLICY',
+      responseInstructions: 'ONE LINE ONLY',
+    }));
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      messages: [
+        { role: 'system', content: 'SYSTEM POLICY\nONE LINE ONLY' },
+        { role: 'user', content: 'reference' },
+      ],
+    });
+  });
+
   it('stops before a later fallback when the auxiliary chain changes mid-request', async () => {
     readKey.mockReturnValue('proxy-key');
     const maker = makerMock(true);

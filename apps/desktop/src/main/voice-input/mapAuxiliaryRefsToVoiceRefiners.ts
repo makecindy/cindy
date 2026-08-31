@@ -5,12 +5,31 @@
  * skipped. An empty result means "do not refine".
  */
 
+import { isModelSelectableForNewRoute } from '@cindy/model-providers';
+
 import { parseAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
+import type { CatalogModelPinRoute } from '../../shared/catalogModelPin.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   getVoiceInputRefinerProfile,
   voiceInputRefinerProviderKindForCatalogRoute,
   type VoiceInputRefinerProviderKind,
 } from '../../shared/voiceInputRefinerProfiles.js';
+
+/**
+ * Catalog pins are persisted across catalog refreshes, so membership must be
+ * checked again before a voice route is admitted. This keeps voice refinement
+ * fail-closed when a model is retired, disabled, or loses paid availability.
+ */
+function isActiveCatalogVoiceRoute(route: CatalogModelPinRoute): boolean {
+  const provider = getActiveCatalog().providers.find((entry) => entry.id === route.providerId);
+  if (!provider || !provider.agents.includes(route.agentKind)) return false;
+  const model = provider.models[route.agentKind]?.find((entry) => entry.id === route.model);
+  return Boolean(
+    model
+    && isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
+  );
+}
 
 export function mapAuxiliaryRefToVoiceRefiner(ref: string): VoiceInputRefinerProviderKind | null {
   const parsed = parseAuxiliaryModelRef(ref);
@@ -18,6 +37,7 @@ export function mapAuxiliaryRefToVoiceRefiner(ref: string): VoiceInputRefinerPro
   if (parsed.kind === 'profile') {
     return parsed.id;
   }
+  if (!isActiveCatalogVoiceRoute(parsed.route)) return null;
   return voiceInputRefinerProviderKindForCatalogRoute(parsed.route);
 }
 
