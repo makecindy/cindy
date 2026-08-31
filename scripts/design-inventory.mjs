@@ -235,9 +235,20 @@ if (danglingExtraStyleRoots.length > 0) {
 if (checkOnly) {
   const comparison = compareGenerated(existing, generated);
   if (!comparison.equal) {
+    // 报告首个差异行：跨平台排查（ICU/EOL/大小写）需要看到 diff 本身。
+    const currentLines = normalizeDocEol(comparison.current).split('\n');
+    const nextLines = normalizeDocEol(comparison.next).split('\n');
+    let diffLine = '';
+    for (let i = 0; i < Math.max(currentLines.length, nextLines.length); i++) {
+      if (currentLines[i] !== nextLines[i]) {
+        diffLine = `\n  首个差异(第 ${i + 1} 行):\n  - 文件: ${(currentLines[i] ?? '').slice(0, 160)}\n  - 重算: ${(nextLines[i] ?? '').slice(0, 160)}`;
+        break;
+      }
+    }
     console.error(
       '[design-inventory] ❌ GENERATED 区块与源码不同步。\n' +
-        '  运行 pnpm design:inventory 重新生成。',
+        '  运行 pnpm design:inventory 重新生成。' +
+        diffLine,
     );
     if (orphanReport) console.error(orphanReport);
     process.exit(1);
