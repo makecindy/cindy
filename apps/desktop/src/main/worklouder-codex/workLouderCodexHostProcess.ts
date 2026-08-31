@@ -65,6 +65,8 @@ interface WorkLouderLogger {
 const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort;
 const requireFromHost = createRequire(__filename);
 const RETRY_MS = 3_000;
+const SDK_LOG_WINDOW_MS = 60_000;
+const SDK_LOG_BURST = 3;
 
 let sdk: WorkLouderSdk | null = null;
 let sdkEntry: string | null = null;
@@ -84,6 +86,9 @@ let stopping = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let lastLoggedError: string | null = null;
 let lastActivityPostedAt = 0;
+let lastTransportError: string | null = null;
+let permissionBlocked = false;
+const sdkLogBuckets = new Map<string, { startedAt: number; emitted: number; suppressed: number }>();
 /** The native SDK often logs a dead USB/BT handle instead of throwing. */
 let transportFaulted = false;
 /** Which device the current `api` handle belongs to, so probes can refresh it. */
@@ -95,6 +100,10 @@ if (parentPort) {
     const request = event.data as WorkLouderCodexHostRequest;
     if (request?.kind === 'init') {
       sdkEntry = request.sdkEntry;
+      permissionBlocked = false;
+      transportFaulted = false;
+      lastTransportError = null;
+      lastLoggedError = null;
     } else if (request?.kind === 'listen') {
       hidListeningRequested = true;
       requestListen();
@@ -102,6 +111,10 @@ if (parentPort) {
       latestFrame = request.frame;
       requestApply();
     } else if (request?.kind === 'probe') {
+      // A probe is an explicit recovery request (for example after the user
+      // grants Input Monitoring or unlocks macOS), so it is allowed to clear
+      // the permission circuit breaker once.
+      permissionBlocked = false;
       requestProbe();
     } else if (request?.kind === 'discover') {
       requestDiscover();
@@ -122,10 +135,12 @@ function hostLog(level: 'debug' | 'info' | 'warn' | 'error', message: string): v
 const sdkLogger: WorkLouderLogger = {
   debug: () => undefined,
   info: () => undefined,
-  warn: (...args) => hostLog('warn', `Work Louder SDK reported a warning${formatSdkLog(args)}`),
+  warn: (...args) => logSdkMessage('warn', 'Work Louder SDK reported a warning', args),
   error: (...args) => {
     transportFaulted = true;
-    hostLog('error', `Work Louder SDK reported an error${formatSdkLog(args)}`);
+    const detail = formatSdkLog(args);
+    lastTransportError = `Work Louder SDK reported an error${detail}`;
+    logSdkMessage('error', 'Work Louder SDK reported an error', args);
     if (api && !stopping && !probePending && !applying) requestProbe();
   },
 };
@@ -147,19 +162,19 @@ function loadSdk(): WorkLouderSdk {
 }
 
 function requestApply(): void {
-  if (stopping) return;
+  if (stopping || permissionBlocked) return;
   applyPending = true;
   kickQueue();
 }
 
 function requestListen(): void {
-  if (stopping) return;
+  if (stopping || permissionBlocked) return;
   listenPending = true;
   kickQueue();
 }
 
 function requestProbe(): void {
-  if (stopping) return;
+  if (stopping || permissionBlocked) return;
   probePending = true;
   kickQueue();
 }
@@ -226,7 +241,11 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
     });
     const threadsOk = await deviceApi.sendThreadsLighting(frame.threads);
     if (!lightingOk || !threadsOk || transportFaulted) {
-      throw new Error(transportFaulted ? 'lighting transport faulted' : 'lighting RPC returned false');
+      throw new Error(
+        transportFaulted
+          ? (lastTransportError ?? 'lighting transport faulted')
+          : 'lighting RPC returned false',
+      );
     }
     clearRetry();
     lastLoggedError = null;
@@ -238,8 +257,7 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
       hostLog('error', `lighting apply failed: ${message}`);
     }
     await disconnect();
-    post({ kind: 'state', status: 'error', reason: classifyConnectionError(message) });
-    scheduleRetry();
+    reportConnectionError(message);
   }
 }
 
@@ -256,14 +274,16 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
  * showing connection state, so an idle app is not waking the device on a timer.
  */
 async function probeConnection(): Promise<void> {
-  if (stopping) return;
+  if (stopping || permissionBlocked) return;
   if (api) {
     const faulted = transportFaulted;
+    let probeError: string | null = null;
+    let optionalStatusFailure = false;
     if (typeof api.getDeviceStatus === 'function' && !faulted) {
       try {
-        // Call it directly rather than through postDeviceStatus, which swallows
-        // failures — swallowing here would make every probe "succeed" and defeat
-        // the whole point. Same round trip also keeps battery and firmware fresh.
+        // Call it directly so a successful round trip keeps battery and firmware
+        // values fresh while still letting an explicit transport fault trigger
+        // reconnect handling below.
         const status = await api.getDeviceStatus();
         if (!transportFaulted) {
           const device = connectedDevice;
@@ -272,8 +292,33 @@ async function probeConnection(): Promise<void> {
           return;
         }
       } catch (error) {
-        hostLog('debug', `probe found the device gone: ${safeErrorMessage(error)}`);
+        probeError = safeErrorMessage(error);
+        optionalStatusFailure = isOptionalDeviceStatusError(error);
+        hostLog(
+          'debug',
+          optionalStatusFailure
+            ? `probe status unavailable: ${probeError}`
+            : `probe found the device gone: ${probeError}`,
+        );
       }
+    }
+    const transportError = transportFaulted ? lastTransportError : null;
+    if (transportError) {
+      await disconnect();
+      reportConnectionError(transportError);
+      return;
+    }
+    if (probeError && optionalStatusFailure) {
+      // Status is optional telemetry. Keep the healthy HID transport when a
+      // firmware/RPC implementation explicitly reports that this query is not
+      // supported; a rejected hardware request must still invalidate the handle.
+      post({ kind: 'state', status: 'connected' });
+      return;
+    }
+    if (probeError) {
+      await disconnect();
+      reportConnectionError(probeError);
+      return;
     }
     hostLog('debug', 'probe dropped a stale Work Louder transport');
     await disconnect();
@@ -290,9 +335,10 @@ async function probeConnection(): Promise<void> {
     post({ kind: 'state', status: 'connected' });
     if (hidListeningRequested) requestListen();
     if (latestFrame && !isWorkLouderCodexLightingFrameOff(latestFrame)) requestApply();
-  } catch {
-    post({ kind: 'state', status: 'not-detected' });
-    scheduleRetry();
+  } catch (error) {
+    const message = safeErrorMessage(error);
+    await disconnect();
+    reportConnectionError(message);
   }
 }
 
@@ -312,6 +358,10 @@ function discoverPresence(): void {
   } catch (error) {
     hostLog('debug', `presence discovery failed: ${safeErrorMessage(error)}`);
     post({ kind: 'presence', present: false });
+  } finally {
+    // Presence discovery does not own a HID transport. Do not let an SDK
+    // discovery diagnostic poison the next real connection attempt.
+    clearTransportFault();
   }
 }
 
@@ -355,8 +405,7 @@ async function listenForAgentKeys(): Promise<void> {
       hostLog('error', `HID listening failed: ${message}`);
     }
     await disconnect();
-    post({ kind: 'state', status: 'error', reason: classifyConnectionError(message) });
-    scheduleRetry();
+    reportConnectionError(message);
   }
 }
 
@@ -370,6 +419,42 @@ function formatSdkLog(args: unknown[]): string {
   return detail ? `: ${detail}` : '';
 }
 
+function logSdkMessage(level: 'warn' | 'error', prefix: string, args: unknown[]): void {
+  const detail = formatSdkLog(args);
+  const message = `${prefix}${detail}`;
+  const signature = normalizeSdkLogSignature(message);
+  const now = Date.now();
+  const previous = sdkLogBuckets.get(signature);
+  if (!previous || now - previous.startedAt >= SDK_LOG_WINDOW_MS) {
+    if (previous?.suppressed) {
+      hostLog(
+        level,
+        `${prefix} (suppressed ${previous.suppressed} repeated messages in the previous minute): ${signature}`,
+      );
+    }
+    if (!previous && sdkLogBuckets.size >= 128) {
+      const oldest = sdkLogBuckets.keys().next().value;
+      if (typeof oldest === 'string') sdkLogBuckets.delete(oldest);
+    }
+    sdkLogBuckets.set(signature, { startedAt: now, emitted: 1, suppressed: 0 });
+    hostLog(level, message);
+    return;
+  }
+  if (previous.emitted < SDK_LOG_BURST) {
+    previous.emitted += 1;
+    hostLog(level, message);
+  } else {
+    previous.suppressed += 1;
+  }
+}
+
+function normalizeSdkLogSignature(message: string): string {
+  return message
+    .replace(/0x[0-9a-f]+/gi, '<hex>')
+    .replace(/\b\d+\b/g, '<n>')
+    .slice(0, 240);
+}
+
 function safeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message
@@ -381,11 +466,33 @@ function safeErrorMessage(error: unknown): string {
 async function ensureConnected(): Promise<WorkLouderApi | null> {
   if (api && transportFaulted) await disconnect();
   if (api) return api;
+  // Discovery runs with the same SDK logger as the HID transport, but it is
+  // independent of any connection. Start each new connection with a clean
+  // transport-fault state.
+  clearTransportFault();
   const candidate = findCandidates()[0];
+  clearTransportFault();
   if (!candidate) return null;
   const loaded = loadSdk();
   const nextComm = new loaded.WLDeviceCommImpl(sdkLogger);
-  if (!(await nextComm.connect(candidate.device))) return null;
+  let connected = false;
+  try {
+    connected = await nextComm.connect(candidate.device);
+  } catch (error) {
+    const message = transportFaulted ? (lastTransportError ?? safeErrorMessage(error)) : null;
+    try {
+      await nextComm.disconnect();
+    } catch {
+      // Connection setup failed; teardown is best effort.
+    }
+    throw new Error(message ?? safeErrorMessage(error));
+  }
+  if (!connected) {
+    if (transportFaulted) {
+      throw new Error(lastTransportError ?? 'Work Louder transport faulted');
+    }
+    return null;
+  }
   comm = nextComm;
   const nextApi = new loaded.RPCApiOAI(nextComm, sdkLogger);
   if (typeof nextApi.onHidReceived === 'function') {
@@ -411,7 +518,20 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
     deviceType: candidate.deviceType,
     isUsb: candidate.device.isUsbConnection === true,
   };
-  await postDeviceStatus(nextApi, candidate.deviceType, candidate.device.isUsbConnection === true);
+  try {
+    await postDeviceStatus(
+      nextApi,
+      candidate.deviceType,
+      candidate.device.isUsbConnection === true,
+    );
+    if (transportFaulted) {
+      throw new Error(lastTransportError ?? 'Work Louder transport faulted');
+    }
+  } catch (error) {
+    const message = transportFaulted ? (lastTransportError ?? safeErrorMessage(error)) : null;
+    await disconnect();
+    throw new Error(message ?? safeErrorMessage(error));
+  }
   return nextApi;
 }
 
@@ -422,7 +542,35 @@ function postActivity(): void {
   post({ kind: 'activity' });
 }
 
-async function postDeviceStatus(
+/**
+ * The SDK exposes status as an optional RPC on some firmware versions. Keep
+ * that compatibility failure non-fatal, but treat every other rejection as a
+ * failed hardware round trip so unplugged handles are recycled promptly.
+ */
+export function isOptionalDeviceStatusError(error: unknown): boolean {
+  const record =
+    typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : null;
+  const code = typeof record?.code === 'string' ? record.code : '';
+  if (
+    /not[_ -]?supported|unsupported|not[_ -]?implemented|method[_ -]?not[_ -]?found|enosys/i.test(
+      code,
+    )
+  ) {
+    return true;
+  }
+
+  const message = safeErrorMessage(error);
+  return (
+    /(?:getDeviceStatus|device status|status rpc|status request).*(?:not supported|unsupported|not implemented|unknown method|method not found)/i.test(
+      message,
+    ) ||
+    /(?:not supported|unsupported|not implemented|unknown method|method not found).*(?:getDeviceStatus|device status|status rpc|status request)/i.test(
+      message,
+    )
+  );
+}
+
+export async function postDeviceStatus(
   deviceApi: WorkLouderApi,
   deviceType: 'codex-micro' | 'creator-micro-2',
   isUsbConnection: boolean,
@@ -433,6 +581,10 @@ async function postDeviceStatus(
       status = await deviceApi.getDeviceStatus();
     } catch (error) {
       hostLog('warn', `device status unavailable: ${safeErrorMessage(error)}`);
+      // Device status is optional telemetry only when the SDK explicitly says
+      // this RPC is unsupported. A rejected hardware request still means the
+      // transport may be dead and must not be reported as connected.
+      if (transportFaulted || !isOptionalDeviceStatusError(error)) throw error;
     }
   }
   postDeviceState(deviceType, isUsbConnection, status);
@@ -461,18 +613,35 @@ function postDeviceState(
   });
 }
 
-function classifyConnectionError(message: string): 'connection-failed' | 'permission-required' {
-  return /permission|not permitted|access denied|input monitoring|operation not allowed/i.test(
-    message,
-  )
+export function classifyConnectionError(
+  message: string,
+): 'connection-failed' | 'permission-required' {
+  const looksLikePermissionError =
+    /permission|not permitted|access denied|input monitoring|operation not allowed/i.test(message);
+  // Input Monitoring is a macOS authorization boundary. On Windows, the HID
+  // backend also reports transient handle contention as "access denied"; that
+  // must stay on the bounded connection retry path instead of tripping the
+  // permanent permission circuit breaker.
+  return process.platform === 'darwin' && looksLikePermissionError
     ? 'permission-required'
     : 'connection-failed';
+}
+
+function reportConnectionError(message: string): void {
+  const reason = classifyConnectionError(message);
+  if (reason === 'permission-required') {
+    permissionBlocked = true;
+    clearRetry();
+  }
+  post({ kind: 'state', status: 'error', reason });
+  if (reason !== 'permission-required') scheduleRetry();
 }
 
 function scheduleRetry(): void {
   if (
     retryTimer ||
     stopping ||
+    permissionBlocked ||
     (!latestFrame && !hidListeningRequested) ||
     (latestFrame && isWorkLouderCodexLightingFrameOff(latestFrame) && !hidListeningRequested)
   ) {
@@ -494,7 +663,7 @@ function clearRetry(): void {
 }
 
 async function disconnect(): Promise<void> {
-  transportFaulted = false;
+  clearTransportFault();
   connectedDevice = null;
   const unsubscribe = unsubscribeHid;
   unsubscribeHid = null;
@@ -523,6 +692,11 @@ async function disconnect(): Promise<void> {
   } catch {
     // Connection teardown is best effort after a failed HID RPC.
   }
+}
+
+function clearTransportFault(): void {
+  transportFaulted = false;
+  lastTransportError = null;
 }
 
 async function stop(): Promise<void> {

@@ -2568,6 +2568,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  // symlink-platform-skip: CDPATH and the redirect commands in this case require a POSIX Bash host.
   it.skipIf(process.platform === 'win32' || !canSymlink)(
     'auto mode fail closes inherited CDPATH while explicit relative cd keeps ordinary reads fast',
     { timeout: 60_000 },

@@ -1378,7 +1378,7 @@ export class PiAgent extends BaseAgent {
         { id: 'medium', displayName: 'Medium' },
         { id: 'high', displayName: 'High' },
         { id: 'xhigh', displayName: 'Extra High' },
-        { id: 'max', displayName: 'Max' },
+        { id: 'max', displayName: 'Maximum' },
       ],
       reasoningDisplay: ['off', 'full'],
       // 权限执行层在 cindy-bridge extension 的 tool_call 拦截:ask 档下只读内置

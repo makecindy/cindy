@@ -671,12 +671,16 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
     await handle.close();
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it(
     'prompts when a dangling link prevents proving the write target',
     async () => {
       const writableDir = await makeTempDir();
       const linkedDir = path.join(writableDir, 'dangling-output');
-      await fs.symlink(path.join(writableDir, 'missing-target'), linkedDir, 'dir');
+      await fs.symlink(
+        path.join(writableDir, 'missing-target'),
+        linkedDir,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
       const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
         writableDirs: [writableDir],
       });

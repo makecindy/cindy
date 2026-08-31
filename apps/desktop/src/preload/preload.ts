@@ -2401,17 +2401,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkEnvironment: () => ipcRenderer.invoke('check-environment'),
   onBinaryDownloadProgress: fanOutBinaryDownloadProgress,
 
-  // App update (hot-update) — startup check + progress + status query
-  // `error` distinguishes the two failure modes so the renderer can show the
-  // right dialog: 'manifest_failed' = couldn't fetch the version manifest,
-  // 'download_failed' = manifest said there is an update but we couldn't pull
-  // (or verify) the file after MAX_RETRIES. Both keep the user in splash.
+  // Splash startup update check is temporarily disabled. Background polling
+  // and the manual update entry use separate UpdateService IPC paths.
   checkAppUpdate: (): Promise<{
     hasUpdate: boolean;
     action?: 'relaunch' | 'none';
     version?: string;
     error?: 'manifest_failed' | 'download_failed';
-  }> => ipcRenderer.invoke('update-check-startup'),
+  }> => Promise.resolve({ hasUpdate: false, action: 'none' }),
   getUpdateStatus: (): Promise<{ status: string; version?: string; errorCode?: string }> =>
     ipcRenderer.invoke('update-get-status'),
   getAutoUpdateSettings: (): Promise<{

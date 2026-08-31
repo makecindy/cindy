@@ -19,16 +19,26 @@
 //
 // 用法(仓库根):
 //   pnpm mobile:sim:start                 # Global，起在 8081(app 默认连这个)
+//   pnpm mobile:sim:start:cn              # 中国大陆版；Windows 同时启动 cindy-api36
 //   pnpm mobile:sim:start -- --region=cn  # 中国大陆版
 //   pnpm mobile:sim:start -- --region=cn --takeover # 显式接管另一个 Metro
 //   pnpm mobile:sim:start -- --port 8082   # 显式换端口(透传给 expo;需自行把 app 指过去)
+//   pnpm mobile:sim:start -- --no-emulator # Windows 只启动 Metro
 
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import {
+  resolvePnpmInvocation,
+  usablePnpmExecPath,
+} from '../../../scripts/shared/pnpm-invocation.mjs';
 import { ensureMobileEnv, formatMobileEnvStatus } from './ensure-mobile-env.mjs';
+import {
+  ensureWindowsAndroidEmulator,
+  extractAndroidSimulatorArgs,
+} from './lib/android-simulator.mjs';
 import {
   extractMobileDevRegionArgs,
   withLocalMobileRegionConfig,
@@ -58,7 +68,8 @@ const worktreeRoot = resolve(mobileDir, '../..');
 const DEFAULT_PORT = 8081;
 const { region, passthrough: regionPassthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
 const { takeover, passthrough: takeoverPassthrough } = extractSimTakeoverArgs(regionPassthrough);
-const portArgs = extractSimMetroPortArgs(takeoverPassthrough, DEFAULT_PORT);
+const androidArgs = extractAndroidSimulatorArgs(takeoverPassthrough);
+const portArgs = extractSimMetroPortArgs(androidArgs.passthrough, DEFAULT_PORT);
 if (takeover && portArgs.explicit) {
   console.error(`✗ --takeover 只用于隐式默认端口 ${DEFAULT_PORT},不能和显式 --port 混用。`);
   process.exit(1);
@@ -86,6 +97,11 @@ const branch = git(['branch', '--show-current']) || git(['rev-parse', '--short',
 const commit = git(['rev-parse', '--short', 'HEAD']);
 const sourceIdentity = gitSourceIdentity(worktreeRoot);
 
+async function ensureAndroidTarget() {
+  if (!androidArgs.startEmulator) return;
+  await ensureWindowsAndroidEmulator({ avd: androidArgs.avd, port: portArgs.port });
+}
+
 // 默认端口始终执行身份闸门;显式其它端口由开发者自行把 App 指过去。
 const args = ['exec', 'expo', 'start', '--dev-client', ...portArgs.passthrough];
 if (portArgs.port === DEFAULT_PORT) {
@@ -111,6 +127,7 @@ if (portArgs.port === DEFAULT_PORT) {
     });
     if (decision.action === 'reuse') {
       for (const line of decision.lines) console.log(line);
+      await ensureAndroidTarget();
       process.exit(0);
     }
     if (decision.action === 'refuse') {
@@ -136,6 +153,7 @@ if (portArgs.port === DEFAULT_PORT) {
     }
   }
 }
+await ensureAndroidTarget();
 // 统一规范化成 Expo 明确支持的 `--port <n>`，避免 `--port=<n>` 被本工具识别、
 // 却在端口归属检查和启动参数之间产生分歧。
 args.push('--port', String(portArgs.port));
@@ -147,16 +165,26 @@ console.log('  注入 EXPO_PUBLIC_XDT_GIT_SOURCE / EXPO_PUBLIC_XDT_GIT_BRANCH / 
 
 // 用 `pnpm exec expo`:pnpm 不在 apps/mobile/node_modules/.bin 放 expo bin,但 pnpm exec
 // 能按包依赖解析到 expo CLI(直接 node node_modules/.bin/expo 会 MODULE_NOT_FOUND)。
-const child = spawn('pnpm', args, {
+const invocation = resolvePnpmInvocation(args, {
+  npmExecPath: usablePnpmExecPath(process.env.npm_execpath, existsSync),
+});
+const child = spawn(invocation.command, invocation.args, {
   cwd: mobileDir,
   stdio: 'inherit',
   env: {
     ...process.env,
     ...buildEnv,
+    ...(invocation.env ?? {}),
     EXPO_PUBLIC_XDT_GIT_BRANCH: branch,
     EXPO_PUBLIC_XDT_GIT_COMMIT: commit,
     EXPO_PUBLIC_XDT_GIT_SOURCE: sourceIdentity,
   },
+  shell: invocation.shell,
+  windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 });
 
+child.once('error', (error) => {
+  console.error(`✗ 无法启动 Metro: ${error.message}`);
+  process.exit(1);
+});
 child.on('exit', (code) => process.exit(code ?? 0));

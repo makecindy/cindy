@@ -298,11 +298,12 @@ export class CallbackListener {
   private resolve: ((code: string) => void) | null = null;
   private reject: ((err: Error) => void) | null = null;
 
-  constructor() {
+  // 运行期始终使用默认固定端口；单测注入 0，让系统分配隔离的 loopback 端口。
+  constructor(private readonly listenPort = REDIRECT_PORT) {
     this.server = createServer();
   }
 
-  async start(): Promise<void> {
+  async start(): Promise<number> {
     return new Promise((resolve, reject) => {
       this.server.once('error', (err: NodeJS.ErrnoException) =>
         reject(
@@ -313,8 +314,11 @@ export class CallbackListener {
           ),
         ),
       );
-      // 必须监听固定端口 + 回环;xAI 只接受 http://127.0.0.1:56121/callback。
-      this.server.listen(REDIRECT_PORT, '127.0.0.1', () => resolve());
+      // 运行期必须监听固定端口 + 回环；xAI 只接受 http://127.0.0.1:56121/callback。
+      this.server.listen(this.listenPort, '127.0.0.1', () => {
+        const address = this.server.address();
+        resolve(typeof address === 'object' && address ? address.port : this.listenPort);
+      });
     });
   }
 

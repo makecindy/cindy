@@ -113,17 +113,23 @@ describe('cindy_helper session control tools', () => {
   });
 
   it('requires a bound current session when session_id is omitted', async () => {
+    // expected_generation 已是 schema 必填(#3535):带上合法值,隔离验证
+    // 会话上下文缺失的分支。
     const { registry } = setup({ sessionId: undefined });
     expect(
-      parse(await registry.call('set_session_runtime', { effort: 'high' })),
+      parse(await registry.call('set_session_runtime', { effort: 'high', expected_generation: 1 })),
     ).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
   });
 
   it('requires a read-before-write generation token', async () => {
+    // #3535:schema 曾标 optional 而 handler 强制必传 —— 契约矛盾让缺参调用
+    // 只拿到裸 INVALID_ARGS。现在 schema 即必填:zod 层拒绝并回吐 schema 与
+    // 校验明细,调用方一轮自纠。
     const { registry } = setup();
-    expect(
-      parse(await registry.call('set_session_runtime', { effort: 'high' })),
-    ).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    const result = parse(await registry.call('set_session_runtime', { effort: 'high' }));
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(JSON.stringify(result.data?.validation_errors ?? result)).toContain('expected_generation');
+    expect(result.data?.schema).toBeTruthy();
   });
 
   it('updates and cancels only through the caller-bound ownership context', async () => {

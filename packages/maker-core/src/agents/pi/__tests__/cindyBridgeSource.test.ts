@@ -28,6 +28,20 @@ import {
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
 
+const canLinkFile = (() => {
+  const root = mkdtempSync(path.join(tmpdir(), 'cindy-bridge-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    writeFileSync(target, 'probe');
+    symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+})();
+
 type ReviewSearchHelpers = {
   collectReadonlyCredentialEvidence: (
     toolName: string,
@@ -527,6 +541,7 @@ describe('cindy-bridge extension source', () => {
     }
   });
 
+  // symlink-platform-skip: This case validates POSIX shell and filename semantics that Windows cannot represent.
   it.skipIf(process.platform === 'win32')(
     'collects canonical credential targets without flagging ordinary symlinks',
     () => {
@@ -1625,7 +1640,7 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain('REVIEW_CREDENTIAL_GLOB_PATTERNS.some');
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it.skipIf(!canLinkFile)(
     'pins every Pi read tool to the real path that passed Review validation',
     () => {
       const source = CINDY_BRIDGE_EXTENSION_SOURCE;

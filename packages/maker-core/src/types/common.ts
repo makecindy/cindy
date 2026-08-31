@@ -79,6 +79,15 @@ export interface AuthState {
    * 其它 agent 不返回该字段。
    */
   credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
+  /** Local-only Codex credential topology. Additive; older renderers may ignore it. */
+  credentialDiagnostics?: {
+    linkType: 'symlink' | 'hardlink' | 'file' | 'missing' | 'dangling-symlink' | 'unknown';
+    healthy: boolean;
+    devReadOnly: boolean;
+    systemAuthMtimeMs?: number;
+    systemAuthLinkCount?: number;
+    orphanRepair?: 'none' | 'relinked' | 'failed';
+  };
   /**
    * A replacement Codex OAuth credential exists locally but must pass an account-level RPC before
    * UI may declare the previous invalidation recovered.

@@ -316,6 +316,7 @@ import {
   getSessionOrcaRole,
   getWorkerLink,
   isActiveWorkerStatus,
+  isOrphanedTeamInit,
   listWorkersByLead,
   markTeamEnded,
   markWorkersStatusByTeam,
@@ -11117,6 +11118,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const orcaLifecycleService = createOrcaLifecycleService({
     getActiveTeamByLead,
+    isOrphanedTeamInit,
     createActiveTeam: async (leadSessionId) => createActiveTeam({ leadSessionId }),
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
     setWorkerPermissionMode: applyWorkerPermissionModePreference,

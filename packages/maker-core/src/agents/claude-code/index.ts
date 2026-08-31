@@ -767,7 +767,7 @@ const CLAUDE_EFFORTS: EffortDescriptor[] = [
   { id: 'medium', displayName: 'Medium',     description: 'Balanced capability and token use' },
   { id: 'high',   displayName: 'High',       description: 'High capability for complex work' },
   { id: 'xhigh',  displayName: 'Extra High', description: 'Extended capability for long-horizon work' },
-  { id: 'max',    displayName: 'Max',        description: 'Maximum capability with unconstrained token use' },
+  { id: 'max',    displayName: 'Maximum',   description: 'Maximum capability with unconstrained token use' },
 ];
 
 // 注: plan 不再作为权限档暴露 —— 计划模式已独立成 Capabilities.planMode 一级开关
@@ -1166,10 +1166,36 @@ export class ClaudeCodeAgent extends BaseAgent {
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
       isProviderRoutedModel(model.id),
     );
+    // #3661:扁平表按「CC 内建 resolver 认识 Anthropic 名」排除了 claude-*,但
+    // 中转/自定义来源上的 claude 模型窗口以用户配置为准(如 1M);CLI 内建
+    // resolver 会按 Anthropic 缺省收敛(~200K)并过早判满/auto-compact。显式
+    // 来源会话把「该路由已核实」的窗口(resolveVerifiedContextWindow:多来源
+    // 歧义或未核实返回 null,fail-open 回落 CLI 自解析)按本会话模型单点注入;
+    // 不做 [1m] 镜像 —— claude 的 [1m] 是真实 1M 通道,不是同窗口路由别名。
+    // 会话中途 setModel 到其它 claude 模型时该 env 键不覆盖新模型,行为与
+    // 修复前一致(CLI 自解析),无回归面。
+    const sessionRouteWindowEntry = ((): {
+      id: string;
+      contextWindow: number;
+      mirrorOneMillionSuffix: false;
+    } | null => {
+      if (!opts.providerId) return null;
+      if (!opts.model.startsWith('claude-')) return null;
+      const verified = this.deps.resolveVerifiedContextWindow?.(opts.providerId, opts.model);
+      if (typeof verified !== 'number' || verified <= 0) return null;
+      return {
+        id: sdkModelFor(opts.model),
+        contextWindow: verified,
+        mirrorOneMillionSuffix: false,
+      };
+    })();
+    const modelContextWindows = sessionRouteWindowEntry
+      ? [...providerRoutedModels, sessionRouteWindowEntry]
+      : providerRoutedModels;
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
       sessionProviderId: opts.providerId ?? null,
-      modelContextWindows: providerRoutedModels,
+      modelContextWindows,
       // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
       // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
       subagentModel: null,
@@ -1253,7 +1279,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           credentialMode,
           sessionProviderId: opts.providerId ?? null,
           mode: 'remote',
-          modelContextWindows: providerRoutedModels,
+          modelContextWindows,
           // 远端不做本地扫描(见上),这里的值就是路由感知后的设置值 —— 保持 env 强制覆盖语义。
           subagentModel: subagentDefault.envSubagentModel ?? null,
         })

@@ -18,6 +18,13 @@ export const MAKER_MODEL_CONTEXT_WINDOWS_ENV = 'XDT_MAKER_MODEL_CONTEXT_WINDOWS'
 interface ModelContextWindowSource {
   id: string;
   contextWindow: number;
+  /**
+   * 是否把无 [1m] 后缀的 id 镜像出一个同窗口的 `${id}[1m]` 键(缺省 true,
+   * 兼容 provider 路由模型把 [1m] 当同窗口路由别名的历史语义)。claude-* 的
+   * [1m] 是真实的 1M 通道、不是同窗口别名,按会话路由注入的条目必须传 false,
+   * 否则 200K 会被镜像到 Fast 切换后的 [1m] 形态上(#3661)。
+   */
+  mirrorOneMillionSuffix?: boolean;
 }
 
 interface ClaudeEnvBuildOptions {
@@ -66,7 +73,10 @@ function serializeModelContextWindows(
     }
     const window = Math.floor(model.contextWindow);
     entries[model.id] = window;
-    if (!model.id.endsWith('[1m]')) {
+    // 后缀判定大小写不敏感(#3661):用户配置 `...[1M]` 时不能再镜像出
+    // `...[1M][1m]` 垃圾键。镜像本身仍按原样键写入,消费侧按字面匹配。
+    const hasOneMillionSuffix = /\[1m\]$/i.test(model.id);
+    if (model.mirrorOneMillionSuffix !== false && !hasOneMillionSuffix) {
       entries[`${model.id}[1m]`] = window;
     }
   }

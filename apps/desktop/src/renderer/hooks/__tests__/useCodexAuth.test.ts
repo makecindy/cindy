@@ -22,6 +22,12 @@ type TestAuthState = {
   oauthWritesBlocked?: boolean;
   credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
   recoveryRequiredReason?: string;
+  credentialDiagnostics?: {
+    linkType: 'symlink';
+    healthy: boolean;
+    devReadOnly: boolean;
+    systemAuthLinkCount?: number;
+  };
 };
 
 function deferred<T>() {
@@ -94,6 +100,34 @@ describe('useCodexAuth lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it('projects structured Codex credential diagnostics into renderer state', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({
+      authenticated: true,
+      identity: 'user@example.com',
+      authSource: 'oauth',
+      credentialScope: 'system-shared',
+      credentialDiagnostics: {
+        linkType: 'symlink',
+        healthy: true,
+        devReadOnly: true,
+        systemAuthLinkCount: 1,
+      },
+    });
+
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('authenticated'));
+    expect(result.current.state).toMatchObject({
+      credentialDiagnostics: {
+        linkType: 'symlink',
+        healthy: true,
+        devReadOnly: true,
+        systemAuthLinkCount: 1,
+      },
+    });
   });
 
   it('keeps the authenticated UI when durable disconnect was not committed', async () => {

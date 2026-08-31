@@ -30,6 +30,11 @@ vi.mock('electron', () => ({
 
 vi.mock('@cindy/maker-core', () => ({}));
 
+vi.mock('../../agent-binaries/index.js', () => ({
+  getCachedBinaryStatus: () => ({ binaryReady: false, binaryPath: null }),
+  isVettedAgentBinaryPath: () => false,
+}));
+
 vi.mock('../../appSessionState.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../appSessionState.js')>();
   return {
@@ -125,6 +130,36 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     );
   });
 
+  it.runIf(process.platform !== 'win32')(
+    '开关开:系统凭证缺失时清除悬空共享软链,恢复后仍保持隔离',
+    async () => {
+      const { codexHome, localAuth, systemAuth } = fixture();
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.rmSync(systemAuth);
+      fs.symlinkSync(systemAuth, localAuth);
+      expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
+      expect(fs.existsSync(localAuth)).toBe(false);
+
+      trustIsolatedAuthSandbox();
+      h.dataOwnerId = 'owner-a';
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
+      expect(() => fs.lstatSync(localAuth)).toThrow();
+
+      fs.writeFileSync(
+        systemAuth,
+        JSON.stringify({
+          account: { email: 'restored@example.test' },
+          tokens: { access_token: 'restored-system-token', account_id: 'acct-restored' },
+        }),
+      );
+      expect(fs.existsSync(localAuth)).toBe(false);
+      await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
+      expect(fs.existsSync(localAuth)).toBe(false);
+    },
+  );
+
   it('开关开:旧的独立凭证孤岛也会被清空', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     fs.mkdirSync(codexHome, { recursive: true });
@@ -217,6 +252,56 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
+  it('dev 默认只读的 unproven 失效只保留内存边界', async () => {
+    const { codexHome, localAuth, systemAuth } = fixture();
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const onInvalidated = vi.fn();
+    adapter.setOnInvalidatedBroadcast(onInvalidated);
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    const systemBytes = fs.readFileSync(systemAuth);
+    const localBytes = fs.readFileSync(localAuth);
+    const systemStat = fs.statSync(systemAuth);
+    const localStat = fs.statSync(localAuth);
+    const rm = vi.spyOn(fs.promises, 'rm');
+    const chmod = vi.spyOn(fs.promises, 'chmod');
+
+    await adapter.invalidate('child_auth_rejected', { credentialAttribution: 'unproven' });
+
+    expect(onInvalidated).toHaveBeenCalledWith('child_auth_rejected', 'system-shared', true);
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'child_auth_rejected',
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.getAccessToken()).resolves.toBeNull();
+    await expect(adapter.getAccountId()).resolves.toBeNull();
+    expect(readCodexOneShotCreds(adapter)).toBeNull();
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
+    expect(fs.readFileSync(localAuth)).toEqual(localBytes);
+    expect(fs.statSync(systemAuth)).toMatchObject({ ino: systemStat.ino, mode: systemStat.mode });
+    expect(fs.statSync(localAuth)).toMatchObject({ ino: localStat.ino, mode: localStat.mode });
+    expect(rm).not.toHaveBeenCalled();
+    expect(chmod).not.toHaveBeenCalled();
+
+    await expect(
+      new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+  });
+
   it('dev 只读失效以内存指纹等待系统凭证换代,不泄漏旧 token 或写共享文件', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
@@ -302,6 +387,8 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       credentialScope: 'system-shared',
       oauthWritesBlocked: true,
     });
+    const oldGeneration = adapter.captureCredentialGeneration();
+    expect(oldGeneration).not.toBeNull();
     const oldLocalBytes = fs.readFileSync(localAuth);
     const originalMode = fs.statSync(systemAuth).mode;
 
@@ -317,11 +404,15 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.renameSync(replacement, systemAuth);
     const renewedSystemBytes = fs.readFileSync(systemAuth);
     const renewedSystemStat = fs.statSync(systemAuth);
-    expect(fs.readFileSync(localAuth)).toEqual(oldLocalBytes);
-    expect(fs.readFileSync(localAuth)).not.toEqual(renewedSystemBytes);
+    if (process.platform === 'win32') {
+      expect(fs.readFileSync(localAuth)).toEqual(oldLocalBytes);
+      expect(fs.readFileSync(localAuth)).not.toEqual(renewedSystemBytes);
+    } else {
+      expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
+    }
 
     const chmod = vi.spyOn(fs.promises, 'chmod');
-    await adapter.invalidate('late_host_401');
+    await adapter.invalidate('late_host_401', { credentialGeneration: oldGeneration });
 
     expect(readCodexOneShotCreds(adapter)).toBeNull();
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
@@ -430,6 +521,44 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(
       fs.existsSync(path.join(h.userDataDir, '.isolated-auth-launch-proof.json')),
     ).toBe(false);
+  });
+
+  it('排队登录在 logout barrier 后执行自己的 isolated-auth 清理', async () => {
+    const { codexHome, localAuth, systemAuth } = fixture();
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'stale-sandbox-token' } }));
+    const systemBytes = fs.readFileSync(systemAuth);
+    trustIsolatedAuthSandbox();
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    let finishLogout!: () => void;
+    const logoutOperation = new Promise<void>((resolve) => {
+      finishLogout = resolve;
+    });
+    const privateState = adapter as unknown as {
+      logoutOperation: Promise<void> | null;
+      isolatedAuthSanitized: boolean;
+      pendingLogin: unknown;
+    };
+    privateState.logoutOperation = logoutOperation;
+
+    const login = adapter.triggerLogin({ mode: 'device-code' });
+    await Promise.resolve();
+    expect(fs.existsSync(localAuth)).toBe(true);
+    expect(privateState.isolatedAuthSanitized).toBe(false);
+
+    privateState.logoutOperation = null;
+    finishLogout();
+    await expect(login).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'codex_binary_missing',
+    });
+
+    expect(fs.existsSync(localAuth)).toBe(false);
+    expect(privateState.isolatedAuthSanitized).toBe(true);
+    expect(privateState.pendingLogin).toBeNull();
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
   });
 
   it('proof 绑定其它 userData 时保持只读且不消费凭证', async () => {

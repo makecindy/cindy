@@ -19,6 +19,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TEST_CLIENT_ENDPOINTS } from '../../test/vitest/clientEndpointsFixture';
 
+const canLinkFile = (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'client-endpoints-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+})();
+
 const ipcOn = vi.hoisted(() => vi.fn());
 const netRequest = vi.hoisted(() => vi.fn());
 const showMessageBoxSync = vi.hoisted(() => vi.fn());
@@ -1387,12 +1401,15 @@ describe('netlog 产物事后核对(verifyEndpointNetLogCapture)', () => {
   it('目录项被换成 symlink → 不通过(产物丢弃)', () => {
     // 这是攻击的真实形状:把我们创建的目录项换成指向别处的 symlink,好让 Chromium
     // 写到别的地方去。lstat 不跟随 symlink,所以 isDirectory() 为 false。
-    if (process.platform === 'win32') return;
     const capture = prepareEndpointNetLogFile(logDir)!;
     const captureDir = path.dirname(capture.file);
     const elsewhere = fs.mkdtempSync(path.join(logDir, 'elsewhere-'));
     fs.rmSync(captureDir, { recursive: true, force: true });
-    fs.symlinkSync(elsewhere, captureDir);
+    fs.symlinkSync(
+      elsewhere,
+      captureDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
     fs.writeFileSync(capture.file, '{}', 'utf8');
     expect(verifyEndpointNetLogCapture(capture)).toBe(false);
   });
@@ -1414,7 +1431,7 @@ describe('netlog 产物事后核对(verifyEndpointNetLogCapture)', () => {
   });
 
   it('目标被换成 symlink → 不通过', () => {
-    if (process.platform === 'win32') return;
+    if (!canLinkFile) return;
     const capture = prepareEndpointNetLogFile(logDir)!;
     const real = path.join(logDir, 'elsewhere.json');
     fs.writeFileSync(real, '{}', 'utf8');

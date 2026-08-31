@@ -16,6 +16,7 @@ import {
   onCodexLoginStarted,
   type CodexLoginLease,
   type CodexLoginResult,
+  type CodexCredentialDiagnostics,
 } from './codexAuthLogin';
 import { isCodexOAuthReconnectRequired } from './codexAuthRecovery';
 
@@ -40,7 +41,10 @@ export type CodexUiState = (
       credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
     }
   | { kind: 'error'; message: string }
-) & { oauthWritesBlocked?: boolean };
+) & {
+  credentialDiagnostics?: CodexCredentialDiagnostics;
+  oauthWritesBlocked?: boolean;
+};
 
 export type CodexLoginOutcome = 'authenticated' | 'cancelled' | 'blocked' | 'failed' | 'unverified';
 export type CodexRecoveryCheck = 'idle' | 'checking' | 'failed';
@@ -92,9 +96,13 @@ function createInitialMachineState(): CodexAuthMachineState {
 }
 
 function toCodexUiState(raw: CodexLoginResult, preserveGenericError = false): CodexUiState {
+  const diagnostics = raw.credentialDiagnostics
+    ? { credentialDiagnostics: raw.credentialDiagnostics }
+    : {};
   const writePolicy = raw.oauthWritesBlocked ? { oauthWritesBlocked: true } : {};
   if (raw.authenticated && raw.recoveryRequiredReason) {
     return {
+      ...diagnostics,
       kind: 'reconnect-required',
       reason: raw.recoveryRequiredReason,
       ...writePolicy,
@@ -103,6 +111,7 @@ function toCodexUiState(raw: CodexLoginResult, preserveGenericError = false): Co
   }
   if (raw.authenticated) {
     return {
+      ...diagnostics,
       kind: 'authenticated',
       identity: raw.identity,
       expiresAt: raw.expiresAt,
@@ -114,6 +123,7 @@ function toCodexUiState(raw: CodexLoginResult, preserveGenericError = false): Co
   const reason = raw.errorReason;
   if (reason && isCodexOAuthReconnectRequired(reason)) {
     return {
+      ...diagnostics,
       kind: 'reconnect-required',
       reason,
       ...writePolicy,
@@ -121,9 +131,9 @@ function toCodexUiState(raw: CodexLoginResult, preserveGenericError = false): Co
     };
   }
   if (preserveGenericError && reason) {
-    return { kind: 'error', message: reason, ...writePolicy };
+    return { kind: 'error', message: reason, ...diagnostics, ...writePolicy };
   }
-  return { kind: 'unauthenticated', ...writePolicy };
+  return { kind: 'unauthenticated', ...diagnostics, ...writePolicy };
 }
 
 function replaceUi(
