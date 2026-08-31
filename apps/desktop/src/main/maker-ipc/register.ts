@@ -3839,12 +3839,27 @@ export function installDesktopInteractionListener(session: {
  */
 async function settleSilentStopDone(
   sessionId: string,
+  sessionInstanceId: string,
   reason: 'exhausted' | 'skip' | 'send-failed',
   turnLeaseId: string,
   turnGeneration: number,
 ): Promise<void> {
   silentStopTurnLeaseGate.settle(sessionId, turnLeaseId);
   turnClaudeBillingSnapshots.releaseContinuation(sessionId, turnLeaseId);
+  const currentSessionInstanceId = wiredSessionsById.get(sessionId)?.session.instanceId ?? null;
+  if (
+    !isClaudeBillingSnapshotOwnedByCurrentSessionInstance(
+      sessionInstanceId,
+      currentSessionInstanceId,
+    )
+  ) {
+    log.debug('ignored silent-stop settle from a retired Session instance', {
+      sessionId,
+      sessionInstanceId,
+      turnLeaseId,
+    });
+    return;
+  }
   // A silent-stop done keeps the completed request snapshot alive so the
   // replacement request can inherit the same billing route. If recovery ends
   // here instead, retire that completed generation without touching a newer
@@ -3946,7 +3961,13 @@ async function handleSilentStopTurnEnd(
     log.debug('silent-stop auto-resume skipped — coordinator has queued work', {
       sessionId: session.id,
     });
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId, turnGeneration);
+    await settleSilentStopDone(
+      session.id,
+      session.instanceId,
+      'skip',
+      turnLeaseId,
+      turnGeneration,
+    );
     return;
   }
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
@@ -4013,7 +4034,13 @@ async function handleSilentStopTurnEnd(
           reason: outcome.reason,
         });
         await surfaceSilentStopExhaustedBanner(session.id);
-        await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, turnGeneration);
+        await settleSilentStopDone(
+          session.id,
+          session.instanceId,
+          'exhausted',
+          turnLeaseId,
+          turnGeneration,
+        );
       } else {
         log.info('silent-stop auto-resume dispatched', { sessionId: session.id });
       }
@@ -4024,16 +4051,34 @@ async function handleSilentStopTurnEnd(
         error: err instanceof Error ? err.message : String(err),
       });
       await surfaceSilentStopExhaustedBanner(session.id);
-      await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, turnGeneration);
+      await settleSilentStopDone(
+        session.id,
+        session.instanceId,
+        'exhausted',
+        turnLeaseId,
+        turnGeneration,
+      );
     }
     return;
   }
   if (decision.action === 'exhausted') {
     await surfaceSilentStopExhaustedBanner(session.id);
-    await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, turnGeneration);
+    await settleSilentStopDone(
+      session.id,
+      session.instanceId,
+      'exhausted',
+      turnLeaseId,
+      turnGeneration,
+    );
   }
   if (decision.action === 'skip') {
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId, turnGeneration);
+    await settleSilentStopDone(
+      session.id,
+      session.instanceId,
+      'skip',
+      turnLeaseId,
+      turnGeneration,
+    );
   }
 }
 

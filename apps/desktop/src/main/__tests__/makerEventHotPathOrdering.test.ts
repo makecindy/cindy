@@ -1231,6 +1231,22 @@ describe('maker:event hot path ordering', () => {
     expect(silentStopSettleSource).toContain(
       'turnClaudeBillingSnapshots.releaseContinuation(sessionId, turnLeaseId);',
     );
+    expect(silentStopSettleSource).toContain(
+      'wiredSessionsById.get(sessionId)?.session.instanceId ?? null',
+    );
+    expect(silentStopSettleSource).toContain(
+      '!isClaudeBillingSnapshotOwnedByCurrentSessionInstance(',
+    );
+    expectOrder(
+      silentStopSettleSource,
+      'turnClaudeBillingSnapshots.releaseContinuation(sessionId, turnLeaseId);',
+      '!isClaudeBillingSnapshotOwnedByCurrentSessionInstance(',
+    );
+    expectOrder(
+      silentStopSettleSource,
+      '!isClaudeBillingSnapshotOwnedByCurrentSessionInstance(',
+      'clearClaudeTurnBillingSnapshot(sessionId, turnGeneration);',
+    );
     const silentStopHandlerSource = source.slice(
       source.indexOf('async function handleSilentStopTurnEnd('),
       source.indexOf('function isFencedStaleProductTerminal('),

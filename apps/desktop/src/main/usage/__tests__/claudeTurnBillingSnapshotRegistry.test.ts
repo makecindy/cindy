@@ -58,9 +58,13 @@ describe('ClaudeTurnBillingSnapshotRegistry', () => {
     const registry = new ClaudeTurnBillingSnapshotRegistry();
 
     registry.stage('session-1', 1, () => PROVIDER_A);
+    // The old delayed handler may already have claimed its lease before the
+    // Session rebuild. Teardown retires A's evidence, then B reuses generation 1.
     registry.clearSession('session-1');
     registry.stage('session-1', 1, () => USER_PROVIDER_B);
 
+    // Both failed-claim cleanup and the later claimed-settle cleanup use this
+    // same instance fence, so neither can target B's replacement evidence.
     const retiredInstanceStillOwnsGeneration = isClaudeBillingSnapshotOwnedByCurrentSessionInstance(
       'instance-a',
       'instance-b',
