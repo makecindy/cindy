@@ -2449,6 +2449,51 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       credentialAttribution?: 'unproven';
     },
   ): Promise<void> {
+    const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
+    if (this.devOAuthWritesBlocked()) {
+      log.warn('codex auth invalidated in dev read-only mode; durable credentials unchanged', {
+        reason,
+      });
+      const credentialScope = this.readCodexCredentialScope();
+      const localAuthPath = path.join(this.codexHome, 'auth.json');
+      // A late 401 belongs to the credential actually consumed by the old host. The system path
+      // may already contain its replacement; if local evidence is unreadable, keep failing closed
+      // instead of guessing that the current system credential is the invalidated generation.
+      this.memoryOnlyInvalidatedSystemCredential =
+        credentialScope === 'system-shared'
+          ? capturedFingerprint
+            ? {
+                reason,
+                credentialScope,
+                dev: Number(capturedFingerprint.dev),
+                ino: Number(capturedFingerprint.ino),
+                size: capturedFingerprint.size,
+                mtimeMs: capturedFingerprint.mtimeMs,
+                sha256: capturedFingerprint.sha256,
+              }
+            : currentCodexAuthMarker(localAuthPath, reason, credentialScope)
+          : null;
+      this.oauthInvalidatedReason = reason;
+      this.oauthInvalidatedCredentialScope = credentialScope;
+      this.oauthRecoveryRequiredReason = null;
+      this.oauthRecoveryCredentialScope = undefined;
+      this.suppressSystemCodexReconcile = true;
+      await this.logout({ preserveInvalidatedReason: true });
+      if (
+        this.oauthInvalidatedReason === reason &&
+        this.oauthInvalidatedCredentialScope === credentialScope &&
+        this.onInvalidatedBroadcast
+      ) {
+        try {
+          await this.onInvalidatedBroadcast(reason, credentialScope, true);
+        } catch (error) {
+          log.warn('onInvalidatedBroadcast threw', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return;
+    }
     if (context?.credentialAttribution === 'unproven') {
       this.ensureInvalidationMarkerLoaded();
       const existingMarker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
@@ -2497,51 +2542,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       if (this.onInvalidatedBroadcast) {
         try {
           await this.onInvalidatedBroadcast(reason, credentialScope, this.devOAuthWritesBlocked());
-        } catch (error) {
-          log.warn('onInvalidatedBroadcast threw', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      return;
-    }
-    const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
-    if (this.devOAuthWritesBlocked()) {
-      log.warn('codex auth invalidated in dev read-only mode; durable credentials unchanged', {
-        reason,
-      });
-      const credentialScope = this.readCodexCredentialScope();
-      const localAuthPath = path.join(this.codexHome, 'auth.json');
-      // A late 401 belongs to the credential actually consumed by the old host. The system path
-      // may already contain its replacement; if local evidence is unreadable, keep failing closed
-      // instead of guessing that the current system credential is the invalidated generation.
-      this.memoryOnlyInvalidatedSystemCredential =
-        credentialScope === 'system-shared'
-          ? capturedFingerprint
-            ? {
-                reason,
-                credentialScope,
-                dev: Number(capturedFingerprint.dev),
-                ino: Number(capturedFingerprint.ino),
-                size: capturedFingerprint.size,
-                mtimeMs: capturedFingerprint.mtimeMs,
-                sha256: capturedFingerprint.sha256,
-              }
-            : currentCodexAuthMarker(localAuthPath, reason, credentialScope)
-          : null;
-      this.oauthInvalidatedReason = reason;
-      this.oauthInvalidatedCredentialScope = credentialScope;
-      this.oauthRecoveryRequiredReason = null;
-      this.oauthRecoveryCredentialScope = undefined;
-      this.suppressSystemCodexReconcile = true;
-      await this.logout({ preserveInvalidatedReason: true });
-      if (
-        this.oauthInvalidatedReason === reason &&
-        this.oauthInvalidatedCredentialScope === credentialScope &&
-        this.onInvalidatedBroadcast
-      ) {
-        try {
-          await this.onInvalidatedBroadcast(reason, credentialScope, true);
         } catch (error) {
           log.warn('onInvalidatedBroadcast threw', {
             error: error instanceof Error ? error.message : String(error),

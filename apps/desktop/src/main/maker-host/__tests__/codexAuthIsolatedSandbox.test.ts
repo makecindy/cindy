@@ -252,6 +252,56 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
+  it('dev 默认只读的 unproven 失效只保留内存边界', async () => {
+    const { codexHome, localAuth, systemAuth } = fixture();
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const onInvalidated = vi.fn();
+    adapter.setOnInvalidatedBroadcast(onInvalidated);
+
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    const systemBytes = fs.readFileSync(systemAuth);
+    const localBytes = fs.readFileSync(localAuth);
+    const systemStat = fs.statSync(systemAuth);
+    const localStat = fs.statSync(localAuth);
+    const rm = vi.spyOn(fs.promises, 'rm');
+    const chmod = vi.spyOn(fs.promises, 'chmod');
+
+    await adapter.invalidate('child_auth_rejected', { credentialAttribution: 'unproven' });
+
+    expect(onInvalidated).toHaveBeenCalledWith('child_auth_rejected', 'system-shared', true);
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'child_auth_rejected',
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    await expect(adapter.getAccessToken()).resolves.toBeNull();
+    await expect(adapter.getAccountId()).resolves.toBeNull();
+    expect(readCodexOneShotCreds(adapter)).toBeNull();
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+    expect(fs.readFileSync(systemAuth)).toEqual(systemBytes);
+    expect(fs.readFileSync(localAuth)).toEqual(localBytes);
+    expect(fs.statSync(systemAuth)).toMatchObject({ ino: systemStat.ino, mode: systemStat.mode });
+    expect(fs.statSync(localAuth)).toMatchObject({ ino: localStat.ino, mode: localStat.mode });
+    expect(rm).not.toHaveBeenCalled();
+    expect(chmod).not.toHaveBeenCalled();
+
+    await expect(
+      new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      oauthWritesBlocked: true,
+    });
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+  });
+
   it('dev 只读失效以内存指纹等待系统凭证换代,不泄漏旧 token 或写共享文件', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
