@@ -2709,6 +2709,7 @@ export class CodexAgent extends BaseAgent {
     // 往远端 config.toml 写 mcp_servers 段, daemon 经 SSH remote-forward 直连
     // 本机 HTTP bridge, tool call 按 params._meta.threadId 路由(与本地一致)。
     let createTransport: () => import('./app-server/transport.js').Transport;
+    let transportCredentialGeneration: string | null = null;
     if (remoteHostId) {
       if (!this.deps.getRemoteCodexTransport) {
         throw new Error(
@@ -2719,20 +2720,34 @@ export class CodexAgent extends BaseAgent {
       createTransport = () => provider(remoteHostId);
     } else {
       const binaryPath = this.deps.binaryPath;
-      createTransport = () => createStdioTransport({
-        binaryPath,
-        env,
-        extraArgs,
-        onProcessSpawned: (pid) => {
-          this.deps.registerLocalCodexAppServerProcess?.({
-            pid,
-            role:
-              hostPurpose === 'control-plane'
-                ? 'control-plane-service'
-                : 'task-host',
+      createTransport = () => {
+        // Freeze the local file generation before this concrete child exists. A long-running
+        // app-server caches its credential; later auth.json rotation alone does not prove that
+        // the child adopted F2. A replacement transport captures its own fresh generation here.
+        try {
+          transportCredentialGeneration =
+            this.deps.auth.captureCredentialGeneration?.() ?? null;
+        } catch (error) {
+          transportCredentialGeneration = null;
+          this.deps.logger.warn('codex transport credential generation capture failed', {
+            error: error instanceof Error ? error.message : String(error),
           });
-        },
-      });
+        }
+        return createStdioTransport({
+          binaryPath,
+          env,
+          extraArgs,
+          onProcessSpawned: (pid) => {
+            this.deps.registerLocalCodexAppServerProcess?.({
+              pid,
+              role:
+                hostPurpose === 'control-plane'
+                  ? 'control-plane-service'
+                  : 'task-host',
+            });
+          },
+        });
+      };
     }
 
     const host = new AppServerHost({
@@ -2752,12 +2767,11 @@ export class CodexAgent extends BaseAgent {
       subagentRoute,
       codexOpenAiWebSocketsEnabled,
       codexSubagentRoutingProfile,
-      // Bind each structured Auth failure to the generation captured immediately before its
-      // correlated request entered this transport. Never resnapshot auth.json in the failure
-      // callback: the child may have consumed F1 before an external atomic replacement to F2.
+      // Bind each structured Auth failure to the generation frozen before this concrete child
+      // spawned. Request dispatch and failure callbacks must never advance it from disk alone.
       captureCredentialGeneration: remoteHostId
         ? undefined
-        : () => this.deps.auth.captureCredentialGeneration?.() ?? null,
+        : () => transportCredentialGeneration,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask

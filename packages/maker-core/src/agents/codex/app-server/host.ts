@@ -259,7 +259,7 @@ export interface AppServerHostOptions {
     reason: string,
     context?: { credentialGeneration?: string | null },
   ) => void;
-  /** Captures the generation associated with each request before it enters the transport. */
+  /** Returns the credential generation frozen for the current concrete transport. */
   captureCredentialGeneration?: () => string | null;
   /**
    * Host 创建时冻结的事实:该 app-server 的 model_provider.base_url 是否走

@@ -192,7 +192,10 @@ export interface AppServerClientOptions {
     reason: string,
     context?: { credentialGeneration?: string | null },
   ) => void;
-  /** Capture the credential generation immediately before each correlated request is dispatched. */
+  /**
+   * Return the generation frozen for this concrete transport. It must not resnapshot mutable
+   * credential storage; the client binds the returned host fact to each correlated request id.
+   */
   captureCredentialGeneration?: () => string | null;
 }
 
