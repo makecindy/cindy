@@ -7784,6 +7784,9 @@
     },
     "quote": {
       "addToChat": "Add to chat",
+      "comment": "Comment",
+      "commentPlaceholder": "Write a comment about this selection…",
+      "submitComment": "Add comment",
       "remove": "Remove quote",
       "selectionCount_one": "{{count}} selection",
       "selectionCount_other": "{{count}} selections"

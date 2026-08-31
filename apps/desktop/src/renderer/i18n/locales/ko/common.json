@@ -7772,6 +7772,9 @@
     },
     "quote": {
       "addToChat": "대화에 추가",
+      "comment": "댓글",
+      "commentPlaceholder": "이 선택 항목에 대한 댓글을 입력…",
+      "submitComment": "댓글 추가",
       "remove": "인용 제거",
       "selectionCount_one": "인용 {{count}}개",
       "selectionCount_other": "인용 {{count}}개"

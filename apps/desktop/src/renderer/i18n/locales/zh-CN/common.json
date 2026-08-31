@@ -7764,6 +7764,9 @@
     },
     "quote": {
       "addToChat": "添加到对话",
+      "comment": "评论",
+      "commentPlaceholder": "输入这条选区的评论…",
+      "submitComment": "添加评论",
       "remove": "移除引用",
       "selectionCount_one": "{{count}} 处引用",
       "selectionCount_other": "{{count}} 处引用"

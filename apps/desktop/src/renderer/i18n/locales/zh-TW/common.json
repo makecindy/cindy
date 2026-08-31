@@ -7763,6 +7763,9 @@
     },
     "quote": {
       "addToChat": "新增到對話",
+      "comment": "評論",
+      "commentPlaceholder": "輸入這條選區的評論…",
+      "submitComment": "新增評論",
       "remove": "移除引用",
       "selectionCount_one": "{{count}} 處引用",
       "selectionCount_other": "{{count}} 處引用"

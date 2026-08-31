@@ -27,4 +27,5 @@ describe('QuoteChip', () => {
       container.querySelector('[data-inline-reference-chip]')?.className,
     ).toContain('text-[var(--text-primary)]');
   });
+
 });

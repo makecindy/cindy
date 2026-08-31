@@ -20,6 +20,7 @@ export interface ComposerQuoteAttrs {
   sourcePath: string | null;
   startLine: number | null;
   endLine: number | null;
+  comment: string | null;
 }
 
 export interface ComposerSerializedBlock {
@@ -54,6 +55,7 @@ export function composerQuoteAttrsToChatQuote(attrs: ComposerQuoteAttrs): ChatQu
     ...(attrs.sourcePath ? { sourcePath: attrs.sourcePath } : {}),
     ...(typeof attrs.startLine === 'number' ? { startLine: attrs.startLine } : {}),
     ...(typeof attrs.endLine === 'number' ? { endLine: attrs.endLine } : {}),
+    ...(attrs.comment ? { comment: attrs.comment } : {}),
   };
 }
 
@@ -65,6 +67,7 @@ function quoteNode(quote: ChatQuote): JSONContent {
       sourcePath: quote.sourcePath ?? null,
       startLine: quote.startLine ?? null,
       endLine: quote.endLine ?? null,
+      comment: quote.comment ?? null,
     },
   };
 }

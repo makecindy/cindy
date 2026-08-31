@@ -27,6 +27,7 @@ export interface ChatQuote {
   sourcePath?: string;
   startLine?: number;
   endLine?: number;
+  comment?: string;
 }
 
 /** 按消息正文顺序排列的引用 / 用户文字段。 */
@@ -36,9 +37,10 @@ export type ChatQuoteSegment =
 
 /** 来源行前缀(条目内最后一行)。 */
 const SOURCE_LINE_PREFIX = '— source: ';
+const COMMENT_LINE_PREFIX = '— comment: ';
 
 /**
- * 新版产品引用块的显式标记。Markdown comment 在普通文本视图中不可见，
+* 新版产品引用块的显式标记。Markdown comment 在普通文本视图中不可见，
  * 同时让解析器能把正文里的用户手写 `> ...` 与 composer quote atom 区分开。
  * 未带标记的历史 quotesEncoded 消息仍只按「消息开头的引用区」兼容解析。
  */
@@ -109,6 +111,7 @@ export function formatQuoteForSend(quote: ChatQuote): string {
   const lines = stripOuterNewlines(quote.text).split('\n');
   const sourceLine = formatSourceLine(quote);
   if (sourceLine) lines.push(`${SOURCE_LINE_PREFIX}${sourceLine}`);
+  if (quote.comment) lines.push(`${COMMENT_LINE_PREFIX}${quote.comment}`);
   return [
     QUOTE_BLOCK_MARKER_LINE,
     ...lines.map((line) => (line ? `> ${line}` : '>')),
@@ -122,14 +125,26 @@ export function formatQuotesForSend(quotes: readonly ChatQuote[], body: string):
 }
 
 function quoteFromLines(lines: string[]): ChatQuote {
-  const last = lines[lines.length - 1];
-  if (last?.startsWith(SOURCE_LINE_PREFIX) && lines.length > 1) {
-    return {
-      text: lines.slice(0, -1).join('\n'),
-      ...parseSourceLine(last.slice(SOURCE_LINE_PREFIX.length)),
-    };
-  }
-  return { text: lines.join('\n') };
+  let remaining = lines;
+  const comment = (() => {
+    const last = remaining[remaining.length - 1];
+    if (last?.startsWith(COMMENT_LINE_PREFIX) && remaining.length > 1) {
+      remaining = remaining.slice(0, -1);
+      return last.slice(COMMENT_LINE_PREFIX.length) || undefined;
+    }
+    return undefined;
+  })();
+  const last = remaining[remaining.length - 1];
+  const base = (() => {
+    if (last?.startsWith(SOURCE_LINE_PREFIX) && remaining.length > 1) {
+      return {
+        text: remaining.slice(0, -1).join('\n'),
+        ...parseSourceLine(last.slice(SOURCE_LINE_PREFIX.length)),
+      };
+    }
+    return { text: remaining.join('\n') };
+  })();
+  return comment ? { ...base, comment } : base;
 }
 
 /**

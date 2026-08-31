@@ -64,6 +64,12 @@ describe('formatQuotesForSend', () => {
     expect(formatQuotesForSend([], 'hello')).toBe('hello');
   });
 
+  it('appends a comment line after source metadata', () => {
+    expect(formatQuoteForSend({ text: 'a', sourcePath: 'docs/x.md', comment: '说明' })).toBe(
+      '> <!-- cindy-composer-quote -->\n> a\n> — source: docs/x.md\n> — comment: 说明',
+    );
+  });
+
   it('trims the trailing gap for quote-only sends', () => {
     expect(formatQuotesForSend([{ text: 'a' }], '')).toBe(
       '> <!-- cindy-composer-quote -->\n> a',
@@ -269,6 +275,18 @@ describe('parseLeadingBlockquotes', () => {
 
   it('round-trips file quote line numbers', () => {
     const quotes = [{ text: 'selected', sourcePath: 'docs/spec.md', startLine: 4, endLine: 6 }];
+    const sent = formatQuotesForSend(quotes, 'fix it');
+    expect(parseLeadingBlockquotes(sent)).toEqual({ quotes, body: 'fix it' });
+  });
+
+  it('round-trips comments after source metadata', () => {
+    const quotes = [{
+      text: 'selected',
+      sourcePath: 'docs/spec.md',
+      startLine: 4,
+      endLine: 6,
+      comment: '这里要改',
+    }];
     const sent = formatQuotesForSend(quotes, 'fix it');
     expect(parseLeadingBlockquotes(sent)).toEqual({ quotes, body: 'fix it' });
   });

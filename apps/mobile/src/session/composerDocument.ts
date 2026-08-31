@@ -158,7 +158,8 @@ export function composerDocumentsEqual(
       return node.quote.text === candidate.quote.text
         && node.quote.sourcePath === candidate.quote.sourcePath
         && node.quote.startLine === candidate.quote.startLine
-        && node.quote.endLine === candidate.quote.endLine;
+        && node.quote.endLine === candidate.quote.endLine
+        && node.quote.comment === candidate.quote.comment;
     }
     if (node.type === 'mention' && candidate.type === 'mention') {
       return node.kind === candidate.kind
@@ -766,6 +767,7 @@ function normalizeQuote(value: unknown): ChatQuote | null {
     sourcePath?: unknown;
     startLine?: unknown;
     endLine?: unknown;
+    comment?: unknown;
   };
   if (typeof quote.text !== 'string' || !quote.text) return null;
   if (quote.sourcePath !== undefined && typeof quote.sourcePath !== 'string') return null;
@@ -783,6 +785,7 @@ function normalizeQuote(value: unknown): ChatQuote | null {
     ...(quote.sourcePath !== undefined ? { sourcePath: quote.sourcePath } : {}),
     ...(typeof quote.startLine === 'number' ? { startLine: quote.startLine } : {}),
     ...(typeof quote.endLine === 'number' ? { endLine: quote.endLine } : {}),
+    ...(typeof quote.comment === 'string' && quote.comment ? { comment: quote.comment } : {}),
   };
 }
 

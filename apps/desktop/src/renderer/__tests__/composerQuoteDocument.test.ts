@@ -51,7 +51,13 @@ describe('composerQuoteDocument', () => {
           content: [
             {
               type: 'composerQuote',
-              attrs: { text: 'quote one', sourcePath: null, startLine: null, endLine: null },
+              attrs: {
+                text: 'quote one',
+                sourcePath: null,
+                startLine: null,
+                endLine: null,
+                comment: null,
+              },
             },
             { type: 'text', text: 'response one' },
             {
@@ -61,6 +67,7 @@ describe('composerQuoteDocument', () => {
                 sourcePath: 'docs/spec.md',
                 startLine: 4,
                 endLine: 5,
+                comment: null,
               },
             },
           ],
@@ -81,7 +88,13 @@ describe('composerQuoteDocument', () => {
         content: [
           {
             type: 'composerQuote',
-            attrs: { text: 'quote', sourcePath: null, startLine: null, endLine: null },
+            attrs: {
+                text: 'quote',
+                sourcePath: null,
+                startLine: null,
+                endLine: null,
+                comment: null,
+              },
           },
           { type: 'text', text: 'reply' },
         ],
@@ -106,7 +119,13 @@ describe('composerQuoteDocument', () => {
           content: [
             {
               type: 'composerQuote',
-              attrs: { text: 'legacy', sourcePath: null, startLine: null, endLine: null },
+              attrs: {
+                text: 'legacy',
+                sourcePath: null,
+                startLine: null,
+                endLine: null,
+                comment: null,
+              },
             },
             { type: 'text', text: 'body' },
           ],
@@ -131,12 +150,24 @@ describe('composerQuoteDocument', () => {
           content: [
             {
               type: 'composerQuote',
-              attrs: { text: 'q1', sourcePath: null, startLine: null, endLine: null },
+              attrs: {
+                text: 'q1',
+                sourcePath: null,
+                startLine: null,
+                endLine: null,
+                comment: null,
+              },
             },
             { type: 'text', text: 'a1' },
             {
               type: 'composerQuote',
-              attrs: { text: 'q2', sourcePath: null, startLine: null, endLine: null },
+              attrs: {
+                text: 'q2',
+                sourcePath: null,
+                startLine: null,
+                endLine: null,
+                comment: null,
+              },
             },
             { type: 'text', text: 'a2' },
           ],
@@ -166,6 +197,7 @@ describe('composerQuoteDocument', () => {
                 sourcePath: null,
                 startLine: null,
                 endLine: null,
+                comment: null,
               },
             },
           ],
@@ -186,7 +218,13 @@ describe('composerQuoteDocument', () => {
           content: [
             {
               type: 'composerQuote',
-              attrs: { text: 'quoted', sourcePath: null, startLine: null, endLine: null },
+              attrs: {
+                text: 'quoted',
+                sourcePath: null,
+                startLine: null,
+                endLine: null,
+                comment: null,
+              },
             },
             { type: 'text', text: 'reply' },
           ],
@@ -218,12 +256,24 @@ describe('composerQuoteDocument', () => {
           content: [
             {
               type: 'composerQuote',
-              attrs: { text: 'q1', sourcePath: null, startLine: null, endLine: null },
+              attrs: {
+                text: 'q1',
+                sourcePath: null,
+                startLine: null,
+                endLine: null,
+                comment: null,
+              },
             },
             { type: 'hardBreak' },
             {
               type: 'composerQuote',
-              attrs: { text: 'q2', sourcePath: null, startLine: null, endLine: null },
+              attrs: {
+                text: 'q2',
+                sourcePath: null,
+                startLine: null,
+                endLine: null,
+                comment: null,
+              },
             },
           ],
         },
@@ -344,6 +394,7 @@ describe('composerQuoteDocument', () => {
                 sourcePath: 'src/example.ts',
                 startLine: 7,
                 endLine: 9,
+                comment: null,
               },
             },
           ],
@@ -360,6 +411,7 @@ describe('composerQuoteDocument', () => {
         sourcePath: 'src/example.ts',
         startLine: 7,
         endLine: 9,
+        comment: null,
       },
     });
   });
@@ -373,5 +425,19 @@ describe('composerQuoteDocument', () => {
     expect(html).not.toContain('data-source-path');
     expect(html).not.toContain('data-start-line');
     expect(html).not.toContain('data-end-line');
+    expect(html).not.toContain('data-quote-comment');
+  });
+
+  it('round-trips quote comments through HTML clipboard serialization', () => {
+    const editor = makeEditor();
+    editor.commands.setContent(appendQuoteToComposerDocument(null, {
+      text: 'quoted',
+      comment: 'fix this',
+    }));
+
+    expect(editor.getHTML()).toContain('data-quote-comment="fix this"');
+    const restored = makeEditor();
+    restored.commands.setContent(editor.getHTML());
+    expect(restored.getJSON().content?.[0]?.content?.[0]?.attrs).toMatchObject({ comment: 'fix this' });
   });
 });
