@@ -32,6 +32,12 @@ export const CODEX_USER_DISCONNECT_REASON = 'user_disconnected';
 /** 失效标记文件内容: 失效原因 + 当时 ~/.codex/auth.json 的文件指纹。 */
 export type InvalidatedSystemCodexAuthMarker = {
   reason: string;
+  /**
+   * The child reported an auth failure without identifying the generation it loaded. In this
+   * mode the fingerprint is only a suppression/replacement baseline, not proof that these bytes
+   * were rejected. It must never authorize credential deletion.
+   */
+  unprovenCredentialAttribution?: true;
   /** 失效前 Cindy 使用的是系统共享凭证、实例隔离凭证，还是无法判断。 */
   credentialScope?: CodexCredentialScope;
   /** 系统共享凭证失效时所属的 Cindy data owner；只允许该 owner 恢复原绑定。 */
@@ -80,6 +86,9 @@ export function readInvalidatedSystemCodexAuthMarker(
         (parsed.localSha256 === undefined || typeof parsed.localSha256 === 'string'));
     const validDurableDisconnect =
       parsed.durableDisconnect === undefined || typeof parsed.durableDisconnect === 'boolean';
+    const validUnprovenCredentialAttribution =
+      parsed.unprovenCredentialAttribution === undefined ||
+      parsed.unprovenCredentialAttribution === true;
     const validCredentialScope =
       parsed.credentialScope === undefined ||
       parsed.credentialScope === 'system-shared' ||
@@ -90,6 +99,7 @@ export function readInvalidatedSystemCodexAuthMarker(
     if (
       typeof parsed.reason === 'string' &&
       validDurableDisconnect &&
+      validUnprovenCredentialAttribution &&
       validCredentialScope &&
       validRecoveryOwnerId &&
       typeof parsed.dev === 'number' &&
@@ -110,6 +120,34 @@ export function readInvalidatedSystemCodexAuthMarker(
     /* no-op */
   }
   return null;
+}
+
+/**
+ * Persist a non-destructive boundary for a child auth failure whose credential generation is
+ * unknown. The fingerprint is the credential a replacement child would currently observe; it is
+ * used only to keep that generation suppressed across restart and detect a later replacement.
+ */
+export function writeUnprovenCodexAuthSuppressionMarker(
+  codexHome: string,
+  systemAuthPath: string,
+  localAuthPath: string,
+  reason: string,
+  credentialScope: CodexCredentialScope,
+  recoveryOwnerId?: string,
+): boolean {
+  const previous = readInvalidatedSystemCodexAuthMarker(codexHome);
+  if (previous && isDurableDisconnectMarker(previous)) return false;
+  const baseline =
+    currentCodexAuthFileFingerprint(localAuthPath) ??
+    currentCodexAuthFileFingerprint(systemAuthPath);
+  if (!baseline) return false;
+  return persistInvalidatedSystemCodexAuthMarker(codexHome, {
+    reason,
+    credentialScope,
+    ...(credentialScope === 'system-shared' && recoveryOwnerId ? { recoveryOwnerId } : {}),
+    unprovenCredentialAttribution: true,
+    ...baseline,
+  });
 }
 
 /** 兼容最初只靠 reason 表示的 user_disconnected marker。 */
@@ -258,9 +296,18 @@ export function markerMatchesCurrentSystemCodexAuth(
 export function getActiveInvalidatedSystemCodexAuthMarker(
   codexHome: string,
   systemAuthPath: string,
+  localAuthPath?: string,
 ): InvalidatedSystemCodexAuthMarker | null {
   const marker = readInvalidatedSystemCodexAuthMarker(codexHome);
   if (!marker) return null;
+  if (marker.unprovenCredentialAttribution) {
+    const baselinePath =
+      marker.credentialScope === 'system-shared' ? systemAuthPath : localAuthPath;
+    // Absence cannot prove replacement. For isolated/unknown credentials the caller must provide
+    // the local path; otherwise preserve the boundary rather than release it optimistically.
+    if (!baselinePath || currentCodexAuthFileFingerprint(baselinePath) === null) return marker;
+    return fileMatchesInvalidatedMarker(marker, baselinePath) ? marker : null;
+  }
   // 实例隔离或来源不明的凭证都不能靠 ~/.codex 变化证明已经恢复；UI 会引导用户在 Cindy
   // 重新登录。新的 local auth 不再匹配坏凭证 fingerprint，但 marker 仍负责抑制系统回灌。
   if (marker.credentialScope === 'instance-isolated' || marker.credentialScope === 'unknown') {
@@ -395,6 +442,7 @@ export function clearInvalidatedSystemCodexAuthMarker(codexHome: string): boolea
 export function settleInvalidationMarkerAfterLogin(
   codexHome: string,
   systemAuthPath: string,
+  localAuthPath?: string,
 ): { keepSuppressed: boolean } {
   const marker = readInvalidatedSystemCodexAuthMarker(codexHome);
   if (marker?.credentialScope === 'instance-isolated' || marker?.credentialScope === 'unknown') {
@@ -406,7 +454,8 @@ export function settleInvalidationMarkerAfterLogin(
     return { keepSuppressed: true };
   }
   return {
-    keepSuppressed: getActiveInvalidatedSystemCodexAuthMarker(codexHome, systemAuthPath) != null,
+    keepSuppressed:
+      getActiveInvalidatedSystemCodexAuthMarker(codexHome, systemAuthPath, localAuthPath) != null,
   };
 }
 
@@ -436,7 +485,11 @@ export function restoreInvalidationStateOnStartup(
   if (!persistedMarker) {
     return { suppressReconcile: false, invalidatedReason: null };
   }
-  const marker = getActiveInvalidatedSystemCodexAuthMarker(codexHome, systemAuthPath);
+  const marker = getActiveInvalidatedSystemCodexAuthMarker(
+    codexHome,
+    systemAuthPath,
+    localAuthPath,
+  );
   if (!marker) {
     // A changed system auth.json is only a recovery candidate. Reconcile may consume it, but the
     // renderer must perform an account RPC before replacing the actionable invalidation prompt.

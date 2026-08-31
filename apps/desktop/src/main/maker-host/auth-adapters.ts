@@ -52,6 +52,7 @@ import {
   shouldSuppressLocalCodexAuth,
   updateInvalidatedSystemCodexAuthMarkerCredentialScope,
   writeInvalidatedSystemCodexAuthMarker,
+  writeUnprovenCodexAuthSuppressionMarker,
   type CodexAuthFileFingerprint,
   type InvalidatedSystemCodexAuthMarker,
 } from './codex-auth-invalidation.js';
@@ -1118,8 +1119,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         // invalidation time. Never let generic legacy auto-claim hand it to a different Cindy
         // owner, but also do not let an older legacyClaimOwner strand the original owner.
         if (
-          getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, getSystemCodexAuthPath()) !==
-          null
+          getActiveInvalidatedSystemCodexAuthMarker(
+            this.codexHome,
+            getSystemCodexAuthPath(),
+            path.join(this.codexHome, 'auth.json'),
+          ) !== null
         ) {
           return;
         }
@@ -1197,7 +1201,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       const marker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
       // marker 丢失时保持本进程 fail-closed；磁盘写失败不能变成下一次调用立刻回灌坏 token。
       if (!marker) return;
-      if (getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, getSystemCodexAuthPath())) {
+      if (
+        getActiveInvalidatedSystemCodexAuthMarker(
+          this.codexHome,
+          getSystemCodexAuthPath(),
+          path.join(this.codexHome, 'auth.json'),
+        )
+      ) {
         return;
       }
       this.suppressSystemCodexReconcile = false;
@@ -1529,7 +1539,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (!marker) return;
     const systemAuthPath = getSystemCodexAuthPath();
     if (persistedMarker) {
-      if (getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuthPath)) return;
+      if (
+        getActiveInvalidatedSystemCodexAuthMarker(
+          this.codexHome,
+          systemAuthPath,
+          path.join(this.codexHome, 'auth.json'),
+        )
+      ) {
+        return;
+      }
     } else {
       // Memory-only invalidation cannot persist a marker. Keep the rejected/ambiguous credential
       // detached until a present system auth has a different fingerprint; deletion alone is not
@@ -2017,6 +2035,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const { keepSuppressed } = settleInvalidationMarkerAfterLogin(
       this.codexHome,
       getSystemCodexAuthPath(),
+      path.join(this.codexHome, 'auth.json'),
     );
     this.suppressSystemCodexReconcile = keepSuppressed || missingMarkerFailClosed;
     // `codex login` 的成功已经由刚写入的真实 access_token 证明。先持久化显式来源，
@@ -2432,14 +2451,37 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   ): Promise<void> {
     if (context?.credentialAttribution === 'unproven') {
       this.ensureInvalidationMarkerLoaded();
+      const existingMarker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
+      if (existingMarker && isDurableDisconnectMarker(existingMarker)) {
+        log.info('ignoring unproven Codex invalidation after explicit disconnect', { reason });
+        return;
+      }
+      if (this.pendingLogin || this.loginCancellationOpen) {
+        log.info('ignoring unproven Codex invalidation while a tracked login is active', { reason });
+        return;
+      }
       const credentialScope = this.readCodexCredentialScope();
       const localAuthPath = path.join(this.codexHome, 'auth.json');
       // A structured 401 proves this child is bad, but the protocol does not identify whether it
       // loaded F1 or an atomically published F2. Keep the current credential byte-for-byte intact,
       // block new hosts in memory, and use the current shared generation only as a replacement
       // baseline. A later F3 can recover in-process without treating F2 as the failed child fact.
-      this.memoryOnlyInvalidatedSystemCredential =
-        credentialScope === 'system-shared'
+      const activeOwnerId = getActiveAppSession().dataOwnerId;
+      const recoveryOwnerId =
+        credentialScope === 'system-shared' && activeOwnerId && isNativeProviderAuthBound('openai')
+          ? activeOwnerId
+          : undefined;
+      const markerCommitted = writeUnprovenCodexAuthSuppressionMarker(
+        this.codexHome,
+        getSystemCodexAuthPath(),
+        localAuthPath,
+        reason,
+        credentialScope,
+        recoveryOwnerId,
+      );
+      this.memoryOnlyInvalidatedSystemCredential = markerCommitted
+        ? null
+        : credentialScope === 'system-shared'
           ? currentCodexAuthMarker(localAuthPath, reason, credentialScope)
           : null;
       this.oauthInvalidatedReason = reason;
@@ -2450,6 +2492,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       log.warn('codex child auth invalidated without credential attribution; preserving auth.json', {
         reason,
         credentialScope,
+        markerCommitted,
       });
       if (this.onInvalidatedBroadcast) {
         try {

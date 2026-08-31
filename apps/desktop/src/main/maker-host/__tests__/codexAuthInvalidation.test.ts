@@ -1173,7 +1173,7 @@ describe('Codex system credential suppression marker', () => {
     expect(readCodexOneShotCreds()).toBeNull();
   });
 
-  it('preserves shared F2 and blocks new hosts when the child generation is unproven', async () => {
+  it('persists unproven child suppression without modifying shared F2', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-unproven-child-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -1217,7 +1217,12 @@ describe('Codex system credential suppression marker', () => {
 
     expect(onLogoutSuccess).not.toHaveBeenCalled();
     expect(broadcast).toHaveBeenCalledWith('child_auth_rejected', 'system-shared', false);
-    expect(fs.existsSync(markerPath)).toBe(false);
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
+      reason: 'child_auth_rejected',
+      credentialScope: 'system-shared',
+      recoveryOwnerId: 'owner-a',
+      unprovenCredentialAttribution: true,
+    });
     expect(rmSpy).not.toHaveBeenCalled();
     expect(chmodSpy).not.toHaveBeenCalled();
     expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
@@ -1229,6 +1234,17 @@ describe('Codex system credential suppression marker', () => {
       credentialScope: 'system-shared',
     });
 
+    const restartedAdapter = new DesktopCodexAuthAdapter();
+    await expect(
+      restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'child_auth_rejected',
+      credentialScope: 'system-shared',
+    });
+    expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
+    expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
+
     rmSpy.mockRestore();
     const replacement = path.join(path.dirname(systemAuth), 'auth.f3.json');
     fs.writeFileSync(
@@ -1237,13 +1253,84 @@ describe('Codex system credential suppression marker', () => {
       { mode: 0o600 },
     );
     fs.renameSync(replacement, systemAuth);
-    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+    await expect(
+      restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toMatchObject({
       authenticated: true,
       credentialScope: 'system-shared',
       recoveryRequiredReason: 'child_auth_rejected',
     });
-    await expect(adapter.getAccessToken()).resolves.toBe('system-f3-token');
+    await expect(restartedAdapter.getAccessToken()).resolves.toBe('system-f3-token');
+    await restartedAdapter.verifyRecoveryWithAccountRpc(async () => undefined);
+    expect(fs.existsSync(markerPath)).toBe(false);
     expect(chmodSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unproven isolated boundary until the local credential changes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-unproven-isolated-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-token', account_id: 'acct-system' } }),
+    );
+    const localF2 = JSON.stringify({
+      tokens: { access_token: 'isolated-f2-token', account_id: 'acct-local' },
+    });
+    fs.writeFileSync(localAuth, localF2);
+    fs.writeFileSync(
+      path.join(h.userDataDir, 'native-provider-auth.json'),
+      JSON.stringify({
+        openai: 'owner-a',
+        selfAuthorized: { openai: 'owner-a' },
+        sources: { openai: 'explicit-provider-oauth' },
+        instanceIsolatedCredential: { openai: 'owner-a' },
+      }),
+    );
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.invalidate('isolated_child_auth_rejected', {
+      credentialAttribution: 'unproven',
+    });
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
+      reason: 'isolated_child_auth_rejected',
+      credentialScope: 'instance-isolated',
+      unprovenCredentialAttribution: true,
+    });
+
+    const restartedAdapter = new DesktopCodexAuthAdapter();
+    await expect(
+      restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toMatchObject({ authenticated: false, errorReason: 'isolated_child_auth_rejected' });
+
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-f3-token', account_id: 'acct-system' } }),
+    );
+    await expect(
+      restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toMatchObject({ authenticated: false, errorReason: 'isolated_child_auth_rejected' });
+    expect(fs.readFileSync(localAuth, 'utf8')).toBe(localF2);
+
+    fs.writeFileSync(
+      localAuth,
+      JSON.stringify({ tokens: { access_token: 'isolated-f3-token', account_id: 'acct-local' } }),
+    );
+    await expect(
+      restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'instance-isolated',
+      recoveryRequiredReason: 'isolated_child_auth_rejected',
+    });
   });
 
   it('fails closed when the invalidation marker cannot be committed and restores suppression after login', async () => {
