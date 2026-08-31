@@ -816,11 +816,14 @@ export class Scheduler extends EventEmitter {
       return;
     }
 
-    // 如果是被 delete/pause 主动 abort 的,把 run 标 'aborted' 而非 'failed' —— 让 UI
-    // 用 RunHistoryCard 渲染时能区分"用户中断"和"agent 自爆"。判定见 wasRunAborted。
+    // schedule pause/delete 的 signal 和 runner 的结构化取消都会把 run 标为
+    // aborted；但两者对 schedule 的收口语义不同，下方重排时必须分开。
+    // 两者竞态时真实 signal 优先，不让先 settle 的队列删除文案覆盖 pause/delete。
+    const scheduleAborted = controller.signal.aborted;
     const wasAborted = this.wasRunAborted(controller.signal, runCancellationMessage !== undefined);
-    const cancellationMessage =
-      runCancellationMessage ?? 'cancelled by user (schedule deleted or paused)';
+    const cancellationMessage = scheduleAborted
+      ? 'cancelled by user (schedule deleted or paused)'
+      : (runCancellationMessage ?? 'cancelled by user (schedule deleted or paused)');
     // 守卫 abort 与用户 abort 的收口语义相反(见 wasStallAborted):必须在写 run 行与
     // 决定是否重排之前把两者分开。
     const stallAborted = this.wasStallAborted(runId);
@@ -953,13 +956,15 @@ export class Scheduler extends EventEmitter {
     }
     this.silencedRuns.delete(runId);
 
-    // Aborted 路径不更新 schedule 行 —— schedule 大概率已被 delete(行已不存在,update
-    // 是 no-op)或 pause(status='paused',activeSchedules 已被摘出)。重排 nextFireAt
-    // 会引入幽灵下次触发,resume 时 resume() 自己会重算,这里跳过最干净。
+    // 真实 schedule abort 路径不更新 schedule 行 —— schedule 大概率已被
+    // delete(行已不存在,update 是 no-op)或 pause(status='paused',activeSchedules
+    // 已被摘出)。重排 nextFireAt 会引入幽灵下次触发,resume 时会自己重算。
+    // runner 结构化取消不能走这个短路：active recurring schedule 的自动认领已经
+    // 清空 nextFireAt，本轮虽记 aborted，仍必须按当前 schedule 重排下一周期。
     //
     // **例外:守卫 abort**。此时 schedule 既没被删也没被停,只是这一轮卡死了;
     // claimDueFire 已清空 nextFireAt,必须往下走重排,否则任务永久停摆(review P1)。
-    if (wasAborted && !stallAborted) {
+    if (scheduleAborted && !stallAborted) {
       return;
     }
 
@@ -1127,9 +1132,11 @@ export class Scheduler extends EventEmitter {
       return { runId };
     }
 
+    const scheduleAborted = controller.signal.aborted;
     const wasAborted = this.wasRunAborted(controller.signal, runCancellationMessage !== undefined);
-    const cancellationMessage =
-      runCancellationMessage ?? 'cancelled by user (schedule deleted or paused)';
+    const cancellationMessage = scheduleAborted
+      ? 'cancelled by user (schedule deleted or paused)'
+      : (runCancellationMessage ?? 'cancelled by user (schedule deleted or paused)');
     const stallAborted = this.wasStallAborted(runId);
 
     // 顺延(手动触发撞忙也礼让,与 cron 路径一致):撤销预插的 running run、不通知。

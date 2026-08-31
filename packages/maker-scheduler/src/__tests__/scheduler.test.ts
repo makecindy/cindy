@@ -563,12 +563,17 @@ describe('Scheduler', () => {
     expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 2, 0));
   });
 
-  it('结构化 runner 取消保留独立文案并记为 aborted', async () => {
+  it('结构化 runner 取消保留独立文案并重排 active recurring schedule', async () => {
+    let fireCount = 0;
     const local = makeHarness({
       runnerImpl: async () => {
-        throw new ScheduleRunCancellationError(
-          'cancelled by user (queued automation input removed)',
-        );
+        fireCount += 1;
+        if (fireCount === 1) {
+          throw new ScheduleRunCancellationError(
+            'cancelled by user (queued automation input removed)',
+          );
+        }
+        return { sessionId: 'sess-next-cycle' };
       },
     });
     const sch = await local.scheduler.create({ ...baseInput });
@@ -584,6 +589,49 @@ describe('Scheduler', () => {
     });
     expect(runs[0].readAt).toBe(runs[0].finishedAt);
     const after = await local.storage.get(sch.id);
+    expect(after?.status).toBe('active');
+    expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 2, 0));
+
+    // 不只锁字段：推进到下一周期，确认这条 active schedule 真的会再次运行。
+    local.clock.setTo(Date.UTC(2026, 0, 1, 0, 2, 5));
+    await local.scheduler.tick();
+    expect(fireCount).toBe(2);
+    const afterNextCycle = await local.storage.get(sch.id);
+    expect(afterNextCycle?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 3, 0));
+  });
+
+  it('pause signal 与结构化 runner 取消竞态时优先使用 pause/delete 文案且不重排', async () => {
+    const local = makeHarness({
+      runnerImpl: (_schedule, ctx) =>
+        new Promise<{ sessionId: string }>((_resolve, reject) => {
+          ctx.signal.addEventListener(
+            'abort',
+            () => reject(
+              new ScheduleRunCancellationError(
+                'cancelled by user (queued automation input removed)',
+              ),
+            ),
+            { once: true },
+          );
+        }),
+    });
+    const sch = await local.scheduler.create({ ...baseInput });
+    local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+
+    const tickPromise = local.scheduler.tick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await local.scheduler.pause(sch.id);
+    await tickPromise;
+
+    const runs = await local.scheduler.listRuns(sch.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: 'aborted',
+      errorMsg: 'cancelled by user (schedule deleted or paused)',
+    });
+    expect(runs[0].readAt).toBe(runs[0].finishedAt);
+    const after = await local.storage.get(sch.id);
+    expect(after?.status).toBe('paused');
     expect(after?.nextFireAt).toBeUndefined();
   });
 
