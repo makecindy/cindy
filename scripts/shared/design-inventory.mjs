@@ -952,7 +952,9 @@ export function productionRouterCoverage(routerSource, catalog = catalogSurfaces
       return {
         path: route.path,
         actualComponent: route.component,
-        catalogComponents: surface.routeEntryComponents[route.path],
+        // 统一成数组：消费侧（CLI 报错拼接）按数组处理；登记缺路径时是 undefined，
+        // 兜底成空数组避免 join 前的运行期类型错。
+        catalogComponents: [].concat(surface.routeEntryComponents[route.path] ?? []),
         surfaceId: surface.id,
       };
     });

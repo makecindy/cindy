@@ -445,7 +445,7 @@ test('路径保留但 element 换组件时 componentMismatch 能发现', () => {
     {
       path: '/fixture',
       actualComponent: 'NewSwappedView',
-      catalogComponents: 'FixtureView',
+      catalogComponents: ['FixtureView'],
       surfaceId: 'desktop.test.surface',
     },
   ]);
@@ -485,10 +485,54 @@ test('多路由 surface 内部换入口组件(并集内)也会被发现', () => 
     {
       path: '/home',
       actualComponent: 'DetailView',
-      catalogComponents: 'HomeView',
+      catalogComponents: ['HomeView'],
       surfaceId: 'desktop.test.multi',
     },
   ]);
+});
+
+test('componentMismatch 报错路径可完整渲染,不再 TypeError', () => {
+  // 回归:catalogComponents 曾被赋成字符串(routeEntryComponents[path] 的值),CLI 的
+  // 报错拼接 row.catalogComponents.join(' / ') 会 TypeError,把真实的组件不一致
+  // 信息吞掉。此测试钉住两层:共享层输出数组,且 CLI 报错文本可正常生成。
+  const routerSource = `
+    export const router = createHashRouter([
+      { path: 'fixture', element: <SwappedView /> },
+    ]);
+  `;
+  const catalog = [
+    {
+      id: 'desktop.test.surface',
+      routerPaths: ['/fixture'],
+      routeEntryComponents: { '/fixture': 'FixtureView' },
+    },
+  ];
+  const coverage = productionRouterCoverage(routerSource, catalog);
+  // 共享层:数组形态(消费侧可安全 join)。
+  assert.deepEqual(coverage.componentMismatch[0].catalogComponents, ['FixtureView']);
+  assert.ok(Array.isArray(coverage.componentMismatch[0].catalogComponents));
+  // CLI 报错拼接:与 scripts/design-inventory.mjs 的失败路径同构,必须不抛异常。
+  const mismatchLine = coverage.componentMismatch
+    .map(
+      (row) =>
+        `  - ${row.path}: router 实际 ${row.actualComponent}, catalog 登记 ${row.catalogComponents.join(' / ')}（surface ${row.surfaceId}）`,
+    )
+    .join('\n');
+  assert.match(mismatchLine, /\/fixture: router 实际 SwappedView, catalog 登记 FixtureView/);
+  // 登记缺路径(undefined)也兜底成空数组,不炸 join。
+  const missingPathCatalog = [
+    {
+      id: 'desktop.test.partial',
+      routerPaths: ['/fixture'],
+      routeEntryComponents: { '/other': 'OtherView' },
+    },
+  ];
+  const partial = productionRouterCoverage(routerSource, missingPathCatalog);
+  if (partial.componentMismatch.length > 0) {
+    assert.ok(Array.isArray(partial.componentMismatch[0].catalogComponents));
+    // 不抛即可:
+    partial.componentMismatch[0].catalogComponents.join(' / ');
+  }
 });
 
 test('真实 router.tsx 的每条路由组件都与 catalog 的 routeEntryComponents 一致', () => {
