@@ -985,7 +985,11 @@ import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
 } from './sessionTurnActivityTracker.js';
-import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnLease.js';
+import {
+  isSessionTurnIdleForCurrentInstance,
+  SilentStopTurnLeaseGate,
+  SessionTurnLeaseTracker,
+} from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
 import { resolveClearSessionBoundary } from './clearSessionBoundary.js';
 import {
@@ -3866,9 +3870,19 @@ async function settleSilentStopDone(
   // user-started turn.
   clearClaudeTurnBillingSnapshot(sessionId, turnGeneration);
   try {
-    if (!(await sessionTurnLeaseTracker.markTurnEndedAndCheckIdle(sessionId, turnLeaseId))) {
-      log.debug('ignored stale silent-stop settle after a newer turn started', {
+    if (
+      !(await isSessionTurnIdleForCurrentInstance(
+        () => sessionTurnLeaseTracker.markTurnEndedAndCheckIdle(sessionId, turnLeaseId),
+        () =>
+          isClaudeBillingSnapshotOwnedByCurrentSessionInstance(
+            sessionInstanceId,
+            wiredSessionsById.get(sessionId)?.session.instanceId ?? null,
+          ),
+      ))
+    ) {
+      log.debug('ignored stale silent-stop settle after async lease check', {
         sessionId,
+        sessionInstanceId,
         turnLeaseId,
       });
       return;

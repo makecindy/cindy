@@ -20,6 +20,14 @@ export interface PersistedSessionTurnLeaseRow {
   lease: SessionTurnLease | null;
 }
 
+/** Recheck Session identity after the asynchronous shared-lease idle probe. */
+export async function isSessionTurnIdleForCurrentInstance(
+  checkIdle: () => Promise<boolean>,
+  isCurrentInstance: () => boolean,
+): Promise<boolean> {
+  return (await checkIdle()) && isCurrentInstance();
+}
+
 type SilentStopTurnPhase = 'scheduled' | 'handling' | 'settled';
 
 interface SilentStopTurnState {

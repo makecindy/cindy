@@ -1247,6 +1247,11 @@ describe('maker:event hot path ordering', () => {
       '!isClaudeBillingSnapshotOwnedByCurrentSessionInstance(',
       'clearClaudeTurnBillingSnapshot(sessionId, turnGeneration);',
     );
+    expectOrder(
+      silentStopSettleSource,
+      'isSessionTurnIdleForCurrentInstance(',
+      "finalizeTurnChangeSet(sessionId, null, 'complete');",
+    );
     const silentStopHandlerSource = source.slice(
       source.indexOf('async function handleSilentStopTurnEnd('),
       source.indexOf('function isFencedStaleProductTerminal('),
