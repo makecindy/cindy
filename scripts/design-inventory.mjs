@@ -12,6 +12,7 @@
  *   CINDY_INVENTORY_DOC=<path> 覆盖台账写读路径（测试用：指向临时目录拷贝，
  *   不改真实 docs/design-rules/design-inventory.md）
  */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -266,14 +267,17 @@ if (checkOnly) {
       diffLines.push(`    文件: ${currentLine ? statsOf(currentLine) : '(缺行)'}`);
       diffLines.push(`    重算: ${statsOf(nextLine)}`);
       // 逐文件计数表：定位跨平台分歧到具体文件（CI 日志与本地表逐行对比）。
+      // 每行带文件内容 sha256 前 12 位——若 CI 读到的文件与本仓 git blob 不同，
+      // 哈希会直接分叉，不再需要猜测内容差异。
       const surface = surfaces.find((s) => s.id === id);
       if (surface) {
         const perFile = surface.styleSources.map((file) => {
-          const src = fs.readFileSync(path.join(repoRoot, ...file.split('/')), 'utf8');
-          const scan = stripJsComments(src);
+          const raw = fs.readFileSync(path.join(repoRoot, ...file.split('/')));
+          const scan = stripJsComments(raw.toString('utf8'));
           const re = createBareRadiusRe();
           const matches = [...scan.matchAll(re)];
-          return `    ${matches.length} ${file}` + (matches.length > 0 ? '' : '');
+          const sha = createHash('sha256').update(raw).digest('hex').slice(0, 12);
+          return `    ${matches.length} ${sha} ${file}`;
         });
         diffLines.push(...perFile);
       }
