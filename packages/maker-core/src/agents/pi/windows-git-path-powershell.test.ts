@@ -227,14 +227,16 @@ describe('Windows Git PATH PowerShell probes', () => {
             '-NonInteractive',
             '-Command',
             [
-              '$deadline = [DateTime]::UtcNow.AddSeconds(3)',
+              '$deadline = [DateTime]::UtcNow.AddSeconds(8)',
               `while (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) {`,
               '  if ([DateTime]::UtcNow -ge $deadline) { exit 1 }',
               '  Start-Sleep -Milliseconds 50',
               '}',
             ].join('\n'),
           ],
-          { stdio: 'ignore', timeout: 5_000, windowsHide: true },
+           // PowerShell startup can exceed five seconds on a busy hosted Windows runner;
+           // the in-script deadline (8s) plus startup must fit the exec timeout.
+           { stdio: 'ignore', timeout: 15_000, windowsHide: true },
         );
       } finally {
         if (coordinatorPid) {
@@ -251,7 +253,9 @@ describe('Windows Git PATH PowerShell probes', () => {
         }
       }
     },
-    12_000,
+    // waitFor(5s) + descendant cleanup exec(10s) + liveness probe exec(15s) already
+    // sum to 30s; leave headroom for coordinator exit, taskkill, and scheduling.
+     45_000,
   );
 
   it('reports recoverable script failures only when a logger is supplied', () => {

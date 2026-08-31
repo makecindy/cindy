@@ -103,6 +103,7 @@ import {
 import {
   buildAgentCapabilitiesCacheKey,
   commitAgentCapabilities,
+  evictAgentCapabilitiesForDevice,
   getAgentCapabilitiesGeneration,
   getCachedAgentCapabilities,
   isAgentCapabilitiesGenerationCurrent,
@@ -428,6 +429,8 @@ export default function NewRemoteSessionScreen() {
     invoke,
     openLink,
     subscribe,
+    unsubscribe,
+    onAgentsChanged,
     status: deviceLinkStatus,
     connectionEpoch,
     presenceVersion,
@@ -515,6 +518,13 @@ export default function NewRemoteSessionScreen() {
   // 建出最终 requireAgent 报 not-registered 的会话(codex review P2)。
   const [availableAgentKinds, setAvailableAgentKinds] =
     useState<ReadonlySet<NewSessionAgentKind> | null>(null);
+  const [availableAgentRefreshNonce, setAvailableAgentRefreshNonce] = useState(0);
+  const [availableAgentRosterRefreshNonce, setAvailableAgentRosterRefreshNonce] = useState(0);
+  const rosterRecoveryIdentityRef = useRef<{
+    deviceId: string;
+    connectionEpoch: number;
+    presenceVersion: number;
+  } | null>(null);
   // worktree 开关(project 模式 + 已选目录时显示):勾选值存工作端(get-new-maker-defaults
   // 播种 / 显式点击写穿),资格由 worktree:detect-cwd 探测(目录变化即重探,seq 防竞态)。
   const [worktreeProbe, setWorktreeProbe] = useState<NewSessionWorktreeProbeSnapshot | null>(null);
@@ -1751,7 +1761,7 @@ export default function NewRemoteSessionScreen() {
       cancelled = true;
       unsubscribe();
     };
-  }, [selectedDeviceId, draft.agentKind, maker, openLink]);
+  }, [availableAgentRefreshNonce, selectedDeviceId, draft.agentKind, maker, openLink]);
 
   // Fast 记忆延迟恢复(codex review P1):切/恢复 agent 的瞬间,目标 agent 的能力表
   // 尚未到达(或残留着切换前 agent 的),恢复点只能保守置 false;真正的恢复在这里——
@@ -1846,7 +1856,67 @@ export default function NewRemoteSessionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDeviceId, maker, openLink]);
+  }, [selectedDeviceId, maker, openLink, availableAgentRosterRefreshNonce]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) {
+      rosterRecoveryIdentityRef.current = null;
+      return;
+    }
+    const previous = rosterRecoveryIdentityRef.current;
+    rosterRecoveryIdentityRef.current = { deviceId: selectedDeviceId, connectionEpoch, presenceVersion };
+    if (!previous || previous.deviceId !== selectedDeviceId) return;
+    if (
+      previous.connectionEpoch === connectionEpoch
+      && previous.presenceVersion === presenceVersion
+    ) return;
+    // Roster pushes are edge-triggered and are not replayed by topic rehydration.
+    // Refresh both the runtime roster and the selected agent capabilities after a
+    // relay/target recovery, even when the screen stayed mounted and focused.
+    setAvailableAgentRefreshNonce((value) => value + 1);
+    setAvailableAgentRosterRefreshNonce((value) => value + 1);
+  }, [connectionEpoch, presenceVersion, selectedDeviceId]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    let cancelled = false;
+    void withTransientRemoteRetry(async () => {
+      await openLink(selectedDeviceId);
+      if (cancelled) return;
+      await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
+    }).catch(() => {
+      /* The existing roster fetch remains fail-open; the next focus/retry can resubscribe. */
+    });
+    return () => {
+      cancelled = true;
+      void unsubscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']).catch(() => undefined);
+    };
+  }, [openLink, selectedDeviceId, subscribe, unsubscribe]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    let cancelled = false;
+    void withTransientRemoteRetry(async () => {
+      await openLink(selectedDeviceId);
+      if (cancelled) return;
+      await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
+    }).catch(() => {
+      /* The mount-time owner remains held; the next connection/presence change retries. */
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionEpoch, openLink, presenceVersion, selectedDeviceId, subscribe]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    return onAgentsChanged((deviceId) => {
+      if (deviceId !== selectedDeviceId) return;
+      evictAgentCapabilitiesForDevice(deviceId);
+      setAvailableAgentRefreshNonce((value) => value + 1);
+      setAvailableAgentRosterRefreshNonce((value) => value + 1);
+    });
+  }, [onAgentsChanged, selectedDeviceId]);
 
   useEffect(() => {
     if (!selectedDeviceId || composerTrigger.kind !== 'slash') {

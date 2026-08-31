@@ -1,11 +1,12 @@
 import type { ServerResponse } from 'node:http';
 
 import { ChatSseTranslator } from './chat-sse-translator.js';
-import { translateResponsesRequestWithContext } from './translate-request.js';
+import { coalesceLeadingSystemMessages, translateResponsesRequestWithContext } from './translate-request.js';
 import {
   UnsupportedResponsesFeatureError,
   type ChatBridgeLogger,
   type ChatBridgeProviderConfig,
+  type ChatMessage,
   type ResponsesChatBridgeHandler,
   type ResponsesRequest,
 } from './types.js';
@@ -26,6 +27,28 @@ function classifyUpstreamErrorBody(text: string): 'empty' | 'json' | 'text' {
   } catch {
     return 'text';
   }
+}
+
+function isSystemMessageOrderError(status: number, text: string): boolean {
+  if (status !== 400) return false;
+  try {
+    const body: unknown = JSON.parse(text);
+    return isPlainObject(body)
+      && isPlainObject(body.error)
+      && typeof body.error.message === 'string'
+      && /^system message must be at the beginning\.?$/i.test(body.error.message.trim());
+  } catch {
+    return false;
+  }
+}
+
+/** Only retry a prefix merge; moving later instructions across a turn changes their scope. */
+function hasConsecutiveSystemPrefix(messages: ChatMessage[]): boolean {
+  let prefixLength = 0;
+  while (messages[prefixLength]?.role === 'system') prefixLength += 1;
+  return prefixLength > 1 && messages.every((message, index) => (
+    index < prefixLength || (message.role !== 'system' && message.role !== 'developer')
+  ));
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
@@ -235,8 +258,9 @@ export function createResponsesChatHandler(
       const abortUpstream = (): void => abort.abort();
       res.once('close', abortUpstream);
       let upstream: Response;
+      let upstreamErrorText: string | undefined;
       try {
-        upstream = await fetchImpl(upstreamUrl, {
+        const send = (): Promise<Response> => fetchImpl(upstreamUrl, {
           method: 'POST',
           headers: {
             ...providerHeaders,
@@ -246,6 +270,32 @@ export function createResponsesChatHandler(
           body: JSON.stringify(chatRequest),
           signal: abort.signal,
         });
+        upstream = await send();
+        if (!upstream.ok) {
+          upstreamErrorText = await readErrorText(upstream);
+          // Qwen can reject instructions + developer even before the first user (#3583).
+          // Retry only a precise pre-generation rejection, once and within this request.
+          // Explicit policies and native developer-role semantics remain authoritative.
+          if (
+            provider.capabilities?.systemMessagePolicy === undefined
+            && provider.capabilities?.developerRole !== 'developer'
+            && isSystemMessageOrderError(upstream.status, upstreamErrorText)
+            && !abort.signal.aborted
+            && hasConsecutiveSystemPrefix(chatRequest.messages)
+          ) {
+            const coalesced = coalesceLeadingSystemMessages(chatRequest.messages);
+            if (coalesced !== chatRequest.messages) {
+              chatRequest.messages = coalesced;
+              upstream = await send();
+              upstreamErrorText = upstream.ok ? undefined : await readErrorText(upstream);
+            }
+          }
+        }
+        if (abort.signal.aborted) {
+          res.off('close', abortUpstream);
+          void upstream.body?.cancel().catch(() => {});
+          return;
+        }
       } catch (error) {
         res.off('close', abortUpstream);
         if (abort.signal.aborted) return;
@@ -271,7 +321,7 @@ export function createResponsesChatHandler(
       };
 
       if (!upstream.ok || !upstream.body) {
-        const text = await readErrorText(upstream);
+        const text = upstreamErrorText ?? await readErrorText(upstream);
         log.warn?.('responses-chat bridge upstream error', {
           model: request.model,
           status: upstream.status,

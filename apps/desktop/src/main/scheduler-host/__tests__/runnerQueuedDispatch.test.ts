@@ -84,6 +84,8 @@ import {
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
+type SessionStatus = Parameters<Parameters<Session['onStatusChange']>[0]>[0];
+type MakerEventListener = Parameters<Maker['on']>[0];
 type SendImpl = (
   message: Parameters<Session['send']>[0],
   opts?: SessionSendOptions,
@@ -105,11 +107,14 @@ interface FakeSessionHarness {
   setVendorOptions: ReturnType<typeof vi.fn>;
   vendorOptions: Record<string, unknown>;
   emit(event: AgentEvent): void;
+  emitStatus(status: SessionStatus): void;
   listenerCount(): number;
+  statusListenerCount(): number;
 }
 
 function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
+  const statusListeners: Array<(status: SessionStatus) => void> = [];
   const send = vi.fn<SendImpl>(sendImpl);
   const setModel = vi.fn(
     async (_model: string, _opts?: { providerId?: string | null }) => undefined,
@@ -136,6 +141,13 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
         if (idx >= 0) listeners.splice(idx, 1);
       };
     },
+    onStatusChange(listener: (status: SessionStatus) => void) {
+      statusListeners.push(listener);
+      return () => {
+        const idx = statusListeners.indexOf(listener);
+        if (idx >= 0) statusListeners.splice(idx, 1);
+      };
+    },
     abort: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
   } as unknown as Session;
@@ -153,8 +165,14 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
       const emitted = { turnOrigin: SCHEDULER_TURN_ORIGIN, ...event };
       for (const listener of [...listeners]) listener(emitted);
     },
+    emitStatus(status: SessionStatus) {
+      for (const listener of [...statusListeners]) listener(status);
+    },
     listenerCount() {
       return listeners.length;
+    },
+    statusListenerCount() {
+      return statusListeners.length;
     },
   };
 }
@@ -318,9 +336,11 @@ function createRunnerHarness(
   const notifier: Notifier & { notify: ReturnType<typeof vi.fn> } = {
     notify: vi.fn(async () => undefined),
   };
+  let liveSession = session;
+  const makerListeners = new Set<MakerEventListener>();
   const maker = {
-    createSession: vi.fn(async () => session),
-    getSession: vi.fn(() => session),
+    createSession: vi.fn(async () => liveSession),
+    getSession: vi.fn(() => liveSession),
     getSessionMeta: vi.fn(async () => ({
       id: SESSION_ID,
       agentKind: 'claude-code',
@@ -332,6 +352,10 @@ function createRunnerHarness(
     })),
     isSessionAlive: vi.fn(() => true),
     closeSession: vi.fn(async () => undefined),
+    on: vi.fn((listener: MakerEventListener) => {
+      makerListeners.add(listener);
+      return () => makerListeners.delete(listener);
+    }),
     // issue #456:排队派发路径也按所选模型 efforts reconcile effort;测试经 availableModels 注入能力。
     getCapabilities: vi.fn((_agent: string) => ({ availableModels: opts.availableModels ?? [] })),
   } as unknown as Maker;
@@ -343,7 +367,21 @@ function createRunnerHarness(
     schedulerQueue,
     checkModelRoute: opts.checkModelRoute,
   });
-  return { runner, logger, notifier, maker };
+  return {
+    runner,
+    logger,
+    notifier,
+    maker,
+    replaceLiveSession(nextSession: Session) {
+      liveSession = nextSession;
+      for (const listener of [...makerListeners]) {
+        listener({ type: 'session:created', session: nextSession });
+      }
+    },
+    makerListenerCount() {
+      return makerListeners.size;
+    },
+  };
 }
 
 function latestNotifiedRun(notifier: Notifier & { notify: ReturnType<typeof vi.fn> }): ScheduleRun {
@@ -507,6 +545,110 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
   });
 
+  it("rebinds the same run to Maker's replacement Session while auto-resume still owns it", async () => {
+    vi.useFakeTimers();
+    try {
+      let autoResumePending = true;
+      const original = createSessionHarness(async () => ({ accepted: true }));
+      const replacement = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true, autoResumePending: () => autoResumePending });
+      const { runner, notifier, replaceLiveSession, makerListenerCount } = createRunnerHarness(
+        original.session,
+        queue.deps,
+      );
+
+      const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+      const settled = vi.fn();
+      void firePromise.then(
+        () => settled('resolved'),
+        () => settled('rejected'),
+      );
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      await queue.accept();
+
+      original.emit({
+        type: 'error',
+        data: { message: 'backend unreachable', isTerminal: true },
+        source: 'claude-code',
+      });
+      await Promise.resolve();
+      original.emitStatus('closed');
+      await Promise.resolve();
+
+      expect(settled).not.toHaveBeenCalled();
+      expect(original.listenerCount()).toBe(0);
+      expect(original.statusListenerCount()).toBe(0);
+      expect(makerListenerCount()).toBe(1);
+
+      // 真实 auto-resume 的最短退避远大于配对 done 窗口；替代 Session 由 Maker
+      // 用同一业务 id lazy rebuild，runner 只跟随既有生命周期。
+      await vi.advanceTimersByTimeAsync(251);
+      replaceLiveSession(replacement.session);
+      expect(replacement.listenerCount()).toBe(1);
+      expect(replacement.statusListenerCount()).toBe(1);
+
+      autoResumePending = false;
+      replacement.emit({
+        type: 'text',
+        data: { text: 'recovered result', isFinal: true },
+        source: 'claude-code',
+      });
+      replacement.emit({ type: 'done', data: {}, source: 'claude-code' });
+
+      await expect(firePromise).resolves.toMatchObject({
+        sessionId: SESSION_ID,
+        resultText: 'recovered result',
+      });
+      expect(latestNotifiedRun(notifier).status).toBe('success');
+      expect(replacement.listenerCount()).toBe(0);
+      expect(replacement.statusListenerCount()).toBe(0);
+      expect(makerListenerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still fails when the Session closes without an auto-resume claim', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => false });
+    const { runner, makerListenerCount } = createRunnerHarness(harness.session, queue.deps);
+
+    const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+    harness.emitStatus('closed');
+
+    await expect(firePromise).rejects.toThrow(
+      'scheduler session ended without a terminal event (closed)',
+    );
+    expect(harness.listenerCount()).toBe(0);
+    expect(harness.statusListenerCount()).toBe(0);
+    expect(makerListenerCount()).toBe(0);
+  });
+
+  it('lets the existing auto-resume failure signal settle a run after its Session closed', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => true });
+    const { runner, makerListenerCount } = createRunnerHarness(harness.session, queue.deps);
+
+    const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+    harness.emit({
+      type: 'error',
+      data: { message: 'backend unreachable', isTerminal: true },
+      source: 'claude-code',
+    });
+    await Promise.resolve();
+    harness.emitStatus('closed');
+    queue.failAutoResume();
+
+    await expect(firePromise).rejects.toThrow('scheduled task auto-resume failed');
+    expect(harness.listenerCount()).toBe(0);
+    expect(harness.statusListenerCount()).toBe(0);
+    expect(makerListenerCount()).toBe(0);
+  });
+
   it('ignores a delayed done while the same run still owns the auto-resume claim', async () => {
     vi.useFakeTimers();
     try {
@@ -602,6 +744,46 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       { sessionId: SESSION_ID, runId: 'run-q1' },
     ]);
     expect(harness.listenerCount()).toBe(0);
+  });
+
+  it('cancels recovery and aborts the replacement after an idle coordinator dispatch', async () => {
+    const original = createSessionHarness(async () => ({ accepted: true }));
+    const replacement = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({
+      busy: false,
+      acceptBeforeEnqueueResolves: true,
+      autoResumePending: () => true,
+    });
+    const { runner, replaceLiveSession } = createRunnerHarness(original.session, queue.deps);
+    const ctx = createFireContext();
+
+    const firePromise = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(original.listenerCount()).toBe(1));
+    expect(queue.enqueueCalls).toHaveLength(1);
+    expect(original.send).not.toHaveBeenCalled();
+    original.emit({
+      type: 'error',
+      data: { message: 'backend unreachable', isTerminal: true },
+      source: 'claude-code',
+    });
+    await Promise.resolve();
+    original.emitStatus('closed');
+    replaceLiveSession(replacement.session);
+    expect(replacement.listenerCount()).toBe(1);
+
+    ctx.abortController.abort();
+
+    await expect(firePromise).rejects.toThrow(/aborted/i);
+    expect(queue.cancelAutoResumeCalls).toEqual([
+      { sessionId: SESSION_ID, runId: 'run-q1' },
+    ]);
+    expect(
+      (replacement.session as unknown as { abort: ReturnType<typeof vi.fn> }).abort,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      (original.session as unknown as { abort: ReturnType<typeof vi.fn> }).abort,
+    ).not.toHaveBeenCalled();
+    expect(replacement.listenerCount()).toBe(0);
   });
 
   it('does not let the previous auto-resume claim hide a deterministic error from the resumed turn', async () => {

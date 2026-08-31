@@ -557,6 +557,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     withScheduler(async ({ storage, scheduler }) => ({
       runs: await storage.listSidebarIndexRuns(),
       inflightRunIds: scheduler.listInflightRunIds(),
+      inflightPolicies: scheduler.listInflightRunPolicies(),
     })),
   );
 

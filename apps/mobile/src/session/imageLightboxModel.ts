@@ -9,9 +9,16 @@ export const LIGHTBOX_MIN_SCALE = 1;
 export const LIGHTBOX_MAX_SCALE = 4;
 /** 双击放大的目标倍率(IM 惯例 2~3 倍之间)。 */
 export const LIGHTBOX_DOUBLE_TAP_SCALE = 2.5;
+/** 视为「已放大」的最小超出量,避免 1.0001 这种浮点噪声锁住翻页。 */
+export const LIGHTBOX_ZOOM_EPS = 0.01;
 /** 下滑关闭:位移超过此值(px)或速度超过 velocity 阈值即关闭。 */
 export const LIGHTBOX_DISMISS_DISTANCE = 120;
 export const LIGHTBOX_DISMISS_VELOCITY = 800;
+/**
+ * 单击关闭允许的最大位移(pt)。RNGH Tap 默认 maxDist 为无限(NAN 跳过校验),
+ * 与平移 Simultaneous 时,500ms 内的短拖松手会被当成单击,lightbox 直接关掉。
+ */
+export const LIGHTBOX_TAP_MAX_DISTANCE = 12;
 
 export function clampLightboxScale(scale: number): number {
   'worklet';
@@ -20,27 +27,183 @@ export function clampLightboxScale(scale: number): number {
   return scale;
 }
 
+export function isLightboxZoomed(scale: number): boolean {
+  'worklet';
+  return scale > LIGHTBOX_MIN_SCALE + LIGHTBOX_ZOOM_EPS;
+}
+
 /**
- * 放大后的平移钳制:图片(contain 适配后与容器同尺寸的逻辑框)按 scale 放大,
- * 超出容器的部分才允许平移;未超出的轴锁死在 0,防止把图拖出屏幕。
+ * contain 适配后的显示尺寸。自然尺寸未知时退回容器(按铺满估算,宁可少拖一点)。
+ * 与 annotationBaseRect 同源,但不返回 left/top——平移钳制只需要边长。
+ */
+export function lightboxContainedSize(
+  containerWidth: number,
+  containerHeight: number,
+  naturalWidth: number,
+  naturalHeight: number,
+): { width: number; height: number } {
+  'worklet';
+  if (containerWidth <= 0 || containerHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
+    return { width: containerWidth, height: containerHeight };
+  }
+  const fit = Math.min(containerWidth / naturalWidth, containerHeight / naturalHeight);
+  return { width: naturalWidth * fit, height: naturalHeight * fit };
+}
+
+/** 某轴允许的平移半幅:放大后的显示边超出容器的一半;未超出则为 0。 */
+export function lightboxPanOverflow(
+  containerSize: number,
+  displayedSize: number,
+  scale: number,
+): number {
+  'worklet';
+  const size = displayedSize <= 0 ? containerSize : displayedSize;
+  return Math.max(0, (size * scale - containerSize) / 2);
+}
+
+/**
+ * 放大后的平移钳制:图片按 contain 显示后再乘 scale,超出容器的部分才允许平移;
+ * 未超出的轴锁死在 0,防止把图拖出屏幕。displayedSize 缺省时按铺满容器估算
+ * (旧调用点 / 自然尺寸未到)。
  */
 export function clampLightboxTranslation(
   value: number,
   containerSize: number,
   scale: number,
+  displayedSize?: number,
 ): number {
   'worklet';
-  const overflow = Math.max(0, (containerSize * scale - containerSize) / 2);
+  const overflow = lightboxPanOverflow(
+    containerSize,
+    displayedSize == null ? containerSize : displayedSize,
+    scale,
+  );
   if (value < -overflow) return -overflow;
   if (value > overflow) return overflow;
   return value;
 }
 
-/** 下滑手势释放时是否应关闭(距离或甩动速度任一超阈值)。 */
-export function shouldDismissLightbox(translationY: number, velocityY: number): boolean {
+/**
+ * 显示尺寸变化后(自然尺寸到达 / 旋转)按新 contain 边界重钳位移。
+ * 未知尺寸按铺满容器估算,横图 onLoad 后高变小,旧位移必须立刻收回,
+ * 不能等下次拖动手才跳回边界。
+ */
+export function reclampLightboxPan(
+  translateX: number,
+  translateY: number,
+  containerWidth: number,
+  containerHeight: number,
+  scale: number,
+  displayedWidth: number,
+  displayedHeight: number,
+): { x: number; y: number } {
   'worklet';
+  return {
+    x: clampLightboxTranslation(translateX, containerWidth, scale, displayedWidth),
+    y: clampLightboxTranslation(translateY, containerHeight, scale, displayedHeight),
+  };
+}
+
+/** 捏合焦点相对容器中心,作为 scale 的 transform origin。 */
+export function lightboxPinchOrigin(focal: number, containerSize: number): number {
+  'worklet';
+  return focal - containerSize / 2;
+}
+
+/**
+ * 把 origin 缩放折进 translation,之后 origin 可归零而不跳变。
+ * p' = (p - origin) * scale + origin + translate
+ *    = p * scale + origin * (1 - scale) + translate
+ */
+export function bakeLightboxOrigin(translate: number, origin: number, scale: number): number {
+  'worklet';
+  return translate + origin * (1 - scale);
+}
+
+/**
+ * bake 的逆运算:已有缩放时再设 origin,从 translate 扣掉 origin*(1-scale),
+ * 画面公式不变。二次捏合若不补偿,imageStyle 会立刻加上 origin*(1-scale) 跳一下,
+ * 结束时 bake 还会把这次跳变写进位移。
+ */
+export function compensateLightboxOrigin(translate: number, origin: number, scale: number): number {
+  'worklet';
+  return translate - origin * (1 - scale);
+}
+
+/**
+ * 画面中心(bake 后)钳进 contain 边界,再补偿回带 origin 的 raw translate。
+ * origin≠0 时钳 raw 会让画面越出边界,松手 bake 再弹回。origin=0 时 bake/补偿
+ * 是恒等,与直接钳 translate 相同——浏览捏合与标注双指平移共用这一条。
+ */
+export function clampLightboxVisualPan(
+  translateX: number,
+  translateY: number,
+  originX: number,
+  originY: number,
+  containerWidth: number,
+  containerHeight: number,
+  scale: number,
+  displayedWidth: number,
+  displayedHeight: number,
+): { x: number; y: number } {
+  'worklet';
+  return {
+    x: compensateLightboxOrigin(
+      clampLightboxTranslation(
+        bakeLightboxOrigin(translateX, originX, scale),
+        containerWidth,
+        scale,
+        displayedWidth,
+      ),
+      originX,
+      scale,
+    ),
+    y: compensateLightboxOrigin(
+      clampLightboxTranslation(
+        bakeLightboxOrigin(translateY, originY, scale),
+        containerHeight,
+        scale,
+        displayedHeight,
+      ),
+      originY,
+      scale,
+    ),
+  };
+}
+
+/**
+ * 双击目标平移:点击点在缩放到 targetScale 后仍停在原处;缩回 1x 时归零。
+ */
+export function lightboxDoubleTapTranslate(
+  tap: number,
+  containerSize: number,
+  targetScale: number,
+): number {
+  'worklet';
+  if (!isLightboxZoomed(targetScale)) return 0;
+  return lightboxPinchOrigin(tap, containerSize) * (1 - targetScale);
+}
+
+/**
+ * 下滑手势释放时是否应关闭(距离或甩动速度任一超阈值)。
+ * 放大后一律不关:contain 横图即使 2.5x 也常无纵向溢出,同一记向下滑会被 Simultaneous
+ * 的关闭手势当成 dismiss;scale 必须参与判定,不能只靠手势 fail()。
+ */
+export function shouldDismissLightbox(
+  translationY: number,
+  velocityY: number,
+  scale: number = LIGHTBOX_MIN_SCALE,
+): boolean {
+  'worklet';
+  if (isLightboxZoomed(scale)) return false;
   return Math.abs(translationY) > LIGHTBOX_DISMISS_DISTANCE
     || Math.abs(velocityY) > LIGHTBOX_DISMISS_VELOCITY;
+}
+
+/** 单击是否关闭:仅 1x。放大时单击留给看图,避免和拖图/双击抢手势。 */
+export function shouldCloseLightboxOnTap(scale: number): boolean {
+  'worklet';
+  return !isLightboxZoomed(scale);
 }
 
 /** 下滑拖动中的背景不透明度:拖过半屏降到 0.3,跟手渐隐。 */
@@ -54,7 +217,7 @@ export function lightboxBackgroundOpacity(translationY: number, containerHeight:
 /** 双击在 1x 与放大倍率间切换。 */
 export function nextDoubleTapScale(currentScale: number): number {
   'worklet';
-  return currentScale > LIGHTBOX_MIN_SCALE + 0.01 ? LIGHTBOX_MIN_SCALE : LIGHTBOX_DOUBLE_TAP_SCALE;
+  return isLightboxZoomed(currentScale) ? LIGHTBOX_MIN_SCALE : LIGHTBOX_DOUBLE_TAP_SCALE;
 }
 
 /** 横向分页偏移 → 页索引(pagingEnabled 的 momentum end)。 */

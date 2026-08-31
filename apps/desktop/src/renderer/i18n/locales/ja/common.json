@@ -850,59 +850,59 @@
         "chatAttachmentsClearConfirmDescription": "メッセージ添付ファイルのキャッシュディレクトリ内のファイルだけを削除し、メッセージデータベースは参照しません。履歴内の一部の添付ファイルを開けなくなる場合があり、この操作は元に戻せません。",
         "chatAttachmentsClearConfirmButton": "添付ファイルキャッシュを削除",
         "chatAttachmentsCleared": "メッセージ添付ファイルのキャッシュをクリーンアップしました",
-          "chatAttachmentsClearFailed": "メッセージ添付ファイルのキャッシュをクリーンアップできませんでした。もう一度お試しください。",
-          "dbSlimmingBackupDirectoryDialogTitle": "データベースのクリーンアップ用バックアップ先を選択",
-          "dbSlimmingLabel": "データベースのクリーンアップ",
-          "dbSlimmingDescription": "選択した期間を超えて更新されていない論理削除済みおよびアーカイブ済みタスクの履歴をスキャンし、必要に応じてアクティブなタスクも対象に含めます。確認後に Cindy を再起動し、データベースを開く前に履歴を削除して圧縮します。ディスク上の添付ファイルや生成メディアは削除しません。",
-          "dbSlimmingScanButton": "データベースをスキャン",
-          "dbSlimmingScanLoading": "データベースをスキャンしています…",
-          "dbSlimmingScanResultTitle": "データベースのスキャン結果",
-          "dbSlimmingExecutionLoading": "データベースのクリーンアップを準備しています。Cindy はまもなく再起動します…",
-          "dbSlimmingArchiveAgeLabel": "最終更新から次の期間を超えたタスクを整理",
-          "dbSlimmingArchiveAgeOption7Days": "7 日",
-          "dbSlimmingArchiveAgeOption1": "1 か月",
-          "dbSlimmingArchiveAgeOption3": "3 か月",
-          "dbSlimmingArchiveAgeOption6": "6 か月",
-          "dbSlimmingIncludeActiveLabel": "アクティブなタスクの履歴も削除",
-          "dbSlimmingIncludeActiveDescription": "選択した期間を超えたアクティブなタスクの履歴もクリーンアップします",
-          "dbSlimmingIncludeActiveConfirmTitle": "アクティブなタスクもデータベースのクリーンアップ対象にしますか？",
-          "dbSlimmingIncludeActiveConfirmDescription": "選択した期間を超えたアクティブなタスクでも、まだ実行中の可能性があります。クリーンアップはタスクの停止を待たず、スキャン後に追加されたメッセージも削除される場合があります。有効にすると、選択した期間を超えて更新されていないアクティブ、アーカイブ済み、論理削除済みのタスクがクリーンアップされます。対象のアクティブなタスクの履歴と Agent コンテキストは削除されますが、タスク自体は残ります。データベースのバックアップではタスクとメッセージのデータを復元できます。バックアップを作成しない場合、それらのデータも復元できません。それらのメッセージによるファイル変更のレビューや元に戻す操作に使う記録はデータベースのバックアップに含まれず、復元できません。",
-          "dbSlimmingIncludeActiveConfirmButton": "アクティブなタスクを含める",
-          "dbSlimmingIncludeActiveCancelButton": "アクティブなタスクを残す",
-          "dbSlimmingBackupLabel": "クリーンアップ前にデータベースをバックアップ",
-          "dbSlimmingBackupDefaultLocation": "データベースのフォルダ（最新のクリーンアップ用バックアップのみ保持）",
-          "dbSlimmingUseDefaultDirectoryButton": "既定のフォルダを使用",
-          "dbSlimmingChooseDirectoryButton": "バックアップ先を選択",
-          "dbSlimmingBackupDirectoryFailed": "バックアップ先を選択できませんでした。もう一度お試しください。",
-          "dbSlimmingScanFailed": "データベースをスキャンできませんでした。もう一度お試しください。",
-          "dbSlimmingScheduleFailed": "データベースのクリーンアップを予約できませんでした。再スキャンしてお試しください。",
-          "dbSlimmingBackupMissing": "最新のクリーンアップ用バックアップが見つかりません。",
-          "dbSlimmingBackupOpenFailed": "クリーンアップ用バックアップの場所を開けませんでした。もう一度お試しください。",
-          "dbSlimmingReportTasks": "論理削除タスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件を削除します",
-          "dbSlimmingReportTasksWithActive": "アクティブなタスク {{active}} 件、論理削除済みタスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件をクリーンアップします",
-          "dbSlimmingReportMessages": "削除予定のメッセージ内容：{{count}} 件（約 {{size}}）",
-          "dbSlimmingReportSpace": "データベース {{database}}、必要な一時領域は最低 {{temporary}}、空き容量 {{free}}",
-          "dbSlimmingSpaceUnknown": "不明",
-          "dbSlimmingInsufficientSpace": "作業コピーを安全に作成してデータベースを圧縮するための空き容量がありません。",
-          "dbSlimmingConfirmButton": "データベースのクリーンアップを確認",
-          "dbSlimmingConfirmTitle": "再起動してデータベースをクリーンアップしますか？",
-          "dbSlimmingConfirmDescriptionWithBackup": "Cindy を正常に再起動し、次回起動時にデータベースを開く前にバックアップ、履歴削除、圧縮、整合性確認を行います。バックアップの書き込みと検証が完了するまでデータは削除しません。",
-          "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy を正常に再起動し、次回起動時にデータベースを開く前に履歴を削除して圧縮します。今回はバックアップを作成しないため、削除した履歴は復元できません。",
-          "dbSlimmingRestartButton": "再起動してデータベースをクリーンアップ",
-          "dbSlimmingResultCompleted": "{{tasks}} 件のタスクから {{messages}} 件のメッセージを削除し、データベースを {{size}} 縮小しました。",
-          "dbSlimmingOpenBackupButton": "クリーンアップ用バックアップを開く",
-          "dbSlimmingToastCompleted": "データベースのクリーンアップが完了し、{{size}} 解放しました",
-          "dbSlimmingHistoryCleared": "履歴は削除されました",
-          "dbSlimmingFailure": {
-            "backup-failed": "データベースのバックアップを作成または保持できなかったため、履歴は削除していません。",
-            "cleanup-failed": "データベースのクリーンアップは完了しませんでした。元のデータベースは変更されていません。",
-            "database-in-use": "別のインスタンスがデータベースを使用しているため、クリーンアップを実行しませんでした。",
-            "insufficient-space": "空き容量が不足しているため、データベースのクリーンアップを実行しませんでした。",
-            "integrity-check-failed": "整合性確認に失敗したため、元のデータベースを復元しました。",
-            "replacement-failed": "圧縮後のデータベースを配置できなかったため、元のデータベースを復元しました。",
-            "recovery-failed": "データベースの復元に失敗しました。元データを保護するため、Cindy はデータベースを開いていません。",
-            "unknown": "データベースのクリーンアップは完了しませんでした。もう一度お試しください。"
-          },
+        "chatAttachmentsClearFailed": "メッセージ添付ファイルのキャッシュをクリーンアップできませんでした。もう一度お試しください。",
+        "dbSlimmingBackupDirectoryDialogTitle": "データベースのクリーンアップ用バックアップ先を選択",
+        "dbSlimmingLabel": "データベースのクリーンアップ",
+        "dbSlimmingDescription": "選択した期間を超えて更新されていない論理削除済みおよびアーカイブ済みタスクの履歴をスキャンし、必要に応じてアクティブなタスクも対象に含めます。確認後に Cindy を再起動し、データベースを開く前に履歴を削除して圧縮します。ディスク上の添付ファイルや生成メディアは削除しません。",
+        "dbSlimmingScanButton": "データベースをスキャン",
+        "dbSlimmingScanLoading": "データベースをスキャンしています…",
+        "dbSlimmingScanResultTitle": "データベースのスキャン結果",
+        "dbSlimmingExecutionLoading": "データベースのクリーンアップを準備しています。Cindy はまもなく再起動します…",
+        "dbSlimmingArchiveAgeLabel": "最終更新から次の期間を超えたタスクを整理",
+        "dbSlimmingArchiveAgeOption7Days": "7 日",
+        "dbSlimmingArchiveAgeOption1": "1 か月",
+        "dbSlimmingArchiveAgeOption3": "3 か月",
+        "dbSlimmingArchiveAgeOption6": "6 か月",
+        "dbSlimmingIncludeActiveLabel": "アクティブなタスクの履歴も削除",
+        "dbSlimmingIncludeActiveDescription": "選択した期間を超えたアクティブなタスクの履歴もクリーンアップします",
+        "dbSlimmingIncludeActiveConfirmTitle": "アクティブなタスクもデータベースのクリーンアップ対象にしますか？",
+        "dbSlimmingIncludeActiveConfirmDescription": "選択した期間を超えたアクティブなタスクでも、まだ実行中の可能性があります。クリーンアップはタスクの停止を待たず、スキャン後に追加されたメッセージも削除される場合があります。有効にすると、選択した期間を超えて更新されていないアクティブ、アーカイブ済み、論理削除済みのタスクがクリーンアップされます。対象のアクティブなタスクの履歴と Agent コンテキストは削除されますが、タスク自体は残ります。データベースのバックアップではタスクとメッセージのデータを復元できます。バックアップを作成しない場合、それらのデータも復元できません。それらのメッセージによるファイル変更のレビューや元に戻す操作に使う記録はデータベースのバックアップに含まれず、復元できません。",
+        "dbSlimmingIncludeActiveConfirmButton": "アクティブなタスクを含める",
+        "dbSlimmingIncludeActiveCancelButton": "アクティブなタスクを残す",
+        "dbSlimmingBackupLabel": "クリーンアップ前にデータベースをバックアップ",
+        "dbSlimmingBackupDefaultLocation": "データベースのフォルダ（最新のクリーンアップ用バックアップのみ保持）",
+        "dbSlimmingUseDefaultDirectoryButton": "既定のフォルダを使用",
+        "dbSlimmingChooseDirectoryButton": "バックアップ先を選択",
+        "dbSlimmingBackupDirectoryFailed": "バックアップ先を選択できませんでした。もう一度お試しください。",
+        "dbSlimmingScanFailed": "データベースをスキャンできませんでした。もう一度お試しください。",
+        "dbSlimmingScheduleFailed": "データベースのクリーンアップを予約できませんでした。再スキャンしてお試しください。",
+        "dbSlimmingBackupMissing": "最新のクリーンアップ用バックアップが見つかりません。",
+        "dbSlimmingBackupOpenFailed": "クリーンアップ用バックアップの場所を開けませんでした。もう一度お試しください。",
+        "dbSlimmingReportTasks": "論理削除タスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件を削除します",
+        "dbSlimmingReportTasksWithActive": "アクティブなタスク {{active}} 件、論理削除済みタスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件をクリーンアップします",
+        "dbSlimmingReportMessages": "削除予定のメッセージ内容：{{count}} 件（約 {{size}}）",
+        "dbSlimmingReportSpace": "データベース {{database}}、必要な一時領域は最低 {{temporary}}、空き容量 {{free}}",
+        "dbSlimmingSpaceUnknown": "不明",
+        "dbSlimmingInsufficientSpace": "作業コピーを安全に作成してデータベースを圧縮するための空き容量がありません。",
+        "dbSlimmingConfirmButton": "データベースのクリーンアップを確認",
+        "dbSlimmingConfirmTitle": "再起動してデータベースをクリーンアップしますか？",
+        "dbSlimmingConfirmDescriptionWithBackup": "Cindy を正常に再起動し、次回起動時にデータベースを開く前にバックアップ、履歴削除、圧縮、整合性確認を行います。バックアップの書き込みと検証が完了するまでデータは削除しません。",
+        "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy を正常に再起動し、次回起動時にデータベースを開く前に履歴を削除して圧縮します。今回はバックアップを作成しないため、削除した履歴は復元できません。",
+        "dbSlimmingRestartButton": "再起動してデータベースをクリーンアップ",
+        "dbSlimmingResultCompleted": "{{tasks}} 件のタスクから {{messages}} 件のメッセージを削除し、データベースを {{size}} 縮小しました。",
+        "dbSlimmingOpenBackupButton": "クリーンアップ用バックアップを開く",
+        "dbSlimmingToastCompleted": "データベースのクリーンアップが完了し、{{size}} 解放しました",
+        "dbSlimmingHistoryCleared": "履歴は削除されました",
+        "dbSlimmingFailure": {
+          "backup-failed": "データベースのバックアップを作成または保持できなかったため、履歴は削除していません。",
+          "cleanup-failed": "データベースのクリーンアップは完了しませんでした。元のデータベースは変更されていません。",
+          "database-in-use": "別のインスタンスがデータベースを使用しているため、クリーンアップを実行しませんでした。",
+          "insufficient-space": "空き容量が不足しているため、データベースのクリーンアップを実行しませんでした。",
+          "integrity-check-failed": "整合性確認に失敗したため、元のデータベースを復元しました。",
+          "replacement-failed": "圧縮後のデータベースを配置できなかったため、元のデータベースを復元しました。",
+          "recovery-failed": "データベースの復元に失敗しました。元データを保護するため、Cindy はデータベースを開いていません。",
+          "unknown": "データベースのクリーンアップは完了しませんでした。もう一度お試しください。"
+        },
         "cleanupLabel": "ディスククリーンアップ",
         "cleanupDescription": "どのセッションからも参照されていないメディアファイル、上限を超えたキャッシュ、不要になったフォルダをスキャンします。まず件数を表示し、確認後にのみ削除します。入力欄の下書きや送信待ちメッセージ内の画像は自動的に保護されます。",
         "scanButton": "スキャン",
@@ -1458,6 +1458,8 @@
         "copyKeyFailed": "コピーに失敗しました。後でもう一度お試しください",
         "asset": {
           "viewUsage": "使用量を見る",
+          "buyPlan": "プランを購入",
+          "upgradePlan": "プランをアップグレード",
           "syncFailed": "認証情報の同期に失敗したため、残高を取得できません。保存済みのモデル設定には影響しません。"
         }
       },
@@ -2769,11 +2771,16 @@
     },
     "linkOpen": {
       "title": "リンクの開き方",
-      "description": "メッセージ内のリンクや HTML ファイルを左クリックしたときの既定の開き先です。",
-      "card": {
-        "label": "既定の開き先",
-        "description": "リンクを右クリックすると、その場でもう一方の開き方を選べます。",
-        "ariaLabel": "リンクの既定の開き先を選択"
+      "description": "メッセージ内のウェブやローカルのリンクを左クリックしたときの既定の開き先です。右クリックでその場でもう一方も選べます。",
+      "web": {
+        "label": "外部ウェブ",
+        "description": "インターネット上のウェブページです。",
+        "ariaLabel": "外部ウェブの既定の開き先を選択"
+      },
+      "local": {
+        "label": "内部ウェブ",
+        "description": "このコンピュータ上の HTML ファイルと、localhost アドレスです。",
+        "ariaLabel": "内部ウェブの既定の開き先を選択"
       },
       "options": {
         "sidebar": "サイドバーブラウザ",
@@ -2859,7 +2866,7 @@
       "installSectionDescription": "pi.dev ページのインストール元を貼り付けるか、npm パッケージ名、Git URL、ローカルの絶対パスを入力します。",
       "installedSectionTitle": "インストール済み",
       "sourcePlaceholder": "npm パッケージ、Git URL、ローカルの絶対パス",
-      "inspectionHint": "インストール時にリスクを一度だけ確認します。承認後、Cindy が拡張機能をインストールしてリソースを検査し、検査に成功した実行可能リソースを自動的に有効にします。",
+      "inspectionHint": "パッケージのインストールと読み込みは Pi のネイティブパッケージシステムが行います。Cindy の互換性詳細は参考情報であり、未知・未対応・解析失敗でもインストールや有効化を妨げません。",
       "install": "インストール",
       "update": "更新",
       "remove": "アンインストール",
@@ -2880,12 +2887,7 @@
       "loadFailed": "Pi 拡張機能を読み込めませんでした。接続を確認して再試行してください。",
       "retry": "再試行",
       "operationInProgress": "{{name}} を処理しています…",
-      "confirmTitle": "この Pi 拡張機能をインストールしますか？",
-      "confirmDescription": "{{source}} は第三者コードです。Cindy の Pi と同じプロセスで実行され、Pi がアクセスできるファイルや認証情報を読み取る可能性があります。インストール時に npm ライフサイクルスクリプトは実行しません。承認するとインストールされます。検査に成功した実行可能リソースは、互換性の制限が報告された場合でも自動的に有効になります。",
-      "confirmInstall": "リスクを理解してインストール",
       "updateConfirmTitle": "この Pi 拡張機能を更新しますか？",
-      "updateConfirmDescription": "{{source}} は新しいサードパーティ版をダウンロードし、インストール済みコードを置き換えます。更新時に npm ライフサイクルスクリプトは実行しません。コードは Pi と同じプロセスで実行され、ファイルや認証情報を読み取る可能性があります。承認すると更新されます。自分で無効にした拡張機能は無効のままになり、それ以外は検査に成功すると有効になります。",
-      "confirmUpdate": "リスクを理解して更新",
       "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
       "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
       "confirmUninstall": "アンインストール",
@@ -2930,30 +2932,29 @@
       "runtimeMismatch": "{{packageName}} には Pi {{range}} が必要ですが、Cindy は現在 {{currentVersion}} を使用しています。",
       "runtimeLegacyPackage": "{{packageName}} は Pi の旧ランタイム名前空間です。これを基にした拡張機能は、現在の Cindy Pi で読み込めない可能性があります。",
       "runtimeUnknown": "{{packageName}} には Pi {{range}} が必要ですが、現在の Cindy の Pi バージョンが要件を満たすか確認できませんでした。",
-      "compatibilityNoticeTitle": "互換性の確認結果",
-      "compatibilityNoticeDescription": "{{name}} のインストールまたは更新が完了しました。Cindy の検査結果を以下に表示します。有効状態は拡張機能一覧で確認でき、変更は新規または再起動した Pi タスクにだけ反映されます。",
-      "extensionApprovalTitle": "実行可能な拡張機能を有効にしますか？",
-      "extensionApprovalDescription": "有効にすると第三者の拡張機能は Pi と同じプロセスで動作し、モデルや API の認証情報を含む Pi が参照できるファイルと環境変数を読み取れます。Cindy は現在このアクセスを分離できません。完全に信頼するソースだけを有効にしてください。",
-      "parserDisclaimer": "これは静的な互換性チェックであり、セキュリティ監査ではありません。任意の第三者コードの完全な互換性を保証できません。",
-      "disableAfterInstall": "この拡張機能を無効にする",
-      "keepEnabled": "有効のまま使う",
-      "keepDisabled": "無効のままにする",
-      "approveAndEnable": "リスクを理解して有効にする",
-      "done": "完了",
       "warning": {
         "no-resources": "この拡張機能には Pi リソースが見つかりません。",
-        "inspection-failed": "拡張機能は登録されていますが、内容を確認できません。",
-        "inspection-limit": "拡張機能が安全な検査上限を超えたため、無効のままです。",
-        "unsupported-filter": "この拡張機能は Cindy がまだ安全に再現できない Pi リソースフィルターを使用しているため、無効のままです。",
-        "unsafe-source": "保存済みの配布元に認証情報または非公開の URL パラメーターが含まれています。Cindy は機密部分を隠して無効のままにし、アプリ内での更新と削除を禁止しました。",
-        "lifecycle-scripts-disabled": "この拡張機能にはインストールスクリプトがありますが、安全のため Cindy は実行していません。生成ファイルに依存する機能は動作しない可能性があります。"
+        "inspection-failed": "Cindy はインストール済み内容を検査できませんでしたが、それを理由に無効化しません。Pi がネイティブに処理します。",
+        "inspection-limit": "Cindy は詳細分析の上限で表示を停止しました。パッケージは Pi のネイティブローダーで引き続き利用できます。",
+        "unsupported-filter": "Cindy はこの Pi リソースフィルターをまだ表示できません。パッケージとフィルターは Pi がネイティブに処理します。",
+        "unsafe-source": "保存済みソースには認証情報または非公開 URL パラメーターが含まれています。Cindy はこの画面で機密項目だけを隠し、Pi のパッケージ動作はブロックしません。"
+      },
+      "failure": {
+        "sourceUnavailable": "ソースにアクセスできません。ネットワークまたは URL を確認するか、別のソースをお試しください。",
+        "packageNotFound": "パッケージが見つかりません。パッケージ名またはリポジトリ URL を確認してください。",
+        "versionNotFound": "そのバージョンが見つかりません。利用可能なバージョンを選んで再試行してください。",
+        "stateUnavailable": "Cindy は Pi 拡張機能の状態を読み取れませんでした。Cindy を再起動して再試行してください。",
+        "runtimeConvergencePartial": "Pi 拡張機能の変更は保存されましたが、一部のローカル Pi タスクが古い拡張機能を実行中の可能性があります。Pi を再び使用する前に Cindy を再起動してください。",
+        "nativeCommandFailed": "Pi のネイティブパッケージコマンドが失敗しました。ソースまたはバージョンを確認してください。"
       },
       "success": {
-        "install": "Pi 拡張機能をインストールしました。下の有効状態を確認してください。現在のタスクは変わりません。",
-        "installEnabled": "Pi 拡張機能をインストールして有効にしました。現在のタスクは変わりません。Pi タスクを新規作成または再起動すると使えます。",
-        "remove": "Pi 拡張機能を削除しました。現在のタスクは閉じるまで古い拡張機能を保持します。",
-        "update": "Pi 拡張機能を更新しました。現在のタスクは古いバージョンを保持します。新規作成または再起動後に反映されます。",
-        "set-enabled": "Pi 拡張機能の状態を保存しました。現在のタスクは変わりません。新規作成または再起動後に反映されます。"
+        "install": "Pi 拡張機能をインストールしました。実行中のローカル Pi タスクを停止しました。新しい Pi タスクで利用できます。",
+        "installEnabled": "Pi 拡張機能をインストールして有効にしました。実行中のローカル Pi タスクを停止しました。新しい Pi タスクで利用できます。",
+        "remove": "Pi 拡張機能を削除しました。ツールが実行され続けないよう、実行中のローカル Pi タスクを停止しました。",
+        "settingsRemove": "Pi 拡張機能を削除しました。ツールが実行され続けないよう、実行中のローカル Pi タスクを停止しました。",
+        "settingsDisable": "Pi 拡張機能を無効にしました。ツールが実行され続けないよう、実行中のローカル Pi タスクを停止しました。",
+        "update": "Pi 拡張機能を更新しました。実行中のローカル Pi タスクを停止しました。新しい Pi タスクで更新版を利用できます。",
+        "set-enabled": "Pi 拡張機能の状態を保存しました。実行中のローカル Pi タスクを停止しました。新しい Pi タスクで新しい状態が反映されます。"
       }
     },
     "computerUse": {
@@ -2974,10 +2975,30 @@
           "disabled": "ブラウザ自動操作を無効にしました",
           "toggleFailed": "ブラウザ自動操作の切り替えに失敗しました",
           "openedForLogin": "自動操作ブラウザを開きました。必要なサイトにログインしてください",
-          "openForLoginFailed": "ブラウザを開けませんでした"
+          "openForLoginFailed": "ブラウザを開けませんでした",
+          "foreignInstance": "別の Cindy が Agent 専用ブラウザを使用中です。先にそのウィンドウを終了してください。"
         },
         "openForLogin": "Agent 専用ブラウザを開く",
         "openForLoginHint": "これはエージェント専用の独立したブラウザです。お使いの Chrome を利用しますが、プロファイルは完全に独立しており（右上に「Cindy」と表示）、普段の Chrome のタブ・ブックマーク・ログイン状態には一切影響しません。エージェントはこのブラウザであなたの代わりにページを開き、読み、クリックし、スクリーンショットを撮ります。ログインが必要なサイトは、上の「Agent 専用ブラウザを開く」から一度ログインすれば、ログイン状態が保持され、以降はエージェントがあなたとして操作を続けられます。"
+      },
+      "realProfile": {
+        "title": "ブラウザのログイン状態を使う",
+        "description": "Chrome、Edge、Brave でログイン済みのアカウントとしてサイトを開きます。",
+        "toggleAria": "ブラウザのログイン状態を使う",
+        "unavailableEmbedded": "スタンドアロンの外部ブラウザでのみ利用できます。サイドバーの内蔵ブラウザは Chrome のログインファイルを読めません。",
+        "confirmTitle": "Agent にブラウザのログイン状態を使わせますか？",
+        "confirmDescription": "Agent はメール、クラウド、社内コンソールなど、すでにログインしているサイトであなたとして操作できます。いつでもオフにでき、コピーは削除されます。",
+        "confirmDescriptionMac": "Agent はメール、クラウド、社内コンソールなど、すでにログインしているサイトであなたとして操作できます。Chrome のログインファイルを読むには「フルディスクアクセス」も必要です。いつでもオフにでき、コピーは削除されます。",
+        "confirm": "ログイン状態を使う",
+        "readDeniedTitle": "フルディスクアクセスが必要です",
+        "readDeniedDescription": "Chrome のログインファイルを読むには、システムが Cindy を許可する必要があります。「プライバシーとセキュリティ → フルディスクアクセス」で Cindy をオンにしてから、もう一度お試しください。",
+        "openFullDiskAccess": "システム設定を開く",
+        "readDeniedLater": "あとで",
+        "toast": {
+          "enabled": "Agent 専用ブラウザが Chrome のログイン状態を使います",
+          "disabled": "コピーしたログインを削除し、隔離された Agent ブラウザに戻しました",
+          "failed": "ブラウザのログイン設定を更新できませんでした"
+        }
       },
       "browserBackend": {
         "title": "自動操作のブラウザ対象",
@@ -4164,6 +4185,92 @@
           "leftStick": "左スティック",
           "rightStick": "右スティック"
         },
+        "familyControls": {
+          "xbox": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Xbox",
+            "ls": "左スティック押し込み",
+            "rs": "右スティック押し込み",
+            "dpadUp": "十字キー上",
+            "dpadDown": "十字キー下",
+            "dpadLeft": "十字キー左",
+            "dpadRight": "十字キー右",
+            "leftStick": "左スティック",
+            "rightStick": "右スティック"
+          },
+          "playstation": {
+            "a": "✕",
+            "b": "○",
+            "x": "□",
+            "y": "△",
+            "lb": "L1",
+            "rb": "R1",
+            "lt": "L2",
+            "rt": "R2",
+            "view": "Create",
+            "menu": "Options",
+            "xbox": "PS",
+            "ls": "左スティック押し込み",
+            "rs": "右スティック押し込み",
+            "dpadUp": "十字キー上",
+            "dpadDown": "十字キー下",
+            "dpadLeft": "十字キー左",
+            "dpadRight": "十字キー右",
+            "leftStick": "左スティック",
+            "rightStick": "右スティック"
+          },
+          "nintendo": {
+            "a": "B",
+            "b": "A",
+            "x": "Y",
+            "y": "X",
+            "lb": "L",
+            "rb": "R",
+            "lt": "ZL",
+            "rt": "ZR",
+            "view": "−",
+            "menu": "+",
+            "xbox": "HOME",
+            "ls": "左スティック押し込み",
+            "rs": "右スティック押し込み",
+            "dpadUp": "十字キー上",
+            "dpadDown": "十字キー下",
+            "dpadLeft": "十字キー左",
+            "dpadRight": "十字キー右",
+            "leftStick": "左スティック",
+            "rightStick": "右スティック"
+          },
+          "generic": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "ホーム",
+            "ls": "左スティック押し込み",
+            "rs": "右スティック押し込み",
+            "dpadUp": "十字キー上",
+            "dpadDown": "十字キー下",
+            "dpadLeft": "十字キー左",
+            "dpadRight": "十字キー右",
+            "leftStick": "左スティック",
+            "rightStick": "右スティック"
+          }
+        },
         "actions": {
           "none": "未設定",
           "voice": "音声入力",
@@ -4206,6 +4313,57 @@
           "bluetooth": "Bluetooth",
           "battery": "{{percent}}%",
           "charging": "充電中 {{percent}}%"
+        }
+      },
+      "playstationGamepad": {
+        "title": "PlayStation コントローラー",
+        "openAria": "PlayStation コントローラー設定を開く",
+        "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
+        "connection": {
+          "toggle": { "aria": "Cindy が前面にあるとき PlayStation コントローラーを使う" },
+          "descriptions": {
+            "connecting": "Cindy は PlayStation コントローラーを探しています。",
+            "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
+            "disabled": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "present": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "not-detected": "USB または Bluetooth で DualSense または DualShock を接続してください。",
+            "error": "Cindy はコントローラーを読み取れず、再試行しています。",
+            "unavailable": "このコンピューターはまだ PlayStation コントローラーを読めません。"
+          }
+        }
+      },
+      "nintendoGamepad": {
+        "title": "Switch コントローラー",
+        "openAria": "Switch コントローラー設定を開く",
+        "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
+        "connection": {
+          "toggle": { "aria": "Cindy が前面にあるとき Switch コントローラーを使う" },
+          "descriptions": {
+            "connecting": "Cindy は Switch コントローラーを探しています。",
+            "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
+            "disabled": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "present": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "not-detected": "USB または Bluetooth で Switch Pro または Joy-Con を接続してください。",
+            "error": "Cindy はコントローラーを読み取れず、再試行しています。",
+            "unavailable": "このコンピューターはまだ Switch コントローラーを読めません。"
+          }
+        }
+      },
+      "genericGamepad": {
+        "title": "汎用コントローラー",
+        "openAria": "汎用コントローラー設定を開く",
+        "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
+        "connection": {
+          "toggle": { "aria": "Cindy が前面にあるとき汎用コントローラーを使う" },
+          "descriptions": {
+            "connecting": "Cindy はコントローラーを探しています。",
+            "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
+            "disabled": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "present": "有効にすると、Cindy が前面にあるときにコントローラーを受け付けます。",
+            "not-detected": "USB または Bluetooth でコントローラーを接続してください。",
+            "error": "Cindy はコントローラーを読み取れず、再試行しています。",
+            "unavailable": "このコンピューターはまだコントローラーを読めません。"
+          }
         }
       }
     },
@@ -4528,7 +4686,7 @@
         "fsWrite": "ファイルを書き込めます(作成/変更)",
         "fsWriteDetail": "専用データフォルダにはいつでも書き込めます。現在のセッションの作業ディレクトリへの書き込みはセッションの権限モードに従います(自動承認モードでは直接書き込み、逐次確認モードでは事前に承認を求めます)。それ以外のフォルダへの書き込みは毎回確認が必要です。ファイルは常にホストが代理で書き込み、プラグイン自体があなたのファイルシステムに直接アクセスすることはありません。",
         "libraryPersist": "永続ライブラリを使用可能(大量のファイルとデータベース)",
-        "libraryPersistDetail": "Cindy が管理する独立した保存領域を取得し、作品データ(キャンバス、画像、データベースなど)を保存します。通常のプラグインデータ割り当ての制限を受けません。ファイルとデータベースの操作はすべてホストが代行実行し、プラグインはライブラリ内の相対パスのみを使用して、他のファイルに触れることはできません。プラグインをアンインストールしてもこのデータは削除されず、削除には Cindy 設定での個別確認が必要です。",
+        "libraryPersistDetail": "Cindy が管理する独立した保存領域を取得し、作品データ(キャンバス、画像、データベースなど)を保存します。通常のプラグインデータ割り当ての制限を受けません。ファイルとデータベースの操作はすべてホストが代行実行し、プラグインはライブラリ内の相対パスのみを使用して、他のファイルに触れることはできません。ライブラリ内のファイルをシステムのフォルダで表示したり、システムの名前を付けて保存ダイアログを開いてコピー先を選ばせることもできます。キャンセルすれば何もコピーされません。プラグインをアンインストールしてもこのデータは削除されず、削除には Cindy 設定での個別確認が必要です。",
         "networkHost": "ネットワークドメイン {{host}} にアクセス",
         "networkSecret": "認証情報「{{name}}」の入力が必要",
         "networkSecretGhostInputDetail": "この資格情報はプラグイン自身の設定画面で入力を受け付けるため、入力時にはプラグインのページを経由します。その後ホストへ一度だけ渡されて暗号化保存され、保存後はプラグインから読み出せません。注入は宣言されたドメインへのリクエスト時のみホストが行います。",
@@ -4747,6 +4905,10 @@
       "pick": {
         "dialogTitle": "フォルダを選択",
         "dialogMessage": "プラグイン「{{name}}」がフォルダの選択を求めています"
+      },
+      "saveAs": {
+        "dialogTitle": "プラグイン「{{name}}」名前を付けて保存",
+        "dialogMessage": "プラグイン「{{name}}」がコピーの保存先選択を求めています"
       },
       "confirm": {
         "dialogTitle": "プラグイン「{{name}}」が確認を求めています"
@@ -7284,12 +7446,17 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT のログインが無効になりました",
-    "systemSharedInvalidated": "Cindy は現在、このコンピューターの ChatGPT ログインを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
+    "systemSharedInvalidated": "Cindy はこのコンピューターの ChatGPT ログインを使用しています。まず ChatGPT App でログインを復旧してください。別の認証情報を作成したり、このコンピューターをログアウトさせたりせずに済みます。",
     "instanceIsolatedInvalidated": "Cindy は現在、個別にログインした ChatGPT アカウントを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
     "unknownInvalidated": "Cindy の現在の ChatGPT ログインは無効になりました。再度ログインしてから、再試行してください。",
     "recovered": "ChatGPT ログインが復旧しました。再試行してください。",
     "openApp": "ChatGPT App を開く",
     "relogin": "ChatGPT に再ログイン",
+    "reloginRiskTitle": "それでも Cindy から再ログインしますか？",
+    "reloginRiskDescription": "新しい OpenAI OAuth 認証が作成され、このコンピューターの ChatGPT App と Codex CLI が直ちにログアウトする可能性があります。完了後、それらのアプリでもう一度ログインする必要があります。",
+    "reloginRiskConfirm": "リスクを承知して続行",
+    "devWriteBlocked": "開発環境は既定で、このコンピューターの ChatGPT ログインを読み取り専用で共有するため、OAuth の開始や認証情報の変更はできません。OAuth をテストする場合は、隔離サンドボックスで XDT_ALLOW_DEV_OAUTH_WRITE=1 を明示的に設定してください。",
+    "devReadOnly": "開発環境では読み取り専用",
     "checking": "確認中…",
     "recheck": "再確認",
     "later": "後で",
@@ -8038,7 +8205,13 @@
       "showLess": "折りたたむ",
       "artifactLabel": "成果物",
       "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
-      "summary": { "pages": "{{count}} ページ", "slides": "{{count}} 枚のスライド", "sheets": "{{count}} シート", "rows": "{{count}} 行", "bytes": "{{count}}" }
+      "summary": {
+        "pages": "{{count}} ページ",
+        "slides": "{{count}} 枚のスライド",
+        "sheets": "{{count}} シート",
+        "rows": "{{count}} 行",
+        "bytes": "{{count}}"
+      }
     },
     "turnChanges": {
       "title": "{{count}} ファイルを変更",
@@ -9699,7 +9872,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "{{appName}} にフィードバックを送りたいです。情報が揃った明確な GitHub issue にまとめるのを手伝ってください:バグか機能要望かを確認し、不足または曖昧な点だけを質問してください。ユーザーが示した発言や例は既定で要約・一般化し、個人、会話、業務を特定できる情報をそのまま転載しないでください。バグでは現象、再現手順、期待する動作と実際の動作、再現頻度、試した対処をできるだけ確認し、ユーザーの同意がある場合だけ個人情報を除いた診断の要約を含めてください。パスワード、トークン、メールアドレス、個人パス、無関係なファイル内容は含めないでください。機能要望では利用シーン、現在の困りごと、期待する結果を確認してください。情報が揃ったら cindy_helper の call_tool で submit_github_issue ツールを呼び出して提出してください(category=feedback。先に list_tools でパラメータを確認できます。提出前に確認カードが表示されます)。GitHub プラグインやアカウントの設定は不要です。既定では Cindy 公式 Bot が送信し、利用可能な GitHub アカウントがある場合のみ確認カードに追加の送信元として表示されます。作成後は issue 番号とリンクを伝え、Cindy がオープンソースであること、ソースから再現・修正・テスト・機能開発を一緒に進められることを案内してください。提出に失敗した場合は、理由をそのまま教えてください。{{details}}",
+      "instruction": "{{appName}} にフィードバックを送りたいです。明確な GitHub issue にまとめるのを手伝ってください:バグか要望かを見極め、足りないことだけを聞いてください。決まった質問票は使わないでください。通常の要望に欠陥のチェックリストを当てはめず、実行環境と無関係なら Harness、モデル、推論強度は尋ねないでください。ユーザーが示した発言や例は既定で要約・一般化し、個人、会話、業務を特定できる情報をそのまま転載しないでください。このチャットの画像は GitHub にアップロードされないので、「スクリーンショットを添付済み」と書かず、画像の内容を文章で説明してください。ユーザーの同意がある場合だけ個人情報を除いた診断の要約を含めてください。パスワード、トークン、メールアドレス、個人パス、無関係なファイル内容は含めないでください。機能要望では見える利用シーンと要望を書き、求められない限りリポジトリパス、実装案、受け入れ条件は書かないでください。情報が揃ったら cindy_helper の call_tool で submit_github_issue ツールを呼び出して提出してください(category=feedback。先に list_tools でパラメータを確認できます。提出前に確認カードが表示されます)。GitHub プラグインやアカウントの設定は不要です。既定では Cindy 公式 Bot が送信し、利用可能な GitHub アカウントがある場合のみ確認カードに追加の送信元として表示されます。作成後は issue 番号とリンクを伝え、Cindy がオープンソースであること、ソースから再現・修正・テスト・機能開発を一緒に進められることを案内してください。提出に失敗した場合は、理由をそのまま教えてください。{{details}}",
       "detailsPrefix": "\n最初の説明:{{details}}"
     },
     "confirm": {
@@ -9719,8 +9892,8 @@
       "publicNameHint": "この署名は Issue 本文に公開表示されます",
       "anonymous": "匿名",
       "useAnonymous": "匿名の署名を使用",
-      "envLine": "送信時に自動で付加されます:クライアント {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 表示言語 {{uiLanguage}}",
-      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}",
+      "envLine": "送信クライアント環境（送信時に自動で付加）:クライアント {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 表示言語 {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（このセッション）",
       "regionLine": "リージョン:{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -10398,7 +10571,12 @@
       "codexHistoryOversizedRemote": "履歴に過大な画像があり、リモート圧縮を完了できません。Codex を実行している端末でこのタスクを開いて再送信してください。Cindy が画像を省略して続けます。",
       "codexCompactionNotConverging": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。容量を占めているのは会話ではなく、圧縮では削れないシステムプロンプトとツール定義であることがほとんどです。新しいセッションを開始してください。",
       "codexCompactionNotConvergingModelSwitch": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。このセッションは途中でモデルを切り替えており、Codex は切り替え前のモデルの上限でコンテキストを判定し続けています。元のモデルに戻すか、新しいセッションを開始してください。",
-      "turnNoEventTimeout": "このターンは長時間まったく進展がなかったため（モデル・ツール・バックグラウンド処理のすべてが無反応）、無限待機を避けるため自動中断しました。次のメッセージを送信して続行できます。"
+      "turnNoEventTimeout": "このターンは長時間まったく進展がなかったため（モデル・ツール・バックグラウンド処理のすべてが無反応）、無限待機を避けるため自動中断しました。次のメッセージを送信して続行できます。",
+      "toolUseLoopDetected": "モデルがツール呼び出しを繰り返したため、無限ループを防ぐためこのターンを停止しました。新しいメッセージを送信して続行できます。",
+      "toolUseLoopDetectedWithCount": "モデルが無効なツール呼び出しを繰り返したため、無限ループを防ぐために {{count}} 回の失敗後にこのターンを停止しました。新しいメッセージを送信して続行できます。",
+      "toolUseLoopDetectedConsecutiveWithCount": "モデルが同じツール呼び出しを {{count}} 回繰り返したため、無限ループを防ぐためこのターンを停止しました。新しいメッセージを送信して続行できます。",
+      "toolUseLoopDetectedPingPongWithCount": "モデルがツール呼び出しの間を行き来するループを続けたため、このターンで {{count}} 回の呼び出しを検出した時点で停止しました。新しいメッセージを送信して続行できます。",
+      "toolUseLoopDetectedRotationWithCount": "モデルが複数のツール呼び出しを順番に繰り返したため、このターンで {{count}} 回の呼び出しを検出した時点で停止しました。新しいメッセージを送信して続行できます。"
     },
     "validation": {
       "feishuFieldsRequired": "App ID と App Secret の両方を入力してください",
@@ -10537,7 +10715,7 @@
   "extraDirs": {
     "menuAria": "操作メニュー",
     "tooltipEmpty": "その他の操作",
-    "tooltipCount": "参照ディレクトリ {{count}} 件",
+    "tooltipCount": "追加ディレクトリ {{count}} 件",
     "addFiles": "ファイル、画像、動画を追加…",
     "pluginsTitle": "インストール済みプラグイン",
     "pluginDisabled": "無効",
@@ -10546,10 +10724,16 @@
     "sectionTitle": "参照ディレクトリ(読み取り専用)",
     "empty": "参照ディレクトリはまだありません",
     "add": "ディレクトリを追加…",
+    "addReadOnly": "読み取り専用ディレクトリを追加…",
+    "addWritable": "読み書き可能なディレクトリを追加…",
+    "writableSectionTitle": "読み書き可能なディレクトリ",
+    "writableEmpty": "読み書き可能なディレクトリはまだありません",
     "atLimit": "上限 {{max}} 件に達しました",
     "remove": "{{name}} を削除",
     "parentConfirmTitle": "親ディレクトリを追加しますか？",
     "parentConfirmDescription": "選択したディレクトリは、現在の作業ディレクトリの親または祖先です。Agent が作業ディレクトリ外の内容も参照できるようになり、表示範囲が広がります。\n\nそれでも追加しますか？\n\n{{path}}",
+    "writableParentConfirmTitle": "親ディレクトリの読み書きを許可しますか？",
+    "writableParentConfirmDescription": "選択したディレクトリは、現在の作業ディレクトリの親または祖先です。Agent はその中のファイルを読み取り、作成、変更、削除できるようになります。\n\nそれでも許可しますか？\n\n{{path}}",
     "parentConfirmAccept": "追加する",
     "parentConfirmCancel": "キャンセル"
   },

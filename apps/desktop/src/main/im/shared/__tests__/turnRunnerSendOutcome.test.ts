@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
     error: vi.fn(),
     debug: vi.fn(),
   },
+  releaseFinalReplyMirror: vi.fn(),
   feishuIm: {
     reactToMessage: vi.fn(),
     removeMessageReaction: vi.fn(),
@@ -40,6 +41,8 @@ const mocks = vi.hoisted(() => ({
     consumePendingOpenerCard: vi.fn(),
     getPendingOpenerTrigger: vi.fn(),
     takeNotedFallbackOpenerId: vi.fn(),
+    retainFinalReplyMirror: vi.fn(),
+    mirrorFinalReply: vi.fn(),
   },
   getMaker: vi.fn(),
   listProviders: vi.fn(),
@@ -377,6 +380,7 @@ function setupSession(sendImpl: Parameters<typeof createSessionHarness>[0]): Ses
 
 function setupAttachedSession(
   sendImpl: Parameters<typeof createSessionHarness>[0],
+  options: { remoteHostId?: string | null } = {},
 ): SessionHarness {
   const sessionId = 'desktop-attached-session';
   const h = createSessionHarness(sendImpl, sessionId);
@@ -391,6 +395,7 @@ function setupAttachedSession(
       permissionMode: 'bypassPermissions',
       fastMode: false,
       sdkSessionId: null,
+      remoteHostId: options.remoteHostId ?? null,
       providerId: null,
     },
   ]);
@@ -427,6 +432,12 @@ interface TurnOverrides {
   groupHistoryAccess?: GroupHistoryAccessScope;
   prePersistedUserMessage?: { sessionId: string; clientId: string };
   onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
+  finalReplyMirror?: {
+    kind: 'parent-chat';
+    chatId: string;
+    idempotencyKey: string;
+    accountEpoch: number;
+  };
 }
 
 async function runDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrides = {}) {
@@ -451,6 +462,7 @@ async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrid
       ? { prePersistedUserMessage: overrides.prePersistedUserMessage }
       : {}),
     ...(overrides.onEarlyReject ? { onEarlyReject: overrides.onEarlyReject } : {}),
+    ...(overrides.finalReplyMirror ? { finalReplyMirror: overrides.finalReplyMirror } : {}),
   });
   return { onTurnComplete, turnPromise };
 }
@@ -555,6 +567,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
     mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue(undefined);
     mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue(undefined);
+    mocks.feishuIm.retainFinalReplyMirror.mockReturnValue(mocks.releaseFinalReplyMirror);
     mocks.feishuIm.startStreamingText.mockResolvedValue({
       messageId: 'stream-1',
       append: vi.fn(),
@@ -1787,6 +1800,32 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
   });
 
+  it('mirrors credential-busy early reject onto the parent-chat dual-delivery target', async () => {
+    const busy = new CredentialModeSwitchBusyError(['busy-session']);
+    mocks.getMaker.mockReturnValue(createMakerCreateSessionFailureHarness(busy));
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-busy',
+    };
+
+    await runDefaultTurn(vi.fn(), { finalReplyMirror: mirror });
+    await flushMicrotasks();
+
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', ui.agent.credentialBusy, {
+      threadTs: undefined,
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(
+      {
+        ...mirror,
+        allowedFileRoots: ['F:\\XDMaker'],
+        pinnedFileRoots: [],
+      },
+      ui.agent.credentialBusy,
+    );
+  });
+
   it('queues a second message while the first turn is running and dispatches it after done', async () => {
     mocks.feishuIm.reactToMessage.mockImplementation(
       async (messageId: string) => `reaction-${messageId}`,
@@ -1859,6 +1898,36 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       'msg-second',
       'reaction-msg-second',
     );
+  });
+
+  it('releases mirror retention when a queued turn is dropped by stop', async () => {
+    setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn(vi.fn(), { userMessageId: 'msg-first' });
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-queued-stop',
+    };
+
+    await runDefaultTurn(vi.fn(), {
+      userMessageId: 'msg-second',
+      finalReplyMirror: mirror,
+    });
+    expect(mocks.feishuIm.retainFinalReplyMirror).toHaveBeenCalledWith({
+      ...mirror,
+      allowedFileRoots: ['F:\\XDMaker'],
+      pinnedFileRoots: [],
+    });
+    expect(mocks.releaseFinalReplyMirror).not.toHaveBeenCalled();
+
+    await expect(
+      getRunner().stopActiveTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+      }),
+    ).resolves.toMatchObject({ stopped: true, droppedQueued: 1 });
+    expect(mocks.releaseFinalReplyMirror).toHaveBeenCalledTimes(1);
   });
 
   it('queues while a desktop-originated turn is running (attached takeover) and dispatches on its stray done', async () => {
@@ -2628,6 +2697,301 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       }),
       { threadTs: undefined },
     );
+  });
+
+  it('mirrors missing-auth early reject onto the parent-chat dual-delivery target', async () => {
+    mocks.readXdGatewayApiKey.mockReturnValue(null);
+    mocks.findActiveSession.mockResolvedValue(null);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-auth',
+    };
+    const expected = ui.agent.authMissing?.({
+      agentKind: 'claude-code',
+      model: 'claude-opus-4-7',
+      providerId: 'xd',
+      providerLabel: 'XD',
+      missing: 'gateway-key',
+    });
+
+    await runDefaultTurn(vi.fn(), { finalReplyMirror: mirror });
+
+    expect(mocks.createSession).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', expected, {
+      threadTs: undefined,
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).toHaveBeenCalledWith(mirror, expected);
+  });
+
+  it('arms only the true terminal finalize with the parent-chat mirror', async () => {
+    const handle = {
+      messageId: 'stream-terminal',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-stream-done',
+    };
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    expect(mocks.feishuIm.retainFinalReplyMirror).toHaveBeenCalledWith({
+      ...mirror,
+      allowedFileRoots: ['F:\\XDMaker'],
+      pinnedFileRoots: [],
+    });
+    expect(mocks.releaseFinalReplyMirror).not.toHaveBeenCalled();
+
+    h.emit({ type: 'text', data: { text: 'final answer', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledWith('ou_user', undefined, {
+      threadTs: undefined,
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    expect(handle.finalize).toHaveBeenCalledWith(expect.stringContaining('final answer'), {
+      finalReplyMirror: {
+        ...mirror,
+        allowedFileRoots: ['F:\\XDMaker'],
+        pinnedFileRoots: [],
+      },
+    });
+    expect(mocks.releaseFinalReplyMirror).toHaveBeenCalledTimes(1);
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+  });
+
+  it('supplies the parent-chat mirror only at terminal finalize so files reuse the upload key', async () => {
+    const handle = {
+      messageId: 'stream-armed',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-armed',
+    };
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({ type: 'text', data: { text: 'see the file', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    });
+    expect(handle.finalize).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    expect(handle.finalize).toHaveBeenCalledWith(expect.stringContaining('see the file'), {
+      finalReplyMirror: {
+        ...mirror,
+        allowedFileRoots: ['F:\\XDMaker'],
+        pinnedFileRoots: [],
+      },
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+  });
+
+  it('mirrors side-channel tool images onto the parent-chat even when the final text omits them', async () => {
+    const extraAbsPath = 'C:\\cindy-media\\tool-extra.png';
+    mocks.resolveXdtImageUrl.mockReturnValue({ absPath: extraAbsPath });
+    const handle = {
+      messageId: 'stream-extra-image',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+      addExtraImageAbsPath: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-extra-image',
+    };
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({
+      type: 'tool_result_full',
+      data: {
+        fullText: JSON.stringify({ xdt_image_url: 'xdt-image://blob/tool-extra.png' }),
+      },
+    });
+    h.emit({ type: 'text', data: { text: 'here is the image', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalled();
+    });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    expect(handle.addExtraImageAbsPath).toHaveBeenCalledWith(extraAbsPath);
+    expect(handle.finalize).toHaveBeenCalledWith(
+      expect.stringContaining('here is the image'),
+      {
+        finalReplyMirror: {
+          ...mirror,
+          allowedFileRoots: ['F:\\XDMaker'],
+          pinnedFileRoots: [],
+        },
+      },
+    );
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+
+  });
+
+  it('never treats SSH workdir or media paths as local parent-chat files', async () => {
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-remote-safe',
+    };
+    const h = setupAttachedSession(async () => ({ accepted: true }), {
+      remoteHostId: 'ssh-host-1',
+    });
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({
+      type: 'tool_result_full',
+      data: {
+        fullText: JSON.stringify({ xdt_image_url: 'xdt-image:///remote/project/tool.png' }),
+      },
+    });
+    h.emit({ type: 'text', data: { text: 'remote final', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
+    expect(mocks.materializeLocalMarkdownImages).not.toHaveBeenCalled();
+    const handle = await mocks.feishuIm.startStreamingText.mock.results[0].value;
+    expect(handle.finalize).toHaveBeenCalledWith(expect.stringContaining('remote final'), {
+      finalReplyMirror: {
+        ...mirror,
+        allowedFileRoots: [],
+        pinnedFileRoots: [],
+      },
+    });
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+  });
+
+  it('defers parent-chat mirroring across an in-turn permission card until the turn completes', async () => {
+    const firstHandle = {
+      messageId: 'stream-pre',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    const secondHandle = {
+      messageId: 'stream-post',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText
+      .mockResolvedValueOnce(firstHandle)
+      .mockResolvedValueOnce(secondHandle);
+    mocks.buildPermissionCard.mockReturnValue({
+      title: 'allow bash?',
+      body: 'run bash',
+      buttons: [{ id: 'allow', label: 'Allow' }],
+    });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'perm-card' });
+    const permissionGate = deferred<InteractionDecision>();
+    mocks.registerPending.mockReturnValue(permissionGate.promise);
+    const mirror = {
+      kind: 'parent-chat' as const,
+      chatId: 'oc_group',
+      accountEpoch: 1,
+      idempotencyKey: 'mirror-interact',
+    };
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete, { finalReplyMirror: mirror });
+
+    h.emit({ type: 'text', data: { text: 'I will run bash', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledWith('ou_user', undefined, {
+      threadTs: undefined,
+    });
+
+    const interactionPromise = h.dispatchInteraction({
+      kind: 'permission',
+      requestId: 'req-perm',
+      toolName: 'bash',
+      input: { command: 'ls' },
+    });
+    await waitForAssertion(() => {
+      expect(firstHandle.finalize).toHaveBeenCalled();
+      expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalled();
+    });
+    expect(firstHandle.finalize).toHaveBeenCalledWith(expect.stringContaining('I will run bash'));
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
+
+    permissionGate.resolve({ kind: 'permission', behavior: 'allow' });
+    await expect(interactionPromise).resolves.toEqual({
+      kind: 'permission',
+      behavior: 'allow',
+    });
+
+    h.emit({ type: 'text', data: { text: 'command finished: ok', isFinal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(2);
+    });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(secondHandle.finalize).toHaveBeenCalled();
+    });
+    expect(secondHandle.finalize).toHaveBeenCalledWith(
+      expect.stringContaining('command finished: ok'),
+      {
+        finalReplyMirror: {
+          ...mirror,
+          allowedFileRoots: ['F:\\XDMaker'],
+          pinnedFileRoots: [],
+        },
+      },
+    );
+    expect(String(secondHandle.finalize.mock.calls[0][0])).not.toContain('I will run bash');
+    expect(mocks.feishuIm.mirrorFinalReply).not.toHaveBeenCalled();
   });
 
   it('does not report route resolution before auth passes on an existing route', async () => {

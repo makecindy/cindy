@@ -242,6 +242,35 @@ describe('buildClaudeEnv', () => {
     });
   });
 
+  it('大写 [1M] 后缀不再镜像出 [1M][1m] 垃圾键 (#3661)', async () => {
+    const env = await buildClaudeEnv(createAuthAdapter(), {}, {
+      modelContextWindows: [
+        { id: 'claude-opus-4-6[1M]', contextWindow: 1_000_000 },
+      ],
+    });
+
+    expect(JSON.parse(env[MODEL_CONTEXT_WINDOWS_ENV] ?? '{}')).toEqual({
+      'claude-opus-4-6[1M]': 1_000_000,
+    });
+  });
+
+  it('mirrorOneMillionSuffix=false 的条目只写原样键,不镜像 [1m] (#3661)', async () => {
+    // claude-* 的 [1m] 是真实 1M 通道,不是同窗口路由别名:按会话路由注入的
+    // 中转站窗口若被镜像,会把 200K 压到 Fast 切换后的 [1m] 形态上。
+    const env = await buildClaudeEnv(createAuthAdapter(), {}, {
+      modelContextWindows: [
+        { id: 'claude-opus-4-6', contextWindow: 1_000_000, mirrorOneMillionSuffix: false },
+        { id: 'deepseek/deepseek-v4-pro', contextWindow: 1_048_576 },
+      ],
+    });
+
+    expect(JSON.parse(env[MODEL_CONTEXT_WINDOWS_ENV] ?? '{}')).toEqual({
+      'claude-opus-4-6': 1_000_000,
+      'deepseek/deepseek-v4-pro': 1_048_576,
+      'deepseek/deepseek-v4-pro[1m]': 1_048_576,
+    });
+  });
+
   it('does not inject empty or invalid context windows', async () => {
     const env = await buildClaudeEnv(createAuthAdapter(), {}, {
       modelContextWindows: [

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -141,6 +141,14 @@ async function freshCodexProxyHost() {
   mockState.resetCapturedRegistry();
   return import('../codex-proxy-host.js');
 }
+
+// CI 忙时本文件首次 import SUT 要付 Vitest transform 整个模块图的冷启动钱:Linux 分片
+// 实测超默认 5s,Windows 分片超 15s,继续抬单测超时只是把死亡线后推。这笔成本属于环境
+// 冷启动,不属于任何断言 —— 文件级 beforeAll 先把模块图焐热(hook 超时独立计),之后各
+// 用例里 resetModules + import 只剩模块求值开销,回到默认超时内。
+beforeAll(async () => {
+  await import('../codex-proxy-host.js');
+}, 60_000);
 
 describe('withCodexUpstreamRecording', () => {
   const DEFAULT_UPSTREAM = 'https://gateway.example/v1';
@@ -654,6 +662,30 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   ])('enables image_url for Kimi Code coding-plan route: %s / %s (#2732)', async (upstream, model) => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+  });
+
+  it.each([
+    ['cindy-local-ollama', 'http://127.0.0.1:11434/v1'],
+    ['my-custom-ollama', 'http://127.0.0.1:11434/v1'],
+    ['my-custom-ollama', 'http://localhost:8080/v1'],
+    ['my-custom-lmstudio', 'http://[::1]:1234/v1'],
+  ])('coalesces leading system for loopback chat upstreams: %s / %s (#3531)', async (providerId, upstream) => {
+    // 本地模板运行器(Qwen3 系 Jinja 模板)硬校验 system 在首,消息中段的
+    // system/developer 直接 500;回环上游一律 coalesce,不再限 Qwen3.8 白名单。
+    const { chatBridgeSystemMessagePolicyForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeSystemMessagePolicyForRoute(providerId, upstream)).toBe('coalesce-leading');
+  });
+
+  it.each([
+    // 远程供应商保持 preserve 缺省:coalesce 会把 developer 并成 system,对
+    // 原生区分 developer 的云端兼容层是语义变更。127.example.com 是合法公网
+    // 域名,不得按前缀误判为 loopback。
+    ['my-custom-remote', 'https://api.example.com/v1'],
+    ['my-custom-remote', 'https://127.example.com/v1'],
+    ['my-custom-remote', 'not-a-url'],
+  ])('keeps preserve for non-loopback chat upstreams: %s / %s (#3531)', async (providerId, upstream) => {
+    const { chatBridgeSystemMessagePolicyForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeSystemMessagePolicyForRoute(providerId, upstream)).toBeUndefined();
   });
 
   it.each([

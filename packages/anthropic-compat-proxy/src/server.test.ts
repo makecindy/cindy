@@ -1078,6 +1078,221 @@ describe('anthropic-compat-proxy routingTransform', () => {
     expect(custom.paths).toHaveLength(0);
   });
 
+  it('revalidateBeforeDispatch can divert a localHandler after routingTransform', async () => {
+    let innerRan = false;
+    proxy = await createAnthropicCompatProxy({
+      upstream: () => '',
+      transformRequest: [],
+      routingTransform: () => ({
+        localHandler: async ({ res }) => {
+          innerRan = true;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ from: 'inner' }));
+        },
+      }),
+      revalidateBeforeDispatch: () => ({
+        localHandler: async ({ res }) => {
+          res.writeHead(503, {
+            'content-type': 'application/json',
+            'retry-after': '1',
+          });
+          res.end(JSON.stringify({
+            error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+          }));
+        },
+      }),
+    });
+
+    const result = await post(proxy.url, { model: 'subscription-direct-model' });
+    expect(result.status).toBe(503);
+    expect(JSON.parse(result.text)).toEqual({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+    expect(innerRan).toBe(false);
+  });
+
+  it('revalidates after async request transforms and does not forward', async () => {
+    const custom = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    let pending = false;
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [async () => {
+        pending = true;
+        return null;
+      }],
+      routingTransform: () => ({ headerOverride: { authorization: 'Bearer previous-owner' } }),
+      revalidateBeforeDispatch: () => (pending
+        ? {
+          localHandler: async ({ res }) => {
+            res.writeHead(503, {
+              'content-type': 'application/json',
+              'retry-after': '1',
+            });
+            res.end(JSON.stringify({
+              error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+            }));
+          },
+        }
+        : null),
+    });
+
+    const result = await post(proxy.url, { model: 'claude-haiku-4-5-20251001' });
+    expect(result.status).toBe(503);
+    expect(JSON.parse(result.text)).toEqual({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+    expect(custom.bodies).toHaveLength(0);
+  });
+
+  it('revalidates when owner scope changes during async transforms even if pending stays false', async () => {
+    const custom = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    let ownerScope = 'cloud:owner-a:1';
+    const ownerScopeByCtx = new WeakMap<object, string>();
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [async () => {
+        ownerScope = 'cloud:owner-b:2';
+        return null;
+      }],
+      routingTransform: (_body, ctx) => {
+        ownerScopeByCtx.set(ctx, ownerScope);
+        return { headerOverride: { authorization: 'Bearer previous-owner' } };
+      },
+      revalidateBeforeDispatch: (_decision, ctx) => {
+        const start = ctx ? ownerScopeByCtx.get(ctx) : undefined;
+        if (start !== undefined && start !== ownerScope) {
+          return {
+            localHandler: async ({ res }) => {
+              res.writeHead(503, {
+                'content-type': 'application/json',
+                'retry-after': '1',
+              });
+              res.end(JSON.stringify({
+                error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+              }));
+            },
+          };
+        }
+        return null;
+      },
+    });
+
+    const result = await post(proxy.url, { model: 'claude-haiku-4-5-20251001' });
+    expect(result.status).toBe(503);
+    expect(JSON.parse(result.text)).toEqual({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+    expect(custom.bodies).toHaveLength(0);
+  });
+
+  it('stamps owner scope before collecting the body so a switch during upload cannot re-baseline', async () => {
+    const custom = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    let ownerScope = 'cloud:owner-a:1';
+    const ownerScopeByCtx = new WeakMap<object, string>();
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [],
+      routingTransform: () => {
+        // collectRequestBody 已经结束;若盖章拖到这里,会把 B 当成起始 scope。
+        ownerScope = 'cloud:owner-b:2';
+        return { headerOverride: { authorization: 'Bearer previous-owner' } };
+      },
+      revalidateBeforeDispatch: (_decision, ctx) => {
+        if (ctx && !ownerScopeByCtx.has(ctx)) ownerScopeByCtx.set(ctx, ownerScope);
+        const start = ctx ? ownerScopeByCtx.get(ctx) : undefined;
+        if (start !== undefined && start !== ownerScope) {
+          return {
+            localHandler: async ({ res }) => {
+              res.writeHead(503, {
+                'content-type': 'application/json',
+                'retry-after': '1',
+              });
+              res.end(JSON.stringify({
+                error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+              }));
+            },
+          };
+        }
+        return null;
+      },
+    });
+
+    const result = await post(proxy.url, { model: 'claude-haiku-4-5-20251001' });
+    expect(result.status).toBe(503);
+    expect(JSON.parse(result.text)).toEqual({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+    expect(custom.bodies).toHaveLength(0);
+    expect(custom.headers).toHaveLength(0);
+  });
+
+  it('revalidates owner scope before a transparent recovery retry', async () => {
+    let ownerScope = 'cloud:owner-a:1';
+    const ownerScopeByCtx = new WeakMap<object, string>();
+    const custom = await startFakeUpstream((idx, _body, res) => {
+      ownerScope = 'cloud:owner-b:2';
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = custom.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [],
+      routingTransform: () => ({ headerOverride: { authorization: 'Bearer previous-owner' } }),
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      revalidateBeforeDispatch: (_decision, ctx) => {
+        if (ctx && !ownerScopeByCtx.has(ctx)) ownerScopeByCtx.set(ctx, ownerScope);
+        const start = ctx ? ownerScopeByCtx.get(ctx) : undefined;
+        if (start !== undefined && start !== ownerScope) {
+          return {
+            localHandler: async ({ res }) => {
+              res.writeHead(503, {
+                'content-type': 'application/json',
+                'retry-after': '1',
+              });
+              res.end(JSON.stringify({
+                error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+              }));
+            },
+          };
+        }
+        return null;
+      },
+    });
+
+    const r = await post(proxy.url, {
+      model: 'gpt-5.5',
+      input: [{ type: 'reasoning', encrypted_content: 'gAAAsecret' }],
+    });
+    expect(r.status).toBe(503);
+    expect(JSON.parse(r.text)).toEqual({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+    expect(custom.bodies).toHaveLength(1);
+    expect(custom.headers[0]?.authorization).toBe('Bearer previous-owner');
+  });
+
   it('runs a local handler without resolving an unavailable default upstream', async () => {
     proxy = await createAnthropicCompatProxy({
       upstream: () => '',
@@ -1541,7 +1756,7 @@ describe('anthropic-compat-proxy mixed sync+async transform chain', () => {
       upstream: custom.url,
       transformRequest: [
         // 第一个：sync transform 透传（返回 null），不改 body。
-        (_body) => {
+        () => {
           order.push('sync-passthrough');
           return null;
         },
@@ -2540,6 +2755,181 @@ describe('anthropic-compat-proxy request body limit(超限回可读 413,不斩�
     const r = await post(proxy.url, { model: 'gpt-5.5', input: 'x'.repeat(4096) });
     expect(r.status).toBe(200);
     expect(gateway.bodies).toHaveLength(1);
+  });
+
+  it('超出硬上限但在有界 ingress 内时先压缩,压缩后正常转发', async () => {
+    const gateway = await startFakeUpstream((_i, body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ bytes: Buffer.byteLength(body, 'utf8'), body: JSON.parse(body) }));
+    });
+    upstreamClose = gateway.close;
+    let compactorCalls = 0;
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      maxRequestBodyBytes: 1024,
+      oversizedRequestIngressBytes: 8 * 1024,
+      oversizedRequestCompactor: (body) => {
+        compactorCalls += 1;
+        return { model: (body as Record<string, unknown>).model, compacted: true };
+      },
+    });
+    const res = await post(proxy.url, { model: 'test-model', history: 'x'.repeat(4096) });
+    expect(res.status).toBe(200);
+    const json = JSON.parse(res.text) as { bytes: number; body: Record<string, unknown> };
+    expect(json.body.compacted).toBe(true);
+    expect(json.bytes).toBeLessThan(1024);
+    expect(compactorCalls).toBe(1);
+  });
+
+  it('命中 localHandler 时同样先压缩超限 JSON,再交给 handler', async () => {
+    const gateway = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(500);
+      res.end('local handler must prevent forwarding');
+    });
+    upstreamClose = gateway.close;
+    let compactorCalls = 0;
+    let seen: { raw: string; parsed: Record<string, unknown> } | null = null;
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      maxRequestBodyBytes: 1024,
+      oversizedRequestIngressBytes: 8 * 1024,
+      oversizedRequestCompactor: (body) => {
+        compactorCalls += 1;
+        return { model: (body as Record<string, unknown>).model, compacted: true };
+      },
+      routingTransform: () => ({
+        localHandler: async ({ rawBody, parsedBody, res }) => {
+          seen = { raw: rawBody.toString('utf8'), parsed: parsedBody as Record<string, unknown> };
+          res.writeHead(204);
+          res.end();
+        },
+      }),
+    });
+
+    const res = await post(proxy.url, { model: 'gpt-5.5', history: 'x'.repeat(4096) });
+    expect(res.status).toBe(204);
+    expect(compactorCalls).toBe(1);
+    expect(seen).toEqual({
+      raw: JSON.stringify({ model: 'gpt-5.5', compacted: true }),
+      parsed: { model: 'gpt-5.5', compacted: true },
+    });
+    expect(gateway.bodies).toHaveLength(0);
+  });
+
+  it('硬上限以内的请求完全跳过 oversized compactor', async () => {
+    const gateway = await startFakeUpstream((_i, _body, res) => { res.writeHead(200); res.end('{}'); });
+    upstreamClose = gateway.close;
+    let compactorCalls = 0;
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      maxRequestBodyBytes: 8 * 1024,
+      oversizedRequestCompactor: () => {
+        compactorCalls += 1;
+        return null;
+      },
+    });
+    const res = await post(proxy.url, { model: 'test-model', input: 'small' });
+    expect(res.status).toBe(200);
+    expect(compactorCalls).toBe(0);
+  });
+
+  it('压缩器无法安全缩小时,最终仍返回结构化 413', async () => {
+    const gateway = await startFakeUpstream((_i, _body, res) => { res.writeHead(200); res.end('{}'); });
+    upstreamClose = gateway.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      maxRequestBodyBytes: 1024,
+      oversizedRequestIngressBytes: 8 * 1024,
+      oversizedRequestCompactor: () => null,
+    });
+    const res = await post(proxy.url, { model: 'test-model', history: 'x'.repeat(4096) });
+    expect(res.status).toBe(413);
+    const json = JSON.parse(res.text) as { error: { reason: string } };
+    expect(json.error.reason).toBe('request_body_too_large');
+    expect(gateway.bodies).toHaveLength(0);
+  });
+
+  it('超过 ingress 上限时仍立即 413,不会把无限 body 读入内存', async () => {
+    const gateway = await startFakeUpstream((_i, _body, res) => { res.writeHead(200); res.end('{}'); });
+    upstreamClose = gateway.close;
+    let compactorCalls = 0;
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      maxRequestBodyBytes: 1024,
+      oversizedRequestIngressBytes: 2048,
+      oversizedRequestCompactor: () => {
+        compactorCalls += 1;
+        return null;
+      },
+    });
+    const body = JSON.stringify({ model: 'test-model', history: 'x'.repeat(4096) });
+    const res = await fetch(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+    expect(res.status).toBe(413);
+    const json = await res.json() as { error: { reason: string } };
+    expect(json.error.reason).toBe('request_body_too_large');
+    expect(compactorCalls).toBe(0);
+    expect(gateway.bodies).toHaveLength(0);
+  });
+
+  it('非法 ingress 配置不会关闭流式大小守卫', async () => {
+    const gateway = await startFakeUpstream((_i, _b, res) => { res.writeHead(200); res.end('{}'); });
+    upstreamClose = gateway.close;
+    let compactorCalls = 0;
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      maxRequestBodyBytes: 1024,
+      oversizedRequestIngressBytes: Number.NaN,
+      oversizedRequestCompactor: () => {
+        compactorCalls += 1;
+        return null;
+      },
+    });
+    const body = JSON.stringify({ model: 'test-model', history: 'x'.repeat(4096) });
+    const res = await fetch(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+    expect(res.status).toBe(413);
+    expect(compactorCalls).toBe(0);
+    expect(gateway.bodies).toHaveLength(0);
+  });
+
+  it('启用压缩器时,非 JSON 请求仍按硬上限预检', async () => {
+    const gateway = await startFakeUpstream((_i, _b, res) => { res.writeHead(200); res.end('{}'); });
+    upstreamClose = gateway.close;
+    const warns: Array<Record<string, unknown>> = [];
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      maxRequestBodyBytes: 1024,
+      oversizedRequestIngressBytes: 8 * 1024,
+      oversizedRequestCompactor: () => null,
+      logger: {
+        warn: (msg, ctx) => {
+          if (msg === '✖ request body exceeds proxy limit → 413') warns.push(ctx ?? {});
+        },
+      },
+    });
+    const res = await fetch(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: 'x'.repeat(4096),
+    });
+    expect(res.status).toBe(413);
+    expect(warns).toHaveLength(1);
+    expect(warns[0].receivedBytes).toBe(0);
+    expect(gateway.bodies).toHaveLength(0);
   });
 });
 

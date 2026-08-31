@@ -936,9 +936,14 @@ export async function launchOpenClawChrome(
   fs.mkdirSync(userDataDir, { recursive: true });
   await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
 
+  // LOCAL PATCH (Cindy, via sync.mjs): Chrome chip follows host displayName
+  // when set so the disk key (Cindy-real) never leaks into the profile button.
+  const chipName =
+    normalizeOptionalString(resolved.profiles[profile.name]?.displayName) ?? profile.name;
+
   const needsDecorate = !isProfileDecorated(
     userDataDir,
-    profile.name,
+    chipName,
     (profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR).toUpperCase(),
     DEFAULT_DOWNLOAD_DIR,
   );
@@ -1012,7 +1017,7 @@ export async function launchOpenClawChrome(
   if (needsDecorate) {
     try {
       decorateOpenClawProfile(userDataDir, {
-        name: profile.name,
+        name: chipName,
         color: profile.color,
         downloadDir: DEFAULT_DOWNLOAD_DIR,
       });

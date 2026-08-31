@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { describe, expect, it } from 'vitest';
 
 describe('mobile message actions desktop-first surface', () => {
@@ -303,6 +304,17 @@ describe('mobile message actions desktop-first surface', () => {
     expect(spinnerSource).not.toContain('<CircleDashed');
     expect(agentStatusSource).toContain("status === 'running'");
     expect(agentStatusSource).toContain('<CompactActivityIndicator');
+  });
+
+  it('compacts sub-agent token usage with the shared desktop/mobile formatter', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+    const metaStart = source.indexOf('function buildAgentTaskMeta');
+    const metaEnd = source.indexOf('\nfunction readAgentTaskToolInput', metaStart);
+    const metaSource = source.slice(metaStart, metaEnd);
+
+    expect(source).toContain("import { formatCompactTokens } from '@cindy/maker-shared/usage-format';");
+    expect(metaSource).toContain('`${formatCompactTokens(model.totalTokens)} tokens`');
+    expect(formatCompactTokens(143_615)).toBe('143.6k');
   });
 
   it('does not keep a hidden badge rendering path in foldable message hierarchy panels', () => {

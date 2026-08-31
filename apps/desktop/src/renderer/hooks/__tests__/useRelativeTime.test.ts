@@ -2,9 +2,22 @@
  * useRelativeTime — chat message-action-bar relative timestamps follow app language.
  */
 
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { renderHook } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { formatRelative } from '../useRelativeTime';
+import { formatRelative, useRelativeTime } from '../useRelativeTime';
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: 'en' },
+  }),
+}));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const JUST_NOW = 'chat.messageActionBar.relative.justNow';
 const MINUTES = 'chat.messageActionBar.relative.minutesAgo';
@@ -57,5 +70,32 @@ describe('formatRelative', () => {
 
     const otherYear = new Date(2025, 11, 25, 14, 30, 0).getTime();
     expect(formatRelative(otherYear, now, tReturnsKey)).toBe('2025-12-25 14:30');
+  });
+});
+
+describe('useRelativeTime', () => {
+  it('clears stale text when the timestamp becomes missing or unparseable', () => {
+    const now = new Date(2026, 4, 20, 12, 0, 0).getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    const { result, rerender } = renderHook<
+      string,
+      { createdAt: string | undefined }
+    >(
+      ({ createdAt }) => useRelativeTime(createdAt, { hovered: false }),
+      {
+        initialProps: {
+          createdAt: new Date(now - 5 * 60_000).toISOString(),
+        },
+      },
+    );
+
+    expect(result.current).toBe('5 minutes ago');
+
+    rerender({ createdAt: undefined });
+    expect(result.current).toBe('');
+
+    rerender({ createdAt: 'not-a-date' });
+    expect(result.current).toBe('');
   });
 });

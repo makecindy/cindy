@@ -34,6 +34,12 @@ export interface BinaryProvisionerConfig {
    * 走 prepare 的完整错误流程)。
    */
   optionalAsset?: boolean;
+  /**
+   * 可选的本地真实版本探针。配置后，prepare/peek 会优先选择 `.verified` 安装中
+   * 实际 semver 不低于 manifest 的最高版本，避免宿主升级时把用户已自更新的
+   * runtime 降级。探针失败只表示候选不可用于仲裁，原 manifest 流程照常继续。
+   */
+  localVersionResolver?: (binaryPath: string, signal?: AbortSignal) => Promise<string | null>;
 }
 
 // ===== §5.2 VendorRuntimeState =====

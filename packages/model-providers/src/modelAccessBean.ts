@@ -22,7 +22,12 @@ export const MODEL_ACCESS_AGENTS = ['claude-code', 'codex', 'pi'] as const;
 export type ModelAgent = (typeof MODEL_ACCESS_AGENTS)[number];
 export type ModelAccessV2Agent = (typeof MODEL_ACCESS_V2_AGENTS)[number];
 
-export const MODEL_ACCESS_WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses'] as const;
+export const MODEL_ACCESS_WIRE_PROTOCOLS = [
+  'anthropic-messages',
+  'openai-responses',
+  'openai-completions',
+  'google-generative-ai',
+] as const;
 export type ModelAccessWireProtocol = (typeof MODEL_ACCESS_WIRE_PROTOCOLS)[number];
 
 export const MODEL_ACCESS_MEDIA_CAPABILITIES = [

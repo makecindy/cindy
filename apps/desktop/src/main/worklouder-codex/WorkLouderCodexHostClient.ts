@@ -14,6 +14,8 @@ import type {
 } from '../../shared/workLouderCodex.js';
 import type { WorkLouderCodexLightingSink } from './WorkLouderCodexLightingController.js';
 
+const MAX_CONSECUTIVE_CRASHES = 5;
+
 export interface WorkLouderCodexChildLike {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (message: unknown) => void): void;
@@ -89,6 +91,8 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private wantsHidInput = false;
   private deviceEnabled = true;
   private wantsPresence = false;
+  /** Permission failures are user-actionable; stop automatic recovery until an explicit retry or toggle. */
+  private permissionBlocked = false;
   /** True while the current host is stopping so re-enable cannot talk to it. */
   private hostStopping = false;
 
@@ -123,6 +127,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   setDeviceEnabled(enabled: boolean): void {
     if (this.deviceEnabled === enabled) return;
     this.deviceEnabled = enabled;
+    this.permissionBlocked = false;
     if (enabled) {
       this.updateHidListeningIntent();
       if (this.latestFrame) this.update(this.latestFrame);
@@ -152,13 +157,15 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   setPresenceHandler(
-    handler: ((
-      present: boolean,
-      identity?: {
-        deviceType: 'codex-micro' | 'creator-micro-2';
-        isUsbConnection: boolean;
-      },
-    ) => void) | null,
+    handler:
+      | ((
+          present: boolean,
+          identity?: {
+            deviceType: 'codex-micro' | 'creator-micro-2';
+            isUsbConnection: boolean;
+          },
+        ) => void)
+      | null,
   ): void {
     this.presenceHandler = handler;
   }
@@ -220,6 +227,11 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
 
   private ensureChild(): WorkLouderCodexChildLike | null {
     if (this.hostStopping) return null;
+    // A scheduled recycle owns recovery; work/presence callers must not
+    // recreate the host early and bypass its exponential backoff.
+    if (this.restartTimer) return null;
+    if (this.permissionBlocked) return null;
+    if (this.isCrashBudgetExhausted()) return null;
     if (!this.deviceEnabled && !this.wantsPresence) return null;
     if (this.child) return this.child;
     const sdk = this.deps.resolveSdk();
@@ -286,12 +298,15 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
    * no such keyboard.
    */
   probe(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.permissionBlocked) return;
     if (!this.deviceEnabled) {
       this.discoverPresence();
       return;
     }
-    if (!this.child) return;
+    // A background probe is observational only. If the host is gone, either
+    // the restart backoff or the crash budget owns recovery; do not recreate
+    // it indirectly through requestHidListening/update.
+    if (!this.child || this.restartTimer) return;
     try {
       const request: WorkLouderCodexHostRequest = { kind: 'probe' };
       this.child.postMessage(request);
@@ -300,6 +315,24 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * Clear a permission breaker only for an explicit recovery signal.
+   *
+   * Background connection polling must stay observational: repeatedly
+   * recreating a host while macOS still denies HID access is the restart storm
+   * this client is designed to prevent. The settings toggle and system unlock
+   * paths call this method when a permission change may have happened.
+   */
+  retryPermission(): void {
+    if (this.disposed || !this.permissionBlocked) return;
+    this.permissionBlocked = false;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.restartHost();
   }
 
   private requestHidListening(): void {
@@ -372,11 +405,25 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     if (message.kind !== 'state') return;
     this.clearConnectWatchdog();
+    if (this.permissionBlocked && message.status === 'connected') return;
     this.updateConnectionReason(message.reason ?? null);
-    if (message.status === this.lastStatus) return;
+    const permissionRequired =
+      message.status === 'error' && message.reason === 'permission-required';
+    if (permissionRequired) this.permissionBlocked = true;
     const previousStatus = this.lastStatus;
-    this.lastStatus = message.status;
-    this.updateConnectionStatus(message.status);
+    const statusChanged = message.status !== this.lastStatus;
+    if (statusChanged) {
+      this.lastStatus = message.status;
+      this.updateConnectionStatus(message.status);
+    }
+    // Permission errors own teardown even when a previous connection error
+    // already published the same coarse `error` status. The breaker must not
+    // leave a permission-blocked child alive and unable to honor retry.
+    if (permissionRequired) {
+      this.stopHostAfterPermission(child);
+      return;
+    }
+    if (!statusChanged) return;
     if (message.status === 'connected') {
       this.armStableConnection();
       this.deps.log.info('Codex Micro lighting connected');
@@ -391,6 +438,25 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     // unusable. ChatGPT recovers by opening a fresh transport; we do the same
     // by recycling the utility process once the live session drops.
     if (previousStatus === 'connected') this.recycleStaleHost(child);
+  }
+
+  private stopHostAfterPermission(child: WorkLouderCodexChildLike): void {
+    if (this.disposed || this.child !== child) return;
+    this.clearConnectWatchdog();
+    this.clearStableConnection();
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.deps.log.warn(
+      'Codex Micro lighting paused because HID permission is required; retry after permission changes',
+    );
+    try {
+      child.kill();
+    } catch {
+      // Permission failure owns the stop; the host may already have exited.
+    }
+    this.handleExit(child, 0);
   }
 
   private recycleStaleHost(child: WorkLouderCodexChildLike): void {
@@ -426,8 +492,13 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       if (this.wantsPresence) this.scheduleRestart();
       return;
     }
+    if (this.permissionBlocked) {
+      this.updateConnectionReason('permission-required');
+      this.updateConnectionStatus('error');
+      return;
+    }
     if (recycled) {
-      this.restartHost();
+      this.scheduleRestart();
       return;
     }
     this.deps.log.warn('Codex Micro lighting host exited', { code });
@@ -445,9 +516,9 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private scheduleRestart(): void {
-    if (this.restartTimer || !this.shouldRestartHost()) return;
+    if (this.restartTimer || this.permissionBlocked || !this.shouldRestartHost()) return;
     this.consecutiveCrashes += 1;
-    if (this.consecutiveCrashes > 5) {
+    if (this.isCrashBudgetExhausted()) {
       this.deps.log.error('Codex Micro lighting host repeatedly crashed; disabled until restart');
       return;
     }
@@ -463,6 +534,10 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       if (this.latestFrame) this.update(this.latestFrame);
     }, delayMs);
     this.restartTimer.unref?.();
+  }
+
+  private isCrashBudgetExhausted(): boolean {
+    return this.consecutiveCrashes > MAX_CONSECUTIVE_CRASHES;
   }
 
   private shouldRestartHost(): boolean {
@@ -581,6 +656,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     this.lastStatus = null;
     this.consecutiveCrashes = 0;
+    this.permissionBlocked = false;
     this.updateConnectionReason(null);
     this.updateConnectionStatus('disabled');
   }
