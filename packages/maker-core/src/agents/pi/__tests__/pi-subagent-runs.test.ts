@@ -732,6 +732,19 @@ describe('PI durable subagent run store', () => {
       expect(piSubagentOwnerIdentity('not-an-owner')).toBeNull();
     });
 
+    it('keeps the owner id stable when later start-time samples cross a rounding boundary', () => {
+      const nowSpy = vi.spyOn(Date, 'now')
+        .mockReturnValueOnce(1_700_000_100_499)
+        .mockReturnValueOnce(1_700_000_100_501);
+      const uptimeSpy = vi.spyOn(process, 'uptime').mockReturnValue(100);
+      restores.push(() => nowSpy.mockRestore(), () => uptimeSpy.mockRestore());
+
+      const first = piSubagentRuntimeOwnerId(process.pid, 'scope-stable');
+      const second = piSubagentRuntimeOwnerId(process.pid, 'scope-stable');
+
+      expect(second).toBe(first);
+    });
+
     it('treats a recycled pid as a dead owner, so the orphan stays reclaimable', async () => {
       const ownerPid = nextOwnerPid++;
       stubAliveOwner(ownerPid);
@@ -2152,8 +2165,14 @@ describe('PI durable subagent run store', () => {
     const terminalId = '123e4567-e89b-42d3-a456-426614174007';
     await writeStatus(root, status(activeId));
     await writeStatus(root, status(terminalId, { state: 'completed' }));
-    await expect(syncPiSubagentPermissions(root, { mode: 'ask', readOnlyRoots: [] })).resolves.toBe(1);
-    await expect(readFile(path.join(root, activeId, 'permission.json'), 'utf8')).resolves.toContain('"mode":"ask"');
+    await expect(syncPiSubagentPermissions(root, {
+      mode: 'auto',
+      readOnlyRoots: ['/ref'],
+      writableRoots: ['/out'],
+    })).resolves.toBe(1);
+    await expect(readFile(path.join(root, activeId, 'permission.json'), 'utf8')).resolves.toBe(
+      '{"mode":"auto","readOnlyRoots":["/ref"],"writableRoots":["/out"]}\n',
+    );
     await expect(readFile(path.join(root, terminalId, 'permission.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -2168,11 +2187,13 @@ describe('PI durable subagent run store', () => {
 
     await expect(syncPiSubagentPermissions(
       root,
-      { mode: 'bypassPermissions', readOnlyRoots: [] },
+      { mode: 'bypassPermissions', readOnlyRoots: ['/ref'], writableRoots: ['/out'] },
       'owner-a',
     )).resolves.toBe(1);
     await expect(readFile(path.join(root, ownedId, 'permission.json'), 'utf8'))
-      .resolves.toContain('bypassPermissions');
+      .resolves.toBe(
+        '{"mode":"bypassPermissions","readOnlyRoots":["/ref"],"writableRoots":["/out"]}\n',
+      );
     await expect(readFile(path.join(root, foreignId, 'permission.json'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(path.join(root, legacyId, 'permission.json'), 'utf8'))

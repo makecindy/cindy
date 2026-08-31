@@ -179,7 +179,7 @@ describe('MessageActionBar', () => {
     });
 
     fireEvent.click(forkButton);
-    await waitFor(() => expect(forkButton.querySelector('.animate-spin')).toBeTruthy());
+    await waitFor(() => expect(forkButton.querySelector('.animate-spinner')).toBeTruthy());
     expect(moreButton.querySelector('.lucide-ellipsis')).toBeTruthy();
     expect(moreButton.querySelector('.lucide-loader-circle')).toBeNull();
     expect((moreButton as HTMLButtonElement).disabled).toBe(false);
@@ -189,7 +189,7 @@ describe('MessageActionBar', () => {
 
     resolveFork();
     await waitFor(() => {
-      expect(forkButton.querySelector('.animate-spin')).toBeNull();
+      expect(forkButton.querySelector('.animate-spinner')).toBeNull();
       expect((editButton as HTMLButtonElement).disabled).toBe(false);
     });
   });

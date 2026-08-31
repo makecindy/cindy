@@ -1,4 +1,4 @@
-import { XBOX_GAMEPAD_BUTTON_IDS } from '../../shared/xboxGamepad.js';
+import { isGamepadFamily, XBOX_GAMEPAD_BUTTON_IDS, type GamepadFamily } from '../../shared/xboxGamepad.js';
 import {
   digitalTriggerPressed,
   XBOX_GAMEPAD_EMPTY_FRAME,
@@ -14,12 +14,14 @@ export type XboxGamepadHostMessage =
       present: boolean;
       name?: string;
       category?: string;
+      family?: GamepadFamily;
       transport?: 'usb' | 'bluetooth' | 'unknown';
       batteryPercentage?: number;
       batteryState?: 'unknown' | 'discharging' | 'charging' | 'full';
     }
   | {
       kind: 'frame';
+      family?: GamepadFamily;
       buttons: XboxGamepadButtons;
       axes: XboxGamepadAxes;
       triggers: XboxGamepadTriggers;
@@ -40,6 +42,7 @@ export function isXboxGamepadHostMessage(value: unknown): value is XboxGamepadHo
       present?: unknown;
       name?: unknown;
       category?: unknown;
+      family?: unknown;
       transport?: unknown;
       batteryPercentage?: unknown;
       batteryState?: unknown;
@@ -47,6 +50,7 @@ export function isXboxGamepadHostMessage(value: unknown): value is XboxGamepadHo
     if (typeof record.present !== 'boolean') return false;
     if (record.name !== undefined && typeof record.name !== 'string') return false;
     if (record.category !== undefined && typeof record.category !== 'string') return false;
+    if (record.family !== undefined && !isGamepadFamily(record.family)) return false;
     if (
       record.transport !== undefined &&
       record.transport !== 'usb' &&
@@ -84,6 +88,8 @@ export function isXboxGamepadHostMessage(value: unknown): value is XboxGamepadHo
     );
   }
   if (message.kind !== 'frame') return false;
+  const frame = message as { family?: unknown };
+  if (frame.family !== undefined && !isGamepadFamily(frame.family)) return false;
   return parseXboxGamepadFrame(message) !== null;
 }
 

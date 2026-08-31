@@ -131,7 +131,7 @@
     "analyticsResetAction": "Reset"
   },
   "account": {
-    "logoutHint": "Signing out only clears the sign-in state and local remote mirror on this phone. Sessions on your computer are not affected.",
+    "logoutHint": "Signing out clears every account saved on this phone and its local remote mirror. Sessions on your computer are not affected.",
     "logout": "Sign Out",
     "loggingOut": "Signing out",
     "loggingOutAccessibility": "Signing out"

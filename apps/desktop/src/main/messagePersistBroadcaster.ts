@@ -67,6 +67,7 @@ import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-obser
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
+import { parseToolLoopErrorDetails, type ToolLoopErrorDetails } from '@cindy/maker-core';
 
 const log = createLogger('messagePersistBroadcaster');
 
@@ -74,6 +75,8 @@ const log = createLogger('messagePersistBroadcaster');
 interface AssistantBlock {
   persistId: string;
   text: string;
+  /** Provider message identity; a changed identity is an assistant block boundary. */
+  agentMessageId?: string;
   agentMeta: AgentMeta | null;
   createdAt: number;
 }
@@ -82,6 +85,7 @@ const assistantBlocks = new Map<string, AssistantBlock>();
 interface SealedAssistantLateFinalCandidate {
   persistId: string;
   text: string;
+  agentMessageId?: string;
   requestId?: string;
   uuid?: string;
 }
@@ -96,7 +100,15 @@ const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFin
 function matchesSealedAssistantIdentity(
   candidate: SealedAssistantLateFinalCandidate,
   agentMeta: AgentMeta | null,
+  agentMessageId: string | undefined,
 ): boolean {
+  if (
+    candidate.agentMessageId !== undefined &&
+    agentMessageId !== undefined &&
+    candidate.agentMessageId !== agentMessageId
+  ) {
+    return false;
+  }
   if (!agentMeta) return false;
   if (candidate.requestId !== undefined && agentMeta.requestId !== undefined) {
     return candidate.requestId === agentMeta.requestId;
@@ -280,14 +292,23 @@ export function setLastAssistantTranscriptUuid(sessionId: string, uuid: string |
  * 第二行、renderer DUP-SKIP 只挡显示不挡库 → 重开会话 assistant 翻倍(正是本 MR 要消灭
  * 的重复行)。
  *
- * 只去重"相邻且内容完全相同"的 assistant:任何其它消息(tool_use / tool_result / thinking /
- * ask_user / plan_review)入队都会刷新这条记录 → role 不再是 assistant,从而"中间夹了别的
- * 消息"的两条相同文本不会被误删(与 renderer messages[last] 语义 1:1,避免误吞合法重复回复)。
+ * 只去重"相邻、内容相同且 provider item 身份相同"的 assistant:任何其它消息
+ * (tool_use / tool_result / thinking / ask_user / plan_review)入队都会刷新这条记录；不同
+ * agentMessageId 即使文本相同也必须保留为两条消息。
  */
-const lastPersistedMsgBySession = new Map<string, { role: string; text: string; persistId: string }>();
+const lastPersistedMsgBySession = new Map<
+  string,
+  { role: string; text: string; persistId: string; agentMessageId?: string }
+>();
 
-function notePersistedMessage(sessionId: string, role: string, persistId: string, text = ''): void {
-  lastPersistedMsgBySession.set(sessionId, { role, text, persistId });
+function notePersistedMessage(
+  sessionId: string,
+  role: string,
+  persistId: string,
+  text = '',
+  agentMessageId?: string,
+): void {
+  lastPersistedMsgBySession.set(sessionId, { role, text, persistId, agentMessageId });
 }
 
 /**
@@ -444,6 +465,37 @@ function enqueueWrite(label: string, fn: (ownerScope: OwnerScope) => Promise<unk
     });
 }
 
+/**
+ * error 行写入专用队列：owner-scope 跳过或写入失败时也必须解开预留 waiter，
+ * 否则 dismiss-error 会一直等这条预留 id 落库。
+ */
+function enqueueTurnErrorWrite(
+  sessionId: string,
+  persistId: string,
+  fn: (ownerScope: OwnerScope) => Promise<unknown>,
+): void {
+  const ownerScope = captureOwnerScope();
+  const label = `turn_error:${sessionId}:${persistId}`;
+  writeChain = writeChain
+    .then(async () => {
+      try {
+        if (!isOwnerScopeCurrent(ownerScope)) {
+          log.debug('message persist skipped after app-session boundary', { label });
+          return;
+        }
+        await fn(ownerScope);
+      } finally {
+        resolveTurnErrorWaiter(sessionId, persistId);
+      }
+    })
+    .catch((err) => {
+      log.warn('message persist failed', {
+        label,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+}
+
 /** 在事件入队时冻结 agent_kind，避免 writeChain 延迟执行时读到切换后的可变 Map。 */
 function enqueueVisibleDbMessage(
   label: string,
@@ -523,6 +575,7 @@ function enqueuePersistAssistant(
   content: string,
   agentMeta: AgentMeta | null,
   createdAt: number,
+  agentMessageId?: string,
 ): void {
   noteAssistantTranscriptUuid(sessionId, agentMeta);
   enqueueVisibleDbMessage(`assistant:${sessionId}:${clientId}`, sessionId, {
@@ -532,7 +585,7 @@ function enqueuePersistAssistant(
     agentMeta: agentMeta ?? null,
     createdAt,
   });
-  notePersistedMessage(sessionId, 'assistant', clientId, content);
+  notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
   lastAssistantPersistIdBySession.set(sessionId, clientId);
   if (
     isTopLevelTitleAssistant(
@@ -1216,7 +1269,7 @@ export function prepareSyntheticToolEventForBroadcast(
   if (event.type === 'tool_result_full') {
     const r = onToolResultFullEvent(
       sessionId,
-      event.data as { toolUseId?: unknown; fullText?: unknown },
+      event.data as { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
       agentMeta,
     );
     return { persistId: r?.persistId, resolvedContent: r?.content };
@@ -1432,14 +1485,21 @@ export function onToolResultEvent(
  * 对齐老 renderer:有映射 → 覆盖更新;无映射但 tool_use 已到 → eager-create;
  * tool_use 也没到 → buffer。
  */
+function markFailedToolResultText(text: string, isError: boolean): string {
+  if (!isError || text.includes('<tool_use_error>')) return text;
+  return `<tool_use_error>${text}</tool_use_error>`;
+}
+
 export function onToolResultFullEvent(
   sessionId: string,
-  data: { toolUseId?: unknown; fullText?: unknown },
+  data: { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
   agentMeta: AgentMeta | null,
   scope: 'turn' | 'background' = 'turn',
 ): { persistId: string; content: string } | null {
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
-  const fullText = typeof data.fullText === 'string' ? data.fullText : null;
+  const rawText = typeof data.fullText === 'string' ? data.fullText : null;
+  const fullText =
+    rawText === null ? null : markFailedToolResultText(rawText, data.isError === true);
   if (!toolUseId || fullText === null) return null; // guard,对齐老 renderer
 
   const backgroundState = scope === 'background'
@@ -1737,12 +1797,25 @@ export function resetTurnPersistState(sessionId: string): void {
  */
 export function onAssistantTextEvent(
   sessionId: string,
-  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown },
+  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown },
   agentMeta: AgentMeta | null,
 ): string | undefined {
   const rawText = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
   const isFullText = data.isFullText === true;
+  const agentMessageId =
+    typeof data.agentMessageId === 'string' && data.agentMessageId
+      ? data.agentMessageId
+      : undefined;
+
+  const activeBlock = assistantBlocks.get(sessionId);
+  if (
+    activeBlock?.agentMessageId &&
+    agentMessageId &&
+    activeBlock.agentMessageId !== agentMessageId
+  ) {
+    flushAssistantBlock(sessionId);
+  }
 
   if (isFinal) {
     const visible = stripInternalWebCitations(rawText);
@@ -1750,7 +1823,7 @@ export function onAssistantTextEvent(
     if (
       lateFinalCandidate &&
       visible.length > 0 &&
-      matchesSealedAssistantIdentity(lateFinalCandidate, agentMeta) &&
+      matchesSealedAssistantIdentity(lateFinalCandidate, agentMeta, agentMessageId) &&
       (isFullText ||
         visible === lateFinalCandidate.text ||
         visible.startsWith(lateFinalCandidate.text))
@@ -1803,11 +1876,23 @@ export function onAssistantTextEvent(
       // persistId、不再 create,把重复行挡在 main 落库层。中间夹过别的消息则 last.role
       // 不是 assistant,不会误删合法的相同文本回复。
       const last = lastPersistedMsgBySession.get(sessionId);
-      if (last && last.role === 'assistant' && last.text === visible) {
+      if (
+        last &&
+        last.role === 'assistant' &&
+        last.text === visible &&
+        (!agentMessageId || last.agentMessageId === agentMessageId)
+      ) {
         return last.persistId;
       }
       const persistId = createId();
-      enqueuePersistAssistant(sessionId, persistId, visible, agentMeta, Date.now());
+      enqueuePersistAssistant(
+        sessionId,
+        persistId,
+        visible,
+        agentMeta,
+        Date.now(),
+        agentMessageId,
+      );
       return persistId;
     }
     return undefined;
@@ -1816,7 +1901,13 @@ export function onAssistantTextEvent(
   // delta: accumulate the raw snapshot; strip only the completed block.
   let block = assistantBlocks.get(sessionId);
   if (!block) {
-    block = { persistId: createId(), text: rawText, agentMeta, createdAt: Date.now() };
+    block = {
+      persistId: createId(),
+      text: rawText,
+      agentMessageId,
+      agentMeta,
+      createdAt: Date.now(),
+    };
     assistantBlocks.set(sessionId, block);
   } else {
     block.text += rawText;
@@ -1843,7 +1934,12 @@ export function flushAssistantBlock(
 function flushAssistantBlockInternal(
   sessionId: string,
   agentMetaFallback: AgentMeta | null,
-): { persistId: string; text: string; agentMeta: AgentMeta | null } | undefined {
+): {
+  persistId: string;
+  text: string;
+  agentMessageId?: string;
+  agentMeta: AgentMeta | null;
+} | undefined {
   const block = assistantBlocks.get(sessionId);
   if (!block) return undefined;
   assistantBlocks.delete(sessionId);
@@ -1852,8 +1948,20 @@ function flushAssistantBlockInternal(
   // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
   // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
   const meta = block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  enqueuePersistAssistant(sessionId, block.persistId, visible, meta, block.createdAt);
-  return { persistId: block.persistId, text: visible, agentMeta: meta };
+  enqueuePersistAssistant(
+    sessionId,
+    block.persistId,
+    visible,
+    meta,
+    block.createdAt,
+    block.agentMessageId,
+  );
+  return {
+    persistId: block.persistId,
+    text: visible,
+    ...(block.agentMessageId ? { agentMessageId: block.agentMessageId } : {}),
+    agentMeta: meta,
+  };
 }
 
 /**
@@ -1874,6 +1982,7 @@ export function sealAssistantBlockForLateFinal(
   sealedAssistantLateFinalBySession.set(sessionId, {
     persistId: flushed.persistId,
     text: flushed.text,
+    ...(flushed.agentMessageId ? { agentMessageId: flushed.agentMessageId } : {}),
     ...(requestId ? { requestId } : {}),
     ...(uuid ? { uuid } : {}),
   });
@@ -1911,9 +2020,64 @@ async function latestMessageCreatedAt(sessionId: string): Promise<number | undef
  *
  * clearSessionPersistState 时一并清理。
  */
-const _recentErrorPersistKeys = new Map<string, number>();
+interface RecentTurnErrorPersistClaim {
+  capturedAt: number;
+  persistId?: string;
+}
+
+const _recentErrorPersistKeys = new Map<string, RecentTurnErrorPersistClaim>();
 /** message-only fallback 窗口:完全无 turn identity 时仅防多窗近乎同时(<100ms)并发。 */
 const DEDUP_WINDOW_MS_MESSAGE = 300;
+
+interface TurnErrorPersistWaiter {
+  promise: Promise<void>;
+  resolve: () => void;
+}
+
+/** 预留后、写库前即可 await；key = `${sessionId}:${persistId}`。 */
+const _turnErrorPersistWaiters = new Map<string, TurnErrorPersistWaiter>();
+/** 预留后尚未 enqueue 写库的 id，供 onTurnErrorEvent 复用。 */
+const _reservedTurnErrorPersistIds = new Set<string>();
+/** 已消费（写库或 release）的预留 id，防止同一 persistId 双写。 */
+const _consumedTurnErrorPersistIds = new Set<string>();
+
+function turnErrorPersistKey(sessionId: string, persistId: string): string {
+  return `${sessionId}:${persistId}`;
+}
+
+function createTurnErrorWaiter(sessionId: string, persistId: string): void {
+  const key = turnErrorPersistKey(sessionId, persistId);
+  if (_turnErrorPersistWaiters.has(key)) return;
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  _turnErrorPersistWaiters.set(key, { promise, resolve });
+}
+
+function resolveTurnErrorWaiter(sessionId: string, persistId: string): void {
+  const key = turnErrorPersistKey(sessionId, persistId);
+  const waiter = _turnErrorPersistWaiters.get(key);
+  if (!waiter) return;
+  waiter.resolve();
+  _turnErrorPersistWaiters.delete(key);
+}
+
+function dropSessionTurnErrorReservations(sessionId: string): void {
+  const prefix = `${sessionId}:`;
+  // 只解开尚未 enqueue 的预留。已入队的 waiter 必须等到 writeChain finally,
+  // 否则 dismiss 会在 createMessage 前得到 NOT_FOUND,迟到写入留下未忽略行。
+  for (const key of [..._reservedTurnErrorPersistIds]) {
+    if (!key.startsWith(prefix)) continue;
+    _reservedTurnErrorPersistIds.delete(key);
+    resolveTurnErrorWaiter(sessionId, key.slice(prefix.length));
+  }
+  for (const key of [..._consumedTurnErrorPersistIds]) {
+    if (!_turnErrorPersistWaiters.has(key) && key.startsWith(prefix)) {
+      _consumedTurnErrorPersistIds.delete(key);
+    }
+  }
+}
 
 /**
  * terminal error(turn 失败终态)持久化 —— 让失败在会话历史里留下可追溯的痕迹。
@@ -1931,6 +2095,7 @@ const DEDUP_WINDOW_MS_MESSAGE = 300;
  * **发送 local-db:session:error-persisted 脏信号**:对于已加载历史(historyLoaded=true)
  * 但当前不在流式中的后台会话,renderer 收到信号后将 historyLoaded 置 false,
  * 下次用户打开该会话时 ensureInitialMessages 从 DB 重拉,error 行正常浮现。
+ * payload 含 persistId,让 live 横幅与持久化行绑定同一 id。
  *
  * 先 flushAssistantBlock:error 是 turn 终结边界,在飞 assistant 文本必须先落库,
  * 否则 error 行会排在它产出的正文之前(时序错乱),与 tool_use / interaction 边界
@@ -1938,39 +2103,158 @@ const DEDUP_WINDOW_MS_MESSAGE = 300;
  * 之后调用(保证 orphan tool_result 排在 error 行之前);agentMeta 显式透传,
  * 兜底"失败轮只有 error 边界携带 SDK uuid"场景的 rewind/fork 锚点(greptile P1)。
  *
- * content 存结构化 { message, reason?, sdkError? }:reason 是 maker-core 的稳定
+ * persistId 可在广播前经 reserveTurnErrorPersistId 预留(O(1),不 flush、不写库);
+ * 真正写库仍必须保持在广播后。用户若在落库前点关闭/重试,dismiss-error 会先等
+ * whenTurnErrorPersisted(等到写入、跳过或释放,不以墙钟超时当作已落库)再按同一
+ * id 标记 ignored。
+ *
+ * content 存结构化 { message, reason?, sdkError?, toolLoop? }:reason 是 maker-core 的稳定
  * key('empty-response' / 'turn-failed' 等),renderer 渲染时按它走 i18n(规则 18),
  * message 是给非 renderer 消费方(IM / orca / 旧版本客户端)的兜底文案。
  */
-export function onTurnErrorEvent(
+function turnErrorDedupKey(
   sessionId: string,
-  data: { message?: unknown; reason?: unknown; sdkError?: unknown } | null | undefined,
+  message: string,
+  agentMeta: AgentMeta | null,
+): { dedupKey: string; hasTurnIdentity: boolean } {
+  const turnDedupId =
+    _turnDedupIdBySession.get(sessionId) ??
+    _savedTurnDedupIdForDeferred.get(sessionId) ??
+    null;
+  const turnId = agentMeta?.requestId ?? agentMeta?.uuid ?? null;
+  const messageKey = message.slice(0, 100);
+  return {
+    dedupKey: `${sessionId}:${turnId ?? (turnDedupId ? `turn:${turnDedupId}:${messageKey}` : `message:${messageKey}`)}`,
+    hasTurnIdentity: turnId !== null || turnDedupId !== null,
+  };
+}
+
+function claimTurnErrorDedup(
+  sessionId: string,
+  message: string,
+  agentMeta: AgentMeta | null,
+  capturedAt: number,
+): boolean {
+  const { dedupKey, hasTurnIdentity } = turnErrorDedupKey(sessionId, message, agentMeta);
+  const last = _recentErrorPersistKeys.get(dedupKey);
+  if (
+    last !== undefined &&
+    (hasTurnIdentity || capturedAt - last.capturedAt < DEDUP_WINDOW_MS_MESSAGE)
+  ) {
+    return false;
+  }
+  _recentErrorPersistKeys.set(dedupKey, { capturedAt });
+  return true;
+}
+
+function rememberTurnErrorPersistId(
+  sessionId: string,
+  message: string,
+  agentMeta: AgentMeta | null,
+  persistId: string,
+): void {
+  const { dedupKey } = turnErrorDedupKey(sessionId, message, agentMeta);
+  const last = _recentErrorPersistKeys.get(dedupKey);
+  if (last) {
+    last.persistId = persistId;
+    return;
+  }
+  _recentErrorPersistKeys.set(dedupKey, { capturedAt: Date.now(), persistId });
+}
+
+function lookupTurnErrorPersistId(
+  sessionId: string,
+  message: string,
+  agentMeta: AgentMeta | null,
+): string | undefined {
+  const { dedupKey } = turnErrorDedupKey(sessionId, message, agentMeta);
+  return _recentErrorPersistKeys.get(dedupKey)?.persistId;
+}
+
+/**
+ * 广播前预留 error 行 clientId。只做 dedup + createId + 登记 waiter,不 flush、不写库。
+ * 随后必须调用 onTurnErrorEvent(..., persistId) 或 releaseReservedTurnErrorPersistId。
+ */
+export function reserveTurnErrorPersistId(
+  sessionId: string,
+  data:
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | null
+    | undefined,
   agentMeta: AgentMeta | null = null,
 ): string | undefined {
   const message = typeof data?.message === 'string' ? redactSensitiveText(data.message) : '';
   if (!message) return undefined;
-  const ownerScope = captureOwnerScope();
+  if (!claimTurnErrorDedup(sessionId, message, agentMeta, Date.now())) return undefined;
+  const persistId = createId();
+  rememberTurnErrorPersistId(sessionId, message, agentMeta, persistId);
+  _reservedTurnErrorPersistIds.add(turnErrorPersistKey(sessionId, persistId));
+  createTurnErrorWaiter(sessionId, persistId);
+  return persistId;
+}
+
+/** 预留后决定不写库时解开 waiter,并标记已消费以免同一 id 再写一次。 */
+export function releaseReservedTurnErrorPersistId(sessionId: string, persistId: string): void {
+  const key = turnErrorPersistKey(sessionId, persistId);
+  _reservedTurnErrorPersistIds.delete(key);
+  _consumedTurnErrorPersistIds.add(key);
+  resolveTurnErrorWaiter(sessionId, persistId);
+}
+
+/**
+ * dismiss-error 在写库完成前点关闭时,先等这条预留 id 落库(或被释放)。
+ * 没有 waiter(已写完/从未预留)立即返回。有 waiter 就必须等到写入、owner-scope
+ * 跳过或 release —— 不能墙钟超时后按「已落库」去查询,否则会 NOT_FOUND,迟到的
+ * 写入留下未忽略行,重启又弹出同一张卡。会话清理只解开尚未入队的预留 waiter;
+ * 已入队的等到 writeChain finally。
+ */
+export function whenTurnErrorPersisted(sessionId: string, persistId: string): Promise<void> {
+  const waiter = _turnErrorPersistWaiters.get(turnErrorPersistKey(sessionId, persistId));
+  if (!waiter) return Promise.resolve();
+  return waiter.promise;
+}
+
+export function onTurnErrorEvent(
+  sessionId: string,
+  data:
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | null
+    | undefined,
+  agentMeta: AgentMeta | null = null,
+  reservedPersistId?: string,
+): string | undefined {
+  const message = typeof data?.message === 'string' ? redactSensitiveText(data.message) : '';
+  if (!message) return undefined;
   const capturedAt = Date.now();
   const recordedTurnStartedAt =
     _turnStartedAtBySession.get(sessionId) ??
     _savedTurnStartedAtForDeferred.get(sessionId);
   const turnStartedAtSnapshot = recordedTurnStartedAt ?? capturedAt;
-  const turnDedupId =
-    _turnDedupIdBySession.get(sessionId) ??
-    _savedTurnDedupIdForDeferred.get(sessionId) ??
-    null;
-  // 多窗 dedup:防止多个 BrowserWindow 各自触发 persistTurnErrorDeferred 导致重复 error 行。
-  // 优先用 agentMeta.requestId/uuid 作 turn 级 key(唯一,不同 turn 不误 dedup);
-  // 无 agentMeta 时优先使用 register 记录的 turnDedupId,最后才回退 message 短窗口。
-  const turnId = agentMeta?.requestId ?? agentMeta?.uuid ?? null;
-  const messageKey = message.slice(0, 100);
-  const dedupKey = `${sessionId}:${turnId ?? (turnDedupId ? `turn:${turnDedupId}:${messageKey}` : `message:${messageKey}`)}`;
-  const hasTurnIdentity = turnId !== null || turnDedupId !== null;
-  const lastT = _recentErrorPersistKeys.get(dedupKey);
-  if (lastT !== undefined && (hasTurnIdentity || capturedAt - lastT < DEDUP_WINDOW_MS_MESSAGE)) {
-    return undefined;
+
+  let persistId: string;
+  if (reservedPersistId) {
+    const key = turnErrorPersistKey(sessionId, reservedPersistId);
+    if (_consumedTurnErrorPersistIds.has(key) || !_reservedTurnErrorPersistIds.has(key)) {
+      return reservedPersistId;
+    }
+    _reservedTurnErrorPersistIds.delete(key);
+    _consumedTurnErrorPersistIds.add(key);
+    persistId = reservedPersistId;
+  } else {
+    // 多窗 dedup:防止多个 BrowserWindow 各自触发 persistTurnErrorDeferred 导致重复 error 行。
+    // 优先用 agentMeta.requestId/uuid 作 turn 级 key(唯一,不同 turn 不误 dedup);
+    // 无 agentMeta 时优先使用 register 记录的 turnDedupId,最后才回退 message 短窗口。
+    // Electron main 单线程:claim + createId + remember 在同一次调用里完成,输家
+    // 再进来时 lookup 一定能拿到赢家的 persistId,不必另造 pending-dismiss。
+    if (!claimTurnErrorDedup(sessionId, message, agentMeta, capturedAt)) {
+      return lookupTurnErrorPersistId(sessionId, message, agentMeta);
+    }
+    persistId = createId();
+    rememberTurnErrorPersistId(sessionId, message, agentMeta, persistId);
+    _consumedTurnErrorPersistIds.add(turnErrorPersistKey(sessionId, persistId));
+    createTurnErrorWaiter(sessionId, persistId);
   }
-  _recentErrorPersistKeys.set(dedupKey, capturedAt);
+
   // 同步捕获当前时刻作为上界，防止异步写入延迟时 latestMessageCreatedAt
   // 取到 /clear 之后的新消息时间戳，导致 error 行出现在清空后的会话里。
   // 同步捕获 turn 开始时刻，防止 enqueueWrite 异步回调执行时 register.ts 已调
@@ -1988,12 +2272,13 @@ export function onTurnErrorEvent(
   //   避免 Date.now() 落在 /clear 之后导致 error 行在清空后的历史中浮现。
   const blockCreatedAt = assistantBlocks.get(sessionId)?.createdAt;
   flushAssistantBlock(sessionId, agentMeta);
-  const persistId = createId();
   const content: Record<string, unknown> = { message };
   if (typeof data?.reason === 'string' && data.reason) content.reason = data.reason;
   if (typeof data?.sdkError === 'string' && data.sdkError) {
     content.sdkError = redactSensitiveText(data.sdkError);
   }
+  const toolLoop = parseToolLoopErrorDetails(data?.toolLoop);
+  if (toolLoop) content.toolLoop = toolLoop satisfies ToolLoopErrorDetails;
   // 错误来源 provider 的**同步**快照(session-provider-store 内存态):错误分类必须
   // 绑定到错误发生时的 provider —— session.providerId 可在任务中途切换并持久化,
   // 恢复历史错误时用它会把别家 provider 的 insufficient_quota 误判成 Cindy AI 余额
@@ -2004,7 +2289,7 @@ export function onTurnErrorEvent(
   if (providerIdAtError) content.providerId = providerIdAtError;
   const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
   const dbAgentKindSnapshot = getSessionDbAgentKind(sessionId) ?? undefined;
-  enqueueWrite(`turn_error:${sessionId}:${persistId}`, async () => {
+  enqueueTurnErrorWrite(sessionId, persistId, async (ownerScope) => {
     // 两个分支统一 +1：保证 error.createdAt 严格晚于本轮所有已入库行。
     // 注意：register.ts 在 flushAssistantBlock 之后调本函数，blockCreatedAt
     // 在生产路径恒为 undefined（block 已 delete）；latestMessageCreatedAt
@@ -2048,13 +2333,14 @@ export function onTurnErrorEvent(
     );
     if (!isOwnerScopeCurrent(ownerScope)) return;
     const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
+    const payload = { sessionId, persistId };
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue;
       try {
         if (ownerScope === null) {
-          win.webContents.send('local-db:session:error-persisted', { sessionId });
+          win.webContents.send('local-db:session:error-persisted', payload);
         } else {
-          win.webContents.send('local-db:session:error-persisted', { sessionId }, ownerStamp);
+          win.webContents.send('local-db:session:error-persisted', payload, ownerStamp);
         }
       } catch {
         /* swallow per-window broadcast failures */
@@ -2062,9 +2348,9 @@ export function onTurnErrorEvent(
     }
     // device-link:把脏信号也转发给远控端,让已加载该会话历史的控制端窗口同样失效。
     if (ownerScope === null) {
-      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', { sessionId });
+      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', payload);
     } else {
-      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', { sessionId }, ownerStamp);
+      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', payload, ownerStamp);
     }
   });
   notePersistedMessage(sessionId, 'error', persistId);
@@ -2109,4 +2395,5 @@ export function clearSessionPersistState(sessionId: string): void {
   for (const key of _recentErrorPersistKeys.keys()) {
     if (key.startsWith(`${sessionId}:`)) _recentErrorPersistKeys.delete(key);
   }
+  dropSessionTurnErrorReservations(sessionId);
 }

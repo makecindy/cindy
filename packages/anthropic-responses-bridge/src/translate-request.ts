@@ -19,6 +19,7 @@
  *     (encrypted_content 存在 redacted_thinking.data 里)
  */
 
+import { isStrictCompatibleSchema } from './strict-schema.js';
 import type {
   AnthropicContentBlock,
   AnthropicMessage,
@@ -316,6 +317,13 @@ export interface TranslateRequestOptions {
    * 请求本身没有任何 function tool 时也会单独下发(纯服务端工具轮)。
    */
   serverSideTools?: ResponsesServerTool[];
+  /**
+   * provider 级 strict 约束解码开关(bridge 层按 BridgeProviderConfig.strictFunctionTools(model)
+   * 解析后传入)。开启后仍**逐工具**做 strict 子集兼容检查(见 strict-schema.ts):
+   * 不合规工具(如 Edit 的可选 replace_all、复杂 MCP schema)回落 strict:false,不改写 schema。
+   * 省略 / false = 全部 strict:false(所有非启用 provider 的默认行为)。
+   */
+  strictFunctionTools?: boolean;
 }
 
 /**
@@ -339,11 +347,14 @@ export function translateRequest(
   // 显式用 ResponsesFunctionTool(而非放宽后的 ResponsesTool 联合):function tool 的
   // name / parameters 等必填字段要在编译期被校验,别被服务端工具那个 `type: string`
   // 兜底分支放过去。
+  const strictEnabled = opts.strictFunctionTools === true;
   const functionTools: ResponsesFunctionTool[] = (req.tools ?? []).map((t) => ({
     type: 'function',
     name: t.name,
     description: t.description,
-    strict: false,
+    // strict 逐工具判定:provider 开关 × schema 兼容(纯函数,同会话内稳定,前缀不抖)。
+    // 不合规回落 false,避免上游 400 或 optional→nullable 改写造成工具语义漂移。
+    strict: strictEnabled && isStrictCompatibleSchema(t.input_schema),
     parameters: t.input_schema ?? { type: 'object', properties: {} },
   }));
   // 服务端工具的声明**只由 model 决定**,不受任何单轮请求态(含 tool_choice)影响 ——

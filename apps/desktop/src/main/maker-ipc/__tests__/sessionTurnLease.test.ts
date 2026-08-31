@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
+import { tx as runDbTx } from '../../localDb/worker/opHandlers/tx.js';
 import {
   readPersistedSessionTurnLeases,
   refreshSessionTurnLeaseOwner,
@@ -17,10 +18,11 @@ import {
   tryAcquireSessionTurnLease,
 } from '../sessionTurnLease.js';
 
-function asLeaseClient(db: Database.Database): Pick<DbClient, 'exec' | 'query'> {
+function asLeaseClient(db: Database.Database): Pick<DbClient, 'exec' | 'query' | 'tx'> {
   return {
     exec: async (sql, params = []) => db.prepare(sql).run(...params),
     query: async <T>(sql: string, params: unknown[] = []) => db.prepare(sql).all(...params) as T[],
+    tx: async (name: string, args: unknown) => runDbTx(db, { name, args }) as never,
   };
 }
 
@@ -41,7 +43,10 @@ describe('shared-process session turn lease', () => {
         id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         active_turn_started_at INTEGER,
-        last_turn_ended_at INTEGER
+        last_turn_ended_at INTEGER,
+        list_preview TEXT,
+        list_preview_role TEXT,
+        list_message_count INTEGER
       );
       CREATE TABLE messages (
         id TEXT PRIMARY KEY,
@@ -135,6 +140,74 @@ describe('shared-process session turn lease', () => {
     await expect(readPersistedSessionTurnLeases(second, 'source-1')).resolves.toMatchObject([
       { lease: { turnId: 'turn-2', owner: secondOwner } },
     ]);
+  });
+
+  it('invalidates list_message_count when a lease row is inserted or deleted, not on no-op', async () => {
+    const { first, raw } = setup();
+    const owner = { instanceId: 'first', processId: 101 };
+    const seedCount = (count: number) => {
+      raw
+        .prepare(
+          'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+        )
+        .run('keep me', 'user', count, 'source-1');
+    };
+    const readProjection = () =>
+      raw
+        .prepare(
+          'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+        )
+        .get('source-1');
+
+    seedCount(7);
+    await expect(
+      tryAcquireSessionTurnLease(first, {
+        sessionId: 'source-1',
+        turnId: 'turn-1',
+        owner,
+        createdAt: 1,
+      }),
+    ).resolves.toBe(true);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: null,
+    });
+
+    seedCount(8);
+    await expect(
+      tryAcquireSessionTurnLease(first, {
+        sessionId: 'source-1',
+        turnId: 'turn-1b',
+        owner,
+        createdAt: 2,
+      }),
+    ).resolves.toBe(false);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: 8,
+    });
+
+    seedCount(9);
+    await expect(
+      releaseSessionTurnLease(first, { sessionId: 'source-1', turnId: 'turn-1', owner }),
+    ).resolves.toBe(true);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: null,
+    });
+
+    seedCount(10);
+    await expect(
+      releaseSessionTurnLease(first, { sessionId: 'source-1', turnId: 'turn-1', owner }),
+    ).resolves.toBe(false);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: 10,
+    });
   });
 
   it('uses exact CAS release so a delayed old end cannot delete a successor', async () => {

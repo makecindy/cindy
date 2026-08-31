@@ -64,6 +64,7 @@ export interface LatestVisiblePreviewRow {
   clientId: string;
   content: string;
   role: string;
+  createdAt: number;
 }
 
 /**
@@ -78,6 +79,7 @@ export async function latestVisiblePreviewRow(
       clientId: messages.clientId,
       content: messages.content,
       role: messages.role,
+      createdAt: messages.createdAt,
     })
     .from(messages)
     .innerJoin(sessions, eq(messages.sessionId, sessions.id))

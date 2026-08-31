@@ -1322,4 +1322,56 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
     expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);
   });
+
+  // Regression: when ensureInitialMessages backfill is invalidated by an epoch
+  // change (e.g. reloadMessages), isLoadingMore must be released so that
+  // loadOlderMessages is not permanently blocked.
+  it('releases isLoadingMore when initial backfill is invalidated by epoch change', async () => {
+    const sessionId = sid('initial-backfill-invalidation-lock');
+    const latestPage = Array.from({ length: 49 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
+      ),
+    );
+    const latestPlan = dbToolUseMessage(
+      sessionId,
+      'latest-plan',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      new Date(BASE_TIME.getTime() + 120_000).toISOString(),
+    );
+    let resolveOlderPage!: (rows: Message[]) => void;
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce([...latestPage, latestPlan])
+      .mockReturnValueOnce(
+        new Promise<Message[]>((resolve) => {
+          resolveOlderPage = resolve;
+        }),
+      );
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(4);
+
+    // Backfill is in progress, lock held.
+    expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(true);
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+
+    // Epoch change invalidates the in-flight backfill.
+    makerChatStore.reloadMessages(sessionId);
+    await Promise.resolve();
+
+    // Resolve the pending backfill — it should detect invalidation and exit.
+    resolveOlderPage([
+      dbMessage(sessionId, 'older-visible', 'older visible message', BASE_TIME.toISOString()),
+    ]);
+    await flushPromises();
+
+    // isLoadingMore must have been released despite the invalidation path.
+    expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(false);
+  });
+
+
 });

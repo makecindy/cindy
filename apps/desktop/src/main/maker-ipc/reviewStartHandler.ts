@@ -221,7 +221,13 @@ function terminalErrorDetails(event: AgentEvent): {
   error?: string;
   failureCode?: ReviewFailureCode;
 } {
-  const data = event.data as { message?: unknown } | null;
+  const data = event.data as { message?: unknown; reason?: unknown } | null;
+  if (data?.reason === 'tool_use_loop_detected') {
+    // The producer message is a diagnostic fallback and may contain Chinese
+    // text plus an internal contract category. Persist the stable code so the
+    // Reviewer card renders through its localized failure catalog.
+    return { failureCode: 'provider-failed' };
+  }
   return typeof data?.message === 'string' && data.message
     ? { error: data.message }
     : { failureCode: 'provider-failed' };

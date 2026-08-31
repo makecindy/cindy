@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
+import { tx as runDbTx } from '../../localDb/worker/opHandlers/tx.js';
 import {
   discardInvalidReviewSourceLease,
   readPersistedReviewSourceLease,
@@ -14,10 +15,11 @@ import {
   tryAcquireReviewSourceLease,
 } from '../reviewSourceLease.js';
 
-function asLeaseClient(db: Database.Database): Pick<DbClient, 'exec' | 'query'> {
+function asLeaseClient(db: Database.Database): Pick<DbClient, 'exec' | 'query' | 'tx'> {
   return {
     exec: async (sql, params = []) => db.prepare(sql).run(...params),
     query: async <T>(sql: string, params: unknown[] = []) => db.prepare(sql).all(...params) as T[],
+    tx: async (name: string, args: unknown) => runDbTx(db, { name, args }) as never,
   };
 }
 
@@ -34,7 +36,13 @@ describe('Review source lease', () => {
     const first = new Database(dbPath);
     first.exec(`
       PRAGMA foreign_keys = ON;
-      CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL);
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        list_preview TEXT,
+        list_preview_role TEXT,
+        list_message_count INTEGER
+      );
       CREATE TABLE messages (
         id TEXT PRIMARY KEY,
         client_id TEXT NOT NULL,
@@ -58,6 +66,87 @@ describe('Review source lease', () => {
     });
     return { first: asLeaseClient(first), second: asLeaseClient(second), raw: first };
   }
+
+  it('invalidates list_message_count when a lease row is inserted or deleted, not on no-op', async () => {
+    const { first, second, raw } = setup();
+    const owner = {
+      instanceId: 'first',
+      processId: 101,
+      liveness: { version: 1 as const, port: 43101, token: 'first-owner-token' },
+    };
+    const other = { instanceId: 'second', processId: 202 };
+    const seedCount = (count: number) => {
+      raw
+        .prepare(
+          'UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?',
+        )
+        .run('keep me', 'user', count, 'source-1');
+    };
+    const readProjection = () =>
+      raw
+        .prepare(
+          'SELECT list_preview, list_preview_role, list_message_count FROM sessions WHERE id = ?',
+        )
+        .get('source-1');
+
+    seedCount(7);
+    await expect(
+      tryAcquireReviewSourceLease(first, {
+        sourceSessionId: 'source-1',
+        runId: 'run-1',
+        owner,
+        createdAt: 1,
+      }),
+    ).resolves.toBe(true);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: null,
+    });
+
+    seedCount(8);
+    await expect(
+      tryAcquireReviewSourceLease(second, {
+        sourceSessionId: 'source-1',
+        runId: 'run-2',
+        owner: other,
+        createdAt: 2,
+      }),
+    ).resolves.toBe(false);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: 8,
+    });
+
+    seedCount(9);
+    await expect(
+      releaseReviewSourceLease(first, {
+        sourceSessionId: 'source-1',
+        runId: 'run-1',
+        owner,
+      }),
+    ).resolves.toBe(true);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: null,
+    });
+
+    seedCount(10);
+    await expect(
+      releaseReviewSourceLease(first, {
+        sourceSessionId: 'source-1',
+        runId: 'run-1',
+        owner,
+      }),
+    ).resolves.toBe(false);
+    expect(readProjection()).toEqual({
+      list_preview: 'keep me',
+      list_preview_role: 'user',
+      list_message_count: 10,
+    });
+  });
 
   it('admits exactly one shared-database owner and allows a successor after CAS release', async () => {
     const { first, second, raw } = setup();

@@ -98,9 +98,12 @@
       "time": {
         "unknown": "最近活动时间未知",
         "justNow": "刚刚",
-        "minutesAgo": "{{count}} 分钟前",
-        "hoursAgo": "{{count}} 小时前",
-        "daysAgo": "{{count}} 天前",
+        "minutesAgo_one": "{{count}} 分钟前",
+        "minutesAgo_other": "{{count}} 分钟前",
+        "hoursAgo_one": "{{count}} 小时前",
+        "hoursAgo_other": "{{count}} 小时前",
+        "daysAgo_one": "{{count}} 天前",
+        "daysAgo_other": "{{count}} 天前",
         "minutes": "{{count}} 分钟",
         "hours": "{{count}} 小时",
         "days": "{{count}} 天",
@@ -185,6 +188,14 @@
       "close": "关闭",
       "cancelRename": "取消重命名"
     },
+    "accounts": {
+      "title": "切换账号",
+      "add": "登录更多账号",
+      "syncFailed": "账号信息暂时无法更新",
+      "runningTitle": "切换账号？",
+      "runningMessage": "仍有任务正在运行。切换后任务会继续在电脑上运行，但此手机将停止接收和控制这些任务。",
+      "switchConfirm": "继续切换"
+    },
     "menu": {
       "groupByProject": "按项目分组",
       "groupDialogue": "对话归为一组",
@@ -204,7 +215,10 @@
       "projectOrderActivity": "按最近活动",
       "projectOrderManual": "手动",
       "projectOrderManualTip": "长按项目行拖动调整顺序，组内任务仍按上面的排序",
-      "statusHeading": "状态"
+      "statusHeading": "状态",
+      "showDeviceTasks": "查看任务",
+      "openDevice": "打开",
+      "renameDevice": "重命名"
     },
     "search": {
       "placeholder": "搜索标题或内容…",

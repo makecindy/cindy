@@ -45,6 +45,9 @@ const appearanceSettings = ipcRenderer.sendSync(
   'appearance-settings:get-sync',
 ) as AppearanceSettings | null;
 
+const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => void) =>
+  onPayload('fullscreen-change', cb);
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   preferredSystemLocale: readPreferredSystemLocale(),
@@ -81,6 +84,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.send('theme:apply-vibrancy', { familyId, isDark });
     },
   },
+  // macOS 原生全屏时红绿灯会隐藏；资源窗口自己的标题栏据此撤销左侧让位。
+  onFullscreenChange: fanOutFullscreenChange,
+  getFullscreenState: (): Promise<boolean> => ipcRenderer.invoke('get-fullscreen-state'),
   // 资源监视器是独立 renderer，localStorage 默认是空的。没有这条主进程线索时，
   // 首启亮色门会把已登录用户的暗色主题锁成浅色。
   authHasPersistedSessionHintSync: (): boolean =>

@@ -45,4 +45,16 @@ describe('Pi package mutation IPC boundary', () => {
     });
     expect(log).toHaveBeenCalledOnce();
   });
+
+  it('selects an actionable safe message from the stable failure category', async () => {
+    const privateFailure = new Error('/private/store stale target');
+    await expect(runPiPackageMutationIpcBoundary(
+      async () => { throw privateFailure; },
+      (error) => error === privateFailure ? 'Restart Cindy and refresh extensions.' : 'Try again.',
+      vi.fn(),
+    )).rejects.toMatchObject({
+      code: 'PI_PACKAGE_MUTATION_FAILED',
+      message: '[PI_PACKAGE_MUTATION_FAILED] Restart Cindy and refresh extensions.',
+    });
+  });
 });

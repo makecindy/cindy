@@ -1533,6 +1533,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/localDb/dbSlimmingMaintenanceProcess.ts',
+          config: 'vite.db-slimming-worker.config.ts',
+          // DELETE / VACUUM can run for minutes on a large database. An OS-killable
+          // utility process keeps Main responsive and lets users cancel before swap.
+          target: 'preload',
+        },
+        {
           entry: 'src/main/cindy-brain/libraryDbWorker.ts',
           config: 'vite.library-db-worker.config.ts',
           // 插件 Library SQLite 隔离在 per-plugin worker：恶意慢查询只饿死

@@ -15,6 +15,22 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 describe('mobile settings overview', () => {
+  it('surfaces durable logout failures instead of dropping the promise', () => {
+    const settingsSource = readTextLf(
+      resolve(process.cwd(), 'app/settings.tsx'),
+      'utf8',
+    );
+    const logoutStart = settingsSource.indexOf('const logout = useCallback');
+    const logoutBody = settingsSource.slice(
+      logoutStart,
+      settingsSource.indexOf('const switchDevServerEnvironment', logoutStart),
+    );
+
+    expect(logoutBody).toContain('await auth.logout();');
+    expect(logoutBody).toContain("t('devices.list.alert.actionFailed')");
+    expect(logoutBody).toContain('formatRemoteError(error)');
+  });
+
   it('renders language as one expandable picker instead of a fixed option list', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
 

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,7 @@ import {
   parseInstalledGhostManifest,
   readInstalledGhostManifest,
   readInstalledGhostManifestDigestFormats,
+  readInstalledGhostManifestSnapshot,
 } from '../installedGhostManifest.js';
 import { ghostManifestDigest } from '../plugin-market/ledger.js';
 
@@ -133,6 +135,42 @@ describe('installed ghost manifest compatibility', () => {
     expect(parsed.manifest).not.toHaveProperty('manual');
   });
 
+  it('hashes the exact bytes read instead of a normalized serialization', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-manifest-sha-'));
+    roots.push(root);
+    const bytes = Buffer.from(`${JSON.stringify(manifest(), null, 2)}\n`);
+    fs.writeFileSync(path.join(root, 'ghost.json'), bytes);
+
+    const result = readInstalledGhostManifestSnapshot(root, 64 * 1024);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.snapshot.rawManifestSha256).toBe(
+      crypto.createHash('sha256').update(bytes).digest('hex'),
+    );
+    expect(result.snapshot.rawManifestSha256).not.toBe(
+      crypto.createHash('sha256').update(JSON.stringify(result.snapshot.manifest)).digest('hex'),
+    );
+  });
+
+  it('keeps semantic equality separate from raw-byte identity', () => {
+    const rootsForFormats = [
+      fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-format-a-')),
+      fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-format-b-')),
+    ];
+    roots.push(...rootsForFormats);
+    fs.writeFileSync(path.join(rootsForFormats[0], 'ghost.json'), JSON.stringify(manifest()));
+    fs.writeFileSync(path.join(rootsForFormats[1], 'ghost.json'), JSON.stringify(manifest(), null, 2));
+
+    const first = readInstalledGhostManifestSnapshot(rootsForFormats[0], 64 * 1024);
+    const second = readInstalledGhostManifestSnapshot(rootsForFormats[1], 64 * 1024);
+
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(first.snapshot.manifest).toEqual(second.snapshot.manifest);
+    expect(first.snapshot.rawManifestSha256).not.toBe(second.snapshot.rawManifestSha256);
+  });
+
   it('keeps the upgrade-time v2 digest candidate in the original slot order', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-v2-digest-'));
     roots.push(root);
@@ -153,5 +191,60 @@ describe('installed ghost manifest compatibility', () => {
     );
     expect(digestCandidates).toContain(ghostManifestDigest(legacy));
     expect(parsed.manifest).toMatchObject({ notify: true });
+  });
+
+  it.each([
+    ['omitted', undefined],
+    ['empty', {}],
+    ['explicit false', { externalLinks: false }],
+  ])('reproduces the v0.1.61 card projection when card is %s', (_label, card) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-v2-card-shape-'));
+    roots.push(root);
+    const raw = {
+      schemaVersion: 2 as const,
+      id: 'cindy-card-shape',
+      name: 'Card Shape',
+      version: '1.0.0',
+      kind: 'chip' as const,
+      entry: 'main.js',
+      slots: ['card'],
+      ...(card === undefined ? {} : { card }),
+    };
+    fs.writeFileSync(path.join(root, 'ghost.json'), JSON.stringify(raw));
+
+    const result = readInstalledGhostManifestSnapshot(root, 64 * 1024);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.snapshot.releasedLegacyDigestFormat).not.toHaveProperty('card');
+  });
+
+  it('keeps only released true-valued card and agent detail fields', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-v2-detail-shape-'));
+    roots.push(root);
+    const raw = {
+      schemaVersion: 2 as const,
+      id: 'cindy-detail-shape',
+      name: 'Detail Shape',
+      version: '1.0.0',
+      kind: 'chip' as const,
+      entry: 'main.js',
+      slots: ['card', 'agent'],
+      card: { externalLinks: true },
+      agent: { background: true, errand: false },
+    };
+    fs.writeFileSync(path.join(root, 'ghost.json'), JSON.stringify(raw));
+
+    const result = readInstalledGhostManifestSnapshot(root, 64 * 1024);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.snapshot.releasedLegacyDigestFormat).toMatchObject({
+      card: { externalLinks: true },
+      agent: { background: true },
+    });
+    expect(
+      (result.snapshot.releasedLegacyDigestFormat as { agent: Record<string, unknown> }).agent,
+    ).not.toHaveProperty('errand');
   });
 });

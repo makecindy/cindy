@@ -4,7 +4,7 @@
  * Hook 新会话的 agent / model / effort / permissionMode / providerId 合成
  * (取值链的桌面端末段):
  *
- *   server 显式值(用户在 Slack 按工作目录设置的偏好) > 桌面端 IM 新会话
+ *   本机目录偏好(尚未迁移时才回落 dispatch/server 便签) > 桌面端 IM 新会话
  *   默认值(草稿, 建 session 那一刻实时读) > 当前可用模型清单的首项 >
  *   草稿裸值(没有任何可用模型时的兼容兜底)
  *

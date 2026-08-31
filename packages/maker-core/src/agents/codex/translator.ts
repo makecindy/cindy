@@ -478,32 +478,72 @@ export function isAuthRelatedErrorMessage(message: string, errorStatus?: number)
     .test(message);
 }
 
+export interface ClassifiedCodexError {
+  message: string;
+  errorStatus?: number;
+  errorInfoTag?: string;
+  usageLimit: boolean;
+  isCapacityError: boolean;
+  reason?: string;
+  data: Record<string, unknown> & { message: string };
+}
+
+/**
+ * ErrorNotification 与 turn/completed.turn.error 共用的结构化分类。
+ * 只消费 Codex wire schema 的 codexErrorInfo；additionalDetails / stderr 不参与判定。
+ */
+export function classifyCodexError(error: {
+  message?: string;
+  codexErrorInfo?: import('./app-server/protocol.js').CodexErrorInfo | null;
+} | null | undefined): ClassifiedCodexError {
+  const rawMessage = error?.message ?? 'codex error';
+  const hasMissingBearer = /\bMissing bearer\b/i.test(rawMessage);
+  const hasAuthErrorMarker =
+    /\bauthentication_(?:error|failed)\b|\binvalid[\s_-]*api[\s_-]*key\b|\bapi key not valid\b/i.test(
+      rawMessage,
+    );
+  const message = redactSensitiveText(rawMessage);
+  const signals = extractNonSecretErrorSignals(rawMessage);
+  const errorStatus =
+    signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+  const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
+  const isCapacityError =
+    parseOverloadError(message, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
+  const reason = isCapacityError
+    ? UPSTREAM_OVERLOAD_REASON
+    : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
+      ? CONTEXT_OVERFLOW_REASON
+      : undefined;
+  return {
+    message,
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
+    ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
+    usageLimit: signals.usageLimit,
+    isCapacityError,
+    ...(reason ? { reason } : {}),
+    data: {
+      message,
+      ...(errorStatus !== undefined ? { errorStatus } : {}),
+      ...(signals.usageLimit ? { usageLimit: true } : {}),
+      ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
+      ...(reason ? { reason } : {}),
+    },
+  };
+}
+
 /** error notification (顶层非 item.*) → AgentEvent error。 */
 export function translateErrorNotification(
   params: ErrorNotification['params'],
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
-  const message = params.error?.message ?? 'codex error';
-  const hasMissingBearer = /\bMissing bearer\b/i.test(message);
-  const hasAuthErrorMarker =
-    /\bauthentication_(?:error|failed)\b|\binvalid[\s_-]*api[\s_-]*key\b|\bapi key not valid\b/i.test(
-      message,
-    );
-  const safeMessage = redactSensitiveText(message);
-  const signals = extractNonSecretErrorSignals(message);
-  const errorStatus =
-    signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
-  // 结构化错误标识。过载判定优先吃它(见下方 capacity 分支), 同时透出到 error data
-  // 供诊断与下游归因。**不参与上面的 errorStatus 推断** —— 那条链路上挂着
-  // renderer 的 401 banner 与 auth 修复 UX, 改推断依据会连带改这些行为。
-  const errorInfoTag = codexErrorInfoTag(params.error?.codexErrorInfo);
-  const safeErrorData = {
-    message: safeMessage,
-    ...(errorStatus !== undefined ? { errorStatus } : {}),
-    ...(signals.usageLimit ? { usageLimit: true } : {}),
-    ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
-  };
+  const classified = classifyCodexError(params.error);
+  const message = classified.message;
+  const safeMessage = classified.message;
+  const errorStatus = classified.errorStatus;
+  const isCapacityError = classified.isCapacityError;
+  const errorInfoTag = classified.errorInfoTag;
+  const safeErrorData = classified.data;
   // willRetry=true 的暂时错误 (transient API blip / 5xx blip), server 自己会重试 — 默认
   // 不 emit error event 给 UI,否则会把瞬时错误暴露成用户可见失败。**但** auth 缺失
   // (401/Unauthorized/Missing bearer) 是 daemon 怎么 retry 也不可能自愈的 —— 必须
@@ -566,20 +606,14 @@ export function translateErrorNotification(
   // 由 agent 层接管退避重投。接管成功时透成非终止状态并带进度后缀, renderer
   // 显示"模型繁忙, 正在重试 (N/M)"; 预算耗尽或条件不满足 (本 turn 已有产出)
   // 时 tryTakeOverOverload 返回 null, 落回下面的终止错误路径。
-  const isCapacityError =
-    parseOverloadError(safeMessage, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
-  // 过载错误一律带上稳定 reason key。renderer 隔着 IPC 投影拿不到 codexErrorInfo,
-  // 靠这个 key 判定"是否过载"(ErrorBanner 的本地化文案 + 重试进度 + hideRetry 都由它
-  // 驱动)。不带的话 renderer 只能回退到文案匹配 —— codex 改一次措辞, 用户就会在整段
-  // 重试窗口里看到英文原文, 也就是本次改动要消除的那个依赖在 UI 侧原样残留。
+  // 过载分类在函数入口已完成，避免同一判据在两处漂移。
   const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
   // 上下文超限同样带稳定 reason key(#1429): 原样重试必然再撞同一个 4xx, renderer 靠
   // 它隐藏 Retry 并给出压缩 / 新开会话入口。结构化 contextWindowExceeded 优先，
   // 文案匹配仅兼容旧版 app-server；与 capacity 互斥时 overload 优先 —— 它还驱动
   // 退避重投接管，语义更具体。
   const contextOverflowReason =
-    !isCapacityError &&
-    (errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(safeMessage))
+    !isCapacityError && classified.reason === CONTEXT_OVERFLOW_REASON
       ? { reason: CONTEXT_OVERFLOW_REASON }
       : {};
   if (!params.willRetry && isCapacityError) {
@@ -733,6 +767,7 @@ interface AgentMessageItem {
   type: 'agentMessage';
   id: string;
   text: string;
+  phase?: 'commentary' | 'final_answer';
 }
 
 interface ReasoningItem {
@@ -1057,7 +1092,7 @@ function emitAgentMessageProgress(
   if (delta.length === 0) return;
   queue.push({
     type: 'text',
-    data: { text: delta, isFinal: false },
+    data: { text: delta, isFinal: false, agentMessageId: itemId },
     source: 'codex',
   });
 }
@@ -1145,7 +1180,13 @@ function handleAgentMessage(
     // finalizeCodexCitationText 是与历史导入共用的统一口径。
     queue.push({
       type: 'text',
-      data: { text: finalizeCodexCitationText(rawText), isFinal: true, isFullText: true },
+      data: {
+        text: finalizeCodexCitationText(rawText),
+        isFinal: true,
+        isFullText: true,
+        agentMessageId: item.id,
+        ...(item.phase ? { phase: item.phase } : {}),
+      },
       source: 'codex',
     });
     return;

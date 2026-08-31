@@ -16,10 +16,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 class MemLocalStorage {
   private store = new Map<string, string>();
+  private writesFail = false;
   getItem(k: string): string | null {
     return this.store.has(k) ? (this.store.get(k) as string) : null;
   }
   setItem(k: string, v: string): void {
+    if (this.writesFail) throw new Error('simulated localStorage write failure');
     this.store.set(k, v);
   }
   removeItem(k: string): void {
@@ -27,6 +29,9 @@ class MemLocalStorage {
   }
   clear(): void {
     this.store.clear();
+  }
+  setWritesFail(writesFail: boolean): void {
+    this.writesFail = writesFail;
   }
 }
 
@@ -45,9 +50,333 @@ async function loadModule() {
 
 describe('providerModelMemory store', () => {
   it('默认无记录:getProviderModelChoice 返回 undefined', async () => {
-    const { getProviderModelChoice } = await loadModule();
+    const { getProviderModelChoice, hasAnyProviderModelOverride } = await loadModule();
     expect(getProviderModelChoice('claude-code', 'xd')).toBeUndefined();
     expect(getProviderModelChoice('codex', 'openai')).toBeUndefined();
+    expect(hasAnyProviderModelOverride()).toBe(false);
+  });
+
+  it('仅有 effort 或 Fast 记忆也视为既有模型自定义', async () => {
+    const effortMemory = await loadModule();
+    effortMemory.setProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8', 'high');
+    expect(effortMemory.hasAnyProviderModelOverride()).toBe(true);
+
+    effortMemory.__resetForTest();
+    effortMemory.setProviderModelFast('codex', 'openai', 'gpt-5.6-sol', false);
+    expect(effortMemory.hasAnyProviderModelOverride()).toBe(true);
+  });
+
+  it('按 dataOwnerId 隔离 override，旧全局快照只由首个 owner 认领', async () => {
+    memStorage.setItem(
+      'xdt:providerModelMemory:v2',
+      JSON.stringify({
+        'claude-code:anthropic': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'high' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    expect(m.hasAnyProviderModelOverride()).toBe(true);
+    expect(memStorage.getItem('xdt:providerModelMemory:v2')).toBeNull();
+
+    m.setProviderModelMemoryOwner('owner-b');
+    expect(m.hasAnyProviderModelOverride()).toBe(false);
+    m.setProviderModelFast('codex', 'openai', 'gpt-5.6-sol', false);
+    expect(m.hasAnyProviderModelOverride()).toBe(true);
+
+    m.setProviderModelMemoryOwner('owner-a');
+    expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('high');
+    expect(m.getProviderModelFast('codex', 'openai', 'gpt-5.6-sol')).toBeUndefined();
+  });
+
+  it('同 owner 的外部写入刷新空缓存并通知订阅者，其他 owner 事件不串入', async () => {
+    let onStorage: ((event: StorageEvent) => void) | undefined;
+    vi.stubGlobal('window', {
+      localStorage: memStorage,
+      addEventListener: (type: string, listener: EventListener) => {
+        if (type === 'storage') onStorage = listener as (event: StorageEvent) => void;
+      },
+      removeEventListener: vi.fn(),
+    });
+    vi.resetModules();
+
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    expect(m.hasAnyProviderModelOverride()).toBe(false); // 窗口 B 先以空缓存启动。
+    const seen = vi.fn();
+    m.subscribeProviderModelMemory(seen);
+
+    const ownerAKey = `${m.__STORAGE_KEY}:owner-a`;
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'codex:openai': {
+          lastModel: '',
+          effortByModel: { 'gpt-5.6-sol': 'xhigh' },
+          fastByModel: { 'gpt-5.6-sol': true },
+          thinkingByModel: {},
+        },
+      }),
+    );
+    onStorage?.({ key: ownerAKey, newValue: '{ stale event payload }' } as StorageEvent);
+
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(m.hasAnyProviderModelOverride()).toBe(true);
+    expect(m.getProviderModelEffort('codex', 'openai', 'gpt-5.6-sol')).toBe('xhigh');
+    expect(m.getProviderModelFast('codex', 'openai', 'gpt-5.6-sol')).toBe(true);
+
+    // 相同持久化真相的迟到事件不应重复 bump modelPresetVersion。
+    onStorage?.({ key: ownerAKey, newValue: '{ older payload }' } as StorageEvent);
+    onStorage?.({
+      key: ownerAKey,
+      storageArea: {} as Storage,
+    } as StorageEvent);
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    memStorage.setItem(
+      `${m.__STORAGE_KEY}:owner-b`,
+      JSON.stringify({
+        'claude-code:anthropic': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+    onStorage?.({ key: `${m.__STORAGE_KEY}:owner-b` } as StorageEvent);
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBeUndefined();
+
+    // owner 已切换后，旧 owner 的迟到事件不能刷新新 owner 缓存。
+    m.setProviderModelMemoryOwner('owner-c');
+    seen.mockClear();
+    onStorage?.({ key: ownerAKey } as StorageEvent);
+    expect(seen).not.toHaveBeenCalled();
+    expect(m.hasAnyProviderModelOverride()).toBe(false);
+  });
+
+  it('写入前重读 owner 分区，不用空缓存覆盖外部 effort/Fast', async () => {
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    expect(m.hasAnyProviderModelOverride()).toBe(false); // 窗口 B 的旧缓存。
+
+    const ownerAKey = `${m.__STORAGE_KEY}:owner-a`;
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'claude-code:anthropic': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'high' },
+          fastByModel: { 'claude-opus-4-8': true },
+          thinkingByModel: {},
+        },
+      }),
+    );
+
+    // storage 事件尚未送达时，窗口 B 又写另一条；整表写回仍须保留窗口 A 的两项 override。
+    m.setProviderModelThinking('pi', 'xd', 'glm-5.3-flash', true);
+    const persisted = JSON.parse(memStorage.getItem(ownerAKey) ?? '{}') as Record<
+      string,
+      {
+        effortByModel: Record<string, string>;
+        fastByModel: Record<string, boolean>;
+        thinkingByModel: Record<string, boolean>;
+      }
+    >;
+    expect(persisted['claude-code:anthropic']?.effortByModel['claude-opus-4-8']).toBe('high');
+    expect(persisted['claude-code:anthropic']?.fastByModel['claude-opus-4-8']).toBe(true);
+    expect(persisted['pi:xd']?.thinkingByModel['glm-5.3-flash']).toBe(true);
+  });
+
+  it('写前读到外部同值时也刷新本窗口缓存和订阅者', async () => {
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    expect(m.hasAnyProviderModelOverride()).toBe(false);
+    const seen = vi.fn();
+    m.subscribeProviderModelMemory(seen);
+
+    const ownerAKey = `${m.__STORAGE_KEY}:owner-a`;
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'codex:openai': {
+          lastModel: '',
+          effortByModel: { 'gpt-5.6-sol': 'xhigh' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+
+    // storage 事件尚未到达；同值写虽无需再落盘，但 freshMap 已看到的真相必须立即被采纳。
+    m.setProviderModelEffort('codex', 'openai', 'gpt-5.6-sol', 'xhigh');
+    expect(m.getProviderModelEffort('codex', 'openai', 'gpt-5.6-sol')).toBe('xhigh');
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it('写盘失败后继续保留当前 owner 的新 override，可写时完整补落盘', async () => {
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    const ownerAKey = `${m.__STORAGE_KEY}:owner-a`;
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'claude-code:anthropic': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'medium' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+
+    memStorage.setWritesFail(true);
+    m.setProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8', true);
+    m.setProviderModelEffort('codex', 'openai', 'gpt-5.6-sol', 'xhigh');
+    expect(m.getProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8')).toBe(true);
+    expect(m.getProviderModelEffort('codex', 'openai', 'gpt-5.6-sol')).toBe('xhigh');
+
+    memStorage.setWritesFail(false);
+    // 窗口 A 在 B 写盘失败期间成功写入另一项；B 恢复后必须在这份新盘面上重放自己的 op。
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'claude-code:anthropic': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'medium' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'claude-code:xd': {
+          lastModel: '',
+          effortByModel: { 'claude-haiku-4-5': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'codex:openai': {
+          lastModel: 'gpt-5.5',
+          effortByModel: { 'gpt-5.5': 'medium' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'codex:*': {
+          lastModel: '',
+          effortByModel: {},
+          fastByModel: { 'gpt-5.6-sol': false },
+          thinkingByModel: {},
+        },
+      }),
+    );
+    m.setProviderModelThinking('pi', 'xd', 'glm-5.3-flash', true);
+    const persisted = JSON.parse(memStorage.getItem(ownerAKey) ?? '{}') as Record<
+      string,
+      {
+        effortByModel: Record<string, string>;
+        fastByModel: Record<string, boolean>;
+        thinkingByModel: Record<string, boolean>;
+      }
+    >;
+    expect(persisted['claude-code:anthropic']?.effortByModel['claude-opus-4-8']).toBe('medium');
+    expect(persisted['claude-code:anthropic']?.fastByModel['claude-opus-4-8']).toBe(true);
+    expect(persisted['claude-code:xd']?.effortByModel['claude-haiku-4-5']).toBe('low');
+    expect(persisted['codex:openai']?.effortByModel['gpt-5.6-sol']).toBe('xhigh');
+    expect(persisted['codex:openai']?.effortByModel['gpt-5.5']).toBe('medium');
+    expect((persisted['codex:openai'] as { lastModel?: string })?.lastModel).toBe('gpt-5.5');
+    expect(persisted['codex:*']?.fastByModel['gpt-5.6-sol']).toBe(false);
+    expect(persisted['pi:xd']?.thinkingByModel['glm-5.3-flash']).toBe(true);
+  });
+
+  it('写盘失败的旧操作不覆盖另一窗口后来写入的同字段', async () => {
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    const ownerAKey = `${m.__STORAGE_KEY}:owner-a`;
+
+    memStorage.setWritesFail(true);
+    m.setProviderModelFast('codex', 'openai', 'gpt-5.6-sol', true);
+
+    memStorage.setWritesFail(false);
+    // 窗口 A 后来明确把同一字段设为 false；B 的旧 pending=true 恢复时必须退休。
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'codex:openai': {
+          lastModel: '',
+          effortByModel: {},
+          fastByModel: { 'gpt-5.6-sol': false },
+          thinkingByModel: {},
+        },
+      }),
+    );
+    m.setProviderModelThinking('pi', 'xd', 'glm-5.3-flash', true);
+
+    const persisted = JSON.parse(memStorage.getItem(ownerAKey) ?? '{}') as Record<
+      string,
+      { fastByModel: Record<string, boolean> }
+    >;
+    expect(persisted['codex:openai']?.fastByModel['gpt-5.6-sol']).toBe(false);
+  });
+
+  it('选模写盘失败后再调 effort，不会丢失独立的 lastModel 意图', async () => {
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+
+    memStorage.setWritesFail(true);
+    m.setProviderModelChoice('codex', 'openai', 'gpt-5.6-sol', 'high');
+    m.setProviderModelEffort('codex', 'openai', 'gpt-5.6-sol', 'xhigh');
+
+    memStorage.setWritesFail(false);
+    m.setProviderModelThinking('pi', 'xd', 'glm-5.3-flash', true);
+    expect(m.getProviderModelChoice('codex', 'openai')).toEqual({
+      model: 'gpt-5.6-sol',
+      effort: 'xhigh',
+    });
+  });
+
+  it('冲突退休的旧 lastModel 基线不阻断后来更新的本地选模', async () => {
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    const ownerAKey = `${m.__STORAGE_KEY}:owner-a`;
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'codex:openai': {
+          lastModel: 'model-x',
+          effortByModel: { 'model-x': 'medium' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+
+    memStorage.setWritesFail(true);
+    m.setProviderModelChoice('codex', 'openai', 'model-a', 'high');
+
+    memStorage.setWritesFail(false);
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'codex:openai': {
+          lastModel: 'model-c',
+          effortByModel: { 'model-c': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+    memStorage.setWritesFail(true);
+    m.setProviderModelChoice('codex', 'openai', 'model-b', 'xhigh');
+
+    memStorage.setWritesFail(false);
+    m.setProviderModelThinking('pi', 'xd', 'glm-5.3-flash', true);
+    expect(m.getProviderModelChoice('codex', 'openai')).toEqual({
+      model: 'model-b',
+      effort: 'xhigh',
+    });
   });
 
   it('set/get 往返 + 跨重启持久化', async () => {
@@ -95,7 +424,10 @@ describe('providerModelMemory store', () => {
     const m = await loadModule();
     m.setProviderModelChoice('codex', 'openai', 'gpt-5.4', 'high');
     expect(() => m.setProviderModelChoice('codex', 'openai', 'gpt-5.4', 'high')).not.toThrow();
-    expect(m.getProviderModelChoice('codex', 'openai')).toEqual({ model: 'gpt-5.4', effort: 'high' });
+    expect(m.getProviderModelChoice('codex', 'openai')).toEqual({
+      model: 'gpt-5.4',
+      effort: 'high',
+    });
   });
 
   it('空 providerId / model / effort 入参被忽略', async () => {
@@ -322,7 +654,9 @@ describe('providerModelMemory —— clear:恢复推荐删键(不写默认快照
     // 重启后仍是「无记录 ⇒ 跟随目录默认」。
     vi.resetModules();
     const m2 = await loadModule();
-    expect(m2.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBeUndefined();
+    expect(
+      m2.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8'),
+    ).toBeUndefined();
   });
 
   it('clearFast 同理;删的是键而不是写一份显式 false', async () => {

@@ -1,39 +1,30 @@
+import { readFileSync } from 'node:fs';
+
+import { PiManagedPackageMutationFailedError } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const electron = vi.hoisted(() => ({
-  focusedWindow: null as object | null,
-  showMessageBox: vi.fn(),
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
 }));
 
-vi.mock('electron', () => ({
-  BrowserWindow: {
-    getFocusedWindow: () => electron.focusedWindow,
-  },
-  dialog: {
-    showMessageBox: electron.showMessageBox,
-  },
+const storeMocks = vi.hoisted(() => ({
+  mayHaveChangedState: vi.fn(() => false),
 }));
 
 vi.mock('../pi-package-store.js', () => ({
   mutatePiPackage: vi.fn(),
+  piPackageMutationMayHaveChangedState: storeMocks.mayHaveChangedState,
+}));
+
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({ warn: loggerMocks.warn }),
 }));
 
 vi.mock('../pi-package-mutation-grant.js', () => ({
   issuePiPackageMutationGrant: vi.fn(),
 }));
 
-vi.mock('../../i18n.js', () => ({
-  t: (key: string) => ({
-    'settings.piPackages.uninstallDescription': 'remove {{name}}',
-    'settings.piPackages.updateConfirmDescription': 'update {{source}}',
-    'settings.piPackages.confirmDescription': 'install {{source}}',
-  }[key] ?? key),
-}));
-
-import { PiManagedPackageMutationCancelledError } from '@cindy/maker-core';
-
 import {
-  confirmLocalPiManagedPackageMutation,
   mutateAuthorizedPiManagedPackage,
   type PiManagedPackageMutationDeps,
 } from '../pi-managed-package-mutation.js';
@@ -41,7 +32,6 @@ import {
 function buildDeps() {
   const grant = {} as ReturnType<PiManagedPackageMutationDeps['issueGrant']>;
   const deps: PiManagedPackageMutationDeps = {
-    confirmLocalMutation: vi.fn(async () => true),
     issueGrant: vi.fn(() => grant),
     mutate: vi.fn(async () => ({ available: true, packages: [], changed: true })),
   };
@@ -50,137 +40,170 @@ function buildDeps() {
 
 describe('Pi managed package Main authorization', () => {
   beforeEach(() => {
-    electron.focusedWindow = null;
-    electron.showMessageBox.mockReset();
+    vi.clearAllMocks();
   });
 
-  it('requires native Main confirmation before a local Desktop command receives a grant', async () => {
+  it.each([
+    'local-desktop-command',
+    'authenticated-im-command',
+    'confirmed-tool-call',
+  ] as const)('treats host-trusted %s as the single authorization', async (authorization) => {
     const { deps, grant } = buildDeps();
-    const request = {
-      action: 'install' as const,
+    await mutateAuthorizedPiManagedPackage({
+      action: 'install',
       source: 'npm:context-mode',
-      authorization: 'local-desktop-command' as const,
-    };
+      authorization,
+    }, deps);
 
-    await mutateAuthorizedPiManagedPackage(request, deps);
-
-    expect(deps.confirmLocalMutation).toHaveBeenCalledWith({
+    expect(deps.issueGrant).toHaveBeenCalledOnce();
+    expect(deps.issueGrant).toHaveBeenCalledWith({
       action: 'install',
       source: 'npm:context-mode',
     });
-    expect(vi.mocked(deps.confirmLocalMutation).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(deps.issueGrant).mock.invocationCallOrder[0]!,
-    );
     expect(deps.mutate).toHaveBeenCalledWith(
       { action: 'install', source: 'npm:context-mode' },
       grant,
     );
   });
 
-  it('does not issue a grant or mutate when the local Desktop confirmation is cancelled', async () => {
-    const { deps } = buildDeps();
-    vi.mocked(deps.confirmLocalMutation).mockResolvedValue(false);
+  it.each(['update', 'remove'] as const)(
+    'forwards the host runtime hook to the native %s commit edge',
+    async (action) => {
+      const { deps, grant } = buildDeps();
+      const hooks = { onRuntimeInvalidationPublished: vi.fn() };
 
-    await expect(mutateAuthorizedPiManagedPackage({
-      action: 'remove',
-      source: 'npm:context-mode',
-      authorization: 'local-desktop-command',
-    }, deps)).rejects.toBeInstanceOf(PiManagedPackageMutationCancelledError);
-    expect(deps.issueGrant).not.toHaveBeenCalled();
-    expect(deps.mutate).not.toHaveBeenCalled();
-  });
-
-  it('keeps the original source bound to the grant and mutation after display-only escaping', async () => {
-    const { deps, grant } = buildDeps();
-    const source = 'npm:trusted\tname\u001b\u202Etxt';
-    const request = {
-      action: 'install' as const,
-      source,
-      authorization: 'local-desktop-command' as const,
-    };
-
-    await mutateAuthorizedPiManagedPackage(request, deps);
-
-    expect(deps.confirmLocalMutation).toHaveBeenCalledWith({ action: 'install', source });
-    expect(deps.issueGrant).toHaveBeenCalledWith({ action: 'install', source });
-    expect(deps.mutate).toHaveBeenCalledWith({ action: 'install', source }, grant);
-  });
-
-  it.each(['authenticated-im-command', 'confirmed-tool-call'] as const)(
-    'accepts host-trusted %s without a second Desktop dialog',
-    async (authorization) => {
-      const { deps } = buildDeps();
       await mutateAuthorizedPiManagedPackage({
-        action: 'update',
+        action,
         source: 'npm:context-mode',
-        authorization,
-      }, deps);
-      expect(deps.confirmLocalMutation).not.toHaveBeenCalled();
-      expect(deps.issueGrant).toHaveBeenCalledOnce();
-      expect(deps.mutate).toHaveBeenCalledOnce();
+        authorization: 'confirmed-tool-call',
+      }, deps, hooks);
+
+      expect(deps.mutate).toHaveBeenCalledWith(
+        { action, source: 'npm:context-mode' },
+        grant,
+        hooks,
+      );
     },
   );
 
-  it('uses a Main-owned native dialog whose cancellation is the default', async () => {
-    electron.showMessageBox.mockResolvedValue({ response: 1 });
+  it('publishes sibling convergence before retiring the exact caller snapshot', () => {
+    const piHostSource = readFileSync(new URL('../pi-host.ts', import.meta.url), 'utf8');
+    const makerHostSource = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
 
-    await expect(confirmLocalPiManagedPackageMutation({
-      action: 'install',
-      source: 'npm:context-mode',
-    })).resolves.toBe(false);
-    expect(electron.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
-      buttons: [
-        'settings.piPackages.confirmInstall',
-        'settings.piPackages.cancel',
-      ],
-      defaultId: 1,
-      cancelId: 1,
-    }));
+    expect(piHostSource).toContain(
+      '{ onRuntimeInvalidationPublished: opts.onPiManagedPackageMutationCommitted }',
+    );
+    expect(piHostSource).toContain(
+      'onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled',
+    );
+    expect(makerHostSource).toContain(
+      "onPiManagedPackageMutationCommitted: async (phase = 'commit') =>",
+    );
+    expect(makerHostSource).toContain(
+      'await captureLocalPiPackageRuntimeInvalidationSnapshot(maker)',
+    );
+    expect(makerHostSource).toContain(
+      'pendingPiPackageRuntimeSnapshots[pendingPiPackageRuntimeSnapshots.length - 1] = snapshot',
+    );
+    expect(makerHostSource).toContain(
+      'snapshot.entries.filter(({ session }) => session.id === callerSessionId)',
+    );
+    expect(makerHostSource).toContain(
+      'snapshot.entries.filter(({ session }) => session.id !== callerSessionId)',
+    );
+    expect(makerHostSource).toContain("recoveryAction: 'restart-cindy-to-refresh-packages'");
+    const publishIndex = makerHostSource.indexOf('if (initiallyPartial) partial()');
+    const callerRetirementIndex = makerHostSource.indexOf('{ entries: callerEntries }');
+    expect(publishIndex).toBeGreaterThan(-1);
+    expect(callerRetirementIndex).toBeGreaterThan(publishIndex);
   });
 
-  it('treats the Main native confirm button as the user gesture that authorizes mutation', async () => {
-    const owner = {};
-    electron.focusedWindow = owner;
-    electron.showMessageBox.mockResolvedValue({ response: 0 });
+  it('keeps the exact action and source bound to the one-shot grant', async () => {
+    const { deps, grant } = buildDeps();
+    const source = 'npm:trusted\tname\u001b\u202Etxt';
 
-    await expect(confirmLocalPiManagedPackageMutation({
-      action: 'remove',
+    await mutateAuthorizedPiManagedPackage({
+      action: 'update',
+      source,
+      authorization: 'local-desktop-command',
+    }, deps);
+
+    expect(deps.issueGrant).toHaveBeenCalledWith({ action: 'update', source });
+    expect(deps.mutate).toHaveBeenCalledWith({ action: 'update', source }, grant);
+  });
+
+  it('carries only the runtime-convergence bit across a failed host mutation', async () => {
+    const { deps } = buildDeps();
+    const rawError = new Error('private native failure');
+    vi.mocked(deps.mutate).mockRejectedValueOnce(rawError);
+    storeMocks.mayHaveChangedState.mockReturnValueOnce(true);
+
+    const failure = await mutateAuthorizedPiManagedPackage({
+      action: 'update',
       source: 'npm:context-mode',
-    })).resolves.toBe(true);
-    expect(electron.showMessageBox).toHaveBeenCalledWith(
-      owner,
-      expect.objectContaining({
-        buttons: [
-          'settings.piPackages.confirmUninstall',
-          'settings.piPackages.cancel',
-        ],
-        defaultId: 1,
-        cancelId: 1,
-      }),
-    );
+      authorization: 'local-desktop-command',
+    }, deps).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PiManagedPackageMutationFailedError);
+    expect(failure).toMatchObject({
+      mayHaveChangedState: true,
+      failureCode: 'native-command-failed',
+    });
+    expect(failure).not.toHaveProperty('cause');
   });
 
   it.each([
-    ['install', 'install'] as const,
-    ['update', 'update'] as const,
-    ['remove', 'remove'] as const,
-  ])('escapes untrusted controls in the %s dialog without changing the mutation source', async (
-    action,
-    verb,
-  ) => {
-    const source = 'C:\\safe\\pkg\tname\u001b\u202Etxt\u2066\u2028end';
-    electron.showMessageBox.mockResolvedValue({ response: 0 });
+    ['npm ERR! code ETARGET No matching version found', 'version-not-found'],
+    ['npm ERR! code E404 package not found', 'package-not-found'],
+    ['getaddrinfo ENOTFOUND registry.example', 'source-unavailable'],
+    ['Pi extension state is unavailable', 'state-unavailable'],
+  ] as const)('classifies recoverable native failure: %s', async (message, failureCode) => {
+    const { deps } = buildDeps();
+    vi.mocked(deps.mutate).mockRejectedValueOnce(new Error(message));
 
-    await expect(confirmLocalPiManagedPackageMutation({ action, source })).resolves.toBe(true);
+    await expect(mutateAuthorizedPiManagedPackage({
+      action: 'install',
+      source: 'npm:context-mode',
+      authorization: 'local-desktop-command',
+    }, deps)).rejects.toMatchObject({ failureCode });
+  });
 
-    const options = electron.showMessageBox.mock.calls[0]?.at(-1) as { detail: string };
-    expect(options.detail).toBe(
-      `${verb} C:\\\\safe\\\\pkg\\u{0009}name\\u{001B}\\u{202E}txt\\u{2066}\\u{2028}end`,
+  it.each([
+    ['credentials', 'https://user:secret@example.com/pkg.git'],
+    ['query', 'https://example.com/pkg.git?token=query-secret'],
+    ['fragment', 'https://example.com/pkg.git#fragment-secret'],
+  ])('never persists raw %s details from a failed wrapper mutation', async (_kind, source) => {
+    const { deps } = buildDeps();
+    const rawMessage = `npm failed while fetching ${source}`;
+    vi.mocked(deps.mutate).mockRejectedValueOnce(new Error(rawMessage));
+
+    await expect(mutateAuthorizedPiManagedPackage({
+      action: 'install',
+      source,
+      authorization: 'local-desktop-command',
+    }, deps)).rejects.toBeInstanceOf(PiManagedPackageMutationFailedError);
+
+    const logged = JSON.stringify(loggerMocks.warn.mock.calls);
+    expect(logged).not.toContain(source);
+    expect(logged).not.toContain(rawMessage);
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      'Pi managed package native mutation failed',
+      {
+        action: 'install',
+        failureCode: 'native-command-failed',
+        mayHaveChangedState: false,
+      },
     );
-    expect(options.detail).not.toContain('\t');
-    expect(options.detail).not.toContain('\u001b');
-    expect(options.detail).not.toContain('\u202E');
-    expect(options.detail).not.toContain('\u2066');
-    expect(options.detail).not.toContain('\u2028');
+  });
+
+  it('rejects authorization values outside the host-owned union at runtime', async () => {
+    const { deps } = buildDeps();
+    await expect(mutateAuthorizedPiManagedPackage({
+      action: 'remove',
+      source: 'npm:context-mode',
+      authorization: 'renderer-claimed' as 'local-desktop-command',
+    }, deps)).rejects.toThrow('missing host-trusted authorization');
+    expect(deps.issueGrant).not.toHaveBeenCalled();
+    expect(deps.mutate).not.toHaveBeenCalled();
   });
 });

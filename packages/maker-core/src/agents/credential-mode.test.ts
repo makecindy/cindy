@@ -3,9 +3,28 @@ import { describe, expect, it } from 'vitest';
 import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
+  isCindyProviderCodexRemoteCompactionRoute,
   resolveAgentCredentialMode,
   resolveEffectiveCredentialModeFromAuthSource,
 } from './credential-mode.js';
+
+describe('isCindyProviderCodexRemoteCompactionRoute', () => {
+  it.each([null, undefined, 'xd'])('accepts Cindy codex models for provider %s', (providerId) => {
+    expect(isCindyProviderCodexRemoteCompactionRoute({
+      providerId,
+      model: 'codex/gpt-5.6-sol',
+    })).toBe(true);
+  });
+
+  it.each([
+    { providerId: 'xd', model: 'gpt-5.6-sol' },
+    { providerId: 'openai', model: 'codex/gpt-5.6-sol' },
+    { providerId: 'xai', model: 'codex/gpt-5.6-sol' },
+    { providerId: 'xd', model: 'codex/' },
+  ])('rejects non-Cindy-Codex route $providerId/$model', (input) => {
+    expect(isCindyProviderCodexRemoteCompactionRoute(input)).toBe(false);
+  });
+});
 
 describe('resolveAgentCredentialMode', () => {
   it('uses built-in provider ids as the authoritative credential source', () => {

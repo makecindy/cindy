@@ -388,6 +388,25 @@ describe('LearnController 状态机', () => {
     expect(run.error).toContain('model exploded');
   });
 
+  it('工具循环终态错误持久化稳定 reason 与受限详情', async () => {
+    const h = makeHarness();
+    const { runId } = await h.controller.startLearn({ input: 'x', sourceKind: 'freetext' });
+    await h.waitForStatus(runId, 'distilling');
+    h.session.emit({
+      type: 'error',
+      data: {
+        message: 'missing_required_field: file_path',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      },
+    });
+
+    const run = await h.waitForStatus(runId, 'failed');
+    expect(run.errorReason).toBe('tool_use_loop_detected');
+    expect(run.toolLoop).toEqual({ kind: 'contract', count: 3 });
+    expect(run.error).toContain('missing_required_field');
+  });
+
   it('超时 → abort + failed', async () => {
     const h = makeHarness({ turnTimeoutMs: 30 });
     const { runId } = await h.controller.startLearn({ input: 'x', sourceKind: 'freetext' });

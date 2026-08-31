@@ -10,6 +10,7 @@ interface UseLoginReturn {
   hasAccountDeletionReceipt: boolean;
   getAccountDeletionStatus: ReturnType<typeof useAuth>['getAccountDeletionStatus'];
   clearAccountDeletionReceipt: ReturnType<typeof useAuth>['clearAccountDeletionReceipt'];
+  listAccounts: ReturnType<typeof useAuth>['listAccounts'];
   dispatch: (action: DesktopLoginAction) => Promise<boolean>;
   /**
    * 与 dispatch 同一条链路,但把失败码返回给调用方——captcha 兜底重试需要在
@@ -38,6 +39,7 @@ export function useLogin(): UseLoginReturn {
     hasAccountDeletionReceipt,
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
+    listAccounts,
     enterLocalMode,
   } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
@@ -98,6 +100,7 @@ export function useLogin(): UseLoginReturn {
     hasAccountDeletionReceipt,
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
+    listAccounts,
     dispatch,
     dispatchWithResult,
     clearError: () => setErrorCode(null),

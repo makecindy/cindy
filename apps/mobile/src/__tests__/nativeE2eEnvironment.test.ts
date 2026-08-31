@@ -251,7 +251,7 @@ describe('native e2e environment', () => {
     );
     // Scope the ordering check to the shared local-session cleanup: both logout and confirmed
     // account deletion use it, and refresh-token deletion remains serialized against refresh.
-    const cleanupStart = authContext.indexOf('const clearLocalSession = useCallback(async () => {');
+    const cleanupStart = authContext.indexOf('const clearLocalSession = useCallback(async (');
     const cleanupBody = authContext.slice(cleanupStart, authContext.indexOf('}, [', cleanupStart));
     const refreshTokenDelete = cleanupBody.indexOf('await serializeRefreshTokenMutation(() =>');
     expect(refreshTokenDelete).toBeGreaterThanOrEqual(0);
@@ -260,8 +260,13 @@ describe('native e2e environment', () => {
     expect(cleanupBody.indexOf('await clearAllMobileVoiceInputHistories().catch(() => undefined);')).toBeLessThan(refreshTokenDelete);
     const logoutStart = authContext.indexOf('const logout = useCallback(async () => {');
     const logoutBody = authContext.slice(logoutStart, authContext.indexOf('}, [', logoutStart));
-    expect(logoutBody).toContain('await persistAccountDeletionReceipt(null);');
-    expect(logoutBody).toContain('await clearLocalSession();');
+    expect(logoutBody).toContain('clearMobileLoginCredentialsForLogout({');
+    expect(logoutBody).toContain(
+      'clearReceipt: () => persistAccountDeletionReceipt(null),',
+    );
+    expect(logoutBody).toContain(
+      'await clearLocalSession({ persistedAuthAlreadyCleared: true });',
+    );
     // 启动(auth 初始化)也要做一次存量清理,防旧版本留下的桌面 key 继续躺在
     // secure storage(与 LEGACY_* token 清理同一批)。
     expect(authContext).toContain('clearAllMobileVoiceCredentials().catch(() => undefined),');

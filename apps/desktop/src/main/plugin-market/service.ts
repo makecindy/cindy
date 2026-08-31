@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 
 import {
   isValidPluginResourceId,
+  PLUGIN_PREFIX_PATTERN,
   type PluginCurrentOrganization,
   type PluginRemovalNotice,
   type VisiblePluginDetail,
@@ -19,7 +20,6 @@ import {
   isOfficialGhostId,
   isValidGhostId,
   validateGhostManifest,
-  type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
@@ -73,8 +73,7 @@ import {
   readBoundedFileNoFollowWithStat,
 } from '../utils/readBoundedFile.js';
 import {
-  readInstalledGhostManifest,
-  readInstalledGhostManifestDigestFormats,
+  readInstalledGhostManifestSnapshot,
 } from '../installedGhostManifest.js';
 import { withGhostInstallLock } from '../cindy-brain/ghostInstallLock.js';
 import { ghostBrokerRedirectPortInstallError } from '../cindy-brain/ghostBrokerRedirectPort.js';
@@ -87,6 +86,13 @@ import {
   ghostManifestDigest,
   type PluginMarketInstallationRecord,
 } from './ledger.js';
+import {
+  installedMarketManifestIdentity,
+  installedIdentityMatchesManifest,
+  legacyManifestIdentityMatches,
+  verifyInstalledMarketManifest,
+  type InstalledMarketManifestIdentity,
+} from './installedManifestIdentity.js';
 import type { DiscoveredMarketPlugin } from './sources/discover.js';
 import { checkGitPreflight, type GitPreflightResult } from './sources/preflight.js';
 import { MarketSourceManager } from './sources/index.js';
@@ -96,6 +102,7 @@ const log = createLogger('plugin-market');
 
 class SilentUpgradeBusyError extends Error {}
 class SilentDefaultInstallCancelledError extends Error {}
+class SilentOrganizationDefaultTakeoverSupersededError extends Error {}
 
 /**
  * 来源增删改的互斥键。自定义市场安装的提交段也要拿这把锁，保证所选来源从
@@ -183,9 +190,8 @@ function defaultInstallSubject(owner: ActiveAppSession): string {
 function recordFrom(
   plugin: VisiblePluginSummary | VisiblePluginDetail,
   source: PluginMarketInstallationRecord['source'],
-  installed: InstalledGhost,
+  identity: InstalledMarketManifestIdentity,
 ): PluginMarketInstallationRecord {
-  const rawManifest = installedGhostRawManifest(installed.dir);
   return {
     pluginId: plugin.id,
     ghostId: plugin.ghostId,
@@ -197,7 +203,8 @@ function recordFrom(
     source,
     installed: true,
     updatedAt: new Date().toISOString(),
-    ...(rawManifest ? { manifestDigest: ghostManifestDigest(rawManifest) } : {}),
+    manifestDigest: identity.legacyManifestDigest,
+    rawManifestSha256: identity.rawManifestSha256,
   };
 }
 
@@ -211,6 +218,7 @@ function assertDetailMatchesSummary(
     detail.ghostId !== summary.ghostId ||
     detail.scope !== summary.scope ||
     detail.organizationId !== summary.organizationId ||
+    detail.defaultInstall !== summary.defaultInstall ||
     detail.currentRelease.id !== summary.currentRelease.id ||
     detail.currentRelease.version !== summary.currentRelease.version ||
     detail.currentRelease.sha256 !== summary.currentRelease.sha256 ||
@@ -218,6 +226,63 @@ function assertDetailMatchesSummary(
   ) {
     throwIpcError('PRECONDITION_FAILED', 'Plugin release changed while loading details');
   }
+}
+
+type ServerSourceReplacementMode =
+  'preserve-existing-source' | 'user-requested-source-change' | 'organization-default-takeover';
+
+interface OrganizationDefaultTakeoverFacts {
+  summary: VisiblePluginSummary;
+  currentOrganization: PluginCurrentOrganization | null | undefined;
+  uniqueGhostId: boolean;
+  installed: InstalledGhost;
+  record: PluginMarketInstallationRecord | null;
+  installOrigin: 'manual' | 'agent-forge';
+  runtimeAvailable: boolean;
+  optedOut: boolean;
+  builtinRemoved: boolean;
+  busy: boolean;
+}
+
+/** 当前组织默认插件能否接管既有同 id 安装；只消费调用方已经重读的本地事实。 */
+export function organizationDefaultTakeoverEligibility(
+  facts: OrganizationDefaultTakeoverFacts,
+): { eligible: true } | { eligible: false; reason: string } {
+  const { summary, currentOrganization, installed, record } = facts;
+  const prefix = currentOrganization?.pluginPrefix;
+  if (
+    !summary.defaultInstall ||
+    summary.scope !== 'organization' ||
+    !currentOrganization ||
+    summary.organizationId !== currentOrganization.organizationId ||
+    typeof prefix !== 'string' ||
+    !PLUGIN_PREFIX_PATTERN.test(prefix) ||
+    !summary.ghostId.startsWith(`${prefix}-`)
+  ) {
+    return { eligible: false, reason: 'not-current-organization-default' };
+  }
+  if (!facts.uniqueGhostId) return { eligible: false, reason: 'duplicate-ghost-id' };
+  if (!facts.runtimeAvailable) return { eligible: false, reason: 'runtime-unavailable' };
+  if (facts.optedOut) return { eligible: false, reason: 'explicit-opt-out' };
+  if (facts.builtinRemoved) return { eligible: false, reason: 'builtin-tombstone' };
+  if (facts.busy) return { eligible: false, reason: 'busy' };
+  if (installed.approval.state !== 'approved') {
+    return { eligible: false, reason: 'unapproved-install' };
+  }
+  if (facts.installOrigin === 'agent-forge') {
+    return { eligible: false, reason: 'forge-install' };
+  }
+  if (!record || !record.installed) return { eligible: true };
+  if (
+    record.installed &&
+    record.pluginId === summary.id &&
+    (record.source === 'market' || record.source === 'legacy-adopted') &&
+    (!serverRecordMatchesInstalledGhost(summary.id, installed, record) ||
+      !serverRecordMatchesSummaryRoute(summary, record))
+  ) {
+    return { eligible: true };
+  }
+  return { eligible: false, reason: 'protected-source' };
 }
 
 /**
@@ -229,8 +294,8 @@ function assertDetailMatchesSummary(
 function legacyRecordFrom(
   plugin: VisiblePluginSummary,
   ghost: InstalledGhost,
+  identity: InstalledMarketManifestIdentity,
 ): PluginMarketInstallationRecord {
-  const rawManifest = installedGhostRawManifest(ghost.dir);
   return {
     pluginId: plugin.id,
     ghostId: plugin.ghostId,
@@ -242,7 +307,8 @@ function legacyRecordFrom(
     source: 'legacy-adopted',
     installed: true,
     updatedAt: new Date().toISOString(),
-    ...(rawManifest ? { manifestDigest: ghostManifestDigest(rawManifest) } : {}),
+    manifestDigest: identity.legacyManifestDigest,
+    rawManifestSha256: identity.rawManifestSha256,
   };
 }
 
@@ -302,20 +368,11 @@ function stripDirectionalControls(text: string): string {
 }
 /* eslint-enable no-control-regex */
 
-function installedGhostRawManifest(dir: string): GhostManifest | null {
-  const parsed = readInstalledGhostManifest(dir, GHOST_MANIFEST_MAX_BYTES);
-  return parsed.ok ? parsed.manifest : null;
-}
-
-function installedGhostRawManifestDigest(
+function readInstalledMarketManifestIdentity(
   dir: string,
-  expectedDigest?: string,
-): string | null {
-  const digests = readInstalledGhostManifestDigestFormats(dir, GHOST_MANIFEST_MAX_BYTES).map(
-    ghostManifestDigest,
-  );
-  if (expectedDigest !== undefined && digests.includes(expectedDigest)) return expectedDigest;
-  return digests[0] ?? null;
+): InstalledMarketManifestIdentity | null {
+  const result = readInstalledGhostManifestSnapshot(dir, GHOST_MANIFEST_MAX_BYTES);
+  return result.ok ? installedMarketManifestIdentity(result.snapshot) : null;
 }
 
 /**
@@ -430,6 +487,7 @@ function serverRecordMatchesInstalledGhost(
   pluginId: string,
   ghost: InstalledGhost,
   record: PluginMarketInstallationRecord | null,
+  identity = readInstalledMarketManifestIdentity(ghost.dir),
 ): boolean {
   if (
     !record?.installed ||
@@ -438,9 +496,25 @@ function serverRecordMatchesInstalledGhost(
   ) {
     return false;
   }
-  return (
-    record.manifestDigest === undefined ||
-    record.manifestDigest === installedGhostRawManifestDigest(ghost.dir, record.manifestDigest)
+  return Boolean(
+    identity &&
+    verifyInstalledMarketManifest(record, identity, {
+      allowLegacyRecordWithoutDigest: true,
+    })
+  );
+}
+
+/** 账本是否仍指向当前服务端目录项；release 变化是升级，不属于路由漂移。 */
+function serverRecordMatchesSummaryRoute(
+  plugin: VisiblePluginSummary,
+  record: PluginMarketInstallationRecord | null,
+): boolean {
+  return Boolean(
+    record &&
+    record.pluginId === plugin.id &&
+    record.ghostId === plugin.ghostId &&
+    record.scope === plugin.scope &&
+    record.organizationId === plugin.organizationId,
   );
 }
 
@@ -453,10 +527,7 @@ function canBackfillOfficialCindyGithubTrust(
     record.source === 'market' &&
     record.manifestDigest !== undefined &&
     installed.approval.state === 'approved' &&
-    (
-      !isCindyOfficialTrustInfo(installed.trust) ||
-      !hasCindyOfficialTrustMetadata(installed.dir)
-    ) &&
+    (!isCindyOfficialTrustInfo(installed.trust) || !hasCindyOfficialTrustMetadata(installed.dir)) &&
     serverRecordMatchesInstalledGhost(record.pluginId, installed, record)
   );
 }
@@ -470,7 +541,8 @@ function sameMarketInstallation(
     current.releaseId === expected.releaseId &&
     current.version === expected.version &&
     current.sha256 === expected.sha256 &&
-    current.manifestDigest === expected.manifestDigest
+    current.manifestDigest === expected.manifestDigest &&
+    current.rawManifestSha256 === expected.rawManifestSha256
   );
 }
 
@@ -491,7 +563,8 @@ function sameDisconnectedMarketInstallation(
     && current.source === expected.source
     && current.updatedAt === expected.updatedAt
     && current.sourceKey === expected.sourceKey
-    && current.manifestDigest === expected.manifestDigest,
+    && current.manifestDigest === expected.manifestDigest
+    && current.rawManifestSha256 === expected.rawManifestSha256,
   );
 }
 
@@ -501,15 +574,15 @@ interface LocalInstallSnapshot {
   ghostsById: ReadonlyMap<string, InstalledGhost>;
   /** Parsed provenance records from one ledger read. */
   installations: Readonly<Record<string, PluginMarketInstallationRecord>>;
-  /** 每个已装插件的 locale 无关 manifest 摘要(一次快照只读一遍盘)。 */
-  rawDigestByGhostId: ReadonlyMap<string, string | null>;
+  /** 每个已装插件的 locale 无关 Manifest 身份(一次快照只读一遍盘)。 */
+  manifestIdentityByGhostId: ReadonlyMap<string, InstalledMarketManifestIdentity | null>;
 }
 
 /** 未登录浏览公开目录时不读本机账本 / 已装列表，避免带出上一账号的安装态。 */
 const EMPTY_LOCAL_INSTALL_SNAPSHOT: LocalInstallSnapshot = {
   ghostsById: new Map(),
   installations: {},
-  rawDigestByGhostId: new Map(),
+  manifestIdentityByGhostId: new Map(),
 };
 
 /**
@@ -556,7 +629,7 @@ export class PluginMarketService {
 
   private automaticUpgradeRetryKey(
     owner: ActiveAppSession,
-    source: 'server' | 'custom',
+    source: 'server' | 'custom' | 'organization-default',
     pluginId: string,
   ): string {
     return [owner.mode, owner.dataOwnerId, source, pluginId].join('\u0000');
@@ -635,6 +708,7 @@ export class PluginMarketService {
       requireSameMarketOwner(owner);
       const ledger = this.ledgerForOwner(owner);
       await this.ledgerMutation;
+      await this.backfillInstalledManifestIdentities(ledger, owner);
       const reconcileCustomUpdates = async (): Promise<'completed' | 'failed'> => {
         const completed = await this.applyAutomaticUpgrades(
           [],
@@ -700,6 +774,7 @@ export class PluginMarketService {
     requireSameMarketOwner(owner);
     this.rememberCurrentOrganization(currentOrganization);
     const ledger = this.ledgerForOwner(owner);
+    await this.backfillInstalledManifestIdentities(ledger, owner);
     await this.adoptLegacyInstallations(plugins, ledger, owner);
     await this.recoverDisconnectedMarketInstallations(plugins, ledger, owner);
     await this.backfillOfficialCindyGithubTrust(ledger, owner);
@@ -716,7 +791,9 @@ export class PluginMarketService {
       // 已经落地的同 id 插件仍由 applyDefaultInstalls → installDetail 的本地事实检查保护。
       let completed = true;
       try {
-        if (!(await this.applyDefaultInstalls(plugins, owner, ledger))) completed = false;
+        if (!(await this.applyDefaultInstalls(plugins, currentOrganization, owner, ledger))) {
+          completed = false;
+        }
       } catch (error) {
         completed = false;
         log.warn('default plugin install reconciliation failed', {
@@ -1072,7 +1149,10 @@ export class PluginMarketService {
           ...(options.expectedInstalledApproval !== undefined
             ? { expectedInstalledApproval: options.expectedInstalledApproval }
             : {}),
-          allowSourceReplacement: options.allowSourceReplacement === true,
+          sourceReplacementMode:
+            options.allowSourceReplacement === true
+              ? 'user-requested-source-change'
+              : 'preserve-existing-source',
         },
         owner,
         ledger,
@@ -1293,18 +1373,18 @@ export class PluginMarketService {
           .find((ghost) => ghost.manifest.id === plugin.ghostId);
         const sourceKey = marketSourceKey(discovered.config.source);
         const currentRecord = ledger.installationForGhost(plugin.ghostId);
-        // 选择时刻的已装内容摘要：打包窗口内不能换掉当前包。v2 存量记录可继续
-        // 使用升级前的 slots 摘要；新记录使用当前稳定投影。
-        const reviewInstalledDigest = existing
-          ? installedGhostRawManifestDigest(existing.dir, currentRecord?.manifestDigest)
+        // 选择时刻的已装 Manifest 身份：打包窗口内不能换掉当前包。raw 字段
+        // 存在时只认原始字节；旧记录由集中 legacy adapter 兼容核对。
+        const reviewInstalledIdentity = existing
+          ? readInstalledMarketManifestIdentity(existing.dir)
           : null;
         const matchesSelectedRoute = Boolean(
           existing &&
           currentRecord?.installed &&
           currentRecord.pluginId === pluginId &&
           currentRecord.sourceKey === sourceKey &&
-          currentRecord.manifestDigest != null &&
-          currentRecord.manifestDigest === reviewInstalledDigest,
+          reviewInstalledIdentity &&
+          verifyInstalledMarketManifest(currentRecord, reviewInstalledIdentity),
         );
         if (existing && !matchesSelectedRoute && options.allowSourceReplacement !== true) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
@@ -1320,10 +1400,7 @@ export class PluginMarketService {
           if (
             ghostInstallApprovalToken(installedNow.approval) !== options.expectedInstalledApproval
           ) {
-            throwIpcError(
-              'PRECONDITION_FAILED',
-              'Plugin approval state changed during the update',
-            );
+            throwIpcError('PRECONDITION_FAILED', 'Plugin approval state changed during the update');
           }
         };
         assertCustomApprovalStateUnchanged(existing ?? null);
@@ -1370,12 +1447,19 @@ export class PluginMarketService {
                   : 'Plugin was uninstalled while the install was packaging',
               );
             }
+            const currentIdentity = current
+              ? readInstalledMarketManifestIdentity(current.dir)
+              : null;
             if (
               current &&
-              installedGhostRawManifestDigest(current.dir, reviewInstalledDigest ?? undefined) !==
-                reviewInstalledDigest
+              reviewInstalledIdentity &&
+              (!currentIdentity ||
+                currentIdentity.rawManifestSha256 !== reviewInstalledIdentity.rawManifestSha256)
             ) {
               throwIpcError('PRECONDITION_FAILED', 'Installed Plugin changed during the install');
+            }
+            if (current && !reviewInstalledIdentity && options.allowSourceReplacement !== true) {
+              throwIpcError('PRECONDITION_FAILED', 'Installed Plugin manifest is unreadable');
             }
             // raw manifest 摘要不含 Host receipt；内容未变但批准态变化也必须拒绝。
             assertCustomApprovalStateUnchanged(current ?? null);
@@ -1392,8 +1476,8 @@ export class PluginMarketService {
               record?.installed &&
               record.pluginId === pluginId &&
               record.sourceKey === sourceKey &&
-              record.manifestDigest != null &&
-              record.manifestDigest === reviewInstalledDigest,
+              reviewInstalledIdentity &&
+              verifyInstalledMarketManifest(record, reviewInstalledIdentity),
             );
             if (existing && !routeStillMatches && options.allowSourceReplacement !== true) {
               throwIpcError('PRECONDITION_FAILED', 'Installed Plugin source changed');
@@ -1421,14 +1505,14 @@ export class PluginMarketService {
           // 溯源写入仍在上面那把 ghost 锁内(afterCommit 由 commit 段调用):
           // 放到锁外时,本地装入能插在"包已落位"与"写下溯源"之间换掉同 id 的包。
           // 锁序:pluginId → SOURCE_MUTATION_KEY → ghostId → ledgerMutation。
-          afterCommit: async (_installed, packagedManifest) => {
+          afterCommit: async (_installed, _packagedManifest, evidence) => {
             // 这里已在 owner mutation lease 与同 id 安装锁内，且 ledger 绑定的是操作
             // 开始时捕获的 owner。切号终止等待超时后当前 generation 可能已经推进，
             // 但包既已落位，就仍须把溯源写回旧 owner；不能再读取当前 session 拒绝。
-            // packGhostDirToFile 返回的是写入真实临时包的 canonical manifest；
-            // Main 随后复验并用包 SHA 钉死同一文件，因此无需在包已经落位后
-            // 再读一次目录。后置 I/O 失败不应把成功安装误报成失败或漏写来源。
-            const manifestDigest = ghostManifestDigest(packagedManifest);
+            // evidence 来自 Main 对真实临时包的复验，且包 SHA 钉死后续落位的
+            // 同一文件，因此无需在包已经落位后再读一次目录。后置 I/O 失败
+            // 不应把成功安装误报成失败或漏写来源。
+            const manifestDigest = evidence.legacyManifestDigest;
             await this.withCapturedLedgerMutation(ledger, () => {
               ledger.upsertInstallation({
                 pluginId,
@@ -1447,6 +1531,7 @@ export class PluginMarketService {
                 // 摘要来自实际临时包的 canonical manifest,不是发现快照，也不是
                 // 安装返回的本地化 ghost.manifest；包被替换后不会被当成同源更新。
                 manifestDigest,
+                rawManifestSha256: evidence.rawManifestSha256,
               });
             });
             replacedRoute = null;
@@ -1597,6 +1682,7 @@ export class PluginMarketService {
     const releaseId = customMarketReleaseId(config.name, plugin.ghostId, plugin.version);
     const ghost = local.ghostsById.get(plugin.ghostId);
     const record = local.installations[plugin.ghostId];
+    const identity = local.manifestIdentityByGhostId.get(plugin.ghostId) ?? null;
     // pluginId + 来源指纹 + 安装时 manifest 摘要全部对上时，
     // 该条目才是当前自动更新路由。其它同 id 条目仍可被用户显式选择替换。
     const matchesUpdateRoute = Boolean(
@@ -1604,8 +1690,8 @@ export class PluginMarketService {
       record?.installed &&
       record.pluginId === pluginId &&
       record.sourceKey === marketSourceKey(config.source) &&
-      record.manifestDigest != null &&
-      record.manifestDigest === local.rawDigestByGhostId.get(plugin.ghostId),
+      identity &&
+      verifyInstalledMarketManifest(record, identity),
     );
     // conflict 是「不能作为自动更新」的内部投影，不是不可安装；
     // Renderer 会把它呈现为用户显式的「替换」操作。
@@ -1683,8 +1769,8 @@ export class PluginMarketService {
     options: {
       /** receipt 模型的并发护栏:比对 receipt 派生 token,状态变更即拒(与 main 硬化叠加)。 */
       expectedInstalledApproval?: string;
-      /** 用户明确点击安装时，允许所选市场包原地替换其它来源的同 id 插件。 */
-      allowSourceReplacement?: boolean;
+      /** 是否保留现有来源，或按明确意图切换来源。 */
+      sourceReplacementMode?: ServerSourceReplacementMode;
       beforeCommitInLock?: () => void;
       /** 发起操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
       expectedInstalled: boolean;
@@ -1708,9 +1794,18 @@ export class PluginMarketService {
       .list()
       .find((ghost) => ghost.manifest.id === plugin.ghostId);
     const currentRecord = ledger.installationForGhost(plugin.ghostId);
+    const sourceReplacementMode = options.sourceReplacementMode ?? 'preserve-existing-source';
+    if (
+      sourceReplacementMode === 'organization-default-takeover' &&
+      Boolean(existing) !== options.expectedInstalled
+    ) {
+      throw new SilentOrganizationDefaultTakeoverSupersededError(
+        'Organization default Plugin takeover target presence changed',
+      );
+    }
     if (
       existing &&
-      !options.allowSourceReplacement &&
+      sourceReplacementMode === 'preserve-existing-source' &&
       !serverRecordMatchesInstalledGhost(plugin.id, existing, currentRecord)
     ) {
       throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
@@ -1724,6 +1819,11 @@ export class PluginMarketService {
         );
       }
       if (ghostInstallApprovalToken(existing.approval) !== options.expectedInstalledApproval) {
+        if (sourceReplacementMode === 'organization-default-takeover') {
+          throw new SilentOrganizationDefaultTakeoverSupersededError(
+            'Organization default Plugin takeover target approval changed',
+          );
+        }
         throwIpcError('PRECONDITION_FAILED', 'Plugin approval state changed during the update');
       }
     }
@@ -1765,7 +1865,7 @@ export class PluginMarketService {
           ...(options.expectedInstalledApproval !== undefined
             ? { expectedInstalledApproval: options.expectedInstalledApproval }
             : {}),
-          allowSourceReplacement: options.allowSourceReplacement,
+          sourceReplacementMode,
           beforeCommitInLock: options.beforeCommitInLock,
         },
         owner,
@@ -1783,7 +1883,7 @@ export class PluginMarketService {
     plugin: VisiblePluginSummary | VisiblePluginDetail,
     options: {
       expectedInstalledApproval?: string;
-      allowSourceReplacement?: boolean;
+      sourceReplacementMode: ServerSourceReplacementMode;
       beforeCommitInLock?: () => void;
       expectedInstalled: boolean;
     },
@@ -1796,6 +1896,11 @@ export class PluginMarketService {
         .find((ghost) => ghost.manifest.id === plugin.ghostId);
       const currentRecordNow = ledger.installationForGhost(plugin.ghostId);
       if (Boolean(installedNow) !== options.expectedInstalled) {
+        if (options.sourceReplacementMode === 'organization-default-takeover') {
+          throw new SilentOrganizationDefaultTakeoverSupersededError(
+            'Organization default Plugin takeover target presence changed',
+          );
+        }
         throwIpcError(
           'PRECONDITION_FAILED',
           installedNow
@@ -1805,7 +1910,7 @@ export class PluginMarketService {
       }
       if (
         installedNow &&
-        !options.allowSourceReplacement &&
+        options.sourceReplacementMode === 'preserve-existing-source' &&
         !serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow)
       ) {
         throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
@@ -1820,6 +1925,11 @@ export class PluginMarketService {
         if (
           ghostInstallApprovalToken(installedNow.approval) !== options.expectedInstalledApproval
         ) {
+          if (options.sourceReplacementMode === 'organization-default-takeover') {
+            throw new SilentOrganizationDefaultTakeoverSupersededError(
+              'Organization default Plugin takeover target approval changed',
+            );
+          }
           throwIpcError(
             'PRECONDITION_FAILED',
             'Plugin approval state changed while the update was downloading',
@@ -1829,7 +1939,7 @@ export class PluginMarketService {
       requireSameMarketOwner(owner);
       const replacingSource = Boolean(
         installedNow &&
-        options.allowSourceReplacement &&
+        options.sourceReplacementMode === 'user-requested-source-change' &&
         currentRecordNow?.installed &&
         !serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow),
       );
@@ -1875,11 +1985,16 @@ export class PluginMarketService {
               },
             }
           : {}),
-        afterCommitInLock: async (committed) => {
+        afterCommitInLock: async (_committed, evidence) => {
           // 包已落位且仍持原 owner mutation lease；即使切号终止等待超时推进了
           // 当前 generation，也必须把来源写进操作开始时捕获的旧 owner 账本。
           await this.withCapturedLedgerMutation(ledger, () => {
-            ledger.upsertInstallation(recordFrom(plugin, 'market', committed));
+            ledger.upsertInstallation(recordFrom(plugin, 'market', {
+              manifest: evidence.canonicalManifest,
+              rawManifestSha256: evidence.rawManifestSha256,
+              legacyManifestDigest: evidence.legacyManifestDigest,
+              legacyManifestDigests: [],
+            }));
           });
         },
       }).catch((error) => {
@@ -1909,8 +2024,11 @@ export class PluginMarketService {
   ): PluginMarketItem {
     const ghost = local.ghostsById.get(plugin.ghostId);
     const record = local.installations[plugin.ghostId];
+    const identity = local.manifestIdentityByGhostId.get(plugin.ghostId) ?? null;
     const matchesUpdateRoute = Boolean(
-      ghost && serverRecordMatchesInstalledGhost(plugin.id, ghost, record ?? null),
+      ghost
+      && serverRecordMatchesInstalledGhost(plugin.id, ghost, record ?? null, identity)
+      && serverRecordMatchesSummaryRoute(plugin, record ?? null),
     );
     // 其它同 id 条目不进入自动更新，但仍可由用户显式选择替换。
     const conflict = Boolean(ghost && !matchesUpdateRoute);
@@ -1941,6 +2059,91 @@ export class PluginMarketService {
     };
   }
 
+  /**
+   * Add raw manifest identity to released-client records without changing their
+   * routing timestamp or legacy digest. This is deliberately per-record and
+   * idempotent: a downgraded client may later replace one record and drop the
+   * unknown field, so there is no permanent global "migration complete" gate.
+   */
+  private async backfillInstalledManifestIdentities(
+    ledger: PluginMarketLedger,
+    owner: ActiveAppSession,
+  ): Promise<void> {
+    const candidates = Object.values(ledger.read().installations).filter(
+      (record) => record.installed && record.rawManifestSha256 === undefined,
+    );
+    for (const candidate of candidates) {
+      await this.withMutation(candidate.pluginId, () =>
+        withGhostInstallLock(candidate.ghostId, async () => {
+          requireSameMarketOwner(owner);
+          const record = ledger.installationForGhost(candidate.ghostId);
+          if (!record?.installed || record.rawManifestSha256 !== undefined) return;
+          const installed = getGhostManager()
+            .list()
+            .find((ghost) => ghost.manifest.id === record.ghostId);
+          if (!installed) return;
+          const identity = readInstalledMarketManifestIdentity(installed.dir);
+          if (!identity) return;
+
+          const isServerRecord = record.source === 'market' || record.source === 'legacy-adopted';
+          const manager = getGhostManager();
+          const approvalEvidence = manager.approvedInstallEvidence?.(record.ghostId) ?? null;
+          // Pending or failed mutation recovery is projected as invalid. Never
+          // mint a baseline from that intermediate directory for any source.
+          if (installed.approval.state === 'invalid') return;
+          // An approved server state with no readable evidence can also be a
+          // pending mutation journal. Only genuine legacy-unapproved installs
+          // may use the legacy digest without receipt evidence.
+          if (isServerRecord && installed.approval.state === 'approved' && !approvalEvidence) {
+            return;
+          }
+          const approvedManifestMatches = Boolean(
+            approvalEvidence &&
+            installedIdentityMatchesManifest(identity, approvalEvidence.approvedManifest),
+          );
+          if (
+            isServerRecord &&
+            approvalEvidence &&
+            !approvedManifestMatches
+          ) {
+            return;
+          }
+          if (
+            isServerRecord &&
+            approvalEvidence?.packageSha256 !== null &&
+            approvalEvidence?.packageSha256 !== undefined &&
+            approvalEvidence.packageSha256 !== record.sha256
+          ) {
+            return;
+          }
+          if (isServerRecord && approvalEvidence?.packageSha256 === null) {
+            if (!approvalEvidence.legacyMigrated) return;
+          }
+          const legacyDigestMatches = legacyManifestIdentityMatches(record, identity);
+          const strongReceiptCanFillMissingLegacyDigest = Boolean(
+            isServerRecord &&
+            record.manifestDigest === undefined &&
+            approvalEvidence &&
+            approvalEvidence.packageSha256 === record.sha256 &&
+            approvedManifestMatches,
+          );
+          if (!legacyDigestMatches && !strongReceiptCanFillMissingLegacyDigest) return;
+
+          const backfilled = await this.withLedgerMutation(owner, () =>
+            ledger.backfillRawManifestSha256(record, identity.rawManifestSha256),
+          );
+          if (backfilled) {
+            log.info('plugin manifest raw identity backfilled', {
+              pluginId: record.pluginId,
+              ghostId: record.ghostId,
+              source: record.source,
+            });
+          }
+        }),
+      );
+    }
+  }
+
   private async adoptLegacyInstallations(
     plugins: readonly VisiblePluginSummary[],
     ledger: PluginMarketLedger,
@@ -1958,16 +2161,32 @@ export class PluginMarketService {
           plugin.ghostId === ghost.manifest.id,
       );
       if (matches.length !== 1) continue;
-      const record = legacyRecordFrom(matches[0], ghost);
-      await this.withLedgerMutation(owner, () => {
-        ledger.upsertInstallation(record);
-      });
-      installations[record.ghostId] = record;
-      log.info('legacy plugin adopted into market ledger', {
-        ghostId: ghost.manifest.id,
-        pluginId: matches[0].id,
-        exactCurrentRelease: record.releaseId === matches[0].currentRelease.id,
-      });
+      const plugin = matches[0];
+      await this.withMutation(plugin.id, () =>
+        withGhostInstallLock(ghost.manifest.id, async () => {
+          requireSameMarketOwner(owner);
+          if (ledger.installationForGhost(ghost.manifest.id)) return;
+          const currentGhost = getGhostManager()
+            .list()
+            .find((candidate) => candidate.manifest.id === ghost.manifest.id);
+          if (!currentGhost) return;
+          const identity = readInstalledMarketManifestIdentity(currentGhost.dir);
+          if (!identity) return;
+          const record = legacyRecordFrom(plugin, currentGhost, identity);
+          const adopted = await this.withLedgerMutation(owner, () => {
+            if (ledger.installationForGhost(record.ghostId)) return false;
+            ledger.upsertInstallation(record);
+            return true;
+          });
+          if (!adopted) return;
+          installations[record.ghostId] = record;
+          log.info('legacy plugin adopted into market ledger', {
+            ghostId: ghost.manifest.id,
+            pluginId: plugin.id,
+            exactCurrentRelease: record.releaseId === plugin.currentRelease.id,
+          });
+        }),
+      );
     }
   }
 
@@ -1999,18 +2218,18 @@ export class PluginMarketService {
     for (const record of records) {
       const summary = summariesById.get(record.pluginId);
       if (
-        record.installed
-        || (record.source !== 'market' && record.source !== 'legacy-adopted')
-        || !isValidPluginResourceId(record.pluginId)
-        || !isValidPluginResourceId(record.releaseId)
-        || !isValidGhostId(record.ghostId)
-        || !/^[a-f0-9]{64}$/.test(record.sha256)
-        || pluginIdCounts.get(record.pluginId) !== 1
-        || ghostCounts.get(record.ghostId) !== 1
-        || !summary
-        || summary.ghostId !== record.ghostId
-        || summary.scope !== record.scope
-        || summary.organizationId !== record.organizationId
+        record.installed ||
+        (record.source !== 'market' && record.source !== 'legacy-adopted') ||
+        !isValidPluginResourceId(record.pluginId) ||
+        !isValidPluginResourceId(record.releaseId) ||
+        !isValidGhostId(record.ghostId) ||
+        !/^[a-f0-9]{64}$/.test(record.sha256) ||
+        pluginIdCounts.get(record.pluginId) !== 1 ||
+        ghostCounts.get(record.ghostId) !== 1 ||
+        !summary ||
+        summary.ghostId !== record.ghostId ||
+        summary.scope !== record.scope ||
+        summary.organizationId !== record.organizationId
       ) {
         continue;
       }
@@ -2031,17 +2250,17 @@ export class PluginMarketService {
               .list()
               .find((ghost) => ghost.manifest.id === record.ghostId);
             if (
-              !currentInstalled
-              || currentInstalled.approval.state !== 'approved'
-              || currentInstalled.manifest.version !== record.version
+              !currentInstalled ||
+              currentInstalled.approval.state !== 'approved' ||
+              currentInstalled.manifest.version !== record.version
             ) {
               return;
             }
             const approvalEvidence = getGhostManager().approvedInstallEvidence(record.ghostId);
             if (!approvalEvidence) return;
             if (
-              approvalEvidence.packageSha256 !== null
-              && approvalEvidence.packageSha256 !== record.sha256
+              approvalEvidence.packageSha256 !== null &&
+              approvalEvidence.packageSha256 !== record.sha256
             ) {
               log.info('disconnected market recovery skipped', {
                 pluginId: record.pluginId,
@@ -2050,10 +2269,20 @@ export class PluginMarketService {
               });
               return;
             }
-            const installedManifestDigest = installedGhostRawManifestDigest(
-              currentInstalled.dir,
-              record.manifestDigest,
+            const identity = readInstalledMarketManifestIdentity(currentInstalled.dir);
+            if (!identity) return;
+            const approvedManifestMatches = installedIdentityMatchesManifest(
+              identity,
+              approvalEvidence.approvedManifest,
             );
+            if (!approvedManifestMatches) {
+              log.info('disconnected market recovery skipped', {
+                pluginId: record.pluginId,
+                ghostId: record.ghostId,
+                reason: 'approved-manifest-mismatch',
+              });
+              return;
+            }
             if (approvalEvidence.packageSha256 === null) {
               if (!approvalEvidence.legacyMigrated) {
                 log.info('disconnected market recovery skipped', {
@@ -2063,23 +2292,23 @@ export class PluginMarketService {
                 });
                 return;
               }
-              if (
-                installedManifestDigest === null
-                || installedManifestDigest !== ghostManifestDigest(
-                  approvalEvidence.approvedManifest,
-                )
-              ) {
-                log.info('disconnected market recovery skipped', {
-                  pluginId: record.pluginId,
-                  ghostId: record.ghostId,
-                  reason: 'legacy-approved-manifest-mismatch',
-                });
-                return;
-              }
             }
+            const identityMatches = verifyInstalledMarketManifest(record, identity);
+            const strongReceiptCanFillMissingLegacyDigest =
+              record.rawManifestSha256 === undefined &&
+              record.manifestDigest === undefined &&
+              approvalEvidence.packageSha256 === record.sha256 &&
+              approvedManifestMatches;
+            const legacyReceiptCanRestoreWithoutMintingIdentity =
+              record.rawManifestSha256 === undefined &&
+              record.manifestDigest === undefined &&
+              approvalEvidence.packageSha256 === null &&
+              approvalEvidence.legacyMigrated &&
+              approvedManifestMatches;
             if (
-              record.manifestDigest !== undefined
-              && installedManifestDigest !== record.manifestDigest
+              !identityMatches &&
+              !strongReceiptCanFillMissingLegacyDigest &&
+              !legacyReceiptCanRestoreWithoutMintingIdentity
             ) {
               log.info('disconnected market recovery skipped', {
                 pluginId: record.pluginId,
@@ -2089,7 +2318,13 @@ export class PluginMarketService {
               return;
             }
             const restored = await this.withLedgerMutation(owner, () =>
-              ledger.restoreDisconnectedInstallation(record, installSubject));
+              ledger.restoreDisconnectedInstallation(
+                record,
+                installSubject,
+                legacyReceiptCanRestoreWithoutMintingIdentity
+                  ? undefined
+                  : identity.rawManifestSha256,
+              ));
             if (restored) {
               log.info('disconnected market installation recovered', {
                 pluginId: record.pluginId,
@@ -2165,6 +2400,21 @@ export class PluginMarketService {
           version: currentRecord.version,
           expectedInstalledApproval: ghostInstallApprovalToken(currentInstalled.approval),
           officialCindyGithub: true,
+          afterCommitInLock: async (_committed, evidence) => {
+            const replaced = await this.withCapturedLedgerMutation(ledger, () =>
+              ledger.replaceManifestIdentityAfterPackageCommit(
+                currentRecord,
+                evidence.legacyManifestDigest,
+                evidence.rawManifestSha256,
+              ),
+            );
+            if (!replaced) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'cindy-github market record changed during trust backfill',
+              );
+            }
+          },
         });
       });
       requireSameMarketOwner(owner);
@@ -2242,10 +2492,13 @@ export class PluginMarketService {
           // (含 ghost.json 读不出)即视为非服务端安装,不删,与更新路径/连接授权
           // 的 fail-closed 判据同口径。缺摘要的存量记录放行:被下架的插件已不在
           // 目录里,digest 迁移永远补不上,fail-closed 会让老安装的合法清理永久失效。
+          const identity = readInstalledMarketManifestIdentity(installed.dir);
           if (
-            record?.manifestDigest != null &&
-            installedGhostRawManifestDigest(installed.dir, record.manifestDigest) !==
-              record.manifestDigest
+            !record ||
+            !identity ||
+            !verifyInstalledMarketManifest(record, identity, {
+              allowLegacyRecordWithoutDigest: true,
+            })
           ) {
             return skip(removal, 'manifest-digest-mismatch');
           }
@@ -2284,6 +2537,7 @@ export class PluginMarketService {
 
   private async applyDefaultInstalls(
     plugins: readonly VisiblePluginSummary[],
+    currentOrganization: PluginCurrentOrganization | null | undefined,
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
   ): Promise<boolean> {
@@ -2301,56 +2555,176 @@ export class PluginMarketService {
       if (ledgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)) continue;
       if (isBuiltinGhostRemovedByUser(summary.ghostId)) continue;
       const state = this.toItem(summary, local).installState;
-      if (state !== 'not-installed') continue;
+      if (state !== 'not-installed' && state !== 'conflict') continue;
+      const takeoverRetryKey = this.automaticUpgradeRetryKey(
+        owner,
+        'organization-default',
+        summary.id,
+      );
+      const releaseKey = summary.currentRelease.id;
+      if (
+        state === 'conflict' &&
+        (isGhostBusy(summary.ghostId) ||
+          this.shouldDeferAutomaticUpgrade(takeoverRetryKey, releaseKey))
+      ) {
+        continue;
+      }
       try {
         await this.withMutation(summary.id, async () => {
-          requireSameMarketOwner(owner);
-          const freshLedgerData = ledger.read();
-          if (freshLedgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)) {
-            return;
-          }
-          const freshLocal = this.localInstallSnapshot(ledger, freshLedgerData.installations);
-          if (this.toItem(summary, freshLocal).installState !== 'not-installed') {
-            return;
-          }
-          const detail = await this.api.detail(summary.id);
-          requireSameMarketOwner(owner);
-          assertDetailMatchesSummary(summary, detail);
-          // 装完即开语义已收敛进市场安装入口本身,这里无需再显式声明。
-          await this.installDetail(
-            detail,
-            {
-              expectedInstalled: false,
-              // 下载期间用户可能从本地插件页完成显式卸载。最终落位前在
-              // ghostId 锁内重读卸载意图，不能让旧 snapshot 把插件装回来。
-              beforeCommitInLock: () => {
-                const commitLedgerData = ledger.read();
-                if (commitLedgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)) {
-                  throw new SilentDefaultInstallCancelledError(
-                    'Default Plugin was explicitly uninstalled',
-                  );
+          const runFreshTakeoverPass = async (): Promise<void> => {
+            requireSameMarketOwner(owner);
+            const freshLedgerData = ledger.read();
+            if (freshLedgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)) {
+              return;
+            }
+            const freshLocal = this.localInstallSnapshot(ledger, freshLedgerData.installations);
+            const freshState = this.toItem(summary, freshLocal).installState;
+            if (freshState !== 'not-installed' && freshState !== 'conflict') {
+              return;
+            }
+            const freshInstalled = freshLocal.ghostsById.get(summary.ghostId);
+            let expectedInstalledApproval: string | undefined;
+            if (freshState === 'conflict') {
+              if (!freshInstalled) return;
+              // approval 是读取 installOrigin 的前置条件。严格 receipt 读取
+              // 失败必须上抛，不能把异常降级成可接管的 manual。
+              const installOrigin =
+                freshInstalled.approval.state === 'approved'
+                  ? getGhostManager().readApprovedInstallOriginStrict(summary.ghostId)
+                  : 'manual';
+              const eligibility = organizationDefaultTakeoverEligibility({
+                summary,
+                currentOrganization,
+                uniqueGhostId: uniqueGhostIds.has(summary.ghostId),
+                installed: freshInstalled,
+                record: freshLedgerData.installations[summary.ghostId] ?? null,
+                installOrigin,
+                runtimeAvailable: isGhostAvailableForActiveSession(summary.ghostId),
+                optedOut: Boolean(
+                  freshLedgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id),
+                ),
+                builtinRemoved: isBuiltinGhostRemovedByUser(summary.ghostId),
+                busy: isGhostBusy(summary.ghostId),
+              });
+              if (!eligibility.eligible) {
+                if (eligibility.reason === 'busy') {
+                  throw new SilentUpgradeBusyError('Plugin is busy');
                 }
-                const commitLocal = this.localInstallSnapshot(
-                  ledger,
-                  commitLedgerData.installations,
-                );
-                if (this.toItem(summary, commitLocal).installState !== 'not-installed') {
-                  throw new SilentDefaultInstallCancelledError(
-                    'Default Plugin install state changed',
+                return;
+              }
+              expectedInstalledApproval = ghostInstallApprovalToken(freshInstalled.approval);
+            }
+            const detail = await this.api.detail(summary.id);
+            requireSameMarketOwner(owner);
+            assertDetailMatchesSummary(summary, detail);
+            // 装完即开语义已收敛进市场安装入口本身,这里无需再显式声明。
+            await this.installDetail(
+              detail,
+              {
+                expectedInstalled: freshState === 'conflict',
+                ...(expectedInstalledApproval ? { expectedInstalledApproval } : {}),
+                sourceReplacementMode:
+                  freshState === 'conflict'
+                    ? 'organization-default-takeover'
+                    : 'preserve-existing-source',
+                // 下载期间用户可能从本地插件页完成显式卸载。最终落位前在
+                // ghostId 锁内重读卸载意图，不能让旧 snapshot 把插件装回来。
+                beforeCommitInLock: () => {
+                  requireSameMarketOwner(owner);
+                  const commitLedgerData = ledger.read();
+                  if (
+                    commitLedgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)
+                  ) {
+                    throw new SilentDefaultInstallCancelledError(
+                      'Default Plugin was explicitly uninstalled',
+                    );
+                  }
+                  const commitLocal = this.localInstallSnapshot(
+                    ledger,
+                    commitLedgerData.installations,
                   );
-                }
+                  if (freshState === 'not-installed') {
+                    if (
+                      !isGhostAvailableForActiveSession(summary.ghostId) ||
+                      isBuiltinGhostRemovedByUser(summary.ghostId) ||
+                      this.toItem(summary, commitLocal).installState !== 'not-installed'
+                    ) {
+                      throw new SilentDefaultInstallCancelledError(
+                        'Default Plugin install state changed',
+                      );
+                    }
+                    return;
+                  }
+                  const commitInstalled = commitLocal.ghostsById.get(summary.ghostId);
+                  if (!commitInstalled || commitInstalled.approval.state !== 'approved') {
+                    throw new SilentDefaultInstallCancelledError(
+                      'Default Plugin install state changed',
+                    );
+                  }
+                  const commitOrigin = getGhostManager().readApprovedInstallOriginStrict(
+                    summary.ghostId,
+                  );
+                  const eligibility = organizationDefaultTakeoverEligibility({
+                    summary,
+                    currentOrganization,
+                    uniqueGhostId: uniqueGhostIds.has(summary.ghostId),
+                    installed: commitInstalled,
+                    record: commitLedgerData.installations[summary.ghostId] ?? null,
+                    installOrigin: commitOrigin,
+                    runtimeAvailable: isGhostAvailableForActiveSession(summary.ghostId),
+                    optedOut: false,
+                    builtinRemoved: isBuiltinGhostRemovedByUser(summary.ghostId),
+                    busy: isGhostBusy(summary.ghostId),
+                  });
+                  if (!eligibility.eligible) {
+                    if (eligibility.reason === 'busy') {
+                      throw new SilentUpgradeBusyError('Plugin is busy');
+                    }
+                    throw new SilentDefaultInstallCancelledError(
+                      `Default Plugin takeover became ineligible: ${eligibility.reason}`,
+                    );
+                  }
+                },
               },
-            },
-            owner,
-            ledger,
-          );
+              owner,
+              ledger,
+            );
+          };
+          try {
+            await runFreshTakeoverPass();
+          } catch (error) {
+            if (!(error instanceof SilentOrganizationDefaultTakeoverSupersededError)) {
+              throw error;
+            }
+            // 抢先完成的本地 mutation 已经释放 ghostId 锁；只按最新 receipt、
+            // 来源与账本事实完整重跑一次，不能复用上一轮下载或 eligibility。
+            await runFreshTakeoverPass();
+          }
         });
+        if (state === 'conflict') {
+          this.clearAutomaticUpgradeFailure(takeoverRetryKey, releaseKey);
+        }
       } catch (error) {
         // 单个默认插件失败不拖垮整个市场；下次同步可重试。
-        if (!(error instanceof SilentDefaultInstallCancelledError)) {
+        if (error instanceof SilentOrganizationDefaultTakeoverSupersededError) {
           completed = false;
+        } else if (error instanceof SilentUpgradeBusyError) {
+          completed = false;
+        } else if (!(error instanceof SilentDefaultInstallCancelledError)) {
+          completed = false;
+          const retry =
+            state === 'conflict'
+              ? this.recordAutomaticUpgradeFailure(takeoverRetryKey, releaseKey)
+              : null;
           log.warn('default plugin install failed', {
             pluginId: summary.id,
+            ...(retry
+              ? {
+                  releaseId: releaseKey,
+                  failures: retry.failures,
+                  retryAfter: new Date(retry.retryAfter).toISOString(),
+                }
+              : {}),
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -2504,14 +2878,11 @@ export class PluginMarketService {
     return {
       ghostsById: new Map(ghosts.map((ghost) => [ghost.manifest.id, ghost])),
       installations,
-      rawDigestByGhostId: new Map(
-        ghosts.map((ghost) => {
-          const record = installations[ghost.manifest.id];
-          return [
-            ghost.manifest.id,
-            installedGhostRawManifestDigest(ghost.dir, record?.manifestDigest),
-          ];
-        }),
+      manifestIdentityByGhostId: new Map(
+        ghosts.map((ghost) => [
+          ghost.manifest.id,
+          readInstalledMarketManifestIdentity(ghost.dir),
+        ]),
       ),
     };
   }

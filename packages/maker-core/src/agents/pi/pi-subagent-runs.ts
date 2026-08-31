@@ -37,6 +37,8 @@ const KILL_CONFIRM_INTERVAL_MS = 200;
 const RENAME_RETRY_ATTEMPTS = 10;
 const RENAME_RETRY_STEP_MS = 25;
 const RENAME_RETRY_MAX_MS = 100;
+/** Stable wall-clock second for this process incarnation. */
+const OWN_PROCESS_START_TIME_SEC = Math.round(Date.now() / 1000 - process.uptime());
 let controlWriteSequence = 0;
 
 function containedParentSessionId(sessionId: string): string {
@@ -1022,7 +1024,7 @@ export function piSubagentRuntimeOwnerId(hostPid: number, scopeId: string): stri
 
 /** Wall-clock second this process started, in the form the owner id records. */
 function ownProcessStartTimeSec(): number {
-  return Math.round(Date.now() / 1000 - process.uptime());
+  return OWN_PROCESS_START_TIME_SEC;
 }
 
 export interface PiSubagentOwnerIdentity {

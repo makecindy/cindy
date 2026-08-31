@@ -8,7 +8,7 @@
  * 变成"孤儿 jsonl"，可接受（数量极少，留给后续清理脚本）。
  */
 
-import { eq, and, lt, gt, asc, isNull, or, sql } from 'drizzle-orm';
+import { eq, and, lt, gt, asc, desc, isNull, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
@@ -40,6 +40,8 @@ export type ForkErrorCode =
   | 'NO_PRIOR_ASSISTANT'
   | 'CODEX_FORK_STATE_UNAVAILABLE'
   | 'UNSUPPORTED_HISTORY';
+
+const STRIP_FORK_TITLE_PREFIX = '[Fork·已剥离]';
 
 function forkError(code: ForkErrorCode, message: string): Error {
   const err = new Error(message);
@@ -870,6 +872,20 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     throw forkError('SOURCE_NEVER_RAN', '原会话尚未运行，无法 fork');
   }
 
+  const childRows = await db
+    .select()
+    .from(sessions)
+    .where(
+      and(eq(sessions.parentSessionId, sourceSessionId), isNull(sessions.forkedAtMessageId)),
+    );
+  const reused = childRows.reduce<(typeof childRows)[number] | null>((latest, row) => {
+    if (row.status === 'deleted' || !String(row.title).startsWith(STRIP_FORK_TITLE_PREFIX)) {
+      return latest;
+    }
+    if (!latest || Number(row.createdAt ?? 0) > Number(latest.createdAt ?? 0)) return row;
+    return latest;
+  }, null);
+
   const sourceMessages = await db
     .select()
     .from(messages)
@@ -885,6 +901,23 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     (max, message) => Math.max(max, Number(message.createdAt ?? 0)),
     0,
   );
+  if (reused) {
+    const [latestCopied] = await db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.sessionId, reused.id),
+          isNull(messages.rewindAt),
+          lt(messages.createdAt, Number(reused.createdAt ?? 0)),
+        ),
+      )
+      .orderBy(desc(messages.createdAt), desc(messageRowid))
+      .limit(1);
+    if (Number(latestCopied?.createdAt ?? 0) >= maxCreatedAt) {
+      return sessionToCamel({ ...reused, messageCount: 0 });
+    }
+  }
   const copyBeforeCreatedAt = maxCreatedAt + 1;
 
   await assertForkRangeDoesNotCrossAgentSwitch(
@@ -893,9 +926,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     copyBeforeCreatedAt,
   );
 
-  const newTitle = source.title.startsWith('[Fork·已剥离]')
+  const newTitle = source.title.startsWith(STRIP_FORK_TITLE_PREFIX)
     ? source.title
-    : `[Fork·已剥离] ${source.title}`;
+    : `${STRIP_FORK_TITLE_PREFIX} ${source.title}`;
   const { newSdkSessionId, uuidMap } = await getMaker()
     .forkSdkSession('codex', {
       sourceSdkSessionId: source.sdkSessionId,

@@ -90,6 +90,9 @@ import {
   flushOrphanToolResults,
   isSuccessfulCodexDoneEventData,
   onTurnErrorEvent,
+  reserveTurnErrorPersistId,
+  releaseReservedTurnErrorPersistId,
+  whenTurnErrorPersisted,
   resetTurnPersistState,
   clearCodexPlanRowsForSession,
   clearSessionPersistState,
@@ -2111,9 +2114,105 @@ describe('stale-idle assistant late final identity', () => {
       .filter((c) => (c[1] as { role?: string }).role === 'assistant');
     expect(assistantCreates).toHaveLength(2);
   });
+
+  it('keeps distinct Codex items separate within the same SDK request', async () => {
+    const meta = { requestId: 'req-shared', uuid: 'assistant-shared' };
+    const commentaryId = onAssistantTextEvent(
+      SESSION,
+      {
+        text: 'same text',
+        isFinal: false,
+        agentMessageId: 'msg-commentary',
+      },
+      meta,
+    );
+    sealAssistantBlockForLateFinal(SESSION, null);
+    consumeLastAssistantPersistId(SESSION);
+    consumeLastTopLevelAssistantPersistId(SESSION);
+    resetTurnPersistState(SESSION);
+
+    const finalId = onAssistantTextEvent(
+      SESSION,
+      {
+        text: 'same text',
+        isFinal: true,
+        isFullText: true,
+        agentMessageId: 'msg-final',
+      },
+      meta,
+    );
+    expect(finalId).not.toBe(commentaryId);
+    await flushWrites();
+
+    const assistantCreates = (createMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .filter((c) => (c[1] as { role?: string }).role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
 });
 
 describe('streamed assistant final calibration', () => {
+  it('persists commentary and final_answer as separate rows when Codex item ids change', async () => {
+    const commentaryId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Execution preview', isFinal: false, agentMessageId: 'msg-commentary' },
+      null,
+    );
+    expect(
+      onAssistantTextEvent(
+        SESSION,
+        {
+          text: 'Execution preview',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary',
+        },
+        null,
+      ),
+    ).toBe(commentaryId);
+
+    const finalId = onAssistantTextEvent(
+      SESSION,
+      {
+        text: 'Please confirm.',
+        isFinal: true,
+        isFullText: true,
+        agentMessageId: 'msg-final',
+      },
+      null,
+    );
+    expect(finalId).not.toBe(commentaryId);
+
+    await flushWrites();
+    const assistantCreates = vi
+      .mocked(createMessage)
+      .mock.calls
+      .filter(([, message]) => message.role === 'assistant')
+      .map(([, message]) => ({ clientId: message.clientId, content: message.content }));
+    expect(assistantCreates).toEqual([
+      { clientId: commentaryId, content: 'Execution preview' },
+      { clientId: finalId, content: 'Please confirm.' },
+    ]);
+  });
+
+  it('does not deduplicate equal text from distinct Codex message ids', async () => {
+    const firstId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Ready.', isFinal: true, isFullText: true, agentMessageId: 'msg-a' },
+      null,
+    );
+    const secondId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Ready.', isFinal: true, isFullText: true, agentMessageId: 'msg-b' },
+      null,
+    );
+
+    expect(secondId).not.toBe(firstId);
+    await flushWrites();
+    expect(
+      vi.mocked(createMessage).mock.calls.filter(([, message]) => message.role === 'assistant'),
+    ).toHaveLength(2);
+  });
+
   it('persists the authoritative final text even when it is shorter than accumulated deltas', async () => {
     const persistId = onAssistantTextEvent(
       SESSION,
@@ -2238,8 +2337,10 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
   it('does not persist a leaked Grok stop token as the last assistant', async () => {
     const first = onAssistantTextEvent(SESSION, { text: '现有 reviewer 空闲。', isFinal: true }, null);
     const leaked = onAssistantTextEvent(SESSION, { text: '<|eos|>', isFinal: true }, null);
+    const repeated = onAssistantTextEvent(SESSION, { text: '<|eos|><|eos|>', isFinal: true }, null);
     await flushWrites();
     expect(leaked).toBeUndefined();
+    expect(repeated).toBeUndefined();
     expect(createMessage).toHaveBeenCalledTimes(1);
     expect(consumeLastAssistantPersistId(SESSION)).toBe(first);
   });
@@ -2395,7 +2496,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     // 脏信号必须发:让已加载历史的后台会话下次打开时从 DB 重拉,error 卡正常浮现。
     expect(mockSend).toHaveBeenCalledWith(
       'local-db:session:error-persisted',
-      { sessionId: SESSION },
+      { sessionId: SESSION, persistId },
       undefined,
     );
   });
@@ -2492,8 +2593,8 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     const id3 = onTurnErrorEvent(SESSION, { message: msg });
 
     expect(id1).toBeTruthy();
-    expect(id2).toBeUndefined(); // dedup 命中（同步调用 < 300ms）
-    expect(id3).toBeUndefined(); // dedup 命中（同步调用 < 300ms）
+    expect(id2).toBe(id1); // 输家也要拿到同一 persistId,关闭/重试才能 dismiss
+    expect(id3).toBe(id1);
 
     await flushWrites();
     expect(createMessage).toHaveBeenCalledTimes(1); // 只落一条
@@ -2542,7 +2643,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     const id2 = onTurnErrorEvent(SESSION, { message: msg }, meta);
 
     expect(id1).toBeTruthy();
-    expect(id2).toBeUndefined(); // 同 requestId → dedup 命中
+    expect(id2).toBe(id1); // 同 requestId → dedup 命中,输家复用赢家 persistId
 
     await flushWrites();
     expect(createMessage).toHaveBeenCalledTimes(1);
@@ -2562,7 +2663,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     secondSpy.mockRestore();
 
     expect(id1).toBeTruthy();
-    expect(id2).toBeUndefined();
+    expect(id2).toBe(id1);
 
     await flushWrites();
     expect(createMessage).toHaveBeenCalledTimes(1);
@@ -2734,6 +2835,159 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     // turnStartedAt (1000) <= clearBoundary (2000) → cap 生效
     // createdAt 必须 <= clearBoundaryTs，error 卡不出现在清空后的新会话
     expect(createdAt).toBeLessThanOrEqual(clearBoundaryTs);
+  });
+});
+
+describe('reserveTurnErrorPersistId — 广播前预留与 waiter', () => {
+  it('预留 id 不写库,onTurnErrorEvent 复用同一 id', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'boom' });
+    expect(reserved).toBeTruthy();
+    expect(createMessage).not.toHaveBeenCalled();
+
+    const persistId = onTurnErrorEvent(SESSION, { message: 'boom' }, null, reserved);
+    expect(persistId).toBe(reserved);
+
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createMessage).mock.calls[0][1]).toMatchObject({ clientId: reserved });
+    expect(mockSend).toHaveBeenCalledWith(
+      'local-db:session:error-persisted',
+      { sessionId: SESSION, persistId: reserved },
+      undefined,
+    );
+  });
+
+  it('whenTurnErrorPersisted 等到写库完成才返回', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'wait-me' });
+    expect(reserved).toBeTruthy();
+    let done = false;
+    const waiting = whenTurnErrorPersisted(SESSION, reserved!).then(() => {
+      done = true;
+    });
+    expect(done).toBe(false);
+
+    onTurnErrorEvent(SESSION, { message: 'wait-me' }, null, reserved);
+    expect(done).toBe(false);
+
+    await flushWrites();
+    await waiting;
+    expect(done).toBe(true);
+  });
+
+  it('未知 persistId 的 whenTurnErrorPersisted 立即返回', async () => {
+    await expect(whenTurnErrorPersisted(SESSION, 'never-reserved')).resolves.toBeUndefined();
+  });
+
+  it('whenTurnErrorPersisted 在预留写入完成前不会因墙钟超时提前返回', async () => {
+    vi.useFakeTimers();
+    try {
+      const reserved = reserveTurnErrorPersistId(SESSION, { message: 'slow-write' });
+      expect(reserved).toBeTruthy();
+      let done = false;
+      const waiting = whenTurnErrorPersisted(SESSION, reserved!).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(done).toBe(false);
+
+      releaseReservedTurnErrorPersistId(SESSION, reserved!);
+      await waiting;
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('release 解开 waiter 且同一 id 不再写库', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'skip' });
+    expect(reserved).toBeTruthy();
+    const waiting = whenTurnErrorPersisted(SESSION, reserved!);
+    releaseReservedTurnErrorPersistId(SESSION, reserved!);
+    await waiting;
+    expect(createMessage).not.toHaveBeenCalled();
+
+    expect(onTurnErrorEvent(SESSION, { message: 'skip' }, null, reserved)).toBe(reserved);
+    await flushWrites();
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('同一预留 id 二次 onTurnErrorEvent 不双写', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'once' });
+    onTurnErrorEvent(SESSION, { message: 'once' }, null, reserved);
+    onTurnErrorEvent(SESSION, { message: 'once' }, null, reserved);
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('owner-scope 跳过写入时仍解开 waiter', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'skip-owner' });
+    expect(reserved).toBeTruthy();
+    ownerScopeState.current = false;
+    onTurnErrorEvent(SESSION, { message: 'skip-owner' }, null, reserved);
+    await whenTurnErrorPersisted(SESSION, reserved!);
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('多窗 dedup 输家返回同一 persistId，dismiss 等到同一写入', async () => {
+    const id1 = onTurnErrorEvent(SESSION, { message: 'dup-window-auth' });
+    const id2 = onTurnErrorEvent(SESSION, { message: 'dup-window-auth' });
+    expect(id1).toBeTruthy();
+    expect(id2).toBe(id1);
+
+    let done = false;
+    const waiting = whenTurnErrorPersisted(SESSION, id2!).then(() => {
+      done = true;
+    });
+    expect(done).toBe(false);
+    expect(createMessage).not.toHaveBeenCalled();
+
+    await flushWrites();
+    await waiting;
+    expect(done).toBe(true);
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createMessage).mock.calls[0][1]).toMatchObject({ clientId: id1 });
+  });
+
+  it('会话清理不提前兑现已入队的 waiter，写完才 done', async () => {
+    const persistId = onTurnErrorEvent(SESSION, { message: 'queued-then-clear' });
+    expect(persistId).toBeTruthy();
+    let done = false;
+    const waiting = whenTurnErrorPersisted(SESSION, persistId!).then(() => {
+      done = true;
+    });
+    expect(done).toBe(false);
+
+    clearSessionPersistState(SESSION);
+    await Promise.resolve();
+    expect(done).toBe(false);
+    expect(createMessage).not.toHaveBeenCalled();
+
+    await flushWrites();
+    await waiting;
+    expect(done).toBe(true);
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createMessage).mock.calls[0][1]).toMatchObject({ clientId: persistId });
+  });
+
+  it('尚未入队的预留在会话清理后解开且不再写', async () => {
+    const reserved = reserveTurnErrorPersistId(SESSION, { message: 'reserved-then-clear' });
+    expect(reserved).toBeTruthy();
+    let done = false;
+    const waiting = whenTurnErrorPersisted(SESSION, reserved!).then(() => {
+      done = true;
+    });
+    expect(done).toBe(false);
+
+    clearSessionPersistState(SESSION);
+    await waiting;
+    expect(done).toBe(true);
+    expect(createMessage).not.toHaveBeenCalled();
+
+    expect(onTurnErrorEvent(SESSION, { message: 'reserved-then-clear' }, null, reserved)).toBe(
+      reserved,
+    );
+    await flushWrites();
+    expect(createMessage).not.toHaveBeenCalled();
   });
 });
 

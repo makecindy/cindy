@@ -25,6 +25,7 @@
  */
 
 import { hasUserVisibleText } from '../../shared/visibleText.js';
+import type { AgentInputToolLoopDetails } from '../../shared/agentInputQueue.js';
 
 import {
   isNetworkishErrorMessage,
@@ -42,6 +43,8 @@ export interface InterruptedTurnErrorSignals {
   reason?: string;
   /** 从错误里抽出的 HTTP 状态码。 */
   errorStatus?: number;
+  /** Bounded details for the live error projection; never contains raw provider data. */
+  toolLoop?: AgentInputToolLoopDetails;
 }
 
 /**

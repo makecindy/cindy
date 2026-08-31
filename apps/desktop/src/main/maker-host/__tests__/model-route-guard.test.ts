@@ -114,6 +114,51 @@ describe('checkModelRoute', () => {
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', null)).toEqual({ kind: 'pass' });
   });
 
+  it('付费模型实体与刷新失败后 tombstone 都拒绝 XD，且不阻断显式他源', () => {
+    const locked = buildRegistry(
+      {
+        providers: [
+          provider('xd', [model('paid-model', { availability: 'requires_payment' })]),
+          provider('anthropic', [model('paid-model')]),
+        ],
+      } as Catalog,
+      { xd: true, anthropic: true },
+      {},
+    );
+    expect(checkModelRoute(locked, 'claude-code', 'paid-model', 'xd')).toEqual({
+      kind: 'reject',
+      reason: 'payment-required',
+    });
+    expect(checkModelRoute(locked, 'claude-code', 'paid-model', null)).toEqual({
+      kind: 'reroute',
+      providerId: 'anthropic',
+      reason: 'payment-required',
+    });
+
+    const isPaymentRequiredTombstone = (providerId: string | null, modelId: string) =>
+      (providerId === null || providerId === 'xd') && modelId === 'paid-model';
+    const otherSourceOnly = buildRegistry(
+      { providers: [provider('anthropic', [model('paid-model')])] } as Catalog,
+      { anthropic: true },
+      {},
+    );
+    expect(
+      checkModelRoute(otherSourceOnly, 'claude-code', 'paid-model', 'xd', {
+        isPaymentRequiredTombstone,
+      }),
+    ).toEqual({ kind: 'reject', reason: 'payment-required' });
+    expect(
+      checkModelRoute(otherSourceOnly, 'claude-code', 'paid-model', 'anthropic', {
+        isPaymentRequiredTombstone,
+      }),
+    ).toEqual({ kind: 'pass' });
+    expect(
+      checkModelRoute([], 'claude-code', 'paid-model', null, {
+        isPaymentRequiredTombstone,
+      }),
+    ).toEqual({ kind: 'reject', reason: 'payment-required' });
+  });
+
   it('能力模型(图像/视频等分组)⇒ reject capability-model(隐式与显式点名同判)', () => {
     // 老控制端可经 allowlisted 通道直接点名图像模型当对话模型 —— 选择器的硬排除
     // 帮不上,必须在同一边界拒绝(PR #744 review 第四轮)。

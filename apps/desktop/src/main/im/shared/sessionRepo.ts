@@ -53,6 +53,8 @@ export interface ImSessionRow {
   permissionMode: PermissionMode;
   fastMode: boolean;
   sdkSessionId: string | null;
+  /** Non-empty means workingDir and Agent file paths live on an SSH host. */
+  remoteHostId?: string | null;
   /**
    * 该会话显式选定的供应商 id(路由用,null = 跟随默认路由)。/model 卡片选行时一并持久化,
    * IM turn 启动前 hydrate 进 session-provider-store,保证按选中供应商路由。
@@ -226,6 +228,7 @@ export function createImSessionRepo(
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
+        remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
         workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
       };
@@ -304,6 +307,7 @@ export function createImSessionRepo(
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
+        remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
         // update 前读到的旧值不能直接回 —— 与 correctedWorkspaceKind 用同一判据现算,
         // caller 拿到的和库里落定的才是同一个答案。
@@ -325,6 +329,7 @@ export function createImSessionRepo(
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
+        remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
         workspaceKind: row.workspaceKind ?? null,
       };
@@ -424,6 +429,7 @@ export function createImSessionRepo(
             permissionMode: persistedRow.permissionMode,
             fastMode: persistedRow.fastMode,
             sdkSessionId: persistedRow.sdkSessionId,
+            remoteHostId: persistedRow.remoteHostId ?? null,
             providerId: persistedRow.providerId ?? null,
           }
         : row;
@@ -472,6 +478,7 @@ function rowFromDefaults(
     permissionMode: defaults.permissionMode,
     fastMode: defaults.fastMode,
     sdkSessionId: null,
+    remoteHostId: null,
     providerId: defaults.providerId,
   };
 }
@@ -500,7 +507,13 @@ export async function clearContext(sessionId: string): Promise<void> {
   const db = getDbClient().drizzle;
   await db
     .update(sessions)
-    .set({ sdkSessionId: null, clearedAt: Date.now(), updatedAt: Date.now() })
+    .set({
+      sdkSessionId: null,
+      clearedAt: Date.now(),
+      updatedAt: Date.now(),
+      listPreview: null,
+      listPreviewRole: null,
+    })
     .where(eq(sessions.id, sessionId));
 }
 
@@ -537,6 +550,8 @@ export async function resetSessionToDefaults(
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),
+      listPreview: null,
+      listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
   setSessionProvider(sessionId, defaults.providerId);
@@ -563,6 +578,8 @@ export async function switchSessionWorkingDir(
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),
+      listPreview: null,
+      listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
   broadcastSessionCreated(sessionId);

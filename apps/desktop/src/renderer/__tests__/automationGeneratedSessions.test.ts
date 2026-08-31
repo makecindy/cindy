@@ -41,8 +41,6 @@ import {
   isUnreadFailedScheduleRun,
   isUnreadScheduleRun,
 } from '@/features/scheduler/lib/runUnread';
-import { formatUsd } from '@/features/scheduler/lib/formatters';
-
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
@@ -1063,8 +1061,9 @@ describe('automation-generated sessions', () => {
     expect(unreadCountsHookSource).not.toContain('RUNS_PER_SCHEDULE_LIMIT');
     expect(unreadCountsHookSource).not.toContain('listRuns(');
     expect(storageSource).toContain('listSidebarIndexRuns');
+    expect(storageSource).toContain('.from(scheduleSessionLatestRuns)');
     expect(storageSource).toContain('isNotNull(scheduleRuns.sessionId)');
-    expect(storageSource).toContain('UNREAD_TERMINAL_RUN_STATUSES');
+    expect(storageSource).toContain('unreadTerminalRunWhere');
     expect(storageSource).toContain('nextFireAt: schedules.nextFireAt');
     expect(storageSource).toContain('listSchedulesByLegacyKey(db)');
     expect(storageSource).toContain('legacyScheduleNameFromSessionTitle(session.title)');
@@ -1080,11 +1079,7 @@ describe('automation-generated sessions', () => {
     expect(preloadSource).toContain('listSidebarIndexRuns');
   });
 
-  it('surfaces total automation task cost from deduped schedule sessions', () => {
-    const storageSource = readTextLf(
-      new URL('../../main/scheduler-host/storage.ts', import.meta.url),
-      'utf8',
-    );
+  it('keeps per-run Automation cost without loading cumulative list cost', () => {
     const schedulePageSource = readTextLf(
       new URL('../features/scheduler/SchedulerPage.tsx', import.meta.url),
       'utf8',
@@ -1105,47 +1100,15 @@ describe('automation-generated sessions', () => {
       new URL('../features/scheduler/components/RunHistoryPane.tsx', import.meta.url),
       'utf8',
     );
-    const hookSource = readTextLf(
-      new URL('../features/scheduler/hooks/useScheduleCostSummaries.ts', import.meta.url),
-      'utf8',
-    );
     const preloadSource = readTextLf(new URL('../../preload/preload.ts', import.meta.url), 'utf8');
     const zh = JSON.parse(
       readTextLf(new URL('../i18n/locales/zh-CN/common.json', import.meta.url), 'utf8'),
     );
 
-    expect(formatUsd(0)).toBe('$0.00');
-    expect(formatUsd(0.001)).toBe('<$0.01');
-    expect(formatUsd(1.234)).toBe('$1.23');
-    expect(storageSource).toContain('listCostSummaries');
-    expect(storageSource).toContain('messages.agentMeta');
-    expect(storageSource).toContain('scheduleOriginFromAgentMeta');
-    expect(storageSource).toContain("origin?.kind !== 'scheduler'");
-    expect(storageSource).toContain('turnCostFromAgentMeta');
-    expect(storageSource).toContain('turnCostIsEstimate === true');
-    expect(storageSource).toContain('SQLITE_IN_CHUNK_SIZE');
-    expect(storageSource).toContain("when 'user' then 0 else 1 end");
-    expect(storageSource).toContain('entry.costValues.push(turnCost.costMoney)');
-    expect(storageSource).toContain(
-      'addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency)',
-    );
-    expect(storageSource).toContain('totalMoney');
-    expect(storageSource).toContain('listLegacySessionRuns');
-    expect(storageSource).toContain("LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] '");
-    expect(storageSource).toContain("LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:'");
-    expect(storageSource).toContain('legacyScheduleNameFromSessionTitle(session.title)');
-    expect(storageSource).toContain('listLegacyAliasesForSchedule');
-    expect(storageSource).toContain('inArray(sessions.title, titles)');
-    expect(storageSource).toContain('legacyAliases.has(');
-    expect(storageSource).toContain('directScheduleId && directScheduleId !== schedule.id');
-    expect(preloadSource).toContain('listCostSummaries');
-    expect(hookSource).toContain('onUsageSessionSpendChanged');
-    expect(hookSource).toContain('onUsageMessageTurnCost');
-    expect(hookSource).toContain('maker.schedule.listCostSummaries()');
-    expect(schedulePageSource).toContain('useScheduleCostSummaries(sorted)');
-    expect(taskListPaneSource).toContain('costSummariesLoaded');
-    expect(taskListCellSource).toContain('scheduler.cell.totalCost');
-    expect(taskListCellSource).toContain('formatTurnCostMoney(totalMoney)');
+    expect(preloadSource).not.toContain('listCostSummaries');
+    expect(schedulePageSource).not.toContain('useScheduleCostSummaries');
+    expect(taskListPaneSource).not.toContain('costSummaries');
+    expect(taskListCellSource).not.toContain('scheduler.cell.totalCost');
     expect(runHistoryPaneSource).toContain('groupRunsForHistory');
     expect(runHistoryPaneSource).toContain('PERSISTENT_SESSION_PREVIEW_LIMIT = 3');
     expect(runHistoryPaneSource).toContain('expandRemainingRuns');
@@ -1154,8 +1117,6 @@ describe('automation-generated sessions', () => {
     expect(runHistoryCardSource).toContain("!isLegacySessionRun && run.status !== 'running'");
     expect(runHistoryCardSource).toContain('scheduler.runs.runCost');
     expect(runHistoryCardSource).toContain("run.costAttribution === 'legacy'");
-    expect(zh.scheduler.cell.totalCost).toBe('开销 {{cost}}');
-    expect(zh.scheduler.cell.totalValue).toBe('价值 {{value}}');
     expect(zh.scheduler.runs.sessionCost).toBe('任务开销 {{cost}}');
     expect(zh.scheduler.runs.sessionValue).toBe('任务价值 {{value}}');
     expect(zh.scheduler.runs.runCost).toBe('本次开销 {{cost}}');

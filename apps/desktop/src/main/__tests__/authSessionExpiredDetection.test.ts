@@ -157,10 +157,10 @@ describe('desktop auth session-expiry detection', () => {
 
     expect(authSource).toContain('withGhostSkillProjectionOwnerCommit,');
     expect(authSource).toContain("from './authBoundaryQuarantine.js';");
-    expect(refreshBody).toContain('writePersistedAuthSession(data.refreshToken, refreshRealm);');
+    expect(refreshBody).toContain('await commitDesktopRefreshCredentials(');
     expect(refreshBody).toContain('await withCloudOwnerCommit({');
     expect(refreshBody).toContain('nextOwnerId: nextUser.id');
-    expect(refreshBody.indexOf('writePersistedAuthSession(data.refreshToken, refreshRealm);')).toBeLessThan(
+    expect(refreshBody.indexOf('await commitDesktopRefreshCredentials(')).toBeLessThan(
       refreshBody.indexOf('await withCloudOwnerCommit({'),
     );
   });

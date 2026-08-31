@@ -16,7 +16,7 @@
  *   - aria-expanded 反映 !isCollapsed
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -121,7 +121,7 @@ export interface ProjectNodeProps {
   onArchiveAll: (project: ProjectNodeData) => void;
 }
 
-export function ProjectNode({
+export const ProjectNode = memo(function ProjectNode({
   project,
   displaySessions,
   sessionVariant = 'text',
@@ -621,7 +621,7 @@ export function ProjectNode({
       </SectionCollapse>
     </div>
   );
-}
+});
 
 interface ProjectActionProps {
   label: string;

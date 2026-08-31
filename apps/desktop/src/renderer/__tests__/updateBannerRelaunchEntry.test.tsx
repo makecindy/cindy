@@ -52,10 +52,21 @@ vi.mock('@/hooks/useUpdateStatus', () => ({
 vi.mock('@/hooks/useUpdateBannerDismiss', () => ({
   useUpdateBannerDismiss: () => ({
     dismissed: dismissState.dismissed,
+    reason: null,
     dismiss: () => { dismissState.dismissed = true; },
     restore: () => { dismissState.dismissed = false; },
+    deferBecauseBusy: vi.fn(),
+    markAutoShown: vi.fn(),
+    clearAutoDecision: vi.fn(),
+    isDecidedFor: () => true,
     isNewUpdateAfterDismiss: () => false,
   }),
+}));
+
+// 本文件只测「点入口之后」的重启判定;自动弹出让路由 updateBannerBusyDefer 覆盖。
+vi.mock('@/hooks/useDeferUpdateBannerWhileBusy', () => ({
+  useDeferUpdateBannerWhileBusy: () => false,
+  UPDATE_BANNER_BUSY_POLL_MS: 2000,
 }));
 
 vi.mock('@/components/ui/tooltip', () => ({

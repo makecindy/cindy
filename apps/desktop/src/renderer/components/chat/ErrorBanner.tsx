@@ -50,17 +50,21 @@ import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
 } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 interface ErrorBannerProps {
   error: string;
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
+  /** Structured details for a tool-loop terminal error (optional for legacy rows). */
+  toolLoop?: ToolLoopErrorDetails | null;
   retryText?: string | null;
   onRetry: (text: string) => void;
   onCancel?: () => void;
@@ -118,6 +122,7 @@ interface ErrorBannerProps {
 export function ErrorBanner({
   error,
   errorReason,
+  toolLoop,
   retryText,
   onRetry,
   onCancel,
@@ -142,8 +147,8 @@ export function ErrorBanner({
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
-    // 横幅已说明影响范围；用户点击“重新连接 ChatGPT”后直接进入浏览器连接流程，
-    // 不再叠一层重复确认弹窗。
+    // 非共享凭证已有横幅说明，可直接重连；system-shared 始终由 hook 强制走
+    // “打开 ChatGPT App / 风险确认后由 Cindy 登录”的保护分支。
     confirmBeforeLogin: false,
   });
   // SSH 与 device-link 是两种互斥的远端来源，但都不能读取或修复控制端本机认证。
@@ -180,6 +185,10 @@ export function ErrorBanner({
     !isAnyRemoteSession &&
     !silentEncryptedRetryEnabled &&
     isInvalidEncryptedContentError(error);
+  const isOversizedHistoryError =
+    agentKind === 'codex' && errorReason === 'codex_history_oversized';
+  // SSH 不能自动剥图。本机 / device-link 由 main 侧协调器就地恢复，横幅不给按钮。
+  const isSshRemoteSession = Boolean(remoteHostId);
   // Codex 401 auth-missing detection 分三层:
   //  - isCodexAuthMissing: codex session + 401/Missing bearer pattern。
   //  - isCodexRemoteAuthMissing: 远端 codex + 上面命中 → 显「同步登录态」按钮。
@@ -270,6 +279,14 @@ export function ErrorBanner({
   const unwrappedDisplay = unwrapProviderErrorDisplay(error);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
+  const toolLoopI18nKey =
+    errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
+  const localizedReasonError =
+    toolLoopI18nKey && toolLoop
+      ? t(toolLoopI18nKey, { count: toolLoop.count })
+      : errorReasonI18nKey
+        ? t(errorReasonI18nKey)
+        : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
     agentKind === 'codex' && usageLimitRecovery?.isAccountUsageLimit === true;
@@ -309,6 +326,7 @@ export function ErrorBanner({
     isGatewayProxyTokenInvalid ||
     isCodexThreadStale ||
     showInvalidEncryptedContentRecovery ||
+    isOversizedHistoryError ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||
     openAiReconnectRequired ||
     isCodexLocalOAuthAuthMissing;
@@ -335,6 +353,12 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.codexThreadStale');
   } else if (showInvalidEncryptedContentRecovery) {
     displayError = t('chat.errorBanner.invalidEncryptedContent');
+  } else if (isOversizedHistoryError) {
+    displayError = t(
+      isSshRemoteSession
+        ? 'logic.errors.codexHistoryOversizedRemote'
+        : 'logic.errors.codexHistoryOversized',
+    );
   } else if (isCodexRemoteAuthMissing) {
     displayError = syncedSinceError
       ? t('chat.errorBanner.codexAuthSynced')
@@ -439,7 +463,7 @@ export function ErrorBanner({
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = errorReasonI18nKey ? t(errorReasonI18nKey) : unwrappedDisplay;
+    displayError = localizedReasonError ?? unwrappedDisplay;
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance && !errorReasonI18nKey && unwrappedDisplay !== error;
@@ -608,8 +632,8 @@ export function ErrorBanner({
         )}
       </div>
       {openAiReconnectRequired && (
-        // 所有凭证来源都由 Cindy 启动可产生新 Codex 凭据的登录流程；登录候选出现后
-        // 先走账号级服务端探测，探测成功前继续隐藏请求 Retry。
+        // 先走账号级服务端探测；共享凭证由恢复弹窗优先引导到 ChatGPT App，
+        // 不直接产生第二条可 refresh 的 OAuth 凭证链。
         <button
           type="button"
           onClick={() => void handleOpenAiRecovery()}
@@ -625,7 +649,9 @@ export function ErrorBanner({
               ? 'chatgptAuthRecovery.recheck'
               : openAiRecoveryBusy
                 ? 'chatgptAuthRecovery.checking'
-                : 'chatgptAuthRecovery.relogin',
+                : openAiCredentialScope === 'system-shared'
+                  ? 'chatgptAuthRecovery.recheck'
+                  : 'chatgptAuthRecovery.relogin',
           )}
         >
           <Spinner icon={RefreshCw} size={12} spinning={openAiRecoveryBusy} />
@@ -634,7 +660,9 @@ export function ErrorBanner({
               ? 'chatgptAuthRecovery.checking'
               : openAiRecoveryCheck === 'failed'
                 ? 'chatgptAuthRecovery.recheck'
-                : 'chatgptAuthRecovery.relogin',
+                : openAiCredentialScope === 'system-shared'
+                  ? 'chatgptAuthRecovery.recheck'
+                  : 'chatgptAuthRecovery.relogin',
           )}
         </button>
       )}

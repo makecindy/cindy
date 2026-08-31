@@ -1180,7 +1180,12 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // 1d:意图期改选模型 / 来源必须 await 并把结果交回去,不能 fire-and-forget 返回
     // undefined 让上游读成「已应用」。
     expect(source).not.toContain('void performAgentSwitch(');
-    expect(source).toContain('return await performAgentSwitch(intent.target, newModelId, null);');
+    expect(source).toContain(
+      'return await performAgentSwitch(intent.target, newModelId, null, {',
+    );
+    expect(source).toContain('intent.effort ? { effort: intent.effort as Effort }');
+    // 意图期改选带来的 Fast override 必须过目标能力门,不能把旧 Fast 写进不支持的模型。
+    expect(source).toContain('overrides.fastMode && fastCapable');
   });
 
   /**

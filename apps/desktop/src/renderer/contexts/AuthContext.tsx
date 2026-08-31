@@ -24,6 +24,7 @@ import {
   type AuthFlowState,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
+  type DesktopAccountSwitcherSnapshot,
   type User,
 } from '@/lib/authService';
 import {
@@ -42,6 +43,7 @@ import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
 import { setModelFavoritesOwner } from '@/state/modelFavorites';
+import { setProviderModelMemoryOwner } from '@/state/providerModelMemory';
 import { setFavoriteAnchorMemoryOwner } from '@/state/favoriteAnchorMemory';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
@@ -79,6 +81,11 @@ export interface AuthContextValue {
   loadLoginState: () => Promise<DesktopLoginActionResult>;
   dispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
   logout: () => Promise<void>;
+  listAccounts: () => Promise<DesktopAccountSwitcherSnapshot>;
+  syncAccounts: () => Promise<DesktopAccountSwitcherSnapshot>;
+  switchAccount: (accountKey: string) => Promise<void>;
+  beginAddAccount: () => Promise<DesktopLoginActionResult>;
+  cancelAddAccount: () => Promise<void>;
   enterLocalMode: () => Promise<void>;
   exitLocalMode: () => Promise<void>;
   hasAccountDeletionReceipt: boolean;
@@ -191,7 +198,8 @@ export function AuthProvider({
       activeDataOwnerIdRef.current = state.dataOwnerId;
       activeDataOwnerGenerationRef.current = state.ownerGeneration;
       setNewMakerDraftOwner(state.dataOwnerId);
-      // 统一模型选择器的两根新轴与 newMakerDraft 同待遇:同一处、同一个 dataOwnerId、
+      setProviderModelMemoryOwner(state.dataOwnerId);
+      // 模型选择器的持久记忆与 newMakerDraft 同待遇:同一处、同一个 dataOwnerId、
       // 登出时同样传 null(state.dataOwnerId 在 signed-out 快照里就是 null,分区键退回
       // 无后缀的默认槽)。漏接 = 多账号串号(providerModelMemory 的旧教训)。
       setModelEnginePrefsOwner(state.dataOwnerId);
@@ -409,6 +417,27 @@ export function AuthProvider({
     clearWorkersCache();
   }, [runDataOwnerBoundary]);
 
+  const listAccounts = useCallback(() => authServiceRef.current!.listAccounts(), []);
+
+  const syncAccounts = useCallback(() => authServiceRef.current!.syncAccounts(), []);
+
+  const switchAccount = useCallback(
+    (accountKey: string) =>
+      runDataOwnerBoundary(() => authServiceRef.current!.switchAccount(accountKey)),
+    [runDataOwnerBoundary],
+  );
+
+  const beginAddAccount = useCallback(async () => {
+    const result = await authServiceRef.current!.beginAddAccount();
+    setLoginState(result.state);
+    return result;
+  }, []);
+
+  const cancelAddAccount = useCallback(async () => {
+    await authServiceRef.current!.cancelAddAccount();
+    setLoginState(null);
+  }, []);
+
   const enterLocalMode = useCallback(async () => {
     // 本地模式也是一次 dataOwnerId 切换。必须走 applyIncomingState,不能自己拼半套
     // setter:漏接草稿 / prompt / 模型可见性 / 记忆分区会让跳过登录进主界面后仍读写
@@ -475,6 +504,11 @@ export function AuthProvider({
       loadLoginState,
       dispatchLoginAction,
       logout,
+      listAccounts,
+      syncAccounts,
+      switchAccount,
+      beginAddAccount,
+      cancelAddAccount,
       enterLocalMode,
       exitLocalMode,
       hasAccountDeletionReceipt,
@@ -501,6 +535,11 @@ export function AuthProvider({
       loadLoginState,
       dispatchLoginAction,
       logout,
+      listAccounts,
+      syncAccounts,
+      switchAccount,
+      beginAddAccount,
+      cancelAddAccount,
       enterLocalMode,
       exitLocalMode,
       hasAccountDeletionReceipt,

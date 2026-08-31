@@ -16,7 +16,7 @@ const INJECTION_PATTERNS: ReadonlyArray<RegExp> = [
   /不要(?:再)?(?:遵守|执行|理会)(?:以上|之前|前面)?的?(?:系统)?(?:指令|提示|规则)/,
   /you\s+are\s+now\s+(?:in\s+)?(?:developer|dan|jailbreak|god)\s+mode/i,
   /(?:进入|切换到)\s*(?:开发者|越狱|dan)\s*模式/,
-  /<\/?group_chat_context>/i,
+  /<\/?(?:group_chat_context|reply_context)>/i,
   /(?:system\s*prompt|系统提示词)\s*(?:is|override|覆盖|改为)/i,
 ];
 

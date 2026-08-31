@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type {
+  DbSlimmingStartupPhase,
+  DbSlimmingStartupProgress,
+} from '../../../shared/localDbMaintenance';
 
 import { cn } from '@/lib/utils';
 import {
@@ -15,7 +19,12 @@ import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { desktopScale } from '@/components/login/loginScale';
 import { useViewportSize } from '@/components/login/LoginStage';
-import { LoginPanel, LoginPrimaryButton, LoginTitleBlock } from '@/components/login/LoginControls';
+import {
+  LoginPanel,
+  LoginPrimaryButton,
+  LoginTextLink,
+  LoginTitleBlock,
+} from '@/components/login/LoginControls';
 import {
   LOGIN_COLORS,
   LOGIN_GROUP,
@@ -89,6 +98,27 @@ function splashTitleFor(
   }
 }
 
+function dbCleanupPhaseTranslationKey(phase: DbSlimmingStartupPhase): string {
+  switch (phase) {
+    case 'preparing':
+      return 'splash.databaseCleanup.phase.preparing';
+    case 'backing-up':
+      return 'splash.databaseCleanup.phase.backingUp';
+    case 'copying':
+      return 'splash.databaseCleanup.phase.copying';
+    case 'cleaning':
+      return 'splash.databaseCleanup.phase.cleaning';
+    case 'compacting':
+      return 'splash.databaseCleanup.phase.compacting';
+    case 'verifying':
+      return 'splash.databaseCleanup.phase.verifying';
+    case 'finalizing':
+      return 'splash.databaseCleanup.phase.finalizing';
+    case 'cancelling':
+      return 'splash.databaseCleanup.phase.cancelling';
+  }
+}
+
 export function SplashScreen() {
   const { t } = useTranslation();
   const splash = useSplash();
@@ -97,9 +127,40 @@ export function SplashScreen() {
   const reducedMotion = useReducedMotion();
   const handoff = useLoginHandoff();
   const [shellCoverFading, setShellCoverFading] = useState(false);
+  const [dbCleanupProgress, setDbCleanupProgress] =
+    useState<DbSlimmingStartupProgress | null>(null);
+  const [dbCleanupNow, setDbCleanupNow] = useState(() => Date.now());
+  const [dbCleanupCancelPending, setDbCleanupCancelPending] = useState(false);
   const prevCoverHeldRef = useRef(coverHeld);
   const { width, height } = useViewportSize();
   const { scale } = desktopScale(width, height);
+
+  useEffect(() => {
+    const maintenance = window.electronAPI?.localDb?.maintenance;
+    if (!maintenance?.onStartupProgress || !maintenance.getStartupProgress) return;
+    let disposed = false;
+    const applyProgress = (progress: DbSlimmingStartupProgress | null) => {
+      if (disposed) return;
+      setDbCleanupProgress(progress);
+      setDbCleanupNow(Date.now());
+      if (!progress || progress.phase !== 'cancelling') setDbCleanupCancelPending(false);
+    };
+    const unsubscribe = maintenance.onStartupProgress(applyProgress);
+    void maintenance.getStartupProgress().then(applyProgress, () => {
+      // Startup presentation is best-effort; ensureReady remains the source of truth.
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dbCleanupProgress) return;
+    setDbCleanupNow(Date.now());
+    const timer = window.setInterval(() => setDbCleanupNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [dbCleanupProgress?.requestId]);
 
   // dev fixture 只改显示 phase(附录 A splash 行;PROD 恒 null)。
   const fixture = readSplashPhaseFixture();
@@ -161,7 +222,7 @@ export function SplashScreen() {
 
   useEffect(() => {
     const root = document.documentElement;
-    if (splashLifecycleActive || shellCoverVisible) {
+    if (splashLifecycleActive || shellCoverVisible || dbCleanupProgress) {
       root.setAttribute('data-splash-active', '1');
     } else {
       root.removeAttribute('data-splash-active');
@@ -169,7 +230,7 @@ export function SplashScreen() {
     return () => {
       root.removeAttribute('data-splash-active');
     };
-  }, [shellCoverVisible, splashLifecycleActive]);
+  }, [dbCleanupProgress, shellCoverVisible, splashLifecycleActive]);
 
   // handoff 推进锚之一:Splash 开始退场(fading_out/done/skipped)即上报。
   const splashExitReportedRef = useRef(false);
@@ -187,17 +248,26 @@ export function SplashScreen() {
 
   // dev fixture 激活时冻结停留:真实生命周期跑完也不退场,供状态遍历/视觉走查
   // (readSplashPhaseFixture 在 PROD 恒 null,本分支不可达)。
-  if (!fixture && (realPhase === 'splash_done' || realPhase === 'splash_skipped') && !shellCoverVisible) {
+  if (
+    !fixture &&
+    (realPhase === 'splash_done' || realPhase === 'splash_skipped') &&
+    !shellCoverVisible &&
+    !dbCleanupProgress
+  ) {
     return null;
   }
 
   const isMac = window.electronAPI?.platform === 'darwin';
 
-  const title = splashTitleFor(displayPhase, t, step, totalSteps);
+  const title = dbCleanupProgress
+    ? t('splash.databaseCleanup.title')
+    : splashTitleFor(displayPhase, t, step, totalSteps);
   // 进度条仅更新下载态面板形态(updating/downloading);fixture 模式按显示 phase。
-  const isDownloading = fixture
-    ? displayPhase === 'splash_updating' || displayPhase === 'splash_downloading'
-    : realIsDownloading;
+  const isDownloading =
+    !dbCleanupProgress &&
+    (fixture
+      ? displayPhase === 'splash_updating' || displayPhase === 'splash_downloading'
+      : realIsDownloading);
   // fixture 冻结走查没有真实下载遥测,给进度行一组演示数据看排版
   // (dev-only:readSplashPhaseFixture 在 PROD 恒 null,本分支不可达)。
   const statsProgress = fixture && !realIsDownloading ? 31 : downloadProgress;
@@ -222,13 +292,38 @@ export function SplashScreen() {
           ? 'spawn'
           : null;
   const isEnvFailed = displayPhase === 'splash_failed';
-  const showSpinner = dialogKind === null && !isEnvFailed;
+  const showSpinner = !dbCleanupProgress && dialogKind === null && !isEnvFailed;
+  const dbCleanupPercent = dbCleanupProgress
+    ? Math.round(Math.min(100, Math.max(0, dbCleanupProgress.progress)))
+    : 0;
+  const dbCleanupElapsedMs = dbCleanupProgress
+    ? Math.max(0, dbCleanupNow - dbCleanupProgress.startedAt)
+    : 0;
+  const dbCleanupRemainingMs = dbCleanupProgress
+    ? Math.max(0, dbCleanupProgress.estimatedTotalMs - dbCleanupElapsedMs)
+    : 0;
+  const formatDbCleanupDuration = (milliseconds: number): string => {
+    const seconds = Math.max(1, Math.ceil(milliseconds / 1_000));
+    if (seconds < 60) return t('splash.databaseCleanup.duration.seconds', { count: seconds });
+    return t('splash.databaseCleanup.duration.minutes', { count: Math.ceil(seconds / 60) });
+  };
+  const requestDbCleanupCancel = (): void => {
+    const maintenance = window.electronAPI?.localDb?.maintenance;
+    if (!maintenance?.cancelStartup || !dbCleanupProgress?.cancellable) return;
+    setDbCleanupCancelPending(true);
+    void maintenance.cancelStartup().then(
+      (result) => {
+        if (!result.cancelled) setDbCleanupCancelPending(false);
+      },
+      () => setDbCleanupCancelPending(false),
+    );
+  };
 
   return (
     <div
       className={cn(
         'fixed inset-0 z-[9999] overflow-hidden',
-        (realPhase === 'fading_out' || shellCoverFading) && !fixture
+        (realPhase === 'fading_out' || shellCoverFading) && !fixture && !dbCleanupProgress
           ? 'pointer-events-none opacity-0'
           : 'opacity-100',
       )}
@@ -245,7 +340,7 @@ export function SplashScreen() {
     >
       {/* Toolbar:z-10(关闭/最小化,仅 Windows 原生 chrome) */}
       <div className="relative z-10 flex h-[46px] shrink-0 items-center justify-end px-2">
-        {!isMac && (
+        {!isMac && !dbCleanupProgress && (
           <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             <WindowControls />
           </div>
@@ -289,7 +384,9 @@ export function SplashScreen() {
                 // 距 spinner(y=188)/主按钮(y=300)均有余量。
                 subtitleMaxLines={3}
                 subtitle={
-                  dialogKind === 'manifest'
+                  dbCleanupProgress
+                    ? `${t(dbCleanupPhaseTranslationKey(dbCleanupProgress.phase))} · ${dbCleanupPercent}%`
+                    : dialogKind === 'manifest'
                     ? t('splash.manifestFailed.description')
                     : dialogKind === 'download'
                       ? t('splash.downloadFailed.description')
@@ -376,6 +473,91 @@ export function SplashScreen() {
                       </span>
                     </>
                   )}
+                </div>
+              </>
+            )}
+
+            {dbCleanupProgress && (
+              <>
+                <div
+                  role="progressbar"
+                  aria-label={t('splash.databaseCleanup.progressLabel')}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={dbCleanupPercent}
+                  data-testid="database-cleanup-progress-track"
+                  className="absolute overflow-hidden"
+                  style={{
+                    left: SPLASH_PANEL.progress.x,
+                    top: SPLASH_PANEL.databaseCleanup.progressY,
+                    width: SPLASH_PANEL.progress.width,
+                    height: SPLASH_PANEL.progress.height,
+                    borderRadius: SPLASH_PANEL.progress.radius,
+                    background: LOGIN_COLORS.splashProgressTrack,
+                  }}
+                >
+                  <div
+                    data-testid="database-cleanup-progress-fill"
+                    className="h-full transition-[width] duration-300 motion-reduce:transition-none"
+                    style={{
+                      width: `${dbCleanupPercent}%`,
+                      borderRadius: SPLASH_PANEL.progress.radius,
+                      background: LOGIN_COLORS.splashProgressFill,
+                    }}
+                  />
+                </div>
+                <div
+                  data-testid="database-cleanup-time"
+                  className="absolute flex items-center justify-center"
+                  style={{
+                    left: SPLASH_PANEL.stats.x,
+                    top: SPLASH_PANEL.databaseCleanup.statsY,
+                    width: SPLASH_PANEL.stats.width,
+                    height: SPLASH_PANEL.stats.height,
+                    fontSize: SPLASH_PANEL.stats.fontSize,
+                    color: LOGIN_COLORS.secondaryText,
+                  }}
+                >
+                  {dbCleanupProgress.phase === 'finalizing'
+                    ? t('splash.databaseCleanup.elapsedFinalizing', {
+                        elapsed: formatDbCleanupDuration(dbCleanupElapsedMs),
+                      })
+                    : t('splash.databaseCleanup.elapsedAndRemaining', {
+                        elapsed: formatDbCleanupDuration(dbCleanupElapsedMs),
+                        remaining: formatDbCleanupDuration(dbCleanupRemainingMs),
+                      })}
+                </div>
+                <LoginTextLink
+                  testId="database-cleanup-cancel"
+                  top={SPLASH_PANEL.databaseCleanup.actionY}
+                  height={SPLASH_PANEL.databaseCleanup.actionHeight}
+                  disabled={!dbCleanupProgress.cancellable || dbCleanupCancelPending}
+                  onClick={requestDbCleanupCancel}
+                >
+                  {dbCleanupProgress.phase === 'cancelling' || dbCleanupCancelPending
+                    ? t('splash.databaseCleanup.cancellingAction')
+                    : dbCleanupProgress.phase === 'finalizing'
+                      ? t('splash.databaseCleanup.finalizingAction')
+                      : t('splash.databaseCleanup.cancelAction')}
+                </LoginTextLink>
+                <div
+                  data-testid="database-cleanup-safety-hint"
+                  className="absolute flex items-center justify-center text-center"
+                  style={{
+                    left: SPLASH_PANEL.databaseCleanup.hint.x,
+                    top: SPLASH_PANEL.databaseCleanup.hint.y,
+                    width: SPLASH_PANEL.databaseCleanup.hint.width,
+                    height: SPLASH_PANEL.databaseCleanup.hint.height,
+                    fontSize: SPLASH_PANEL.databaseCleanup.hint.fontSize,
+                    lineHeight: `${SPLASH_PANEL.databaseCleanup.hint.lineHeight}px`,
+                    color: LOGIN_COLORS.secondaryText,
+                  }}
+                >
+                  {dbCleanupProgress.phase === 'finalizing'
+                    ? t('splash.databaseCleanup.finalizingHint')
+                    : dbCleanupProgress.phase === 'cancelling'
+                      ? t('splash.databaseCleanup.cancellingHint')
+                      : t('splash.databaseCleanup.cancelHint')}
                 </div>
               </>
             )}

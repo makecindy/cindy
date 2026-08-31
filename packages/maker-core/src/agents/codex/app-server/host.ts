@@ -255,7 +255,12 @@ export interface AppServerHostOptions {
    * 关联中的 JSON-RPC response 明确返回 cloudRequirements Auth/relogin 时调用一次
    * (单次 latch 在 client 内)。stderr 始终只作为诊断日志。
    */
-  onAuthInvalidated?: (reason: string) => void;
+  onAuthInvalidated?: (
+    reason: string,
+    context?: { credentialGeneration?: string | null },
+  ) => void;
+  /** Returns the credential generation frozen for the current concrete transport. */
+  captureCredentialGeneration?: () => string | null;
   /**
    * Host 创建时冻结的事实:该 app-server 的 model_provider.base_url 是否走
    * 本机 codex proxy。session 级 prompt gate 只读这个值,不再 live 读取全局状态。
@@ -268,10 +273,11 @@ export interface AppServerHostOptions {
   /** Maximum wait for the provisioned Browser companion to publish its MCP tools. */
   codexBrowserUseStartupTimeoutMs?: number;
   /**
-   * Host 创建时冻结的事实:spawn args 里定义的 OpenAI 身份 provider id(仅
-   * oauth-bearer spawn 存在)。thread/start|resume 据此对订阅直连会话开远端压缩。
+   * Host 创建时冻结的 ChatGPT OpenAI transport identity，仅 oauth-bearer spawn 存在。
    */
   remoteCompactionProviderId?: string;
+  /** Cindy Provider codex/* 的内部 OpenAI transport identity。 */
+  cindyRemoteCompactionProviderId?: string;
   /** Per-thread host-owned MCP URL overrides keyed by the Session instance. */
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   /** Cindy-side fallback used only when a subagent's actual model is not reported. */
@@ -431,6 +437,10 @@ export class AppServerHost {
     return this.opts.remoteCompactionProviderId ?? null;
   }
 
+  getCindyRemoteCompactionProviderId(): string | null {
+    return this.opts.cindyRemoteCompactionProviderId ?? null;
+  }
+
   /**
    * Return the host-owned MCP URL overrides for one concrete Session instance.
    * Anonymous/legacy callers keep the spawn-level unbound URLs, which preserves
@@ -527,6 +537,7 @@ export class AppServerHost {
       logger: this.opts.logger,
       onTransportError: (err) => this.handleTransportError(err),
       onAuthInvalidated: this.opts.onAuthInvalidated,
+      captureCredentialGeneration: this.opts.captureCredentialGeneration,
     });
     this.client = client;
 

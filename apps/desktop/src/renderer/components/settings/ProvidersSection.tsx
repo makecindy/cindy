@@ -37,10 +37,12 @@ import {
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
+import { useCodexSessionExpiredPrompt } from '@/hooks/useCodexSessionExpiredPrompt';
 import { useApiKey } from '@/hooks/useApiKey';
 import { extractIpcError } from '@/utils/ipcError';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useModelAccessCreditUsage } from '@/hooks/useModelAccessCreditUsage';
+import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
@@ -314,6 +316,7 @@ function RowIconButton({
 function DetailHeader({
   icon,
   title,
+  modelCountSuffix,
   subtitle,
   trailing,
   provider,
@@ -325,6 +328,8 @@ function DetailHeader({
 }: {
   icon: ReactNode;
   title: string;
+  /** 紧跟模型数量的供应商专属元数据。 */
+  modelCountSuffix?: ReactNode;
   subtitle: string;
   trailing: ReactNode;
   provider?: ProviderView;
@@ -394,6 +399,7 @@ function DetailHeader({
                   {title}
                 </span>
                 {modelCount !== null && <ModelCountChip count={modelCount} />}
+                {modelCountSuffix}
                 {subscriptionProduct && (
                   <CustomTag
                     label={t('settings.providers.models.subscriptionProduct', {
@@ -585,6 +591,11 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   const credentialScope = reconnectRequired
     ? (state.credentialScope ?? 'unknown')
     : (reconnectCredentialScope ?? 'unknown');
+  const oauthWritesBlocked = state.oauthWritesBlocked === true;
+  const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
+    onAuthenticated: () => onChanged(),
+    confirmBeforeLogin: false,
+  });
 
   const handleLogout = useCallback(async () => {
     const confirmed = await confirm({
@@ -610,6 +621,8 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       onChanged();
     } else if (outcome === 'unverified') {
       toast.error(t('chatgptAuthRecovery.verificationFailed'));
+    } else if (outcome === 'blocked') {
+      toast.error(t('chatgptAuthRecovery.devWriteBlocked'));
     } else if (outcome === 'failed') {
       toast.error(t('settings.connections.codex.toast.loginFailed'));
     }
@@ -621,8 +634,8 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       await refresh();
       return;
     }
-    await handleLogin();
-  }, [handleLogin, loggingIn, recoveryCheck, refresh]);
+    if (reconnectRequired) promptCodexSessionExpired(state.reason);
+  }, [loggingIn, promptCodexSessionExpired, reconnectRequired, recoveryCheck, refresh, state]);
 
   const recoveryDetail = reconnectRequired ? (
     <p className="text-12 leading-relaxed text-[var(--settings-integration-subtitle)]">
@@ -653,19 +666,28 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
             ? 'chatgptAuthRecovery.checking'
             : recoveryCheck === 'failed'
               ? 'chatgptAuthRecovery.recheck'
-              : 'chatgptAuthRecovery.relogin',
+              : credentialScope === 'system-shared'
+                ? 'chatgptAuthRecovery.recheck'
+                : 'chatgptAuthRecovery.relogin',
         )}
         onClick={() => void handleRecovery()}
-        disabled={recoveryCheck === 'checking' || loggingIn}
+        disabled={
+          recoveryCheck === 'checking' ||
+          loggingIn ||
+          (oauthWritesBlocked && credentialScope !== 'system-shared')
+        }
       />
     </div>
   ) : (
     <PillButton
       label={
-        loggingIn
-          ? t('settings.providers.openai.cancelConnect')
-          : t('settings.providers.openai.connect')
+        oauthWritesBlocked
+          ? t('chatgptAuthRecovery.devReadOnly')
+          : loggingIn
+            ? t('settings.providers.openai.cancelConnect')
+            : t('settings.providers.openai.connect')
       }
+      disabled={oauthWritesBlocked}
       onClick={() => {
         if (loggingIn) void cancelLogin();
         else void handleLogin();
@@ -855,18 +877,19 @@ function XaiAssetModule({ connected }: { connected: boolean }) {
             {t('settings.providers.xai.asset.resetsAt', { at: resetLabel })}
           </p>
         )}
-        {hasWeekly && (usage.productUsage ?? []).map((product) => (
-          <p
-            key={product.product}
-            className="mt-1 text-12 leading-tight tabular-nums"
-            style={{ color: 'var(--text-secondary)' }}
-          >
-            {t('settings.providers.xai.asset.productLine', {
-              product: formatXaiProductLabel(product.product),
-              percent: Math.round(product.usagePercent),
-            })}
-          </p>
-        ))}
+        {hasWeekly &&
+          (usage.productUsage ?? []).map((product) => (
+            <p
+              key={product.product}
+              className="mt-1 text-12 leading-tight tabular-nums"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              {t('settings.providers.xai.asset.productLine', {
+                product: formatXaiProductLabel(product.product),
+                percent: Math.round(product.usagePercent),
+              })}
+            </p>
+          ))}
       </div>
       <div className="flex shrink-0 items-center pt-3.5">
         <button
@@ -1212,7 +1235,8 @@ function BuiltinApiKeyHeader({
 // 脱敏 key / 轮换 / 重新获取这三件用户几乎不碰的事,而给「我还剩多少钱、去哪充」:
 //   - 标题行右端只留一个「···」溢出菜单(与所有供应商共用 DetailHeader 那一个),
 //     凭证管理三项 + 只读脱敏 key 收在里面,各自保留原有的二次确认;
-//   - 标题行下方是账户资产模块(1px 发丝线分隔):可用余额 + 查看用量 + 余额充值;
+//   - 标题行下方是账户资产模块(1px 发丝线分隔):可用余额 + 查看用量始终在;
+//     右侧一颗 Black Pill 按套餐状态切换购买 / 升级 / 充值（升满后才充值）;
 //   - 故障恢复(重试)只在凭据同步失败时浮现,正常态版面上没有重试按钮。
 // ---------------------------------------------------------------------------
 
@@ -1252,6 +1276,7 @@ function XdGatewayHeader({
     syncState: syncStatus.state,
     available: creditUsage?.available ?? null,
   });
+  const primaryAction = useXdAssetPrimaryAction(assetState.kind === 'balance');
 
   // 凭据一律由服务端自动下发(个人 / 已接入企业),**无手填入口**(2026-07-17 定案)。
   const serverManaged = syncStatus.state === 'ok' && syncStatus.source === 'server';
@@ -1318,8 +1343,8 @@ function XdGatewayHeader({
   }, [hasSavedKey, key, t]);
 
   const goToBilling = useCallback(
-    (intent?: 'topup') => {
-      navigate(intent ? '/settings?tab=billing&intent=topup' : '/settings?tab=billing');
+    (intent?: 'topup' | 'subscribe' | 'plan-change') => {
+      navigate(intent ? `/settings?tab=billing&intent=${intent}` : '/settings?tab=billing');
     },
     [navigate],
   );
@@ -1401,16 +1426,13 @@ function XdGatewayHeader({
   const assetModule =
     assetState.kind === 'hidden' ? undefined : (
       <div
-        className={cn(
-          'flex flex-wrap justify-between gap-x-6 gap-y-4 border-t px-5 py-5',
-          assetState.kind === 'fault' ? 'items-center gap-y-3' : 'items-start',
-        )}
+        data-testid="cindy-ai-asset-module"
+        className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 border-t px-5 py-4"
         style={{ borderColor: 'var(--settings-theme-card-border)' }}
       >
         {assetState.kind === 'fault' ? (
           <>
-            {/* 「本该有、这次拿不到」——讲清发生了什么 + 下一步,并就地给恢复入口
-                (DESIGN「Errors = what happened + what to do」)。 */}
+            {/* 「本该有、这次拿不到」——讲清发生了什么 + 下一步,并就地给恢复入口。 */}
             <p
               className="max-w-[400px] text-13 leading-relaxed"
               style={{ color: 'var(--text-secondary)' }}
@@ -1421,7 +1443,7 @@ function XdGatewayHeader({
           </>
         ) : (
           <>
-            <div className="min-w-0">
+            <div className="min-w-[120px]">
               <p className="text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
                 {t('billing.balance.title')}
               </p>
@@ -1437,20 +1459,28 @@ function XdGatewayHeader({
                 )}
               </p>
             </div>
-            {/* pt 与金额基线光学对齐(标签 12px + 6px 间距的一半)。 */}
-            <div className="flex shrink-0 items-center gap-4 pt-3.5">
-              <button
-                type="button"
+            {/* 一屏一颗 Black Pill。查看用量始终是次动作；右侧按套餐状态切换。 */}
+            <div className="flex shrink-0 items-center gap-3">
+              <PillButton
+                label={t('settings.providers.xd.asset.viewUsage')}
                 onClick={() => goToBilling()}
-                className="text-13 transition-colors hover:text-[var(--text-primary)]"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                {t('settings.providers.xd.asset.viewUsage')}
-              </button>
-              <CtaPillButton
-                label={t('billing.settings.topupCard.action')}
-                onClick={() => goToBilling('topup')}
               />
+              {primaryAction === 'buy-plan' ? (
+                <CtaPillButton
+                  label={t('settings.providers.xd.asset.buyPlan')}
+                  onClick={() => goToBilling('subscribe')}
+                />
+              ) : primaryAction === 'upgrade-plan' ? (
+                <CtaPillButton
+                  label={t('settings.providers.xd.asset.upgradePlan')}
+                  onClick={() => goToBilling('plan-change')}
+                />
+              ) : primaryAction === 'topup' ? (
+                <CtaPillButton
+                  label={t('billing.settings.topupCard.action')}
+                  onClick={() => goToBilling('topup')}
+                />
+              ) : null}
             </div>
           </>
         )}
@@ -1461,6 +1491,16 @@ function XdGatewayHeader({
     <DetailHeader
       icon={<XDIncMark size={18} />}
       title={t('settings.providers.xd.title')}
+      modelCountSuffix={
+        syncStatus.accountTier === 'free' ? (
+          <span
+            data-testid="cindy-ai-free-tier-badge"
+            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
+          >
+            {t('settings.providers.xd.accountTier.free')}
+          </span>
+        ) : undefined
+      }
       subtitle={providerSubtitleForDisplay(provider, t('settings.providers.xd.modelLabel'), {
         suffix: t('settings.providers.xd.billingLabel'),
         fallback: t('settings.providers.xd.subtitle'),
@@ -2678,9 +2718,9 @@ export function ProvidersSection() {
                         )}
                       </div>
                     )}
-                {effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID && (
-                  <OllamaProviderDetail onChanged={refetch} />
-                )}
+                  {effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID && (
+                    <OllamaProviderDetail onChanged={refetch} />
+                  )}
                 </>
               </>
             ) : (
