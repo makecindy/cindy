@@ -410,10 +410,20 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     const permissionRequired =
       message.status === 'error' && message.reason === 'permission-required';
     if (permissionRequired) this.permissionBlocked = true;
-    if (message.status === this.lastStatus) return;
     const previousStatus = this.lastStatus;
-    this.lastStatus = message.status;
-    this.updateConnectionStatus(message.status);
+    const statusChanged = message.status !== this.lastStatus;
+    if (statusChanged) {
+      this.lastStatus = message.status;
+      this.updateConnectionStatus(message.status);
+    }
+    // Permission errors own teardown even when a previous connection error
+    // already published the same coarse `error` status. The breaker must not
+    // leave a permission-blocked child alive and unable to honor retry.
+    if (permissionRequired) {
+      this.stopHostAfterPermission(child);
+      return;
+    }
+    if (!statusChanged) return;
     if (message.status === 'connected') {
       this.armStableConnection();
       this.deps.log.info('Codex Micro lighting connected');
@@ -423,10 +433,6 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.deps.log.debug('Codex Micro lighting device not detected');
     } else {
       this.deps.log.warn('Codex Micro lighting host could not apply the current frame');
-    }
-    if (permissionRequired) {
-      this.stopHostAfterPermission(child);
-      return;
     }
     // Pairing / USB re-enumeration leaves the native SDK handle alive but
     // unusable. ChatGPT recovers by opening a fresh transport; we do the same

@@ -650,6 +650,35 @@ describe('WorkLouderCodexHostClient', () => {
     }
   });
 
+  it('stops a host when permission-required follows another error status', () => {
+    const children = [new FakeChild(), new FakeChild()];
+    const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    children[0].emit('message', {
+      kind: 'state',
+      status: 'error',
+      reason: 'connection-failed',
+    });
+    children[0].emit('message', {
+      kind: 'state',
+      status: 'error',
+      reason: 'permission-required',
+    });
+
+    expect(children[0].kill).toHaveBeenCalledOnce();
+    expect(fork).toHaveBeenCalledTimes(1);
+
+    client.retryPermission();
+
+    expect(fork).toHaveBeenCalledTimes(2);
+    expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
   it('does not discover presence when unlock arrives without a permission breaker', () => {
     const fork = vi.fn(() => new FakeChild());
     const client = new WorkLouderCodexHostClient({
