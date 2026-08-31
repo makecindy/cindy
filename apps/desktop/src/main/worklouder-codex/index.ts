@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { BrowserWindow, ipcMain, shell, utilityProcess } from 'electron';
+import { BrowserWindow, ipcMain, powerMonitor, shell, utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { getDeepLinkMainWindow, openMainWindowSession, sendMainWindowMessage } from '../deepLink.js';
@@ -205,6 +205,12 @@ export function registerWorkLouderCodexInputDevice(): void {
 export function registerWorkLouderCodexSettingsIpc(): void {
   if (settingsIpcRegistered) return;
   settingsIpcRegistered = true;
+
+  // macOS can report the same HID denial while the screen is locked. The
+  // client keeps that failure circuit-broken until unlock, then makes one
+  // bounded recovery attempt instead of relying on the settings poller to
+  // recreate the host every two seconds.
+  powerMonitor.on('unlock-screen', () => hostClient.retryPermission());
 
   workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());
   workLouderCodexLightingController.start();

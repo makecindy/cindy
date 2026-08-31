@@ -292,8 +292,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
    * no such keyboard.
    */
   probe(): void {
-    if (this.disposed) return;
-    this.permissionBlocked = false;
+    if (this.disposed || this.permissionBlocked) return;
     if (!this.deviceEnabled) {
       this.discoverPresence();
       return;
@@ -313,6 +312,20 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * Clear a permission breaker only for an explicit recovery signal.
+   *
+   * Background connection polling must stay observational: repeatedly
+   * recreating a host while macOS still denies HID access is the restart storm
+   * this client is designed to prevent. The settings toggle and system unlock
+   * paths call this method when a permission change may have happened.
+   */
+  retryPermission(): void {
+    if (this.disposed) return;
+    this.permissionBlocked = false;
+    this.probe();
   }
 
   private requestHidListening(): void {

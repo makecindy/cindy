@@ -544,7 +544,7 @@ describe('WorkLouderCodexHostClient', () => {
     }
   });
 
-  it('does not restart after a permission-required failure until an explicit probe', async () => {
+  it('does not restart after a permission-required failure during background probes', async () => {
     vi.useFakeTimers();
     try {
       const children = [new FakeChild(), new FakeChild()];
@@ -564,10 +564,12 @@ describe('WorkLouderCodexHostClient', () => {
 
       expect(children[0].kill).toHaveBeenCalledOnce();
       expect(fork).toHaveBeenCalledTimes(1);
+      client.probe();
+      client.probe();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(fork).toHaveBeenCalledTimes(1);
 
-      client.probe();
+      client.retryPermission();
       expect(fork).toHaveBeenCalledTimes(2);
       expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
     } finally {
