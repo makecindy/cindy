@@ -110,6 +110,7 @@ import {
   PluginManagementLayout,
   PluginManagementPage,
 } from './PluginManagementLayout';
+import { usePluginListScrollRestoration } from './lib/usePluginListScrollRestoration';
 import { GhostPagePanelHost } from './GhostPagePanelHost';
 import { GhostPluginDetailView } from './GhostPluginDetailView';
 import {
@@ -426,6 +427,15 @@ export function GhostPluginPage({
   }, [ignoredRoundKey]);
   const [originFilter, setOriginFilter] = useState<PluginPresentationFilter>('all');
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
+  // 列表与详情是互斥分支;列表节点会卸载,返回时需显式恢复进入前的滚动位置。
+  const pluginCatalogVisible = marketDetail === null && selectedId === null;
+  const {
+    listRef: pluginCatalogListRef,
+    onListScroll: onPluginCatalogScroll,
+    capture: capturePluginCatalogScroll,
+    requestRestore: requestPluginCatalogScrollRestore,
+    clearPendingRestore: clearPluginCatalogScrollRestore,
+  } = usePluginListScrollRestoration(pluginCatalogVisible);
   const [marketBusyId, setMarketBusyId] = useState<string | null>(null);
   // 市场操作的同步互斥锁。React state 在提交前有窗口期,快速连点会让多个回调
   // 都读到 null;ref 先到先得,state 只驱动按钮禁用等 UI 展示。每次占锁都返回
@@ -487,13 +497,14 @@ export function GhostPluginPage({
     }
   }, []);
   useEffect(() => {
+    clearPluginCatalogScrollRestore();
     setMarketSnapshot(null);
     setMarketDetail(null);
     marketBusyLockRef.current = null;
     setMarketBusyId(null);
     marketDetailRequestRef.current += 1;
     void refreshMarket();
-  }, [refreshMarket, mode, dataOwnerId]);
+  }, [clearPluginCatalogScrollRestore, refreshMarket, mode, dataOwnerId]);
   const refreshMarketOnForeground = useCallback(() => refreshMarket(true), [refreshMarket]);
   usePluginMarketForegroundRefresh(refreshMarketOnForeground, lastMarketRefreshAtRef);
   useEffect(() => {
@@ -1233,6 +1244,7 @@ export function GhostPluginPage({
       // 与 handleMarketUpdate 共用同一互斥锁:更新进行中不叠加其它市场操作。
       const marketBusyLease = acquireMarketBusy(pluginId);
       if (!marketBusyLease) return;
+      capturePluginCatalogScroll();
       const requestId = ++marketDetailRequestRef.current;
       try {
         const detail = await window.electronAPI.pluginMarket.detail(pluginId);
@@ -1253,8 +1265,13 @@ export function GhostPluginPage({
         releaseMarketBusy(marketBusyLease);
       }
     },
-    [acquireMarketBusy, isMarketBusyLeaseActive, releaseMarketBusy, t],
+    [acquireMarketBusy, capturePluginCatalogScroll, isMarketBusyLeaseActive, releaseMarketBusy, t],
   );
+  const handleMarketBack = useCallback(() => {
+    requestPluginCatalogScrollRestore();
+    marketDetailRequestRef.current += 1;
+    setMarketDetail(null);
+  }, [requestPluginCatalogScrollRestore]);
 
   const refreshVisibleMarketDetail = useCallback(async (pluginId: string) => {
     // A background icon renewal may observe navigation, but must never invalidate a
@@ -1427,10 +1444,7 @@ export function GhostPluginPage({
           <MarketPluginDetailView
             detail={marketDetail}
             busy={marketBusyId === marketDetail.pluginId}
-            onBack={() => {
-              marketDetailRequestRef.current += 1;
-              setMarketDetail(null);
-            }}
+            onBack={handleMarketBack}
             onInstall={
               canOfferMarketInstall(mode, marketDetail.ghostId)
                 ? () => void handleInstallFromMarket()
@@ -1505,10 +1519,12 @@ export function GhostPluginPage({
     >
       <div className="flex min-h-0 flex-1">
         <main
+          ref={pluginCatalogListRef}
           className={cn(
             'min-h-0 w-full min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]',
             embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
           )}
+          onScroll={onPluginCatalogScroll}
         >
           <PluginManagementPage>
             <header className="plugin-motion-page-header pb-2">
