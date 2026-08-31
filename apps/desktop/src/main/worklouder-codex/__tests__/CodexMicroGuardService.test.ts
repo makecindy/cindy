@@ -126,6 +126,26 @@ describe('CodexMicroGuardService', () => {
     expect(JSON.parse(fs.readFileSync(locations.settingsPath, 'utf8'))).toEqual({ enabled: true });
   });
 
+  it('keeps shared protection until the final live instance exits', async () => {
+    const locations = paths();
+    const runner = new EnvironmentRunner(null);
+    const first = service(locations, runner);
+    const second = service(locations, runner);
+    const token = `--require=${path.join(locations.supportPath, 'guard-hook.cjs')}`;
+
+    await first.setEnabled(true);
+    expect(await second.getState()).toMatchObject({ enabled: true, status: 'protecting' });
+
+    await first.dispose();
+    expect(runner.nodeOptions).toBe(token);
+    expect(fs.existsSync(path.join(locations.supportPath, 'enabled'))).toBe(true);
+    expect(await second.getState()).toMatchObject({ enabled: true, status: 'protecting' });
+
+    await second.dispose();
+    expect(runner.nodeOptions).toBeNull();
+    expect(fs.existsSync(path.join(locations.supportPath, 'enabled'))).toBe(false);
+  });
+
   it('re-enables a persisted preference on startup and recover turns it off', async () => {
     const locations = paths();
     fs.writeFileSync(locations.settingsPath, JSON.stringify({ enabled: true }));

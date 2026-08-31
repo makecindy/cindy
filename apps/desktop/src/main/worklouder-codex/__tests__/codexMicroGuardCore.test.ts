@@ -16,6 +16,7 @@ import {
 } from '../codexMicroGuardCore.js';
 
 const roots: string[] = [];
+const LEASE_ID = '11111111-1111-4111-8111-111111111111';
 
 class FakeRunner implements GuardCommandRunner {
   readonly commands: string[][] = [];
@@ -137,6 +138,26 @@ describe('Codex Micro guard store and manager', () => {
     );
   });
 
+  it('rejects an expired lease heartbeat and safely reclaims stale leases', async () => {
+    const store = temporaryStore();
+    const staleLease = '22222222-2222-4222-8222-222222222222';
+    const manager = new CodexMicroGuardManager(
+      store,
+      new FakeRunner([]),
+      'gui/501',
+      staleLease,
+    );
+    store.registerLease(staleLease, 100_000);
+
+    await expect(manager.refreshHeartbeat(115_001)).rejects.toThrow(
+      'lease is no longer fresh',
+    );
+    expect(store.releaseLease(LEASE_ID, 115_001)).toBe(false);
+    expect(
+      fs.existsSync(path.join(store.supportPath, `lease-${staleLease}.json`)),
+    ).toBe(false);
+  });
+
   it('enables from a verified snapshot and restores the original value', async () => {
     const store = temporaryStore();
     const runner = new FakeRunner([
@@ -145,7 +166,7 @@ describe('Codex Micro guard store and manager', () => {
       result(printed(`--trace-warnings --require=${store.hookPath}`)),
       result(),
     ]);
-    const manager = new CodexMicroGuardManager(store, runner, 'gui/501');
+    const manager = new CodexMicroGuardManager(store, runner, 'gui/501', LEASE_ID);
 
     await manager.enable('// hook\n', 100_000);
     expect(store.isFresh(100_000)).toBe(true);
@@ -159,7 +180,7 @@ describe('Codex Micro guard store and manager', () => {
       ['setenv', 'NODE_OPTIONS', `--trace-warnings ${manager.token}`],
     ]);
 
-    await manager.disable();
+    await manager.disable(100_000);
     expect(runner.commands.at(-1)).toEqual(['setenv', 'NODE_OPTIONS', '--trace-warnings']);
     expect(store.readState()).toBeNull();
     expect(store.isFresh(100_000)).toBe(false);
@@ -179,7 +200,7 @@ describe('Codex Micro guard store and manager', () => {
       result(printed(`--trace-warnings ${token} --inspect=9229`)),
       result(),
     ]);
-    await new CodexMicroGuardManager(store, runner, 'gui/501').disable();
+    await new CodexMicroGuardManager(store, runner, 'gui/501', LEASE_ID).disable();
     expect(runner.commands.at(-1)).toEqual([
       'setenv',
       'NODE_OPTIONS',
@@ -190,9 +211,11 @@ describe('Codex Micro guard store and manager', () => {
   it('rolls markers and recovery state back when launchctl activation fails', async () => {
     const store = temporaryStore();
     const runner = new FakeRunner([result(printed()), result('', 9)]);
-    const manager = new CodexMicroGuardManager(store, runner, 'gui/501');
+    const manager = new CodexMicroGuardManager(store, runner, 'gui/501', LEASE_ID);
 
-    await expect(manager.enable('// hook\n')).rejects.toThrow('launchctl command failed');
+    await expect(manager.enable('// hook\n')).rejects.toThrow(
+      'launchctl command failed',
+    );
     expect(store.readState()).toBeNull();
     expect(store.isFresh()).toBe(false);
   });
@@ -205,7 +228,9 @@ describe('Codex Micro guard store and manager', () => {
     store.writeHeartbeat();
     const runner = new FakeRunner([result(printed(token)), result('', 7)]);
 
-    await expect(new CodexMicroGuardManager(store, runner, 'gui/501').disable()).rejects.toThrow();
+    await expect(
+      new CodexMicroGuardManager(store, runner, 'gui/501', LEASE_ID).disable(),
+    ).rejects.toThrow();
     expect(store.isFresh()).toBe(false);
     expect(store.readState()).not.toBeNull();
   });

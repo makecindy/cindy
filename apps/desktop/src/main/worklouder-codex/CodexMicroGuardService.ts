@@ -62,6 +62,7 @@ export class CodexMicroGuardService {
       options.runner ?? new LaunchctlGuardCommandRunner(),
       options.launchctlDomain ??
         (this.platform === 'darwin' ? `gui/${currentUid()}` : 'gui/unsupported'),
+      crypto.randomUUID(),
     );
     this.hookContents = options.hookContents ?? hookContents;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
@@ -210,7 +211,7 @@ export class CodexMicroGuardService {
       void this.enqueue(async () => {
         if (!this.active || this.disposed) return;
         try {
-          this.manager.refreshHeartbeat();
+          await this.manager.refreshHeartbeat();
         } catch {
           this.stopHeartbeat();
           this.active = false;

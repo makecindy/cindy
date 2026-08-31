@@ -25,6 +25,9 @@ const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 2_000;
 const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIRECTORY_MODE = 0o700;
+const LEASE_NAME = /^lease-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/u;
+const LEASE_MAX_AGE_MS = 15_000;
+const LEASE_LOCK_NAME = '.lease-lock';
 
 export class LaunchctlGuardCommandRunner implements GuardCommandRunner {
   async run(arguments_: readonly string[]): Promise<GuardCommandResult> {
@@ -171,6 +174,104 @@ export class CodexMicroGuardStore {
     this.removePrivateFile('receipt.json');
   }
 
+  async withLeaseLock<T>(operation: () => Promise<T>): Promise<T> {
+    const deadline = Date.now() + 5_000;
+    let identity: fs.Stats | null = null;
+    while (!identity) {
+      identity = this.tryCreateLeaseLock();
+      if (identity) break;
+      if (this.reclaimAbandonedLeaseLock()) continue;
+      if (Date.now() >= deadline) throw new Error('guard lease lock timed out');
+      await delay(25);
+    }
+    try {
+      return await operation();
+    } finally {
+      this.releaseLeaseLock(identity);
+    }
+  }
+
+  registerLease(leaseId: string, now: number): void {
+    this.listFreshLeaseTimes(now);
+    this.atomicWrite(leaseFilename(leaseId), JSON.stringify(now / 1_000));
+    this.writeHeartbeat(now);
+  }
+
+  refreshLease(leaseId: string, now: number): void {
+    const timestamp = parseLeaseTimestamp(this.readPrivateFile(leaseFilename(leaseId)));
+    if (!isFreshTimestamp(timestamp, now)) throw new Error('guard lease is no longer fresh');
+    this.atomicWrite(leaseFilename(leaseId), JSON.stringify(now / 1_000));
+    this.writeHeartbeat(now);
+  }
+
+  releaseLease(leaseId: string, now: number): boolean {
+    this.removePrivateFile(leaseFilename(leaseId));
+    const fresh = this.listFreshLeaseTimes(now);
+    if (fresh.length === 0) {
+      this.removeHeartbeat();
+      return false;
+    }
+    this.writeHeartbeat(Math.max(...fresh));
+    return true;
+  }
+
+  private listFreshLeaseTimes(now: number): number[] {
+    this.prepare();
+    const fresh: number[] = [];
+    for (const name of fs.readdirSync(this.supportPath)) {
+      if (!LEASE_NAME.test(name)) continue;
+      let timestamp: number;
+      try {
+        timestamp = parseLeaseTimestamp(this.readPrivateFile(name));
+      } catch (error) {
+        if (isNotFound(error)) continue;
+        throw error;
+      }
+      if (isFreshTimestamp(timestamp, now)) fresh.push(timestamp);
+      else this.removePrivateFile(name);
+    }
+    return fresh;
+  }
+
+  private releaseLeaseLock(identity: fs.Stats): void {
+    const lockPath = path.join(this.supportPath, LEASE_LOCK_NAME);
+    const current = fs.lstatSync(lockPath);
+    if (current.isSymbolicLink() || !sameIdentity(current, identity)) {
+      throw new Error('guard lease lock changed while held');
+    }
+    fs.rmdirSync(lockPath);
+  }
+
+  private tryCreateLeaseLock(): fs.Stats | null {
+    this.prepare();
+    const lockPath = path.join(this.supportPath, LEASE_LOCK_NAME);
+    try {
+      fs.mkdirSync(lockPath, { mode: PRIVATE_DIRECTORY_MODE });
+      fs.chmodSync(lockPath, PRIVATE_DIRECTORY_MODE);
+      return fs.lstatSync(lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null;
+      throw error;
+    }
+  }
+
+  private reclaimAbandonedLeaseLock(): boolean {
+    const lockPath = path.join(this.supportPath, LEASE_LOCK_NAME);
+    try {
+      const stat = fs.lstatSync(lockPath);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || !ownedByCurrentUser(stat)) {
+        throw new Error('guard lease lock is unsafe');
+      }
+      if (Date.now() - stat.mtimeMs <= 30_000) return false;
+      const stalePath = path.join(this.supportPath, `.stale-lock-${randomSuffix()}`);
+      fs.renameSync(lockPath, stalePath);
+      fs.rmdirSync(stalePath);
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+    return true;
+  }
+
   private readPrivateFileIfPresent(name: string): string | null {
     try {
       return this.readPrivateFile(name);
@@ -265,11 +366,24 @@ export class CodexMicroGuardManager {
     readonly store: CodexMicroGuardStore,
     private readonly runner: GuardCommandRunner,
     private readonly launchctlDomain: string,
+    private readonly leaseId: string,
   ) {
     this.token = `--require=${store.hookPath}`;
   }
 
   async enable(hookContents: string, now: number = Date.now()): Promise<void> {
+    await this.store.withLeaseLock(() => this.enableLocked(hookContents, now));
+  }
+
+  async disable(now: number = Date.now()): Promise<void> {
+    await this.store.withLeaseLock(() => this.disableLocked(now));
+  }
+
+  async refreshHeartbeat(now: number = Date.now()): Promise<void> {
+    await this.store.withLeaseLock(async () => this.store.refreshLease(this.leaseId, now));
+  }
+
+  private async enableLocked(hookContents: string, now: number): Promise<void> {
     if (/\s/u.test(this.store.hookPath)) {
       throw new Error('guard hook path must not contain whitespace');
     }
@@ -290,7 +404,6 @@ export class CodexMicroGuardManager {
         installedNodeOptions: installed,
       });
     }
-    this.store.writeHeartbeat(now);
 
     let environmentInstalled = false;
     try {
@@ -298,29 +411,32 @@ export class CodexMicroGuardManager {
         await this.runLaunchctl(['setenv', 'NODE_OPTIONS', installed]);
         environmentInstalled = true;
       }
+      this.store.registerLease(this.leaseId, now);
       this.store.markEnabled();
     } catch (error) {
       let rollbackFailed = false;
+      let otherLeasesRemain = false;
       try {
-        this.store.removeEnabled();
-        this.store.removeHeartbeat();
+        otherLeasesRemain = this.store.releaseLease(this.leaseId, now);
+        if (!otherLeasesRemain) this.store.removeEnabled();
       } catch {
         rollbackFailed = true;
       }
-      if (environmentInstalled) {
+      if (environmentInstalled && !otherLeasesRemain) {
         try {
           await this.restoreEnvironment(original);
         } catch {
           rollbackFailed = true;
         }
       }
-      if (stateWasCreated && !rollbackFailed) this.store.removeState();
+      if (stateWasCreated && !otherLeasesRemain && !rollbackFailed) this.store.removeState();
       if (rollbackFailed) throw new Error('guard activation rollback failed');
       throw error;
     }
   }
 
-  async disable(): Promise<void> {
+  private async disableLocked(now: number): Promise<void> {
+    if (this.store.releaseLease(this.leaseId, now)) return;
     this.store.removeEnabled();
     try {
       let state: CodexMicroGuardStateRecord | null;
@@ -347,11 +463,6 @@ export class CodexMicroGuardManager {
       this.store.removeHeartbeat();
       this.store.removeReceipt();
     }
-  }
-
-  refreshHeartbeat(now: number = Date.now()): void {
-    if (!this.store.isFresh(now)) throw new Error('guard heartbeat is no longer fresh');
-    this.store.writeHeartbeat(now);
   }
 
   private async readNodeOptions(): Promise<string | null> {
@@ -482,6 +593,32 @@ function boundedTokenRange(value: string, token: string): [number, number] | nul
     from = end;
   }
   return null;
+}
+
+function leaseFilename(leaseId: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(leaseId)) {
+    throw new Error('guard lease id is invalid');
+  }
+  return `lease-${leaseId}.json`;
+}
+
+function parseLeaseTimestamp(input: string): number {
+  const seconds = JSON.parse(input) as unknown;
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return Number.NaN;
+  return seconds * 1_000;
+}
+
+function isFreshTimestamp(timestamp: number, now: number): boolean {
+  const age = now - timestamp;
+  return age >= 0 && age <= LEASE_MAX_AGE_MS;
+}
+
+function sameIdentity(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function ownedByCurrentUser(stat: fs.Stats): boolean {
