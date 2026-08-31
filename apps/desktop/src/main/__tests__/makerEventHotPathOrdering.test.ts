@@ -1179,7 +1179,12 @@ describe('maker:event hot path ordering', () => {
       'stageClaudeTurnBillingSnapshot(',
       'if (session.remoteHostId) return;',
     );
-    expect(lifecycleObserverSource).toContain(
+    expect(
+      lifecycleObserverSource.match(
+        /rollbackClaudeTurnBillingSnapshotForCurrentSessionInstance\(session, turnGeneration\);/g,
+      ),
+    ).toHaveLength(2);
+    expect(lifecycleObserverSource).not.toContain(
       'rollbackClaudeTurnBillingSnapshot(session.id, turnGeneration);',
     );
     const lifecycleTerminalSource = lifecycleObserverSource.slice(

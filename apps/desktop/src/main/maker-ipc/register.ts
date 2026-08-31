@@ -2867,6 +2867,23 @@ function rollbackClaudeTurnBillingSnapshot(sessionId: string, turnGeneration: nu
   rollbackClaudeSessionTurnRoute(sessionId, turnGeneration);
 }
 
+function rollbackClaudeTurnBillingSnapshotForCurrentSessionInstance(
+  session: Pick<WiredSession, 'id' | 'instanceId'>,
+  turnGeneration: number,
+): boolean {
+  const currentSessionInstanceId = wiredSessionsById.get(session.id)?.session.instanceId ?? null;
+  if (
+    !isClaudeBillingSnapshotOwnedByCurrentSessionInstance(
+      session.instanceId,
+      currentSessionInstanceId,
+    )
+  ) {
+    return false;
+  }
+  rollbackClaudeTurnBillingSnapshot(session.id, turnGeneration);
+  return true;
+}
+
 function clearClaudeTurnBillingSnapshot(sessionId: string, turnGeneration: number): void {
   turnClaudeBillingSnapshots.clear(sessionId, turnGeneration);
   clearClaudeSessionTurnRoute(sessionId, turnGeneration);
@@ -4182,13 +4199,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         );
       } catch (error) {
         if (capturedBillingSnapshot) {
-          rollbackClaudeTurnBillingSnapshot(session.id, turnGeneration);
+          rollbackClaudeTurnBillingSnapshotForCurrentSessionInstance(session, turnGeneration);
         }
         throw error;
       }
     },
     onUndispatched: async (turnGeneration) => {
-      rollbackClaudeTurnBillingSnapshot(session.id, turnGeneration);
+      rollbackClaudeTurnBillingSnapshotForCurrentSessionInstance(session, turnGeneration);
       if (session.remoteHostId) return;
       await sessionTurnLeaseTracker.markTurnEnded(
         session.id,

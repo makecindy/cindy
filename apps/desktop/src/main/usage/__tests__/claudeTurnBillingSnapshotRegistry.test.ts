@@ -54,24 +54,32 @@ const PRICING: ModelPricingCatalog = {
 };
 
 describe('ClaudeTurnBillingSnapshotRegistry', () => {
-  it('fences delayed cleanup when a rebuilt Session reuses its id and generation', () => {
+  it('fences preflight and undispatched rollback after a Session replacement', async () => {
     const registry = new ClaudeTurnBillingSnapshotRegistry();
+    let currentSessionInstanceId = 'instance-a';
+    const rollbackForAIfCurrent = () => {
+      const ownsGeneration = isClaudeBillingSnapshotOwnedByCurrentSessionInstance(
+        'instance-a',
+        currentSessionInstanceId,
+      );
+      if (ownsGeneration) registry.rollback('session-1', 1);
+      return ownsGeneration;
+    };
+    let rejectPreflight!: (reason: Error) => void;
 
     registry.stage('session-1', 1, () => PROVIDER_A);
-    // The old delayed handler may already have claimed its lease before the
-    // Session rebuild. Teardown retires A's evidence, then B reuses generation 1.
+    const failedPreflight = new Promise<void>((_resolve, reject) => {
+      rejectPreflight = reject;
+    }).catch(() => rollbackForAIfCurrent());
+    // B is wired and stages generation 1 before A's async preflight rejects.
     registry.clearSession('session-1');
     registry.stage('session-1', 1, () => USER_PROVIDER_B);
+    currentSessionInstanceId = 'instance-b';
+    rejectPreflight(new Error('paid-model preflight rejected'));
 
-    // Both failed-claim cleanup and the later claimed-settle cleanup use this
-    // same instance fence, so neither can target B's replacement evidence.
-    const retiredInstanceStillOwnsGeneration = isClaudeBillingSnapshotOwnedByCurrentSessionInstance(
-      'instance-a',
-      'instance-b',
-    );
-    if (retiredInstanceStillOwnsGeneration) registry.clear('session-1', 1);
-
-    expect(retiredInstanceStillOwnsGeneration).toBe(false);
+    await expect(failedPreflight).resolves.toBe(false);
+    // A successful preflight followed by Session.send's onUndispatched uses the same fence.
+    expect(rollbackForAIfCurrent()).toBe(false);
     expect(isClaudeBillingSnapshotOwnedByCurrentSessionInstance('instance-a', null)).toBe(false);
     expect(isClaudeBillingSnapshotOwnedByCurrentSessionInstance('instance-b', 'instance-b')).toBe(
       true,
