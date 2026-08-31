@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   classifyConnectionError,
+  isOptionalDeviceStatusError,
   postDeviceStatus,
-  shouldReconnectAfterProbeStatusFailure,
 } from '../workLouderCodexHostProcess.js';
 
 const originalPlatform = process.platform;
@@ -43,9 +43,14 @@ describe('Work Louder connection error classification', () => {
 });
 
 describe('Work Louder device status', () => {
-  it('does not recycle HID for an optional probe status failure', () => {
-    expect(shouldReconnectAfterProbeStatusFailure(false)).toBe(false);
-    expect(shouldReconnectAfterProbeStatusFailure(true)).toBe(true);
+  it('recognizes explicit unsupported status RPC errors as optional telemetry', () => {
+    expect(isOptionalDeviceStatusError(new Error('status RPC unsupported'))).toBe(true);
+    expect(isOptionalDeviceStatusError({ code: 'ERR_METHOD_NOT_FOUND' })).toBe(true);
+  });
+
+  it('keeps rejected hardware status probes fatal so unplugged handles are recycled', () => {
+    expect(isOptionalDeviceStatusError(new Error('device disconnected'))).toBe(false);
+    expect(isOptionalDeviceStatusError(new Error('HID request failed'))).toBe(false);
   });
 
   it('keeps the HID connection usable when optional status telemetry fails', async () => {
@@ -63,5 +68,21 @@ describe('Work Louder device status', () => {
       ),
     ).resolves.toBeUndefined();
     expect(getDeviceStatus).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a status probe that fails without an unsupported-RPC signal', async () => {
+    const getDeviceStatus = vi.fn().mockRejectedValue(new Error('device disconnected'));
+
+    await expect(
+      postDeviceStatus(
+        {
+          sendLightingConfig: vi.fn(),
+          sendThreadsLighting: vi.fn(),
+          getDeviceStatus,
+        },
+        'codex-micro',
+        true,
+      ),
+    ).rejects.toThrow('device disconnected');
   });
 });

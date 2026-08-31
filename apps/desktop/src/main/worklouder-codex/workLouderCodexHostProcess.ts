@@ -278,6 +278,7 @@ async function probeConnection(): Promise<void> {
   if (api) {
     const faulted = transportFaulted;
     let probeError: string | null = null;
+    let optionalStatusFailure = false;
     if (typeof api.getDeviceStatus === 'function' && !faulted) {
       try {
         // Call it directly so a successful round trip keeps battery and firmware
@@ -292,22 +293,31 @@ async function probeConnection(): Promise<void> {
         }
       } catch (error) {
         probeError = safeErrorMessage(error);
-        hostLog('debug', `probe status unavailable: ${probeError}`);
+        optionalStatusFailure = isOptionalDeviceStatusError(error);
+        hostLog(
+          'debug',
+          optionalStatusFailure
+            ? `probe status unavailable: ${probeError}`
+            : `probe found the device gone: ${probeError}`,
+        );
       }
     }
-    const transportError = shouldReconnectAfterProbeStatusFailure(transportFaulted)
-      ? lastTransportError
-      : null;
+    const transportError = transportFaulted ? lastTransportError : null;
     if (transportError) {
       await disconnect();
       reportConnectionError(transportError);
       return;
     }
-    if (probeError) {
+    if (probeError && optionalStatusFailure) {
       // Status is optional telemetry. Keep the healthy HID transport when a
-      // firmware/RPC implementation rejects this query; reconnect only when
-      // the SDK explicitly marked the transport as faulted above.
+      // firmware/RPC implementation explicitly reports that this query is not
+      // supported; a rejected hardware request must still invalidate the handle.
       post({ kind: 'state', status: 'connected' });
+      return;
+    }
+    if (probeError) {
+      await disconnect();
+      reportConnectionError(probeError);
       return;
     }
     hostLog('debug', 'probe dropped a stale Work Louder transport');
@@ -524,12 +534,31 @@ function postActivity(): void {
 }
 
 /**
- * Decide whether a failed status probe invalidates the HID transport.
- * Optional status telemetry may be unsupported while input remains usable;
- * only the SDK's explicit transport fault should trigger reconnect handling.
+ * The SDK exposes status as an optional RPC on some firmware versions. Keep
+ * that compatibility failure non-fatal, but treat every other rejection as a
+ * failed hardware round trip so unplugged handles are recycled promptly.
  */
-export function shouldReconnectAfterProbeStatusFailure(transportFaulted: boolean): boolean {
-  return transportFaulted;
+export function isOptionalDeviceStatusError(error: unknown): boolean {
+  const record =
+    typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : null;
+  const code = typeof record?.code === 'string' ? record.code : '';
+  if (
+    /not[_ -]?supported|unsupported|not[_ -]?implemented|method[_ -]?not[_ -]?found|enosys/i.test(
+      code,
+    )
+  ) {
+    return true;
+  }
+
+  const message = safeErrorMessage(error);
+  return (
+    /(?:getDeviceStatus|device status|status rpc|status request).*(?:not supported|unsupported|not implemented|unknown method|method not found)/i.test(
+      message,
+    ) ||
+    /(?:not supported|unsupported|not implemented|unknown method|method not found).*(?:getDeviceStatus|device status|status rpc|status request)/i.test(
+      message,
+    )
+  );
 }
 
 export async function postDeviceStatus(
@@ -543,10 +572,10 @@ export async function postDeviceStatus(
       status = await deviceApi.getDeviceStatus();
     } catch (error) {
       hostLog('warn', `device status unavailable: ${safeErrorMessage(error)}`);
-      // Device status is optional telemetry. A firmware or RPC implementation
-      // may reject it even while the HID transport remains usable; only the
-      // SDK's explicit transport fault signal should tear down the connection.
-      if (transportFaulted) throw error;
+      // Device status is optional telemetry only when the SDK explicitly says
+      // this RPC is unsupported. A rejected hardware request still means the
+      // transport may be dead and must not be reported as connected.
+      if (transportFaulted || !isOptionalDeviceStatusError(error)) throw error;
     }
   }
   postDeviceState(deviceType, isUsbConnection, status);
