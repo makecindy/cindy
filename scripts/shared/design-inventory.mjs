@@ -75,14 +75,23 @@ function cell(text) {
     .replace(/\n/g, ' ');
 }
 
+/**
+ * 确定性排序比较器：用码点序（< / >），不用 localeCompare——ICU 版本在
+ * Windows/Linux/macOS 间对连字符等标点的排序权重不一致，会让 GENERATED
+ * 在不同平台渲染出不同字节序，--check 跨平台假红。码点序在任何 Node 上逐字节稳定。
+ */
+function byCodepoints(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function uniqueSorted(values) {
-  return [...new Set(values.filter(Boolean).map(String))].sort((a, b) => a.localeCompare(b));
+  return [...new Set(values.filter(Boolean).map(String))].sort(byCodepoints);
 }
 
 function walkFiles(absDir, relDir, files) {
   if (!fs.existsSync(absDir)) return;
   const entries = fs.readdirSync(absDir, { withFileTypes: true });
-  entries.sort((a, b) => a.name.localeCompare(b.name));
+  entries.sort((a, b) => byCodepoints(a.name, b.name));
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     if (SKIP_DIR_NAMES.has(entry.name)) continue;
@@ -314,10 +323,10 @@ export function extractRouterFacts(routerSource) {
 
   for (const route of parseRouteArray(source, open)) visit(route, '');
 
-  const byPath = (a, b) => a.path.localeCompare(b.path);
-  facts.production.sort((a, b) => byPath(a, b) || a.component.localeCompare(b.component));
-  facts.redirects.sort((a, b) => byPath(a, b) || a.to.localeCompare(b.to));
-  facts.layouts.sort((a, b) => byPath(a, b) || a.component.localeCompare(b.component));
+  const byPath = (a, b) => byCodepoints(a.path, b.path);
+  facts.production.sort((a, b) => byPath(a, b) || byCodepoints(a.component, b.component));
+  facts.redirects.sort((a, b) => byPath(a, b) || byCodepoints(a.to, b.to));
+  facts.layouts.sort((a, b) => byPath(a, b) || byCodepoints(a.component, b.component));
   return facts;
 }
 
@@ -977,7 +986,7 @@ export function buildGeneratedSurfaces(repoRoot, { catalog = catalogSurfaces() }
         routerPaths: uniqueSorted(surface.routerPaths ?? []),
       };
     })
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => byCodepoints(a.id, b.id));
   return {
     surfaces,
     missingStyleRoots: uniqueSorted(missingStyleRoots),
@@ -1023,7 +1032,7 @@ export function renderGeneratedBlock(
 ) {
   // 先按路径与组件排序，再渲染成单元格：排序键是事实本身，不受反引号等渲染包裹影响。
   const coverageRows = [...routerCoverage.mapped, ...routerCoverage.missing]
-    .sort((a, b) => a.path.localeCompare(b.path) || a.component.localeCompare(b.component))
+    .sort((a, b) => byCodepoints(a.path, b.path) || byCodepoints(a.component, b.component))
     .map((row) => [
       `\`${cell(row.path)}\``,
       cell(row.component),
@@ -1156,7 +1165,7 @@ export function defaultHumanSeed(surfaces) {
     '| ID | owner | 迁移状态 | protected | 目标道路 | 下一动作 |',
     '| --- | --- | --- | --- | --- | --- |',
     ...[...surfaces]
-      .sort((a, b) => a.id.localeCompare(b.id))
+      .sort((a, b) => byCodepoints(a.id, b.id))
       .map((surface) => renderHumanRow(surface.id, defaultHumanAnnotation(surface.id))),
     '',
   ];
@@ -1231,12 +1240,12 @@ function appendRowsToHumanTable(suffix, extraRows) {
   // 人工表按 surface ID 排序是既有不变量；新行按 ID 插到正确位置，不是无脑追加到表尾。
   const pending = extraRows
     .map((row) => ({ row, id: HUMAN_ID_RE.exec(row)?.[1] ?? '' }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => byCodepoints(a.id, b.id));
   const result = [];
   let insertAt = -1;
   for (const line of lines) {
     const id = HUMAN_ID_RE.exec(line)?.[1];
-    while (pending.length > 0 && id && pending[0].id.localeCompare(id) < 0) {
+    while (pending.length > 0 && id && byCodepoints(pending[0].id, id) < 0) {
       result.push(pending.shift().row);
     }
     result.push(line);

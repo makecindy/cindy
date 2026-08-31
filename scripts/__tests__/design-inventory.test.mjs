@@ -215,6 +215,28 @@ test('连续两次渲染 GENERATED 区块字节一致', () => {
   assert.equal(/\b(?:[A-Z]:\\|\/Users\/)\S+/.test(first), false, 'GENERATED 不得含绝对路径');
 });
 
+test('排序用码点序而非 localeCompare——跨平台字节一致', () => {
+  // localeCompare 对连字符等标点的排序权重随 ICU 版本(Windows/Linux/macOS 各不同)
+  // 漂移,曾让 --check 在 Windows CI 假红。钉死:同一批输入的排序结果必须与
+  // 码点序逐字节一致,不受宿主 locale 影响。
+  const source = `
+    export const router = createHashRouter([
+      { path: 'b-x', element: <BView /> },
+      { path: 'bx', element: <BXView /> },
+      { path: 'a', element: <AView /> },
+    ]);
+  `;
+  const { production } = extractRouterFacts(source);
+  // extractRouterFacts 内部排序:结果必须等于码点序(而非 en collation 的 b-x < bx)。
+  const codepointSorted = [...production].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  assert.deepEqual(production, codepointSorted);
+  // 含连字符路径:码点序 '-'(45) < 'x'(120),b-x 排在 bx 前。
+  assert.deepEqual(
+    production.map((row) => row.path),
+    ['/a', '/b-x', '/bx'],
+  );
+});
+
 test('人工区块被改后 merge 仍原样保留', () => {
   const generated = renderGeneratedBlock([tinySurface()], {
     snapshotDate: '2026-08-30',
