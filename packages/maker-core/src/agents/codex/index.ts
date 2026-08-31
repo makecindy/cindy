@@ -2709,7 +2709,6 @@ export class CodexAgent extends BaseAgent {
     // 往远端 config.toml 写 mcp_servers 段, daemon 经 SSH remote-forward 直连
     // 本机 HTTP bridge, tool call 按 params._meta.threadId 路由(与本地一致)。
     let createTransport: () => import('./app-server/transport.js').Transport;
-    let transportCredentialGeneration: string | null = null;
     if (remoteHostId) {
       if (!this.deps.getRemoteCodexTransport) {
         throw new Error(
@@ -2720,34 +2719,20 @@ export class CodexAgent extends BaseAgent {
       createTransport = () => provider(remoteHostId);
     } else {
       const binaryPath = this.deps.binaryPath;
-      createTransport = () => {
-        // Freeze the local file generation before this concrete child exists. A long-running
-        // app-server caches its credential; later auth.json rotation alone does not prove that
-        // the child adopted F2. A replacement transport captures its own fresh generation here.
-        try {
-          transportCredentialGeneration =
-            this.deps.auth.captureCredentialGeneration?.() ?? null;
-        } catch (error) {
-          transportCredentialGeneration = null;
-          this.deps.logger.warn('codex transport credential generation capture failed', {
-            error: error instanceof Error ? error.message : String(error),
+      createTransport = () => createStdioTransport({
+        binaryPath,
+        env,
+        extraArgs,
+        onProcessSpawned: (pid) => {
+          this.deps.registerLocalCodexAppServerProcess?.({
+            pid,
+            role:
+              hostPurpose === 'control-plane'
+                ? 'control-plane-service'
+                : 'task-host',
           });
-        }
-        return createStdioTransport({
-          binaryPath,
-          env,
-          extraArgs,
-          onProcessSpawned: (pid) => {
-            this.deps.registerLocalCodexAppServerProcess?.({
-              pid,
-              role:
-                hostPurpose === 'control-plane'
-                  ? 'control-plane-service'
-                  : 'task-host',
-            });
-          },
-        });
-      };
+        },
+      });
     }
 
     const host = new AppServerHost({
@@ -2767,36 +2752,30 @@ export class CodexAgent extends BaseAgent {
       subagentRoute,
       codexOpenAiWebSocketsEnabled,
       codexSubagentRoutingProfile,
-      // Bind each structured Auth failure to the generation frozen before this concrete child
-      // spawned. Request dispatch and failure callbacks must never advance it from disk alone.
-      captureCredentialGeneration: remoteHostId
-        ? undefined
-        : () => transportCredentialGeneration,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
       // 防止在 JSON-RPC response 分发回调里同步收割自己。远端也走同一结构化协议路径。
-      onAuthInvalidated: (reason, context) => {
+      onAuthInvalidated: (reason) => {
         const usesLocalAuth = !remoteHostId;
         this.deps.logger.warn('codex auth invalidated', {
           reason,
           key,
-          localAuthWillInvalidate: usesLocalAuth,
+          localAuthWillEnterUnprovenRecovery: usesLocalAuth,
         });
         Promise.resolve()
           .then(async () => {
-            if (usesLocalAuth && context?.credentialGeneration) {
+            if (usesLocalAuth) {
               try {
-                await this.deps.auth.invalidate?.(reason, context);
+                // The app-server protocol does not expose which auth.json generation the child
+                // loaded. Parent-side snapshots before spawn, after initialize, or per request can
+                // all race that read, so they cannot authorize credential deletion or logout.
+                await this.deps.auth.invalidate?.(reason, {
+                  credentialAttribution: 'unproven',
+                });
               } catch (e) {
                 this.deps.logger.error('auth.invalidate threw', { message: (e as Error).message });
               }
-            } else if (usesLocalAuth) {
-              // Without a request-bound generation, destructive invalidation could attribute an
-              // old host's F1 failure to a newly published F2. Retiring this host is still safe.
-              this.deps.logger.warn('skipping unbound local Codex credential invalidation', {
-                reason,
-              });
             }
             // 防御兜底: 只收掉报错的 host key。远端 daemon 的 auth 失效不应该扩散到
             // local host 或其它 remote host,否则无关会话会绕过 Session.close 变 stale。

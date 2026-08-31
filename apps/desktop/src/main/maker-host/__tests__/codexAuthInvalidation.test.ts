@@ -1173,6 +1173,79 @@ describe('Codex system credential suppression marker', () => {
     expect(readCodexOneShotCreds()).toBeNull();
   });
 
+  it('preserves shared F2 and blocks new hosts when the child generation is unproven', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-unproven-child-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    const markerPath = getCodexAuthInvalidationMarkerPath(codexHome);
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-f2-token', account_id: 'acct-1' } }),
+      { mode: 0o600 },
+    );
+    if (process.platform === 'win32') fs.linkSync(systemAuth, localAuth);
+    else fs.symlinkSync(systemAuth, localAuth);
+    fs.writeFileSync(
+      path.join(h.userDataDir, 'native-provider-auth.json'),
+      JSON.stringify({
+        openai: 'owner-a',
+        sharedSystemCredential: { openai: 'owner-a' },
+      }),
+    );
+    const f2Bytes = fs.readFileSync(systemAuth);
+    const f2Stat = fs.statSync(systemAuth);
+    const rmSpy = vi.spyOn(fs.promises, 'rm');
+    const chmodSpy = vi.spyOn(fs.promises, 'chmod');
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);
+    const broadcast = vi.fn().mockResolvedValue(undefined);
+    adapter.setOnLogoutSuccess(onLogoutSuccess);
+    adapter.setOnInvalidatedBroadcast(broadcast);
+
+    await expect(
+      adapter.invalidate('child_auth_rejected', { credentialAttribution: 'unproven' }),
+    ).resolves.toBeUndefined();
+
+    expect(onLogoutSuccess).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledWith('child_auth_rejected', 'system-shared', false);
+    expect(fs.existsSync(markerPath)).toBe(false);
+    expect(rmSpy).not.toHaveBeenCalled();
+    expect(chmodSpy).not.toHaveBeenCalled();
+    expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
+    expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
+    expect(fs.statSync(systemAuth)).toMatchObject({ ino: f2Stat.ino, mode: f2Stat.mode });
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: false,
+      errorReason: 'child_auth_rejected',
+      credentialScope: 'system-shared',
+    });
+
+    rmSpy.mockRestore();
+    const replacement = path.join(path.dirname(systemAuth), 'auth.f3.json');
+    fs.writeFileSync(
+      replacement,
+      JSON.stringify({ tokens: { access_token: 'system-f3-token', account_id: 'acct-1' } }),
+      { mode: 0o600 },
+    );
+    fs.renameSync(replacement, systemAuth);
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+      recoveryRequiredReason: 'child_auth_rejected',
+    });
+    await expect(adapter.getAccessToken()).resolves.toBe('system-f3-token');
+    expect(chmodSpy).not.toHaveBeenCalled();
+  });
+
   it('fails closed when the invalidation marker cannot be committed and restores suppression after login', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-invalidation-marker-fail-'));
     dirs.push(root);

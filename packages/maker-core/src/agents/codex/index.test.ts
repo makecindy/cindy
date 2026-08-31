@@ -6097,9 +6097,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     await waitForExpectation(() => {
       expect(createdTransports[0].closed).toBe(true);
     });
-    expect(captureCredentialGeneration).toHaveBeenCalledOnce();
+    expect(captureCredentialGeneration).not.toHaveBeenCalled();
     expect(invalidate).toHaveBeenCalledWith('refresh_token_reused', {
-      credentialGeneration: 'host-f1-generation',
+      credentialAttribution: 'unproven',
     });
     expect(createdTransports[1].closed).toBe(false);
 
@@ -6109,7 +6109,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
-  it('keeps a long-running child on its frozen F1 generation after disk rotates to F2', async () => {
+  it('does not attribute a child F2 failure to a parent F1 snapshot across spawn', async () => {
     let credentialGeneration = 'host-f1-generation';
     const captureCredentialGeneration = vi.fn(() => credentialGeneration);
     const invalidate = vi.fn(async () => undefined);
@@ -6124,13 +6124,18 @@ describe('CodexAgent MCP thread context hooks', () => {
       },
     }));
 
+    MockCodexTransport.beforeInitializeResponse = () => {
+      // The child can first load auth.json after spawn but before initialize returns. The parent
+      // cannot prove whether this transport consumed F1 or the atomically published F2.
+      credentialGeneration = 'disk-f2-generation';
+    };
     const handle = await agent.startSession({
       sessionId: 'session-frozen-host-generation',
       model: 'gpt-5.4',
       workingDir: '/repo-local',
     });
-    expect(captureCredentialGeneration).toHaveBeenCalledOnce();
-    credentialGeneration = 'disk-f2-generation';
+    expect(credentialGeneration).toBe('disk-f2-generation');
+    expect(captureCredentialGeneration).not.toHaveBeenCalled();
     createdTransports[0].setMockResponse(Method.TurnStart, {
       error: {
         code: -32000,
@@ -6146,10 +6151,13 @@ describe('CodexAgent MCP thread context hooks', () => {
     ).rejects.toThrow(/refresh token was already used/i);
     await waitForExpectation(() => {
       expect(invalidate).toHaveBeenCalledWith('refresh_token_reused', {
-        credentialGeneration: 'host-f1-generation',
+        credentialAttribution: 'unproven',
       });
     });
-    expect(captureCredentialGeneration).toHaveBeenCalledOnce();
+    expect(captureCredentialGeneration).not.toHaveBeenCalled();
+    await waitForExpectation(() => {
+      expect(createdTransports[0].closed).toBe(true);
+    });
 
     await handle.close();
     await agent.dispose();

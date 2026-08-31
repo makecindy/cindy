@@ -105,6 +105,10 @@ export interface AuthAdapter {
    */
   invalidate?(
     reason: string,
-    context?: { credentialGeneration?: string | null },
+    context?: {
+      credentialGeneration?: string | null;
+      /** The child reported auth failure, but the protocol did not identify its credential. */
+      credentialAttribution?: 'unproven';
+    },
   ): Promise<void>;
 }

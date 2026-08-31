@@ -919,8 +919,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private lastOrphanRepair: NonNullable<AuthState['credentialDiagnostics']>['orphanRepair'] =
     'none';
   private devReadOnlyDetached = false;
-  /** Dev read-only invalidation fingerprint; memory-only so shared credentials stay untouched. */
-  private devReadOnlyInvalidatedSystemCredential: InvalidatedSystemCodexAuthMarker | null = null;
+  /** Runtime-only invalidation baseline used when shared credentials must stay untouched. */
+  private memoryOnlyInvalidatedSystemCredential: InvalidatedSystemCodexAuthMarker | null = null;
   private devOAuthWriteOverrideWarned = false;
   private isolatedAuthSanitized = false;
   private isolatedAuthLaunchProofTrusted: boolean | null = null;
@@ -1525,14 +1525,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private async clearStaleInvalidationIfSystemCodexChanged(): Promise<void> {
     if (!this.oauthInvalidatedReason) return;
     const persistedMarker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
-    const marker = persistedMarker ?? this.devReadOnlyInvalidatedSystemCredential;
+    const marker = persistedMarker ?? this.memoryOnlyInvalidatedSystemCredential;
     if (!marker) return;
     const systemAuthPath = getSystemCodexAuthPath();
     if (persistedMarker) {
       if (getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuthPath)) return;
     } else {
-      // Dev read-only mode cannot persist a marker. Keep the old credential detached until a
-      // present system auth has a different fingerprint; deletion alone is not recovery.
+      // Memory-only invalidation cannot persist a marker. Keep the rejected/ambiguous credential
+      // detached until a present system auth has a different fingerprint; deletion alone is not
+      // recovery.
       if (!currentSystemCodexAuthMarker(systemAuthPath, marker.reason)) return;
       if (markerMatchesCurrentSystemCodexAuth(marker, systemAuthPath)) return;
     }
@@ -1578,7 +1579,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return null;
     }
     const persistedMarker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
-    const marker = persistedMarker ?? this.devReadOnlyInvalidatedSystemCredential;
+    const marker = persistedMarker ?? this.memoryOnlyInvalidatedSystemCredential;
     const credential = readCodexRecoveryCredentialProof(path.join(this.codexHome, 'auth.json'));
     if (!marker || !credential) return null;
     const credentialScope =
@@ -1627,7 +1628,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       }
       this.suppressSystemCodexReconcile = true;
     }
-    this.devReadOnlyInvalidatedSystemCredential = null;
+    this.memoryOnlyInvalidatedSystemCredential = null;
     this.oauthRecoveryRequiredReason = null;
     this.oauthRecoveryCredentialScope = undefined;
     return true;
@@ -1708,7 +1709,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
     this.warnDevOAuthWriteOverride('login');
     this.devReadOnlyDetached = false;
-    this.devReadOnlyInvalidatedSystemCredential = null;
+    this.memoryOnlyInvalidatedSystemCredential = null;
     const mode = opts?.mode ?? 'browser';
     if (this.pendingLogin) {
       if (this.pendingLogin.mode === mode && !this.pendingLogin.cancelled) {
@@ -2094,7 +2095,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             this.oauthInvalidatedCredentialScope = undefined;
             this.oauthRecoveryRequiredReason = null;
             this.oauthRecoveryCredentialScope = undefined;
-            this.devReadOnlyInvalidatedSystemCredential = null;
+            this.memoryOnlyInvalidatedSystemCredential = null;
             return this.logoutOperation;
           }
           // runLogout 的 async cleanup 已经结束，但 Promise.finally 还没清掉 operation。此时
@@ -2159,7 +2160,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       this.oauthInvalidatedCredentialScope = undefined;
       this.oauthRecoveryRequiredReason = null;
       this.oauthRecoveryCredentialScope = undefined;
-      this.devReadOnlyInvalidatedSystemCredential = null;
+      this.memoryOnlyInvalidatedSystemCredential = null;
     }
     if (this.onLogoutSuccess) {
       try {
@@ -2176,7 +2177,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       this.oauthInvalidatedCredentialScope = undefined;
       this.oauthRecoveryRequiredReason = null;
       this.oauthRecoveryCredentialScope = undefined;
-      this.devReadOnlyInvalidatedSystemCredential = null;
+      this.memoryOnlyInvalidatedSystemCredential = null;
     }
     log.info('dev read-only Codex auth detached in memory; durable credentials unchanged');
   }
@@ -2424,8 +2425,43 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   async invalidate(
     reason: string,
-    context?: { credentialGeneration?: string | null },
+    context?: {
+      credentialGeneration?: string | null;
+      credentialAttribution?: 'unproven';
+    },
   ): Promise<void> {
+    if (context?.credentialAttribution === 'unproven') {
+      this.ensureInvalidationMarkerLoaded();
+      const credentialScope = this.readCodexCredentialScope();
+      const localAuthPath = path.join(this.codexHome, 'auth.json');
+      // A structured 401 proves this child is bad, but the protocol does not identify whether it
+      // loaded F1 or an atomically published F2. Keep the current credential byte-for-byte intact,
+      // block new hosts in memory, and use the current shared generation only as a replacement
+      // baseline. A later F3 can recover in-process without treating F2 as the failed child fact.
+      this.memoryOnlyInvalidatedSystemCredential =
+        credentialScope === 'system-shared'
+          ? currentCodexAuthMarker(localAuthPath, reason, credentialScope)
+          : null;
+      this.oauthInvalidatedReason = reason;
+      this.oauthInvalidatedCredentialScope = credentialScope;
+      this.oauthRecoveryRequiredReason = null;
+      this.oauthRecoveryCredentialScope = undefined;
+      this.suppressSystemCodexReconcile = true;
+      log.warn('codex child auth invalidated without credential attribution; preserving auth.json', {
+        reason,
+        credentialScope,
+      });
+      if (this.onInvalidatedBroadcast) {
+        try {
+          await this.onInvalidatedBroadcast(reason, credentialScope, this.devOAuthWritesBlocked());
+        } catch (error) {
+          log.warn('onInvalidatedBroadcast threw', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return;
+    }
     const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
     if (this.devOAuthWritesBlocked()) {
       log.warn('codex auth invalidated in dev read-only mode; durable credentials unchanged', {
@@ -2436,7 +2472,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       // A late 401 belongs to the credential actually consumed by the old host. The system path
       // may already contain its replacement; if local evidence is unreadable, keep failing closed
       // instead of guessing that the current system credential is the invalidated generation.
-      this.devReadOnlyInvalidatedSystemCredential =
+      this.memoryOnlyInvalidatedSystemCredential =
         credentialScope === 'system-shared'
           ? capturedFingerprint
             ? {
