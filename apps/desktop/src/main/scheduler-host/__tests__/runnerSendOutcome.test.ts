@@ -571,6 +571,33 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
   });
 
+  it('projects tool-loop terminal errors to a safe scheduler notification', async () => {
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session);
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({
+      type: 'error',
+      data: {
+        message: '上游模型疑似陷入死循环: missing_required_field',
+        isTerminal: true,
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      },
+    });
+
+    await expect(firePromise).rejects.toThrow(/连续触发了无效的工具调用/);
+    const run = latestNotifiedRun(notifier);
+    expect(run.status).toBe('failed');
+    expect(run.errorMsg).toContain('连续触发了无效的工具调用');
+    expect(run.errorMsg).not.toContain('missing_required_field');
+    expect(run.errorMsg).not.toContain('tool_use_loop_detected');
+  });
+
   it('marks a direct scheduler turn headless only after acceptance and releases it at terminal', async () => {
     let releaseSend!: (result: SessionSendResult) => void;
     let onAccepted: NonNullable<SessionSendOptions>['onAccepted'];

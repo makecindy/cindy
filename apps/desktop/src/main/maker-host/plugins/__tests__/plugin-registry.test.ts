@@ -70,6 +70,7 @@ function realBuiltinProviderNames(): KnownProviderName[] {
     ssh: {} as never,
     memory: {} as never,
     contacts: {} as never,
+    docs: {} as never,
     xdtHelper: {} as never,
     orca: {} as never,
     lsp: {} as never,
@@ -119,25 +120,26 @@ describe('PluginRegistry — scoped priority', () => {
     expect(state.projectOverride).toBeNull();
   });
 
-  it('enables the embedded iOS Simulator by default but respects an explicit project disable', async () => {
+  it('hides the embedded iOS Simulator from Tools and ignores leftover Tools settings at runtime freeze', async () => {
+    expect(HOSTED_ELSEWHERE_PLUGIN_IDS.has('ios-simulator')).toBe(true);
     expect(registry.isEnabled('ios-simulator')).toBe(true);
     expect(registry.isEnabled('ios-simulator', workingDir)).toBe(true);
-    await expect(registry.getEnableState('ios-simulator', workingDir)).resolves.toMatchObject({
-      effectiveEnabled: true,
-      productDefaultEnabled: true,
-      projectOverride: null,
-      userOverride: null,
-    });
+    expect((await registry.listPlugins(workingDir)).map((item) => item.id)).not.toContain(
+      'ios-simulator',
+    );
+    expect((await registry.listPlugins()).map((item) => item.id)).not.toContain('ios-simulator');
+    expect(registry.getDisabledRuntimePluginIds(workingDir)).not.toContain('ios-simulator');
 
     writeProjectSettings(workingDir, { 'ios-simulator': false });
     registry = createRegistry();
 
+    // Leftover xdtMaker.builtinTools['ios-simulator'] still parses, but must not
+    // freeze Codex/Pi MCP off — live access is the Plugins-page gate.
     expect(registry.isEnabled('ios-simulator', workingDir)).toBe(false);
-    await expect(registry.getEnableState('ios-simulator', workingDir)).resolves.toMatchObject({
-      effectiveEnabled: false,
-      productDefaultEnabled: true,
-      projectOverride: { enabled: false, workingDir },
-    });
+    expect(registry.getDisabledRuntimePluginIds(workingDir)).not.toContain('ios-simulator');
+    expect((await registry.listPlugins(workingDir)).map((item) => item.id)).not.toContain(
+      'ios-simulator',
+    );
   });
 
   it('returns true by default with workingDir', () => {
@@ -395,6 +397,22 @@ describe('PluginRegistry — scoped priority', () => {
     }
   });
 
+  // 文档工坊(cindy_docs)的归置裁决:不是基础设施(不做文档的用户应该能关掉,
+  // 省下两个入口工具的上下文),也没有专属设置页,所以它必须出现在通用「内置工具」
+  // 列表里、默认开启、可由用户在项目或用户默认作用域里关掉。
+  it('exposes the document toolkit as a user-toggleable builtin, enabled by default', async () => {
+    expect(ESSENTIAL_PLUGIN_IDS.has('docs')).toBe(false);
+    expect(HOSTED_ELSEWHERE_PLUGIN_IDS.has('docs')).toBe(false);
+    expect(registry.isEnabled('docs', workingDir)).toBe(true);
+
+    const list = await registry.listPlugins(workingDir);
+    expect(list.map((item) => item.id)).toContain('docs');
+
+    writeProjectSettings(workingDir, { docs: false });
+    registry = createRegistry();
+    expect(registry.isEnabled('docs', workingDir)).toBe(false);
+  });
+
   it('listPlugins exposes browser in the user-default scope', async () => {
     const list = await registry.listPlugins();
 
@@ -406,6 +424,7 @@ describe('PluginRegistry — scoped priority', () => {
     expect(list.find((item) => item.id === 'android')).toBeUndefined();
     expect(list.find((item) => item.id === 'computer')).toBeUndefined();
     expect(list.find((item) => item.id === 'contacts')).toBeUndefined();
+    expect(list.find((item) => item.id === 'ios-simulator')).toBeUndefined();
   });
 
   it('listPlugins: non-essential defaults to true', async () => {

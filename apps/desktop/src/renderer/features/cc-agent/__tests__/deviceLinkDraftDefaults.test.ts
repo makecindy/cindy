@@ -252,6 +252,32 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     expect(sel.effort).toBe('xhigh');
     expect(sel.fastMode).toBe(true);
   });
+
+  it('provider 槽优先于 * 槽', () => {
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(),
+      {
+        model: 'claude-opus-4-8',
+        providerId: 'anthropic',
+        effort: 'high',
+        fastMode: false,
+        providerModelMemory: {
+          'claude-code:*': {
+            effortByModel: { 'claude-opus-4-8': 'low' },
+            fastByModel: {},
+          },
+          'claude-code:anthropic': {
+            effortByModel: { 'claude-opus-4-8': 'xhigh' },
+            fastByModel: { 'claude-opus-4-8': true },
+          },
+        },
+      },
+      undefined,
+      'claude-code',
+    );
+    expect(sel.effort).toBe('xhigh');
+    expect(sel.fastMode).toBe(true);
+  });
 });
 
 describe('shouldReseedDeviceLinkDraftDefaults', () => {

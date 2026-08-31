@@ -6,6 +6,7 @@
  */
 
 import apiErrors from './apiErrors.json';
+import chat from './chat.json';
 import composer from './composer.json';
 import deviceLink from './deviceLink.json';
 import devices from './devices.json';
@@ -22,6 +23,7 @@ import update from './update.json';
 
 export default {
   apiErrors,
+  chat,
   composer,
   deviceLink,
   devices,

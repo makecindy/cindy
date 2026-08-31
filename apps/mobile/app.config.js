@@ -113,11 +113,10 @@ function resolveMobileBuildEnv() {
   return loadMobileClientBuildEnv();
 }
 
-function resolvePeerManifestBaseUrl(region) {
+function resolveManifestBaseUrl(region) {
   const previousRegion = process.env.EXPO_PUBLIC_CINDY_AUTH_REGION;
   try {
-    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION =
-      region === 'global' ? 'cn' : 'global';
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = region;
     const peerBuildEnv = loadMobileClientBuildEnv();
     return peerBuildEnv.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL;
   } finally {
@@ -127,6 +126,10 @@ function resolvePeerManifestBaseUrl(region) {
       process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = previousRegion;
     }
   }
+}
+
+function resolvePeerManifestBaseUrl(region) {
+  return resolveManifestBaseUrl(region === 'global' ? 'cn' : 'global');
 }
 
 const REGION_CONFIG = {
@@ -206,9 +209,26 @@ module.exports = (context = {}) => {
     ...mobileBuildEnv,
     EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL:
       resolvePeerManifestBaseUrl(region),
+    // CindyDev 的业务服务器切换只需把 CN Release 的可信清单基址内联进 JS。
+    // 不写入 extra / resolved ExpoConfig，避免让纯 JS 开发功能改变 runtime fingerprint。
+    ...(region === 'dev'
+      ? {
+          EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL:
+            resolveManifestBaseUrl('cn'),
+        }
+      : {}),
   };
   for (const [key, value] of Object.entries(mobileBundleEnv)) {
     if (!process.env[key]?.trim()) process.env[key] = value;
+  }
+  // 该值只允许由 CindyDev 构建从仓内 CN 清单派生。Dev 构建覆盖 runner
+  // 残留值，CN / Global 构建主动清除，确保正式包不会误烘焙 Dev-only 配置。
+  if (region === 'dev') {
+    process.env.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL =
+      mobileBundleEnv.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL;
+  } else {
+    delete process.env
+      .EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL;
   }
   // xdtProductionEnv 是既有 Expo config / runtime fingerprint 的一部分。对端清单
   // 基址只需通过上面的 EXPO_PUBLIC_* 环境变量进入 Metro bundle；不要把它追加到

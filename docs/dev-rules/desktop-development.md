@@ -7,21 +7,27 @@
 
 ## Agent 启动入口
 
-Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。用户只说
-「启动开发版 / 启动测试版 / 看当前改动」且没有指定模式时，使用当前 worktree 的
-命名隔离沙箱，不要默认共享正式登录态：
+Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。restart
+命令默认使用固定的 `dev` 命名隔离沙箱（等价于自动附加 `--isolated=dev`），
+不再默认共享正式登录态：
 
 ```bash
-pnpm restart:desktop:remote --region=global -- --isolated=@worktree
-pnpm restart:desktop:remote --region=cn -- --isolated=@worktree
+pnpm restart:desktop:remote --region=global
+pnpm restart:desktop:remote --region=cn
 ```
 
-`--isolated=@worktree` 按 checkout 目录名派生稳定沙箱名（去掉前导 `cindy-`，
-再加路径短哈希，例如 `cindy-local-ollama-models` → `local-ollama-models-a1b2c3`）。
-同一 worktree 下次还用这个名字，登录态会留在这份沙箱里。
+默认 `dev` 沙箱与 checkout 路径无关：无论从主仓还是哪个 worktree 启动，
+Global 都落在同一个 dev 沙箱，CN 也落在同一个 CN dev 沙箱；登录态与 dev 数据持续保留。
+需要按 worktree 拆分数据时才显式传 `--isolated=@worktree`，它会按 checkout 目录名派生
+稳定沙箱名（去掉前导 `cindy-`，再加路径短哈希）。
 
-只有用户明确说「共享登录 / 不要重新登录 / 用现有数据 / 不要关当前实例」时才加
-`--preserve-running`。不要把「用户没提模式」理解成共享。
+只有用户明确说「共享登录 / 不要重新登录 / 用现有数据」时才加 `--shared`；用户明确
+「不要关当前实例」时才加 `--preserve-running`。不要把「用户没提模式」理解成共享。
+需要复用旧的共享正式 profile 时，命令是：
+
+```bash
+pnpm restart:desktop:remote -- --shared
+```
 
 启动命令结束时必须出现一行 `DESKTOP_DEV_VERDICT=ready` 才算成功；看到
 `DESKTOP_DEV_VERDICT=failed` 或根本没有 verdict 行，不得声称开发版已起来。
@@ -42,12 +48,15 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 
 ## 可选启动参数
 
-两个 restart 命令都支持下列参数。脚本本身不加这些旗标时仍是共库 + 正常调度（给人在
-终端里手跑）。**Agent 例外**见上一节：用户只说启动开发版时必须加
-`--isolated=@worktree`。这些参数只对 dev 生效，不影响用户机器上的正式版。
+两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
+命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
+用户机器上的正式版。
 
 - `--region=cn|global`（默认 `global`）：切换构建身份与仓内端点清单；中国大陆版
   必须显式传 `--region=cn`，读取 `config/endpoint.json`。
+- `--shared`：显式选择共享 userData（旧默认行为）：dev 与正式版共用当前区域的正式
+  profile，数据库、登录态、会话完全共享。仅当用户明确要求「共享登录 / 复用现有数据」
+  时使用；禁止与 `--isolated` 或环境里的 `XDT_ISOLATED=1` 组合。
 - `--isolated` / `--isolated=<名字>` / `--isolated=@worktree`：使用独立 userData 沙箱，数据库、登录态、会话、定时
   任务与设备身份都与正式版彻底隔离（首次需重新登录）；命名沙箱每个名字一条独立沙箱，
   名字限 `A-Za-z0-9_-`、≤32 字符。`@worktree` 是保留名，按当前 checkout 目录派生沙箱名。
@@ -93,7 +102,7 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 唯一例外：`--isolated` / `XDT_ISOLATED=1` 把该目录指到正式 profile 时直接拒绝启动。
 
 正式版目录保持历史兼容：CN → `Cindy`，Global → `CindyGlobal`，不在启动时改名或搬迁用户数据。
-非隔离 dev 也使用当前区域对应的正式 profile；`--isolated` 沙箱再按相同区域映射派生目录。
+`--shared` dev 使用当前区域对应的正式 profile；`--isolated` 沙箱再按相同区域映射派生目录。
 **dev writer 不得把正式 profile 升到当前 checkout 比安装版更新的 schema**：有 pending
 migration 就拒绝启动，改用 `--isolated=<名字>`。`--preserve-running` / 共库 passive 仍只读。
 跨区域共享、登录态迁移或旧版本回滚应使用显式隔离目录，避免不同构建误用同一 profile。
@@ -102,8 +111,9 @@ migration 就拒绝启动，改用 `--isolated=<名字>`。`--preserve-running` 
 
 restart 的 kill 作用域是**当前 checkout（worktree）**：只停自己这份 checkout 的 dev
 进程，其他 worktree／命名沙箱的实例一律保留（2026-07-30 约束：并行沙箱不得被另一个
-checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个实例一个独立 worktree +
-`--isolated=<名字>` 命名沙箱**，互不干扰地各自 restart。
+checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个 worktree 显式传
+`--isolated=@worktree` 或 `--isolated=<名字>`**，各自使用独立沙箱；默认 `dev`
+沙箱跨 worktree 共用，适合单人常规开发但不能并行多开同一份 userData。
 
 配套护栏与工具：
 

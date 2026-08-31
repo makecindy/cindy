@@ -1,5 +1,6 @@
 import { messageContentToPreview } from './messageNormalize.js';
 import { stripTrailingPathSeparators } from './pathText.js';
+import { presentationDate, presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
 import type { RemoteSchedule, RemoteScheduleRun, RemoteScheduleRunStatus } from './scheduleTypes.js';
 import { toMillis } from './scheduleModel.js';
@@ -142,11 +143,9 @@ export interface RemoteSessionListContext {
 }
 
 export type RemoteSessionStatusFilter = 'active' | 'waiting' | 'automation' | 'archived' | 'all';
-export type RemoteSessionGroupMode = 'project' | 'date';
 
 export interface RemoteSessionListOptions {
   statusFilter?: RemoteSessionStatusFilter;
-  groupMode?: RemoteSessionGroupMode;
   messagePreviewIndex?: ReadonlyMap<string, string>;
   liveActivityIndex?: ReadonlyMap<string, RemoteSessionLiveActivity>;
   pendingInteractionIndex?: ReadonlyMap<string, number>;
@@ -163,6 +162,8 @@ export interface RemoteSessionListOptions {
    * 共享层刻意不兜中文串,见 {@link remoteSessionDisplayTitle}。
    */
   unnamedLabel?: string;
+  /** Optional localizer so relative timestamps follow the app language. */
+  localizer?: PresentationLocalizer;
 }
 
 export function buildRemoteSessionSections(
@@ -171,7 +172,6 @@ export function buildRemoteSessionSections(
   options: RemoteSessionListOptions = {},
 ): RemoteSessionSection[] {
   const statusFilter = options.statusFilter ?? 'all';
-  const groupMode = options.groupMode ?? 'project';
   const groupAutomations = options.groupAutomations ?? true;
   const query = normalizeSearchQuery(options.searchQuery);
   const items = [...sessions]
@@ -192,6 +192,7 @@ export function buildRemoteSessionSections(
       options.messagePreviewIndex?.get(session.id) ?? sessionRowMessagePreview(session),
       options.liveActivityIndex?.get(session.id) ?? null,
       options.unnamedLabel,
+      options.localizer,
     ));
 
   const pinned = items.filter((item) => !!item.session.pinnedAt);
@@ -202,12 +203,7 @@ export function buildRemoteSessionSections(
     sections.push({ key: 'pinned', title: '置顶', data: pinned });
   }
 
-  if (groupMode === 'date') {
-    sections.push(...buildDateSections(rest, now, groupAutomations));
-    return sections;
-  }
-
-  sections.push(...buildProjectSections(rest, now, groupAutomations));
+  sections.push(...buildProjectSections(rest, now, groupAutomations, options.localizer));
 
   return sections;
 }
@@ -268,26 +264,19 @@ export function remoteSessionFilterBaseLabel(value: RemoteSessionStatusFilter): 
   return '全部';
 }
 
-export function remoteSessionGroupModeLabel(value: RemoteSessionGroupMode): string {
-  return value === 'project' ? '项目' : '时间';
-}
-
 export function remoteSessionControlsSummary(
   statusFilter: RemoteSessionStatusFilter,
-  groupMode: RemoteSessionGroupMode,
   overview: RemoteSessionOverview,
 ): string {
-  return `${remoteSessionFilterLabel(statusFilter, overview)} · ${remoteSessionGroupModeLabel(groupMode)}分组`;
+  return `${remoteSessionFilterLabel(statusFilter, overview)} · 项目分组`;
 }
 
 export function buildRemoteSessionListContext({
-  groupMode,
   overview,
   searchQuery,
   sections,
   statusFilter,
 }: {
-  groupMode: RemoteSessionGroupMode;
   overview: RemoteSessionOverview;
   searchQuery: string;
   sections: readonly RemoteSessionSection[];
@@ -304,7 +293,7 @@ export function buildRemoteSessionListContext({
       : '当前筛选无结果';
   const rowCopy = rowCount > 0 && rowCount !== resultCount ? ` · ${rowCount} 行` : '';
   return {
-    detail: `${resultCopy}${rowCopy} · ${remoteSessionFilterLabel(statusFilter, overview)} · ${remoteSessionGroupModeLabel(groupMode)}分组`,
+    detail: `${resultCopy}${rowCopy} · ${remoteSessionFilterLabel(statusFilter, overview)} · 项目分组`,
     hint: remoteSessionListHint(statusFilter, normalizedQuery),
     resultCount,
     rowCount,
@@ -376,8 +365,9 @@ function buildProjectSections(
   items: readonly RemoteSessionListItem[],
   now: number,
   groupAutomations = true,
+  localizer?: PresentationLocalizer,
 ): RemoteSessionSection[] {
-  const dialogue = groupAutomationListItems(items.filter((item) => isDialogueSession(item.session)), now, groupAutomations);
+  const dialogue = groupAutomationListItems(items.filter((item) => isDialogueSession(item.session)), now, groupAutomations, undefined, localizer);
   const sections: RemoteSessionSection[] = [];
   if (dialogue.length > 0) {
     sections.push({ key: 'dialogue', title: '对话', data: dialogue });
@@ -397,29 +387,10 @@ function buildProjectSections(
     sections.push({
       key: `project:${workingDir}`,
       title: projectTitle(workingDir),
-      data: groupAutomationListItems(data, now, groupAutomations),
+      data: groupAutomationListItems(data, now, groupAutomations, undefined, localizer),
     });
   }
   return sections;
-}
-
-function buildDateSections(
-  items: readonly RemoteSessionListItem[],
-  now: number,
-  groupAutomations = true,
-): RemoteSessionSection[] {
-  const buckets = [
-    { key: 'date:today', title: '今天', data: [] as RemoteSessionListItem[] },
-    { key: 'date:yesterday', title: '昨天', data: [] as RemoteSessionListItem[] },
-    { key: 'date:last7', title: '最近 7 天', data: [] as RemoteSessionListItem[] },
-    { key: 'date:earlier', title: '更早', data: [] as RemoteSessionListItem[] },
-  ];
-  for (const item of items) {
-    buckets[dateBucketIndex(item.lastActivityAt, now)].data.push(item);
-  }
-  return buckets
-    .map((section) => ({ ...section, data: groupAutomationListItems(section.data, now, groupAutomations) }))
-    .filter((section) => section.data.length > 0);
 }
 
 /**
@@ -456,6 +427,7 @@ export function toRemoteSessionListItem(
   liveActivity: RemoteSessionLiveActivity | null = null,
   /** 「尚未起名」任务的显示文案,由调用方传已解析的 i18n 值(见 remoteSessionDisplayTitle)。 */
   unnamedLabel?: string,
+  localizer?: PresentationLocalizer,
 ): RemoteSessionListItem {
   const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
   const scheduleInfo = scheduleIndex?.get(session.id) ?? fallbackScheduleInfo(session);
@@ -472,7 +444,7 @@ export function toRemoteSessionListItem(
     ].filter(Boolean).join(' · '),
     detail: [
       sessionStatusLabel(session.status),
-      relativeTime(lastActivityAt, now),
+      relativeTime(lastActivityAt, now, localizer),
       scheduleInfo?.running ? '自动化执行中' : null,
       scheduleInfo && scheduleInfo.unreadCount > 0 ? `${scheduleInfo.unreadCount} 个自动化未读` : null,
       pendingInteractionCount > 0 ? `等待处理 ${pendingInteractionCount} 个` : null,
@@ -562,7 +534,7 @@ function remoteSessionListItemIsRunning(
 
 export function buildRemoteSessionCardPreview(
   item: RemoteSessionListItem,
-  options: { running?: boolean } = {},
+  options: { running?: boolean; localizer?: PresentationLocalizer } = {},
 ): string | null {
   // 等待交互优先于一切:此时 compactDetail 往往是过期的 tool 状态行(典型
   // 'ask_user_question running...'),和"在等你"的语义打架。与桌面卡片 awaitingText
@@ -572,17 +544,49 @@ export function buildRemoteSessionCardPreview(
     || (live != null && isActiveLiveActivity(live) && live.phase === 'needs-interaction');
   if (awaiting) {
     const kind = live?.interactionKind;
-    if (kind === 'permission') return '等待授权';
-    if (kind === 'plan_review') return '等待计划审阅';
-    if (kind === 'ask_user_question') return '等待你的回复';
-    return '等待你处理';
+    if (kind === 'permission') {
+      return presentationText(
+        options.localizer,
+        'devices.presentation.sessionList.preview.permission',
+        '等待授权',
+      );
+    }
+    if (kind === 'plan_review') {
+      return presentationText(
+        options.localizer,
+        'devices.presentation.sessionList.preview.planReview',
+        '等待计划审阅',
+      );
+    }
+    if (kind === 'ask_user_question') {
+      return presentationText(
+        options.localizer,
+        'devices.presentation.sessionList.preview.answer',
+        '等待你的回复',
+      );
+    }
+    return presentationText(
+      options.localizer,
+      'devices.presentation.sessionList.preview.attention',
+      '等待你处理',
+    );
   }
   if (options.running === true) {
     if (live && isActiveLiveActivity(live)) {
       const text = normalizeInlinePreview(live.compactDetail);
       if (text) return text;
     }
-    return item.scheduleInfo?.running || item.session.source === 'scheduler' ? '自动化执行中' : '运行中';
+    return item.scheduleInfo?.running || item.session.source === 'scheduler'
+      ? presentationText(
+          options.localizer,
+          'devices.presentation.sessionList.preview.automationRunning',
+          '自动化执行中',
+        )
+      : presentationText(
+          options.localizer,
+          'devices.presentation.sessionList.preview.running',
+          '运行中',
+        );
   }
   // idle:展示最近一条消息预览。messagePreview 来自已 load 的消息(打开过的会话),
   // 或由首页构建时回退到 device-link 带的 session.preview(见 buildMobileHomePresentation /
@@ -682,7 +686,7 @@ function matchesStatusFilter(
   return session.status === filter;
 }
 
-function matchesSearchQuery(
+export function matchesSearchQuery(
   session: RemoteSession,
   query: string,
   options: {
@@ -738,23 +742,6 @@ function compareSessions(a: RemoteSession, b: RemoteSession): number {
 
 function normalizeSearchQuery(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? '';
-}
-
-function dateBucketIndex(iso: string, now: number): number {
-  const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return 3;
-  const start = startOfLocalDay(now);
-  const itemStart = startOfLocalDay(ts);
-  const diffDays = Math.floor((start - itemStart) / 86_400_000);
-  if (diffDays <= 0) return 0;
-  if (diffDays === 1) return 1;
-  if (diffDays < 7) return 2;
-  return 3;
-}
-
-function startOfLocalDay(ms: number): number {
-  const date = new Date(ms);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
 function isDialogueSession(session: RemoteSession): boolean {
@@ -817,6 +804,7 @@ export function groupAutomationListItems(
   now: number,
   enabled = true,
   scopeKey?: (item: RemoteSessionListItem) => string | null | undefined,
+  localizer?: PresentationLocalizer,
 ): RemoteSessionListItem[] {
   // 关闭折叠时每个 run 各自成行(项目作用域精简页用,详见 RemoteSessionListOptions.groupAutomations)。
   if (!enabled) return [...items];
@@ -843,7 +831,7 @@ export function groupAutomationListItems(
     }
     if (emitted.has(key)) continue;
     emitted.add(key);
-    next.push(toAutomationGroupListItem(key, group, now));
+    next.push(toAutomationGroupListItem(key, group, now, localizer));
   }
   return next;
 }
@@ -865,6 +853,7 @@ function toAutomationGroupListItem(
   key: string,
   group: readonly RemoteSessionListItem[],
   now: number,
+  localizer?: PresentationLocalizer,
 ): RemoteSessionListItem {
   const primary = pickAutomationPrimaryItem(group);
   const scheduleInfo = mergeScheduleInfo(group);
@@ -889,7 +878,7 @@ function toAutomationGroupListItem(
     ].filter(Boolean).join(' · '),
     detail: [
       `${group.length} 个任务`,
-      relativeTime(latestActivityAt, now),
+      relativeTime(latestActivityAt, now, localizer),
       scheduleInfo?.running ? '自动化执行中' : null,
       scheduleInfo && scheduleInfo.unreadCount > 0 ? `${scheduleInfo.unreadCount} 个自动化未读` : null,
       pendingInteractionCount > 0 ? `等待处理 ${pendingInteractionCount} 个` : null,
@@ -958,8 +947,12 @@ function sessionStatusLabel(status: RemoteSession['status']): string {
   return '已删除';
 }
 
+/** 与 Desktop sessions:list 封顶计数对齐：达到该值即显示 1000+。 */
+export const SESSION_LIST_MESSAGE_COUNT_CAP = 1001;
+
 function messageCountLabel(count: number | undefined): string | null {
   if (typeof count !== 'number') return null;
+  if (count >= SESSION_LIST_MESSAGE_COUNT_CAP) return '1000+ 条消息';
   return `${count} 条消息`;
 }
 
@@ -1086,20 +1079,49 @@ function contentRefName(value: unknown): string | null {
   return null;
 }
 
-function relativeTime(iso: string, now: number): string {
+function relativeTime(iso: string, now: number, localizer?: PresentationLocalizer): string {
   const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return '最近活动时间未知';
+  if (!Number.isFinite(ts)) {
+    return presentationText(localizer, 'devices.presentation.sessionList.time.unknown', 'Recent activity time unknown');
+  }
   const diffMinutes = Math.max(0, Math.floor((now - ts) / 60_000));
-  if (diffMinutes < 1) return '刚刚';
-  if (diffMinutes < 60) return `${diffMinutes} 分钟前`;
+  if (diffMinutes < 1) {
+    return presentationText(localizer, 'devices.presentation.sessionList.time.justNow', 'Just now');
+  }
+  if (diffMinutes < 60) {
+    return presentationText(
+      localizer,
+      'devices.presentation.sessionList.time.minutesAgo',
+      diffMinutes === 1 ? '1 minute ago' : `${diffMinutes} minutes ago`,
+      { count: diffMinutes },
+    );
+  }
   const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours} 小时前`;
+  if (diffHours < 24) {
+    return presentationText(
+      localizer,
+      'devices.presentation.sessionList.time.hoursAgo',
+      diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`,
+      { count: diffHours },
+    );
+  }
   const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays} 天前`;
-  return new Date(ts).toLocaleDateString();
+  if (diffDays < 7) {
+    return presentationText(
+      localizer,
+      'devices.presentation.sessionList.time.daysAgo',
+      diffDays === 1 ? '1 day ago' : `${diffDays} days ago`,
+      { count: diffDays },
+    );
+  }
+  return presentationDate(localizer, new Date(ts));
 }
 
-export function formatRemoteSessionSidebarTime(iso: string | undefined, now = Date.now()): string {
+export function formatRemoteSessionSidebarTime(
+  iso: string | undefined,
+  now = Date.now(),
+  localizer?: PresentationLocalizer,
+): string {
   if (!iso) return '';
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return '';
@@ -1112,11 +1134,29 @@ export function formatRemoteSessionSidebarTime(iso: string | undefined, now = Da
   const monthMs = 30 * dayMs;
   const yearMs = 365 * dayMs;
 
-  if (diffMs < minuteMs) return '刚刚';
-  if (diffMs < hourMs) return `${Math.max(1, Math.floor(diffMs / minuteMs))} 分钟`;
-  if (diffMs < dayMs) return `${Math.max(1, Math.floor(diffMs / hourMs))} 小时`;
-  if (diffMs < weekMs) return `${Math.max(1, Math.floor(diffMs / dayMs))} 天`;
-  if (diffMs < monthMs) return `${Math.max(1, Math.floor(diffMs / weekMs))} 周`;
-  if (diffMs < yearMs) return `${Math.max(1, Math.floor(diffMs / monthMs))} 月`;
-  return `${Math.max(1, Math.floor(diffMs / yearMs))} 年`;
+  if (diffMs < minuteMs) {
+    return presentationText(localizer, 'devices.presentation.sessionList.time.justNow', 'Just now');
+  }
+  if (diffMs < hourMs) {
+    const count = Math.max(1, Math.floor(diffMs / minuteMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.minutes', `${count} min`, { count });
+  }
+  if (diffMs < dayMs) {
+    const count = Math.max(1, Math.floor(diffMs / hourMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.hours', `${count} hr`, { count });
+  }
+  if (diffMs < weekMs) {
+    const count = Math.max(1, Math.floor(diffMs / dayMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.days', `${count} d`, { count });
+  }
+  if (diffMs < monthMs) {
+    const count = Math.max(1, Math.floor(diffMs / weekMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.weeks', `${count} wk`, { count });
+  }
+  if (diffMs < yearMs) {
+    const count = Math.max(1, Math.floor(diffMs / monthMs));
+    return presentationText(localizer, 'devices.presentation.sessionList.time.months', `${count} mo`, { count });
+  }
+  const count = Math.max(1, Math.floor(diffMs / yearMs));
+  return presentationText(localizer, 'devices.presentation.sessionList.time.years', `${count} yr`, { count });
 }

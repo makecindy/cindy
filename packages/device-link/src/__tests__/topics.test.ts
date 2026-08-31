@@ -34,6 +34,7 @@ describe('topicForPush', () => {
 
   it('账号 / 全局级 channel → sessions(随列表订阅走)', () => {
     expect(topicForPush('maker:provider:changed', { revision: 42 })).toBe('sessions');
+    expect(topicForPush('maker:agents:changed', {})).toBe('sessions');
     expect(topicForPush('maker:schedule:event', { kind: 'x' })).toBe('sessions');
     expect(topicForPush('maker:project-automation:event', {})).toBe('sessions');
     // 被控端当前草稿全量变更(无 sessionId)→ 并入 sessions topic。
@@ -44,6 +45,10 @@ describe('topicForPush', () => {
       baseRepo: '/tmp/repo',
       sourceBranch: 'feature/mobile',
       revision: 2,
+    })).toBe('sessions');
+    expect(topicForPush('sidebar-settings:project-order-changed', {
+      projectOrder: 'custom',
+      manualProjectOrder: ['local:/a'],
     })).toBe('sessions');
   });
 

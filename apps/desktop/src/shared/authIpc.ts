@@ -13,7 +13,7 @@ export type DesktopLoginAction =
   | { type: 'discover-sso-org'; org: string }
   | { type: 'confirm-sso-realm' }
   | { type: 'cancel-sso-realm' }
-  | { type: 'request-code'; kind: VerificationKind; identifier: string }
+  | { type: 'request-code'; kind: VerificationKind; identifier: string; captchaToken?: string }
   | { type: 'verify-code'; kind: VerificationKind; identifier: string; code: string }
   | {
       type: 'start-browser';
@@ -30,6 +30,23 @@ export type DesktopLoginAction =
 export type DesktopLoginActionResult =
   | { success: true; state: AuthFlowState }
   | { success: false; code: string; state: AuthFlowState | null };
+
+export interface DesktopSavedAccount {
+  /** Opaque main-owned identifier. Renderer must not derive realm or membership ids from it. */
+  accountKey: string;
+  displayName: string;
+  email: string | null;
+  avatarUrl: string | null;
+  kind: 'personal' | 'org';
+  orgName: string | null;
+  orgLogoUrl: string | null;
+  isCurrent: boolean;
+}
+
+export interface DesktopAccountSwitcherSnapshot {
+  accounts: DesktopSavedAccount[];
+  mutationAllowed: boolean;
+}
 
 /** The receipt token stays in Electron main; renderer only receives display-safe fields. */
 export interface DesktopAccountDeletionChallenge {
@@ -60,8 +77,11 @@ export type DesktopAccountDeletionStatusResult =
 const MAX_IDENTIFIER_LENGTH = 320;
 const MAX_OPAQUE_ID_LENGTH = 256;
 const MAX_CODE_LENGTH = 32;
+// Turnstile token 官方上限 2048 字符(服务端 schema 同值)。
+const MAX_CAPTCHA_TOKEN_LENGTH = 2048;
 // 与 auth-server 的企业 ID / slug / 已验证域名统一上限对齐。
 const MAX_ORG_IDENTIFIER_LENGTH = 253;
+const MAX_ACCOUNT_KEY_LENGTH = 512;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -99,11 +119,27 @@ export function parseDesktopLoginAction(value: unknown): DesktopLoginAction | nu
       return { type: 'confirm-sso-realm' };
     case 'cancel-sso-realm':
       return { type: 'cancel-sso-realm' };
-    case 'request-code':
-      return isVerificationKind(value.kind) &&
-        isBoundedString(value.identifier, MAX_IDENTIFIER_LENGTH)
-        ? { type: 'request-code', kind: value.kind, identifier: value.identifier }
+    case 'request-code': {
+      if (
+        !isVerificationKind(value.kind) ||
+        !isBoundedString(value.identifier, MAX_IDENTIFIER_LENGTH)
+      ) {
+        return null;
+      }
+      // captchaToken 缺省合法(cn 构建 / captcha 未启用);一旦携带必须过界校验,
+      // 非法则整条 action 拒绝,不做静默剥离。
+      if (value.captchaToken === undefined) {
+        return { type: 'request-code', kind: value.kind, identifier: value.identifier };
+      }
+      return isBoundedString(value.captchaToken, MAX_CAPTCHA_TOKEN_LENGTH)
+        ? {
+            type: 'request-code',
+            kind: value.kind,
+            identifier: value.identifier,
+            captchaToken: value.captchaToken,
+          }
         : null;
+    }
     case 'verify-code':
       return isVerificationKind(value.kind) &&
         isBoundedString(value.identifier, MAX_IDENTIFIER_LENGTH) &&
@@ -148,6 +184,10 @@ export function parseDesktopLoginAction(value: unknown): DesktopLoginAction | nu
     default:
       return null;
   }
+}
+
+export function parseDesktopAccountKey(value: unknown): string | null {
+  return isBoundedString(value, MAX_ACCOUNT_KEY_LENGTH) ? value : null;
 }
 
 /** Runtime validation for the irreversible account-deletion confirmation boundary. */

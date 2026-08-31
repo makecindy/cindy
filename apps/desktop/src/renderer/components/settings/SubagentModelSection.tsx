@@ -584,6 +584,10 @@ export function SubagentModelSection() {
           {t('settings.subagentModels.codexV2ModelHint')}
         </p>
 
+        <p className="px-4 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+          {t('settings.subagentModels.codexOauthCompatibilityHint')}
+        </p>
+
         <p className="px-4 pb-4 text-12 leading-[1.5] text-[var(--text-secondary)]">
           {t('settings.subagentModels.hint')}
         </p>

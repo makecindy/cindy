@@ -42,7 +42,8 @@ export interface GhostSettingsSnapshotContext {
   dpr: number;
 }
 
-const STORAGE_PREFIX = 'ghostSettings.snapshot.';
+// v1 只有 ghostId，无法证明快照属于哪个 owner；保留但永不读取/迁移。
+const STORAGE_PREFIX = 'ghostSettings.snapshot.v2.';
 
 /** 宿主设置 guest 的布局契约版本;布局注入改变时递增以主动淘汰旧快照。 */
 export const GHOST_SETTINGS_LAYOUT_REVISION = 3;
@@ -86,27 +87,50 @@ function isValidSnapshot(value: unknown): value is GhostSettingsSnapshot {
   );
 }
 
-/** 静默删一条持久化快照(localStorage 不可用时忽略)。 */
-function removePersisted(ghostId: string): void {
+function snapshotKey(dataOwnerId: string, ghostId: string): string {
+  return `${encodeURIComponent(dataOwnerId)}:${ghostId}`;
+}
+
+function parseSnapshotKey(key: string): { dataOwnerId: string; ghostId: string } | null {
+  const separator = key.lastIndexOf(':');
+  if (separator <= 0 || separator === key.length - 1) return null;
   try {
-    localStorage.removeItem(STORAGE_PREFIX + ghostId);
+    const dataOwnerId = decodeURIComponent(key.slice(0, separator));
+    const ghostId = key.slice(separator + 1);
+    if (!dataOwnerId || !ghostId) return null;
+    return { dataOwnerId, ghostId };
+  } catch {
+    return null;
+  }
+}
+
+/** 静默删一条持久化快照(localStorage 不可用时忽略)。 */
+function removePersisted(dataOwnerId: string, ghostId: string): void {
+  const key = snapshotKey(dataOwnerId, ghostId);
+  try {
+    localStorage.removeItem(STORAGE_PREFIX + key);
   } catch {
     // ignore
   }
 }
 
 /** 读取某意识的存量快照(内存 → localStorage;损坏/缺失/过期返回 null)。 */
-export function loadGhostSettingsSnapshot(ghostId: string): GhostSettingsSnapshot | null {
-  const cached = memoryCache.get(ghostId);
+export function loadGhostSettingsSnapshot(
+  dataOwnerId: string | null,
+  ghostId: string,
+): GhostSettingsSnapshot | null {
+  if (!dataOwnerId) return null;
+  const key = snapshotKey(dataOwnerId, ghostId);
+  const cached = memoryCache.get(key);
   if (cached !== undefined) return cached;
   let snapshot: GhostSettingsSnapshot | null = null;
   try {
-    const raw = localStorage.getItem(STORAGE_PREFIX + ghostId);
+    const raw = localStorage.getItem(STORAGE_PREFIX + key);
     if (raw) {
       const parsed: unknown = JSON.parse(raw);
       if (isValidSnapshot(parsed)) {
         if (Date.now() - parsed.capturedAt > SNAPSHOT_TTL_MS) {
-          removePersisted(ghostId);
+          removePersisted(dataOwnerId, ghostId);
         } else {
           snapshot = parsed;
         }
@@ -115,12 +139,14 @@ export function loadGhostSettingsSnapshot(ghostId: string): GhostSettingsSnapsho
   } catch {
     // localStorage 不可用或 JSON 损坏:视同没有快照,走老的淡入路径。
   }
-  memoryCache.set(ghostId, snapshot);
+  memoryCache.set(key, snapshot);
   return snapshot;
 }
 
-/** 遍历所有持久化快照键,回调收到意识 id 与原始串(解析失败的键直接跳过)。 */
-function forEachPersisted(fn: (ghostId: string, raw: string) => void): void {
+/** 遍历所有新版持久快照键；旧的无 owner 快照不会进入回调。 */
+function forEachPersisted(
+  fn: (identity: { key: string; dataOwnerId: string; ghostId: string }, raw: string) => void,
+): void {
   try {
     const keys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -129,7 +155,9 @@ function forEachPersisted(fn: (ghostId: string, raw: string) => void): void {
     }
     for (const key of keys) {
       const raw = localStorage.getItem(key);
-      if (raw !== null) fn(key.slice(STORAGE_PREFIX.length), raw);
+      const scopedKey = key.slice(STORAGE_PREFIX.length);
+      const identity = parseSnapshotKey(scopedKey);
+      if (raw !== null && identity) fn({ key: scopedKey, ...identity }, raw);
     }
   } catch {
     // localStorage 不可用:静默(持久化本就是 best-effort)。
@@ -140,19 +168,25 @@ function forEachPersisted(fn: (ghostId: string, raw: string) => void): void {
  * 存快照(内存必存;持久化 best-effort):单条超限只留内存;写入前按
  * capturedAt 淘汰最旧的其它快照直到总量回到预算内;写失败静默降级仅内存。
  */
-export function saveGhostSettingsSnapshot(ghostId: string, snapshot: GhostSettingsSnapshot): void {
-  memoryCache.set(ghostId, snapshot);
+export function saveGhostSettingsSnapshot(
+  dataOwnerId: string | null,
+  ghostId: string,
+  snapshot: GhostSettingsSnapshot,
+): void {
+  if (!dataOwnerId) return;
+  const key = snapshotKey(dataOwnerId, ghostId);
+  memoryCache.set(key, snapshot);
   if (snapshot.dataUrl.length > MAX_PERSIST_CHARS) {
     // 单条超限只留内存;同 id 更早的持久快照顺手清掉——它已确认过时,
     // 重启后贴一张旧画面不如诚实走淡入。
-    removePersisted(ghostId);
+    removePersisted(dataOwnerId, ghostId);
     return;
   }
   const serialized = JSON.stringify(snapshot);
   // 总量预算:收集其它快照的体积与拍摄时间,超预算从最旧开始腾位。
   const others: Array<{ id: string; size: number; capturedAt: number }> = [];
-  forEachPersisted((id, raw) => {
-    if (id === ghostId) return;
+  forEachPersisted((identity, raw) => {
+    if (identity.key === key) return;
     let capturedAt = 0;
     try {
       const parsed: unknown = JSON.parse(raw);
@@ -160,20 +194,21 @@ export function saveGhostSettingsSnapshot(ghostId: string, snapshot: GhostSettin
     } catch {
       // 坏数据当最旧(capturedAt 0),优先被淘汰。
     }
-    others.push({ id, size: raw.length, capturedAt });
+    others.push({ id: identity.key, size: raw.length, capturedAt });
   });
   let total = serialized.length + others.reduce((sum, o) => sum + o.size, 0);
   if (total > TOTAL_PERSIST_BUDGET_CHARS) {
     others.sort((a, b) => a.capturedAt - b.capturedAt);
     for (const victim of others) {
       if (total <= TOTAL_PERSIST_BUDGET_CHARS) break;
-      removePersisted(victim.id);
+      const identity = parseSnapshotKey(victim.id);
+      if (identity) removePersisted(identity.dataOwnerId, identity.ghostId);
       memoryCache.delete(victim.id);
       total -= victim.size;
     }
   }
   try {
-    localStorage.setItem(STORAGE_PREFIX + ghostId, serialized);
+    localStorage.setItem(STORAGE_PREFIX + key, serialized);
   } catch {
     // 配额满等写失败:内存缓存仍生效(本会话内复用),不影响功能。
   }
@@ -183,18 +218,28 @@ export function saveGhostSettingsSnapshot(ghostId: string, snapshot: GhostSettin
  * 按"当前已装意识清单"清理孤儿快照(卸载后的快照没有存在理由)。
  * 由意识清单同步点(启动 + ghosts:changed)顺手调用,幂等。
  */
-export function pruneGhostSettingsSnapshots(installedGhostIds: Iterable<string>): void {
+export function pruneGhostSettingsSnapshots(
+  dataOwnerId: string | null,
+  installedGhostIds: Iterable<string>,
+): void {
+  if (!dataOwnerId) return;
   const keep = new Set(installedGhostIds);
   const orphanIds: string[] = [];
-  forEachPersisted((id) => {
-    if (!keep.has(id)) orphanIds.push(id);
+  forEachPersisted((identity) => {
+    if (identity.dataOwnerId === dataOwnerId && !keep.has(identity.ghostId)) {
+      orphanIds.push(identity.ghostId);
+    }
   });
   for (const id of orphanIds) {
-    removePersisted(id);
-    memoryCache.delete(id);
+    removePersisted(dataOwnerId, id);
+    const key = snapshotKey(dataOwnerId, id);
+    memoryCache.delete(key);
   }
-  for (const id of [...memoryCache.keys()]) {
-    if (!keep.has(id)) memoryCache.delete(id);
+  for (const key of [...memoryCache.keys()]) {
+    const identity = parseSnapshotKey(key);
+    if (identity?.dataOwnerId === dataOwnerId && !keep.has(identity.ghostId)) {
+      memoryCache.delete(key);
+    }
   }
 }
 

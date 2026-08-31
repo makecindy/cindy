@@ -435,6 +435,47 @@ const LOCAL_PATCHES = {
         '        );',
     },
   ],
+  'extension/src/browser/chrome.ts': [
+    {
+      desc: 'decorate Chrome chip with host displayName so Cindy-real stays disk-only',
+      find: `  fs.mkdirSync(userDataDir, { recursive: true });
+  await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
+
+  const needsDecorate = !isProfileDecorated(
+    userDataDir,
+    profile.name,
+    (profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR).toUpperCase(),
+    DEFAULT_DOWNLOAD_DIR,
+  );`,
+      replace: `  fs.mkdirSync(userDataDir, { recursive: true });
+  await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
+
+  // LOCAL PATCH (Cindy, via sync.mjs): Chrome chip follows host displayName
+  // when set so the disk key (Cindy-real) never leaks into the profile button.
+  const chipName =
+    normalizeOptionalString(resolved.profiles[profile.name]?.displayName) ?? profile.name;
+
+  const needsDecorate = !isProfileDecorated(
+    userDataDir,
+    chipName,
+    (profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR).toUpperCase(),
+    DEFAULT_DOWNLOAD_DIR,
+  );`,
+    },
+    {
+      desc: 'pass chipName into decorateOpenClawProfile instead of the disk key',
+      find: `      decorateOpenClawProfile(userDataDir, {
+        name: profile.name,
+        color: profile.color,
+        downloadDir: DEFAULT_DOWNLOAD_DIR,
+      });`,
+      replace: `      decorateOpenClawProfile(userDataDir, {
+        name: chipName,
+        color: profile.color,
+        downloadDir: DEFAULT_DOWNLOAD_DIR,
+      });`,
+    },
+  ],
 };
 
 /**

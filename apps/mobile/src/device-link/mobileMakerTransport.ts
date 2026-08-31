@@ -1,4 +1,8 @@
 import type {
+  ConversationSearchRequest,
+  ConversationSearchResponse,
+} from '@cindy/maker-shared/conversation-search';
+import type {
   InputProjection,
   PendingInteraction,
   QueuedRemoteMessage,
@@ -274,6 +278,8 @@ export interface MobileActiveSessionSnapshot {
 export interface MobileModelPrice {
   inputUsdPerMtok: number;
   outputUsdPerMtok: number;
+  /** Gateway 折扣比例 0..1;旧被控端不下发。计费金额 = 原价 × (1 - costDiscount)。 */
+  costDiscount?: number;
 }
 
 export type MobileModelPricingMap = Record<string, MobileModelPrice>;
@@ -389,6 +395,7 @@ export interface MobileMakerTransport {
     modelVisibilityOverrides?: Record<string, boolean>;
   }>;
   getSession(sessionId: string): Promise<RemoteSession>;
+  searchConversations(request: ConversationSearchRequest): Promise<ConversationSearchResponse>;
   patchSessionMeta(sessionId: string, patch: SessionMetaPatch): Promise<RemoteSession>;
   /**
    * error-tail「忽略」:被控端把该 role='error' 行的 content merge dismissed:true
@@ -660,6 +667,7 @@ export function createMobileMakerTransport({
       capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
     }]),
     getSession: (sessionId) => call('local-db:sessions:get', [sessionId]),
+    searchConversations: (request) => call('local-db:conversations:search', [request]),
     patchSessionMeta: (sessionId, patch) => call('local-db:sessions:patch-meta', [sessionId, patch]),
     dismissErrorMessage: (sessionId, clientId) =>
       call('local-db:messages:dismiss-error', [sessionId, clientId]),

@@ -245,6 +245,10 @@ export class PluginRegistry {
         // Freezing it here would keep an existing Codex thread disabled after
         // the project setting is enabled.
         plugin.id !== 'collab' &&
+        // iOS Simulator access is the live plugin gate (install / enable /
+        // workdir). Leftover Tools-page builtinTools['ios-simulator'] must not
+        // freeze Codex/Pi MCP off after that toggle left Settings.
+        plugin.id !== 'ios-simulator' &&
         !ESSENTIAL_PLUGIN_IDS.has(plugin.id) &&
         !GLOBAL_PLUGIN_IDS.has(plugin.id) &&
         !this.isEnabled(plugin.id, workingDir),

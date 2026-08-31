@@ -20,6 +20,7 @@ import { getDbClient } from '../../localDb/client/current';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
+import { retireDeletedPiSubagentState } from '../../localDb/ipc/piSubagentDeletion';
 import { createLogger, maskPath } from '../../logger';
 import { setSessionProvider } from '../../maker-host/session-provider-store';
 import {
@@ -52,6 +53,8 @@ export interface ImSessionRow {
   permissionMode: PermissionMode;
   fastMode: boolean;
   sdkSessionId: string | null;
+  /** Non-empty means workingDir and Agent file paths live on an SSH host. */
+  remoteHostId?: string | null;
   /**
    * 该会话显式选定的供应商 id(路由用,null = 跟随默认路由)。/model 卡片选行时一并持久化,
    * IM turn 启动前 hydrate 进 session-provider-store,保证按选中供应商路由。
@@ -225,6 +228,7 @@ export function createImSessionRepo(
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
+        remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
         workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
       };
@@ -248,6 +252,11 @@ export function createImSessionRepo(
           // 复活由用户 IM 消息触发,一并 bump userSendAt:广播 created 后 renderer
           // 立即重拉,而稍后 turnRunner 的 touchUserSent 不再广播 patched,不在这里
           // 写的话 sidebar 会按旧活跃时间排序/分组,直到下次整页刷新。
+          if (row.status === 'deleted') {
+            // Durable Subagent 墓碑与进行中的删除清理必须在翻回 active 之前撤掉，
+            // 否则确定性 id 复活后每次 spawn 仍判父任务已删除。
+            await retireDeletedPiSubagentState(id);
+          }
           const now = Date.now();
           await db
             .update(sessions)
@@ -298,6 +307,7 @@ export function createImSessionRepo(
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
+        remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
         // update 前读到的旧值不能直接回 —— 与 correctedWorkspaceKind 用同一判据现算,
         // caller 拿到的和库里落定的才是同一个答案。
@@ -319,6 +329,7 @@ export function createImSessionRepo(
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
+        remoteHostId: row.remoteHostId ?? null,
         providerId: row.providerId ?? null,
         workspaceKind: row.workspaceKind ?? null,
       };
@@ -353,6 +364,15 @@ export function createImSessionRepo(
       const row = prepared ?? (await this.prepareNewSession(botContextId, userId, scopeKey));
       const now = Date.now();
       const persisted = await withSessionRouteLock(row.id, async () => {
+        const priorRows = await db
+          .select({ status: sessions.status })
+          .from(sessions)
+          .where(eq(sessions.id, row.id))
+          .limit(1);
+        if (priorRows[0]?.status === 'deleted') {
+          await retireDeletedPiSubagentState(row.id);
+        }
+        const isFreshInsert = priorRows.length === 0;
         await db
           .insert(sessions)
           .values({
@@ -388,16 +408,6 @@ export function createImSessionRepo(
               userSendAt: now,
             },
           });
-        // upsert 前先判行是否已存在: resolveSessionTitle 只对**新建行**生效 —
-        // 复活行带着自己的历史标题(oneshot 拼装的话题名等), 不能被渠道解析
-        // 结果刷掉(飞书话题 lane 首条消息会把标题升级成 [飞书·群名·简介] 格式,
-        // 复活时再刷回 [飞书·群名] 后缀格式就是数据回退)。
-        const preRows = await db
-          .select({ title: sessions.title })
-          .from(sessions)
-          .where(eq(sessions.id, row.id))
-          .limit(1);
-        const isFreshInsert = preRows.length === 0;
         // upsert 可能走冲突分支(残留行的 sdkSessionId / 模型 / 权限被刻意保留),
         // 返回值必须以 DB 持久化结果为准——直接返回 prepared 默认值会让 turn 拿
         // sdkSessionId=null 新开对话,而 DB 里旧上下文仍标记 active,两边失配。
@@ -419,6 +429,7 @@ export function createImSessionRepo(
             permissionMode: persistedRow.permissionMode,
             fastMode: persistedRow.fastMode,
             sdkSessionId: persistedRow.sdkSessionId,
+            remoteHostId: persistedRow.remoteHostId ?? null,
             providerId: persistedRow.providerId ?? null,
           }
         : row;
@@ -433,7 +444,7 @@ export function createImSessionRepo(
       // 只对**新建行**生效 — 复活行保留自己的历史标题(首条消息 oneshot 会把
       // 话题会话升级成 [飞书·群名·简介] 格式, 不能回刷)。失败/无结果保持
       // defaultTitle, 不阻塞建行。
-      if (ns.resolveSessionTitle && persisted?.isFreshInsert !== false) {
+      if (ns.resolveSessionTitle && persisted?.isFreshInsert) {
         try {
           const resolved = await ns.resolveSessionTitle(userId, scopeKey);
           if (resolved) {
@@ -467,6 +478,7 @@ function rowFromDefaults(
     permissionMode: defaults.permissionMode,
     fastMode: defaults.fastMode,
     sdkSessionId: null,
+    remoteHostId: null,
     providerId: defaults.providerId,
   };
 }
@@ -495,7 +507,13 @@ export async function clearContext(sessionId: string): Promise<void> {
   const db = getDbClient().drizzle;
   await db
     .update(sessions)
-    .set({ sdkSessionId: null, clearedAt: Date.now(), updatedAt: Date.now() })
+    .set({
+      sdkSessionId: null,
+      clearedAt: Date.now(),
+      updatedAt: Date.now(),
+      listPreview: null,
+      listPreviewRole: null,
+    })
     .where(eq(sessions.id, sessionId));
 }
 
@@ -532,6 +550,8 @@ export async function resetSessionToDefaults(
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),
+      listPreview: null,
+      listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
   setSessionProvider(sessionId, defaults.providerId);
@@ -558,6 +578,8 @@ export async function switchSessionWorkingDir(
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),
+      listPreview: null,
+      listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
   broadcastSessionCreated(sessionId);

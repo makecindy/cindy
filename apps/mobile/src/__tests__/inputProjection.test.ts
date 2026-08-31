@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   buildQueuePanelSummary,
   buildQueueRowPresentation,
@@ -14,6 +15,7 @@ import {
 import { buildMobileUploadedAttachment } from '@/session/attachments';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import { textComposerDocument } from '@/session/composerDocument';
+import { localizeToolLoopError } from '@/session/toolLoopErrorI18n';
 import type { RemoteSession } from '@/session/types';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
@@ -39,6 +41,10 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 }
 
 describe('inputProjection', () => {
+  beforeAll(async () => {
+    await i18n.changeLanguage('zh-CN');
+  });
+
   it('builds a text-only queued message that matches the desktop coordinator payload shape', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:03.000Z'));
     const queued = buildQueuedTextMessage(session(), '  hello mobile  ', new Date(), 'q-1');
@@ -370,6 +376,35 @@ describe('inputProjection', () => {
     });
   });
 
+  it('keeps bounded live tool-loop details and rejects malformed projection data', () => {
+    expect(normalizeInputProjection({
+      sessionId: 'tool-loop',
+      error: '模型内部错误',
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    })).toMatchObject({
+      error: '模型内部错误',
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    });
+
+    expect(normalizeInputProjection({
+      sessionId: 'tool-loop-invalid',
+      error: '模型内部错误',
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 0 },
+    }).toolLoop).toBeNull();
+  });
+
+  it('localizes live tool-loop errors instead of rendering the host message', () => {
+    const localized = localizeToolLoopError(
+      'tool_use_loop_detected',
+      { kind: 'contract', count: 3 },
+    );
+    expect(localized).toBe(i18n.t('session.tail.toolUseLoopDetectedWithCount', { count: 3 }));
+    expect(localized).not.toContain('模型内部错误');
+  });
+
   it('distinguishes supported, legacy, and not-yet-received continuation ownership', () => {
     expect(normalizeInputProjection(undefined)).toMatchObject({
       continuationTurnClientId: null,
@@ -527,7 +562,7 @@ describe('inputProjection', () => {
       },
       queueLength: projection.pendingQueue.length,
     });
-    expect(locked.hint).toBe('这条消息正在编辑中,桌面端会暂停自动发送。');
+    expect(locked.hint).toBe('这条消息正在编辑中，桌面端会暂停自动发送。');
     expect(locked.actions.edit.disabledReason).toBe('这条队列消息正在编辑中，完成后再操作。');
   });
 

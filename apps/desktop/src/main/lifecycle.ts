@@ -52,6 +52,7 @@ import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup
 import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
 import { isGhostPanelWebContentsId } from './ghost-panel-window/registry.js';
+import { isReviewArtifactConfirmWebContentsId } from './reviewer/reviewArtifactConfirmWindowRegistry.js';
 
 /**
  * 瞬时网络错误的 wire payload (main → renderer)。code 永远存在 (Node 的 ErrnoException
@@ -672,6 +673,12 @@ export function installQuitHandler(timeoutMs = 2000): void {
     if (isGhostPanelWebContentsId(webContents.id)) {
       log.warn(
         `ghost panel render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
+      );
+      return;
+    }
+    if (isReviewArtifactConfirmWebContentsId(webContents.id)) {
+      log.warn(
+        `Review artifact consent render-process-gone (isolated, access denied): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }

@@ -168,6 +168,9 @@ function isRemoteSessionListSession(
     (session.extraDirs === undefined ||
       (Array.isArray(session.extraDirs) &&
         session.extraDirs.every((dir) => typeof dir === 'string'))) &&
+    (session.writableDirs === undefined ||
+      (Array.isArray(session.writableDirs) &&
+        session.writableDirs.every((dir) => typeof dir === 'string'))) &&
     (count === undefined ||
       count === null ||
       (isRecord(count) &&
@@ -288,6 +291,8 @@ export async function refreshRemoteDeviceSessions(
         (existing.opts.snapshotMode ?? 'merge') === 'replace' || requestedSnapshotMode === 'replace'
           ? 'replace'
           : 'merge',
+      // 走到这里的一定不是弱周期 tick；补跑按事件语义带 fresh。
+      coalescingMode: undefined,
     };
     // 先让当前 in-flight snapshot 失效,否则它可能在排队的补跑开始前覆盖 push 带来的新状态。
     remoteProjectsStore.nextSnapshotEpoch(deviceId, status);
@@ -398,7 +403,11 @@ async function runRefreshRemoteDeviceSessions(
       const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:list', [
         listLimit,
         status,
-        { includePinned: true },
+        {
+          includePinned: true,
+          // 周期 tick 保持单飞；created / bootstrap 等事件重拉必须绕开写前查询。
+          ...(opts.coalescingMode === 'weak' ? {} : { fresh: true }),
+        },
       ]);
       // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
       if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';

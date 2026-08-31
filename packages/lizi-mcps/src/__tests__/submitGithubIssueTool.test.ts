@@ -63,6 +63,32 @@ describe('submit_github_issue tool', () => {
     expect(tool?.description).toContain('不能识别所有语义隐私');
   });
 
+  it('澄清流程交给 agent 判断,并与自动附加的当前任务环境区分', () => {
+    const { registry } = setup();
+    const tool = registry.get('submit_github_issue');
+    expect(tool?.description).toContain('缺什么问什么');
+    expect(tool?.description).toContain('不要套固定问卷或章节清单');
+    expect(tool?.description).toContain('普通建议不必按缺陷来问');
+    expect(tool?.description).toContain('和环境无关不必追问 Harness');
+    expect(tool?.description).toContain('系统自动附加的 Harness / Model ID 是当前任务的快照');
+    expect(tool?.description).toContain('不一定是出问题的那个');
+    expect(tool?.description).toContain('提交时的任务环境');
+    expect(tool?.description).toContain('本工具不能把对话里的图片传到 GitHub');
+    expect(tool?.description).toContain('禁止写「已提供截图」');
+    expect(tool?.description).toContain('不要写仓库路径、实现方案、验收清单');
+    expect(tool?.inputShape.body.description).toContain('按这条反馈本身组织');
+    expect(tool?.inputShape.body.description).not.toContain('bug 优先用');
+    expect(tool?.inputShape.body.description).toContain('禁止声称截图已附');
+    expect(tool?.inputShape.body.description).toContain('提交时的任务环境');
+    expect(tool?.inputShape.body.description).toContain('实际故障');
+    expect(tool?.inputShape.body.description).toContain(
+      '不要复制系统自动附加的当前任务快照',
+    );
+    expect(tool?.inputShape.body.description).not.toMatch(
+      /不要写环境信息\(客户端版本 \/ 版本区域 \/ OS \/ Harness \/ 模型 ID/,
+    );
+  });
+
   it('缺参数 → INVALID_ARGS, host 不被调', async () => {
     const { registry, submit } = setup();
     const res = await registry.call('submit_github_issue', {});
@@ -101,6 +127,7 @@ describe('submit_github_issue tool', () => {
     });
     expect(submit).toHaveBeenCalledWith({
       sessionId: 'sess-1',
+      agentKind: 'claude-code',
       workingDir: '/tmp/wd',
       title: VALID_ARGS.title,
       body: VALID_ARGS.body,

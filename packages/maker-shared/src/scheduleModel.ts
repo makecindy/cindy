@@ -5,6 +5,12 @@ import type {
   RemoteScheduleStatus,
   RemoteTimestamp,
 } from './scheduleTypes';
+import {
+  presentationDate,
+  presentationText,
+  presentationTime,
+  type PresentationLocalizer,
+} from './presentationLocalization.js';
 
 export interface ScheduleSummary {
   title: string;
@@ -150,46 +156,61 @@ export function summarizeSchedule(
   schedule: RemoteSchedule,
   runs: readonly RemoteScheduleRun[] = [],
   now = Date.now(),
+  localizer?: PresentationLocalizer,
 ): ScheduleSummary {
-  const lastText = formatLastRun(schedule.lastFiredAt, now);
-  const nextText = schedule.status === 'active' ? formatNextRun(schedule.nextFireAt, now) : null;
+  const lastText = formatLastRun(schedule.lastFiredAt, now, localizer);
+  const nextText = schedule.status === 'active'
+    ? formatNextRun(schedule.nextFireAt, now, localizer)
+    : null;
   let subtitle: string;
   if (schedule.status === 'paused') {
-    subtitle = '已暂停';
+    subtitle = presentationText(localizer, 'devices.automations.presentation.schedule.paused', '已暂停');
   } else if (schedule.manual) {
-    subtitle = lastText ?? '手动触发';
+    subtitle = lastText
+      ?? presentationText(localizer, 'devices.automations.presentation.schedule.manual', '手动触发');
   } else if (schedule.recurring === false) {
-    subtitle = lastText ?? '单次任务';
+    subtitle = lastText
+      ?? presentationText(localizer, 'devices.automations.presentation.schedule.once', '单次任务');
   } else if (lastText && nextText) {
     subtitle = `${lastText} · ${nextText}`;
   } else {
-    subtitle = lastText ?? nextText ?? '等待首次执行';
+    subtitle = lastText
+      ?? nextText
+      ?? presentationText(localizer, 'devices.automations.presentation.schedule.waitingFirstRun', '等待首次执行');
   }
 
   return {
     title: schedule.name || schedule.id,
     subtitle,
     detail: [
-      describeScheduleTiming(schedule),
-      describeRunSessionLabel(schedule),
+      describeScheduleTiming(schedule, localizer),
+      describeRunSessionLabel(schedule, localizer),
       humanizeAgentKind(schedule.agentKind),
-      describeDestination(schedule),
+      describeDestination(schedule, localizer),
     ].filter(Boolean).join(' · '),
-    runSessionDetail: describeRunSessionDetail(schedule),
-    runSessionLabel: describeRunSessionLabel(schedule),
+    runSessionDetail: describeRunSessionDetail(schedule, localizer),
+    runSessionLabel: describeRunSessionLabel(schedule, localizer),
     status: schedule.status,
-    statusLabel: scheduleStatusLabel(schedule.status),
+    statusLabel: scheduleStatusLabel(schedule.status, localizer),
     unreadCount: countUnreadRuns(runs, now),
   };
 }
 
-export function summarizeRun(run: RemoteScheduleRun, now = Date.now()): RunSummary {
-  const fired = formatTimestamp(run.firedAt);
-  const finished = run.finishedAt ? formatTimestamp(run.finishedAt) : null;
+export function summarizeRun(
+  run: RemoteScheduleRun,
+  now = Date.now(),
+  localizer?: PresentationLocalizer,
+): RunSummary {
+  const fired = formatTimestamp(run.firedAt, localizer);
+  const finished = run.finishedAt ? formatTimestamp(run.finishedAt, localizer) : null;
   const subtitle = finished ? `${fired} - ${finished}` : fired;
   const error = run.errorMsg?.trim();
   const result = run.resultText?.trim();
-  const sessionDetail = run.sessionId?.trim() ? `任务 ${shortSessionId(run.sessionId)}` : null;
+  const sessionDetail = run.sessionId?.trim()
+    ? presentationText(localizer, 'devices.automations.presentation.run.session', `任务 ${shortSessionId(run.sessionId)}`, {
+        id: shortSessionId(run.sessionId),
+      })
+    : null;
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);
   const unread = isUnreadRun(run, now);
   const canDelete = !isLegacySessionRun && run.status !== 'running';
@@ -203,17 +224,27 @@ export function summarizeRun(run: RemoteScheduleRun, now = Date.now()): RunSumma
     canMarkRead,
     canOpenSession,
     canRestart,
-    deleteLabel: canDelete ? '删除' : null,
-    title: runStatusLabel(run.status),
+    deleteLabel: canDelete
+      ? presentationText(localizer, 'devices.automations.presentation.run.delete', '删除')
+      : null,
+    title: runStatusLabel(run.status, localizer),
     subtitle,
     detail: error || previewText(result) || null,
-    markReadLabel: canMarkRead ? '已读' : null,
+    markReadLabel: canMarkRead
+      ? presentationText(localizer, 'devices.automations.presentation.run.markRead', '已读')
+      : null,
     meta: [
-      describeRunTiming(run, now),
-      sessionDetail ?? (canRestart ? '可重新执行' : '未创建任务'),
+      describeRunTiming(run, now, localizer),
+      sessionDetail ?? (canRestart
+        ? presentationText(localizer, 'devices.automations.presentation.run.canRestart', '可重新执行')
+        : presentationText(localizer, 'devices.automations.presentation.run.noSession', '未创建任务')),
     ].filter(Boolean).join(' · '),
-    openSessionLabel: sessionDetail ? '打开' : null,
-    restartLabel: canRestart ? '重跑' : null,
+    openSessionLabel: sessionDetail
+      ? presentationText(localizer, 'devices.automations.presentation.run.open', '打开')
+      : null,
+    restartLabel: canRestart
+      ? presentationText(localizer, 'devices.automations.presentation.run.restart', '重跑')
+      : null,
     sessionDetail,
     status: run.status,
     unread,
@@ -229,41 +260,56 @@ export function normalizeScheduleInflightCount(value: unknown): number {
 export function buildSchedulePauseConfirmation(
   schedule: Pick<RemoteSchedule, 'id' | 'name'>,
   inflightCount: unknown,
+  localizer?: PresentationLocalizer,
 ): SchedulePauseConfirmation | null {
   const count = normalizeScheduleInflightCount(inflightCount);
   if (count <= 0) return null;
   return {
-    title: `暂停 ${schedule.name || schedule.id}`,
-    detail: `这条自动化当前有 ${count} 次执行正在进行。暂停会立即阻止后续触发,并停止这些正在进行的执行。`,
-    preview: `正在执行: ${count} 次`,
+    title: presentationText(localizer, 'devices.automations.presentation.pause.title', `暂停 ${schedule.name || schedule.id}`, {
+      name: schedule.name || schedule.id,
+    }),
+    detail: presentationText(localizer, 'devices.automations.presentation.pause.detail', `这条自动化当前有 ${count} 次执行正在进行。暂停会立即阻止后续触发,并停止这些正在进行的执行。`, {
+      count,
+    }),
+    preview: presentationText(localizer, 'devices.automations.presentation.pause.preview', `正在执行: ${count} 次`, {
+      count,
+    }),
   };
 }
 
-export function scheduleStatusLabel(status: RemoteScheduleStatus): string {
+export function scheduleStatusLabel(
+  status: RemoteScheduleStatus,
+  localizer?: PresentationLocalizer,
+): string {
+  const key = `devices.automations.presentation.schedule.status.${status}`;
   switch (status) {
     case 'active':
-      return '运行中';
+      return presentationText(localizer, key, '运行中');
     case 'paused':
-      return '已暂停';
+      return presentationText(localizer, key, '已暂停');
     case 'expired':
-      return '已完成';
+      return presentationText(localizer, key, '已完成');
   }
 }
 
-export function runStatusLabel(status: RemoteScheduleRunStatus): string {
+export function runStatusLabel(
+  status: RemoteScheduleRunStatus,
+  localizer?: PresentationLocalizer,
+): string {
+  const key = `devices.automations.presentation.run.status.${status}`;
   switch (status) {
     case 'running':
-      return '执行中';
+      return presentationText(localizer, key, '执行中');
     case 'success':
-      return '成功';
+      return presentationText(localizer, key, '成功');
     case 'failed':
-      return '失败';
+      return presentationText(localizer, key, '失败');
     case 'aborted':
-      return '已中止';
+      return presentationText(localizer, key, '已中止');
     case 'interrupted':
-      return '被中断';
+      return presentationText(localizer, key, '被中断');
     case 'skipped':
-      return '已跳过';
+      return presentationText(localizer, key, '已跳过');
   }
 }
 
@@ -295,38 +341,73 @@ function normalizeRunStatus(value: unknown): RemoteScheduleRunStatus {
   return 'failed';
 }
 
-function describeScheduleTiming(schedule: RemoteSchedule): string {
-  if (schedule.manual) return '手动触发';
-  if (typeof schedule.intervalMs === 'number' && schedule.intervalMs > 0) {
-    return `每 ${formatDuration(schedule.intervalMs)}`;
+function describeScheduleTiming(
+  schedule: RemoteSchedule,
+  localizer?: PresentationLocalizer,
+): string {
+  if (schedule.manual) {
+    return presentationText(localizer, 'devices.automations.presentation.schedule.manual', '手动触发');
   }
-  if (schedule.recurring === false) return '单次任务';
-  return schedule.cronExpr ? `cron ${schedule.cronExpr}` : '周期任务';
+  if (typeof schedule.intervalMs === 'number' && schedule.intervalMs > 0) {
+    const duration = formatDuration(schedule.intervalMs, localizer);
+    return presentationText(localizer, 'devices.automations.presentation.schedule.every', `每 ${duration}`, {
+      duration,
+    });
+  }
+  if (schedule.recurring === false) {
+    return presentationText(localizer, 'devices.automations.presentation.schedule.once', '单次任务');
+  }
+  return schedule.cronExpr
+    ? `cron ${schedule.cronExpr}`
+    : presentationText(localizer, 'devices.automations.presentation.schedule.recurring', '周期任务');
 }
 
-function describeDestination(schedule: RemoteSchedule): string {
-  if (schedule.workspaceKind === 'dialogue') return '对话工作区';
-  if (!schedule.workingDir) return '未设置目录';
+function describeDestination(
+  schedule: RemoteSchedule,
+  localizer?: PresentationLocalizer,
+): string {
+  if (schedule.workspaceKind === 'dialogue') {
+    return presentationText(localizer, 'devices.automations.presentation.schedule.dialogueWorkspace', '对话工作区');
+  }
+  if (!schedule.workingDir) {
+    return presentationText(localizer, 'devices.automations.presentation.schedule.noDirectory', '未设置目录');
+  }
   const parts = schedule.workingDir.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? schedule.workingDir;
 }
 
 function describeRunSessionLabel(
   schedule: Pick<RemoteSchedule, 'persistentSession' | 'targetSessionId'>,
+  localizer?: PresentationLocalizer,
 ): string {
-  if (schedule.persistentSession) return '持续任务';
-  if (schedule.targetSessionId?.trim()) return '绑定任务';
-  return '新任务';
+  if (schedule.persistentSession) {
+    return presentationText(localizer, 'devices.automations.presentation.schedule.session.persistent', '持续任务');
+  }
+  if (schedule.targetSessionId?.trim()) {
+    return presentationText(localizer, 'devices.automations.presentation.schedule.session.bound', '绑定任务');
+  }
+  return presentationText(localizer, 'devices.automations.presentation.schedule.session.fresh', '新任务');
 }
 
 function describeRunSessionDetail(
   schedule: Pick<RemoteSchedule, 'persistentSession' | 'targetSessionId'>,
+  localizer?: PresentationLocalizer,
 ): string | null {
   if (schedule.persistentSession && schedule.targetSessionId?.trim()) {
-    return `持续任务 ${shortSessionId(schedule.targetSessionId)}`;
+    const id = shortSessionId(schedule.targetSessionId);
+    return presentationText(localizer, 'devices.automations.presentation.schedule.session.persistentWithId', `持续任务 ${id}`, {
+      id,
+    });
   }
-  if (schedule.persistentSession) return '首次触发后持续复用同一任务';
-  if (schedule.targetSessionId?.trim()) return `绑定到 ${shortSessionId(schedule.targetSessionId)}`;
+  if (schedule.persistentSession) {
+    return presentationText(localizer, 'devices.automations.presentation.schedule.session.persistentDetail', '首次触发后持续复用同一任务');
+  }
+  if (schedule.targetSessionId?.trim()) {
+    const id = shortSessionId(schedule.targetSessionId);
+    return presentationText(localizer, 'devices.automations.presentation.schedule.session.boundWithId', `绑定到 ${id}`, {
+      id,
+    });
+  }
   return null;
 }
 
@@ -334,22 +415,52 @@ function shortSessionId(sessionId: string): string {
   return sessionId.trim().slice(0, 8);
 }
 
-function describeRunTiming(run: Pick<RemoteScheduleRun, 'firedAt' | 'finishedAt' | 'status'>, now: number): string {
+function describeRunTiming(
+  run: Pick<RemoteScheduleRun, 'firedAt' | 'finishedAt' | 'status'>,
+  now: number,
+  localizer?: PresentationLocalizer,
+): string {
   const firedAt = toMillis(run.firedAt);
-  if (!firedAt) return run.status === 'running' ? '执行中' : '耗时未知';
-  if (run.status === 'running') return `已运行 ${formatRunDuration(now - firedAt)}`;
+  if (!firedAt) {
+    return run.status === 'running'
+      ? presentationText(localizer, 'devices.automations.presentation.run.status.running', '执行中')
+      : presentationText(localizer, 'devices.automations.presentation.run.durationUnknown', '耗时未知');
+  }
+  if (run.status === 'running') {
+    const duration = formatRunDuration(now - firedAt, localizer);
+    return presentationText(localizer, 'devices.automations.presentation.run.runningFor', `已运行 ${duration}`, {
+      duration,
+    });
+  }
   const finishedAt = toMillis(run.finishedAt);
-  if (!finishedAt) return '耗时未知';
-  return `耗时 ${formatRunDuration(finishedAt - firedAt)}`;
+  if (!finishedAt) {
+    return presentationText(localizer, 'devices.automations.presentation.run.durationUnknown', '耗时未知');
+  }
+  const duration = formatRunDuration(finishedAt - firedAt, localizer);
+  return presentationText(localizer, 'devices.automations.presentation.run.duration', `耗时 ${duration}`, {
+    duration,
+  });
 }
 
-function formatRunDuration(ms: number): string {
+function formatRunDuration(ms: number, localizer?: PresentationLocalizer): string {
   const diff = Math.max(0, ms);
   if (diff < 1000) return `${Math.round(diff)} ms`;
-  if (diff < 60_000) return `${(diff / 1000).toFixed(1)} 秒`;
+  if (diff < 60_000) {
+    const count = (diff / 1000).toFixed(1);
+    return presentationText(localizer, 'devices.automations.presentation.duration.seconds', `${count} 秒`, {
+      count,
+    });
+  }
   const minutes = Math.floor(diff / 60_000);
   const seconds = Math.floor((diff % 60_000) / 1000);
-  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+  return seconds > 0
+    ? presentationText(localizer, 'devices.automations.presentation.duration.minutesSeconds', `${minutes} 分 ${seconds} 秒`, {
+        minutes,
+        seconds,
+      })
+    : presentationText(localizer, 'devices.automations.presentation.duration.minutes', `${minutes} 分钟`, {
+        count: minutes,
+      });
 }
 
 function humanizeAgentKind(agentKind: RemoteSchedule['agentKind']): string {
@@ -358,39 +469,92 @@ function humanizeAgentKind(agentKind: RemoteSchedule['agentKind']): string {
   return 'Claude';
 }
 
-function formatLastRun(value: RemoteTimestamp, now: number): string | null {
+function formatLastRun(
+  value: RemoteTimestamp,
+  now: number,
+  localizer?: PresentationLocalizer,
+): string | null {
   const ts = toMillis(value);
   if (!ts) return null;
-  return `上次 ${formatRelativePast(ts, now)}`;
+  const relative = formatRelativePast(ts, now, localizer);
+  return presentationText(localizer, 'devices.automations.presentation.schedule.lastRun', `上次 ${relative}`, {
+    relative,
+  });
 }
 
-function formatNextRun(value: RemoteTimestamp, now: number): string | null {
+function formatNextRun(
+  value: RemoteTimestamp,
+  now: number,
+  localizer?: PresentationLocalizer,
+): string | null {
   const ts = toMillis(value);
   if (!ts) return null;
   const diff = ts - now;
-  if (diff <= 0) return '即将执行';
-  return `${formatDuration(diff)}后`;
+  if (diff <= 0) {
+    return presentationText(localizer, 'devices.automations.presentation.schedule.imminent', '即将执行');
+  }
+  const duration = formatDuration(diff, localizer);
+  return presentationText(localizer, 'devices.automations.presentation.schedule.nextRun', `${duration}后`, {
+    duration,
+  });
 }
 
-function formatRelativePast(timestamp: number, now: number): string {
+function formatRelativePast(
+  timestamp: number,
+  now: number,
+  localizer?: PresentationLocalizer,
+): string {
   const diff = Math.max(0, now - timestamp);
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
-  return formatTimestamp(timestamp);
+  if (diff < 60_000) {
+    return presentationText(localizer, 'devices.automations.presentation.relative.justNow', '刚刚');
+  }
+  if (diff < 3_600_000) {
+    const count = Math.floor(diff / 60_000);
+    return presentationText(localizer, 'devices.automations.presentation.relative.minutesAgo', `${count} 分钟前`, {
+      count,
+    });
+  }
+  if (diff < 86_400_000) {
+    const count = Math.floor(diff / 3_600_000);
+    return presentationText(localizer, 'devices.automations.presentation.relative.hoursAgo', `${count} 小时前`, {
+      count,
+    });
+  }
+  if (diff < 7 * 86_400_000) {
+    const count = Math.floor(diff / 86_400_000);
+    return presentationText(localizer, 'devices.automations.presentation.relative.daysAgo', `${count} 天前`, {
+      count,
+    });
+  }
+  return formatTimestamp(timestamp, localizer);
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 3_600_000) return `${Math.max(1, Math.round(ms / 60_000))} 分钟`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)} 小时`;
-  return `${Math.round(ms / 86_400_000)} 天`;
+function formatDuration(ms: number, localizer?: PresentationLocalizer): string {
+  if (ms < 3_600_000) {
+    const count = Math.max(1, Math.round(ms / 60_000));
+    return presentationText(localizer, 'devices.automations.presentation.duration.minutes', `${count} 分钟`, {
+      count,
+    });
+  }
+  if (ms < 86_400_000) {
+    const count = Math.round(ms / 3_600_000);
+    return presentationText(localizer, 'devices.automations.presentation.duration.hours', `${count} 小时`, {
+      count,
+    });
+  }
+  const count = Math.round(ms / 86_400_000);
+  return presentationText(localizer, 'devices.automations.presentation.duration.days', `${count} 天`, {
+    count,
+  });
 }
 
-function formatTimestamp(value: RemoteTimestamp): string {
+function formatTimestamp(value: RemoteTimestamp, localizer?: PresentationLocalizer): string {
   const ts = toMillis(value);
-  if (!ts) return '未知时间';
+  if (!ts) {
+    return presentationText(localizer, 'devices.automations.presentation.run.unknownTime', '未知时间');
+  }
   const date = new Date(ts);
+  if (localizer) return `${presentationDate(localizer, date)} ${presentationTime(localizer, date)}`;
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   const hour = String(date.getHours()).padStart(2, '0');

@@ -117,6 +117,8 @@ const MODEL = 'gpt-5';
 const EFFORT = 'medium';
 const PERMISSION_MODE = 'default';
 const WORKING_DIR = 'C:\\workspace';
+const LITELLM_INVALID_PROXY_TOKEN =
+  'Invalid proxy server token passed; Unable to find token in cache or `LiteLLM_VerificationTokenTable`';
 
 function serverMessage(
   patch: Omit<Message, 'toolUseId' | 'agentMeta'> &
@@ -135,6 +137,7 @@ let onDeviceLinkStatusChanged: ((data: unknown) => void) | undefined;
 let onPresenceChanged: ((data: unknown) => void) | undefined;
 let onRemotePush: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 let onDbMessageCreated: ((data: unknown) => void) | undefined;
+let onErrorPersisted: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 let onInputProjection: ((data: unknown) => void) | undefined;
 let onInteractionRequest: ((data: unknown) => void) | undefined;
 let onInteractionDismissed: ((data: unknown) => void) | undefined;
@@ -177,7 +180,7 @@ const input = {
     void clearedAt;
     return projection(sessionId);
   }),
-  persistTurnErrorDeferred: vi.fn(async () => {}),
+  persistTurnErrorDeferred: vi.fn(async (): Promise<string | undefined> => undefined),
 };
 
 function projection(
@@ -201,6 +204,50 @@ function projection(
   };
 }
 
+function activeTurnRecoveryItem(
+  text = 'hello gateway',
+  clientId = 'user-client',
+  providerId: string | null | undefined = 'xd',
+): AgentInputQueuedMessage {
+  return {
+    clientId,
+    text,
+    persistedContent: text,
+    model: MODEL,
+    effort: EFFORT,
+    permissionMode: PERMISSION_MODE,
+    workingDir: WORKING_DIR,
+    chatMessage: {
+      clientId,
+      role: 'user',
+      content: text,
+      createdAt: '2026-01-01T00:00:01.000Z',
+    },
+    createOpts: {
+      agentKind: 'claude-code',
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      ...(providerId !== undefined ? { providerId } : {}),
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    },
+  };
+}
+
+function emitGatewayProxyTokenFailure(
+  data: Record<string, unknown>,
+  source: 'claude-code' | 'codex' = 'claude-code',
+): void {
+  onEvent?.({
+    sessionId: SESSION_ID,
+    event: { type: 'error', source, data },
+  });
+  onEvent?.({
+    sessionId: SESSION_ID,
+    event: { type: 'done', source, data: { is_error: true } },
+  });
+}
+
 function installElectronBridge(): void {
   onEvent = undefined;
   onStatusChanged = undefined;
@@ -208,6 +255,7 @@ function installElectronBridge(): void {
   onPresenceChanged = undefined;
   onRemotePush = undefined;
   onDbMessageCreated = undefined;
+  onErrorPersisted = undefined;
   onInputProjection = undefined;
   onInteractionRequest = undefined;
   onInteractionDismissed = undefined;
@@ -266,10 +314,20 @@ function installElectronBridge(): void {
         size: 1,
       })),
       safeStorageRead: vi.fn(async () => 'local-key'),
+      modelAccess: {
+        retry: vi.fn(async () => ({ state: 'ok', source: 'server', endpoint: 'https://gw.test' })),
+        rotate: vi.fn(),
+        getStatus: vi.fn(),
+        onStatusChange: vi.fn(),
+      },
       localDb: {
         messages: {
           onCreated: (cb: (data: unknown) => void) => {
             onDbMessageCreated = cb;
+            return vi.fn();
+          },
+          onErrorPersisted: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+            onErrorPersisted = cb;
             return vi.fn();
           },
         },
@@ -326,7 +384,11 @@ function installElectronBridge(): void {
   };
 }
 
-function emitTextDelta(text: string, sessionId = SESSION_ID): void {
+function emitTextDelta(
+  text: string,
+  sessionId = SESSION_ID,
+  persistId = 'assistant-1',
+): void {
   onEvent?.({
     sessionId,
     event: {
@@ -334,7 +396,7 @@ function emitTextDelta(text: string, sessionId = SESSION_ID): void {
       source: 'claude-code',
       data: { text, isFinal: false },
     },
-    persistId: 'assistant-1',
+    persistId,
   });
 }
 
@@ -1589,6 +1651,61 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
+  it('keeps commentary when a distinct Codex final_answer item follows it', () => {
+    emitTextDelta('Execution preview');
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text',
+        source: 'codex',
+        data: {
+          text: 'Please confirm.',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-final',
+          phase: 'final_answer',
+        },
+      },
+      persistId: 'assistant-2',
+    });
+
+    vi.advanceTimersByTime(32);
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'Execution preview',
+        isStreaming: false,
+      }),
+      expect.objectContaining({
+        clientId: 'assistant-2',
+        content: 'Please confirm.',
+        isStreaming: false,
+      }),
+    ]);
+  });
+
+  it('flushes batched deltas when the assistant persist id changes', () => {
+    emitTextDelta('Execution preview', SESSION_ID, 'assistant-1');
+    emitTextDelta('Please confirm.', SESSION_ID, 'assistant-2');
+
+    vi.advanceTimersByTime(32);
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'Execution preview',
+        isStreaming: false,
+      }),
+      expect.objectContaining({
+        clientId: 'assistant-2',
+        content: 'Please confirm.',
+        isStreaming: true,
+      }),
+    ]);
+  });
+
   it('keeps accumulated text when an unmarked isFinal event is only a tail block', () => {
     emitTextDelta('Hello ');
 
@@ -2116,6 +2233,59 @@ describe('makerChatStore text delta batching', () => {
     expect(snap.messages.some((m) => m.role === 'user' && m.content === 'next')).toBe(false);
   });
 
+  it('does not flip product isRunning for background compact status', () => {
+    emitStatus({ status: 'Done', isRunning: false });
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(false);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'status',
+        source: 'pi',
+        turnScope: 'background',
+        data: {
+          status: 'Compacting context…',
+          isRunning: true,
+          tokenUsage: 0,
+          contextTokens: 415010,
+          contextWindow: 500000,
+        },
+      },
+    });
+
+    const snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.agentStatus.isRunning).toBe(false);
+    expect(snap.agentStatus.status).toBe('Compacting context…');
+    expect(snap.agentStatus.contextTokens).toBe(415010);
+    expect(snap.agentStatus.contextWindow).toBe(500000);
+  });
+
+  it('does not paint a live turn as Done when a late background compact status arrives', () => {
+    emitStatus({ status: 'Thinking…', isRunning: true });
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(true);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'status',
+        source: 'pi',
+        turnScope: 'background',
+        data: {
+          status: 'Done',
+          isRunning: false,
+          tokenUsage: 0,
+          contextTokens: 20000,
+          contextWindow: 500000,
+        },
+      },
+    });
+
+    const snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.agentStatus.isRunning).toBe(true);
+    expect(snap.agentStatus.status).toBe('Thinking…');
+    expect(snap.agentStatus.contextTokens).toBe(20000);
+  });
+
   // 本地 only 迁移后,网关 key 无服务器副本,401 不再触发"从服务器重拉 key"。
   // 原先验证 refreshApiKeyFromServer 调用次数的两个用例(terminal → 重拉、recoverable
   // → 不重拉)随该行为一并移除。非 remote 会话的 401 直接把 error 浮现给用户。
@@ -2134,6 +2304,482 @@ describe('makerChatStore text delta batching', () => {
       },
     });
 
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(
+      'Authorization: [REDACTED] (HTTP 401)',
+    );
+  });
+
+  it('re-fetches Cindy credentials and resends on LiteLLM invalid proxy token', async () => {
+    vi.mocked(sessionService.get).mockResolvedValue({
+      agentKind: 'claude-code',
+      remoteHostId: null,
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    emitDbMessageCreated({
+      id: 'user-row',
+      clientId: 'user-client',
+      role: 'user',
+      content: 'hello gateway',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+    expect(window.electronAPI.modelAccess.rotate).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.closeSession).toHaveBeenCalledWith(SESSION_ID, {
+      preserveWorkspace: true,
+    });
+    expect(input.retryLastError).toHaveBeenCalledOnce();
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+  });
+
+  it('does not retry the same gateway failure root after the failed turn done tail', async () => {
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+
+    const retriedItem = activeTurnRecoveryItem('hello gateway', 'retry-client');
+    retriedItem.supersedesUserClientId = 'user-client';
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: retriedItem },
+        errorRetryText: 'retry:retry-client',
+      }),
+    );
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+    expect(input.retryLastError).toHaveBeenCalledOnce();
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('persists the deferred error when Cindy credential re-fetch fails', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('deferred persist IPC 回执只绑定 persistId，写失败时离开视图也不清 live error', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    input.persistTurnErrorDeferred.mockResolvedValueOnce('err-persist-deferred');
+    makerChatStore.enterView(SESSION_ID);
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBe('err-persist-deferred');
+
+    makerChatStore.leaveView(SESSION_ID);
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBe('err-persist-deferred');
+
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-deferred' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('迟到的 deferred persist IPC 不得把 A 的 persistId 绑到下一轮 live error B', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    let resolvePersist: ((id: string | undefined) => void) | undefined;
+    input.persistTurnErrorDeferred.mockImplementationOnce(
+      () =>
+        new Promise<string | undefined>((resolve) => {
+          resolvePersist = resolve;
+        }),
+    );
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    emitStatus({ status: 'Thinking…', isRunning: true });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, message: 'later error B' },
+      },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    resolvePersist?.('err-persist-A');
+    await flushPromises();
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('迟到的落库脏信号不得清掉下一轮 live error B', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    let resolvePersist: ((id: string | undefined) => void) | undefined;
+    input.persistTurnErrorDeferred.mockImplementationOnce(
+      () =>
+        new Promise<string | undefined>((resolve) => {
+          resolvePersist = resolve;
+        }),
+    );
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    emitStatus({ status: 'Thinking…', isRunning: true });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, message: 'later error B' },
+      },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+
+    resolvePersist?.('err-persist-A');
+    await flushPromises();
+    await flushPromises();
+
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-A' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('later error B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('deferred persist IPC 回执不清后台 live error，要等真实脏信号', async () => {
+    vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+      state: 'failed',
+      source: null,
+      endpoint: null,
+      errorCode: 'NETWORK_ERROR',
+      accountTier: null,
+    });
+    input.persistTurnErrorDeferred.mockResolvedValueOnce('err-persist-bg');
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      reason: 'gateway-proxy-token-invalid',
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBe('err-persist-bg');
+
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-bg' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+  });
+
+  it('does not treat a custom LiteLLM provider token error as Cindy credentials', async () => {
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: {
+          kind: 'active-turn',
+          item: activeTurnRecoveryItem('hello custom gateway', 'custom-client', 'custom-litellm'),
+        },
+        errorRetryText: 'retry:custom-client',
+      }),
+    );
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, message: LITELLM_INVALID_PROXY_TOKEN },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('does not guess Cindy credentials when queued createOpts omitted providerId', async () => {
+    vi.mocked(sessionService.get).mockResolvedValue({
+      agentKind: 'claude-code',
+      remoteHostId: null,
+      providerId: 'custom-litellm',
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    const omittedProviderItem = activeTurnRecoveryItem('hello omitted provider', 'omit-client');
+    delete omittedProviderItem.createOpts.providerId;
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: {
+          kind: 'active-turn',
+          item: omittedProviderItem,
+        },
+        errorRetryText: 'retry:omit-client',
+      }),
+    );
+
+    emitGatewayProxyTokenFailure({
+      isTerminal: true,
+      message: LITELLM_INVALID_PROXY_TOKEN,
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledOnce();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('waits for the failed turn done before refreshing Cindy credentials', async () => {
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    );
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'codex',
+        data: {
+          isTerminal: true,
+          reason: 'gateway-proxy-token-invalid',
+          message: LITELLM_INVALID_PROXY_TOKEN,
+        },
+      },
+    });
+    await flushPromises();
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'done', source: 'codex', data: { is_error: true } },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
+    expect(input.retryLastError).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed instead of guessing a retry target when active-turn recovery is missing', async () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: {
+          isTerminal: true,
+          reason: 'gateway-proxy-token-invalid',
+          message: LITELLM_INVALID_PROXY_TOKEN,
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.objectContaining({ reason: 'gateway-proxy-token-invalid' }),
+      null,
+    );
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('LiteLLM_VerificationTokenTable');
+  });
+
+  it('does not refresh local credentials for a device-link forwarded gateway error', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    onRemotePush?.({
+      deviceId: 'device-1',
+      channel: 'maker:input:projection',
+      payload: projection(SESSION_ID, {
+        error: LITELLM_INVALID_PROXY_TOKEN,
+        recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+        errorRetryText: 'retry:user-client',
+      }),
+    });
+    onRemotePush?.({
+      deviceId: 'device-1',
+      channel: 'maker:event',
+      payload: {
+        sessionId: SESSION_ID,
+        event: {
+          type: 'error',
+          source: 'claude-code',
+          data: {
+            isTerminal: true,
+            reason: 'gateway-proxy-token-invalid',
+            message: LITELLM_INVALID_PROXY_TOKEN,
+          },
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(input.retryLastError).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
+  });
+
+  it('does not re-fetch credentials for a generic 401', async () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, errorStatus: 401, message: 'Authorization: [REDACTED]' },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.modelAccess.retry).not.toHaveBeenCalled();
+    expect(window.electronAPI.modelAccess.rotate).not.toHaveBeenCalled();
     expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(
       'Authorization: [REDACTED] (HTTP 401)',
     );

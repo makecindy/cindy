@@ -32,6 +32,15 @@ describe('composer morph scope', () => {
     expect(modelSelector).toContain('<PopoverTrigger asChild>{trigger}</PopoverTrigger>');
   });
 
+  it('composer 选完模型后把焦点送回输入框;设置页不传 restoreFocusTarget', () => {
+    expect(chatInput).toContain('restoreFocusTarget={composerSuggestionFocusTarget}');
+    expect(modelSelector).toContain('restoreFocusTarget?: () => HTMLElement | null');
+    expect(modelSelector).toContain('onMouseDown={morphEnabled ? (event) => event.preventDefault() : undefined}');
+    expect(settingsModel).not.toContain('restoreFocusTarget');
+    expect(subagentModel).not.toContain('restoreFocusTarget');
+    expect(createWorker).not.toContain('restoreFocusTarget');
+  });
+
   it('PermissionSelector / ExtraDirsButton 仅 composer 使用,恒走脱身上浮 morph(无 opt-in、无 Radix 回退)', () => {
     expect(permissionSelector).not.toContain('useMorphPopover');
     expect(extraDirsButton).not.toContain('useMorphPopover');

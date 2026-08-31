@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from 'react';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
+import { isCindyGatewayProxyTokenInvalidError } from '@cindy/maker-shared/error-redaction';
 import {
   AlertCircle,
   Check,
@@ -41,21 +42,29 @@ import { cn } from '@/lib/utils';
 import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
+import {
+  isStreamInterruptedErrorMessage,
+  unwrapProviderErrorDisplay,
+} from '@/utils/streamInterruptError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
 } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 interface ErrorBannerProps {
   error: string;
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
+  /** Structured details for a tool-loop terminal error (optional for legacy rows). */
+  toolLoop?: ToolLoopErrorDetails | null;
   retryText?: string | null;
   onRetry: (text: string) => void;
   onCancel?: () => void;
@@ -113,6 +122,7 @@ interface ErrorBannerProps {
 export function ErrorBanner({
   error,
   errorReason,
+  toolLoop,
   retryText,
   onRetry,
   onCancel,
@@ -137,8 +147,8 @@ export function ErrorBanner({
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
-    // 横幅已说明影响范围；用户点击“重新连接 ChatGPT”后直接进入浏览器连接流程，
-    // 不再叠一层重复确认弹窗。
+    // 非共享凭证已有横幅说明，可直接重连；system-shared 始终由 hook 强制走
+    // “打开 ChatGPT App / 风险确认后由 Cindy 登录”的保护分支。
     confirmBeforeLogin: false,
   });
   // SSH 与 device-link 是两种互斥的远端来源，但都不能读取或修复控制端本机认证。
@@ -175,13 +185,17 @@ export function ErrorBanner({
     !isAnyRemoteSession &&
     !silentEncryptedRetryEnabled &&
     isInvalidEncryptedContentError(error);
+  const isOversizedHistoryError =
+    agentKind === 'codex' && errorReason === 'codex_history_oversized';
+  // SSH 不能自动剥图。本机 / device-link 由 main 侧协调器就地恢复，横幅不给按钮。
+  const isSshRemoteSession = Boolean(remoteHostId);
   // Codex 401 auth-missing detection 分三层:
   //  - isCodexAuthMissing: codex session + 401/Missing bearer pattern。
   //  - isCodexRemoteAuthMissing: 远端 codex + 上面命中 → 显「同步登录态」按钮。
   //  - isCodexLocalOAuthAuthMissing: 本地 codex + oauth-bearer spawn(走订阅) + 401 → hide
-  //    Retry + 引导 user codex login。**env-key spawn(走网关)不命中**: 网关 401 通常是 gateway
-  //    key 过期 / rate-limit / proxy 故障, makerChatStore 已经在 401 时自动 refresh
-  //    gateway key, retry 即可恢复; 强行 hide Retry + 显 "codex login" 反而误导。
+  //    Retry + 引导 user codex login。**env-key spawn(走网关)不命中**: LiteLLM 网关 token
+  //    失效由 makerChatStore 重新拉取 model-access 凭据后自动重试; 强行 hide Retry +
+  //    显 "codex login" 反而误导。
   // 父组件 (CCAgentSessionView) 必须只对 codex session 传 agentKind='codex' +
   // remoteHostId; Claude session 的 401 走默认 retry 流程不应被吞。
   // xAI / 自定义来源的真实凭证由 provider-oauth proxy 注入；显式 providerId 是权威来源，
@@ -261,8 +275,18 @@ export function ErrorBanner({
   // 而这条判定驱动的正是本地化文案、重试进度与 hideRetry。文案匹配保留作兜底
   // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
+  const isStreamInterrupted = isStreamInterruptedErrorMessage(error, errorReason);
+  const unwrappedDisplay = unwrapProviderErrorDisplay(error);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
+  const toolLoopI18nKey =
+    errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
+  const localizedReasonError =
+    toolLoopI18nKey && toolLoop
+      ? t(toolLoopI18nKey, { count: toolLoop.count })
+      : errorReasonI18nKey
+        ? t(errorReasonI18nKey)
+        : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
     agentKind === 'codex' && usageLimitRecovery?.isAccountUsageLimit === true;
@@ -289,13 +313,20 @@ export function ErrorBanner({
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
   const isClaudeSubscriptionOpusPlanMismatch =
     errorReason === CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON;
+  const isGatewayProxyTokenInvalid = isCindyGatewayProxyTokenInvalidError({
+    reason: errorReason,
+    message: error,
+    providerId: errorSourceProviderId?.trim() || providerId?.trim() || null,
+  });
   // 订阅套餐错误保留 Retry：用户重新连接 Anthropic 后可从当前错误卡片重试；
   // Gateway 错误则隐藏 Retry，改走切换到 Claude.ai 的明确恢复动作。
   const hideRetry =
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
+    isGatewayProxyTokenInvalid ||
     isCodexThreadStale ||
     showInvalidEncryptedContentRecovery ||
+    isOversizedHistoryError ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||
     openAiReconnectRequired ||
     isCodexLocalOAuthAuthMissing;
@@ -322,6 +353,12 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.codexThreadStale');
   } else if (showInvalidEncryptedContentRecovery) {
     displayError = t('chat.errorBanner.invalidEncryptedContent');
+  } else if (isOversizedHistoryError) {
+    displayError = t(
+      isSshRemoteSession
+        ? 'logic.errors.codexHistoryOversizedRemote'
+        : 'logic.errors.codexHistoryOversized',
+    );
   } else if (isCodexRemoteAuthMissing) {
     displayError = syncedSinceError
       ? t('chat.errorBanner.codexAuthSynced')
@@ -342,6 +379,8 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.claudeGatewayOpusPlanMismatch');
   } else if (isClaudeSubscriptionOpusPlanMismatch) {
     displayError = t('chat.errorBanner.claudeSubscriptionOpusPlanMismatch');
+  } else if (isGatewayProxyTokenInvalid) {
+    displayError = t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry');
   } else if (isGatewayQuotaExhausted) {
     // 「配额或余额不足，请检查供应商账户」对网关用户是半句话:账户就在 Cindy 里,
     // 该说的是「去充值」而不是「去检查」。右端的内联出口负责「去哪充」。
@@ -394,6 +433,14 @@ export function ErrorBanner({
           maxAttempts: overloadRetryProgress.maxAttempts,
         })
       : t(safeRetryText ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
+  } else if (isStreamInterrupted) {
+    // LiteLLM / Responses 流中途空壳 500。协议客户端会写成 OpenAI API error,
+    // 对非 OpenAI 模型是误导。只改展示,不自动续跑。
+    displayError = t(
+      safeRetryText
+        ? 'chat.errorBanner.streamInterrupted'
+        : 'chat.errorBanner.streamInterruptedNoRetry',
+    );
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有
     // 行动价值,换成友好文案;原始错误折叠可查(下方「查看原始错误」)。
@@ -416,9 +463,10 @@ export function ErrorBanner({
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = errorReasonI18nKey ? t(errorReasonI18nKey) : error;
+    displayError = localizedReasonError ?? unwrappedDisplay;
     hasSpecialGuidance = false;
   }
+  const showUnwrappedRaw = !hasSpecialGuidance && !errorReasonI18nKey && unwrappedDisplay !== error;
 
   // 折扣版 GPT (budget, `codex/` 前缀) 走 gateway, 偶发限流 / 后端不可用时, 普通版
   // 往往能正常出。仅在通用错误分支 (上面没命中任何特殊分支) 追加一句切普通版的引导
@@ -555,10 +603,13 @@ export function ErrorBanner({
         )}
         {(isNetworkishError ||
           isOverloadError ||
+          isStreamInterrupted ||
+          showUnwrappedRaw ||
           isCodexUsageLimitError ||
           terminalRateLimitRetryProgress ||
           isClaudeGatewayOpusPlanMismatch ||
-          isClaudeSubscriptionOpusPlanMismatch) && (
+          isClaudeSubscriptionOpusPlanMismatch ||
+          isGatewayProxyTokenInvalid) && (
           // 网络类与过载类的原始错误折叠可查:友好文案替换了原文,但排障(端口/URL/
           // errno/上游原话)仍需要原文,点击展开。新增控件走 --error-fg token(规则 16;
           // 本组件其余 red-600/400 为历史存量,error 属语义豁免色但新代码仍走 token)。
@@ -581,8 +632,8 @@ export function ErrorBanner({
         )}
       </div>
       {openAiReconnectRequired && (
-        // 所有凭证来源都由 Cindy 启动可产生新 Codex 凭据的登录流程；登录候选出现后
-        // 先走账号级服务端探测，探测成功前继续隐藏请求 Retry。
+        // 先走账号级服务端探测；共享凭证由恢复弹窗优先引导到 ChatGPT App，
+        // 不直接产生第二条可 refresh 的 OAuth 凭证链。
         <button
           type="button"
           onClick={() => void handleOpenAiRecovery()}
@@ -598,7 +649,9 @@ export function ErrorBanner({
               ? 'chatgptAuthRecovery.recheck'
               : openAiRecoveryBusy
                 ? 'chatgptAuthRecovery.checking'
-                : 'chatgptAuthRecovery.relogin',
+                : openAiCredentialScope === 'system-shared'
+                  ? 'chatgptAuthRecovery.recheck'
+                  : 'chatgptAuthRecovery.relogin',
           )}
         >
           <Spinner icon={RefreshCw} size={12} spinning={openAiRecoveryBusy} />
@@ -607,7 +660,9 @@ export function ErrorBanner({
               ? 'chatgptAuthRecovery.checking'
               : openAiRecoveryCheck === 'failed'
                 ? 'chatgptAuthRecovery.recheck'
-                : 'chatgptAuthRecovery.relogin',
+                : openAiCredentialScope === 'system-shared'
+                  ? 'chatgptAuthRecovery.recheck'
+                  : 'chatgptAuthRecovery.relogin',
           )}
         </button>
       )}

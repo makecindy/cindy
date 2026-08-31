@@ -43,7 +43,7 @@ describe('SessionCard review regressions', () => {
 
   it('keeps awaiting text in list mode previews', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
     );
     expect(sessionCardSource).toContain('{listPreview}');
   });
@@ -143,8 +143,9 @@ describe('SessionCard review regressions', () => {
 
   it('keeps card preview line budgets stable across content sources', () => {
     expect(sessionCardSource).toContain(
-      'const cardPreviewLineClamp = session.summary ? 3 : isRunning ? 2 : isAutomationGenerated ? 1 : 2',
+      "const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary)",
     );
+    expect(sessionCardSource).toContain('const cardPreviewLineClamp = usesPinnedCardSummary');
     expect(sessionCardSource).toContain('style={{ WebkitLineClamp: cardPreviewLineClamp }}');
   });
 
@@ -234,11 +235,11 @@ describe('SessionCard review regressions', () => {
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
     );
-    expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? summaryPreview');
+    expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? bodyPreview');
     expect(sessionCardSource).not.toContain(
-      'const cardPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const cardPreview = awaitingText ?? runningDetail ?? bodyPreview',
     );
   });
 

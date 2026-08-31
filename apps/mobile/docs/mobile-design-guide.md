@@ -11,7 +11,7 @@
 承接桌面:**灰度为主、零阴影、pill 几何、字重克制**。在此之上叠加移动端约束:
 
 - **iOS 优先**,触控优先,跟随系统 light / dark 自动切换(`useColorScheme`)。
-- **灰度环境**:除品牌 teal(就绪态)和 Heart Orange(运行/thinking 态)两个语义色外,界面全是黑白之间的灰阶。不引入任何品牌蓝 / 绿 / 红等装饰色。
+- **灰度环境**:除品牌 teal(就绪态)、Heart Orange(运行/thinking 态)和已登记的 Beta 渠道红色状态徽标外,界面全是黑白之间的灰阶。不引入任何品牌蓝 / 绿 / 红等装饰色。
 - **圆角走四档阶梯**(与 `src/theme/tokens.ts` 的 `radius` 一致,守护测试拦截阶梯外值):`micro`(4,缩略图内 chip、勾选指示器等微元素)/ `control`(8,卡片内层控件)/ `container`(12,卡片 / 容器)/ `pill`(9999,交互元素)。**禁止**阶梯外中间值(0 / 3 / 6 / 28 等)与字面量圆角。根规范 `docs/design-rules/DESIGN.md` §5 的三档制约束的是桌面 surface;其「Mobile」节明确把 §15.13 / §16 之外的 mobile 布局细节委托给 `apps/mobile` 的实现,mobile 圆角阶梯以 `tokens.ts` 为准。
 - **零阴影**:层次靠背景色差 + 1px 边框,不用 `shadow*` / `elevation`。
 - **字重克制**:只用 400 / 500,极少量大写微标签可用 600。**UI chrome 无 700+**。唯一例外是根规范 `docs/design-rules/DESIGN.md` §3「排版豁免登记表」已登记的域——原生 Markdown strong(`src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`)与登录品牌画布(`app/(auth)/login.tsx`、`src/components/LoginSkinControls.tsx`、`src/auth/loginSkinLayout.ts`)。这些是用户内容语义与品牌画布,不算 chrome;chrome 本身的上限仍是 600。
@@ -42,13 +42,15 @@
 | `homeListFab` | `#262626` | `#ECEDEF` | 素雅新建对话 FAB:dark 用柔白而非纯白 cta,避免主入口在深底上过跳 |
 | `statusReady` | `#00D9C5` | `#00D9C5` | 就绪 / 在线点(品牌 teal,**语义不变**) |
 | `statusAccent` | `#ff6600` | `#ff6600` | 运行 / thinking + 完全访问权限(Heart Orange,**语义不变**) |
+| `betaChannelBadgeBackground` | `#DF0C27` | `#DF0C27` | Beta 渠道开关已打开时,当前版本旁的状态徽标底色 |
+| `betaChannelBadgeForeground` | `#FFFFFF` | `#FFFFFF` | Beta 渠道状态徽标文字,与底色对比度 4.98:1 |
 | `permAutoAccent` | `#000050` | `#00D9C5` | 自动审批权限模式强调(对齐桌面 `--perm-auto-selected-text`) |
 | `errorText` | `#262626` | `#d4d4d4` | 错误文字(跟随 textPrimary) |
 | `errorBorder` | `#a3a3a3` | `#525252` | 错误边框(跟随 borderStrong) |
 | `overlay` | rgba(38,38,38,.24) | rgba(0,0,0,.45) | modal / lightbox 背板 |
 
 **规则:**
-- **语义不变色**(`statusReady` / `statusAccent`)跨 light / dark 一致——它们是状态语义,不随主题漂移。
+- **语义不变色**(`statusReady` / `statusAccent` / `betaChannelBadgeBackground` / `betaChannelBadgeForeground`)跨 light / dark 一致——它们是状态语义,不随主题漂移。Beta 红色只用于设置页当前版本旁的渠道徽标,不得扩展为装饰色、错误色或 CTA。
 - **CTA 在 dark 反相为白**:`cta` 白底 + `ctaText` 深字。注意别让白 pill 看起来像 disabled——新增主操作 / 选中态后在 dark 下目检。
 - **Home 对话列表用 base token**:列表背景 / 分隔 / 文字使用 `surface` / `border` / `text*`,菜单选中用 `surfaceChip`,不另起暗色调色板;菜单 / FAB 只用 1px `border` 分层、零阴影,保持桌面「单一 flat Surface + 1px Board」哲学。
 - 不要在组件里硬编码 hex / rgba;找不到合适 token 时跟维护者确认是否新增,而不是写死。
@@ -141,6 +143,17 @@ function Foo() {
 > ⚠️ **`makeStyles` 必须是模块级常量**(身份稳定)。在组件体内内联定义会让 `useThemedStyles` 的 WeakMap 缓存每次 miss,退化成每帧新建 sheet,拖垮 `MessageRenderer` 这类热路径。
 > 叶子 helper 函数若要用颜色,把 `colors: ThemeColors` 作为参数传进去,别从模块级 `colors` 取。
 
+### iOS 外壳 vs Cindy 内容
+
+界面分两层,不要混为一谈:
+
+- **外壳(iOS 交给系统)**:首页顶栏走系统导航栏,底色跟列表同一块 surface。触发器(汉堡 / 标题簇 / `···`)仍是原来的按钮,点开后挂系统 UIMenu。尚未冷更编进 `MenuView` 时自动退回自绘面板。底部 ActionSheet 只留给没有附着点的确认/破坏性询问。Android 继续自绘。
+- **内容(继续 Cindy)**:消息和 Markdown、输入框、模型 / 权限 / 任务等带搜索或两级结构的面板、登录品牌画布、首页会话列表。这些仍走 token、lucide、`SheetSurface`。
+
+左滑「选项」在 iOS 用 Expo UI 的系统 `BottomSheet` + `List`(SwiftUI grouped rows)。Android 继续自绘 `SessionActionSheet`。无附着点的其它纯动作菜单仍走 `showActionMenu`。内容面板(模型选择、会话菜单、任务 Context)继续 `SheetSurface`。
+
+简单页(设置、账号删除、设备详情、自动化)在 iOS 打开系统导航栏,返回锚点 `settings.backButton` 等 testID 仍要保留。首页顶栏在 iOS 也走系统导航栏,底色跟列表同一块 surface;会话页和文件浏览顶栏仍是自绘。左侧抽屉仍是自绘面板,iOS 用 `FullWindowOverlay` 盖住系统顶栏;Android 继续树内 overlay。搜索筛选钮收起时仍是原来的图标,iOS 点开挂系统 UIMenu;尚未冷更或 Android 继续自绘面板。
+
 ---
 
 ## 5. 间距 / 圆角 / 触控 / 安全区
@@ -165,7 +178,7 @@ function Foo() {
 - `strokeWidth` 统一约 2。
 - 颜色走 token(`colors.textPrimary` / `textSecondary` / `statusAccent` / `permAutoAccent` 等),不写死。
 - 会话 Agent 身份图标走 `MobileVendorIcon`；provider / model 厂牌图标分别走 `MobileProviderMark` / `MobileModelIconMark`。
-- **底部浮窗统一走 SheetSurface 模式**:可拖动底部浮窗(把手 half/full/下拉 dismiss)的「面板表面」抽在 `src/session/SheetSurface.tsx`(grabber + header + pinnedTop/footer 插槽 + 滚动区 + `useContextSheetDrag` 拖动编排,snap 受控)。单层浮窗 = Modal + backdrop + 一层 Surface(`ContextSheet` 即此薄壳);需要「浮窗上再叠一层」时**不要嵌套 Modal**(iOS 同级双 Modal 第二个不显示、Android 每个 Modal 是独立原生 Dialog、返回键派发不可控),在**同一个 Modal 里叠第二层 Surface**(translateY 滑入 + 自带加深 backdrop + 返回两段式),先例见 `ModelPickerSheet`(模型列表一级 + 模型选项/权限二级,视图状态机在 `modelPickerSheetModel.ts` 可单测)。新浮窗一律复用 SheetSurface,不再手写 sheet 结构。
+- **底部浮窗统一走 SheetSurface 模式**:可拖动底部浮窗(把手 half/full/下拉 dismiss)的「面板表面」抽在 `src/session/SheetSurface.tsx`(grabber + header + pinnedTop/footer 插槽 + 滚动区 + `useContextSheetDrag` 拖动编排,snap 受控)。单层浮窗 = Modal + backdrop + 一层 Surface(`ContextSheet` 即此薄壳);需要「浮窗上再叠一层」时**不要嵌套 Modal**(iOS 同级双 Modal 第二个不显示、Android 每个 Modal 是独立原生 Dialog、返回键派发不可控),在**同一个 Modal 里叠第二层 Surface**(translateY 滑入 + 自带加深 backdrop + 返回两段式),先例见 `ModelPickerSheet`(模型列表一级 + 模型选项/权限二级,视图状态机在 `modelPickerSheetModel.ts` 可单测)。**内容面板**新浮窗一律复用 SheetSurface。纯动作菜单除外:iOS 走 `showActionMenu`,见 §4「iOS 外壳 vs Cindy 内容」。
 
 ---
 

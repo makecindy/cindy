@@ -18,10 +18,12 @@ import type {
 import {
   UNIFIED_FLYOUT_GAP,
   buildUnifiedListSections,
+  engineOfAgentKind,
   entryMatchesModelId,
   wireModelIdOf,
   buildUnifiedRail,
   computeFlyoutPlacement,
+  computeSelectedRowScrollTop,
   isRecommendedFavoriteConfig,
   resolveFavoriteRowConfig,
   resolveUnifiedRowConfig,
@@ -312,6 +314,28 @@ describe('buildUnifiedListSections', () => {
     ]);
   });
 
+  it('传 providerOrder 时组间按设置页拖动序排,未收录供应商按首见序追加', () => {
+    const xdModel = entryOf({
+      providerId: 'xd',
+      modelId: 'deepseek-v4-pro',
+      displayName: 'DeepSeek V4 Pro',
+    });
+    const sections = buildUnifiedListSections({
+      entries: [opus, gpt, xdModel],
+      favorites: [],
+      query: '',
+      rail: { kind: 'all' },
+      // 目录首见序 = anthropic → openai → xd;拖动序点名 openai 提前,
+      // 未收录的 xd 按首见序追加,顺序表里的未知 id 直接忽略。
+      providerOrder: ['unknown-provider', 'openai', 'anthropic'],
+    });
+    expect(sections.map((section) => section.group?.providerId)).toEqual([
+      'openai',
+      'anthropic',
+      'xd',
+    ]);
+  });
+
   it('搜索命中名称 / id / 描述', () => {
     const described = entryOf({ description: '擅长长上下文推理' });
     for (const query of ['opus', 'CLAUDE-OPUS', '长上下文']) {
@@ -461,7 +485,7 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
     expect(ignored.engine).toBe('codex');
   });
 
-  it('同引擎视图按**候选**过滤模型(能留在本会话引擎上的都算无损)', () => {
+  it('同引擎视图按**候选**过滤模型(不注入解析器时维持旧行为)', () => {
     const sections = buildUnifiedListSections({
       entries: [dual, codexOnly],
       favorites: [],
@@ -470,6 +494,192 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
     });
     const ids = sections.flatMap((s) => s.rows.map((r) => r.entry.modelId));
     expect(ids).toEqual(['deepseek/deepseek-v4-pro']);
+  });
+
+  // Chris 2026-08-23:同引擎视图的准入是候选,生效引擎只做排序优先级 —— 默认 / 用户选过
+  // 本引擎的在前,仅兼容的在后;不再把后者藏掉。
+  describe('同引擎视图:生效引擎是排序优先级,不是隐藏条件', () => {
+    /** 注入侧的真实形态:调用方给的是 resolveUnifiedRowConfig / resolveFavoriteRowConfig 的 engine。 */
+    const engineOfRow = (
+      overrides: Record<string, 'cc' | 'codex' | 'pi'> = {},
+      pinnedEngine: 'cc' | 'codex' | 'pi' = 'cc',
+    ) => (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem) =>
+      favorite
+        ? resolveFavoriteRowConfig({ entry, item: favorite }).engine
+        : resolveUnifiedRowConfig({
+            entry,
+            pinnedEngine,
+            ...(overrides[entry.modelId] ? { engineOverride: overrides[entry.modelId] } : {}),
+          }).engine;
+
+    const idsOf = (
+      entries: UnifiedModelEntry[],
+      effectiveEngineOf: ReturnType<typeof engineOfRow>,
+    ): string[] =>
+      buildUnifiedListSections({
+        entries,
+        favorites: [],
+        query: '',
+        rail: { kind: 'engine', agent: 'claude-code' },
+        effectiveEngineOf,
+      })
+        .flatMap((s) => s.rows)
+        .map((row) => row.entry.modelId);
+
+    it('override 指到别的引擎 → 仍显示,排在优先行后面', () => {
+      // dual 候选含 cc,用户把它的引擎 override 到了 codex → 兼容段,不是消失。
+      expect(idsOf([dual], engineOfRow({ 'deepseek/deepseek-v4-pro': 'codex' }))).toEqual([
+        'deepseek/deepseek-v4-pro',
+      ]);
+      expect(idsOf([dual], engineOfRow())).toEqual(['deepseek/deepseek-v4-pro']);
+    });
+
+    it('override 指到当前引擎 → 即使主场在别处也排进优先段', () => {
+      const gptDual = entryOf({
+        providerId: 'xd',
+        modelId: 'gpt-5.5',
+        candidates: ['claude-code', 'codex'],
+        recommended: 'codex',
+        nativeAgent: 'codex',
+        capabilities: { 'claude-code': capability('claude-code'), codex: capability('codex') },
+      });
+      const guest = entryOf({
+        providerId: 'xd',
+        modelId: 'gpt-5.6',
+        candidates: ['claude-code', 'codex'],
+        recommended: 'codex',
+        nativeAgent: 'codex',
+        capabilities: { 'claude-code': capability('claude-code'), codex: capability('codex') },
+      });
+      expect(idsOf([guest, gptDual], engineOfRow({ 'gpt-5.5': 'cc' }))).toEqual([
+        'gpt-5.5',
+        'gpt-5.6',
+      ]);
+    });
+
+    it('主场在别处的行排在生效引擎=当前引擎的行后面', () => {
+      const gptDual = entryOf({
+        providerId: 'xd',
+        modelId: 'gpt-5.5',
+        candidates: ['claude-code', 'codex'],
+        recommended: 'codex',
+        nativeAgent: 'codex',
+        capabilities: { 'claude-code': capability('claude-code'), codex: capability('codex') },
+      });
+      // cc 会话里:dual 无主场被 pinned 到 cc(优先),gpt 主场在 codex(兼容)。
+      expect(idsOf([gptDual, dual], engineOfRow())).toEqual([
+        'deepseek/deepseek-v4-pro',
+        'gpt-5.5',
+      ]);
+    });
+
+    it('含优先行的供应商组排在纯兼容供应商组前面,即使 providerOrder 相反', () => {
+      const opus = entryOf({
+        providerId: 'anthropic',
+        modelId: 'claude-opus-5',
+        candidates: ['claude-code', 'pi'],
+        recommended: 'claude-code',
+        nativeAgent: 'claude-code',
+        capabilities: {
+          'claude-code': capability('claude-code'),
+          pi: capability('pi'),
+        },
+      });
+      const grok = entryOf({
+        providerId: 'xai',
+        modelId: 'grok-4.6',
+        candidates: ['pi'],
+        recommended: 'pi',
+        nativeAgent: null,
+        capabilities: { pi: capability('pi') },
+      });
+      const sections = buildUnifiedListSections({
+        entries: [opus, grok],
+        favorites: [],
+        query: '',
+        rail: { kind: 'engine', agent: 'pi' },
+        effectiveEngineOf: (entry) => engineOfAgentKind(entry.recommended),
+        providerOrder: ['anthropic', 'xai'],
+      });
+      expect(sections.flatMap((s) => s.rows.map((row) => row.entry.modelId))).toEqual([
+        'grok-4.6',
+        'claude-opus-5',
+      ]);
+    });
+
+    it('无主场的行照常跟随 pinnedEngine 通过过滤(§2.1 例外不受影响)', () => {
+      expect(dual.nativeAgent).toBeNull();
+      expect(idsOf([dual], engineOfRow({}, 'cc'))).toEqual(['deepseek/deepseek-v4-pro']);
+    });
+
+    it('收藏解析回落到别家(条目存的引擎掉出候选)→ 该收藏行同样不显示', () => {
+      // 条目存 cc,但这个模型只在 codex 有条目 → resolveFavoriteRowConfig 回落 codex。
+      const staleFav = favoriteOf({
+        uid: 'fav-9',
+        providerId: 'xd',
+        modelId: 'codex/gpt-5.5',
+        agent: 'cc',
+      });
+      const withResolver = buildUnifiedListSections({
+        entries: [codexOnly],
+        favorites: [staleFav],
+        query: '',
+        rail: { kind: 'engine', agent: 'claude-code' },
+        effectiveEngineOf: engineOfRow(),
+      });
+      expect(withResolver.some((s) => s.kind === 'favorites')).toBe(false);
+      // 不注入解析器时维持旧行为(只看条目自己存的引擎)—— 旧断言不被本次改动掀翻。
+      const withoutResolver = buildUnifiedListSections({
+        entries: [codexOnly],
+        favorites: [staleFav],
+        query: '',
+        rail: { kind: 'engine', agent: 'claude-code' },
+      });
+      expect(withoutResolver[0]?.kind).toBe('favorites');
+    });
+
+    it('收藏解析回落到**当前引擎**(条目存的引擎掉出候选)→ 该收藏行必须显示', () => {
+      // 2026-08-19 review P2:此前先按 item.agent 硬排除,会把这条错杀出「无损」视图 ——
+      // 它存的 codex 已不在候选里,解析回落到 cc(= 当前会话引擎),点它无损、画出来也是
+      // cc。注入解析器时判据只有「解析后的生效引擎」这一个,与模型行同构。
+      const ccOnly = entryOf({
+        providerId: 'xd',
+        modelId: 'claude-opus-5',
+        candidates: ['claude-code'],
+        recommended: 'claude-code',
+        nativeAgent: 'claude-code',
+        capabilities: { 'claude-code': capability('claude-code') },
+      });
+      const staleCodexFav = favoriteOf({
+        uid: 'fav-10',
+        providerId: 'xd',
+        modelId: 'claude-opus-5',
+        agent: 'codex',
+      });
+      const sections = buildUnifiedListSections({
+        entries: [ccOnly],
+        favorites: [staleCodexFav],
+        query: '',
+        rail: { kind: 'engine', agent: 'claude-code' },
+        effectiveEngineOf: engineOfRow(),
+      });
+      expect(sections[0]?.kind).toBe('favorites');
+      expect(sections[0]?.rows.map((row) => row.favorite?.uid)).toEqual(['fav-10']);
+    });
+
+    it('「全部」视图不受生效引擎影响(跨引擎是显式入口)', () => {
+      const sections = buildUnifiedListSections({
+        entries: [dual, codexOnly],
+        favorites: [],
+        query: '',
+        rail: { kind: 'all' },
+        effectiveEngineOf: engineOfRow({ 'deepseek/deepseek-v4-pro': 'codex' }),
+      });
+      expect(sections.flatMap((s) => s.rows).map((r) => r.entry.modelId)).toEqual([
+        'deepseek/deepseek-v4-pro',
+        'codex/gpt-5.5',
+      ]);
+    });
   });
 
   it('同引擎视图里收藏按**条目自己存的引擎**过滤', () => {
@@ -534,6 +744,72 @@ describe('buildUnifiedRail', () => {
     ]);
     // 草稿场景不出现这一格。
     expect(buildUnifiedRail(entries).some((item) => item.kind === 'engine')).toBe(false);
+  });
+
+  it('传 providerOrder 时供应商图标按设置页拖动序排,未收录供应商按首见序追加', () => {
+    const entries = [
+      entryOf({ providerId: 'xd', modelId: 'a' }),
+      entryOf({ providerId: 'anthropic', modelId: 'b' }),
+      entryOf({ providerId: 'openai', modelId: 'c' }),
+    ];
+    expect(buildUnifiedRail(entries, undefined, ['openai', 'xd'])).toEqual([
+      { kind: 'favorites' },
+      { kind: 'all' },
+      { kind: 'provider', providerId: 'openai' },
+      { kind: 'provider', providerId: 'xd' },
+      { kind: 'provider', providerId: 'anthropic' },
+    ]);
+  });
+});
+
+describe('computeSelectedRowScrollTop(选中行居中,Chris 2026-08-19)', () => {
+  const base = { scrollTop: 0, clientHeight: 400, scrollHeight: 2000, headerInset: 0 };
+
+  it('把选中行的中心对齐到可视区中心', () => {
+    // 行 [1000,1044] → 中心 1022;可视区高 400 → 目标 scrollTop = 1022 - 200 = 822。
+    expect(
+      computeSelectedRowScrollTop({ ...base, rowTop: 1000, rowBottom: 1044 }),
+    ).toEqual({ scrollTop: 822, oversized: false });
+  });
+
+  it('列表头部的行夹到 0(不能负滚),尾部的行夹到 scrollHeight - clientHeight', () => {
+    expect(computeSelectedRowScrollTop({ ...base, rowTop: 8, rowBottom: 52 }).scrollTop).toBe(0);
+    expect(
+      computeSelectedRowScrollTop({ ...base, rowTop: 1950, rowBottom: 1994 }).scrollTop,
+    ).toBe(1600);
+  });
+
+  it('题头实底从可视高度里扣掉:居中位置随之下移半条题头', () => {
+    // badge 题头盖住顶部 38px:可视区 [scrollTop+38, +400),中心比无题头时低 (38+38/2)?
+    // 目标 = 中心 - inset - (clientHeight - inset)/2 = 1022 - 38 - 181 = 803。
+    expect(
+      computeSelectedRowScrollTop({ ...base, headerInset: 38, rowTop: 1000, rowBottom: 1044 })
+        .scrollTop,
+    ).toBe(803);
+  });
+
+  it('行比可视区还高 → 顶对齐并标 oversized(调用方据此一次收工,防振荡)', () => {
+    const result = computeSelectedRowScrollTop({
+      ...base,
+      clientHeight: 40,
+      rowTop: 1000,
+      rowBottom: 1080,
+    });
+    expect(result.oversized).toBe(true);
+    expect(result.scrollTop).toBe(1000);
+  });
+
+  it('内容不足以滚动时恒返回 0(morph 首帧的极矮容器不会算出负值)', () => {
+    expect(
+      computeSelectedRowScrollTop({
+        scrollTop: 0,
+        clientHeight: 12,
+        scrollHeight: 12,
+        headerInset: 0,
+        rowTop: 0,
+        rowBottom: 44,
+      }).scrollTop,
+    ).toBe(0);
   });
 });
 

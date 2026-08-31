@@ -1,7 +1,7 @@
 import {
-  isModelDisabled,
+  isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
-  MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
   parseListModelsResponse,
   type MediaCapability,
@@ -25,7 +25,7 @@ const MEDIA_MODEL_REQUEST_TIMEOUT_MS = 20_000;
 const MEDIA_GUIDE_PREFLIGHT_TIMEOUT_MS = 5_000;
 const CINDY_AI_PROVIDER_ID = 'xd';
 const MEDIA_MODELS_PATH =
-  `${MODEL_ACCESS_MODELS_PATH}?schemaVersion=${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}` as const;
+  `${MODEL_ACCESS_MODELS_PATH}?schemaVersion=${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}` as const;
 
 export type MediaGuideCompatibilityErrorCode =
   | 'CLIENT_UPGRADE_REQUIRED'
@@ -70,10 +70,14 @@ export interface ExecutableMediaModelsResult {
 }
 
 export type ExecutableMediaModel = ModelCatalogEntry & { providerId: string };
+type GatewayMediaCatalogEntry = ModelCatalogEntry & {
+  availability?: 'available' | 'requires_payment';
+};
 
 interface ExecutableMediaSnapshot {
   models: ModelCatalogEntry[];
   capabilitiesByModel: Map<string, ReadonlySet<MediaCapability>>;
+  guideIdsByModel: Map<string, string>;
   unavailableByModel: Map<string, UnavailableMediaModel>;
 }
 
@@ -101,6 +105,17 @@ export function isMediaModelExecutable(
   capability: MediaCapability,
 ): boolean {
   return executableMediaSnapshot?.capabilitiesByModel.get(modelId)?.has(capability) === true;
+}
+
+export function isMediaModelExecutableForGuide(
+  modelId: string,
+  guideId: string,
+  capability: MediaCapability,
+): boolean {
+  return (
+    executableMediaSnapshot?.guideIdsByModel.get(modelId) === guideId &&
+    isMediaModelExecutable(modelId, capability)
+  );
 }
 
 export { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
@@ -145,6 +160,7 @@ export function filterEnabledGatewayMediaModels<
   T extends {
     id: string;
     mode?: string;
+    availability?: 'available' | 'requires_payment';
     modalities?: { input: string[]; output: string[] };
   },
 >(
@@ -153,8 +169,19 @@ export function filterEnabledGatewayMediaModels<
   access: ModelDisableOverrides | undefined,
 ): T[] {
   if (isProviderDisabled(access, CINDY_AI_PROVIDER_ID)) return [];
+  const candidateModelIds = models.map((model) => model.id);
   return models.filter((model) => {
-    if (isModelDisabled(access, CINDY_AI_PROVIDER_ID, model.id)) return false;
+    if (model.availability === 'requires_payment') return false;
+    if (
+      isModelDisabledWithUniqueLegacyBasename(
+        access,
+        CINDY_AI_PROVIDER_ID,
+        model.id,
+        candidateModelIds,
+      )
+    ) {
+      return false;
+    }
     if (capability?.startsWith('image.') && model.mode !== 'image_generation') return false;
     if (capability?.startsWith('video.') && model.mode !== 'video_generation') return false;
     if (capability !== undefined) return supportsMediaCapability(model.modalities, capability);
@@ -167,7 +194,7 @@ export function filterEnabledGatewayMediaModels<
  * 的实时投影；Gateway mode 决定图片/视频模型类型。Guide 独立按 modelId
  * 懒取，不参与模型发现。
  */
-async function fetchGatewayMediaModels(): Promise<ModelCatalogEntry[]> {
+async function fetchGatewayMediaModels(): Promise<GatewayMediaCatalogEntry[]> {
   const payload = await serverApiFetch<unknown>(MEDIA_MODELS_PATH, {
     baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
     timeoutMs: MEDIA_MODEL_REQUEST_TIMEOUT_MS,
@@ -177,11 +204,11 @@ async function fetchGatewayMediaModels(): Promise<ModelCatalogEntry[]> {
     typeof payload !== 'object' ||
     payload === null ||
     !('schemaVersion' in payload) ||
-    payload.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+    payload.schemaVersion !== MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION
   ) {
     throw new MediaModelCatalogError(
       '媒体模型目录当前不可用，请稍后重试或使用其他工具。',
-      `expected schemaVersion ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`,
+      `expected schemaVersion ${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}`,
     );
   }
   const parsed = parseListModelsResponse(payload);
@@ -217,7 +244,8 @@ export async function fetchMediaInvocationGuide(
   modelId: string,
   timeoutMs = MEDIA_MODEL_REQUEST_TIMEOUT_MS,
 ): Promise<ResolvedMediaInvocationGuide> {
-  const query = new URLSearchParams({ modelId });
+  const guideModelId = mediaInvocationGuideModelId(modelId);
+  const query = new URLSearchParams({ modelId: guideModelId });
   const payload = await serverApiFetch<unknown>(
     `${MODEL_ACCESS_INVOCATION_GUIDE_PATH}?${query.toString()}`,
     {
@@ -226,7 +254,12 @@ export async function fetchMediaInvocationGuide(
       logLabel: MODEL_ACCESS_INVOCATION_GUIDE_PATH,
     },
   );
-  return parseResolvedGuidePayload(payload, modelId);
+  return parseResolvedGuidePayload(payload, guideModelId);
+}
+
+/** Guide 只按模型协议名查询；provider/routing namespace 仍保留在真实调用身份中。 */
+export function mediaInvocationGuideModelId(modelId: string): string {
+  return modelId.slice(modelId.lastIndexOf('/') + 1);
 }
 
 function parseResolvedGuidePayload(
@@ -337,9 +370,15 @@ function unavailableFromGuideError(modelId: string, error: unknown): Unavailable
 }
 
 async function buildExecutableMediaSnapshot(): Promise<ExecutableMediaSnapshot> {
-  const models = await fetchGatewayMediaModels();
+  // The snapshot is itself an execution authorization source for legacy media
+  // paths, not just a cache behind listExecutableMediaModels. Never record a
+  // v5 paid-only model as executable even when it has a valid invocation Guide.
+  const models = (await fetchGatewayMediaModels()).filter(
+    (model) => model.availability !== 'requires_payment',
+  );
   const batch = await fetchMediaInvocationGuideBatch();
   const capabilitiesByModel = new Map<string, ReadonlySet<MediaCapability>>();
+  const guideIdsByModel = new Map<string, string>();
   const unavailableByModel = new Map<string, UnavailableMediaModel>();
 
   for (const model of models) {
@@ -379,12 +418,13 @@ async function buildExecutableMediaSnapshot(): Promise<ExecutableMediaSnapshot> 
         continue;
       }
       capabilitiesByModel.set(model.id, operations);
+      guideIdsByModel.set(model.id, resolvedGuide.guide.guideId);
     } catch (error) {
       unavailableByModel.set(model.id, unavailableFromGuideError(model.id, error));
     }
   }
 
-  return { models, capabilitiesByModel, unavailableByModel };
+  return { models, capabilitiesByModel, guideIdsByModel, unavailableByModel };
 }
 
 async function getExecutableMediaSnapshot(forceRefresh = false): Promise<ExecutableMediaSnapshot> {

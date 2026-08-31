@@ -37,7 +37,12 @@ vi.mock('@/hooks/useWorkLouderCodex', () => ({
     state: {
       connectionStatus: 'connected',
       connectionReason: null,
-      device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
+      devicePresent: true,
+      device: {
+        ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+        deviceType: 'codex-micro',
+        isUsbConnection: true,
+      },
       settings: {
         ...createWorkLouderCodexDefaultSettings(),
         lightingBrightness: 70,
@@ -124,8 +129,9 @@ describe('WorkLouderCodexSettings', () => {
         state={{
           connectionStatus: 'connected',
           connectionReason: null,
+          devicePresent: true,
           device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
-          settings: createWorkLouderCodexDefaultSettings(),
+          settings: { ...createWorkLouderCodexDefaultSettings(), deviceEnabled: true },
           agentSlots: Array.from({ length: 6 }, (_, slot) => ({
             slot,
             sessionId: null,
@@ -145,10 +151,44 @@ describe('WorkLouderCodexSettings', () => {
     );
 
     expect(onOpen).toHaveBeenCalledOnce();
-    expect(screen.getByText('settings.shortcuts.workLouderCodex.beta')).toBeTruthy();
+    expect(screen.queryByText('settings.shortcuts.workLouderCodex.beta')).toBeNull();
     expect(
       screen.getByText('settings.shortcuts.workLouderCodex.connection.status.connected'),
     ).toBeTruthy();
+  });
+
+  it('shows off on the shortcuts entry when the keyboard is present but this instance is off', () => {
+    render(
+      <WorkLouderCodexEntry
+        state={{
+          connectionStatus: 'connecting',
+          connectionReason: null,
+          devicePresent: true,
+          device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
+          settings: createWorkLouderCodexDefaultSettings(),
+          agentSlots: Array.from({ length: 6 }, (_, slot) => ({
+            slot,
+            sessionId: null,
+            title: null,
+            action: null,
+          })),
+          taskOptions: [],
+          agentSlotCount: 6,
+        }}
+        loading={false}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText('settings.shortcuts.workLouderCodex.connection.status.disabled'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText('settings.shortcuts.workLouderCodex.connection.status.connected'),
+    ).toBeNull();
+    expect(
+      screen.queryByText('settings.shortcuts.workLouderCodex.connection.status.connecting'),
+    ).toBeNull();
   });
 
   it('shows the six task keys and writes the settings that remain on the panel', async () => {
@@ -158,6 +198,11 @@ describe('WorkLouderCodexSettings', () => {
     // not individually clickable.
     expect(screen.getByRole('img', { name: /AG00/ })).toBeTruthy();
     expect(screen.getByRole('img', { name: /AG05/ })).toBeTruthy();
+    expect(
+      screen.queryByText('settings.shortcuts.workLouderCodex.device.inputMonitoring.label'),
+    ).toBeNull();
+    expect(screen.getByText('Codex Micro')).toBeTruthy();
+    expect(screen.getByText('USB')).toBeTruthy();
     expect(screen.getByTestId('worklouder-codex-keyboard-layout').parentElement?.className).toContain(
       'justify-center',
     );
@@ -189,10 +234,17 @@ describe('WorkLouderCodexSettings', () => {
 
     fireEvent.click(
       screen.getByRole('switch', {
+        name: 'settings.shortcuts.workLouderCodex.connection.toggle.aria',
+      }),
+    );
+    expect(mocks.setSettings).toHaveBeenCalledWith({ deviceEnabled: true });
+
+    fireEvent.click(
+      screen.getByRole('switch', {
         name: 'settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria',
       }),
     );
-    expect(mocks.setSettings).toHaveBeenCalledWith({ singleTapAgentKeys: true });
+    expect(mocks.setSettings).toHaveBeenCalledWith({ singleTapAgentKeys: false });
   });
 
   it('only lets a task key be set on its own under "custom"', async () => {

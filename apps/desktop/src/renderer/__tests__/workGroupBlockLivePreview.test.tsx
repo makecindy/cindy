@@ -510,6 +510,35 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(thinkingButton.textContent).toContain('first line\nsecond line');
   });
 
+  it('always reserves the 18px trailing chevron slot on thinking rows', () => {
+    render(
+      createElement(WorkGroupBlock, {
+        blockId: 'work:t1',
+        isStreaming: true,
+        childItems: [
+          thinking(mkThinking('short', 'brief')),
+          thinking(mkThinking('long', 'first line\nsecond line')),
+        ],
+      }),
+    );
+
+    const rows = document.querySelectorAll<HTMLButtonElement>(
+      '[data-live-work-activity="thinking"]',
+    );
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.className).toContain('rounded-[8px]');
+      const slot = row.lastElementChild;
+      expect(slot?.className).toContain('w-[18px]');
+      expect(slot?.className).toContain('h-[18px]');
+      expect(slot?.className).toContain('ml-auto');
+      expect(slot?.className).toContain('rounded-[8px]');
+      expect(slot?.className).toContain('group-hover:bg-[var(--cmd-palette-item-hover)]');
+    }
+    expect(rows[0]?.querySelector('svg.lucide-chevron-right')).toBeNull();
+    expect(rows[1]?.querySelector('svg.lucide-chevron-right')).toBeTruthy();
+  });
+
   it('drops empty thinking and renders redacted thinking directly', () => {
     const redacted = { ...mkThinking('hidden', ''), thinkingRedacted: true };
     render(

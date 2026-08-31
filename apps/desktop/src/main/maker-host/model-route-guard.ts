@@ -44,7 +44,12 @@ import {
 
 export type ModelRouteVerdict =
   | { kind: 'pass' }
-  | { kind: 'reroute'; providerId: string }
+  | {
+      kind: 'reroute';
+      providerId: string;
+      /** 运行中会话的发送终检只强制付费边界；其它 reroute 保持既有 best-effort 语义。 */
+      reason?: 'payment-required';
+    }
   | {
       kind: 'reject';
       reason:
@@ -52,6 +57,7 @@ export type ModelRouteVerdict =
         | 'explicit-source-disabled'
         | 'capability-model'
         | 'model-retired'
+        | 'payment-required'
         | 'exclusive-source-unavailable';
     };
 
@@ -156,6 +162,12 @@ export function shouldApplyExclusiveProviderReroute(
 export interface ModelRouteGuardOptions {
   /** Active Registry tombstones have no CatalogModel entity, so the live shell supplies this. */
   isRetiredTombstone?: (providerId: string | null, modelId: string, agent: AgentKind) => boolean;
+  /** 刷新失败后已从展示目录移除、但最近一次成功 v5 明确拒绝的 XD 路由。 */
+  isPaymentRequiredTombstone?: (
+    providerId: string | null,
+    modelId: string,
+    agent: AgentKind,
+  ) => boolean;
 }
 
 /** 该来源下这份 (model, agent) 拷贝是否被停用(含供应商级)。 */
@@ -177,6 +189,10 @@ function copySelectableForNewRoute(p: ProviderView, modelId: string, agent: Agen
 
 function copyRetired(p: ProviderView, modelId: string, agent: AgentKind): boolean {
   return getModel(p, modelId, agent)?.status === 'retired';
+}
+
+function copyPaymentRequired(p: ProviderView, modelId: string, agent: AgentKind): boolean {
+  return getModel(p, modelId, agent)?.availability === 'requires_payment';
 }
 
 function applyExclusiveRoute(
@@ -216,7 +232,17 @@ function checkDisableAxisRoute(
   if (providerId && !explicit && options.isRetiredTombstone?.(providerId, modelId, agent)) {
     return { kind: 'reject', reason: 'model-retired' };
   }
+  if (
+    providerId &&
+    !explicit &&
+    options.isPaymentRequiredTombstone?.(providerId, modelId, agent)
+  ) {
+    return { kind: 'reject', reason: 'payment-required' };
+  }
   if (offering.length === 0) {
+    if (options.isPaymentRequiredTombstone?.(null, modelId, agent)) {
+      return { kind: 'reject', reason: 'payment-required' };
+    }
     return options.isRetiredTombstone?.(null, modelId, agent)
       ? { kind: 'reject', reason: 'model-retired' }
       : { kind: 'pass' };
@@ -231,6 +257,9 @@ function checkDisableAxisRoute(
 
   if (providerId) {
     if (explicit) {
+      if (copyPaymentRequired(explicit, modelId, agent)) {
+        return { kind: 'reject', reason: 'payment-required' };
+      }
       if (copyRetired(explicit, modelId, agent)) {
         return { kind: 'reject', reason: 'model-retired' };
       }
@@ -257,6 +286,13 @@ function checkDisableAxisRoute(
   if (!wouldRouteId) return { kind: 'pass' };
   const wouldRoute = preDisableRail.find((p) => p.id === wouldRouteId);
   if (!wouldRoute) return { kind: 'pass' };
+  if (copyPaymentRequired(wouldRoute, modelId, agent)) {
+    const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
+    const alternativeProvider = alternative ? views.find((p) => p.id === alternative) : undefined;
+    return alternative && alternativeProvider && !copyPaymentRequired(alternativeProvider, modelId, agent)
+      ? { kind: 'reroute', providerId: alternative, reason: 'payment-required' }
+      : { kind: 'reject', reason: 'payment-required' };
+  }
   if (copyRetired(wouldRoute, modelId, agent)) {
     const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
     const alternativeProvider = alternative

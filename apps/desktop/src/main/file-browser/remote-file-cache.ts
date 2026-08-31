@@ -80,27 +80,25 @@ function normalizePathForComparison(filePath: string): string {
 }
 
 /**
- * Remove renderer-owned draft copies without crossing owner or persisted-message
- * boundaries. The optional guard is checked immediately before unlink so an
- * account switch that happens while filesystem metadata is being read cancels
- * the destructive step.
+ * Remove renderer-owned draft copies without crossing the current owner boundary.
+ * Callers invoke this only for explicit draft-discard paths; successful sends use
+ * the non-destructive composer reset instead. The optional guard is checked
+ * immediately before unlink so an account switch that happens while filesystem
+ * metadata is being read cancels the destructive step.
  */
 export async function cleanupOwnedUnpersistedStagedChatAttachments(params: {
   ownerId: string;
   filePaths: readonly string[];
-  protectedPaths: readonly string[];
   canRemove?: () => boolean;
 }): Promise<void> {
   const ownerDir = normalizePathForComparison(chatAttachmentOwnerCacheDir(params.ownerId));
-  const protectedPaths = new Set(params.protectedPaths.map(normalizePathForComparison));
   await Promise.all(
     params.filePaths.map(async (filePath) => {
       if (
         typeof filePath !== 'string' ||
         !path.isAbsolute(filePath) ||
         path.extname(filePath).toLowerCase() !== '.bin' ||
-        normalizePathForComparison(path.dirname(filePath)) !== ownerDir ||
-        protectedPaths.has(normalizePathForComparison(filePath))
+        normalizePathForComparison(path.dirname(filePath)) !== ownerDir
       ) {
         return;
       }
@@ -120,90 +118,6 @@ export async function cleanupOwnedUnpersistedStagedChatAttachments(params: {
       }
     }),
   );
-}
-
-export interface StartupStagedChatAttachmentSweepResult {
-  inspected: number;
-  removed: number;
-  protected: number;
-}
-
-/**
- * Remove abandoned dangerous-attachment staging files from the current
- * account. Renderer drafts are intentionally in-memory only, so anything
- * created by an earlier process and not referenced by persisted messages is
- * unreachable after restart. Files created by this process are left alone to
- * avoid racing a draft that is still being assembled.
- *
- * Filesystem is the source of work: persisted-path lookup only runs when the
- * owner cache already has stale `.bin` / `.bin.part` files. A LIKE + json_tree
- * scan over a multi-GB message table otherwise blocks startup for tens of
- * seconds even when the cache directory does not exist.
- */
-export async function sweepStagedChatAttachmentsOnStartup(params: {
-  ownerId: string;
-  createdBeforeMs: number;
-  protectedPaths?: readonly string[];
-  loadProtectedPaths?: () => Promise<readonly string[]>;
-  canContinue?: () => boolean;
-}): Promise<StartupStagedChatAttachmentSweepResult> {
-  const result: StartupStagedChatAttachmentSweepResult = {
-    inspected: 0,
-    removed: 0,
-    protected: 0,
-  };
-  const ownerDir = chatAttachmentOwnerCacheDir(params.ownerId);
-  const entries = await fs.readdir(ownerDir, { withFileTypes: true }).catch(() => []);
-  const stalePaths: string[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-    if (!entry.name.endsWith('.bin') && !entry.name.endsWith('.bin.part')) continue;
-
-    const filePath = path.join(ownerDir, entry.name);
-    result.inspected += 1;
-    try {
-      const stat = await fs.lstat(filePath);
-      if (stat.mtimeMs >= params.createdBeforeMs) continue;
-      stalePaths.push(filePath);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException | null)?.code;
-      if (code !== 'ENOENT') {
-        log.warn('startup staged chat attachment sweep failed for file', {
-          filePath,
-          error: String(err),
-        });
-      }
-    }
-  }
-  if (stalePaths.length === 0) return result;
-  if (params.canContinue && !params.canContinue()) return result;
-
-  const protectedList =
-    params.protectedPaths ??
-    (params.loadProtectedPaths ? await params.loadProtectedPaths() : []);
-  if (params.canContinue && !params.canContinue()) return result;
-  const protectedPaths = new Set(protectedList.map(normalizePathForComparison));
-
-  for (const filePath of stalePaths) {
-    if (protectedPaths.has(normalizePathForComparison(filePath))) {
-      result.protected += 1;
-      continue;
-    }
-    try {
-      if (params.canContinue && !params.canContinue()) return result;
-      await fs.unlink(filePath);
-      result.removed += 1;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException | null)?.code;
-      if (code !== 'ENOENT') {
-        log.warn('startup staged chat attachment sweep failed for file', {
-          filePath,
-          error: String(err),
-        });
-      }
-    }
-  }
-  return result;
 }
 
 /** 路径身份前缀(不含 size/mtime):断线兜底按它捞最近副本。 */

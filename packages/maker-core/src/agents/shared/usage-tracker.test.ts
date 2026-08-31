@@ -45,6 +45,120 @@ describe('UsageTracker.getTurnUsage', () => {
     expect(tracker.getTurnUsage()).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
   });
 
+  it('preserves request boundaries for request-scoped pricing', () => {
+    const tracker = new UsageTracker();
+    tracker.ingestApiCallUsage({
+      inputTokens: 40_000,
+      outputTokens: 500,
+      cacheReadTokens: 10_000,
+      cacheCreateTokens: 0,
+      reasoningTokens: 100,
+    });
+    tracker.ingestApiCallUsage({
+      inputTokens: 45_000,
+      outputTokens: 700,
+      cacheReadTokens: 5_000,
+      cacheCreateTokens: 0,
+      reasoningTokens: 200,
+    });
+
+    const segments = tracker.getTurnUsageSegments();
+    expect(segments).toEqual([
+      {
+        inputTokens: 40_000,
+        outputTokens: 500,
+        cacheReadTokens: 10_000,
+        cacheCreateTokens: 0,
+        reasoningTokens: 100,
+      },
+      {
+        inputTokens: 45_000,
+        outputTokens: 700,
+        cacheReadTokens: 5_000,
+        cacheCreateTokens: 0,
+        reasoningTokens: 200,
+      },
+    ]);
+
+    segments[0]!.inputTokens = 999_999;
+    expect(tracker.getTurnUsageSegments()[0]?.inputTokens).toBe(40_000);
+  });
+
+  it('merges split frames for one request without double-counting repeated input/cache', () => {
+    const tracker = new UsageTracker();
+    tracker.upsertApiCallUsage('request-1', {
+      inputTokens: 100,
+      outputTokens: 0,
+      cacheReadTokens: 900,
+      cacheCreateTokens: 50,
+      complete: false,
+    });
+    tracker.upsertApiCallUsage('request-1', {
+      inputTokens: 100,
+      outputTokens: 25,
+      cacheReadTokens: 900,
+      cacheCreateTokens: 50,
+      complete: true,
+    });
+
+    expect(tracker.getTurnUsage()).toEqual({
+      input: 100,
+      output: 25,
+      cacheRead: 900,
+      cacheCreate: 50,
+    });
+    expect(tracker.getTurnUsageSegments()).toEqual([
+      {
+        id: 'request-1',
+        inputTokens: 100,
+        outputTokens: 25,
+        cacheReadTokens: 900,
+        cacheCreateTokens: 50,
+        reasoningTokens: 0,
+        costUsd: 0,
+        complete: true,
+      },
+    ]);
+  });
+
+  it('keeps the request model and price variant captured by the first frame', () => {
+    const tracker = new UsageTracker();
+    tracker.upsertApiCallUsage('request-1', {
+      model: 'claude-opus-4-8',
+      priceVariant: 'priority',
+      inputTokens: 100,
+      outputTokens: 0,
+    });
+    tracker.upsertApiCallUsage('request-1', {
+      model: 'claude-sonnet-4-8',
+      priceVariant: 'standard',
+      inputTokens: 100,
+      outputTokens: 25,
+    });
+
+    expect(tracker.getTurnUsageSegments()[0]).toMatchObject({
+      model: 'claude-opus-4-8',
+      priceVariant: 'priority',
+      inputTokens: 100,
+      outputTokens: 25,
+    });
+  });
+
+  it('clears request segments at both beginTurn and endTurn boundaries', () => {
+    const tracker = new UsageTracker();
+    tracker.ingestApiCallUsage({ inputTokens: 10, outputTokens: 1 });
+    tracker.beginTurn();
+    expect(tracker.getTurnUsageSegments()).toEqual([]);
+
+    tracker.ingestApiCallUsage({ inputTokens: 20, outputTokens: 2 });
+    const captured = tracker.getTurnUsageSegments();
+    tracker.endTurn({ inputTokens: 20, outputTokens: 2 });
+    expect(captured).toEqual([
+      { inputTokens: 20, outputTokens: 2, cacheReadTokens: 0, cacheCreateTokens: 0 },
+    ]);
+    expect(tracker.getTurnUsageSegments()).toEqual([]);
+  });
+
   it('adds result-only cache tokens to cache stats without double counting prior usage', () => {
     const tracker = new UsageTracker();
     tracker.ingestApiCallUsage({ inputTokens: 10, outputTokens: 0 });

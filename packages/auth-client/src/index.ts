@@ -1,5 +1,20 @@
 export { AuthApiError, CindyAuthClient } from "./client.js";
+export {
+  accountVaultKey,
+  isStoredAccountMetadata,
+  passportVaultKey,
+  reconcileSavedAccountMetadata,
+  storedAccountMetadataFromMembership,
+} from "./accountMetadata.js";
 export { discoverSsoOrgRealm } from "./orgRealmDiscovery.js";
+export {
+  MAX_SSO_ORG_HISTORY_ENTRIES,
+  MAX_SSO_ORG_IDENTIFIER_LENGTH,
+  parseSsoOrgHistory,
+  rememberSsoOrgIdentifier,
+  serializeSsoOrgHistory,
+  SSO_ORG_HISTORY_VERSION,
+} from "./ssoOrgHistory.js";
 export {
   accountDeletionReceiptRecordSchema,
   authSessionRecordSchema,
@@ -9,6 +24,10 @@ export {
   serializeAuthSessionRecord,
 } from "./sessionRealm.js";
 export { isValidEmail } from "./email.js";
+export type {
+  AccountMetadataVault,
+  StoredAccountMetadata,
+} from "./accountMetadata.js";
 export type {
   AuthClientOptions,
   AuthFetch,
@@ -28,7 +47,12 @@ export {
   accountDeletionChallengeSchema,
   accountDeletionStatusSchema,
   accountMembershipSchema,
+  accountTokenPairSchema,
   authRegionSchema,
+  CAPTCHA_CHALLENGE_PAGE_PATH,
+  captchaConfigSchema,
+  captchaRequiredActionForVerificationKind,
+  captchaRequiredActionSchema,
   desktopAuthorizationPollSchema,
   loginMethodSchema,
   loginOutcomeSchema,
@@ -49,9 +73,12 @@ export type {
   AccountDeletionChallenge,
   AccountDeletionStatus,
   AccountMembership,
+  AccountTokenPair,
   AuthClientType,
   AuthFlowAction,
   AuthFlowState,
+  CaptchaConfig,
+  CaptchaRequiredAction,
   AuthMe,
   AuthMembership,
   AuthRegion,

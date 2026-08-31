@@ -195,7 +195,7 @@ export async function fetchLatestUserMessageClientIdViaDb(
 export async function commitEditAndResend(
   opts: CommitEditAndResendOptions,
   deps: CommitEditAndResendDeps = defaultDeps,
-): Promise<void> {
+): Promise<boolean> {
   const attachments = buildRewindDraftAttachments({
     images: opts.images,
     files: opts.files,
@@ -267,7 +267,9 @@ export async function commitEditAndResend(
         ? plainTextToTiptapDoc(opts.text)
         : null;
     deps.saveDraftFallback(opts.sessionId, document, attachments);
+    return false;
   }
+  return true;
 }
 
 /** 重试节奏(编辑自动停止场景专用,见 commitEditAndResendWithRunningRetry)。 */
@@ -305,14 +307,13 @@ export async function commitEditAndResendWithRunningRetry(
   opts: CommitEditAndResendOptions,
   deps: CommitEditAndResendDeps = defaultDeps,
   retry: RunningRetryOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const attempts = retry.attempts ?? RUNNING_RETRY_DEFAULTS.attempts;
   const delayMs = retry.delayMs ?? RUNNING_RETRY_DEFAULTS.delayMs;
   const sleep = retry.sleep ?? defaultSleep;
   for (let attempt = 0; ; attempt++) {
     try {
-      await commitEditAndResend(opts, deps);
-      return;
+      return await commitEditAndResend(opts, deps);
     } catch (err) {
       const isRunning = err instanceof ApiError && err.code === 'SESSION_RUNNING';
       if (!isRunning || attempt >= attempts) throw err;

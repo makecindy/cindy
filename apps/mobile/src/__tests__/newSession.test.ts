@@ -1154,6 +1154,12 @@ describe('new session model', () => {
     const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
     // 拉被控端 runtime 注册集合,渲染按可用集过滤,选中不可用时 coerce。
     expect(newSource).toContain('maker.listAvailableAgents()');
+    expect(newSource).toContain('onAgentsChanged');
+    expect(newSource).toContain('evictAgentCapabilitiesForDevice(deviceId);');
+    expect(newSource).toContain('const rosterRecoveryIdentityRef = useRef<');
+    expect(newSource).toContain('setAvailableAgentRosterRefreshNonce((value) => value + 1);');
+    expect(newSource).toContain('previous.connectionEpoch === connectionEpoch');
+    expect(newSource.match(/subscribe\(`new-session:\$\{selectedDeviceId\}`/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
     expect(newSource).toContain('availableNewSessionAgentOptions(availableAgentKinds).map');
     expect(newSource).toMatch(/availableAgentKinds\.has\(draft\.agentKind\)/);
     // 传输层 passthrough 到 allowlisted channel。
@@ -1612,6 +1618,20 @@ describe('new session composer surface', () => {
     expect(newSource).not.toContain('marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(newSource).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(newSource).toContain('const renderComposerToolbar = () => (');
+    // 左侧组包住 [+][权限][计划][模型],再接 spacer;右段 语音占位 → 创建。
+    const newToolbarStart = newSource.indexOf('const renderComposerToolbar = () => (');
+    const newToolbarEnd = newSource.indexOf('const renderComposerInputOverlay', newToolbarStart);
+    const newToolbarSource = newSource.slice(newToolbarStart, newToolbarEnd);
+    const newToolbarLeftGroupStart = newToolbarSource.indexOf('<ComposerToolbarLeftGroup testID="newSession.composerToolbarLeft">');
+    const newToolbarLeftGroupEnd = newToolbarSource.indexOf('</ComposerToolbarLeftGroup>');
+    const newToolbarModelIndex = newToolbarSource.indexOf('testID="newSession.modelIndicator"');
+    const newToolbarSpacerIndex = newToolbarSource.indexOf('<ComposerToolbarSpacer />');
+    const newToolbarVoiceSlotIndex = newToolbarSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
+    expect(newToolbarLeftGroupStart).toBeGreaterThan(-1);
+    expect(newToolbarModelIndex).toBeGreaterThan(newToolbarLeftGroupStart);
+    expect(newToolbarLeftGroupEnd).toBeGreaterThan(newToolbarModelIndex);
+    expect(newToolbarSpacerIndex).toBeGreaterThan(newToolbarLeftGroupEnd);
+    expect(newToolbarVoiceSlotIndex).toBeGreaterThan(newToolbarSpacerIndex);
     expect(newSource).toContain('PaperPlaneIcon');
     expect(newSource).not.toContain('ArrowUp');
     expect(attachmentButtonSource).toContain('contextSheetOpen && styles.composerIconButtonActive');
@@ -1786,10 +1806,11 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
     expect(sessionSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;');
-    expect(sharedSource).toContain('export const MOBILE_COMPOSER_CONTROL_SIZE = 34;');
-    expect(sharedSource).toContain('export function resolveMobileComposerVoiceButtonPlacement');
+    expect(sharedSource).toContain('MOBILE_COMPOSER_CONTROL_SIZE,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonPlacement,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
-    expect(sharedSource).toContain('styles.voiceButtonAnchor,');
+    expect(sharedSource).not.toContain('styles.voiceButtonAnchor');
     expect(newSource).not.toContain('messageInput: {');
     expect(newSource).not.toContain('composerToolbar: {');
     expect(newSource).not.toContain('permissionIcon: {');

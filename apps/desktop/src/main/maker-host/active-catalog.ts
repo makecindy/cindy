@@ -36,6 +36,7 @@ import {
   type CatalogXdMediaKind,
   type CatalogModel,
   type CustomProviderConfig,
+  type PiModelApi,
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
@@ -43,6 +44,11 @@ import {
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 import { projectUnverifiedCatalogFallbackForBuildRegion } from './provider-access-policy.js';
+import {
+  isCatalogPiGatewayModelRetired,
+  resolveBundledPiGatewayModelProfile,
+  resolveCatalogPiGatewayModelApi,
+} from './pi-gateway-model-catalog.js';
 import {
   applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
@@ -66,6 +72,8 @@ import {
 
 /** OSS / bundled 加载来的基础目录;null = 尚未加载(回落 BUNDLED_CATALOG)。 */
 let base: Catalog | null = null;
+/** Exact accepted Cindy Server/local/LKG snapshot before bundled compatibility backfill. */
+let piGatewayAuthorityCatalog: Catalog | null = null;
 /** 当前基础目录是否由本次配置的 Catalog 真源明确证明；fallback 只保兼容元数据。 */
 let baseCapabilityEvidence: CatalogCapabilityEvidence = 'fallback';
 /** XD media fields inherited from bundled rather than proven by the current source. */
@@ -131,19 +139,19 @@ export interface XdGatewayAgentOverride {
   defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
-  wireProtocol?: Extract<ProviderWireProtocol, 'anthropic-messages' | 'openai-responses'>;
+  wireProtocol?: PiModelApi;
 }
 
 /**
  * 服务端下发的 XD 网关模型条目(shared/modelAccess ModelAccessGatewayModel 的子集)。
- * 命名沿用历史("聊天"),但条目本身不保证是聊天模型——是否聊天模型看 mode,
- * 服务端目前只透传已经过它自己 chat 过滤的条目,过滤范围以后可能放开(issue #882);
- * 客户端一律用 isChatEligible 判定,不依赖本类型名字或服务端过滤范围。
+ * 命名沿用历史("聊天"),但条目本身不保证是聊天模型——v4 同时包含 chat 与媒体模型，
+ * 客户端一律按 agents/mode 投影到对应消费面，不从 id 猜测类型。
  *
  * 能力字段已由服务端一次归一化,客户端不再二次转换(见 model-access/index.ts)。
  */
 export interface XdGatewayModelInfo {
   id: string;
+  availability?: 'available' | 'requires_payment';
   /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
   mode?: string;
   /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
@@ -188,6 +196,15 @@ export interface XdGatewayModelInfo {
  * v3 必需字段在协议边界严格校验；这里不读取公共 Catalog，也不按模型 id 或固定常量补值。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
+/** 当前账号最近一次 `/models` 成功响应；false 时清单缺席不能作为模型不存在的 deny 证据。 */
+let xdGatewayModelsAuthoritative = false;
+/**
+ * 最近一次成功 v5 响应明确拒绝的 XD 对话路由。
+ *
+ * 刷新失败时活动目录会隐藏过期的付费营销行，但既有会话的派发终检仍须保留这份
+ * fail-closed 证据；只有更新的成功响应或账号边界清空才能撤销。
+ */
+let xdGatewayPaymentRequiredRoutes = new Set<string>();
 /**
  * XD 模型里「由客户端投影给 Codex、但走 Anthropic Messages bridge」的 id 集合。
  * Responses → Anthropic Messages bridge，不能误用 XD 的原生 Responses 路由。
@@ -217,6 +234,17 @@ let lastPlanWarnings: ModelPlaneWarning[] = [];
 type Effort = CatalogModel['efforts'][number];
 const EFFORT_RANK: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
+/**
+ * 档位集合 → **规范升序**数组(低 → 高)。x.ai discovery 的 payload 是降序,而下游
+ * (滑杆按下标画轴、`efforts[0]`=最低 / `efforts.at(-1)`=最高的全部取值点)契约都是
+ * 升序 —— 此前只有 Grok 4.6 经 mergeKnownXaiEfforts 顺带归一,其余条目原样透传,
+ * Grok 4.5 的滑杆整条轴反向(Chris 2026-08-19 实测)。所有 xAI 条目统一过这一道。
+ */
+function canonicalEffortOrder(list: readonly Effort[] | undefined): Effort[] {
+  const seen = new Set<Effort>(list ?? []);
+  return EFFORT_RANK.filter((effort) => seen.has(effort));
+}
+
 /** Union discovery with the known official ladder so an incomplete SuperGrok payload cannot hide xhigh.
  * Official source (2026-08-16): https://docs.x.ai/developers/model-capabilities/text/reasoning
  * Grok 4.6 = low | medium | high (default) | xhigh. */
@@ -224,8 +252,7 @@ function mergeKnownXaiEfforts(
   discovered: readonly Effort[] | undefined,
   baseline: readonly Effort[] | undefined,
 ): Effort[] {
-  const seen = new Set<Effort>([...(discovered ?? []), ...(baseline ?? [])]);
-  return EFFORT_RANK.filter((effort) => seen.has(effort));
+  return canonicalEffortOrder([...(discovered ?? []), ...(baseline ?? [])]);
 }
 
 function isOfficialGrok46Id(modelId: string): boolean {
@@ -242,6 +269,9 @@ function pickXaiDefaultEffort(
   }
   if (efforts.length === 0) return null;
   if (fallback === 'official-high' && efforts.includes('high')) return 'high';
+  // efforts 已规范升序(canonicalEffortOrder):'official-high' 的兜底 = 最高档;
+  // 'first' 的兜底 = 最低档 —— 没有任何来源声明默认时保守起步,这条路仅在
+  // discovery / registry / catalog 三处默认全缺时才会走到(实测 payload 都带 default)。
   return fallback === 'official-high'
     ? (efforts[efforts.length - 1] ?? null)
     : (efforts[0] ?? null);
@@ -255,11 +285,14 @@ function resolveXaiAccountCapabilities(
   catalogDefault: Effort | null | undefined,
 ): { efforts: Effort[]; defaultEffort: Effort | null } {
   const isGrok46 = isOfficialGrok46Id(entry.id);
+  // 非 4.6 仍「以 discovery 为准」(不与官方梯子并集),但**顺序必须归一**:discovery 层
+  // 已排过一道(model-discovery/xai.ts canonicalEffortOrder),这里再兜一次是防御 ——
+  // efforts 是外部输入(payload / 磁盘缓存 / registry 静态值),任何一路漏排都会让滑杆反向。
   const efforts = isGrok46
     ? mergeKnownXaiEfforts(entry.efforts, baselineEfforts)
     : entry.efforts !== undefined
-      ? [...entry.efforts]
-      : [...(baselineEfforts ?? [])];
+      ? canonicalEffortOrder(entry.efforts)
+      : canonicalEffortOrder(baselineEfforts);
   const defaultEffort = isGrok46
     ? pickXaiDefaultEffort(
         efforts,
@@ -293,31 +326,88 @@ function preserveNonGrok46DiscoveryEfforts(
   });
 }
 
-function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
-  return (model.agents ?? []).filter((agent) => {
-    if (agent !== 'pi') return true;
-    const wireProtocol = model.perAgent?.pi?.wireProtocol;
-    return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses';
-  });
+function isPiModelApi(value: unknown): value is PiModelApi {
+  return (
+    value === 'anthropic-messages' ||
+    value === 'openai-responses' ||
+    value === 'openai-completions' ||
+    value === 'google-generative-ai'
+  );
 }
 
-/**
- * XD 下发模型给 Pi 时的真实 wire protocol。
- *
- * Pi provider 始终叫 `cindy`；这里只读取 v3 服务端给该模型的 transport，供
- * models.json 写入模型级 `api`。三态语义：非 XD Pi 模型返回 undefined；XD Pi 模型
- * 缺失或协议非法返回 null，由 maker-core fail closed；有效配置返回服务端声明值。
- */
-export function resolveXdPiGatewayWireProtocol(
-  modelId: string,
-): Extract<ProviderWireProtocol, 'anthropic-messages' | 'openai-responses'> | null | undefined {
+function resolveXdPiGatewayServerModelApi(model: XdGatewayModelInfo): PiModelApi | null | undefined {
+  return piGatewayAuthorityCatalog
+    ? resolveCatalogPiGatewayModelApi(piGatewayAuthorityCatalog, model.id)
+    : undefined;
+}
+
+function resolveXdPiGatewayHintModelApi(model: XdGatewayModelInfo): PiModelApi | null {
+  const gatewayApi: unknown = model.perAgent?.pi?.wireProtocol;
+  return isPiModelApi(gatewayApi) ? gatewayApi : null;
+}
+
+function resolveXdPiGatewayModelApi(model: XdGatewayModelInfo): PiModelApi | null {
+  // Source authority is deliberate and must not be inverted:
+  // Cindy Server downloaded Catalog > version-matched local Pi table > Cindy AI Gateway hint.
+  const catalogApi = resolveXdPiGatewayServerModelApi(model);
+  if (catalogApi !== undefined) return catalogApi;
+  const localApi = resolveBundledPiGatewayModelProfile(model.id)?.api;
+  if (localApi !== undefined) return localApi;
+  return resolveXdPiGatewayHintModelApi(model);
+}
+
+function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
+  // Pi's exact binary catalog is probed only when a session starts, after capabilities are built.
+  // Keep declared Pi membership provisional here unless Cindy Server has an exact Registry
+  // tombstone; the final resolver removes or rejects any other unsafe Gateway route, while same-id
+  // subscription/BYOM models remain usable.
+  const serverRetired =
+    piGatewayAuthorityCatalog !== null &&
+    isCatalogPiGatewayModelRetired(piGatewayAuthorityCatalog, model.id);
+  return (model.agents ?? []).filter((agent) => agent !== 'pi' || !serverRetired);
+}
+
+/** Resolve only Cindy Server's highest-priority protocol declaration. */
+export function resolveXdPiGatewayServerApi(modelId: string): PiModelApi | null | undefined {
   const normalized = modelId.replace(/\[1m\]$/, '');
   const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
   if (!gatewayModel?.agents?.includes('pi')) return undefined;
-  const wireProtocol = gatewayModel.perAgent?.pi?.wireProtocol;
-  return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses'
-    ? wireProtocol
-    : null;
+  return resolveXdPiGatewayServerModelApi(gatewayModel);
+}
+
+/** Resolve only Cindy AI Gateway's last-priority protocol hint. */
+export function resolveXdPiGatewayHintApi(modelId: string): PiModelApi | null | undefined {
+  const normalized = modelId.replace(/\[1m\]$/, '');
+  const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
+  if (!gatewayModel?.agents?.includes('pi')) return undefined;
+  return resolveXdPiGatewayHintModelApi(gatewayModel);
+}
+
+/** Resolve Pi API in Cindy Server > local Pi table > Cindy AI Gateway order. */
+export function resolveXdPiGatewayApi(modelId: string): PiModelApi | null | undefined {
+  const normalized = modelId.replace(/\[1m\]$/, '');
+  const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
+  if (!gatewayModel?.agents?.includes('pi')) return undefined;
+  return resolveXdPiGatewayModelApi(gatewayModel);
+}
+
+/** Legacy wire vocabulary for HTTP-only consumers that cannot represent Google's native API. */
+export function resolveXdPiGatewayWireProtocol(
+  modelId: string,
+): ProviderWireProtocol | null | undefined {
+  const api = resolveXdPiGatewayApi(modelId);
+  switch (api) {
+    case 'anthropic-messages':
+      return 'anthropic-messages';
+    case 'openai-responses':
+      return 'openai-responses';
+    case 'openai-completions':
+      return 'openai-chat';
+    case 'google-generative-ai':
+      return null;
+    default:
+      return api;
+  }
 }
 
 /** 派生 XD 中「仅 claude-code 面（投影给 Claude）、无 codex 原生」的模型 id 集合。 */
@@ -772,6 +862,40 @@ function withEmptyModels(p: Provider): Provider {
   return { ...p, models };
 }
 
+function projectXdGatewayMediaModels(
+  provider: Provider,
+  gatewayModels: readonly XdGatewayModelInfo[],
+): Provider {
+  const imageModels = gatewayModels
+    .filter((model) => model.mode === 'image_generation')
+    .map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+      ...(model.availability ? { availability: model.availability } : {}),
+      ...(model.modalities ? { modalities: model.modalities } : {}),
+    }));
+  const videoModels = gatewayModels
+    .filter((model) => model.mode === 'video_generation')
+    .map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+      ...(model.availability ? { availability: model.availability } : {}),
+      ...(model.modalities ? { modalities: model.modalities } : {}),
+    }));
+  const identity = { ...provider };
+  delete identity.imageModels;
+  delete identity.imageDefaults;
+  delete identity.videoModels;
+  delete identity.videoDefaults;
+  return {
+    ...identity,
+    imageModels,
+    videoModels,
+    ...(imageModels[0] ? { imageDefaults: { standard: imageModels[0].id } } : {}),
+    ...(videoModels[0] ? { videoDefaults: { standard: videoModels[0].id } } : {}),
+  };
+}
+
 function computeMerged(): Catalog {
   const source = base ?? BUNDLED_CATALOG;
   const b =
@@ -818,9 +942,8 @@ function computeMerged(): Catalog {
   // 作者错误隔离进 warnings,由刷新路径读走打日志,不拖垮其余条目。
   const plan = planRegistryRoots(b.modelRegistry);
   lastPlanWarnings = plan.warnings;
-  // XD 的对话模型成员仍由下方 `/models` 权威重建，但 provider 壳中的媒体清单、
-  // 默认项和显式空值必须服从当前 Catalog。只有目录本身缺少 XD（生产加载经
-  // mergeWithBundled 后通常不会发生）才回落与 evidence 同级安全的 bundled 壳。
+  // XD 的模型成员与媒体清单都由下方 `/models` 权威重建。Catalog 只保留 provider
+  // 身份壳；其中残留的旧媒体字段不得成为第二事实源。
   const fallbackXdCatalog =
     baseCapabilityEvidence === 'current'
       ? projectUnverifiedCatalogFallbackForBuildRegion(
@@ -1103,8 +1226,10 @@ function computeMerged(): Catalog {
         const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
         const cost = effectiveGatewayModelCost(gm);
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
+        const piApi = agent === 'pi' ? resolveXdPiGatewayModelApi(gm) : undefined;
         const merged: CatalogModel = {
           id: gm.id,
+          ...(gm.availability ? { availability: gm.availability } : {}),
           // name / contextWindow are required by Model Access v3 and therefore never synthesized.
           name: gm.name as string,
           ...(gm.group !== undefined ? { group: gm.group } : {}),
@@ -1126,9 +1251,9 @@ function computeMerged(): Catalog {
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
-          // Pi 的协议是 Model Access 按模型下发的权威路由元数据。重建 CatalogModel 时
-          // 必须一并投影，否则模型虽然保留在 Pi tab，统一路由器却会因协议缺失而 fail closed。
-          ...(agent === 'pi' && ov.wireProtocol ? { piApi: ov.wireProtocol } : {}),
+          // Unknown pre-probe Pi routes stay provisional; models.json only emits a route after the
+          // current binary/server/local/Gateway resolver produces one of the supported APIs.
+          ...(agent === 'pi' && piApi ? { piApi } : {}),
         };
         models[agent]!.push(merged);
       }
@@ -1143,7 +1268,7 @@ function computeMerged(): Catalog {
         )
         .map(({ model }) => model);
     }
-    return { ...p, models };
+    return { ...projectXdGatewayMediaModels(p, gwModels), models };
   });
 
   if (providers === b.providers) return b; // 无 augment、无 custom → 原样返回
@@ -1186,6 +1311,7 @@ export function getCatalogModelContextWindow(
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
 function installActiveCatalog(
   catalog: Catalog,
+  authorityCatalog: Catalog | null,
   capabilityEvidence: CatalogCapabilityEvidence,
   unverifiedXdMediaKinds: readonly CatalogXdMediaKind[],
   force: boolean,
@@ -1197,6 +1323,7 @@ function installActiveCatalog(
     base !== null &&
     baseCapabilityEvidence === capabilityEvidence &&
     isDeepStrictEqual(baseUnverifiedXdMediaKinds, nextUnverifiedXdMediaKinds) &&
+    isDeepStrictEqual(piGatewayAuthorityCatalog, authorityCatalog) &&
     isDeepStrictEqual(base, catalog)
   ) {
     return false;
@@ -1205,6 +1332,7 @@ function installActiveCatalog(
     catalog.modelRegistry ?? previous.modelRegistry ?? trustedCustomProviderRegistry;
   trustedCustomProviderRegistry = projectionRegistry;
   base = catalog;
+  piGatewayAuthorityCatalog = authorityCatalog;
   baseCapabilityEvidence = capabilityEvidence;
   baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
   if (customConfigs) {
@@ -1219,6 +1347,7 @@ function installActiveCatalog(
 export function setActiveCatalog(
   catalog: Catalog,
   options: {
+    authorityCatalog?: Catalog | null;
     capabilityEvidence?: CatalogCapabilityEvidence;
     unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
   } = {},
@@ -1226,6 +1355,7 @@ export function setActiveCatalog(
   const capabilityEvidence = options.capabilityEvidence ?? 'current';
   installActiveCatalog(
     catalog,
+    options.authorityCatalog ?? null,
     capabilityEvidence,
     options.unverifiedXdMediaKinds ??
       (capabilityEvidence === 'fallback' ? ['image', 'video', 'embedding'] : []),
@@ -1241,6 +1371,7 @@ export function setActiveCatalog(
 export function commitActiveCatalogSnapshot(
   catalog: Catalog,
   options: {
+    authorityCatalog?: Catalog | null;
     capabilityEvidence?: CatalogCapabilityEvidence;
     unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
   } = {},
@@ -1248,6 +1379,7 @@ export function commitActiveCatalogSnapshot(
   const capabilityEvidence = options.capabilityEvidence ?? 'current';
   return installActiveCatalog(
     catalog,
+    options.authorityCatalog ?? null,
     capabilityEvidence,
     options.unverifiedXdMediaKinds ??
       (capabilityEvidence === 'fallback' ? ['image', 'video', 'embedding'] : []),
@@ -1395,8 +1527,23 @@ export function setDiscoveredProviderMediaModels(
  * 注入 XD 网关权威模型清单(model-access 拉取流程写入,重建逻辑见 computeMerged)。
  * 传空数组 = 实时清单不可用,此时 XD 供应商保留但不暴露任何模型。
  */
-export function setXdGatewayModels(models: XdGatewayModelInfo[]): void {
+export function setXdGatewayModels(
+  models: XdGatewayModelInfo[],
+  options?: { authoritative?: boolean; preservePaymentRequiredRoutes?: boolean },
+): void {
   xdGatewayModels = [...models];
+  if (options?.authoritative !== undefined) {
+    xdGatewayModelsAuthoritative = options.authoritative;
+  }
+  if (options?.preservePaymentRequiredRoutes !== true) {
+    xdGatewayPaymentRequiredRoutes = new Set(
+      models.flatMap((model) =>
+        model.availability === 'requires_payment'
+          ? (model.agents ?? []).map((agent) => `${agent}\n${model.id}`)
+          : [],
+      ),
+    );
+  }
   xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
 }
@@ -1404,6 +1551,34 @@ export function setXdGatewayModels(models: XdGatewayModelInfo[]): void {
 /** 同步读取最近一次完整 `/models` 快照，供 sendSync 配置面只读投影。 */
 export function getXdGatewayModels(): readonly XdGatewayModelInfo[] {
   return xdGatewayModels;
+}
+
+/** Main 派发边界查询最近一次明确的付费拒绝；不用于 Renderer 营销展示。 */
+export function isXdGatewayPaymentRequiredRoute(modelId: string, agent: AgentKind): boolean {
+  return xdGatewayPaymentRequiredRoutes.has(`${agent}\n${modelId}`);
+}
+
+/** 子代理模型预检只在此标记为 true 时，才可把清单缺席解释为权威拒绝。 */
+export function getXdGatewayModelAccessSnapshot(): {
+  authoritative: boolean;
+  models: readonly XdGatewayModelInfo[];
+  paymentRequiredModelIds: readonly string[];
+} {
+  const claudeCodeRoutePrefix = 'claude-code\n';
+  return {
+    authoritative: xdGatewayModelsAuthoritative,
+    models: xdGatewayModels,
+    paymentRequiredModelIds: [...xdGatewayPaymentRequiredRoutes].flatMap((route) =>
+      route.startsWith(claudeCodeRoutePrefix)
+        ? [route.slice(claudeCodeRoutePrefix.length)]
+        : [],
+    ),
+  };
+}
+
+/** 新一轮 `/models` 未完成或失败后撤销负向证明，但保留 LKG 供 UI 展示。 */
+export function markXdGatewayModelAccessUnknown(): void {
+  xdGatewayModelsAuthoritative = false;
 }
 
 /** 返回当前 active catalog 的单调递增修订号。 */

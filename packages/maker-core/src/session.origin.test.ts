@@ -5,7 +5,7 @@
  * turn 终止后清空、下一轮不被污染、多 listener 一致。这是 IM 转播自动任务的地基
  * (共享 session 下区分"这一轮是谁发起的")。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
 import { Session } from './session.js';
@@ -39,12 +39,21 @@ function createControllableHandle(opts?: {
   holdDispatch?: boolean;
   holdOnSend?: number;
 }) {
-  let push: ((e: AgentEvent) => void) | null = null;
+  let waiter: ((e: AgentEvent | null) => void) | null = null;
   let turnRunning = false;
   let closeCalls = 0;
   let releaseDispatch: (() => void) | null = null;
   let sendCount = 0;
-  const buffered: AgentEvent[] = [];
+  const pending: Array<AgentEvent | null> = [];
+  const deliver = (event: AgentEvent | null) => {
+    if (waiter) {
+      const resolve = waiter;
+      waiter = null;
+      resolve(event);
+      return;
+    }
+    pending.push(event);
+  };
   const continuationStates = new Map<number, TurnContinuationState>();
   let interactionResolver: ((req: InteractionRequest) => Promise<InteractionDecision>) | null = null;
   let lastSendOptions: SendOptions | undefined;
@@ -60,8 +69,7 @@ function createControllableHandle(opts?: {
         throw opts.sendError; // 模拟 dispatch 失败(SESSION_RUNNING race)
       }
       if (opts?.dispatchEvent && (opts.dispatchOnSend ?? 1) === sendCount) {
-        if (push) push(opts.dispatchEvent);
-        else buffered.push(opts.dispatchEvent);
+        deliver(opts.dispatchEvent);
       }
       if (opts?.holdDispatch && (opts.holdOnSend ?? 1) === sendCount) {
         await new Promise<void>((resolve) => {
@@ -77,12 +85,15 @@ function createControllableHandle(opts?: {
       turnRunning = false;
     },
     async *events() {
-      for (const e of buffered) yield e;
-      buffered.length = 0;
       for (;;) {
-        const next = await new Promise<AgentEvent | null>((resolve) => {
-          push = (e) => resolve(e);
-        });
+        let next: AgentEvent | null;
+        if (pending.length > 0) {
+          next = pending.shift() ?? null;
+        } else {
+          next = await new Promise<AgentEvent | null>((resolve) => {
+            waiter = resolve;
+          });
+        }
         if (next === null) return;
         yield next;
       }
@@ -114,8 +125,7 @@ function createControllableHandle(opts?: {
         e.type === 'error' &&
         (e.data as { isTerminal?: unknown } | null | undefined)?.isTerminal === true;
       if ((e.type === 'done' || terminalError) && !opts.keepRunning) turnRunning = false;
-      if (push) push(e);
-      else buffered.push(e);
+      deliver(e);
       await new Promise((r) => setTimeout(r, 0)); // 让事件循环把它 fan-out 出去
     },
     setTurnRunning(running: boolean) {
@@ -128,8 +138,7 @@ function createControllableHandle(opts?: {
       releaseDispatch?.();
     },
     queue(event: AgentEvent) {
-      if (push) push(event);
-      else buffered.push(event);
+      deliver(event);
     },
     closeCalls: () => closeCalls,
     lastSendOptions: () => lastSendOptions,
@@ -355,9 +364,623 @@ describe('Session per-turn origin 打标', () => {
       type: 'error',
       turnOrigin: SCHED_ORIGIN,
       turnAttemptToken: 9,
+      sessionTurnGeneration: 1,
+      sessionInstanceId: session.instanceId,
     }));
     releaseDispatch();
     await send;
+    await session.close();
+  });
+
+  it('does not let an unobserved prior error adopt an in-flight send as N+1', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await vi.waitFor(() => {
+      expect(
+        seen.some((event) =>
+          event.type === 'error' && (event.data as { message?: string }).message === 'second failed'),
+      ).toBe(true);
+    });
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('does not let leftover N running promote a later N error onto unaccepted N+1', async () => {
+    const { handle, emit, queue, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    queue({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+    expect(
+      seen.some((event) =>
+        event.type === 'error' && event.sessionTurnGeneration === 2),
+    ).toBe(false);
+    expect(
+      seen.find((event) =>
+        event.type === 'error' && (event.data as { message?: string }).message === 'first late failure')
+        ?.sessionTurnGeneration,
+    ).not.toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('keeps an in-flight N+1 start-failure after handle running releases the reservation', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const originalSend = handle.send.bind(handle);
+    handle.send = async (...args) => {
+      setTurnRunning(true);
+      return originalSend(...args);
+    };
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await vi.waitFor(() => {
+      expect(
+        seen.some((event) =>
+          event.type === 'error' && (event.data as { message?: string }).message === 'second failed'),
+      ).toBe(true);
+    });
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('keeps an in-flight N+1 start-failure before a leftover N error', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await vi.waitFor(() => {
+      expect(
+        seen.some((event) =>
+          event.type === 'error' && (event.data as { message?: string }).message === 'second failed'),
+      ).toBe(true);
+    });
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+    const late = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('still stamps an in-flight start-failure after the prior turn already observed done', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    await emit({ type: 'done', data: {} });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    expect(startFail?.sessionInstanceId).toBe(session.instanceId);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('fans out an in-flight N+1 start-failure after N already observed error', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({
+      type: 'error',
+      data: { message: 'first failed', isTerminal: true },
+      source: 'codex',
+    });
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await vi.waitFor(() => {
+      expect(
+        seen.some((event) =>
+          event.type === 'error' && (event.data as { message?: string }).message === 'second failed'),
+      ).toBe(true);
+    });
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'error', generation: 2 });
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('records an in-flight N+1 start-failure after N went idle without a terminal', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    setTurnRunning(false);
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+    const second = session.send('second');
+    await vi.waitFor(() => {
+      expect(
+        seen.some((event) =>
+          event.type === 'error' && (event.data as { message?: string }).message === 'second failed'),
+      ).toBe(true);
+    });
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'error', generation: 2 });
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('keeps a leftover terminal on queued generation after handle.send yields', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({ type: 'done', data: {}, source: 'codex' });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+
+    expect(seen.some((event) => event.type === 'status' || event.type === 'done')).toBe(false);
+    const secondText = seen.find((event) => event.type === 'text' && (event.data as { text?: string }).text === 'second progress');
+    expect(secondText?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('keeps leftover done on the prior generation after a new-turn running status', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+
+    expect(seen.some((event) => event.type === 'done')).toBe(false);
+    expect(seen.find((event) => event.type === 'text' && (event.data as { text?: string }).text === 'second progress')?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('does not stamp a zero-output done as leftover after a completed prior turn', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    await emit({ type: 'done', data: {}, source: 'codex' });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await emit({ type: 'done', data: {}, source: 'codex' });
+
+    const dones = seen.filter((event) => event.type === 'done');
+    expect(dones[0]?.sessionTurnGeneration).toBe(1);
+    expect(dones[1]?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('stamps a silent-stop done as the new generation even without progress tokens', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: true }, source: 'claude-code' });
+    await emit({ type: 'done', data: { silentStop: true }, source: 'claude-code' });
+
+    const silentStop = seen.find((event) => event.type === 'done');
+    expect(silentStop?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('keeps a leftover terminal error on the prior generation after leftover idle', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+
+    expect(seen.some((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'first late failure')).toBe(false);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('lets a result-only N+1 done settle after leftover idle then current running', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await emit({ type: 'done', data: {} });
+    const liveDone = seen.find((event) => event.type === 'done');
+    expect(liveDone?.sessionTurnGeneration).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 2 });
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('keeps an accepted result-only N+1 error after a leftover idle tail', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    releaseDispatch();
+    await second;
+    await emit({
+      type: 'error',
+      data: { message: 'second failed', isTerminal: true },
+      source: 'codex',
+    });
+    const fail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(fail?.sessionTurnGeneration).toBe(2);
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'error', generation: 2 });
+    await session.close();
+  });
+
+  it('stamps an immediate new-turn 401 after running as the live generation', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await emit({
+      type: 'error',
+      data: { message: 'quota exceeded', isTerminal: true },
+      source: 'codex',
+    });
+
+    const fail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'quota exceeded');
+    expect(fail?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('does not let a leftover terminal clear the live turn origin', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second', { origin: SCHED_ORIGIN });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+
+    expect(seen.some((event) => event.type === 'done')).toBe(false);
+    const secondText = seen.find((event) =>
+      event.type === 'text' && (event.data as { text?: string }).text === 'second progress');
+    expect(secondText?.sessionTurnGeneration).toBe(2);
+    expect(secondText?.turnOrigin).toEqual(SCHED_ORIGIN);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('does not let a leftover idle-only tail claim the new turn done after tokens', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+    await emit({ type: 'done', data: { reason: 'new-turn' }, source: 'codex' });
+
+    const done = seen.find((event) => event.type === 'done');
+    expect(done?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('does not treat a background tool result as new-turn progress', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({
+      type: 'tool_result_full',
+      data: { toolUseId: 'collab-1', result: 'old collab' },
+      source: 'codex',
+      turnScope: 'background',
+    });
+    await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+
+    expect(seen.some((event) => event.type === 'done')).toBe(false);
+    expect(seen.find((event) => event.type === 'text' && (event.data as { text?: string }).text === 'second progress')?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('keeps leftover done on the unresolved generation after a cancelled reservation', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const controller = new AbortController();
+    await expect(session.send('cancelled', {
+      signal: controller.signal,
+      afterTurnReserved: () => controller.abort(),
+    })).resolves.toEqual({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    });
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+
+    expect(seen.some((event) => event.type === 'done')).toBe(false);
+    expect(seen.find((event) => event.type === 'text' && (event.data as { text?: string }).text === 'second progress')?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('treats a standalone image as new-turn progress before leftover done', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({
+      type: 'image',
+      data: { kind: 'imageGeneration', result: 'data:image/png;base64,xx' },
+      source: 'codex',
+    });
+    await emit({ type: 'done', data: { reason: 'new-turn' }, source: 'codex' });
+
+    const done = seen.find((event) => event.type === 'done');
+    expect(done?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
     await session.close();
   });
 
@@ -394,6 +1017,34 @@ describe('Session per-turn origin 打标', () => {
       event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
     expect(late?.turnAttemptToken).toBeUndefined();
     expect(late?.turnOrigin).toBeUndefined();
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('clears leftover prior after an in-flight terminal so the live done can settle', async () => {
+    const { handle, emit, queue, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    queue({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'done', data: { reason: 'new-turn' }, source: 'codex' });
+
+    const liveDone = seen.find((event) => event.type === 'done');
+    expect(liveDone?.sessionTurnGeneration).toBe(2);
     releaseDispatch();
     await second;
     await session.close();
@@ -836,6 +1487,11 @@ describe('Session per-turn origin 打标', () => {
       expect(rawError.message).toBe('client_secret=[REDACTED]');
       expect(rawError.additionalDetails).toBe('key=[REDACTED]');
     }
+    expect(session.getObservedCurrentTurnTerminal()).toEqual({
+      kind: 'error',
+      generation: 1,
+      message: 'Authorization: [REDACTED]',
+    });
   });
 
   it('preserves a non-secret auth status and redacts nested Codex error details', async () => {

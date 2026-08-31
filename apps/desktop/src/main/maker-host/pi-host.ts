@@ -8,7 +8,8 @@
  *    从安全存储注入，models.json 不落任何真实订阅凭证。
  *  - endpoint:统一走 authenticated loopback proxy。PI 按供应商使用原生协议：
  *    Claude=Messages、ChatGPT=Codex Responses、SuperGrok=PI bundled API；host
- *    只注入凭证并原样转发。Cindy Gateway 继续按 Model Access v3 下发协议。
+ *    只注入凭证并原样转发。Cindy Gateway 的成员与显式 API 来自 Model Access；
+ *    版本匹配的 Pi 本地模型表只补足缺失 API 及协议一致的 compat。
  *  - 二进制:与 cc/codex 同链 —— splash prepare 经 agent-binaries 按 CDN manifest
  *    的 pi 字段下载整目录 tar.gz 到 userData/pi/<version>/(SHA256 校验,清单一变
  *    下次启动即换新)。dev 期使用 apps/pi-bin 中 pnpm install:pi 的产物；正式版
@@ -24,6 +25,7 @@ import { app } from 'electron';
 
 import {
   PiAgent,
+  PiNativeProviderProxyNotReadyError,
   type AgentDeps,
   type AuthAdapter,
   type AuthState,
@@ -55,8 +57,18 @@ import type {
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { t } from '../i18n.js';
+import { spawnPiSubagentRunner } from '../cindy-brain/piSubagentRunnerHost.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
+import {
+  MANAGED_OLLAMA_PROVIDER_ID,
+  matchesManagedOllamaFingerprint,
+} from '../../shared/localModelRuntime.js';
+import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
+import {
+  applyQwen38NativeOverlay,
+  shouldApplyQwen38Overlay,
+} from '../local-model-runtime/qwenProfile.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import {
   desktopClaudeAuthAdapter,
@@ -73,21 +85,30 @@ import hostSystemPrompt from './host-system-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
+import { readPiCompactionPct } from './compaction-settings-store.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { derivePiProxySessionToken } from './pi-proxy-session-token.js';
 import {
   getDesktopMcpToolApprovalPolicy,
   getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
-import { readCompactionPct } from './compaction-settings-store.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import {
   getActiveCatalog,
   getLocalCatalogOverridesSnapshot,
-  resolveXdPiGatewayWireProtocol,
+  resolveXdPiGatewayHintApi,
+  resolveXdPiGatewayServerApi,
 } from './active-catalog.js';
+import {
+  resolveBundledPiGatewayCatalogIdentity,
+  resolveBundledPiGatewayModelProfile,
+} from './pi-gateway-model-catalog.js';
+import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
-import { resolveManagedPiPackageResources } from './pi-package-store.js';
+import {
+  resolveManagedPiNativePackagePaths,
+  resolveManagedPiPackageResources,
+} from './pi-package-store.js';
 import { mutateAuthorizedPiManagedPackage } from './pi-managed-package-mutation.js';
 
 const log = createLogger('pi-host');
@@ -121,6 +142,7 @@ export type PiListedModelIds = ReadonlyMap<string, ReadonlySet<string>>;
 
 const piBundledModelsByBinary = new Map<string, Promise<PiBundledModelCatalog | null>>();
 const listedIdsByCatalog = new WeakMap<PiBundledModelCatalog, PiListedModelIds>();
+let latestPiBundledModelCatalog: PiBundledModelCatalog | null = null;
 
 export function listedPiModelIds(
   catalog: PiBundledModelCatalog | undefined,
@@ -150,7 +172,13 @@ function piOpenaiProxyPlaceholderJwt(): string {
 }
 
 function appendEndpointPath(endpoint: string, suffix: string): string {
-  return `${endpoint.replace(/\/+$/, '')}/${suffix.replace(/^\/+/, '')}`;
+  const url = new URL(endpoint);
+  const normalizedSuffix = `/${suffix.replace(/^\/+/, '').replace(/\/+$/, '')}`;
+  const pathname = url.pathname.replace(/\/+$/, '');
+  if (!pathname.endsWith(normalizedSuffix)) {
+    url.pathname = `${pathname}${normalizedSuffix}`;
+  }
+  return url.toString().replace(/\/$/, '');
 }
 
 function piSubscriptionHeaders(providerId: string): Record<string, string> {
@@ -360,7 +388,12 @@ export async function readPiBundledModels(
   binaryPath: string,
 ): Promise<PiBundledModelCatalog | null> {
   const cached = piBundledModelsByBinary.get(binaryPath);
-  if (cached) return cached;
+  if (cached) {
+    const catalog = await cached;
+    latestPiBundledModelCatalog = catalog;
+    if (catalog === null) piBundledModelsByBinary.delete(binaryPath);
+    return catalog;
+  }
   const pending = (async () => {
     let configDir: string | undefined;
     try {
@@ -438,7 +471,12 @@ export async function readPiBundledModels(
     }
   })();
   piBundledModelsByBinary.set(binaryPath, pending);
-  return pending;
+  const catalog = await pending;
+  latestPiBundledModelCatalog = catalog;
+  // A temp-dir/timeout/parse failure is transient evidence, not a permanent property of this
+  // binary. Keep successful probes cached, but let the next session retry a null result.
+  if (catalog === null) piBundledModelsByBinary.delete(binaryPath);
+  return catalog;
 }
 
 function catalogCostForPiNative(cost: {
@@ -588,6 +626,15 @@ export function buildPiSubscriptionNativeProviders(
         const officialModel = sourceProviderId === 'xai' ? officialXaiById.get(wireId) : undefined;
         const officialThinking = officialXaiThinkingSpec(officialModel);
         const capabilityCorrection = xaiOfficialCapabilityCorrection(bundledModel, officialModel);
+        const finalMetadataApi = isProtocolCorrection
+          ? model.piApi
+          : isXaiCatalogAddition
+            ? (model.piApi ?? officialModel?.api ?? bundledModel?.api ?? 'openai-responses')
+            : (bundledModel?.api ?? model.piApi ?? officialModel?.api);
+        const compatibleOfficialThinking =
+          officialModel?.api === finalMetadataApi ? officialThinking : null;
+        const compatibleCapabilityCorrection =
+          capabilityCorrection?.api === finalMetadataApi ? capabilityCorrection : null;
         const isRegistryBaselineOverlay = sourceProviderId === 'openai' && !!bundledModel;
         const catalogCost = catalogCostForPiNative(model.cost);
         if (isRegistryBaselineOverlay) {
@@ -623,10 +670,12 @@ export function buildPiSubscriptionNativeProviders(
               : {}),
           };
         }
-        const preserved = isProtocolCorrection ? bundledModel : contextProfileTemplate;
+        // A protocol correction must not preserve the old serializer profile. compat, headers,
+        // thinking, or sampling metadata from a different API would create an unsafe hybrid.
+        const preserved = contextProfileTemplate;
         const thinkingLevelMap =
-          capabilityCorrection?.thinkingLevelMap
-          ?? officialThinking?.thinkingLevelMap
+          compatibleCapabilityCorrection?.thinkingLevelMap
+          ?? compatibleOfficialThinking?.thinkingLevelMap
           ?? (preserved?.thinkingLevelMap
             ? { ...preserved.thinkingLevelMap }
             : model.efforts.length > 0
@@ -649,14 +698,14 @@ export function buildPiSubscriptionNativeProviders(
             ? { catalogAddition: true }
             : {}),
           ...(isXaiCatalogAddition
-            ? { api: model.piApi ?? 'openai-responses' }
-            : capabilityCorrection
-              ? { api: capabilityCorrection.api }
+            ? { api: model.piApi ?? officialModel?.api ?? bundledModel?.api ?? 'openai-responses' }
             : sourceProviderId !== 'openai' &&
                 model.piApi &&
                 (isAnnotatedAddition || isProtocolCorrection)
               ? { api: model.piApi }
-              : {}),
+              : capabilityCorrection
+                ? { api: capabilityCorrection.api }
+                : {}),
           name: isContextProfileAddition ? model.name : (preserved?.name ?? model.name),
           contextWindow: isContextProfileAddition
             ? model.contextWindow
@@ -667,8 +716,8 @@ export function buildPiSubscriptionNativeProviders(
               ? { maxTokens: model.maxOutput }
               : {}),
           reasoning:
-            capabilityCorrection?.reasoning
-            ?? officialThinking?.reasoning
+            compatibleCapabilityCorrection?.reasoning
+            ?? compatibleOfficialThinking?.reasoning
             ?? preserved?.reasoning
             ?? model.efforts.length > 0,
           ...(preserved?.input
@@ -683,10 +732,10 @@ export function buildPiSubscriptionNativeProviders(
               ? { cost: catalogCost }
               : {}),
           ...(preserved?.headers ? { headers: { ...preserved.headers } } : {}),
-          ...(capabilityCorrection?.compat
-            ? { compat: capabilityCorrection.compat }
-            : isXaiCatalogAddition && officialThinking?.compat
-              ? { compat: officialThinking.compat }
+          ...(compatibleCapabilityCorrection?.compat
+            ? { compat: compatibleCapabilityCorrection.compat }
+            : compatibleOfficialThinking?.compat
+              ? { compat: compatibleOfficialThinking.compat }
             : preserved?.compat
               ? { compat: structuredClone(preserved.compat) }
               : {}),
@@ -817,7 +866,11 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     managedExecutablePaths: { ripgrep: ripgrepPath },
     userDataPath: app.getPath('userData'),
   };
-  // 网关 endpoint 随 model-access 凭据同步就绪,用 getter 惰性读(与 claude remoteEndpoint 同理)。
+  Object.defineProperty(config, 'piAutoCompactThresholdPct', {
+    get: () => readPiCompactionPct(),
+    enumerable: true,
+    configurable: false,
+  });
   Object.defineProperty(config, 'endpoint', {
     get: () => getClaudeEndpoint(),
     enumerable: true,
@@ -842,11 +895,6 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
       get: () => readMemorySettings().maker,
       enumerable: true,
     },
-    // 与 Claude Code 共用 compaction-settings.json；Codex 不读。
-    autoCompactThresholdPct: {
-      get: () => readCompactionPct(),
-      enumerable: true,
-    },
   });
   return config;
 }
@@ -862,6 +910,9 @@ export interface BuildPiAgentOpts {
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  /** Commit-edge fence; live caller retirement remains post-receipt below. */
+  onPiManagedPackageMutationCommitted?: () => Promise<void>;
+  onPiManagedPackageMutationSettled?: AgentDeps['onPiManagedPackageMutationSettled'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
@@ -1170,6 +1221,11 @@ export function buildPiNativeProvidersFromConfigs(
       onSkip?.(cfg.id, 'oauth not supported for pi native');
       continue;
     }
+    const managedOllama = matchesManagedOllamaFingerprint({
+      id: cfg.id,
+      authMethod,
+      runtimes: cfg.runtimes,
+    });
     const runtimeApi =
       rt.wireProtocol === undefined ? undefined : wireProtocolToPiApi(rt.wireProtocol);
     // Protocol authority, in order: per-model override, explicit endpoint default,
@@ -1256,7 +1312,7 @@ export function buildPiNativeProvidersFromConfigs(
             : bundledModel?.api === modelApi
               ? bundledModel.baseUrl
               : undefined;
-        return {
+        const spec = {
           id: m.id,
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
@@ -1293,6 +1349,9 @@ export function buildPiNativeProvidersFromConfigs(
             ? { samplingParams: structuredClone(bundledModel.samplingParams) }
             : {}),
         };
+        return managedOllama && shouldApplyQwen38Overlay(m.id)
+          ? applyQwen38NativeOverlay(spec)
+          : spec;
       }),
     });
   }
@@ -1372,9 +1431,10 @@ export async function buildXaiPiNativeProvider(
         ),
       })),
     id: `xai/${catalogModel.id}`,
-    // Keep the xai/ prefix on the wire so the existing compat proxy selects its Responses
-    // bridge, which refreshes OAuth per request, recovers 401/403, and injects x_search.
-    api: 'anthropic-messages' as const,
+    wireId: catalogModel.id,
+    // Keep the exact API from Pi's catalog. The host forwarder authenticates and forwards both
+    // native shapes without sending the request through the Claude Messages bridge.
+    api: catalogModel.piApi ?? officialById.get(catalogModel.id)?.api ?? 'openai-responses',
   }));
   const aliases = Object.fromEntries(
     catalogModels.flatMap((candidate) => [
@@ -1390,7 +1450,12 @@ export async function buildXaiPiNativeProvider(
       }
       // Resume compatibility only: preserve the historical id and route it through the same
       // proxy without asserting unverified vision/reasoning capabilities or publishing it.
-      models.push({ id: namespacedModel, name: namespacedModel, api: 'anthropic-messages' });
+      models.push({
+        id: namespacedModel,
+        wireId: piNativeModelId('xai', namespacedModel),
+        name: namespacedModel,
+        api: 'openai-responses',
+      });
       aliases[model] = namespacedModel;
       aliases[piNativeModelId('xai', model)] = namespacedModel;
     }
@@ -1405,10 +1470,10 @@ export async function buildXaiPiNativeProvider(
               const endpoint = new URL(getClaudeEndpoint());
               endpoint.hostname = '127.0.0.1';
               endpoint.port = String(PI_XAI_COMPAT_FORWARD_PORT);
-              return endpoint.toString().replace(/\/$/, '');
+              return appendEndpointPath(endpoint.toString(), 'v1');
             })()
-          : getClaudeEndpoint(),
-        api: 'anthropic-messages',
+          : appendEndpointPath(getClaudeEndpoint(), 'v1'),
+        api: 'openai-responses',
         apiKeyEnvVar: PI_XAI_PROXY_API_KEY_ENV,
         headers: {
           'x-cindy-pi-session-id': `$${PI_SESSION_ID_ENV}`,
@@ -1431,11 +1496,103 @@ export async function buildXaiPiNativeProvider(
   };
 }
 
+function isPiGatewayModelApi(api: PiBundledModelInfo['api']): api is PiModelApi {
+  return (
+    api === 'anthropic-messages' ||
+    api === 'openai-responses' ||
+    api === 'openai-completions' ||
+    api === 'google-generative-ai'
+  );
+}
+
+function resolveProbedPiGatewayModel(modelId: string): PiBundledModelInfo | undefined {
+  const normalized = modelId.replace(/\[1m\]$/, '');
+  const identity = resolveBundledPiGatewayCatalogIdentity(normalized);
+  if (identity) {
+    const matched = latestPiBundledModelCatalog?.get(identity.provider)?.get(identity.modelId);
+    if (matched) return matched;
+  }
+  // Future namespaced models may use Pi's exact provider/model identity without a client alias.
+  // This is an exact pair lookup, never a bare-id or family guess.
+  const slash = normalized.indexOf('/');
+  if (slash <= 0) return undefined;
+  return latestPiBundledModelCatalog
+    ?.get(normalized.slice(0, slash))
+    ?.get(normalized.slice(slash + 1));
+}
+
 export function resolvePiCindyGatewayModelApi(
   _selectedProviderId: string | null | undefined,
   modelId: string,
-): 'anthropic-messages' | 'openai-responses' | null | undefined {
-  return resolveXdPiGatewayWireProtocol(modelId);
+  context?: { remote: boolean },
+): PiModelApi | null | undefined {
+  // Gateway membership remains the account-availability gate, but its protocol is the last hint.
+  const gatewayApi = resolveXdPiGatewayHintApi(modelId);
+  if (gatewayApi === undefined) return undefined;
+  const serverApi = resolveXdPiGatewayServerApi(modelId);
+  if (serverApi !== undefined) return serverApi;
+  // The Desktop binary is not evidence about a different Pi executable on an SSH host. Remote
+  // sessions skip that probe but still use this client version's explicit static configuration
+  // before the last-priority Gateway hint.
+  if (context?.remote) return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
+  const probed = resolveProbedPiGatewayModel(modelId);
+  if (probed) return isPiGatewayModelApi(probed.api) ? probed.api : null;
+  return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
+}
+
+export function resolvePiCindyGatewayModelSpec(
+  _selectedProviderId: string | null | undefined,
+  modelId: string,
+  context?: { remote: boolean },
+): Pick<
+  PiNativeModelSpec,
+  'api' | 'compat' | 'samplingParams' | 'thinkingLevelMap'
+> | null | undefined {
+  const api = resolvePiCindyGatewayModelApi(_selectedProviderId, modelId, context);
+  if (api === undefined || api === null) return api;
+  const bundled = resolveBundledPiGatewayModelProfile(modelId);
+  // Remote execution never receives metadata from the Desktop binary probe. The version-matched
+  // static client profile remains the second authority and is injected only when its API matches.
+  if (context?.remote) {
+    return {
+      api,
+      ...(bundled?.api === api && bundled.compat
+        ? { compat: structuredClone(bundled.compat) }
+        : {}),
+      ...(bundled?.api === api && bundled.samplingParams
+        ? { samplingParams: structuredClone(bundled.samplingParams) }
+        : {}),
+      ...(bundled?.api === api && bundled.thinkingLevelMap
+        ? { thinkingLevelMap: { ...bundled.thinkingLevelMap } }
+        : {}),
+    };
+  }
+  const probed = resolveProbedPiGatewayModel(modelId);
+  // Provider quirks are API-specific. Local metadata may fill omissions only when it agrees with
+  // the final API; never apply stale compat across a protocol change. The exact current binary
+  // probe takes precedence over the checked-in snapshot when both match that API.
+  const compatibleBundled = bundled?.api === api ? bundled : undefined;
+  const compatibleProbed = probed?.api === api ? probed : undefined;
+  return {
+    api,
+    ...(compatibleProbed?.compat ?? compatibleBundled?.compat
+      ? { compat: structuredClone(compatibleProbed?.compat ?? compatibleBundled?.compat) }
+      : {}),
+    ...(compatibleProbed?.samplingParams ?? compatibleBundled?.samplingParams
+      ? {
+          samplingParams: structuredClone(
+            compatibleProbed?.samplingParams ?? compatibleBundled?.samplingParams,
+          ),
+        }
+      : {}),
+    ...(compatibleProbed?.thinkingLevelMap ?? compatibleBundled?.thinkingLevelMap
+      ? {
+          thinkingLevelMap: {
+            ...(compatibleProbed?.thinkingLevelMap ?? compatibleBundled?.thinkingLevelMap),
+          },
+        }
+      : {}),
+  };
 }
 
 /** BYOM:读 DB 自定义 provider + safeStorage key → pi 原生 provider spec。IO 外壳,逻辑在上面。 */
@@ -1452,10 +1609,24 @@ export async function resolvePiNativeProviders(ctx: {
     // before the process snapshots its global skills. Remote Pi has a different HOME/root.
     await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
   }
+  const compatProxyReady = isAnthropicCompatProxyHandleReady();
+  const selectedOfficialXai =
+    ctx.providerId === 'xai' || (ctx.providerId == null && isExclusiveXaiModelId(ctx.model));
+  if (selectedOfficialXai && !compatProxyReady) {
+    log.error('resolvePiNativeProviders: SuperGrok requires the local compat proxy', {
+      providerId: ctx.providerId ?? null,
+      model: ctx.model,
+      remoteHostId: ctx.remoteHostId ?? null,
+    });
+    throw new PiNativeProviderProxyNotReadyError();
+  }
   const piBinaryPath = resolvePiBinaryPath();
-  const bundledModels = piBinaryPath ? await readPiBundledModels(piBinaryPath) : null;
+  // Never treat the Desktop executable as the catalog of a different remote Pi binary.
+  const bundledModels = !ctx.remoteHostId && piBinaryPath
+    ? await readPiBundledModels(piBinaryPath)
+    : null;
   let subscriptions: PiNativeProvidersResult = { providers: [], env: {} };
-  if (!ctx?.remoteHostId && isAnthropicCompatProxyHandleReady()) {
+  if (!ctx?.remoteHostId && compatProxyReady) {
     const retainedOpenAiModel =
       ctx.resumeSessionId && ctx.providerId === 'openai'
         ? resolvePiRuntimeModelDescriptor(getActiveCatalog(), 'openai', ctx.model, {
@@ -1482,6 +1653,13 @@ export async function resolvePiNativeProviders(ctx: {
     );
   }
   const isRemote = Boolean(ctx.remoteHostId);
+  if (!isRemote && ctx.providerId === MANAGED_OLLAMA_PROVIDER_ID) {
+    await ensureManagedOllamaReadyForSession({
+      providerId: ctx.providerId,
+      remoteHostId: ctx.remoteHostId ?? null,
+      userDataDir: app.getPath('userData'),
+    });
+  }
   // 远端会话:本地 loopback 端点(本机 Ollama/vLLM)远端够不到。
   // 轮 42 P2(codex-connector):**不再 pre-filter 掉** —— 让 PiAgent 的
   // [REMOTE_LOCAL_ONLY_PROVIDER] guard 显式拒绝, 用户才能拿到带行动指引的
@@ -1511,9 +1689,10 @@ export async function resolvePiNativeProviders(ctx: {
   // SuperGrok provenance/forwarding path there; locally the version-matched PI
   // native provider above remains the protocol authority.
   // inheritModels xai 现在带占位 apiKey,Pi getAvailable() 才能看见 grok-4.6。
-  // 不要再塞一份 overlay xai:reserved id 会被改名成 cindy-byom-xai,Messages
-  // 请求打到 PI native handler 会 404 Unsupported PI subscription endpoint。
+  // 不要再塞一份 overlay xai:reserved id 会被改名成 cindy-byom-xai；
+  // 请求打到 PI native handler 会走错误的 provider 身份并返回 404。
   if (
+    compatProxyReady &&
     !subscriptions.providers.some((provider) => provider.id === 'xai') &&
     (ctx.providerId === 'xai' || hasGrokOAuthLogin())
   ) {
@@ -1579,6 +1758,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     logger: opts.logger,
     turnChangeCapture: opts.turnChangeCapture,
     registerLocalAgentProcess: opts.registerLocalAgentProcess,
+    spawnPiSubagentRunner,
     derivePiProxySessionToken,
     capabilityAdditions: opts.capabilityAdditions,
     reviewAutoPermissionAction: opts.reviewAutoPermissionAction,
@@ -1598,13 +1778,28 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       return path.join(app.getPath('userData'), 'pi-agent-home');
     },
     resolvePiManagedPackageResources: resolveManagedPiPackageResources,
-    mutatePiManagedPackage: mutateAuthorizedPiManagedPackage,
+    resolvePiNativePackagePaths: resolveManagedPiNativePackagePaths,
+    mutatePiManagedPackage: (request) => mutateAuthorizedPiManagedPackage(
+      request,
+      undefined,
+      opts.onPiManagedPackageMutationCommitted
+        ? { onRuntimeInvalidationPublished: opts.onPiManagedPackageMutationCommitted }
+        : undefined,
+    ),
+    onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled,
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),
       cancel: t('settings.piPackages.cancel'),
       mutationFailed: t('settings.piPackages.operationFailed'),
+      mutationFailure: {
+        'source-unavailable': t('settings.piPackages.failure.sourceUnavailable'),
+        'package-not-found': t('settings.piPackages.failure.packageNotFound'),
+        'version-not-found': t('settings.piPackages.failure.versionNotFound'),
+        'state-unavailable': t('settings.piPackages.failure.stateUnavailable'),
+        'native-command-failed': t('settings.piPackages.failure.nativeCommandFailed'),
+      },
       mutationSuccess: {
-        install: t('settings.piPackages.success.install'),
+        install: t('settings.piPackages.success.installEnabled'),
         update: t('settings.piPackages.success.update'),
         remove: t('settings.piPackages.success.remove'),
       },
@@ -1685,9 +1880,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
     // `cindy` is the gateway fallback block even when the session starts on a subscription or
-    // BYOM provider. Its model protocol must therefore come from the exact XD model, never from
-    // the currently selected provider's endpoint default.
+    // BYOM provider. Its explicit protocol comes from the exact XD model; the local Pi table only
+    // fills a remote omission and never inherits the currently selected provider's endpoint.
     resolvePiGatewayModelApi: resolvePiCindyGatewayModelApi,
+    resolvePiGatewayModelSpec: resolvePiCindyGatewayModelSpec,
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
     resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
     resolvePiVisionBridgeEnv: opts.resolvePiVisionBridgeEnv,

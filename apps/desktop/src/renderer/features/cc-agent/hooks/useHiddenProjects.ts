@@ -39,6 +39,7 @@ export function useHiddenProjects(): UseHiddenProjectsReturn {
       pinnedOrderIsAuthoritative: false,
       pinnedOrder: [],
       hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
     };
   });
   const [hiddenProjectKeys, setHiddenProjectKeys] = useState<Set<string>>(() =>

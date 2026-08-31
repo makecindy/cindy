@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { createLogger } from '@/lib/logger';
-import { chatEmbeddingFailureKey } from '@/lib/chatEmbeddingStore';
+import { chatEmbeddingFailureKey, refreshChatEmbeddingFromMain } from '@/lib/chatEmbeddingStore';
 import { useChatEmbedding } from '@/hooks/useChatEmbedding';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
@@ -24,47 +24,60 @@ const log = createLogger('ChatEmbeddingCell');
 
 export function ChatEmbeddingCell() {
   const { t } = useTranslation();
-  const { enabled, isCustomized, setEnabled, setIsCustomized } = useChatEmbedding();
+  const { enabled, isCustomized, beginMutation, completeMutation, rollbackMutation } =
+    useChatEmbedding();
   const [pending, setPending] = useState(false);
 
   const handleToggle = useCallback(
     async (next: boolean) => {
-      // 乐观更新: toggle 视觉立即跟手, IPC 内部就是写一个 JSON 文件, 几乎不会失败
-      const prev = enabled;
-      setEnabled(next);
+      const token = beginMutation(next);
       setPending(true);
       try {
-        const settings = await window.electronAPI.maker.chatEmbeddingSet(next);
-        setEnabled(settings.enabled);
-        setIsCustomized(settings.isCustomized);
-        toast.success(
-          t(next ? 'settings.chatEmbedding.toast.enabled' : 'settings.chatEmbedding.toast.disabled'),
-        );
+        const settings = await window.electronAPI.maker.chatEmbeddingSet(next, {
+          dataOwnerId: token.dataOwnerId,
+          ownerGeneration: token.ownerGeneration,
+        });
+        if (completeMutation(token, settings)) {
+          toast.success(
+            t(
+              next
+                ? 'settings.chatEmbedding.toast.enabled'
+                : 'settings.chatEmbedding.toast.disabled',
+            ),
+          );
+        }
       } catch (err) {
         log.warn('chatEmbeddingSet failed', err);
-        toast.error(t(chatEmbeddingFailureKey(err)));
-        setEnabled(prev); // 回滚乐观值
+        if (rollbackMutation(token)) {
+          toast.error(t(chatEmbeddingFailureKey(err)));
+          void refreshChatEmbeddingFromMain();
+        }
       } finally {
         setPending(false);
       }
     },
-    [enabled, setEnabled, setIsCustomized, t],
+    [beginMutation, completeMutation, rollbackMutation, t],
   );
 
   const handleReset = useCallback(async () => {
+    const token = beginMutation();
     setPending(true);
     try {
-      const next = await window.electronAPI.maker.chatEmbeddingReset();
-      setEnabled(next.enabled);
-      setIsCustomized(next.isCustomized);
-      toast.success(t('settings.defaults.restored'));
+      const next = await window.electronAPI.maker.chatEmbeddingReset({
+        dataOwnerId: token.dataOwnerId,
+        ownerGeneration: token.ownerGeneration,
+      });
+      if (completeMutation(token, next)) toast.success(t('settings.defaults.restored'));
     } catch (err) {
       log.warn('chatEmbeddingReset failed', err);
-      toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
+      if (rollbackMutation(token)) {
+        toast.error(t('settings.defaults.restoreFailed'));
+        void refreshChatEmbeddingFromMain();
+      }
     } finally {
       setPending(false);
     }
-  }, [setEnabled, setIsCustomized, t]);
+  }, [beginMutation, completeMutation, rollbackMutation, t]);
 
   return (
     <div className="flex items-center justify-between gap-3 px-4 py-[14px]">

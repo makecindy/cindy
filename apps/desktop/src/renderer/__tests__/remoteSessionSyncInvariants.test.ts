@@ -105,7 +105,7 @@ describe('CCAgentSessionView 接线不变式', () => {
     );
     expect(chatInputSrc).toContain('onDeferredAccepted,');
     expect(chatInputSrc).toMatch(
-      /if \(optimisticallyClearRemoteComposer\) \{\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n){2}\s*optimisticComposerRestored = false;\s*clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\} else \{[\s\S]*?clearSentComposer\(\);\s*\}/,
+      /if \(optimisticallyClearRemoteComposer\) \{\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n){2}\s*optimisticComposerRestored = false;\s*clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\} else \{[\s\S]*?clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\}/,
     );
   });
   it('已有远程 session 断线时跳过来源门禁，远程草稿与本地任务仍保留门禁', () => {

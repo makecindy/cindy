@@ -182,6 +182,99 @@ describe('mergeWithBundled', () => {
     ]);
   });
 
+  it('backfills the bundled SuperGrok Pi runtime when a legacy v2 xAI block masks it', () => {
+    const bundledXai = structuredClone(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!,
+    );
+    const legacyXai = structuredClone(bundledXai);
+    legacyXai.agents = legacyXai.agents.filter((agent) => agent !== 'pi');
+    delete legacyXai.routing.pi;
+    delete legacyXai.models.pi;
+
+    const merged = mergeWithBundled({ version: '2', providers: [legacyXai] });
+    const xai = merged.providers.find((provider) => provider.id === 'xai');
+
+    expect(xai?.agents).toContain('pi');
+    expect(xai?.routing.pi).toEqual(bundledXai.routing.pi);
+    expect(xai?.models.pi).toEqual(bundledXai.models.pi);
+  });
+
+  it('does not invent a SuperGrok Pi runtime for current or differently routed xAI providers', () => {
+    const bundledXai = structuredClone(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!,
+    );
+    const withoutPi = structuredClone(bundledXai);
+    withoutPi.agents = withoutPi.agents.filter((agent) => agent !== 'pi');
+    delete withoutPi.routing.pi;
+    delete withoutPi.models.pi;
+
+    const current = mergeWithBundled({
+      version: BUNDLED_CATALOG.version,
+      providers: [withoutPi],
+    }).providers.find((provider) => provider.id === 'xai');
+    expect(current?.agents).not.toContain('pi');
+    expect(current?.routing.pi).toBeUndefined();
+    expect(current?.models.pi).toBeUndefined();
+
+    const rerouted = mergeWithBundled({
+      version: '2',
+      providers: [{
+        ...withoutPi,
+        routing: {
+          ...withoutPi.routing,
+          codex: {
+            ...withoutPi.routing.codex!,
+            upstream: 'https://different.example.test/v1',
+          },
+        },
+      }],
+    }).providers.find((provider) => provider.id === 'xai');
+    expect(rerouted?.agents).not.toContain('pi');
+    expect(rerouted?.routing.pi).toBeUndefined();
+    expect(rerouted?.models.pi).toBeUndefined();
+  });
+
+  it.each([
+    { label: 'api access', access: { kind: 'api' } as const },
+    { label: 'managed access', access: { kind: 'managed' } as const },
+    { label: 'different subscription', access: { kind: 'subscription', product: 'OtherGrok' } as const },
+  ])('does not backfill SuperGrok Pi for explicit $label', ({ access }) => {
+    const bundledXai = structuredClone(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!,
+    );
+    const legacyXai = structuredClone(bundledXai);
+    legacyXai.access = access;
+    legacyXai.agents = legacyXai.agents.filter((agent) => agent !== 'pi');
+    delete legacyXai.routing.pi;
+    delete legacyXai.models.pi;
+
+    const merged = mergeWithBundled({ version: '2', providers: [legacyXai] });
+    const xai = merged.providers.find((provider) => provider.id === 'xai');
+
+    expect(xai?.access).toEqual(access);
+    expect(xai?.agents).not.toContain('pi');
+    expect(xai?.routing.pi).toBeUndefined();
+    expect(xai?.models.pi).toBeUndefined();
+  });
+
+  it('keeps the SuperGrok Pi backfill when an old catalog explicitly repeats the same access', () => {
+    const bundledXai = structuredClone(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!,
+    );
+    const legacyXai = structuredClone(bundledXai);
+    legacyXai.access = { kind: 'subscription', product: 'SuperGrok' };
+    legacyXai.agents = legacyXai.agents.filter((agent) => agent !== 'pi');
+    delete legacyXai.routing.pi;
+    delete legacyXai.models.pi;
+
+    const merged = mergeWithBundled({ version: '2', providers: [legacyXai] });
+    const xai = merged.providers.find((provider) => provider.id === 'xai');
+
+    expect(xai?.agents).toContain('pi');
+    expect(xai?.routing.pi).toEqual(bundledXai.routing.pi);
+    expect(xai?.models.pi).toEqual(bundledXai.models.pi);
+  });
+
   it('backfills access for an old primary catalog without mutating it', () => {
     const merged = mergeWithBundled(MINIMAL);
     expect(MINIMAL.providers[0].access).toBeUndefined();
@@ -368,6 +461,61 @@ describe('mergeWithBundled', () => {
     ).toBeUndefined();
   });
 
+  it('旧目录在官方 Codex 路由未声明 custom tool 能力时继承 bundled 能力', () => {
+    const oldProviders = BUNDLED_CATALOG.providers.map((provider) => {
+      const oldProvider = structuredClone(provider);
+      if (oldProvider.routing.codex) {
+        delete oldProvider.routing.codex.supportsResponsesCustomTools;
+      }
+      return oldProvider;
+    });
+
+    const merged = mergeWithBundled({ version: '2', providers: oldProviders });
+
+    expect(merged.providers.find((provider) => provider.id === 'openai')
+      ?.routing.codex?.supportsResponsesCustomTools).toBe(true);
+    expect(merged.providers.find((provider) => provider.id === 'xai')
+      ?.routing.codex?.supportsResponsesCustomTools).toBe(false);
+    expect(merged.providers.find((provider) => provider.id === 'xd')
+      ?.routing.codex?.supportsResponsesCustomTools).toBe(false);
+
+    const explicitOpenai = structuredClone(
+      oldProviders.find((provider) => provider.id === 'openai')!,
+    );
+    explicitOpenai.routing.codex!.supportsResponsesCustomTools = false;
+    expect(mergeWithBundled({ version: '2', providers: [explicitOpenai] })
+      .providers.find((provider) => provider.id === 'openai')
+      ?.routing.codex?.supportsResponsesCustomTools).toBe(false);
+  });
+
+  it('不为改变鉴权或 upstream 的同名 Provider 猜测 custom tool 能力', () => {
+    const bundledOpenai = structuredClone(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'openai')!,
+    );
+    delete bundledOpenai.routing.codex!.supportsResponsesCustomTools;
+    const apiKeyOpenai: Provider = {
+      ...bundledOpenai,
+      auth: { method: 'apiKey' },
+    };
+    const reroutedOpenai: Provider = {
+      ...bundledOpenai,
+      routing: {
+        ...bundledOpenai.routing,
+        codex: {
+          ...bundledOpenai.routing.codex!,
+          upstream: 'https://responses.example.test/v1',
+        },
+      },
+    };
+
+    expect(mergeWithBundled({ version: '2', providers: [apiKeyOpenai] })
+      .providers.find((provider) => provider.id === 'openai')
+      ?.routing.codex?.supportsResponsesCustomTools).toBeUndefined();
+    expect(mergeWithBundled({ version: '2', providers: [reroutedOpenai] })
+      .providers.find((provider) => provider.id === 'openai')
+      ?.routing.codex?.supportsResponsesCustomTools).toBeUndefined();
+  });
+
   it('does not infer bundled billing when a same-id primary changes auth or upstream', () => {
     const apiKeyPrimary: Catalog = {
       ...MINIMAL,
@@ -422,18 +570,21 @@ describe('loadCatalog', () => {
       capabilityEvidence: 'current',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: { version: 'test' },
+      authorityCatalog: { version: 'test' },
     });
     expect(remote).toMatchObject({
       source: 'remote',
       capabilityEvidence: 'current',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: { version: 'test' },
+      authorityCatalog: { version: 'test' },
     });
     expect(bundled).toEqual({
       source: 'bundled',
       capabilityEvidence: 'fallback',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: BUNDLED_CATALOG,
+      authorityCatalog: null,
     });
   });
 
@@ -502,6 +653,9 @@ describe('loadCatalog', () => {
     for (const loaded of [local, remote, cache]) {
       expect(loaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
         .toEqual(bundledPreset.runtimes.pi);
+      expect(
+        loaded.authorityCatalog?.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi,
+      ).toBeUndefined();
     }
 
     const currentLoaded = await loadCatalogWithSource(
@@ -688,6 +842,7 @@ describe('loadCatalog', () => {
       capabilityEvidence: 'fallback',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: BUNDLED_CATALOG,
+      authorityCatalog: null,
     });
   });
 
@@ -754,6 +909,7 @@ describe('loadCatalog', () => {
       source: 'remote',
       capabilityEvidence: 'fallback',
       catalog: { version: 'test' },
+      authorityCatalog: null,
     });
   });
   it('falls back from invalid public API payload to legacy OSS before bundled', async () => {
@@ -809,6 +965,7 @@ describe('loadCatalog', () => {
     expect(result.capabilityEvidence).toBe('fallback');
     expect(result.catalog.version).toBe('test');
     expect(result.catalog).not.toHaveProperty('cindyModelMeta');
+    expect(result.authorityCatalog).toBeNull();
   });
 
   it('shares one remote budget across the public API and legacy OSS fallback', async () => {
@@ -924,6 +1081,7 @@ describe('loadCatalog', () => {
       capabilityEvidence: 'fallback',
       unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: BUNDLED_CATALOG,
+      authorityCatalog: null,
     });
     expect((Object.prototype as { polluted?: unknown }).polluted).toBeUndefined();
   });

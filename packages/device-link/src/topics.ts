@@ -150,6 +150,8 @@ const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
 const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // provider 目录是设备级快照；控制端订阅 sessions 后按来源 deviceId 精确刷新。
   'maker:provider:changed',
+  // runtime Agent roster is a device-level snapshot; controllers refresh after this push.
+  'maker:agents:changed',
   'maker:schedule:event',
   'maker:project-automation:event',
   // 被控端「当前 New Maker 草稿」全量变更:账号 / 全局级(无 sessionId),并入 `sessions` topic
@@ -160,6 +162,8 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // (状态卡两处都渲染),按单一 sessionId 路由会漏一边 → 按账号级并入 `sessions` topic
   // (低频状态机事件,量极小)。
   'learn:event',
+  // 被控端项目手动顺序变化:无 sessionId,并入 sessions topic 随设备列表订阅到达。
+  'sidebar-settings:project-order-changed',
 ]);
 
 /** 从 unknown payload 安全读一个字符串字段。 */

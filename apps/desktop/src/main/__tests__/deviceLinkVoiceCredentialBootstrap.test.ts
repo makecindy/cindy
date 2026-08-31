@@ -48,9 +48,10 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // 永久放弃后的唯一恢复事件(#1520 review P1)。
     expect(deviceLinkHost).toContain('if (available && wasAvailable !== true)');
     expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
+    expect(deviceLinkHost).toContain('createSubscriptionReplayScheduler({');
   });
 
-  it('每个 relay 连接代上线时从设备目录补齐已在线控制端展示名', () => {
+  it('每个 relay 连接代上线时从设备目录补齐展示名与已在线桌面', () => {
     const deviceLinkHost = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8');
 
     expect(deviceLinkHost).toContain("serverApiFetch<DeviceDirectoryResponse>('/api/device-link/devices'");
@@ -84,7 +85,10 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       'latestControllerDisplayNameDirectoryRefresh = {',
     );
     expect(deviceLinkHost).toContain(
-      'const requestEpoch = controllerDisplayNameFreshness.epoch;',
+      'const displayNameRequestEpoch = controllerDisplayNameFreshness.epoch;',
+    );
+    expect(deviceLinkHost).toContain(
+      'const presenceRequestEpoch = controllerPresenceFreshness.epoch;',
     );
     expect(deviceLinkHost).toContain(
       'applyControllerDisplayNamePresence({',
@@ -93,6 +97,13 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       "Object.prototype.hasOwnProperty.call(snap, 'selfName')",
     );
     expect(deviceLinkHost).toContain('applyControllerDisplayNameDirectorySnapshot({');
+    expect(deviceLinkHost).toContain('applyControllerPresenceListSnapshot(result.devices ?? [], presenceRequestEpoch);');
+    expect(deviceLinkHost).toContain(
+      'markControllerPresenceFresh(controllerPresenceFreshness, snap.deviceId);',
+    );
+    expect(deviceLinkHost).toContain(
+      'if (isMobilePlatform(platform)) handleMobilePeerOnline(deviceId);',
+    );
   });
 
   it('presence 展示名统一走协调器，无有效权威名时保留 dispatch 回退链', () => {

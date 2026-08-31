@@ -1,9 +1,7 @@
-import { Check, Share as ShareIcon, X } from "lucide-react-native";
+import { Share as ShareIcon, X } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
-import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
-import { shareSelectionStore } from "@/session/shareSelectionStore";
 import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
 import {
   fontWeight,
@@ -15,17 +13,16 @@ import {
   typeScale,
 } from "@/theme/tokens";
 
+/** 分享选择模式底部只保留关闭、已选数量和分享主按钮。 */
 export function ShareSelectionBar({
   busy,
   count,
-  shareableIds,
   screenshotTriggered = false,
   onCancel,
   onShare,
 }: {
   busy?: boolean;
   count: number;
-  shareableIds: readonly string[];
   screenshotTriggered?: boolean;
   onCancel(): void;
   onShare(): void;
@@ -33,33 +30,6 @@ export function ShareSelectionBar({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const selectedVisibleCount =
-    shareSelectionStore.getSelectedIdsInOrder(shareableIds).length;
-  const allSelected =
-    shareableIds.length > 0 &&
-    selectedVisibleCount === shareableIds.length &&
-    selectedVisibleCount === count;
-  const selectionBeforeSelectAllRef = useRef<string[] | null>(null);
-
-  const toggleAll = () => {
-    const selectedCount =
-      shareSelectionStore.getSelectedIdsInOrder(shareableIds).length;
-    const currentlyAllSelected =
-      shareableIds.length > 0 &&
-      selectedCount === shareableIds.length &&
-      selectedCount === shareSelectionStore.count();
-    if (currentlyAllSelected) {
-      shareSelectionStore.setSelection(
-        shareableIds.filter((clientId) =>
-          selectionBeforeSelectAllRef.current?.includes(clientId),
-        ),
-      );
-      selectionBeforeSelectAllRef.current = null;
-      return;
-    }
-    selectionBeforeSelectAllRef.current = shareSelectionStore.getSelectedIds();
-    shareSelectionStore.setSelection(shareableIds);
-  };
 
   const cancelButton = (
     <Pressable
@@ -77,58 +47,11 @@ export function ShareSelectionBar({
       />
     </Pressable>
   );
-  const selectAllButton = (
-    <Pressable
-      accessibilityLabel={
-        allSelected
-          ? t("session.shareImage.clearAll")
-          : t("session.shareImage.selectAll")
-      }
-      accessibilityRole="checkbox"
-      accessibilityState={{
-        checked: allSelected,
-        disabled: busy === true || shareableIds.length === 0,
-      }}
-      disabled={busy === true || shareableIds.length === 0}
-      onPress={toggleAll}
-      style={({ pressed }) => [
-        styles.selectAllButton,
-        (busy || shareableIds.length === 0) && styles.disabled,
-        pressed && styles.pressed,
-      ]}
-      testID="session.shareImage.selectAll"
-    >
-      <View
-        style={[
-          styles.selectAllMark,
-          allSelected && styles.selectAllMarkSelected,
-        ]}
-      >
-        {allSelected ? (
-          <Check
-            color={colors.ctaText}
-            size={iconSize.xs}
-            strokeWidth={iconStroke.bold}
-          />
-        ) : null}
-      </View>
-      <Text style={styles.selectAllLabel}>
-        {t(
-          allSelected
-            ? "session.shareImage.clearAll"
-            : "session.shareImage.selectAll",
-        )}
-      </Text>
-    </Pressable>
-  );
-  const copy = (
+  const countLabel = (
     <View
-      style={[styles.copy, screenshotTriggered && styles.screenshotSafeCopy]}
+      style={[styles.count, screenshotTriggered && styles.screenshotSafeCount]}
     >
-      <Text style={styles.title}>
-        {t("session.shareImage.title")}
-      </Text>
-      <Text style={styles.subtitle}>
+      <Text ellipsizeMode="tail" numberOfLines={1} style={styles.countText}>
         {t("session.shareImage.selectedCount", { count })}
       </Text>
     </View>
@@ -152,7 +75,7 @@ export function ShareSelectionBar({
         size={iconSize.sm}
         strokeWidth={iconStroke.regular}
       />
-      <Text style={styles.shareLabel}>
+      <Text ellipsizeMode="tail" numberOfLines={1} style={styles.shareLabel}>
         {busy
           ? t("session.shareImage.generating")
           : t("session.shareImage.share")}
@@ -163,8 +86,7 @@ export function ShareSelectionBar({
   return (
     <View style={styles.container} testID="session.shareImage.bar">
       {cancelButton}
-      {selectAllButton}
-      {copy}
+      {countLabel}
       {shareButton}
     </View>
   );
@@ -185,66 +107,33 @@ const makeStyles = (colors: ThemeColors) =>
     },
     iconButton: {
       alignItems: "center",
-      height: 36,
-      justifyContent: "center",
-      width: 36,
-    },
-    selectAllButton: {
-      alignItems: "center",
-      backgroundColor: colors.surfaceChip,
-      borderColor: colors.border,
-      borderRadius: radius.pill,
-      borderWidth: StyleSheet.hairlineWidth,
-      flexDirection: "row",
-      gap: spacing.xs,
       height: 44,
-      paddingHorizontal: spacing.sm,
-    },
-    selectAllLabel: {
-      color: colors.textPrimary,
-      fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
-    },
-    selectAllMark: {
-      alignItems: "center",
-      borderColor: colors.textTertiary,
-      borderRadius: radius.pill,
-      borderWidth: StyleSheet.hairlineWidth,
-      height: 16,
       justifyContent: "center",
-      width: 16,
+      width: 44,
     },
-    selectAllMarkSelected: {
-      backgroundColor: colors.cta,
-      borderColor: colors.cta,
-    },
-    copy: { flex: 1, gap: 2, minWidth: 0 },
-    title: {
+    count: { flex: 1, minWidth: 0 },
+    countText: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
       fontWeight: fontWeight.medium,
       lineHeight: lineHeight.body,
     },
-    screenshotSafeCopy: {
+    screenshotSafeCount: {
       paddingLeft: spacing.xl,
-    },
-    subtitle: {
-      color: colors.textTertiary,
-      fontSize: typeScale.caption,
-      lineHeight: lineHeight.caption,
     },
     shareButton: {
       alignItems: "center",
       backgroundColor: colors.cta,
       borderRadius: radius.pill,
       flexDirection: "row",
-      gap: spacing.xs,
+      gap: spacing.sm,
       minHeight: 44,
-      paddingHorizontal: spacing.md,
+      minWidth: 112,
+      paddingHorizontal: spacing.lg,
     },
     shareLabel: {
       color: colors.ctaText,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.body,
       fontWeight: fontWeight.medium,
     },
     disabled: { opacity: 0.46 },

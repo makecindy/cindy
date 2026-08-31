@@ -19,7 +19,7 @@
 
 import {
   classifyModel,
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   isModelDisabled,
   isProviderDisabled,
   type AgentKind,
@@ -30,6 +30,10 @@ import {
 } from '@cindy/model-providers';
 
 import { applyProviderOrder } from '../../shared/providerOrder.js';
+import {
+  decodeCatalogModelPin,
+  encodeCatalogModelPin,
+} from '../../shared/catalogModelPin.js';
 
 /** oneshot 可路由的 agent(Pi 的 oneShot 未实现,不进钉档清单)。 */
 const ONESHOT_ROUTE_AGENTS = ['codex', 'claude-code'] as const;
@@ -47,30 +51,19 @@ export type OneshotRoute =
   | { kind: 'utility-profile'; profileId: string }
   | { kind: 'catalog'; providerId: string; agentKind: AgentKind; model: string };
 
-/** 目录钉值前缀(与轻量档位键区分:档位键永不带冒号)。 */
-const CATALOG_PIN_PREFIX = 'cat:';
-
 /** 目录钉编码:cat:<providerId>:<agentKind>:<modelId>(modelId 可含 '/' 与 ':')。 */
 export function encodeCatalogPin(providerId: string, agentKind: AgentKind, model: string): string {
-  return `${CATALOG_PIN_PREFIX}${providerId}:${agentKind}:${model}`;
+  if (agentKind !== 'codex' && agentKind !== 'claude-code') {
+    throw new Error(`unsupported catalog pin agent: ${agentKind}`);
+  }
+  return encodeCatalogModelPin({ providerId, agentKind, model });
 }
 
 /** 解码目录钉;不是目录钉(或形态残缺/agent 不可路由)返回 null。 */
 export function decodeCatalogPin(
   raw: string,
 ): { providerId: string; agentKind: AgentKind; model: string } | null {
-  if (!raw.startsWith(CATALOG_PIN_PREFIX)) return null;
-  const rest = raw.slice(CATALOG_PIN_PREFIX.length);
-  const firstSep = rest.indexOf(':');
-  if (firstSep <= 0) return null;
-  const secondSep = rest.indexOf(':', firstSep + 1);
-  if (secondSep <= firstSep + 1) return null;
-  const providerId = rest.slice(0, firstSep);
-  const agentRaw = rest.slice(firstSep + 1, secondSep);
-  const model = rest.slice(secondSep + 1);
-  if (!model) return null;
-  if (!(ONESHOT_ROUTE_AGENTS as readonly string[]).includes(agentRaw)) return null;
-  return { providerId, agentKind: agentRaw as AgentKind, model };
+  return decodeCatalogModelPin(raw);
 }
 
 /**
@@ -104,7 +97,7 @@ function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean
  *  更宽的判据会把 mode 缺省、group='image' 的网关条目放进钉档清单,钉死
  *  不回落 = 恒失败)。userProvider 标记镜像模型选择器的自定义供应商放行。 */
 function isChatModel(model: CatalogModel, provider: Provider): boolean {
-  return isAgentSelectableModel(model, { userProvider: provider.source === 'user' });
+  return isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' });
 }
 
 const AGENT_LABEL: Record<(typeof ONESHOT_ROUTE_AGENTS)[number], string> = {
@@ -131,7 +124,7 @@ function routingForRenderer(routing: Provider['routing']): Provider['routing'] {
 export interface TextOneshotPinOption {
   /** 钉值(cat: 编码)。 */
   id: string;
-  /** 兜底行文案:`<模型名> · <供应商名>`(跨 agent 重复补 agent 后缀)。 */
+  /** 兜底行文案:`<Agent> · <模型名> · <供应商名>`。 */
   label: string;
   /** 分组(供应商显示名)。 */
   group: string;
@@ -140,6 +133,8 @@ export interface TextOneshotPinOption {
   modelId: string;
   /** 模型展示名(CatalogModel.name)。 */
   modelName: string;
+  /** 模型选择器的目录默认可见性；缺省 = 可见。 */
+  defaultEnabled?: boolean;
   /** 模型展示图标 id(CatalogModel.icon;未设定时渲染层回落供应商标)。 */
   icon?: string;
   /** 折扣路由条目(classifyModel = gpt-budget)——渲染层据此亮「折扣」徽标。 */
@@ -148,8 +143,8 @@ export interface TextOneshotPinOption {
   subscription: boolean;
   /** 供应商路由描述(渲染层厂牌图标判定用,ProviderLogoMark)。 */
   routing?: Provider['routing'];
-  /** 同供应商同模型跨 agent 重复时的后缀('Codex' / 'Claude Code');不重复缺省。 */
-  agentSuffix?: string;
+  /** 该精确路由使用的 Agent('Codex' / 'Claude Code')。 */
+  agentSuffix: string;
 }
 
 /**
@@ -191,61 +186,40 @@ export function buildTextOneshotPinOptions(
   hasCredential?: OneshotCredentialProbe,
 ): TextOneshotPinOption[] {
   const entries: { provider: Provider; agentKind: (typeof ONESHOT_ROUTE_AGENTS)[number]; model: CatalogModel }[] = [];
+  const seenRoutes = new Set<string>();
   for (const provider of orderedProviders(catalog, providerOrder)) {
     if (isProviderDisabled(overrides, provider.id)) continue;
-    if (provider.source === 'builtin') {
-      // 内置四家的执行与凭证都与 agent 无关(xd 网关的请求连 agent 都不看;
-      // 订阅登录态是账号级)——同一模型只出一行,agent 取首个可路由且有凭证
-      // 的(codex 优先,与 resolveOneshotCatalogModel 同偏好)。
-      const seen = new Set<string>();
-      for (const agentKind of ONESHOT_ROUTE_AGENTS) {
-        if (!isRoutableForOneshot(provider, agentKind)) continue;
-        if (hasCredential && !hasCredential(provider, agentKind)) continue;
-        for (const model of displayOrderedModels(provider.models[agentKind] ?? [])) {
-          if (seen.has(model.id)) continue;
-          if (!isChatModel(model, provider)) continue;
-          if (isModelDisabled(overrides, provider.id, model.id)) continue;
-          seen.add(model.id);
-          entries.push({ provider, agentKind, model });
-        }
-      }
-      continue;
-    }
-    // 自定义供应商:agent 决定 wire / 凭证 / 上游,(供应商×模型) 跨 agent 是
-    // 两条真路由,各自成行(渲染层补 agent 后缀区分)。
+    // Agent 决定模型可见性和实际 wire。即使内置供应商的两条路由最终共享
+    // 凭证或上游，也分别展示并保存，让用户选择一组确定的 Agent + Model。
     for (const agentKind of ONESHOT_ROUTE_AGENTS) {
       if (!isRoutableForOneshot(provider, agentKind)) continue;
       if (hasCredential && !hasCredential(provider, agentKind)) continue;
       for (const model of displayOrderedModels(provider.models[agentKind] ?? [])) {
         if (!isChatModel(model, provider)) continue;
         if (isModelDisabled(overrides, provider.id, model.id)) continue;
+        const routeKey = `${provider.id}\n${agentKind}\n${model.id}`;
+        if (seenRoutes.has(routeKey)) continue;
+        seenRoutes.add(routeKey);
         entries.push({ provider, agentKind, model });
       }
     }
   }
-  // 同供应商同模型 id 跨 agent 重复时,两边都补 agent 后缀(否则两行同名选不中)。
-  // 键带分隔符:裸拼接 ('ab','cd') 与 ('a','bcd') 会撞键误判重复。
-  const counts = new Map<string, number>();
-  for (const e of entries) {
-    const key = `${e.provider.id}\n${e.model.id}`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
   return entries.map((e) => {
     const base = `${e.model.name} · ${e.provider.name}`;
-    const dup = (counts.get(`${e.provider.id}\n${e.model.id}`) ?? 0) > 1;
     return {
       id: encodeCatalogPin(e.provider.id, e.agentKind, e.model.id),
-      label: dup ? `${base} · ${AGENT_LABEL[e.agentKind]}` : base,
+      label: `${AGENT_LABEL[e.agentKind]} · ${base}`,
       group: e.provider.name,
       providerId: e.provider.id,
       agentKind: e.agentKind,
       modelId: e.model.id,
       modelName: e.model.name,
+      ...(e.model.defaultEnabled !== undefined ? { defaultEnabled: e.model.defaultEnabled } : {}),
       ...(e.model.icon !== undefined ? { icon: e.model.icon } : {}),
       budget: classifyModel(e.model) === 'gpt-budget',
       subscription: e.provider.access?.kind === 'subscription',
       ...(e.provider.routing !== undefined ? { routing: routingForRenderer(e.provider.routing) } : {}),
-      ...(dup ? { agentSuffix: AGENT_LABEL[e.agentKind] } : {}),
+      agentSuffix: AGENT_LABEL[e.agentKind],
     };
   });
 }

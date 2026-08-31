@@ -2,9 +2,9 @@
  * cindyMediaCatalog.ts — cindy 槽能力配置的纯派生(白名单 + 默认/档位选型)。
  * [PROTOCOL]: 变更时更新此头部,然后检查 CLAUDE.md
  *
- * 输入是 providers.json 运行时目录的供应商数组(与会话模型列表**同一获取来源**,
- * 见 maker-host/active-catalog 的 getActiveCatalog),输出图像 / 视频 / 向量各自的
- * 可选清单与默认选型。本文件**零模型字面量**:清单与默认全部来自目录。
+ * 输入是 active catalog 的供应商数组(与会话模型列表**同一获取来源**,
+ * 见 maker-host/active-catalog 的 getActiveCatalog)。其中 XD 媒体由 Gateway `/models`
+ * 动态投影，第三方媒体来自各 Provider 目录；本文件**零模型字面量**。
  *
  * 文件名留着 "Media" 是历史(2026-08-04 加入向量类目时未改名,避免一次纯改名
  * 的大 diff 冲掉 blame);三个类目共用同一套派生规则,差异只在读目录的哪个字段。
@@ -23,6 +23,21 @@
  * first-wins 去重、停用过滤、默认档位、空清单降级)—— 差异只在读目录的哪个字段。
  */
 export type CindyCapabilityKind = 'image' | 'video' | 'embed';
+
+export type CindyCoreMediaType = 'image' | 'video';
+
+/**
+ * Core 媒体目录只按媒体类型与 Core 可执行性筛选。旧视频 alias Registry 属于
+ * `cindy-request` 执行器实现细节，不能参与这里的模型可见性判断。
+ */
+export function selectExecutableCoreMediaModels<T extends { mode?: string }>(
+  models: readonly T[],
+  type: CindyCoreMediaType,
+  isExecutable: (model: T) => boolean = () => true,
+): T[] {
+  const mode = type === 'image' ? 'image_generation' : 'video_generation';
+  return models.filter((model) => model.mode === mode && isExecutable(model));
+}
 
 /** 目录里与媒体能力相关的供应商字段(只取本模块用得到的那几个)。 */
 export interface CindyMediaProviderSlice {
@@ -54,6 +69,29 @@ export interface CindyMediaCatalogConfig {
    * 非 null 时 standard / draft / best 三个值必定在 models 里。
    */
   defaults: { standard: string; draft: string; best: string } | null;
+}
+
+/**
+ * 仅在旧 cindy-request 入口收窄候选；失效默认随清单一起恢复，交给既有偏好
+ * 迁移逻辑持久化，不能只在执行时换型号而保留页面上的旧配置。
+ */
+export function filterLegacyCindyMediaConfig<T extends CindyMediaCatalogConfig['models'][number]>(
+  config: { models: T[]; defaults: CindyMediaCatalogConfig['defaults'] },
+  isExecutable: (model: T) => boolean,
+): { models: T[]; defaults: CindyMediaCatalogConfig['defaults'] } {
+  const models = config.models.filter(isExecutable);
+  if (models.length === 0) return { models, defaults: null };
+  const valid = (id: string | undefined) =>
+    id !== undefined && models.some((model) => model.id === id) ? id : null;
+  const standard = valid(config.defaults?.standard) ?? models[0]!.id;
+  return {
+    models,
+    defaults: {
+      standard,
+      draft: valid(config.defaults?.draft) ?? standard,
+      best: valid(config.defaults?.best) ?? standard,
+    },
+  };
 }
 
 /**

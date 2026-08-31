@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 
 import {
   MIN_SPLIT_CHILD_FRACTION,
@@ -13,7 +22,7 @@ import { ensureGhostPanelsRegistered, useGhostPanelsSync } from '../cindy-brain/
 import { isGhostPanelKindMinimized, useGhostPanelBubbleState } from '../lib/ghostPanelBubbleState';
 import { isGhostPanelKindDetached, useGhostPanelWindowsState } from '../lib/ghostPanelWindowState';
 import { registerBuiltinPanels } from '../panels/builtinPanels';
-import { getPanelKind } from '../panels/registry';
+import { getPanelKind, type PanelDefinition } from '../panels/registry';
 import { installLayoutDevTools } from './layoutDevTools';
 import { PanelMaximizeContext, type PanelMaximizeState } from './panelMaximize';
 import { PaneAtWindowTopProvider, PaneFillProvider } from './panePlacement';
@@ -41,8 +50,9 @@ import { PaneWidthProvider, useContentAvailableWidth } from './paneWidths';
  *   fraction 一字不动(位置与宽度记忆保留,重装/合并/恢复即原位复活,
  *   architecture-invariants §3)。
  *
- * 实现细节 —— root split 扁平化:根分割不产生容器 div,children(含分割线)
- * 直接吐进父容器(MainLayout 的 row flex div)。嵌套 split 走通用容器渲染,
+ * 实现细节 —— root split 在专属的内容区 flex 容器内扁平化:根分割自身不再额外
+ * 产生容器 div,children(含分割线)直接作为内容区容器的 flex 子项。该容器把百分比
+ * 解析口径钉在“窗口减去左侧栏”的剩余宽度；嵌套 split 走通用容器渲染,
  * 其分割线暂为静态(嵌套布局今天不存在,交互化随真实需求补)。
  */
 
@@ -50,6 +60,8 @@ import { PaneWidthProvider, useContentAvailableWidth } from './paneWidths';
 const AVAILABLE_WIDTH_FALLBACK = 1200;
 /** chat-main 的最小像素宽(与 <main> 的 min-w-[400px] 对齐)。 */
 const CHAT_MIN_PX = 400;
+/** live resize 停稳后再校正 clamp 与份额账本，避免把连续像素变化回灌 React。 */
+const ROOT_WIDTH_SELF_HEAL_SETTLE_MS = 120;
 /**
  * 非 chat 面板的兜底最小宽(2026-07-09 Lizi 定案:**只有聊天区有硬下限,
  * 其它面板一律自由拉**)。这个值不是产品下限,只防"拖到窄得抓不住把手/
@@ -73,18 +85,21 @@ function isPanelKindVisible(kind: string): boolean {
 }
 
 /** 单个 pane 的挂载点:查注册表渲染;不可见 kind = 隐藏(数据保留在树里)。 */
-function PanelHost({
+const PanelHost = memo(function PanelHost({
   node,
+  definition,
+  visible,
   fill = false,
   atWindowTop = true,
 }: {
   node: PaneNode;
+  definition: PanelDefinition | null;
+  visible: boolean;
   fill?: boolean;
   atWindowTop?: boolean;
 }): ReactNode {
-  const def = getPanelKind(node.panelKind);
-  if (!def || !isPanelKindVisible(node.panelKind)) return null;
-  const Component = def.Component;
+  if (!definition || !visible) return null;
+  const Component = definition.Component;
   return (
     <PaneAtWindowTopProvider value={atWindowTop}>
       <PaneFillProvider value={fill}>
@@ -92,7 +107,7 @@ function PanelHost({
       </PaneFillProvider>
     </PaneAtWindowTopProvider>
   );
-}
+});
 
 interface SplitChildEntry {
   treeIndex: number;
@@ -221,17 +236,13 @@ export function normalizeSubMinFractions(
  * live 覆盖里存的同样是在场份额(拖动与渲染同一口径)。
  */
 interface RootWidthState {
-  panelWidths: Record<string, number>;
-  splitWidths: Record<string, number>;
+  panelWidths: Record<string, string>;
+  splitWidths: Record<string, string>;
 }
 
-function computeRootWidths(
-  layout: Layout,
-  live: Record<string, number> | null,
-  avail: number,
-): RootWidthState {
-  const panelWidths: Record<string, number> = {};
-  const splitWidths: Record<string, number> = {};
+function computeRootWidths(layout: Layout, live: Record<string, number> | null): RootWidthState {
+  const panelWidths: Record<string, string> = {};
+  const splitWidths: Record<string, string> = {};
   if (layout.content.type !== 'split' || layout.content.direction !== 'row') {
     return { panelWidths, splitWidths };
   }
@@ -240,8 +251,11 @@ function computeRootWidths(
     if (node.type === 'pane' && node.panelKind === 'chat-main') continue;
     const share = live?.[node.id] ?? entry.share;
     const min = paneMinPx(node);
-    const max = Math.max(min, avail - CHAT_MIN_PX);
-    const width = Math.min(max, Math.max(min, Math.round(share * avail)));
+    // Resolve every consumer against the dedicated layout-content query container. A plain `%`
+    // would be relative to each consumer's immediate parent, so GhostPanel's inner section would
+    // accidentally apply the root share a second time. cqw keeps the shell and content aligned
+    // without restoring a ResizeObserver → React state round-trip during live window resizing.
+    const width = `clamp(${min}px, ${share * 100}cqw, calc(100cqw - ${CHAT_MIN_PX}px))`;
     if (node.type === 'pane') panelWidths[node.panelKind] = width;
     else splitWidths[node.id] = width;
   }
@@ -287,7 +301,15 @@ function NodeView({
 }: NodeViewProps): ReactNode {
   const splitRef = useRef<HTMLDivElement>(null);
   if (node.type === 'pane') {
-    return <PanelHost node={node} fill={fillPane} atWindowTop={atWindowTop} />;
+    return (
+      <PanelHost
+        node={node}
+        definition={getPanelKind(node.panelKind)}
+        visible={isPanelKindVisible(node.panelKind)}
+        fill={fillPane}
+        atWindowTop={atWindowTop}
+      />
+    );
   }
   const ledger = activeSplitLedger(node.children);
   const visible = ledger.entries;
@@ -322,8 +344,7 @@ function NodeView({
     const hiddenByMaximize = maximizedKind !== null && !entryHasMaximized;
     const childAtWindowTop =
       atWindowTop &&
-      (node.direction === 'row' ||
-        (maximizedKind !== null ? entryHasMaximized : i === 0));
+      (node.direction === 'row' || (maximizedKind !== null ? entryHasMaximized : i === 0));
     items.push(
       <div
         key={entry.node.id}
@@ -366,12 +387,6 @@ function NodeView({
 
 interface RootDividerPropsExtra {
   /**
-   * chat-main 渲染宽的**账本估值**(px,仅兜底用):可用宽 − 各在场非 chat 面板
-   * 宽度之和。起拖时优先实测 chat-main 元素矩形(一次布局读取,符合起拖测量
-   * 口径),量不到(测试环境等)才回落本值。
-   */
-  chatRenderedPx: number;
-  /**
    * 在场份额与树份额的比例尺(Σ在场 fraction)。份额增量写回树时要乘它 ——
    * 隐藏面板占着的那份不参与分配,也不该被拖动改写(见文件头「在场份额」)。
    */
@@ -379,12 +394,17 @@ interface RootDividerPropsExtra {
 }
 
 interface RootDividerProps extends RootDividerPropsExtra {
+  /** 当前 Renderer 布局快照；起拖时用于同步对齐尚未自愈的 clamp 份额。 */
+  layout: Layout;
   splitId: string;
   left: SplitChildEntry;
   right: SplitChildEntry;
   /** 同一分割的全部在场子项(含缝两侧):压缩 chat 的接力出账要按实测宽找出折叠兄弟。 */
   visibleSiblings: SplitChildEntry[];
-  avail: number;
+  /** 测试/嵌入宿主可提供的可用宽提示；生产起拖时直接测量内容区容器。 */
+  availableWidthHint: number | null;
+  /** 根 split 所在的内容区；生产起拖时以它为像素/份额换算口径。 */
+  availableWidthRootRef: RefObject<HTMLDivElement | null>;
   /** 拖动中的瞬时**在场份额**覆盖(paneId → share);null = 结束。 */
   onLive: (live: Record<string, number> | null) => void;
   /** 提交后的乐观本地树更新(广播随后回声同一棵树)。 */
@@ -430,12 +450,13 @@ function rawPanePx(node: LayoutNode): number | null {
  * 松手经 transferSplitFraction 一次性写树;双击 = 两侧份额均分。
  */
 function RootDivider({
+  layout,
   splitId,
   left,
   right,
   visibleSiblings,
-  avail,
-  chatRenderedPx,
+  availableWidthHint,
+  availableWidthRootRef,
   shareScale,
   onLive,
   onCommitted,
@@ -444,7 +465,7 @@ function RootDivider({
   const draggingRef = useRef(false);
 
   /** amountToLeft:**在场份额**增量(> 0 = 左侧变宽);写树前乘 shareScale 换成树份额。 */
-  const commit = (amountToLeft: number, relay: RelayPlan | null) => {
+  const commit = (amountToLeft: number, relay: RelayPlan | null, baseLayout?: Layout) => {
     const treeAmount = amountToLeft * shareScale;
     if (treeAmount === 0) return;
     // 压缩 chat 的提交走接力:chat 先扣到 0.05 下限,差额由折叠兄弟出账 ——
@@ -452,7 +473,7 @@ function RootDivider({
     const compressingChat =
       relay !== null && (relay.receiver === right.treeIndex ? treeAmount < 0 : treeAmount > 0);
     try {
-      const current = window.electronAPI.layout.getStateSync().layout;
+      const current = baseLayout ?? window.electronAPI.layout.getStateSync().layout;
       const op = compressingChat
         ? transferSplitFractionRelay(
             current,
@@ -487,16 +508,20 @@ function RootDivider({
    *   作废,界面弹回原宽(2026-07-29 Lizi 实测右栏拖到最大就回弹的根因:树里
    *   躺着一条已卸载插件的残留份额,聊天区吸收了它的地方,账面却还记在它头上)。
    */
-  const sideRoomShare = (entry: SplitChildEntry, fallbackPx: number | null): number => {
-    if (!(avail > 0)) return 0; // 可用宽异常:不给余量,免得 0/0 产出 NaN 份额
+  const sideRoomShare = (
+    entry: SplitChildEntry,
+    available: number,
+    fallbackPx: number | null,
+  ): number => {
+    if (!(available > 0)) return 0; // 可用宽异常:不给余量,免得 0/0 产出 NaN 份额
     const minPx = paneMinPx(entry.node);
-    const ledgerPx = entry.share * avail;
+    const ledgerPx = entry.share * available;
     const measured = measuredPanePx(entry.node);
     // 实测可信直接用;量不到才回退账面/兜底,并保留 min 下限(与历史一致,不扰动)。
     const basisPx = measured ?? Math.min(ledgerPx, fallbackPx ?? ledgerPx);
     const pxRoom = basisPx - minPx;
     const floorRoom = shareScale > 0 ? (entry.fraction - MIN_SPLIT_CHILD_FRACTION) / shareScale : 0;
-    return Math.max(0, Math.min(pxRoom / avail, floorRoom));
+    return Math.max(0, Math.min(pxRoom / available, floorRoom));
   };
 
   /**
@@ -514,8 +539,9 @@ function RootDivider({
   const chatShrinkPlan = (
     chatEntry: SplitChildEntry,
     otherSide: SplitChildEntry,
+    available: number,
   ): { room: number; relay: RelayPlan } | null => {
-    if (!(avail > 0)) return null;
+    if (!(available > 0)) return null;
     const measured = rawPanePx(chatEntry.node);
     if (measured === null || measured < CHAT_MIN_PX) return null;
     const floorRoom = (entry: SplitChildEntry): number =>
@@ -530,7 +556,7 @@ function RootDivider({
         idleSources.push(sibling.treeIndex);
       }
     }
-    const pxRoom = Math.max(0, measured - CHAT_MIN_PX) / avail;
+    const pxRoom = Math.max(0, measured - CHAT_MIN_PX) / available;
     return {
       room: Math.min(pxRoom, sourcesRoom),
       relay: { sources: [chatEntry.treeIndex, ...idleSources], receiver: otherSide.treeIndex },
@@ -542,15 +568,33 @@ function RootDivider({
     e.preventDefault();
     draggingRef.current = true;
     const startX = e.clientX;
-    const startL = left.share;
-    const startR = right.share;
+    const measuredAvailable = availableWidthRootRef.current?.getBoundingClientRect().width ?? 0;
+    const available =
+      availableWidthHint && availableWidthHint > 0
+        ? availableWidthHint
+        : measuredAvailable > 0
+          ? measuredAvailable
+          : AVAILABLE_WIDTH_FALLBACK;
+    // The settle-time self-heal can still be pending when the user grabs the divider immediately
+    // after a window resize. Align this gesture's baseline synchronously so a pane held up by the
+    // CSS floor responds from the first pixel; persist only if the gesture actually moves.
+    const alignedLayout = normalizeSubMinFractions(layout, available, isPanelKindVisible);
+    const alignedLedger =
+      alignedLayout?.content.type === 'split' && alignedLayout.content.direction === 'row'
+        ? activeSplitLedger(alignedLayout.content.children)
+        : null;
+    const alignedLeft = alignedLedger?.entries.find((entry) => entry.treeIndex === left.treeIndex);
+    const alignedRight = alignedLedger?.entries.find((entry) => entry.treeIndex === right.treeIndex);
+    const dragBaseLayout = alignedLeft && alignedRight ? alignedLayout : undefined;
+    const startL = alignedLeft?.share ?? left.share;
+    const startR = alignedRight?.share ?? right.share;
     // 起拖只量一次(拖动期间界面静止,没有失效场景);chat 量不到时回落账本估值。
     const chatEntry = isChatPane(left.node) ? left : isChatPane(right.node) ? right : null;
     const shrinkPlan = chatEntry
-      ? chatShrinkPlan(chatEntry, chatEntry === left ? right : left)
+      ? chatShrinkPlan(chatEntry, chatEntry === left ? right : left, available)
       : null;
-    let dMin = -sideRoomShare(left, isChatPane(left.node) ? chatRenderedPx : null);
-    let dMax = sideRoomShare(right, isChatPane(right.node) ? chatRenderedPx : null);
+    let dMin = -sideRoomShare(left, available, null);
+    let dMax = sideRoomShare(right, available, null);
     if (shrinkPlan && chatEntry === left) dMin = -shrinkPlan.room;
     if (shrinkPlan && chatEntry === right) dMax = shrinkPlan.room;
     const relay: RelayPlan | null = shrinkPlan?.relay ?? null;
@@ -563,7 +607,7 @@ function RootDivider({
     document.documentElement.style.cursor = 'col-resize';
 
     const onMove = (me: PointerEvent) => {
-      const d = Math.min(dMax, Math.max(dMin, (me.clientX - startX) / avail));
+      const d = Math.min(dMax, Math.max(dMin, (me.clientX - startX) / available));
       lastD = d;
       onLive({ [left.node.id]: startL + d, [right.node.id]: startR - d });
     };
@@ -575,7 +619,7 @@ function RootDivider({
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onCancel);
-      if (commitIt && lastD !== 0) commit(lastD, relay);
+      if (commitIt && lastD !== 0) commit(lastD, relay, dragBaseLayout ?? undefined);
       onLive(null);
     };
     const onUp = () => finish(true);
@@ -590,8 +634,17 @@ function RootDivider({
   // 压缩 chat 的方向同样走接力(计划即时按当前实测现算),且不得越过 chat 400px 下限。
   const onDoubleClick = () => {
     const total = left.share + right.share;
+    const measuredAvailable = availableWidthRootRef.current?.getBoundingClientRect().width ?? 0;
+    const available =
+      availableWidthHint && availableWidthHint > 0
+        ? availableWidthHint
+        : measuredAvailable > 0
+          ? measuredAvailable
+          : AVAILABLE_WIDTH_FALLBACK;
     const chatEntry = isChatPane(left.node) ? left : isChatPane(right.node) ? right : null;
-    const plan = chatEntry ? chatShrinkPlan(chatEntry, chatEntry === left ? right : left) : null;
+    const plan = chatEntry
+      ? chatShrinkPlan(chatEntry, chatEntry === left ? right : left, available)
+      : null;
     let d = total / 2 - left.share;
     if (plan) {
       // 均分 delta 压缩 chat 侧时,夹取到接力计划的可压余量,防止越过 400px 下限。
@@ -781,6 +834,43 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     () => window.electronAPI.layout.getStateSync().layout,
   );
   useEffect(() => window.electronAPI.layout.onChanged(({ layout: next }) => setLayout(next)), []);
+  const layoutRootRef = useRef<HTMLDivElement>(null);
+
+  // CSS clamp 负责 live resize 的即时画面；这里不发布连续宽度 state，只在内容区
+  // 停稳后检查一次份额账本。确实有非 chat 面板被 120px floor 托起时才写 React/IPC，
+  // 让下一次分割线起拖从眼前宽度开始，不出现“空拖一段再跳大”。
+  useEffect(() => {
+    const root = layoutRootRef.current;
+    if (!root || suppressNonChatPanels) return;
+    let timer: number | null = null;
+    const heal = () => {
+      timer = null;
+      if (document.body.classList.contains('resizing-pane')) {
+        schedule();
+        return;
+      }
+      const available = root.getBoundingClientRect().width;
+      if (!(available > 0)) return;
+      const fixed = normalizeSubMinFractions(layout, available, isPanelKindVisible);
+      if (fixed === null) return;
+      setLayout(fixed);
+      void window.electronAPI.layout.set(fixed).catch(() => undefined);
+    };
+    const schedule = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(heal, ROOT_WIDTH_SELF_HEAL_SETTLE_MS);
+    };
+
+    schedule();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    observer?.observe(root);
+    if (observer === null) window.addEventListener('resize', schedule);
+    return () => {
+      observer?.disconnect();
+      if (observer === null) window.removeEventListener('resize', schedule);
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [ghostBubbleState, ghostSyncVersion, ghostWindowsState, layout, suppressNonChatPanels]);
 
   // 撑满态(panelMaximize.tsx):会话级视图态,树账本不动。同 kind 再点还原。
   const [maximizedKind, setMaximizedKind] = useState<string | null>(null);
@@ -795,47 +885,13 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
   // 分割线拖动中的瞬时**在场份额**覆盖(paneId → share);面板宽度实时跟手,
   // 松手清空回落树值 —— 拖动全程不写 IPC。
   const [liveFractions, setLiveFractions] = useState<Record<string, number> | null>(null);
-  const availCtx = useContentAvailableWidth();
-  const avail = availCtx ?? AVAILABLE_WIDTH_FALLBACK;
+  const availableWidthHint = useContentAvailableWidth();
   // eslint 会说 ghostWindowsState 没被直接读——它是 computeRootWidths 里
   // isPanelKindVisible 的隐式数据源(模块级镜像),必须进 deps 才能感知抽离变化。
   const rootWidths = useMemo(
-    () => computeRootWidths(layout, liveFractions, avail),
-    [layout, liveFractions, avail, ghostBubbleState, ghostSyncVersion, ghostWindowsState],
+    () => computeRootWidths(layout, liveFractions),
+    [layout, liveFractions, ghostBubbleState, ghostSyncVersion, ghostWindowsState],
   );
-  // chat 实际渲染宽 ≈ 可用宽 − 各在场非 chat 面板宽度之和(拖缝余量的兜底估值,
-  // 见 RootDividerPropsExtra;起拖优先实测元素矩形)。
-  const chatRenderedPx = Math.max(
-    CHAT_MIN_PX,
-    avail -
-      [...Object.values(rootWidths.panelWidths), ...Object.values(rootWidths.splitWidths)].reduce(
-        (sum, width) => sum + width,
-        0,
-      ),
-  );
-
-  // 布局自愈:份额吃不饱最小宽 → 抬到位、chat 捐差额并写回树(画面与账本一致,
-  // 拖缝零跳变;详见 normalizeSubMinFractions)。250ms 防抖合并连续变化(装入
-  // 广播、窗口缩放);拖动中不打扰;可用宽未测得(context null)时不动账本。
-  useEffect(() => {
-    // 接管态下可用宽是接管方的(设置页全宽),按它改账本会失真 —— 不自愈。
-    if (suppressNonChatPanels || availCtx === null || liveFractions !== null) return;
-    const timer = setTimeout(() => {
-      const fixed = normalizeSubMinFractions(layout, availCtx, isPanelKindVisible);
-      if (!fixed) return;
-      setLayout(fixed);
-      void window.electronAPI.layout.set(fixed).catch(() => undefined);
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [
-    availCtx,
-    ghostBubbleState,
-    ghostSyncVersion,
-    ghostWindowsState,
-    layout,
-    liveFractions,
-    suppressNonChatPanels,
-  ]);
 
   // 撑满目标失效自动还原:面板被卸下/停用(kind 注销)、抽离进独立窗口或
   // pane 离开树时清态,免得下次回来以陈年撑满态惊回。接管态(设置页)只是
@@ -902,7 +958,16 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
       );
       return (
         <PanelMaximizeContext.Provider value={maximizeCtx}>
-          <PaneWidthProvider value={rootWidths.panelWidths}>{body}</PaneWidthProvider>
+          <PaneWidthProvider value={rootWidths.panelWidths}>
+            <div
+              ref={layoutRootRef}
+              data-testid="layout-root-content"
+              className="flex min-w-0 flex-1 overflow-hidden"
+              style={{ containerType: 'inline-size' }}
+            >
+              {body}
+            </div>
+          </PaneWidthProvider>
         </PanelMaximizeContext.Provider>
       );
     }
@@ -914,12 +979,13 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
           items.push(
             <RootDivider
               key={`divider-${entry.node.id}`}
+              layout={layout}
               splitId={content.id}
               left={prev}
               right={entry}
               visibleSiblings={visible}
-              avail={avail}
-              chatRenderedPx={chatRenderedPx}
+              availableWidthHint={availableWidthHint}
+              availableWidthRootRef={layoutRootRef}
               shareScale={ledger.scale}
               onLive={setLiveFractions}
               onCommitted={setLayout}
@@ -980,7 +1046,16 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
   }
   return (
     <PanelMaximizeContext.Provider value={maximizeCtx}>
-      <PaneWidthProvider value={rootWidths.panelWidths}>{body}</PaneWidthProvider>
+      <PaneWidthProvider value={rootWidths.panelWidths}>
+        <div
+          ref={layoutRootRef}
+          data-testid="layout-root-content"
+          className="flex min-w-0 flex-1 overflow-hidden"
+          style={{ containerType: 'inline-size' }}
+        >
+          {body}
+        </div>
+      </PaneWidthProvider>
     </PanelMaximizeContext.Provider>
   );
 }

@@ -70,17 +70,17 @@ describe('buildFileBrowserGridItems', () => {
     expect(byName['zeta.png'].thumb).toBe('image');
     expect(byName['AGENTS.md'].thumb).toBe('doc');
     expect(byName['sessions.db'].thumb).toBe('generic');
-    expect(byName['AGENTS.md'].metaLabel).toMatch(/^18\.2 KB · 昨天 \d{2}:\d{2}$/);
-    expect(byName['docs'].metaLabel).toMatch(/^今天 \d{2}:\d{2}$/);
+    expect(byName['AGENTS.md'].metaLabel).toMatch(/^18\.2 KB · Yesterday \d{2}:\d{2}$/);
+    expect(byName['docs'].metaLabel).toMatch(/^Today \d{2}:\d{2}$/);
   });
 });
 
 describe('formatFileBrowserDate', () => {
-  it('今天/昨天/当年/跨年四种形态', () => {
-    expect(formatFileBrowserDate(NOW - 60_000, NOW)).toMatch(/^今天 /);
-    expect(formatFileBrowserDate(NOW - 86_400_000, NOW)).toMatch(/^昨天 /);
-    expect(formatFileBrowserDate(new Date(2026, 4, 12).getTime(), NOW)).toBe('5月12日');
-    expect(formatFileBrowserDate(new Date(2025, 11, 31).getTime(), NOW)).toBe('2025年12月31日');
+  it('today/yesterday/same-year/cross-year shapes', () => {
+    expect(formatFileBrowserDate(NOW - 60_000, NOW)).toMatch(/^Today /);
+    expect(formatFileBrowserDate(NOW - 86_400_000, NOW)).toMatch(/^Yesterday /);
+    expect(formatFileBrowserDate(new Date(2026, 4, 12).getTime(), NOW)).toBe('05-12');
+    expect(formatFileBrowserDate(new Date(2025, 11, 31).getTime(), NOW)).toBe('2025-12-31');
     expect(formatFileBrowserDate(0, NOW)).toBe('');
   });
 });

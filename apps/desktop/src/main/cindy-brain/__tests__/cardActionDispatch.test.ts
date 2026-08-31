@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { GhostCardActionDispatcher, type CardActionDispatchDeps } from '../cardActionDispatch';
 import type { InstalledGhost } from '../../../shared/ghost';
 
-function fakeGhost(overrides: { enabled?: boolean; slots?: string[] } = {}): InstalledGhost {
+function fakeGhost(overrides: { enabled?: boolean; card?: boolean } = {}): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -18,7 +18,7 @@ function fakeGhost(overrides: { enabled?: boolean; slots?: string[] } = {}): Ins
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: overrides.slots ?? ['tool', 'card', 'network'],
+      ...(overrides.card === false ? {} : { card: {} }),
     },
     dir: '/fake/cindy-mivo',
     enabled: overrides.enabled ?? true,
@@ -204,7 +204,7 @@ describe('cardActionDispatch · 资格审 + 投递', () => {
     const gone = makeDispatcher({ getGhost: () => null });
     expect((await gone.dispatcher.dispatch(CALL_ID, CUSTOM_ID)).ok).toBe(false);
 
-    const noSlot = makeDispatcher({ getGhost: () => fakeGhost({ slots: ['tool'] }) });
+    const noSlot = makeDispatcher({ getGhost: () => fakeGhost({ card: false }) });
     const r = await noSlot.dispatcher.dispatch(CALL_ID, CUSTOM_ID);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('no-card-slot');

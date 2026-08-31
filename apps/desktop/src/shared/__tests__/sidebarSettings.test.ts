@@ -14,6 +14,7 @@ describe('sidebar settings snapshot validation', () => {
           pinnedOrderIsAuthoritative,
           pinnedOrder: [],
           hiddenProjectKeys: [],
+          hiddenMainViewGhostIds: [],
         }),
       ).toBe(true);
     },
@@ -26,6 +27,7 @@ describe('sidebar settings snapshot validation', () => {
         pinnedOrderIsAuthoritative: true,
         pinnedOrder: ['session-a'],
         hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: [],
       }),
     ).toBe(true);
     expect(
@@ -34,6 +36,7 @@ describe('sidebar settings snapshot validation', () => {
         pinnedOrderIsAuthoritative: false,
         pinnedOrder: ['session-a'],
         hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: [],
       }),
     ).toBe(false);
   });
@@ -44,6 +47,7 @@ describe('sidebar settings snapshot validation', () => {
         ...OWNER_STAMP,
         pinnedOrder: [],
         hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: [],
       }),
     ).toBe(false);
     expect(
@@ -52,6 +56,37 @@ describe('sidebar settings snapshot validation', () => {
         pinnedOrderIsAuthoritative: 'yes',
         pinnedOrder: [],
         hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: [],
+      }),
+    ).toBe(false);
+  });
+
+  it('requires bounded unique Ghost ids for hidden main views', () => {
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['xd-sites'],
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['xd-sites', 'xd-sites'],
+      }),
+    ).toBe(false);
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['XD Sites'],
       }),
     ).toBe(false);
   });

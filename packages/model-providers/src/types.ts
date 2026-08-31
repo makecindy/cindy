@@ -164,6 +164,12 @@ export interface RoutingDescriptor {
    * Codex 的 openai-chat / anthropic-messages 会分别进入对应的本地 Responses bridge。
    */
   wireProtocol?: ProviderWireProtocol;
+  /**
+   * 此 Codex Responses 上游是否原生接受 `type: "custom"` 工具。
+   * `false` 时 Desktop 可把选定的 custom tool 对称转换为普通 function tool；
+   * 未声明表示没有足够能力信息，调用方不得按模型名猜测。
+   */
+  supportsResponsesCustomTools?: boolean;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
   upstream: string;
   /**
@@ -258,6 +264,8 @@ export interface ModelCost {
 export interface CatalogModel {
   /** 与 maker-core 现有 model id 一致（如 'claude-opus-4-8' / 'gpt-5.5' / 'codex/gpt-5.5'）。 */
   id: string;
+  /** Server entitlement state. Paid-locked models remain present for UI but are never routable. */
+  availability?: 'available' | 'requires_payment';
   /** Sparse PI protocol override; absence means use PI's bundled model catalog. */
   piApi?: PiModelApi;
   /** 同一 provider/runtime 内该模型的上游覆盖；缺省使用 provider 级路由。 */
@@ -328,6 +336,8 @@ export interface CatalogModel {
   effortDisplayNames?: Partial<Record<Effort, string>>;
   /** 默认 effort；null = 不支持。 */
   defaultEffort: Effort | null;
+  /** 思考只有开/关两档时，选择器显示开关而不是档位列表。 */
+  thinkingToggle?: boolean;
   /**
    * 该模型在**该 (provider, agent) 下**是否支持 Fast Mode —— Fast 能力的**唯一真相**。
    *
@@ -424,6 +434,7 @@ export interface CatalogModel {
 export interface ProviderMediaModel {
   id: string;
   name: string;
+  availability?: 'available' | 'requires_payment';
   modalities?: { input: string[]; output: string[] };
   officialDocs?: string;
   disabled?: boolean;
@@ -532,15 +543,17 @@ export interface ProviderRuntimeModelConfig {
   defaultEnabled?: boolean;
   /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */
   supportsImageInput?: boolean;
-  /** Pi 自定义模型是否支持 reasoning；缺省 / false 均按不支持处理。 */
+  /** 该 runtime 模型是否支持 reasoning；缺省表示未声明（由投影层决定 fallback）。 */
   reasoning?: boolean;
   /**
-   * Pi 自定义模型明确支持的推理强度。仅在 `reasoning: true` 时有效；不从模型名、协议或
-   * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的 BYOM 端点。
+   * 该 runtime 模型明确支持的推理强度。仅在 `reasoning: true` 时有效；不从模型名、协议或
+   * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的端点。
    */
   reasoningEfforts?: PiReasoningEffort[];
-  /** Pi 自定义模型的厂商推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
+  /** 该 runtime 模型的推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
   reasoningDefaultEffort?: PiReasoningEffort;
+  /** 思考只有开/关时走开关 UI。 */
+  thinkingToggle?: boolean;
 }
 
 /**

@@ -33,6 +33,7 @@ import {
   Search,
   Unplug,
   Zap,
+  Lock,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -41,6 +42,7 @@ import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { MorphPopover } from '@/components/ui/morph-popover';
+import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { XDIncMark } from '@/components/icons/XDIncMark';
@@ -53,6 +55,7 @@ import {
   type UnifiedModelPanelProps,
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
+import { ThinkingToggle } from './ThinkingToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
 import {
@@ -64,7 +67,9 @@ import {
 import { useApiKey } from '@/hooks/useApiKey';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
+import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useProviders } from '@/hooks/useProviders';
+import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
   evictDeviceProviders,
   prefetchDeviceProviders,
@@ -111,6 +116,7 @@ import {
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { compactEnglishEffortLabel } from '@cindy/maker-shared/agent-capabilities';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
+import type { ModelAccessAccountTier } from '../../../shared/modelAccess';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
@@ -154,6 +160,8 @@ export interface ModelMemoryAccessors {
   setChoice?: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   getFast: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
   setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
+  getThinking?: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
+  setThinking?: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
   /**
    * 「恢复推荐 / 回落默认」用的**删除**入口(2026-08-17 review H3)。
    *
@@ -169,14 +177,6 @@ export interface ModelMemoryAccessors {
   /** 同 `clearEffort`,针对 Fast(缺省即关,所以删除与写 false 显示等价,但不钉住默认)。 */
   clearFast?: (agent: AgentKind, providerId: string, modelId: string) => void;
 }
-
-// 供应商完整展示名:三个内置 id 复用设置页 i18n 标题(settings.providers.<id>.title),
-// 自定义供应商回退目录里的 provider.name。用于模型信息面板的来源说明。
-const PROVIDER_TITLE_KEY: Record<string, string> = {
-  anthropic: 'settings.providers.anthropic.title',
-  openai: 'settings.providers.openai.title',
-  xd: 'settings.providers.xd.title',
-};
 
 // 配置面板锚在主菜单内缩 8px 的模型行上；补偿这段内缩，让两块面板贴边但不重叠。
 const MODEL_OPTIONS_SIDE_OFFSET = 8;
@@ -315,8 +315,7 @@ function ModelOptionsFloatingPanel({
 }
 
 function providerDisplayName(p: ProviderView, t: (key: string) => string): string {
-  const key = PROVIDER_TITLE_KEY[p.id];
-  return key ? t(key) : p.name;
+  return sharedProviderDisplayName(p, t);
 }
 
 // 来源供应商 → 单色官方 mark(fill=currentColor)。trigger 默认右间距 + trigger 文字色;
@@ -448,10 +447,12 @@ interface RowModel {
   defaultEffort: Effort | null;
   effortDisplayNames?: Partial<Record<string, string>>;
   supportsFastMode?: boolean;
+  thinkingToggle?: boolean;
   /** 模型级 Codex bridge 协议；仅同一 Provider 内混合原生/桥接模型时存在。 */
   codexCompatibilityWireProtocol?: 'openai-chat' | 'anthropic-messages';
   /** 展示图标 id(AI Gateway / 目录设定,SectionModel.icon);flat 列表的 ModelDescriptor 无此字段。 */
   icon?: string;
+  availability?: 'available' | 'requires_payment';
 }
 
 type Translate = (key: string, options?: { defaultValue?: string }) => string;
@@ -620,6 +621,8 @@ interface ModelSelectorProps {
   fastMode?: boolean;
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  thinkingEnabled?: boolean;
+  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
@@ -663,6 +666,11 @@ interface ModelSelectorProps {
   visualVariant?: 'default' | 'create-agent';
   /** 仅普通 composer 显式开启 chip → panel 容器形变；设置页/worker 等维持 Radix。 */
   useMorphPopover?: boolean;
+  /**
+   * 指针关闭后的回焦目标(composer 输入框)。选完模型 / 点空白后立刻送回输入框;
+   * Esc 仍回 pill(§14.2)。设置页等非 composer 入口不传。
+   */
+  restoreFocusTarget?: () => HTMLElement | null;
   /** Popover 弹出方向,默认 "top"（底部工具栏向上弹），dialog 内嵌场景传 "bottom"。 */
   popoverSide?: 'top' | 'bottom';
   /**
@@ -732,8 +740,14 @@ interface ModelSelectorProps {
    */
   agentSwitch?: {
     currentVendor: 'cc' | 'codex' | 'pi';
-    /** 进入非当前 Agent 浏览态前确认；false 时保持原分段，什么都不改。 */
-    confirmBrowseSwitch?: () => Promise<boolean>;
+    /**
+     * 进入非当前 Agent 浏览态前确认；false 时保持原分段，什么都不改。
+     *
+     * ★ 必须把**本次目标引擎**交出去(Chris 2026-08-19):调用方的「已确认过就不再问」
+     * 判据是「会话上已有**指向该目标**的切换意图」。不传目标,它只能判「有没有意图」,
+     * 于是先切 Codex 再选 Pi 时确认框永久静默(见 agentSwitchConfirmation.hasSwitchIntent)。
+     */
+    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
     /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
@@ -760,6 +774,8 @@ interface ModelSelectorContentProps {
   fastMode?: boolean;
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  thinkingEnabled?: boolean;
+  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
@@ -897,6 +913,8 @@ interface ModelSelectorContentProps {
     engine: 'cc' | 'codex' | 'pi';
     fast: boolean;
     favoriteUid: string | null;
+    /** 配置浮层「恢复推荐」的应用动作；调用方应删除 override，不得重新记忆推荐值。 */
+    resetToRecommended?: true;
   }) => void;
   /** 语义同 ModelSelectorProps.reselectEmitsChange(点当前行照常回调)。 */
   reselectEmitsChange?: boolean;
@@ -914,7 +932,8 @@ interface ModelSelectorContentProps {
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
   agentSwitch?: {
     currentVendor: 'cc' | 'codex' | 'pi';
-    confirmBrowseSwitch?: () => Promise<boolean>;
+    /** 语义同 ModelSelectorProps.agentSwitch.confirmBrowseSwitch(带本次目标引擎)。 */
+    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
     /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
@@ -997,11 +1016,13 @@ export function resolveRemoteModelListStatus({
 export function ModelSelectorContent(props: ModelSelectorContentProps) {
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
+  const { accountTier } = useModelAccessStatus();
   return (
     <ModelSelectorContentView
       {...props}
       gatewayPricing={gatewayPricing}
       referencePricing={referencePricing}
+      modelAccessAccountTier={accountTier}
     />
   );
 }
@@ -1013,6 +1034,8 @@ function ModelSelectorContentView({
   onEffortChange,
   fastMode = false,
   onFastModeChange,
+  thinkingEnabled = true,
+  onThinkingChange,
   modelMemory,
   vendorKey,
   deviceId,
@@ -1044,10 +1067,13 @@ function ModelSelectorContentView({
   interactionDisabled = false,
   gatewayPricing,
   referencePricing,
+  modelAccessAccountTier,
 }: ModelSelectorContentProps & {
   gatewayPricing: ModelPricingCatalog | null;
   referencePricing: ModelPricingCatalog | null;
+  modelAccessAccountTier: ModelAccessAccountTier | null;
 }) {
+  const confirmDialog = useOptionalConfirmDialog();
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
@@ -1089,7 +1115,7 @@ function ModelSelectorContentView({
     if (agentSwitch && next !== agentSwitch.currentVendor && agentSwitch.confirmBrowseSwitch) {
       browseSwitchPendingRef.current = true;
       try {
-        if (!(await agentSwitch.confirmBrowseSwitch())) return;
+        if (!(await agentSwitch.confirmBrowseSwitch(next))) return;
       } finally {
         browseSwitchPendingRef.current = false;
       }
@@ -1496,12 +1522,7 @@ function ModelSelectorContentView({
         ? resolveCurrentSourceId(providers, currentProviderId, id, priceAgentKind)
         : null);
     const pricing = effectiveProviderId === 'xd' ? gatewayPricing : referencePricing;
-    const quote = getModelPriceQuote(
-      pricing,
-      effectiveProviderId,
-      id,
-      priceAgentKind ?? undefined,
-    );
+    const quote = getModelPriceQuote(pricing, effectiveProviderId, id, priceAgentKind ?? undefined);
     if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
       if (!quote && gatewayPricing == null) return null;
       const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
@@ -1626,6 +1647,7 @@ function ModelSelectorContentView({
             });
           },
       query,
+      includePaymentRequired: true,
     });
     // visibilityVersion 仅作刷新触发器(设置页改显示开关后强制重算);deviceId 切换需重算分段。
   }, [
@@ -2004,7 +2026,10 @@ function ModelSelectorContentView({
     (editingIsActive || inactiveProviderHasMemory) &&
     !!editingModel &&
     fastEditable(editingProviderId, editingModel);
-  const editHasEfforts = canConfigure && (editingModel?.efforts.length ?? 0) > 0;
+  const editThinkingToggle =
+    canConfigure && currentAgentKind === 'pi' && editingModel?.thinkingToggle === true;
+  const editHasEfforts =
+    canConfigure && (editingModel?.efforts.length ?? 0) > 0 && !editThinkingToggle;
 
   // 配置列当前 effort 值(选中 → live;否则记忆/默认)。
   const editEffortValue: Effort | null = editingModel
@@ -2103,7 +2128,7 @@ function ModelSelectorContentView({
           </span>
         )}
       </div>
-      {(editShowFast || editHasEfforts) && (
+      {(editShowFast || editHasEfforts || editThinkingToggle) && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editShowFast && (
@@ -2118,7 +2143,52 @@ function ModelSelectorContentView({
           />
         </div>
       )}
-      {editShowFast && editHasEfforts && (
+      {editShowFast && (editHasEfforts || editThinkingToggle) && (
+        <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
+      )}
+      {editThinkingToggle && editingModel && (
+        <div className="px-0.5">
+          <ThinkingToggle
+            enabled={
+              editingIsActive
+                ? thinkingEnabled
+                : currentAgentKind && editingProviderId
+                  ? (modelMemory?.getThinking?.(
+                      currentAgentKind,
+                      editingProviderId,
+                      editingModel.id,
+                    ) ?? true)
+                  : true
+            }
+            onToggle={() => {
+              const next = editingIsActive
+                ? !thinkingEnabled
+                : !(currentAgentKind && editingProviderId
+                    ? (modelMemory?.getThinking?.(
+                        currentAgentKind,
+                        editingProviderId,
+                        editingModel.id,
+                      ) ?? true)
+                    : true);
+              if (currentAgentKind && editingProviderId) {
+                modelMemory?.setThinking?.(
+                  currentAgentKind,
+                  editingProviderId,
+                  editingModel.id,
+                  next,
+                );
+              }
+              if (editingIsActive) void onThinkingChange?.(next);
+              bump();
+            }}
+            label={t('newChat.modelSelector.thinking')}
+            hideIcon
+            accentVar="var(--text-primary)"
+            thumbVar="var(--surface-on-card)"
+          />
+        </div>
+      )}
+      {editThinkingToggle && editHasEfforts && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editHasEfforts && (
@@ -2244,6 +2314,24 @@ function ModelSelectorContentView({
     </div>
   ) : null;
 
+  const showPaymentRequired = () => {
+    if (!confirmDialog) return;
+    void confirmDialog
+      .confirm({
+        title: t('newChat.modelSelector.paymentRequired.title'),
+        description: t('newChat.modelSelector.paymentRequired.description'),
+        confirmText: t('newChat.modelSelector.paymentRequired.action'),
+        cancelText: t('commonUi.confirmDialog.cancel'),
+      })
+      .then((accepted) => {
+        if (!accepted) return;
+        // Desktop 使用 createHashRouter；ModelSelectorContent 同时是可裸渲染的复用组件，
+        // 不能在这里强依赖 Router context。写入 hash 会触发 hashchange，并由正式路由
+        // 切到设置里的计费 tab；直接 pushState(pathname) 不会被 HashRouter 接管。
+        window.location.hash = '#/settings?tab=billing';
+      });
+  };
+
   // ── 单个模型行 ───────────────────────────────────────────────────────────
   // provider 非空(分段模式)→ 名字前缀该来源的 mark;null(flat / device-link)→ 无前缀。
   const renderModelItem = (provider: ProviderView | null, model: RowModel) => {
@@ -2273,6 +2361,7 @@ function ModelSelectorContentView({
             defaultEnabled: selectedCatalogModel?.defaultEnabled,
           }));
     const disabled = interactionDisabled || modelDisabledOf(provider, model.id);
+    const paymentRequired = model.availability === 'requires_payment';
     const disabledReason = subscriptionDirectDisabledReason(model.id);
     // 只选择模型 id 的入口没有 effort / Fast 语义；继续展示目录默认档会让用户
     // 误以为该值可在当前入口调整。选择事务仍由 handleRowSelect 独立解析 effort，
@@ -2299,7 +2388,7 @@ function ModelSelectorContentView({
     // session-agent-switch 浏览目标引擎态同样开放:选模型前正需要看描述/上下文/价格/来源;
     // 面板内配置写的是**目标引擎**的 per-(来源,模型) 全局预设(currentAgentKind 已随浏览态
     // 指向目标引擎),切换确认后由 performAgentSwitch 按预设恢复 effort / Fast。
-    const hasOptions = !disabled;
+    const hasOptions = !disabled && !paymentRequired;
     const isEditingThis =
       !!editing && editing.modelId === model.id && editing.providerId === providerId;
     const revealOptions = (anchor: HTMLDivElement) => {
@@ -2350,7 +2439,12 @@ function ModelSelectorContentView({
           <div
             role="option"
             aria-selected={isSelected}
-            aria-disabled={disabled}
+            aria-disabled={disabled ? true : undefined}
+            aria-label={
+              paymentRequired
+                ? `${model.displayName} · ${t('newChat.modelSelector.paymentRequired.unlock')}`
+                : undefined
+            }
             title={disabledReason ?? undefined}
             data-model-selected={isSelected ? 'true' : undefined}
             data-model-options-active={isEditingThis ? 'true' : undefined}
@@ -2365,10 +2459,19 @@ function ModelSelectorContentView({
             }}
             onClick={() => {
               if (disabled) return;
+              if (paymentRequired) {
+                showPaymentRequired();
+                return;
+              }
               handleRowSelect(providerId, model.id);
             }}
             onKeyDown={(ev) => {
               if (ev.target !== ev.currentTarget || disabled) return;
+              if (paymentRequired && (ev.key === 'Enter' || ev.key === ' ')) {
+                ev.preventDefault();
+                showPaymentRequired();
+                return;
+              }
               if (ev.key === 'ArrowLeft' && hasOptions) {
                 ev.preventDefault();
                 revealOptions(ev.currentTarget);
@@ -2384,13 +2487,13 @@ function ModelSelectorContentView({
               handleRowSelect(providerId, model.id);
             }}
             className={cn(
-              'flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
+              'group/row flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
               constrainedListMaxHeight !== undefined && 'min-h-9',
               'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               isSelected && 'bg-[var(--model-item-hover)]',
               isEditingThis &&
                 'bg-[var(--surface-hover)] ring-1 ring-inset ring-[var(--model-dropdown-border)]',
-              disabled && 'cursor-not-allowed opacity-50 hover:bg-transparent',
+              (disabled || paymentRequired) && 'opacity-50',
             )}
           >
             <span className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -2428,8 +2531,28 @@ function ModelSelectorContentView({
                     />
                   )}
                 </span>
-                {(isHiddenSelectedModel || showSubscriptionTag || showPromotionTag) && (
+                {(paymentRequired ||
+                  isHiddenSelectedModel ||
+                  showSubscriptionTag ||
+                  showPromotionTag) && (
                   <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
+                    {paymentRequired && (
+                      <span
+                        data-payment-required-unlock
+                        className="invisible shrink-0 select-none text-11 font-medium text-[var(--text-secondary)] group-hover/row:visible group-focus-within/row:visible"
+                      >
+                        {t('newChat.modelSelector.paymentRequired.unlock')}
+                      </span>
+                    )}
+                    {paymentRequired && (
+                      <span
+                        data-payment-required-badge
+                        className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]"
+                      >
+                        <Lock size={11} />
+                        {t('newChat.modelSelector.paymentRequired.badge')}
+                      </span>
+                    )}
                     {isHiddenSelectedModel && (
                       <span
                         data-model-hidden-label
@@ -2532,6 +2655,42 @@ function ModelSelectorContentView({
       </div>
     ) : null;
 
+  // 统一面板的三个标签 / 能力回调(2026-08-19 预审 P2-4):包 useCallback 免得 render body
+  // 裸函数每帧换引用,把面板内 useCallback / useMemo 的缓存全部打穿。
+  // ★ 位置必须在下面 `if (emptyState) return` 这个**提前返回之前**:hooks 数量在空态与
+  // 正常态之间必须一致(2026-08-19 实测:放在 emptyState 之后,providers 从空到有的那一次
+  // 渲染直接 "Rendered more hooks" 崩溃)。
+  const unifiedProviderLabel = useCallback(
+    (providerId: string): string => {
+      const provider = providers.find((entry) => entry.id === providerId);
+      return provider ? providerDisplayName(provider, t) : providerId;
+    },
+    [providers, t],
+  );
+  // 档名多语言按**该行自己的引擎**取 capabilities 兜底名(不同 agent 的同名档可能有
+  // 各自的英文名),优先仍是 i18n 词表 effortLevels.*。
+  const unifiedEffortLabel = useCallback(
+    (agent: AgentKind, value: Effort): string => {
+      const levels =
+        agent === 'claude-code'
+          ? (cc.capabilities?.effortLevels ?? [])
+          : agent === 'codex'
+            ? (codex.capabilities?.effortLevels ?? [])
+            : (pi.capabilities?.effortLevels ?? []);
+      return modelEffortLabel(t, null, value, levels.find((e) => e.id === value)?.displayName);
+    },
+    [cc.capabilities, codex.capabilities, pi.capabilities, t],
+  );
+  const unifiedAgentFastCapable = useCallback(
+    (agent: AgentKind): boolean =>
+      agent === 'claude-code'
+        ? !!cc.capabilities?.hasFastMode
+        : agent === 'codex'
+          ? !!codex.capabilities?.hasFastMode
+          : !!pi.capabilities?.hasFastMode,
+    [cc.capabilities, codex.capabilities, pi.capabilities],
+  );
+
   if (emptyState) return emptyState;
 
   const hasAnyModel = sections ? sections.length > 0 : (flatModels?.length ?? 0) > 0;
@@ -2584,30 +2743,11 @@ function ModelSelectorContentView({
   // ── 统一模型选择器面板(opt-in,M3 / M4)────────────────────────────────────
   // 联合列表的可见性 / 排除口径必须与既有面板**逐条对齐**(否则「统一面板里能看到、
   // 切回旧面板就没了」),故这里复用同一批判定函数,只是补上 agent 维度。
+  // unifiedProviderLabel / unifiedEffortLabel / unifiedAgentFastCapable 三个回调声明在
+  // emptyState 提前返回之前(hooks 数量恒定的硬要求,见彼处注释)。
   if (unifiedPanel) {
     // 可见性 / 排除谓词与 scope 一律从组件作用域取(见 unifiedIsVisible 的定义处):
     // 种子收藏 effect 用的是同一份,两边不能各写一遍。
-    const unifiedProviderLabel = (providerId: string): string => {
-      const provider = providers.find((entry) => entry.id === providerId);
-      return provider ? providerDisplayName(provider, t) : providerId;
-    };
-    // 档名多语言按**该行自己的引擎**取 capabilities 兜底名(不同 agent 的同名档可能有
-    // 各自的英文名),优先仍是 i18n 词表 effortLevels.*。
-    const unifiedEffortLabel = (agent: AgentKind, value: Effort): string => {
-      const levels =
-        agent === 'claude-code'
-          ? (cc.capabilities?.effortLevels ?? [])
-          : agent === 'codex'
-            ? (codex.capabilities?.effortLevels ?? [])
-            : (pi.capabilities?.effortLevels ?? []);
-      return modelEffortLabel(t, null, value, levels.find((e) => e.id === value)?.displayName);
-    };
-    const unifiedAgentFastCapable = (agent: AgentKind): boolean =>
-      agent === 'claude-code'
-        ? !!cc.capabilities?.hasFastMode
-        : agent === 'codex'
-          ? !!codex.capabilities?.hasFastMode
-          : !!pi.capabilities?.hasFastMode;
     return (
       // 外层多包一层「百分比钳制」:面板列自身的 max-h 公式(560px/100vh)不知道宿主
       // popover 实际给了多少纵向空间 —— morph 弹层按锚点位置算出的可用高度可能更小,
@@ -2616,191 +2756,201 @@ function ModelSelectorContentView({
       // 在宿主高度**确定**时把面板列钳到宿主内(flex 拉伸 → 列内 min-h-0 让列表收缩滚动),
       // 宿主高度不确定时百分比落空为 none,由面板列自己的绝对上限兜底 —— 两个分支各管一头。
       <div className="flex max-h-full min-h-0 w-full min-w-0">
-      <div
-        ref={bindPaneElement}
-        data-model-tag-density={modelTagDensity}
-        data-unified-model-panel="true"
-        className={cn(
-          // 设计稿的面板骨架:搜索行贴顶(border-b 分隔)、列表贴边(自带 8px 内距)、
-          // footer 用 border-t 分隔 —— 外层不再加统一 padding。
-          // grow:stickyWidth 下宿主可能比内容宽(筛选后内容变窄、面板不回缩),
-          // 面板列拉伸填满,不在边框内留空条。
-          'flex min-h-0 grow flex-col',
-          // 高度上限必须给在**面板**上:不给的话,列表按内容撑到比视口还高,外层
-          // popover 裁掉超出部分,用户就翻不到最后几行(2026-08-13 实测)。列表侧配
-          // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
-          'max-h-[min(560px,calc(100vh-120px))]',
-          // 宽度自适应(规格 §1.2):长模型名先把面板撑宽,到上限才截断,不硬砍名字。
-          // 最小宽只兜「搜索行 + 空态不局促」的底(Chris 2026-08-13:min 460 让短名列表
-          // 中间留一条空隙 —— 面板应该贴着最长行收窄,理论最小值可以很小)。
-          fluidWidth
-            ? 'w-full min-w-0'
-            : 'w-max min-w-[300px] max-w-[min(600px,calc(100vw-48px))]',
-        )}
-      >
-        {/* 设计稿 .search-wrap:无框平铺行 + 底部 hairline(不是独立的胶囊输入框)。 */}
         <div
+          ref={bindPaneElement}
+          data-model-tag-density={modelTagDensity}
+          data-unified-model-panel="true"
           className={cn(
-            'flex shrink-0 items-center gap-2 border-b border-[var(--model-dropdown-border)] px-3.5 py-3',
-            interactionDisabled ? 'text-[var(--text-disabled-tertiary)]' : 'text-[var(--text-tertiary)]',
+            // 设计稿的面板骨架:搜索行贴顶(border-b 分隔)、列表贴边(自带 8px 内距)、
+            // footer 用 border-t 分隔 —— 外层不再加统一 padding。
+            // grow:stickyWidth 下宿主可能比内容宽(筛选后内容变窄、面板不回缩),
+            // 面板列拉伸填满,不在边框内留空条。
+            'flex min-h-0 grow flex-col',
+            // 高度上限必须给在**面板**上:不给的话,列表按内容撑到比视口还高,外层
+            // popover 裁掉超出部分,用户就翻不到最后几行(2026-08-13 实测)。列表侧配
+            // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
+            'max-h-[min(560px,calc(100vh-120px))]',
+            // 宽度自适应(规格 §1.2):长模型名先把面板撑宽,到上限才截断,不硬砍名字。
+            // 最小宽只兜「搜索行 + 空态不局促」的底(Chris 2026-08-13:min 460 让短名列表
+            // 中间留一条空隙 —— 面板应该贴着最长行收窄,理论最小值可以很小)。
+            fluidWidth
+              ? 'w-full min-w-0'
+              : 'w-max min-w-[300px] max-w-[min(600px,calc(100vw-48px))]',
           )}
         >
-          <Search size={14} className="shrink-0" />
-          <input
-            type="text"
-            disabled={interactionDisabled}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t('newChat.modelSelector.search.placeholderAll')}
+          {/* 设计稿 .search-wrap:无框平铺行 + 底部 hairline(不是独立的胶囊输入框)。 */}
+          <div
             className={cn(
-              'min-w-0 flex-1 bg-transparent text-13 outline-none',
+              'flex shrink-0 items-center gap-2 border-b border-[var(--model-dropdown-border)] px-3.5 py-3',
               interactionDisabled
-                ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
-                : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
+                ? 'text-[var(--text-disabled-tertiary)]'
+                : 'text-[var(--text-tertiary)]',
             )}
-            aria-label={t('newChat.modelSelector.search.placeholderAll')}
-          />
-        </div>
-        <UnifiedModelPanel
-          providers={providers}
-          {...(unifiedAgents ? { agents: unifiedAgents } : {})}
-          scope={unifiedScope}
-          isVisible={unifiedIsVisible}
-          {...(unifiedExcludeProvider ? { excludeProvider: unifiedExcludeProvider } : {})}
-          {...(unifiedExcludeModel ? { excludeModel: unifiedExcludeModel } : {})}
-          sourceVersion={[
-            visibilityVersion,
-            deviceId ?? '',
-            excludeSubscriptionDirect ? 1 : 0,
-            excludeChatBridgedCodex ? 1 : 0,
-            remoteProviders.modelVisibilityOverrides ? 'ov' : 'no-ov',
-          ].join('|')}
-          query={query}
-          selected={{ providerId: activeSourceId, modelId }}
-          selectedFavoriteUid={selectedFavoriteUid}
-          liveAgentKind={currentAgentKind}
-          fastMode={fastMode}
-          selectedEffort={effort}
-          {...(modelMemory ? { modelMemory } : {})}
-          agentFastModeCapable={unifiedAgentFastCapable}
-          priceOf={(providerId, id, agent) => pricePresentationOf(providerId, id, agent)}
-          providerLabel={unifiedProviderLabel}
-          effortLabelOf={unifiedEffortLabel}
-          {...(constrainedListMaxHeight !== undefined
-            ? { listMaxHeight: constrainedListMaxHeight }
-            : {})}
-          interactionDisabled={interactionDisabled}
-          configurationEnabled={configurationEnabled}
-          {...(sessionEngineFilter ? { sessionEngineFilter } : {})}
-          {...(followSession ? { followSession } : {})}
-          onSelect={(providerId, id, rowEffort, rowConfig) => {
-            const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
-            // 草稿(M5):整行原样直通给调用方 —— 引擎跟着模型一起落，中途不再被单引擎
-            // 链路重解析一次(见 onUnifiedSelect 的说明)。
-            if (onUnifiedSelect) {
-              onUnifiedSelect({
-                providerId,
-                modelId: id,
-                ...(rowEffortValue ? { effort: rowEffortValue } : {}),
-                engine: rowConfig.engine,
-                fast: rowConfig.fast,
-                favoriteUid: rowConfig.favoriteUid,
-              });
-              closeOptionsPanel();
-              onDismiss?.();
-              return;
-            }
-            // 已建会话(M6):同引擎行照旧走 onProviderChange 直切;跨引擎行在 selectRow
-            // 里就已经改道 sessionEngineFilter.onCrossEngineSelect,到不了这里。
-            // 「同模型不同配置的收藏」与「锚点只在真的应用后才记」两件事收在
-            // applyUnifiedSessionSelect 里(见其头注,M3 / M4)。
-            void applyUnifiedSessionSelect({
-              providerId,
-              wireModelId: id,
-              effort: rowEffortValue,
-              config: rowConfig,
-            });
-          }}
-          onSelectedFavoriteAnchorClear={(providerId, id, rowEffort, rowConfig) => {
-            // 用户在**同模型的普通模型行**上改了实时深度 / Fast:正在跑的配置已经不再等于那份
-            // 收藏副本(2026-08-17 review 第五轮 M2)。这里只清锚点 —— 模型 / 引擎一个字没变,
-            // 不是一次行选择,**刻意不收面板**(用户还在浮层里继续调)。
-            const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
-            if (onUnifiedSelect) {
-              // 草稿:锚点由这条直通链路的 favoriteUid 承载(草稿层没有第二个清锚入口),
-              // 原样把当前 (来源, 模型, 引擎) 连同刚改完的深度 / Fast 重写一遍并置空 uid。
-              onUnifiedSelect({
-                providerId,
-                modelId: id,
-                ...(rowEffortValue ? { effort: rowEffortValue } : {}),
-                engine: rowConfig.engine,
-                fast: rowConfig.fast,
-                favoriteUid: null,
-              });
-              return;
-            }
-            onSessionFavoriteAnchorChange?.(null);
-          }}
-          {...(onEffortChange ? { onEffortChangeLive: onEffortChange } : {})}
-          {...(onFastModeChange ? { onFastModeChangeLive: onFastModeChange } : {})}
-          panelElement={paneElement}
-          {...(overlayContentClassName !== undefined
-            ? { overlayClassName: overlayContentClassName }
-            : {})}
-        />
-        {/* footer:「连接来源」(与既有面板同规则,device-link 远程隐藏)+ 右侧
-            列表样式试用开关(本机偏好,见 modelPickerLayout;两种样式并存期的入口)。 */}
-        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
-          {onNavigateToProviders && !deviceId ? (
-            <button
-              type="button"
+          >
+            <Search size={14} className="shrink-0" />
+            <input
+              type="text"
               disabled={interactionDisabled}
-              onClick={onNavigateToProviders}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t('newChat.modelSelector.search.placeholderAll')}
               className={cn(
-                'flex min-w-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
-                'transition-colors hover:text-[var(--text-primary)]',
-                interactionDisabled && 'cursor-not-allowed opacity-50',
+                'min-w-0 flex-1 bg-transparent text-13 outline-none',
+                interactionDisabled
+                  ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
+                  : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
               )}
-            >
-              <Plus size={14} className="shrink-0" />
-              <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
-            </button>
-          ) : (
-            <span />
-          )}
-          {/* 右侧两个文字按钮(三档并存,Chris 2026-08-17):A/B 互切 + 切回老版。 */}
-          <div className="flex shrink-0 items-center gap-3">
-            <button
-              type="button"
-              data-layout-toggle
-              disabled={interactionDisabled}
-              onClick={() =>
-                setModelPickerLayout(pickerLayout === 'badge' ? 'classic' : 'badge')
+              aria-label={t('newChat.modelSelector.search.placeholderAll')}
+            />
+          </div>
+          <UnifiedModelPanel
+            providers={providers}
+            providerOrder={deviceId ? undefined : localProviders.providerOrder}
+            {...(unifiedAgents ? { agents: unifiedAgents } : {})}
+            scope={unifiedScope}
+            isVisible={unifiedIsVisible}
+            {...(unifiedExcludeProvider ? { excludeProvider: unifiedExcludeProvider } : {})}
+            {...(unifiedExcludeModel ? { excludeModel: unifiedExcludeModel } : {})}
+            sourceVersion={[
+              visibilityVersion,
+              deviceId ?? '',
+              excludeSubscriptionDirect ? 1 : 0,
+              excludeChatBridgedCodex ? 1 : 0,
+              remoteProviders.modelVisibilityOverrides ? 'ov' : 'no-ov',
+            ].join('|')}
+            query={query}
+            // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
+            panelWidthFluid={fluidWidth}
+            selected={{ providerId: activeSourceId, modelId }}
+            selectedFavoriteUid={selectedFavoriteUid}
+            liveAgentKind={currentAgentKind}
+            fastMode={fastMode}
+            selectedEffort={effort}
+            {...(modelMemory ? { modelMemory } : {})}
+            agentFastModeCapable={unifiedAgentFastCapable}
+            priceOf={(providerId, id, agent) => pricePresentationOf(providerId, id, agent)}
+            providerLabel={unifiedProviderLabel}
+            effortLabelOf={unifiedEffortLabel}
+            {...(constrainedListMaxHeight !== undefined
+              ? { listMaxHeight: constrainedListMaxHeight }
+              : {})}
+            interactionDisabled={interactionDisabled}
+            includePaymentRequired
+            paymentRequiredLabel={t('newChat.modelSelector.paymentRequired.badge')}
+            paymentRequiredUnlockLabel={t('newChat.modelSelector.paymentRequired.unlock')}
+            onPaymentRequired={showPaymentRequired}
+            configurationEnabled={configurationEnabled}
+            {...(sessionEngineFilter ? { sessionEngineFilter } : {})}
+            {...(followSession ? { followSession } : {})}
+            onSelect={(providerId, id, rowEffort, rowConfig) => {
+              const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
+              // 草稿(M5):整行原样直通给调用方 —— 引擎跟着模型一起落，中途不再被单引擎
+              // 链路重解析一次(见 onUnifiedSelect 的说明)。
+              if (onUnifiedSelect) {
+                onUnifiedSelect({
+                  providerId,
+                  modelId: id,
+                  ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+                  engine: rowConfig.engine,
+                  fast: rowConfig.fast,
+                  favoriteUid: rowConfig.favoriteUid,
+                  ...(rowConfig.resetToRecommended
+                    ? { resetToRecommended: true as const }
+                    : {}),
+                });
+                closeOptionsPanel();
+                onDismiss?.();
+                return;
               }
-              className={cn(
-                'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
-                interactionDisabled && 'cursor-not-allowed opacity-50',
-              )}
-            >
-              {pickerLayout === 'badge'
-                ? t('newChat.modelSelector.unified.layoutClassic')
-                : t('newChat.modelSelector.unified.layoutBadge')}
-            </button>
-            <button
-              type="button"
-              data-layout-original
-              disabled={interactionDisabled}
-              onClick={() => setModelPickerLayout('original')}
-              className={cn(
-                'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
-                interactionDisabled && 'cursor-not-allowed opacity-50',
-              )}
-            >
-              {t('newChat.modelSelector.unified.layoutOriginal')}
-            </button>
+              // 已建会话(M6):同引擎行照旧走 onProviderChange 直切;跨引擎行在 selectRow
+              // 里就已经改道 sessionEngineFilter.onCrossEngineSelect,到不了这里。
+              // 「同模型不同配置的收藏」与「锚点只在真的应用后才记」两件事收在
+              // applyUnifiedSessionSelect 里(见其头注,M3 / M4)。
+              void applyUnifiedSessionSelect({
+                providerId,
+                wireModelId: id,
+                effort: rowEffortValue,
+                config: rowConfig,
+              });
+            }}
+            onSelectedFavoriteAnchorClear={(providerId, id, rowEffort, rowConfig) => {
+              // 用户在**同模型的普通模型行**上改了实时深度 / Fast:正在跑的配置已经不再等于那份
+              // 收藏副本(2026-08-17 review 第五轮 M2)。这里只清锚点 —— 模型 / 引擎一个字没变,
+              // 不是一次行选择,**刻意不收面板**(用户还在浮层里继续调)。
+              const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
+              if (onUnifiedSelect) {
+                // 草稿:锚点由这条直通链路的 favoriteUid 承载(草稿层没有第二个清锚入口),
+                // 原样把当前 (来源, 模型, 引擎) 连同刚改完的深度 / Fast 重写一遍并置空 uid。
+                onUnifiedSelect({
+                  providerId,
+                  modelId: id,
+                  ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+                  engine: rowConfig.engine,
+                  fast: rowConfig.fast,
+                  favoriteUid: null,
+                });
+                return;
+              }
+              onSessionFavoriteAnchorChange?.(null);
+            }}
+            {...(onEffortChange ? { onEffortChangeLive: onEffortChange } : {})}
+            {...(onFastModeChange ? { onFastModeChangeLive: onFastModeChange } : {})}
+            panelElement={paneElement}
+            {...(overlayContentClassName !== undefined
+              ? { overlayClassName: overlayContentClassName }
+              : {})}
+          />
+          {/* footer:「连接来源」(与既有面板同规则,device-link 远程隐藏)+ 右侧
+            列表样式试用开关(本机偏好,见 modelPickerLayout;两种样式并存期的入口)。 */}
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
+            {onNavigateToProviders && !deviceId ? (
+              <button
+                type="button"
+                disabled={interactionDisabled}
+                onClick={onNavigateToProviders}
+                className={cn(
+                  'flex min-w-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
+                  'transition-colors hover:text-[var(--text-primary)]',
+                  interactionDisabled && 'cursor-not-allowed opacity-50',
+                )}
+              >
+                <Plus size={14} className="shrink-0" />
+                <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
+              </button>
+            ) : (
+              <span />
+            )}
+            {/* 右侧两个文字按钮(三档并存,Chris 2026-08-17):A/B 互切 + 切回老版。 */}
+            <div className="flex shrink-0 items-center gap-3">
+              <button
+                type="button"
+                data-layout-toggle
+                disabled={interactionDisabled}
+                onClick={() => setModelPickerLayout(pickerLayout === 'badge' ? 'classic' : 'badge')}
+                className={cn(
+                  'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
+                  interactionDisabled && 'cursor-not-allowed opacity-50',
+                )}
+              >
+                {pickerLayout === 'badge'
+                  ? t('newChat.modelSelector.unified.layoutClassic')
+                  : t('newChat.modelSelector.unified.layoutBadge')}
+              </button>
+              <button
+                type="button"
+                data-layout-original
+                disabled={interactionDisabled}
+                onClick={() => setModelPickerLayout('original')}
+                className={cn(
+                  'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
+                  interactionDisabled && 'cursor-not-allowed opacity-50',
+                )}
+              >
+                {t('newChat.modelSelector.unified.layoutOriginal')}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
       </div>
     );
   }
@@ -2917,8 +3067,16 @@ function ModelSelectorContentView({
                 aria-label={providerDisplayName(sec.provider, t)}
               >
                 {index > 0 && <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />}
-                <div className="truncate px-3 pb-0.5 pt-1 text-11 font-medium text-[var(--text-tertiary)]">
-                  {providerDisplayName(sec.provider, t)}
+                <div className="flex min-w-0 items-center gap-2 px-3 pb-0.5 pt-1 text-11 font-medium text-[var(--text-tertiary)]">
+                  <span className="min-w-0 truncate">{providerDisplayName(sec.provider, t)}</span>
+                  {!deviceId && sec.provider.id === 'xd' && modelAccessAccountTier === 'free' && (
+                    <span
+                      data-testid="cindy-ai-model-group-free-tier-badge"
+                      className="ml-auto inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
+                    >
+                      {t('settings.providers.xd.accountTier.free')}
+                    </span>
+                  )}
                 </div>
                 <div className="flex flex-col gap-0.5">
                   {sec.models.map((m) => renderModelItem(sec.provider, m))}
@@ -3013,6 +3171,8 @@ export function ModelSelector({
   onEffortChange,
   fastMode,
   onFastModeChange,
+  thinkingEnabled,
+  onThinkingChange,
   modelMemory,
   vendorKey,
   agentIdentity,
@@ -3027,6 +3187,7 @@ export function ModelSelector({
   triggerVariant = 'toolbar',
   visualVariant = 'default',
   useMorphPopover = false,
+  restoreFocusTarget,
   popoverSide = 'top',
   maxVisibleModelRows,
   configurationEnabled = true,
@@ -3124,10 +3285,10 @@ export function ModelSelector({
     if (!confirmBrowseSwitch) return agentSwitch;
     return {
       ...agentSwitch,
-      confirmBrowseSwitch: async () => {
+      confirmBrowseSwitch: async (targetVendor: 'cc' | 'codex' | 'pi') => {
         setKeepOpenForAgentConfirmation(true);
         try {
-          return await confirmBrowseSwitch();
+          return await confirmBrowseSwitch(targetVendor);
         } finally {
           setOpenWithoutAutoRefresh(true);
           setKeepOpenForAgentConfirmation(false);
@@ -3138,15 +3299,21 @@ export function ModelSelector({
 
   // 统一面板下没有「先切分段再选模型」那一步,跨引擎的确认落在**真正选中那一行**的这一下。
   // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
-  // 保命锁;区别只在收尾:
-  //   · 调用方执行了切换(返回非 false)→ 收起面板(与旧两步分段选完即收一致);
-  //   · 用户在确认框上取消 / 事务失败(返回 false)→ 面板留在原地,他还能接着挑别的行。
+  // 保命锁。收尾**成功也不关**(Chris 2026-08-20):切完引擎用户还要改思维 / 再点胶囊,
+  // 以前 applied=true 就收窗,表象就是「所有模型改不了 Harness」。取消 / 失败同样留在原地。
   //
   // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
   // 不再只是确认框那一下。保命锁刻意**覆盖整个 await 期**:事务在途时面板被 Popover 的
   // 外点判定收掉,收尾再把 open 设回 true,就成了「面板闪一下又自己弹回来」。锁按住期间
-  // 面板恒可见(open || keepOpenForAgentConfirmation),切换 in-flight 由 interactionDisabled
-  // 置灰,收尾时才按结果决定收还是留 —— 中途没有可以插进来的关闭窗口。
+  // 面板恒可见,切换 in-flight 由 interactionDisabled 置灰。
+  //
+  // ★ open 的表达式必须是 `open || keepOpenForAgentConfirmation`,disabled **不能**参与
+  // 开关(Chris 2026-08-19「面板原地刷新」+ 2026-08-20「改思维闪关菜单」):
+  // 事务一进 beginAgentSwitchOperation,调用方的 agentSwitchInFlight 就把 disabled 拉高。
+  // `(open && !disabled) || keepOpen` 只保住确认框那条路,改思维 / 同引擎重登记不走
+  // keepOpen,选单照关。disabled 只该让面板置灰(interactionDisabled),不该有权把窗口关掉。
+  // 不能写成 `(open || keepOpen) && !disabled` —— 那是 08-19 的原症状。
+  // 不能写成 `(open && !disabled) || keepOpen` —— 那是 08-20 改思维仍闪关。
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;
@@ -3158,8 +3325,10 @@ export function ModelSelector({
         setKeepOpenForAgentConfirmation(true);
         try {
           const applied = await onCrossEngineSelect(args);
-          // 执行了切换 → 收面板;取消 → 留在原地(open 保持 true)。
-          setOpenWithoutAutoRefresh(applied === false);
+          // 成功也不收选单(Chris 2026-08-20):切完引擎用户还要改思维 / 再点胶囊。
+          // 以前 `applied === true` 就把窗口关了,表象就是「所有模型改不了 Harness」——
+          // 一点胶囊选单消失,变量还没调完。取消 / 失败同样留在原地。用户自己点外面才关。
+          setOpenWithoutAutoRefresh(true);
           return applied !== false;
         } finally {
           setKeepOpenForAgentConfirmation(false);
@@ -3174,6 +3343,7 @@ export function ModelSelector({
   const pi = useAgentCapabilities('pi', deviceId);
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
+  const { accountTier: modelAccessAccountTier } = useModelAccessStatus();
   // trigger 的来源 icon / 当前模型也按来源取:device-link 用被控端供应商目录(否则控制端本地
   // 查不到被控端独有模型 → currentModel undefined → label 退成 "Select model")。
   const localProviders = useProviders();
@@ -3307,8 +3477,21 @@ export function ModelSelector({
     !providersLoading &&
     !hasConnectedSource;
   // trigger 上仍展示当前模型的 effort(模型支持时)。
-  const showEffort = !fallbackOption?.active && efforts.length > 0 && efforts.includes(effort);
-  const fullEffortLabel = showEffort ? labelOf(effort) : null;
+  const triggerProvider = providers.find((provider) => provider.id === activeSourceId);
+  const activeThinkingToggle =
+    currentAgentKind === 'pi' &&
+    !!triggerProvider &&
+    getModel(triggerProvider, modelId, currentAgentKind)?.thinkingToggle === true;
+  const showEffort =
+    !fallbackOption?.active &&
+    efforts.length > 0 &&
+    efforts.includes(effort) &&
+    !activeThinkingToggle;
+  const fullEffortLabel = showEffort
+    ? labelOf(effort)
+    : activeThinkingToggle && thinkingEnabled
+      ? t('newChat.modelSelector.thinking')
+      : null;
   const effortLabel = showEffort
     ? modelCompactEffortLabel(
         resolvedTranslationLanguage(i18n),
@@ -3446,6 +3629,9 @@ export function ModelSelector({
     <button
       type="button"
       disabled={switching || disabled}
+      // 阻 mousedown 抢焦点 —— 否则点 pill 会先把光标从输入框挪走,选完模型后
+      // 还要再点一次才能接着打字。键盘 Tab 仍可正常 focus。
+      onMouseDown={morphEnabled ? (event) => event.preventDefault() : undefined}
       onClick={morphEnabled ? () => handleOpenChange(!openRef.current) : undefined}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
@@ -3718,6 +3904,8 @@ export function ModelSelector({
       onEffortChange={onEffortChange}
       fastMode={fastMode}
       onFastModeChange={onFastModeChange}
+      thinkingEnabled={thinkingEnabled}
+      onThinkingChange={onThinkingChange}
       modelMemory={modelMemory}
       vendorKey={vendorKey}
       deviceId={deviceId}
@@ -3747,6 +3935,7 @@ export function ModelSelector({
       interactionDisabled={switching || disabled}
       gatewayPricing={gatewayPricing}
       referencePricing={referencePricing}
+      modelAccessAccountTier={modelAccessAccountTier}
       followSession={
         fallbackOption
           ? {
@@ -3762,7 +3951,7 @@ export function ModelSelector({
   if (morphEnabled) {
     return (
       <MorphPopover
-        open={(open || keepOpenForAgentConfirmation) && !disabled}
+        open={open || keepOpenForAgentConfirmation}
         onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
@@ -3780,6 +3969,7 @@ export function ModelSelector({
         stickyWidth
         stickyWidthKey={pickerLayout}
         panelAriaLabel={ariaLabel}
+        {...(restoreFocusTarget ? { restoreFocusTarget } : {})}
         trigger={trigger}
       >
         {content}
@@ -3788,10 +3978,7 @@ export function ModelSelector({
   }
 
   return (
-    <Popover
-      open={(open || keepOpenForAgentConfirmation) && !disabled}
-      onOpenChange={handleOpenChange}
-    >
+    <Popover open={open || keepOpenForAgentConfirmation} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         side={popoverSide}

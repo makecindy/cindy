@@ -21,13 +21,14 @@
 
 ### 1.2 面板(向下展开)
 
+- 未保存过形态偏好的用户默认进入 **A 版**(`classic`)；原始版与 B 版继续保留为用户可选偏好，升级不改已保存选择。
 - 结构:搜索框贴顶 → 左侧 rail(★收藏 / [同引擎·仅会话内] / 全部 / 各供应商图标) → 右侧列表 → 底部「＋添加模型」。
 - 宽度自适应:`max-content`,min 460px / max min(600px, 100vw-48px)——长名先撑宽,到上限才截断,不硬砍。
 - 行(双行):
   - L1:厂商图标 · 模型名(弹性,截断) · 价格档/折扣/订阅徽标 · ☆ · 右侧**常驻三元组**`[引擎图标] 深度 [⚡]` · 选中勾。
   - L2:一句描述(截断)。
   - 三元组**所有行同构、永远显示**——引擎可见性靠一致的结构位,不靠出错才显示;自定义未收藏的行整组提亮一档(secondary)。
-- 分组:收藏(置顶) → 服务端下发分组(group/sortOrder)。收藏区条目**不**从供应商组中去重移除(收藏是配置副本,模型本体仍在原地)。
+- 分组:收藏(置顶) → 供应商分组。组间顺序遵循「设置 → 模型供应商」的拖动排序(本地会话;device-link 用被控端快照顺序,不套控制端本地序),组内按服务端下发 group/sortOrder。收藏区条目**不**从供应商组中去重移除(收藏是配置副本,模型本体仍在原地)。
 - 折扣表达:价格档 `¥/$` 串按折后价连续填充(付费亮、折扣灰),后跟淡染徽标 `↓60%`;详情(title+浮层)写全「折扣中 · 标准价 X · 省 Y%」。中文计价 ¥,英文 $。
 
 ### 1.3 配置浮层(hover 行,跟随行定位)
@@ -56,9 +57,26 @@
 
 ### 1.6 会话内(切换有损)
 
-- rail 顶部(★下)多一个**同引擎过滤**(图标=当前会话引擎),**默认选中**;该视图只显示 引擎匹配的收藏 + 同引擎模型;组标题旁 ⓘ 悬停说明(自绘即时 tooltip,原生 title 会被重渲染打断)。
+- rail 顶部(★下)多一个**同引擎过滤**(图标=当前会话引擎),**默认选中**;组标题旁 ⓘ 悬停说明(自绘即时 tooltip,原生 title 会被重渲染打断)。
+- **准入**是「候选里有当前引擎」:该视图列出所有能在本引擎跑的模型。收藏仍只列生效引擎=当前引擎的副本(收藏是配置快照)。
+- **排序**(不是隐藏,Chris 2026-08-23 纠正 08-19 「不显示」裁决):
+  1. 生效引擎=当前引擎的行在前(目录默认推荐本引擎、用户手动选过本引擎、或无主场被 pinned 到本引擎);
+  2. 其余仅兼容本引擎的行在后(主场 / override 在别处,但候选含本引擎)。
+  供应商组间:含优先行的供应商先于纯兼容供应商;组内同样优先行在前。
+  **同引擎轨里点模型行 = 当前轨引擎**(π 轨里点就是 Pi):显示与选中都钉在轨上,走无损直切。
+  「全部 / 供应商」仍按行落点,点下去若不是当前引擎则走跨引擎确认。浮层里显式点其它引擎胶囊也走确认。
 - 跨引擎:点「全部/供应商」显式切换,列表顶部一行警示「⚠ 跨引擎切换会重建上下文,有丢失风险」。
 - 切引擎执行仍走既有 `performAgentSwitch` 链路(确认弹窗、fastMode 不跨引擎带入等语义保留)。
+- **风险确认只认任务真实引擎**(Chris 2026-08-20):用户只要选的是**不是当前正在跑的引擎**的模型或收藏,
+  一律弹出换引擎确认。挂着的切换意图不算已经确认过 —— Claude 任务里点了 Pi 收藏、还没发消息,再点
+  另一条非 Claude 的模型/收藏,仍然要问。只有目标就是正在跑的引擎(回原引擎)才不弹。
+- **切换事务的「成功」= 本端请求的完整配置原样落地**(2026-08-19 review 收口):main 先广播意图回声、后回
+  ack,回声身份匹配只比 target/model/provider 三元组(effort/Fast 可能被 main 归一化,providerId 传 null 时
+  跟随默认路由解析)。因此三元组匹配、但权威回声里的 effort/Fast 与本端请求不一致(device-link 往返期间另一
+  控制端只改了同一意图的档位/Fast)时,事务按**未完整应用**上报 false:面板挂在成功上的持久化收尾
+  (清 override、提交/删除收藏编辑、写收藏锚点)一律不做,旧锚点由派生校验自然失效;意图展示与偏好同步照用
+  **权威快照**的值(缺字段的维不写)。判据的宽严取向(权威快照缺维放行、本端未指定的维放行、双方有值逐字比)
+  见 `agentSwitchConfirmation.isAgentSwitchEchoConfigConsistent` 头注。
 
 ### 1.7 i18n / 主题
 
@@ -102,7 +120,7 @@
 - `resolveVerifiedContextWindow` 目前仅接 codex——本版为 cc/pi 补接 `AgentDeps`(实现清单 M6)。
 - efforts / defaultEffort / supportsFastMode:按 (provider, agent) 嵌套条目取,已是现状。
 
-### 2.3 新增存储(两个,均只存 override;renderer localStorage,按既有命名约定)
+### 2.3 新增存储(前两个只存 override;renderer localStorage,按既有命名约定)
 
 1. `xdt:modelEnginePrefs:v1:<dataOwnerId>` —— 每模型引擎 override:
    `{ "<providerId>:<modelId>": { agent: AgentKind } }`
@@ -111,6 +129,16 @@
 2. `xdt:modelFavorites:v1:<dataOwnerId>` —— 收藏配置副本:
    `{ uidSeq, items: [{ uid, providerId, modelId, agent, effort, fast }] }`
    - 深度/Fast 存**档位 key**(low/medium/...)不存显示文案(防语言串档,Maximum 混中文的教训)。
+3. `xdt:favoriteAnchorMemory:v1:<dataOwnerId>` —— **收藏锚点记忆**(「面板上哪一行打勾」),
+   Chris 2026-08-19 实测后从内存态改为持久化:
+   `{ drafts: { <cc|codex|pi>: { uid, wireModelId, providerId } }, sessions: [{ sessionId, uid, wireModelId, engine, providerId }] }`
+   - 草稿槽按引擎分(与 `lastByVendor` 同一分槽维度);会话槽按 sessionId,**LRU 上限 100**(队首=最近一次写)。
+   - 存的是**选中那一刻的快照**。收藏是独立选中项(Chris 2026-08-20):勾选只认 uid 还在收藏列表里,
+     不拿正在跑的模型/引擎/思维去对副本 —— 对上才打勾会让下面同名模型行抢走焦点。用户点普通模型行时
+     才把 uid 置空。快照里的 wire/来源仍用于建会话延续,不参与勾选判定。
+   - 仍**不是用户配置**:不落库、不进 device-link payload、写失败静默吞;丢了只是回落模型行。
+   - 草稿发送建会话时,仍有效且**有显式来源**的草稿锚点写进该 sessionId 的会话槽(跟随默认路由的会话
+     `providerId` 为 null,与显式来源的锚点永不相等,存了也打不上勾,故不延续)。
 - 深度/Fast 的每模型记忆**沿用** `providerModelMemory` `<agent>:*` 槽(不迁移不改形——它同时是 device-link wire 形状)。
 
 ### 2.4 选中态与会话创建
@@ -123,9 +151,11 @@
 
 | 情形 | 行为 |
 |---|---|
-| 新用户 | 无任何 override;推荐映射+目录默认(`newSessionDefault`→排序首个 defaultEnabled)生效;服务端改推荐,升级即跟随 |
-| 未自定义老用户 | 同新用户;旧 lastByVendor 种子值因 `modelChosenByVendor` 未置位而不视为自定义(现有语义) |
-| 已自定义老用户 | `modelChosenByVendor=true` 的 vendor 模型选择、providerModelMemory 深度/Fast、新引擎 override 全部保留;**零迁移**——新 store 为空即「全部跟随推荐」,旧数据不搬不猜 |
+| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-5.6-Sol / Codex / high；Anthropic 订阅→Claude Opus 5 / Claude Code / high；xAI 订阅→Grok 4.6 / Pi / high；CN / Global Cindy Gateway→原生多模态 GLM-5.3-Flash / Pi / high。Gateway 默认必须同时明确声明图片输入与 Pi 实时能力；Pi 不可用时不把该默认强塞进 Codex 或 Claude Code |
+| 多来源 | 可用订阅优先于 Gateway；客户端没有“最近连接时间”时，多订阅稳定按 OpenAI→Anthropic→xAI。来源仍在加载、账号目录没有目标模型、或零来源时不编造组合，保留连接引导 |
+| 未自定义老用户 | 同新用户；自动下放不设置 `modelChosenByVendor`。仅由旧版 cc 不可用触发并持久化的非 cc Harness 仍属于系统回退，不算用户自定义 |
+| 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |
+| 远程任务 | SSH / device-link 不套用控制端本机登录态；继续由执行端能力与来源快照决定，避免把本机授权强塞给远端 |
 
 ---
 

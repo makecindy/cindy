@@ -17,12 +17,22 @@ import type { AgentKind } from '@cindy/maker-core';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { getResolvedMainLocale } from '../i18n.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { generateTitleViaProviderResult } from '../maker-host/title-one-shot.js';
-import { connectedProvidersForAgent, nativeDefaultSourceId, type ProviderView } from '@cindy/model-providers';
+import {
+  buildTitleTarget,
+  generateTitleViaProviderResult,
+} from '../maker-host/title-one-shot.js';
+import { validateTitleOutput } from '../maker-host/title-output-validation.js';
+import { readAuxiliaryModelSelection } from '../utility-model/auxiliary-model-settings-store.js';
+import {
+  connectedProvidersForAgent,
+  nativeDefaultSourceId,
+  type ProviderView,
+} from '@cindy/model-providers';
 import { eq } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { createLogger } from '../logger.js';
+import { wasPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 
 const log = createLogger('maker-ipc/prompt-prediction');
 
@@ -40,13 +50,8 @@ type SlimMessage = { role: string; content: string };
  * 从对话历史里提取最近几轮 user↔assistant 配对,截断后拼接成 prompt 素材。
  * 跳过 tool_use / tool_result / thinking / error / system 等非对话角色。
  */
-function buildConversationContext(
-  messages: SlimMessage[],
-  maxPairs: number,
-): string {
-  const conversational = messages.filter(
-    (m) => m.role === 'user' || m.role === 'assistant',
-  );
+function buildConversationContext(messages: SlimMessage[], maxPairs: number): string {
+  const conversational = messages.filter((m) => m.role === 'user' || m.role === 'assistant');
   // 从末尾往前取 maxPairs*2 条(user+assistant)
   const recent = conversational.slice(-maxPairs * 2);
   if (recent.length === 0) return '';
@@ -61,7 +66,9 @@ function buildConversationContext(
       text.length <= maxChars
         ? text
         : m.role === 'assistant'
-          ? text.slice(0, Math.floor(maxChars * 0.4)) + ' … ' + text.slice(-Math.floor(maxChars * 0.6))
+          ? text.slice(0, Math.floor(maxChars * 0.4)) +
+            ' … ' +
+            text.slice(-Math.floor(maxChars * 0.6))
           : text.slice(0, maxChars);
     if (!truncated) continue;
     lines.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${truncated}`);
@@ -93,7 +100,9 @@ function buildPredictionPrompt(
     ja: "Match the user's language. The user types in Japanese.",
     ko: "Match the user's language. The user types in Korean.",
   };
-  const wdLine = workingDir ? `Current working directory: ${escapeReferenceData(workingDir)}` : null;
+  const wdLine = workingDir
+    ? `Current working directory: ${escapeReferenceData(workingDir)}`
+    : null;
 
   // 系统指令写入 Anthropic Messages API 顶层 system 字段（非 Anthropic wire 忽略），
   // 不混入 user message，避免被 Anthropic API 拒绝。
@@ -143,9 +152,7 @@ async function readSessionProviderIdFromDb(sessionId: string): Promise<string | 
 }
 
 /** 某 agent 下已连接的供应商视图列表。失败 → []。 */
-async function listConnectedProvidersForAgent(
-  agentKind: AgentKind,
-): Promise<ProviderView[]> {
+async function listConnectedProvidersForAgent(agentKind: AgentKind): Promise<ProviderView[]> {
   try {
     const all = await getDesktopProviderService().listProviders({ allowSideEffects: true });
     return connectedProvidersForAgent(all, agentKind);
@@ -159,6 +166,8 @@ export interface PromptPredictionParams {
   agentKind: AgentKind;
   messages: SlimMessage[];
   workingDir?: string;
+  /** 本次预测对应的 sessions.lastTurnEndedAt，provider 派发紧前再次复核。 */
+  completionRevision: number;
   /** title.ts 中 readMaterial 之后捕获的 session.updatedAt,用于 beforeDispatch 终末复核。
    * 传入此参数后 generatePromptPrediction 不再重新从 DB 读取 drain 时 updatedAt,
    * 避免素材物化后、provider/凭证解析期间新消息落盘导致轮次变化未被检测。 */
@@ -224,6 +233,121 @@ export async function generatePromptPrediction(
       beforeDispatchDrainUpdatedAt = undefined;
     }
   }
+  const auxiliarySelection = readAuxiliaryModelSelection('promptRecommendationModel');
+  if (auxiliarySelection) {
+    const selectionStillCurrent = (route: {
+      providerId: string;
+      agentKind: AgentKind;
+      model: string;
+    }): boolean => {
+      const current = readAuxiliaryModelSelection('promptRecommendationModel');
+      return Boolean(
+        current &&
+        current.pin === auxiliarySelection.pin &&
+        route.providerId === auxiliarySelection.providerId &&
+        route.agentKind === auxiliarySelection.agentKind &&
+        route.model === auxiliarySelection.model,
+      );
+    };
+    const beforeExplicitDispatch = async (route: {
+      providerId: string;
+      agentKind: AgentKind;
+      model: string;
+    }): Promise<boolean> => {
+      try {
+        if (!selectionStillCurrent(route)) return false;
+        const [row] = await getDbClient()
+          .drizzle.select({
+            agentKind: sessions.agentKind,
+            status: sessions.status,
+            source: sessions.source,
+            remoteHostId: sessions.remoteHostId,
+            providerId: sessions.providerId,
+            workingDir: sessions.workingDir,
+            updatedAt: sessions.updatedAt,
+            activeTurnStartedAt: sessions.activeTurnStartedAt,
+            lastTurnEndedAt: sessions.lastTurnEndedAt,
+          })
+          .from(sessions)
+          .where(eq(sessions.id, params.sessionId))
+          .limit(1);
+        if (!row || row.status === 'deleted' || row.source === 'review' || row.remoteHostId) {
+          return false;
+        }
+        if (dbToMakerAgentKind(row.agentKind) !== params.agentKind) return false;
+        if (row.lastTurnEndedAt !== params.completionRevision) return false;
+        if (
+          row.activeTurnStartedAt != null &&
+          row.activeTurnStartedAt >= params.completionRevision
+        ) return false;
+        if (wasPromptPredictionSessionStopped(params.sessionId)) return false;
+        if (row.workingDir !== (params.workingDir ?? null)) return false;
+
+        const [finalRow] = await getDbClient()
+          .drizzle.select({
+            agentKind: sessions.agentKind,
+            status: sessions.status,
+            source: sessions.source,
+            remoteHostId: sessions.remoteHostId,
+            providerId: sessions.providerId,
+            workingDir: sessions.workingDir,
+            updatedAt: sessions.updatedAt,
+            activeTurnStartedAt: sessions.activeTurnStartedAt,
+            lastTurnEndedAt: sessions.lastTurnEndedAt,
+          })
+          .from(sessions)
+          .where(eq(sessions.id, params.sessionId))
+          .limit(1);
+        if (
+          !finalRow ||
+          finalRow.status === 'deleted' ||
+          finalRow.source === 'review' ||
+          finalRow.remoteHostId
+        ) return false;
+        if (dbToMakerAgentKind(finalRow.agentKind) !== params.agentKind) return false;
+        if (finalRow.lastTurnEndedAt !== params.completionRevision) return false;
+        if (
+          finalRow.activeTurnStartedAt != null &&
+          finalRow.activeTurnStartedAt >= params.completionRevision
+        ) return false;
+        if (wasPromptPredictionSessionStopped(params.sessionId)) return false;
+        if (finalRow.providerId !== row.providerId) return false;
+        if (finalRow.workingDir !== (params.workingDir ?? null)) return false;
+        if (
+          beforeDispatchDrainUpdatedAt &&
+          finalRow.updatedAt !== beforeDispatchDrainUpdatedAt
+        ) return false;
+        return selectionStillCurrent(route);
+      } catch {
+        return false;
+      }
+    };
+
+    // Keep the provider/runtime graph off the ordinary automatic path. It is
+    // only needed when the user has selected an exact auxiliary route.
+    const { requestExplicitUtilityText } = await import(
+      '../utility-model/oneShotCandidates.js'
+    );
+    const explicit = await requestExplicitUtilityText(truncated, {
+      providerId: auxiliarySelection.providerId,
+      agentKind: auxiliarySelection.agentKind,
+      model: auxiliarySelection.model,
+      maxTokens: 96,
+      timeoutMs: 12_000,
+      // Recommendation outputs share a short token budget with provider-native
+      // thinking. Disable it so reasoning-first models still return body text.
+      disableReasoning: true,
+      systemPrompt,
+      responseInstructions:
+        'Output only the predicted next user message — no quotes, markdown, or commentary.',
+      beforeDispatch: beforeExplicitDispatch,
+    });
+    if (wasPromptPredictionSessionStopped(params.sessionId)) return null;
+    if (!explicit.ok) return null;
+    const normalized = validateTitleOutput(explicit.text, 512);
+    return normalized ? Array.from(normalized).slice(0, 140).join('') : null;
+  }
+
   const result = await generateTitleViaProviderResult(
     {
       sessionId: params.sessionId,
@@ -244,6 +368,7 @@ export async function generatePromptPrediction(
       //   - providerId: 会话 provider 被切换时中止,避免路由到过期 provider
       beforeDispatch: async ({ sessionId, agentKind, providerId: resolvedProviderId }) => {
         try {
+          if (readAuxiliaryModelSelection('promptRecommendationModel')) return false;
           // drainUpdatedAt 在 provider/凭证解析之前捕获，用于终末复核。
           // 若在 drain 之后、beforeDispatch 首次 DB 读之前用户发送了新消息，
           // row.updatedAt 和 finalRow.updatedAt 都会包含新值，仅做 row↔finalRow
@@ -258,6 +383,8 @@ export async function generatePromptPrediction(
               providerId: sessions.providerId,
               workingDir: sessions.workingDir,
               updatedAt: sessions.updatedAt,
+              activeTurnStartedAt: sessions.activeTurnStartedAt,
+              lastTurnEndedAt: sessions.lastTurnEndedAt,
             })
             .from(sessions)
             .where(eq(sessions.id, sessionId))
@@ -267,28 +394,33 @@ export async function generatePromptPrediction(
           if (row.source === 'review') return false;
           if (row.remoteHostId) return false;
           if (dbToMakerAgentKind(row.agentKind) !== agentKind) return false;
-          // 用已解析的 providerId(来自 generateTitleViaProviderResult 的
-          // 凭证解析口径)与当前 DB 的 providerId 比对。此前只比较两次 DB 读,
-          // 会话在 provider 解析后、beforeDispatch 前被切换 provider 时,
-          // 两次 DB 读都返回新值,比对通过,但凭证已用旧 provider 解析,
-          // 导致付费请求路由到过期 provider/账号。
-          if (row.providerId != null) {
-            if (row.providerId !== resolvedProviderId) return false;
-            // 额外复查：显式 provider 是否仍在已连接列表中。用户在凭证解析后
-            // 断开/登出该显式 provider 时，DB providerId 仍等于 resolvedProviderId，
-            // 但 connected-provider rail 已不含该 provider，继续派发会用过期凭证
-            // 外发付费调用。按 fail-closed 中止。
-            const providers = await listConnectedProvidersForAgent(agentKind);
-            if (!providers.some((p) => p.id === resolvedProviderId)) return false;
-          } else {
-            // provider_id 为 null 表示使用默认 provider。若用户在凭证解析后
-            // 断开/切换了默认 provider，resolvedProviderId 仍指向旧 provider，
-            // 继续派发会外发到过期 provider/账号。重新计算当前有效默认 provider
-            // 并与 resolvedProviderId 比对。
-            const providers = await listConnectedProvidersForAgent(agentKind);
-            const defaultProviderId = nativeDefaultSourceId(providers, agentKind);
-            if (!defaultProviderId || defaultProviderId !== resolvedProviderId) return false;
-          }
+          if (row.lastTurnEndedAt !== params.completionRevision) return false;
+          if (
+            row.activeTurnStartedAt != null &&
+            row.activeTurnStartedAt >= params.completionRevision
+          )
+            return false;
+          if (wasPromptPredictionSessionStopped(sessionId)) return false;
+          // 重新按 one-shot 同一口径解析当前有效来源。显式/默认来源若没有 title wire，
+          // generateTitleViaProviderResult 会回落已连接的官方 xd；这里必须比较「解析后的
+          // 实际来源」，不能拿 DB 原始 custom providerId 直接拒绝合法回落。
+          const providers = await listConnectedProvidersForAgent(agentKind);
+          const selectedProviderId =
+            row.providerId ?? nativeDefaultSourceId(providers, agentKind);
+          if (
+            !selectedProviderId ||
+            !providers.some((provider) => provider.id === selectedProviderId)
+          ) return false;
+          const officialFallbackAvailable =
+            providers.some((provider) => provider.id === 'xd') &&
+            buildTitleTarget('xd') != null;
+          const expectedResolvedProviderId =
+            buildTitleTarget(selectedProviderId) != null
+              ? selectedProviderId
+              : officialFallbackAvailable
+                ? 'xd'
+                : selectedProviderId;
+          if (expectedResolvedProviderId !== resolvedProviderId) return false;
           // 紧前复查 workingDir：用户在 provider/凭证解析期间切换了工作目录，
           // 此时 buildPredictionPrompt 已嵌入旧 params.workingDir，继续派发
           // 会向 provider 外发过期本地路径。按 fail-closed 中止。
@@ -306,6 +438,8 @@ export async function generatePromptPrediction(
               providerId: sessions.providerId,
               workingDir: sessions.workingDir,
               updatedAt: sessions.updatedAt,
+              activeTurnStartedAt: sessions.activeTurnStartedAt,
+              lastTurnEndedAt: sessions.lastTurnEndedAt,
             })
             .from(sessions)
             .where(eq(sessions.id, sessionId))
@@ -315,18 +449,22 @@ export async function generatePromptPrediction(
           if (finalRow.source === 'review') return false;
           if (finalRow.remoteHostId) return false;
           if (dbToMakerAgentKind(finalRow.agentKind) !== agentKind) return false;
-          if (finalRow.providerId != null && finalRow.providerId !== resolvedProviderId) return false;
-          // 会话在检查期间从显式 provider 切换到默认 provider（finalRow.providerId
-          // 为 null 但 row.providerId 非 null），resolvedProviderId 仍指向旧显式
-          // provider。此时无法再做异步 provider 解析（TOCTOU 最小化），按 fail-closed
-          // 中止，避免用旧 provider 凭证外发付费调用。
-          if (finalRow.providerId == null && row.providerId != null) return false;
+          if (finalRow.lastTurnEndedAt !== params.completionRevision) return false;
+          if (
+            finalRow.activeTurnStartedAt != null &&
+            finalRow.activeTurnStartedAt >= params.completionRevision
+          )
+            return false;
+          if (wasPromptPredictionSessionStopped(sessionId)) return false;
+          // provider/凭证 rail 已在上方按 fallback 口径复核；最后一个 await 后只需确认
+          // DB 原始选择没有再变化（含 explicit ↔ default），避免重开异步解析窗口。
+          if (finalRow.providerId !== row.providerId) return false;
           if (finalRow.workingDir !== (params.workingDir ?? null)) return false;
           // 终末复核消息轮次：与 drain 时的 updatedAt（provider/凭证解析之前捕获）比较。
           // 仅与 row.updatedAt（beforeDispatch 内首次 DB 读）比较无法检测到
           // drain 之后、首次 DB 读之前发来的新消息——此时两次读都返回同一新值。
           if (drainUpdatedAt && finalRow.updatedAt !== drainUpdatedAt) return false;
-          return true;
+          return readAuxiliaryModelSelection('promptRecommendationModel') === null;
         } catch {
           // 复查失败按 fail-closed 处理:宁可漏掉一次推荐,也不在归属不确定时外发付费调用。
           return false;
@@ -342,5 +480,8 @@ export async function generatePromptPrediction(
       maxVisualChars: 140,
     },
   );
+  // HTTP 已经发出后仍可能收到其它窗口 / Device Link 的 Stop。费用无法撤回，但返回值
+  // 必须丢弃，不能在用户明确停止后把推荐重新显示到输入框。
+  if (wasPromptPredictionSessionStopped(params.sessionId)) return null;
   return result.status === 'ok' ? result.title : null;
 }

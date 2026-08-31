@@ -11,9 +11,11 @@ import {
   buildUnionRows,
   countModelsByAgent,
   getHiddenAgents,
+  hasPaymentRequiredDisabledRow,
   isCapabilityRow,
   isRowDisabled,
   isRowDiverged,
+  isRowPaymentRequired,
   loadCollapsedMap,
 } from '@/components/settings/UnifiedModelList';
 import {
@@ -195,6 +197,25 @@ describe('countModelsByAgent', () => {
     ]);
   });
 
+  it('付费锁定行不进批量显示分母，其历史隐藏偏好不会卡住 allOn', () => {
+    const withPaymentRequired = {
+      ...provider,
+      models: {
+        ...provider.models,
+        codex: [
+          ...(provider.models.codex ?? []),
+          { ...model('paid-model'), availability: 'requires_payment' },
+        ],
+      },
+    } as ProviderView;
+    setModelVisibility('codex', 'p1', 'paid-model', false);
+
+    expect(countModelsByAgent(withPaymentRequired)).toEqual([
+      { agent: 'claude-code', on: 2, total: 2 },
+      { agent: 'codex', on: 2, total: 2 },
+    ]);
+  });
+
   it('停用模型与能力模型(image 等)不进「显示 x/y」计数', () => {
     const withExtras = {
       ...provider,
@@ -250,11 +271,38 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     expect(isRowDisabled(rows[1])).toBe(false);
   });
 
+  it('付费锁定的停用行阻止整组 reset，避免批量入口改写其历史 override', () => {
+    const withLockedDisabled = {
+      ...provider,
+      models: {
+        ...provider.models,
+        codex: [
+          ...(provider.models.codex ?? []),
+          { ...model('paid-disabled'), availability: 'requires_payment', disabled: true },
+        ],
+      },
+    } as ProviderView;
+    const rows = buildUnionRows(withLockedDisabled);
+
+    expect(hasPaymentRequiredDisabledRow(rows)).toBe(true);
+    expect(
+      hasPaymentRequiredDisabledRow(
+        rows,
+        (row) => row.id === 'paid-disabled' ? false : isRowDisabled(row),
+      ),
+    ).toBe(false);
+  });
+
   it('专属媒体清单(imageModels/videoModels)合成能力行:可停用、与 agent 清单同 id 去重', () => {
     const withMedia = {
       ...provider,
       imageModels: [
-        { id: 'gpt-image-2', name: 'GPT Image 2', disabled: true },
+        {
+          id: 'gpt-image-2',
+          name: 'GPT Image 2',
+          disabled: true,
+          availability: 'requires_payment',
+        },
         { id: 'shared', name: '与 agent 清单撞 id(应被去重)' },
       ],
       videoModels: [{ id: 'seedance-fast', name: 'Seedance 快速' }],
@@ -263,6 +311,7 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     const image = rows.find((r) => r.id === 'gpt-image-2')!;
     expect(isCapabilityRow(image, false)).toBe(true);
     expect(isRowDisabled(image)).toBe(true);
+    expect(isRowPaymentRequired(image)).toBe(true);
     expect(rows.find((r) => r.id === 'seedance-fast')).toBeTruthy();
     // 同 id 去重:'shared' 只保留 agent 清单那行(可见性开关照常)。
     expect(rows.filter((r) => r.id === 'shared')).toHaveLength(1);

@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   outboundFetch: vi.fn(),
   ingestMedia: vi.fn(),
   readBlob: vi.fn(),
+  resolveBlob: vi.fn(),
+  resolveLegacyImage: vi.fn(),
+  resolveLegacyVideo: vi.fn(),
   db: {
     owner: 'media-user-0',
     drizzle: { owner: 'media-user-0' },
@@ -92,10 +95,16 @@ vi.mock('../providerMediaRuntime.js', () => ({
 vi.mock('../ingest.js', () => ({ ingestMedia: mocks.ingestMedia }));
 vi.mock('../blobStore.js', () => ({
   readFile: mocks.readBlob,
+  parseBlobUrl: (url: string) => {
+    const match = /^cindy-media:\/\/blobs\/([0-9a-f]{64})(\.[a-z0-9]+)$/.exec(url);
+    return match ? { hash: match[1], ext: match[2] } : null;
+  },
+  resolveSafe: mocks.resolveBlob,
   supportedMime: (mime: string) =>
     ['image/png', 'video/mp4', 'audio/mpeg'].includes(mime),
 }));
-vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: vi.fn() }));
+vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyImage }));
+vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyVideo }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
@@ -239,8 +248,41 @@ describe('Cindy Core media invocation state and security boundary', () => {
       url: `cindy-media://blobs/${'a'.repeat(64)}.png`,
     });
     mocks.readBlob.mockReset();
+    mocks.resolveBlob.mockReset().mockReturnValue({
+      absPath: process.execPath,
+      mimeType: 'image/png',
+      hash: 'a'.repeat(64),
+    });
+    mocks.resolveLegacyImage.mockReset().mockReturnValue({
+      absPath: process.execPath,
+      mimeType: 'image/jpeg',
+    });
+    mocks.resolveLegacyVideo.mockReset().mockReturnValue({
+      absPath: process.execPath,
+      mimeType: 'video/mp4',
+    });
     mocks.recover.mockClear();
     mocks.prune.mockClear();
+  });
+
+  it('把当前及历史受管媒体地址解析为本机文件路径', async () => {
+    const cases = [
+      [`cindy-media://blobs/${'a'.repeat(64)}.png`, 'image/png'],
+      ['xdt-image://session-1/image.jpg', 'image/jpeg'],
+      ['xdt-video://lizi-art-media-videos/video.mp4', 'video/mp4'],
+    ] as const;
+
+    for (const [url, mimeType] of cases) {
+      await expect(callCindyMedia({ action: 'resolve_local_path', url })).resolves.toEqual({
+        ok: true,
+        url,
+        local_path: process.execPath,
+        mime_type: mimeType,
+      });
+    }
+    await expect(
+      callCindyMedia({ action: 'resolve_local_path', url: 'xdt-audio://local/?path=/tmp/a.mp3' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
   });
 
   it('按 modelId 取 Guide、覆盖 body.model，并以一次性 invocation 完成同步结果入仓', async () => {
@@ -266,7 +308,12 @@ describe('Cindy Core media invocation state and security boundary', () => {
       body: { prompt: 'cat', model: 'agent-must-not-control-this' },
     });
 
-    expect(result).toMatchObject({ ok: true, status: 'complete' });
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'complete',
+    });
+    expect(String(result.hint)).toContain('只嵌入展示一次');
+    expect(result).not.toHaveProperty('_xdt_render_image');
     const [, init] = mocks.outboundFetch.mock.calls[0];
     expect(mocks.outboundFetch.mock.calls[0][0]).toBe(
       'https://gateway.example.com/images/generations',
@@ -282,6 +329,42 @@ describe('Cindy Core media invocation state and security boundary', () => {
     });
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
     expect(mocks.ingestMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('Guide 查询键无前缀时仍持久化并提交完整 Gateway modelId', async () => {
+    const fullModelId = 'openai/gpt-image-2';
+    mocks.models.mockResolvedValue([
+      { id: fullModelId, name: 'GPT Image 2', providerId: 'xd', mode: 'image_generation' },
+    ]);
+    mocks.guide.mockResolvedValue({
+      ...resolvedGuide(
+        operation({
+          mode: 'sync',
+          media: [{ path: ['data'], encoding: 'base64', kind: 'image' }],
+        }),
+      ),
+      modelId: 'gpt-image-2',
+    });
+    mocks.outboundFetch.mockResolvedValue(
+      new Response(JSON.stringify({ data: PNG.toString('base64') }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const prepared = await callCindyMedia({
+      action: 'prepare',
+      modelId: fullModelId,
+      capability: 'image.generate',
+    });
+    const invocationId = prepared.invocation_id as string;
+    await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } });
+
+    expect(prepared).toMatchObject({ ok: true, model_id: fullModelId });
+    expect(mocks.guide).toHaveBeenCalledWith(fullModelId);
+    expect(mocks.rows.get(invocationId)?.modelId).toBe(fullModelId);
+    const [, init] = mocks.outboundFetch.mock.calls[0];
+    expect(JSON.parse(init.body)).toMatchObject({ model: fullModelId });
   });
 
   it('同名媒体模型按 providerId 精确准备并调用第三方来源', async () => {
@@ -336,7 +419,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
     });
   });
 
-  it('旧调用未传 providerId 时不在同名 Provider 中静默选择来源', async () => {
+  it('旧调用未传 providerId 时裸 ID 唯一升级且同名来源优先 Cindy AI', async () => {
     const model = {
       id: 'openai/gpt-image-2',
       name: 'GPT Image 2',
@@ -346,20 +429,21 @@ describe('Cindy Core media invocation state and security boundary', () => {
       officialDocs: 'https://platform.openai.com/docs/guides/image-generation',
     };
     mocks.models.mockResolvedValue([{ ...model, providerId: 'xd' }, model]);
+    mocks.guide.mockResolvedValue(
+      resolvedGuide(operation({ mode: 'sync', media: [] })),
+    );
 
-    await expect(
-      callCindyMedia({
-        action: 'prepare',
-        modelId: model.id,
-        capability: 'image.generate',
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'MODEL_NOT_AVAILABLE',
-      retryable: false,
-      message: expect.stringContaining('provider_id'),
+    const prepared = await callCindyMedia({
+      action: 'prepare',
+      modelId: 'gpt-image-2',
+      capability: 'image.generate',
     });
-    expect(mocks.guide).not.toHaveBeenCalled();
+    expect(prepared).toMatchObject({
+      ok: true,
+      provider_id: 'xd',
+      model_id: model.id,
+    });
+    expect(mocks.guide).toHaveBeenCalledWith(model.id);
     expect(mocks.providerModel).not.toHaveBeenCalled();
   });
 
@@ -959,11 +1043,13 @@ describe('Cindy Core media invocation state and security boundary', () => {
     await expect(
       callCindyMedia({ action: 'request', invocationId, body: { content: [] } }),
     ).resolves.toMatchObject({ ok: true, status: 'pending' });
-    await expect(callCindyMedia({ action: 'poll', invocationId })).resolves.toMatchObject({
+    const completed = await callCindyMedia({ action: 'poll', invocationId });
+    expect(completed).toMatchObject({
       ok: true,
       status: 'complete',
       xdt_video_urls: [`cindy-media://blobs/${'b'.repeat(64)}.mp4`],
     });
+    expect(completed).not.toHaveProperty('_xdt_render_image');
     expect(mocks.outboundFetch.mock.calls[1][0]).toBe(
       'https://gateway.example.com/video/tasks/task-1',
     );

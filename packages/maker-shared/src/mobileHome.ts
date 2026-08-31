@@ -9,7 +9,9 @@ import {
   type RemoteSessionScheduleInfo,
   type RemoteSessionStatusFilter,
 } from './sessionList.js';
+import type { PresentationLocalizer } from './presentationLocalization.js';
 import { stripTrailingPathSeparators } from './pathText.js';
+import { normalizeProjectOrderPath } from './projectOrderSync.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
 
 export const MOBILE_HOME_ALL_DEVICES = 'all';
@@ -122,6 +124,7 @@ export interface MobileHomeOptions {
    * 共享层刻意不兜中文串,见 sessionList 的 remoteSessionDisplayTitle。
    */
   unnamedLabel?: string;
+  localizer?: PresentationLocalizer;
 }
 
 export function buildMobileHomePresentation({
@@ -136,6 +139,7 @@ export function buildMobileHomePresentation({
   sessions,
   statusFilter = 'active',
   unnamedLabel,
+  localizer,
 }: MobileHomeOptions): MobileHomePresentation {
   // 设备身份归一化在管线源头对每个会话算出 canonicalDeviceId(写入字段,不改 deviceLinkDeviceId):
   // 后续设备筛选统计、matchesSelectedDevice 过滤、项目分组、概览、卡片 deviceId 全部按 canonicalDeviceId
@@ -172,6 +176,7 @@ export function buildMobileHomePresentation({
     messagePreviewIndex?.get(session.id) ?? sessionRowMessagePreview(session),
     liveActivityIndex?.get(session.id) ?? null,
     unnamedLabel,
+    localizer,
   ));
   const pinned = items.filter((item) => !!item.session.pinnedAt);
   const rest = items.filter((item) => !item.session.pinnedAt);
@@ -186,6 +191,7 @@ export function buildMobileHomePresentation({
     now,
     true,
     (item) => sessionDeviceKey(item.session as MobileHomeSessionLike),
+    localizer,
   );
   const projects = buildProjectGroups(
     groupAutomationListItems(
@@ -193,6 +199,7 @@ export function buildMobileHomePresentation({
       now,
       true,
       (item) => projectGroupKey(item.session),
+      localizer,
     ),
     devices,
   );
@@ -580,9 +587,7 @@ function normalizeSearchQuery(value: string): string {
 }
 
 function normalizePathKey(value: string): string {
-  const normalized = normalizeProjectWorkingDir(value);
-  if (isWindowsStylePath(normalized)) return normalized.replaceAll('\\', '/').toLowerCase();
-  return normalized;
+  return normalizeProjectOrderPath(value);
 }
 
 function normalizeProjectWorkingDir(value: string | null | undefined): string {

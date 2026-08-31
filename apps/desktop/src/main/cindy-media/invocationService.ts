@@ -15,6 +15,7 @@ import { GHOST_IMAGE_ASPECT_RATIOS, type GhostImageAspectRatio } from '../../sha
 import { getAppCapabilities } from '../appCapabilities.js';
 import * as authManager from '../authManager.js';
 import * as imageCacheStore from '../imageCacheStore.js';
+import * as videoCacheStore from '../videoCacheStore.js';
 import { createLogger } from '../logger.js';
 import { ServerApiError } from '../serverApiClient.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
@@ -912,6 +913,11 @@ function completedInvocationResult(invocation: StoredMediaInvocation): Record<st
   }
   return {
     ...(media as Record<string, unknown>),
+    ...(invocation.capability === 'image.generate' || invocation.capability === 'image.edit'
+      ? {
+          hint: '请在最终回复中使用返回的 cindy-media:// 地址只嵌入展示一次；若未嵌入，客户端会用工具结果兜底展示。',
+        }
+      : {}),
     ok: true,
     status: 'complete',
     invocation_id: invocation.id,
@@ -1127,25 +1133,43 @@ async function prepareInvocation(
   assertAuthScope(scope);
   const models = await listAvailableMediaModels(capability);
   assertAuthScope(scope);
-  const matchingModels = models.filter(
+  let matchingModels = models.filter(
     (candidate) => candidate.id === modelId && (!providerId || candidate.providerId === providerId),
   );
-  if (!providerId && matchingModels.length > 1) {
-    return failure(
-      'MODEL_NOT_AVAILABLE',
-      '该模型同时来自多个 Provider，请从模型目录选择精确来源并在 prepare 时传入 provider_id',
+  if (!providerId && matchingModels.length === 0 && !modelId.includes('/')) {
+    const legacyMatches = models.filter(
+      (candidate) => candidate.id.slice(candidate.id.lastIndexOf('/') + 1) === modelId,
     );
+    if (new Set(legacyMatches.map((candidate) => candidate.id)).size === 1) {
+      matchingModels = legacyMatches;
+    }
   }
-  const model = matchingModels[0];
+  const model = providerId
+    ? matchingModels[0]
+    : (matchingModels.find((candidate) => candidate.providerId === 'xd') ??
+      matchingModels[0]);
+  if (!providerId && model && (model.id !== modelId || matchingModels.length !== 1)) {
+    log.warn('legacy media prepare resolved to available model', {
+      requestedModelId: modelId,
+      resolvedProviderId: model.providerId,
+      resolvedModelId: model.id,
+      matchingProviderCount: matchingModels.length,
+    });
+  }
   if (!model) {
     return failure('MODEL_NOT_AVAILABLE', '该模型或指定 Provider 当前不可见，或不是请求的媒体类型');
   }
+  const resolvedModelId = model.id;
   let preparedGuide: PreparedMediaInvocationGuide;
   if (model.providerId !== 'xd') {
     if (capability !== 'image.generate' && capability !== 'image.edit') {
       return failure('CAPABILITY_NOT_SUPPORTED', '该第三方 Provider 当前不支持请求的媒体能力');
     }
-    const providerModel = resolveProviderMediaModel(model.providerId, modelId, capability);
+    const providerModel = resolveProviderMediaModel(
+      model.providerId,
+      resolvedModelId,
+      capability,
+    );
     if (!providerModel) {
       return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源当前不可用');
     }
@@ -1153,7 +1177,7 @@ async function prepareInvocation(
   } else {
     let resolvedGuide: ResolvedMediaInvocationGuide;
     try {
-      resolvedGuide = await fetchMediaInvocationGuide(modelId);
+      resolvedGuide = await fetchMediaInvocationGuide(resolvedModelId);
       assertAuthScope(scope);
     } catch (error) {
       if (error instanceof ServerApiError && error.code === 'MEDIA_INVOCATION_GUIDE_NOT_FOUND') {
@@ -1164,7 +1188,7 @@ async function prepareInvocation(
       }
       if (error instanceof MediaGuideCompatibilityError) {
         log.warn('media Guide rejected by current client', {
-          modelId,
+          modelId: resolvedModelId,
           code: error.code,
           detail: error.detail,
         });
@@ -1198,7 +1222,8 @@ async function prepareInvocation(
     const { operations: _operations, ...guideProtocol } = resolvedGuide.guide;
     void _operations;
     preparedGuide = {
-      modelId: resolvedGuide.modelId,
+      // Guide 查询键不参与调用身份；配置、持久化和 Gateway 请求始终使用完整 modelId。
+      modelId: resolvedModelId,
       ...guideProtocol,
       ...operation,
     };
@@ -1226,7 +1251,7 @@ async function prepareInvocation(
     status: 'prepared',
     invocation_id: id,
     provider_id: model.providerId,
-    model_id: modelId,
+    model_id: resolvedModelId,
     model_name: model.name ?? model.id,
     capability,
     guide_revision: preparedGuide.revision,
@@ -1661,6 +1686,41 @@ export async function callCindyMedia(
   request: CindyMediaToolRequest,
 ): Promise<Record<string, unknown>> {
   try {
+    if (request.action === 'resolve_local_path') {
+      let resolved: { absPath: string; mimeType: string };
+      try {
+        if (request.url.startsWith('cindy-media://')) {
+          if (!blobStore.parseBlobUrl(request.url)) throw new Error('invalid cindy-media url');
+          resolved = blobStore.resolveSafe(request.url);
+        } else if (request.url.startsWith('xdt-image://')) {
+          resolved = imageCacheStore.resolveSafe(request.url);
+        } else if (request.url.startsWith('xdt-video://')) {
+          resolved = videoCacheStore.resolveSafe(request.url);
+        } else {
+          return failure(
+            'INVALID_INPUT',
+            'url 必须是 cindy-media://、xdt-image:// 或 xdt-video:// 受管地址',
+          );
+        }
+      } catch {
+        return failure(
+          'MEDIA_REFERENCE_INVALID',
+          '受管媒体地址不合法或无法解析',
+        );
+      }
+      try {
+        const stat = await fs.stat(resolved.absPath);
+        if (!stat.isFile()) throw new Error('not a file');
+      } catch {
+        return failure('MEDIA_FILE_NOT_FOUND', '该受管媒体文件在本机已不存在');
+      }
+      return {
+        ok: true,
+        url: request.url,
+        local_path: resolved.absPath,
+        mime_type: resolved.mimeType,
+      };
+    }
     if (request.action === 'list_models') {
       const capability = request.capability as MediaCapability | undefined;
       const availability = await listExecutableMediaModels(

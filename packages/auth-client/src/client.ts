@@ -5,6 +5,7 @@ import {
   accountDeletionChallengeSchema,
   accountDeletionStatusSchema,
   accountMembershipSchema,
+  accountTokenPairSchema,
   authRegionSchema,
   desktopAuthorizationPollSchema,
   loginMethodSchema,
@@ -18,6 +19,7 @@ import {
   type AccountDeletionChallenge,
   type AccountDeletionStatus,
   type AccountMembership,
+  type AccountTokenPair,
   type AuthMe,
   type AuthTokenPair,
   type AuthRegion,
@@ -148,11 +150,17 @@ export class CindyAuthClient {
     return discovery;
   }
 
-  async requestCode(kind: VerificationKind, identifier: string): Promise<void> {
-    const body =
-      kind === "email"
-        ? { email: identifier, locale: this.options.locale }
-        : { phone: identifier, locale: this.options.locale };
+  async requestCode(
+    kind: VerificationKind,
+    identifier: string,
+    options: { captchaToken?: string } = {},
+  ): Promise<void> {
+    const body = {
+      ...(kind === "email" ? { email: identifier } : { phone: identifier }),
+      locale: this.options.locale,
+      // 仅有值时携带：旧 auth-server 的 zod 会忽略未知字段，但保持最小请求面。
+      ...(options.captchaToken ? { captchaToken: options.captchaToken } : {}),
+    };
     await this.request(
       `/api/auth/${kind}/request-code`,
       z.object({ status: z.literal("sent") }),
@@ -311,6 +319,24 @@ export class CindyAuthClient {
       "/api/auth/account/exchange",
       tokenPairSchema,
       { membershipId },
+      { token: accountToken },
+    );
+  }
+
+  refreshAccount(accountRefreshToken: string): Promise<AccountTokenPair> {
+    return this.request(
+      "/api/auth/account/refresh",
+      accountTokenPairSchema,
+      { accountRefreshToken, deviceId: this.options.deviceId },
+      { timeoutMs: 0 },
+    );
+  }
+
+  async logoutAccount(accountToken: string): Promise<void> {
+    await this.request(
+      "/api/auth/account/logout",
+      z.object({ status: z.literal("ok") }),
+      {},
       { token: accountToken },
     );
   }

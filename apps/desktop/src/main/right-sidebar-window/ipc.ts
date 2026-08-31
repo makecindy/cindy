@@ -38,34 +38,58 @@ const SUBAGENT_PROVIDERS = [
   'pi',
 ] as const satisfies readonly SubagentProvider[];
 
+const MAX_CONTEXT_SESSION_ID_LENGTH = 128;
+const MAX_CONTEXT_PATH_LENGTH = 4096;
+
 function parseContext(raw: unknown): RsbWindowContext {
   const r = requireObject(raw, 'context');
-  const nullableString = (v: unknown, name: string): string | null => {
+  const nullableString = (v: unknown, name: string, maxLength: number): string | null => {
     if (v === null || v === undefined) return null;
     if (typeof v !== 'string') throwIpcError('INVALID_PARAMS', `${name} must be string | null`);
+    if (v.length > maxLength) {
+      throwIpcError('INVALID_PARAMS', `${name} must be at most ${maxLength} characters`);
+    }
     return v;
   };
-  const optionalNullableString = (v: unknown, name: string): string | null | undefined => {
+  const optionalNullableString = (
+    v: unknown,
+    name: string,
+    maxLength: number,
+  ): string | null | undefined => {
     if (v === undefined) return undefined;
-    return nullableString(v, name);
+    return nullableString(v, name, maxLength);
   };
   if (typeof r.available !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'available must be boolean');
   }
-  const deviceLinkDeviceId = optionalNullableString(r.deviceLinkDeviceId, 'deviceLinkDeviceId');
+  if (r.subagentsAvailable !== undefined && typeof r.subagentsAvailable !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'subagentsAvailable must be boolean when provided');
+  }
+  const deviceLinkDeviceId = optionalNullableString(
+    r.deviceLinkDeviceId,
+    'deviceLinkDeviceId',
+    MAX_CONTEXT_SESSION_ID_LENGTH,
+  );
   return {
-    sessionId: nullableString(r.sessionId, 'sessionId'),
-    workdir: nullableString(r.workdir, 'workdir'),
-    remoteHostId: nullableString(r.remoteHostId, 'remoteHostId'),
+    sessionId: nullableString(r.sessionId, 'sessionId', MAX_CONTEXT_SESSION_ID_LENGTH),
+    workdir: nullableString(r.workdir, 'workdir', MAX_CONTEXT_PATH_LENGTH),
+    remoteHostId: nullableString(r.remoteHostId, 'remoteHostId', MAX_CONTEXT_SESSION_ID_LENGTH),
     ...(deviceLinkDeviceId === undefined ? {} : { deviceLinkDeviceId }),
+    ...(r.subagentsAvailable === undefined
+      ? {}
+      : { subagentsAvailable: r.subagentsAvailable }),
     available: r.available,
   };
 }
 
 function parseCommand(raw: unknown): RsbWindowCommand {
   const r = requireObject(raw, 'command');
-  if (typeof r.sessionId !== 'string' || r.sessionId.length === 0) {
-    throwIpcError('INVALID_PARAMS', 'command.sessionId required');
+  if (
+    typeof r.sessionId !== 'string' ||
+    r.sessionId.length === 0 ||
+    r.sessionId.length > 128
+  ) {
+    throwIpcError('INVALID_PARAMS', 'command.sessionId must be a 1–128 character string');
   }
   if (r.type === 'open-terminal') {
     return { type: 'open-terminal', sessionId: r.sessionId };
@@ -252,13 +276,22 @@ function parseCommandRouteRequest(raw: unknown): RsbWindowCommandRouteRequest {
 }
 
 /** open 的可选 payload:缺省(旧签名 / 无参调用)= 用户手势,保持既有聚焦行为。 */
-function parseOpenUserInitiated(raw: unknown): boolean {
-  if (raw === undefined || raw === null) return true;
+function parseOpenOptions(raw: unknown): { userInitiated: boolean; sessionId?: string } {
+  if (raw === undefined || raw === null) return { userInitiated: true };
   const r = requireObject(raw, 'options');
   if (r.userInitiated !== undefined && typeof r.userInitiated !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'options.userInitiated must be boolean');
   }
-  return r.userInitiated !== false;
+  if (
+    r.sessionId !== undefined &&
+    (typeof r.sessionId !== 'string' || r.sessionId.length === 0 || r.sessionId.length > 128)
+  ) {
+    throwIpcError('INVALID_PARAMS', 'options.sessionId must be a 1–128 character string');
+  }
+  return {
+    userInitiated: r.userInitiated !== false,
+    ...(typeof r.sessionId === 'string' ? { sessionId: r.sessionId } : {}),
+  };
 }
 
 const MAX_HANDOFF_SNAPSHOTS = 8;
@@ -327,8 +360,14 @@ export function registerRsbWindowIpc(opts: {
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_STATE, () => controller.getState());
 
-  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_OPEN, (_e, payload: unknown) => {
-    controller.open({ userInitiated: parseOpenUserInitiated(payload) });
+  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_OPEN, (event, payload: unknown) => {
+    const options = parseOpenOptions(payload);
+    const main = getMainWindow();
+    if (!main || main.isDestroyed() || event.sender !== main.webContents) {
+      log.warn('RSB_WINDOW_OPEN from non-main-window sender, dropped');
+      return;
+    }
+    controller.open(options);
   });
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_CLOSE, () => {

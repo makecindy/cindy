@@ -103,6 +103,7 @@ import {
 import {
   buildAgentCapabilitiesCacheKey,
   commitAgentCapabilities,
+  evictAgentCapabilitiesForDevice,
   getAgentCapabilitiesGeneration,
   getCachedAgentCapabilities,
   isAgentCapabilitiesGenerationCurrent,
@@ -130,6 +131,7 @@ import {
   resolveContextSheetMediaAssetForUpload,
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
+import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 import {
   detectComposerTrigger,
   filterAtResources,
@@ -207,6 +209,7 @@ import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import {
   ComposerResizeGrabber,
+  ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
   MOBILE_COMPOSER_CONTROL_SIZE,
@@ -321,7 +324,7 @@ import {
 import { mobileAgentLabel, mobileAgentVendor } from '@/session/sessionAgentSwitch';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { draftModelMemoryFor, hydrateDraftModelMemory } from '@/session/draftModelMemory';
-import { rowFastEditable } from '@/session/modelPickerRows';
+import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -393,7 +396,7 @@ interface WorktreeCreateIntentSnapshot {
 export default function NewRemoteSessionScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   // Dev-only:把构建信息从全局浮层挪到这里的顶部展示(试 Fast Refresh)。
   const buildLabel = __DEV__
     ? formatMobileBuildLabel(normalizeBuildInfo({
@@ -426,6 +429,8 @@ export default function NewRemoteSessionScreen() {
     invoke,
     openLink,
     subscribe,
+    unsubscribe,
+    onAgentsChanged,
     status: deviceLinkStatus,
     connectionEpoch,
     presenceVersion,
@@ -496,6 +501,7 @@ export default function NewRemoteSessionScreen() {
   // Context 面板(+ 号弹出的可拖动 sheet):open + 子视图(主视图 / 截图列表 / 目标草稿)。
   const [contextSheetOpen, setContextSheetOpen] = useState(false);
   const [contextSheetView, setContextSheetView] = useState<'main' | 'screenshots' | 'goal'>('main');
+  const contextSheetMediaLibraryEnabled = canBrowsePhotoLibraryDirectly(Platform.OS);
   // 目标模式(对齐桌面 NewMakerDraftRoute.handleCreateGoal):填完表单直接建会话 + setGoal,
   // 被控端落目标消息并自动开跑第一轮,成功后跳转会话页。
   const [goalBusy, setGoalBusy] = useState(false);
@@ -512,6 +518,13 @@ export default function NewRemoteSessionScreen() {
   // 建出最终 requireAgent 报 not-registered 的会话(codex review P2)。
   const [availableAgentKinds, setAvailableAgentKinds] =
     useState<ReadonlySet<NewSessionAgentKind> | null>(null);
+  const [availableAgentRefreshNonce, setAvailableAgentRefreshNonce] = useState(0);
+  const [availableAgentRosterRefreshNonce, setAvailableAgentRosterRefreshNonce] = useState(0);
+  const rosterRecoveryIdentityRef = useRef<{
+    deviceId: string;
+    connectionEpoch: number;
+    presenceVersion: number;
+  } | null>(null);
   // worktree 开关(project 模式 + 已选目录时显示):勾选值存工作端(get-new-maker-defaults
   // 播种 / 显式点击写穿),资格由 worktree:detect-cwd 探测(目录变化即重探,seq 防竞态)。
   const [worktreeProbe, setWorktreeProbe] = useState<NewSessionWorktreeProbeSnapshot | null>(null);
@@ -1056,7 +1069,8 @@ export default function NewRemoteSessionScreen() {
   );
   const runtimeSummary = useMemo(
     () => buildDraftRuntimeSummary(draft, runtimeOptions),
-    [draft, runtimeOptions],
+    // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
+    [draft, runtimeOptions, i18nInstance.language],
   );
   // 权限按钮 / 权限下拉不体现 plan(对齐桌面 PR#494 / Cursor):计划模式激活时展示
   // 进入前的底层权限档(无记录时回退首个非 plan 档),激活态由 composer 的 PlanModeChip 表达。
@@ -1747,7 +1761,7 @@ export default function NewRemoteSessionScreen() {
       cancelled = true;
       unsubscribe();
     };
-  }, [selectedDeviceId, draft.agentKind, maker, openLink]);
+  }, [availableAgentRefreshNonce, selectedDeviceId, draft.agentKind, maker, openLink]);
 
   // Fast 记忆延迟恢复(codex review P1):切/恢复 agent 的瞬间,目标 agent 的能力表
   // 尚未到达(或残留着切换前 agent 的),恢复点只能保守置 false;真正的恢复在这里——
@@ -1842,7 +1856,67 @@ export default function NewRemoteSessionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDeviceId, maker, openLink]);
+  }, [selectedDeviceId, maker, openLink, availableAgentRosterRefreshNonce]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) {
+      rosterRecoveryIdentityRef.current = null;
+      return;
+    }
+    const previous = rosterRecoveryIdentityRef.current;
+    rosterRecoveryIdentityRef.current = { deviceId: selectedDeviceId, connectionEpoch, presenceVersion };
+    if (!previous || previous.deviceId !== selectedDeviceId) return;
+    if (
+      previous.connectionEpoch === connectionEpoch
+      && previous.presenceVersion === presenceVersion
+    ) return;
+    // Roster pushes are edge-triggered and are not replayed by topic rehydration.
+    // Refresh both the runtime roster and the selected agent capabilities after a
+    // relay/target recovery, even when the screen stayed mounted and focused.
+    setAvailableAgentRefreshNonce((value) => value + 1);
+    setAvailableAgentRosterRefreshNonce((value) => value + 1);
+  }, [connectionEpoch, presenceVersion, selectedDeviceId]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    let cancelled = false;
+    void withTransientRemoteRetry(async () => {
+      await openLink(selectedDeviceId);
+      if (cancelled) return;
+      await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
+    }).catch(() => {
+      /* The existing roster fetch remains fail-open; the next focus/retry can resubscribe. */
+    });
+    return () => {
+      cancelled = true;
+      void unsubscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']).catch(() => undefined);
+    };
+  }, [openLink, selectedDeviceId, subscribe, unsubscribe]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    let cancelled = false;
+    void withTransientRemoteRetry(async () => {
+      await openLink(selectedDeviceId);
+      if (cancelled) return;
+      await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
+    }).catch(() => {
+      /* The mount-time owner remains held; the next connection/presence change retries. */
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionEpoch, openLink, presenceVersion, selectedDeviceId, subscribe]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    return onAgentsChanged((deviceId) => {
+      if (deviceId !== selectedDeviceId) return;
+      evictAgentCapabilitiesForDevice(deviceId);
+      setAvailableAgentRefreshNonce((value) => value + 1);
+      setAvailableAgentRosterRefreshNonce((value) => value + 1);
+    });
+  }, [onAgentsChanged, selectedDeviceId]);
 
   useEffect(() => {
     if (!selectedDeviceId || composerTrigger.kind !== 'slash') {
@@ -3365,43 +3439,46 @@ export default function NewRemoteSessionScreen() {
     );
   };
 
-  // 工具条布局(对齐 Codex):左 = [+][权限图标][计划 chip];右 = [模型][语音][创建]。
+  // 工具条布局:左 = [+][权限][计划 chip][模型];右 = [语音][创建]。
+  // 模型放左侧组,不随创建按钮出现而横向跳动。
   const renderComposerToolbar = () => (
     <>
-      {renderAttachmentToggleButton()}
-      {renderPermissionIconButton()}
-      {planModeOn ? (
-        <PlanModeChip
-          disabled={creating}
-          onExit={() => togglePlanMode(false)}
-          testID="newSession.planModeChip"
-        />
-      ) : null}
-      <ComposerToolbarSpacer />
-      <Pressable
-        accessibilityLabel={t('session.new.modelAccessibility', { model: runtimeSummary.modelSummary })}
-        accessibilityRole="button"
-        accessibilityState={{ expanded: modelSheetOpen || undefined }}
-        hitSlop={10}
-        onPress={toggleModelPicker}
-        style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
-        testID="newSession.modelIndicator"
-      >
-        {activeSourceProvider ? (
-          // 图标统一规则(桌面同源):模型条目 icon(AI Gateway 设定)优先,缺省回落来源标。
-          <MobileModelIconMark
-            color={colors.textSecondary}
-            icon={getModel(activeSourceProvider, draft.model, draft.agentKind)?.icon}
-            name={activeSourceProvider.name}
-            providerId={activeSourceProvider.id}
-            routing={activeSourceProvider.routing}
-            logoKind={activeSourceProvider.logoKind}
+      <ComposerToolbarLeftGroup testID="newSession.composerToolbarLeft">
+        {renderAttachmentToggleButton()}
+        {renderPermissionIconButton()}
+        {planModeOn ? (
+          <PlanModeChip
+            disabled={creating}
+            onExit={() => togglePlanMode(false)}
+            testID="newSession.planModeChip"
           />
         ) : null}
-        <Text style={styles.modelPillText} numberOfLines={1}>{runtimeSummary.modelSummary}</Text>
-        {triggerFastOn ? <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
-        <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      </Pressable>
+        <Pressable
+          accessibilityLabel={t('session.new.modelAccessibility', { model: runtimeSummary.modelSummary })}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: modelSheetOpen || undefined }}
+          hitSlop={10}
+          onPress={toggleModelPicker}
+          style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
+          testID="newSession.modelIndicator"
+        >
+          {activeSourceProvider ? (
+            // 图标统一规则(桌面同源):模型条目 icon(AI Gateway 设定)优先,缺省回落来源标。
+            <MobileModelIconMark
+              color={colors.textSecondary}
+              icon={getModel(activeSourceProvider, draft.model, draft.agentKind)?.icon}
+              name={activeSourceProvider.name}
+              providerId={activeSourceProvider.id}
+              routing={activeSourceProvider.routing}
+              logoKind={activeSourceProvider.logoKind}
+            />
+          ) : null}
+          <Text style={styles.modelPillText} numberOfLines={1}>{runtimeSummary.modelSummary}</Text>
+          {triggerFastOn ? <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
+          <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        </Pressable>
+      </ComposerToolbarLeftGroup>
+      <ComposerToolbarSpacer />
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}
@@ -3826,10 +3903,12 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     if (!contextSheetOpen) setPendingMediaAssets([]);
   }, [contextSheetOpen]);
-  // 进页面就静默预取最近照片(仅已授权时),打开 + 面板即刻出图。
+  // iOS 进页面就静默预取最近照片(仅已授权时),打开 + 面板即刻出图;Android 统一走系统选择器。
   useEffect(() => {
-    void prefetchContextSheetMediaAssets('recent');
-  }, []);
+    if (contextSheetMediaLibraryEnabled) {
+      void prefetchContextSheetMediaAssets('recent');
+    }
+  }, [contextSheetMediaLibraryEnabled]);
 
   // Context 面板「计划模式」入口,双路径(#494 迁移):
   //  - 新协议(capabilities.planMode.supported):本地布尔草稿态,创建会话后经
@@ -4387,10 +4466,10 @@ export default function NewRemoteSessionScreen() {
       });
     } catch (err) {
       if (!isCurrentOwner()) return;
-      // agent 未鉴权(电脑端没配 key / 没登录)是新会话失败的高频原因,
-      // 换成带引导的中文提示;其它错误维持原文。
+      // agent 未鉴权(电脑端没配 key / 没登录)是新任务失败的高频原因。
+      // state 保留结构化原文，渲染时再按当前语言生成引导，避免切换语言后缓存旧文案。
       const raw = formatRemoteError(err);
-      setError(describeAgentAuthError(raw) ?? raw);
+      setError(raw);
     } finally {
       releasePrecreatedRegistration?.();
       if (!handedOff) {
@@ -5609,7 +5688,9 @@ export default function NewRemoteSessionScreen() {
               </View>
             ) : null}
 
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+            {error ? (
+              <Text style={styles.errorText}>{describeAgentAuthError(error) ?? error}</Text>
+            ) : null}
             {/* 发送前鉴权提示:选中 agent 在被控端无已连接供应商时提前告知;
                 error 已展示(含被门禁拦截的同款文案)时不重复出现。 */}
             {!error && agentAuthVerdict === 'unauthenticated' ? (
@@ -5749,15 +5830,17 @@ export default function NewRemoteSessionScreen() {
       >
         {contextSheetView === 'main' ? (
           <>
-            <RecentPhotosStrip
-              busyAssetIds={uploadingMediaAssetIds}
-              disabled={creating}
-              enabled={contextSheetOpen}
-              onToggleAsset={toggleMediaAssetAttachment}
-              pendingOrder={pendingMediaOrder}
-              selectedAssetIds={selectedMediaAssetIds}
-              testID="newSession.contextSheetPhotos"
-            />
+            {contextSheetMediaLibraryEnabled ? (
+              <RecentPhotosStrip
+                busyAssetIds={uploadingMediaAssetIds}
+                disabled={creating}
+                enabled={contextSheetOpen}
+                onToggleAsset={toggleMediaAssetAttachment}
+                pendingOrder={pendingMediaOrder}
+                selectedAssetIds={selectedMediaAssetIds}
+                testID="newSession.contextSheetPhotos"
+              />
+            ) : null}
             <ContextSheetGroup label={t('session.common.groupMode')}>
               {planModeSupported ? (
                 // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
@@ -5790,14 +5873,16 @@ export default function NewRemoteSessionScreen() {
                 onPress={() => void addLocalImageAttachments('library')}
                 testID="newSession.contextSheetPhotoRow"
               />
-              <ContextSheetRow
-                disabled={creating}
-                icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.screenshot')}
-                onPress={() => setContextSheetView('screenshots')}
-                testID="newSession.contextSheetScreenshotsRow"
-                trailing="chevron"
-              />
+              {contextSheetMediaLibraryEnabled ? (
+                <ContextSheetRow
+                  disabled={creating}
+                  icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                  label={t('session.common.screenshot')}
+                  onPress={() => setContextSheetView('screenshots')}
+                  testID="newSession.contextSheetScreenshotsRow"
+                  trailing="chevron"
+                />
+              ) : null}
               <ContextSheetRow
                 disabled={creating}
                 icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
@@ -5819,7 +5904,7 @@ export default function NewRemoteSessionScreen() {
               </Text>
             ) : null}
           </>
-        ) : contextSheetView === 'screenshots' ? (
+        ) : contextSheetView === 'screenshots' && contextSheetMediaLibraryEnabled ? (
           <ScreenshotsGrid
             busyAssetIds={uploadingMediaAssetIds}
             contentWidth={windowDimensions.width - 40}
@@ -6088,7 +6173,7 @@ function buildDraftRuntimeSummary(
   runtime: MobileSessionRuntimeOptions,
 ): { modelSummary: string; permissionLabel: string } {
   const modelLabel = runtime.currentModel?.label ?? draft.model;
-  const effortLabel = choiceLabel(runtime.effortOptions, draft.effort);
+  const effortLabel = effortLabelFromRuntime(runtime, draft.effort);
   return {
     modelSummary: [modelLabel, effortLabel].filter(Boolean).join(' · '),
     permissionLabel: choiceLabel(runtime.permissionOptions, draft.permissionMode),

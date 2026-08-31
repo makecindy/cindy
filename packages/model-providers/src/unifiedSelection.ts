@@ -61,6 +61,7 @@ import {
   type ProviderView,
 } from './registry.js';
 import { deriveModelList } from './modelList.js';
+import { effortRank } from './effortResolution.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, groupOf, isBudgetModel } from './classification.js';
 import type { AgentKind, CatalogModel, Effort, Provider } from './types.js';
 
@@ -440,7 +441,11 @@ function capabilityOf(
   return {
     agent,
     wireModelId: model.id,
-    efforts: model.efforts,
+    // 防御性规范升序(Chris 2026-08-19 实测:xAI discovery 下发降序,只有 Grok 4.6 被
+    // 特判归一,4.5 的滑杆整条轴反向)。efforts 是外部输入(服务端目录 / 三家 discovery /
+    // 用户 local override),而滑杆与行三元组按数组下标画轴 —— 数据侧已在 xAI 链路归一,
+    // 这里对**所有来源**再兜一道,单点成本换掉整类「某条来源漏排就反轴」的缺陷。
+    efforts: [...model.efforts].sort((a, b) => effortRank(a) - effortRank(b)),
     ...resolveDefaultEffort(model),
     // 按目录里真实那条 id 查 Fast,避免归一命中后误报 false。
     supportsFastMode: modelSupportsFastMode(provider, model.id, agent),
@@ -477,6 +482,8 @@ export interface UnifiedModelEntry {
   sortOrder?: number;
   /** 展示图标 id(`CatalogModel.icon`;缺省由渲染层回落供应商标)。 */
   icon?: string;
+  /** 服务端 v5 下发的个人模型可用性；requires_payment 只展示，不可作为新路由。 */
+  availability?: CatalogModel['availability'];
   /** 候选引擎,按 `UNIFIED_AGENT_PRIORITY` 序。恒 ≥1。 */
   candidates: AgentKind[];
   /** 推荐引擎,恒 ∈ candidates。 */
@@ -508,6 +515,8 @@ export interface UnifiedModelEntriesOptions {
   excludeProvider?: (provider: ProviderView, agent: AgentKind) => boolean;
   /** 单模型排除(SSH 远程排除订阅直连前缀等)。 */
   excludeModel?: (model: CatalogModel, provider: ProviderView, agent: AgentKind) => boolean;
+  /** 是否把 requires_payment 模型保留为只读展示行；缺省 false。 */
+  includePaymentRequired?: boolean;
   /** 来源解析口径,默认 `'draft'`。 */
   scope?: SourceResolutionScope;
   /**
@@ -580,6 +589,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     isVisible,
     excludeProvider,
     excludeModel,
+    includePaymentRequired = false,
     scope = 'draft',
     keepModel,
   } = opts;
@@ -676,6 +686,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       ...(keepModel && keepModel.agent === agent
         ? { keepSelected: { providerId: keepModel.providerId, modelId: keepModel.modelId } }
         : {}),
+      includePaymentRequired,
     });
     for (const row of rows) {
       const keyModelId = unifiedModelKeyId(row.id);
@@ -727,7 +738,10 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       const wireId = draft.wireIds[agent];
       if (wireId === undefined) continue;
       const keptAgent = draft.kept && keepModel?.agent === agent;
-      if (!keptAgent) {
+      const paymentRequired =
+        includePaymentRequired &&
+        findCatalogModel(provider, wireId, agent)?.availability === 'requires_payment';
+      if (!keptAgent && !paymentRequired) {
         const sourceId = resolveSourceId(providers, draft.providerId, wireId, agent, scope);
         if (sourceId !== draft.providerId) continue;
       }
@@ -750,6 +764,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       ...(display?.group !== undefined ? { group: display.group } : {}),
       ...(display?.sortOrder !== undefined ? { sortOrder: display.sortOrder } : {}),
       ...(display?.icon !== undefined ? { icon: display.icon } : {}),
+      ...(display?.availability !== undefined ? { availability: display.availability } : {}),
       candidates,
       recommended,
       nativeAgent: nativeAgentForProviderModel(provider, draft.keyModelId),

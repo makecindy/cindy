@@ -183,13 +183,22 @@ export function loadSessionScheduleIndexThrottled(
  * 在链路恢复后立即失效——否则 30s 失败 TTL 内重连触发的 reseed 会吃到旧的
  * rejected promise,设备详情页把索引替换成空集、首页保留陈旧数据,且没有任何
  * 定时器在 TTL 过期后补拉。由 DeviceLinkContext 在每轮 rehydrate(只在 online
- * 时运行,重连必经)开始时调用;熔断类负缓存不受影响(走各自的恢复旁路)。
+ * 时运行,重连必经)的共享生命周期入口调用;单 peer 恢复使用下方逐设备版本，
+ * 熔断类负缓存不受影响(走各自的恢复旁路)。
  */
 export function invalidateTransientScheduleIndexFailures(): void {
   for (const [key, entry] of scheduleIndexThrottleEntries) {
     if (entry.failedAt !== null && entry.failedTransient) {
       scheduleIndexThrottleEntries.delete(key);
     }
+  }
+}
+
+/** Per-peer variant used by independent Mobile recovery lifecycles. */
+export function invalidateTransientScheduleIndexFailureFor(deviceId: string): void {
+  const entry = scheduleIndexThrottleEntries.get(deviceId);
+  if (entry?.failedAt !== null && entry?.failedTransient) {
+    scheduleIndexThrottleEntries.delete(deviceId);
   }
 }
 

@@ -78,6 +78,8 @@ import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js
 import { resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
+import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
+import { getSessionFastMode } from './session-effort-store.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
 import { getRemoteSshPool, broadcastSilentInstallStatus } from '../remote-ssh/index.js';
 import {
@@ -109,6 +111,11 @@ import {
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
+import {
+  captureLocalPiPackageRuntimeInvalidationSnapshot,
+  invalidateLocalPiPackageRuntimeSnapshot,
+  type PiPackageRuntimeInvalidationSnapshot,
+} from './pi-package-runtime-invalidation.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -132,6 +139,7 @@ import {
   setClaudeProxyOAuthSpawnChecker,
 } from './anthropic-compat-proxy-host.js';
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
+import { resolveDesktopClaudeSubagentModelAccess } from './subagent-model-access.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
 import {
@@ -217,11 +225,15 @@ import {
 } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import {
   buildCodexProxySpawnArgs,
+  CODEX_CINDY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
 import {
   buildCodexSubagentSpawnArgs,
+  codexSubagentRouteUsesChatGptOAuth,
   codexSubagentRouteResolutionFailed,
+  resolveCodexSubagentRoutingProfile,
+  resolveEffectiveCodexSubagentSettings,
   resolveCodexSubagentModelFallback,
   resolveCodexSubagentHostCredentialPlan,
   resolveCodexSubagentRouteSnapshot,
@@ -264,6 +276,7 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
+let _registerPiAgent: (() => boolean) | null = null;
 /** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
 let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
 
@@ -755,26 +768,13 @@ export function getMaker(): Maker {
 
     const resolveIOSSimulatorAccess = (context?: IOSSimulatorMcpCallContext) => {
       const workingDir = context?.workingDir?.trim() || null;
-      const pluginAccess = getIOSSimulatorPluginAccessDecision(workingDir);
-      if (!pluginAccess.allowed) return pluginAccess;
-      if (!pluginRegistry.isEnabled('ios-simulator', workingDir ?? undefined)) {
-        return {
-          allowed: false as const,
-          errorCode: 'IOS_SIMULATOR_DISABLED' as const,
-          message:
-            'The embedded iOS Simulator capability is disabled for the current project. Enable it in the project plugin settings before retrying the embedded tool; other iOS workflows are unaffected.',
-          data: {
-            reason: 'disabled-in-workdir',
-            action: 'enable-plugin',
-            pluginId: 'ios-simulator',
-            pluginName: 'iOS Simulator',
-          },
-        };
-      }
-      return { allowed: true as const };
+      // Product access is the installed plugin (enable + workdir disable).
+      // Leftover Tools-page `builtinTools['ios-simulator']` must not gate runtime.
+      return getIOSSimulatorPluginAccessDecision(workingDir);
     };
 
     const makerMemoryProviderDeps = {
+      getAppVersion: () => app.getVersion(),
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
       pluginRegistry,
@@ -967,6 +967,7 @@ export function getMaker(): Maker {
       // (浏览器自动化等高频入口)会逐次弹窗, 与 Codex 侧的静默执行行为分叉。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
       getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
+      resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CLAUDE_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 cc 列表注入
       // （含 claude 订阅模型 + XD 网关路由的 gpt / 国产 / gemini 等）。active catalog 已在 splash 期
@@ -1022,6 +1023,7 @@ export function getMaker(): Maker {
         startParams,
         vendorOptions,
         onApprovalRequest,
+        onSubagentModelAccessRequest,
         onOAuthRefresh,
         makerMemoryEnabled,
       }) => {
@@ -1156,6 +1158,9 @@ export function getMaker(): Maker {
               onApprovalRequest: onApprovalRequest as Parameters<
                 typeof openCcManagerSession
               >[0]['onApprovalRequest'],
+              onSubagentModelAccessRequest: onSubagentModelAccessRequest as Parameters<
+                typeof openCcManagerSession
+              >[0]['onSubagentModelAccessRequest'],
               onOAuthRefresh: onOAuthRefresh as Parameters<
                 typeof openCcManagerSession
               >[0]['onOAuthRefresh'],
@@ -1221,6 +1226,7 @@ export function getMaker(): Maker {
       runtimeConfig: desktopCodexRuntimeConfig,
       binaryPath: codexPath,
       logger: desktopMakerLogger,
+      disableCodexPluginRuntime: true,
       registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
       // Codex 也接 Cindy MCP providers (跟 claude 共享同一份 provider instances);
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig
@@ -1428,19 +1434,18 @@ export function getMaker(): Maker {
         const endpoint = usesIsolatedProxy
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
-        const subagentModelSettings = readSubagentModelSettings();
-        const subagentModelFallback = !isReview
-          ? resolveCodexSubagentModelFallback(subagentModelSettings, ctx.remoteHostId)
-          : undefined;
+        const storedSubagentModelSettings = readSubagentModelSettings();
+        const mainTaskCredentialMode = ctx.requestedCredentialMode ?? credentialMode;
         let subagentProviderViews: ProviderView[] | undefined;
         if (
           !isReview
           && !ctx.remoteHostId
-          && subagentModelSettings.codexSubagentsEnabled
-          && subagentModelSettings.codex?.trim()
+          && storedSubagentModelSettings.codexSubagentsEnabled
+          && storedSubagentModelSettings.codex?.trim()
         ) {
-          // 显式来源同样必须按当前目录严格校验；读取失败时保留空数组，令下面的路由
-          // 解析 fail-closed，而不是信任可能已经断连或删除模型的旧设置。
+          // OAuth 主任务也需要识别固定路由的来源，区分“ChatGPT 路由在两侧都回落默认”
+          // 与“其它路由只在 OAuth 侧临时回落”；读取失败时保留空数组，令显式 OpenAI
+          // 选择仍可按稳定来源 id 识别，其它路由继续 fail-closed。
           subagentProviderViews = [];
           try {
             subagentProviderViews = await getDesktopProviderService().listProviders({
@@ -1452,12 +1457,32 @@ export function getMaker(): Maker {
             });
           }
         }
-        let subagentRoute = !isReview
+        const configuredSubagentRoute = !isReview
           ? resolveCodexSubagentRouteSnapshot(
-              subagentModelSettings,
+              storedSubagentModelSettings,
               ctx.remoteHostId,
               subagentProviderViews,
             )
+          : undefined;
+        const subagentModelSettings = resolveEffectiveCodexSubagentSettings(
+          storedSubagentModelSettings,
+          mainTaskCredentialMode,
+          configuredSubagentRoute,
+          subagentProviderViews,
+        );
+        const codexSubagentRoutingProfile = !isReview && !ctx.remoteHostId
+          ? resolveCodexSubagentRoutingProfile(
+              storedSubagentModelSettings,
+              mainTaskCredentialMode,
+              configuredSubagentRoute,
+              subagentProviderViews,
+            )
+          : 'default';
+        const subagentModelFallback = !isReview
+          ? resolveCodexSubagentModelFallback(subagentModelSettings, ctx.remoteHostId)
+          : undefined;
+        let subagentRoute = subagentModelSettings === storedSubagentModelSettings
+          ? configuredSubagentRoute
           : undefined;
         let forceDisableSubagents = false;
         if (codexSubagentRouteResolutionFailed(subagentModelSettings, subagentRoute, {
@@ -1482,10 +1507,10 @@ export function getMaker(): Maker {
           forceDisableSubagents = true;
           subagentRoute = undefined;
         } else if (subagentRoute) {
-          const selectedRouting = subagentProviderViews
-            ?.find((provider) => provider.id === subagentRoute?.providerId)
-            ?.routing.codex;
-          const hasRequiredOAuth = selectedRouting?.authStrategy === 'oauth-passthrough'
+          const hasRequiredOAuth = codexSubagentRouteUsesChatGptOAuth(
+            subagentRoute,
+            subagentProviderViews,
+          )
             ? await desktopCodexAuthAdapter.hasCodexOAuthLogin().catch(() => false)
             : false;
           const credentialPlan = resolveCodexSubagentHostCredentialPlan(
@@ -1510,7 +1535,6 @@ export function getMaker(): Maker {
             };
           }
         }
-        const openAiWebSocketsEnabled = !subagentRoute;
         return {
           // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
@@ -1522,14 +1546,15 @@ export function getMaker(): Maker {
                   forceDisableSubagents,
                 })
               : []),
-            ...buildCodexProxySpawnArgs(endpoint, authInjection, { openAiWebSocketsEnabled }),
+            ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
           ...(subagentModelFallback ? { subagentModelFallback } : {}),
           ...(subagentRoute ? { subagentRoute } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
-          codexOpenAiWebSocketsEnabled: useOAuthBearer && ready && openAiWebSocketsEnabled,
+          codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
+          codexSubagentRoutingProfile,
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
           ...(browserCompanion?.status === 'ready'
             ? {
@@ -1537,8 +1562,10 @@ export function getMaker(): Maker {
                 codexBrowserUseStartupTimeoutMs: browserCompanion.startupTimeoutMs,
               }
             : {}),
-          // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
-          // 「订阅直连路由」的 thread 用它开 OpenAI 远端压缩,其余 thread 保持本地压缩。
+          ...(ready
+            ? { codexCindyRemoteCompactionProviderId: CODEX_CINDY_COMPACT_PROVIDER_ID }
+            : {}),
+          // oauth spawn 额外定义订阅直连 identity；Cindy codex/* 使用上面的 HTTP identity。
           ...(useOAuthBearer && ready
             ? { codexRemoteCompactionProviderId: CODEX_OPENAI_COMPACT_PROVIDER_ID }
             : {}),
@@ -1583,7 +1610,9 @@ export function getMaker(): Maker {
         text,
         subagentRoute,
       }) =>
-        registerCodexProxyComposed(sessionId, threadId, text, { subagentRoute }),
+        registerCodexProxyComposed(sessionId, threadId, text, {
+          ...(subagentRoute ? { subagentRoute } : {}),
+        }),
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);
@@ -1648,10 +1677,12 @@ export function getMaker(): Maker {
     _codexAgent = codexAgent;
 
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
-    attachAgentsToMakerMemory(makerMemoryManager, {
+    // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。
+    const makerAgents: ConstructorParameters<typeof Maker>[0]['agents'] = {
       'claude-code': claudeAgent,
       codex: codexAgent,
-    });
+    };
+    attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
     if (makerMemoryManager.isEnabled()) {
       void makerMemoryManager.enable();
     }
@@ -1705,7 +1736,11 @@ export function getMaker(): Maker {
     // logout + 这里这个 broadcast, 让 useCodexAuth hook 立刻进 'unauthenticated' 状态,
     // UI 弹 "请重新登录" — 否则错误只会反复埋在后台日志里。payload 字段对齐
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
-    desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason, credentialScope) => {
+    desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (
+      reason,
+      credentialScope,
+      oauthWritesBlocked,
+    ) => {
       resetProviderModelAutoRefreshCooldowns('openai');
       resetCodexModelBackfillState();
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
@@ -1734,6 +1769,7 @@ export function getMaker(): Maker {
         authenticated: false,
         errorReason: reason,
         credentialScope,
+        ...(oauthWritesBlocked ? { oauthWritesBlocked: true } : {}),
       };
       for (const win of BrowserWindow.getAllWindows()) {
         if (win.isDestroyed()) continue;
@@ -1791,7 +1827,10 @@ export function getMaker(): Maker {
     registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
     _initialCustomMcpRefresh = refreshCustomMcpProviders();
 
-    const piAgent = buildPiAgent({
+    // Store mutations are serialized; each settled callback consumes the exact
+    // latest-byte-edge runtime snapshot for its durable mutation.
+    const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
+    const buildPiAgentForDesktop = () => buildPiAgent({
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,
@@ -1807,8 +1846,8 @@ export function getMaker(): Maker {
           localOverrides: getLocalCatalogOverridesSnapshot(),
         }),
       resolvePiGatewayModelDescriptor: (providerId, modelId) => {
-        // `cindy` / null 是 Pi 的默认 gateway 路由；其 wire 由 v3 XD runtime plan
-        // 决定，因此描述符也必须锁定 XD，不能让复合 `cindy` 按目录顺序命中同 id 订阅模型。
+        // `cindy` 始终是 XD Gateway 路由；其成员、能力与显式 API 都由 Model Access
+        // 决定，不能随当前订阅/BYOM provider 命中同 id 的另一条目录记录。
         return resolvePiRuntimeModelDescriptor(
           getDesktopSelectableCatalog(),
           resolvePiGatewayDescriptorProviderId(providerId),
@@ -1818,6 +1857,63 @@ export function getMaker(): Maker {
       },
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
+      // Fence in-flight startups at the durable package edge, but do not close
+      // the current caller before maker-core queues its host-owned receipt and
+      // sends the extension response. The settled callback below retires only
+      // the exact local runtimes captured at the mutation's latest byte edge.
+      onPiManagedPackageMutationCommitted: async (phase = 'commit') => {
+        const maker = _maker;
+        if (!maker) return;
+        const snapshot = await captureLocalPiPackageRuntimeInvalidationSnapshot(maker);
+        if (phase === 'post-build' && pendingPiPackageRuntimeSnapshots.length > 0) {
+          // The mutation lock prevents another commit edge from interleaving.
+          // Replace the earlier snapshot so settled retirement includes every
+          // runtime admitted while optional package bytes were being written.
+          pendingPiPackageRuntimeSnapshots[pendingPiPackageRuntimeSnapshots.length - 1] = snapshot;
+        } else {
+          pendingPiPackageRuntimeSnapshots.push(snapshot);
+        }
+      },
+      onPiManagedPackageMutationSettled: async (callerSessionId, publishOutcome) => {
+        const partial = () => publishOutcome({
+          runtimeConvergence: 'partial',
+          recoveryAction: 'restart-cindy-to-refresh-packages',
+        });
+        const maker = _maker;
+        const snapshot = pendingPiPackageRuntimeSnapshots.shift();
+        if (!maker || !snapshot) {
+          partial();
+          return;
+        }
+        const callerEntries = snapshot.entries.filter(({ session }) => session.id === callerSessionId);
+        const siblingEntries = snapshot.entries.filter(({ session }) => session.id !== callerSessionId);
+        let siblingFailed = false;
+        try {
+          const siblingResult = await invalidateLocalPiPackageRuntimeSnapshot(
+            maker,
+            { entries: siblingEntries },
+          );
+          siblingFailed = siblingResult.failedSessionIds.length > 0;
+        } catch {
+          siblingFailed = true;
+        }
+        const initiallyPartial = siblingFailed
+          || callerEntries.length === 0
+          || callerEntries.some(({ metadataFailed }) => metadataFailed);
+        if (initiallyPartial) partial();
+        else publishOutcome({ runtimeConvergence: 'complete' });
+
+        if (callerEntries.length === 0) return;
+        try {
+          const callerResult = await invalidateLocalPiPackageRuntimeSnapshot(
+            maker,
+            { entries: callerEntries },
+          );
+          if (!initiallyPartial && callerResult.failedSessionIds.length > 0) partial();
+        } catch {
+          if (!initiallyPartial) partial();
+        }
+      },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
       resolvePiVisionBridgeEnv: (model) =>
@@ -2002,6 +2098,8 @@ export function getMaker(): Maker {
         return getRemoteAgentProxyEnv(remoteHost);
       },
     });
+    const piAgent = buildPiAgentForDesktop();
+    if (piAgent) makerAgents.pi = piAgent;
 
     setVisionGatewayKeyReader(readClaudeApiKey);
     _visionBridgeInstance = createVisionBridge({
@@ -2026,11 +2124,7 @@ export function getMaker(): Maker {
     });
 
     _maker = new Maker({
-      agents: {
-        'claude-code': claudeAgent,
-        codex: codexAgent,
-        ...(piAgent ? { pi: piAgent } : {}),
-      },
+      agents: makerAgents,
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,
       makerMemory: makerMemoryManager,
@@ -2044,6 +2138,17 @@ export function getMaker(): Maker {
             throw new Error('Account provider models are not ready for this app session; retry.');
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
+          if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
+            const thinkingEnabled = getThinkingEnabledFromMemory(
+              opts.agentKind,
+              opts.providerId,
+              opts.model,
+            );
+            if (thinkingEnabled !== undefined) opts.thinkingEnabled = thinkingEnabled;
+          }
+          if (opts.agentKind === 'pi') {
+            opts.getPriceVariant = () => (getSessionFastMode(sessionId) ? 'priority' : 'standard');
+          }
           if (opts.agentKind === 'codex') {
             const disabledPluginIds = getPluginRegistry().getDisabledRuntimePluginIds(
               opts.workingDir,
@@ -2104,6 +2209,21 @@ export function getMaker(): Maker {
         },
       },
     });
+    _registerPiAgent = () => {
+      if (!_maker || _maker.listAvailableAgents().includes('pi')) return false;
+      const next = buildPiAgentForDesktop();
+      if (!next) return false;
+      const registered = _maker.registerAgent('pi', next);
+      if (!registered) {
+        void next.dispose().catch((error) => {
+          desktopMakerLogger.warn('discarding Pi agent after registration race failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+        return false;
+      }
+      return true;
+    };
     setVisionBridgeController({
       shouldBridge: _visionBridgeInstance.isTargetModel,
       describeImage: _visionBridgeInstance.describeImage,
@@ -2168,12 +2288,39 @@ export function getMakerIfReady(): Maker | null {
   return _maker;
 }
 
+/** Register Pi after a managed runtime retry and notify local renderers. */
+export function registerPiAgentIfAvailable(): boolean {
+  const register = _registerPiAgent;
+  if (!register) return false;
+  try {
+    if (_maker?.listAvailableAgents().includes('pi')) return true;
+    const registered = register();
+    if (!registered) return false;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(MAKER_PUSH.AGENTS_CHANGED);
+      } catch {
+        // Window teardown may race the broadcast; other windows still receive it.
+      }
+    }
+    tapWindowBroadcast(MAKER_PUSH.AGENTS_CHANGED, {});
+    return true;
+  } catch (error) {
+    desktopMakerLogger.warn('Pi agent registration after runtime recovery failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 /**
  * 重置 Maker 单例（切账号 / 测试用）。
  */
 export function resetMaker(): void {
   cancelCodexAuthModeChange();
   _maker = null;
+  _registerPiAgent = null;
   _codexAgent = null;
   // coordinator 闭包捕获了刚作废的那个 maker —— 不清掉的话,换账号窗口期内到达的 auth
   // 事件会拿旧实例去拉模型清单(串号)。下次 getMaker() 会带着干净记账重建它。

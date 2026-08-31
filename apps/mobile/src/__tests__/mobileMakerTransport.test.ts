@@ -27,6 +27,7 @@ describe('mobile maker transport', () => {
       'maker:get-capabilities',
       'maker:provider:list',
       'local-db:sessions:get',
+      'local-db:conversations:search',
       'local-db:sessions:patch-meta',
       'local-db:messages:dismiss-error',
       'local-db:sessions:ack-interrupted',
@@ -42,6 +43,7 @@ describe('mobile maker transport', () => {
       'maker:set-effort',
       'maker:set-permission-mode',
       'maker:set-fast-mode',
+      'maker:set-thinking-enabled',
       'maker:set-extra-dirs',
       'maker:set-session-model-pref',
       'maker:apply-new-maker-draft-pref',
@@ -201,6 +203,19 @@ describe('mobile maker transport', () => {
       deviceId: 'dev-1',
       channel: 'maker:create-session',
       args: [opts],
+    }]);
+  });
+
+  it('routes task search through the controlled desktop conversations:search channel', async () => {
+    const { calls, maker } = harness();
+    const request = { query: 'needle', semanticMode: 'keyword' as const };
+
+    await maker.searchConversations(request);
+
+    expect(calls).toEqual([{
+      deviceId: 'dev-1',
+      channel: 'local-db:conversations:search',
+      args: [request],
     }]);
   });
 

@@ -12,11 +12,13 @@ vi.mock("expo-localization", () => ({
 import {
   createResendDeadline,
   formatResendCountdown,
+  LOGIN_CONTROL,
   LOGIN_DELETION_BUBBLE,
   LOGIN_PAD_LANDSCAPE_STAGE,
   LOGIN_PAD_PORTRAIT_STAGE,
   LOGIN_STAGE_LONG,
   LOGIN_STAGE_SHORT,
+  LOGIN_SSO_ORG_HISTORY,
   PAD_LANDSCAPE_MIN_SCALE,
   RESEND_COUNTDOWN_SECONDS,
   resendCountdownRemaining,
@@ -28,6 +30,7 @@ import {
   type LoginStageBox,
 } from "@/auth/loginSkinLayout";
 import { loginMessages } from "@/auth/loginMessages";
+import { loginSizes } from "@/theme/tokens";
 
 function expectBox(actual: LoginStageBox, expected: LoginStageBox) {
   expect(actual.x).toBeCloseTo(expected.x, 6);
@@ -45,6 +48,23 @@ describe("loginSkin 750 stage 布局引擎", () => {
     expect(resolveLoginStage(750, 500).designHeight).toBe(600);
     // clamp 上限:dh > 1800 → 1800
     expect(resolveLoginStage(750, 2000).designHeight).toBe(1800);
+  });
+
+  it.each([
+    ["phone 短屏", 375, 667],
+    ["phone 长屏", 375, 812],
+    ["pad 竖屏", 744, 1133],
+    ["pad 横屏", 1180, 820],
+  ])("%s 下 SSO 候选层都随输入框锚定并收在面板内", (_label, width, height) => {
+    const surface = resolveLoginSurface(width, height);
+    const groupScale = surface.scale * surface.loginGroupScale;
+    const inputBottom = (LOGIN_CONTROL.inputY + LOGIN_CONTROL.height) * groupScale;
+    const historyTop = LOGIN_SSO_ORG_HISTORY.y * groupScale;
+    const historyBottom =
+      (LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight) * groupScale;
+
+    expect(historyTop - inputBottom).toBeCloseTo(8 * groupScale, 6);
+    expect(historyBottom).toBeLessThanOrEqual(loginSizes.panelHeight * groupScale);
   });
 
   it("短屏档 1334:品牌簇 + 功能区落位逐字段等于登录改版新稿 figma 705:915 实测值(loginY 622)", () => {

@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseDesktopAccountDeletionConfirmInput, parseDesktopLoginAction } from '../authIpc';
+import {
+  parseDesktopAccountDeletionConfirmInput,
+  parseDesktopAccountKey,
+  parseDesktopLoginAction,
+} from '../authIpc';
 
 describe('desktop auth IPC validation', () => {
+  it('accepts bounded opaque account keys and rejects malformed values', () => {
+    expect(parseDesktopAccountKey('["global","membership-1"]')).toBe('["global","membership-1"]');
+    expect(parseDesktopAccountKey('')).toBeNull();
+    expect(parseDesktopAccountKey('x'.repeat(513))).toBeNull();
+    expect(parseDesktopAccountKey({ accountKey: 'membership-1' })).toBeNull();
+  });
+
   it('projects recognized actions onto their typed fields', () => {
     expect(
       parseDesktopLoginAction({
@@ -18,6 +29,50 @@ describe('desktop auth IPC validation', () => {
       providerOrConnectionId: 'connection-id',
       label: 'Company SSO',
     });
+  });
+
+  it('accepts request-code with and without a bounded captchaToken', () => {
+    expect(
+      parseDesktopLoginAction({ type: 'request-code', kind: 'email', identifier: 'a@b.co' }),
+    ).toEqual({ type: 'request-code', kind: 'email', identifier: 'a@b.co' });
+    expect(
+      parseDesktopLoginAction({
+        type: 'request-code',
+        kind: 'email',
+        identifier: 'a@b.co',
+        captchaToken: 'tok',
+      }),
+    ).toEqual({
+      type: 'request-code',
+      kind: 'email',
+      identifier: 'a@b.co',
+      captchaToken: 'tok',
+    });
+    // 携带即校验:超界/空/非字符串一律整条拒绝,不做静默剥离
+    expect(
+      parseDesktopLoginAction({
+        type: 'request-code',
+        kind: 'email',
+        identifier: 'a@b.co',
+        captchaToken: 'a'.repeat(2049),
+      }),
+    ).toBeNull();
+    expect(
+      parseDesktopLoginAction({
+        type: 'request-code',
+        kind: 'email',
+        identifier: 'a@b.co',
+        captchaToken: '',
+      }),
+    ).toBeNull();
+    expect(
+      parseDesktopLoginAction({
+        type: 'request-code',
+        kind: 'email',
+        identifier: 'a@b.co',
+        captchaToken: 42,
+      }),
+    ).toBeNull();
   });
 
   it('rejects unknown, incomplete, and oversized actions', () => {
