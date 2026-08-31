@@ -133,4 +133,34 @@ describe('OneshotModelPinPicker provider-first mode', () => {
 
     expect(onChange).toHaveBeenCalledWith(ANTHROPIC_PIN);
   });
+
+  it('renders an unavailable current route but prevents selecting it', () => {
+    const onChange = vi.fn();
+    const unavailable = {
+      ...xdOption,
+      id: 'cat:xd:codex:retired-model',
+      modelId: 'retired-model',
+      modelName: 'Retired model',
+      label: 'Retired model · Cindy AI',
+      available: false,
+    };
+    render(
+      <OneshotModelPinPicker
+        value={unavailable.id}
+        defaultLabel=""
+        declaredLabel={null}
+        options={[unavailable]}
+        onChange={onChange}
+        ariaLabel="Auxiliary model"
+        groupByProvider
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auxiliary model' }));
+    const option = screen.getByRole('option', { name: /Retired model/ });
+    expect(option.getAttribute('disabled')).not.toBeNull();
+    fireEvent.click(option);
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

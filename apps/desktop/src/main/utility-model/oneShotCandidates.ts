@@ -623,11 +623,20 @@ async function requestDefaultUtilityText(
   // the owner before either starts so callers that do not provide their own
   // workflow guard still fail closed instead of dispatching into a new owner.
   const ownerScopeKey = activeOwnerScopeKey();
+  // A fallback chain is a user-selected routing decision. If it changes while
+  // an earlier candidate is awaiting credentials or failing, do not dispatch a
+  // later candidate from the stale snapshot into the new configuration.
+  const initialChain = opts?.pinnedProfileId ? null : getEffectiveAuxiliaryModelChain();
+  const chainSnapshot = initialChain ? stableSnapshot(initialChain) : null;
   const callerBeforeDispatch = opts?.beforeDispatch;
   const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
     ...opts,
     beforeDispatch: async (route) => {
       if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return false;
+      if (
+        chainSnapshot !== null
+        && stableSnapshot(getEffectiveAuxiliaryModelChain()) !== chainSnapshot
+      ) return false;
       return callerBeforeDispatch ? callerBeforeDispatch(route) : true;
     },
     // Short auxiliary budgets cannot afford provider-default thinking. Callers
@@ -651,7 +660,7 @@ async function requestDefaultUtilityText(
     return success ?? failedChainResult(attempts);
   }
 
-  const chain = getEffectiveAuxiliaryModelChain();
+  const chain = initialChain!;
   const attempts: UtilityTextAttempt[] = [];
   for (const ref of chain.refs) {
     const parsed = parseAuxiliaryModelRef(ref);

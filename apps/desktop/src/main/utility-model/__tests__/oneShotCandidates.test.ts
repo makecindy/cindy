@@ -317,6 +317,23 @@ describe('utility one-shot candidates', () => {
     );
   });
 
+  it('stops before a later fallback when the auxiliary chain changes mid-request', async () => {
+    readKey.mockReturnValue('proxy-key');
+    const maker = makerMock(true);
+    vi.mocked(maker.oneShot).mockImplementationOnce(async () => {
+      chainState.refs = ['codex-gpt-5.4-mini'];
+      throw new Error('codex down');
+    });
+
+    const result = await requestUtilityText(maker, 'hello');
+
+    expect(result).toMatchObject({ ok: false });
+    expect(vi.mocked(maker.oneShot)).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    if (result.ok) throw new Error('expected the stale fallback chain to abort');
+    expect(result.attempts).toHaveLength(1);
+  });
+
   it('chat-completions 的 content 为 parts 数组时拼接文本段(思考模型形态)', async () => {
     readKey.mockReturnValue('proxy-key');
     fetchMock.mockResolvedValueOnce({

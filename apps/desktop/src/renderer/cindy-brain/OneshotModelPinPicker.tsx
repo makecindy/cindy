@@ -251,8 +251,9 @@ export function OneshotModelPinPicker({
                   aria-selected={active}
                   data-pin-id={o.id}
                   aria-disabled={unavailable}
+                  disabled={unavailable}
                   className={cn(rowClass(active), unavailable && 'opacity-60')}
-                  onClick={() => select(o.id)}
+                  onClick={unavailable ? undefined : () => select(o.id)}
                 >
                   <span className="flex min-w-0 flex-1 items-center gap-2.5">
                     <ModelIconMark
