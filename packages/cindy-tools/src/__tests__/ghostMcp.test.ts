@@ -859,6 +859,8 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
     expect((payload.result as { note: string }).note).toBe("已上墙");
     // 带媒体的返回体随附防重复渲染提示(模型别用 markdown 再嵌一遍,会裂图)。
     expect(String(payload.hint)).toContain("markdown");
+    expect(String(payload.hint)).toContain("尝试作为附件送达");
+    expect(String(payload.hint)).not.toContain("已自动送达");
   });
 
   it("xdt_media_descriptions 透传但不被 hoist(视觉桥描述不触发图卡渲染)", async () => {
@@ -935,6 +937,9 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
     expect(payload.xdt_media_produced).toEqual(["cindy-media://blobs/def.png"]);
     // producedMedia 是主机侧信道,不泄漏原始字段名给模型侧 payload
     expect(payload.producedMedia).toBeUndefined();
+    // 工具返回发生在渠道收口之前,只能承诺尝试投递,不能提前声称已送达。
+    expect(String(payload.hint)).toContain("将在 turn 收口时尝试送达");
+    expect(String(payload.hint)).not.toContain("已自动送达");
   });
 
   it("内联意图令牌:xdt_media_inline + 账本媒体 → hint 改为鼓励 markdown 内联", async () => {

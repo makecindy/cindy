@@ -960,21 +960,22 @@ export async function handleGhostCall(
       typeof result.result === "object" &&
       (result.result as Record<string, unknown>).xdt_media_inline === true;
     // 带媒体的返回体随附呈现口径提示(代码级统一注入,不靠意识作者自觉):
-    // - 卡片语义(声明了媒体字段):渲染层自动画卡,模型再嵌 markdown 会双份;
+    // - 卡片语义(声明了媒体字段):桌面渲染层自动画卡,支持的渠道在 turn
+    //   收口时才尝试投递;模型再嵌 markdown 会双份;
     // - 内联语义(xdt_media_inline):桌面不画卡、不自动显示,模型必须 markdown
     //   内联否则桌面用户什么都看不到。
     const mediaHint =
       Object.keys(hoisted).length > 0
         ? {
-            hint: "媒体已由聊天气泡自动渲染成卡片,不要在回复文本里用 markdown(![](…))重复嵌入这些地址;后续改图引用返回的 hash 指纹即可。xdt_card_id / xdt_anchor_card_id 是渲染层的配对令牌,忽略即可,不要复述。",
+            hint: "这些媒体已交给主机呈现与投递管线:桌面聊天会渲染卡片,支持的 IM/远程渠道将在 turn 收口时尝试作为附件送达。不要在回复文本里用 markdown(![](…))重复嵌入这些地址;后续改图引用返回的 hash 指纹即可。xdt_card_id / xdt_anchor_card_id 是渲染层的配对令牌,忽略即可,不要复述。",
           }
         : Object.keys(producedFallback).length > 0
           ? inlineIntent
             ? {
-                hint: "这些媒体已入库但桌面聊天不会自动显示——请在最终回复的 markdown 里用 ![](地址) 把图按内容对应位置嵌入展示(原样使用返回里的 xdt_image_url / cindy-media:// 地址,不要自己拼);IM/远程场景由主机按 xdt_media_produced 自动送达,无需复述该字段。不要口播下载过程。",
+                hint: "这些媒体已入库但桌面聊天不会自动显示——请在最终回复的 markdown 里用 ![](地址) 把图按内容对应位置嵌入展示(原样使用返回里的 xdt_image_url / cindy-media:// 地址,不要自己拼);支持的 IM/远程渠道将在 turn 收口时按 xdt_media_produced 尝试送达,无需复述该字段。不要口播下载过程。",
               }
             : {
-                hint: "xdt_media_produced 是主机记账的送达通道:这些媒体已自动送达用户(桌面/IM),不要在回复文本里用 markdown 嵌入这些地址,也不要复述它们。",
+                hint: "xdt_media_produced 是主机记账的送达通道:桌面会呈现这些媒体,支持的 IM/远程渠道将在 turn 收口时尝试送达。不要在回复文本里用 markdown 嵌入这些地址,也不要复述它们。",
               }
           : {};
     return textResult({
