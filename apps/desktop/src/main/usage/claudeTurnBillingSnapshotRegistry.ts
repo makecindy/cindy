@@ -42,6 +42,18 @@ export function shouldResolveClaudeTurnBillingSnapshotAtUsage(
 }
 
 /**
+ * A rebuilt Session can reuse both its durable id and provider generation.
+ * Delayed cleanup from the retired instance must not target evidence staged by
+ * the replacement instance under that reused pair.
+ */
+export function isClaudeBillingSnapshotOwnedByCurrentSessionInstance(
+  ownerSessionInstanceId: string,
+  currentSessionInstanceId: string | null,
+): boolean {
+  return currentSessionInstanceId === ownerSessionInstanceId;
+}
+
+/**
  * Owns generation-scoped Claude billing evidence and one-shot silent-stop handoffs.
  *
  * A claimed predecessor is copied into a token slot before any independent turn can

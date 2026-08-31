@@ -1242,6 +1242,17 @@ describe('maker:event hot path ordering', () => {
       ),
     );
     expect(supersededTimerSource).toContain(
+      'wiredSessionsById.get(session.id)?.session.instanceId ?? null',
+    );
+    expect(supersededTimerSource).toContain(
+      'isClaudeBillingSnapshotOwnedByCurrentSessionInstance(',
+    );
+    expectOrder(
+      supersededTimerSource,
+      'isClaudeBillingSnapshotOwnedByCurrentSessionInstance(',
+      'clearClaudeTurnBillingSnapshot(session.id, turnGeneration);',
+    );
+    expect(supersededTimerSource).toContain(
       'clearClaudeTurnBillingSnapshot(session.id, turnGeneration);',
     );
     expect(claudeDoneSource).toContain(

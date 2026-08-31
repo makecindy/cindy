@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ClaudeTurnBillingSnapshotRegistry,
+  isClaudeBillingSnapshotOwnedByCurrentSessionInstance,
   shouldResolveClaudeTurnBillingSnapshotAtUsage,
   type ClaudeTurnBillingSnapshot,
 } from '../claudeTurnBillingSnapshotRegistry';
@@ -53,6 +54,27 @@ const PRICING: ModelPricingCatalog = {
 };
 
 describe('ClaudeTurnBillingSnapshotRegistry', () => {
+  it('fences delayed cleanup when a rebuilt Session reuses its id and generation', () => {
+    const registry = new ClaudeTurnBillingSnapshotRegistry();
+
+    registry.stage('session-1', 1, () => PROVIDER_A);
+    registry.clearSession('session-1');
+    registry.stage('session-1', 1, () => USER_PROVIDER_B);
+
+    const retiredInstanceStillOwnsGeneration = isClaudeBillingSnapshotOwnedByCurrentSessionInstance(
+      'instance-a',
+      'instance-b',
+    );
+    if (retiredInstanceStillOwnsGeneration) registry.clear('session-1', 1);
+
+    expect(retiredInstanceStillOwnsGeneration).toBe(false);
+    expect(isClaudeBillingSnapshotOwnedByCurrentSessionInstance('instance-a', null)).toBe(false);
+    expect(isClaudeBillingSnapshotOwnedByCurrentSessionInstance('instance-b', 'instance-b')).toBe(
+      true,
+    );
+    expect(registry.read('session-1', 1)).toEqual(USER_PROVIDER_B);
+  });
+
   it('keeps an interleaved user turn and replacement on their exact routes and sinks', () => {
     const registry = new ClaudeTurnBillingSnapshotRegistry();
 

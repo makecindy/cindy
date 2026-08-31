@@ -548,6 +548,7 @@ import {
 } from '../usage/turnCostCalculator.js';
 import {
   ClaudeTurnBillingSnapshotRegistry,
+  isClaudeBillingSnapshotOwnedByCurrentSessionInstance,
   shouldResolveClaudeTurnBillingSnapshotAtUsage,
   type ClaudeTurnBillingSnapshot,
 } from '../usage/claudeTurnBillingSnapshotRegistry.js';
@@ -3926,8 +3927,19 @@ async function handleSilentStopTurnEnd(
       turnLeaseId,
     });
     // An independent turn superseded this timer. Its generation is distinct,
-    // so retire only the stale silent-stop predecessor's billing evidence.
-    clearClaudeTurnBillingSnapshot(session.id, turnGeneration);
+    // so retire only the stale silent-stop predecessor's billing evidence. A
+    // rebuilt Session may reuse both id and generation, however; its disposer
+    // already retired the old evidence, and this delayed callback must not
+    // delete the replacement instance's newly staged snapshot.
+    const currentSessionInstanceId = wiredSessionsById.get(session.id)?.session.instanceId ?? null;
+    if (
+      isClaudeBillingSnapshotOwnedByCurrentSessionInstance(
+        session.instanceId,
+        currentSessionInstanceId,
+      )
+    ) {
+      clearClaudeTurnBillingSnapshot(session.id, turnGeneration);
+    }
     return;
   }
   if (agentInputCoordinatorHolder?.hasPendingQueuedWork(session.id)) {
