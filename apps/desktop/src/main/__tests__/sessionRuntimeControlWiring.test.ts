@@ -11,6 +11,10 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const makerSendSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -21,6 +25,67 @@ function handlerBody(source: string, channel: string, nextChannel: string): stri
 }
 
 describe('session runtime control wiring', () => {
+  it('authenticates Desktop package-command entry points before minting Main context', () => {
+    const legacySend = handlerBody(
+      registerSource,
+      'registerMakerSessionSendHandler(',
+      'MAKER_INVOKE.STEER,',
+    );
+    expect(legacySend).toContain('assertTrustedAppRendererEvent(');
+    expect(legacySend).toContain('attachTrustedDesktopSendContext(message, sendOpts)');
+    expect(registerSource).toContain('containsManagedAttachment(persisted?.content)');
+    expect(registerSource).toContain('persisted?.autoResume === true');
+    expect(registerSource).toContain('persisted?.origin !== undefined');
+
+    const steerDispatch = handlerBody(
+      registerSource,
+      'const steerToAgentAccepted = async (',
+      'registerMakerSessionSendHandler(',
+    );
+    expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
+    expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
+    expect(registerSource).toContain('attachTrustedDesktopSendContext(message, sendOpts, expectedText)');
+
+    for (const [channel, nextChannel] of [
+      ['MAKER_INVOKE.INPUT_ENQUEUE,', 'MAKER_INVOKE.INPUT_COMPACT,'],
+      ['MAKER_INVOKE.INPUT_STEER,', 'MAKER_INVOKE.INPUT_STOP,'],
+    ] as const) {
+      const body = handlerBody(registerSource, channel, nextChannel);
+      expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
+      expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
+    }
+    expect(makerSendSource).toContain('clientId: explicitUserItem.clientId');
+    expect(makerSendSource).toContain(
+      'persistedContent: explicitUserItem.persistedContent',
+    );
+    expect(makerSendSource).toContain(
+      'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
+    );
+    expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
+    expect(registerSource).toContain(
+      'onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item)',
+    );
+    const updateText = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.INPUT_UPDATE_TEXT,',
+      'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
+    );
+    expect(updateText).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
+    expect(updateText).toContain('stampTrustedDesktopQueuedOrigin(updated, remote, true)');
+    const updateContent = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
+      'MAKER_INVOKE.INPUT_MOVE,',
+    );
+    expect(updateContent).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
+    expect(updateContent).toContain('stampTrustedDesktopQueuedOrigin(updated, remote, true)');
+    const enqueue = handlerBody(
+      registerSource,
+      'MAKER_INVOKE.INPUT_ENQUEUE,',
+      'MAKER_INVOKE.INPUT_COMPACT,',
+    );
+    expect(enqueue).toContain('stampTrustedDesktopQueuedOrigin(');
+  });
   it('guards every fallback setting IPC before reading or mutating the setting', () => {
     for (const [channel, nextChannel] of [
       [

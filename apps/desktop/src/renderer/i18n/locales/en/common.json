@@ -2867,7 +2867,7 @@
       "installSectionDescription": "Paste the install source from a pi.dev page, or enter an npm package name, Git URL, or absolute local path.",
       "installedSectionTitle": "Installed",
       "sourcePlaceholder": "npm package, Git URL, or absolute local path",
-      "inspectionHint": "Cindy warns you once about the risk. After you confirm, Cindy installs it, checks its resources, and automatically enables runnable resources when inspection succeeds.",
+      "inspectionHint": "Packages are installed and loaded by Pi’s native package system. Cindy only displays advisory compatibility details; unknown, unsupported, or failed analysis never blocks installation or enablement.",
       "install": "Install",
       "update": "Update",
       "remove": "Uninstall",
@@ -2889,12 +2889,7 @@
       "retry": "Retry",
       "operationInProgress": "Working on {{name}}…",
       "relativePathUnsupported": "Use an absolute path for local extensions in Settings. Relative paths such as ./extension can be installed from a Pi task.",
-      "confirmTitle": "Install This Pi Extension?",
-      "confirmDescription": "{{source}} is third-party code. It will run in the same process as Cindy's Pi and may read files and credentials Pi can access. Install does not run npm lifecycle scripts. Confirming installs it. Cindy automatically enables runnable resources after a successful inspection, even when it reports compatibility limits.",
-      "confirmInstall": "Accept Risk, Install",
       "updateConfirmTitle": "Update This Pi Extension?",
-      "updateConfirmDescription": "{{source}} will download a new third-party version and replace the installed code. Update does not run npm lifecycle scripts. The code runs in the same process as Pi and may read files and credentials. Confirming updates it. If you turned it off, it stays off; otherwise, Cindy enables it after a successful inspection.",
-      "confirmUpdate": "Accept Risk, Update",
       "uninstallTitle": "Uninstall Pi extension?",
       "uninstallDescription": "{{name}} will be removed from this device. Pi tasks that are already open keep the old extension until they are closed.",
       "confirmUninstall": "Uninstall",
@@ -2938,30 +2933,29 @@
       "runtimeMismatch": "{{packageName}} requires Pi {{range}}, but Cindy currently uses {{currentVersion}}.",
       "runtimeLegacyPackage": "{{packageName}} belongs to Pi's legacy runtime namespace. Extensions built against it may not load in Cindy's current Pi.",
       "runtimeUnknown": "{{packageName}} requires Pi {{range}}, but Cindy could not determine whether its current Pi version satisfies it.",
-      "compatibilityNoticeTitle": "Installed with compatibility limits",
-      "compatibilityNoticeDescription": "{{name}} finished installing or updating. Cindy's inspection is shown below; its current enabled state remains visible in the extension list, and changes affect only new or restarted Pi tasks.",
-      "extensionApprovalTitle": "Enable executable Extension code?",
-      "extensionApprovalDescription": "When enabled, third-party Extension code runs in the same process as Pi and can read files and environment variables available to Pi, including model or API credentials. Cindy cannot isolate that access today. Enable only sources you fully trust.",
-      "parserDisclaimer": "This static compatibility check is not a security audit and cannot prove arbitrary third-party code is fully compatible.",
-      "disableAfterInstall": "Disable this extension",
-      "keepEnabled": "Keep enabled",
-      "keepDisabled": "Keep disabled",
-      "approveAndEnable": "Accept risk and enable",
-      "done": "Done",
       "warning": {
         "no-resources": "No Pi resources were found in this extension.",
-        "inspection-failed": "The extension is configured, but its installed contents could not be inspected.",
-        "inspection-limit": "The extension exceeded safe inspection limits and remains disabled.",
-        "unsupported-filter": "This extension uses Pi resource filters that Cindy cannot safely reproduce yet, so it remains disabled.",
-        "unsafe-source": "This extension's saved source contains credentials or private URL parameters. Cindy hid the sensitive parts, kept it disabled, and blocked in-app update or removal.",
-        "lifecycle-scripts-disabled": "This extension declares install scripts, but Cindy did not run them for safety. Features that depend on generated files may not work."
+        "inspection-failed": "Cindy could not inspect the installed contents. This does not disable the package; Pi still handles it natively.",
+        "inspection-limit": "Cindy stopped displaying analysis after its inspection limit. The package remains available through Pi’s native loader.",
+        "unsupported-filter": "Cindy cannot display this Pi resource filter yet. Pi still handles the package and filter natively.",
+        "unsafe-source": "The saved source contains credentials or private URL parameters. Cindy hid those fields in this view without blocking Pi’s package behavior."
+      },
+      "failure": {
+        "sourceUnavailable": "The source is unavailable. Check the network or URL, or try another source.",
+        "packageNotFound": "The package was not found. Check the package name or repository URL.",
+        "versionNotFound": "That version was not found. Choose an available version and try again.",
+        "stateUnavailable": "Cindy could not read the Pi extension state. Restart Cindy and try again.",
+        "runtimeConvergencePartial": "The Pi extension change was saved, but some local Pi tasks may still be running the old extension. Restart Cindy before using Pi again.",
+        "nativeCommandFailed": "Pi's package command failed. Check the source or version and try again."
       },
       "success": {
-        "install": "Pi extension installed. Check its enabled state below; the current task is unchanged.",
-        "installEnabled": "Pi extension installed and enabled. The current task is unchanged; start or restart a Pi task to use it.",
-        "remove": "Pi extension removed. The current task keeps the old extension until it is closed.",
-        "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.",
-        "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it."
+        "install": "Pi extension installed. Active local Pi tasks were stopped; start a Pi task to use it.",
+        "installEnabled": "Pi extension installed and enabled. Active local Pi tasks were stopped; start a Pi task to use it.",
+        "remove": "Pi extension removed. Active local Pi tasks were stopped so its tools can no longer run.",
+        "settingsRemove": "Pi extension removed. Active local Pi tasks were stopped so its tools can no longer run.",
+        "settingsDisable": "Pi extension disabled. Active local Pi tasks were stopped so its tools can no longer run.",
+        "update": "Pi extension updated. Active local Pi tasks were stopped; start a Pi task to use the update.",
+        "set-enabled": "Pi extension state saved. Active local Pi tasks were stopped; start a Pi task to use the new state."
       }
     },
     "computerUse": {
@@ -7092,7 +7086,7 @@
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Routine tools run without asking. Installing, updating, or removing Pi extensions still requires confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine tools run without asking. Pi extension commands you send directly run as requested; agent-initiated changes still require tool approval. Highest risk; use only for trusted tasks."
           }
         }
       }
@@ -7456,12 +7450,17 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT Sign-In Is No Longer Valid",
-    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
+    "systemSharedInvalidated": "Cindy is using this computer’s ChatGPT sign-in. Restore it in the ChatGPT App first; this avoids creating a second credential or signing this computer out.",
     "instanceIsolatedInvalidated": "Cindy is currently using a separately signed-in ChatGPT account. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
     "unknownInvalidated": "Cindy’s current ChatGPT sign-in is no longer valid. Sign in again, then retry.",
     "recovered": "ChatGPT sign-in has been restored. Please retry.",
     "openApp": "Open ChatGPT App",
     "relogin": "Sign In to ChatGPT Again",
+    "reloginRiskTitle": "Still sign in through Cindy?",
+    "reloginRiskDescription": "This creates a new OpenAI OAuth authorization and may immediately sign the ChatGPT App and Codex CLI out on this computer. You will need to sign in to those apps again afterward.",
+    "reloginRiskConfirm": "Accept Risk and Continue",
+    "devWriteBlocked": "Development builds use this computer’s ChatGPT sign-in read-only by default and cannot start OAuth or change its credentials. To test OAuth, use an isolated sandbox and explicitly set XDT_ALLOW_DEV_OAUTH_WRITE=1.",
+    "devReadOnly": "Read-only in Development",
     "checking": "Checking…",
     "recheck": "Check Again",
     "later": "Later",

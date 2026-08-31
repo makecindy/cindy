@@ -185,12 +185,7 @@ describe('ClaudeTurnBillingSnapshotRegistry', () => {
       // before the delayed replacement dispatches. The replacement therefore
       // has no new default-route observation and must retain its inherited route.
       registry.stage('session-1', 2, () => USER_PROVIDER_B);
-      const replacement = registry.stage(
-        'session-1',
-        3,
-        () => USER_PROVIDER_B,
-        continuation,
-      );
+      const replacement = registry.stage('session-1', 3, () => USER_PROVIDER_B, continuation);
 
       expect(replacement).toEqual({ snapshot: resolvedPredecessor, inherited: true });
       expect(shouldResolveClaudeTurnBillingSnapshotAtUsage(replacement.snapshot, false)).toBe(

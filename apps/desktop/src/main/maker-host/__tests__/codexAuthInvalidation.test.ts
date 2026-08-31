@@ -20,13 +20,16 @@ const h = vi.hoisted(() => ({
   dataOwnerId: null as string | null,
   sessionGeneration: 1,
   sessionBoundaryPending: false,
+  isPackaged: true,
 }));
 
 vi.mock('electron', () => ({
   app: {
     getPath: () => h.userDataDir,
     getAppPath: () => h.userDataDir,
-    isPackaged: false,
+    get isPackaged() {
+      return h.isPackaged;
+    },
   },
   safeStorage: { isEncryptionAvailable: () => false },
 }));
@@ -83,6 +86,37 @@ it('compares Codex hard-link identities without Windows number precision collisi
   expect(haveSameStableFileIdentity({ dev: 7n, ino: 11n }, { dev: 7n, ino: 11n })).toBe(true);
 });
 
+it('does not chmod a system-shared auth file while finalizing login', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-mode-'));
+  dirs.push(root);
+  h.userDataDir = path.join(root, 'user-data');
+  h.dataOwnerId = 'owner-a';
+  const home = path.join(root, 'home');
+  const systemAuth = path.join(home, '.codex', 'auth.json');
+  const codexHome = path.join(h.userDataDir, 'codex-home');
+  const localAuth = path.join(codexHome, 'auth.json');
+  vi.spyOn(os, 'homedir').mockReturnValue(home);
+  fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    systemAuth,
+    JSON.stringify({ tokens: { access_token: 'shared-token', account_id: 'acct-1' } }),
+  );
+  fs.linkSync(systemAuth, localAuth);
+  const chmod = vi.spyOn(fs.promises, 'chmod');
+  const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+  const adapter = new DesktopCodexAuthAdapter();
+  const finishSuccessfulCodexLogin = (
+    adapter as unknown as {
+      finishSuccessfulCodexLogin(): Promise<{ authenticated: boolean }>;
+    }
+  ).finishSuccessfulCodexLogin.bind(adapter);
+
+  await expect(finishSuccessfulCodexLogin()).resolves.toMatchObject({ authenticated: true });
+  expect(chmod).not.toHaveBeenCalled();
+  expect(fs.statSync(systemAuth).ino).toBe(fs.statSync(localAuth).ino);
+});
+
 async function createRecoveryCandidate(
   credentialScope: 'system-shared' | 'instance-isolated' | 'unknown',
 ) {
@@ -136,6 +170,7 @@ afterEach(() => {
   h.dataOwnerId = null;
   h.sessionGeneration = 1;
   h.sessionBoundaryPending = false;
+  h.isPackaged = true;
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 

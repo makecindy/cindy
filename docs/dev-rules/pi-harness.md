@@ -81,6 +81,34 @@ Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
   开关),**禁止「先转成 Claude 格式再转 pi 兼容」的双重转义**。BYOM 用户自定义/本地模型直接
   写 models.json 走 pi 原生 provider,不过 anthropic-compat 代理。
 
+### 3.1 Pi 上游 GUI 非退化红线（Chris 2026-08-19 裁决）
+
+Cindy 是 Pi 的上游 GUI，不是 Pi 的二次安全产品。Cindy 的 Pi 集成验收基线首先是：**不得让
+同版本 Pi 原本能完成的事情，因为 Cindy 控制层新增的判断而失败、停用或无法由 Agent 恢复。**
+
+1. **原生成功是成功真源**：`pi install/update/remove` 的退出结果是包 mutation 的成功真源。
+   命令成功后，Cindy 的检查器、指纹器、快照器、兼容解析器或 UI 投影失败，不得把它改判成
+   安装失败，不得回滚或自动停用。宿主自己的分析失败只能显示为 Cindy 诊断不可用。
+2. **兼容检查永不阻断**：TUI API、RPC、静态语法、runtime range、未知资源及未来 Pi 格式的
+   检查只用于详情提示。`partial`、`unsupported`、`unknown`、超时和解析异常都不能影响安装、
+   更新、启用或运行；Pi 能加载就交给 Pi 加载，运行错误再按 Pi 原始错误呈现。
+3. **显式操作零附加审批**：用户直接发送完整确定性的 Pi 包命令，或在设置页点击明确的
+   安装／更新／启用／停用／移除，即完成对应授权，不得再弹宿主确认。Agent 自主发起的工具
+   调用可以沿用通用工具批准，但批准后不得再加第二层包审批。
+4. **宿主不确定时退回 Pi**：Cindy 无法识别 manifest、filter、symlink、构建产物、资源类型或
+   新版包格式时，必须优先使用 Pi 原生包发现／加载路径；禁止因 Cindy 未覆盖全部情况而
+   fail closed。Cindy 可以隔离自己的内部桥接文件，但不能据此隔离用户明确安装的 Pi 包。
+5. **Agent 必须有恢复路径**：失败回执至少区分 Pi 原生命令失败与 Cindy 辅助分析失败；前者
+   提供脱敏、可行动的错误类别，后者不得阻断。不得把原始可修复错误吞成只有“操作失败”的
+   死路，也不得禁止 Agent 在用户授权后换 source/version、补构建或重试。
+6. **对等测试是硬门**：包管理改动必须覆盖“Pi 原生命令成功 + Cindy 分析失败／超时／未知格式”
+   仍安装并加载，以及失败后 Agent 可继续重试。任何以“安全增强”为理由接受 Cindy Pi 低于
+   原生 Pi 能力的测试预期都应删除或改写。
+
+允许保留的边界仅限 Cindy 自身运行所必需、且不改变 Pi 用户包结果的机械隔离（例如不把远端
+会话指向控制端本地路径、保护 Cindy 内部凭证不被写入包目录）。这类边界也不能被描述成
+Cindy 对 Pi 的产品安全升级，更不能拿来扩大阻断范围。
+
 ## 4. 维护不变量(改动时不得破坏)
 
 1. **权限档从严到宽**:`capabilities.permissionModes` 必须 `[ask, auto, bypassPermissions]`
@@ -101,8 +129,12 @@ Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
    Pi 会话内分支。Pi 导航后必须通过 `session.treeRehydrate` 原子替换 SQLite 可见投影,旧行仅
    soft-hide;切换只改对话上下文,不得声称或尝试回滚工作区文件。
 8. **项目资源显式装配**:root、只读 subagent 与离线 fork 启动 Pi 时都必须显式传
-   `--no-approve --no-extensions`;root 仅用重复 `--extension` 回装 Cindy 自有 bridge/subagent
-   与 pinned plan-mode，并仅用重复 `--skill` 装配 host 从 PR3 approval snapshot 判定 eligible
+   `--no-approve`;没有 Cindy-managed 本机用户包根时同时传 `--no-extensions`。本机普通 runtime
+   存在明确安装且未停用的用户包根时，为保留 Pi 原生 package discovery 可以只省略
+   `--no-extensions`：包根只能来自 Main 生成的 runtime `settings.json`，`--no-approve` 仍是项目
+   `.pi/extensions` / `.pi/settings.json` 的硬门，不得因此传 `--approve` 或读取项目设置。root
+   仅用重复 `--extension` 回装 Cindy 自有 bridge/subagent 与 pinned plan-mode，并仅用重复
+   `--skill` 装配 host 从 PR3 approval snapshot 判定 eligible
    的项目 skill 目录。eligible canonical 目录必须先完整物化到当前会话 `configHome` 的非自动
    扫描目录，再把隔离快照路径交给 Pi；不得把仍可变化的项目原路径直接放进 argv。复制期间
    任一越界 symlink、特殊文件或路径替换会使整组 skills fail closed。不得读取/复制项目

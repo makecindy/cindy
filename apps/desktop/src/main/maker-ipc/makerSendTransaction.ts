@@ -1,11 +1,14 @@
 import {
   CodexResumePreparationBlockedError,
+  MAIN_OWNED_SEND_CONTEXT,
   type AgentKind,
+  type MainOwnedSendContext,
   type SessionSendOptions,
   type SessionSendResult,
   type UserMessage,
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 
 import {
   createHostSendFailure,
@@ -77,7 +80,100 @@ export async function prepareDirectoryGrantsForBootstrap(
 type IpcUserMessage =
   string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
 
+export const TRUSTED_DESKTOP_QUEUE_ORIGIN = Symbol('trusted-desktop-queue-origin');
+export const TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT = 'trustedDesktopPiCommandAuthorization';
+interface TrustedDesktopQueueOriginReceipt {
+  clientId: string;
+  persistedContent: string;
+  text: string;
+}
+interface TrustedDesktopPiCommandSnapshot extends TrustedDesktopQueueOriginReceipt {
+  version: 1;
+}
+type QueuedMessageWithDesktopAuthorization = AgentInputQueuedMessage & {
+  [TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT]?: TrustedDesktopPiCommandSnapshot;
+};
+
+function isExactPiPackageCommand(text: string): boolean {
+  const original = text.trim();
+  if (!original || /[\r\n\0]/.test(original)) return false;
+  const match = original.match(/^\/?pi\s+(install|update|remove)\s+(.+)$/i);
+  return Boolean(match?.[1] && match[2]);
+}
+
+function canTrustDesktopPiCommand(item: AgentInputQueuedMessage): boolean {
+  const semanticOrigin = item.origin as { kind?: unknown } | undefined;
+  return isExactPiPackageCommand(item.text)
+    && extractPlainText(item.persistedContent) === item.text
+    && (item.files?.length ?? 0) === 0
+    && (item.mentions?.length ?? 0) === 0
+    && (item.sessionRefs?.length ?? 0) === 0
+    && (item.agentReferences?.length ?? 0) === 0
+    && item.fromMobileClient !== true
+    && item.autoResume !== true
+    && item.originalSyntheticTrigger === undefined
+    && (semanticOrigin === undefined || semanticOrigin.kind === 'desktop');
+}
+
+function withoutDesktopAuthorization(
+  item: AgentInputQueuedMessage,
+  preserveSemanticOrigin = false,
+): QueuedMessageWithDesktopAuthorization {
+  const explicitUserItem = { ...item } as QueuedMessageWithDesktopAuthorization;
+  if (!preserveSemanticOrigin
+    || (item.origin as { kind?: unknown } | undefined)?.kind === 'desktop') delete explicitUserItem.origin;
+  delete explicitUserItem[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
+  return explicitUserItem;
+}
+
+export function stampTrustedDesktopQueuedOrigin(
+  item: AgentInputQueuedMessage,
+  deviceLinkInvoke: boolean,
+  preserveSemanticOrigin = false,
+): AgentInputQueuedMessage {
+  const explicitUserItem = withoutDesktopAuthorization(item, preserveSemanticOrigin);
+  if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem;
+  const receipt: TrustedDesktopPiCommandSnapshot = {
+    version: 1,
+    clientId: explicitUserItem.clientId,
+    persistedContent: explicitUserItem.persistedContent,
+    text: explicitUserItem.text,
+  };
+  explicitUserItem[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT] = receipt;
+  return {
+    ...explicitUserItem,
+    origin: {
+      kind: 'desktop',
+      [TRUSTED_DESKTOP_QUEUE_ORIGIN]: receipt,
+    },
+  } as unknown as AgentInputQueuedMessage;
+}
+
+export function restoreTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  const queued = item as QueuedMessageWithDesktopAuthorization;
+  const receipt = queued[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
+  if (receipt?.version !== 1
+    || receipt.clientId !== item.clientId
+    || receipt.persistedContent !== item.persistedContent
+    || receipt.text !== item.text
+    || !canTrustDesktopPiCommand(item)) return withoutDesktopAuthorization(item, true);
+  return {
+    ...item,
+    origin: {
+      kind: 'desktop',
+      [TRUSTED_DESKTOP_QUEUE_ORIGIN]: receipt,
+    },
+  } as unknown as AgentInputQueuedMessage;
+}
+
+export function revokeTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage): void {
+  const queued = item as QueuedMessageWithDesktopAuthorization;
+  delete queued[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
+  if ((item.origin as { kind?: unknown } | undefined)?.kind === 'desktop') delete item.origin;
+}
+
 type MakerSendOptions = {
+  readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   messageUuid?: string;
   userName?: string;
   throwOnStartFailure?: boolean;
@@ -138,6 +234,26 @@ type MakerSendOptions = {
   /** Main-owned input generation used by the final vendor fence. */
   expectedInputGeneration?: unknown;
 };
+
+function readTrustedDesktopQueueReceipt(
+  persistUserMessage: MakerSendOptions['persistUserMessage'] | null,
+): TrustedDesktopQueueOriginReceipt | undefined {
+  if (!persistUserMessage || typeof persistUserMessage.origin !== 'object'
+    || persistUserMessage.origin === null
+    || (persistUserMessage.origin as { kind?: unknown }).kind !== 'desktop') return undefined;
+  const value = (persistUserMessage.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN];
+  if (typeof value !== 'object' || value === null) return undefined;
+  const receipt = value as Partial<TrustedDesktopQueueOriginReceipt>;
+  return typeof receipt.clientId === 'string'
+    && typeof receipt.persistedContent === 'string'
+    && typeof receipt.text === 'string'
+    ? receipt as TrustedDesktopQueueOriginReceipt
+    : undefined;
+}
+
+function extractIpcUserMessageText(message: IpcUserMessage): string {
+  return typeof message === 'string' ? extractPlainText(message) : extractPlainText(message.content);
+}
 
 export interface MakerSendTransactionSession {
   id: string;
@@ -386,7 +502,7 @@ function normalizeExpectedInputGeneration(value: unknown): number | undefined {
   return value;
 }
 
-function containsManagedAttachment(value: unknown): boolean {
+export function containsManagedAttachment(value: unknown): boolean {
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false;
@@ -905,6 +1021,21 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : withPlanReconcile;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
+      const trustedDesktopQueueReceipt = readTrustedDesktopQueueReceipt(persistUserMessage);
+      const directDesktopContext =
+        trustedDesktopQueueReceipt !== undefined &&
+        trustedDesktopQueueReceipt.clientId === persistUserMessage?.clientId &&
+        trustedDesktopQueueReceipt.persistedContent === persistUserMessage?.content &&
+        persistUserMessage.agentFacingWireContent !== undefined &&
+        extractIpcUserMessageText(persistUserMessage.agentFacingWireContent) === trustedDesktopQueueReceipt.text &&
+        !containsManagedAttachment(persistUserMessage?.content) &&
+        !containsManagedAttachment(persistUserMessage.agentFacingWireContent) &&
+        !persistUserMessage?.autoResume &&
+        !so.origin &&
+        !so.fromMobileClient
+          ? { origin: { kind: 'desktop' as const }, rawChannelText: trustedDesktopQueueReceipt.text }
+          : undefined;
+      const mainOwnedSendContext = so[MAIN_OWNED_SEND_CONTEXT] ?? directDesktopContext;
       const topLevelClearBoundary = normalizeExpectedClearBoundary(so.expectedClearBoundaryMs);
       const topLevelInputGeneration = normalizeExpectedInputGeneration(so.expectedInputGeneration);
       if (
@@ -1007,6 +1138,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
           ...(so.origin ? { origin: so.origin } : {}),
+          ...(mainOwnedSendContext
+            ? { [MAIN_OWNED_SEND_CONTEXT]: mainOwnedSendContext }
+            : {}),
           // 本条消息的计划意图快照(点击发送/入队瞬间的勾选,排队行透传)。对已
           // 存活会话是权威——排队期间用户改勾选不影响已排队行,反向也不误消耗
           // (语义见 maker-core SendOptions.planMode;undefined = 旧的消耗武装态)。
