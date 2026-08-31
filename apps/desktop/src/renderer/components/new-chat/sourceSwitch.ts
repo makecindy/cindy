@@ -167,7 +167,12 @@ export function resolveSourceSwitch(args: {
 // resolveEffort / resolveProviderSwitchEffort(切模型 / 同模型切来源的落档优先级)已下沉到共享包
 // `@cindy/model-providers`(手机版模型选择列表要用同一套口径)。这里 re-export 保持 renderer
 // 既有 import 路径不变,语义与历史版本逐字一致。
-export { resolveEffort, resolveProviderSwitchEffort } from '@cindy/model-providers';
+export {
+  resolveEffort,
+  resolveRequestedEffort,
+  resolveIntentReselectEffort,
+  resolveProviderSwitchEffort,
+} from '@cindy/model-providers';
 
 /**
  * 「显式选中的来源已断开」判定 —— 纯函数。会话把来源(providerId)持久化在 DB 里,

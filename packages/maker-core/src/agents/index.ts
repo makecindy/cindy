@@ -7,6 +7,12 @@ export type {
   ClaudeSubagentModelAccessStatus,
 } from './claude-code/subagent-model-access.js';
 export { CodexAgent } from './codex/index.js';
+export {
+  CODEX_HISTORY_OVERSIZED_REASON,
+  CODEX_LIVE_TAIL_OVERSIZED_BYTES,
+  isOversizedLiveTailStats,
+  measureRolloutLiveTailStats,
+} from './codex/rollout-sanitize.js';
 // host 导入本地 Codex rollout 历史时也要做 citation 归一化(流式路径在 translator
 // 内部做,导入路径拿到的是 rollout 原文),复用同一实现避免口径分叉。
 // finalizeCodexCitationText = 剥截断残尾 + 归一化(与流式 completed 完全同口径)。
@@ -15,6 +21,7 @@ export { PiAgent } from './pi/index.js';
 export {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
+  isCindyProviderCodexRemoteCompactionRoute,
   resolveAgentCredentialMode,
 } from './credential-mode.js';
 // host 在 boot 阶段需要的 env 守卫(详见 claude-code/env-builder.ts 注释)
@@ -73,7 +80,7 @@ export {
 } from './shared/stream-interrupt-error.js';
 // 同上理由(同 bundle 直接复用,不造第三份):desktop 的中断自愈判据要认「网络到不了
 // 上游」这一类 —— 那类同样是"连不上"而不是"请求有问题",续跑一次就能过去。
-export { isNetworkishErrorMessage } from './shared/network-error.js';
+export { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from './shared/network-error.js';
 export {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,

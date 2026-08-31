@@ -22,8 +22,11 @@ describe('model pricing prewarm ordering', () => {
     const localDbReady = source.indexOf('const dbClientTakeover = await ensureLifecycleDbClient(userId);');
     const failedGuard = source.indexOf("dbClientTakeover.mode === 'failed'");
     const unchangedGuard = source.indexOf("dbClientTakeover.mode === 'unchanged'");
-    const attachmentSweep = source.indexOf('sweepStagedChatAttachmentsOnStartup({');
-    const lifecycleStartupBlock = source.slice(localDbReady, attachmentSweep);
+    const takeoverStart = source.indexOf(
+      'if (dbClientTakeover.shouldReleaseMainDb',
+      unchangedGuard,
+    );
+    const lifecycleStartupBlock = source.slice(localDbReady, takeoverStart);
     const earlyUsageIpc = source.indexOf('registerMakerUsageIpc(ipcMaker);');
     const prewarm = source.indexOf('void prewarmModelPricing();');
     const refreshCatalog = source.indexOf('await refreshCustomProvidersIntoCatalog(');
@@ -31,7 +34,7 @@ describe('model pricing prewarm ordering', () => {
     expect(localDbReady).toBeGreaterThanOrEqual(0);
     expect(failedGuard).toBeGreaterThan(localDbReady);
     expect(unchangedGuard).toBeGreaterThan(failedGuard);
-    expect(attachmentSweep).toBeGreaterThan(unchangedGuard);
+    expect(takeoverStart).toBeGreaterThan(unchangedGuard);
     expect(lifecycleStartupBlock).not.toContain(
       'BrowserWindow.getAllWindows().some(isSecondaryAppWindow)',
     );
@@ -49,19 +52,13 @@ describe('model pricing prewarm ordering', () => {
     expect(source.slice(earlyUsageIpc, nextIpc)).not.toContain('prewarmModelPricing');
   });
 
-  it('does not block owner ensureReady on staged attachment bookkeeping', () => {
+  it('does not run staged attachment bookkeeping during owner startup', () => {
     const onReady = source.slice(
       source.indexOf('onReady: async (userId) => {'),
       source.indexOf('onReadyError:'),
     );
-    expect(onReady).toContain('STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS');
-    expect(onReady).toContain('setTimeout(() => {');
-    expect(onReady).toContain('void sweepStagedChatAttachmentsOnStartup({');
-    expect(onReady).toContain('loadProtectedPaths: listPersistedChatAttachmentPaths');
-    expect(onReady).not.toMatch(/await listPersistedChatAttachmentPaths\(\)/);
-    expect(onReady).not.toMatch(/await sweepStagedChatAttachmentsOnStartup\(/);
-    expect(onReady.indexOf('setTimeout(() => {')).toBeLessThan(
-      onReady.indexOf('void sweepStagedChatAttachmentsOnStartup({'),
-    );
+    expect(onReady).not.toContain('chat-attachment-cache');
+    expect(onReady).not.toContain('listPersistedChatAttachmentPaths');
+    expect(onReady).not.toContain('sweepStagedChatAttachmentsOnStartup');
   });
 });

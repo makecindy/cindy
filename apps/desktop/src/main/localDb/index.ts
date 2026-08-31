@@ -54,7 +54,6 @@ import {
   readSchemaVersion,
 } from './migrationRunner';
 import {
-  acquireSchemaMigrationWriterLease,
   acquireSchemaStartupLease,
   SchemaMigrationReaderLeaseLifecycle,
   type SchemaMigrationLease,
@@ -65,9 +64,12 @@ import {
   buildSharedDbCompatibilityMessage,
 } from './sharedDbCompatibilityMessage';
 import { shouldShowNativeFatalDialog, type EnsureReadyErrorCode } from './fatalDialogPolicy';
+import { runPendingDbSlimmingAtStartup } from './dbSlimmingStartup';
+import { deferReleaseUntilDbSlimmingWorkerTermination } from './dbSlimmingWorkerClient';
 
 import { createLogger } from '../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../devStartupStatus';
+import { t } from '../i18n';
 
 const log = createLogger('localDb');
 
@@ -105,6 +107,10 @@ export function getCurrentUserId(): string | null {
 
 function dbPath(userId: string): string {
   return path.join(app.getPath('userData'), `${BRAND_IDENTITY.dbFilePrefix}-${userId}.db`);
+}
+
+export function getDbPathForUser(userId: string): string {
+  return dbPath(userId);
 }
 
 export type EnsureReadyResult =
@@ -185,9 +191,14 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   readerLeaseAcquiredThisCall = startupLease.kind === 'reader' && startupLease.newlyAcquired;
   if (startupLease.kind === 'writer') startupWriterLease = startupLease.lease;
 
-  const releaseSchemaLeasesAfterFailure = (): void => {
-    startupWriterLease?.release();
-    startupWriterLease = null;
+  const releaseSchemaLeasesAfterFailure = (error?: unknown): void => {
+    if (startupWriterLease) {
+      const heldWriterLease = startupWriterLease;
+      if (!deferReleaseUntilDbSlimmingWorkerTermination(error, () => heldWriterLease.release())) {
+        heldWriterLease.release();
+      }
+      startupWriterLease = null;
+    }
     if (readerLeaseAcquiredThisCall) {
       schemaMigrationReaderLeaseLifecycle.release();
     }
@@ -200,6 +211,38 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       exists: fs.existsSync(filePath),
     }),
   );
+
+  let maintenance: Awaited<ReturnType<typeof runPendingDbSlimmingAtStartup>>;
+  try {
+    maintenance = await runPendingDbSlimmingAtStartup({
+      userDataDir: app.getPath('userData'),
+      dbFilePath: filePath,
+      ownerId: userId,
+      leaseKind: startupLease.kind,
+      loadVectorExtension: (maintenanceDb) => loadSqliteVec(maintenanceDb).loaded,
+      log,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = t('localDbFatal.databaseCleanup.interruptedDescription');
+    log.error('database cleanup startup failed unexpectedly', { detail });
+    releaseSchemaLeasesAfterFailure(error);
+    showFatalDialog(t('localDbFatal.databaseCleanup.interruptedTitle'), message, 'MIGRATE_FAILED');
+    return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+  }
+  if (maintenance.handled && startupLease.kind === 'writer') {
+    resetSqliteVecState();
+  }
+  if (!maintenance.originalDatabaseReady) {
+    const message = t('localDbFatal.databaseCleanup.recoveryFailedDescription');
+    showFatalDialog(
+      t('localDbFatal.databaseCleanup.recoveryFailedTitle'),
+      message,
+      'DB_CORRUPT_NO_BACKUP',
+    );
+    releaseSchemaLeasesAfterFailure();
+    return { ready: false, error: { code: 'DB_CORRUPT_NO_BACKUP', message } };
+  }
 
   try {
     _db = openWithPragmas(filePath);

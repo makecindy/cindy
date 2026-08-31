@@ -38,6 +38,7 @@ import {
 import { getDbClient, tryGetDbClient } from '../client/current.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { captureMediaRefCompensationScope } from '../../cindy-media/refCompensationJournal.js';
+import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 import {
   broadcastSessionPatched,
   captureSessionRecycleScope,
@@ -199,6 +200,10 @@ export function registerSessionShareIpc(): void {
         for (const replaced of result.replacedSessions) {
           if (!isStillCurrent()) break;
           broadcastSessionPatched(replaced.id, { status: 'deleted' }, recycleScope.ownerScope);
+          void compactSessionToolResultsBestEffort({
+            client: importDbClient,
+            sessionId: replaced.id,
+          });
           await recycleSessionWorktreeForStatusChange(replaced.id, 'deleted', recycleScope);
         }
         if (isStillCurrent()) {

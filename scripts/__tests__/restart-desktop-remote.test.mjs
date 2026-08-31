@@ -10,10 +10,13 @@ import {
 	applyDesktopStartupConfigForPhase,
 	clearDesktopDevCaches,
 	commandUsesUserDataDir,
+	createIsolatedAuthLaunchProof,
 	defaultIsolatedUserDataDir,
 	desktopDevCacheDirs,
 	devEnvPrefix,
 	hasIsolationIntent,
+	isTrustedIsolatedAuthUserDataDir,
+	ISOLATED_AUTH_LAUNCH_PROOF_FILE,
 	isOfficialProductionUserDataDir,
 	isRepositoryDesktopDevProcess,
 	officialProductionUserDataDirs,
@@ -36,12 +39,16 @@ import {
 	DESKTOP_DEV_VERDICT_PREFIX,
 	ISOLATED_RESTART_NEXT,
 	WORKTREE_ISOLATED_ARG,
+	SHARED_USERDATA_ARG,
+	DEFAULT_ISOLATED_ARG,
 	buildDesktopDevVerdictFromFailure,
 	buildDesktopDevVerdictFromWhoami,
+	desktopRestartArgvConflictMessage,
 	formatDesktopDevVerdict,
 	inferDesktopDevFailureCode,
 	isolationNameFromWorktree,
 	isolatedRestartNextCommand,
+	normalizeDesktopRestartArgv,
 	resolveIsolatedArg,
 	restartContextFromArgv,
 	shouldSuggestIsolatedNext,
@@ -240,6 +247,40 @@ test("hasIsolationIntent sees argv and ambient XDT_ISOLATED=1", () => {
 	assert.equal(hasIsolationIntent([], { XDT_ISOLATED: "0" }), false);
 });
 
+test("normalizeDesktopRestartArgv defaults to one stable sandbox across worktrees", () => {
+	assert.deepEqual(normalizeDesktopRestartArgv(["--wait-ready"], {}), [
+		"--wait-ready",
+		DEFAULT_ISOLATED_ARG,
+	]);
+	assert.deepEqual(
+		normalizeDesktopRestartArgv(["--wait-ready", "--isolated=review"], {}),
+		["--wait-ready", "--isolated=review"],
+	);
+	assert.deepEqual(normalizeDesktopRestartArgv(["--wait-ready"], { XDT_ISOLATED: "1" }), [
+		"--wait-ready",
+	]);
+	assert.deepEqual(normalizeDesktopRestartArgv(["--wait-ready", SHARED_USERDATA_ARG], {}), [
+		"--wait-ready",
+		SHARED_USERDATA_ARG,
+	]);
+	assert.deepEqual(
+		normalizeDesktopRestartArgv(["--wait-ready", "--preserve-running"], {}),
+		["--wait-ready", "--preserve-running"],
+	);
+});
+
+test("--shared conflicts with explicit or ambient isolation", () => {
+	assert.equal(
+		desktopRestartArgvConflictMessage(["--shared", "--isolated"], {}),
+		"--shared cannot be combined with --isolated or XDT_ISOLATED=1",
+	);
+	assert.equal(
+		desktopRestartArgvConflictMessage(["--shared"], { XDT_ISOLATED: "1" }),
+		"--shared cannot be combined with --isolated or XDT_ISOLATED=1",
+	);
+	assert.equal(desktopRestartArgvConflictMessage(["--shared"], {}), null);
+});
+
 test("isOfficialProductionUserDataDir matches every official region profile", () => {
 	assert.equal(isOfficialProductionUserDataDir(productionUserDataDir("cn")), true);
 	assert.equal(isOfficialProductionUserDataDir(productionUserDataDir("global")), true);
@@ -277,6 +318,125 @@ test("env-only XDT_ISOLATED=1 derives the default sandbox, not the official prof
 		selectedRegion: "global",
 	});
 	assert.equal(named, defaultIsolatedUserDataDir("review", "global"));
+});
+
+test("isolated auth accepts only the epoch sandbox derived by this restart", () => {
+	const isolatedArg = "--isolated=oauth-review";
+	const derived = defaultIsolatedUserDataDir("oauth-review", "global");
+	const trusted = {
+		isolatedArg,
+		userDataDir: derived,
+		userDataDirEpoch: "1",
+		userDataDerivedByRestart: true,
+		selectedRegion: "global",
+	};
+
+	// A freshly derived sandbox does not need an existing credential file.
+	assert.equal(isTrustedIsolatedAuthUserDataDir(trusted), true);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDerivedByRestart: false,
+	}), false);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDirEpoch: undefined,
+	}), false);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDir: path.join(os.tmpdir(), "shared-cindy-profile"),
+	}), false);
+});
+
+test("isolated auth rejects an explicit userData even when it spoofs the derived path and epoch", () => {
+	const isolatedArg = "--isolated=oauth-review";
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		isolatedArg,
+		userDataDir: defaultIsolatedUserDataDir("oauth-review", "global"),
+		userDataDirEpoch: "1",
+		userDataDerivedByRestart: false,
+		selectedRegion: "global",
+	}), false);
+});
+
+test("isolated auth rejects a derived userData symlink or junction before minting proof", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-isolated-alias-"));
+	const savedEnv = {
+		APPDATA: process.env.APPDATA,
+		HOME: process.env.HOME,
+		USERPROFILE: process.env.USERPROFILE,
+		XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+	};
+	try {
+		if (process.platform === "win32") {
+			process.env.APPDATA = path.join(root, "appdata");
+			process.env.USERPROFILE = root;
+		} else if (process.platform === "darwin") {
+			process.env.HOME = root;
+		} else {
+			process.env.XDG_CONFIG_HOME = path.join(root, "config");
+		}
+		const isolatedArg = "--isolated=link-guard";
+		const derived = defaultIsolatedUserDataDir("link-guard", "global");
+		const unrelatedProfile = path.join(root, "unrelated-profile");
+		fs.mkdirSync(path.dirname(derived), { recursive: true });
+		fs.mkdirSync(unrelatedProfile, { recursive: true });
+		fs.symlinkSync(
+			unrelatedProfile,
+			derived,
+			process.platform === "win32" ? "junction" : "dir",
+		);
+
+		assert.equal(isTrustedIsolatedAuthUserDataDir({
+			isolatedArg,
+			userDataDir: derived,
+			userDataDirEpoch: "1",
+			userDataDerivedByRestart: true,
+			selectedRegion: "global",
+		}), false);
+		assert.throws(
+			() => createIsolatedAuthLaunchProof({ userDataDir: derived }),
+			/symlink or junction/,
+		);
+		assert.equal(
+			fs.existsSync(path.join(unrelatedProfile, ISOLATED_AUTH_LAUNCH_PROOF_FILE)),
+			false,
+		);
+	} finally {
+		for (const [key, value] of Object.entries(savedEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("isolated auth launch proof binds the current derived sandbox and is private", () => {
+	const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-isolated-proof-"));
+	try {
+		const nonce = "b".repeat(64);
+		assert.equal(createIsolatedAuthLaunchProof({
+			userDataDir,
+			isolationName: "oauth-review",
+			now: 123_000,
+			nonce,
+		}), nonce);
+		const proofPath = path.join(userDataDir, ISOLATED_AUTH_LAUNCH_PROOF_FILE);
+		const proof = JSON.parse(fs.readFileSync(proofPath, "utf8"));
+		assert.deepEqual(proof, {
+			version: 1,
+			nonce,
+			userDataDir: canonicalizeUserDataDir(userDataDir),
+			profileKind: "isolated-sandbox",
+			epoch: 1,
+			isolationName: "oauth-review",
+			issuedAtMs: 123_000,
+			expiresAtMs: 723_000,
+		});
+		if (process.platform !== "win32") assert.equal(fs.statSync(proofPath).mode & 0o077, 0);
+		assert.deepEqual(fs.readdirSync(userDataDir), [ISOLATED_AUTH_LAUNCH_PROOF_FILE]);
+	} finally {
+		fs.rmSync(userDataDir, { recursive: true, force: true });
+	}
 });
 
 test("isolated=@worktree derives the named sandbox from the checkout directory", () => {
@@ -324,6 +484,28 @@ test("isolated official-profile refuse happens before mkdir in the restart main 
 	const mkdirIdx = source.indexOf("fs.mkdirSync(process.env.XDT_USER_DATA_DIR");
 	assert.ok(refuseIdx > 0);
 	assert.ok(mkdirIdx > refuseIdx);
+});
+
+test("isolated auth trust gate runs before credential write flags and userData creation", () => {
+	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
+	const trustIdx = source.lastIndexOf("if (!isTrustedIsolatedAuthUserDataDir({");
+	const authFlagIdx = source.indexOf("process.env.XDT_ISOLATED_AUTH = '1';");
+	const mkdirIdx = source.indexOf("fs.mkdirSync(process.env.XDT_USER_DATA_DIR");
+	assert.ok(trustIdx > 0);
+	assert.ok(authFlagIdx > trustIdx);
+	assert.ok(mkdirIdx > authFlagIdx);
+});
+
+test("isolated auth proof is minted only by this invocation's accepted flag path", () => {
+	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
+	const ambientDeleteIdx = source.indexOf("delete process.env.XDT_ISOLATED_AUTH_PROOF;");
+	const authorizeIdx = source.indexOf("isolatedAuthAuthorizedByRestart = true;");
+	const mintGuardIdx = source.indexOf("if (isolatedAuthAuthorizedByRestart) {");
+	const mintIdx = source.indexOf("createIsolatedAuthLaunchProof({", mintGuardIdx);
+	assert.ok(ambientDeleteIdx > 0);
+	assert.ok(authorizeIdx > ambientDeleteIdx);
+	assert.ok(mintGuardIdx > authorizeIdx);
+	assert.ok(mintIdx > mintGuardIdx);
 });
 
 test("preserve-running only shares a target with live records from the same region", () => {
@@ -438,7 +620,7 @@ test("desktop restart process-control phase does not initialize startup configur
 	});
 });
 
-test("desktop restart rejects an unmerged migration before the kill step", () => {
+test("desktop restart rejects an unmerged migration before the kill step when --shared is explicit", () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-restart-policy-"));
 	const calls = [];
 	try {
@@ -459,13 +641,23 @@ test("desktop restart rejects an unmerged migration before the kill step", () =>
 		fs.writeFileSync(path.join(repo, "apps", "desktop", "drizzle", "0001_feature.sql"), "SELECT 1;\n");
 
 		assert.throws(
-			() => runDesktopRestart(["--wait-ready"], repo, (step) => calls.push(step)),
+			() => runDesktopRestart(["--wait-ready", "--", "--shared"], repo, (step) => calls.push(step)),
 			/Shared Cindy userData cannot run migration artifacts/,
 		);
 		assert.deepEqual(calls, []);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
+});
+
+test("desktop restart defaults to the stable dev sandbox without the shared migration gate", () => {
+	const steps = [];
+	runDesktopRestart(["--wait-ready"], "/repo/cindy", (step) => steps.push(step));
+	assert.equal(steps.length, 4);
+	assert.ok(steps[0].args.includes(DEFAULT_ISOLATED_ARG));
+	assert.equal(steps[0].args.at(-1), "--kill-only");
+	assert.ok(steps.at(-1).args.includes(DEFAULT_ISOLATED_ARG));
+	assert.equal(steps.at(-1).args.at(-1), "--wait-ready");
 });
 
 test("preserve-running skips every kill stage and reaches the readiness start", () => {
@@ -734,6 +926,21 @@ test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () =
 	assert.equal(devEnvPrefix({}, "darwin"), "");
 });
 
+test("devEnvPrefix passes the explicit isolated OAuth write escape hatch", () => {
+	assert.equal(
+		devEnvPrefix(
+			{
+				XDT_ISOLATED_AUTH: "1",
+				XDT_ALLOW_DEV_OAUTH_WRITE: "1",
+				XDT_ISOLATED_AUTH_PROOF: "proof-nonce",
+			},
+			"darwin",
+		),
+		"XDT_ISOLATED_AUTH='1' XDT_ALLOW_DEV_OAUTH_WRITE='1' " +
+			"XDT_ISOLATED_AUTH_PROOF='proof-nonce' ",
+	);
+});
+
 test("devEnvPrefix passes explicit model catalog test controls to Desktop", () => {
 	const prefix = devEnvPrefix(
 		{
@@ -817,10 +1024,10 @@ test("isolationNameFromWorktree strips cindy-, adds a path digest, and stays wit
 });
 
 test("resolveIsolatedArg expands @worktree to a named sandbox", () => {
-	assert.match(
-		resolveIsolatedArg(WORKTREE_ISOLATED_ARG, "/repo/cindy-local-ollama-models"),
-		/^--isolated=local-ollama-models-[0-9a-f]{6}$/,
-	);
+	const root = "/repo/cindy-local-ollama-models";
+	const expanded = resolveIsolatedArg(WORKTREE_ISOLATED_ARG, root);
+	assert.match(expanded, /^--isolated=local-ollama-models-[0-9a-f]{6}$/);
+	assert.equal(expanded, resolveIsolatedArg(WORKTREE_ISOLATED_ARG, root));
 	assert.equal(resolveIsolatedArg("--isolated=feature-a", "/repo/x"), "--isolated=feature-a");
 	assert.equal(resolveIsolatedArg("--isolated", "/repo/x"), "--isolated");
 });

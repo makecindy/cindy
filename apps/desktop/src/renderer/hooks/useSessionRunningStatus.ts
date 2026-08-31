@@ -53,6 +53,7 @@ import {
   isSessionTerminalNotificationOwnedByScheduler,
   isSessionDoneSilenced,
 } from '@/lib/silencedSessionDoneStore';
+import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
 
 // Codex maker 化后, codex session 也走 makerChatStore;
 // 不再需要双 store 合并 —— 直接订阅 makerChatStore 即可。
@@ -110,6 +111,8 @@ export function useSessionRunningStatus(
   const onSessionDoneRef = useRef(options?.onSessionDone);
   const onSessionErrorRef = useRef(options?.onSessionError);
   const onSessionNeedsReplyRef = useRef(options?.onSessionNeedsReply);
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
   useEffect(() => {
     onSessionDoneRef.current = options?.onSessionDone;
     onSessionErrorRef.current = options?.onSessionError;
@@ -131,9 +134,7 @@ export function useSessionRunningStatus(
    * QUEUE_DEBOUNCE_MS 内若同 session 又开新 turn,取消这次 fire(是自动衔接);
    * 时限内没起新 turn 才真正弹通知 + 亮角标。
    */
-  const pendingDoneTimersRef = useRef(
-    new Map<string, ReturnType<typeof setTimeout>>(),
-  );
+  const pendingDoneTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   const notifications = useSessionAttentionSnapshot();
 
@@ -157,12 +158,16 @@ export function useSessionRunningStatus(
         // 重新挂角标,提醒不丢失。
         // 与派生红点(usePendingAlertAttention)一致:turn 启动会插入新的 user 行,
         // 原 error 行不再是尾行,pending-alerts 也不再命中 —— 两条路径同向收敛。
+        // hasSessionTerminalError 仍为 true 时不清(mivo 等 skipTurnReset 上升沿
+        // 不拆横幅);派生账本另走 noteSessionTurnStartedForAlerts,只在仍认领
+        // 错误尾行时重算,横幅已灭则差分熄灭红点。
         if (
           getSessionAttentionKind(sessionId) === 'error' &&
           !makerChatStore.hasSessionTerminalError(sessionId)
         ) {
           clearSessionAttention(sessionId, { intent: 'explicit' });
         }
+        noteSessionTurnStartedForAlerts(sessionId);
         // Queue auto-drain cancellation:如果此 session 有 pending done 定时器
         // (刚 turn done 还在 debounce 窗口内),说明 main 正在自动衔接下一条队列
         // 消息 —— 取消这次通知/角标 fire。用户视角这是一条完整任务的中间态。
@@ -198,11 +203,11 @@ export function useSessionRunningStatus(
         // silencedSessionDoneStore 的文件头注释。
         const isSilencedDone = !hasError && isSessionDoneSilenced(sessionId);
         // Scheduler 已按 schedule.notify 接管这次终态的桌面 / 飞书通知。这里只
-        // 抑制 callback，侧栏 / Dock attention 仍按普通 done/error 逻辑保留。
+        // 抑制 callback。成功绿点改认 schedule 未读,不再从这条 running→done 点
+        // `done` attention;失败红点仍立即挂。debounce 落地还会再读一次标记,
+        // 免得 silenced 落在 500ms 窗口里。
         const notificationOwnedByScheduler =
           isSessionTerminalNotificationOwnedByScheduler(sessionId);
-        const isActive = sessionId === activeSessionId;
-
         // error 立刻处理:队列会被 abort,不存在"下一条自动接着跑"的场景;红角标 +
         // 系统通知(onSessionError,由 renderer 侧 gate focus)都马上触发,不走
         // debounce。出错永不静默:失败的后台 turn 不能伪装成正常完成或悄无声息消失。
@@ -227,6 +232,7 @@ export function useSessionRunningStatus(
         // 状态判断更 robust。存量 pending 若存在(理论上不会:起新 turn 就清了),覆盖掉。
         const existing = pendingDoneTimersRef.current.get(sessionId);
         if (existing !== undefined) clearTimeout(existing);
+        const wasActiveAtCompletion = sessionId === activeSessionId;
         const timer = setTimeout(() => {
           pendingDoneTimersRef.current.delete(sessionId);
           // 落地前重查一次当前状态:若此刻会话正等待用户输入(ask-user / permission /
@@ -235,16 +241,35 @@ export function useSessionRunningStatus(
           // section 3 在 section 2 之后跑、awaiting 天然覆盖 done;debounce 把 done 推迟到
           // section 3 之后,必须显式让 awaiting 优先。done 系统通知仍照常发(与原行为一致)。
           const cur = makerChatStore.getRunningSnapshot().get(sessionId);
+          const isActive = sessionId === activeSessionIdRef.current;
+          const isRunning = cur?.isRunning === true;
+          // debounce 期间下一轮可能在真正进入 running 前失败并写入 terminal error。
+          // error 红点由现有告警 owner 投影；这里必须避免旧 run 的延迟 done 把它
+          // 覆盖成橙点，或再发一条过期的完成通知。starting 本身不作为抑制条件：
+          // 侧栏已把它显示为 running，保留旧 done 才能在启动失败时继续提醒用户。
+          const hasTerminalError = makerChatStore.hasSessionTerminalError(sessionId);
           const stillPending =
             !!cur &&
             (cur.hasPendingAskUser ||
               cur.hasPendingPermission ||
               cur.hasPendingPlanReview ||
               cur.hasPendingPluginSetup);
-          if (!isActive && !stillPending) {
+          // silenced 可能在 debounce 窗口内才到:转换当时没静默、进了 debounce,落地必须再读。
+          if (!hasTerminalError && isSessionDoneSilenced(sessionId)) return;
+          const ownedNow = isSessionTerminalNotificationOwnedByScheduler(sessionId);
+          if (
+            !wasActiveAtCompletion &&
+            !isActive &&
+            !isRunning &&
+            !hasTerminalError &&
+            !stillPending &&
+            !ownedNow
+          ) {
             addSessionAttention(sessionId, 'done');
           }
-          if (!notificationOwnedByScheduler) onSessionDoneRef.current?.(sessionId);
+          if (!ownedNow && !hasTerminalError) {
+            onSessionDoneRef.current?.(sessionId);
+          }
         }, QUEUE_DEBOUNCE_MS);
         pendingDoneTimersRef.current.set(sessionId, timer);
       }
@@ -323,16 +348,21 @@ export function useSessionRunningStatus(
   // 默认 passive:切到会话 ≠ 处置了报错。store 会保住 'error' 红角标,
   // 只有用户处置横幅或告警本身消失才清。
   useEffect(() => {
-    if (activeSessionId) clearSessionAttention(activeSessionId);
+    if (!activeSessionId) return;
+    clearSessionAttention(activeSessionId);
+    // 完成后的 debounce 窗口内用户已经点进任务,说明这次完成已被消费。
+    // 直接取消待落地的 done,避免用户很快切走后定时器再补橙点并抬升排序。
+    const pendingTimer = pendingDoneTimersRef.current.get(activeSessionId);
+    if (pendingTimer !== undefined) {
+      clearTimeout(pendingTimer);
+      pendingDoneTimersRef.current.delete(activeSessionId);
+    }
   }, [activeSessionId]);
 
-  const clearNotification = useCallback(
-    (sessionId: string) => {
-      // 默认 passive:点击会话卡片只导航,'error' 红角标由 store 保住。
-      clearSessionAttention(sessionId);
-    },
-    [],
-  );
+  const clearNotification = useCallback((sessionId: string) => {
+    // 默认 passive:点击会话卡片只导航,'error' 红角标由 store 保住。
+    clearSessionAttention(sessionId);
+  }, []);
 
   // Derive running set for the return value (outside effect, for rendering).
   // 必须 memo:裸调用每渲染都 new Set,会顺着 effectiveRunningSessionIds →
@@ -352,9 +382,7 @@ export function useSessionRunningStatus(
 }
 
 /** Extract the set of currently-running session IDs from the status map. */
-function deriveRunningSet(
-  statusMap: ReadonlyMap<string, SessionStatusInfo>,
-): ReadonlySet<string> {
+function deriveRunningSet(statusMap: ReadonlyMap<string, SessionStatusInfo>): ReadonlySet<string> {
   const set = new Set<string>();
   for (const [id, info] of statusMap) {
     if (info.isRunning) set.add(id);

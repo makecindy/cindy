@@ -289,6 +289,30 @@ describe('Agent Island display state', () => {
     expect(display.sessions.map((session) => session.sessionId)).toEqual(['ask', 'err', 'done']);
   });
 
+  it('localizes tool-loop terminal details in the Agent Island projection', () => {
+    const state = createAgentIslandState();
+    setAgentIslandStrings(state, {
+      ...DEFAULT_AGENT_ISLAND_STRINGS,
+      error: 'Localized error',
+    });
+
+    applyAgentIslandEvent(
+      state,
+      { sessionId: 'tool-loop', title: 'Tool loop', agentKind: 'claude-code' },
+      terminalErrorEvent(
+        '上游模型 claude 连续 3 次 Edit 调用因同类参数错误(missing_required_field)被拒',
+        'tool_use_loop_detected',
+      ),
+      1_000,
+    );
+
+    const session = buildAgentIslandDisplayState(state, 1_001).sessions[0];
+    expect(session?.detail).toBe('Localized error');
+    expect(session?.activityLines).toContainEqual(
+      expect.objectContaining({ kind: 'status', text: 'Localized error' }),
+    );
+  });
+
   it('builds a CodeIsland-style recent activity preview per session', () => {
     const state = createAgentIslandState();
 
@@ -1163,6 +1187,35 @@ describe('Agent Island display state', () => {
       phase: 'needs-interaction',
       attention: true,
     });
+  });
+
+  it('keeps ask_user waiting after a successful done instead of completing', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, statusEvent(true, 'Running'), 1_000);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, askUserQuestionRequest('r1'), 1_100);
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, doneEvent(), 1_200);
+
+    const display = buildAgentIslandDisplayState(state, 1_300);
+    expect(display.sessions[0]).toMatchObject({
+      sessionId: 'ask',
+      phase: 'needs-interaction',
+      interactionKind: 'ask_user_question',
+    });
+    expect(display.pillSnapshot.pendingInteractionCount).toBe(1);
+  });
+
+  it('still completes the island on done when only a permission card was pending', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, statusEvent(true, 'Running'), 1_000);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, permissionRequest('r1'), 1_100);
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, doneEvent(), 1_200);
+
+    const display = buildAgentIslandDisplayState(state, 1_300);
+    expect(display.sessions[0]).toMatchObject({
+      sessionId: 'ask',
+      phase: 'completed',
+    });
+    expect(display.pillSnapshot.pendingInteractionCount).toBe(0);
   });
 
   it('expands visible-session permission prompts so users can approve in the island', () => {

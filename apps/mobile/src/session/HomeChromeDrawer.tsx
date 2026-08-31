@@ -2,34 +2,43 @@
  * HomeChromeDrawer —— 首页左上角系统菜单。
  *
  * 从左边滑出,不是下拉卡:现在有搜索任务和设置。
- * 树内 overlay(不用 RN Modal),避免和首页其它 Modal 抢 present/dismiss。
- * 动画 / 左滑关闭对齐 SessionListDrawer,遵循 reduce-motion。
+ * 不用 RN Modal,避免和首页其它 Modal 抢 present/dismiss。
+ * iOS 系统导航栏在 RN 内容之上,树内 overlay 盖不住顶栏,所以走
+ * react-native-screens FullWindowOverlay(独立 UIWindow)。
+ * 新窗口里要自带 GestureHandlerRootView,左滑关闭才有效。
+ * Android 无系统顶栏,继续树内 overlay。动画遵循 reduce-motion。
  */
-import { Search, Settings } from 'lucide-react-native';
+import { LogOut, Search, Settings, UsersRound } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   BackHandler,
   findNodeHandle,
   Image,
+  Platform,
   Pressable,
   StyleSheet,
   View,
   useWindowDimensions,
-} from 'react-native';
+} from "react-native";
 import Animated, {
   Easing,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
-} from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTranslation } from 'react-i18next';
-import { Text } from '@/components/AppText';
-import { Gesture, GestureDetector } from '@/platform/gestureHandler';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+} from "react-native-reanimated";
+import { FullWindowOverlay } from "react-native-screens";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useTranslation } from "react-i18next";
+import { Text } from "@/components/AppText";
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from "@/platform/gestureHandler";
+import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
+import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
 import {
   fontWeight,
   iconSize,
@@ -40,7 +49,7 @@ import {
   radius,
   spacing,
   typeScale,
-} from '@/theme/tokens';
+} from "@/theme/tokens";
 
 const DRAWER_CLOSE_DISTANCE_RATIO = 1 / 3;
 const DRAWER_CLOSE_VELOCITY = -800;
@@ -52,7 +61,10 @@ export function HomeChromeDrawer({
   onClose,
   onClosed,
   onOpenSearch,
+  onOpenAccounts,
   onOpenSettings,
+  onLogout,
+  loggingOut = false,
   open,
   user,
 }: {
@@ -61,9 +73,19 @@ export function HomeChromeDrawer({
   onClose(): void;
   onClosed?(): void;
   onOpenSearch(): void;
+  onOpenAccounts(): void;
   onOpenSettings(): void;
+  onLogout(): void;
+  loggingOut?: boolean;
   open: boolean;
-  user: { avatar: string | null; email: string | null; name: string } | null;
+  user: {
+    avatar: string | null;
+    email: string | null;
+    membershipKind: 'personal' | 'org';
+    name: string;
+    orgLogoUrl: string | null;
+    orgName: string | null;
+  } | null;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -73,7 +95,8 @@ export function HomeChromeDrawer({
   const reduceMotion = useReduceMotionEnabled();
   const panelWidth = Math.max(
     1,
-    Math.min(DRAWER_MAX_WIDTH, Math.round(screenWidth * DRAWER_WIDTH_RATIO)) + insets.left,
+    Math.min(DRAWER_MAX_WIDTH, Math.round(screenWidth * DRAWER_WIDTH_RATIO)) +
+      insets.left,
   );
 
   const [mounted, setMounted] = useState(open);
@@ -112,16 +135,25 @@ export function HomeChromeDrawer({
     const animate = reduceMotion === false;
     if (open) {
       setMounted(true);
-      const effective = Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth));
+      const effective = Math.max(
+        0,
+        Math.min(1, progress.value + dragX.value / panelWidth),
+      );
       progress.value = effective;
       dragX.value = 0;
       progress.value = animate
-        ? withTiming(1, { duration: motionDuration.enter, easing: Easing.bezier(...motionEasing.out) })
+        ? withTiming(1, {
+            duration: motionDuration.enter,
+            easing: Easing.bezier(...motionEasing.out),
+          })
         : 1;
       return;
     }
     if (!mountedRef.current) return;
-    const effective = Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth));
+    const effective = Math.max(
+      0,
+      Math.min(1, progress.value + dragX.value / panelWidth),
+    );
     progress.value = effective;
     dragX.value = 0;
     if (!animate || closeInstant) {
@@ -131,20 +163,34 @@ export function HomeChromeDrawer({
     }
     progress.value = withTiming(
       0,
-      { duration: motionDuration.exit, easing: Easing.bezier(...motionEasing.in) },
+      {
+        duration: motionDuration.exit,
+        easing: Easing.bezier(...motionEasing.in),
+      },
       (finished) => {
-        'worklet';
+        "worklet";
         if (finished) runOnJS(finishClose)();
       },
     );
-  }, [closeInstant, dragX, finishClose, open, panelWidth, progress, reduceMotion]);
+  }, [
+    closeInstant,
+    dragX,
+    finishClose,
+    open,
+    panelWidth,
+    progress,
+    reduceMotion,
+  ]);
 
   useEffect(() => {
     if (!open) return;
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      onClose();
-      return true;
-    });
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        onClose();
+        return true;
+      },
+    );
     return () => subscription.remove();
   }, [onClose, open]);
 
@@ -156,14 +202,14 @@ export function HomeChromeDrawer({
         .failOffsetX(16)
         .failOffsetY([-16, 16])
         .onUpdate((event) => {
-          'worklet';
+          "worklet";
           dragX.value = Math.min(0, event.translationX);
         })
         .onEnd((event) => {
-          'worklet';
+          "worklet";
           const shouldClose =
-            event.translationX < -panelWidth * DRAWER_CLOSE_DISTANCE_RATIO
-            || event.velocityX < DRAWER_CLOSE_VELOCITY;
+            event.translationX < -panelWidth * DRAWER_CLOSE_DISTANCE_RATIO ||
+            event.velocityX < DRAWER_CLOSE_VELOCITY;
           if (shouldClose) {
             runOnJS(closeFromGesture)();
           } else {
@@ -177,7 +223,10 @@ export function HomeChromeDrawer({
   );
 
   const scrimStyle = useAnimatedStyle(() => ({
-    opacity: Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth)),
+    opacity: Math.max(
+      0,
+      Math.min(1, progress.value + dragX.value / panelWidth),
+    ),
   }));
   const panelStyle = useAnimatedStyle(() => ({
     transform: [
@@ -195,14 +244,19 @@ export function HomeChromeDrawer({
   }, [onOpenSettings]);
 
   const accountName = user?.name.trim() || user?.email?.trim() || t('settings.header.notSignedIn');
-  const accountEmail = user?.email?.trim() && user.email.trim() !== accountName
-    ? user.email.trim()
-    : null;
-  const avatarLabel = (accountName.trim()[0] ?? '?').toUpperCase();
+  const isOrg = user?.membershipKind === 'org';
+  const accountTitle = isOrg ? user?.orgName?.trim() || accountName : accountName;
+  const accountSubtitle = isOrg
+    ? accountName
+    : user?.email?.trim() && user.email.trim() !== accountName
+      ? user.email.trim()
+      : null;
+  const accountImage = isOrg ? user?.orgLogoUrl : user?.avatar;
+  const avatarLabel = (accountTitle.trim()[0] ?? '?').toUpperCase();
 
   if (!mounted) return null;
 
-  return (
+  const overlay = (
     <View
       accessibilityViewIsModal
       pointerEvents="auto"
@@ -211,7 +265,7 @@ export function HomeChromeDrawer({
     >
       <Animated.View style={[styles.scrim, scrimStyle]}>
         <Pressable
-          accessibilityLabel={t('devices.list.a11y.closeMenu')}
+          accessibilityLabel={t("devices.list.a11y.closeMenu")}
           accessibilityRole="button"
           onPress={onClose}
           style={styles.scrimPressable}
@@ -222,65 +276,123 @@ export function HomeChromeDrawer({
         <Animated.View
           style={[
             styles.panel,
-            { paddingBottom: insets.bottom, paddingLeft: insets.left, paddingTop: insets.top, width: panelWidth },
+            {
+              paddingBottom: insets.bottom,
+              paddingLeft: insets.left,
+              paddingTop: insets.top,
+              width: panelWidth,
+            },
             panelStyle,
           ]}
           testID="home.chromeMenu.panel"
         >
-          <Pressable
-            accessibilityLabel={accountEmail ? `${accountName}, ${accountEmail}` : accountName}
-            accessibilityRole="button"
-            onPress={openSettingsImmediately}
-            style={({ pressed }) => [styles.accountRow, pressed && styles.pressed]}
-            testID="home.chromeDrawer.account"
-          >
+          <View style={styles.accountRow} testID="home.chromeDrawer.account">
             <View style={styles.avatar}>
-              {user?.avatar ? (
-                <Image source={{ uri: user.avatar }} style={styles.avatarImage} />
+              {accountImage ? (
+                <Image source={{ uri: accountImage }} style={styles.avatarImage} />
               ) : (
                 <Text style={styles.avatarText}>{avatarLabel}</Text>
               )}
             </View>
             <View style={styles.accountTexts}>
-              <Text numberOfLines={1} style={styles.accountName}>{accountName}</Text>
-              {accountEmail ? (
-                <Text numberOfLines={1} style={styles.accountEmail}>{accountEmail}</Text>
+              <Text numberOfLines={1} style={styles.accountName}>{accountTitle}</Text>
+              {accountSubtitle ? (
+                <Text numberOfLines={1} style={styles.accountEmail}>{accountSubtitle}</Text>
               ) : null}
             </View>
-          </Pressable>
+          </View>
 
           <View style={styles.divider} />
 
           <Pressable
-            accessibilityLabel={t('devices.list.a11y.openSearch')}
+            accessibilityLabel={t("devices.list.a11y.openSearch")}
             accessibilityRole="button"
             onPress={onOpenSearch}
             style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
             testID="home.chromeDrawer.search"
           >
-            <Search color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-            <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.list.menu.search')}</Text>
+            <Search
+              color={colors.textSecondary}
+              size={iconSize.md}
+              strokeWidth={iconStroke.regular}
+            />
+            <Text numberOfLines={1} style={styles.menuLabel}>
+              {t("devices.list.menu.search")}
+            </Text>
           </Pressable>
 
           <Pressable
-            accessibilityLabel={t('devices.list.a11y.openSettings')}
+            accessibilityLabel={t("devices.list.a11y.openSettings")}
             accessibilityRole="button"
             onPress={openSettingsImmediately}
             ref={settingsButtonRef}
             style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
             testID="devices.settingsButton"
           >
-            <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-            <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.list.menu.settings')}</Text>
+            <Settings
+              color={colors.textSecondary}
+              size={iconSize.md}
+              strokeWidth={iconStroke.regular}
+            />
+            <Text numberOfLines={1} style={styles.menuLabel}>
+              {t("devices.list.menu.settings")}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityLabel={t('devices.list.accounts.title')}
+            accessibilityRole="button"
+            onPress={onOpenAccounts}
+            style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
+            testID="home.chromeDrawer.accounts"
+          >
+            <UsersRound color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.list.accounts.title')}</Text>
+          </Pressable>
+
+          <View style={styles.menuDivider} />
+
+          <Pressable
+            accessibilityLabel={loggingOut
+              ? t('settings.account.loggingOutAccessibility')
+              : t('settings.account.logout')}
+            accessibilityRole="button"
+            accessibilityState={{ busy: loggingOut || undefined, disabled: loggingOut || undefined }}
+            disabled={loggingOut}
+            onPress={onLogout}
+            style={({ pressed }) => [
+              styles.menuRow,
+              pressed && styles.pressed,
+              loggingOut && styles.disabled,
+            ]}
+            testID="home.chromeDrawer.logout"
+          >
+            <LogOut color={colors.destructive} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            <Text numberOfLines={1} style={[styles.menuLabel, styles.dangerMenuLabel]}>
+              {loggingOut ? t('settings.account.loggingOut') : t('settings.account.logout')}
+            </Text>
           </Pressable>
         </Animated.View>
       </GestureDetector>
     </View>
   );
+
+  if (Platform.OS !== "ios") return overlay;
+
+  return (
+    <FullWindowOverlay unstable_accessibilityContainerViewIsModal>
+      <GestureHandlerRootView style={styles.overlayHost}>
+        {overlay}
+      </GestureHandlerRootView>
+    </FullWindowOverlay>
+  );
 }
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
+    overlayHost: {
+      flex: 1,
+    },
     overlay: {
       ...StyleSheet.absoluteFill,
       zIndex: 40,
@@ -298,26 +410,26 @@ const makeStyles = (colors: ThemeColors) =>
       borderRightWidth: StyleSheet.hairlineWidth,
       bottom: 0,
       left: 0,
-      position: 'absolute',
+      position: "absolute",
       top: 0,
     },
     accountRow: {
-      alignItems: 'center',
-      flexDirection: 'row',
+      alignItems: "center",
+      flexDirection: "row",
       gap: spacing.md,
       minHeight: 64,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
     },
     avatar: {
-      alignItems: 'center',
+      alignItems: "center",
       backgroundColor: colors.surfaceElevated,
       borderColor: colors.border,
       borderRadius: radius.pill,
       borderWidth: StyleSheet.hairlineWidth,
       height: 44,
-      justifyContent: 'center',
-      overflow: 'hidden',
+      justifyContent: "center",
+      overflow: "hidden",
       width: 44,
     },
     avatarImage: {
@@ -350,10 +462,16 @@ const makeStyles = (colors: ThemeColors) =>
       height: StyleSheet.hairlineWidth,
       marginHorizontal: spacing.lg,
     },
+    menuDivider: {
+      backgroundColor: colors.border,
+      height: StyleSheet.hairlineWidth,
+      marginHorizontal: spacing.lg,
+      marginVertical: spacing.xs,
+    },
     menuRow: {
-      alignItems: 'center',
+      alignItems: "center",
       borderRadius: radius.container,
-      flexDirection: 'row',
+      flexDirection: "row",
       gap: spacing.md,
       marginHorizontal: spacing.sm,
       minHeight: 48,
@@ -366,6 +484,12 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: fontWeight.medium,
       lineHeight: lineHeight.body,
       minWidth: 0,
+    },
+    dangerMenuLabel: {
+      color: colors.destructive,
+    },
+    disabled: {
+      opacity: 0.48,
     },
     pressed: {
       opacity: 0.72,

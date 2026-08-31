@@ -338,6 +338,12 @@ function validateProvider(p: Provider): void {
         `provider '${p.id}' routing[${agent}].requestPath invalid`,
       );
     }
+    if (routing.supportsResponsesCustomTools !== undefined) {
+      assert(
+        typeof routing.supportsResponsesCustomTools === 'boolean',
+        `provider '${p.id}' routing[${agent}].supportsResponsesCustomTools must be boolean`,
+      );
+    }
     // modelPrefixes（路由服务范围）提供了就必须是命名空间前缀形态（`xai/` 这类,以 `/` 结尾）——
     // 结构上保证 claude-* 等裸 wire model 永远不会命中,防止把 scope 声明成误伤辅助请求的形状。
     if (routing.modelPrefixes !== undefined) {

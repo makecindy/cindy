@@ -1,12 +1,52 @@
 {
+  "bin": {
+    "claude": "bin/claude.exe"
+  },
+  "bugs": {
+    "url": "https://github.com/anthropics/claude-code/issues"
+  },
+  "dist": {
+    "shasum": "7849f29b80da65065a14f16d520a7f8c433f895b",
+    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.219.tgz",
+    "fileCount": 7,
+    "integrity": "sha512-6PVBrRsKHFi0gzv5bCabVL+XSqI3F8AR6ekFx4gpzdE5a9XotqewolID0PbcdD9IyWVYCIDET4GDCcUdA89i3Q==",
+    "signatures": [
+      {
+        "sig": "MEQCIG75mrsMxC3YQTnCcPmBeHwr1f9g7ePFmyx5w2CXKvG4AiAhugEXOCz+p4i9ah/rKGNQ7W6bD1P91J1ZN9KRzVJdSg==",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "sig": "MEUCIQCWsFSESf0pIESXKkYOlZvGH6SGYGzsslI7QD7g/aeEYwIgHlgHLYRj4GcQ51PyprSajcWQk0yZ7B34NupQZ6b6eWQ=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "unpackedSize": 165478
+  },
   "name": "@anthropic-ai/claude-code",
-  "version": "2.1.219",
+  "type": "module",
+  "_from": "file:staged-npm/anthropic-ai-claude-code-2.1.219.tgz",
   "author": {
     "name": "Anthropic",
     "email": "support@anthropic.com"
   },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "license": "SEE LICENSE IN README.md",
-  "_id": "@anthropic-ai/claude-code@2.1.219",
+  "scripts": {
+    "prepare": "node -e \"if (!process.env.AUTHORIZED) { console.error('ERROR: Direct publishing is not allowed.\\nPlease see the release workflow documentation to publish this package.'); process.exit(1); }\"",
+    "postinstall": "node install.cjs"
+  },
+  "_npmUser": {
+    "name": "wolffiex",
+    "email": "wolffiex@anthropic.com"
+  },
+  "homepage": "https://github.com/anthropics/claude-code",
+  "_resolved": "/home/runner/work/claude-cli-internal/claude-cli-internal/staged-npm/anthropic-ai-claude-code-2.1.219.tgz",
+  "_integrity": "sha512-6PVBrRsKHFi0gzv5bCabVL+XSqI3F8AR6ekFx4gpzdE5a9XotqewolID0PbcdD9IyWVYCIDET4GDCcUdA89i3Q==",
+  "_npmVersion": "11.16.0",
+  "description": "Use Claude, Anthropic's AI assistant, right from your terminal. Claude can understand your codebase, edit files, run terminal commands, and handle entire workflows for you.",
+  "directories": {},
   "maintainers": [
     {
       "name": "zak-anthropic",
@@ -61,52 +101,9 @@
       "email": "joan@anthropic.com"
     }
   ],
-  "homepage": "https://github.com/anthropics/claude-code",
-  "bugs": {
-    "url": "https://github.com/anthropics/claude-code/issues"
-  },
-  "bin": {
-    "claude": "bin/claude.exe"
-  },
-  "dist": {
-    "shasum": "7849f29b80da65065a14f16d520a7f8c433f895b",
-    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.219.tgz",
-    "fileCount": 7,
-    "integrity": "sha512-6PVBrRsKHFi0gzv5bCabVL+XSqI3F8AR6ekFx4gpzdE5a9XotqewolID0PbcdD9IyWVYCIDET4GDCcUdA89i3Q==",
-    "signatures": [
-      {
-        "sig": "MEQCIG75mrsMxC3YQTnCcPmBeHwr1f9g7ePFmyx5w2CXKvG4AiAhugEXOCz+p4i9ah/rKGNQ7W6bD1P91J1ZN9KRzVJdSg==",
-        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
-      },
-      {
-        "sig": "MEUCIQCWsFSESf0pIESXKkYOlZvGH6SGYGzsslI7QD7g/aeEYwIgHlgHLYRj4GcQ51PyprSajcWQk0yZ7B34NupQZ6b6eWQ=",
-        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
-      }
-    ],
-    "unpackedSize": 165478
-  },
-  "type": "module",
-  "_from": "file:staged-npm/anthropic-ai-claude-code-2.1.219.tgz",
-  "engines": {
-    "node": ">=22.0.0"
-  },
-  "scripts": {
-    "prepare": "node -e \"if (!process.env.AUTHORIZED) { console.error('ERROR: Direct publishing is not allowed.\\nPlease see the release workflow documentation to publish this package.'); process.exit(1); }\"",
-    "postinstall": "node install.cjs"
-  },
-  "_npmUser": {
-    "name": "wolffiex",
-    "email": "wolffiex@anthropic.com"
-  },
-  "_resolved": "/home/runner/work/claude-cli-internal/claude-cli-internal/staged-npm/anthropic-ai-claude-code-2.1.219.tgz",
-  "_integrity": "sha512-6PVBrRsKHFi0gzv5bCabVL+XSqI3F8AR6ekFx4gpzdE5a9XotqewolID0PbcdD9IyWVYCIDET4GDCcUdA89i3Q==",
-  "_npmVersion": "11.16.0",
-  "description": "Use Claude, Anthropic's AI assistant, right from your terminal. Claude can understand your codebase, edit files, run terminal commands, and handle entire workflows for you.",
-  "directories": {},
   "_nodeVersion": "24.18.0",
   "dependencies": {},
   "_hasShrinkwrap": false,
-  "readmeFilename": "README.md",
   "optionalDependencies": {
     "@anthropic-ai/claude-code-linux-x64": "2.1.219",
     "@anthropic-ai/claude-code-win32-x64": "2.1.219",
@@ -121,6 +118,8 @@
     "tmp": "tmp/claude-code_2.1.219_1784909509727_0.3364890058271168",
     "host": "s3://npm-registry-packages-npm-production"
   },
+  "_id": "@anthropic-ai/claude-code@2.1.219",
+  "version": "2.1.219",
   "runtimeAssets": {
     "darwin-arm64": {
       "url": "https://downloads.claude.ai/claude-code-releases/2.1.219/darwin-arm64/claude",

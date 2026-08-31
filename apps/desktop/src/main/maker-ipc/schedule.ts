@@ -557,12 +557,11 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     withScheduler(async ({ storage, scheduler }) => ({
       runs: await storage.listSidebarIndexRuns(),
       inflightRunIds: scheduler.listInflightRunIds(),
+      inflightPolicies: scheduler.listInflightRunPolicies(),
     })),
   );
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_COST_SUMMARIES, async () =>
-    withScheduler(({ storage }) => storage.listCostSummaries()),
-  );
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_COST_SUMMARIES, async () => []);
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_DELETE_RUN, async (_e, runId: unknown) => {
     const id = requireString(runId, 'runId');

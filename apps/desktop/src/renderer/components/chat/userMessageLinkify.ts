@@ -1,12 +1,7 @@
 import {
-  cutBeforeUnbalancedParenProse,
-  cutBeforeClosingMarkdownWrap,
-  cutBeforePathBracketProse,
-  countUnmatchedOpeningParens,
-  isMarkdownWrapOpenBoundary,
-  MARKDOWN_WRAP_MARKERS,
-  shrinkAutolinkTrailingJunk,
-} from '@/lib/urlTextBoundary';
+  BARE_HTTP_URL_RE_SOURCE,
+  clipBareHttpAutolink,
+} from '@cindy/maker-shared/url-text-boundary';
 import {
   SESSION_DEEP_LINK_RE_SOURCE,
   PROJECT_DEEP_LINK_RE_SOURCE,
@@ -29,18 +24,9 @@ import { stripDeepLinkPathPrefix } from '../../../shared/deepLinkSchemes';
  * (png/jpg/jpeg/gif/webp/svg/bmp/ico) and the main-process xdt-file://
  * protocol's IMAGE_EXT_WHITELIST. Keep them in sync.
  */
-// The trailing range in the negation class spans U+0080..U+FFFF, so any
-// non-ASCII char (CJK text, full-width punctuation) terminates the URL —
-// URLs at this layer are ASCII-only, otherwise a Chinese comma right after
-// the URL gets gobbled into the link and breaks the click target.
-//
-// ASCII double quotes / angle brackets are prose boundaries. Apostrophes can be
-// valid path text (`Guns_N'_Roses`) and can also validly end a URL, so a trailing
-// apostrophe is only stripped when the URL is visibly wrapped by a leading
-// apostrophe. Parentheses and square/brace brackets are handled after matching so
-// URL-valid query / fragment punctuation survives while path-level prose is
-// returned to text.
-const URL_RE = /(https?:\/\/[^\s<>"\u0080-\uFFFF]+)/g;
+// 匹配源与切边都来自 maker-shared/url-text-boundary：ASCII-only 匹配，
+// 半角括号/包裹引号/尾部句读由 clipBareHttpAutolink 统一收口。
+const URL_RE = new RegExp(`(${BARE_HTTP_URL_RE_SOURCE})`, 'g');
 const IMG_PATH_RE =
   /([A-Za-z]:[\\/][^\s<>"']*?\.(?:png|jpe?g|gif|webp|svg|bmp|ico)|\/[^\s<>"']*?\.(?:png|jpe?g|gif|webp|svg|bmp|ico))/gi;
 // \u4F1A\u8BDD\u6DF1\u94FE cindy://session/<id>[?message=<clientId>](\u5386\u53F2 xdt-maker:// \u540C):ASCII \u767D\u540D\u5355,CJK /
@@ -82,36 +68,13 @@ export type LinkifyMatch =
   | ({ kind: 'session' } & DeepLinkMatchFields)
   | ({ kind: 'project' } & DeepLinkMatchFields);
 
-function getMarkdownWrapMarkerBeforeUrl(source: string, index: number): string | null {
-  for (const marker of MARKDOWN_WRAP_MARKERS) {
-    if (index < marker.length || source.slice(index - marker.length, index) !== marker) {
-      continue;
-    }
-    return isMarkdownWrapOpenBoundary(source[index - marker.length - 1])
-      ? marker
-      : null;
-  }
-  return null;
-}
-
 function pushUrlMatch(
   matches: LinkifyMatch[],
   source: string,
   index: number,
   raw: string,
 ): number | null {
-  const marker = getMarkdownWrapMarkerBeforeUrl(source, index);
-  const markdownCut = cutBeforeClosingMarkdownWrap(raw, marker);
-  const wrappingParenCount = countUnmatchedOpeningParens(source.slice(0, index));
-  const cut = Math.min(
-    cutBeforeUnbalancedParenProse(raw, markdownCut, { wrappingParenCount }),
-    cutBeforePathBracketProse(raw),
-    markdownCut,
-  );
-  const end = shrinkAutolinkTrailingJunk(raw, cut, {
-    stripWrappingApostrophe: source[index - 1] === "'",
-    stripWrappingParenCount: wrappingParenCount,
-  });
+  const end = clipBareHttpAutolink(raw, { prefix: source.slice(0, index) });
   if (end <= 0) return null;
   const text = raw.slice(0, end);
   matches.push({

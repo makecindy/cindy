@@ -7,7 +7,7 @@
  *
  * 所有 ID 都使用短且一致的名字，不带 `cindy_` 前缀：
  *   android | ios-simulator | browser | computer | feishu_bot | wechat |
- *   scheduler | ssh | memory | contacts | xdt_helper | collab(→ cindy_orca) | lsp
+ *   scheduler | ssh | memory | contacts | docs | xdt_helper | collab(→ cindy_orca) | lsp
  *
  * @cindy/mcps/providers.ts 里的现役 MCP provider `name` 使用 `cindy_` 前缀；
  * 用户配置仍使用稳定的短 plugin id。映射关系由 PROVIDER_NAME_TO_PLUGIN_ID 定义，
@@ -40,6 +40,7 @@ const BUILTIN_META: BuiltinPluginMeta[] = [
   { id: 'ssh',          name: 'SSH Remote',   description: 'Run commands on configured SSH hosts via the built-in connection pool (aliases, ssh-agent/keys) — nothing installed remotely' },
   { id: 'memory',       name: 'Maker Memory', description: 'Cross-agent long-term memory for persistent context across sessions' },
   { id: 'contacts',     name: 'Smart Contacts', description: 'Agent-native contacts — cross-platform identity resolution, relationship context, and timeline events' },
+  { id: 'docs',         name: 'Document Toolkit', description: 'Turn content into real files — PDF, Word, Excel, and PowerPoint — and read them back to verify the result. No extra software to install.' },
   { id: 'xdt_helper',   name: 'Cindy Helper', description: 'Host capability disclosure — tells agents what tools and models are available' },
   { id: 'collab',       name: 'Collab Mode',  description: 'Multi-worker collaboration (Orca team) — start_team / create_worker / send_to_worker etc.' },
   { id: 'lsp',          name: 'LSP',          description: 'TypeScript LSP queries (Beta — gated by Settings → Experimental → LSP Mode)' },
@@ -80,6 +81,7 @@ export type KnownProviderName =
   | 'cindy_ssh'
   | 'cindy_memory'
   | 'cindy_contacts'
+  | 'cindy_docs'
   | 'cindy_helper'
   | 'cindy_orca'
   | 'cindy_lsp';
@@ -110,6 +112,7 @@ export const PROVIDER_NAME_TO_PLUGIN_ID: Record<KnownProviderName, PluginId> = {
   cindy_ssh: 'ssh',
   cindy_memory: 'memory',
   cindy_contacts: 'contacts',
+  cindy_docs: 'docs',
   cindy_helper: 'xdt_helper',
   cindy_orca: 'collab',
   cindy_lsp: 'lsp',
@@ -167,6 +170,7 @@ const PLUGIN_ID_TO_MCP_ID: Record<PluginId, LiziMcpId | undefined> = {
   ssh: 'cindy_ssh',
   memory: 'cindy_memory',
   contacts: 'cindy_contacts',
+  docs: 'cindy_docs',
   xdt_helper: 'cindy_helper',
   collab: 'cindy_orca',
   lsp: 'cindy_lsp',

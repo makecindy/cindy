@@ -41,6 +41,7 @@ vi.mock('../../maker-host/generic-oauth.js', () => ({
 
 vi.mock('../../maker-host/active-catalog.js', () => ({
   getActiveCatalog: vi.fn(() => ({ providers: [] })),
+  isXdGatewayPaymentRequiredRoute: vi.fn(() => false),
 }));
 
 vi.mock('../../maker-host/provider-route.js', () => ({
@@ -80,7 +81,10 @@ import { getChatgptBridgeAuth } from '../../maker-host/anthropic-responses-bridg
 import { getValidClaudeAiOAuth } from '../../maker-host/claude-oauth-refresh.js';
 import { getGrokAccessToken } from '../../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
-import { getActiveCatalog } from '../../maker-host/active-catalog.js';
+import {
+  getActiveCatalog,
+  isXdGatewayPaymentRequiredRoute,
+} from '../../maker-host/active-catalog.js';
 import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
 import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
@@ -88,7 +92,9 @@ import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
 import {
   DEDICATED_AUTO_REVIEW_CANDIDATES,
   getUtilityTextCandidates,
+  isUtilityRoutePaymentRequired,
   requestDedicatedAutoReviewCandidateText,
+  requestExplicitUtilityText,
   requestUtilityText,
   toAnthropicApiModelId,
 } from '../oneShotCandidates.js';
@@ -102,6 +108,7 @@ const readGrokToken = vi.mocked(getGrokAccessToken);
 const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
 const fetchMock = vi.mocked(undiciFetch);
 const activeCatalog = vi.mocked(getActiveCatalog);
+const xdPaymentRequiredRoute = vi.mocked(isXdGatewayPaymentRequiredRoute);
 const readDisableOverrides = vi.mocked(readModelDisableOverrides);
 const providerRouteMutationInProgress = vi.mocked(isProviderRouteMutationInProgress);
 const readCustomKey = vi.mocked(readCustomProviderKey);
@@ -128,6 +135,7 @@ describe('utility one-shot candidates', () => {
     readCustomKey.mockReturnValue(null);
     readDisableOverrides.mockReturnValue({ disabledModels: {}, disabledProviders: {} });
     activeCatalog.mockReturnValue({ providers: [] } as never);
+    xdPaymentRequiredRoute.mockReturnValue(false);
     getProfiles.mockReturnValue([
       {
         id: 'codex-gpt-5.4-mini',
@@ -154,6 +162,51 @@ describe('utility one-shot candidates', () => {
     const candidates = await getUtilityTextCandidates(makerMock(false));
 
     expect(candidates.map((candidate) => candidate.providerId)).toEqual(['litellm-gpt-5.4-mini']);
+  });
+
+  it('does not expose or dispatch an XD utility candidate denied by paid availability', async () => {
+    readKey.mockReturnValue('proxy-key');
+    xdPaymentRequiredRoute.mockImplementation((model, agent) =>
+      model === 'gpt-5.4-mini' && agent === 'codex',
+    );
+
+    const result = await requestUtilityText(makerMock(false), 'hello');
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [
+        expect.objectContaining({ providerId: 'codex-gpt-5.4-mini' }),
+        expect.objectContaining({
+          providerId: 'litellm-gpt-5.4-mini',
+          reason: 'model_unavailable',
+        }),
+      ],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('applies paid availability only to direct XD LiteLLM utility routes', () => {
+    xdPaymentRequiredRoute.mockImplementation((model) => model === 'paid-model');
+
+    expect(isUtilityRoutePaymentRequired({
+      transport: 'litellm-chat-completions',
+      model: 'paid-model',
+    })).toBe(true);
+    expect(isUtilityRoutePaymentRequired({
+      transport: 'codex-responses',
+      model: 'paid-model',
+    })).toBe(false);
+  });
+
+  it('rechecks paid availability immediately before a previously resolved XD utility dispatch', async () => {
+    readKey.mockReturnValue('proxy-key');
+    const candidates = await getUtilityTextCandidates(makerMock(false));
+    expect(candidates).toHaveLength(1);
+
+    xdPaymentRequiredRoute.mockReturnValue(true);
+    await expect(candidates[0]!.execute('hello')).rejects.toThrow('request_failed');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns credential-safe diagnostics when every configured candidate is unavailable', async () => {
@@ -420,6 +473,52 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('rejects a retired model pinned to an explicit auxiliary route', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'tapsvc',
+        name: 'Tap Service',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://custom.example/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{
+            id: 'retired-mini',
+            name: 'Retired Mini',
+            contextWindow: 100_000,
+            status: 'retired',
+          }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('custom-secret');
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'tapsvc',
+      agentKind: 'codex',
+      model: 'retired-mini',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [expect.objectContaining({
+        providerId: 'tapsvc',
+        model: 'retired-mini',
+        status: 'skipped',
+        reason: 'model_unavailable',
+      })],
+    });
+    expect(readCustomKey).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('does not read or send a custom-provider key while its route is mutating', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -509,6 +608,135 @@ describe('utility one-shot candidates', () => {
       model: 'chat-model',
       reasoning_effort: 'low',
       messages: [{ role: 'user', content: 'generate' }],
+    });
+  });
+
+  it('keeps system instructions separate on an exact auxiliary chat route', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'chat-only',
+        name: 'Chat Only',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://chat.example/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{ id: 'chat-model', name: 'Chat Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('chat-secret');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: 'next prompt' } }],
+      }),
+    } as never);
+
+    const result = await requestExplicitUtilityText('reference material', {
+      providerId: 'chat-only',
+      agentKind: 'codex',
+      model: 'chat-model',
+      systemPrompt: 'SYSTEM POLICY',
+      responseInstructions: 'ONE LINE ONLY',
+      beforeDispatch: async (route) => route.providerId === 'chat-only',
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'next prompt' });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      messages: [
+        { role: 'system', content: 'SYSTEM POLICY\nONE LINE ONLY' },
+        { role: 'user', content: 'reference material' },
+      ],
+    });
+  });
+
+  it('does not dispatch or fall back when the final exact-route guard rejects', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'chat-only',
+        name: 'Chat Only',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://chat.example/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{ id: 'chat-model', name: 'Chat Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('chat-secret');
+
+    const result = await requestExplicitUtilityText('must stay local', {
+      providerId: 'chat-only',
+      agentKind: 'codex',
+      model: 'chat-model',
+      beforeDispatch: async () => false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [expect.objectContaining({ providerId: 'chat-only', reason: 'request_failed' })],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('passes instructions and the final guard through an exact builtin route', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD Gateway',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'managed' },
+        routing: {
+          'claude-code': { upstream: 'https://ignored.invalid', authStrategy: 'gateway-key' },
+        },
+        models: {
+          'claude-code': [{ id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: 1_000_000 }],
+        },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'next prompt' } }] }),
+    } as never);
+    const beforeDispatch = vi.fn(async () => true);
+
+    const result = await requestExplicitUtilityText('reference material', {
+      providerId: 'xd',
+      agentKind: 'claude-code',
+      model: 'gpt-5.5',
+      systemPrompt: 'SYSTEM POLICY',
+      responseInstructions: 'ONE LINE ONLY',
+      disableReasoning: true,
+      reasoningEffort: 'minimal',
+      beforeDispatch,
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'next prompt' });
+    expect(beforeDispatch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      thinking: { type: 'disabled' },
+      reasoning_effort: 'minimal',
+      messages: [
+        { role: 'system', content: 'SYSTEM POLICY\nONE LINE ONLY' },
+        { role: 'user', content: 'reference material' },
+      ],
     });
   });
 

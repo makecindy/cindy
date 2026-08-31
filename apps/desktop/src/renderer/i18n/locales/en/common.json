@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
+    "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
@@ -39,6 +40,12 @@
     "details": "Error details"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "Database Cleanup Was Interrupted",
+      "interruptedDescription": "Database cleanup stopped unexpectedly. Restart Cindy so it can recover safely from the saved maintenance state.",
+      "recoveryFailedTitle": "The Local Database Couldn't Be Recovered Safely",
+      "recoveryFailedDescription": "Database cleanup recovery failed. Cindy stopped opening the local database to avoid overwriting the original data."
+    },
     "updateReady": {
       "title": "Update required to continue",
       "description": "Your local data was upgraded by a newer version of Cindy and can't be opened by this version. The new version is downloaded and ready — restart to install it and get back in.",
@@ -131,6 +138,7 @@
       "chipMetrics": "Usage indicator",
       "memory": "Memory",
       "subagentModels": "Subagents",
+      "auxiliaryModels": "Auxiliary models",
       "visionBridge": "Vision Bridge",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
@@ -718,6 +726,13 @@
         "item2": "Break large tasks into multiple turns: understand first, edit second, verify third.",
         "item3": "Create a new session for independent problems instead of mixing everything into one thread."
       },
+      "linuxUpdates": {
+        "title": "Linux install and updates",
+        "description": "Linux currently ships as a .deb for Ubuntu 22.04 / 24.04. When a newer build is available, the app downloads it and asks for your system password to install.",
+        "item1": "First install with sudo apt install ./cindy-<version>-<arch>.deb (amd64 on x64, arm64 on arm64).",
+        "item2": "In-app updates download the .deb. After you choose Update, a system prompt installs it over the current package.",
+        "item3": "Linux does not offer the beta channel or idle auto-install, because installing requires your password."
+      },
       "qnaTitle": "Ask directly",
       "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",
       "qnaPlaceholder": "For example: how do I import a Codex session?",
@@ -776,6 +791,7 @@
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
       "autoUpdateDescription": "After an update finishes downloading, restart the app to install it when this computer has been idle for 10 minutes and no tasks are running.",
+      "linuxUpdateDescription": "When a newer build is available, Cindy downloads the .deb in the app. Installing it asks for your system password, so updates are not applied while idle.",
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
@@ -813,6 +829,80 @@
         "usageValue": "{{size}} ({{count}} files, {{cacheSize}} cache)",
         "statsFailed": "Stats temporarily unavailable",
         "legacyUsage": "Legacy data (read-only, not part of cleanup): {{size}}",
+        "legacyImagesLabel": "Image cache directory",
+        "legacyImagesDescription": "Cindy does not scan or clean this directory automatically. Deleting files may make images in message history unavailable; review them before deleting.",
+        "legacyImagesOpenButton": "Open directory",
+        "legacyImagesClearButton": "Clear image cache",
+        "legacyImagesDirectoryMissing": "The image cache directory was not found",
+        "legacyImagesOpenFailed": "Could not open the image cache directory. Try again.",
+        "legacyImagesClearConfirmTitle": "Clean up the image cache?",
+        "legacyImagesClearConfirmDescription": "Only files in the image cache directory will be deleted; the message database will not be queried. Images in message history may become unavailable, and this cannot be undone.",
+        "legacyImagesClearConfirmButton": "Clear image cache",
+        "legacyImagesCleared": "Image cache cleaned up",
+        "legacyImagesClearFailed": "Could not clean up the image cache. Try again.",
+        "chatAttachmentsLabel": "Message attachment cache directory",
+        "chatAttachmentsDescription": "Some attachments you send are stored here. Cindy does not scan or clean this directory automatically. Deleting files may make attachments in message history unavailable.",
+        "chatAttachmentsOpenButton": "Open directory",
+        "chatAttachmentsClearButton": "Clear attachment cache",
+        "chatAttachmentsDirectoryMissing": "The message attachment cache directory was not found",
+        "chatAttachmentsOpenFailed": "Could not open the message attachment cache directory. Try again.",
+        "chatAttachmentsClearConfirmTitle": "Clean up the message attachment cache?",
+        "chatAttachmentsClearConfirmDescription": "Only files in the message attachment cache directory will be deleted; the message database will not be queried. Some attachments in message history may become unavailable, and this cannot be undone.",
+        "chatAttachmentsClearConfirmButton": "Clear attachment cache",
+        "chatAttachmentsCleared": "Message attachment cache cleaned up",
+        "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
+        "dbSlimmingBackupDirectoryDialogTitle": "Choose database cleanup backup folder",
+        "dbSlimmingLabel": "Database cleanup",
+        "dbSlimmingDescription": "Scan history in soft-deleted and archived tasks not updated for the selected period, with an option to include active tasks. After confirmation, Cindy restarts and compacts the database before opening it. Files and generated media on disk are not deleted.",
+        "dbSlimmingScanButton": "Scan database",
+        "dbSlimmingScanLoading": "Scanning the database…",
+        "dbSlimmingScanResultTitle": "Database scan results",
+        "dbSlimmingExecutionLoading": "Preparing database cleanup. Cindy will restart shortly…",
+        "dbSlimmingArchiveAgeLabel": "Clean tasks not updated for more than",
+        "dbSlimmingArchiveAgeOption7Days": "7 days",
+        "dbSlimmingArchiveAgeOption1": "1 month",
+        "dbSlimmingArchiveAgeOption3": "3 months",
+        "dbSlimmingArchiveAgeOption6": "6 months",
+        "dbSlimmingIncludeActiveLabel": "Clean active task history",
+        "dbSlimmingIncludeActiveDescription": "Also clean history from active tasks older than the selected period",
+        "dbSlimmingIncludeActiveConfirmTitle": "Include active tasks in database cleanup?",
+        "dbSlimmingIncludeActiveConfirmDescription": "An active task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, active, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible active tasks and their Agent context will be reset; task entries remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
+        "dbSlimmingIncludeActiveConfirmButton": "Include active tasks",
+        "dbSlimmingIncludeActiveCancelButton": "Keep active tasks",
+        "dbSlimmingBackupLabel": "Back up database before cleanup",
+        "dbSlimmingBackupDefaultLocation": "Database folder (keeps only the latest cleanup backup)",
+        "dbSlimmingUseDefaultDirectoryButton": "Use default folder",
+        "dbSlimmingChooseDirectoryButton": "Choose backup folder",
+        "dbSlimmingBackupDirectoryFailed": "Could not choose a backup folder. Try again.",
+        "dbSlimmingScanFailed": "Could not scan the database. Try again.",
+        "dbSlimmingScheduleFailed": "Could not schedule database cleanup. Scan again and retry.",
+        "dbSlimmingBackupMissing": "The latest cleanup backup could not be found.",
+        "dbSlimmingBackupOpenFailed": "Could not open the cleanup backup location. Try again.",
+        "dbSlimmingReportTasks": "Will clean {{deleted}} soft-deleted tasks and {{archived}} archived tasks",
+        "dbSlimmingReportTasksWithActive": "Will clean {{active}} active tasks, {{deleted}} soft-deleted tasks, and {{archived}} archived tasks",
+        "dbSlimmingReportMessages": "Estimated message content to clean: {{count}} messages (about {{size}})",
+        "dbSlimmingReportSpace": "Database: {{database}}; temporary space needed: at least {{temporary}}; available: {{free}}",
+        "dbSlimmingSpaceUnknown": "unknown",
+        "dbSlimmingInsufficientSpace": "There is not enough disk space to safely create a working copy and compact the database.",
+        "dbSlimmingConfirmButton": "Confirm database cleanup",
+        "dbSlimmingConfirmTitle": "Restart and clean up the database?",
+        "dbSlimmingConfirmDescriptionWithBackup": "Cindy will restart gracefully, then back up, clean history, compact, and verify the database before opening it. Data is cleaned only after the backup is written and verified.",
+        "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy will restart gracefully, then clean and compact the database before opening it. No backup will be created, and cleaned history cannot be recovered.",
+        "dbSlimmingRestartButton": "Restart and clean up database",
+        "dbSlimmingResultCompleted": "Removed {{messages}} messages from {{tasks}} tasks and reduced the database by {{size}}.",
+        "dbSlimmingOpenBackupButton": "Open cleanup backup",
+        "dbSlimmingToastCompleted": "Database cleanup complete; freed {{size}}",
+        "dbSlimmingHistoryCleared": "History has been cleared",
+        "dbSlimmingFailure": {
+          "backup-failed": "The database backup could not be created or retained. No history was cleaned.",
+          "cleanup-failed": "Database cleanup did not finish. The original database is unchanged.",
+          "database-in-use": "Another instance is using the database, so cleanup was not run.",
+          "insufficient-space": "There was not enough disk space to clean up the database.",
+          "integrity-check-failed": "The database integrity check failed. The original database was restored.",
+          "replacement-failed": "The compacted database could not be installed. The original database was restored.",
+          "recovery-failed": "Database recovery failed. Cindy stopped opening the database to protect the original data.",
+          "unknown": "Database cleanup did not finish. Try again."
+        },
         "cleanupLabel": "Disk cleanup",
         "cleanupDescription": "Scans for media files no session references anymore, oversized caches, and obsolete folders. Shows the numbers first and deletes only after you confirm; images in composer drafts and queued messages are protected automatically.",
         "scanButton": "Scan",
@@ -1048,6 +1138,13 @@
           "cancel": "Cancel",
           "edit": "Edit",
           "delete": "Delete",
+          "termLabel": "Term",
+          "aliasSeparator": ", ",
+          "aliases": "Often misheard as: {{aliases}}",
+          "aliasesEditLabel": "Often misheard as",
+          "aliasesEditAriaLabel": "Edit common misrecognitions",
+          "aliasesPlaceholder": "One misrecognition per line",
+          "aliasesEditHint": "Use one per line. Clear the field to remove them all.",
           "searchAriaLabel": "Search dictionary",
           "closeSearch": "Close search",
           "searchPlaceholder": "Search dictionary",
@@ -1331,6 +1428,9 @@
         "subtitle": "All models · Claude Code / Codex · billed from your balance per token",
         "modelLabel": "All models",
         "billingLabel": "billed from your balance per token",
+        "accountTier": {
+          "free": "Free tier"
+        },
         "disconnectConfirm": {
           "title": "Disconnect Cindy AI?",
           "description": "Disconnecting clears the Cindy AI key saved locally. You will need to reconnect to keep using models provided by Cindy AI."
@@ -1358,6 +1458,8 @@
         "copyKeyFailed": "Copy failed, please try again later",
         "asset": {
           "viewUsage": "View usage",
+          "buyPlan": "Buy a plan",
+          "upgradePlan": "Upgrade plan",
           "syncFailed": "Credential sync failed, so the balance is unavailable right now. Your saved model settings are unaffected."
         }
       },
@@ -1594,6 +1696,8 @@
         "refreshFailed": "Model list couldn’t be refreshed — try again later",
         "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
         "disableModel": "Disable This Model",
+        "paymentRequired": "Paid",
+        "paymentUnlock": "Pay to unlock",
         "enableModel": "Enable This Model",
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
         "accessWriteFailed": "Couldn't save the change. Please try again.",
@@ -1777,15 +1881,23 @@
         "invalidLibraryName": "Enter an Ollama library name, or paste a huggingface.co model page URL",
         "advancedExactName": "Advanced: exact library name",
         "models": {
-          "qwen38-27b": { "blurb": "The strongest dense model you can run locally. Best for coding and long tasks." },
+          "qwen38-27b": {
+            "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
+          },
           "gpt-oss-20b": { "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines." },
           "gemma4-e2b": { "blurb": "Smallest Gemma 4. Light machines, with vision." },
           "gemma4-e4b": { "blurb": "Google Gemma 4 small. Light daily use, with vision." },
           "gemma4-12b": { "blurb": "Gemma 4 mid-size. Steadier chat and multimodal." },
           "gemma4-31b": { "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory." },
-          "gemma4-26b": { "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines." },
-          "ornith15-35b": { "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup." },
-          "glm-47-flash": { "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents." }
+          "gemma4-26b": {
+            "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
+          },
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup."
+          },
+          "glm-47-flash": {
+            "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents."
+          }
         },
         "onboardingTitle": "Install the Ollama runtime",
         "onboardingBody": "After you install Ollama, you can download and use local models in Cindy without opening the Ollama app. Ollama is a free, open-source third-party runtime.",
@@ -1927,6 +2039,7 @@
     },
     "betaChannel": {
       "title": "Beta channel",
+      "badge": "Beta",
       "description": "Join the beta channel to receive upcoming client updates early. Takes effect after restart.",
       "toggleAria": "Beta channel toggle",
       "restartTitle": "Restart Cindy",
@@ -1936,7 +2049,7 @@
       "restartBusyDescription": "Tasks are currently in progress and restarting will interrupt them. Restart now anyway?",
       "unavailable": "The beta channel is unavailable — could not reach the beta update server.",
       "toast": {
-        "disabled": "Beta channel disabled; takes effect after restart",
+        "disabled": "Beta channel disabled. Cindy will keep the current version and switch when a newer release is available",
         "toggleFailed": "Failed to toggle beta channel"
       }
     },
@@ -2538,15 +2651,47 @@
         "deferredSuffix": " — running Codex sessions will apply this after their current task finishes"
       }
     },
+    "auxiliaryModels": {
+      "title": "Auxiliary models",
+      "description": "Choose one Agent and model pair for automatic task naming and another for composer prompt suggestions.",
+      "sessionTitle": {
+        "label": "Automatic task naming",
+        "description": "Applies to Claude Code, Codex, and Pi tasks, plus manual AI renaming.",
+        "ariaLabel": "Choose the automatic task naming model",
+        "automatic": "Automatic (follow the current task)"
+      },
+      "promptRecommendation": {
+        "label": "Composer prompt suggestions",
+        "description": "Used only when prompt recommendations are enabled under Tips.",
+        "ariaLabel": "Choose the composer prompt suggestion model",
+        "automatic": "Automatic (keep current routing)"
+      },
+      "chooseAgent": "Choose an Agent",
+      "backToAgents": "Back to Agent selection",
+      "explicitRouteHint": "An explicit selection uses only that Agent and model. If unavailable, Cindy will not switch automatically.",
+      "searchPlaceholder": "Search models or providers",
+      "noResults": "No available models",
+      "unavailable": "Currently unavailable",
+      "budget": "Discount",
+      "subscription": "Subscription",
+      "saveFailed": "Failed to save auxiliary model settings"
+    },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
+      "description": "Control when Claude Code and Pi automatically compact context. Codex manages context compaction separately.",
       "card": {
         "label": "Compaction trigger threshold",
-        "badge": "Claude Code and Pi",
+        "badge": "Claude Code",
         "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
         "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
         "sliderAria": "Adjust auto-compaction trigger threshold"
+      },
+      "piCard": {
+        "label": "Compaction trigger threshold",
+        "badge": "Pi",
+        "description": "Pi's native auto-compaction starts when context usage reaches this percentage. The setting is applied the next time a Pi task starts.",
+        "hint": "Lower values compact earlier and leave more room for the response; higher values compact later. Changes apply the next time a Pi task starts.",
+        "sliderAria": "Adjust Pi auto-compaction trigger threshold"
       }
     },
     "personalization": {
@@ -2637,11 +2782,16 @@
     },
     "linkOpen": {
       "title": "Link open behavior",
-      "description": "Where web links and HTML files in messages open on left click.",
-      "card": {
-        "label": "Default open target",
-        "description": "Right-click a link anytime to pick the other option for a single open.",
-        "ariaLabel": "Select default link open target"
+      "description": "Where message links open on left click. Right-click still lets you pick the other option once.",
+      "web": {
+        "label": "Web pages",
+        "description": "Links on the public internet.",
+        "ariaLabel": "Choose where web pages open"
+      },
+      "local": {
+        "label": "Local pages",
+        "description": "HTML files on this computer, and localhost addresses.",
+        "ariaLabel": "Choose where local pages open"
       },
       "options": {
         "sidebar": "Sidebar browser",
@@ -2657,7 +2807,7 @@
     "chatEmbedding": {
       "cell": {
         "label": "Enable chat semantic indexing",
-        "description": "New chat messages are embedded into a local vector store (voyage-4) for future semantic search. Stays on this device. Only messages after enabling are indexed; existing history is not backfilled."
+        "description": "New messages and semantic search queries are sent to the vector model (voyage-4) to create vectors. Message vectors are stored in a local index. Only messages created after this setting is enabled are indexed; existing chat history is not backfilled."
       },
       "toggleAria": "Toggle chat semantic indexing",
       "toast": {
@@ -2727,7 +2877,7 @@
       "installSectionDescription": "Paste the install source from a pi.dev page, or enter an npm package name, Git URL, or absolute local path.",
       "installedSectionTitle": "Installed",
       "sourcePlaceholder": "npm package, Git URL, or absolute local path",
-      "inspectionHint": "Cindy warns you once about the risk. After you confirm, Cindy installs it, checks its resources, and automatically enables runnable resources when inspection succeeds.",
+      "inspectionHint": "Packages are installed and loaded by Pi’s native package system. Cindy only displays advisory compatibility details; unknown, unsupported, or failed analysis never blocks installation or enablement.",
       "install": "Install",
       "update": "Update",
       "remove": "Uninstall",
@@ -2749,12 +2899,7 @@
       "retry": "Retry",
       "operationInProgress": "Working on {{name}}…",
       "relativePathUnsupported": "Use an absolute path for local extensions in Settings. Relative paths such as ./extension can be installed from a Pi task.",
-      "confirmTitle": "Install This Pi Extension?",
-      "confirmDescription": "{{source}} is third-party code. It will run in the same process as Cindy's Pi and may read files and credentials Pi can access. Install does not run npm lifecycle scripts. Confirming installs it. Cindy automatically enables runnable resources after a successful inspection, even when it reports compatibility limits.",
-      "confirmInstall": "Accept Risk, Install",
       "updateConfirmTitle": "Update This Pi Extension?",
-      "updateConfirmDescription": "{{source}} will download a new third-party version and replace the installed code. Update does not run npm lifecycle scripts. The code runs in the same process as Pi and may read files and credentials. Confirming updates it. If you turned it off, it stays off; otherwise, Cindy enables it after a successful inspection.",
-      "confirmUpdate": "Accept Risk, Update",
       "uninstallTitle": "Uninstall Pi extension?",
       "uninstallDescription": "{{name}} will be removed from this device. Pi tasks that are already open keep the old extension until they are closed.",
       "confirmUninstall": "Uninstall",
@@ -2798,30 +2943,29 @@
       "runtimeMismatch": "{{packageName}} requires Pi {{range}}, but Cindy currently uses {{currentVersion}}.",
       "runtimeLegacyPackage": "{{packageName}} belongs to Pi's legacy runtime namespace. Extensions built against it may not load in Cindy's current Pi.",
       "runtimeUnknown": "{{packageName}} requires Pi {{range}}, but Cindy could not determine whether its current Pi version satisfies it.",
-      "compatibilityNoticeTitle": "Installed with compatibility limits",
-      "compatibilityNoticeDescription": "{{name}} finished installing or updating. Cindy's inspection is shown below; its current enabled state remains visible in the extension list, and changes affect only new or restarted Pi tasks.",
-      "extensionApprovalTitle": "Enable executable Extension code?",
-      "extensionApprovalDescription": "When enabled, third-party Extension code runs in the same process as Pi and can read files and environment variables available to Pi, including model or API credentials. Cindy cannot isolate that access today. Enable only sources you fully trust.",
-      "parserDisclaimer": "This static compatibility check is not a security audit and cannot prove arbitrary third-party code is fully compatible.",
-      "disableAfterInstall": "Disable this extension",
-      "keepEnabled": "Keep enabled",
-      "keepDisabled": "Keep disabled",
-      "approveAndEnable": "Accept risk and enable",
-      "done": "Done",
       "warning": {
         "no-resources": "No Pi resources were found in this extension.",
-        "inspection-failed": "The extension is configured, but its installed contents could not be inspected.",
-        "inspection-limit": "The extension exceeded safe inspection limits and remains disabled.",
-        "unsupported-filter": "This extension uses Pi resource filters that Cindy cannot safely reproduce yet, so it remains disabled.",
-        "unsafe-source": "This extension's saved source contains credentials or private URL parameters. Cindy hid the sensitive parts, kept it disabled, and blocked in-app update or removal.",
-        "lifecycle-scripts-disabled": "This extension declares install scripts, but Cindy did not run them for safety. Features that depend on generated files may not work."
+        "inspection-failed": "Cindy could not inspect the installed contents. This does not disable the package; Pi still handles it natively.",
+        "inspection-limit": "Cindy stopped displaying analysis after its inspection limit. The package remains available through Pi’s native loader.",
+        "unsupported-filter": "Cindy cannot display this Pi resource filter yet. Pi still handles the package and filter natively.",
+        "unsafe-source": "The saved source contains credentials or private URL parameters. Cindy hid those fields in this view without blocking Pi’s package behavior."
+      },
+      "failure": {
+        "sourceUnavailable": "The source is unavailable. Check the network or URL, or try another source.",
+        "packageNotFound": "The package was not found. Check the package name or repository URL.",
+        "versionNotFound": "That version was not found. Choose an available version and try again.",
+        "stateUnavailable": "Cindy could not read the Pi extension state. Restart Cindy and try again.",
+        "runtimeConvergencePartial": "The Pi extension change was saved, but some local Pi tasks may still be running the old extension. Restart Cindy before using Pi again.",
+        "nativeCommandFailed": "Pi's package command failed. Check the source or version and try again."
       },
       "success": {
-        "install": "Pi extension installed. Check its enabled state below; the current task is unchanged.",
-        "installEnabled": "Pi extension installed and enabled. The current task is unchanged; start or restart a Pi task to use it.",
-        "remove": "Pi extension removed. The current task keeps the old extension until it is closed.",
-        "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.",
-        "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it."
+        "install": "Pi extension installed. Active local Pi tasks were stopped; start a Pi task to use it.",
+        "installEnabled": "Pi extension installed and enabled. Active local Pi tasks were stopped; start a Pi task to use it.",
+        "remove": "Pi extension removed. Active local Pi tasks were stopped so its tools can no longer run.",
+        "settingsRemove": "Pi extension removed. Active local Pi tasks were stopped so its tools can no longer run.",
+        "settingsDisable": "Pi extension disabled. Active local Pi tasks were stopped so its tools can no longer run.",
+        "update": "Pi extension updated. Active local Pi tasks were stopped; start a Pi task to use the update.",
+        "set-enabled": "Pi extension state saved. Active local Pi tasks were stopped; start a Pi task to use the new state."
       }
     },
     "computerUse": {
@@ -2842,10 +2986,30 @@
           "disabled": "Browser automation disabled",
           "toggleFailed": "Failed to toggle browser automation",
           "openedForLogin": "Automation browser opened — sign into the sites you need",
-          "openForLoginFailed": "Failed to open the browser"
+          "openForLoginFailed": "Failed to open the browser",
+          "foreignInstance": "Another Cindy window is already using the agent browser. Quit the other instance and try again."
         },
         "openForLogin": "Open agent browser",
         "openForLoginHint": "This is a dedicated browser for agents: it runs on your installed Chrome but with a separate profile (shown as “Cindy”), so it never touches your everyday Chrome's tabs, bookmarks, or logins. Agents open pages, read, click, and take screenshots here on your behalf. For sites that need a login, click “Open agent browser” above and sign in once — your session is kept, so the agent can keep acting as you afterward."
+      },
+      "realProfile": {
+        "title": "Use my browser logins",
+        "description": "The agent will open sites with your signed-in Chrome, Edge, or Brave accounts.",
+        "toggleAria": "Use my browser logins",
+        "unavailableEmbedded": "Only available with the standalone external browser. The sidebar browser cannot load Chrome’s login files.",
+        "confirmTitle": "Let the agent use your browser logins?",
+        "confirmDescription": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. You can turn it off anytime; the copy will be deleted.",
+        "confirmDescriptionMac": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. Reading Chrome’s login files also needs Full Disk Access. You can turn this off anytime; the copy will be deleted.",
+        "confirm": "Use my logins",
+        "readDeniedTitle": "Full Disk Access Needed",
+        "readDeniedDescription": "Cindy needs this permission to read Chrome’s login files. Turn on Cindy under Privacy & Security → Full Disk Access, then try again.",
+        "openFullDiskAccess": "Open System Settings",
+        "readDeniedLater": "Not Now",
+        "toast": {
+          "enabled": "Agent browser will use your Chrome logins",
+          "disabled": "Copied logins removed. Agent browser is isolated again.",
+          "failed": "Failed to update browser login setting"
+        }
       },
       "browserBackend": {
         "title": "Automation browser target",
@@ -3095,6 +3259,10 @@
           "name": "Cindy Memory",
           "description": "Cross-agent long-term memory for persistent context across sessions"
         },
+        "docs": {
+          "name": "Document Toolkit",
+          "description": "Turn content into real files — PDF, Word, Excel, and PowerPoint — and read them back to verify the result. No extra software to install."
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "Host capability disclosure — tells agents what tools and models are available"
@@ -3119,6 +3287,18 @@
         "enabled": "Silent encrypted-content retry is on.",
         "disabled": "Silent encrypted-content retry is off.",
         "toggleFailed": "Failed to switch silent encrypted-content retry"
+      }
+    },
+    "sessionRuntimeFallback": {
+      "cell": {
+        "label": "Automatic task model fallback",
+        "description": "After repeated connection or capacity failures, try another connected source for the same model, then a model explicitly recommended for the current agent. It never switches agents or changes your saved selection. Off by default."
+      },
+      "toggleAria": "Toggle automatic task model fallback",
+      "toast": {
+        "enabled": "Automatic task model fallback is on.",
+        "disabled": "Automatic task model fallback is off.",
+        "toggleFailed": "Failed to change automatic task model fallback"
       }
     },
     "remoteControl": {
@@ -3393,6 +3573,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
+        "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
         "retry": "Retry",
@@ -3503,6 +3684,12 @@
     },
     "shortcuts": {
       "title": "Keyboard Shortcuts",
+      "accessories": {
+        "title": "Accessories",
+        "description": "Keyboards, gamepads, and other input devices",
+        "openAria": "Open accessories",
+        "back": "Back"
+      },
       "resetAll": "Reset all to defaults",
       "reset": "Reset to default",
       "recording": "Press new shortcut…",
@@ -3539,7 +3726,7 @@
           },
           "composer.submit": {
             "name": "Send message",
-            "description": "Send the current composer message"
+            "description": "Send the composer message, or approve the pending request"
           },
           "feedback": {
             "name": "Send feedback",
@@ -3622,7 +3809,11 @@
           },
           "navigateBack": {
             "name": "Back",
-            "description": "Go back in navigation history"
+            "description": "Go back, or decline the pending request"
+          },
+          "toggleFullscreen": {
+            "name": "Toggle fullscreen",
+            "description": "Enter or exit fullscreen"
           },
           "composer.focus": {
             "name": "Focus composer",
@@ -3642,7 +3833,6 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "beta": "Beta",
         "entryDescription": "Open tasks with the Agent keys and mirror their status with lighting.",
         "openAria": "Open Work Louder Codex Micro settings",
         "back": "Back to keyboard shortcuts",
@@ -3943,7 +4133,256 @@
       "edit": "Edit",
       "delete": "Delete",
       "deleteAria": "Delete shortcut for {{name}}",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "xboxGamepad": {
+        "title": "Xbox controller",
+        "openAria": "Open Xbox controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "back": "Back",
+        "retry": "Retry",
+        "layout": {
+          "title": "Controls",
+          "description": "Click a control to change what it does. Pressing the pad lights the matching control here.",
+          "clickToEdit": "Click to set",
+          "editor": {
+            "title": "Control",
+            "description": "Choose a Cindy action for this control. Unmapped controls do nothing.",
+            "done": "Done",
+            "assigned": "Action",
+            "assignedDescription": "Fires on press. Hold-to-talk ends when you release."
+          },
+          "reset": {
+            "title": "Reset mapping",
+            "description": "Restores each control’s action without turning the controller off.",
+            "button": "Reset mapping"
+          }
+        },
+        "stick": {
+          "description": "A stick can scroll the conversation, or fire a different action in each direction.",
+          "customDescription": "Fires once when the stick enters this direction.",
+          "mode": {
+            "label": "Stick mode",
+            "description": "Conversation scroll follows how far you push. Custom assigns an action per direction.",
+            "options": {
+              "conversation-scroll": "Scroll conversation",
+              "custom": "Custom directions"
+            }
+          }
+        },
+        "directions": {
+          "up": "Up",
+          "right": "Right",
+          "down": "Down",
+          "left": "Left"
+        },
+        "controls": {
+          "a": "A",
+          "b": "B",
+          "x": "X",
+          "y": "Y",
+          "lb": "LB",
+          "rb": "RB",
+          "lt": "LT",
+          "rt": "RT",
+          "view": "View",
+          "menu": "Menu",
+          "xbox": "Xbox",
+          "ls": "Left stick click",
+          "rs": "Right stick click",
+          "dpadUp": "D-pad up",
+          "dpadDown": "D-pad down",
+          "dpadLeft": "D-pad left",
+          "dpadRight": "D-pad right",
+          "leftStick": "Left stick",
+          "rightStick": "Right stick"
+        },
+        "familyControls": {
+          "xbox": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Xbox",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          },
+          "playstation": {
+            "a": "✕",
+            "b": "○",
+            "x": "□",
+            "y": "△",
+            "lb": "L1",
+            "rb": "R1",
+            "lt": "L2",
+            "rt": "R2",
+            "view": "Create",
+            "menu": "Options",
+            "xbox": "PS",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          },
+          "nintendo": {
+            "a": "B",
+            "b": "A",
+            "x": "Y",
+            "y": "X",
+            "lb": "L",
+            "rb": "R",
+            "lt": "ZL",
+            "rt": "ZR",
+            "view": "−",
+            "menu": "+",
+            "xbox": "HOME",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          },
+          "generic": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Home",
+            "ls": "Left stick click",
+            "rs": "Right stick click",
+            "dpadUp": "D-pad up",
+            "dpadDown": "D-pad down",
+            "dpadLeft": "D-pad left",
+            "dpadRight": "D-pad right",
+            "leftStick": "Left stick",
+            "rightStick": "Right stick"
+          }
+        },
+        "actions": {
+          "none": "Unmapped",
+          "voice": "Voice input",
+          "voiceDescription": "Hold for voice input, release to stop.",
+          "commands": "Commands",
+          "skills": "Skills",
+          "choose": "Choose action"
+        },
+        "errors": {
+          "load": "Could not load controller settings",
+          "save": "Could not save controller settings"
+        },
+        "connection": {
+          "label": "Connection",
+          "toggle": {
+            "label": "Enable",
+            "aria": "Let this Cindy use an Xbox controller while it is in the foreground"
+          },
+          "status": {
+            "connecting": "Connecting",
+            "connected": "Connected",
+            "not-detected": "Not detected",
+            "present": "Connected",
+            "disabled": "Off",
+            "error": "Connection error",
+            "unavailable": "Not supported on this system"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for an Xbox controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect an Xbox controller with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read an Xbox controller yet."
+          }
+        },
+        "device": {
+          "usb": "Wired",
+          "bluetooth": "Bluetooth",
+          "battery": "{{percent}}%",
+          "charging": "Charging {{percent}}%"
+        }
+      },
+      "playstationGamepad": {
+        "title": "PlayStation controller",
+        "openAria": "Open PlayStation controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "connection": {
+          "toggle": {
+            "aria": "Let this Cindy use a PlayStation controller while it is in the foreground"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for a PlayStation controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect a DualSense or DualShock with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read a PlayStation controller yet."
+          }
+        }
+      },
+      "nintendoGamepad": {
+        "title": "Switch controller",
+        "openAria": "Open Switch controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "connection": {
+          "toggle": {
+            "aria": "Let this Cindy use a Switch controller while it is in the foreground"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for a Switch controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect a Switch Pro or Joy-Con with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read a Switch controller yet."
+          }
+        }
+      },
+      "genericGamepad": {
+        "title": "Generic controller",
+        "openAria": "Open generic controller settings",
+        "entryDescription": "Scroll, talk, send, and switch tasks with a controller",
+        "connection": {
+          "toggle": {
+            "aria": "Let this Cindy use a generic controller while it is in the foreground"
+          },
+          "descriptions": {
+            "connecting": "Cindy is looking for a controller.",
+            "connected": "Cindy listens to this controller while it is in the foreground.",
+            "disabled": "Turn it on to listen while Cindy is in the foreground.",
+            "present": "Turn it on to listen while Cindy is in the foreground.",
+            "not-detected": "Connect a controller with USB or Bluetooth.",
+            "error": "Cindy cannot read the controller right now and is retrying.",
+            "unavailable": "This computer cannot read a controller yet."
+          }
+        }
+      }
     },
     "ghosts": {
       "title": "Plugins",
@@ -3951,6 +4390,8 @@
       "page": {
         "search": "Search plugins",
         "clearSearch": "Clear Plugin Search",
+        "secondaryTabsAria": "Plugin page sections",
+        "overviewTab": "Overview",
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "installedSection": "Installed",
@@ -3963,7 +4404,7 @@
         "updateTo": "Update to v{{version}}",
         "updateAria": "Update {{name}} to v{{version}}",
         "createWithCindy": "Create with Cindy",
-        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, read chapter 0 (design alignment) first, then read the relevant chapters via the section parameter (at minimum chapter 2 for the slot overview, plus the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions: prefer option-based question cards, one key decision per card with your recommended choice marked, and proactively surface design options I may not know about — such as the UI form (docked panel, panel inside the Plugins page, chat card, or no UI), a $ command word, launch mode, background abilities (event listening, in-app toast notifications, unread badges, confirmation dialogs), network access, whether a settings page is needed, whether a bundled Node process should do heavy lifting, and whether image/video media abilities are needed. Step by step, confirm the problem to solve, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
+        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, read chapter 0 (design alignment) first, then read the relevant chapters via the section parameter (at minimum the capability overview, sandbox red-lines, and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions: prefer option-based question cards, one key decision per card with your recommended choice marked, and proactively surface design options I may not know about — such as the UI form (docked panel, panel inside the Plugins page, chat card, or no UI), a $ command word, launch mode, background abilities (event listening, in-app toast notifications, unread badges, confirmation dialogs), network access, whether a settings page is needed, whether a bundled Node process should do heavy lifting, and whether image/video media abilities are needed. Step by step, confirm the problem to solve, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to validate and produce the .cindy package; do not claim that it was installed.",
         "filterAll": "All",
         "filtersAria": "Filter plugins by source",
         "origin": {
@@ -4007,14 +4448,6 @@
         "customSourcesUnavailable": "These custom marketplaces are temporarily unavailable: {{names}}. Other marketplaces are unaffected.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
-        "upgradeNotice": {
-          "single": "Automatically updated organization plugin “{{name}}”.",
-          "multiple_one": "Automatically updated {{count}} organization plugin.",
-          "multiple_other": "Automatically updated {{count}} organization plugins.",
-          "singleWithPermissions": "Automatically updated organization plugin “{{name}}”; new permissions: {{permissions}}.",
-          "multipleWithPermissions_one": "Automatically updated {{count}} organization plugin; it includes new permissions.",
-          "multipleWithPermissions_other": "Automatically updated {{count}} organization plugins; some plugins include new permissions."
-        },
         "removalNotice": {
           "single": "The organization removed the plugin “{{name}}”. Its local copy and data on this device have been cleaned up.",
           "multiple_one": "The organization removed {{count}} plugin. Its local copy and data on this device have been cleaned up.",
@@ -4028,16 +4461,13 @@
           "stateChanged": "The account, plugin, or release changed during this operation. Review the latest state and try again.",
           "accessDenied": "This plugin operation is not permitted or was cancelled.",
           "notConfigured": "The plugin market is not available in this environment.",
-          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy."
+          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy.",
+          "brokerRedirectPortRequired": "This plugin declares an authorization broker but is missing redirectPort in the same OAuth configuration, so it cannot be installed from the plugin marketplace. Contact the publisher to add the field and publish a new release."
         },
         "securityTitle": "Install and permissions",
         "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. First-time installs are enabled automatically and can be disabled anytime on the Plugins page; updates keep the current enabled state.",
         "customSecurityDescription": "This plugin comes from a custom marketplace you added and has not been verified by the Cindy server. Its manifest is validated in the main process before install. First-time installs are enabled automatically and can be disabled anytime on the Plugins page.",
         "noPermissions": "This plugin declares no additional capabilities.",
-        "installConfirmTitle": "Install “{{name}}”?",
-        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
-        "customInstallConfirmDescription": "This plugin comes from a custom marketplace and has not been verified for integrity by the server; its manifest will be validated before install. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
-        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged.",
         "sources": {
           "addMarketplace": "Add Plugin Marketplace…",
           "dialogTitle": "Add Plugin Marketplace",
@@ -4095,7 +4525,7 @@
             "authTitle": "Private Repositories",
             "authBody": "Authentication relies entirely on your system Git configuration — Cindy never stores Git credentials. SSH: a working key must be configured on this machine; if the organization enforces SAML SSO, authorize the key for that organization via Configure SSO in your GitHub SSH key settings. HTTPS: use a Personal Access Token stored by the system credential helper.",
             "rulesTitle": "Install Rules",
-            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins using officially reserved prefixes like cindy- cannot be installed from custom marketplaces. Before install, every permission the plugin declares is shown for review; confirming completes the install and enables the plugin.",
+            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins whose ids use the official reserved prefixes ({{reservedGhostIdPrefixes}}) cannot be installed by dragging in a package, choosing a file, or using a custom plugin marketplace. Declared permissions are shown on the detail page; clicking Install completes installation and enables the plugin without another permission confirmation dialog.",
             "copy": "Copy guide",
             "copied": "Guide copied to clipboard.",
             "copyFailed": "Copy failed. Please try again."
@@ -4106,13 +4536,13 @@
         "conflictDescription": "This plugin identifier is already in use and cannot be installed right now"
       },
       "reapproval": {
-        "badge": "Permission review needed",
-        "action": "Review Permissions",
-        "actionAria": "Review permissions for plugin {{name}}",
-        "noticeTitle": "Permission review needed",
-        "bodyLegacy": "Cindy has no record of a permission review for this plugin, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
-        "bodyInvalid": "The permission review record for this plugin is damaged, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
-        "bodyBuiltinRestart": "Something went wrong with this built-in plugin's approval record. Restart Cindy to recover automatically — no other action needed."
+        "badge": "Installation recovery needed",
+        "action": "Reinstall",
+        "actionAria": "Reinstall plugin {{name}}",
+        "noticeTitle": "Installation recovery needed",
+        "bodyLegacy": "Cindy cannot verify this plugin's complete installation record, so the plugin is paused. Reinstall the marketplace release or select the matching .cindy package again.",
+        "bodyInvalid": "This plugin's installation verification record is damaged, so the plugin is paused. Reinstall the marketplace release or select the matching .cindy package again.",
+        "bodyBuiltinRestart": "Something went wrong with this built-in plugin's installation verification record. Restart Cindy to recover automatically — no other action is needed."
       },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
@@ -4166,7 +4596,6 @@
       "toast": {
         "installed": "Installed \"{{name}}\"",
         "uninstalled": "Uninstalled \"{{name}}\"",
-        "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
         "reapproved": "\"{{name}}\" restored",
         "exported": "Exported the .cindy file for \"{{name}}\"",
@@ -4182,15 +4611,21 @@
       },
       "installConfirm": {
         "title": "Install plugin “{{name}}”?",
-        "confirm": "Install plugin",
-        "cancel": "Cancel",
         "meta": "Version {{version}}. Installs locally and can be uninstalled anytime.",
         "metaWithAuthor": "By {{author}} · Version {{version}}. Installs locally and can be uninstalled anytime.",
-        "enableNow": "Enable right after install",
-        "enableNowOpenPanel": "Enable and open its panel right after install",
         "manualCount": "Bundled manuals: {{count}}",
         "expandDescription": "Show Full Description",
         "collapseDescription": "Hide Full Description"
+      },
+      "forgeOidcInstallConfirm": {
+        "title": "Confirm organization identity testing",
+        "description": "After installation, this plugin can use your current organization identity to request Connection JWTs for the hosts below. Confirm that this is the plugin you just built.",
+        "pluginNameLabel": "Plugin",
+        "pluginIdLabel": "Plugin id",
+        "hostsLabel": "Organization identity request hosts",
+        "typedIdLabel": "Enter the plugin id <strong>{{id}}</strong> to confirm",
+        "confirm": "Install and allow testing",
+        "cancel": "Cancel"
       },
       "trust": {
         "official": "Official Cindy plugin",
@@ -4243,6 +4678,8 @@
         "command": "Chat command ${{command}}",
         "panelLeft": "Panel \"{{title}}\" · docked left of the chat",
         "panelTab": "Panel \"{{title}}\" · opens inside the Plugins page",
+        "mainView": "Can add a “{{title}}” entry to Cindy's sidebar",
+        "mainViewDetail": "Opening it displays the main view in the plugin sandbox and does not grant file, network, or credential access.",
         "code": "Executable code",
         "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
@@ -4311,11 +4748,12 @@
       },
       "errors": {
         "fileInvalid": "Not a valid .cindy plugin file",
-        "hostUnsupported": "This plugin needs Cindy capabilities that this version does not provide. Update Cindy, then install it again.",
+        "hostUnsupported": "This Cindy version cannot read this plugin's manifest format.",
         "alreadyInstalled": "This plugin is already installed",
-        "approvalRequired": "This plugin's permissions must be reviewed again before continuing.",
         "commandConflict": "Its command conflicts with an installed plugin. Uninstall the other one or rename the command.",
-        "idReserved": "This id uses the reserved official prefix cindy-; it is only available to plugins bundled with the app",
+        "idReserved": "{{reservedGhostIdPrefixes}} are reserved for official plugins and can’t be installed by dragging in a package, choosing a file, or using a custom plugin marketplace. Install the corresponding official plugin from the Cindy plugin market",
+        "brokerManualInstallNotAuthorized": "A locally installed .cindy package is not authorized to use the authorization broker. Install it from your organization’s plugin market.",
+        "brokerRedirectPortRequired": "This plugin declares an authorization broker but does not declare redirectPort in the same OAuth configuration. Ask the author to add the field so the final authorization hop can return to the local listening port.",
         "sourceMissing": "The selected file could not be found",
         "generic": "Operation failed. Please try again.",
         "updateIdMismatch": "The selected file is plugin \"{{id}}\", which does not match this plugin \"{{expected}}\""
@@ -4394,6 +4832,9 @@
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
         "oauthScopeStale": "This authorization does not include newly added permissions. Reconnect to grant them.",
         "configurationTitle": "Configuration",
+        "sidebarEntryTitle": "Sidebar entry",
+        "showInSidebar": "Show in sidebar",
+        "sidebarEntryDescription": "When turned on, “{{title}}” appears in the sidebar. Hiding it does not disable the plugin.",
         "openTool": "View details for Tool {{name}}",
         "noToolDescription": "No description is available for this Tool.",
         "viewAllTools": "See All",
@@ -4403,6 +4844,7 @@
         "closeDialog": "Close Dialog"
       },
       "contents": {
+        "mainView": "Main view",
         "panel": "Panel",
         "settingsUi": "Custom settings UI",
         "code": "Executable code",
@@ -4477,11 +4919,6 @@
         "confirm": "Update",
         "cancel": "Cancel"
       },
-      "reapproveConfirm": {
-        "title": "Re-approve permissions for \"{{name}}\"?",
-        "body": "Review the permissions below to re-approve this installed plugin — no install file needed.",
-        "confirm": "Approve & Restore"
-      },
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
@@ -4499,7 +4936,7 @@
       "updateAll": {
         "title": "Update all · {{count}} plugins",
         "collapseDiff": "Collapse",
-        "description": "Regular updates finish automatically; verified packages that request new permissions need per-item approval.",
+        "description": "Updates normally run silently. Use this dialog to retry updates that were skipped or failed.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "Queued",
         "statusInstalling": "Updating…",
@@ -4515,6 +4952,46 @@
         "reviewOutdated": "Review outdated",
         "approve": "Approve",
         "skip": "Skip"
+      },
+      "publish": {
+        "section": "My publishes",
+        "action": "Publish plugin…",
+        "confirmTitle": "Publish {{name}}",
+        "confirmDescription": "After you confirm, the package is uploaded to the current organization.",
+        "org": "Organization",
+        "pluginId": "Plugin id",
+        "version": "Version",
+        "size": "Size",
+        "confirm": "Publish",
+        "cancel": "Cancel",
+        "disabled": "This organization has not enabled member publishing. Contact an admin.",
+        "loadFailed": "Could not load your publishes",
+        "startFailed": "Could not start publishing",
+        "empty": "No publishes yet",
+        "unknownPlugin": "Plugin",
+        "uploading": "Publishing",
+        "badge": {
+          "validating": "Checking",
+          "processing": "Processing",
+          "pending": "Pending review",
+          "approved": "Published",
+          "rejected": "Rejected",
+          "failed": "Failed",
+          "expired": "Expired"
+        },
+        "stage": {
+          "confirming": "Waiting for confirmation",
+          "hashing": "Checking the file",
+          "preparing": "Creating the upload",
+          "uploading": "Uploading",
+          "committing": "Submitting",
+          "processing": "Processing",
+          "succeeded": "Finished",
+          "failed": "Failed",
+          "expired": "Expired",
+          "cancelled": "Cancelled",
+          "cancelledTracking": "Stopped watching. The server is still processing."
+        }
       }
     },
     "mcp": {
@@ -5001,6 +5478,32 @@
       "envFailed": "Environment setup failed — click to retry"
     },
     "downloadStats": "{{percent}}% · {{speed}} MB/s · {{done}} MB / {{total}} MB",
+    "databaseCleanup": {
+      "title": "Cleaning up the database",
+      "progressLabel": "Database cleanup progress",
+      "phase": {
+        "preparing": "Preparing cleanup",
+        "backingUp": "Backing up the database",
+        "copying": "Creating a cleanup working copy",
+        "cleaning": "Deleting expired messages",
+        "compacting": "Compacting the database",
+        "verifying": "Verifying the database",
+        "finalizing": "Safely replacing the database",
+        "cancelling": "Cancelling cleanup"
+      },
+      "elapsedAndRemaining": "Elapsed {{elapsed}} · About {{remaining}} remaining",
+      "elapsedFinalizing": "Elapsed {{elapsed}} · Almost done",
+      "duration": {
+        "seconds": "{{count}} sec",
+        "minutes": "{{count}} min"
+      },
+      "cancelAction": "Cancel cleanup and open Cindy",
+      "cancellingAction": "Cancelling cleanup…",
+      "finalizingAction": "Finishing up…",
+      "cancelHint": "You can cancel safely. Cindy will keep the original database and continue starting.",
+      "cancellingHint": "Stopping cleanup. The original database will not be changed.",
+      "finalizingHint": "Safely replacing the database. Do not close Cindy."
+    },
     "envFailed": {
       "title": "Environment initialization failed",
       "retry": "Retry"
@@ -5214,7 +5717,7 @@
         "provider": "Provider",
         "tokens": "Total tokens",
         "context": "Context used",
-            "lastActive": "Last active"
+        "lastActive": "Last active"
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
       "tokensTooltip": "The session's lifetime total, not the tokens spent within the last 30 days."
@@ -5266,7 +5769,7 @@
       "ready": "New version ready — click the sidebar to apply",
       "manifestFailed": "Update check failed, please check your network",
       "downloadFailed": "New version download failed, try again later",
-      "manualDownload": "Linux first release uses manual downloads only. Download the latest installer from the download page."
+      "manualDownload": "Download the update in the app. Installing it requires your system password."
     },
     "closeConfirm": {
       "title": "Confirm exit?",
@@ -5280,6 +5783,7 @@
   },
   "contentHeader": {
     "toggleSidebar": "Toggle sidebar",
+    "exitFullscreen": "Exit full screen",
     "collapseSidebar": "Collapse Sidebar",
     "expandSidebar": "Expand Sidebar",
     "collapsePanel": "Collapse",
@@ -6177,12 +6681,31 @@
     },
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
+      "settingsLinkBeta": "Settings, current user: {{name}}, Beta channel enabled",
+      "moreLabel": "More, current user: {{name}}",
+      "menuSettings": "Settings",
+      "menuAddAccount": "Sign in to another account",
+      "menuLogout": "Log out",
       "canaryBadge": "Canary user",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "viewReleaseNotes": "View release notes",
       "reopenUpdateBanner": "Update ready — click to review",
       "downloadMobile": "Download Cindy Mobile"
+    },
+    "accountSwitcher": {
+      "title": "Switch account",
+      "description": "Choose an account used on this device",
+      "syncing": "Checking sign-in status…",
+      "syncFailed": "Some account statuses could not be updated",
+      "switchFailed": "Could not switch accounts. Sign in to that account again",
+      "runningTaskTitle": "Stop running tasks and switch accounts?",
+      "runningTaskDescription": "Tasks are currently running. Switching accounts will stop them first, and unfinished work will not continue.",
+      "runningTaskConfirm": "Stop Tasks and Switch",
+      "startFailed": "Could not open the sign-in page. Try again later",
+      "addAccount": "Sign in to another account",
+      "back": "Back",
+      "close": "Close"
     },
     "mobileDownload": {
       "title": "Control Cindy Remotely",
@@ -6198,7 +6721,7 @@
       "myDevices": "My Devices",
       "deviceOffline": "Offline",
       "allowControl": "Allow same-account devices to control this machine",
-      "deviceId": "This device · {{id}}",
+      "deviceName": "This device · {{name}}",
       "remoteAction": {
         "checking": "Checking…",
         "unavailable": "Unavailable",
@@ -6410,6 +6933,13 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "This model needs an API key — configure it in Settings",
+      "paymentRequired": {
+        "badge": "Paid",
+        "unlock": "Pay to unlock",
+        "title": "Pay to Unlock This Model",
+        "description": "Subscribe to a paid plan or top up your balance to use this model.",
+        "action": "View Billing Options"
+      },
       "hidden": "Hidden",
       "modelListAria": "Model list",
       "subscriptionDirectDisabled": {
@@ -6566,7 +7096,7 @@
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Routine tools run without asking. Installing, updating, or removing Pi extensions still requires confirmation. Highest risk; use only for trusted tasks."
+            "description": "Routine tools run without asking. Pi extension commands you send directly run as requested; agent-initiated changes still require tool approval. Highest risk; use only for trusted tasks."
           }
         }
       }
@@ -6930,12 +7460,17 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT Sign-In Is No Longer Valid",
-    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
+    "systemSharedInvalidated": "Cindy is using this computer’s ChatGPT sign-in. Restore it in the ChatGPT App first; this avoids creating a second credential or signing this computer out.",
     "instanceIsolatedInvalidated": "Cindy is currently using a separately signed-in ChatGPT account. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
     "unknownInvalidated": "Cindy’s current ChatGPT sign-in is no longer valid. Sign in again, then retry.",
     "recovered": "ChatGPT sign-in has been restored. Please retry.",
     "openApp": "Open ChatGPT App",
     "relogin": "Sign In to ChatGPT Again",
+    "reloginRiskTitle": "Still sign in through Cindy?",
+    "reloginRiskDescription": "This creates a new OpenAI OAuth authorization and may immediately sign the ChatGPT App and Codex CLI out on this computer. You will need to sign in to those apps again afterward.",
+    "reloginRiskConfirm": "Accept Risk and Continue",
+    "devWriteBlocked": "Development builds use this computer’s ChatGPT sign-in read-only by default and cannot start OAuth or change its credentials. To test OAuth, use an isolated sandbox and explicitly set XDT_ALLOW_DEV_OAUTH_WRITE=1.",
+    "devReadOnly": "Read-only in Development",
     "checking": "Checking…",
     "recheck": "Check Again",
     "later": "Later",
@@ -7065,7 +7600,16 @@
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "Request details"
+      "userTurnCostDetailsTitle": "Request details",
+      "relative": {
+        "justNow": "just now",
+        "minutesAgo_one": "{{count}} minute ago",
+        "minutesAgo_other": "{{count}} minutes ago",
+        "hoursAgo_one": "{{count}} hour ago",
+        "hoursAgo_other": "{{count}} hours ago",
+        "daysAgo_one": "{{count}} day ago",
+        "daysAgo_other": "{{count}} days ago"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
@@ -7126,6 +7670,9 @@
       "forkStripEncrypted": "Fork and strip",
       "forkStripEncryptedRunning": "Forking…",
       "forkStripEncryptedTitle": "Fork and strip into a new session",
+      "forkStripOversizedHistory": "Slim history and continue",
+      "forkStripOversizedHistoryRunning": "Forking…",
+      "forkStripOversizedHistoryTitle": "Fork into a new task after removing oversized inline images",
       "codexSessionExpiredLogin": "Reconnect ChatGPT",
       "codexSessionReconnected": "ChatGPT is reconnected. Click “Retry” to continue.",
       "networkUnreachable": "Network error: the service is temporarily unreachable. Click \"Retry\" to try again.",
@@ -7164,6 +7711,11 @@
       "continuing": "Continuing…",
       "continueTitle": "Continue from where the task left off (completed steps will not be repeated)",
       "dismissTitle": "Dismiss this interruption notice"
+    },
+    "unreadFailedScheduleBanner": {
+      "text": "This scheduled run did not finish.",
+      "markAsRead": "Mark as read",
+      "markAsReadTitle": "Clear this failed unread state"
     },
     "worktreeRestoreBanner": {
       "text": "This session's worktree has been cleaned up (directory missing).",
@@ -7293,6 +7845,7 @@
       "promptSend": "Send",
       "promptCancel": "Cancel"
     },
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "agentActionRow": {
       "noContent": "Nothing to display",
       "fileChange": {
@@ -7485,6 +8038,7 @@
       "contextRebuild": {
         "labelOverflow": "Context reorganized, continuing",
         "labelTimeout": "Last turn didn't respond; context reorganized to continue",
+        "labelStrip": "Oversized images removed, continuing",
         "toggleHint": "View handoff context",
         "handoffTitle": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)",
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
@@ -7492,6 +8046,7 @@
       "review": {
         "running": "Reviewing current work",
         "completed": "Review complete",
+        "stale": "Review complete · result out of date",
         "failed": "Review did not complete",
         "openTask": "Open review task",
         "readOnlyHint": "Independent task · no development memory · read-only",
@@ -7665,7 +8220,16 @@
     "generatedFiles": {
       "title": "Files created this message",
       "showMore": "Show {{count}} more",
-      "showLess": "Show less"
+      "showLess": "Show less",
+      "artifactLabel": "Artifact",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": {
+        "pages": "{{count}} pages",
+        "slides": "{{count}} slides",
+        "sheets": "{{count}} sheets",
+        "rows": "{{count}} rows",
+        "bytes": "{{count}}"
+      }
     },
     "turnChanges": {
       "title": "Changed {{count}} files",
@@ -8108,6 +8672,7 @@
         "menu": {
           "runNow": "Run now",
           "more": "More actions",
+          "markAllAsRead": "Mark as read",
           "edit": "Edit",
           "pause": "Pause",
           "resume": "Resume",
@@ -8560,7 +9125,15 @@
         "custom": "Custom"
       },
       "weekday": {
-        "full": { "0": "Sunday", "1": "Monday", "2": "Tuesday", "3": "Wednesday", "4": "Thursday", "5": "Friday", "6": "Saturday" },
+        "full": {
+          "0": "Sunday",
+          "1": "Monday",
+          "2": "Tuesday",
+          "3": "Wednesday",
+          "4": "Thursday",
+          "5": "Friday",
+          "6": "Saturday"
+        },
         "short": { "0": "Su", "1": "Mo", "2": "Tu", "3": "We", "4": "Th", "5": "Fr", "6": "Sa" }
       },
       "time": {
@@ -8726,7 +9299,7 @@
       "sessionCost": "Session cost {{cost}}",
       "sessionValue": "Session value {{value}}",
       "runCost": "Run cost {{cost}}",
-      "runValue": "Estimated run value {{value}}",
+      "runTokens": "Token usage {{tokens}}",
       "costUnavailable": "Cost unavailable",
       "legacyCostUnavailable": "Historical cost unavailable",
       "persistentSessionGroup": "Persistent session {{session}} · {{count}} runs",
@@ -9327,7 +9900,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a complete, clear GitHub issue: confirm whether it is a bug or feature request, and ask only for missing or ambiguous details. Summarize or generalize user-provided quotes and examples by default instead of copying information that could identify a person, conversation, or business context. For bugs, collect the symptoms, reproduction steps, expected and actual behavior, frequency, attempted fixes, and—only with my consent—redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, clarify the use case, current pain point, and desired outcome. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
+      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a clear GitHub issue: figure out whether it is a bug or a suggestion, and ask only what is actually missing—do not run a fixed questionnaire. Ordinary suggestions do not need a bug checklist; skip Harness, model, and Effort questions when they are unrelated. Summarize or generalize user-provided quotes and examples by default instead of copying information that could identify a person, conversation, or business context. Screenshots in this chat are not uploaded to GitHub—never write that screenshots were attached; describe what they showed instead. With my consent, include redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, write the visible use case and ask; do not write repo paths, implementation plans, or acceptance checklists unless I ask. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
       "detailsPrefix": "\nMy initial description: {{details}}"
     },
     "confirm": {
@@ -9347,7 +9920,8 @@
       "publicNameHint": "This attribution will appear publicly in the Issue body",
       "anonymous": "Anonymous",
       "useAnonymous": "Use Anonymous Attribution",
-      "envLine": "Attached automatically on submit: client {{appVersion}} · {{platform}} {{arch}} · UI language {{uiLanguage}}",
+      "envLine": "Submitting client environment (attached automatically on submit): client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (this session)",
       "regionLine": "Build region: {{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -9376,10 +9950,12 @@
   "ghostGrant": {
     "confirm": {
       "title": "“{{name}}” requests access to your files",
+      "titleRevealPath": "Allow the Agent to receive this media file's local path?",
       "count": "{{count}} files",
       "descriptionAttachments": "The files below are outside this session's working directory. If you allow, they will be handed to this plugin (it only receives content fingerprints, never paths).",
       "descriptionDir": "The directory/file below is outside this session's working directory. If you allow, its files will be handed to this plugin for upload (it only receives a one-time ticket, never paths).",
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
+      "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "dirMeta": "{{count}} files · {{size}}",
@@ -10019,9 +10595,16 @@
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
+      "codexHistoryOversized": "This task’s history includes oversized images, so remote compaction cannot finish. Cindy will omit those images and continue in this task.",
+      "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
       "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
       "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",
-      "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue."
+      "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue.",
+      "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
+      "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",
+      "toolUseLoopDetectedConsecutiveWithCount": "The model repeated the same tool call {{count}} times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
+      "toolUseLoopDetectedPingPongWithCount": "The model kept cycling between tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
+      "toolUseLoopDetectedRotationWithCount": "The model kept rotating through tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue."
     },
     "validation": {
       "feishuFieldsRequired": "App ID and App Secret are both required",
@@ -10035,7 +10618,7 @@
     },
     "confirm": {
       "logoutTitle": "Log out",
-      "logoutDescription": "Log out of the current account?",
+      "logoutDescription": "Log out of all accounts on this device?",
       "logoutConfirm": "Log out",
       "cancel": "Cancel",
       "sessionExpiredTitle": "Login expired",
@@ -10161,7 +10744,7 @@
   "extraDirs": {
     "menuAria": "Composer actions",
     "tooltipEmpty": "More actions",
-    "tooltipCount": "{{count}} reference directories",
+    "tooltipCount": "{{count}} additional directories",
     "addFiles": "Add files, images, or videos…",
     "pluginsTitle": "Installed Plugins",
     "pluginDisabled": "Disabled",
@@ -10170,10 +10753,16 @@
     "sectionTitle": "Reference directories (read-only)",
     "empty": "No reference directories yet",
     "add": "Add directory…",
+    "addReadOnly": "Add read-only directory…",
+    "addWritable": "Add read-write directory…",
+    "writableSectionTitle": "Read-write directories",
+    "writableEmpty": "No read-write directories yet",
     "atLimit": "Limit reached ({{max}})",
     "remove": "Remove {{name}}",
     "parentConfirmTitle": "Add a parent directory?",
     "parentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. This expands the Agent's visible scope beyond the working directory.\n\nAdd it anyway?\n\n{{path}}",
+    "writableParentConfirmTitle": "Allow read-write access to a parent directory?",
+    "writableParentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. The Agent will be able to read, create, modify, and delete files inside it.\n\nAllow it anyway?\n\n{{path}}",
     "parentConfirmAccept": "Add anyway",
     "parentConfirmCancel": "Cancel"
   },
@@ -10477,6 +11066,11 @@
       "count": "{{count}} orders",
       "incomplete": "There are many order records. Only the latest {{count}} are shown.",
       "orderId": "NO. {{id}}",
+      "copy": {
+        "action": "Copy Order ID {{id}}",
+        "success": "Order ID copied",
+        "failed": "Order ID wasn’t copied — try again"
+      },
       "states": {
         "completed": "Completed",
         "awaitingPayment": "Awaiting payment",

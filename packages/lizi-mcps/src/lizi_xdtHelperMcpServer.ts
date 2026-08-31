@@ -47,6 +47,7 @@ import {
   registerSteerSessionTool,
   registerStopSessionTurnTool,
   registerGetSessionRuntimeTool,
+  registerSetSessionRuntimeTool,
   registerGetChatHistoryTool,
   registerSearchChatHistoryTool,
   registerSubmitGithubIssueTool,
@@ -77,7 +78,7 @@ export type {
 const D_LIST_TOOLS =
   '探索 cindy_helper 可用工具(渐进式发现入口)。不传 category → 返回所有类目+每个类目工具数量。' +
   `传 category=cindy → ${BRAND_NAME} 自省类只读工具(get_capabilities / get_current_session_id);` +
-  '传 category=control → 会话控制工具(标题/归档、本人排队消息编辑撤回、same-turn 插话、优雅停止、运行探针);' +
+  '传 category=control → 会话控制工具(标题/归档、本人排队消息编辑撤回、same-turn 插话、优雅停止、运行探针与模型控制);' +
   '传 category=history → 只读查询本地数据库聊天历史' +
   '(list_workdirs / list_sessions / list_session_queue / get_chat_history 按元数据捞, search_chat_history 按内容语义找),' +
   '用于让用户基于自己的对话历史组织 memory / 知识库;' +
@@ -93,7 +94,7 @@ const D_CALL_TOOL =
   '调用 cindy_helper 中的某个具体工具(如 get_capabilities / get_current_session_id / ' +
   'set_current_session_title / rename_sessions / send_to_session / list_session_queue / ' +
   'update_session_queued_message / cancel_session_queued_message / steer_session / ' +
-  'stop_session_turn / get_session_runtime / get_chat_history / submit_github_issue)。' +
+  'stop_session_turn / get_session_runtime / set_session_runtime / get_chat_history / submit_github_issue)。' +
   '先用 list_tools 拿工具名 + 简介。' +
   '错误码:`UNKNOWN_TOOL` = 工具名不存在;`INVALID_ARGS` = 参数 schema 校验失败(返回 schema 自纠);' +
   'tool 自身的业务错(如 NO_SESSION_CONTEXT / INVALID_FILTER / HOST_NOT_READY / INTERNAL)' +
@@ -339,6 +340,7 @@ export function createXdtHelperMcpServer(
     registerSteerSessionTool(registry, controlDeps);
     registerStopSessionTurnTool(registry, controlDeps);
     registerGetSessionRuntimeTool(registry, controlDeps);
+    registerSetSessionRuntimeTool(registry, controlDeps);
   }
 
   // Feedback 类工具: 仅 host 注入了 githubIssue 回调时注册。

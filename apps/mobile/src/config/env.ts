@@ -1,3 +1,4 @@
+import * as Application from 'expo-application';
 import Constants from 'expo-constants';
 
 import {
@@ -268,9 +269,10 @@ syncBuildTokenEndpointCache();
 
 // 二进制版本号:审核模式匹配基准。优先原生层版本(iOS CFBundleShortVersionString /
 // Android versionName,OTA 热更后不漂移),expoConfig.version 兜底(dev / 测试环境
-// 拿不到原生值)。与 mobileTapdb 的版本上报取值口径一致。
+// 拿不到原生值)。expo-application 已由现有 expo-auth-session / expo-notifications
+// 链进存量整包;这里只消费现成原生模块,不改 package.json / runtime fingerprint。
 export const APP_BINARY_VERSION = (
-  Constants.nativeAppVersion ??
+  Application.nativeApplicationVersion ??
   Constants.expoConfig?.version ??
   ''
 ).trim();
@@ -370,6 +372,18 @@ export const ENDPOINT_MANIFEST_PEER_BASE_URL = (
   ''
 ).replace(/\/+$/, '');
 
+/**
+ * CindyDev 内部包切换到 CN Release 时使用的第二个可信自举地址。
+ * 只经 Metro 环境变量进入 JS，不属于 ExpoConfig / 原生包身份；正式包恒为空串。
+ */
+export const DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL =
+  AUTH_REGION === 'dev'
+    ? (
+        process.env
+          .EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL?.trim() || ''
+      ).replace(/\/+$/, '')
+    : '';
+
 function trustedMobileRealmManifestBaseUrls(): RealmManifestBaseUrls {
   return BUILD_AUTH_REGION === 'global'
     ? {
@@ -388,18 +402,21 @@ function trustedMobileRealmManifestBaseUrls(): RealmManifestBaseUrls {
  * 构建区域默认值；跨区域组织会话由 activateMobileSessionRealm 整体切换
  * token 消费端点。
  */
-export function applyResolvedClientEndpoints(resolved: {
-  authApiBaseUrl?: string;
-  oauthBrokerApiBaseUrl?: string;
-  deviceLinkApiBaseUrl?: string;
-  voiceApiBaseUrl?: string;
-  mobileUpdateBaseUrl?: string;
-  /** 审核模式送审版本号(parser 产出,null = 清单未填;undefined = 不改动)。 */
-  reviewVersion?: string | null;
-  /** iOS StoreKit 分发环境；TestFlight 保留 OTA、禁用整包外跳。 */
-  isTestFlight?: boolean;
-  region?: ClientEndpointRegion | null;
-}): void {
+export function applyResolvedClientEndpoints(
+  resolved: {
+    authApiBaseUrl?: string;
+    oauthBrokerApiBaseUrl?: string;
+    deviceLinkApiBaseUrl?: string;
+    voiceApiBaseUrl?: string;
+    mobileUpdateBaseUrl?: string;
+    /** 审核模式送审版本号(parser 产出,null = 清单未填;undefined = 不改动)。 */
+    reviewVersion?: string | null;
+    /** iOS StoreKit 分发环境；TestFlight 保留 OTA、禁用整包外跳。 */
+    isTestFlight?: boolean;
+    region?: ClientEndpointRegion | null;
+  },
+  options: { preserveBuildReleaseMetadata?: boolean } = {},
+): void {
   if (resolved.authApiBaseUrl !== undefined) {
     AUTH_API_BASE_URL = normalizeBaseUrlWithDefault(
       resolved.authApiBaseUrl,
@@ -423,18 +440,29 @@ export function applyResolvedClientEndpoints(resolved: {
   syncBuildTokenEndpointCache();
   // 仅自建变体吃清单覆写,保住「非自建 ⇒ OTA_SERVER_BASE_URL 恒空串」不变量
   // (调用点虽都有 IS_OTA_SELFHOST 门控,这里再挡一层,变体身份始终由烧包决定)。
-  if (resolved.mobileUpdateBaseUrl !== undefined && IS_OTA_SELFHOST) {
+  if (
+    !options.preserveBuildReleaseMetadata &&
+    resolved.mobileUpdateBaseUrl !== undefined &&
+    IS_OTA_SELFHOST
+  ) {
     OTA_SERVER_BASE_URL = resolved.mobileUpdateBaseUrl.replace(/\/+$/, '');
   }
-  if (resolved.reviewVersion !== undefined) {
+  if (
+    !options.preserveBuildReleaseMetadata &&
+    resolved.reviewVersion !== undefined
+  ) {
     resolvedReviewVersion = resolved.reviewVersion;
   }
-  if (resolved.isTestFlight !== undefined) {
+  if (
+    !options.preserveBuildReleaseMetadata &&
+    resolved.isTestFlight !== undefined
+  ) {
     IS_TESTFLIGHT_BUILD = resolved.isTestFlight;
   }
   if (
-    resolved.reviewVersion !== undefined ||
-    resolved.isTestFlight !== undefined
+    !options.preserveBuildReleaseMetadata &&
+    (resolved.reviewVersion !== undefined ||
+      resolved.isTestFlight !== undefined)
   ) {
     REVIEW_MODE = isReviewModeActive(
       resolvedReviewVersion,

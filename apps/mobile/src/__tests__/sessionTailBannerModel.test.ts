@@ -37,6 +37,7 @@ function baseInput(patch: Partial<ResolveSessionTailBannerInput> = {}): ResolveS
     projection: { error: null, credentialSwitchWait: null },
     isSessionStreaming: false,
     continuationInFlight: false,
+    sessionMetadataSyncedForConnection: true,
     interruptAcked: false,
     hiddenErrorClientIds: new Set(),
     ...patch,
@@ -60,6 +61,14 @@ describe('resolveSessionTailBanner — error-tail', () => {
     });
   });
 
+  it('keeps a persisted error tail visible before current-connection metadata sync', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('e1', '2026-01-01T00:00:02.000Z', { message: 'boom' })],
+      sessionMetadataSyncedForConnection: false,
+    }));
+    expect(state).toMatchObject({ kind: 'error-tail', clientId: 'e1' });
+  });
+
   it('maps legacy app-exit marker rows to the continue-task semantics', () => {
     const state = resolveSessionTailBanner(baseInput({
       messages: [errorRow('e1', '2026-01-01T00:00:02.000Z', {
@@ -78,6 +87,22 @@ describe('resolveSessionTailBanner — error-tail', () => {
     }));
     expect(state).toMatchObject({ kind: 'error-tail', retryable: false });
     expect((state as { text: string }).text).toContain('设置 → 模型供应商');
+  });
+
+  it('localizes a tool-loop tail from its stable reason and structured details', () => {
+    const state = resolveSessionTailBanner(baseInput({
+      messages: [errorRow('e1', '2026-01-01T00:00:02.000Z', {
+        message: 'internal contract failure: missing_required_field',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'rotation', count: 16 },
+      })],
+    }));
+    expect(state).toMatchObject({
+      kind: 'error-tail',
+      text: i18n.t('session.tail.toolUseLoopDetectedRotationWithCount', { count: 16 }),
+      retryable: true,
+    });
+    expect((state as { text: string }).text).not.toContain('missing_required_field');
   });
 
   it('disables retry for codex stale-thread and invalid-encrypted tail errors', () => {
@@ -163,6 +188,13 @@ describe('resolveSessionTailBanner — error-tail', () => {
 });
 
 describe('resolveSessionTailBanner — interrupted(session 双时间戳)', () => {
+  it('stays quiet until metadata is synced for the current connection', () => {
+    expect(resolveSessionTailBanner(baseInput({
+      session: { activeTurnStartedAt: 2000, lastTurnEndedAt: 1000, clearedAt: null },
+      sessionMetadataSyncedForConnection: false,
+    }))).toBeNull();
+  });
+
   it('fires when the active turn started after it last ended and nothing acked it', () => {
     const state = resolveSessionTailBanner(baseInput({
       session: { activeTurnStartedAt: 2000, lastTurnEndedAt: 1000, clearedAt: null },

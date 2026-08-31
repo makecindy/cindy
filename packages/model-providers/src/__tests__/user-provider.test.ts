@@ -65,8 +65,22 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(p.routing.codex).toEqual({
       upstream: "https://openrouter.ai/api/v1",
       authStrategy: "api-key-header",
+      supportsResponsesCustomTools: false,
     });
     expect(p.routing.codex?.headerOverride).toBeUndefined();
+  });
+
+  it("marks only a custom Codex Responses runtime as lacking native custom tools", () => {
+    const responses = buildUserProvider(codexOnly);
+    const chat = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: { ...codexOnly.runtimes.codex!, wireProtocol: "openai-chat" },
+      },
+    });
+
+    expect(responses.routing.codex?.supportsResponsesCustomTools).toBe(false);
+    expect(chat.routing.codex?.supportsResponsesCustomTools).toBeUndefined();
   });
 
   it("preserves an explicit Chat Completions protocol for Codex routing", () => {
@@ -301,7 +315,121 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     });
   });
 
-    it('falls back safely for ambiguous matches, missing target routes and invalid defaults', () => {
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra"])(
+    "inherits equivalent Registry effort metadata across matching entries for %s",
+    (modelId) => {
+      const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+      if (!registry) throw new Error("missing bundled model registry");
+      const baseEntry = registry.models.find(
+        (entry) => entry.id === `openai/${modelId}`,
+      );
+      if (!baseEntry) throw new Error(`missing ${modelId} registry entry`);
+      registry.models.push({
+        ...structuredClone(baseEntry),
+        id: `alternate/${modelId}`,
+      });
+
+      const provider = buildUserProvider(
+        {
+          id: "relay",
+          name: "Relay",
+          runtimes: {
+            codex: {
+              baseUrl: "https://relay.example/v1",
+              models: [{ id: modelId, name: modelId }],
+            },
+          },
+        },
+        { modelRegistry: registry },
+      );
+
+      expect(provider.models.codex?.[0]).toMatchObject({
+        efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultEffort: "high",
+      });
+    },
+  );
+
+  it.each(["xd/gpt-5.6-sol", "chatgpt/gpt-5.6-sol"])(
+    "inherits equivalent Registry effort metadata after stripping the prefix from %s",
+    (modelId) => {
+      const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+      if (!registry) throw new Error("missing bundled model registry");
+      const baseEntry = registry.models.find(
+        (entry) => entry.id === "openai/gpt-5.6-sol",
+      );
+      if (!baseEntry) throw new Error("missing gpt-5.6-sol registry entry");
+      const first = structuredClone(baseEntry);
+      first.id = "first/gpt-5.6-sol";
+      first.routes = first.routes
+        .filter((route) => route.agents.includes("codex"))
+        .map((route) => ({ ...route, modelId: "gpt-5.6-sol" }));
+      const second = structuredClone(first);
+      second.id = "second/gpt-5.6-sol";
+      registry.models = [first, second];
+
+      const provider = buildUserProvider(
+        {
+          id: "prefixed-relay",
+          name: "Prefixed Relay",
+          runtimes: {
+            codex: {
+              baseUrl: "https://relay.example/v1",
+              models: [{ id: modelId, name: modelId }],
+            },
+          },
+        },
+        { modelRegistry: registry },
+      );
+
+      expect(provider.models.codex?.[0]).toMatchObject({
+        efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultEffort: "high",
+      });
+    },
+  );
+
+  it("rejects conflicting Registry effort metadata after prefix stripping", () => {
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+    if (!registry) throw new Error("missing bundled model registry");
+    const baseEntry = registry.models.find(
+      (entry) => entry.id === "openai/gpt-5.6-sol",
+    );
+    if (!baseEntry) throw new Error("missing gpt-5.6-sol registry entry");
+    const first = structuredClone(baseEntry);
+    first.id = "first/gpt-5.6-sol";
+    first.routes = first.routes
+      .filter((route) => route.agents.includes("codex"))
+      .map((route) => ({ ...route, modelId: "gpt-5.6-sol" }));
+    const second = structuredClone(first);
+    second.id = "second/gpt-5.6-sol";
+    second.perAgent = {
+      ...second.perAgent,
+      codex: { efforts: ["low", "medium", "high"], defaultEffort: "high" },
+    };
+    registry.models = [first, second];
+
+    const provider = buildUserProvider(
+      {
+        id: "conflicting-prefixed-relay",
+        name: "Conflicting Prefixed Relay",
+        runtimes: {
+          codex: {
+            baseUrl: "https://relay.example/v1",
+            models: [{ id: "xd/gpt-5.6-sol", name: "GPT-5.6-Sol" }],
+          },
+        },
+      },
+      { modelRegistry: registry },
+    );
+
+    expect(provider.models.codex?.[0]).toMatchObject({
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
+    });
+  });
+
+    it('falls back safely for conflicting matches, missing target routes and invalid defaults', () => {
     const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
     if (!registry) throw new Error("missing bundled model registry");
     const baseEntry = registry.models.find(
@@ -315,6 +443,10 @@ it('strips xd/ prefix to match registry effort metadata (entry.id ≠ custom id)
     registry.models.push({
       ...structuredClone(baseEntry),
       id: "alternate/gpt-5.6-sol",
+      perAgent: {
+        ...baseEntry.perAgent,
+        codex: { efforts: ["low", "medium", "high"], defaultEffort: "high" },
+      },
     });
 
     const ambiguous = buildUserProvider(

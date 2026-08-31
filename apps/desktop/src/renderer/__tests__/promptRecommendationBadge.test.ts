@@ -9,11 +9,22 @@ const chatInputSource = readFileSync(
 );
 
 describe('prompt recommendation shortcut badge', () => {
-  it('keeps the prompt shrinkable while reserving space for a pill badge', () => {
-    expect(chatInputSource).toContain('className="min-w-0 flex-1 truncate"');
+  it('keeps a keycap badge beside the prompt while allowing long text to truncate', () => {
     expect(chatInputSource).toContain(
-      "'ml-1.5 inline-flex shrink-0 items-center rounded-full border'",
+      "'pointer-events-none absolute left-0 top-0 inline-flex max-w-full min-w-0 items-center py-[3px]'",
     );
+    expect(chatInputSource).toContain('className="min-w-0 truncate"');
+    expect(chatInputSource).toContain(
+      "'pointer-events-auto ml-1 inline-flex h-4 min-w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-lg border border-current'",
+    );
+    expect(chatInputSource).toContain(
+      "'bg-transparent px-0.5 text-11 font-normal leading-none text-inherit'",
+    );
+    expect(chatInputSource).toContain(
+      "'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]'",
+    );
+    expect(chatInputSource).toContain('onMouseDown={(event) => event.preventDefault()}');
+    expect(chatInputSource).toContain('onClick={acceptPromptRecommendation}');
   });
 
   it('uses the complete locale catalog for the visible key label', () => {

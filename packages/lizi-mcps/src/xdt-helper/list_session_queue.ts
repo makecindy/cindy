@@ -1,7 +1,7 @@
 /**
  * xdt-helper/list_session_queue.ts —— 查询任意本机 session 的只读输入队列。
  *
- * 与 cindy_orca/list_worker_queue 的边界不同：本工具不要求 Lead 身份，也不暴露
+ * 与 cindy_orca/get_worker_queue_status 的边界不同：本工具不要求 Lead 身份，也不暴露
  * 修改、撤回或重排能力；它只把 host 注入的队列快照压成有界摘要，供 agent 确认
  * 一条消息是否已经排队、位于什么位置、是否正在投递。
  */

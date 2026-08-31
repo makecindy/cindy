@@ -35,8 +35,7 @@ export type BillingPaymentAction =
   | { type: 'REDIRECT'; url: string; expiresAt: string };
 
 export type BillingSubscriptionPortalResult =
-  | { success: true }
-  | { success: false; timedOut?: true };
+  { success: true } | { success: false; timedOut?: true };
 
 export type BillingFulfillmentStatus = 'NOT_STARTED' | 'PENDING' | 'SUCCEEDED' | 'FAILED';
 
@@ -117,6 +116,14 @@ export type BillingSubscriptionStatus =
   | 'UNPAID'
   | 'CANCELED'
   | 'PAUSED';
+
+/**
+ * 这些状态视为已有生效订阅：计费页阻断再买新套餐；供应商页据此把右侧主动作从
+ * 「购买套餐」换成「升级套餐」或「余额充值」。INCOMPLETE / INCOMPLETE_EXPIRED 属于
+ * 未完成首购，只活在当前 checkout 会话里，不算。
+ */
+export const BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: readonly BillingSubscriptionStatus[] =
+  ['TRIALING', 'ACTIVE', 'PAST_DUE', 'UNPAID', 'PAUSED'];
 
 export type BillingPlanChangeType = 'UPGRADE' | 'DOWNGRADE';
 

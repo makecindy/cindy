@@ -18,6 +18,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -29,6 +30,14 @@ const captured = vi.hoisted(() => ({
   onEvent: null as ((event: unknown) => void) | null,
   requests: [] as Array<Record<string, unknown>>,
   sent: [] as Array<Record<string, unknown>>,
+  runnerLaunches: [] as Array<{
+    runId: string;
+    runDir: string;
+    runnerFile: string;
+    configFile: string;
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+  }>,
   proxyRegistrations: [] as Array<{
     sessionId: string;
     token: string;
@@ -134,9 +143,13 @@ vi.mock('../rpc-client.js', () => ({
 import {
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
+  PiManagedPackageMutationFailedError,
   type TurnPermissionPolicy,
 } from '../../base-agent.js';
-import { PiAgent } from '../index.js';
+import {
+  constrainPiDestructivePathResolution,
+  PiAgent,
+} from '../index.js';
 import { Session } from '../../../session.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -158,6 +171,15 @@ const noopLogger: Logger = {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+function desktopCommandOptions(command: string) {
+  return {
+    [MAIN_OWNED_SEND_CONTEXT]: {
+      origin: { kind: 'desktop' as const },
+      rawChannelText: command,
+    },
+  };
+}
+
 describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   let agentHome = '';
   let cwd = '';
@@ -171,6 +193,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.onEvent = null;
     captured.requests = [];
     captured.sent = [];
+    captured.runnerLaunches = [];
     captured.proxyRegistrations = [];
     captured.mcpVendorOptions = undefined;
     captured.failSetModel = false;
@@ -193,6 +216,24 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     writeFileSync(managedRipgrepPath, 'fake managed ripgrep');
     savedNoProxy = process.env.NO_PROXY;
     savedNoProxyLower = process.env.no_proxy;
+  });
+
+  it('uses the same remote destructive-path constraint in root and durable approval flows', () => {
+    const localAction = { kind: 'exec' as const, command: 'rm -rf build' };
+    expect(constrainPiDestructivePathResolution(localAction, false)).toBe(localAction);
+    expect(constrainPiDestructivePathResolution(localAction, true)).toEqual({
+      ...localAction,
+      destructivePathResolution: 'unavailable',
+    });
+
+    const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+    const durableStart = source.indexOf('const resolvePiSubagentApproval');
+    const durableEnd = source.indexOf('const refreshPiSubagentRuns', durableStart);
+    const rootStart = source.indexOf('private handleExtensionUiRequest');
+    expect(source.slice(durableStart, durableEnd)).toContain(
+      'constrainPiDestructivePathResolution',
+    );
+    expect(source.slice(rootStart)).toContain('constrainPiDestructivePathResolution');
   });
 
   afterEach(() => {
@@ -248,6 +289,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
       runtimeConfig: {
         endpoint: 'http://127.0.0.1:9',
+        remoteEndpoint: 'https://gateway.example.test',
         systemPrompt: 'You are Cindy.',
         managedExecutablePaths: { ripgrep: managedRipgrepPath },
       },
@@ -286,6 +328,48 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async () => ({
+        writeLine: async () => {},
+        onLine: () => () => {},
+        onStderr: () => () => {},
+        onClose: () => () => {},
+        close: async () => {},
+        pid: 4321,
+        isClosed: () => false,
+        remoteBinaryPath: '/remote/pi',
+      }),
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {},
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+      spawnPiSubagentRunner: (request) => {
+        captured.runnerLaunches.push(request);
+        const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+        const emit = (event: string, ...args: unknown[]): void => {
+          for (const listener of listeners.get(event) ?? []) listener(...args);
+        };
+        const handle = {
+          pid: 4321,
+          killed: false,
+          once(event: 'spawn' | 'error' | 'exit' | 'close', listener: (...args: unknown[]) => void) {
+            const queued = listeners.get(event) ?? [];
+            queued.push(listener);
+            listeners.set(event, queued);
+            if (event === 'spawn') queueMicrotask(listener);
+            return handle;
+          },
+          kill: () => {
+            handle.killed = true;
+            queueMicrotask(() => emit('exit', 0, 'SIGTERM'));
+            return true;
+          },
+        };
+        return handle as never;
+      },
       registerPiProxySession: (sessionId, token, _resolveProviderId, options) => {
         captured.proxyRegistrations.push({
           sessionId,
@@ -302,6 +386,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
     mcp?: McpSetup,
+    directories?: {
+      extraDirs?: string[];
+      writableDirs?: string[];
+      remoteHostId?: string;
+    },
   ): Promise<PiTestSessionHandle> {
     const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel, mcp));
     return agent.startSession({
@@ -309,6 +398,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       workingDir: cwd,
       model: 'm',
       ...(permissionMode ? { permissionMode: permissionMode as never } : {}),
+      ...directories,
     }) as Promise<PiTestSessionHandle>;
   }
 
@@ -330,14 +420,28 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     id: string,
     toolName: string,
     input: Record<string, unknown>,
-    options?: { resolvedCredentialPaths: unknown },
+    options?: {
+      resolvedCredentialPaths?: unknown;
+      resolvedWritePath?: unknown;
+      resolvedWritableRoots?: unknown;
+    },
   ): void {
+    const writeEvidence = toolName === 'write' || toolName === 'edit'
+      ? {
+          resolvedWritePath: options && Object.hasOwn(options, 'resolvedWritePath')
+            ? options.resolvedWritePath
+            : (typeof input.path === 'string' ? input.path : null),
+          resolvedWritableRoots: options && Object.hasOwn(options, 'resolvedWritableRoots')
+            ? options.resolvedWritableRoots
+            : [cwd],
+        }
+      : {};
     captured.onEvent!({
       type: 'extension_ui_request',
       method: 'confirm',
       id,
       title: 'cindy:permission',
-      message: JSON.stringify({ toolName, input, ...options }),
+      message: JSON.stringify({ toolName, input, ...options, ...writeEvidence }),
     });
   }
 
@@ -346,12 +450,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     toolName: string,
     input: Record<string, unknown>,
   ): void {
+    const writeEvidence = toolName === 'write' || toolName === 'edit'
+      ? {
+          resolvedWritePath: typeof input.path === 'string' ? input.path : null,
+          resolvedWritableRoots: [cwd],
+        }
+      : {};
     captured.onEvent!({
       type: 'extension_ui_request',
       method: 'input',
       id,
       title: 'cindy:permission',
-      placeholder: JSON.stringify({ toolName, input }),
+      placeholder: JSON.stringify({ toolName, input, ...writeEvidence }),
     });
   }
 
@@ -366,6 +476,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         source,
         token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT,
       }),
+    });
+  }
+
+  function fireSubagentRunnerRequest(
+    id: string,
+    action: 'launch' | 'terminate',
+    runId: string,
+  ): void {
+    captured.onEvent!({
+      type: 'extension_ui_request',
+      method: 'input',
+      id,
+      title: 'cindy:pi-subagent-runner',
+      placeholder: JSON.stringify({ action, runId }),
     });
   }
 
@@ -422,18 +546,131 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.env.no_proxy).toBeUndefined();
   });
 
-  it('routes chat-requested Pi extension installs into the host-managed store', async () => {
+  it('lets Pi discover user-installed packages natively instead of gating them on Cindy metadata', async () => {
+    const packageRoot = path.join(agentHome, 'future-pi-package-shape');
+    mkdirSync(packageRoot, { recursive: true });
+    const deps = buildDeps();
+    deps.resolvePiNativePackagePaths = async () => [packageRoot];
+    deps.resolvePiManagedPackageResources = async () => ({
+      extensions: [],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [],
+    });
+
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'native-package-discovery',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      expect(captured.args).not.toContain('--no-extensions');
+      expect(captured.args).not.toContain(packageRoot);
+      const runtimeHome = captured.env.PI_CODING_AGENT_DIR!;
+      expect(JSON.parse(readFileSync(path.join(runtimeHome, 'settings.json'), 'utf8')))
+        .toMatchObject({ packages: [packageRoot] });
+      const extensionPaths = captured.args.flatMap((arg, index) => (
+        arg === '--extension' ? [captured.args[index + 1]] : []
+      ));
+      expect(extensionPaths.some((entry) => (
+        entry?.replaceAll('\\', '/').includes('/internal-extensions/')
+      ))).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('asks the host to launch a durable runner without treating the app executable as Node', async () => {
+    const previousNode = process.env.ELECTRON_RUN_AS_NODE;
+    const previousLegacy = process.env.CINDY_PI_SUBAGENT_NODE;
+    process.env.ELECTRON_RUN_AS_NODE = '1';
+    process.env.CINDY_PI_SUBAGENT_NODE = '/Applications/Cindy.app/Contents/MacOS/Cindy';
+    try {
+    await start();
+    expect(captured.env.CINDY_PI_SUBAGENT_NODE).toBeUndefined();
+    expect(captured.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    const runRoot = captured.env.CINDY_PI_SUBAGENT_RUN_ROOT;
+    const ownerId = captured.env.CINDY_PI_SUBAGENT_OWNER_ID;
+    expect(runRoot).toBeTruthy();
+    expect(ownerId).toBeTruthy();
+
+    const runId = '123e4567-e89b-42d3-a456-4266141740aa';
+    const runDir = path.join(runRoot!, runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, 'runner.cjs'), "'use strict';\n");
+    writeFileSync(path.join(runDir, 'config.json'), '{}\n');
+    writeFileSync(path.join(runDir, 'status.json'), `${JSON.stringify({
+      version: 1,
+      runId,
+      taskId: 'tool-runner-host',
+      parentSessionId: 's1',
+      runtimeOwnerId: ownerId,
+      runnerInstanceId: `launch-pending-${runId}`,
+      state: 'queued',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      tasks: [{
+        childId: `${runId}-1`,
+        sessionId: `${runId}-1`,
+        agent: 'scout',
+        status: 'queued',
+      }],
+    })}\n`);
+
+    fireSubagentRunnerRequest('runner-launch', 'launch', runId);
+    const response = await waitForResponse('runner-launch');
+    expect(JSON.parse(String(response.value))).toEqual({ ok: true, confirmed: true });
+    expect(captured.runnerLaunches).toHaveLength(1);
+    expect(captured.runnerLaunches[0]).toMatchObject({
+      runId,
+      runDir,
+      runnerFile: path.join(runDir, 'runner.cjs'),
+      configFile: path.join(runDir, 'config.json'),
+      cwd,
+    });
+    expect(captured.runnerLaunches[0]?.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    expect(captured.runnerLaunches[0]?.env.CINDY_PI_SUBAGENT_NODE).toBeUndefined();
+
+    fireSubagentRunnerRequest('runner-stop', 'terminate', runId);
+    const stop = await waitForResponse('runner-stop');
+    expect(JSON.parse(String(stop.value))).toEqual({ ok: true, confirmed: true });
+    } finally {
+      if (previousNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+      else process.env.ELECTRON_RUN_AS_NODE = previousNode;
+      if (previousLegacy === undefined) delete process.env.CINDY_PI_SUBAGENT_NODE;
+      else process.env.CINDY_PI_SUBAGENT_NODE = previousLegacy;
+    }
+  });
+
+  it('publishes a durable tool receipt before retiring the successful caller', async () => {
     const mutatePiManagedPackage = vi.fn(async () => ({
       changed: true,
-      affectedPackage: { source: 'npm:context-mode', enabled: false },
+      affectedPackage: { source: 'npm:context-mode', enabled: true },
     }));
     const deps = buildDeps();
+    let handle!: Awaited<ReturnType<PiAgent['startSession']>>;
+    const onPiManagedPackageMutationSettled = vi.fn(async (_callerSessionId, publishOutcome) => {
+      publishOutcome({ runtimeConvergence: 'complete' });
+      await handle.close();
+    });
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
-    const handle = await new PiAgent(deps).startSession({
+    deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: 'Confirm',
+      cancel: 'Cancel',
+      mutationFailed: 'Pi extension operation failed.',
+      mutationSuccess: {
+        install: 'Pi extension installed and enabled. Start a new Pi task to use it.',
+        update: 'Pi extension updated. Start a new Pi task to use it.',
+        remove: 'Pi extension removed.',
+      },
+    });
+    handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-session',
       workingDir: cwd,
       model: 'm',
     });
+    const events = handle.events()[Symbol.asyncIterator]();
     try {
       handle.setInteractionResolver?.(
         vi.fn(async () => ({
@@ -453,9 +690,168 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         ok: true,
         result: {
           changed: true,
-          affectedPackage: { source: 'npm:context-mode', enabled: false },
+          affectedPackage: { source: 'npm:context-mode', enabled: true },
         },
       });
+      await vi.waitFor(() => expect(onPiManagedPackageMutationSettled).toHaveBeenCalledOnce());
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('Pi extension installed')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      expect(visibleReceipt).toContain('Start a new Pi task to use it.');
+      expect(visibleReceipt).toContain('"ok":true');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('publishes sibling partial recovery before retiring the approved-tool caller', async () => {
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: { source: 'npm:context-mode', enabled: true },
+    }));
+    let handle!: Awaited<ReturnType<PiAgent['startSession']>>;
+    deps.onPiManagedPackageMutationSettled = vi.fn(async (callerSessionId, publishOutcome) => {
+      expect(callerSessionId).toBe('managed-package-tool-partial-session');
+      publishOutcome({
+        runtimeConvergence: 'partial',
+        recoveryAction: 'restart-cindy-to-refresh-packages',
+      });
+      await handle.close();
+    });
+    handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-tool-partial-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    try {
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({ kind: 'permission', behavior: 'allow' })) as never,
+      );
+      fireManagedPackageRequest('pkg-partial', 'install', 'npm:context-mode');
+      const response = await waitForResponse('pkg-partial');
+      expect(JSON.parse(String(response.value))).toMatchObject({
+        ok: true,
+        result: { changed: true, affectedPackage: { enabled: true } },
+      });
+      await vi.waitFor(() => expect(events.some((event) => (
+        event.type === 'text'
+        && String((event.data as { text?: string }).text).includes('"runtimeConvergence":"partial"')
+      ))).toBe(true));
+      const published = JSON.stringify({ response, events });
+      expect(published).toContain('restart-cindy-to-refresh-packages');
+      expect(captured.closed).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    [
+      'credentials',
+      'https://user:credential-secret@example.com/pkg.git',
+      'https://example.com/pkg.git',
+      'credential-secret',
+    ],
+    [
+      'apostrophe credentials',
+      "https://us'er:sec'ret@example.com/pkg.git",
+      'https://example.com/pkg.git',
+      "'er:sec'ret@example.com/pkg.git",
+    ],
+    [
+      'embedded credentials',
+      'https://u1:embedded-secret@one.example/a","https://u2:embedded-secret@two.example/b',
+      'https://one.example/a%22,%22https://two.example/b',
+      'embedded-secret',
+    ],
+    [
+      'query',
+      'https://example.com/pkg.git?token=query-secret',
+      'https://example.com/pkg.git',
+      'query-secret',
+    ],
+    [
+      'fragment',
+      'https://example.com/pkg.git#fragment-secret',
+      'https://example.com/pkg.git',
+      'fragment-secret',
+    ],
+    ['normal', 'npm:context-mode', 'npm:context-mode', 'never-present-secret'],
+  ])('redacts %s from tool responses and durable host receipts', async (
+    kind,
+    source,
+    publicSource,
+    secret,
+  ) => {
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: '/Users/example/private/package-root',
+        name: '/Users/example/private/package-name',
+        enabled: true,
+        resources: [{
+          kind: 'extension',
+          name: '/Users/example/private/extension.ts',
+          compatibility: 'supported',
+        }],
+        runtimeRequirements: [{
+          packageName: 'https://user:runtime-secret@example.com/runtime',
+          range: source,
+          currentVersion: '/Users/example/private/version',
+          compatible: true,
+        }],
+      },
+    }));
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: 'Confirm',
+      cancel: 'Cancel',
+      mutationFailed: 'Failed',
+      mutationSuccess: { install: 'Installed', update: 'Updated', remove: 'Removed' },
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: `managed-package-redacted-${kind}`,
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+    try {
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({ kind: 'permission', behavior: 'allow' })) as never,
+      );
+      fireManagedPackageRequest(`pkg-redacted-${kind}`, 'install', source);
+      const response = await waitForResponse(`pkg-redacted-${kind}`);
+      const responseValue = String(response.value);
+      expect(JSON.parse(responseValue)).toMatchObject({
+        ok: true,
+        result: { affectedPackage: { source: publicSource, enabled: true } },
+      });
+
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('Installed')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      const published = `${responseValue}\n${visibleReceipt}`;
+      expect(published).not.toContain(secret);
+      expect(published).not.toContain('runtime-secret');
+      expect(published).not.toContain('/Users/example/private');
+      expect(published).toContain(publicSource);
     } finally {
       await handle.close();
     }
@@ -1075,8 +1471,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         source: 'npm:context-mode',
         name: 'context-mode',
         version: '1.0.169',
-        enabled: false,
-        requiresExtensionApproval: true,
+        enabled: true,
         resources: [
           {
             kind: 'extension',
@@ -1088,7 +1483,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
     }));
     const deps = buildDeps();
+    const onPiManagedPackageMutationSettled = vi.fn(async (_callerSessionId, publishOutcome) => {
+      publishOutcome({ runtimeConvergence: 'complete' });
+    });
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-command-session',
       workingDir: cwd,
@@ -1096,10 +1495,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: 'npm:context-mode',
@@ -1109,7 +1508,174 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt?.message).toContain('[Cindy internal Pi extension operation receipt]');
       expect(prompt?.message).toContain('"compatibility":"partial"');
       expect(prompt?.message).toContain('"status-display"');
+      expect(prompt?.message).toContain('installed and enabled');
+      expect(prompt?.message).toContain('requested active local Pi tasks including this task to stop');
+      expect(prompt?.message).toContain('do not claim every task has already stopped');
+      expect(prompt?.message).toContain('available after starting a new Pi task');
+      expect(prompt?.message).not.toContain('keeps its startup snapshot');
+      expect(prompt?.message).toContain('Do not enumerate non-blocking compatibility notices');
+      expect(prompt?.message).not.toContain('Settings > General');
       expect(prompt?.message).toContain('Do not run bash');
+      await vi.waitFor(() => expect(onPiManagedPackageMutationSettled).toHaveBeenCalledOnce());
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('keeps direct native success while publishing bounded recovery on host failure', async () => {
+    const deps = buildDeps();
+    const warn = vi.fn();
+    deps.logger = { ...noopLogger, warn };
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: { source: 'npm:context-mode', enabled: true },
+    }));
+    deps.onPiManagedPackageMutationSettled = vi.fn(async () => {
+      throw new Error('/Users/private/session close failed with secret');
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-command-partial-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    try {
+      captured.requests = [];
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
+      const prompt = captured.requests.find((request) => request.type === 'prompt')?.message ?? '';
+      expect(prompt).toContain('"ok":true');
+      expect(prompt).toContain('do not claim every task has already stopped');
+      expect(prompt).toContain('this task remains active');
+      expect(prompt).toContain('restart Cindy to finish refreshing Pi packages');
+      await vi.waitFor(() => expect(events.some((event) => (
+        event.type === 'text'
+        && String((event.data as { text?: string }).text).includes('"runtimeConvergence":"partial"')
+      ))).toBe(true));
+      const published = JSON.stringify({ events, warnings: warn.mock.calls });
+      expect(published).toContain('restart-cindy-to-refresh-packages');
+      expect(published).not.toContain('/Users/private');
+      expect(published).not.toContain('secret');
+      expect(warn).toHaveBeenCalledWith(
+        'Pi package runtime invalidation incomplete after receipt',
+        {
+          failureCategory: 'runtime-convergence-partial',
+          recoveryAction: 'restart-cindy-to-refresh-packages',
+        },
+      );
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each(['install', 'update', 'remove'] as const)(
+    'keeps hook-origin pi %s on the tool-confirmation path',
+    async (action) => {
+      const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+      const deps = buildDeps();
+      deps.mutatePiManagedPackage = mutatePiManagedPackage;
+      const handle = await new PiAgent(deps).startSession({
+        sessionId: `managed-package-hook-${action}-session`,
+        workingDir: cwd,
+        model: 'm',
+      });
+      const command = `pi ${action} npm:context-mode`;
+      try {
+        captured.requests = [];
+        await handle.send({ type: 'user', content: command }, {
+          [MAIN_OWNED_SEND_CONTEXT]: {
+            origin: { kind: 'hook', source: 'telegram' },
+            rawChannelText: command,
+          },
+        });
+
+        expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+        expect(captured.requests.find((request) => request.type === 'prompt')?.message)
+          .toContain(command);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it.each([
+    ['scheduler', { origin: { kind: 'scheduler' } }],
+    ['goal', { origin: { kind: 'goal' } }],
+    ['session-to-session', { origin: { kind: 'session' } }],
+  ])('keeps %s package commands on the tool-confirmation path', async (_source, sendOptions) => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: `managed-package-${_source}-session`,
+      workingDir: cwd,
+      model: 'm',
+    });
+    const command = 'pi install npm:context-mode';
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: command }, sendOptions as never);
+
+      expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+      expect(captured.requests.find((request) => request.type === 'prompt')?.message)
+        .toContain(command);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('redacts private URL fields from deterministic command receipts', async () => {
+    const privateSource = 'https://alice:s3cr3t@packages.example/context-mode.git?token=query-secret#fragment-secret';
+    const publicSource = 'https://packages.example/context-mode.git';
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: privateSource,
+        name: 'context-mode',
+        version: '1.0.169',
+        enabled: true,
+      },
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-private-source-receipt-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send(
+        { type: 'user', content: `pi install ${privateSource}` },
+        desktopCommandOptions(`pi install ${privateSource}`),
+      );
+
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      const events = handle.events()[Symbol.asyncIterator]();
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('context-mode')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      const publications = `${prompt}\n${visibleReceipt}`;
+      expect(prompt).toContain(`Original user command: "pi install ${publicSource}"`);
+      expect(prompt).toContain(`Requested source: "${publicSource}"`);
+      expect(publications).toContain('"name":"context-mode"');
+      expect(publications).toContain('"version":"1.0.169"');
+      expect(publications).not.toContain('alice');
+      expect(publications).not.toContain('s3cr3t');
+      expect(publications).not.toContain('query-secret');
+      expect(publications).not.toContain('fragment-secret');
     } finally {
       await handle.close();
     }
@@ -1313,6 +1879,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(captured.requests.find((request) => request.type === 'steer')?.message)
         .toContain('`/tmp/pi-extension-notes`');
 
+      const callsBeforeUntrustedContext = mutatePiManagedPackage.mock.calls.length;
       await handle.send({
         type: 'user',
         content: 'pi install npm:forged-policy',
@@ -1322,26 +1889,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           confirmationSurface: 'channel',
         } as never,
       });
-      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
-        action: 'install',
-        source: 'npm:forged-policy',
-        authorization: 'local-desktop-command',
-      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeUntrustedContext);
 
       await handle.send({
         type: 'user',
         content: 'pi remove npm:context-mode',
       }, { origin: { kind: 'im' } as never });
-      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
-        action: 'remove',
-        source: 'npm:context-mode',
-        authorization: 'local-desktop-command',
-      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeUntrustedContext);
 
-      await handle.steer({
-        type: 'user',
-        content: 'pi update npm:context-mode',
-      });
+      await handle.steer(
+        { type: 'user', content: 'pi update npm:context-mode' },
+        desktopCommandOptions('pi update npm:context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'update',
         source: 'npm:context-mode',
@@ -1383,11 +1942,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       }, {
         [MAIN_OWNED_SEND_CONTEXT]: {
           origin: { kind: 'desktop' },
-          rawChannelText: 'pi remove npm:context-mode',
+          rawChannelText: 'ordinary decorated text',
         },
       });
       expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeNonExactRawText);
 
+      const callsBeforeHookCommand = mutatePiManagedPackage.mock.calls.length;
       await handle.send({
         type: 'user',
         content: 'official hook note\n\npi remove npm:context-mode',
@@ -1397,11 +1957,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           rawChannelText: 'pi remove npm:context-mode',
         },
       });
-      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
-        action: 'remove',
-        source: 'npm:context-mode',
-        authorization: 'local-desktop-command',
-      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeHookCommand);
     } finally {
       await handle.close();
     }
@@ -1431,7 +1987,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({ type: 'user', content: 'pi install npm:context-mode' });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
       const prompt = String(
         captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
       );
@@ -1472,10 +2031,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
 
       const prompt = String(
         captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
@@ -1499,6 +2058,41 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         action: 'install',
         message: rawError,
       });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('returns a stable actionable native failure category to the user and Agent', async () => {
+    const deps = buildDeps();
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '确认',
+      cancel: '取消',
+      mutationFailed: 'Pi 扩展操作失败。',
+      mutationFailure: {
+        'version-not-found': '没有找到这个版本。请选择可用版本后重试。',
+      },
+      mutationSuccess: { install: '已安装', update: '已更新', remove: '已移除' },
+    });
+    deps.mutatePiManagedPackage = vi.fn(async () => {
+      throw new PiManagedPackageMutationFailedError(false, 'version-not-found');
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-actionable-failure-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode@missing' },
+        desktopCommandOptions('pi install npm:context-mode@missing'),
+      );
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      expect(prompt).toContain('没有找到这个版本。请选择可用版本后重试。');
+      expect(prompt).not.toContain('ETARGET');
     } finally {
       await handle.close();
     }
@@ -1552,10 +2146,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.failPrompt = true;
-      await expect(session.send({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      })).resolves.toEqual({ accepted: true });
+      await expect(session.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      )).resolves.toEqual({ accepted: true });
       await terminal;
 
       expect(sessionEvents).toContainEqual(expect.objectContaining({
@@ -1622,10 +2216,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const events = handle.events()[Symbol.asyncIterator]();
     try {
       captured.failSteer = true;
-      await expect(handle.steer({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      })).resolves.toBeUndefined();
+      await expect(handle.steer(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      )).resolves.toBeUndefined();
 
       let visibleReceipt = '';
       for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -1662,20 +2256,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       model: 'm',
     });
     try {
-      await handle.send({
-        type: 'user',
-        content: "pi install './extensions/context-mode'",
-      });
+      await handle.send(
+        { type: 'user', content: "pi install './extensions/context-mode'" },
+        desktopCommandOptions("pi install './extensions/context-mode'"),
+      );
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/context-mode'),
         authorization: 'local-desktop-command',
       });
 
-      await handle.send({
-        type: 'user',
-        content: 'pi install file:./extensions/file-context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install file:./extensions/file-context-mode' },
+        desktopCommandOptions('pi install file:./extensions/file-context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/file-context-mode'),
@@ -1715,10 +2309,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       model: 'm',
     });
     try {
-      await handle.send({
-        type: 'user',
-        content: 'pi install C:extensions\\context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install C:extensions\\context-mode' },
+        desktopCommandOptions('pi install C:extensions\\context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.win32.resolve(workingDir, 'C:extensions\\context-mode'),
@@ -1753,7 +2347,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     try {
       captured.requests = [];
       const controller = new AbortController();
-      const sending = handle.send({ type: 'user', content: 'pi install npm:context-mode' }, { signal: controller.signal });
+      const sending = handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        { ...desktopCommandOptions('pi install npm:context-mode'), signal: controller.signal },
+      );
       await mutationStarted;
       controller.abort();
       finishMutation?.();
@@ -1794,10 +2391,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: 'pi install npm:oversized-extension',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:oversized-extension' },
+        desktopCommandOptions('pi install npm:oversized-extension'),
+      );
       const prompt = captured.requests.find((request) => request.type === 'prompt')?.message ?? '';
       expect(prompt.length).toBeLessThanOrEqual(16_384);
       expect(prompt).toContain('"name":"oversized-extension"');
@@ -1898,9 +2495,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
       const configHome = captured.env.PI_CODING_AGENT_DIR;
       expect(configHome).toBeTruthy();
-      expect(readdirSync(path.join(configHome!, 'extensions')).sort()).toEqual(['cindy-bridge.ts']);
+      expect(readdirSync(path.join(configHome!, 'internal-extensions')).sort()).toEqual(['cindy-bridge.ts']);
       const extensionPaths = captured.args.flatMap((arg, index) => (arg === '--extension' ? [captured.args[index + 1]] : []));
-      expect(extensionPaths).toEqual([path.posix.join(configHome!, 'extensions', 'cindy-bridge.ts')]);
+      expect(extensionPaths).toEqual([path.posix.join(configHome!, 'internal-extensions', 'cindy-bridge.ts')]);
 
       const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
       expect(permissionFile).toBeTruthy();
@@ -2219,7 +2816,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await start();
     const { readFileSync } = await import('node:fs');
     const configHome = captured.env.PI_CODING_AGENT_DIR as string;
-    const bridge = readFileSync(path.join(configHome, 'extensions', 'cindy-bridge.ts'), 'utf8');
+    const bridge = readFileSync(path.join(configHome, 'internal-extensions', 'cindy-bridge.ts'), 'utf8');
     expect(bridge).toContain('createBashTool,');
     expect(bridge).toContain('createFindTool,');
     expect(bridge).toContain('createGrepTool,');
@@ -2365,6 +2962,289 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       confirmed: true,
     });
     expect(resolverCalls).toBe(0);
+  });
+
+  it('separates external writable roots from read-only references in real approval dispatch', async () => {
+    const referenceDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-reference-'));
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const replacementWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const review = vi.fn(async () => ({ verdict: 'block' as const, reason: 'read-only reference' }));
+    const handle = await start('auto', review, false, undefined, {
+      extraDirs: [referenceDir],
+      writableDirs: [writableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'external-writable',
+      'edit',
+      { path: path.join(writableDir, 'result.txt') },
+      { resolvedWritableRoots: [cwd, writableDir] },
+    );
+    expect(await waitForResponse('external-writable')).toEqual({
+      type: 'extension_ui_response',
+      id: 'external-writable',
+      confirmed: true,
+    });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+
+    firePermissionRequest('readonly-reference', 'edit', { path: path.join(referenceDir, 'spec.md') });
+    expect(await waitForResponse('readonly-reference')).toEqual({
+      type: 'extension_ui_response',
+      id: 'readonly-reference',
+      confirmed: false,
+    });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoots: [cwd, referenceDir, writableDir],
+      writableRoots: [cwd, writableDir],
+    }));
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.setWritableDirs!([replacementWritableDir]);
+    firePermissionRequest(
+      'replacement-writable',
+      'edit',
+      { path: path.join(replacementWritableDir, 'new-result.txt') },
+      { resolvedWritableRoots: [cwd, replacementWritableDir] },
+    );
+    expect(await waitForResponse('replacement-writable')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledTimes(1);
+    firePermissionRequest('revoked-writable', 'edit', {
+      path: path.join(writableDir, 'stale-result.txt'),
+    });
+    expect(await waitForResponse('revoked-writable')).toMatchObject({ confirmed: false });
+    expect(review).toHaveBeenCalledTimes(2);
+
+    await handle.close();
+    rmSync(referenceDir, { recursive: true, force: true });
+    rmSync(writableDir, { recursive: true, force: true });
+    rmSync(replacementWritableDir, { recursive: true, force: true });
+  });
+
+  it('forces confirmation for remote Pi destructive paths instead of using controller realpath', async () => {
+    const localSafeTarget = path.join(cwd, 'controller-safe-target');
+    const remoteLink = path.join(cwd, 'remote-link');
+    mkdirSync(localSafeTarget);
+    symlinkSync(
+      localSafeTarget,
+      remoteLink,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const review = vi.fn(async () => ({
+      verdict: 'allow' as const,
+      reason: 'model allow',
+    }));
+    const handle = await start('auto', review, false, undefined, {
+      remoteHostId: 'remote-host',
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'remote-destructive-link',
+      'bash',
+      { command: `rm -rf ${path.join(remoteLink, 'subdir')}` },
+      { resolvedCredentialPaths: [] },
+    );
+
+    expect(await waitForResponse('remote-destructive-link')).toMatchObject({ confirmed: false });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it('never silently approves a writable-root path whose real target escapes through a link', async () => {
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-outside-'));
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const handle = await start('auto', review, false, undefined, { writableDirs: [writableDir] });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    const linkedPath = path.join(writableDir, 'link', 'result.txt');
+    const cases = [
+      ['ordinary-escape', path.join(outsideDir, 'result.txt')],
+      ['system-escape', '/etc/hosts'],
+      ['credential-escape', path.join(outsideDir, '.ssh', 'id_rsa')],
+      ['unresolved-escape', null],
+    ] as const;
+    for (const [id, resolvedWritePath] of cases) {
+      firePermissionRequest(id, 'write', { path: linkedPath }, { resolvedWritePath });
+      expect(await waitForResponse(id)).toMatchObject({ confirmed: false });
+    }
+    firePermissionRequest('malformed-root-evidence', 'write', { path: linkedPath }, {
+      resolvedWritePath: path.join(writableDir, 'real', 'result.txt'),
+      resolvedWritableRoots: [''],
+    });
+    expect(await waitForResponse('malformed-root-evidence')).toMatchObject({ confirmed: false });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledTimes(cases.length + 1);
+
+    firePermissionRequest('authorized-real-target', 'write', { path: linkedPath }, {
+      resolvedWritePath: path.join(writableDir, 'real', 'result.txt'),
+      resolvedWritableRoots: [cwd, writableDir],
+    });
+    expect(await waitForResponse('authorized-real-target')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledTimes(cases.length + 1);
+
+    await handle.close();
+    rmSync(writableDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('auto-approves a canonical target when the writable root itself is a link', async () => {
+    const realWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-real-writable-'));
+    const linkParent = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-linked-writable-'));
+    const linkedWritableDir = path.join(linkParent, 'output');
+    symlinkSync(
+      realWritableDir,
+      linkedWritableDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const handle = await start('auto', undefined, false, undefined, {
+      writableDirs: [linkedWritableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'linked-writable-root',
+      'write',
+      { path: path.join(linkedWritableDir, 'result.txt') },
+      {
+        resolvedWritePath: path.join(realpathSync(realWritableDir), 'result.txt'),
+        resolvedWritableRoots: [realpathSync(cwd), realpathSync(realWritableDir)],
+      },
+    );
+    expect(await waitForResponse('linked-writable-root')).toMatchObject({ confirmed: true });
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.close();
+    rmSync(linkParent, { recursive: true, force: true });
+    rmSync(realWritableDir, { recursive: true, force: true });
+  });
+
+  it('discards an in-flight allow when external directory permissions change', async () => {
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    let resolveReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const review = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+      resolveReview = resolve;
+    }));
+    const handle = await start('auto', review, false, undefined, {
+      writableDirs: [writableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'late-directory-revoke',
+      'bash',
+      { command: 'npm install left-pad', cwd: writableDir },
+      { resolvedCredentialPaths: [] },
+    );
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+    await handle.setWritableDirs!([]);
+    resolveReview!({ verdict: 'allow', reason: 'reviewed before revoke' });
+
+    expect(await waitForResponse('late-directory-revoke')).toEqual({
+      type: 'extension_ui_response',
+      id: 'late-directory-revoke',
+      confirmed: true,
+    });
+    expect(resolver).toHaveBeenCalledOnce();
+    await handle.close();
+    rmSync(writableDir, { recursive: true, force: true });
+  });
+
+  it('asks instead of auto-reviewing while writable directories are still being persisted', async () => {
+    const fsp = await import('node:fs');
+    const currentWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const nextWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const handle = await start('auto', review, false, undefined, {
+      writableDirs: [currentWritableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve; });
+    let releaseWrite!: () => void;
+    const blockedWrite = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const writeSpy = vi.spyOn(fsp.promises, 'writeFile').mockImplementationOnce(async () => {
+      markWriteStarted();
+      await blockedWrite;
+    });
+
+    const update = handle.setWritableDirs!([nextWritableDir]);
+    await writeStarted;
+    firePermissionRequest(
+      'pending-writable-persist',
+      'edit',
+      { path: path.join(nextWritableDir, 'pending.txt') },
+      {
+        resolvedWritePath: path.join(realpathSync(nextWritableDir), 'pending.txt'),
+        resolvedWritableRoots: [realpathSync(cwd), realpathSync(nextWritableDir)],
+      },
+    );
+    expect(await waitForResponse('pending-writable-persist')).toMatchObject({ confirmed: false });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+
+    releaseWrite();
+    await update;
+    writeSpy.mockRestore();
+    firePermissionRequest(
+      'persisted-writable',
+      'edit',
+      { path: path.join(nextWritableDir, 'persisted.txt') },
+      {
+        resolvedWritePath: path.join(realpathSync(nextWritableDir), 'persisted.txt'),
+        resolvedWritableRoots: [realpathSync(cwd), realpathSync(nextWritableDir)],
+      },
+    );
+    expect(await waitForResponse('persisted-writable')).toMatchObject({ confirmed: true });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+
+    await handle.close();
+    rmSync(currentWritableDir, { recursive: true, force: true });
+    rmSync(nextWritableDir, { recursive: true, force: true });
+  });
+
+  it('restores auto-review to the persisted writable roots after a directory write fails', async () => {
+    const fsp = await import('node:fs');
+    const persistedWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const failedWritableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'model allow' }));
+    const handle = await start('auto', review, false, undefined, {
+      writableDirs: [persistedWritableDir],
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    const writeSpy = vi.spyOn(fsp.promises, 'writeFile').mockRejectedValueOnce(new Error('transient EIO'));
+    await expect(handle.setWritableDirs!([failedWritableDir])).rejects.toThrow('transient EIO');
+    writeSpy.mockRestore();
+
+    firePermissionRequest(
+      'review-after-writable-rollback',
+      'bash',
+      { command: 'npm install left-pad', cwd: persistedWritableDir },
+      { resolvedCredentialPaths: [] },
+    );
+    expect(await waitForResponse('review-after-writable-rollback')).toMatchObject({ confirmed: true });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceRoots: [cwd, persistedWritableDir],
+      writableRoots: [cwd, persistedWritableDir],
+    }));
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.close();
+    rmSync(persistedWritableDir, { recursive: true, force: true });
+    rmSync(failedWritableDir, { recursive: true, force: true });
   });
 
   it('auto mode silently approves first-party Subagent spawn through the source-aware envelope', async () => {
@@ -2520,7 +3400,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         agentKind: 'pi',
         model: 'm',
         userIntent: 'Update the shared scratch file for this test.',
-        action: { kind: 'file-write', path: '/tmp/outside.txt' },
+        action: {
+          kind: 'file-write',
+          path: '/tmp/outside.txt',
+          resolvedPath: '/tmp/outside.txt',
+          resolvedWritableRoots: [cwd],
+        },
       }),
     );
     expect(resolverCalls).toBe(0);

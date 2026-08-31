@@ -111,6 +111,7 @@ beforeEach(() => {
         getHealth: api.getBackendHealth,
         setKind: api.setBackendKind,
         recover: api.recoverBackend,
+        setUseRealProfile: vi.fn(async (enabled: boolean) => ({ ok: true, enabled })),
       },
     },
   });

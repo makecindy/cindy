@@ -1,4 +1,4 @@
-import { execFile, spawn, spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   createReadStream,
@@ -37,6 +37,8 @@ const KILL_CONFIRM_INTERVAL_MS = 200;
 const RENAME_RETRY_ATTEMPTS = 10;
 const RENAME_RETRY_STEP_MS = 25;
 const RENAME_RETRY_MAX_MS = 100;
+/** Stable wall-clock second for this process incarnation. */
+const OWN_PROCESS_START_TIME_SEC = Math.round(Date.now() / 1000 - process.uptime());
 let controlWriteSequence = 0;
 
 function containedParentSessionId(sessionId: string): string {
@@ -750,7 +752,34 @@ export function isPiSubagentTerminal(state: PiSubagentRunState): boolean {
  * Bounded and best-effort: an unreadable command line is indistinguishable from
  * a hostile one for our purposes, and both must stop the kill.
  */
-function readProcessCommandLine(pid: number): string | null {
+function posixPsArgs(pid: number): string[] {
+  return ['-ww', '-p', String(pid), '-o', 'args='];
+}
+
+type CommandLineProbe =
+  | { status: 'unreadable' }
+  | { status: 'text'; text: string };
+
+function commandLineFromStdout(stdout: unknown): CommandLineProbe {
+  const text = typeof stdout === 'string' ? stdout.trim() : '';
+  return text.length > 0 ? { status: 'text', text } : { status: 'unreadable' };
+}
+
+function readLinuxCmdline(pid: number): CommandLineProbe | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/cmdline`);
+    const text = raw.toString('utf8').replace(/\0/g, ' ').trim();
+    return text.length > 0 ? { status: 'text', text } : { status: 'unreadable' };
+  } catch {
+    return null;
+  }
+}
+
+function readProcessCommandLine(pid: number): CommandLineProbe {
+  if (process.platform === 'linux') {
+    const fromProc = readLinuxCmdline(pid);
+    if (fromProc) return fromProc;
+  }
   try {
     const probe = process.platform === 'win32'
       ? spawnSync(
@@ -761,15 +790,14 @@ function readProcessCommandLine(pid: number): string | null {
           ],
           { encoding: 'utf8', timeout: 5_000, windowsHide: true },
         )
-      : spawnSync('ps', ['-p', String(pid), '-o', 'args='], {
+      : spawnSync('ps', posixPsArgs(pid), {
           encoding: 'utf8',
           timeout: 5_000,
         });
-    if (probe.error || probe.status !== 0) return null;
-    const text = typeof probe.stdout === 'string' ? probe.stdout.trim() : '';
-    return text.length > 0 ? text : null;
+    if (probe.error || probe.status !== 0) return { status: 'unreadable' };
+    return commandLineFromStdout(probe.stdout);
   } catch {
-    return null;
+    return { status: 'unreadable' };
   }
 }
 
@@ -789,7 +817,11 @@ const execFileAsync = promisify(execFile);
  */
 const KILL_PROBE_TIMEOUT_MS = 1_000;
 
-async function readProcessCommandLineAsync(pid: number): Promise<string | null> {
+async function readProcessCommandLineAsync(pid: number): Promise<CommandLineProbe> {
+  if (process.platform === 'linux') {
+    const fromProc = readLinuxCmdline(pid);
+    if (fromProc) return fromProc;
+  }
   try {
     const { stdout } = process.platform === 'win32'
       ? await execFileAsync(
@@ -800,32 +832,14 @@ async function readProcessCommandLineAsync(pid: number): Promise<string | null> 
           ],
           { encoding: 'utf8', timeout: KILL_PROBE_TIMEOUT_MS, windowsHide: true },
         )
-      : await execFileAsync('ps', ['-p', String(pid), '-o', 'args='], {
+      : await execFileAsync('ps', posixPsArgs(pid), {
           encoding: 'utf8',
           timeout: KILL_PROBE_TIMEOUT_MS,
         });
-    const text = typeof stdout === 'string' ? stdout.trim() : '';
-    return text.length > 0 ? text : null;
+    return commandLineFromStdout(stdout);
   } catch {
-    return null;
+    return { status: 'unreadable' };
   }
-}
-
-/**
- * Is the process at `status.runnerPid` really this run's runner?
- *
- * The proof is the generated runner script path, which contains the run's UUID
- * directory — a recycled pid running something else cannot match it. Anything
- * we cannot establish (no recorded path, no readable command line, no match)
- * answers false, because the caller's next step is SIGKILL.
- */
-export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boolean {
-  const pid = status.runnerPid;
-  if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0) return false;
-  const script = status.runnerScript;
-  if (typeof script !== 'string' || script.length === 0) return false;
-  const commandLine = readProcessCommandLine(pid!);
-  return commandLine !== null && commandLine.includes(script);
 }
 
 /**
@@ -837,14 +851,56 @@ export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boo
  *   runner script, whose path contains the run's UUID directory.
  * - `unverifiable` — the pid is live but the command line could not be read (or
  *   the record predates `runnerScript`). Nothing may be concluded from it.
- *
- * Liveness is checked before the command line so a dead pid never costs a spawn
- * and never depends on a probe that a dead process cannot answer.
  */
 type PiSubagentRunnerPresence = 'gone' | 'running' | 'unverifiable';
 
 /**
+ * Is the process at `status.runnerPid` really this run's runner?
+ *
+ * The proof is the generated runner script path, which contains the run's UUID
+ * directory — a recycled pid running something else cannot match it. Anything
+ * we cannot establish (no recorded path, no readable command line, no match)
+ * answers false, because the caller's next step is SIGKILL.
+ */
+function classifyRunnerCommandLine(
+  commandLine: string,
+  script: string,
+): PiSubagentRunnerPresence {
+  // A readable listing is complete enough to decide. The proof is this run's
+  // generated script path (UUID directory). Another Subagent utility process
+  // at a recycled pid also contains `piSubagentRunnerProcess`, but not *this*
+  // script — that is gone, not unverifiable. Unreadable probes stay unknown.
+  return commandLine.includes(script) ? 'running' : 'gone';
+}
+
+function classifyCommandLineProbe(
+  probe: CommandLineProbe,
+  script: string,
+): PiSubagentRunnerPresence {
+  if (probe.status === 'unreadable') return 'unverifiable';
+  return classifyRunnerCommandLine(probe.text, script);
+}
+
+function resolveUnreadablePresence(pid: number): PiSubagentRunnerPresence {
+  // ps/CIM/empty output is also what a pid looks like after it exits between
+  // the liveness check and the listing. Recheck before treating that as a live
+  // process we cannot identify.
+  return isProcessAlive(pid) === false ? 'gone' : 'unverifiable';
+}
+
+export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boolean {
+  const pid = status.runnerPid;
+  if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0) return false;
+  const script = status.runnerScript;
+  if (typeof script !== 'string' || script.length === 0) return false;
+  return classifyCommandLineProbe(readProcessCommandLine(pid!), script) === 'running';
+}
+
+/**
  * Synchronous mirror of `classifyRunnerPresence`.
+ *
+ * Liveness is checked before the command line so a dead pid never costs a spawn
+ * and never depends on a probe that a dead process cannot answer.
  *
  * Same three answers from the same evidence, in the same order — the only
  * difference is the blocking probe, which the callers on the synchronous
@@ -857,9 +913,8 @@ function classifyRunnerPresenceSync(status: PiSubagentRunStatus): PiSubagentRunn
   if (isProcessAlive(pid!) === false) return 'gone';
   const script = status.runnerScript;
   if (typeof script !== 'string' || script.length === 0) return 'unverifiable';
-  const commandLine = readProcessCommandLine(pid!);
-  if (commandLine === null) return 'unverifiable';
-  return commandLine.includes(script) ? 'running' : 'gone';
+  const classified = classifyCommandLineProbe(readProcessCommandLine(pid!), script);
+  return classified === 'unverifiable' ? resolveUnreadablePresence(pid!) : classified;
 }
 
 async function classifyRunnerPresence(status: PiSubagentRunStatus): Promise<PiSubagentRunnerPresence> {
@@ -869,9 +924,8 @@ async function classifyRunnerPresence(status: PiSubagentRunStatus): Promise<PiSu
   if (isProcessAlive(pid!) === false) return 'gone';
   const script = status.runnerScript;
   if (typeof script !== 'string' || script.length === 0) return 'unverifiable';
-  const commandLine = await readProcessCommandLineAsync(pid!);
-  if (commandLine === null) return 'unverifiable';
-  return commandLine.includes(script) ? 'running' : 'gone';
+  const classified = classifyCommandLineProbe(await readProcessCommandLineAsync(pid!), script);
+  return classified === 'unverifiable' ? resolveUnreadablePresence(pid!) : classified;
 }
 
 /**
@@ -883,8 +937,10 @@ async function classifyRunnerPresence(status: PiSubagentRunStatus): Promise<PiSu
  * BYOM credentials that, unlike the proxy token, cannot be revoked — so leaving
  * it running past a logout keeps the outgoing account's credentials in use.
  *
- * The runner is spawned detached, so it leads its own process group; killing
- * the group reaps the Pi children it owns too.
+ * The live runner must receive SIGTERM first so it can reap the Pi children it
+ * spawned. Utility-process runners are not process-group leaders; signalling
+ * `-pid` would miss those children and, on a shared group, could hit Cindy.
+ * Windows `taskkill /T` already walks the process tree.
  *
  * Success is *exit confirmation*, never "the signal was sent": `taskkill` fails
  * by exit status rather than by throwing, and a caller that reports reclaimed
@@ -903,26 +959,17 @@ export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus):
   // ours, and we may not claim it was reclaimed either.
   if (presence === 'unverifiable') return false;
   const pid = status.runnerPid!;
-  let signalled = false;
-  try {
-    if (process.platform === 'win32') {
-      const killed = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
-        windowsHide: true,
-        stdio: 'ignore',
-        timeout: 5_000,
-      });
-      signalled = !killed.error && killed.status === 0;
-    } else {
-      process.kill(-pid, 'SIGKILL');
-      signalled = true;
-    }
-  } catch { /* fall through to the single-process attempt */ }
-  if (!signalled) {
-    // The tree kill can fail on a permission or timing race while the runner
-    // itself is still reachable — and it also "fails" when the process is
-    // already gone. Neither is a verdict, so try the narrower signal and let
-    // the confirmation loop decide.
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore',
+      timeout: 5_000,
+    });
+    // taskkill reports failure through its exit status. A follow-up SIGKILL
+    // is what lets the confirmation loop observe a pid that actually died.
     try { process.kill(pid, 'SIGKILL'); } catch { /* already gone, or unreachable */ }
+  } else {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone, or unreachable */ }
   }
   // Confirm by re-verifying identity rather than `kill(pid, 0)`: a zombie still
   // "exists" for `kill(pid, 0)` and would be reported as unreclaimed forever,
@@ -930,14 +977,21 @@ export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus):
   // predicate also covers a recycled pid and, on Windows, a dead pid (the CIM
   // query returns nothing) — one cross-platform judgement for "that runner is
   // no longer running". Each attempt costs a `ps`/CIM spawn, so keep it short.
-  for (let attempt = 0; ; attempt += 1) {
-    // Same predicate as the entry check, and it must be a *positive* `gone`:
-    // after the signal, a probe that simply stopped answering is not proof the
-    // process died.
+  if (await waitUntilRunnerGone(status)) return true;
+  if (process.platform !== 'win32') {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone, or unreachable */ }
+    return waitUntilRunnerGone(status);
+  }
+  return false;
+}
+
+async function waitUntilRunnerGone(status: PiSubagentRunStatus): Promise<boolean> {
+  for (let attempt = 0; attempt < KILL_CONFIRM_ATTEMPTS; attempt += 1) {
     if (await classifyRunnerPresence(status) === 'gone') return true;
-    if (attempt >= KILL_CONFIRM_ATTEMPTS - 1) return false;
+    if (attempt === KILL_CONFIRM_ATTEMPTS - 1) break;
     await new Promise<void>((resolve) => setTimeout(resolve, KILL_CONFIRM_INTERVAL_MS));
   }
+  return await classifyRunnerPresence(status) === 'gone';
 }
 
 /**
@@ -970,7 +1024,7 @@ export function piSubagentRuntimeOwnerId(hostPid: number, scopeId: string): stri
 
 /** Wall-clock second this process started, in the form the owner id records. */
 function ownProcessStartTimeSec(): number {
-  return Math.round(Date.now() / 1000 - process.uptime());
+  return OWN_PROCESS_START_TIME_SEC;
 }
 
 export interface PiSubagentOwnerIdentity {
@@ -2073,7 +2127,14 @@ interface ResumeRunnerConfig {
 }
 
 interface PiSubagentResumeLaunch {
-  nodeExecutable: string;
+  launchRunner: (request: {
+    runId: string;
+    runDir: string;
+    runnerFile: string;
+    configFile: string;
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<void>;
   env: NodeJS.ProcessEnv;
   runtimeOwnerId: string;
   permissionSnapshot: unknown;
@@ -2270,6 +2331,71 @@ function isResumeConfig(value: unknown, runId: string): value is ResumeRunnerCon
     && Array.isArray(raw.tasks)
     && raw.tasks.length > 0
     && raw.tasks.length <= 8;
+}
+
+/** Launch/stop gave up waiting for exit; disk must stay non-terminal so sweep can still signal. */
+export class PiSubagentRunnerExitUnconfirmedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PiSubagentRunnerExitUnconfirmedError';
+  }
+}
+
+/** Host saw the runner exit even if status.json could not be persisted. */
+export class PiSubagentRunnerHostExitedError extends Error {
+  readonly runnerExited = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'PiSubagentRunnerHostExitedError';
+  }
+}
+
+/** Persist a host-observed runner failure without overwriting a real terminal result. */
+export async function recordPiSubagentRunnerFailure(
+  runDir: string,
+  message: string,
+): Promise<void> {
+  const runId = path.basename(runDir);
+  if (!RUN_DIR_RE.test(runId)) return;
+  const [configValue, statusValue] = await Promise.all([
+    readSmallJson(path.join(runDir, 'config.json')).catch(() => null),
+    readSmallJson(path.join(runDir, 'status.json')).catch(() => null),
+  ]);
+  if (!isResumeConfig(configValue, runId)) return;
+  const current = parseStatus(statusValue, runId);
+  if (current && isPiSubagentTerminal(current.state)) return;
+
+  const now = Date.now();
+  const error = message.slice(0, 4_000);
+  await writeAtomicJson(path.join(runDir, 'status.json'), {
+    version: 1,
+    runId,
+    taskId: configValue.taskId,
+    parentSessionId: configValue.parentSessionId,
+    runtimeOwnerId: configValue.runtimeOwnerId,
+    runnerInstanceId: `launch-error-${runId}`,
+    state: 'failed',
+    title: configValue.title,
+    description: configValue.description,
+    startedAt: current?.startedAt ?? now,
+    updatedAt: now,
+    endedAt: now,
+    tasks: configValue.tasks.map((task) => {
+      const previous = current?.tasks.find((candidate) => candidate.childId === task.childId);
+      const taskAlreadyTerminal = previous
+        && (previous.status === 'completed' || previous.status === 'failed' || previous.status === 'stopped');
+      return {
+        ...(previous ?? {}),
+        childId: task.childId,
+        sessionId: task.sessionId,
+        agent: task.agent,
+        title: task.title,
+        status: taskAlreadyTerminal ? previous.status : 'failed',
+        ...(!taskAlreadyTerminal ? { error } : {}),
+        endedAt: previous?.endedAt ?? now,
+      };
+    }),
+  });
 }
 
 /**
@@ -2542,40 +2668,23 @@ async function resumeClaimedPiSubagentRun(
     await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
-  const child = spawn(launch.nodeExecutable, [runnerFile, path.join(runDir, 'config.json')], {
-    cwd: sourceConfig.cwd,
-    env: { ...launch.env, ELECTRON_RUN_AS_NODE: '1' },
-    detached: true,
-    windowsHide: true,
-    stdio: 'ignore',
-  });
-  child.once('error', (error) => {
-    const now = Date.now();
-    void writeAtomicJson(path.join(runDir, 'status.json'), {
-      version: 1,
+  const configFile = path.join(runDir, 'config.json');
+  try {
+    await launch.launchRunner({
       runId,
-      taskId: sourceConfig.taskId,
-      parentSessionId: sourceConfig.parentSessionId,
-      runtimeOwnerId: launch.runtimeOwnerId,
-      runnerInstanceId: `launch-error-${runId}`,
-      state: 'failed',
-      title: config.title,
-      description: config.description,
-      startedAt: now,
-      updatedAt: now,
-      endedAt: now,
-      tasks: config.tasks.map((task) => ({
-        childId: task.childId,
-        sessionId: task.sessionId,
-        agent: task.agent,
-        title: task.title,
-        status: 'failed',
-        error: `Durable runner failed to resume: ${String(error)}`.slice(0, 4_000),
-        endedAt: now,
-      })),
-    }).catch(() => undefined);
-  });
-  child.unref();
+      runDir,
+      runnerFile,
+      configFile,
+      cwd: sourceConfig.cwd,
+      env: launch.env,
+    });
+  } catch (error) {
+    if (!(error instanceof PiSubagentRunnerExitUnconfirmedError)) {
+      const message = error instanceof Error ? error.message : String(error);
+      await recordPiSubagentRunnerFailure(runDir, message).catch(() => undefined);
+    }
+    throw error;
+  }
   return runId;
 }
 

@@ -3,11 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {
+  DEFAULT_MATERIALIZE_LIMITS,
   addManualEntry,
   deleteTerms,
   dictionaryTermKey,
+  materializeDictionary,
   recordLearningEvent,
   renameTerm,
+  replaceTermAliases,
   termKeyFromMaterializedId,
   type DictationDictionaryLearningAction,
   type MaterializedDictionary,
@@ -167,6 +170,57 @@ export class VoiceInputDataStore {
     return this.applyDictionaryMutation((current, clock) =>
       renameTerm(current, clock, { termKey, nextText, nowMs: Date.now() }),
     );
+  }
+
+  editDictionaryEntry(entryId: string, nextText: string, aliases: string[]): VoiceInputSettings {
+    const state = voiceDictionarySyncStore.getState();
+    const termKey = termKeyFromMaterializedId(state, entryId);
+    if (!termKey) return cloneSettings(this.load().settings);
+    const targetKey = dictionaryTermKey(nextText);
+    const visibleEntry = materializeDictionary(state).entries.find((entry) => entry.id === entryId);
+    const allEntry = materializeDictionary(state, {
+      ...DEFAULT_MATERIALIZE_LIMITS,
+      maxAliases: Number.MAX_SAFE_INTEGER,
+    }).entries.find((entry) => entry.id === entryId);
+    const editableAliasKeys = new Set(
+      visibleEntry?.aliases.map((alias) => dictionaryTermKey(alias.text)) ?? [],
+    );
+    const submittedAliasKeys = new Set(aliases.map((alias) => dictionaryTermKey(alias)));
+    const visibleAliasesUnchanged =
+      submittedAliasKeys.size === editableAliasKeys.size &&
+      [...submittedAliasKeys].every((aliasKey) => editableAliasKeys.has(aliasKey));
+    // UI 按产品上限只展示前 8 个别名。更低权重的别名仍属于同步正本，原样保存时
+    // 不能把用户根本没看见的第 9 个及之后条目当作删除；但用户增删或替换了
+    // 任一可见项时，提交集合就是完整显式意图，否则新别名可能立刻被隐藏高频项挤出。
+    const hiddenAliases = visibleAliasesUnchanged
+      ? allEntry?.aliases
+          .filter((alias) => !editableAliasKeys.has(dictionaryTermKey(alias.text)))
+          .map((alias) => alias.text) ?? []
+      : [];
+    const nextAliases = [...aliases, ...hiddenAliases].filter(
+      (alias) => dictionaryTermKey(alias) !== targetKey,
+    );
+    return this.applyDictionaryMutation((current, clock) => {
+      const nowMs = Date.now();
+      // 先在原词条上替换别名，再搬到新主键。若新主键已存在，它原有的独立证据与别名
+      // 会由 renameTerm 正常合并，不会被这次编辑整份覆盖掉。
+      const aliasesEdited = replaceTermAliases(current, clock, {
+        termKey,
+        primaryText: nextText,
+        aliases: nextAliases,
+        nowMs,
+      });
+      const renamed = renameTerm(aliasesEdited.state, aliasesEdited.clock, {
+        termKey,
+        nextText,
+        nowMs,
+      });
+      return {
+        state: renamed.state,
+        clock: renamed.clock,
+        changed: aliasesEdited.changed || renamed.changed,
+      };
+    });
   }
 
   recordDictionaryLearningActions(actions: DictationDictionaryLearningAction[]): {
@@ -763,6 +817,33 @@ export function registerVoiceInputDataStoreIpc(): void {
         const text = typeof payload?.text === 'string' ? payload.text : '';
         if (!entryId) return voiceInputDataStore.getSettings();
         return voiceInputDataStore.renameDictionaryEntry(entryId, text);
+      } catch (error) {
+        throwVoiceInputDataStoreIpcError(error);
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'voice-input:dictionary:edit-entry',
+    (
+      event,
+      payload: { entryId?: unknown; text?: unknown; aliases?: unknown },
+    ): VoiceInputSettings => {
+      try {
+        assertTrustedAppRendererEvent(event);
+        const entryId = typeof payload?.entryId === 'string' ? payload.entryId : '';
+        const text =
+          typeof payload?.text === 'string'
+            ? payload.text.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS)
+            : '';
+        const aliases = Array.isArray(payload?.aliases)
+          ? payload.aliases
+              .filter((item): item is string => typeof item === 'string')
+              .map((item) => item.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS))
+              .slice(0, MAX_VOICE_INPUT_DICTIONARY_ALIASES)
+          : [];
+        if (!entryId) return voiceInputDataStore.getSettings();
+        return voiceInputDataStore.editDictionaryEntry(entryId, text, aliases);
       } catch (error) {
         throwVoiceInputDataStoreIpcError(error);
       }

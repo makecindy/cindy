@@ -42,8 +42,10 @@ import {
   broadcast,
   deviceLinkApiBase,
   applyControllerDisplayNameListSnapshot,
+  applyControllerPresenceListSnapshot,
   beginControllerDisplayNameDirectoryRefresh,
   captureControllerDisplayNameRequestEpoch,
+  captureControllerPresenceRequestEpoch,
   isLatestControllerDisplayNameDirectoryRefresh,
   readControllerDisplayNameFreshnessSince,
   waitForNewerControllerDisplayNameDirectoryRefresh,
@@ -66,7 +68,9 @@ import {
 } from './settings-store';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import {
+  coerceCachedSession,
   getMirrorCache,
+  MAX_CACHED_TEXT_CHARS,
   MirrorCachePurgeError,
   type CachedDeviceSessions,
   type MirrorCache,
@@ -119,10 +123,15 @@ export interface DeviceLinkIpcDeps {
     devices: readonly DeviceLinkServerDeviceView[],
     requestEpoch: number,
   ): void;
+  applyControllerPresenceListSnapshot(
+    devices: readonly DeviceLinkServerDeviceView[],
+    requestEpoch: number,
+  ): void;
   beginControllerDisplayNameDirectoryRefresh(): number;
   isLatestControllerDisplayNameDirectoryRefresh(sequence: number): boolean;
   waitForNewerControllerDisplayNameDirectoryRefresh(sequence: number): Promise<void>;
   captureControllerDisplayNameRequestEpoch(): number;
+  captureControllerPresenceRequestEpoch(): number;
   readControllerDisplayNameFreshnessSince(
     deviceId: string,
     requestEpoch: number,
@@ -173,8 +182,10 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     rememberLastKnownDeviceName,
     forgetLastKnownDeviceName,
     applyControllerDisplayNameListSnapshot,
+    applyControllerPresenceListSnapshot,
     beginControllerDisplayNameDirectoryRefresh,
     captureControllerDisplayNameRequestEpoch,
+    captureControllerPresenceRequestEpoch,
     isLatestControllerDisplayNameDirectoryRefresh,
     readControllerDisplayNameFreshnessSince,
     waitForNewerControllerDisplayNameDirectoryRefresh,
@@ -333,6 +344,7 @@ export function handleListDevices(
   const sequence = ++deviceListRequestSequence;
   const directoryRequestSequence = deps.beginControllerDisplayNameDirectoryRefresh();
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
+  const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
   let request!: Promise<DeviceListResult>;
   request = deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
     '/api/device-link/devices',
@@ -345,6 +357,7 @@ export function handleListDevices(
       );
       if (isLatestDirectorySnapshot) {
         deps.applyControllerDisplayNameListSnapshot(result.devices, requestEpoch);
+        deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch);
       } else {
         await deps.waitForNewerControllerDisplayNameDirectoryRefresh(directoryRequestSequence);
         latest = latestDeviceListRequest;
@@ -1089,16 +1102,29 @@ export async function handleMirrorCachePutSessionList(
   // 已经吃进去了。截断之后才是「设备数不多但某台带着几十万个 session」这一层(review: codex P1)。
   // 逐台**只挑需要的三个字段**,不做对象展开:一台设备对象可以带上几十万个自有属性,
   // 展开会让 main 先枚举 + 复制整份,结构 / 字节预算要等 boundedItems 才生效(review: codex P1)。
-  // main 侧的 normalizeDeviceSessions 也只消费这三个字段,别的原本就会被白名单丢掉。
+  // session 先经过与落盘侧相同的白名单投影;否则完整 session 上的 summary / extra
+  // 字段会在投影前触发预算,把本可缓存的会话误判成 oversized(review: codex P1)。
   const trimmed = devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES).map((device) => {
     if (!device || typeof device !== 'object') return device;
     const source = device as { deviceId?: unknown; deviceName?: unknown; sessions?: unknown };
+    const sessions: Record<string, unknown>[] = [];
+    if (Array.isArray(source.sessions)) {
+      for (
+        const rawSession of source.sessions.slice(0, MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE)
+      ) {
+        const session = coerceCachedSession(rawSession);
+        if (session) sessions.push(session);
+      }
+    }
     return {
-      deviceId: source.deviceId,
-      deviceName: source.deviceName,
-      sessions: Array.isArray(source.sessions)
-        ? source.sessions.slice(0, MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE)
-        : [],
+      deviceId: typeof source.deviceId === 'string'
+        && source.deviceId.length <= MIRROR_CACHE_MAX_ID_LENGTH
+        ? source.deviceId
+        : undefined,
+      deviceName: typeof source.deviceName === 'string'
+        ? source.deviceName.slice(0, MAX_CACHED_TEXT_CHARS)
+        : undefined,
+      sessions,
     };
   });
   const ownerRootAtHandler = ownerScopedUserDataPath('device-link-mirror-cache');

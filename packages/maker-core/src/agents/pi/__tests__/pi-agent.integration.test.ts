@@ -9,6 +9,7 @@
  * (CI / 未装 pi 的环境不红)。
  */
 
+import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import {
   chmodSync,
@@ -361,7 +362,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           'content-type': 'text/event-stream',
           'cache-control': 'no-cache',
         });
-        res.end(scriptedResponses.shift() ?? anthropicStreamBody('pong from fake gateway'));
+        const url = req.url ?? '';
+        const fallback = url.includes('/responses')
+          ? responsesStreamBody('pong from fake gateway', 'pi-test-model')
+          : url.includes('/chat/completions')
+            ? chatCompletionsStreamBody('pong from fake gateway', 'pi-test-model')
+            : anthropicStreamBody('pong from fake gateway');
+        res.end(scriptedResponses.shift() ?? fallback);
       });
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -400,6 +407,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      spawnPiSubagentRunner: (request) => {
+        const child = spawn(process.execPath, [request.runnerFile, request.configFile], {
+          cwd: request.cwd,
+          env: request.env,
+          detached: true,
+          windowsHide: true,
+          stdio: 'ignore',
+        });
+        child.unref();
+        return child as never;
+      },
       resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
@@ -509,6 +527,76 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(events.some((event) =>
           event.type === 'text'
           && (event.data as { text?: string }).text?.includes('pong from responses gateway'),
+        )).toBe(true);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'sends the locally selected Gateway Kimi API with matching compat to /v1/chat/completions',
+    { timeout: 60_000 },
+    async () => {
+      const deps = buildDeps();
+      deps.capabilityAdditions = {
+        ...deps.capabilityAdditions,
+        availableModels: [
+          ...(deps.capabilityAdditions?.availableModels ?? []),
+          {
+            id: 'moonshotai/kimi-k3',
+            displayName: 'Kimi K3',
+            contextWindow: 1_000_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'max',
+          },
+        ],
+      };
+      deps.resolvePiGatewayModelApi = (_providerId, modelId) =>
+        modelId === 'moonshotai/kimi-k3' ? 'openai-completions' : 'anthropic-messages';
+      deps.resolvePiGatewayModelSpec = (_providerId, modelId) =>
+        modelId === 'moonshotai/kimi-k3'
+          ? {
+              api: 'openai-completions',
+              compat: {
+                maxTokensField: 'max_tokens',
+                thinkingFormat: 'openai',
+                requiresReasoningContentOnAssistantMessages: true,
+                deferredToolsMode: 'kimi',
+              },
+              thinkingLevelMap: { low: 'low', high: 'high', max: 'max' },
+            }
+          : { api: 'anthropic-messages' };
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-kimi-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      scriptedResponses.push(chatCompletionsStreamBody('pong from kimi gateway', 'moonshotai/kimi-k3'));
+      try {
+        handle = await new PiAgent(deps).startSession({
+          sessionId: 'itest-kimi-session',
+          workingDir,
+          model: 'moonshotai/kimi-k3',
+          providerId: 'xd',
+          effort: 'max',
+        });
+        const events: AgentEvent[] = [];
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+
+        await handle.send({ type: 'user', content: 'ping kimi' });
+        await collected;
+
+        const requests = seenRequests.slice(requestsBefore);
+        expect(requests.some((request) => request.url === '/v1/chat/completions')).toBe(true);
+        expect(requests.some((request) => request.url === '/v1/responses')).toBe(false);
+        expect(events.some((event) =>
+          event.type === 'text'
+          && (event.data as { text?: string }).text?.includes('pong from kimi gateway'),
         )).toBe(true);
       } finally {
         await handle?.close();
@@ -670,7 +758,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'uses PI bundled xAI APIs as the baseline for Responses and Chat Completions models',
+    'uses the current PI bundled xAI Responses API for both official models',
     { timeout: 60_000 },
     async () => {
       const deps = buildDeps();
@@ -749,11 +837,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         responsesStreamBody('pong from xai responses', 'grok-4.5'),
         '/v1/responses',
       );
+      // Pi v0.84.3 moved bundled xAI models onto Responses with encrypted
+      // reasoning replay. grok-build-0.1 is no longer Chat Completions.
       await run(
         'itest-native-xai-completions',
         'xai/grok-build-0.1',
-        chatCompletionsStreamBody('pong from xai completions', 'grok-build-0.1'),
-        '/v1/chat/completions',
+        responsesStreamBody('pong from xai responses', 'grok-build-0.1'),
+        '/v1/responses',
       );
     },
   );
@@ -1306,7 +1396,18 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         const activeConfigHomes = readdirSync(runTmp, { withFileTypes: true })
           .filter((entry) => entry.isDirectory())
           .map((entry) => path.join(runTmp, entry.name))
-          .filter((candidate) => existsSync(path.join(candidate, 'models.json')));
+          .filter((candidate) => {
+            const modelsPath = path.join(candidate, 'models.json');
+            if (!existsSync(modelsPath)) return false;
+            try {
+              const parsed = JSON.parse(readFileSync(modelsPath, 'utf8')) as {
+                providers?: Record<string, unknown>;
+              };
+              return Boolean(parsed.providers?.localbyom);
+            } catch {
+              return false;
+            }
+          });
         expect(activeConfigHomes).toHaveLength(1);
         const configHome = activeConfigHomes[0];
         if (!configHome) throw new Error('active Pi config home missing');

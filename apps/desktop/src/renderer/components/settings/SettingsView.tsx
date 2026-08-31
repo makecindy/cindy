@@ -13,6 +13,7 @@ import { UserProfileCard } from './UserProfileCard';
 import { VoiceInputSection } from './VoiceInputSection';
 import { AppearanceSection } from './AppearanceSection';
 import { SubagentModelSection } from './SubagentModelSection';
+import { AuxiliaryModelSection } from './AuxiliaryModelSection';
 import { VisionBridgeSection } from './VisionBridgeSection';
 import { ProvidersSection } from './ProvidersSection';
 import { McpServersSection } from './McpServersSection';
@@ -437,6 +438,11 @@ export function SettingsView() {
                 </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.subagentModels')}>
                   <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
+                </section>
+                <section className="pb-[18px]" aria-label={t('settings.sections.auxiliaryModels')}>
+                  <AuxiliaryModelSection
+                    key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
+                  />
                 </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.visionBridge')}>
                   <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />

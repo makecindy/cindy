@@ -13,7 +13,7 @@ import {
   type GhostConfirmShowParams,
 } from '../confirmSlot';
 
-function confirmGhost(options: { slots?: string[]; enabled?: boolean; icon?: string } = {}): InstalledGhost {
+function confirmGhost(options: { confirm?: boolean; enabled?: boolean; icon?: string } = {}): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -22,7 +22,7 @@ function confirmGhost(options: { slots?: string[]; enabled?: boolean; icon?: str
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: options.slots ?? ['confirm'],
+      ...(options.confirm === false ? {} : { confirm: true }),
     },
     dir: '/fake/confirm-ghost',
     enabled: options.enabled ?? true,
@@ -58,8 +58,8 @@ function firstShown(mock: ReturnType<typeof showConfirmMock>): GhostConfirmShowP
 const OK_BODY = { body: '把项目目录切到 fix/xxx 分支?' };
 
 describe('confirmSlot · 资格审与载荷校验', () => {
-  it('未声明 confirm 槽 / 未启用 一律 PERMISSION_DENIED', async () => {
-    const noSlot = makeSlot({ getGhost: () => confirmGhost({ slots: ['tool'] }) });
+  it('未声明 confirm 能力 / 未启用 一律 PERMISSION_DENIED', async () => {
+    const noSlot = makeSlot({ getGhost: () => confirmGhost({ confirm: false }) });
     expect(await noSlot.slot.handleRequest('confirm-ghost', OK_BODY)).toMatchObject({
       ok: false,
       errorCode: 'PERMISSION_DENIED',

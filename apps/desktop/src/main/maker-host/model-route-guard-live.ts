@@ -27,7 +27,10 @@ import {
 } from '@cindy/model-providers';
 
 import { getDesktopProviderService } from './createDesktopProviderService.js';
-import { getActiveCatalog } from './active-catalog.js';
+import {
+  getActiveCatalog,
+  isXdGatewayPaymentRequiredRoute,
+} from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import {
   isRegistryTombstoneForConsumer,
@@ -57,6 +60,9 @@ function tombstoneGuardOptions(
   catalog: ReturnType<typeof getActiveCatalog>,
 ): ModelRouteGuardOptions {
   return {
+    isPaymentRequiredTombstone: (providerId, modelId, agent) =>
+      (providerId === null || providerId === 'xd') &&
+      isXdGatewayPaymentRequiredRoute(modelId, agent),
     isRetiredTombstone: (providerId, modelId, agent) => {
       const providerIds = providerId ? [providerId] : MODEL_PLANE_POLICIES.keys();
       return [...providerIds].some((id) =>

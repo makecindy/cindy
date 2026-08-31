@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  classifyCodexError,
   extractRolloutUpdatePlanFunctionCallEvent,
   newCodexRuntimeState,
   translateErrorNotification,
@@ -118,11 +119,11 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hello ', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hello ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
       {
         type: 'text',
-        data: { text: 'Hello world', isFinal: true, isFullText: true },
+        data: { text: 'Hello world', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
         source: 'codex',
       },
     ]);
@@ -165,11 +166,11 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hello ', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hello ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
       {
         type: 'text',
-        data: { text: 'Hello world', isFinal: true, isFullText: true },
+        data: { text: 'Hello world', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
         source: 'codex',
       },
     ]);
@@ -205,9 +206,9 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hel', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'lo ', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hel', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'lo ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
     ]);
   });
 
@@ -243,10 +244,62 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hello worxd', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hello worxd', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
       {
         type: 'text',
-        data: { text: 'Hello wonderful', isFinal: true, isFullText: true },
+        data: { text: 'Hello wonderful', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
+        source: 'codex',
+      },
+    ]);
+  });
+
+  it('preserves distinct Codex message identities and completed phases', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+
+    for (const item of [
+      {
+        type: 'agentMessage' as const,
+        id: 'msg-commentary',
+        text: 'Execution preview',
+        phase: 'commentary',
+      },
+      {
+        type: 'agentMessage' as const,
+        id: 'msg-final',
+        text: 'Please confirm.',
+        phase: 'final_answer',
+      },
+    ]) {
+      translateItemNotification(
+        'completed',
+        { threadId: 'thread-1', turnId: 'turn-1', item },
+        q,
+        ctx,
+      );
+    }
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      {
+        type: 'text',
+        data: {
+          text: 'Execution preview',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary',
+          phase: 'commentary',
+        },
+        source: 'codex',
+      },
+      {
+        type: 'text',
+        data: {
+          text: 'Please confirm.',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-final',
+          phase: 'final_answer',
+        },
         source: 'codex',
       },
     ]);
@@ -772,6 +825,24 @@ describe('translateErrorNotification', () => {
       reason: 'context-overflow',
       isTerminal: true,
     });
+  });
+
+  it('classifyCodexError 把 contextWindowExceeded 与 overload 映射成稳定 reason', () => {
+    expect(classifyCodexError({
+      message: 'window full',
+      codexErrorInfo: 'contextWindowExceeded',
+    })).toMatchObject({
+      reason: 'context-overflow',
+      errorInfoTag: 'contextWindowExceeded',
+    });
+    expect(classifyCodexError({
+      message: 'The upstream declined this request.',
+      codexErrorInfo: 'serverOverloaded',
+    }).reason).toBe('upstream-overload');
+    expect(classifyCodexError({
+      message: 'stream dropped',
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } },
+    }).errorInfoTag).toBe('responseStreamDisconnected');
   });
 
   it('Codex 结构化 contextWindowExceeded tag 不依赖错误文案措辞', async () => {
@@ -2048,6 +2119,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(stableCitationBoundary('<|eo')).toBe(0);
     expect(stableCitationBoundary('<')).toBe(0);
     expect(stableCitationBoundary('  <|eos|>')).toBe(0);
+    expect(stableCitationBoundary('<|eos|><|eos|>')).toBe(0);
     expect(stableCitationBoundary('The token is <|eos|>')).toBe('The token is <|eos|>'.length);
   });
 
@@ -2088,6 +2160,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(finalizeCodexCitationText('<')).toBe('<');
     expect(finalizeCodexCitationText('<|eo')).toBe('<|eo');
     expect(finalizeCodexCitationText('<|eos|>')).toBe('');
+    expect(finalizeCodexCitationText('<|eos|><|eos|>')).toBe('');
   });
 
   it('Web Search 引用标记被剥离,普通 cite 文本与相邻标点不变', async () => {
@@ -2281,7 +2354,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(events).toEqual([
       expect.objectContaining({
         type: 'text',
-        data: { text: 'done `/a/b.md`', isFinal: true, isFullText: true },
+        data: { text: 'done `/a/b.md`', isFinal: true, isFullText: true, agentMessageId: 'msg-2' },
       }),
     ]);
   });

@@ -75,8 +75,9 @@ describe('findFocusTargetWorker', () => {
 function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
   const calls: string[] = [];
   let workers = [createWorker()];
-  let manualInterrupt: { reason: string } | null = null;
-  const findWorkerBySessionId = (sessionId: string) => workers.find((item) => item.sessionId === sessionId);
+  let manualInterrupt: { reason: string; markedAt: number } | null = null;
+  const findWorkerBySessionId = (sessionId: string) =>
+    workers.find((item) => item.sessionId === sessionId);
   const findWorkerById = (workerId: string) => workers.find((item) => item.id === workerId);
 
   const deps: OrcaTeamServiceDeps = {
@@ -102,61 +103,61 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
           }
         : null;
     }),
-    listWorkersByLead: vi.fn(async (leadSessionId: string) => (
-      workers.filter((worker) => worker.leadSessionId === leadSessionId)
-    )),
+    listWorkersByLead: vi.fn(async (leadSessionId: string) =>
+      workers.filter((worker) => worker.leadSessionId === leadSessionId),
+    ),
     getLiveSession: vi.fn(() => null),
     resumeWorkerSession: vi.fn(async () => {}),
     updateWorkerStatus: vi.fn(async (workerId, status) => {
       calls.push(`updateWorkerStatus:${status}`);
-      workers = workers.map((worker) => (
+      workers = workers.map((worker) =>
         worker.id === workerId
           ? {
               ...worker,
               status,
               idleSince: status === 'running' ? null : worker.idleSince,
             }
-          : worker
-      ));
+          : worker,
+      );
     }),
     markWorkerIdle: vi.fn(async (workerId) => {
       calls.push('markWorkerIdle');
-      workers = workers.map((worker) => (
+      workers = workers.map((worker) =>
         worker.id === workerId
           ? {
               ...worker,
               status: 'idle',
             }
-          : worker
-      ));
+          : worker,
+      );
     }),
     markWorkerIdleIfStatus: vi.fn(async (workerId, expectedStatus) => {
       const worker = workers.find((item) => item.id === workerId);
       if (!worker || worker.status !== expectedStatus) return false;
       calls.push('markWorkerIdleIfStatus');
-      workers = workers.map((item) => (
+      workers = workers.map((item) =>
         item.id === workerId
           ? {
               ...item,
               status: 'idle',
             }
-          : item
-      ));
+          : item,
+      );
       return true;
     }),
     restoreWorkerDoneIfIdle: vi.fn(async (workerId) => {
       const worker = workers.find((item) => item.id === workerId);
       if (!worker || worker.status !== 'idle') return false;
       calls.push('restoreWorkerDoneIfIdle');
-      workers = workers.map((item) => (
+      workers = workers.map((item) =>
         item.id === workerId
           ? {
               ...item,
               status: 'done',
               idleSince: null,
             }
-          : item
-      ));
+          : item,
+      );
       return true;
     }),
     cancelWorkerSessionOperations: vi.fn(async (sessionId) => {
@@ -178,6 +179,9 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     clearManualInterrupt: vi.fn(() => {
       manualInterrupt = null;
     }),
+    restoreManualInterrupt: vi.fn((_sessionId, snapshot) => {
+      manualInterrupt = snapshot;
+    }),
     broadcastOrcaWorkerChanged: vi.fn(() => {
       calls.push('broadcastOrcaWorkerChanged');
     }),
@@ -197,14 +201,40 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
         targetLastUserSendAt: null,
       } satisfies DispatchWorkerMessageResult;
     }),
+    reserveWorkerMessage: vi.fn(async (params) => {
+      params.onReserved?.();
+      return {
+        ok: true,
+        mode: 'queued',
+        clientId: 'interrupt-client-1',
+        dispatchOutcome: {
+          kind: 'session-dispatch',
+          source: params.dispatchMeta.source,
+          dispatched: true,
+          wakeKind: 'queued',
+        },
+        targetTitle: 'Worker',
+        targetLastUserSendAt: null,
+      } satisfies DispatchWorkerMessageResult;
+    }),
+    requestWorkerInterrupt: vi.fn(async () => ({
+      stopOutcome: 'requested' as const,
+      queuePaused: false,
+    })),
+    getWorkerQueuePaused: vi.fn(() => false),
     sendAutoBridgeToLead: vi.fn(async () => ({ accepted: true })),
     getSessionQueueSnapshot: vi.fn(async () => ({
       pendingQueue: [],
       steeringClientIds: [],
       consumingClientIds: [],
+      isWorking: false,
+      willQueue: false,
+      queuePaused: false,
     })),
+    ensureWorkerQueueRestored: vi.fn(async () => true),
     removeQueuedMessage: vi.fn(() => true),
     replaceQueuedMessage: vi.fn(() => true),
+    mergeQueuedMessages: vi.fn(() => true),
     log: {
       warn: vi.fn(),
       info: vi.fn(),
@@ -223,7 +253,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       workers = next;
     },
     setManualInterrupt: (reason: string) => {
-      manualInterrupt = { reason };
+      manualInterrupt = { reason, markedAt: Date.now() };
     },
     service: createOrcaTeamService(deps),
   };
@@ -255,10 +285,12 @@ describe('OrcaTeamService', () => {
       'updateWorkerStatus:running',
       'broadcastOrcaWorkerChanged',
     ]);
-    expect(deps.dispatchWorkerMessage).toHaveBeenCalledWith(expect.objectContaining({
-      workerId: 'worker-1',
-      dispatchMeta: { source: 'test-source', context: 'test-context' },
-    }));
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workerId: 'worker-1',
+        dispatchMeta: { source: 'test-source', context: 'test-context' },
+      }),
+    );
 
     await service.handleWorkerTerminalTurn({
       sessionId: 'worker-session-1',
@@ -271,17 +303,19 @@ describe('OrcaTeamService', () => {
 
   it('resumes a stale running worker before dispatching the next task', async () => {
     const { deps, service, setWorker } = createDeps();
-    setWorker(createWorker({
-      status: 'running',
-      session: {
-        title: 'Worker',
-        agentKind: 'codex',
-        model: 'gpt-5.4',
-        effort: 'medium',
-        permissionMode: 'auto',
-        fastMode: false,
-      },
-    }));
+    setWorker(
+      createWorker({
+        status: 'running',
+        session: {
+          title: 'Worker',
+          agentKind: 'codex',
+          model: 'gpt-5.4',
+          effort: 'medium',
+          permissionMode: 'auto',
+          fastMode: false,
+        },
+      }),
+    );
 
     await expect(
       service.dispatchWorkerTask({
@@ -328,10 +362,7 @@ describe('OrcaTeamService', () => {
     await service.handleWorkerTurnStarted('worker-session-1');
 
     expect(getWorker().status).toBe('running');
-    expect(calls).toEqual([
-      'updateWorkerStatus:running',
-      'broadcastOrcaWorkerChanged',
-    ]);
+    expect(calls).toEqual(['updateWorkerStatus:running', 'broadcastOrcaWorkerChanged']);
 
     setWorker(createWorker({ status: 'running' }));
     calls.length = 0;
@@ -359,29 +390,261 @@ describe('OrcaTeamService', () => {
     setWorker(createWorker({ status: 'idle', idleSince: '2026-07-21T10:00:00.000Z' }));
 
     await expect(
-      service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-1', message: '继续' }),
+      service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-1',
+        message: '继续',
+      }),
     ).resolves.toMatchObject({
       ok: true,
       wakeKind: 'resumed',
     } satisfies Partial<Extract<SendToWorkerResult, { ok: true }>>);
 
-    expect(deps.getWorkerLinkBySessionId).toHaveBeenCalledWith('worker-session-1');
-    expect(deps.getWorkerLinkBySessionId).not.toHaveBeenCalledWith('worker-1');
+    expect(deps.getWorkerLinkBySessionId).not.toHaveBeenCalled();
     expect(deps.resumeWorkerSession).toHaveBeenCalledOnce();
     expect(getWorker().idleSince).toBeNull();
-    expect(deps.dispatchWorkerMessage).toHaveBeenCalledWith(expect.objectContaining({
-      targetSessionId: 'worker-session-1',
-      workerId: 'worker-1',
-      dispatchMeta: {
-        source: 'maker-ipc/collab',
-        context: 'send_to_worker/worker-session-1/dispatch-worker-message',
-      },
-    }));
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionId: 'worker-session-1',
+        workerId: 'worker-1',
+        dispatchMeta: {
+          source: 'maker-ipc/collab',
+          context: 'send_to_worker/worker-session-1/dispatch-worker-message',
+        },
+      }),
+    );
     expect(calls).toEqual([
       'dispatchWorkerMessage:worker-1',
       'updateWorkerStatus:running',
       'broadcastOrcaWorkerChanged',
     ]);
+  });
+
+  it('routes normal and interrupt tools through the shared ownership boundary with distinct modes', async () => {
+    const order: string[] = [];
+    const reserveWorkerMessage = vi.fn(async (params) => {
+      order.push('reserve-head');
+      params.onReserved?.();
+      order.push('after-stop-request');
+      await params.onAccepted?.();
+      return {
+        ok: true,
+        mode: 'queued',
+        clientId: 'replacement-1',
+        dispatchOutcome: {
+          kind: 'session-dispatch',
+          source: params.dispatchMeta.source,
+          dispatched: true,
+          wakeKind: 'queued',
+        },
+        targetTitle: 'Worker',
+        targetLastUserSendAt: null,
+      } satisfies DispatchWorkerMessageResult;
+    });
+    const requestWorkerInterrupt = vi.fn(async () => {
+      order.push('request-stop');
+      return { stopOutcome: 'requested' as const, queuePaused: false };
+    });
+    const { deps, service } = createDeps({ reserveWorkerMessage, requestWorkerInterrupt });
+
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-1',
+      message: 'append',
+    });
+    await expect(
+      service.interruptWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-1',
+        message: 'replace',
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      agentKind: 'codex',
+      queuedMessageId: 'replacement-1',
+      stopOutcome: 'requested',
+      queuePaused: false,
+    });
+
+    expect(deps.listWorkersByLead).toHaveBeenCalledWith('lead-1');
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledTimes(1);
+    expect(reserveWorkerMessage).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['reserve-head', 'request-stop', 'after-stop-request']);
+    expect(deps.updateWorkerStatus).toHaveBeenCalledTimes(2);
+    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(1, 'worker-1', 'running');
+    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(2, 'worker-1', 'running');
+    expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['no-active-turn', false],
+    ['unsupported', false],
+    ['unconfirmed', false],
+    ['waiting-for-safe-point', true],
+  ] as const)(
+    'keeps the replacement queued for %s and reports the existing pause state',
+    async (stopOutcome, queuePaused) => {
+      const { service } = createDeps({
+        requestWorkerInterrupt: vi.fn(async () => ({ stopOutcome, queuePaused })),
+      });
+
+      await expect(
+        service.interruptWorker({
+          callerLeadSessionId: 'lead-1',
+          targetSessionId: 'worker-session-1',
+          message: 'replacement',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        queuedMessageId: 'interrupt-client-1',
+        stopOutcome,
+        queuePaused,
+      });
+    },
+  );
+
+  it('keeps the reserved replacement when the stop adapter throws synchronously', async () => {
+    const { deps, service } = createDeps({
+      requestWorkerInterrupt: vi.fn(() => {
+        throw new Error('stop adapter failed');
+      }),
+    });
+
+    await expect(
+      service.interruptWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-session-1',
+        message: 'replacement',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      queuedMessageId: 'interrupt-client-1',
+      stopOutcome: 'unconfirmed',
+    });
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      'orca lead interrupt stop request could not be confirmed',
+      expect.objectContaining({ workerId: 'worker-1', err: 'stop adapter failed' }),
+    );
+  });
+
+  it('keeps a paused replacement at the queue head when the stop adapter rejects', async () => {
+    const queue: string[] = ['older'];
+    const reserveWorkerMessage = vi.fn(async (params) => {
+      queue.unshift(params.message);
+      params.onReserved?.();
+      return {
+        ok: true,
+        mode: 'queued',
+        clientId: 'paused-replacement',
+        dispatchOutcome: {
+          kind: 'session-dispatch',
+          source: params.dispatchMeta.source,
+          dispatched: true,
+          wakeKind: 'queued',
+        },
+        targetTitle: 'Worker',
+        targetLastUserSendAt: null,
+      } satisfies DispatchWorkerMessageResult;
+    });
+    const { service } = createDeps({
+      reserveWorkerMessage,
+      requestWorkerInterrupt: vi.fn(async () => {
+        throw new Error('stop rejected');
+      }),
+      getWorkerQueuePaused: vi.fn(() => true),
+    });
+
+    await expect(
+      service.interruptWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-session-1',
+        message: 'replacement',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      queuedMessageId: 'paused-replacement',
+      stopOutcome: 'unconfirmed',
+      queuePaused: true,
+    });
+    expect(queue).toEqual(['replacement', 'older']);
+  });
+
+  it('rolls back the shared accepted lifecycle when an interrupt reservation fails', async () => {
+    const failure = {
+      kind: 'session-dispatch' as const,
+      source: 'maker-ipc/collab',
+      dispatched: false as const,
+      reason: 'cancelled-before-dispatch' as const,
+      context: 'interrupt-failure',
+      message: 'interrupt reservation failed after accepted',
+    };
+    const { calls, deps, getWorker, service } = createDeps({
+      reserveWorkerMessage: vi.fn(async (params) => {
+        params.onReserved?.();
+        await params.onAccepted?.();
+        return { ok: false, dispatchOutcome: failure } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+
+    await expect(
+      service.interruptWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-session-1',
+        message: 'replacement',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(getWorker().status).toBe('idle');
+    expect(calls).toEqual([
+      'updateWorkerStatus:running',
+      'broadcastOrcaWorkerChanged',
+      'updateWorkerStatus:idle',
+      'broadcastOrcaWorkerChanged',
+    ]);
+    expect(deps.requestWorkerInterrupt).toHaveBeenCalledOnce();
+  });
+
+  it('keeps done acknowledgement mutually exclusive with an in-flight interrupt dispatch', async () => {
+    let settleStop!: (value: { stopOutcome: 'requested'; queuePaused: false }) => void;
+    const stopPending = new Promise<{ stopOutcome: 'requested'; queuePaused: false }>((resolve) => {
+      settleStop = resolve;
+    });
+    const requestWorkerInterrupt = vi.fn(() => stopPending);
+    const { service } = createDeps({ requestWorkerInterrupt });
+
+    const interrupt = service.interruptWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'replacement',
+    });
+    await vi.waitFor(() => expect(requestWorkerInterrupt).toHaveBeenCalledOnce());
+
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'WORKER_STATE_CHANGED',
+      message: 'worker worker-1 has a dispatch in progress',
+    });
+
+    settleStop({ stopOutcome: 'requested', queuePaused: false });
+    await expect(interrupt).resolves.toMatchObject({ ok: true, stopOutcome: 'requested' });
+  });
+
+  it('rejects cross-lead interrupts before reserving or stopping', async () => {
+    const { deps, service } = createDeps();
+    await expect(
+      service.interruptWorker({
+        callerLeadSessionId: 'other-lead',
+        targetSessionId: 'worker-session-1',
+        message: 'replacement',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+    expect(deps.reserveWorkerMessage).not.toHaveBeenCalled();
+    expect(deps.requestWorkerInterrupt).not.toHaveBeenCalled();
   });
 
   it('rejects ambiguous sendToWorker worker references before resume or dispatch', async () => {
@@ -400,7 +663,11 @@ describe('OrcaTeamService', () => {
     ]);
 
     await expect(
-      service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'ambiguous-ref', message: '继续' }),
+      service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'ambiguous-ref',
+        message: '继续',
+      }),
     ).resolves.toMatchObject({
       ok: false,
       errorCode: 'INTERNAL',
@@ -416,20 +683,26 @@ describe('OrcaTeamService', () => {
     const { calls, deps, service } = createDeps();
 
     await expect(
-      service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '继续' }),
+      service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-session-1',
+        message: '继续',
+      }),
     ).resolves.toMatchObject({
       ok: true,
       wakeKind: 'resumed',
     } satisfies Partial<Extract<SendToWorkerResult, { ok: true }>>);
 
-    expect(deps.dispatchWorkerMessage).toHaveBeenCalledWith(expect.objectContaining({
-      targetSessionId: 'worker-session-1',
-      workerId: 'worker-1',
-      dispatchMeta: {
-        source: 'maker-ipc/collab',
-        context: 'send_to_worker/worker-session-1/dispatch-worker-message',
-      },
-    }));
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionId: 'worker-session-1',
+        workerId: 'worker-1',
+        dispatchMeta: {
+          source: 'maker-ipc/collab',
+          context: 'send_to_worker/worker-session-1/dispatch-worker-message',
+        },
+      }),
+    );
     expect(calls).toEqual([
       'dispatchWorkerMessage:worker-1',
       'updateWorkerStatus:running',
@@ -440,30 +713,37 @@ describe('OrcaTeamService', () => {
   it.each([
     ['worker id', 'worker-1'],
     ['worker session id', 'worker-session-1'],
-  ] as const)('treats cross-lead sendToWorker by %s as not found at the external caller boundary', async (_label, targetSessionId) => {
-    const { calls, deps, service } = createDeps();
+  ] as const)(
+    'treats cross-lead sendToWorker by %s as not found at the external caller boundary',
+    async (_label, targetSessionId) => {
+      const { calls, deps, service } = createDeps();
 
-    await expect(
-      service.sendToWorker({
-        callerLeadSessionId: 'lead-other',
-        targetSessionId,
-        message: '继续',
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'NOT_FOUND',
-    });
+      await expect(
+        service.sendToWorker({
+          callerLeadSessionId: 'lead-other',
+          targetSessionId,
+          message: '继续',
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'NOT_FOUND',
+      });
 
-    expect(calls).toEqual([]);
-    expect(deps.resumeWorkerSession).not.toHaveBeenCalled();
-    expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();
-  });
+      expect(calls).toEqual([]);
+      expect(deps.resumeWorkerSession).not.toHaveBeenCalled();
+      expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it('returns NOT_FOUND for unknown sendToWorker target before resume or dispatch', async () => {
     const { calls, deps, service } = createDeps();
 
     await expect(
-      service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'missing-worker-session', message: '继续' }),
+      service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'missing-worker-session',
+        message: '继续',
+      }),
     ).resolves.toMatchObject({
       ok: false,
       errorCode: 'NOT_FOUND',
@@ -482,7 +762,11 @@ describe('OrcaTeamService', () => {
     });
 
     await expect(
-      service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '继续' }),
+      service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-session-1',
+        message: '继续',
+      }),
     ).resolves.toMatchObject({
       ok: false,
       errorCode: 'AGENT_NOT_READY',
@@ -497,35 +781,47 @@ describe('OrcaTeamService', () => {
   it.each([
     ['SESSION_RUNNING', 'BUSY'],
     ['SEND_FAILED', 'AGENT_NOT_READY'],
-  ] as const)('normalizes host dispatch failure %s to public %s for sendToWorker', async (hostCode, publicCode) => {
-    const { service } = createDeps({
-      dispatchWorkerMessage: vi.fn(async (params) => ({
-        ok: false,
-        dispatchOutcome: {
-          kind: 'host-send',
-          accepted: false,
-          code: hostCode,
-          message: `${hostCode} failure`,
-          source: params.dispatchMeta.source,
-          context: params.dispatchMeta.context,
-        },
-      } satisfies DispatchWorkerMessageResult)),
-    });
+  ] as const)(
+    'normalizes host dispatch failure %s to public %s for sendToWorker',
+    async (hostCode, publicCode) => {
+      const { service } = createDeps({
+        dispatchWorkerMessage: vi.fn(
+          async (params) =>
+            ({
+              ok: false,
+              dispatchOutcome: {
+                kind: 'host-send',
+                accepted: false,
+                code: hostCode,
+                message: `${hostCode} failure`,
+                source: params.dispatchMeta.source,
+                context: params.dispatchMeta.context,
+              },
+            }) satisfies DispatchWorkerMessageResult,
+        ),
+      });
 
-    await expect(
-      service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '继续' }),
-    ).resolves.toMatchObject({
-      ok: false,
-      errorCode: publicCode,
-    });
-  });
+      await expect(
+        service.sendToWorker({
+          callerLeadSessionId: 'lead-1',
+          targetSessionId: 'worker-session-1',
+          message: '继续',
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        errorCode: publicCode,
+      });
+    },
+  );
 
   it('does not auto-bridge a queued worker task until dispatch is accepted', async () => {
     const acceptedCallback: { current: (() => void | Promise<void>) | null } = { current: null };
+    const committedCallback: { current: (() => void | Promise<void>) | null } = { current: null };
     const leadMessages: string[] = [];
     const { service } = createDeps({
       dispatchWorkerMessage: vi.fn(async (params) => {
         acceptedCallback.current = params.onAccepted ?? null;
+        committedCallback.current = params.onAcceptedCommit ?? null;
         return {
           ok: true,
           mode: 'queued',
@@ -555,7 +851,12 @@ describe('OrcaTeamService', () => {
     ).resolves.toMatchObject({
       dispatched: false,
       queued: true,
-      dispatchOutcome: { kind: 'session-dispatch', source: 'test-source', dispatched: true, wakeKind: 'queued' },
+      dispatchOutcome: {
+        kind: 'session-dispatch',
+        source: 'test-source',
+        dispatched: true,
+        wakeKind: 'queued',
+      },
     });
 
     await service.handleWorkerTerminalTurn({
@@ -569,6 +870,7 @@ describe('OrcaTeamService', () => {
     const accept = acceptedCallback.current;
     if (!accept) throw new Error('accepted callback was not captured');
     await accept();
+    await committedCallback.current?.();
     await service.handleWorkerTerminalTurn({
       sessionId: 'worker-session-1',
       status: 'done',
@@ -678,6 +980,81 @@ describe('OrcaTeamService', () => {
     expect(leadMessages).toEqual([]);
   });
 
+  it.each(['status update', 'broadcast'] as const)(
+    'cancels vendor dispatch and restores accepted state when the running %s fails',
+    async (failurePoint) => {
+      const h = createDeps();
+      const updateWorkerStatus = h.deps.updateWorkerStatus;
+      const broadcast = h.deps.broadcastOrcaWorkerChanged;
+      h.setManualInterrupt('lead_interrupt');
+      if (failurePoint === 'status update') {
+        h.deps.updateWorkerStatus = vi.fn(async (workerId, status) => {
+          if (status === 'running') throw new Error('status write failed');
+          await updateWorkerStatus(workerId, status);
+        });
+      } else {
+        h.deps.broadcastOrcaWorkerChanged = vi.fn(() => {
+          throw new Error('broadcast failed');
+        });
+      }
+
+      await expect(
+        h.service.sendToWorker({
+          callerLeadSessionId: 'lead-1',
+          targetSessionId: 'worker-session-1',
+          message: 'must not dispatch with partial lifecycle state',
+        }),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY' });
+
+      expect(h.getWorker().status).toBe('idle');
+      expect(h.service.captureWorkerTerminalTurn('worker-session-1').manualInterrupt).toMatchObject(
+        { reason: 'lead_interrupt' },
+      );
+      if (failurePoint === 'broadcast') {
+        expect(broadcast).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it('does not let an older provisional rollback overwrite a newer manual interrupt', async () => {
+    let accepted: (() => void | Promise<void>) | undefined;
+    let rollback: (() => void | Promise<void>) | undefined;
+    const h = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        accepted = params.onAccepted;
+        rollback = params.onAcceptedRollback;
+        return {
+          ok: true,
+          mode: 'queued',
+          clientId: 'manual-cas',
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: params.dispatchMeta.source,
+            dispatched: true,
+            wakeKind: 'queued',
+          },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    h.setManualInterrupt('lead_interrupt');
+    await h.service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'queued replacement',
+    });
+    await accepted?.();
+    h.setManualInterrupt('user_stop');
+
+    await rollback?.();
+
+    expect(h.getWorker().status).toBe('idle');
+    expect(h.service.captureWorkerTerminalTurn('worker-session-1').manualInterrupt).toMatchObject({
+      reason: 'user_stop',
+    });
+  });
+
   it('rolls back queued dispatch from accepted-boundary state instead of enqueue-time pending', async () => {
     const queuedAccepted: { current: (() => void | Promise<void>) | null } = { current: null };
     const queuedRollback: { current: (() => void | Promise<void>) | null } = { current: null };
@@ -764,7 +1141,11 @@ describe('OrcaTeamService', () => {
     });
     const { service } = createDeps({ sendAutoBridgeToLead });
 
-    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '分析 issue' });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '分析 issue',
+    });
 
     await service.handleWorkerTerminalTurn({
       sessionId: 'worker-session-1',
@@ -815,7 +1196,11 @@ describe('OrcaTeamService', () => {
       }),
     });
 
-    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '分析 issue' });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '分析 issue',
+    });
     vi.mocked(deps.listWorkersByLead).mockResolvedValueOnce([]);
 
     await service.handleWorkerTerminalTurn({
@@ -844,7 +1229,11 @@ describe('OrcaTeamService', () => {
         }),
       });
 
-      await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '分析 issue' });
+      await service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-session-1',
+        message: '分析 issue',
+      });
       setWorker(createWorker({ status }));
       await service.handleWorkerTerminalTurn({
         sessionId: 'worker-session-1',
@@ -863,7 +1252,7 @@ describe('OrcaTeamService', () => {
     },
   );
 
-  it.each(['input_stop', 'abort_session'])(
+  it.each(['input_stop', 'abort_session', 'lead_interrupt'])(
     'keeps %s manual interrupt silent and marks the worker idle',
     async (reason) => {
       const leadMessages: string[] = [];
@@ -874,7 +1263,11 @@ describe('OrcaTeamService', () => {
         }),
       });
 
-      await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '分析 issue' });
+      await service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-session-1',
+        message: '分析 issue',
+      });
       service.captureWorkerText('worker-session-1', '部分输出');
       setManualInterrupt(reason);
       await service.handleWorkerTerminalTurn({
@@ -891,16 +1284,302 @@ describe('OrcaTeamService', () => {
         'broadcastOrcaWorkerChanged',
       ]);
       expect(deps.clearManualInterrupt).toHaveBeenCalledWith('worker-session-1');
-      expect(deps.log.info).toHaveBeenCalledWith('worker manual interrupt: suppressed auto-bridge', {
-        workerId: 'worker-1',
-        leadSessionId: 'lead-1',
-        sessionId: 'worker-session-1',
-        reason,
-        status: 'done',
-      });
+      expect(deps.log.info).toHaveBeenCalledWith(
+        'worker manual interrupt: suppressed auto-bridge',
+        {
+          workerId: 'worker-1',
+          leadSessionId: 'lead-1',
+          sessionId: 'worker-session-1',
+          reason,
+          status: 'done',
+        },
+      );
       expect(leadMessages).toEqual([]);
     },
   );
+
+  it('does not let an interrupted terminal overwrite a replacement accepted during terminal lookup', async () => {
+    let replacementAccepted: (() => void | Promise<void>) | undefined;
+    let replacementCommitted: (() => void | Promise<void>) | undefined;
+    const { deps, getWorker, service, setManualInterrupt } = createDeps({
+      reserveWorkerMessage: vi.fn(async (params) => {
+        replacementAccepted = params.onAccepted;
+        replacementCommitted = params.onAcceptedCommit;
+        params.onReserved?.();
+        return {
+          ok: true,
+          mode: 'queued',
+          clientId: 'replacement-race',
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: params.dispatchMeta.source,
+            dispatched: true,
+            wakeKind: 'queued',
+          },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'old turn',
+    });
+    await service.interruptWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'replacement',
+    });
+    setManualInterrupt('lead_interrupt');
+    const capture = service.captureWorkerTerminalTurn('worker-session-1');
+    await replacementAccepted?.();
+    await replacementCommitted?.();
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'old partial output',
+      capture,
+    });
+
+    expect(getWorker().status).toBe('running');
+    expect(deps.markWorkerIdle).not.toHaveBeenCalled();
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
+
+  it('waits for provisional replacement rollback before closing the interrupted terminal', async () => {
+    let replacementAccepted: (() => void | Promise<void>) | undefined;
+    let replacementRolledBack: (() => void | Promise<void>) | undefined;
+    const { deps, getWorker, service, setManualInterrupt } = createDeps({
+      reserveWorkerMessage: vi.fn(async (params) => {
+        replacementAccepted = params.onAccepted;
+        replacementRolledBack = params.onAcceptedRollback;
+        params.onReserved?.();
+        return {
+          ok: true,
+          mode: 'queued',
+          clientId: 'replacement-rollback-race',
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: params.dispatchMeta.source,
+            dispatched: true,
+            wakeKind: 'queued',
+          },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'old turn',
+    });
+    await service.interruptWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'replacement',
+    });
+    setManualInterrupt('lead_interrupt');
+    const oldCapture = service.captureWorkerTerminalTurn('worker-session-1');
+
+    await replacementAccepted?.();
+    let terminalSettled = false;
+    const terminal = service
+      .handleWorkerTerminalTurn({
+        sessionId: 'worker-session-1',
+        status: 'done',
+        finalText: 'old partial output',
+        capture: oldCapture,
+      })
+      .then(() => {
+        terminalSettled = true;
+      });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(terminalSettled).toBe(false);
+
+    await replacementRolledBack?.();
+    await terminal;
+
+    expect(getWorker().status).toBe('idle');
+    expect(deps.markWorkerIdle).toHaveBeenCalledWith('worker-1');
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stale done snapshot clear a replacement accepted during worker lookup', async () => {
+    let replacementAccepted: (() => void | Promise<void>) | undefined;
+    let replacementCommitted: (() => void | Promise<void>) | undefined;
+    let releaseOldLookup!: (workers: OrcaWorkerRecordSnapshot[]) => void;
+    let markOldLookupStarted!: () => void;
+    const oldLookupStarted = new Promise<void>((resolve) => {
+      markOldLookupStarted = resolve;
+    });
+    const oldLookup = new Promise<OrcaWorkerRecordSnapshot[]>((resolve) => {
+      releaseOldLookup = resolve;
+    });
+    const leadMessages: string[] = [];
+    const { deps, getWorker, service, setManualInterrupt } = createDeps({
+      reserveWorkerMessage: vi.fn(async (params) => {
+        replacementAccepted = params.onAccepted;
+        replacementCommitted = params.onAcceptedCommit;
+        params.onReserved?.();
+        return {
+          ok: true,
+          mode: 'queued',
+          clientId: 'replacement-after-done',
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: params.dispatchMeta.source,
+            dispatched: true,
+            wakeKind: 'queued',
+          },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+      sendAutoBridgeToLead: vi.fn(async (_leadSessionId, message) => {
+        leadMessages.push(message);
+        return { accepted: true };
+      }),
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'old turn',
+    });
+    await service.interruptWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'replacement',
+    });
+    setManualInterrupt('lead_interrupt');
+    const oldCapture = service.captureWorkerTerminalTurn('worker-session-1');
+
+    let blockNextLookup = true;
+    vi.mocked(deps.listWorkersByLead).mockImplementation(async () => {
+      if (blockNextLookup) {
+        blockNextLookup = false;
+        markOldLookupStarted();
+        return oldLookup;
+      }
+      return [getWorker()];
+    });
+    const oldTerminal = service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'old output',
+      capture: oldCapture,
+    });
+    await oldLookupStarted;
+
+    await replacementAccepted?.();
+    await replacementCommitted?.();
+    releaseOldLookup([createWorker({ status: 'done' })]);
+    await oldTerminal;
+
+    expect(getWorker().status).toBe('running');
+    expect(leadMessages).toEqual([]);
+
+    const replacementCapture = service.captureWorkerTerminalTurn('worker-session-1');
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'replacement output',
+      capture: replacementCapture,
+    });
+    expect(leadMessages).toEqual([
+      '[Auto-bridged: worker 完成但未调 send_to_lead]\n\nreplacement output',
+    ]);
+  });
+
+  it('uses auto-bridge identity alone to protect a normally queued follow-up', async () => {
+    let followUpAccepted: (() => void | Promise<void>) | undefined;
+    let followUpCommitted: (() => void | Promise<void>) | undefined;
+    let releaseOldLookup!: (workers: OrcaWorkerRecordSnapshot[]) => void;
+    let markOldLookupStarted!: () => void;
+    const oldLookupStarted = new Promise<void>((resolve) => {
+      markOldLookupStarted = resolve;
+    });
+    const oldLookup = new Promise<OrcaWorkerRecordSnapshot[]>((resolve) => {
+      releaseOldLookup = resolve;
+    });
+    const leadMessages: string[] = [];
+    let dispatchCount = 0;
+    const { deps, getWorker, service } = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        dispatchCount += 1;
+        if (dispatchCount === 1) await params.onAccepted?.();
+        else {
+          followUpAccepted = params.onAccepted;
+          followUpCommitted = params.onAcceptedCommit;
+        }
+        return {
+          ok: true,
+          mode: dispatchCount === 1 ? 'dispatched' : 'queued',
+          clientId: `normal-${dispatchCount}`,
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: params.dispatchMeta.source,
+            dispatched: true,
+            ...(dispatchCount === 1 ? {} : { wakeKind: 'queued' as const }),
+          },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+      sendAutoBridgeToLead: vi.fn(async (_leadSessionId, message) => {
+        leadMessages.push(message);
+        return { accepted: true };
+      }),
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'old turn',
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'follow-up',
+    });
+    const oldCapture = service.captureWorkerTerminalTurn('worker-session-1');
+    expect(oldCapture.manualInterrupt).toBeNull();
+
+    let blockNextLookup = true;
+    vi.mocked(deps.listWorkersByLead).mockImplementation(async () => {
+      if (blockNextLookup) {
+        blockNextLookup = false;
+        markOldLookupStarted();
+        return oldLookup;
+      }
+      return [getWorker()];
+    });
+    const oldTerminal = service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'old output',
+      capture: oldCapture,
+    });
+    await oldLookupStarted;
+    await followUpAccepted?.();
+    await followUpCommitted?.();
+    releaseOldLookup([createWorker({ status: 'done' })]);
+    await oldTerminal;
+
+    expect(getWorker().status).toBe('running');
+    expect(leadMessages).toEqual([]);
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'follow-up output',
+      capture: service.captureWorkerTerminalTurn('worker-session-1'),
+    });
+    expect(leadMessages).toEqual([
+      '[Auto-bridged: worker 完成但未调 send_to_lead]\n\nfollow-up output',
+    ]);
+  });
 
   it.each(['done', 'error'] as const)(
     'updates worker %s status, broadcasts, and auto-bridges pending output',
@@ -913,7 +1592,11 @@ describe('OrcaTeamService', () => {
         }),
       });
 
-      await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '分析 issue' });
+      await service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-session-1',
+        message: '分析 issue',
+      });
       await service.handleWorkerTerminalTurn({
         sessionId: 'worker-session-1',
         status,
@@ -948,10 +1631,7 @@ describe('OrcaTeamService', () => {
       });
 
       expect(getWorker().status).toBe(status);
-      expect(calls).toEqual([
-        `updateWorkerStatus:${status}`,
-        'broadcastOrcaWorkerChanged',
-      ]);
+      expect(calls).toEqual([`updateWorkerStatus:${status}`, 'broadcastOrcaWorkerChanged']);
       expect(sendAutoBridgeToLead).not.toHaveBeenCalled();
     },
   );
@@ -965,7 +1645,11 @@ describe('OrcaTeamService', () => {
       }),
     });
 
-    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第一次' });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '第一次',
+    });
     service.captureWorkerText('worker-session-1', '旧输出');
     await service.handleWorkerTerminalTurn({
       sessionId: 'worker-session-1',
@@ -973,7 +1657,11 @@ describe('OrcaTeamService', () => {
       finalText: '',
     });
 
-    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第二次' });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '第二次',
+    });
     await service.handleWorkerTerminalTurn({
       sessionId: 'worker-session-1',
       status: 'done',
@@ -995,7 +1683,11 @@ describe('OrcaTeamService', () => {
       }),
     });
 
-    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '分析 issue' });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '分析 issue',
+    });
     service.captureWorkerText('worker-session-1', '部分', { isFinal: false });
     service.captureWorkerText('worker-session-1', '部分输出', { isFinal: true });
     await service.handleWorkerTerminalTurn({
@@ -1016,7 +1708,11 @@ describe('OrcaTeamService', () => {
       }),
     });
 
-    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '只读审计' });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '只读审计',
+    });
     await service.handleWorkerTerminalTurn({
       sessionId: 'worker-session-1',
       status: 'error',
@@ -1033,7 +1729,9 @@ describe('OrcaTeamService', () => {
     const { calls, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'running' }));
 
-    await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' })).resolves.toEqual({
+    await expect(
+      service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }),
+    ).resolves.toEqual({
       ok: true,
       workerId: 'worker-1',
     });
@@ -1049,11 +1747,13 @@ describe('OrcaTeamService', () => {
     const { calls, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({ ok: true, workerId: 'worker-1' });
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({ ok: true, workerId: 'worker-1' });
 
     expect(calls).toEqual([
       'markWorkerIdleIfStatus',
@@ -1068,11 +1768,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 is no longer done',
@@ -1120,11 +1822,13 @@ describe('OrcaTeamService', () => {
     });
     await dispatchStarted;
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has a dispatch in progress',
@@ -1144,11 +1848,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has a send in progress',
@@ -1165,11 +1871,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has an active turn',
@@ -1192,11 +1900,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has an active turn',
@@ -1241,11 +1951,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
 
     // 新 turn 开始:旧 done 被取代,悬置的补确认必须作废。
     await service.handleWorkerTurnStarted('worker-session-1');
@@ -1273,11 +1985,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
 
     // terminal 边界重试时已有新排队输入:确认被拒(fire-once,不重登记),worker 保持 done。
     turnRunning = false;
@@ -1352,11 +2066,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
 
     // terminal 边界:live session 仍报 running,重试被拒——但不得重新登记。
     await service.handleWorkerTerminalTurn({
@@ -1388,11 +2104,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has an active turn',
@@ -1413,11 +2131,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has queued input',
@@ -1437,11 +2157,13 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'done' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 has queued input',
@@ -1458,11 +2180,13 @@ describe('OrcaTeamService', () => {
     const { calls, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'running' }));
 
-    await expect(service.idleWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      expectedStatus: 'done',
-    })).resolves.toEqual({
+    await expect(
+      service.idleWorker({
+        callerLeadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        expectedStatus: 'done',
+      }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'WORKER_STATE_CHANGED',
       message: 'worker worker-1 is running, expected done',
@@ -1478,7 +2202,9 @@ describe('OrcaTeamService', () => {
     const { calls, deps, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'running' }));
 
-    await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: workerRef })).resolves.toEqual({
+    await expect(
+      service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: workerRef }),
+    ).resolves.toEqual({
       ok: true,
       workerId: 'worker-1',
     });
@@ -1566,7 +2292,9 @@ describe('OrcaTeamService', () => {
     const { calls, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'idle' }));
 
-    await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' })).resolves.toEqual({
+    await expect(
+      service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }),
+    ).resolves.toEqual({
       ok: false,
       errorCode: 'ALREADY_IDLE',
       message: 'worker worker-1 is already idle',
@@ -1584,7 +2312,9 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'running' }));
 
-    await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' })).resolves.toEqual({
+    await expect(
+      service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }),
+    ).resolves.toEqual({
       ok: true,
       workerId: 'worker-1',
     });
@@ -1604,7 +2334,9 @@ describe('OrcaTeamService', () => {
     const { calls, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'running' }));
 
-    await expect(service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' })).resolves.toEqual({
+    await expect(
+      service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }),
+    ).resolves.toEqual({
       ok: true,
       workerId: 'worker-1',
     });
@@ -1626,7 +2358,9 @@ describe('OrcaTeamService', () => {
     const { calls, deps, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'running' }));
 
-    await expect(service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: workerRef })).resolves.toEqual({
+    await expect(
+      service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: workerRef }),
+    ).resolves.toEqual({
       ok: true,
       workerId: 'worker-1',
     });
@@ -1724,7 +2458,9 @@ describe('OrcaTeamService', () => {
     });
     setWorker(createWorker({ status: 'running' }));
 
-    await expect(service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' })).resolves.toEqual({
+    await expect(
+      service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }),
+    ).resolves.toEqual({
       ok: true,
       workerId: 'worker-1',
     });
@@ -1785,6 +2521,9 @@ describe('OrcaTeamService worker queued message control', () => {
         ],
         steeringClientIds: ['q-user'],
         consumingClientIds: ['q-user'],
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
       })),
     });
 
@@ -1793,14 +2532,40 @@ describe('OrcaTeamService worker queued message control', () => {
       workerRef: 'worker-1',
     });
 
-    expect(result).toMatchObject({ ok: true, workerId: 'worker-1', workerSessionId: 'worker-session-1' });
+    expect(result).toMatchObject({
+      ok: true,
+      workerId: 'worker-1',
+      workerSessionId: 'worker-session-1',
+      status: 'idle',
+      isWorking: true,
+      willQueue: true,
+      queuePaused: false,
+    });
     if (!result.ok) throw new Error('unreachable');
     // 口径「看得全、只能动自己的」:lead 条目回 displayText 原始正文,用户 /
     // scheduler 条目回排队正文;可操作性由 update/cancel 的 NOT_LEAD_MESSAGE 把关。
     expect(result.messages).toEqual([
-      { queuedMessageId: 'q-lead', position: 0, source: 'lead', content: '原始任务', consuming: false },
-      { queuedMessageId: 'q-user', position: 1, source: 'user', content: 'text-q-user', consuming: true },
-      { queuedMessageId: 'q-sched', position: 2, source: 'scheduler', content: 'text-q-sched', consuming: false },
+      {
+        queuedMessageId: 'q-lead',
+        position: 0,
+        source: 'lead',
+        content: '原始任务',
+        consuming: false,
+      },
+      {
+        queuedMessageId: 'q-user',
+        position: 1,
+        source: 'user',
+        content: 'text-q-user',
+        consuming: true,
+      },
+      {
+        queuedMessageId: 'q-sched',
+        position: 2,
+        source: 'scheduler',
+        content: 'text-q-sched',
+        consuming: false,
+      },
     ]);
     expect(deps.getSessionQueueSnapshot).toHaveBeenCalledWith('worker-session-1');
   });
@@ -1808,7 +2573,10 @@ describe('OrcaTeamService worker queued message control', () => {
   it('rejects queue access for a worker outside the caller lead scope', async () => {
     const { service } = createDeps();
     await expect(
-      service.listWorkerQueuedMessages({ callerLeadSessionId: 'other-lead', workerRef: 'worker-1' }),
+      service.listWorkerQueuedMessages({
+        callerLeadSessionId: 'other-lead',
+        workerRef: 'worker-1',
+      }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_NOT_FOUND' });
     await expect(
       service.updateWorkerQueuedMessage({
@@ -1820,6 +2588,47 @@ describe('OrcaTeamService worker queued message control', () => {
     ).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_NOT_FOUND' });
   });
 
+  it('lists pre-dispatch active rows from the full inspection as consuming', async () => {
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [queuedItem('pending', leadOrigin)],
+        steeringClientIds: [],
+        consumingClientIds: ['active'],
+        inspectionMessages: [
+          {
+            queuedMessageId: 'active',
+            position: 0,
+            source: 'lead' as const,
+            content: 'active dispatch',
+            consuming: true,
+          },
+          {
+            queuedMessageId: 'pending',
+            position: 1,
+            source: 'lead' as const,
+            content: 'pending',
+            consuming: false,
+          },
+        ],
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+      })),
+    });
+
+    const result = await service.listWorkerQueuedMessages({
+      callerLeadSessionId: 'lead-1',
+      workerRef: 'worker-1',
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      messages: [
+        { queuedMessageId: 'active', position: 0, consuming: true },
+        { queuedMessageId: 'pending', position: 1, consuming: false },
+      ],
+    });
+  });
+
   it('updates a lead queued entry by rebuilding dispatch-format content in place', async () => {
     const replaceQueuedMessage = vi.fn(() => true);
     const { service } = createDeps({
@@ -1827,6 +2636,9 @@ describe('OrcaTeamService worker queued message control', () => {
         pendingQueue: [queuedItem('q-lead', leadOrigin)],
         steeringClientIds: [],
         consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
       })),
       replaceQueuedMessage,
     });
@@ -1854,7 +2666,10 @@ describe('OrcaTeamService worker queued message control', () => {
     expect(next.text).toContain('[From Orca Lead]');
     expect(next.text).toContain('改后的任务');
     expect(next.text).toContain('worker-1');
-    expect(JSON.parse(next.persistedContent)).toEqual({ orcaSource: 'lead', content: '改后的任务' });
+    expect(JSON.parse(next.persistedContent)).toEqual({
+      orcaSource: 'lead',
+      content: '改后的任务',
+    });
     expect(next.chatMessage.content).toBe(next.persistedContent);
     expect(next.chatMessage.createdAt).toBe('2026-07-21T00:00:00.000Z');
     expect(next.origin).toEqual({ kind: 'orca', senderLabel: 'Lead', displayText: '改后的任务' });
@@ -1865,12 +2680,12 @@ describe('OrcaTeamService worker queued message control', () => {
     const replaceQueuedMessage = vi.fn(() => true);
     const { service } = createDeps({
       getSessionQueueSnapshot: vi.fn(async () => ({
-        pendingQueue: [
-          queuedItem('q-user'),
-          queuedItem('q-consuming', leadOrigin),
-        ],
+        pendingQueue: [queuedItem('q-user'), queuedItem('q-consuming', leadOrigin)],
         steeringClientIds: ['q-consuming'],
         consumingClientIds: ['q-consuming'],
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
       })),
       removeQueuedMessage,
       replaceQueuedMessage,
@@ -1908,6 +2723,9 @@ describe('OrcaTeamService worker queued message control', () => {
         pendingQueue: [queuedItem('q-lead', leadOrigin)],
         steeringClientIds: [],
         consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
       })),
       removeQueuedMessage,
     });
@@ -1932,22 +2750,122 @@ describe('OrcaTeamService worker queued message control', () => {
     ).resolves.toMatchObject({ ok: false, errorCode: 'QUEUED_MESSAGE_NOT_FOUND' });
   });
 
+  it('merges consecutive lead messages through one atomic coordinator call', async () => {
+    let queue = [
+      queuedItem('q1', leadOrigin, 'one'),
+      queuedItem('q2', leadOrigin, 'two'),
+      queuedItem('q3', leadOrigin, 'three'),
+    ];
+    const mergeQueuedMessages = vi.fn((_sessionId, ids, buildReplacement) => {
+      const targets = queue.slice(0, ids.length);
+      const replacement = buildReplacement(targets);
+      if (!replacement) return false;
+      queue = [replacement, ...queue.slice(ids.length)];
+      return true;
+    });
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: queue,
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      mergeQueuedMessages,
+    });
+
+    const result = await service.mergeWorkerQueuedMessages({
+      callerLeadSessionId: 'lead-1',
+      workerRef: 'worker-1',
+      queuedMessageIds: ['q1', 'q2'],
+      message: 'merged task',
+    });
+
+    expect(result).toMatchObject({ ok: true, workerId: 'worker-1', queuedMessageId: 'q1' });
+    expect(mergeQueuedMessages).toHaveBeenCalledTimes(1);
+    expect(queue.map((item) => item.clientId)).toEqual(['q1', 'q3']);
+    expect(queue[0]?.origin).toEqual({
+      kind: 'orca',
+      senderLabel: 'Lead',
+      displayText: 'merged task',
+    });
+  });
+
+  it('returns QUEUE_CHANGED with the latest full queue and no partial mutation', async () => {
+    const latestQueue = [queuedItem('q1', leadOrigin), queuedItem('user')];
+    const mergeQueuedMessages = vi.fn(() => false);
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: latestQueue,
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      mergeQueuedMessages,
+    });
+
+    await expect(
+      service.mergeWorkerQueuedMessages({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageIds: ['q1', 'q2'],
+        message: 'merged task',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'QUEUE_CHANGED',
+      messages: [
+        { queuedMessageId: 'q1', source: 'lead' },
+        { queuedMessageId: 'user', source: 'user' },
+      ],
+    });
+    expect(mergeQueuedMessages).toHaveBeenCalledTimes(1);
+    expect(latestQueue.map((item) => item.clientId)).toEqual(['q1', 'user']);
+  });
+
+  it('does not enter the atomic merge when durable queue restoration is incomplete', async () => {
+    const mergeQueuedMessages = vi.fn(() => true);
+    const { service } = createDeps({
+      ensureWorkerQueueRestored: vi.fn(async () => false),
+      mergeQueuedMessages,
+    });
+
+    await expect(
+      service.mergeWorkerQueuedMessages({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageIds: ['q1', 'q2'],
+        message: 'merged task',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+    expect(mergeQueuedMessages).not.toHaveBeenCalled();
+  });
+
   it('threads queuedMessageId through queued dispatch results', async () => {
     const { service } = createDeps({
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => true })),
-      dispatchWorkerMessage: vi.fn(async (params) => ({
-        ok: true,
-        mode: 'queued',
-        clientId: 'client-queued-9',
-        dispatchOutcome: {
-          kind: 'session-dispatch',
-          source: params.dispatchMeta.source,
-          dispatched: true,
-          wakeKind: 'queued',
-        },
-        targetTitle: 'Worker',
-        targetLastUserSendAt: null,
-      } satisfies DispatchWorkerMessageResult)),
+      dispatchWorkerMessage: vi.fn(
+        async (params) =>
+          ({
+            ok: true,
+            mode: 'queued',
+            clientId: 'client-queued-9',
+            dispatchOutcome: {
+              kind: 'session-dispatch',
+              source: params.dispatchMeta.source,
+              dispatched: true,
+              wakeKind: 'queued',
+            },
+            targetTitle: 'Worker',
+            targetLastUserSendAt: null,
+          }) satisfies DispatchWorkerMessageResult,
+      ),
     });
 
     await expect(

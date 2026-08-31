@@ -108,10 +108,7 @@ export function useSessionListActions() {
     });
   }, [patchSession, swipeRegistry, t]);
 
-  const handleSessionSheetAction = useCallback((action: SessionSwipeAction) => {
-    const session = actionSheetSession;
-    setActionSheetSession(null);
-    if (!session) return;
+  const applySessionSheetAction = useCallback((session: RemoteSession, action: SessionSwipeAction) => {
     if (action === 'delete') {
       const title = projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')).trim()
         || t('devices.list.untitled');
@@ -122,14 +119,25 @@ export function useSessionListActions() {
       return;
     }
     if (action === 'rename') {
-      pendingSheetActionRef.current = () => {
-        setRenameSessionDraft(projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')));
-        setRenameSessionTarget(session);
-      };
+      setRenameSessionDraft(projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')));
+      setRenameSessionTarget(session);
       return;
     }
     runSwipeAction(session, action);
-  }, [actionSheetSession, runSwipeAction, t]);
+  }, [runSwipeAction, t]);
+
+  const handleSessionSheetAction = useCallback((action: SessionSwipeAction) => {
+    const session = actionSheetSession;
+    setActionSheetSession(null);
+    if (!session) return;
+    if (action === 'rename' || action === 'delete') {
+      // Android 自绘 Modal、iOS Expo BottomSheet、系统 Alert 都不能在 Sheet
+      // dismiss 过程中再 present,否则会被吞掉或压在后面。
+      pendingSheetActionRef.current = () => applySessionSheetAction(session, action);
+      return;
+    }
+    applySessionSheetAction(session, action);
+  }, [actionSheetSession, applySessionSheetAction]);
 
   const handleSessionSheetClosed = useCallback(() => {
     const pending = pendingSheetActionRef.current;

@@ -8,6 +8,10 @@ export {
 } from './translate-request.js';
 export { ChatBridgeToolContext, type ChatBridgeToolKind, type ChatBridgeToolSpec } from './tool-context.js';
 export {
+  createResponsesCustomToolFunctionAdapter,
+  type ResponsesCustomToolFunctionAdapter,
+} from './custom-tool-function-adapter.js';
+export {
   isResponsesImageContentPartType,
   isUnsupportedResponsesImageErrorPayload,
   UnsupportedResponsesFeatureError,

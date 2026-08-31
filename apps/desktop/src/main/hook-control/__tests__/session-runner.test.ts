@@ -102,6 +102,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
     parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
+    parseToolLoopErrorDetails: actual.parseToolLoopErrorDetails,
   };
 });
 vi.mock('../../device-link/broadcast-tap.js', () => ({
@@ -2196,6 +2197,30 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.errorMessage).toContain('在这里重发这条消息');
     // 上游原文不外发到渠道, 只留在本地日志里。
     expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
+  });
+
+  it('工具循环终态在官方 bot 也走共享安全文案, 不透出内部分类', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    cb({
+      type: 'error',
+      data: {
+        message: 'tool_use_loop_detected: missing_required_field',
+        isTerminal: true,
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      },
+    });
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('无效的工具调用');
+    expect(outcome.errorMessage).not.toContain('missing_required_field');
+    expect(outcome.errorMessage).not.toContain('tool_use_loop_detected');
   });
 
   it('非过载的终态错误仍原样上报(不误改其它失败的诊断信息)', async () => {

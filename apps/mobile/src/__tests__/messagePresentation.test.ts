@@ -189,7 +189,7 @@ describe('messagePresentation', () => {
     };
 
     expect(summarizeWorkGroupPresentation(workGroup)).toEqual({
-      title: '已工作 1m 5s',
+      title: 'Worked for 1m 5s',
       subtitle: '',
       header: {
         chevronPosition: 'trailing',
@@ -198,7 +198,7 @@ describe('messagePresentation', () => {
         iconSize: 14,
         summaryCount: 0,
         subtitle: null,
-        title: '已工作 1m 5s',
+        title: 'Worked for 1m 5s',
         variant: 'plain',
       },
     });

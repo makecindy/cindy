@@ -91,6 +91,19 @@ describe('Maker agent status', () => {
       authReady: false,
     });
   });
+
+  it('registers an optional agent after construction idempotently', () => {
+    const maker = new Maker({
+      agents: {},
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const pi = createAgent(async () => undefined, 'pi');
+
+    expect(maker.registerAgent('pi', pi)).toBe(true);
+    expect(maker.registerAgent('pi', pi)).toBe(false);
+    expect(maker.listAvailableAgents()).toEqual(['pi']);
+  });
 });
 
 function createAgent(
@@ -177,6 +190,285 @@ function createDeferred<T = void>(): {
   });
   return { promise, resolve };
 }
+
+describe('Maker local Pi package generation fence', () => {
+  it.each(['disable', 'remove', 'update'])(
+    'closes an in-flight local Pi startup before publish after %s',
+    async () => {
+      const started = createDeferred<AgentSessionHandle>();
+      const handle = createHandle({ id: 'pi-thread', agentKind: 'pi' });
+      handle.close = vi.fn(async () => undefined);
+      const startSession = vi.fn(async () => started.promise);
+      const storage = createStorage();
+      const maker = new Maker({
+        agents: { pi: createAgent(startSession, 'pi') },
+        storage,
+        logger: createLogger(),
+      });
+      const creating = maker.createSession({
+        id: 'local-pi',
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      });
+      await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+      maker.advanceLocalPiPackageRuntimeGeneration();
+      started.resolve(handle);
+
+      await expect(creating).rejects.toThrow('invalidated by a package change');
+      expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+      expect(maker.listActiveSessions()).toEqual([]);
+      expect(await storage.get('local-pi')).toBeNull();
+    },
+  );
+
+  it('rolls back a task created after package generation changes inside storage.get', async () => {
+    const baseStorage = createStorage();
+    const getEntered = createDeferred();
+    const allowGet = createDeferred();
+    const storage: SessionStorage = {
+      ...baseStorage,
+      async get(id) {
+        getEntered.resolve();
+        await allowGet.promise;
+        return baseStorage.get(id);
+      },
+    };
+    const handle = createHandle({ id: 'pi-thread-get-race', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const creating = maker.createSession({
+      id: 'get-race',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    await getEntered.promise;
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    allowGet.resolve();
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+    expect(await storage.get('get-race')).toBeNull();
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('rolls back a task created while package generation changes inside storage.create', async () => {
+    const baseStorage = createStorage();
+    const createEntered = createDeferred();
+    const allowCreate = createDeferred();
+    const storage: SessionStorage = {
+      ...baseStorage,
+      async create(meta) {
+        createEntered.resolve();
+        await allowCreate.promise;
+        return baseStorage.create(meta);
+      },
+    };
+    const handle = createHandle({ id: 'pi-thread-created-race', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+
+    const creating = maker.createSession({
+      id: 'created-during-race',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    await createEntered.promise;
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    allowCreate.resolve();
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+    expect(await storage.get('created-during-race')).toBeNull();
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('preserves existing metadata when generation changes inside storage.update', async () => {
+    const baseStorage = createStorage();
+    await baseStorage.create({
+      id: 'updated-during-race',
+      agentKind: 'pi',
+      workDir: '/repo',
+      title: 'Existing Pi task',
+      model: 'pi-model',
+      sdkSessionId: 'pi-thread-existing',
+    });
+    const updateEntered = createDeferred();
+    const allowUpdate = createDeferred();
+    const storage: SessionStorage = {
+      ...baseStorage,
+      async update(id, patch) {
+        updateEntered.resolve();
+        await allowUpdate.promise;
+        return baseStorage.update(id, patch);
+      },
+    };
+    const handle = createHandle({ id: 'pi-thread-replacement', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+
+    const creating = maker.createSession({
+      id: 'updated-during-race',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+      resumeSessionId: 'pi-thread-existing',
+    });
+    await updateEntered.promise;
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    allowUpdate.resolve();
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(await storage.get('updated-during-race')).toMatchObject({
+      title: 'Existing Pi task',
+      sdkSessionId: 'pi-thread-existing',
+    });
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('rejects a mutation during async onStartSucceeded without closing unpublished task ownership', async () => {
+    const hookEntered = createDeferred();
+    const allowHook = createDeferred();
+    const onClose = vi.fn();
+    const handle = createHandle({ id: 'pi-thread-hook-race', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const storage = createStorage();
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage,
+      logger: createLogger(),
+      lifecycleHooks: {
+        async onStartSucceeded() {
+          hookEntered.resolve();
+          await allowHook.promise;
+        },
+        onClose,
+      },
+    });
+
+    const creating = maker.createSession({
+      id: 'hook-race',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    await hookEntered.promise;
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    allowHook.resolve();
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(handle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await storage.get('hook-race')).toBeNull();
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it('publishes a local Pi startup when generation stays unchanged across async hooks', async () => {
+    const allowHook = createDeferred();
+    const handle = createHandle({ id: 'pi-thread-current', agentKind: 'pi' });
+    const maker = new Maker({
+      agents: { pi: createAgent(vi.fn(async () => handle), 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: { onStartSucceeded: async () => allowHook.promise },
+    });
+    const creating = maker.createSession({
+      id: 'current-local-pi',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    });
+    allowHook.resolve();
+
+    await expect(creating).resolves.toBeInstanceOf(Session);
+    expect(maker.listActiveSessions()).toHaveLength(1);
+  });
+
+  it('preserves an existing task sdkSessionId when its replacement startup becomes stale', async () => {
+    const storage = createStorage();
+    await storage.create({
+      id: 'existing-local-pi',
+      agentKind: 'pi',
+      workDir: '/repo',
+      title: 'Existing Pi task',
+      model: 'pi-model',
+      sdkSessionId: 'pi-thread-existing',
+    });
+    const started = createDeferred<AgentSessionHandle>();
+    const staleHandle = createHandle({ id: 'pi-thread-stale', agentKind: 'pi' });
+    staleHandle.close = vi.fn(async () => undefined);
+    const startSession = vi.fn(async () => started.promise);
+    const maker = new Maker({
+      agents: { pi: createAgent(startSession, 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const creating = maker.createSession({
+      id: 'existing-local-pi',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+      resumeSessionId: 'pi-thread-existing',
+    });
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    started.resolve(staleHandle);
+
+    await expect(creating).rejects.toThrow('invalidated by a package change');
+    expect(staleHandle.close).toHaveBeenCalledWith({ reason: 'navigation' });
+    expect(await storage.get('existing-local-pi')).toMatchObject({
+      title: 'Existing Pi task',
+      sdkSessionId: 'pi-thread-existing',
+    });
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+
+  it.each([
+    ['remote', { remoteHostId: 'ssh-host' }],
+    ['Review', { reviewMode: true }],
+  ])('does not fence an in-flight %s Pi startup', async (_label, boundary) => {
+    const started = createDeferred<AgentSessionHandle>();
+    const handle = createHandle({ id: 'pi-thread', agentKind: 'pi' });
+    handle.close = vi.fn(async () => undefined);
+    const startSession = vi.fn(async () => started.promise);
+    const maker = new Maker({
+      agents: { pi: createAgent(startSession, 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const creating = maker.createSession({
+      id: 'excluded-pi',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+      ...boundary,
+    });
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+    maker.advanceLocalPiPackageRuntimeGeneration();
+    started.resolve(handle);
+
+    await expect(creating).resolves.toBeInstanceOf(Session);
+    expect(handle.close).not.toHaveBeenCalled();
+    expect(maker.listActiveSessions()).toHaveLength(1);
+  });
+});
 
 describe('Maker session creation singleflight', () => {
   it('binds each rebuilt business session to a fresh runtime instance id', async () => {

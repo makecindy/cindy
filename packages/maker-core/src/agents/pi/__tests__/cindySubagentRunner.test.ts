@@ -39,6 +39,26 @@ import {
 
 const roots: string[] = [];
 
+async function launchRunnerWithNode(request: {
+  runnerFile: string;
+  configFile: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const child = spawn(process.execPath, [request.runnerFile, request.configFile], {
+    cwd: request.cwd,
+    env: request.env,
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+}
+
 /**
  * `runner.cjs` is byte-identical for every fixture and by far the biggest file
  * each one writes. Writing it once for the suite keeps ~30 real file creations
@@ -303,7 +323,15 @@ if (!process.env.PI_CODING_AGENT_DIR ||
   process.exit(13);
 }
 const subagentRunDir = process.env.CINDY_PI_SUBAGENT_RUN_DIR;
-if (!subagentRunDir || path.dirname(subagentRunDir) !== ${JSON.stringify(root)} ||
+// A resumed run may reach this same fixture root through a directory link when
+// the host-side test models two Cindy instances. Compare filesystem identity,
+// not the spelling of the path: a Windows junction keeps the alias in the env
+// value even though it points at this exact directory.
+let canonicalSubagentRoot = null;
+try {
+  canonicalSubagentRoot = subagentRunDir ? fs.realpathSync(path.dirname(subagentRunDir)) : null;
+} catch (_) { /* rejected by the validation below */ }
+if (!subagentRunDir || canonicalSubagentRoot !== fs.realpathSync(${JSON.stringify(root)}) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(path.basename(subagentRunDir))) {
   process.exit(12);
 }
@@ -630,7 +658,7 @@ describe('Cindy durable PI Subagent runner', () => {
 
     function resumeLaunch(fixture: Awaited<ReturnType<typeof makeFixture>>) {
       return {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: {
@@ -843,27 +871,35 @@ describe('Cindy durable PI Subagent runner', () => {
         outcome.status === 'rejected'
         && !/already resuming this Subagent generation/i.test(String(outcome.reason?.message ?? ''))
       ));
-      expect(unexpectedRejections, `resume outcomes: ${describeOutcomes()}`).toHaveLength(0);
-      expect(started, `resume outcomes: ${describeOutcomes()}`).toHaveLength(1);
-      expect(refusedTheResume, `resume outcomes: ${describeOutcomes()}`).toHaveLength(1);
-      // Whoever got through, there is never a second live generation over the
-      // same PI child session — that is what a lost claim has to prevent.
-      const runs = await listPiSubagentRuns(fixture.root);
-      const resumedRuns = runs.filter((run) => run.taskId === first.taskId && run.runId !== first.runId);
-      expect(resumedRuns).toHaveLength(started.length);
+      const startedRunIds = started.map((outcome) => (
+        (outcome as PromiseFulfilledResult<string>).value
+      ));
+      try {
+        expect(unexpectedRejections, `resume outcomes: ${describeOutcomes()}`).toHaveLength(0);
+        expect(started, `resume outcomes: ${describeOutcomes()}`).toHaveLength(1);
+        expect(refusedTheResume, `resume outcomes: ${describeOutcomes()}`).toHaveLength(1);
+        // Whoever got through, there is never a second live generation over the
+        // same PI child session — that is what a lost claim has to prevent.
+        const runs = await listPiSubagentRuns(fixture.root);
+        const resumedRuns = runs.filter((run) => run.taskId === first.taskId && run.runId !== first.runId);
+        expect(resumedRuns).toHaveLength(started.length);
 
-      if (started.length === 1) {
-        const resumedRunId = (started[0] as PromiseFulfilledResult<string>).value;
-        await controlPiSubagentRuns(fixture.root, resumedRunId, 'stop');
-        await waitFor(
-          async () => {
-            const settledRuns = await listPiSubagentRuns(fixture.root);
-            const resumed = settledRuns.find((run) => run.runId === resumedRunId);
-            return resumed && isPiSubagentTerminal(resumed.state) ? resumed : null;
-          },
-          undefined,
-          'the hung resumed generation to stop',
-        );
+      } finally {
+        // Keep a failed assertion from leaking a detached fake runner. On
+        // Windows its cwd pins the temporary directory and turns the useful
+        // mutual-exclusion failure into a secondary EBUSY teardown failure.
+        await Promise.all(startedRunIds.map(async (resumedRunId) => {
+          await controlPiSubagentRuns(fixture.root, resumedRunId, 'stop');
+          await waitFor(
+            async () => {
+              const settledRuns = await listPiSubagentRuns(fixture.root);
+              const resumed = settledRuns.find((run) => run.runId === resumedRunId);
+              return resumed && isPiSubagentTerminal(resumed.state) ? resumed : null;
+            },
+            undefined,
+            'the hung resumed generation to stop',
+          );
+        }));
       }
     });
   });
@@ -897,7 +933,7 @@ describe('Cindy durable PI Subagent runner', () => {
       first.runId,
       'continue from the prior result',
       {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: {
@@ -946,7 +982,7 @@ describe('Cindy durable PI Subagent runner', () => {
       resumedRunId!,
       'continue for a second resumed generation',
       {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: {
@@ -993,7 +1029,7 @@ describe('Cindy durable PI Subagent runner', () => {
       first.runId,
       'continue from redirected catalog',
       {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: process.env,
@@ -1016,7 +1052,7 @@ describe('Cindy durable PI Subagent runner', () => {
       first.runId,
       'continue without leaving partial staging',
       {
-        nodeExecutable: process.execPath,
+        launchRunner: launchRunnerWithNode,
         runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: fixture.runnerFile,
         env: process.env,
@@ -1038,7 +1074,7 @@ describe('Cindy durable PI Subagent runner', () => {
     });
     await waitForClose(fixture.child, fixture.stderr);
     const launch = {
-      nodeExecutable: process.execPath,
+      launchRunner: launchRunnerWithNode,
       runtimeOwnerId: 'resume-owner',
       runnerFallbackFile: fixture.runnerFile,
       env: {

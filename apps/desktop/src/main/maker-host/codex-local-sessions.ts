@@ -25,6 +25,8 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   CodexResumePreparationBlockedError,
   finalizeCodexCitationText,
+  isOversizedLiveTailStats,
+  measureRolloutLiveTailStats,
 } from '@cindy/maker-core';
 
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
@@ -1560,6 +1562,68 @@ export async function dumpCodexThreadStateRows(threadId: string): Promise<CodexT
     dump = { ...dump, rolloutPath: external.rolloutPath };
   }
   return dump;
+}
+
+/** Capture only a newly forked thread's exact private DB row and rollout identity. */
+export function reserveCodexForkCleanup(
+  threadId: string,
+  sourceThreadId: string,
+): (() => Promise<void>) | null {
+  if (!isLikelyThreadId(threadId) || threadId === sourceThreadId) return null;
+  const home = getDesktopCodexHome();
+  const stateDbPath = findLatestStateDb(home);
+  if (!stateDbPath || !isPathInside(home, stateDbPath)) return null;
+  const row = readRawThreadRow(stateDbPath, threadId);
+  const rolloutPath = stringValue(row?.rollout_path);
+  if (
+    !rolloutPath ||
+    !isPathInside(home, rolloutPath) ||
+    threadIdFromRolloutPath(rolloutPath) !== threadId
+  ) return null;
+  try {
+    const stateDb = fs.lstatSync(stateDbPath);
+    const rollout = fs.lstatSync(rolloutPath);
+    if (!stateDb.isFile() || !rollout.isFile()) return null;
+    return async () => {
+      let db: Database.Database | null = null;
+      try {
+        const currentDb = fs.lstatSync(stateDbPath);
+        const currentRollout = fs.lstatSync(rolloutPath);
+        if (
+          !currentDb.isFile() || currentDb.dev !== stateDb.dev || currentDb.ino !== stateDb.ino ||
+          !currentRollout.isFile() || currentRollout.dev !== rollout.dev || currentRollout.ino !== rollout.ino
+        ) return;
+        db = createBetterSqliteDatabase(stateDbPath);
+        db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+        const targetDb = db;
+        let stateRemoved = false;
+        targetDb.transaction(() => {
+          const current = targetDb.prepare('SELECT rollout_path FROM threads WHERE id = ? LIMIT 1')
+            .get(threadId) as { rollout_path?: string } | undefined;
+          if (current?.rollout_path !== rolloutPath) return;
+          if (tableExists(targetDb, 'thread_dynamic_tools')) {
+            targetDb.prepare('DELETE FROM thread_dynamic_tools WHERE thread_id = ?').run(threadId);
+          }
+          if (tableExists(targetDb, 'thread_spawn_edges')) {
+            targetDb.prepare('DELETE FROM thread_spawn_edges WHERE parent_thread_id = ?').run(threadId);
+          }
+          stateRemoved = targetDb.prepare('DELETE FROM threads WHERE id = ? AND rollout_path = ?')
+            .run(threadId, rolloutPath).changes > 0;
+        })();
+        if (stateRemoved) await fsp.rm(rolloutPath, { force: true });
+      } catch (error) {
+        log.warn('forked Codex thread cleanup failed', {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      } finally {
+        closeDbQuietly(db);
+      }
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** 只读取一个 state DB 里该 thread 的三表行并转成 JSON 可序列化形态。 */
@@ -3518,6 +3582,23 @@ function dropUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
     if (v !== undefined) out[k as keyof T] = v as T[keyof T];
   }
   return out;
+}
+
+export type CodexHistoryOversizedClass = 'oversized' | 'healthy' | 'unknown';
+
+/** 只读测量本地 Codex rollout 活尾巴。找不到文件或读失败归 unknown，不得当成健康。 */
+export async function classifyCodexHistoryOversized(
+  threadId: string,
+): Promise<CodexHistoryOversizedClass> {
+  if (!threadId) return 'unknown';
+  const rolloutPath = resolveRolloutPath(threadId);
+  if (!rolloutPath) return 'unknown';
+  try {
+    const stats = await measureRolloutLiveTailStats(rolloutPath);
+    return isOversizedLiveTailStats(stats) ? 'oversized' : 'healthy';
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**

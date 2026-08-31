@@ -58,6 +58,15 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     );
   });
 
+  it('maps oversized Codex history to its own copy, not the reconnect timeout', () => {
+    expect(ERROR_REASON_I18N_KEYS.codex_history_oversized).toBe(
+      'logic.errors.codexHistoryOversized',
+    );
+    expect(ERROR_REASON_I18N_KEYS.codex_history_oversized).not.toBe(
+      ERROR_REASON_I18N_KEYS.codex_reconnect_stalled,
+    );
+  });
+
   it('maps an event-loop crash to the generic terminal failure copy', () => {
     expect(ERROR_REASON_I18N_KEYS.session_event_loop_crashed).toBe('logic.errors.turnFailed');
   });
@@ -92,6 +101,21 @@ describe('mapServerMessages — persisted terminal error rows', () => {
       content: '任务执行失败（模型未返回错误详情）。',
       errorReason: 'turn-failed',
       isStreaming: false,
+    });
+  });
+
+  it('restores bounded tool-loop details for localized history rendering', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('e-tool-loop', {
+        message: '内部熔断详情：missing_required_field',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      }),
+    ]);
+
+    expect(mapped[0]).toMatchObject({
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
     });
   });
 

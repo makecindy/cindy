@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { InstalledGhost } from '../../../shared/ghost';
 import { GhostPickSlot, type PickSlotDeps } from '../pickSlot';
 
-function pickGhost(options: { slots?: string[]; enabled?: boolean } = {}): InstalledGhost {
+function pickGhost(options: { pick?: boolean; node?: boolean; enabled?: boolean } = {}): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -14,8 +14,8 @@ function pickGhost(options: { slots?: string[]; enabled?: boolean } = {}): Insta
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: options.slots ?? ['pick', 'node'],
-      ...(options.slots?.includes('node') ?? true
+      ...(options.pick === false ? {} : { pick: true }),
+      ...(options.node !== false
         ? { node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' } }
         : {}),
     },
@@ -40,8 +40,8 @@ function makeSlot(overrides: Partial<PickSlotDeps> = {}) {
 }
 
 describe('pickSlot · 资格审与载荷校验', () => {
-  it('未声明 pick 槽 / 未启用 一律 PERMISSION_DENIED', async () => {
-    const noSlot = makeSlot({ getGhost: () => pickGhost({ slots: ['node'] }) });
+  it('未声明 pick 能力 / 未启用 一律 PERMISSION_DENIED', async () => {
+    const noSlot = makeSlot({ getGhost: () => pickGhost({ pick: false }) });
     expect(await noSlot.slot.handleRequest('pick-ghost', { mode: 'directory' })).toMatchObject({
       ok: false,
       errorCode: 'PERMISSION_DENIED',
@@ -68,8 +68,8 @@ describe('pickSlot · 资格审与载荷校验', () => {
     ).toMatchObject({ ok: false, errorCode: 'INVALID_REQUEST' });
   });
 
-  it('未声明 node 槽的插件必须 deposit:true,否则选完什么都拿不到 = 拒单', async () => {
-    const { slot } = makeSlot({ getGhost: () => pickGhost({ slots: ['pick'] }) });
+  it('未声明 node 能力的插件必须 deposit:true,否则选完什么都拿不到 = 拒单', async () => {
+    const { slot } = makeSlot({ getGhost: () => pickGhost({ node: false }) });
     expect(await slot.handleRequest('pick-ghost', { mode: 'directory' })).toMatchObject({
       ok: false,
       errorCode: 'INVALID_REQUEST',
@@ -103,7 +103,7 @@ describe('pickSlot · 授权 = 用户亲选', () => {
     expect(nodeOnly).toMatchObject({ ok: true, path: '/Users/me/projects' });
     expect((nodeOnly as { dir_deposit?: unknown }).dir_deposit).toBeUndefined();
 
-    const depositOnly = makeSlot({ getGhost: () => pickGhost({ slots: ['pick'] }) });
+    const depositOnly = makeSlot({ getGhost: () => pickGhost({ node: false }) });
     const r = await depositOnly.slot.handleRequest('pick-ghost', {
       mode: 'directory',
       deposit: true,

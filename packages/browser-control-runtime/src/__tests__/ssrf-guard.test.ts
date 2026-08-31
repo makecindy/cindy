@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { fetchWithSsrFGuard } from '../shim/ssrf-runtime.js';
+import {
+  fetchSingleHopWithSsrFGuard,
+  fetchWithSsrFGuard,
+} from '../shim/ssrf-runtime.js';
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
@@ -89,6 +92,40 @@ describe('fetchWithSsrFGuard thin shell', () => {
 
   it('blocks a private IP when policy does not allow it', async () => {
     await expect(fetchWithSsrFGuard({ url: 'http://10.0.0.5/' })).rejects.toThrow(/blocked/i);
+  });
+
+  it('blocks a hostname whose pinned DNS answer is private before a single-hop fetch', async () => {
+    await expect(
+      fetchSingleHopWithSsrFGuard({
+        url: 'https://public.example/data',
+        lookupFn: lookupAddresses([{ address: '127.0.0.1', family: 4 }]),
+      }),
+    ).rejects.toThrow(/blocked/i);
+  });
+
+  it('revalidates only after DNS and dispatcher selection, then closes without dispatching', async () => {
+    const events: string[] = [];
+    const close = vi.fn(async () => undefined);
+    await expect(
+      fetchSingleHopWithSsrFGuard({
+        url: 'https://public.example/data',
+        lookupFn: (async () => {
+          events.push('dns');
+          return [{ address: '93.184.216.34', family: 4 }];
+        }) as unknown as LookupFn,
+        dispatcherFactory: async () => {
+          events.push('dispatcher');
+          return { close } as never;
+        },
+        beforeDispatch: () => {
+          events.push('revalidate');
+          throw new Error('authorization expired');
+        },
+      }),
+    ).rejects.toThrow('authorization expired');
+
+    expect(events).toEqual(['dns', 'dispatcher', 'revalidate']);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT block an allowlisted loopback host (regression: CDP control plane)', async () => {
