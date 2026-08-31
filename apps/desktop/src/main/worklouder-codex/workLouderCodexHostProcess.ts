@@ -358,6 +358,10 @@ function discoverPresence(): void {
   } catch (error) {
     hostLog('debug', `presence discovery failed: ${safeErrorMessage(error)}`);
     post({ kind: 'presence', present: false });
+  } finally {
+    // Presence discovery does not own a HID transport. Do not let an SDK
+    // discovery diagnostic poison the next real connection attempt.
+    clearTransportFault();
   }
 }
 
@@ -462,7 +466,12 @@ function safeErrorMessage(error: unknown): string {
 async function ensureConnected(): Promise<WorkLouderApi | null> {
   if (api && transportFaulted) await disconnect();
   if (api) return api;
+  // Discovery runs with the same SDK logger as the HID transport, but it is
+  // independent of any connection. Start each new connection with a clean
+  // transport-fault state.
+  clearTransportFault();
   const candidate = findCandidates()[0];
+  clearTransportFault();
   if (!candidate) return null;
   const loaded = loadSdk();
   const nextComm = new loaded.WLDeviceCommImpl(sdkLogger);
@@ -654,8 +663,7 @@ function clearRetry(): void {
 }
 
 async function disconnect(): Promise<void> {
-  transportFaulted = false;
-  lastTransportError = null;
+  clearTransportFault();
   connectedDevice = null;
   const unsubscribe = unsubscribeHid;
   unsubscribeHid = null;
@@ -684,6 +692,11 @@ async function disconnect(): Promise<void> {
   } catch {
     // Connection teardown is best effort after a failed HID RPC.
   }
+}
+
+function clearTransportFault(): void {
+  transportFaulted = false;
+  lastTransportError = null;
 }
 
 async function stop(): Promise<void> {
