@@ -256,20 +256,20 @@ describe('effortLabelFromRuntime —— 会话摘要按 app 语言覆盖 snapsho
   });
 });
 
-describe('compactEffortLabelFor —— 英文列表短码', () => {
-  it('英文按稳定 effort id 显示 2–3 字母，非英文仍用本地化全称', async () => {
+describe('compactEffortLabelFor —— 英文列表紧凑标签', () => {
+  it('英文只压缩长档位，非英文仍用本地化全称', async () => {
     const previousLanguage = i18n.language;
     try {
       await i18n.changeLanguage('en');
       expect(effortLabelFor({}, 'xhigh', capabilities)).toBe('Extra High');
       expect(
         compactEffortLabelFor({ effortDisplayNames: { xhigh: '特高' } }, 'xhigh', capabilities),
-      ).toBe('XHi');
-      expect(compactEffortLabelFor({}, 'minimal', capabilities)).toBe('Min');
-      expect(compactEffortLabelFor({}, 'low', capabilities)).toBe('Lo');
-      expect(compactEffortLabelFor({}, 'medium', capabilities)).toBe('Mid');
-      expect(compactEffortLabelFor({}, 'high', capabilities)).toBe('Hi');
-      expect(compactEffortLabelFor({}, 'ultra', capabilities)).toBe('Ult');
+      ).toBe('Extra');
+      expect(compactEffortLabelFor({}, 'minimal', capabilities)).toBe('Minimal');
+      expect(compactEffortLabelFor({}, 'low', capabilities)).toBe('Low');
+      expect(compactEffortLabelFor({}, 'medium', capabilities)).toBe('Medium');
+      expect(compactEffortLabelFor({}, 'high', capabilities)).toBe('High');
+      expect(compactEffortLabelFor({}, 'ultra', capabilities)).toBe('Ultra');
       expect(compactEffortLabelFor({}, 'max', capabilities)).toBe('Max');
       expect(
         compactEffortLabelFor(

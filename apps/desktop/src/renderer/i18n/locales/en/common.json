@@ -3557,7 +3557,7 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "Model",
-        "effortLabel": "Reasoning effort",
+        "effortLabel": "Reasoning Effort",
         "permissionLabel": "Permission mode",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
@@ -3953,7 +3953,7 @@
             "options": {
               "session-switch": "Switch tasks",
               "composer-navigation": "Navigate the composer",
-              "reasoning": "Reasoning effort",
+              "reasoning": "Reasoning Effort",
               "conversation-scroll": "Scroll the conversation",
               "custom": "Custom"
             }
@@ -6943,7 +6943,7 @@
       "remoteLoadFailedShort": "Model loading failed",
       "retryRemoteModels": "Reload models",
       "remoteEmpty": "This device has no available models",
-      "effortLabel": "Effort level",
+      "effortLabel": "Reasoning Effort",
       "thinking": "Thinking",
       "edit": "Edit",
       "options": "Options",
@@ -9094,7 +9094,7 @@
     "medium": "Medium",
     "high": "High",
     "xhigh": "Extra High",
-    "max": "Max",
+    "max": "Maximum",
     "ultra": "Ultra"
   },
   "scheduler": {
@@ -9534,13 +9534,13 @@
           "google": "Google",
           "china": "China"
         },
-        "effortHeading": "Effort",
+        "effortHeading": "Reasoning Effort",
         "effortDefault": "Default",
         "followSession": "Follow session",
         "modelListAria": "Model list",
         "modelSelectorAria": "Model selector",
         "categoryListAria": "{{category}} models",
-        "effortListAria": "Effort level"
+        "effortListAria": "Reasoning effort"
       }
     },
     "toast": {
@@ -10501,7 +10501,7 @@
     "workingDirPlaceholder": "Click the button on the right to pick a directory",
     "selectButton": "Select…",
     "modelLabel": "Model:",
-    "effortLabel": "Effort:",
+    "effortLabel": "Reasoning Effort:",
     "permissionLabel": "Permission:",
     "warningHint": "Modes marked ⚠ (ask/default/plan/acceptEdits) have no UI approval popup wired in stage 1; the experimental page hook auto-denies tool calls — only auto / bypassPermissions are recommended for real testing.",
     "createSession": "Create Session",
@@ -10682,7 +10682,7 @@
       "modelLabel": "Model",
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
-      "effortLabel": "Effort",
+      "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",
       "optional": "(optional)",
       "initialTaskPlaceholder": "Optional first task for this worker",
