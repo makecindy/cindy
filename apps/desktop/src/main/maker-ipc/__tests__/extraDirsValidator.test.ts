@@ -22,7 +22,7 @@ describe('excludeDirectoryGrantConflicts', () => {
     const output = path.join(root, 'output');
     mkdirSync(reference);
     mkdirSync(output);
-    symlinkSync(reference, alias, 'dir');
+    symlinkSync(reference, alias, process.platform === 'win32' ? 'junction' : 'dir');
 
     await expect(
       excludeDirectoryGrantConflicts([reference, alias, output], [reference]),
@@ -69,7 +69,7 @@ describe('excludeDirectoryGrantConflicts', () => {
     const sibling = path.join(root, 'shared-other');
     mkdirSync(specs, { recursive: true });
     mkdirSync(sibling);
-    symlinkSync(shared, sharedAlias, 'dir');
+    symlinkSync(shared, sharedAlias, process.platform === 'win32' ? 'junction' : 'dir');
 
     await expect(
       excludeDirectoryGrantConflicts([sharedAlias, sibling], [specs]),

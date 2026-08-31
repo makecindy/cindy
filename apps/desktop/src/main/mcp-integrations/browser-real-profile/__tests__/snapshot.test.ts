@@ -23,6 +23,16 @@ import { REAL_MANAGED_PROFILE } from '../../browser-managed-config.js';
 import { REAL_PROFILE_READ_DENIED } from '../../../../shared/browserBackend.js';
 import { RealProfileError, type InstalledChromium } from '../types.js';
 
+describe('node:sqlite main-process packaging', () => {
+  it('keeps node:sqlite external so Vite does not stub it as a browser module', () => {
+    const viteConfig = fs.readFileSync(
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'vite.main.config.ts'),
+      'utf8',
+    );
+    expect(viteConfig).toContain("'node:sqlite'");
+  });
+});
+
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {

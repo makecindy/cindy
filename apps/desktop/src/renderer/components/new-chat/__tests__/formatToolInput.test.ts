@@ -8,9 +8,11 @@ import { describe, expect, it } from 'vitest';
 import { formatToolInput } from '../PermissionPrompt';
 
 describe('formatToolInput (harness-agnostic)', () => {
-  it('extracts the command for both Bash and bash', () => {
+  it('extracts the command for Bash and PowerShell tools', () => {
     expect(formatToolInput('Bash', { command: 'ls -la' })).toBe('ls -la');
     expect(formatToolInput('bash', { command: 'git status' })).toBe('git status');
+    expect(formatToolInput('powershell', { command: 'Get-Content .\\README.md' }))
+      .toBe('Get-Content .\\README.md');
   });
 
   it('extracts the file path across file_path / path (CC and pi)', () => {

@@ -19,7 +19,7 @@ import {
 } from './codexAuthLogin';
 import { isCodexOAuthReconnectRequired } from './codexAuthRecovery';
 
-export type CodexUiState =
+export type CodexUiState = (
   | { kind: 'loading' }
   | { kind: 'unauthenticated' }
   | {
@@ -39,9 +39,10 @@ export type CodexUiState =
       reason: string;
       credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
     }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+) & { oauthWritesBlocked?: boolean };
 
-export type CodexLoginOutcome = 'authenticated' | 'cancelled' | 'failed' | 'unverified';
+export type CodexLoginOutcome = 'authenticated' | 'cancelled' | 'blocked' | 'failed' | 'unverified';
 export type CodexRecoveryCheck = 'idle' | 'checking' | 'failed';
 
 type CodexAuthMachineState = {
@@ -91,10 +92,12 @@ function createInitialMachineState(): CodexAuthMachineState {
 }
 
 function toCodexUiState(raw: CodexLoginResult, preserveGenericError = false): CodexUiState {
+  const writePolicy = raw.oauthWritesBlocked ? { oauthWritesBlocked: true } : {};
   if (raw.authenticated && raw.recoveryRequiredReason) {
     return {
       kind: 'reconnect-required',
       reason: raw.recoveryRequiredReason,
+      ...writePolicy,
       ...(raw.credentialScope ? { credentialScope: raw.credentialScope } : {}),
     };
   }
@@ -104,6 +107,7 @@ function toCodexUiState(raw: CodexLoginResult, preserveGenericError = false): Co
       identity: raw.identity,
       expiresAt: raw.expiresAt,
       authSource: raw.authSource,
+      ...writePolicy,
       ...(raw.credentialScope ? { credentialScope: raw.credentialScope } : {}),
     };
   }
@@ -112,13 +116,14 @@ function toCodexUiState(raw: CodexLoginResult, preserveGenericError = false): Co
     return {
       kind: 'reconnect-required',
       reason,
+      ...writePolicy,
       ...(raw.credentialScope ? { credentialScope: raw.credentialScope } : {}),
     };
   }
   if (preserveGenericError && reason) {
-    return { kind: 'error', message: reason };
+    return { kind: 'error', message: reason, ...writePolicy };
   }
-  return { kind: 'unauthenticated' };
+  return { kind: 'unauthenticated', ...writePolicy };
 }
 
 function replaceUi(
@@ -126,19 +131,24 @@ function replaceUi(
   ui: CodexUiState,
   revision: 'snapshot' | 'event' | 'auth',
 ): CodexAuthMachineState {
+  // Main's dev write policy is process-wide. Logout broadcasts intentionally omit it, so once
+  // observed it must remain authoritative across local/event state replacements.
+  const nextUi: CodexUiState = machine.ui.oauthWritesBlocked
+    ? { ...ui, oauthWritesBlocked: true }
+    : ui;
   let reconnectReason = machine.reconnectReason;
   let reconnectCredentialScope = machine.reconnectCredentialScope;
-  if (ui.kind === 'reconnect-required') {
-    reconnectReason = ui.reason;
-    reconnectCredentialScope = ui.credentialScope;
+  if (nextUi.kind === 'reconnect-required') {
+    reconnectReason = nextUi.reason;
+    reconnectCredentialScope = nextUi.credentialScope;
   }
-  if (ui.kind === 'authenticated' || ui.kind === 'unauthenticated') {
+  if (nextUi.kind === 'authenticated' || nextUi.kind === 'unauthenticated') {
     reconnectReason = null;
     reconnectCredentialScope = undefined;
   }
 
   return {
-    ui,
+    ui: nextUi,
     reconnectReason,
     ...(reconnectCredentialScope ? { reconnectCredentialScope } : {}),
     authRevision: machine.authRevision + (revision === 'auth' ? 1 : 0),
@@ -156,6 +166,7 @@ function restoreReconnectOr(
       ? {
           kind: 'reconnect-required',
           reason: machine.reconnectReason,
+          ...(fallback.oauthWritesBlocked ? { oauthWritesBlocked: true } : {}),
           ...(machine.reconnectCredentialScope
             ? { credentialScope: machine.reconnectCredentialScope }
             : {}),
@@ -759,6 +770,7 @@ export function useCodexAuth(options?: {
     async (mode: 'browser' | 'device-code' = 'browser'): Promise<CodexLoginOutcome> => {
       const observerEpoch = observerEpochRef.current;
       if (!isObserverActive(observerEpoch)) return 'cancelled';
+      if (machineRef.current.ui.oauthWritesBlocked) return 'blocked';
       transition({ type: 'login-pending', mode });
       try {
         const result = await triggerOwnedLogin(mode);
@@ -778,7 +790,8 @@ export function useCodexAuth(options?: {
           return 'authenticated';
         }
         transition({ type: 'login-result', result });
-        return result.errorReason === 'login_cancelled' ? 'cancelled' : 'failed';
+        if (result.errorReason === 'login_cancelled') return 'cancelled';
+        return result.errorReason === 'dev_oauth_write_blocked' ? 'blocked' : 'failed';
       } catch (error) {
         if (!isObserverActive(observerEpoch)) return 'cancelled';
         const message = error instanceof Error ? error.message : 'login_failed';

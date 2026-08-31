@@ -143,6 +143,7 @@ vi.mock('../rpc-client.js', () => ({
 import {
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
+  PiManagedPackageMutationFailedError,
   type TurnPermissionPolicy,
 } from '../../base-agent.js';
 import {
@@ -169,6 +170,15 @@ const noopLogger: Logger = {
 };
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+
+function desktopCommandOptions(command: string) {
+  return {
+    [MAIN_OWNED_SEND_CONTEXT]: {
+      origin: { kind: 'desktop' as const },
+      rawChannelText: command,
+    },
+  };
+}
 
 describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   let agentHome = '';
@@ -536,6 +546,40 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.env.no_proxy).toBeUndefined();
   });
 
+  it('lets Pi discover user-installed packages natively instead of gating them on Cindy metadata', async () => {
+    const packageRoot = path.join(agentHome, 'future-pi-package-shape');
+    mkdirSync(packageRoot, { recursive: true });
+    const deps = buildDeps();
+    deps.resolvePiNativePackagePaths = async () => [packageRoot];
+    deps.resolvePiManagedPackageResources = async () => ({
+      extensions: [],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [],
+    });
+
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'native-package-discovery',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      expect(captured.args).not.toContain('--no-extensions');
+      expect(captured.args).not.toContain(packageRoot);
+      const runtimeHome = captured.env.PI_CODING_AGENT_DIR!;
+      expect(JSON.parse(readFileSync(path.join(runtimeHome, 'settings.json'), 'utf8')))
+        .toMatchObject({ packages: [packageRoot] });
+      const extensionPaths = captured.args.flatMap((arg, index) => (
+        arg === '--extension' ? [captured.args[index + 1]] : []
+      ));
+      expect(extensionPaths.some((entry) => (
+        entry?.replaceAll('\\', '/').includes('/internal-extensions/')
+      ))).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('asks the host to launch a durable runner without treating the app executable as Node', async () => {
     const previousNode = process.env.ELECTRON_RUN_AS_NODE;
     const previousLegacy = process.env.CINDY_PI_SUBAGENT_NODE;
@@ -598,18 +642,35 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it('routes chat-requested Pi extension installs into the host-managed store', async () => {
+  it('publishes a durable tool receipt before retiring the successful caller', async () => {
     const mutatePiManagedPackage = vi.fn(async () => ({
       changed: true,
-      affectedPackage: { source: 'npm:context-mode', enabled: false },
+      affectedPackage: { source: 'npm:context-mode', enabled: true },
     }));
     const deps = buildDeps();
+    let handle!: Awaited<ReturnType<PiAgent['startSession']>>;
+    const onPiManagedPackageMutationSettled = vi.fn(async (_callerSessionId, publishOutcome) => {
+      publishOutcome({ runtimeConvergence: 'complete' });
+      await handle.close();
+    });
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
-    const handle = await new PiAgent(deps).startSession({
+    deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: 'Confirm',
+      cancel: 'Cancel',
+      mutationFailed: 'Pi extension operation failed.',
+      mutationSuccess: {
+        install: 'Pi extension installed and enabled. Start a new Pi task to use it.',
+        update: 'Pi extension updated. Start a new Pi task to use it.',
+        remove: 'Pi extension removed.',
+      },
+    });
+    handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-session',
       workingDir: cwd,
       model: 'm',
     });
+    const events = handle.events()[Symbol.asyncIterator]();
     try {
       handle.setInteractionResolver?.(
         vi.fn(async () => ({
@@ -629,9 +690,168 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         ok: true,
         result: {
           changed: true,
-          affectedPackage: { source: 'npm:context-mode', enabled: false },
+          affectedPackage: { source: 'npm:context-mode', enabled: true },
         },
       });
+      await vi.waitFor(() => expect(onPiManagedPackageMutationSettled).toHaveBeenCalledOnce());
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('Pi extension installed')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      expect(visibleReceipt).toContain('Start a new Pi task to use it.');
+      expect(visibleReceipt).toContain('"ok":true');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('publishes sibling partial recovery before retiring the approved-tool caller', async () => {
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: { source: 'npm:context-mode', enabled: true },
+    }));
+    let handle!: Awaited<ReturnType<PiAgent['startSession']>>;
+    deps.onPiManagedPackageMutationSettled = vi.fn(async (callerSessionId, publishOutcome) => {
+      expect(callerSessionId).toBe('managed-package-tool-partial-session');
+      publishOutcome({
+        runtimeConvergence: 'partial',
+        recoveryAction: 'restart-cindy-to-refresh-packages',
+      });
+      await handle.close();
+    });
+    handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-tool-partial-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    try {
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({ kind: 'permission', behavior: 'allow' })) as never,
+      );
+      fireManagedPackageRequest('pkg-partial', 'install', 'npm:context-mode');
+      const response = await waitForResponse('pkg-partial');
+      expect(JSON.parse(String(response.value))).toMatchObject({
+        ok: true,
+        result: { changed: true, affectedPackage: { enabled: true } },
+      });
+      await vi.waitFor(() => expect(events.some((event) => (
+        event.type === 'text'
+        && String((event.data as { text?: string }).text).includes('"runtimeConvergence":"partial"')
+      ))).toBe(true));
+      const published = JSON.stringify({ response, events });
+      expect(published).toContain('restart-cindy-to-refresh-packages');
+      expect(captured.closed).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    [
+      'credentials',
+      'https://user:credential-secret@example.com/pkg.git',
+      'https://example.com/pkg.git',
+      'credential-secret',
+    ],
+    [
+      'apostrophe credentials',
+      "https://us'er:sec'ret@example.com/pkg.git",
+      'https://example.com/pkg.git',
+      "'er:sec'ret@example.com/pkg.git",
+    ],
+    [
+      'embedded credentials',
+      'https://u1:embedded-secret@one.example/a","https://u2:embedded-secret@two.example/b',
+      'https://one.example/a%22,%22https://two.example/b',
+      'embedded-secret',
+    ],
+    [
+      'query',
+      'https://example.com/pkg.git?token=query-secret',
+      'https://example.com/pkg.git',
+      'query-secret',
+    ],
+    [
+      'fragment',
+      'https://example.com/pkg.git#fragment-secret',
+      'https://example.com/pkg.git',
+      'fragment-secret',
+    ],
+    ['normal', 'npm:context-mode', 'npm:context-mode', 'never-present-secret'],
+  ])('redacts %s from tool responses and durable host receipts', async (
+    kind,
+    source,
+    publicSource,
+    secret,
+  ) => {
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: '/Users/example/private/package-root',
+        name: '/Users/example/private/package-name',
+        enabled: true,
+        resources: [{
+          kind: 'extension',
+          name: '/Users/example/private/extension.ts',
+          compatibility: 'supported',
+        }],
+        runtimeRequirements: [{
+          packageName: 'https://user:runtime-secret@example.com/runtime',
+          range: source,
+          currentVersion: '/Users/example/private/version',
+          compatible: true,
+        }],
+      },
+    }));
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: 'Confirm',
+      cancel: 'Cancel',
+      mutationFailed: 'Failed',
+      mutationSuccess: { install: 'Installed', update: 'Updated', remove: 'Removed' },
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: `managed-package-redacted-${kind}`,
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+    try {
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({ kind: 'permission', behavior: 'allow' })) as never,
+      );
+      fireManagedPackageRequest(`pkg-redacted-${kind}`, 'install', source);
+      const response = await waitForResponse(`pkg-redacted-${kind}`);
+      const responseValue = String(response.value);
+      expect(JSON.parse(responseValue)).toMatchObject({
+        ok: true,
+        result: { affectedPackage: { source: publicSource, enabled: true } },
+      });
+
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('Installed')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      const published = `${responseValue}\n${visibleReceipt}`;
+      expect(published).not.toContain(secret);
+      expect(published).not.toContain('runtime-secret');
+      expect(published).not.toContain('/Users/example/private');
+      expect(published).toContain(publicSource);
     } finally {
       await handle.close();
     }
@@ -1251,8 +1471,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         source: 'npm:context-mode',
         name: 'context-mode',
         version: '1.0.169',
-        enabled: false,
-        requiresExtensionApproval: true,
+        enabled: true,
         resources: [
           {
             kind: 'extension',
@@ -1264,7 +1483,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
     }));
     const deps = buildDeps();
+    const onPiManagedPackageMutationSettled = vi.fn(async (_callerSessionId, publishOutcome) => {
+      publishOutcome({ runtimeConvergence: 'complete' });
+    });
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-command-session',
       workingDir: cwd,
@@ -1272,10 +1495,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: 'npm:context-mode',
@@ -1285,7 +1508,174 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt?.message).toContain('[Cindy internal Pi extension operation receipt]');
       expect(prompt?.message).toContain('"compatibility":"partial"');
       expect(prompt?.message).toContain('"status-display"');
+      expect(prompt?.message).toContain('installed and enabled');
+      expect(prompt?.message).toContain('requested active local Pi tasks including this task to stop');
+      expect(prompt?.message).toContain('do not claim every task has already stopped');
+      expect(prompt?.message).toContain('available after starting a new Pi task');
+      expect(prompt?.message).not.toContain('keeps its startup snapshot');
+      expect(prompt?.message).toContain('Do not enumerate non-blocking compatibility notices');
+      expect(prompt?.message).not.toContain('Settings > General');
       expect(prompt?.message).toContain('Do not run bash');
+      await vi.waitFor(() => expect(onPiManagedPackageMutationSettled).toHaveBeenCalledOnce());
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('keeps direct native success while publishing bounded recovery on host failure', async () => {
+    const deps = buildDeps();
+    const warn = vi.fn();
+    deps.logger = { ...noopLogger, warn };
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: { source: 'npm:context-mode', enabled: true },
+    }));
+    deps.onPiManagedPackageMutationSettled = vi.fn(async () => {
+      throw new Error('/Users/private/session close failed with secret');
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-command-partial-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    try {
+      captured.requests = [];
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
+      const prompt = captured.requests.find((request) => request.type === 'prompt')?.message ?? '';
+      expect(prompt).toContain('"ok":true');
+      expect(prompt).toContain('do not claim every task has already stopped');
+      expect(prompt).toContain('this task remains active');
+      expect(prompt).toContain('restart Cindy to finish refreshing Pi packages');
+      await vi.waitFor(() => expect(events.some((event) => (
+        event.type === 'text'
+        && String((event.data as { text?: string }).text).includes('"runtimeConvergence":"partial"')
+      ))).toBe(true));
+      const published = JSON.stringify({ events, warnings: warn.mock.calls });
+      expect(published).toContain('restart-cindy-to-refresh-packages');
+      expect(published).not.toContain('/Users/private');
+      expect(published).not.toContain('secret');
+      expect(warn).toHaveBeenCalledWith(
+        'Pi package runtime invalidation incomplete after receipt',
+        {
+          failureCategory: 'runtime-convergence-partial',
+          recoveryAction: 'restart-cindy-to-refresh-packages',
+        },
+      );
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each(['install', 'update', 'remove'] as const)(
+    'keeps hook-origin pi %s on the tool-confirmation path',
+    async (action) => {
+      const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+      const deps = buildDeps();
+      deps.mutatePiManagedPackage = mutatePiManagedPackage;
+      const handle = await new PiAgent(deps).startSession({
+        sessionId: `managed-package-hook-${action}-session`,
+        workingDir: cwd,
+        model: 'm',
+      });
+      const command = `pi ${action} npm:context-mode`;
+      try {
+        captured.requests = [];
+        await handle.send({ type: 'user', content: command }, {
+          [MAIN_OWNED_SEND_CONTEXT]: {
+            origin: { kind: 'hook', source: 'telegram' },
+            rawChannelText: command,
+          },
+        });
+
+        expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+        expect(captured.requests.find((request) => request.type === 'prompt')?.message)
+          .toContain(command);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it.each([
+    ['scheduler', { origin: { kind: 'scheduler' } }],
+    ['goal', { origin: { kind: 'goal' } }],
+    ['session-to-session', { origin: { kind: 'session' } }],
+  ])('keeps %s package commands on the tool-confirmation path', async (_source, sendOptions) => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: `managed-package-${_source}-session`,
+      workingDir: cwd,
+      model: 'm',
+    });
+    const command = 'pi install npm:context-mode';
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: command }, sendOptions as never);
+
+      expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+      expect(captured.requests.find((request) => request.type === 'prompt')?.message)
+        .toContain(command);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('redacts private URL fields from deterministic command receipts', async () => {
+    const privateSource = 'https://alice:s3cr3t@packages.example/context-mode.git?token=query-secret#fragment-secret';
+    const publicSource = 'https://packages.example/context-mode.git';
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: privateSource,
+        name: 'context-mode',
+        version: '1.0.169',
+        enabled: true,
+      },
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-private-source-receipt-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send(
+        { type: 'user', content: `pi install ${privateSource}` },
+        desktopCommandOptions(`pi install ${privateSource}`),
+      );
+
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      const events = handle.events()[Symbol.asyncIterator]();
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('context-mode')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      const publications = `${prompt}\n${visibleReceipt}`;
+      expect(prompt).toContain(`Original user command: "pi install ${publicSource}"`);
+      expect(prompt).toContain(`Requested source: "${publicSource}"`);
+      expect(publications).toContain('"name":"context-mode"');
+      expect(publications).toContain('"version":"1.0.169"');
+      expect(publications).not.toContain('alice');
+      expect(publications).not.toContain('s3cr3t');
+      expect(publications).not.toContain('query-secret');
+      expect(publications).not.toContain('fragment-secret');
     } finally {
       await handle.close();
     }
@@ -1489,6 +1879,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(captured.requests.find((request) => request.type === 'steer')?.message)
         .toContain('`/tmp/pi-extension-notes`');
 
+      const callsBeforeUntrustedContext = mutatePiManagedPackage.mock.calls.length;
       await handle.send({
         type: 'user',
         content: 'pi install npm:forged-policy',
@@ -1498,26 +1889,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           confirmationSurface: 'channel',
         } as never,
       });
-      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
-        action: 'install',
-        source: 'npm:forged-policy',
-        authorization: 'local-desktop-command',
-      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeUntrustedContext);
 
       await handle.send({
         type: 'user',
         content: 'pi remove npm:context-mode',
       }, { origin: { kind: 'im' } as never });
-      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
-        action: 'remove',
-        source: 'npm:context-mode',
-        authorization: 'local-desktop-command',
-      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeUntrustedContext);
 
-      await handle.steer({
-        type: 'user',
-        content: 'pi update npm:context-mode',
-      });
+      await handle.steer(
+        { type: 'user', content: 'pi update npm:context-mode' },
+        desktopCommandOptions('pi update npm:context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'update',
         source: 'npm:context-mode',
@@ -1559,11 +1942,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       }, {
         [MAIN_OWNED_SEND_CONTEXT]: {
           origin: { kind: 'desktop' },
-          rawChannelText: 'pi remove npm:context-mode',
+          rawChannelText: 'ordinary decorated text',
         },
       });
       expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeNonExactRawText);
 
+      const callsBeforeHookCommand = mutatePiManagedPackage.mock.calls.length;
       await handle.send({
         type: 'user',
         content: 'official hook note\n\npi remove npm:context-mode',
@@ -1573,11 +1957,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           rawChannelText: 'pi remove npm:context-mode',
         },
       });
-      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
-        action: 'remove',
-        source: 'npm:context-mode',
-        authorization: 'local-desktop-command',
-      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeHookCommand);
     } finally {
       await handle.close();
     }
@@ -1607,7 +1987,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({ type: 'user', content: 'pi install npm:context-mode' });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
       const prompt = String(
         captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
       );
@@ -1648,10 +2031,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      );
 
       const prompt = String(
         captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
@@ -1675,6 +2058,41 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         action: 'install',
         message: rawError,
       });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('returns a stable actionable native failure category to the user and Agent', async () => {
+    const deps = buildDeps();
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '确认',
+      cancel: '取消',
+      mutationFailed: 'Pi 扩展操作失败。',
+      mutationFailure: {
+        'version-not-found': '没有找到这个版本。请选择可用版本后重试。',
+      },
+      mutationSuccess: { install: '已安装', update: '已更新', remove: '已移除' },
+    });
+    deps.mutatePiManagedPackage = vi.fn(async () => {
+      throw new PiManagedPackageMutationFailedError(false, 'version-not-found');
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-actionable-failure-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send(
+        { type: 'user', content: 'pi install npm:context-mode@missing' },
+        desktopCommandOptions('pi install npm:context-mode@missing'),
+      );
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      expect(prompt).toContain('没有找到这个版本。请选择可用版本后重试。');
+      expect(prompt).not.toContain('ETARGET');
     } finally {
       await handle.close();
     }
@@ -1728,10 +2146,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.failPrompt = true;
-      await expect(session.send({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      })).resolves.toEqual({ accepted: true });
+      await expect(session.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      )).resolves.toEqual({ accepted: true });
       await terminal;
 
       expect(sessionEvents).toContainEqual(expect.objectContaining({
@@ -1798,10 +2216,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const events = handle.events()[Symbol.asyncIterator]();
     try {
       captured.failSteer = true;
-      await expect(handle.steer({
-        type: 'user',
-        content: 'pi install npm:context-mode',
-      })).resolves.toBeUndefined();
+      await expect(handle.steer(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        desktopCommandOptions('pi install npm:context-mode'),
+      )).resolves.toBeUndefined();
 
       let visibleReceipt = '';
       for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -1838,20 +2256,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       model: 'm',
     });
     try {
-      await handle.send({
-        type: 'user',
-        content: "pi install './extensions/context-mode'",
-      });
+      await handle.send(
+        { type: 'user', content: "pi install './extensions/context-mode'" },
+        desktopCommandOptions("pi install './extensions/context-mode'"),
+      );
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/context-mode'),
         authorization: 'local-desktop-command',
       });
 
-      await handle.send({
-        type: 'user',
-        content: 'pi install file:./extensions/file-context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install file:./extensions/file-context-mode' },
+        desktopCommandOptions('pi install file:./extensions/file-context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/file-context-mode'),
@@ -1891,10 +2309,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       model: 'm',
     });
     try {
-      await handle.send({
-        type: 'user',
-        content: 'pi install C:extensions\\context-mode',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install C:extensions\\context-mode' },
+        desktopCommandOptions('pi install C:extensions\\context-mode'),
+      );
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.win32.resolve(workingDir, 'C:extensions\\context-mode'),
@@ -1929,7 +2347,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     try {
       captured.requests = [];
       const controller = new AbortController();
-      const sending = handle.send({ type: 'user', content: 'pi install npm:context-mode' }, { signal: controller.signal });
+      const sending = handle.send(
+        { type: 'user', content: 'pi install npm:context-mode' },
+        { ...desktopCommandOptions('pi install npm:context-mode'), signal: controller.signal },
+      );
       await mutationStarted;
       controller.abort();
       finishMutation?.();
@@ -1970,10 +2391,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     try {
       captured.requests = [];
-      await handle.send({
-        type: 'user',
-        content: 'pi install npm:oversized-extension',
-      });
+      await handle.send(
+        { type: 'user', content: 'pi install npm:oversized-extension' },
+        desktopCommandOptions('pi install npm:oversized-extension'),
+      );
       const prompt = captured.requests.find((request) => request.type === 'prompt')?.message ?? '';
       expect(prompt.length).toBeLessThanOrEqual(16_384);
       expect(prompt).toContain('"name":"oversized-extension"');
@@ -2074,9 +2495,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
       const configHome = captured.env.PI_CODING_AGENT_DIR;
       expect(configHome).toBeTruthy();
-      expect(readdirSync(path.join(configHome!, 'extensions')).sort()).toEqual(['cindy-bridge.ts']);
+      expect(readdirSync(path.join(configHome!, 'internal-extensions')).sort()).toEqual(['cindy-bridge.ts']);
       const extensionPaths = captured.args.flatMap((arg, index) => (arg === '--extension' ? [captured.args[index + 1]] : []));
-      expect(extensionPaths).toEqual([path.posix.join(configHome!, 'extensions', 'cindy-bridge.ts')]);
+      expect(extensionPaths).toEqual([path.posix.join(configHome!, 'internal-extensions', 'cindy-bridge.ts')]);
 
       const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
       expect(permissionFile).toBeTruthy();
@@ -2395,7 +2816,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await start();
     const { readFileSync } = await import('node:fs');
     const configHome = captured.env.PI_CODING_AGENT_DIR as string;
-    const bridge = readFileSync(path.join(configHome, 'extensions', 'cindy-bridge.ts'), 'utf8');
+    const bridge = readFileSync(path.join(configHome, 'internal-extensions', 'cindy-bridge.ts'), 'utf8');
     expect(bridge).toContain('createBashTool,');
     expect(bridge).toContain('createFindTool,');
     expect(bridge).toContain('createGrepTool,');

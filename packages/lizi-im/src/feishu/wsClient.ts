@@ -57,11 +57,15 @@ import * as storage from './storage.js';
 import { parseIncoming } from './incomingContent.js';
 import { downloadAttachments } from './attachmentDownloader.js';
 import { parseCardAction } from './cardActionParser.js';
-import { encodeLaneUserId } from './codec.js';
+import { decodeLaneUserId, encodeLaneUserId } from './codec.js';
+import {
+  coordinateDualDelivery,
+  resetDualDeliveryForTest,
+} from './dualDelivery.js';
 import { getLog } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
 import type { BotCredentials, FeishuConnectionStatus } from './internal-types.js';
-import type { IMMessageEvent } from '../types.js';
+import type { IMFinalReplyMirror, IMMessageEvent } from '../types.js';
 
 // ── module state ──────────────────────────────────────────────────────────────
 
@@ -70,6 +74,13 @@ let detector: ConflictDetector | null = null;
 let currentBotAppId: string | null = null;
 /** 当前连接的 service(feishu/lark)— 账号边界含 service, 同名 appId 也不可串。 */
 let currentService: BotCredentials['service'] | null = null;
+/**
+ * start() 等待旧连接 stop() 时即发布下一账号身份。旧入站 await 若在
+ * currentBotAppId 已清空、新账号尚未装入的空窗恢复，仍能区分同账号重连与换号。
+ */
+let pendingStartAccount: Pick<BotCredentials, 'appId' | 'service'> | null = null;
+/** Latest connection generation invalidated by an explicit logical logout/shutdown. */
+let topicLeaseDiscardThroughGeneration = 0;
 let currentStatus: FeishuConnectionStatus = 'idle';
 let acceptingInbound = false;
 let lifecycleGeneration = 0;
@@ -258,16 +269,44 @@ interface UnconfirmedOpenRetry {
   replyContext?: NonNullable<IMMessageEvent['replyContext']>;
   raw: RawMessageEvent;
   attempt: number;
+  /** 迟到话题已接管路由: 只恢复 UUID 并撤回开场白, 不再派 turn。 */
+  recallOnly?: boolean;
+  /** 未配对群副本: 恢复链真正要派 turn 时才提交路由。 */
+  commitUnpairedFlat?: () => boolean;
+  isUnpairedFlatTakenOver?: () => boolean;
+  abandonUnpairedFlat?: () => void;
+  /** 双投镜像身份与入站账号代次必须跨延迟恢复链保留。 */
+  mirrorKey?: string;
+  mirrorAccountEpoch?: number;
+  mirrorConfirmed?: boolean;
 }
 
 const unconfirmedOpenRetries = new Map<string, UnconfirmedOpenRetry>();
 const suspendedUnconfirmedOpens: UnconfirmedOpenRetry[] = [];
 
+function parentChatMirror(
+  chatId: string,
+  key: string | undefined,
+  accountEpoch: number | undefined,
+  confirmed?: boolean,
+): IMFinalReplyMirror | undefined {
+  if (!key || accountEpoch === undefined) return undefined;
+  return {
+    kind: 'parent-chat',
+    chatId,
+    idempotencyKey: key,
+    accountEpoch,
+    ...(confirmed ? { confirmed: true } : {}),
+  };
+}
+
 function clearUnconfirmedOpenRetries(): void {
   for (const retry of unconfirmedOpenRetries.values()) {
     if (retry.timer) clearTimeout(retry.timer);
+    retry.abandonUnpairedFlat?.();
   }
   unconfirmedOpenRetries.clear();
+  for (const retry of suspendedUnconfirmedOpens) retry.abandonUnpairedFlat?.();
   suspendedUnconfirmedOpens.length = 0;
 }
 
@@ -294,9 +333,44 @@ function resumeUnconfirmedOpenRetriesFor(
   for (let i = suspendedUnconfirmedOpens.length - 1; i >= 0; i--) {
     const entry = suspendedUnconfirmedOpens[i]!;
     suspendedUnconfirmedOpens.splice(i, 1);
-    if (entry.botAppId !== botAppId || entry.service !== service) continue;
+    if (entry.botAppId !== botAppId || entry.service !== service) {
+      entry.abandonUnpairedFlat?.();
+      continue;
+    }
     scheduleUnconfirmedOpenRetry(entry);
   }
+}
+
+async function recallRecoveredOpener(
+  messageId: string,
+  kind: 'opened' | 'orphaned',
+): Promise<boolean> {
+  const log = getLog();
+  try {
+    const recalled = await outbound.recallOwnMessage(messageId);
+    if (!recalled) {
+      log.warn(
+        `[feishu/wsClient] recall ${kind} opener after late topic takeover was rejected (non-fatal)`,
+      );
+    }
+    return recalled;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(
+      `[feishu/wsClient] recall ${kind} opener after late topic takeover failed (non-fatal): ${msg}`,
+    );
+    return false;
+  }
+}
+
+function scheduleTakeoverRecallRetry(entry: UnconfirmedOpenRetry, epoch: number): void {
+  if (orphanRetryEpoch !== epoch) {
+    getLog().info(
+      '[feishu/wsClient] late-takeover opener recall stale after credential clear — dropping retry',
+    );
+    return;
+  }
+  scheduleUnconfirmedOpenRetry({ ...entry, timer: undefined, recallOnly: true });
 }
 
 function scheduleUnconfirmedOpenRetry(entry: UnconfirmedOpenRetry): void {
@@ -331,6 +405,7 @@ async function retryUnconfirmedOpen(
       (currentBotAppId !== entry.botAppId || currentService !== entry.service);
     if (accountChanged) {
       log.info('[feishu/wsClient] unconfirmed openThread retry skipped: account changed');
+      entry.abandonUnpairedFlat?.();
       return;
     }
     suspendUnconfirmedOpenRetry({ ...entry, timer: undefined });
@@ -338,7 +413,10 @@ async function retryUnconfirmedOpen(
     return;
   }
   const opener = await outbound.openThread(entry.messageId);
-  if (orphanRetryEpoch !== epoch) return;
+  if (orphanRetryEpoch !== epoch) {
+    entry.abandonUnpairedFlat?.();
+    return;
+  }
   // saveAndConnect 的普通换账号只 stop/start, 不推进 orphanRetryEpoch —
   // await 后必须再核当前 bot, 否则会把 A 的 opener/turn 写进 B 的 outbound。
   if (!isSameBotActive(entry.botAppId, entry.service)) {
@@ -347,6 +425,7 @@ async function retryUnconfirmedOpen(
       (currentBotAppId !== entry.botAppId || currentService !== entry.service);
     if (accountChanged) {
       log.info('[feishu/wsClient] unconfirmed openThread dropped after await: account changed');
+      entry.abandonUnpairedFlat?.();
       return;
     }
     suspendUnconfirmedOpenRetry({ ...entry, timer: undefined });
@@ -358,6 +437,16 @@ async function retryUnconfirmedOpen(
     return;
   }
   if (opener.kind === 'orphaned') {
+    if (entry.recallOnly || entry.isUnpairedFlatTakenOver?.()) {
+      const recalled = await recallRecoveredOpener(opener.openerMessageId, 'orphaned');
+      if (!recalled) {
+        scheduleTakeoverRecallRetry(
+          { ...entry, attempt: entry.attempt + 1 },
+          epoch,
+        );
+      }
+      return;
+    }
     log.error(
       `[feishu/wsClient] unconfirmed openThread recovered as orphaned opener=...${opener.openerMessageId.slice(-8)}`,
     );
@@ -367,11 +456,22 @@ async function retryUnconfirmedOpen(
       entry.messageId,
       opener.openerMessageId,
     );
+    entry.abandonUnpairedFlat?.();
     return;
   }
   let laneUserId: string;
   let groupContextLane: { chatId: string; threadId: string } | undefined;
   if (opener.kind === 'opened') {
+    if (entry.recallOnly || (entry.commitUnpairedFlat && !entry.commitUnpairedFlat())) {
+      const recalled = await recallRecoveredOpener(opener.messageId, 'opened');
+      if (!recalled) {
+        scheduleTakeoverRecallRetry(
+          { ...entry, attempt: entry.attempt + 1 },
+          epoch,
+        );
+      }
+      return;
+    }
     laneUserId = encodeLaneUserId(entry.chatId, opener.threadId);
     outbound.pushReplyAnchor(laneUserId, opener.messageId);
     outbound.pushPatchableOpener(laneUserId, opener.messageId, entry.messageId);
@@ -388,6 +488,12 @@ async function retryUnconfirmedOpen(
   log.info(
     `[feishu/wsClient] unconfirmed openThread recovered as ${opener.kind} — emitting deferred turn`,
   );
+  const recoveredMirror = parentChatMirror(
+    entry.chatId,
+    entry.mirrorKey,
+    entry.mirrorAccountEpoch,
+    entry.mirrorConfirmed,
+  );
   feishuEvents.emit('message', {
     channelName: 'feishu',
     senderId: laneUserId,
@@ -397,6 +503,7 @@ async function retryUnconfirmedOpen(
     text: entry.text,
     speaker: { id: entry.senderOpenId, name: '', isOwner: true },
     ...(groupContextLane ? { groupContextLane } : {}),
+    ...(recoveredMirror ? { finalReplyMirror: recoveredMirror } : {}),
     ...(entry.replyContext ? { replyContext: entry.replyContext } : {}),
     attachments: entry.attachments,
     unsupported: entry.unsupported,
@@ -447,6 +554,28 @@ function wasNoticeDelivered(openerMessageId: string): boolean {
  */
 function isSameBotActive(botAppId: string, service: BotCredentials['service']): boolean {
   return acceptingInbound && currentBotAppId === botAppId && currentService === service;
+}
+
+/**
+ * 入站 await 恢复时是否应放弃 topic lease。明确登出/销毁会按 connection
+ * generation 永久作废旧 lease；transport 重连则保留。账号替换的 stop/start
+ * 空窗优先比较待启动账号，同账号保留、跨账号放弃。否则
+ * pruneTopicLeases 永久跳过 pending, 反复换号会让 Map 无界增长, 切回旧账号
+ * 还能沿旧 lease 起 turn。
+ */
+function shouldAbandonTopicLease(
+  botAppId: string,
+  service: BotCredentials['service'],
+  generation: number,
+): boolean {
+  if (generation <= topicLeaseDiscardThroughGeneration) return true;
+  if (pendingStartAccount) {
+    return pendingStartAccount.appId !== botAppId || pendingStartAccount.service !== service;
+  }
+  return (
+    currentBotAppId !== null &&
+    (currentBotAppId !== botAppId || currentService !== service)
+  );
 }
 
 /**
@@ -762,6 +891,7 @@ function abandonInboundTurn(botAppId: string, messageId: string): void {
 /** 测试注入口 — 生产代码不要调用(生产语义就是跨 stop/start 不清空)。 */
 export function resetInboundDedupeForTest(): void {
   seenInboundMessages.clear();
+  resetDualDeliveryForTest();
 }
 
 const DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 1500;
@@ -982,17 +1112,26 @@ export async function start(
   log.info(
     `[feishu/wsClient] start requested reason=${opts.reason ?? 'unspecified'} announceLifecycle=${opts.announceLifecycle === false ? 'no' : 'yes'}`,
   );
-  if (client) {
-    await stop({
-      announceOffline: opts.announceLifecycle !== false,
-      reason: `${opts.reason ?? 'start'}:replace-existing-client`,
-    });
+  const pendingAccount = { appId: creds.appId, service: creds.service };
+  pendingStartAccount = pendingAccount;
+  try {
+    if (client) {
+      await stop({
+        announceOffline: opts.announceLifecycle !== false,
+        reason: `${opts.reason ?? 'start'}:replace-existing-client`,
+      });
+    }
+  } catch (err) {
+    if (pendingStartAccount === pendingAccount) pendingStartAccount = null;
+    throw err;
   }
 
   const startedGeneration = ++lifecycleGeneration;
   acceptingInbound = true;
   currentBotAppId = creds.appId;
   currentService = creds.service;
+  // 并发 start 时只清自己的标记，不覆盖更新一轮已经发布的待启动身份。
+  if (pendingStartAccount === pendingAccount) pendingStartAccount = null;
   setStatus('testing');
 
   const startDetector = new ConflictDetector({
@@ -1103,11 +1242,40 @@ interface StopOptions {
   announceOffline?: boolean;
   /** Clear the owner after any offline notice, before broadcasting idle. */
   clearOwnerBeforeIdle?: boolean;
+  /** Publish the account that will start immediately after this stop completes. */
+  nextAccount?: Pick<BotCredentials, 'appId' | 'service'>;
+  /** Logical logout/shutdown: old in-flight topic leases must never survive. */
+  discardPendingTopicLeases?: boolean;
   reason?: string;
 }
 
 export async function stop(opts: StopOptions = {}): Promise<void> {
+  const pendingAccount = opts.nextAccount
+    ? { appId: opts.nextAccount.appId, service: opts.nextAccount.service }
+    : null;
+  if (opts.discardPendingTopicLeases) {
+    // Explicit logout wins over any stale replacement intent.
+    pendingStartAccount = null;
+  } else if (pendingAccount) {
+    pendingStartAccount = pendingAccount;
+  }
+  try {
+    await stopCurrentClient(opts);
+  } catch (err) {
+    if (pendingAccount && pendingStartAccount === pendingAccount) pendingStartAccount = null;
+    throw err;
+  }
+}
+
+async function stopCurrentClient(opts: StopOptions): Promise<void> {
   const log = getLog();
+  const stoppedGeneration = lifecycleGeneration;
+  if (opts.discardPendingTopicLeases) {
+    topicLeaseDiscardThroughGeneration = Math.max(
+      topicLeaseDiscardThroughGeneration,
+      stoppedGeneration,
+    );
+  }
   // Close the logical ingress gate before awaiting the offline announcement.
   // Lark may still deliver callbacks while stop is waiting on network I/O;
   // those callbacks must never reach account-scoped host state after logout.
@@ -1251,6 +1419,7 @@ interface RawMessageEvent {
     message_id?: string;
     root_id?: string;
     parent_id?: string;
+    create_time?: string;
     chat_id?: string;
     thread_id?: string;
     chat_type?: string;
@@ -1330,8 +1499,6 @@ async function handleIncomingMessage(
   const senderOpenId = data.sender.sender_id?.open_id;
   const messageId = data.message.message_id;
   const chatId = data.message.chat_id;
-  const msgType = data.message.message_type ?? '';
-  const rawContent = data.message.content ?? '';
   if (!senderOpenId || !messageId || !chatId) return;
 
   // 重推闸门 —— 必须在第一个 await 之前同步认领(见 claimInboundMessage), 也必须
@@ -1379,6 +1546,13 @@ async function processClaimedMessage(
   // 提取分支后 data.message 的窄化不跨函数传递。
   const msgType = data.message?.message_type ?? '';
   const rawContent = data.message?.content ?? '';
+  let finalReplyMirrorKey: string | undefined;
+  let finalReplyMirrorConfirmed = false;
+  let commitUnpairedFlat: (() => boolean) | undefined;
+  let isUnpairedFlatTakenOver: (() => boolean) | undefined;
+  let abandonUnpairedFlat: (() => void) | undefined;
+  let commitTopic: (() => boolean) | undefined;
+  let abandonTopic: (() => void) | undefined;
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
     if (!mentionsSelf(data.message?.mentions, botOpenId)) return;
@@ -1400,6 +1574,31 @@ async function processClaimedMessage(
         }
       }
       return;
+    }
+
+    const createTime = data.message?.create_time ?? '';
+    if (createTime) {
+      const paired = await coordinateDualDelivery({
+        appId: botAppId,
+        chatId,
+        senderOpenId,
+        createTime,
+        messageType: msgType,
+        rawContent,
+        messageId,
+        threadId: data.message?.thread_id ?? '',
+      });
+      if (paired.kind === 'suppress-main-copy') {
+        log.info('[feishu/wsClient] native thread main-feed copy suppressed');
+        return;
+      }
+      finalReplyMirrorKey = paired.mirrorKey;
+      finalReplyMirrorConfirmed = Boolean(paired.alreadyConfirmed);
+      commitUnpairedFlat = paired.commitUnpairedFlat;
+      isUnpairedFlatTakenOver = paired.isUnpairedFlatTakenOver;
+      abandonUnpairedFlat = paired.abandonUnpairedFlat;
+      commitTopic = paired.commitTopic;
+      abandonTopic = paired.abandonTopic;
     }
   } else {
     // TOFU: first p2p sender becomes owner. Send welcome and continue
@@ -1460,6 +1659,8 @@ async function processClaimedMessage(
 
   // Drop entirely only when there's literally nothing to relay.
   if (!text && attachments.length === 0 && unsupported.length === 0) {
+    abandonUnpairedFlat?.();
+    abandonTopic?.();
     return;
   }
 
@@ -1481,6 +1682,8 @@ async function processClaimedMessage(
       abandonInboundTurn(botAppId, messageId);
     }
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
+    abandonUnpairedFlat?.();
+    if (shouldAbandonTopicLease(botAppId, service, generation)) abandonTopic?.();
     return;
   }
 
@@ -1492,6 +1695,13 @@ async function processClaimedMessage(
   let groupContextLane: { chatId: string; threadId: string } | undefined;
   if (isGroup) {
     if (incomingThreadId) {
+      // Commit before the FIFO reply-anchor: two topic deliveries of the same
+      // logical send can both pass the coordinator while the lease is pending.
+      // The loser must not enqueue an anchor that a later streaming reply would claim.
+      if (commitTopic && !commitTopic()) {
+        log.info('[feishu/wsClient] elected topic aborted: another topic delivery already committed');
+        return;
+      }
       laneUserId = encodeLaneUserId(chatId, incomingThreadId);
       outbound.pushReplyAnchor(laneUserId, messageId);
     } else {
@@ -1501,8 +1711,9 @@ async function processClaimedMessage(
       // 会话(用户感知: 不管在哪问, 工作目录都是绑定那个项目)。要跟接管会话
       // 说话就在那个话题里说。
       const opener = await outbound.openThread(messageId);
-      // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 复查门禁,
-      // 防止旧连接的锚点与事件漏进新连接(或已停机的编排状态)。
+      // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 先复查门禁,
+      // 再提交双投路由或撤回 opener。失效连接不得改跨重连保留的 dual-delivery
+      // 状态, 也不得用新绑定的 client 去撤回旧连接发出的消息。
       if (!isActiveConnection(generation, botAppId)) {
         // 同上: stop() 已释放认领时不重复释放; 记账还在才 abandon(释放 +
         // evict 开话题缓存, 让重推在新连接上用新客户端重试 API)。
@@ -1510,32 +1721,70 @@ async function processClaimedMessage(
           abandonInboundTurn(botAppId, messageId);
         }
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
+        abandonUnpairedFlat?.();
+        if (shouldAbandonTopicLease(botAppId, service, generation)) abandonTopic?.();
         return;
       }
-      if (opener.kind === 'opened') {
-        laneUserId = encodeLaneUserId(chatId, opener.threadId);
-        outbound.pushReplyAnchor(laneUserId, opener.messageId);
-        // 开场白卡是本轮流式卡: streamingText.start 认领后直接 patch,
-        // 话题里不会多出一条占位消息。trigger 一并登记 — patch 失败撤回
-        // 开场白卡时锚点回拨到触发消息(reply_in_thread 落回话题)。
-        outbound.pushPatchableOpener(laneUserId, opener.messageId, messageId);
-        // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
-        // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
-        // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
-        groupContextLane = { chatId, threadId: '' };
-      } else if (opener.kind === 'orphaned') {
+      // 孤儿开场白不会派发副本 turn: 先 peek 是否已被迟到话题接管, 再决定
+      // 撤回或发故障提示。不要 commitUnpairedFlat — 提交会让迟到窗口内的
+      // 真实话题被抑制, 用户请求整轮丢掉。
+      if (opener.kind === 'orphaned') {
+        if (isUnpairedFlatTakenOver?.()) {
+          log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
+          const recallEpoch = orphanRetryEpoch;
+          const recalled = await recallRecoveredOpener(opener.openerMessageId, 'orphaned');
+          if (!recalled) {
+            scheduleTakeoverRecallRetry(
+              {
+                botAppId,
+                service,
+                messageId,
+                chatId,
+                senderOpenId,
+                text,
+                attachments,
+                unsupported,
+                raw: data,
+                attempt: 0,
+                recallOnly: true,
+              },
+              recallEpoch,
+            );
+          }
+          return;
+        }
         // 开场白卡已发出但话题 id 恢复失败、撤回也失败: 降级群 lane 会一边
         // 留着「思考中」的开场白卡、一边把回答刷进群主流。不起 turn, 回复
-        // 开场白(落回话题)说明失败 — 宁可丢一轮, 不误导 + 不刷屏。
+        // 开场白(落回话题)说明失败 — 宁可丢一轮, 不误导 + 不刷屏。迟到话题
+        // 仍可在 LATE_COPY_TTL 内接管这条尚未提交的路由。
         log.error(
           `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
         );
         await sendOrphanOpenerNotice(botAppId, service, messageId, opener.openerMessageId);
+        abandonUnpairedFlat?.();
         return;
-      } else if (opener.kind === 'unconfirmed') {
+      }
+      if (opener.kind === 'unconfirmed') {
         // 三次即时 uuid 重试仍无回执: 服务端可能已发出思考卡。事件会在 3s
-        // 内 ACK, 不能指望平台重投。不释放认领、不降级群主流, 改走 ACK 后
-        // 定时再用同一 uuid 取回 — 恢复 turn 或 orphan 收口。
+        // 内 ACK, 不能指望平台重投。不释放认领、不降级群主流, 也不提交副本
+        // 路由 — unconfirmed 还没派 turn, 迟到话题仍可在 LATE_COPY_TTL 内接管。
+        if (isUnpairedFlatTakenOver?.()) {
+          log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
+          scheduleUnconfirmedOpenRetry({
+            botAppId,
+            service,
+            messageId,
+            chatId,
+            senderOpenId,
+            text,
+            attachments,
+            unsupported,
+            raw: data,
+            attempt: 0,
+            recallOnly: true,
+          });
+          return;
+        }
         log.error(
           '[feishu/wsClient] openThread reply unconfirmed — scheduling delayed uuid recovery, not degrading',
         );
@@ -1551,8 +1800,58 @@ async function processClaimedMessage(
           ...(resolvedReply ? { replyContext: resolvedReply.replyContext } : {}),
           raw: data,
           attempt: 0,
+          commitUnpairedFlat,
+          isUnpairedFlatTakenOver,
+          abandonUnpairedFlat,
+          ...(finalReplyMirrorKey
+            ? {
+                mirrorKey: finalReplyMirrorKey,
+                mirrorAccountEpoch: outbound.getAccountEpoch(),
+                ...(finalReplyMirrorConfirmed ? { mirrorConfirmed: true } : {}),
+              }
+            : {}),
         });
         return;
+      }
+      // 仍是本连接: 迟到的真实话题可能已经接管本轮路由, 不再把回答落进这份
+      // 群主流副本刚建的机器人话题。只在即将派发副本 turn 时提交。
+      if (commitUnpairedFlat && !commitUnpairedFlat()) {
+        log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
+        if (opener.kind === 'opened') {
+          const recallEpoch = orphanRetryEpoch;
+          const recalled = await recallRecoveredOpener(opener.messageId, 'opened');
+          if (!recalled) {
+            scheduleTakeoverRecallRetry(
+              {
+                botAppId,
+                service,
+                messageId,
+                chatId,
+                senderOpenId,
+                text,
+                attachments,
+                unsupported,
+                raw: data,
+                attempt: 0,
+                recallOnly: true,
+              },
+              recallEpoch,
+            );
+          }
+        }
+        return;
+      }
+      if (opener.kind === 'opened') {
+        laneUserId = encodeLaneUserId(chatId, opener.threadId);
+        outbound.pushReplyAnchor(laneUserId, opener.messageId);
+        // 开场白卡是本轮流式卡: streamingText.start 认领后直接 patch,
+        // 话题里不会多出一条占位消息。trigger 一并登记 — patch 失败撤回
+        // 开场白卡时锚点回拨到触发消息(reply_in_thread 落回话题)。
+        outbound.pushPatchableOpener(laneUserId, opener.messageId, messageId);
+        // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
+        // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
+        // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
+        groupContextLane = { chatId, threadId: '' };
       } else {
         laneUserId = encodeLaneUserId(chatId, null);
         outbound.pushReplyAnchor(laneUserId, messageId);
@@ -1562,6 +1861,14 @@ async function processClaimedMessage(
 
   // Emit raw fields — orchestrator decides how to render unsupported (it owns
   // the user-facing wording and the "skip agent for pure-unsupported" rule).
+  const inboundMirror = parentChatMirror(
+    chatId,
+    finalReplyMirrorKey && decodeLaneUserId(laneUserId ?? '')?.threadId
+      ? finalReplyMirrorKey
+      : undefined,
+    outbound.getAccountEpoch(),
+    finalReplyMirrorConfirmed,
+  );
   feishuEvents.emit('message', {
     channelName: 'feishu',
     senderId: laneUserId ?? senderOpenId,
@@ -1577,6 +1884,7 @@ async function processClaimedMessage(
         }
       : {}),
     ...(groupContextLane ? { groupContextLane } : {}),
+    ...(inboundMirror ? { finalReplyMirror: inboundMirror } : {}),
     ...(resolvedReply ? { replyContext: resolvedReply.replyContext } : {}),
     attachments,
     unsupported,

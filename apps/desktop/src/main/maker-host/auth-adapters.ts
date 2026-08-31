@@ -14,7 +14,7 @@
  */
 
 import { app, safeStorage } from 'electron';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -41,14 +41,18 @@ import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import {
   CODEX_USER_DISCONNECT_REASON,
   clearInvalidatedSystemCodexAuthMarker,
+  currentCodexAuthMarker,
+  currentSystemCodexAuthMarker,
   getActiveInvalidatedSystemCodexAuthMarker,
   isDurableDisconnectMarker,
+  markerMatchesCurrentSystemCodexAuth,
   readInvalidatedSystemCodexAuthMarker,
   restoreInvalidationStateOnStartup,
   settleInvalidationMarkerAfterLogin,
   shouldSuppressLocalCodexAuth,
   updateInvalidatedSystemCodexAuthMarkerCredentialScope,
   writeInvalidatedSystemCodexAuthMarker,
+  type InvalidatedSystemCodexAuthMarker,
 } from './codex-auth-invalidation.js';
 import {
   codexLoginArgs,
@@ -177,6 +181,7 @@ type CodexRecoveryVerificationProof = {
   ownerScopeKey: string;
   reason: string;
   credentialScope: NonNullable<AuthState['credentialScope']>;
+  markerPersistence: 'persisted' | 'memory-only';
   markerFingerprint: string;
   credentialSha256: string;
   accountId: string | null;
@@ -241,7 +246,7 @@ export function chatgptAccountIdFromIdToken(idToken: string): string | null {
  * app-server / CLI 负责（本函数只读当下值）；文件缺失 / 非 chatgpt 模式 / 解析失败 → null
  * （调用方据此跳过 codex 这条标题来源，不抛）。
  */
-export function readCodexOneShotCreds(): { accessToken: string; accountId: string } | null {
+function readCodexOneShotCredsFromDisk(): { accessToken: string; accountId: string } | null {
   if (!isNativeProviderAuthBound('openai')) return null;
   try {
     const codexHome = getCodexHome();
@@ -724,9 +729,66 @@ type CodexDisconnectIntent = {
   explicitBoundaryCommitted: boolean;
   /** async cleanup 完成后关闭合并窗口；迟到意图会同步重申最终边界，不能改坏 settle 结果。 */
   acceptingIntent: boolean;
+  devReadOnly: boolean;
 };
 
 const MAX_COALESCED_LOGIN_PROGRESS_CHARS = 64 * 1024;
+const ISOLATED_AUTH_LAUNCH_PROOF_FILE = '.isolated-auth-launch-proof.json';
+const MAX_ISOLATED_AUTH_PROOF_BYTES = 4096;
+const MAX_ISOLATED_AUTH_PROOF_TTL_MS = 10 * 60_000;
+
+function canonicalizeIsolatedAuthProofDir(dir: string): string {
+  try {
+    return fs.realpathSync.native(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+function consumeIsolatedAuthLaunchProof(): boolean {
+  const expectedNonce = process.env.XDT_ISOLATED_AUTH_PROOF;
+  delete process.env.XDT_ISOLATED_AUTH_PROOF;
+  if (!expectedNonce || !/^[a-f0-9]{64}$/.test(expectedNonce)) return false;
+  const userDataDir = app.getPath('userData');
+  const proofPath = path.join(userDataDir, ISOLATED_AUTH_LAUNCH_PROOF_FILE);
+  try {
+    const stat = fs.lstatSync(proofPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_ISOLATED_AUTH_PROOF_BYTES) {
+      return false;
+    }
+    if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) return false;
+    if (process.getuid && stat.uid !== process.getuid()) return false;
+    const proof = JSON.parse(fs.readFileSync(proofPath, 'utf8')) as Record<string, unknown>;
+    const nonce = typeof proof.nonce === 'string' ? proof.nonce : '';
+    const expected = Buffer.from(expectedNonce, 'hex');
+    const actual = /^[a-f0-9]{64}$/.test(nonce) ? Buffer.from(nonce, 'hex') : Buffer.alloc(0);
+    const now = Date.now();
+    return (
+      actual.length === expected.length &&
+      timingSafeEqual(actual, expected) &&
+      proof.version === 1 &&
+      proof.profileKind === 'isolated-sandbox' &&
+      proof.epoch === 1 &&
+      proof.isolationName === (process.env.XDT_ISOLATED_NAME ?? '') &&
+      typeof proof.userDataDir === 'string' &&
+      canonicalizeIsolatedAuthProofDir(proof.userDataDir) ===
+        canonicalizeIsolatedAuthProofDir(userDataDir) &&
+      typeof proof.issuedAtMs === 'number' &&
+      typeof proof.expiresAtMs === 'number' &&
+      proof.issuedAtMs <= now &&
+      proof.expiresAtMs >= now &&
+      proof.expiresAtMs - proof.issuedAtMs <= MAX_ISOLATED_AUTH_PROOF_TTL_MS
+    );
+  } catch {
+    return false;
+  } finally {
+    try {
+      fs.unlinkSync(proofPath);
+    } catch {
+      // Missing/locked proof is already fail-closed.
+    }
+  }
+}
 
 export class DesktopCodexAuthAdapter implements AuthAdapter {
   private currentLoginProc: ChildProcess | null = null;
@@ -767,6 +829,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private onInvalidatedBroadcast?: (
     reason: string,
     credentialScope: NonNullable<AuthState['credentialScope']>,
+    oauthWritesBlocked?: boolean,
   ) => void | Promise<void>;
 
   /**
@@ -785,6 +848,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private oauthRecoveryRequiredReason: string | null = null;
   private oauthRecoveryCredentialScope: AuthState['credentialScope'] = undefined;
   private suppressSystemCodexReconcile = false;
+  private devReadOnlyDetached = false;
+  /** Dev read-only invalidation fingerprint; memory-only so shared credentials stay untouched. */
+  private devReadOnlyInvalidatedSystemCredential: InvalidatedSystemCodexAuthMarker | null = null;
+  private devOAuthWriteOverrideWarned = false;
+  private isolatedAuthSanitized = false;
+  private isolatedAuthLaunchProofTrusted: boolean | null = null;
   /** 运行期最近一次能够被文件/授权记录明确证明的来源，兜住系统 auth 原子替换后的旧硬链。 */
   private lastKnownCodexCredentialScope: AuthState['credentialScope'] = undefined;
 
@@ -824,6 +893,29 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   private get codexHome(): string {
     return getCodexHome();
+  }
+
+  private trustedDevOAuthWriteOverride(): boolean {
+    const declared =
+      !app.isPackaged &&
+      process.env.XDT_ISOLATED === '1' &&
+      process.env.XDT_ISOLATED_AUTH === '1' &&
+      process.env.XDT_USER_DATA_DIR_EPOCH === '1' &&
+      process.env.XDT_ALLOW_DEV_OAUTH_WRITE === '1';
+    if (!declared) return false;
+    this.isolatedAuthLaunchProofTrusted ??= consumeIsolatedAuthLaunchProof();
+    return this.isolatedAuthLaunchProofTrusted;
+  }
+
+  private devOAuthWritesBlocked(): boolean {
+    return !app.isPackaged && !this.trustedDevOAuthWriteOverride();
+  }
+
+  private warnDevOAuthWriteOverride(action: string): void {
+    if (!this.trustedDevOAuthWriteOverride()) return;
+    if (this.devOAuthWriteOverrideWarned) return;
+    this.devOAuthWriteOverrideWarned = true;
+    log.warn(`DEV OAUTH WRITE OVERRIDE ENABLED (${action}): local ChatGPT/Codex login can change`);
   }
 
   /**
@@ -1002,24 +1094,23 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   /** reconcile 真正的执行体 —— 只经由 reconcileWithSystemCodex(AfterLogin) 调用, 不直接对外。 */
   private async runReconcileWithSystemCodex(): Promise<void> {
-    // dev 沙箱凭证隔离(XDT_ISOLATED_AUTH=1,仅非 packaged 生效):完全不与本机
-    // ~/.codex 协调 —— 不建共享硬链;当前 auth.json 若已是与系统文件同 inode 的
-    // 硬链,解除本沙箱这一端(系统文件与其它实例的链接不受影响),让沙箱回到
-    // 未登录、之后的登录写独立文件。背景:共享硬链下沙箱内登录/登出会改写
-    // 正式实例与本机 CLI 共用的凭证(2026-08-13 Chris 实测:沙箱一登录,本机
-    // OAuth 全被退登),隔离沙箱要可安全测登录必须掐掉这条共享。
     if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1') {
+      // XDT_ISOLATED_AUTH 可能被 shell / IDE 环境继承；单一 flag 不是删除凭证的授权。
+      // 与 OAuth 写门禁复用同一完整信任谓词，确保只有 restart 脚本本轮派生的
+      // isolated-auth 沙箱能清理自己的 auth.json。信号不完整时保持磁盘原样并返回，
+      // 既不删除普通实例文件，也不把它送入下方共享链接替换流程。
+      if (!this.trustedDevOAuthWriteOverride()) {
+        log.warn('isolated-auth: ignored untrusted cleanup request');
+        return;
+      }
+      if (this.isolatedAuthSanitized) return;
       const isolatedMyAuth = path.join(this.codexHome, 'auth.json');
-      const isolatedSystemAuth = getSystemCodexAuthPath();
       try {
-        if (existsSync(isolatedMyAuth) && existsSync(isolatedSystemAuth)) {
-          if (await pathsReferToSameFile(isolatedSystemAuth, isolatedMyAuth)) {
-            await fsp.unlink(isolatedMyAuth);
-            log.info('isolated-auth: detached shared codex auth hardlink for this sandbox');
-          }
-        }
+        await fsp.rm(isolatedMyAuth, { force: true });
+        this.isolatedAuthSanitized = true;
+        log.info('isolated-auth: removed local Codex auth so sandbox starts clean');
       } catch (err) {
-        log.warn('isolated-auth: failed to detach shared codex auth hardlink', {
+        log.warn('isolated-auth: failed to remove local Codex auth', {
           error: err instanceof Error ? err.message : String(err),
         });
       }
@@ -1197,6 +1288,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     cb: (
       reason: string,
       credentialScope: NonNullable<AuthState['credentialScope']>,
+      oauthWritesBlocked?: boolean,
     ) => void | Promise<void>,
   ): void {
     this.onInvalidatedBroadcast = cb;
@@ -1211,7 +1303,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
-    return this.readState({ credentialMode: options?.credentialMode });
+    const state = await this.readState({ credentialMode: options?.credentialMode });
+    return this.devOAuthWritesBlocked() ? { ...state, oauthWritesBlocked: true } : state;
   }
 
   private async readState(options?: {
@@ -1304,15 +1397,23 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   private async clearStaleInvalidationIfSystemCodexChanged(): Promise<void> {
     if (!this.oauthInvalidatedReason) return;
-    const marker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
+    const persistedMarker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
+    const marker = persistedMarker ?? this.devReadOnlyInvalidatedSystemCredential;
     if (!marker) return;
-    if (getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, getSystemCodexAuthPath())) {
-      return;
+    const systemAuthPath = getSystemCodexAuthPath();
+    if (persistedMarker) {
+      if (getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuthPath)) return;
+    } else {
+      // Dev read-only mode cannot persist a marker. Keep the old credential detached until a
+      // present system auth has a different fingerprint; deletion alone is not recovery.
+      if (!currentSystemCodexAuthMarker(systemAuthPath, marker.reason)) return;
+      if (markerMatchesCurrentSystemCodexAuth(marker, systemAuthPath)) return;
     }
     this.oauthInvalidatedReason = null;
     this.oauthInvalidatedCredentialScope = undefined;
     this.oauthRecoveryRequiredReason = marker.reason;
     this.oauthRecoveryCredentialScope = marker.credentialScope ?? 'unknown';
+    this.devReadOnlyDetached = false;
     this.suppressSystemCodexReconcile = false;
     await this.reconcileWithSystemCodex();
   }
@@ -1349,7 +1450,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     ) {
       return null;
     }
-    const marker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
+    const persistedMarker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
+    const marker = persistedMarker ?? this.devReadOnlyInvalidatedSystemCredential;
     const credential = readCodexRecoveryCredentialProof(path.join(this.codexHome, 'auth.json'));
     if (!marker || !credential) return null;
     const credentialScope =
@@ -1358,6 +1460,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       ownerScopeKey: activeOwnerScopeKey(),
       reason: this.oauthRecoveryRequiredReason,
       credentialScope,
+      markerPersistence: persistedMarker ? 'persisted' : 'memory-only',
       markerFingerprint: JSON.stringify(marker),
       ...credential,
     };
@@ -1365,16 +1468,19 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   /**
    * A successful account-level RPC proves only the credential captured before that RPC. Compare
-   * the proof again before mutating the durable recovery boundary so a late response cannot clear
-   * a newer login, invalidation or Cindy owner. Persistence failures are fail-soft for the usage
-   * read but fail-closed for recovery: the pending reason remains authoritative.
+   * the proof again before mutating the recovery boundary so a late response cannot clear a newer
+   * login, invalidation or Cindy owner. Persistence failures are fail-soft for the usage read but
+   * fail-closed for recovery: the pending reason remains authoritative.
    */
   private confirmRecoveryVerified(proof: CodexRecoveryVerificationProof): boolean {
     const current = this.captureRecoveryVerificationProof();
     if (!current || JSON.stringify(current) !== JSON.stringify(proof)) return false;
 
     const credentialScope = proof.credentialScope;
-    if (credentialScope === 'system-shared') {
+    if (proof.markerPersistence === 'memory-only') {
+      if (credentialScope !== 'system-shared') return false;
+      this.suppressSystemCodexReconcile = false;
+    } else if (credentialScope === 'system-shared') {
       if (!clearInvalidatedSystemCodexAuthMarker(this.codexHome)) {
         log.error('failed to clear verified Codex recovery marker');
         return false;
@@ -1394,6 +1500,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       }
       this.suppressSystemCodexReconcile = true;
     }
+    this.devReadOnlyInvalidatedSystemCredential = null;
     this.oauthRecoveryRequiredReason = null;
     this.oauthRecoveryCredentialScope = undefined;
     return true;
@@ -1424,6 +1531,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   private async readLocalCodexAuthState(): Promise<AuthState> {
+    if (this.devReadOnlyDetached) return { authenticated: false };
     const authPath = path.join(this.codexHome, 'auth.json');
     if (!existsSync(authPath)) return { authenticated: false };
     // logout 的 marker 先于 unlink 落盘；崩溃 / 文件锁导致旧 auth 残留时也不能复活账号。
@@ -1459,6 +1567,16 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   triggerLogin(opts?: AuthLoginOptions): Promise<AuthState> {
+    if (this.devOAuthWritesBlocked()) {
+      return Promise.resolve({
+        authenticated: false,
+        errorReason: 'dev_oauth_write_blocked',
+        oauthWritesBlocked: true,
+      });
+    }
+    this.warnDevOAuthWriteOverride('login');
+    this.devReadOnlyDetached = false;
+    this.devReadOnlyInvalidatedSystemCredential = null;
     const mode = opts?.mode ?? 'browser';
     if (this.pendingLogin) {
       if (this.pendingLogin.mode === mode && !this.pendingLogin.cancelled) {
@@ -1537,6 +1655,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     opts?: AuthLoginOptions,
     isCancelled: () => boolean = () => false,
   ): Promise<AuthState> {
+    if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1' && !this.isolatedAuthSanitized) {
+      await this.reconcileWithSystemCodex();
+      if (!this.isolatedAuthSanitized) {
+        return { authenticated: false, errorReason: 'isolated_auth_cleanup_failed' };
+      }
+    }
     this.ensureInvalidationMarkerLoaded();
     this.loginAborted = false;
     this.loginCancellationOpen = true;
@@ -1671,7 +1795,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 收紧 auth.json 权限 (fail-soft: 失败只打日志, 不阻塞登录成功)。
     // Win 上 chmod 0o600 在 NTFS 是 no-op,走 icacls；POSIX 用标准 0o600。
     const authPath = path.join(this.codexHome, 'auth.json');
-    if (existsSync(authPath)) {
+    if (existsSync(authPath) && detectCodexCredentialScope(this.codexHome) !== 'system-shared') {
       if (process.platform === 'win32') {
         await tightenAclWindows(authPath).catch((e: unknown) => {
           credPathLog.warn('icacls auth.json failed', { error: String(e) });
@@ -1816,6 +1940,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
           }
         }
         if (!this.logoutIntent.acceptingIntent && this.logoutIntent.explicitRequested) {
+          if (this.logoutIntent.devReadOnly) {
+            this.oauthInvalidatedReason = null;
+            this.oauthInvalidatedCredentialScope = undefined;
+            this.oauthRecoveryRequiredReason = null;
+            this.oauthRecoveryCredentialScope = undefined;
+            this.devReadOnlyInvalidatedSystemCredential = null;
+            return this.logoutOperation;
+          }
           // runLogout 的 async cleanup 已经结束，但 Promise.finally 还没清掉 operation。此时
           // 迟到的 invalidation 可能刚改写 marker；同步重申 durable 边界，避免微任务顺序让
           // server reason 覆盖已经完成的用户显式退出。
@@ -1837,9 +1969,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       invalidationMarkerCommitted: opts?.invalidationMarkerCommitted === true,
       explicitBoundaryCommitted: false,
       acceptingIntent: true,
+      devReadOnly: this.devOAuthWritesBlocked(),
     };
     this.logoutIntent = intent;
-    const run = this.runLogout(intent).finally(() => {
+    if (!intent.devReadOnly) this.warnDevOAuthWriteOverride('logout');
+    const operation = intent.devReadOnly
+      ? this.runDevReadOnlyLogout(intent)
+      : this.runLogout(intent);
+    const run = operation.finally(() => {
       if (this.logoutOperation === run) {
         this.logoutOperation = null;
         this.logoutIntent = null;
@@ -1858,6 +1995,41 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       await pendingLogin.catch(() => undefined);
     }
     await this.disconnectCodexOAuth(intent);
+  }
+
+  private async runDevReadOnlyLogout(intent: CodexDisconnectIntent): Promise<void> {
+    const pendingLogin = this.pendingLogin?.promise;
+    if (pendingLogin) {
+      this.cancelLogin();
+      await pendingLogin.catch(() => undefined);
+    }
+    this.devReadOnlyDetached = true;
+    this.suppressSystemCodexReconcile = true;
+    if (intent.explicitRequested) {
+      this.oauthInvalidatedReason = null;
+      this.oauthInvalidatedCredentialScope = undefined;
+      this.oauthRecoveryRequiredReason = null;
+      this.oauthRecoveryCredentialScope = undefined;
+      this.devReadOnlyInvalidatedSystemCredential = null;
+    }
+    if (this.onLogoutSuccess) {
+      try {
+        await this.onLogoutSuccess();
+      } catch (error) {
+        log.warn('onLogoutSuccess threw during dev read-only detach', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    intent.acceptingIntent = false;
+    if (intent.explicitRequested) {
+      this.oauthInvalidatedReason = null;
+      this.oauthInvalidatedCredentialScope = undefined;
+      this.oauthRecoveryRequiredReason = null;
+      this.oauthRecoveryCredentialScope = undefined;
+      this.devReadOnlyInvalidatedSystemCredential = null;
+    }
+    log.info('dev read-only Codex auth detached in memory; durable credentials unchanged');
   }
 
   private commitExplicitCodexDisconnectBoundary(intent: CodexDisconnectIntent): boolean {
@@ -1892,6 +2064,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       invalidationMarkerCommitted: false,
       explicitBoundaryCommitted: false,
       acceptingIntent: true,
+      devReadOnly: false,
     };
     this.commitExplicitCodexDisconnectBoundary(activeIntent);
     const authPath = path.join(this.codexHome, 'auth.json');
@@ -2011,6 +2184,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * 返回 false;差别仅在于「本来会被这次 reconcile 补上的绑定」这里看不到,于是显示未连接。
    */
   hasCodexOAuthLoginReadOnly(): boolean {
+    if (this.devReadOnlyDetached) return false;
     if (this.oauthInvalidatedReason) return false;
     if (!isNativeProviderAuthBound('openai')) return false;
     const authPath = path.join(this.codexHome, 'auth.json');
@@ -2020,6 +2194,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   /** Legacy upgrade probe; only used while claiming the first verified owner. */
   hasCodexOAuthLoginUnbound(): boolean {
+    if (this.devReadOnlyDetached) return false;
     try {
       const raw = fs.readFileSync(path.join(this.codexHome, 'auth.json'), 'utf-8');
       const parsed = JSON.parse(raw) as { tokens?: { access_token?: unknown } };
@@ -2029,6 +2204,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     } catch {
       return false;
     }
+  }
+
+  readOneShotCreds(): { accessToken: string; accountId: string } | null {
+    if (this.devReadOnlyDetached) return null;
+    return readCodexOneShotCredsFromDisk();
   }
 
   /**
@@ -2043,6 +2223,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (this.oauthInvalidatedReason) {
       await this.clearStaleInvalidationIfSystemCodexChanged();
     }
+    if (this.devReadOnlyDetached) return null;
     if (this.oauthInvalidatedReason) return null;
     // 绑定校验放在 reconcile 之后:reconcile 收口会为首个 owner 补绑定
     // (claimDetectedCodexOAuthBinding),同一次调用内即可生效;校验仍在 token
@@ -2077,6 +2258,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (this.oauthInvalidatedReason) {
       await this.clearStaleInvalidationIfSystemCodexChanged();
     }
+    if (this.devReadOnlyDetached) return null;
     if (this.oauthInvalidatedReason) return null;
     // 同 getAccessToken:绑定校验在 reconcile(含首个 owner 补绑定)之后、读取之前。
     await this.reconcileWithSystemCodex();
@@ -2092,6 +2274,41 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * 否则错误只会反复埋进后台日志, 用户全程无感。
    */
   async invalidate(reason: string): Promise<void> {
+    if (this.devOAuthWritesBlocked()) {
+      log.warn('codex auth invalidated in dev read-only mode; durable credentials unchanged', {
+        reason,
+      });
+      const credentialScope = this.readCodexCredentialScope();
+      const localAuthPath = path.join(this.codexHome, 'auth.json');
+      // A late 401 belongs to the credential actually consumed by the old host. The system path
+      // may already contain its replacement; if local evidence is unreadable, keep failing closed
+      // instead of guessing that the current system credential is the invalidated generation.
+      this.devReadOnlyInvalidatedSystemCredential =
+        credentialScope === 'system-shared'
+          ? currentCodexAuthMarker(localAuthPath, reason, credentialScope)
+          : null;
+      this.oauthInvalidatedReason = reason;
+      this.oauthInvalidatedCredentialScope = credentialScope;
+      this.oauthRecoveryRequiredReason = null;
+      this.oauthRecoveryCredentialScope = undefined;
+      this.suppressSystemCodexReconcile = true;
+      await this.logout({ preserveInvalidatedReason: true });
+      if (
+        this.oauthInvalidatedReason === reason &&
+        this.oauthInvalidatedCredentialScope === credentialScope &&
+        this.onInvalidatedBroadcast
+      ) {
+        try {
+          await this.onInvalidatedBroadcast(reason, credentialScope, true);
+        } catch (error) {
+          log.warn('onInvalidatedBroadcast threw', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return;
+    }
+    this.warnDevOAuthWriteOverride('invalidation');
     this.ensureInvalidationMarkerLoaded();
     log.warn('codex auth invalidated', { reason });
     const localAuthPath = path.join(this.codexHome, 'auth.json');
@@ -2192,3 +2409,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 // 单例 (与现有 host 消费者保持一致)
 export const desktopClaudeAuthAdapter = new DesktopClaudeAuthAdapter();
 export const desktopCodexAuthAdapter = new DesktopCodexAuthAdapter();
+
+export function readCodexOneShotCreds(
+  adapter: DesktopCodexAuthAdapter = desktopCodexAuthAdapter,
+): { accessToken: string; accountId: string } | null {
+  return adapter.readOneShotCreds();
+}

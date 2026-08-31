@@ -8,7 +8,7 @@
 | 文档 | 内容 | 角色 |
 |---|---|---|
 | [`DESIGN.md`](./DESIGN.md) | 权威视觉规范全文：视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）、登录链路（§16） | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
-| [`design-governance.md`](./design-governance.md) | 设计系统治理合同：四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图 | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
+| [`design-governance.md`](./design-governance.md) | 设计系统治理合同：管道与记账（§1.1）、四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图、已知边界（§13） | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
 | [`figma-component-spec.md`](./figma-component-spec.md) | 登录链路 Figma 组件与色彩速查手册：全组件逐态参数、nodeId 溯源、wave1–wave6 读取记录 | 权威（登录域逐参数） |
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
 | [`design-decision-log.md`](./design-decision-log.md) | 全局设计决策史台账：被推翻的方案、勘误过程、backlog（已收录原 `DESIGN.md §13` G1–G4 归档与 §15 决策史全量） | 决策台账（只增不改；与 `DESIGN.md` 冲突时以 `DESIGN.md` 为准） |
@@ -19,6 +19,8 @@
 
 ## 版本记录
 
+- **2026-08-30（治理合同修订：管道/记账、已知边界、路线图勘误；同日按 review 收口）**：[`design-governance.md`](./design-governance.md) 新增 §1.1「管道与记账」（守卫红灯不是禁令——管道规则不许绕、记账值走「同 PR 更新快照/台账 + 设计师批」的合法路径改，消灭的是「没人决定过的变化」；**保护值例外**：CINDY 皮肤族 / U2 二级信息色 / `annotation-accent` 不适用通用路径，须按 `DESIGN.md` 各自的用户裁决或冻结条款；正式豁免登记是合法路径，只禁未经裁决为消红灯加豁免）与 §13「已知边界」（正则扫描边界——内联样式字面量会被 `hardcoded-color-audit` 发现、真正扫不到的是动态值与 canvas/xterm 自绘；复用道路唯一靠 review 不靠机器；**新代码默认走语义层**、保留 §3.3/§3.4 既有准入、仅存量渐进），两节自
+  mivo-canvas-plugin 仓 4/7 张 PR 实战沉淀移植。勘误三处：§2 旧编号「PR-8」→「DS-8」；§12 依赖行 DS-6 前置由已关闭的圆角裁决改为「Permission 迁移余项」并补 DS-7 受 `radius` 覆盖裁决约束；§12 路线图回填 DS-1 = #3609（合入日期修正为 2026-08-30）。零视觉，非 DS 序号。
 - **2026-08-29（圆角三档写死）**：`DESIGN.md §5` Border Radius Scale 措辞加硬（拍板人 = 用户）：按钮一律胶囊（含权限允许/拒绝，删除「cannot wear the pill」主观逃生口）、8px 档判据改为「盒内非按钮」、4px 不入档（30 处生产存量登记为债、新代码禁止、机器拦截随设计系统棘轮 PR 落地）、「看起来小」不是改档理由、不加档。2px status micro-cells 窄豁免不变。**同轮补充裁决（随 #3619 review 落定）**：textarea 一律 8px（不设嵌套前提，§4/§7/§9 摘要句逐一对齐，§5 为唯一裁决源）；已登记的裸文字按钮（向导「← 上一步」、§16.3 登录文字按钮）是胶囊**唯一豁免**、不带圆角，新增用法须在组件条目登记——透明填充 / 仅描边控件不属豁免（fill 样式从不改变档位）。裁决全文与未决余项（允许/拒绝主次、双端几何）见 [`design-decision-log.md`](./design-decision-log.md)「08-29」两条。
 - **2026-08-29（设计系统治理合同）**：新建 [`design-governance.md`](./design-governance.md)，启动设计系统治理（九张主线 PR 的第一张，纯文档）。定案：四种真相边界（规则 = `DESIGN.md`、数值现阶段 = `colors.ts` / 目标 = `packages/design-tokens` DTCG、台账 = 未来的 `design-inventory.md`、视觉 = 真实运行截图）；Token 工具单选 Terrazzo（锁 2.7.1，推迟到生成切换才安装）、不采用 Style Dictionary；可见 PR 两级证据合同（静态守卫测试 + 真实 Cindy Light/Dark 截图）；PR 三类风险不混张；旧 Token ID 不删不改名、用户主题不改写磁盘两条兼容红线；PermissionPrompt 圆角混用（8px×4 / 4px×4 / 12px×1，2026-08-29 实测，生成命令见 [`design-decision-log.md`](./design-decision-log.md)「08-29」条计数口径块）登记为待裁决项，裁决未关闭前相关文件不进迁移 diff。存量门禁与文档逐项登记处置去向（含 `DESIGN.md §10` Tier-1 表与 `§16.1` 表「生成切换后由机器摘要替代、此前维持人工维护」）。本条目仅登记治理文件；`DESIGN.md` 正文零改动。
 - **2026-08-24（手柄线稿交稿）**：新增 [`gamepad-silhouette-authoring.md`](./gamepad-silhouette-authoring.md)，把设置页 Xbox 手柄图的画法收成同事交稿约定（同网格、长弧、键壳分家、热区与填充）。

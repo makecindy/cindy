@@ -68,6 +68,7 @@ export interface AuthState {
   expiresAt?: number;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  oauthWritesBlocked?: boolean;
   /**
    * Codex OAuth 凭证当前的物理存储范围。
    *

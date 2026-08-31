@@ -105,7 +105,10 @@ import {
 } from './pi-gateway-model-catalog.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
-import { resolveManagedPiPackageResources } from './pi-package-store.js';
+import {
+  resolveManagedPiNativePackagePaths,
+  resolveManagedPiPackageResources,
+} from './pi-package-store.js';
 import { mutateAuthorizedPiManagedPackage } from './pi-managed-package-mutation.js';
 
 const log = createLogger('pi-host');
@@ -907,6 +910,9 @@ export interface BuildPiAgentOpts {
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  /** Commit-edge fence; live caller retirement remains post-receipt below. */
+  onPiManagedPackageMutationCommitted?: () => Promise<void>;
+  onPiManagedPackageMutationSettled?: AgentDeps['onPiManagedPackageMutationSettled'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
@@ -1772,13 +1778,28 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       return path.join(app.getPath('userData'), 'pi-agent-home');
     },
     resolvePiManagedPackageResources: resolveManagedPiPackageResources,
-    mutatePiManagedPackage: mutateAuthorizedPiManagedPackage,
+    resolvePiNativePackagePaths: resolveManagedPiNativePackagePaths,
+    mutatePiManagedPackage: (request) => mutateAuthorizedPiManagedPackage(
+      request,
+      undefined,
+      opts.onPiManagedPackageMutationCommitted
+        ? { onRuntimeInvalidationPublished: opts.onPiManagedPackageMutationCommitted }
+        : undefined,
+    ),
+    onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled,
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),
       cancel: t('settings.piPackages.cancel'),
       mutationFailed: t('settings.piPackages.operationFailed'),
+      mutationFailure: {
+        'source-unavailable': t('settings.piPackages.failure.sourceUnavailable'),
+        'package-not-found': t('settings.piPackages.failure.packageNotFound'),
+        'version-not-found': t('settings.piPackages.failure.versionNotFound'),
+        'state-unavailable': t('settings.piPackages.failure.stateUnavailable'),
+        'native-command-failed': t('settings.piPackages.failure.nativeCommandFailed'),
+      },
       mutationSuccess: {
-        install: t('settings.piPackages.success.install'),
+        install: t('settings.piPackages.success.installEnabled'),
         update: t('settings.piPackages.success.update'),
         remove: t('settings.piPackages.success.remove'),
       },

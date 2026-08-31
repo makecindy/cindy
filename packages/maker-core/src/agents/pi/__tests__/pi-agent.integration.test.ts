@@ -362,7 +362,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           'content-type': 'text/event-stream',
           'cache-control': 'no-cache',
         });
-        res.end(scriptedResponses.shift() ?? anthropicStreamBody('pong from fake gateway'));
+        const url = req.url ?? '';
+        const fallback = url.includes('/responses')
+          ? responsesStreamBody('pong from fake gateway', 'pi-test-model')
+          : url.includes('/chat/completions')
+            ? chatCompletionsStreamBody('pong from fake gateway', 'pi-test-model')
+            : anthropicStreamBody('pong from fake gateway');
+        res.end(scriptedResponses.shift() ?? fallback);
       });
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -831,6 +837,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         responsesStreamBody('pong from xai responses', 'grok-4.5'),
         '/v1/responses',
       );
+      // Pi v0.84.3 moved bundled xAI models onto Responses with encrypted
+      // reasoning replay. grok-build-0.1 is no longer Chat Completions.
       await run(
         'itest-native-xai-completions',
         'xai/grok-build-0.1',
@@ -1388,7 +1396,18 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         const activeConfigHomes = readdirSync(runTmp, { withFileTypes: true })
           .filter((entry) => entry.isDirectory())
           .map((entry) => path.join(runTmp, entry.name))
-          .filter((candidate) => existsSync(path.join(candidate, 'models.json')));
+          .filter((candidate) => {
+            const modelsPath = path.join(candidate, 'models.json');
+            if (!existsSync(modelsPath)) return false;
+            try {
+              const parsed = JSON.parse(readFileSync(modelsPath, 'utf8')) as {
+                providers?: Record<string, unknown>;
+              };
+              return Boolean(parsed.providers?.localbyom);
+            } catch {
+              return false;
+            }
+          });
         expect(activeConfigHomes).toHaveLength(1);
         const configHome = activeConfigHomes[0];
         if (!configHome) throw new Error('active Pi config home missing');

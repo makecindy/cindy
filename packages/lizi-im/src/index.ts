@@ -25,6 +25,7 @@ export type {
   IMHost,
   IMAttachment,
   IMUnsupportedEntry,
+  IMFinalReplyMirror,
   IMMessageEvent,
   IMCardActionEvent,
   IMStatus,
