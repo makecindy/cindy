@@ -520,6 +520,42 @@ describe('WorkLouderCodexHostClient', () => {
     }
   });
 
+  it('does not let probes or lighting updates bypass an exhausted crash budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = Array.from({ length: 7 }, () => new FakeChild());
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      const frame = createWorkLouderCodexLightingFrame([
+        {
+          sessionId: 'session-1',
+          phase: 'running',
+          compactDetail: '',
+          attention: false,
+        },
+      ]);
+      client.setAgentKeyPressHandler(vi.fn());
+
+      for (let index = 0; index < 6; index += 1) {
+        children[index].emit('exit', 1);
+        await vi.advanceTimersByTimeAsync(Math.min(10_000, 500 * 2 ** index));
+      }
+
+      const forksAfterBudget = fork.mock.calls.length;
+      client.probe();
+      client.probe();
+      client.update(frame);
+
+      expect(fork).toHaveBeenCalledTimes(forksAfterBudget);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('backs off a host recycle after a live session drops', async () => {
     vi.useFakeTimers();
     try {

@@ -14,6 +14,8 @@ import type {
 } from '../../shared/workLouderCodex.js';
 import type { WorkLouderCodexLightingSink } from './WorkLouderCodexLightingController.js';
 
+const MAX_CONSECUTIVE_CRASHES = 5;
+
 export interface WorkLouderCodexChildLike {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (message: unknown) => void): void;
@@ -226,6 +228,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private ensureChild(): WorkLouderCodexChildLike | null {
     if (this.hostStopping) return null;
     if (this.permissionBlocked) return null;
+    if (this.isCrashBudgetExhausted()) return null;
     if (!this.deviceEnabled && !this.wantsPresence) return null;
     if (this.child) return this.child;
     const sdk = this.deps.resolveSdk();
@@ -505,7 +508,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private scheduleRestart(): void {
     if (this.restartTimer || this.permissionBlocked || !this.shouldRestartHost()) return;
     this.consecutiveCrashes += 1;
-    if (this.consecutiveCrashes > 5) {
+    if (this.isCrashBudgetExhausted()) {
       this.deps.log.error('Codex Micro lighting host repeatedly crashed; disabled until restart');
       return;
     }
@@ -521,6 +524,10 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       if (this.latestFrame) this.update(this.latestFrame);
     }, delayMs);
     this.restartTimer.unref?.();
+  }
+
+  private isCrashBudgetExhausted(): boolean {
+    return this.consecutiveCrashes > MAX_CONSECUTIVE_CRASHES;
   }
 
   private shouldRestartHost(): boolean {
