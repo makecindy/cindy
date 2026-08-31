@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { classifyConnectionError, postDeviceStatus } from '../workLouderCodexHostProcess.js';
+import {
+  classifyConnectionError,
+  postDeviceStatus,
+  shouldReconnectAfterProbeStatusFailure,
+} from '../workLouderCodexHostProcess.js';
 
 const originalPlatform = process.platform;
 
@@ -39,6 +43,11 @@ describe('Work Louder connection error classification', () => {
 });
 
 describe('Work Louder device status', () => {
+  it('does not recycle HID for an optional probe status failure', () => {
+    expect(shouldReconnectAfterProbeStatusFailure(false)).toBe(false);
+    expect(shouldReconnectAfterProbeStatusFailure(true)).toBe(true);
+  });
+
   it('keeps the HID connection usable when optional status telemetry fails', async () => {
     const getDeviceStatus = vi.fn().mockRejectedValue(new Error('status RPC unsupported'));
 

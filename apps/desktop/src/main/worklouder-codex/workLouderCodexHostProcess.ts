@@ -281,8 +281,8 @@ async function probeConnection(): Promise<void> {
     if (typeof api.getDeviceStatus === 'function' && !faulted) {
       try {
         // Call it directly so a successful round trip keeps battery and firmware
-        // values fresh while still letting a rejected optional RPC trigger a
-        // reconnect below.
+        // values fresh while still letting an explicit transport fault trigger
+        // reconnect handling below.
         const status = await api.getDeviceStatus();
         if (!transportFaulted) {
           const device = connectedDevice;
@@ -292,21 +292,25 @@ async function probeConnection(): Promise<void> {
         }
       } catch (error) {
         probeError = safeErrorMessage(error);
-        hostLog('debug', `probe found the device gone: ${probeError}`);
+        hostLog('debug', `probe status unavailable: ${probeError}`);
       }
     }
-    const transportError = transportFaulted ? lastTransportError : null;
+    const transportError = shouldReconnectAfterProbeStatusFailure(transportFaulted)
+      ? lastTransportError
+      : null;
     if (transportError) {
       await disconnect();
       reportConnectionError(transportError);
       return;
     }
-    hostLog(
-      'debug',
-      probeError
-        ? `probe status failed; reconnecting Work Louder transport: ${probeError}`
-        : 'probe dropped a stale Work Louder transport',
-    );
+    if (probeError) {
+      // Status is optional telemetry. Keep the healthy HID transport when a
+      // firmware/RPC implementation rejects this query; reconnect only when
+      // the SDK explicitly marked the transport as faulted above.
+      post({ kind: 'state', status: 'connected' });
+      return;
+    }
+    hostLog('debug', 'probe dropped a stale Work Louder transport');
     await disconnect();
   }
 
@@ -517,6 +521,15 @@ function postActivity(): void {
   if (now - lastActivityPostedAt < 250) return;
   lastActivityPostedAt = now;
   post({ kind: 'activity' });
+}
+
+/**
+ * Decide whether a failed status probe invalidates the HID transport.
+ * Optional status telemetry may be unsupported while input remains usable;
+ * only the SDK's explicit transport fault should trigger reconnect handling.
+ */
+export function shouldReconnectAfterProbeStatusFailure(transportFaulted: boolean): boolean {
+  return transportFaulted;
 }
 
 export async function postDeviceStatus(
