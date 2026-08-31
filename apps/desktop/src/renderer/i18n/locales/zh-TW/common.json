@@ -8046,6 +8046,8 @@
       "duplicateFiles": "找到 {{count}} 個同名檔案，請改用絕對路徑",
       "copyFile": "複製",
       "copyFilePath": "複製檔案路徑",
+      "copyLocation": "複製位置",
+      "locationCopied": "位置已複製",
       "openWith": "開啟方式",
       "openWithAppFailed": "無法用所選應用開啟",
       "revealFile": "開啟檔案所在目錄",

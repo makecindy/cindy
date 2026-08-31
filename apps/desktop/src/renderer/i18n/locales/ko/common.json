@@ -8055,6 +8055,8 @@
       "duplicateFiles": "동일한 이름의 파일 {{count}}개를 찾았습니다. 절대 경로를 사용해 주세요",
       "copyFile": "복사",
       "copyFilePath": "파일 경로 복사",
+      "copyLocation": "위치 복사",
+      "locationCopied": "위치를 복사했습니다",
       "openWith": "앱으로 열기",
       "openWithAppFailed": "선택한 앱으로 열 수 없습니다",
       "revealFile": "파일 위치 열기",

@@ -8055,6 +8055,8 @@
       "duplicateFiles": "同名のファイルが {{count}} 件見つかりました。絶対パスを使用してください",
       "copyFile": "コピー",
       "copyFilePath": "ファイルパスをコピー",
+      "copyLocation": "位置をコピー",
+      "locationCopied": "位置をコピーしました",
       "openWith": "アプリで開く",
       "openWithAppFailed": "選択したアプリで開けませんでした",
       "revealFile": "ファイルの場所を開く",

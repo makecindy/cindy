@@ -8067,6 +8067,8 @@
       "duplicateFiles": "Found {{count}} files with the same name, please use an absolute path",
       "copyFile": "Copy",
       "copyFilePath": "Copy file path",
+      "copyLocation": "Copy Location",
+      "locationCopied": "Location copied",
       "openWith": "Open with",
       "openWithAppFailed": "Couldn't open with the selected app",
       "revealFile": "Reveal in folder",
