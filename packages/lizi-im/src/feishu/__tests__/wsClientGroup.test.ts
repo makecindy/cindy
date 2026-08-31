@@ -25,12 +25,25 @@ const mocks = {
       | { kind: 'opened'; messageId: string; threadId: string }
       | { kind: 'degraded' }
       | { kind: 'orphaned'; openerMessageId: string }
+      | { kind: 'unconfirmed' }
     > => ({
       kind: 'opened',
       messageId: 'om_opener',
       threadId: 'omt_new',
     }),
   ),
+  resolveReplyMessage: vi.fn<
+    (
+      messageId: string,
+      expectedChatId: string,
+    ) => Promise<{
+      replyContext: {
+        author: string;
+        text: string;
+        isBot?: boolean;
+      };
+    } | null>
+  >(async () => null),
   pushReplyAnchor: vi.fn(),
   pushPatchableOpener: vi.fn(),
   evictOpenThreadOutcome: vi.fn(),
@@ -77,9 +90,11 @@ vi.doMock('../outbound.js', () => ({
   bindClient: mocks.bindClient,
   unbindClient: mocks.unbindClient,
   getBoundClient: mocks.getBoundClient,
+  getAccountEpoch: () => 1,
   sendText: mocks.sendText,
   replyText: mocks.replyText,
   openThread: mocks.openThread,
+  resolveReplyMessage: mocks.resolveReplyMessage,
   pushReplyAnchor: mocks.pushReplyAnchor,
   pushPatchableOpener: mocks.pushPatchableOpener,
   evictOpenThreadOutcome: mocks.evictOpenThreadOutcome,
@@ -118,6 +133,8 @@ function groupMessage(overrides: {
   text?: string;
   mentions?: Array<{ key: string; id?: { open_id?: string }; name?: string }>;
   threadId?: string;
+  parentId?: string;
+  rootId?: string;
   messageId?: string;
   chatId?: string;
 }) {
@@ -127,6 +144,8 @@ function groupMessage(overrides: {
       message_id: overrides.messageId ?? 'om_msg1',
       chat_id: overrides.chatId ?? 'oc_chat1',
       ...(overrides.threadId ? { thread_id: overrides.threadId } : {}),
+      ...(overrides.parentId ? { parent_id: overrides.parentId } : {}),
+      ...(overrides.rootId ? { root_id: overrides.rootId } : {}),
       chat_type: 'group',
       message_type: 'text',
       content: JSON.stringify({ text: overrides.text ?? '@_user_1 帮我看看' }),
@@ -169,6 +188,7 @@ beforeEach(async () => {
     messageId: 'om_opener',
     threadId: 'omt_new',
   }));
+  mocks.resolveReplyMessage.mockResolvedValue(null);
   mocks.replyText.mockImplementation(async () => ({ messageId: 'om_reply' }));
 });
 
@@ -237,12 +257,85 @@ describe('feishu group inbound gate', () => {
     expect(event.chatId).toBe('oc_chat1');
     expect(event.text).toBe('帮我看看');
     expect(event.speaker).toEqual({ id: OWNER, name: '', isOwner: true });
+    expect(event.replyContext).toBeUndefined();
+    expect(mocks.resolveReplyMessage).not.toHaveBeenCalled();
     // 锚点是开场白消息(话题内合法锚点), 不是触发消息。
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
     // 开场白卡登记为可补丁锚点 — 本轮流式卡直接 patch 它, 不发占位消息。
     expect(mocks.pushPatchableOpener).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener', 'om_msg1');
     // 路由进新话题 lane, 但上下文取数 lane 仍是群主流(新话题是空的)。
     expect(event.groupContextLane).toEqual({ chatId: 'oc_chat1', threadId: '' });
+  });
+
+  it('main-stream reply mention resolves parent_id as exact context without changing topic routing', async () => {
+    mocks.resolveReplyMessage.mockResolvedValueOnce({
+      replyContext: {
+        author: '张乾',
+        text: 'Omarchy Quattro 发布了！https://omarchy.org',
+      },
+    });
+    await connect();
+    const events = collectEvents();
+    await mocks.eventHandlers['im.message.receive_v1']!(
+      groupMessage({ parentId: 'om_parent', rootId: 'om_root_ignored' }),
+    );
+
+    expect(mocks.resolveReplyMessage).toHaveBeenCalledWith('om_parent', 'oc_chat1');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.replyContext).toEqual({
+      author: '张乾',
+      text: 'Omarchy Quattro 发布了！https://omarchy.org',
+    });
+    // 回答落点仍是现有自动新话题 lane;引用只补上下文,不参与路由。
+    expect(events[0]!.senderId).toBe('g/oc_chat1/omt_new');
+    expect(mocks.openThread).toHaveBeenCalledWith('om_msg1');
+  });
+
+  it('main-stream reply fetch failure keeps the existing group-history fallback', async () => {
+    mocks.resolveReplyMessage.mockResolvedValueOnce(null);
+    await connect();
+    const events = collectEvents();
+    await mocks.eventHandlers['im.message.receive_v1']!(
+      groupMessage({ parentId: 'om_deleted_parent' }),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.replyContext).toBeUndefined();
+    expect(events[0]!.groupContextLane).toEqual({ chatId: 'oc_chat1', threadId: '' });
+    expect(mocks.openThread).toHaveBeenCalledWith('om_msg1');
+  });
+
+  it('keeps exact reply context through delayed openThread receipt recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.resolveReplyMessage.mockResolvedValueOnce({
+        replyContext: {
+          author: '张乾',
+          text: 'Omarchy Quattro 发布了',
+        },
+      });
+      mocks.openThread
+        .mockResolvedValueOnce({ kind: 'unconfirmed' })
+        .mockResolvedValueOnce({
+          kind: 'opened',
+          messageId: 'om_recovered_opener',
+          threadId: 'omt_recovered',
+        });
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(
+        groupMessage({ parentId: 'om_parent' }),
+      );
+      expect(events).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.senderId).toBe('g/oc_chat1/omt_recovered');
+      expect(events[0]!.replyContext?.author).toBe('张乾');
+      expect(events[0]!.replyContext?.text).toBe('Omarchy Quattro 发布了');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('falls back to the plain group lane when thread creation fails', async () => {
@@ -1200,16 +1293,18 @@ describe('feishu group inbound gate', () => {
     expect(mocks.pushReplyAnchor).toHaveBeenCalledTimes(1);
   });
 
-  it('routes topic messages into a topic lane without opening a new thread', async () => {
+  it('routes topic mentions unchanged even when Feishu also supplies parent_id', async () => {
     await connect();
     const events = collectEvents();
     await mocks.eventHandlers['im.message.receive_v1']!(
-      groupMessage({ threadId: 'omt_topic7' }),
+      groupMessage({ threadId: 'omt_topic7', parentId: 'om_topic_parent' }),
     );
     expect(events[0]!.senderId).toBe('g/oc_chat1/omt_topic7');
     expect(events[0]!.groupContextLane).toBeUndefined();
+    expect(events[0]!.replyContext).toBeUndefined();
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_topic7', 'om_msg1');
     expect(mocks.openThread).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyMessage).not.toHaveBeenCalled();
   });
 
   it('replaces other-user mention placeholders with sanitized display names', async () => {

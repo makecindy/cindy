@@ -88,27 +88,28 @@ export const MOBILE_EFFORT_LABELS: Record<string, string> = {
 };
 
 const ENGLISH_COMPACT_EFFORT_LABELS: Record<string, string> = {
-  auto: 'Aut',
-  balanced: 'Bal',
-  default: 'Def',
-  extrahigh: 'XHi',
-  high: 'Hi',
-  low: 'Lo',
+  auto: 'Auto',
+  balanced: 'Balanced',
+  default: 'Default',
+  extrahigh: 'Extra',
+  high: 'High',
+  low: 'Low',
   max: 'Max',
   maximum: 'Max',
-  medium: 'Mid',
-  minimal: 'Min',
+  medium: 'Medium',
+  minimal: 'Minimal',
   none: 'Off',
   off: 'Off',
-  standard: 'Std',
-  ultra: 'Ult',
-  xhigh: 'XHi',
+  standard: 'Standard',
+  ultra: 'Ultra',
+  xhigh: 'Extra',
 };
 
 /**
- * Windows、macOS 与移动端模型选择器共用的英文 effort 短码。
- * 仅已知标准档位缩写；未知档位保留下发的完整显示名（没有显示名时保留完整 id），
- * 避免不同技术 id 被截成同一个不可区分的前三字符。
+ * Windows、macOS 与移动端模型选择器共用的英文 effort 紧凑标签。
+ * 只压缩确实偏长的标准档位(Extra High → Extra、Maximum → Max)，其余保留完整名称；
+ * 未知档位保留下发的完整显示名（没有显示名时保留完整 id），避免把 provider-specific
+ * 能力截成不可区分的短码。
  */
 export function compactEnglishEffortLabel(effort: string, displayName?: string): string {
   const normalizedEffort = effort.toLowerCase().replace(/[^a-z0-9]/g, '');

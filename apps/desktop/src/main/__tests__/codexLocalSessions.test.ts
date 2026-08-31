@@ -339,6 +339,36 @@ describe('Codex local session import', () => {
     expect(rows).toEqual([{ id: `codex-${threadId}`, title: 'Top Level Codex Session' }]);
   }, 15_000);
 
+  it('revives a soft-deleted imported thread on explicit re-import (#3548)', async () => {
+    // 删除把 updated_at 推到删除时刻(晚于源 rollout),仅按时间门判定会让
+    // 重导入永远停留在 deleted;显式导入命中已软删同主键行必须复活。
+    const dbPath = createStateDb(externalHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '');
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 1_000, title: 'Revive Me' });
+
+    const first = await importExternalCodexSessions([threadId]);
+    expect(first).toMatchObject({ inserted: 1 });
+
+    const before = currentTestDb()
+      .prepare('SELECT title, updated_at AS updatedAt FROM sessions WHERE id = ?')
+      .get(`codex-${threadId}`) as { title: string; updatedAt: number };
+    currentTestDb()
+      .prepare("UPDATE sessions SET status = 'deleted', title = 'stale-after-delete', updated_at = updated_at + 999999 WHERE id = ?")
+      .run(`codex-${threadId}`);
+
+    const again = await importExternalCodexSessions([threadId]);
+    expect(again).toMatchObject({ inserted: 0, updated: 1 });
+    const row = currentTestDb()
+      .prepare('SELECT status, title, updated_at AS updatedAt FROM sessions WHERE id = ?')
+      .get(`codex-${threadId}`) as { status: string; title: string; updatedAt: number };
+    expect(row.status).toBe('active');
+    // 复活即按新导入对待:元数据与 updated_at 收敛回源值(review 反馈)。
+    expect(row.title).toBe(before.title);
+    expect(row.updatedAt).toBe(before.updatedAt);
+  });
+
   it('filters Codex source JSON subagent rows even when thread_source is missing', async () => {
     const dbPath = createStateDb(externalHome);
     const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);

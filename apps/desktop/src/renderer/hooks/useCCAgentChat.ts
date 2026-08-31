@@ -58,6 +58,7 @@ import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projec
 import { createLogger } from '@/lib/logger';
 import { isRemoteSessionSticky } from '@/lib/makerTransport';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 const log = createLogger('UseCCAgentChat');
 
@@ -183,11 +184,17 @@ interface UseCCAgentChatReturn {
   /** 当前 terminal error 的稳定 reason key(如 'silent-stop-exhausted');ErrorBanner
    *  据此渲染专用 action。仅 error 非空时有意义。 */
   errorReason: string | null;
+  /** Structured details for a tool-loop terminal error, when available. */
+  toolLoop: ToolLoopErrorDetails | null;
   /** error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):ErrorBanner
    *  网络分支据此显示「正在自动重试…」而非「可点击重试」。 */
   errorIsRecoverable: boolean;
   /** Explicit retry target for ErrorBanner; null means retry is unsafe or unavailable. */
   errorRetryText: string | null;
+  /** live 终态错误绑定的持久化 error 行 clientId;无则没有 persist 续跑依据。 */
+  errorPersistId: string | null;
+  /** 本视图已处置的 persistId;尾部横幅跳过,避免同一错误再弹。 */
+  disposedErrorPersistId: string | null;
   /** 凭证切换等待态(main 透传):挡路会话结束后自动重发,渲染等待横幅。 */
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
   /** 已离队、正在 coordinator dispatch/turn 边界内的 Continue clientId。 */
@@ -855,10 +862,13 @@ export function useCCAgentChat(
         : lightState.recoverableError != null
           ? (lightState.errorReason ?? null)
           : null,
+    toolLoop: lightState.error ? (lightState.toolLoop ?? null) : null,
     // 当前 error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):
     // ErrorBanner 网络分支据此显示「正在自动重试…」而非「可点击重试」。
     errorIsRecoverable: !lightState.error && lightState.recoverableError != null,
     errorRetryText: lightState.errorRetryText,
+    errorPersistId: lightState.errorPersistId,
+    disposedErrorPersistId: lightState.disposedErrorPersistId,
     credentialSwitchWait: lightState.credentialSwitchWait,
     continuationInFlightClientId: lightState.continuationInFlightClientId,
     continuationTurnClientId: lightState.continuationTurnClientId,

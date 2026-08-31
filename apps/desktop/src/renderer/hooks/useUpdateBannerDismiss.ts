@@ -6,6 +6,11 @@ import { useSyncExternalStore } from 'react';
  * 场景:更新就绪(status='ready')时 banner 自动出现,用户想暂时不看可以点 X 关掉。
  * 关掉后头像行的 Flame 按钮涂黑,点击可以把 banner 再唤回来。
  *
+ * 另外一条自动路径:banner **即将自动弹出**时若有任务在跑(与「立即重启」二次确认同一
+ * 条 anyActivityBlockingRelaunch 探针),先不占侧栏,只走火焰按钮这份最小化提醒;
+ * 任务全部停下后再弹出。这条记 reason='busy',和用户点 X 的 reason='user' 必须分开:
+ * 任务停了只恢复 busy 让路,绝不把用户关掉的 banner 再塞回来。
+ *
  * 语义:
  * - **仅本次进程内存**:重启后回到 false(update 是关键状态,不能永久隐藏)。
  * - **新更新到达自动 reset**:dismiss 时会记录当时的 (status, version) 快照;
@@ -13,20 +18,34 @@ import { useSyncExternalStore } from 'react';
  *   (对比快照),只在真的发生变化时 restore()——这样 UpdateBanner 在
  *   /settings 往返后 remount、useUpdateStatus() 经历 idle→ready 的初始水合
  *   时,不会因为「版本和之前 dismiss 时一样」而误 restore。
+ * - **decidedVersion**:已经对某个待装版本做过「弹出 / 让路」决定。用来避免
+ *   remount 时再闪一次探针空窗,也避免用户点火焰唤回之后又被 busy 探针藏回去。
  * - 模块级 singleton store(useSyncExternalStore),让 UpdateBanner 与
  *   UserInfoSection 无需 context / prop-drill 就能共享同一状态。
  */
 
+export type UpdateBannerDismissReason = 'user' | 'busy';
+
 interface DismissState {
   dismissed: boolean;
+  reason: UpdateBannerDismissReason | null;
   dismissedStatus: string | null;
   dismissedVersion: string | null;
+  decidedVersion: string | null;
+}
+
+const UNVERSIONED = '<none>';
+
+export function updateBannerDecisionVersion(version: string | null): string {
+  return version ?? UNVERSIONED;
 }
 
 let state: DismissState = {
   dismissed: false,
+  reason: null,
   dismissedStatus: null,
   dismissedVersion: null,
+  decidedVersion: null,
 };
 const listeners = new Set<() => void>();
 
@@ -42,19 +61,87 @@ function subscribe(listener: () => void) {
 }
 
 function getSnapshot() {
-  return state.dismissed;
+  // 必须返回整份 state:markAutoShown 时常 dismissed 不变、只写 decidedVersion,
+  // 只订阅布尔值会让「探针空窗」永远不结束。
+  return state;
+}
+
+export function getUpdateBannerDismissState(): Readonly<DismissState> {
+  return state;
+}
+
+function sameBusyDefer(status: string, version: string | null): boolean {
+  return (
+    state.dismissed
+    && state.reason === 'busy'
+    && state.dismissedStatus === status
+    && state.dismissedVersion === version
+    && state.decidedVersion === updateBannerDecisionVersion(version)
+  );
 }
 
 export function dismissUpdateBanner(currentStatus: string, currentVersion: string | null) {
-  if (state.dismissed) return;
-  state = { dismissed: true, dismissedStatus: currentStatus, dismissedVersion: currentVersion };
+  if (state.dismissed && state.reason === 'user') return;
+  state = {
+    dismissed: true,
+    reason: 'user',
+    dismissedStatus: currentStatus,
+    dismissedVersion: currentVersion,
+    decidedVersion: state.decidedVersion,
+  };
+  emit();
+}
+
+/**
+ * 有任务在跑:不要弹出完整 banner,只留火焰入口。已经是用户关掉的,不要覆盖。
+ */
+export function deferUpdateBannerBecauseBusy(currentStatus: string, currentVersion: string | null) {
+  if (state.dismissed && state.reason === 'user') return;
+  if (sameBusyDefer(currentStatus, currentVersion)) return;
+  state = {
+    dismissed: true,
+    reason: 'busy',
+    dismissedStatus: currentStatus,
+    dismissedVersion: currentVersion,
+    decidedVersion: updateBannerDecisionVersion(currentVersion),
+  };
+  emit();
+}
+
+export function markUpdateBannerAutoShown(currentVersion: string | null) {
+  if (state.dismissed && state.reason === 'user') return;
+  const decidedVersion = updateBannerDecisionVersion(currentVersion);
+  if (!state.dismissed && state.reason === null && state.decidedVersion === decidedVersion) return;
+  state = {
+    dismissed: false,
+    reason: null,
+    dismissedStatus: null,
+    dismissedVersion: null,
+    decidedVersion,
+  };
   emit();
 }
 
 export function restoreUpdateBanner() {
   if (!state.dismissed) return;
-  state = { dismissed: false, dismissedStatus: null, dismissedVersion: null };
+  state = {
+    dismissed: false,
+    reason: null,
+    dismissedStatus: null,
+    dismissedVersion: null,
+    decidedVersion: state.decidedVersion,
+  };
   emit();
+}
+
+export function clearUpdateBannerAutoDecision() {
+  if (state.decidedVersion === null) return;
+  state = { ...state, decidedVersion: null };
+  emit();
+}
+
+export function isUpdateBannerDecidedFor(currentVersion: string | null): boolean {
+  return state.decidedVersion === updateBannerDecisionVersion(currentVersion);
 }
 
 /**
@@ -73,12 +160,28 @@ export function isNewUpdateAfterDismiss(currentStatus: string, currentVersion: s
   return currentStatus !== state.dismissedStatus || currentVersion !== state.dismissedVersion;
 }
 
+export function resetUpdateBannerDismissStoreForTests() {
+  state = {
+    dismissed: false,
+    reason: null,
+    dismissedStatus: null,
+    dismissedVersion: null,
+    decidedVersion: null,
+  };
+  emit();
+}
+
 export function useUpdateBannerDismiss() {
-  const isDismissed = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return {
-    dismissed: isDismissed,
+    dismissed: snap.dismissed,
+    reason: snap.reason,
     dismiss: dismissUpdateBanner,
     restore: restoreUpdateBanner,
+    deferBecauseBusy: deferUpdateBannerBecauseBusy,
+    markAutoShown: markUpdateBannerAutoShown,
+    clearAutoDecision: clearUpdateBannerAutoDecision,
+    isDecidedFor: isUpdateBannerDecidedFor,
     isNewUpdateAfterDismiss,
   };
 }

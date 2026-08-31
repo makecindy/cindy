@@ -607,6 +607,22 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('preservePersistedRefreshToken: true');
   });
 
+  it('unlocks login preparing with the splash startup gate after 30s', () => {
+    const loadStart = source.indexOf('async function loadLoginProviders(');
+    const loadEnd = source.indexOf('\n}\n\nasync function discoverOrganizationRealm(', loadStart);
+    const loadBody = source.slice(loadStart, loadEnd);
+    expect(loadBody).toContain('await awaitLoginProvidersWithPreparingGate(');
+    expect(loadBody).toContain('createAuthClient(AUTH_REGION).getProviders()');
+    // 闸只限时等待,不 abort 在途 getProviders(与 splash 冷启动闸同一语义)。
+    expect(loadBody).not.toContain('.abort(');
+
+    const getLoginStart = source.indexOf('export async function getLoginState(');
+    const getLoginEnd = source.indexOf('\n}\n\nasync function completeLogin(', getLoginStart);
+    const getLoginBody = source.slice(getLoginStart, getLoginEnd);
+    expect(getLoginBody).toContain('await loadLoginProviders(expectedLoginFlowEpoch)');
+    expect(getLoginBody).toContain('mapLoginProvidersLoadFailure(error)');
+  });
+
   it('does not call teardown for a fresh signed-out/null cold-start session', () => {
     const teardown = vi.fn();
     const previousAppSession = {

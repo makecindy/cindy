@@ -1,14 +1,16 @@
 import { isInputDeviceCommandId } from '../../shared/inputDevices.js';
 import {
+  isGamepadFamily,
   isXboxGamepadStickMode,
   XBOX_GAMEPAD_BUTTON_IDS,
   XBOX_GAMEPAD_STICK_DIRECTIONS,
   XBOX_GAMEPAD_STICK_IDS,
+  type GamepadAccessoriesState,
+  type GamepadFamily,
   type XboxGamepadBinding,
   type XboxGamepadLayout,
   type XboxGamepadSettings,
   type XboxGamepadSettingsPatch,
-  type XboxGamepadState,
   type XboxGamepadStickBinding,
 } from '../../shared/xboxGamepad.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -17,45 +19,63 @@ const SETTING_KEYS = ['deviceEnabled', 'layout'] as const;
 
 export interface XboxGamepadSettingsIpcDeps {
   assertTrustedSender(event: unknown): void;
-  getState(): XboxGamepadState;
-  writeSettings(patch: XboxGamepadSettingsPatch): XboxGamepadSettings;
-  resetSettings(): XboxGamepadSettings;
-  applySettings(settings: XboxGamepadSettings): void;
+  getState(): GamepadAccessoriesState;
+  writeSettings(family: GamepadFamily, patch: XboxGamepadSettingsPatch): XboxGamepadSettings;
+  resetSettings(family: GamepadFamily): XboxGamepadSettings;
+  applySettings(family: GamepadFamily, settings: XboxGamepadSettings): void;
   probeDevice(): void;
-  setLayoutPreviewActive(active: boolean, event: unknown): void;
+  setLayoutPreviewActive(active: boolean, family: GamepadFamily | null, event: unknown): void;
 }
 
 export function createXboxGamepadSettingsIpc(deps: XboxGamepadSettingsIpcDeps) {
   return {
-    get(event: unknown): XboxGamepadState {
+    get(event: unknown): GamepadAccessoriesState {
       deps.assertTrustedSender(event);
       return deps.getState();
     },
-    set(event: unknown, patch: unknown): XboxGamepadState {
+    set(event: unknown, family: unknown, patch: unknown): GamepadAccessoriesState {
       deps.assertTrustedSender(event);
-      const next = deps.writeSettings(parseSettingsPatch(patch));
-      deps.applySettings(next);
+      const next = deps.writeSettings(parseFamily(family), parseSettingsPatch(patch));
+      deps.applySettings(parseFamily(family), next);
       return deps.getState();
     },
-    reset(event: unknown): XboxGamepadState {
+    reset(event: unknown, family: unknown): GamepadAccessoriesState {
       deps.assertTrustedSender(event);
-      const next = deps.resetSettings();
-      deps.applySettings(next);
+      const resolved = parseFamily(family);
+      const next = deps.resetSettings(resolved);
+      deps.applySettings(resolved, next);
       return deps.getState();
     },
-    probe(event: unknown): XboxGamepadState {
+    probe(event: unknown): GamepadAccessoriesState {
       deps.assertTrustedSender(event);
       deps.probeDevice();
       return deps.getState();
     },
     setLayoutPreviewActive(event: unknown, value: unknown): void {
       deps.assertTrustedSender(event);
-      if (typeof value !== 'boolean') {
+      if (typeof value === 'boolean') {
+        deps.setLayoutPreviewActive(value, value ? 'xbox' : null, event);
+        return;
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throwIpcError('INVALID_PARAMS', 'layout preview flag must be a boolean or object');
+      }
+      const record = value as { active?: unknown; family?: unknown };
+      if (typeof record.active !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'layout preview flag must be a boolean');
       }
-      deps.setLayoutPreviewActive(value, event);
+      deps.setLayoutPreviewActive(
+        record.active,
+        record.active ? parseFamily(record.family) : null,
+        event,
+      );
     },
   };
+}
+
+function parseFamily(value: unknown): GamepadFamily {
+  if (!isGamepadFamily(value)) throwIpcError('INVALID_PARAMS', 'gamepad family is invalid');
+  return value;
 }
 
 function parseSettingsPatch(value: unknown): XboxGamepadSettingsPatch {

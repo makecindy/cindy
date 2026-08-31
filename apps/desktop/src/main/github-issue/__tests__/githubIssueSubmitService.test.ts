@@ -101,6 +101,10 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(posted.appVersion).toBe('0.0.112');
     expect(posted.userName).toBe('公开昵称');
     expect(posted.description).toContain('用户改过的正文');
+    expect(posted.description).toContain('## 提交时的任务环境');
+    expect(posted.description).toContain(
+      '仅代表提交时快照,不一定是故障环境。OS 来自提交客户端本机,不含 SSH 远端主机;Harness / 模型来自当前任务。与运行环境无关的反馈可忽略本段。',
+    );
     expect(posted.description).toContain('**版本区域**: CN');
     expect(posted.description).toContain('**OS**: darwin arm64 (25.5.0)');
     expect(posted.description).toContain('**Harness**: Codex');
@@ -237,6 +241,7 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(description).not.toContain('版本区域');
     expect(description).not.toContain('global');
     // 其余 env 行不受影响,不能因为省略区域行把 env 块整段搞坏。
+    expect(description).toContain('## 提交时的任务环境');
     expect(description).toContain('**OS**: darwin arm64 (25.5.0)');
     expect(description).toContain('**界面语言**: zh-CN');
   });

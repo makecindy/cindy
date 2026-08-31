@@ -985,6 +985,56 @@ describe('parseClaudeCodeMessageLine', () => {
     }
   });
 
+  it('revives a soft-deleted imported session on explicit re-import (#3548)', async () => {
+    // 删除是软删且源 JSONL 不随删,扫描会重新出候选;此前 ON CONFLICT 不更新
+    // status,重导入命中同主键后行仍是 deleted —— 导入计数更新、侧栏不可见。
+    // 删除动作把 updated_at 推到删除时刻(晚于源文件),复活不得受时间门约束。
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-local-home-'));
+    const projectsDir = path.join(home, '.claude', 'projects', '-tmp-project');
+    fs.mkdirSync(projectsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectsDir, `${sdkSessionId}.jsonl`),
+      `${line({
+        type: 'user',
+        uuid: 'user-1',
+        cwd: '/tmp/project',
+        message: { role: 'user', content: 'import me' },
+      })}\n`,
+    );
+
+    const db = createLocalDb();
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
+    setLocalDb(db);
+
+    try {
+      const first = await importExternalClaudeCodeSessions([sdkSessionId]);
+      expect(first).toMatchObject({ inserted: 1 });
+
+      const before = db
+        .prepare('SELECT title, updated_at AS updatedAt FROM sessions WHERE id = ?')
+        .get(`claude-${sdkSessionId}`) as { title: string; updatedAt: number };
+      db.prepare(
+        "UPDATE sessions SET status = 'deleted', title = 'stale-after-delete', updated_at = updated_at + 999999 WHERE id = ?",
+      ).run(`claude-${sdkSessionId}`);
+
+      const again = await importExternalClaudeCodeSessions([sdkSessionId]);
+      expect(again).toMatchObject({ scanned: 1, inserted: 0, updated: 1 });
+      const row = db
+        .prepare('SELECT status, title, updated_at AS updatedAt FROM sessions WHERE id = ?')
+        .get(`claude-${sdkSessionId}`) as { status: string; title: string; updatedAt: number };
+      expect(row.status).toBe('active');
+      // 复活即按新导入对待:元数据与 updated_at 收敛回源值,不残留删除时刻
+      // 的旧快照(review 反馈:仅复活 status 会让侧栏行与源会话不一致)。
+      expect(row.title).toBe(before.title);
+      expect(row.updatedAt).toBe(before.updatedAt);
+    } finally {
+      homedir.mockRestore();
+      resetLocalDb();
+      db.close();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('revalidates and rejects internal review sessions imported directly by id', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-local-home-'));
     const projectsDir = path.join(home, '.claude', 'projects', '-tmp-project');

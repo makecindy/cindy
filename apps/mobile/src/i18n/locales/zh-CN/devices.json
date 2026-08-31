@@ -215,7 +215,10 @@
       "projectOrderActivity": "按最近活动",
       "projectOrderManual": "手动",
       "projectOrderManualTip": "长按项目行拖动调整顺序，组内任务仍按上面的排序",
-      "statusHeading": "状态"
+      "statusHeading": "状态",
+      "showDeviceTasks": "查看任务",
+      "openDevice": "打开",
+      "renameDevice": "重命名"
     },
     "search": {
       "placeholder": "搜索标题或内容…",

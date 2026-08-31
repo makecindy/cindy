@@ -689,6 +689,10 @@ export function AddProviderWizard({
           }
           if (!r.ok && r.reason === 'login_cancelled') return;
         } else if (id === 'openai') {
+          if (codexAuth.state.oauthWritesBlocked) {
+            toast.error(t('chatgptAuthRecovery.devWriteBlocked'));
+            return;
+          }
           openaiLoginStartedRef.current = true;
           const outcome = await codexAuth.triggerLogin(mode);
           ok = outcome === 'authenticated';
@@ -1586,7 +1590,10 @@ export function AddProviderWizard({
                     <button
                       type="button"
                       onClick={() => void handleAuthorize('browser')}
-                      className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                      disabled={
+                        sel.provider.id === 'openai' && codexAuth.state.oauthWritesBlocked === true
+                      }
+                      className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
                       style={{
                         backgroundColor: 'var(--settings-btn-secondary-bg)',
                         borderColor: 'var(--settings-btn-secondary-border)',
@@ -1594,18 +1601,21 @@ export function AddProviderWizard({
                       }}
                     >
                       {t(
-                        sel.provider.id === 'openai'
-                          ? 'settings.providers.wizard.authorizeInBrowser'
-                          : sel.provider.auth.oauth?.flow === 'device-code'
-                            ? 'settings.providers.wizard.authorizeWithDeviceCode'
-                            : 'settings.providers.button.authorize',
+                        sel.provider.id === 'openai' && codexAuth.state.oauthWritesBlocked
+                          ? 'chatgptAuthRecovery.devReadOnly'
+                          : sel.provider.id === 'openai'
+                            ? 'settings.providers.wizard.authorizeInBrowser'
+                            : sel.provider.auth.oauth?.flow === 'device-code'
+                              ? 'settings.providers.wizard.authorizeWithDeviceCode'
+                              : 'settings.providers.button.authorize',
                       )}
                     </button>
                     {sel.provider.id === 'openai' && (
                       <button
                         type="button"
                         onClick={() => void handleAuthorize('device-code')}
-                        className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                        disabled={codexAuth.state.oauthWritesBlocked === true}
+                        className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
                         style={{
                           backgroundColor: 'transparent',
                           borderColor: 'var(--settings-btn-secondary-border)',

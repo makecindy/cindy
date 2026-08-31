@@ -33,7 +33,13 @@ const KINDS = {
   claude: { binDir: 'claude-code-bin', base: 'claude', module: '../tools/claude/update.mjs' },
   codex: { binDir: 'codex-bin', base: 'codex', module: '../tools/codex/update.mjs' },
   ripgrep: { binDir: 'ripgrep-bin', base: 'rg', module: '../tools/ripgrep/update.mjs' },
-  pi: { binDir: 'pi-bin', base: 'pi', module: '../tools/pi/update.mjs', dirDist: true },
+  pi: {
+    binDir: 'pi-bin',
+    base: 'pi',
+    module: '../tools/pi/update.mjs',
+    dirDist: true,
+    requiredDirDistFiles: ['theme/dark.json', 'theme/light.json', 'theme/theme-schema.json'],
+  },
 };
 
 /**
@@ -92,8 +98,18 @@ export function isValidBinary(absPath) {
  * theme/ 等旁侧资产时 RPC 启动即崩,只验主执行文件会把残缺目录当"已就位"跳过安装,
  * 随后被打进安装包(codex 报)。清单缺失(旧安装/半成品)按未就位处理,重新 promote 自愈。
  */
-export function isValidDirDist(binDirPath, binPath) {
-  return isValidBinary(binPath) && verifyDirDistManifest(binDirPath);
+export function isValidDirDist(binDirPath, binPath, requiredFiles = []) {
+  if (!isValidBinary(binPath) || !verifyDirDistManifest(binDirPath)) return false;
+  const root = path.resolve(binDirPath);
+  return requiredFiles.every((relativePath) => {
+    const filePath = path.resolve(root, relativePath);
+    if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) return false;
+    try {
+      return fs.statSync(filePath).isFile();
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
@@ -194,7 +210,9 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
 
   // 已就位且版本标记 == pin 才跳过；标记缺失/不匹配则刷新（promoteOnePlatform 写入标记）。
   // dirDist 的"已就位"额外要求安装清单齐全,不能只看主执行文件。
-  const presentAndValid = cfg.dirDist ? isValidDirDist(binDirPath, binPath) : isValidBinary(binPath);
+  const presentAndValid = cfg.dirDist
+    ? isValidDirDist(binDirPath, binPath, cfg.requiredDirDistFiles)
+    : isValidBinary(binPath);
   if (!force && presentAndValid && readInstalledVersion(markerPath) === version) {
     log(`${kind} ${platformKey}: already present @ ${version}, skip`);
     return binPath;
@@ -254,7 +272,9 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   // 被占用（app 运行中、EBUSY）时只 warn 不抛，会留下旧 binary + 旧标记，这里据此把静默失败
   // 转成显式错误。本地复用路径同样受此终检兜底。
   const installed = readInstalledVersion(markerPath);
-  const finalValid = cfg.dirDist ? isValidDirDist(binDirPath, binPath) : isValidBinary(binPath);
+  const finalValid = cfg.dirDist
+    ? isValidDirDist(binDirPath, binPath, cfg.requiredDirDistFiles)
+    : isValidBinary(binPath);
   if (!finalValid || installed !== version) {
     throw new Error(
       `${kind} ${platformKey}: ensure failed — expected ${version} at ${binPath} but installed marker is ${installed ?? '(none)'}. ` +

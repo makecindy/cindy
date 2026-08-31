@@ -76,6 +76,7 @@ export async function create(body?: {
   orcaRole?: OrcaRole | null;
   /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
   extraDirs?: string[];
+  writableDirs?: string[];
   /** Remote codex session (P2): 远端 SSH host alias。设置后 workingDir 须为
    *  远端绝对路径; codex agent 跑在远端机器, 本地不 spawn。 */
   remoteHostId?: string;
@@ -153,6 +154,7 @@ export async function update(
     orcaRole?: OrcaRole | null;
     /** 附加只读引用目录覆盖列表 (绝对路径); main 端会在 mapper 里 JSON.stringify 后写库。 */
     extraDirs?: string[];
+    writableDirs?: string[];
     /**
      * per-session 来源(供应商)选择,持久化到 sessions.provider_id(与 model/effort 同模式)。
      * null = 清除显式选择,回落默认路由。运行时即时生效由 maker.setModel 的第 3 参负责;

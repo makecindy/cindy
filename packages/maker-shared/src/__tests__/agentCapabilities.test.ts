@@ -16,7 +16,7 @@ const desktopCapabilitiesPayload = {
       description: 'Default remote Claude model',
       contextWindow: 200_000,
       efforts: ['low', 'medium', 'high', 'xhigh'],
-      effortDisplayNames: { xhigh: 'Max' },
+      effortDisplayNames: { xhigh: 'Extra High' },
       defaultEffort: 'medium',
       supportsFastMode: true,
       newSessionDefault: ['claude-code', 'invalid-agent', 'claude-code', 'codex', 'pi'],
@@ -45,13 +45,13 @@ const desktopCapabilitiesPayload = {
 };
 
 describe('agent capabilities shared model', () => {
-  it('uses the same 2–3 letter English effort codes on desktop and mobile', () => {
+  it('uses the same English compact effort labels on desktop and mobile', () => {
     expect(
-      ['minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'].map(
-        compactEnglishEffortLabel,
+      ['minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'].map((effort) =>
+        compactEnglishEffortLabel(effort),
       ),
-    ).toEqual(['Min', 'Lo', 'Mid', 'Hi', 'XHi', 'Ult', 'Max']);
-    expect(compactEnglishEffortLabel('extra-high')).toBe('XHi');
+    ).toEqual(['Minimal', 'Low', 'Medium', 'High', 'Extra', 'Ultra', 'Max']);
+    expect(compactEnglishEffortLabel('extra-high')).toBe('Extra');
     expect(compactEnglishEffortLabel('adaptive-fast', 'Adaptive Fast')).toBe('Adaptive Fast');
     expect(compactEnglishEffortLabel('adaptive-safe', 'Adaptive Safe')).toBe('Adaptive Safe');
     expect(compactEnglishEffortLabel('adaptive-fast')).toBe('adaptive-fast');
@@ -92,12 +92,12 @@ describe('agent capabilities shared model', () => {
 
     expect(runtime.modelOptions.map((item) => item.label)).toContain('Claude Sonnet 4.6');
     expect(runtime.currentModel?.id).toBe('claude-sonnet-4-6');
-    // 模型级 effortDisplayNames 覆盖(xhigh → 'Max')仍最优先;其余走中文词表。
+    // 模型级 effortDisplayNames 覆盖(xhigh → 'Extra High')仍最优先;其余走中文词表。
     expect(runtime.effortOptions.map((item) => [item.id, item.label])).toEqual([
       ['low', '低'],
       ['medium', '中'],
       ['high', '高'],
-      ['xhigh', 'Max'],
+      ['xhigh', 'Extra High'],
     ]);
     expect(runtime.permissionOptions.map((item) => item.id)).toEqual([
       'ask',

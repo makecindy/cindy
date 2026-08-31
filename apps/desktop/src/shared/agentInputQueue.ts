@@ -20,6 +20,32 @@ import {
 
 export type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 
+export type AgentInputToolLoopKind = 'consecutive' | 'pingpong' | 'rotation' | 'contract';
+
+/** Bounded tool-loop details safe to carry across the input projection boundary. */
+export interface AgentInputToolLoopDetails {
+  kind: AgentInputToolLoopKind;
+  count: number;
+}
+
+/** Reject untrusted projection data unless it matches the bounded tool-loop contract exactly. */
+export function parseAgentInputToolLoopDetails(value: unknown): AgentInputToolLoopDetails | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as { kind?: unknown; count?: unknown };
+  if (
+    raw.kind !== 'consecutive' &&
+    raw.kind !== 'pingpong' &&
+    raw.kind !== 'rotation' &&
+    raw.kind !== 'contract'
+  ) {
+    return null;
+  }
+  if (!Number.isSafeInteger(raw.count) || typeof raw.count !== 'number' || raw.count < 1 || raw.count > 100_000) {
+    return null;
+  }
+  return { kind: raw.kind, count: raw.count };
+}
+
 export type AgentInputFileCategory = 'image' | 'pdf' | 'text' | 'office' | 'file';
 
 export interface AgentInputSerializedFile {
@@ -352,6 +378,10 @@ export interface AgentInputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /** Stable error reason for live clients; older controlled hosts may omit it. */
+  errorReason?: string | null;
+  /** Bounded details for tool-loop errors; never carries the raw provider message. */
+  toolLoop?: AgentInputToolLoopDetails | null;
   recovery: AgentInputRecovery;
   /**
    * Compatibility display value for the existing ErrorBanner. It is no longer

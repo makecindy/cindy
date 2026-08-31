@@ -6,6 +6,7 @@ import {
   invalidateOfflineScheduleIndexFailureFor,
   invalidateRunningSessionScheduleEntries,
   invalidateScheduleIndexForDevice,
+  invalidateTransientScheduleIndexFailureFor,
   invalidateTransientScheduleIndexFailures,
   loadSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
@@ -423,6 +424,33 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     expect(load).toHaveBeenCalledTimes(2);
     },
   );
+
+  it('逐 peer 恢复只清目标设备的瞬态负缓存', async () => {
+    resetScheduleIndexThrottleForTesting();
+    const loadA = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('not connected'), { code: 'NOT_CONNECTED' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const loadB = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('not connected'), { code: 'NOT_CONNECTED' }))
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+
+    await expect(loadSessionScheduleIndexThrottled('dev-a', loadA, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    await expect(loadSessionScheduleIndexThrottled('dev-b', loadB, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    await Promise.resolve();
+
+    invalidateTransientScheduleIndexFailureFor('dev-b');
+    await expect(loadSessionScheduleIndexThrottled('dev-a', loadA, { now })).rejects.toMatchObject({
+      code: 'NOT_CONNECTED',
+    });
+    await expect(loadSessionScheduleIndexThrottled('dev-b', loadB, { now })).resolves.toBeInstanceOf(Map);
+    expect(loadA).toHaveBeenCalledTimes(1);
+    expect(loadB).toHaveBeenCalledTimes(2);
+  });
 
   it('DEVICE_OFFLINE 负缓存:仅该设备 presence 恢复时失效,全局重连钩子不碰(review P1)', async () => {
     // DEVICE_OFFLINE 是逐设备状态:若挂在全局重连钩子上,B 设备的任何 rehydrate
