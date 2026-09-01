@@ -513,6 +513,11 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('captureDeviceSessionListMutationEpoch(');
     expect(source).toContain('isDeviceSessionListMutationEpochCurrent(');
     expect(source).toContain('needsRerun: true');
+    expect(source).toContain('HOME_HYDRATE_MAX_TRAILING_RERUNS');
+    expect(source).toContain('HOME_HYDRATE_RERUN_BACKOFF_MS');
+    expect(source).toContain('entry.rerunCount >= HOME_HYDRATE_MAX_TRAILING_RERUNS');
+    expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
+    expect(source).toContain('setTimeout(() => {');
     expect(source).toContain('homeDeviceSyncLimiterRef.current.run');
     const hydrateSource = source.slice(
       source.indexOf('const hydrateDeviceSessions = useCallback'),
