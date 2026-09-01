@@ -953,10 +953,10 @@ export class GhostCindySlot {
         if (typeof h !== 'string') {
           return { ok: false, message: '源图指纹格式不合法' };
         }
-        if (isLibrarySidecarRelPath(h) || (h.includes('/') && !isLibraryBlobRelPath(h) && !h.startsWith('library:'))) {
+        const blobKey = h.startsWith('library:') ? h.slice('library:'.length) : h;
+        if (isLibrarySidecarRelPath(blobKey) || (blobKey.includes('/') && !isLibraryBlobRelPath(blobKey))) {
           return { ok: false, message: '源图必须是 library 正本 blob,sidecar 禁止当像素' };
         }
-        const blobKey = h.startsWith('library:') ? h.slice('library:'.length) : h;
         if (isLibraryBlobRelPath(blobKey)) continue;
         if (!HASH_RE.test(h)) {
           return { ok: false, message: '源图指纹格式不合法' };

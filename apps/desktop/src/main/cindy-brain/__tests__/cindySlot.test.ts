@@ -1362,6 +1362,19 @@ describe('改图代办(edit_image)', () => {
     expect(rejected).toMatchObject({ ok: false });
     expect((rejected as { message: string }).message).toContain('sidecar');
     expect(sidecar.editImage).not.toHaveBeenCalled();
+
+    const prefixedResolve = vi.fn();
+    const prefixedSidecar = makeSlot({
+      resolveOwnedMedia: prefixedResolve,
+    } as Partial<CindySlotDeps>);
+    const prefixedRejected = await prefixedSidecar.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: [`library:assets/${HASH.slice(0, 2)}/${HASH}/preview.webp`],
+    });
+    expect(prefixedRejected).toMatchObject({ ok: false });
+    expect((prefixedRejected as { message: string }).message).toContain('sidecar');
+    expect(prefixedSidecar.editImage).not.toHaveBeenCalled();
+    expect(prefixedResolve).not.toHaveBeenCalled();
   });
 });
 
