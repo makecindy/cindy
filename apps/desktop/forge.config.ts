@@ -1019,6 +1019,8 @@ function buildSwiftHelperForForgeArch(
 function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): void {
   if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
   const src = path.join(__dirname, 'native', 'xbox-gamepad', 'macos-xbox-gamepad-helper.swift');
+  const switch2UsbC = path.join(__dirname, 'native', 'xbox-gamepad', 'switch2_usb.c');
+  const switch2UsbH = path.join(__dirname, 'native', 'xbox-gamepad', 'switch2_usb.h');
   const destDir = path.join(__dirname, 'resources', 'tools', 'xbox-gamepad');
   const dest = path.join(destDir, 'cindy-macos-xbox-gamepad-helper');
   if (!fs.existsSync(src)) {
@@ -1030,7 +1032,15 @@ function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): vo
     dest,
     arch,
     MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET,
-    ['-framework', 'GameController', '-framework', 'IOKit'],
+    [
+      switch2UsbC,
+      '-import-objc-header',
+      switch2UsbH,
+      '-framework',
+      'GameController',
+      '-framework',
+      'IOKit',
+    ],
     'Xbox gamepad helper',
   );
   fs.chmodSync(dest, 0o755);

@@ -5,10 +5,7 @@ import { promisify } from 'node:util';
 import { app } from 'electron';
 
 import { createLogger } from '../logger.js';
-import {
-  isXboxGamepadHostMessage,
-  type XboxGamepadHostMessage,
-} from './protocol.js';
+import { isXboxGamepadHostMessage, type XboxGamepadHostMessage } from './protocol.js';
 
 const execFilePromise = promisify(execFile);
 const log = createLogger('xbox-gamepad-host');
@@ -188,7 +185,8 @@ export function createXboxGamepadHost(
       try {
         if (!current.stdin.destroyed) {
           current.stdin.write('stop\n', (error) => {
-            if (error) log.debug('xbox gamepad helper stdin write failed', { error: error.message });
+            if (error)
+              log.debug('xbox gamepad helper stdin write failed', { error: error.message });
           });
           current.stdin.end();
         }
@@ -214,11 +212,22 @@ async function resolveMacHelperPath(): Promise<string> {
   if (app.isPackaged && fs.existsSync(packaged)) return packaged;
 
   const source = resolveMacHelperSource();
-  const binary = path.join(app.getPath('userData'), 'xbox-gamepad', 'cindy-macos-xbox-gamepad-helper');
+  const helperDir = path.dirname(source);
+  const switch2UsbC = path.join(helperDir, 'switch2_usb.c');
+  const switch2UsbH = path.join(helperDir, 'switch2_usb.h');
+  const binary = path.join(
+    app.getPath('userData'),
+    'xbox-gamepad',
+    'cindy-macos-xbox-gamepad-helper',
+  );
   if (!fs.existsSync(source)) {
     throw new Error(`Xbox gamepad helper source missing at ${source}`);
   }
-  const sourceMtime = fs.statSync(source).mtimeMs;
+  const sourceMtime = Math.max(
+    fs.statSync(source).mtimeMs,
+    fs.existsSync(switch2UsbC) ? fs.statSync(switch2UsbC).mtimeMs : 0,
+    fs.existsSync(switch2UsbH) ? fs.statSync(switch2UsbH).mtimeMs : 0,
+  );
   if (fs.existsSync(binary) && fs.statSync(binary).mtimeMs >= sourceMtime) {
     failedHelperSourceMtime = 0;
     return binary;
@@ -232,6 +241,9 @@ async function resolveMacHelperPath(): Promise<string> {
       'swiftc',
       [
         source,
+        switch2UsbC,
+        '-import-objc-header',
+        switch2UsbH,
         '-O',
         '-framework',
         'Foundation',
@@ -242,7 +254,7 @@ async function resolveMacHelperPath(): Promise<string> {
         '-o',
         binary,
       ],
-      { timeout: 20_000 },
+      { timeout: 30_000 },
     );
   } catch (error) {
     failedHelperSourceMtime = sourceMtime;

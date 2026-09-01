@@ -270,11 +270,15 @@ describe('Xbox gamepad helper packaging contract', () => {
     expect(source).toContain('return "generic"');
     expect(source).not.toContain('func isXboxController');
     expect(source).not.toContain('all.first(where: isXboxController)');
+    expect(source).toContain('switch2_usb_ensure');
+    expect(source).toContain('switch2-usb');
   });
 
   it('compiles the helper for macOS 11 so GameController Xbox APIs are available', () => {
     const source = readFileSync(new URL('../../../../forge.config.ts', import.meta.url), 'utf8');
     expect(source).toContain("MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET = 'macos11.0'");
     expect(source).toContain('MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET');
+    expect(source).toContain('switch2_usb.c');
+    expect(source).toContain('switch2_usb.h');
   });
 });

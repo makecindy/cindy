@@ -175,6 +175,10 @@ final class XboxGamepadReporter {
     ) { [weak self] _ in
       self?.refresh()
     }
+    _ = switch2_usb_ensure()
+    Timer.scheduledTimer(withTimeInterval: 0.008, repeats: true) { [weak self] _ in
+      self?.refreshSwitch2IfNeeded()
+    }
     refresh()
   }
 
@@ -205,6 +209,9 @@ final class XboxGamepadReporter {
 
     for family in GAMEPAD_FAMILIES {
       guard let controller = next[family] else {
+        if family == "nintendo" {
+          continue
+        }
         if observed[family] != nil || lastPresenceSignature[family] != "absent" {
           observed[family] = nil
           lastPresenceSignature[family] = "absent"
@@ -219,6 +226,76 @@ final class XboxGamepadReporter {
       emitPresence(from: controller, family: family)
       emitFrame(from: controller, family: family)
     }
+    if next["nintendo"] == nil {
+      refreshSwitch2IfNeeded()
+    }
+  }
+
+  private func refreshSwitch2IfNeeded() {
+    if observed["nintendo"] != nil { return }
+    var state = Switch2UsbState()
+    switch2_usb_copy_state(&state)
+    if !state.present {
+      if lastPresenceSignature["nintendo"] != "absent" {
+        lastPresenceSignature["nintendo"] = "absent"
+        emit(["kind": "presence", "present": false, "family": "nintendo"])
+      }
+      return
+    }
+    emitSwitch2(state)
+  }
+
+  private func emitSwitch2(_ state: Switch2UsbState) {
+    let payload: [String: Any] = [
+      "kind": "presence",
+      "present": true,
+      "name": "Pro Controller",
+      "category": "Nintendo Switch 2",
+      "family": "nintendo",
+      "transport": "usb",
+      "batteryState": "unknown",
+    ]
+    let signature = "switch2-usb:Pro Controller"
+    if signature != lastPresenceSignature["nintendo"] {
+      lastPresenceSignature["nintendo"] = signature
+      emit(payload)
+      emit([
+        "kind": "log",
+        "level": "info",
+        "message": "controllers: Nintendo/Pro Controller/family=nintendo (switch2-usb)",
+      ])
+    }
+    emit([
+      "kind": "frame",
+      "family": "nintendo",
+      "buttons": [
+        "a": state.a,
+        "b": state.b,
+        "x": state.x,
+        "y": state.y,
+        "lb": state.lb,
+        "rb": state.rb,
+        "lt": state.lt,
+        "rt": state.rt,
+        "view": state.view,
+        "menu": state.menu,
+        "xbox": state.xbox,
+        "ls": state.ls,
+        "rs": state.rs,
+        "dpadUp": state.dpad_up,
+        "dpadDown": state.dpad_down,
+        "dpadLeft": state.dpad_left,
+        "dpadRight": state.dpad_right,
+      ],
+      "axes": [
+        "lx": state.lx,
+        "ly": state.ly,
+        "rx": state.rx,
+        "ry": state.ry,
+      ],
+      "ltAnalog": state.lt ? 1.0 : 0.0,
+      "rtAnalog": state.rt ? 1.0 : 0.0,
+    ])
   }
 
   private func attach(_ controller: GCController) {

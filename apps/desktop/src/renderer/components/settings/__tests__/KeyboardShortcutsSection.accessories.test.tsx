@@ -151,8 +151,8 @@ describe('KeyboardShortcutsSection accessories', () => {
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeTruthy();
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.playstation })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.generic })).toBeTruthy();
   });
 
   it('shows a detected device here and keeps the rest behind Accessories', () => {
@@ -170,8 +170,8 @@ describe('KeyboardShortcutsSection accessories', () => {
     ).toBeTruthy();
     expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeNull();
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.playstation })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.generic })).toBeTruthy();
   });
 
   it('shows an enabled device here even when it is not detected', () => {
@@ -199,21 +199,18 @@ describe('KeyboardShortcutsSection accessories', () => {
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeTruthy();
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.playstation })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.generic })).toBeTruthy();
   });
 
-  it('does not surface Switch or generic accessories even when they are present', () => {
+  it('surfaces Switch and generic accessories when they are present', () => {
     mocks.present.nintendo = true;
     mocks.present.generic = true;
     mocks.enabled.nintendo = true;
     mocks.enabled.generic = true;
     render(<KeyboardShortcutsSection />);
 
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.accessories.openAria' }));
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeNull();
-    expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.generic })).toBeNull();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.nintendo })).toBeTruthy();
+    expect(screen.getByRole('button', { name: GAMEPAD_OPEN.generic })).toBeTruthy();
   });
 });
