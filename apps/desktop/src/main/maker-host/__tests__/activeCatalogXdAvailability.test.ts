@@ -16,6 +16,8 @@ import { BUNDLED_CATALOG, type CatalogModel } from '@cindy/model-providers';
 import {
   getActiveCatalog,
   getXdGatewayModels,
+  isXdGatewayPaymentRequiredRoute,
+  resolveXdPiGatewayApi,
   resolveXdPiGatewayWireProtocol,
   setActiveCatalog,
   setAnthropicDiscoveredModels,
@@ -49,6 +51,34 @@ describe('XD 网关权威模型清单重建', () => {
     setXdGatewayModels([]);
     expect(xdModels('claude-code')).toEqual([]);
     expect(xdModels('codex')).toEqual([]);
+  });
+
+  it('刷新失败可隐藏付费行，但派发边界保留最近一次明确拒绝直到成功响应', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'paid-only-model',
+        agents: ['claude-code'],
+        availability: 'requires_payment',
+      },
+    ]);
+    expect(isXdGatewayPaymentRequiredRoute('paid-only-model', 'claude-code')).toBe(true);
+
+    setXdGatewayModels([], {
+      authoritative: false,
+      preservePaymentRequiredRoutes: true,
+    });
+    expect(getXdGatewayModels()).toEqual([]);
+    expect(isXdGatewayPaymentRequiredRoute('paid-only-model', 'claude-code')).toBe(true);
+
+    setXdGatewayModels([
+      {
+        id: 'paid-only-model',
+        agents: ['claude-code'],
+        availability: 'available',
+      },
+    ], { authoritative: true });
+    expect(isXdGatewayPaymentRequiredRoute('paid-only-model', 'claude-code')).toBe(false);
   });
 
   it('/models 同时控制 XD chat 与媒体成员，忽略 Catalog 里的旧媒体清单', () => {
@@ -136,43 +166,146 @@ describe('XD 网关权威模型清单重建', () => {
     });
   });
 
-  it('Pi 在 cindy provider 内接受 v3 显式协议，并过滤缺失协议的模型', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+  it('按 Cindy Server > 本地 Pi 表 > Cindy AI Gateway 的顺序解析 API', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    catalog.presets = [
+      ...(catalog.presets ?? []),
+      {
+        id: 'server-moonshot-test',
+        name: 'Server Moonshot Test',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://server.example/anthropic',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'kimi-k3', name: 'Kimi K3' }],
+          },
+        },
+      },
+    ];
+    const registryEntry = catalog.modelRegistry?.models.find(
+      (entry) =>
+        entry.id === 'moonshotai/kimi-k3' ||
+        entry.routes.some((route) => route.providerId === 'xd' && route.modelId === 'moonshot/kimi-k3'),
+    );
+    if (!registryEntry) throw new Error('missing Kimi registry fixture');
+    registryEntry.routes = [
+      { providerId: 'xd', modelId: 'moonshot/kimi-k3', agents: ['claude-code', 'codex'] },
+      {
+        providerId: 'server-moonshot-test',
+        modelId: 'kimi-k3',
+        agents: ['claude-code', 'codex'],
+      },
+    ];
+    setActiveCatalog(catalog, { authorityCatalog: catalog });
     setXdGatewayModels([
       {
-        id: 'messages-model',
-        agents: ['claude-code', 'codex', 'pi'],
-        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
-      },
-      {
-        id: 'responses-model',
+        id: 'moonshot/kimi-k3',
         agents: ['claude-code', 'codex', 'pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
       },
       {
-        id: 'missing-wire',
+        id: 'claude-opus-5',
         agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
       },
       {
-        id: 'claude-only-model',
-        agents: ['claude-code'],
-        perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' } },
+        id: 'gpt-5.6-sol',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
+      },
+      {
+        id: 'google/gemini-3.7-flash',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'future-unmapped-model',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'future-unsupported-api',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'future-protocol' as never } },
+      },
+      {
+        id: 'gemini-3.6-flash',
+        agents: ['codex'],
+        perAgent: { codex: { wireProtocol: 'openai-responses' } },
       },
     ]);
 
-    expect(resolveXdPiGatewayWireProtocol('messages-model')).toBe('anthropic-messages');
-    expect(resolveXdPiGatewayWireProtocol('responses-model')).toBe('openai-responses');
-    expect(resolveXdPiGatewayWireProtocol('responses-model[1m]')).toBe('openai-responses');
-    expect(resolveXdPiGatewayWireProtocol('missing-wire')).toBeNull();
-    expect(resolveXdPiGatewayWireProtocol('claude-only-model')).toBeUndefined();
-    expect(resolveXdPiGatewayWireProtocol('unknown-model')).toBeUndefined();
-    expect(xdModels('pi').map((model) => model.id)).toEqual([
-      'messages-model',
-      'responses-model',
-    ]);
+    // Cindy Server beats both local Kimi Completions metadata and Gateway Responses.
+    expect(resolveXdPiGatewayApi('moonshot/kimi-k3')).toBe('anthropic-messages');
+    expect(resolveXdPiGatewayWireProtocol('moonshot/kimi-k3')).toBe('anthropic-messages');
+    // With no server declaration, the version-matched local table beats Gateway hints.
+    expect(resolveXdPiGatewayApi('claude-opus-5')).toBe('anthropic-messages');
+    expect(resolveXdPiGatewayApi('gpt-5.6-sol')).toBe('openai-responses');
+    expect(resolveXdPiGatewayApi('google/gemini-3.7-flash')).toBe('google-generative-ai');
+    expect(resolveXdPiGatewayWireProtocol('google/gemini-3.7-flash')).toBeNull();
+    // Gateway is consulted only when both higher-priority sources are absent.
+    expect(resolveXdPiGatewayApi('future-unmapped-model')).toBe('openai-responses');
+    expect(resolveXdPiGatewayApi('future-unsupported-api')).toBeNull();
+    expect(resolveXdPiGatewayApi('gemini-3.6-flash')).toBeUndefined();
     expect(xdModels('pi')).toMatchObject([
-      { id: 'messages-model', piApi: 'anthropic-messages' },
-      { id: 'responses-model', piApi: 'openai-responses' },
+      { id: 'moonshot/kimi-k3', piApi: 'anthropic-messages' },
+      { id: 'claude-opus-5', piApi: 'anthropic-messages' },
+      { id: 'gpt-5.6-sol', piApi: 'openai-responses' },
+      { id: 'google/gemini-3.7-flash', piApi: 'google-generative-ai' },
+      { id: 'future-unmapped-model', piApi: 'openai-responses' },
+      { id: 'future-unsupported-api' },
+    ]);
+  });
+
+  it('Cindy Server 的精确 retired tombstone 会隐藏滞后的 Gateway Pi 成员', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    catalog.modelRegistry = {
+      schemaVersion: 2,
+      updatedAt: '2026-08-29T00:00:00.000Z',
+      models: [
+        {
+          id: 'canonical/kimi-k3',
+          name: 'Kimi K3',
+          status: 'retired',
+          routes: [
+            { providerId: 'xd', modelId: 'moonshot/kimi-k3', agents: ['claude-code', 'codex'] },
+          ],
+        },
+      ],
+    };
+    setActiveCatalog(catalog, { authorityCatalog: catalog });
+    setXdGatewayModels([
+      {
+        id: 'moonshot/kimi-k3',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+    ]);
+
+    expect(resolveXdPiGatewayApi('moonshot/kimi-k3')).toBeNull();
+    expect(xdModels('pi')).toEqual([]);
+    expect(xdModels('codex').map((model) => model.id)).toEqual(['moonshot/kimi-k3']);
+  });
+
+  it('Cindy AI Gateway 只决定账号成员，不会覆盖高优先级 API 或凭其它 agent 擅自投影', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'claude-opus-5',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'google/gemini-3.6-flash',
+        agents: ['codex'],
+        perAgent: { codex: { wireProtocol: 'openai-responses' } },
+      },
+    ]);
+
+    expect(resolveXdPiGatewayApi('claude-opus-5')).toBe('anthropic-messages');
+    expect(resolveXdPiGatewayApi('google/gemini-3.6-flash')).toBeUndefined();
+    expect(xdModels('pi')).toMatchObject([
+      { id: 'claude-opus-5', piApi: 'anthropic-messages' },
     ]);
   });
 
@@ -318,32 +451,32 @@ describe('XD 网关权威模型清单重建', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
-        id: 'gateway-vision',
+        id: 'google/gemini-3.7-flash',
         agents: ['pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
         modalities: { input: ['text', 'image'], output: ['text'] },
       },
       {
-        id: 'gateway-text',
+        id: 'qwen/qwen3.8-27b',
         agents: ['pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
         modalities: { input: ['text'], output: ['text'] },
       },
       {
-        id: 'gateway-unknown',
+        id: 'qwen/qwen3.8-flash',
         agents: ['pi'],
         perAgent: { pi: { wireProtocol: 'openai-responses' } },
       },
     ]);
 
     const pi = deriveAvailableModels(getActiveCatalog(), 'pi');
-    expect(pi.find((model) => model.id === 'gateway-vision')).toMatchObject({
+    expect(pi.find((model) => model.id === 'google/gemini-3.7-flash')).toMatchObject({
       supportsImageInput: true,
     });
-    expect(pi.find((model) => model.id === 'gateway-text')).toMatchObject({
+    expect(pi.find((model) => model.id === 'qwen/qwen3.8-27b')).toMatchObject({
       supportsImageInput: false,
     });
-    expect(pi.find((model) => model.id === 'gateway-unknown')).not.toHaveProperty(
+    expect(pi.find((model) => model.id === 'qwen/qwen3.8-flash')).not.toHaveProperty(
       'supportsImageInput',
     );
   });

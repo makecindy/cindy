@@ -33,7 +33,6 @@ import {
   GHOST_MANUAL_ENTRY_FILE,
   GHOST_MANUAL_MD_MAX_BYTES,
   GHOST_MANIFEST_FILE,
-  GHOST_MANIFEST_V3_MIN_CINDY_VERSION,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_SKILL_MD_MAX_BYTES,
   validateGhostManifest,
@@ -210,6 +209,7 @@ interface ForgeScaffoldInput {
   id: string;
   name: string;
   description?: string;
+  minCindyVersion: string;
 }
 
 /**
@@ -238,7 +238,7 @@ export type ForgeScaffoldWriter = (
 function scaffoldManifest(input: ForgeScaffoldInput): Record<string, unknown> {
   const common = {
     schemaVersion: 3,
-    minCindyVersion: GHOST_MANIFEST_V3_MIN_CINDY_VERSION,
+    minCindyVersion: input.minCindyVersion,
     id: input.id,
     name: input.name,
     description: input.description?.trim() || `${input.name} 插件`,
@@ -1464,7 +1464,9 @@ ghost_forge_pack 校验并生成 .cindy 产物；需要发布时改用 publish i
 Cindy 校验真实包后直接安装并启用，不再追加整张能力确认弹窗。唯一的窄确认是：企业作者
 用 \`ghost_forge_install\` 安装声明了 \`oidc-token\` 的包时，需核对 id 与注入域名。市场安装会绑定所选来源，
 此后的新版本由 Cindy 静默更新并保留当前启用状态；本地 \`.cindy\` 不自动猜测更新来源，
-需要用户再次导入新版包。插件自主 Host 能力仍必须完整声明，插件详情会如实展示，Host 运行时按声明
+需要用户再次导入新版包。当前组织的默认插件可能在严格核对组织、前缀、批准、退订与来源后，
+接管同 id 的普通本地导入；明确通过 \`ghost_forge_install\` 安装或更新的作者自测包会被保护，
+不会被这条自动接管路径覆盖。插件自主 Host 能力仍必须完整声明，插件详情会如实展示，Host 运行时按声明
 强制守门；市场下载包若超出该版本市场清单声明的能力，会作为包内容不一致被拒绝。
 
 **先判断谁执行，再声明能力**：
@@ -1480,7 +1482,9 @@ Cindy 校验真实包后直接安装并启用，不再追加整张能力确认�
 
 从零开始时优先调用 \`ghost_forge_scaffold\` 生成一份不会覆盖现有文件的骨架，再在
 骨架上修改。可选模板:\`plain\`(普通沙箱工具)、\`agent-action\`(卡片点击后让 Agent
-继续工作)、\`node-json-rpc\`(普通随包 Node 服务)、\`node-mcp\`(随包 stdio MCP)。
+继续工作)、\`node-json-rpc\`(普通随包 Node 服务)、\`node-mcp\`(随包 stdio MCP)。正式版
+Cindy 会默认把自身版本写进这份具体插件的 \`minCindyVersion\`；在开发版或预发布版中制作时，
+调用 scaffold 必须明确传入插件实际依赖的首个 Cindy 正式版本。
 
 ## 0. 设计对齐:动手前用提问卡片确认关键决策
 
@@ -1568,7 +1572,7 @@ my-ghost/
     "ko": "locales/ko.json"
   },
   "version": "1.0.0",
-  "minCindyVersion": "0.1.61", // v3 必填:首个支持本清单的 Cindy 正式版本(SemVer)
+  "minCindyVersion": "1.2.3", // 示例；v3 必填:本插件实际依赖的首个 Cindy 正式版本(SemVer)
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:意识只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(详情页会如实标注"常驻运行",绝大多数意识不需要,仅订阅型/需秒响应的场景用)
   "command": "画图",            // 推荐:用户 $画图 显式点名(与已装意识查重,冲突拒装)。
@@ -1603,8 +1607,8 @@ my-ghost/
 }
 \`\`\`
 
-\`schemaVersion: 3\` 必须填写 \`minCindyVersion\`。它写首个能解析该清单的 Cindy
-正式版本；当前 v3 起点是 \`0.1.61\`。不要为了使用某项既有能力随意抬高版本。
+\`schemaVersion: 3\` 必须填写 \`minCindyVersion\`。它写本插件实际依赖的首个 Cindy
+正式版本；Manifest schema 本身没有统一的 Cindy 版本下限。不要为了使用某项既有能力随意抬高版本。
 官方市场会优先向旧客户端投影最近的兼容历史版本，没有兼容版本时不展示该插件。
 Desktop 信任来源已经完成的版本选择，不再按 \`minCindyVersion\` 追加筛选或确认弹窗；
 用户主动导入的本地包、以及用户添加的自定义市场也遵循同一安装策略。这个字段仍必须
@@ -2979,7 +2983,9 @@ Auth 的企业服务。主机只在当前登录账号属于组织 Membership，�
 保有本次包的完整 sha256。两路都要求清单声明目标服务域名。
 audience 与组织身份由主机推导,插件清单和运行时代码都不能选择、读取或保存
 audience/token；audience 固定为 \`\${orgSlug}:\${ghostId}\`,总长不得超过 64 字符。
-个人身份与手动导入不签发；企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
+个人身份与手动导入默认不签发。点名例外：\`ghostId\` 精确等于 \`mivo-canvas\` 的组织成员本地安装，
+在已装清单声明的精确 oidc-token host 仅为 \`mivo-canvas.dsworks.cn\` 时可解析 audience；其它本地插件、其它精确 host 仍不签发。已有市场
+organization 记录（含 installed:false）时必须仍走 digest，不得借例外跳过。市场账本损坏、schema 不认或该 ghostId 记录校验失败时 fail-closed，不得当成无记录。企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
 确认。市场与 Forge 两条组织基座都只给 Broker 与 oidc-token、不给宿主原语。
 该凭证必须固定声明
 \`"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }\`,
@@ -3463,6 +3469,13 @@ for (const chunk of chunks) {
 const done = await cindy.library({ op: 'writeCommit', streamId: b.streamId });
 // done = { ok:true, path, bytes, sha256 }; 中断/放弃用 writeAbort
 
+// 在文件夹中显示 / 系统另存为(不回用户所选绝对路径)
+await cindy.library({ op: 'reveal', path: 'exports/a.psd' });
+const saved = await cindy.library({ op: 'saveAs', path: 'exports/a.psd', name: 'layers.psd' });
+// saved = { ok:true, cancelled:true }
+//      或 { ok:true, cancelled:false, path:'exports/a.psd', bytes }
+// path 永远是库内相对键,不是用户另存到的绝对路径
+
 // SQLite:参数化语句 + 首词白名单(SELECT/WITH/INSERT/REPLACE/UPDATE/DELETE/
 // CREATE/DROP/ALTER/REINDEX/ANALYZE);ATTACH/PRAGMA/VACUUM/事务语句一律拒,
 // 事务由宿主管理(db.batch 整批原子),迁移按 user_version 幂等续跑
@@ -3485,7 +3498,15 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   \`LIBRARY_UNAVAILABLE\`(含 reason:binding-moved/disk-missing/corrupt)、
   \`LIBRARY_READONLY\`、\`DISK_FULL\`、\`PATH_INVALID\`、\`NOT_FOUND\`、
   \`ALREADY_EXISTS\`、\`TOO_LARGE\`、\`STREAM_INVALID\`、\`DB_STATEMENT_REJECTED\`、
-  \`DB_ROW_LIMIT\`(结果集超 2000 行,自己加 LIMIT)、\`DB_MIGRATION_CONFLICT\`;
+  \`DB_ROW_LIMIT\`(结果集超 2000 行,自己加 LIMIT)、\`DB_MIGRATION_CONFLICT\`、
+  \`BUSY\`、\`RATE_LIMITED\`;
+- **reveal / saveAs**:只收库内相对路径。成功不回用户另存目标的绝对路径;
+  取消是 \`{ cancelled:true }\`。reveal 打开系统文件夹、saveAs 弹系统对话框
+  (跨平台标题带已核验插件名;macOS 另有正文),同插件 3 秒内连发 \`RATE_LIMITED\`;
+  saveAs 已有对话框在场 \`BUSY\`(不排队)。
+  对话框期间账号切换则拒绝拷贝(\`LIBRARY_UNAVAILABLE\`);
+  拷贝完成替换前、reveal 打开文件夹前再核一次会话;
+  确认后先拷到目标旁临时文件再替换,失败不破坏已有文件;
 - **不可用 ≠ 空**:\`state:'unavailable'\` 时**不要**当空库重建、不要触发
   清理、不要把素材判成已删——如实向用户展示状态,等位置恢复;
 - **无跨库事务**:多个 .sqlite 之间没有 ATTACH;跨库一致性用幂等 + 墓碑
@@ -4217,7 +4238,7 @@ const opened = await cindy.iosSimulator.request({
 \`\`\`json
 {
   "schemaVersion": 3,
-  "minCindyVersion": "0.1.61",
+  "minCindyVersion": "1.2.3",
   "mainView": {
     "title": "工作台",
     "icon": "puzzle",
@@ -4379,8 +4400,11 @@ const opened = await cindy.iosSimulator.request({
    产生的确切包直接安装；首次安装会启用，同 id 已安装时原位更新并保留启用状态、配置、
    数据与面板位置，同版本也可覆盖。不要因为 scaffold 或 pack 成功就自动调用本工具。
    企业身份下若清单声明 \`source:"oidc-token"\`，提交安装前会展示插件名、id 与精确请求
-   域名，并要求用户手输相同 id；取消不会安装。只有确认后的企业作者自测才会取得 Forge
-   作者资格并可签发 Connection JWT；个人身份下的 Forge 安装和手动导入都不会取得这项资格；
+   域名，并要求用户手输相同 id；取消不会安装。个人与企业身份下的明确 Forge 安装都会标记为
+   作者本地自测并受组织默认插件自动接管保护；但 Connection JWT 资格仍只来自当前企业身份、
+   组织前缀与 OIDC 窄确认，个人身份下的 Forge 安装绝不会仅凭自测标记取得 Broker 或 Connection 权限，
+   普通手动导入也不取得这项资格。
+   本地安装另有一条点名例外，见 §4.7：仅 \`ghostId\` 精确等于 \`mivo-canvas\` 且精确 oidc-token host 仅为 \`mivo-canvas.dsworks.cn\` 的组织成员本地安装可解析 audience；
 4. 安装后再让用户 \`$<command> <内容>\` 试一单，看聊天图卡/面板是否符合预期。
 
 企业组织成员需要发布时，调用 \`ghost_forge_pack({ dir: '<绝对路径>', intent: 'publish' })\`。

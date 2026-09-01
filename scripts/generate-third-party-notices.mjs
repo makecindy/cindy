@@ -582,6 +582,23 @@ function readAndroidPlatformToolsVersion() {
   }
 }
 
+function readWindowsUpdaterRuntimeVersion() {
+  try {
+    return readJson(
+      path.join(
+        REPO_ROOT,
+        "apps",
+        "desktop",
+        "resources",
+        "cindy-updater-runtime",
+        "manifest.json",
+      ),
+    ).version;
+  } catch {
+    return "bundled";
+  }
+}
+
 function bundledComponent(component) {
   return { ecosystem: "bundled", ...component };
 }
@@ -1492,6 +1509,16 @@ const projectManual = mergeComponents(
 auditArtifact("project-aggregate", projectClosure, projectManual);
 
 const restrictedManualEntries = [
+  {
+    ecosystem: "bundled",
+    name: "Microsoft Visual C++ Runtime (Windows updater app-local DLLs)",
+    version: readWindowsUpdaterRuntimeVersion(),
+    license: "LicenseRef-Microsoft-Visual-Studio-Distributable-Code",
+    category: "proprietary",
+    url: "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution",
+    note: "Bundled only with the Windows x64 updater; not covered by Cindy's Apache-2.0 license. Exact Microsoft source, hashes, sizes and signer identities are recorded in apps/desktop/resources/cindy-updater-runtime/manifest.json.",
+    artifacts: ["desktop-win"],
+  },
   {
     ecosystem: "bundled",
     name: "Claude Code CLI",

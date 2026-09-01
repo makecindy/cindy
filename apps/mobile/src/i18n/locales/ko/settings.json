@@ -85,6 +85,21 @@
     "authServer": "Auth Server",
     "authRegion": "로그인 지역"
   },
+  "devServerEnvironment": {
+    "title": "서버 환경",
+    "description": "CindyDev가 연결하는 업무 서버에만 영향을 줍니다",
+    "accessibility": "서버 환경 전환",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "{{environment}} 환경으로 전환할까요?",
+    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 App이 다시 시작됩니다.",
+    "cancel": "취소",
+    "switchAction": "전환",
+    "switching": "전환 중",
+    "switchFailed": "서버 환경을 전환하지 못했습니다. 다시 시도해 주세요."
+  },
   "updateInfo": {
     "embedded": "앱 패키지 포함",
     "embeddedFallback": "앱 패키지 포함 (OTA 미적용)",
@@ -116,7 +131,7 @@
     "analyticsResetAction": "되돌리기"
   },
   "account": {
-    "logoutHint": "로그아웃하면 이 휴대폰의 로그인 상태와 로컬 원격 미러만 삭제됩니다. 컴퓨터의 세션에는 영향이 없습니다.",
+    "logoutHint": "로그아웃하면 이 휴대폰에 저장된 모든 계정과 로컬 원격 미러가 삭제됩니다. 컴퓨터의 세션에는 영향이 없습니다.",
     "logout": "로그아웃",
     "loggingOut": "로그아웃 중",
     "loggingOutAccessibility": "로그아웃하는 중"

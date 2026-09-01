@@ -6,6 +6,10 @@
  *   3. 只有提权 / 系统控制 / 凭证 / 系统级破坏 / 任意代码执行等极高风险边界才
  *      prompt-each-time；可证明受限于工作区子目录的清理进入灰区，避免 Auto 无意义打扰。
  */
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -30,6 +34,14 @@ describe('reviewAction — 非 shell 动作', () => {
     expect(reviewAction({ kind: 'other', description: 'unmapped', requireConsent: true }, roots))
       .toBe('prompt-each-time');
   });
+  it('动态 provider 目录范围收紧后，区外读取逐次确认', () => {
+    expect(reviewAction({
+      kind: 'read',
+      path: '/revoked/file.txt',
+      scope: 'file',
+      requireWorkspaceBoundary: true,
+    }, roots)).toBe('prompt-each-time');
+  });
 });
 
 describe('reviewAction — file-write 工作区边界', () => {
@@ -40,6 +52,104 @@ describe('reviewAction — file-write 工作区边界', () => {
   it('额外只读引用目录(非首 root)写 → prompt(additionalDirectories 可读不可写)', () => {
     // /extra 是只读引用目录,写入须升级,不能因它在 workspaceRoots 里就当可写(codex 报)。
     expect(reviewAction({ kind: 'file-write', path: '/extra/y.ts' }, roots)).toBe('prompt');
+  });
+  it('用户显式授权的附加可写根允许结构化写，但不放宽其它只读根', () => {
+    const allRoots = ['/repo', '/reference', '/shared-output'];
+    const opts = { writableRoots: ['/repo', '/shared-output'] };
+    expect(reviewAction({ kind: 'file-write', path: '/shared-output/result.txt' }, allRoots, opts))
+      .toBe('auto-approve');
+    expect(reviewAction({ kind: 'file-write', path: '/reference/spec.md' }, allRoots, opts))
+      .toBe('prompt');
+    expect(reviewAction({ kind: 'file-write', path: '/shared-output/../outside.txt' }, allRoots, opts))
+      .toBe('prompt');
+  });
+  it('对 harness 提供的真实写目标重新应用授权、系统与凭证边界', () => {
+    const allRoots = ['/repo', '/reference', '/shared-output'];
+    const opts = { writableRoots: ['/repo', '/shared-output'] };
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/link/result.txt',
+      resolvedPath: '/shared-output/real/result.txt',
+    }, allRoots, opts)).toBe('auto-approve');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/link/result.txt',
+      resolvedPath: '/outside/result.txt',
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/link/hosts',
+      resolvedPath: '/etc/hosts',
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/link/key',
+      resolvedPath: '/Users/me/.ssh/id_rsa',
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/shared-output/unresolved/result.txt',
+      resolvedPath: null,
+    }, allRoots, opts)).toBe('prompt-each-time');
+    // 原始路径本就在授权外时保留既有灰区语义，不能被真实目标反向洗成绿灯。
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/outside/alias.txt',
+      resolvedPath: '/shared-output/result.txt',
+    }, allRoots, opts)).toBe('prompt');
+  });
+  it('用 canonical 可写根验证真实目标，同时保留词法授权边界', () => {
+    const allRoots = ['/repo-link', '/output-link'];
+    const opts = { writableRoots: ['/repo-link', '/output-link'] };
+    const resolvedWritableRoots = ['/repo-real', '/output-real'];
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/result.txt',
+      resolvedPath: '/output-real/result.txt',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('auto-approve');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/nested/result.txt',
+      resolvedPath: '/outside/result.txt',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/hosts',
+      resolvedPath: '/etc/hosts',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/key',
+      resolvedPath: '/Users/me/.ssh/id_rsa',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/outside/alias.txt',
+      resolvedPath: '/output-real/result.txt',
+      resolvedWritableRoots,
+    }, allRoots, opts)).toBe('prompt');
+    expect(reviewAction({
+      kind: 'file-write',
+      path: '/output-link/result.txt',
+      resolvedPath: '/output-real/result.txt',
+      resolvedWritableRoots: null,
+    }, allRoots, opts)).toBe('prompt-each-time');
+  });
+  it('恶意或失效的目录授权不能覆盖凭证与系统路径红线', () => {
+    expect(reviewAction(
+      { kind: 'file-write', path: '/etc/hosts' },
+      ['/repo', '/etc'],
+      { writableRoots: ['/repo', '/etc'] },
+    )).toBe('prompt-each-time');
+    expect(reviewAction(
+      { kind: 'file-write', path: '/shared-output/.aws/credentials' },
+      ['/repo', '/shared-output'],
+      { writableRoots: ['/repo', '/shared-output'] },
+    )).toBe('prompt-each-time');
   });
   it('区外(非系统)/ .. 逃逸 / 前缀不整段 → prompt(灰区,交 reviewer)', () => {
     expect(reviewAction({ kind: 'file-write', path: '/outside/x' }, roots)).toBe('prompt');
@@ -75,6 +185,119 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
     expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/extra' }, roots)).toBe('prompt');
     expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/Users/me' }, roots)).toBe('prompt');
     expect(reviewAction({ kind: 'exec', command: 'rm -rf build', cwd: '/Users/me' }, roots)).toBe('prompt-each-time');
+  });
+  it('显式可写目录中的 cwd 保留命令分类，仍拒绝只读目录与整根破坏', () => {
+    const allRoots = ['/repo', '/reference', '/shared-output'];
+    const opts = { writableRoots: ['/repo', '/shared-output'] };
+    expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/shared-output/sub' }, allRoots, opts))
+      .toBe('auto-approve');
+    expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/reference' }, allRoots, opts))
+      .toBe('prompt');
+    expect(reviewAction({ kind: 'exec', command: 'rm -rf .', cwd: '/shared-output' }, allRoots, opts))
+      .toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'exec', command: 'rm -rf build', cwd: '/shared-output' }, allRoots, opts))
+      .toBe('prompt');
+    expect(reviewAction({ kind: 'exec', command: 'mkdir generated', cwd: '/shared-output' }, allRoots, opts))
+      .toBe('prompt');
+  });
+  it('删除目标按真实路径复核：链接逃逸/凭证/无法解析必问，链接授权根内正常清理保留灰区', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'cindy-destructive-realpath-'));
+    const grant = join(fixture, 'grant');
+    const outside = join(fixture, 'outside');
+    const realGrant = join(fixture, 'real-grant');
+    const grantAlias = join(fixture, 'grant-alias');
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    mkdirSync(join(grant, 'build'), { recursive: true });
+    mkdirSync(join(outside, '.ssh'), { recursive: true });
+    mkdirSync(join(outside, 'subdir'), { recursive: true });
+    mkdirSync(join(realGrant, 'build'), { recursive: true });
+    symlinkSync(outside, join(grant, 'outside-link'), linkType);
+    symlinkSync(join(outside, '.ssh'), join(grant, 'credential-link'), linkType);
+    symlinkSync(realGrant, grantAlias, linkType);
+    const protectedRoot = process.platform === 'win32' ? process.env.SystemRoot : '/etc';
+    if (protectedRoot && existsSync(protectedRoot)) {
+      symlinkSync(protectedRoot, join(grant, 'system-link'), linkType);
+    }
+    const danglingTarget = join(fixture, 'missing-target');
+    symlinkSync(danglingTarget, join(grant, 'dangling-link'), linkType);
+
+    try {
+      const opts = { writableRoots: [grant] };
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grant, 'outside-link', 'subdir')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      expect(reviewAction({
+        kind: 'exec',
+        command: `find ${join(grant, 'outside-link')} -delete`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      for (const command of [
+        `echo owned > ${join(grant, 'outside-link', 'result.txt')}`,
+        `cp payload ${join(grant, 'outside-link', 'result.txt')}`,
+        `tee ${join(grant, 'outside-link', 'result.txt')}`,
+        `sed -i 's/a/b/' ${join(grant, 'outside-link', 'result.txt')}`,
+        `Set-Content -Path ${join(grant, 'outside-link', '*.txt')} -Value owned`,
+        `Get-ChildItem ${join(grant, 'outside-link', 'subdir')} | Remove-Item -Recurse`,
+      ]) {
+        expect(reviewAction({ kind: 'exec', command, cwd: grant }, [grant], opts), command)
+          .toBe('prompt-each-time');
+      }
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grant, 'credential-link', 'id_rsa')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      if (protectedRoot && existsSync(protectedRoot)) {
+        expect(reviewAction({
+          kind: 'exec',
+          command: `rm -rf ${join(grant, 'system-link', 'hosts')}`,
+          cwd: grant,
+        }, [grant], opts)).toBe('prompt-each-time');
+      }
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grant, 'dangling-link', 'subdir')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      expect(reviewAction({
+        kind: 'exec',
+        command: `echo owned > ${join(grant, 'dangling-link')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt-each-time');
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grant, 'build')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt');
+      expect(reviewAction({
+        kind: 'exec',
+        command: `cp payload ${join(grant, 'build', 'result.txt')}`,
+        cwd: grant,
+      }, [grant], opts)).toBe('prompt');
+      expect(reviewAction({
+        kind: 'exec',
+        command: `rm -rf ${join(grantAlias, 'build')}`,
+        cwd: grantAlias,
+      }, [grantAlias], { writableRoots: [grantAlias] })).toBe('prompt');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+  it('远端执行端无法提供真实路径证据时，破坏性目标 fail closed', () => {
+    expect(reviewAction({
+      kind: 'exec',
+      command: 'rm -rf build',
+      cwd: '/remote/repo',
+      destructivePathResolution: 'unavailable',
+    }, ['/remote/repo'])).toBe('prompt-each-time');
+    expect(reviewAction({
+      kind: 'exec',
+      command: 'cp payload build/result.txt',
+      cwd: '/remote/repo',
+      destructivePathResolution: 'unavailable',
+    }, ['/remote/repo'])).toBe('prompt-each-time');
   });
 });
 

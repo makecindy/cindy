@@ -65,6 +65,9 @@ function createLocalDb(): Database.Database {
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
       last_turn_ended_at INTEGER,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );

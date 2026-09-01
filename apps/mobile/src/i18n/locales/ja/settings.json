@@ -85,6 +85,21 @@
     "authServer": "Auth Server",
     "authRegion": "ログインリージョン"
   },
+  "devServerEnvironment": {
+    "title": "サーバー環境",
+    "description": "CindyDev が接続する業務サーバーにのみ影響します",
+    "accessibility": "サーバー環境を切り替える",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "{{environment}} に切り替えますか？",
+    "confirmBody": "切り替えると現在のアカウントからログアウトし、App を再起動します。",
+    "cancel": "キャンセル",
+    "switchAction": "切り替える",
+    "switching": "切り替え中",
+    "switchFailed": "サーバー環境を切り替えられませんでした。もう一度お試しください。"
+  },
   "updateInfo": {
     "embedded": "アプリ本体と同梱",
     "embeddedFallback": "アプリ本体と同梱（OTA 未適用）",
@@ -116,7 +131,7 @@
     "analyticsResetAction": "戻す"
   },
   "account": {
-    "logoutHint": "ログアウトすると、このスマートフォン上のログイン状態とローカルのリモートミラーだけが削除されます。パソコン側のセッションには影響しません。",
+    "logoutHint": "ログアウトすると、このスマートフォンに保存されたすべてのアカウントとローカルのリモートミラーが削除されます。パソコン側のセッションには影響しません。",
     "logout": "ログアウト",
     "loggingOut": "ログアウト中",
     "loggingOutAccessibility": "ログアウトしています"

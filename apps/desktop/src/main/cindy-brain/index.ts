@@ -7,6 +7,7 @@ import {
   shell,
   type WebContents,
 } from 'electron';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -102,7 +103,6 @@ import {
 import {
   getAccessToken,
   getAuthState,
-  getCurrentUserId,
   onAuthStateChange,
 } from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.js';
@@ -225,6 +225,8 @@ import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
 import {
   deriveCindyMediaConfig,
+  filterLegacyCindyMediaConfig,
+  selectExecutableCoreMediaModels,
   type CindyCapabilityKind,
   type CindyMediaCatalogConfig,
 } from './cindyMediaCatalog.js';
@@ -238,7 +240,10 @@ import {
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
-import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
+import {
+  GhostNodeRuntimeBroker,
+  type NodeRuntimeStartAttemptContext,
+} from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
@@ -311,12 +316,16 @@ import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot, getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
-import { readInstalledGhostManifestDigestFormats } from '../installedGhostManifest.js';
+import { readInstalledGhostManifestSnapshot } from '../installedGhostManifest.js';
 import {
   ghostManifestDigest,
   PluginMarketLedger,
   type PluginMarketInstallationRecord,
 } from '../plugin-market/ledger.js';
+import {
+  installedMarketManifestIdentity,
+  type InstalledMarketManifestIdentity,
+} from '../plugin-market/installedManifestIdentity.js';
 import { createOrganizationPrefixStore } from '../plugin-market/organizationPrefixStore.js';
 import {
   GhostSubscriptionGateway,
@@ -406,6 +415,7 @@ import {
   configureProviderMediaRuntime,
   listProviderMediaModels,
 } from '../cindy-media/providerMediaRuntime.js';
+import { loadPluginMediaAvailability } from './pluginMediaCatalogFallback.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
 import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.js';
@@ -1673,6 +1683,21 @@ export function getInstalledGhostName(id: string): string | null {
 }
 
 let nodeRuntimeBrokerSingleton: GhostNodeRuntimeBroker | null = null;
+let nodeRuntimeStartAttemptContextReader: (() => NodeRuntimeStartAttemptContext) | null = null;
+const nodeRuntimeAppRunId = (() => {
+  try {
+    return randomUUID().replaceAll('-', '');
+  } catch {
+    return 'unknown';
+  }
+})();
+
+/** Desktop bootstrap 注入主窗/系统的粗粒度只读快照；不注册额外全局监听。 */
+export function setGhostNodeRuntimeStartAttemptContextReader(
+  reader: (() => NodeRuntimeStartAttemptContext) | null,
+): void {
+  nodeRuntimeStartAttemptContextReader = reader;
+}
 
 /**
  * `GhostNodeRuntimeBroker.destroyAll()` is a terminal host-exit operation. An
@@ -1697,6 +1722,12 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
       sendToGhost: (ghostId, payload) => {
         sendToGhostLogic(ghostId, payload);
       },
+      getStartAttemptContext: () =>
+        nodeRuntimeStartAttemptContextReader?.() ?? {
+          observedMainWindowState: 'unknown',
+          observedScreenState: 'unknown',
+        },
+      appRunId: nodeRuntimeAppRunId,
       log,
     });
   }
@@ -2553,31 +2584,28 @@ function getPluginMarketLedger(): PluginMarketLedger {
   return pluginMarketLedgerSingleton;
 }
 
-/** Read the locale-independent manifest digest from the installed package. */
-function readInstalledGhostManifestDigest(ghostId: string): string | null {
+/** Read Manifest and byte identity together from one installed ghost.json snapshot. */
+function readInstalledGhostManifestIdentity(
+  ghostId: string,
+): InstalledMarketManifestIdentity | null {
   const ghost = getGhostManager()
     .list()
     .find((candidate) => candidate.manifest.id === ghostId);
   if (!ghost) return null;
-  const digests = readInstalledGhostManifestDigestFormats(
+  const result = readInstalledGhostManifestSnapshot(
     ghost.dir,
     GHOST_INSTALL_MANIFEST_MAX_BYTES,
-  ).map(ghostManifestDigest);
-  const expected = getPluginMarketLedger().installationForGhost(ghostId)?.manifestDigest;
-  if (expected !== undefined && digests.includes(expected)) return expected;
-  return digests[0] ?? null;
+  );
+  return result.ok ? installedMarketManifestIdentity(result.snapshot) : null;
 }
 
 /** Resolve Connection metadata from trusted organization installs or explicit Forge receipts. */
 function getConnectionAudienceResolver(): ConnectionAudienceResolver {
   if (!connectionAudienceResolverSingleton) {
     connectionAudienceResolverSingleton = loadConnectionAudienceResolver({
-      readInstalledManifest: (ghostId) =>
-        getGhostManager()
-          .list()
-          .find((candidate) => candidate.manifest.id === ghostId)?.manifest ?? null,
-      readInstalledManifestDigest: readInstalledGhostManifestDigest,
-      readMarketInstallation: (ghostId) => getPluginMarketLedger().installationForGhost(ghostId),
+      readInstalledManifestIdentity: readInstalledGhostManifestIdentity,
+      readMarketInstallation: (ghostId) =>
+        getPluginMarketLedger().lookupInstallationForOidc(ghostId),
       readApprovedPackageSha256: (ghostId) =>
         getGhostManager().approvedInstallEvidence(ghostId)?.packageSha256 ?? null,
       readInstallOrigin: (ghostId) => getGhostManager().readEffectiveInstallOrigin(ghostId),
@@ -3436,20 +3464,16 @@ function getMediaPreferenceConfig(
   capability: GhostMediaCapability,
 ): CindyMediaPreferenceConfig {
   const kind = capability.startsWith('image.') ? 'image' : 'video';
-  const videoRegistry = kind === 'video' ? getVideoProviderRegistry() : null;
   const coreCapability: MediaCapability =
     capability === 'video.edit' ? 'video.image_to_video' : capability;
   const providers = new Map(
     getActiveCatalog().providers.map((provider) => [provider.id, provider] as const),
   );
-  const providerModels: CindyMediaPreferenceModel[] = listProviderMediaModels()
-    .filter(
-      (model) =>
-        model.mode === (kind === 'image' ? 'image_generation' : 'video_generation') &&
-        supportsMediaCapability(model.modalities, coreCapability) &&
-        (kind !== 'video' ||
-          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
-    )
+  const providerModels: CindyMediaPreferenceModel[] = selectExecutableCoreMediaModels(
+    kind === 'video' ? listLocalProviderVideoModels() : listProviderMediaModels(),
+    kind,
+    (model) => supportsMediaCapability(model.modalities, coreCapability),
+  )
     .map((model) => {
       const provider = providers.get(model.providerId);
       const providerName = provider?.name ?? model.providerId;
@@ -3465,16 +3489,15 @@ function getMediaPreferenceConfig(
         supportsEdit: supportsMediaCapability(model.modalities, 'image.edit'),
       };
     });
-  const gatewayModels: CindyMediaPreferenceModel[] = filterEnabledGatewayMediaModels(
-    getXdGatewayModels(),
-    coreCapability,
-    readModelDisableOverrides(),
+  const gatewayModels: CindyMediaPreferenceModel[] = selectExecutableCoreMediaModels(
+    filterEnabledGatewayMediaModels(
+      getXdGatewayModels(),
+      coreCapability,
+      readModelDisableOverrides(),
+    ),
+    kind,
+    (model) => isMediaModelExecutable(model.id, coreCapability),
   )
-    .filter(
-      (model) =>
-        isMediaModelExecutable(model.id, coreCapability) &&
-        (kind !== 'video' || (videoRegistry?.hasAlias(model.id, 'xd') ?? false)),
-    )
     .map((model) => {
       const provider = providers.get('xd');
       const providerName = provider?.name ?? 'Cindy AI';
@@ -3636,15 +3659,23 @@ async function getGhostConfigurableMediaModels(
   try {
     // 类型目录返回该大类所有至少有一种可执行操作的模型；具体支持动作由
     // Gateway modalities 透传给插件判断，不能把插件声明的多个动作取交集。
-    const availability = await listExecutableMediaModels();
-    const mode = type === 'image' ? 'image_generation' : 'video_generation';
-    const videoRegistry = type === 'video' ? getVideoProviderRegistry() : null;
-    const candidates = availability.models.filter(
-      (model) =>
-        model.mode === mode &&
-        (type !== 'video' ||
-          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
+    // The generic media-access snapshot is Gateway-first and historically only
+    // carried image-provider models. Video providers are host-owned (the video
+    // registry executes them), so add their local projection explicitly and do
+    // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
+    const localVideoModels = type === 'video' ? listLocalProviderVideoModels() : [];
+    const availability = await loadPluginMediaAvailability(
+      type,
+      localVideoModels.length,
+      () => listExecutableMediaModels(),
     );
+    const allModels = [...availability.models, ...localVideoModels].filter(
+      (model, index, models) =>
+        models.findIndex(
+          (candidate) => candidate.id === model.id && candidate.providerId === model.providerId,
+        ) === index,
+    );
+    const candidates = selectExecutableCoreMediaModels(allModels, type);
     const models = isProviderBlindCoreArt(ghost)
       ? collapseProviderBlindMediaModels(candidates, (model) => model.id)
       : candidates;
@@ -4084,23 +4115,72 @@ function listLocalProviderMediaModels() {
     }
     const supportsEdit = getImageChannelRegistry().isProviderEditReady(provider.id);
     return (provider.imageModels ?? []).flatMap((model) => {
-      if (
-        !model.modalities ||
-        isModelDisabled(access, provider.id, model.id) ||
-        !model.modalities.output.includes('image')
-      ) {
+      if (isModelDisabled(access, provider.id, model.id)) {
         return [];
       }
+      // Legacy/provider catalogs may only carry id/name. The channel registry is
+      // the executable capability source in that case: every registered image
+      // channel accepts text generation, and editable channels additionally
+      // accept an image input. Without this normalization, xAI's valid image
+      // models are visible in Settings but disappear from Art's media catalog.
+      const modalities = model.modalities ?? {
+        input: supportsEdit ? ['text', 'image'] : ['text'],
+        output: ['image'],
+      };
+      if (!modalities.output.includes('image')) return [];
       const input = supportsEdit
-        ? [...model.modalities.input]
-        : model.modalities.input.filter((modality) => modality !== 'image');
+        ? [...modalities.input]
+        : modalities.input.filter((modality) => modality !== 'image');
       return [
         {
           id: model.id,
           name: model.name,
           providerId: provider.id,
           mode: 'image_generation' as const,
-          modalities: { input, output: [...model.modalities.output] },
+          modalities: { input, output: [...modalities.output] },
+          ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
+        },
+      ];
+    });
+  });
+}
+
+/**
+ * Video models are executed by the host video registry rather than the image
+ * provider runtime. Keep their catalog projection beside the image projection
+ * so Art can read the same provider-owned models that Settings displays.
+ */
+function listLocalProviderVideoModels() {
+  const access = readModelDisableOverrides();
+  const registry = getVideoProviderRegistry();
+  if (!registry) return [];
+  return getActiveCatalog().providers.flatMap((provider) => {
+    if (
+      provider.id === 'xd' ||
+      isProviderDisabled(access, provider.id) ||
+      !isVideoCatalogProviderReady(provider.id)
+    ) {
+      return [];
+    }
+    return (provider.videoModels ?? []).flatMap((model) => {
+      if (
+        isModelDisabled(access, provider.id, model.id) ||
+        !registry.hasAlias(model.id, provider.id)
+      ) {
+        return [];
+      }
+      const modalities = model.modalities ?? {
+        input: ['text', 'image'],
+        output: ['video'],
+      };
+      if (!modalities.output.includes('video')) return [];
+      return [
+        {
+          id: model.id,
+          name: model.name,
+          providerId: provider.id,
+          mode: 'video_generation' as const,
+          modalities: { input: [...modalities.input], output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },
       ];
@@ -4227,10 +4307,20 @@ export function getGhostCindySlot(): GhostCindySlot {
         const value = readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
         if (!value) return null;
         const mediaCapability = capability as GhostMediaCapability;
+        const config = getGhostMediaPreferenceConfig(ghostId, mediaCapability);
+        const videoRegistry = capability.startsWith('video.') ? getVideoProviderRegistry() : null;
+        // Core 专用选型不能交给旧执行器。复用存量配置迁移，确保回退后
+        // 用户保存的 provider + modelId 与实际执行一致，不影响 Core 清单。
+        const executableConfig = capability.startsWith('video.')
+          ? filterLegacyCindyMediaConfig(
+              config,
+              (model) => videoRegistry?.hasAlias(model.modelId, model.providerId) ?? false,
+            )
+          : config;
         const selected = resolveAndMigrateGhostMediaPreference(
           ghostId,
           mediaCapability,
-          getGhostMediaPreferenceConfig(ghostId, mediaCapability),
+          executableConfig,
           value,
         );
         return selected
@@ -5052,6 +5142,41 @@ export function getGhostLibrarySlot(): GhostLibrarySlot {
       workerScriptPath: defaultLibraryDbWorkerPath,
       betterSqliteModulePath: () => resolveBetterSqliteModuleEntry() ?? 'better-sqlite3',
       log,
+      showItemInFolder: (absPath) => {
+        shell.showItemInFolder(absPath);
+      },
+      showSaveDialog: async (opts) => {
+        // 另存为由插件自主发起,必须挂可见主壳窗。不能 `getAllWindows()[0]`:
+        // 语音 overlay 是 hidden + focusable:false 的 prewarm 窗,经常排在 [0]
+        // (bootstrap-electron.ts / authManager.ts 已踩过);macOS sheet 挂上去
+        // 用户看不见,saveAsDialogInFlight 却一直占着。无主壳窗 = 失败关闭。
+        const candidates = mainShellWindows().filter(
+          (window) => window.isVisible() && !window.isMinimized(),
+        );
+        const focused = BrowserWindow.getFocusedWindow();
+        const win =
+          focused && !focused.isDestroyed() && candidates.includes(focused)
+            ? focused
+            : candidates[0];
+        if (!win) throw new Error('没有可挂靠的宿主窗口');
+        // main 侧 t() 只插值 {{appName}},插件名在调用点替换(与 pick 槽同做法)。
+        // Electron SaveDialogOptions.message 仅 macOS;Windows 只看 title,
+        // 已核验插件名必须进跨平台标题,否则用户看不到是谁在另存为。
+        const title = t('settings.ghosts.saveAs.dialogTitle').replaceAll(
+          '{{name}}',
+          opts.ghostName,
+        );
+        const message = t('settings.ghosts.saveAs.dialogMessage').replaceAll(
+          '{{name}}',
+          opts.ghostName,
+        );
+        const picked = await dialog.showSaveDialog(win, {
+          title,
+          message,
+          defaultPath: opts.defaultPath,
+        });
+        return { canceled: picked.canceled, filePath: picked.filePath };
+      },
     });
     // 面板只读投影(cindy-ghost://<id>/library/<relPath>)的解析器:与电子脑
     // read 同源校验(binding 根 + vault 路径纪律),失败折叠 404。
@@ -5436,7 +5561,6 @@ async function updateLocalGhostPackageLocked(
   inspected: InspectedGhostPackage,
   expectedPackageSha256: string,
   expectedInstalledApproval: string,
-  mutationOwner: ActiveAppSession,
   installOrigin?: 'agent-forge',
 ): Promise<InstalledGhost> {
   const runtime = getGhostRuntime();
@@ -5449,19 +5573,8 @@ async function updateLocalGhostPackageLocked(
   // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
   await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
   let marketRecord: PluginMarketInstallationRecord | null;
-  let marketInstallSubject: string | null = null;
-  let marketRecordWasSuppressed = false;
   try {
     marketRecord = marketLedger.installationForGhost(inspected.manifest.id);
-    if (
-      marketRecord?.installed &&
-      (marketRecord.source === 'market' || marketRecord.source === 'legacy-adopted')
-    ) {
-      marketInstallSubject = getCurrentUserId() ?? mutationOwner.dataOwnerId;
-      marketRecordWasSuppressed = marketInstallSubject
-        ? marketLedger.isDefaultInstallSuppressed(marketInstallSubject, marketRecord.pluginId)
-        : false;
-    }
   } catch (error) {
     if (previousGhost) spawnIfResident(previousGhost);
     log.warn('failed to verify Plugin provenance before local update', {
@@ -5476,15 +5589,9 @@ async function updateLocalGhostPackageLocked(
   const restoreMarketRecord = (): void => {
     if (!detachMarketRecord || !marketRecord) return;
     try {
-      marketLedger.restoreInstallation(
-        marketRecord,
-        marketInstallSubject
-          ? {
-              userId: marketInstallSubject,
-              suppressed: marketRecordWasSuppressed,
-            }
-          : undefined,
-      );
+      // 来源解绑不触碰 opt-out，失败恢复同样只恢复旧路由；用户过去的显式
+      // 卸载决定因此既不会被新增，也不会被清除。
+      marketLedger.restoreInstallation(marketRecord);
     } catch (error) {
       // 恢复失败时保持路由失效是安全降级：不能让旧市场自动覆盖用户明确选择的本地包。
       log.error('failed to restore Plugin market provenance after local update failure', {
@@ -5495,8 +5602,9 @@ async function updateLocalGhostPackageLocked(
   };
   if (detachMarketRecord) {
     try {
-      // 先持久化切断自动更新路由，再改真实包。账本不可写时不触碰包。
-      marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject);
+      // 先持久化切断自动更新路由，再改真实包。普通本地/Forge 换源不是
+      // 用户显式卸载，不得产生 default-install opt-out。
+      marketLedger.markRemoved(inspected.manifest.id, null);
     } catch (error) {
       restoreMarketRecord();
       if (previousGhost) spawnIfResident(previousGhost);
@@ -5630,7 +5738,6 @@ export async function installOrUpdateLocalGhostPackageFromForge(
         inspected,
         expected.packageSha256,
         ghostInstallApprovalToken(installed.approval),
-        getActiveAppSession(),
         installOrigin,
       ),
       action: 'updated',
@@ -5643,6 +5750,15 @@ export async function installOrUpdateLocalGhostPackageFromForge(
  * 因而允许官方保留前缀；本地文件入口仍继续走 rejectReservedGhostId。
  * tokenBroker 门控、原子换目录、布局停靠与运行时重启保持和本地安装一致。
  */
+export interface MarketGhostPackageCommitEvidence {
+  /** SHA-256 of the exact ghost.json entry bytes bound to the accepted package. */
+  rawManifestSha256: string;
+  /** Digest format read by released clients; derived from the same package entry. */
+  legacyManifestDigest: string;
+  /** Locale-independent Manifest parsed from those same package entry bytes. */
+  canonicalManifest: GhostManifest;
+}
+
 export async function installOrUpdateMarketGhostPackage(
   cindyFilePath: string,
   expected: {
@@ -5651,10 +5767,6 @@ export async function installOrUpdateMarketGhostPackage(
     /** receipt 模型并发护栏:更新分支比对 receipt 派生 token(与 main 硬化叠加,决策 A)。 */
     expectedInstalledApproval?: string;
     /**
-     * 市场发现层已经公开的 Manifest。真实包可以缩小能力，但不能携带发现层
-     * 没有声明的 Host 能力；超出时按包内容不一致拒绝，不转成用户授权弹窗。
-     */
-    /**
      * Organization server-market packages pass this Host-built fact because the
      * ledger row is written after install/update. Official-prefix ids never
      * consult it (they short-circuit). Not "first install only": the same
@@ -5662,12 +5774,16 @@ export async function installOrUpdateMarketGhostPackage(
      * defaultInstall, and source replacement.
      */
     pendingMarketRecord?: GhostFirstPartyPendingMarketRecord;
+    /** 自定义 Git/本地市场在打包前读取的 Manifest，用于防止打包窗口内能力扩张。 */
     manifestCap?: GhostManifest;
     beforeCommitInLock?: () => void;
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
     onPackagePlacedInLock?: () => void;
     /** 包与 receipt 已提交，仍持 owner mutation lease；用于原子写入来源账本。 */
-    afterCommitInLock?: (installed: InstalledGhost) => void | Promise<void>;
+    afterCommitInLock?: (
+      installed: InstalledGhost,
+      evidence: MarketGhostPackageCommitEvidence,
+    ) => void | Promise<void>;
     /** 仅 server-market 主机路径可传；custom/local 不传。 */
     officialCindyGithub?: boolean;
   },
@@ -5693,7 +5809,10 @@ async function installOrUpdateMarketGhostPackageLocked(
     /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
     onPackagePlacedInLock?: () => void;
     /** 包与 receipt 已提交，仍持 owner mutation lease；用于原子写入来源账本。 */
-    afterCommitInLock?: (installed: InstalledGhost) => void | Promise<void>;
+    afterCommitInLock?: (
+      installed: InstalledGhost,
+      evidence: MarketGhostPackageCommitEvidence,
+    ) => void | Promise<void>;
     officialCindyGithub?: boolean;
   },
 ): Promise<InstalledGhost> {
@@ -5703,6 +5822,11 @@ async function installOrUpdateMarketGhostPackageLocked(
     const manager = getGhostManager();
     const inspected = await manager.inspect(cindyFilePath);
     if ('rejection' in inspected) throwInstallError(inspected.rejection);
+    const commitEvidence: MarketGhostPackageCommitEvidence = {
+      rawManifestSha256: inspected.rawManifestSha256,
+      legacyManifestDigest: ghostManifestDigest(inspected.releasedLegacyDigestFormat),
+      canonicalManifest: inspected.canonicalManifest,
+    };
     // Publisher identity slugs stay reserved even on the market path.
     // Official reserved prefixes from shared/ghost.ts remain exempt here; publisher slugs do not.
     rejectReservedPublisherSlug(inspected.canonicalManifest.id);
@@ -5717,8 +5841,9 @@ async function installOrUpdateMarketGhostPackageLocked(
         ? 'cindy-official'
         : undefined;
     requireGhostAvailableForActiveSession(expected.ghostId);
-    // 市场投影只作为真实包的能力上限，避免分发内容与目录声明漂移；
-    // 安装动作本身不承担能力授权，也不会因此追加权限确认弹窗。
+    // 自定义 Git/本地市场的活目录可能在发现后、打包前变化；它们传入发现时的
+    // Manifest 作为 TOCTOU 上限。官方市场由服务端 Release SHA 绑定真实包，目录
+    // Manifest 只用于展示，不参与这里的安装准入。
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
     if (expected.manifestCap) {
       const undeclaredCapabilities = unreviewedGhostPermissionItems(
@@ -5739,7 +5864,7 @@ async function installOrUpdateMarketGhostPackageLocked(
         !ghostToolParametersWithinCap(expected.manifestCap, inspected.canonicalManifest) ||
         !ghostUnknownV3FieldsWithinCap(expected.manifestCap, inspected.canonicalManifest)
       ) {
-        log.warn('market package exceeds catalog manifest capabilities', {
+        log.warn('custom market package exceeds discovered manifest capabilities', {
           ghostId: expected.ghostId,
           keys: undeclaredCapabilities.map((item) => item.key),
         });
@@ -5762,14 +5887,15 @@ async function installOrUpdateMarketGhostPackageLocked(
     );
 
     // Manifest 能力只用于 Host 注册、校验和运行时守门。用户点击安装后不再
-    // 经过插件级权限确认；真实包仍必须通过上面的市场声明上限与 Host 校验。
+    // 经过插件级权限确认；自定义活目录还必须通过上面的打包窗口一致性校验。
     // Hold the owner-stability lease only for the actual Ghost filesystem
     // mutation.
     releaseMutation = beginGhostMutation(mutationOwner);
     if (!installed) {
       // 市场首装一律装完即开(defaultInstall 与手动安装归一)，用户不必再手动
-      // 点一次开关。市场包走服务端校验 + sha256 下载校验，并受目录 manifest
-      // 能力上限约束；本地 .cindy 由明确的文件选择、拖入或双击动作直接装入。
+      // 点一次开关。市场包走服务端校验 + sha256 下载校验；自定义 Git/本地市场
+      // 额外受发现 Manifest 上限约束。本地 .cindy 由明确的文件选择、拖入或双击
+      // 动作直接装入。
       // expectedPackageSha256 把"检查过的字节"与"落位的字节"钉死为同一份:
       // inspect 与 install 各自重读磁盘,临时 .cindy 在两读之间被替换时,
       // 所有前置校验(保留前缀/能力上限/签名/解压上限)都会作用在旧字节上。
@@ -5781,7 +5907,7 @@ async function installOrUpdateMarketGhostPackageLocked(
         expectedPackageSha256: inspected.packageSha256,
         ...(trustOverride ? { trustOverride } : {}),
       });
-      await expected.afterCommitInLock?.(installedGhost);
+      await expected.afterCommitInLock?.(installedGhost, commitEvidence);
       return installedGhost;
     }
 
@@ -5858,7 +5984,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       }
     }
     spawnIfResident(result.ghost);
-    await expected.afterCommitInLock?.(result.ghost);
+    await expected.afterCommitInLock?.(result.ghost, commitEvidence);
     return result.ghost;
   } finally {
     releaseMutation?.();
@@ -7215,7 +7341,6 @@ export function registerGhostIpc(): void {
             inspected,
             expectedPackageSha256,
             expectedInstalledApproval,
-            mutationOwner,
           ),
         ),
       };

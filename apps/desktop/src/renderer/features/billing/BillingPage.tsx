@@ -30,15 +30,15 @@ import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
-import type {
-  BillingCatalog,
-  BillingCatalogOffer,
-  BillingCatalogOfferUnavailableReason,
-  BillingCatalogProduct,
-  BillingPaymentOrder,
-  BillingPendingPlanChange,
-  BillingPurchaseOption,
-  BillingSubscription,
+import {
+  BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES,
+  type BillingCatalog,
+  type BillingCatalogOffer,
+  type BillingCatalogOfferUnavailableReason,
+  type BillingCatalogProduct,
+  type BillingPaymentOrder,
+  type BillingPendingPlanChange,
+  type BillingSubscription,
 } from '../../../shared/billing';
 import type {
   ModelAccessBalance,
@@ -48,6 +48,12 @@ import type {
 } from '../../../shared/modelAccess';
 import { AlipayIcon } from './AlipayIcon';
 import { billingApi } from './api';
+import {
+  isSupportedBillingProvider,
+  isSupportedPurchaseOption,
+  type SupportedBillingProvider,
+  type SupportedPurchaseOption,
+} from './purchaseSupport';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
 import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
@@ -70,11 +76,6 @@ type SubscriptionProductEntry = {
   defaultOffer: CatalogOfferEntry;
 };
 
-type SupportedBillingProvider = 'alipay' | 'stripe';
-type SupportedPurchaseOption = BillingPurchaseOption & {
-  provider: SupportedBillingProvider;
-};
-
 type PurchaseKind = BillingCatalogProduct['kind'];
 type BalanceIssue = 'NOT_PROVISIONED' | 'NOT_SUPPORTED' | 'UNAVAILABLE' | null;
 type CurrentPlanFacts = {
@@ -88,25 +89,8 @@ type CurrentPlanFacts = {
   resumable: boolean;
 };
 
-const SUPPORTED_BILLING_PROVIDERS = new Set<SupportedBillingProvider>(['alipay', 'stripe']);
-const SUPPORTED_PAYMENT_ACTIONS = new Set<BillingPurchaseOption['paymentAction']>([
-  'QR_CODE',
-  'REDIRECT',
-]);
-const SUPPORTED_SUBSCRIPTION_CAPABILITIES = new Set<BillingPurchaseOption['capability']>([
-  'MERCHANT_INITIATED_MANDATE',
-  'PROVIDER_MANAGED_SUBSCRIPTION',
-]);
-
 // 未完成首购只属于当前 checkout 会话，不能展示为当前套餐或阻断重新购买。
-const SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: BillingSubscription['status'][] = [
-  'TRIALING',
-  'ACTIVE',
-  'PAST_DUE',
-  'UNPAID',
-  'PAUSED',
-];
-const SUBSCRIPTION_CANCELLABLE_STATUSES = SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
+const SUBSCRIPTION_CANCELLABLE_STATUSES = BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
 
 const PLAN_CHANGE_ENTRY_STATUSES: BillingSubscription['status'][] = ['ACTIVE'];
 
@@ -267,17 +251,6 @@ function catalogOfferUnavailableReason(
   return entry.offer.unavailableReason ?? 'NO_AVAILABLE_PAYMENT_CHANNEL';
 }
 
-function isSupportedPurchaseOption(
-  option: BillingPurchaseOption,
-  productKind: BillingCatalogProduct['kind'],
-): option is SupportedPurchaseOption {
-  if (!SUPPORTED_BILLING_PROVIDERS.has(option.provider as SupportedBillingProvider)) return false;
-  if (!SUPPORTED_PAYMENT_ACTIONS.has(option.paymentAction)) return false;
-  return productKind === 'CREDIT_TOPUP'
-    ? option.capability === 'ONE_TIME_PAYMENT'
-    : SUPPORTED_SUBSCRIPTION_CAPABILITIES.has(option.capability);
-}
-
 function currencyFractionDigits(currency: string): number {
   try {
     return (
@@ -373,11 +346,13 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   }, [resetSelection]);
 
   /**
-   * 深链 `?tab=billing&intent=topup` —— 别处（供应商设置页的账户资产模块）想触发
-   * 充值时唯一的入口。充值弹窗依赖本 section 的目录 / 选项 / checkout 会话状态，
-   * 跨 feature 直接复用会把这一大摊状态拉到调用方，所以外部只投递意图、由这里
-   * 打开弹窗。消费即从 URL 摘除（replace，防返回/刷新重复弹窗），与
-   * ProvidersSection 的 `?connect` 同款契约。
+   * 深链 `?tab=billing&intent=topup|subscribe|plan-change` —— 供应商设置页账户资产
+   * 模块的入口。弹窗依赖本 section 的目录 / 订阅 / checkout 状态，跨 feature 只投递
+   * 意图。消费即从 URL 摘除（replace，防返回/刷新重复弹窗），与 ProvidersSection 的
+   * `?connect` 同款契约。
+   *
+   * topup 立即打开：充值弹窗自己会等目录。subscribe / plan-change 等目录和订阅都回来
+   * 再开，避免先弹出可购买再变成 blocked，或 plan-change 入口还没算出来就空弹。
    */
   const [searchParams, setSearchParams] = useSearchParams();
   useEffect(() => {
@@ -431,13 +406,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     try {
       const subscription = (await billingApi.getCurrentSubscription()).subscription;
       setCurrentSubscription(
-        subscription && SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(subscription.status)
+        subscription &&
+          BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(subscription.status)
           ? subscription
           : null,
       );
     } catch {
       const completedFallback =
-        fallback && SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(fallback.status)
+        fallback && BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(fallback.status)
           ? fallback
           : null;
       setCurrentSubscription(completedFallback);
@@ -466,6 +442,12 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     ]);
   }, [loadBalance, loadOrders, loadSubscription]);
 
+  const refreshXdModelsAfterEntitlementChange = useCallback(async () => {
+    // 订阅权益会改变 Model Access 按当前用户返回的模型集合。这里必须走 XD 的
+    // 主进程真源刷新，不能只重载 Billing state 后继续使用 active-catalog 的旧快照。
+    await window.electronAPI.maker.refreshBuiltinProviderModels('xd');
+  }, []);
+
   useEffect(() => {
     void loadBillingState();
   }, [loadBillingState]);
@@ -474,7 +456,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     const refreshAfterPortal = () => {
       if (!subscriptionPortalRefreshPendingRef.current) return;
       subscriptionPortalRefreshPendingRef.current = false;
-      void loadBillingState();
+      // Stripe Portal can upgrade, downgrade, cancel, or resume a subscription. Billing
+      // state and the XD catalog are separate snapshots, so returning to Cindy must refresh
+      // both explicitly; the app-wide focus refresh is throttled and cannot provide this
+      // entitlement boundary.
+      void Promise.allSettled([loadBillingState(), refreshXdModelsAfterEntitlementChange()]);
     };
     const onVisible = () => {
       if (document.visibilityState === 'visible') refreshAfterPortal();
@@ -485,7 +471,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       window.removeEventListener('focus', refreshAfterPortal);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [loadBillingState]);
+  }, [loadBillingState, refreshXdModelsAfterEntitlementChange]);
 
   const closeCheckout = useCallback(() => {
     const abandonedIncomplete = checkout.state.subscription?.status === 'INCOMPLETE';
@@ -517,6 +503,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
       void loadBalance();
+      // 服务端的 paid tier 同时认有效订阅和未全额退款的成功充值订单；两类支付
+      // 完成都必须重拉 `/models`，由服务端重算 tier 并收敛 AIGateway access group。
+      if (checkout.state.kind === 'TOPUP' || checkout.state.kind === 'SUBSCRIPTION') {
+        void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
+      }
       if (checkout.state.kind === 'SUBSCRIPTION') {
         void loadSubscription(checkout.state.subscription);
       }
@@ -528,16 +519,19 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     loadBalance,
     loadOrders,
     loadSubscription,
+    refreshXdModelsAfterEntitlementChange,
   ]);
 
   const handlePlanChangeSettled = useCallback(
     (kind: PlanChangeSettledKind) => {
       // APPLIED is the only settle that moves credits; one full reload covers
       // subscription, catalog, and balance without a second balance call.
-      if (kind === 'APPLIED') void loadBillingState();
-      else void loadSubscription();
+      if (kind === 'APPLIED') {
+        void loadBillingState();
+        void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
+      } else void loadSubscription();
     },
-    [loadBillingState, loadSubscription],
+    [loadBillingState, loadSubscription, refreshXdModelsAfterEntitlementChange],
   );
   const planChange = usePlanChange(accountId, handlePlanChangeSettled);
 
@@ -569,7 +563,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const subscriptionPurchaseBlocked =
     currentSubscription !== null &&
-    SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(currentSubscription.status);
+    BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(currentSubscription.status);
   const currentSubscriptionOfferCode = subscriptionPurchaseBlocked
     ? (currentSubscription.effectivePlan?.offer.code ?? null)
     : null;
@@ -696,11 +690,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const currentPlan = currentSubscription?.effectivePlan ?? null;
   const pendingPlanChange = currentSubscription?.pendingPlanChange ?? null;
-  const currentProvider =
-    currentSubscription?.provider &&
-    SUPPORTED_BILLING_PROVIDERS.has(currentSubscription.provider as SupportedBillingProvider)
-      ? (currentSubscription.provider as SupportedBillingProvider)
-      : null;
+  const subscriptionProvider = currentSubscription?.provider;
+  const currentProvider = isSupportedBillingProvider(subscriptionProvider)
+    ? subscriptionProvider
+    : null;
   const currentPlanCandidate = useMemo<PlanChangeCandidate | null>(() => {
     if (!currentPlan) return null;
     const catalogProduct = catalog?.products.find(
@@ -905,25 +898,57 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       }));
   }, [subscriptionOffers, showPlanChangeEntry, currentPlan, currentProvider]);
 
-  const openPurchaseDialog = (kind: PurchaseKind) => {
-    resetSelection();
-    if (kind === 'SUBSCRIPTION') {
-      const defaultProduct =
-        subscriptionProducts.find((product) =>
-          isSubscriptionOfferSelectable(product.defaultOffer, currentSubscriptionOfferCode),
-        ) ??
-        subscriptionProducts[0] ??
-        null;
-      setSelectedProductCode(defaultProduct?.product.code ?? null);
-      if (defaultProduct) {
-        selectSubscriptionOffer(defaultProduct.defaultOffer);
+  const openPurchaseDialog = useCallback(
+    (kind: PurchaseKind) => {
+      resetSelection();
+      if (kind === 'SUBSCRIPTION') {
+        const defaultProduct =
+          subscriptionProducts.find((product) =>
+            isSubscriptionOfferSelectable(product.defaultOffer, currentSubscriptionOfferCode),
+          ) ??
+          subscriptionProducts[0] ??
+          null;
+        setSelectedProductCode(defaultProduct?.product.code ?? null);
+        if (defaultProduct) {
+          selectSubscriptionOffer(defaultProduct.defaultOffer);
+        }
+        setSubscriptionDialogOpen(true);
+      } else {
+        setSelectedProductCode(null);
+        setTopupDialogOpen(true);
       }
-      setSubscriptionDialogOpen(true);
-    } else {
-      setSelectedProductCode(null);
-      setTopupDialogOpen(true);
+    },
+    [currentSubscriptionOfferCode, resetSelection, selectSubscriptionOffer, subscriptionProducts],
+  );
+
+  useEffect(() => {
+    const intent = searchParams.get('intent');
+    if (intent !== 'subscribe' && intent !== 'plan-change') return;
+    if (loadingCatalog || loadingSubscription) return;
+    // 目录或订阅请求失败时 loading 也会结束。此时还不知道能不能打开对应弹窗，
+    // 不能把 intent 摘掉 —— 用户点刷新成功后才能重放。加载成功但没有改档入口
+    // 才消费 plan-change（落地计费页，重放也不会弹出）。
+    if (catalogError || subscriptionError) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('intent');
+    setSearchParams(next, { replace: true });
+    if (intent === 'subscribe') {
+      openPurchaseDialog('SUBSCRIPTION');
+      return;
     }
-  };
+    if (showPlanChangeEntry) {
+      setPlanChangeTargetOpen(true);
+    }
+  }, [
+    catalogError,
+    loadingCatalog,
+    loadingSubscription,
+    openPurchaseDialog,
+    searchParams,
+    setSearchParams,
+    showPlanChangeEntry,
+    subscriptionError,
+  ]);
 
   const selectOffer = (offerCode: string) => {
     if (selectedOfferCode === offerCode) return;
@@ -2015,9 +2040,7 @@ function BillingOfferDialog({
                         return (
                           <button
                             key={offer.code}
-                            ref={
-                              offer.code === initialTopupOfferCode ? primaryFocusRef : undefined
-                            }
+                            ref={offer.code === initialTopupOfferCode ? primaryFocusRef : undefined}
                             type="button"
                             onClick={() => onSelectOffer(offer.code)}
                             disabled={currentPlan || unavailableReason !== null}
@@ -2238,9 +2261,7 @@ function SubscriptionProductAccordion({
             {singleOfferEntry ? (
               <button
                 ref={
-                  productActive &&
-                  !singleOfferCurrentPlan &&
-                  singleOfferUnavailableReason === null
+                  productActive && !singleOfferCurrentPlan && singleOfferUnavailableReason === null
                     ? initialFocusRef
                     : undefined
                 }
@@ -2369,9 +2390,7 @@ function SubscriptionProductAccordion({
                     <button
                       key={offer.code}
                       ref={
-                        offerActive && !currentPlan && !unavailable
-                          ? initialFocusRef
-                          : undefined
+                        offerActive && !currentPlan && !unavailable ? initialFocusRef : undefined
                       }
                       type="button"
                       onClick={() => onSelectOffer(offer.code)}

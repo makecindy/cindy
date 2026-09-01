@@ -34,6 +34,7 @@ import {
 } from 'expo-audio';
 import {
   addScreenshotListener,
+  renderConversationShareHtmlToPng,
 } from 'xdt-screenshot-monitor';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
@@ -112,6 +113,7 @@ import {
   type ShareableMessageViewport,
 } from '@/session/MessageRenderer';
 import {
+  bundledAssetToDataUri,
   cleanupConversationSharePngTemps,
   deleteConversationSharePngTemp,
   writeConversationSharePngTemp,
@@ -121,6 +123,7 @@ import {
   type ConversationShareSvgHandle,
 } from '@/session/ConversationShareSvg';
 import {
+  buildConversationShareHtml,
   type ConversationShareMessage,
   type ConversationShareWebViewColors,
 } from '@/session/conversationShareWebViewHtml';
@@ -184,7 +187,7 @@ import { ModelPickerSheet } from '@/session/ModelPickerSheet';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { getModel } from '@cindy/model-providers/registry';
 import { clearSessionMirror, makeSessionMirrorAccessors } from '@/session/sessionModelMirror';
-import { rowFastEditable } from '@/session/modelPickerRows';
+import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import {
   buildMobileModelSections,
   isSelectedSourceDisconnected,
@@ -541,8 +544,13 @@ import {
 import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { pathDisplayName } from '@/session/chatPathCandidate';
 import { fetchRemoteAbsFileToUrl } from '@/session/remoteAbsFileFetch';
+import { showActionMenu, usesSystemActionMenu } from '@/platform/chrome';
 import { ChatFileChipMenuSheet } from '@/session/ChatFileChipMenuSheet';
-import type { ChatFileChipMenuActionKey } from '@/session/chatFileChipMenuModel';
+import {
+  chatFileChipMenuRows,
+  chatFileChipMenuTitle,
+  type ChatFileChipMenuActionKey,
+} from '@/session/chatFileChipMenuModel';
 import { mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/fileBrowserActions';
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
 import { normalizeRemoteOpDirEntries, parentRelPath } from '@/session/fileBrowserGrid';
@@ -623,6 +631,15 @@ const REOPEN_MESSAGE_WINDOW_LIMITS = [20, 10, 5, 1] as const;
 // 覆盖 settling 窗口上限(10s)之后仍无任何在途证据的场景。
 const TAIL_RETRY_HIDE_TIMEOUT_MS = 15_000;
 const SCREENSHOT_SHARE_ACTIVATION_DEBOUNCE_MS = 1_200;
+const nativeConversationShareAvailable = Platform.OS === 'ios';
+
+// 原生 WKWebView 只能稳定读取 data URI；SVG 兜底直接使用同一组 bundle asset。
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shareCharacterAsset = require('../../assets/share/cindy-share-character.jpg');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shareLogoLightAsset = require('../../assets/login/login-wordmark.png');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shareLogoDarkAsset = require('../../assets/login/login-wordmark-dark.png');
 
 /**
  * 排队消息「复用 composer 编辑」的会话内状态:clientId 定位队列条目,
@@ -647,7 +664,7 @@ function buildComposerRuntimeSummary(
   runtime: MobileSessionRuntimeOptions,
 ): ComposerRuntimeSummary {
   const modelLabel = runtime.currentModel?.label ?? session.model;
-  const effortLabel = choiceLabel(runtime.effortOptions, session.effort);
+  const effortLabel = effortLabelFromRuntime(runtime, session.effort);
   return {
     modelSummary: [modelLabel, effortLabel].filter(Boolean).join(' · '),
     permissionLabel: choiceLabel(runtime.permissionOptions, session.permissionMode),
@@ -1018,6 +1035,9 @@ export default function SessionScreen() {
   const shareOperationSeqRef = useRef(0);
   const [conversationShareBusy, setConversationShareBusy] = useState(false);
   const [shareSelectionTriggeredByScreenshot, setShareSelectionTriggeredByScreenshot] = useState(false);
+  const [shareCharacterSrc, setShareCharacterSrc] = useState<string | null>(null);
+  const [shareLogoSrc, setShareLogoSrc] = useState<string | null>(null);
+  const shareLogoModeRef = useRef<string | null>(null);
   // chat-text-quote:待随下一条消息发送的选中文字引用(全局 store,消息流选区
   // 按钮 / 文件预览页写入;发送时拼进正文,命中本地命令时保留)。
   const quotes = useSessionQuotes(sessionId);
@@ -1097,6 +1117,28 @@ export default function SessionScreen() {
       };
     }, [sessionId]),
   );
+  useEffect(() => {
+    if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;
+    let cancelled = false;
+    const logoNeedsLoad = shareLogoModeRef.current !== mode || !shareLogoSrc;
+    void Promise.all([
+      shareCharacterSrc
+        ? Promise.resolve(shareCharacterSrc)
+        : bundledAssetToDataUri(shareCharacterAsset, 'image/jpeg'),
+      logoNeedsLoad
+        ? bundledAssetToDataUri(
+            mode === 'dark' ? shareLogoDarkAsset : shareLogoLightAsset,
+            'image/png',
+          )
+        : Promise.resolve(shareLogoSrc),
+    ]).then(([character, logo]) => {
+      if (cancelled) return;
+      shareLogoModeRef.current = mode;
+      setShareCharacterSrc(character);
+      setShareLogoSrc(logo);
+    });
+    return () => { cancelled = true; };
+  }, [mode, shareCharacterSrc, shareLogoSrc, shareSelectionActive]);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
@@ -1826,6 +1868,7 @@ export default function SessionScreen() {
   const loadedRouteFocusKeyRef = useRef<string | null>(null);
   const appliedRouteFocusKeyRef = useRef<string | null>(null);
   const appliedRouteComposerFocusKeyRef = useRef<string | null>(null);
+  const handleChipMenuActionRef = useRef<(key: ChatFileChipMenuActionKey, target: ChatFilePathTarget) => void>(() => {});
   const targetAvailableRef = useRef<boolean | null>(null);
   const targetAvailableDeviceRef = useRef<string | null>(null);
   // 记录已为哪个连接 epoch 触发过 resync;初值 = 首渲染时的 epoch,使首开由 mount effect 单独负责,
@@ -2256,7 +2299,8 @@ export default function SessionScreen() {
     () => composerDisplaySession && composerDisplayRuntimeOptions
       ? buildComposerRuntimeSummary(composerDisplaySession, composerDisplayRuntimeOptions)
       : null,
-    [composerDisplayRuntimeOptions, composerDisplaySession],
+    // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
+    [composerDisplayRuntimeOptions, composerDisplaySession, i18nInstance.language],
   );
   // 被控端供应商目录 → provider-aware 模型分段(与新建会话页同逻辑;0 供应商回退扁平 modelOptions)。
   const composerDeviceProviders = useDeviceProviders(deviceId || undefined);
@@ -4593,7 +4637,7 @@ export default function SessionScreen() {
       const reconciled = reconcileMobileMessageRenderItems(previous, items);
       return reconciled;
     },
-    [errorTailClientId, forkOrigin, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
+    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
   );
   // 只在本次 render 真正 commit 后更新 reconcile 基准。写入 useMemo/ref 会让
   // Concurrent Mode 下被丢弃的 render 泄漏成下一轮的 previous,破坏尾行 memo 的稳定性。
@@ -6102,6 +6146,30 @@ export default function SessionScreen() {
     textTertiary: colors.textTertiary,
     dark: mode === 'dark',
   }), [colors, mode]);
+  const conversationShareHtml = useMemo(() => {
+    if (
+      !nativeConversationShareAvailable
+      || !shareSelectionActive
+      || selectedShareMessages.length === 0
+    ) return '';
+    return buildConversationShareHtml({
+      allShareableIds,
+      characterSrc: shareCharacterSrc ?? undefined,
+      colors: conversationShareColors,
+      contentWidth: windowDimensions.width,
+      logoSrc: shareLogoModeRef.current === mode ? shareLogoSrc ?? undefined : undefined,
+      selectedMessages: selectedShareMessages,
+    });
+  }, [
+    allShareableIds,
+    conversationShareColors,
+    mode,
+    selectedShareMessages,
+    shareCharacterSrc,
+    shareLogoSrc,
+    shareSelectionActive,
+    windowDimensions.width,
+  ]);
   const enterShareSelection = useCallback((clientId: string) => {
     Keyboard.dismiss();
     setShareSelectionTriggeredByScreenshot(false);
@@ -6114,10 +6182,30 @@ export default function SessionScreen() {
     shareSelectionStore.exit();
   }, []);
   const exportConversationSharePng = useCallback(async () => {
+    const nativeShareAssetsReady = Boolean(
+      nativeConversationShareAvailable
+      && shareCharacterSrc
+      && shareLogoSrc
+      && shareLogoModeRef.current === mode,
+    );
+    if (conversationShareHtml && nativeShareAssetsReady) {
+      try {
+        const nativeBase64 = await renderConversationShareHtmlToPng({
+          html: conversationShareHtml,
+          width: windowDimensions.width,
+        });
+        if (nativeBase64) {
+          console.info('[conversation-share] native webview export succeeded');
+          return nativeBase64;
+        }
+      } catch (error) {
+        console.warn('[conversation-share] native webview export failed; falling back to svg', error);
+      }
+    }
     const svg = conversationShareSvgRef.current;
     if (!svg) throw new Error('conversation share svg renderer is unavailable');
     return svg.exportPng();
-  }, []);
+  }, [conversationShareHtml, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
   const shareSelectedConversation = useCallback(async () => {
     if (
       conversationShareBusy
@@ -7461,7 +7549,7 @@ export default function SessionScreen() {
     sessionMetadataSyncedForConnection: sessionMetadataSyncedKey === `${sessionId}:${connectionEpoch}`,
     interruptAcked: tailInterruptAcked,
     hiddenErrorClientIds: tailHiddenForBanner,
-  }), [messages, currentSession, inputProjection, isSessionStreaming, tailContinuationInFlight, sessionMetadataSyncedKey, sessionId, connectionEpoch, tailInterruptAcked, tailHiddenForBanner]);
+  }), [connectionEpoch, currentSession, i18nInstance.language, inputProjection, isSessionStreaming, messages, sessionId, sessionMetadataSyncedKey, tailContinuationInFlight, tailHiddenForBanner, tailInterruptAcked]);
 
   // 主按钮(重试 / 继续任务):发隐藏续跑指令(带 [UI_ACTION_TRIGGER] 前缀,消息流
   // 不渲染;排队区显示「继续未完成的任务(系统指令)」遮蔽气泡)。planMode 强制 false:
@@ -8308,7 +8396,21 @@ export default function SessionScreen() {
         }
       },
       onOpenPath: openChatPathTarget,
-      onLongPressPath: setChipMenuTarget,
+      onLongPressPath: (target) => {
+        if (usesSystemActionMenu()) {
+          const rows = chatFileChipMenuRows(target);
+          void showActionMenu({
+            cancelLabel: t('session.common.cancel'),
+            items: rows.map((row) => ({ key: row.key, label: row.label })),
+            title: chatFileChipMenuTitle(target),
+            userInterfaceStyle: mode,
+          }).then((result) => {
+            if (result.kind === 'action') handleChipMenuActionRef.current(result.key, target);
+          });
+          return;
+        }
+        setChipMenuTarget(target);
+      },
     };
   }, [
     connectionEpoch,
@@ -8316,9 +8418,11 @@ export default function SessionScreen() {
     currentSession?.workingDir,
     deviceId,
     maker,
+    mode,
     openChatPathTarget,
     openLink,
     sessionId,
+    t,
   ]);
 
   /** chip 菜单「导出 / 分享」:两段式导出 → 系统分享单(与文件浏览器同链路);
@@ -8422,6 +8526,7 @@ export default function SessionScreen() {
         return;
     }
   }, [applyComposerDocument, applyComposerDraft, deviceId, deviceName, openChatPathTarget, router, sessionId, shareChipFile]);
+  handleChipMenuActionRef.current = handleChipMenuAction;
 
   // 会话菜单元数据操作(重命名 / 置顶 / 归档 / 删除 / 恢复)乐观写:与首页
   // patchHomeSession 同一写序契约——守卫 / 队列 / 在途登记用 app 级单例

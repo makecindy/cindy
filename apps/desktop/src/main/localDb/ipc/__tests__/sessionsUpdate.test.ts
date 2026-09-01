@@ -50,6 +50,7 @@ const h = vi.hoisted(() => ({
     task(),
   ) as SessionRouteLockMock,
   runtimeCleanup: vi.fn(),
+  compactSessionToolResultsBestEffort: vi.fn(async () => undefined),
   userDataDir: null as string | null,
 }));
 
@@ -99,6 +100,9 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../toolResultCompaction.js', () => ({
+  compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
+}));
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
@@ -120,6 +124,7 @@ vi.mock('../../../cindy-brain/index.js', () => ({
 
 import {
   patchSessionMetaInDb,
+  persistSessionFields,
   registerSessionIpc,
   resumeDeletedPiSubagentCleanup,
   setSessionRuntimeCleanup,
@@ -163,6 +168,7 @@ function createDb(): void {
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
       one_m INTEGER NOT NULL DEFAULT 0,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       orca_role TEXT,
@@ -176,7 +182,10 @@ function createDb(): void {
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
-      last_turn_ended_at INTEGER
+      last_turn_ended_at INTEGER,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER
     );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
@@ -215,6 +224,12 @@ async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise
   const handler = h.handlers.get('local-db:sessions:update');
   if (!handler) throw new Error('update handler not registered');
   return handler({}, id, patch);
+}
+
+async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
+  const handler = h.handlers.get('local-db:sessions:create');
+  if (!handler) throw new Error('create handler not registered');
+  return handler({ sender: { id: 7 } }, body);
 }
 
 beforeEach(() => {
@@ -256,6 +271,25 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('rejects new SSH writable roots because the picker is not on the remote filesystem', async () => {
+    await expect(invokeCreate({
+      id: 'ssh-forged',
+      agentKind: 'codex',
+      workingDir: '/remote/repo',
+      remoteHostId: 'host-1',
+      writableDirs: ['/remote/outside'],
+    })).rejects.toThrow(/can only be revoked/i);
+    expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('ssh-forged'))
+      .toBeUndefined();
+  });
+
+  it('rejects renderer-side directory grant writes outside the atomic maker handlers', async () => {
+    await expect(invokeUpdate('cc-local', { writableDirs: ['/forged'] }))
+      .rejects.toThrow(/maker:set-\*-dirs/i);
+    await expect(invokeUpdate('cc-local', { extraDirs: ['/forged-read'] }))
+      .rejects.toThrow(/maker:set-\*-dirs/i);
+  });
+
   it('recovers cleanup only for deleted parent tasks after restart', async () => {
     const userData = h.userDataDir!;
     const parentRoot = path.join(userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');
@@ -460,6 +494,23 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.routeLock).toHaveBeenCalledWith('codex-local', expect.any(Function));
   });
 
+  it('keeps the last legal sessions.effort when a fixed-effort model switch patches null', async () => {
+    await persistSessionFields('pi-local', {
+      model: 'x-ai-grok/grok-4.6',
+      effort: null,
+      fastMode: false,
+    });
+
+    const persisted = h
+      .sqlite!.prepare('SELECT model, effort, fast_mode FROM sessions WHERE id = ?')
+      .get('pi-local') as { model: string; effort: string; fast_mode: number };
+    expect(persisted).toEqual({
+      model: 'x-ai-grok/grok-4.6',
+      effort: 'high',
+      fast_mode: 0,
+    });
+  });
+
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {
     await expect(invokeUpdate('review-local', { effort: 'low' })).rejects.toThrow(
       /Review task settings are fixed/,
@@ -516,6 +567,9 @@ describe('local-db:sessions:update handler wiring', () => {
         patch: { status: 'deleted' },
       }),
     );
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'cc-local' }),
+    );
   });
 
   it('broadcasts local unarchive status patches to every window (#3175)', async () => {
@@ -532,6 +586,7 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 'codex-local',
       patch: { status: 'active' },
     });
+    expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
   });
 
   // setStatus 的归档形是 { status, pinnedAt: null }:广播沿用置顶合并逻辑,
@@ -549,6 +604,9 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 'codex-local',
       patch: { status: 'archived', pinnedAt: null, summary: null },
     });
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'codex-local' }),
+    );
   });
 
   it('cleans runtime state before releasing the local terminal status lock', async () => {

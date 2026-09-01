@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "INVALID_PARAMS": "引數無效，請檢查後重試。",
+    "PRECONDITION_FAILED": "目前狀態下無法執行此操作，請稍後再試。",
     "SESSION_RUNNING": "當前任務正在執行，請稍後再試。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "當前 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自定義模型，請在供應商設定中開啟“支援圖片輸入”，然後新建 Pi 任務。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任務中執行，本次來源切換未生效（本任務仍使用原來源）。等它結束後再試。",
@@ -14,7 +15,10 @@
     "REMOTE_WORKDIR_INVALID": "遠端專案目錄無效，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_FOUND": "遠端專案目錄不存在，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "遠端專案路徑不是資料夾，請重新選擇專案目錄。",
-    "REMOTE_WORKDIR_UNAVAILABLE": "遠端專案目錄不可訪問，請恢復網路盤連線後重試。"
+    "REMOTE_WORKDIR_UNAVAILABLE": "遠端專案目錄不可訪問，請恢復網路盤連線後重試。",
+    "RIGHT_SIDEBAR_TOO_MANY_TABS": "目前任務已達標籤數量上限，請先關閉一些標籤",
+    "RIGHT_SIDEBAR_STATE_TOO_LARGE": "標籤內容過大，無法新增",
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "此標籤類型暫時無法使用"
   },
   "providerError": {
     "AUTH_INVALID": "API 金鑰無效或已過期（401），請檢查金鑰後重試",
@@ -39,6 +43,12 @@
     "details": "錯誤詳情"
   },
   "localDbFatal": {
+    "databaseCleanup": {
+      "interruptedTitle": "資料庫清理中斷",
+      "interruptedDescription": "資料庫清理異常中斷。請重新啟動 Cindy，系統會根據維護記錄安全復原。",
+      "recoveryFailedTitle": "無法安全復原本地資料庫",
+      "recoveryFailedDescription": "資料庫清理復原失敗，Cindy 已停止開啟本地資料庫，以避免覆寫原始資料。"
+    },
     "updateReady": {
       "title": "需要更新後才能繼續",
       "description": "本地資料已由更新版本的 Cindy 升級，當前版本無法開啟。新版本已下載就緒，重啟安裝後即可恢復使用。",
@@ -844,6 +854,58 @@
         "chatAttachmentsClearConfirmButton": "清理附件快取",
         "chatAttachmentsCleared": "訊息附件快取已清理",
         "chatAttachmentsClearFailed": "無法清理訊息附件快取，請重試",
+        "dbSlimmingBackupDirectoryDialogTitle": "選擇資料庫清理備份目錄",
+        "dbSlimmingLabel": "資料庫清理",
+        "dbSlimmingDescription": "掃描超過所選時間未更新的軟刪除和已封存任務歷史，可選擇同時納入活躍任務。確認後重新啟動 Cindy，在資料庫開啟前清理並壓縮。不會刪除磁碟附件或生成媒體。",
+        "dbSlimmingScanButton": "掃描資料庫",
+        "dbSlimmingScanLoading": "正在掃描資料庫，請稍候…",
+        "dbSlimmingScanResultTitle": "資料庫掃描結果",
+        "dbSlimmingExecutionLoading": "正在準備資料庫清理，Cindy 即將重新啟動…",
+        "dbSlimmingArchiveAgeLabel": "清理未更新時間超過",
+        "dbSlimmingArchiveAgeOption7Days": "7 天",
+        "dbSlimmingArchiveAgeOption1": "1 個月",
+        "dbSlimmingArchiveAgeOption3": "3 個月",
+        "dbSlimmingArchiveAgeOption6": "6 個月",
+        "dbSlimmingIncludeActiveLabel": "清理活躍任務歷史",
+        "dbSlimmingIncludeActiveDescription": "同時清理超過所選時間的活躍任務歷史",
+        "dbSlimmingIncludeActiveConfirmTitle": "將活躍任務納入資料庫清理？",
+        "dbSlimmingIncludeActiveConfirmDescription": "活躍任務即使超過所選時間，也可能仍在執行。清理不會等待任務停止，任務在掃描後繼續產生的訊息也可能被清除。啟用後，超過所選時間的活躍、已封存和軟刪除任務都會被清理。符合範圍的活躍任務歷史訊息和 Agent 上下文將被清除；任務項目仍會保留。資料庫備份可以復原任務和訊息資料；不建立備份時，這些資料也無法復原。用於審查或撤銷這些訊息所產生檔案變更的記錄不包含在資料庫備份中，無法復原。",
+        "dbSlimmingIncludeActiveConfirmButton": "納入活躍任務",
+        "dbSlimmingIncludeActiveCancelButton": "保留活躍任務",
+        "dbSlimmingBackupLabel": "清理前備份資料庫",
+        "dbSlimmingBackupDefaultLocation": "資料庫所在目錄（只保留最近一次清理備份）",
+        "dbSlimmingUseDefaultDirectoryButton": "使用預設目錄",
+        "dbSlimmingChooseDirectoryButton": "選擇備份目錄",
+        "dbSlimmingBackupDirectoryFailed": "無法選擇備份目錄，請重試",
+        "dbSlimmingScanFailed": "無法掃描資料庫，請重試",
+        "dbSlimmingScheduleFailed": "無法安排資料庫清理，請重新掃描後重試",
+        "dbSlimmingBackupMissing": "找不到最近一次清理備份",
+        "dbSlimmingBackupOpenFailed": "無法開啟清理備份位置，請重試",
+        "dbSlimmingReportTasks": "將清理軟刪除任務 {{deleted}} 個、封存任務 {{archived}} 個",
+        "dbSlimmingReportTasksWithActive": "將清理活躍任務 {{active}} 個、軟刪除任務 {{deleted}} 個、封存任務 {{archived}} 個",
+        "dbSlimmingReportMessages": "預計清理 {{count}} 則訊息內容（約 {{size}}）",
+        "dbSlimmingReportSpace": "資料庫 {{database}}；暫存空間至少需要 {{temporary}}；目前可用 {{free}}",
+        "dbSlimmingSpaceUnknown": "未知",
+        "dbSlimmingInsufficientSpace": "目前磁碟空間不足，無法安全建立工作副本並壓縮資料庫。",
+        "dbSlimmingConfirmButton": "確認資料庫清理",
+        "dbSlimmingConfirmTitle": "重新啟動並清理資料庫？",
+        "dbSlimmingConfirmDescriptionWithBackup": "Cindy 將正常重新啟動，並在下次啟動、資料庫開啟前完成備份、歷史清理、壓縮和完整性檢查。備份寫入並通過檢查後才會清理資料。",
+        "dbSlimmingConfirmDescriptionWithoutBackup": "Cindy 將正常重新啟動，並在下次啟動、資料庫開啟前清理和壓縮。本次不建立備份，清除的歷史內容無法復原。",
+        "dbSlimmingRestartButton": "重新啟動並清理資料庫",
+        "dbSlimmingResultCompleted": "已清除 {{tasks}} 個任務中的 {{messages}} 則訊息，資料庫縮小 {{size}}。",
+        "dbSlimmingOpenBackupButton": "開啟清理備份",
+        "dbSlimmingToastCompleted": "資料庫清理完成，已釋放 {{size}}",
+        "dbSlimmingHistoryCleared": "歷史內容已清除",
+        "dbSlimmingFailure": {
+          "backup-failed": "未能建立或保留資料庫備份，未清理歷史內容。",
+          "cleanup-failed": "資料庫清理未完成，原資料庫保持不變。",
+          "database-in-use": "資料庫正被其他執行個體使用，未執行清理。",
+          "insufficient-space": "磁碟空間不足，未執行資料庫清理。",
+          "integrity-check-failed": "資料庫完整性檢查未通過，已復原原資料庫。",
+          "replacement-failed": "無法安裝壓縮後的資料庫，已復原原資料庫。",
+          "recovery-failed": "資料庫復原失敗，Cindy 已停止開啟資料庫以保護原始資料。",
+          "unknown": "資料庫清理未完成，請重試。"
+        },
         "cleanupLabel": "磁碟清理",
         "cleanupDescription": "掃描沒有被任何任務引用的媒體檔案、超限快取與廢棄目錄。先報數，確認後才刪除；輸入框草稿和排隊訊息裡的圖片會被自動保護。",
         "scanButton": "掃描",
@@ -1369,6 +1431,9 @@
         "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 從餘額扣費",
         "modelLabel": "全部模型",
         "billingLabel": "按 token 從餘額扣費",
+        "accountTier": {
+          "free": "免費版"
+        },
         "disconnectConfirm": {
           "title": "斷開 Cindy AI？",
           "description": "斷開後將清除本地儲存的 Cindy AI Key，需要重新連線才能繼續使用 Cindy AI 提供的模型。"
@@ -1396,6 +1461,8 @@
         "copyKeyFailed": "複製失敗，請稍後重試",
         "asset": {
           "viewUsage": "檢視用量",
+          "buyPlan": "購買套餐",
+          "upgradePlan": "升級套餐",
           "syncFailed": "憑據同步失敗，暫時無法獲取餘額。已儲存的模型配置不受影響。"
         }
       },
@@ -1631,6 +1698,8 @@
         "refreshFailed": "模型列表重新整理失敗，請稍後再試",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
         "disableModel": "停用此模型",
+        "paymentRequired": "付費",
+        "paymentUnlock": "付費解鎖",
         "enableModel": "啟用此模型",
         "capabilityGroupHint": "不會出現在對話模型選擇中，僅供影像生成等功能使用",
         "accessWriteFailed": "停用設定未能儲存，請重試",
@@ -1974,7 +2043,7 @@
       "restartBusyDescription": "目前有任務進行中，重新啟動會中斷它們。確定要立即重新啟動嗎？",
       "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。",
       "toast": {
-        "disabled": "Beta 測試管道已關閉，重新啟動後生效",
+        "disabled": "Beta 測試管道已關閉，將繼續使用目前版本，等正式版推出較新版本後自動切換",
         "toggleFailed": "切換 Beta 測試管道失敗"
       }
     },
@@ -2631,11 +2700,16 @@
     },
     "linkOpen": {
       "title": "連結開啟方式",
-      "description": "訊息裡左鍵點選網頁連結或 HTML 檔案時的預設開啟位置。",
-      "card": {
-        "label": "預設開啟位置",
-        "description": "右鍵點選連結可隨時臨時選擇另一種開啟方式。",
-        "ariaLabel": "選擇連結預設開啟位置"
+      "description": "訊息裡左鍵點選網頁或本機連結時的預設開啟位置。右鍵仍可臨時選擇另一種方式。",
+      "web": {
+        "label": "外部網頁",
+        "description": "網際網路上的網頁連結。",
+        "ariaLabel": "選擇外部網頁的預設開啟位置"
+      },
+      "local": {
+        "label": "內部網頁",
+        "description": "本機硬碟上的 HTML 檔案，以及本機位址（localhost）。",
+        "ariaLabel": "選擇內部網頁的預設開啟位置"
       },
       "options": {
         "sidebar": "內建側邊欄瀏覽器",
@@ -2787,7 +2861,7 @@
       "installSectionDescription": "貼上 pi.dev 頁面提供的安裝來源，或輸入 npm 套件名稱、Git 位址、本機絕對路徑。",
       "installedSectionTitle": "已安裝",
       "sourcePlaceholder": "npm 套件名稱、Git 位址或本機絕對路徑",
-      "inspectionHint": "安裝時只提示一次風險。確認後會安裝擴充功能並檢查資源；檢查成功時，可執行資源會自動啟用。",
+      "inspectionHint": "Pi 套件由 Pi 原生套件系統安裝和載入。Cindy 只顯示建議性的相容性詳情；未知、不支援或分析失敗都不會阻止安裝或啟用。",
       "install": "安裝",
       "update": "更新",
       "remove": "解除安裝",
@@ -2808,12 +2882,7 @@
       "loadFailed": "暫時無法讀取 Pi 擴充功能，請檢查連線後重試。",
       "retry": "重試",
       "operationInProgress": "正在處理 {{name}}…",
-      "confirmTitle": "安裝這個 Pi 擴充功能？",
-      "confirmDescription": "{{source}} 是第三方程式碼，會與 Cindy 的 Pi 在同一行程中執行，可能讀取 Pi 能存取的檔案和憑證。安裝不會執行 npm 生命週期指令碼。確認後將安裝擴充功能。檢查成功後，可執行資源會自動啟用，即使 Cindy 同時提示相容性限制。",
-      "confirmInstall": "了解風險並安裝",
       "updateConfirmTitle": "更新這個 Pi 擴充功能？",
-      "updateConfirmDescription": "{{source}} 會下載第三方新版本並取代已安裝程式碼。更新不會執行 npm 生命週期指令碼。擴充程式碼與 Pi 在同一行程中執行，可能讀取檔案和憑證。確認後將更新擴充功能。你主動關閉的擴充功能會保持關閉；其他擴充功能會在檢查成功後啟用。",
-      "confirmUpdate": "了解風險並更新",
       "uninstallTitle": "解除安裝 Pi 擴充功能？",
       "uninstallDescription": "將從這台裝置移除 {{name}}。目前已開啟的 Pi 任務仍會保留舊擴充功能，關閉後才會徹底卸載。",
       "confirmUninstall": "解除安裝",
@@ -2858,30 +2927,29 @@
       "runtimeMismatch": "{{packageName}} 需要 Pi {{range}}，Cindy 目前使用的是 {{currentVersion}}。",
       "runtimeLegacyPackage": "{{packageName}} 屬於 Pi 的舊版執行階段命名空間；以它建置的擴充功能可能無法在 Cindy 目前的 Pi 中載入。",
       "runtimeUnknown": "{{packageName}} 需要 Pi {{range}}，但 Cindy 無法判斷目前的 Pi 版本是否符合需求。",
-      "compatibilityNoticeTitle": "相容性檢查結果",
-      "compatibilityNoticeDescription": "{{name}} 已完成安裝或更新。以下是 Cindy 的檢查結果；目前啟用狀態會顯示在擴充功能清單中，修改只影響新建或重新啟動後的 Pi 任務。",
-      "extensionApprovalTitle": "啟用可執行的擴充功能？",
-      "extensionApprovalDescription": "啟用後，第三方擴充功能會與 Pi 在同一程序中執行，可以讀取 Pi 能存取的檔案與環境變數，包括模型或 API 憑證。Cindy 目前無法隔離這些存取；只有完全信任來源時才啟用。",
-      "parserDisclaimer": "這是靜態相容檢查，不是安全稽核，也無法證明任意第三方程式碼完全相容。",
-      "disableAfterInstall": "停用這個擴充功能",
-      "keepEnabled": "仍然啟用",
-      "keepDisabled": "保持停用",
-      "approveAndEnable": "了解風險並啟用",
-      "done": "完成",
       "warning": {
         "no-resources": "這個擴充功能沒有發現 Pi 資源。",
-        "inspection-failed": "擴充功能已登記，但無法檢查已安裝內容。",
-        "inspection-limit": "擴充功能內容超過安全檢查上限，已保持停用。",
-        "unsupported-filter": "這個擴充功能使用了 Cindy 暫時無法安全重現的 Pi 資源篩選設定，因此保持停用。",
-        "unsafe-source": "這個擴充功能的舊來源包含憑證或私密 URL 參數。Cindy 已隱藏敏感部分、保持停用，並禁止在應用程式內更新或移除。",
-        "lifecycle-scripts-disabled": "這個擴充功能宣告了安裝指令碼，但 Cindy 為了安全並未執行。依賴安裝指令碼產生檔案的功能可能無法使用。"
+        "inspection-failed": "Cindy 無法檢查已安裝內容，但不會因此停用；仍由 Pi 原生處理。",
+        "inspection-limit": "Cindy 已達到詳細分析上限並停止顯示更多結果；套件仍透過 Pi 原生載入。",
+        "unsupported-filter": "Cindy 暫時無法顯示這個 Pi 資源篩選設定；套件與篩選仍由 Pi 原生處理。",
+        "unsafe-source": "儲存的來源包含憑證或私密 URL 參數。Cindy 僅在此處隱藏敏感欄位，不會阻擋 Pi 的套件行為。"
+      },
+      "failure": {
+        "sourceUnavailable": "無法存取這個來源。請檢查網路或網址，也可以改用其他來源重試。",
+        "packageNotFound": "找不到這個套件。請檢查套件名稱或儲存庫網址。",
+        "versionNotFound": "找不到這個版本。請選擇可用版本後重試。",
+        "stateUnavailable": "Cindy 無法讀取 Pi 擴充功能狀態。請重新啟動 Cindy 後重試。",
+        "runtimeConvergencePartial": "Pi 擴充功能變更已儲存，但部分本機 Pi 任務可能仍在執行舊擴充功能。請重新啟動 Cindy 後再使用 Pi。",
+        "nativeCommandFailed": "Pi 原生套件命令失敗。請檢查來源或版本後重試。"
       },
       "success": {
-        "install": "Pi 擴充功能已安裝，請在下方查看啟用狀態。目前任務不會改變。",
-        "installEnabled": "Pi 擴充功能已安裝並啟用。目前任務不會改變；新建或重新啟動 Pi 任務後生效。",
-        "remove": "Pi 擴充功能已移除。目前任務仍保留舊擴充功能，關閉後才會徹底卸載。",
-        "update": "Pi 擴充功能已更新。目前任務仍使用舊版本；新建或重新啟動後生效。",
-        "set-enabled": "Pi 擴充功能啟用狀態已儲存。目前任務不會改變；新建或重新啟動後生效。"
+        "install": "Pi 擴充功能已安裝。執行中的本機 Pi 任務已停止；新建 Pi 任務即可使用。",
+        "installEnabled": "Pi 擴充功能已安裝並啟用。執行中的本機 Pi 任務已停止；新建 Pi 任務即可使用。",
+        "remove": "Pi 擴充功能已移除。執行中的本機 Pi 任務已停止，其工具無法再執行。",
+        "settingsRemove": "Pi 擴充功能已移除。執行中的本機 Pi 任務已停止，其工具無法再執行。",
+        "settingsDisable": "Pi 擴充功能已停用。執行中的本機 Pi 任務已停止，其工具無法再執行。",
+        "update": "Pi 擴充功能已更新。執行中的本機 Pi 任務已停止；新建 Pi 任務即可使用新版本。",
+        "set-enabled": "Pi 擴充功能啟用狀態已儲存。執行中的本機 Pi 任務已停止；新建 Pi 任務即可使用新狀態。"
       }
     },
     "computerUse": {
@@ -2902,10 +2970,30 @@
           "disabled": "已停用瀏覽器自動化",
           "toggleFailed": "切換瀏覽器自動化失敗",
           "openedForLogin": "已開啟自動化瀏覽器，請在其中登入需要的網站",
-          "openForLoginFailed": "開啟瀏覽器失敗"
+          "openForLoginFailed": "開啟瀏覽器失敗",
+          "foreignInstance": "本機已有另一個 Cindy 占用了 Agent 專用瀏覽器。請先退出其它 Cindy 視窗再試。"
         },
         "openForLogin": "開啟 Agent 專用瀏覽器",
         "openForLoginHint": "這是 Agent 專用的獨立瀏覽器：基於你本機的 Chrome，但用一份獨立配置（右上角顯示為 Cindy），不會動你日常 Chrome 的標籤頁、書籤和登入態。Agent 會在這裡替你開啟網頁、閱讀內容、點選和截圖。需要登入的網站，點上面「開啟 Agent 專用瀏覽器」手動登入一次即可——登入態會長期保留，之後 Agent 就能以你的身份繼續操作。"
+      },
+      "realProfile": {
+        "title": "使用我的瀏覽器登入態",
+        "description": "Agent 會用你在 Chrome、Edge 或 Brave 裡已登入的身分造訪網站。",
+        "toggleAria": "使用我的瀏覽器登入態",
+        "unavailableEmbedded": "僅獨立外置瀏覽器可用。側邊欄內建瀏覽器無法讀取 Chrome 的登入檔。",
+        "confirmTitle": "允許 Agent 使用你的瀏覽器登入態？",
+        "confirmDescription": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。可以隨時關掉，拷貝會被刪除。",
+        "confirmDescriptionMac": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。讀取 Chrome 登入檔還需要「完全磁碟存取權」。可以隨時關掉，拷貝會被刪除。",
+        "confirm": "使用我的登入態",
+        "readDeniedTitle": "需要完全磁碟存取權",
+        "readDeniedDescription": "讀取 Chrome 登入檔需要系統允許 Cindy。請在「隱私權與安全性 → 完全磁碟存取權」中打開 Cindy，然後回到這裡再試。",
+        "openFullDiskAccess": "打開系統設定",
+        "readDeniedLater": "稍後再說",
+        "toast": {
+          "enabled": "Agent 專用瀏覽器將使用你的 Chrome 登入態",
+          "disabled": "已刪除拷貝的登入態，Agent 瀏覽器恢復為隔離身分",
+          "failed": "更新瀏覽器登入態設定失敗"
+        }
       },
       "browserBackend": {
         "title": "瀏覽器自動化目標",
@@ -3469,6 +3557,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "requireConnected": "連線 {{provider}} 後可編輯（先在上方開啟對應開關並等待連線成功）。",
+        "offlineLocal": "{{provider}} 暫時連不上，變更會保存在本機；連上後同步到對話裡的模型卡。",
         "requireBinding": "先完成 {{provider}} 帳號關聯後可編輯。",
         "serverUnsupported": "伺服器版本過舊或暫時無應答，無法讀取偏好。",
         "retry": "重試",
@@ -4091,6 +4180,92 @@
           "leftStick": "左搖桿",
           "rightStick": "右搖桿"
         },
+        "familyControls": {
+          "xbox": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "Xbox",
+            "ls": "左搖桿按下",
+            "rs": "右搖桿按下",
+            "dpadUp": "方向鍵上",
+            "dpadDown": "方向鍵下",
+            "dpadLeft": "方向鍵左",
+            "dpadRight": "方向鍵右",
+            "leftStick": "左搖桿",
+            "rightStick": "右搖桿"
+          },
+          "playstation": {
+            "a": "✕",
+            "b": "○",
+            "x": "□",
+            "y": "△",
+            "lb": "L1",
+            "rb": "R1",
+            "lt": "L2",
+            "rt": "R2",
+            "view": "Create",
+            "menu": "Options",
+            "xbox": "PS",
+            "ls": "左搖桿按下",
+            "rs": "右搖桿按下",
+            "dpadUp": "方向鍵上",
+            "dpadDown": "方向鍵下",
+            "dpadLeft": "方向鍵左",
+            "dpadRight": "方向鍵右",
+            "leftStick": "左搖桿",
+            "rightStick": "右搖桿"
+          },
+          "nintendo": {
+            "a": "B",
+            "b": "A",
+            "x": "Y",
+            "y": "X",
+            "lb": "L",
+            "rb": "R",
+            "lt": "ZL",
+            "rt": "ZR",
+            "view": "−",
+            "menu": "+",
+            "xbox": "HOME",
+            "ls": "左搖桿按下",
+            "rs": "右搖桿按下",
+            "dpadUp": "方向鍵上",
+            "dpadDown": "方向鍵下",
+            "dpadLeft": "方向鍵左",
+            "dpadRight": "方向鍵右",
+            "leftStick": "左搖桿",
+            "rightStick": "右搖桿"
+          },
+          "generic": {
+            "a": "A",
+            "b": "B",
+            "x": "X",
+            "y": "Y",
+            "lb": "LB",
+            "rb": "RB",
+            "lt": "LT",
+            "rt": "RT",
+            "view": "View",
+            "menu": "Menu",
+            "xbox": "主頁",
+            "ls": "左搖桿按下",
+            "rs": "右搖桿按下",
+            "dpadUp": "方向鍵上",
+            "dpadDown": "方向鍵下",
+            "dpadLeft": "方向鍵左",
+            "dpadRight": "方向鍵右",
+            "leftStick": "左搖桿",
+            "rightStick": "右搖桿"
+          }
+        },
         "actions": {
           "none": "未設定",
           "voice": "語音輸入",
@@ -4133,6 +4308,57 @@
           "bluetooth": "藍牙",
           "battery": "{{percent}}%",
           "charging": "充電中 {{percent}}%"
+        }
+      },
+      "playstationGamepad": {
+        "title": "PlayStation 手把",
+        "openAria": "打開 PlayStation 手把設定",
+        "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
+        "connection": {
+          "toggle": { "aria": "讓這個 Cindy 在前景時使用 PlayStation 手把" },
+          "descriptions": {
+            "connecting": "Cindy 正在尋找 PlayStation 手把。",
+            "connected": "Cindy 在前景時會監聽這只手把。",
+            "disabled": "啟用後，Cindy 在前景時會監聽手把。",
+            "present": "啟用後，Cindy 在前景時會監聽手把。",
+            "not-detected": "請用 USB 或藍牙連接 DualSense 或 DualShock。",
+            "error": "Cindy 暫時無法讀取手把，正在重試。",
+            "unavailable": "這台電腦還不能讀取 PlayStation 手把。"
+          }
+        }
+      },
+      "nintendoGamepad": {
+        "title": "Switch 手把",
+        "openAria": "打開 Switch 手把設定",
+        "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
+        "connection": {
+          "toggle": { "aria": "讓這個 Cindy 在前景時使用 Switch 手把" },
+          "descriptions": {
+            "connecting": "Cindy 正在尋找 Switch 手把。",
+            "connected": "Cindy 在前景時會監聽這只手把。",
+            "disabled": "啟用後，Cindy 在前景時會監聽手把。",
+            "present": "啟用後，Cindy 在前景時會監聽手把。",
+            "not-detected": "請用 USB 或藍牙連接 Switch Pro 或 Joy-Con。",
+            "error": "Cindy 暫時無法讀取手把，正在重試。",
+            "unavailable": "這台電腦還不能讀取 Switch 手把。"
+          }
+        }
+      },
+      "genericGamepad": {
+        "title": "通用手把",
+        "openAria": "打開通用手把設定",
+        "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
+        "connection": {
+          "toggle": { "aria": "讓這個 Cindy 在前景時使用通用手把" },
+          "descriptions": {
+            "connecting": "Cindy 正在尋找手把。",
+            "connected": "Cindy 在前景時會監聽這只手把。",
+            "disabled": "啟用後，Cindy 在前景時會監聽手把。",
+            "present": "啟用後，Cindy 在前景時會監聽手把。",
+            "not-detected": "請用 USB 或藍牙連接手把。",
+            "error": "Cindy 暫時無法讀取手把，正在重試。",
+            "unavailable": "這台電腦還不能讀取手把。"
+          }
         }
       }
     },
@@ -4455,7 +4681,7 @@
         "fsWrite": "可寫入檔案(建立/修改)",
         "fsWriteDetail": "它自己的專屬資料目錄隨時可寫；當前任務的工作目錄跟隨任務的權限模式(免批模式直接寫，逐條確認模式先徵求你同意)；其它目錄每次都需要你確認。檔案始終由主機代寫，插件本身無法直接訪問你的檔案系統。",
         "libraryPersist": "可使用持久作品庫(大量檔案與資料庫)",
-        "libraryPersistDetail": "它會取得一個由 Cindy 管理的獨立儲存區，用來保存你的作品資料(如畫布、圖片、資料庫)，不受一般插件資料配額限制。檔案與資料庫操作全部由主機代執行，插件只能使用庫內相對路徑，無法觸碰你的其它檔案。解除安裝插件不會刪除這些資料；刪除必須在 Cindy 設定中單獨確認。",
+        "libraryPersistDetail": "它會取得一個由 Cindy 管理的獨立儲存區，用來保存你的作品資料(如畫布、圖片、資料庫)，不受一般插件資料配額限制。檔案與資料庫操作全部由主機代執行，插件只能使用庫內相對路徑，無法觸碰你的其它檔案。它還可以讓 Cindy 在系統資料夾中顯示庫內檔案，或彈出系統另存為視窗由你選擇拷貝位置；取消則不會拷出任何檔案。解除安裝插件不會刪除這些資料；刪除必須在 Cindy 設定中單獨確認。",
         "networkHost": "訪問網路域名 {{host}}",
         "networkSecret": "需要你提供憑證「{{name}}」",
         "networkSecretGhostInputDetail": "憑證由這個插件自己的設定介面收集，錄入時會經過插件頁面；隨後一次性交給主機加密保管，存入後插件無法讀回，主機只在請求它宣告的域名時注入。",
@@ -4674,6 +4900,10 @@
       "pick": {
         "dialogTitle": "選擇資料夾",
         "dialogMessage": "插件「{{name}}」請求你選擇一個資料夾"
+      },
+      "saveAs": {
+        "dialogTitle": "插件「{{name}}」另存為",
+        "dialogMessage": "插件「{{name}}」請求你另存一份拷貝"
       },
       "confirm": {
         "dialogTitle": "插件「{{name}}」請你確認"
@@ -5229,6 +5459,32 @@
       "envFailed": "環境初始化失敗，點選重試"
     },
     "downloadStats": "{{percent}}% · {{speed}} MB/s · {{done}} MB / {{total}} MB",
+    "databaseCleanup": {
+      "title": "正在清理資料庫",
+      "progressLabel": "資料庫清理進度",
+      "phase": {
+        "preparing": "正在準備清理",
+        "backingUp": "正在備份資料庫",
+        "copying": "正在建立清理工作副本",
+        "cleaning": "正在刪除過期訊息",
+        "compacting": "正在壓縮資料庫",
+        "verifying": "正在驗證資料庫",
+        "finalizing": "正在安全替換資料庫",
+        "cancelling": "正在取消清理"
+      },
+      "elapsedAndRemaining": "已用 {{elapsed}} · 約剩 {{remaining}}",
+      "elapsedFinalizing": "已用 {{elapsed}} · 即將完成",
+      "duration": {
+        "seconds": "{{count}} 秒",
+        "minutes": "{{count}} 分鐘"
+      },
+      "cancelAction": "取消清理並進入 Cindy",
+      "cancellingAction": "正在取消清理…",
+      "finalizingAction": "即將完成，請稍候…",
+      "cancelHint": "可隨時取消；取消後會保留原資料庫並繼續啟動 Cindy。",
+      "cancellingHint": "正在停止清理，原資料庫不會被修改。",
+      "finalizingHint": "正在安全替換資料庫，請勿關閉 Cindy。"
+    },
     "envFailed": {
       "title": "環境初始化失敗",
       "retry": "重試"
@@ -5442,7 +5698,7 @@
         "provider": "供應商",
         "tokens": "累計 token",
         "context": "上下文佔用",
-            "lastActive": "最後活躍"
+        "lastActive": "最後活躍"
       },
       "providerTooltip": "取該任務目前選定的供應商；未指定時留空。",
       "tokensTooltip": "該任務的生命週期累計，不是近 30 天內的增量。"
@@ -6382,6 +6638,13 @@
       "move": "立即移動（推薦）",
       "download": "手動下載新版本"
     },
+    "windowsRuntimeMissing": {
+      "title": "需要安裝 Microsoft Visual C++ 執行階段",
+      "description": "這台電腦缺少更新程式所需的 Microsoft Visual C++ 執行階段。已下載的更新套件會保留；請安裝 Microsoft 官方 x64 執行階段後重新檢查。",
+      "download": "下載執行階段",
+      "retry": "重新檢查",
+      "later": "稍後安裝"
+    },
     "moveToApplications": {
       "title": "移動到應用程式資料夾",
       "message": "將 {{appName}} 移動到「應用程式」資料夾可獲得更好的體驗，包括自動更新。",
@@ -6407,12 +6670,30 @@
     "user": {
       "settingsLink": "設定，當前使用者：{{name}}",
       "settingsLinkBeta": "設定，當前使用者：{{name}}，Beta 測試管道已開啟",
+      "moreLabel": "更多，當前使用者：{{name}}",
+      "menuSettings": "設定",
+      "menuAddAccount": "登入更多帳號",
+      "menuLogout": "退出",
       "canaryBadge": "灰度使用者",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "viewReleaseNotes": "檢視版本日誌",
       "reopenUpdateBanner": "有更新待重啟，點選檢視",
       "downloadMobile": "下載 Cindy 移動端"
+    },
+    "accountSwitcher": {
+      "title": "切換帳號",
+      "description": "選擇這台裝置上登入過的帳號",
+      "syncing": "正在檢查登入狀態…",
+      "syncFailed": "部分帳號狀態暫時無法更新",
+      "switchFailed": "切換失敗，請重新登入該帳號",
+      "runningTaskTitle": "中斷任務並切換帳號？",
+      "runningTaskDescription": "目前有任務正在執行。切換帳號會先中斷這些任務，未完成的執行不會繼續。",
+      "runningTaskConfirm": "中斷任務並切換",
+      "startFailed": "無法開啟登入頁面，請稍後再試",
+      "addAccount": "登入更多帳號",
+      "back": "返回",
+      "close": "關閉"
     },
     "mobileDownload": {
       "title": "遠端控制 Cindy",
@@ -6640,6 +6921,13 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在設定裡配置 API key 才能使用",
+      "paymentRequired": {
+        "badge": "付費",
+        "unlock": "付費解鎖",
+        "title": "付費後解鎖此模型",
+        "description": "訂閱付費方案或完成餘額儲值後，即可使用此模型。",
+        "action": "查看付費方式"
+      },
       "hidden": "已隱藏",
       "subscriptionDirectDisabled": {
         "chatgpt": "訂閱直連的 GPT 模型協議暫不支援 SSH 遠端會話",
@@ -7166,6 +7454,11 @@
     "recovered": "ChatGPT 登入已恢復，請重試。",
     "openApp": "開啟 ChatGPT App",
     "relogin": "重新登入 ChatGPT",
+    "reloginRiskTitle": "仍要由 Cindy 重新登入？",
+    "reloginRiskDescription": "這會建立新的 OpenAI OAuth 授權，並可能讓本機 ChatGPT App 和 Codex CLI 立即登出。完成後，你需要在本機應用程式中再次登入。",
+    "reloginRiskConfirm": "接受風險並繼續",
+    "devWriteBlocked": "開發環境預設以唯讀方式共用本機 ChatGPT 登入，不能發起登入或改寫憑證。確需測試 OAuth 時，請使用隔離沙箱並明確設定 XDT_ALLOW_DEV_OAUTH_WRITE=1。",
+    "devReadOnly": "開發環境唯讀",
     "checking": "正在檢測…",
     "recheck": "重新檢測",
     "later": "稍後處理",
@@ -7294,7 +7587,13 @@
       "turnCostEstimated": "本輪 token 價值(按 API 單價折算)",
       "turnCostEstimatedValue": "價值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostDetailsTitle": "本輪明細"
+      "userTurnCostDetailsTitle": "本輪明細",
+      "relative": {
+        "justNow": "剛剛",
+        "minutesAgo_other": "{{count}} 分鐘前",
+        "hoursAgo_other": "{{count}} 小時前",
+        "daysAgo_other": "{{count}} 天前"
+      }
     },
     "runningStatus": {
       "tokenRate": "{{rate}} tok/s",
@@ -7354,6 +7653,9 @@
       "forkStripEncrypted": "Fork 並剝離",
       "forkStripEncryptedRunning": "Fork 中…",
       "forkStripEncryptedTitle": "Fork 並剝離出新任務(去掉加密推理內容)",
+      "forkStripOversizedHistory": "瘦身後繼續",
+      "forkStripOversizedHistoryRunning": "Fork 中…",
+      "forkStripOversizedHistoryTitle": "去掉過大的歷史圖片後 Fork 成新任務",
       "codexSessionExpiredLogin": "重新連線 ChatGPT",
       "codexSessionReconnected": "ChatGPT 帳號已重新連線。點選「重試」繼續。",
       "networkUnreachable": "網路異常，服務暫時不可達，可點選「重試」。",
@@ -7526,6 +7828,7 @@
       "promptSend": "傳送",
       "promptCancel": "取消"
     },
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "agentActionRow": {
       "noContent": "無可展示內容",
       "fileChange": {
@@ -7718,6 +8021,7 @@
       "contextRebuild": {
         "labelOverflow": "已整理上下文並繼續",
         "labelTimeout": "上一輪沒有回應，已整理後繼續",
+        "labelStrip": "已去掉過大圖片並繼續",
         "toggleHint": "檢視交接內容",
         "handoffTitle": "交接內容——整理後傳送給後續對話的上下文摘要(不計入對話記錄，僅在此展示)",
         "handoffTitleEnglishSource": "交接內容——整理後傳送給後續對話的上下文摘要，原文為英文(不計入對話記錄，僅在此展示)"
@@ -7725,6 +8029,7 @@
       "review": {
         "running": "正在審查當前成果",
         "completed": "審查完成",
+        "stale": "審查已完成 · 結果已過期",
         "failed": "審查未完成",
         "openTask": "開啟審查任務",
         "readOnlyHint": "獨立任務 · 無開發記憶 · 只讀",
@@ -7901,7 +8206,13 @@
       "showLess": "收起",
       "artifactLabel": "成品",
       "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
-      "summary": { "pages": "{{count}} 頁", "slides": "{{count}} 張投影片", "sheets": "{{count}} 個工作表", "rows": "{{count}} 列", "bytes": "{{count}}" }
+      "summary": {
+        "pages": "{{count}} 頁",
+        "slides": "{{count}} 張投影片",
+        "sheets": "{{count}} 個工作表",
+        "rows": "{{count}} 列",
+        "bytes": "{{count}}"
+      }
     },
     "turnChanges": {
       "title": "已更改 {{count}} 個檔案",
@@ -8789,7 +9100,15 @@
         "custom": "自訂"
       },
       "weekday": {
-        "full": { "0": "星期日", "1": "星期一", "2": "星期二", "3": "星期三", "4": "星期四", "5": "星期五", "6": "星期六" },
+        "full": {
+          "0": "星期日",
+          "1": "星期一",
+          "2": "星期二",
+          "3": "星期三",
+          "4": "星期四",
+          "5": "星期五",
+          "6": "星期六"
+        },
         "short": { "0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六" }
       },
       "time": {
@@ -8955,7 +9274,7 @@
       "sessionCost": "任務開銷 {{cost}}",
       "sessionValue": "任務價值 {{value}}",
       "runCost": "本次開銷 {{cost}}",
-      "runValue": "本次估算價值 {{value}}",
+      "runTokens": "Token 消耗 {{tokens}}",
       "costUnavailable": "費用不可用",
       "legacyCostUnavailable": "歷史費用無法拆分",
       "persistentSessionGroup": "持續任務 {{session}} · {{count}} 次執行",
@@ -9555,7 +9874,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認反饋型別(bug 還是功能建議)，並追問必要細節(現象、復現步驟或使用場景、期望行為)；整理時預設概括或泛化使用者提供的原話與範例，不要直接複製可識別個人、對話或業務的資訊；資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
+      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認這是缺陷還是建議，缺什麼問什麼，不要套固定問卷。普通建議不必按缺陷清單追問，和環境無關不必追問 Harness、模型或推理強度。整理時預設概括或泛化使用者提供的原話與範例，不要直接複製可識別個人、對話或業務的資訊；對話裡的圖不會傳到 GitHub，不要寫「已提供截圖」，用文字描述即可；功能建議不要寫倉庫路徑、實作方案或驗收清單。資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
       "detailsPrefix": "\n我的初始描述：{{details}}"
     },
     "confirm": {
@@ -9575,7 +9894,8 @@
       "publicNameHint": "該署名會公開顯示在 Issue 正文中",
       "anonymous": "匿名",
       "useAnonymous": "使用匿名署名",
-      "envLine": "提交時將自動附加：客戶端 {{appVersion}} · {{platform}} {{arch}} · 介面語言 {{uiLanguage}}",
+      "envLine": "提交客戶端環境（提交時自動附加）：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 介面語言 {{uiLanguage}}",
+      "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（目前任務）",
       "regionLine": "版本區域：{{region}}",
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
@@ -9604,10 +9924,12 @@
   "ghostGrant": {
     "confirm": {
       "title": "「{{name}}」請求使用你的檔案",
+      "titleRevealPath": "允許 Agent 取得這個媒體檔案的本機路徑？",
       "count": "{{count}} 個檔案",
       "descriptionAttachments": "以下檔案在當前任務的工作目錄之外。允許後，這些檔案會交給該插件處理(它只拿到內容指紋，拿不到路徑)。",
       "descriptionDir": "以下目錄/檔案在當前任務的工作目錄之外。允許後，其中的檔案會交給該插件上傳(它只拿到一次性票據，拿不到路徑)。",
       "descriptionSaveDir": "以下目錄在當前任務的工作目錄之外。允許後，該插件可以把下載的檔案存入其中(不會覆蓋已有檔案)。",
+      "descriptionRevealPath": "該路徑只會在你允許後回傳給目前 Agent，並進入對話記錄；配對裝置可能同步該記錄。此操作不授予插件讀取檔案的權限。",
       "descriptionFsWrite": "該插件請求在當前任務的工作目錄寫入以下檔案。允許後，本任務內它寫同一目錄不再詢問。",
       "descriptionWorkspace": "該資料夾在當前任務的工作目錄之外。允許後，Cindy 會以它為工作目錄在側邊欄建立一個空任務(已有任務時直接複用)，不會讀取其中的檔案。",
       "dirMeta": "{{count}} 個檔案 · {{size}}",
@@ -10247,9 +10569,16 @@
       "codexAutoReviewUnavailable": "自動審批暫時不可用，當前操作已阻止並切換為預設權限。請重試，需要時會詢問你。",
       "hostShellCommandBlocked": "Cindy 已阻止會繞過內嵌模擬器的 Shell 命令。請改用模擬器工具控制裝置、啟動 App、操作介面、截圖和診斷。",
       "upstreamResponseIdleTimeout": "模型長時間沒有任何響應，本輪已自動中斷以免無限等待。已完成的工具呼叫都保留，可以直接發下一條訊息繼續。",
+      "codexHistoryOversized": "這段歷史裡有過大的圖片，遠端壓縮送不出去。Cindy 會自動略去這些圖片，並在目前任務裡繼續。",
+      "codexHistoryOversizedRemote": "這段歷史裡有過大的圖片，遠端壓縮送不出去。請在執行 Codex 的那台電腦上打開任務後再傳送，Cindy 會自動略去這些圖片並繼續。",
       "codexCompactionNotConverging": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。壓不動的部分通常不在對話裡——system prompt 與工具定義佔掉的空間壓縮清不掉。新開一個任務可以繼續。",
       "codexCompactionNotConvergingModelSwitch": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。本任務中途切換過模型，而 Codex 仍按切換前那個模型的上下文上限來判斷。切回原模型可以繼續，或者新開一個任務。",
-      "turnNoEventTimeout": "本輪長時間沒有任何進展（模型、工具與後臺處理程序都沒有動靜），已自動中斷以免無限等待。可以直接發下一條訊息繼續。"
+      "turnNoEventTimeout": "本輪長時間沒有任何進展（模型、工具與後臺處理程序都沒有動靜），已自動中斷以免無限等待。可以直接發下一條訊息繼續。",
+      "toolUseLoopDetected": "模型重複呼叫工具次數過多，Cindy 已停止這一輪以避免無限迴圈。可以傳送新訊息繼續。",
+      "toolUseLoopDetectedWithCount": "模型連續觸發無效的工具呼叫，Cindy 已在 {{count}} 次失敗後停止本輪，以避免無限迴圈。可以傳送新訊息繼續。",
+      "toolUseLoopDetectedConsecutiveWithCount": "模型重複呼叫同一個工具 {{count}} 次，Cindy 已停止本輪以避免無限迴圈。可以傳送新訊息繼續。",
+      "toolUseLoopDetectedPingPongWithCount": "模型在多個工具呼叫之間來回循環，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
+      "toolUseLoopDetectedRotationWithCount": "模型持續輪轉呼叫多個工具，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。"
     },
     "validation": {
       "feishuFieldsRequired": "App ID 和 App Secret 都需要填寫",
@@ -10263,7 +10592,7 @@
     },
     "confirm": {
       "logoutTitle": "退出登入",
-      "logoutDescription": "確定要退出當前帳號嗎？",
+      "logoutDescription": "確定要退出這台裝置上的所有帳號嗎？",
       "logoutConfirm": "退出",
       "cancel": "取消",
       "sessionExpiredTitle": "登入已過期",
@@ -10388,7 +10717,7 @@
   "extraDirs": {
     "menuAria": "操作選單",
     "tooltipEmpty": "更多操作",
-    "tooltipCount": "{{count}} 個附加引用目錄",
+    "tooltipCount": "{{count}} 個附加目錄",
     "addFiles": "新增檔案、圖片或影片…",
     "pluginsTitle": "已安裝的插件",
     "pluginDisabled": "未生效",
@@ -10397,10 +10726,16 @@
     "sectionTitle": "引用目錄(只讀)",
     "empty": "還沒有引用目錄",
     "add": "新增目錄…",
+    "addReadOnly": "新增唯讀目錄…",
+    "addWritable": "新增可讀寫目錄…",
+    "writableSectionTitle": "可讀寫目錄",
+    "writableEmpty": "還沒有可讀寫目錄",
     "atLimit": "已達上限 {{max}} 個",
     "remove": "移除 {{name}}",
     "parentConfirmTitle": "新增父目錄？",
     "parentConfirmDescription": "選中的目錄是當前工作目錄的父級或祖先。這會擴大 Agent 的可見範圍，使其能看到工作目錄之外的內容。\n\n仍要新增嗎？\n\n{{path}}",
+    "writableParentConfirmTitle": "允許讀寫父目錄？",
+    "writableParentConfirmDescription": "選中的目錄是當前工作目錄的父級或祖先。Agent 將能讀取、建立、修改和刪除其中的檔案。\n\n仍要允許嗎？\n\n{{path}}",
     "parentConfirmAccept": "仍然新增",
     "parentConfirmCancel": "取消"
   },

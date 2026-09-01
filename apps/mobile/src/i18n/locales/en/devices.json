@@ -98,9 +98,12 @@
       "time": {
         "unknown": "Recent activity time unknown",
         "justNow": "Just now",
-        "minutesAgo": "{{count}} minutes ago",
-        "hoursAgo": "{{count}} hours ago",
-        "daysAgo": "{{count}} days ago",
+        "minutesAgo_one": "{{count}} minute ago",
+        "minutesAgo_other": "{{count}} minutes ago",
+        "hoursAgo_one": "{{count}} hour ago",
+        "hoursAgo_other": "{{count}} hours ago",
+        "daysAgo_one": "{{count}} day ago",
+        "daysAgo_other": "{{count}} days ago",
         "minutes": "{{count}} min",
         "hours": "{{count}} hr",
         "days": "{{count}} d",
@@ -185,6 +188,14 @@
       "close": "Close",
       "cancelRename": "Cancel rename"
     },
+    "accounts": {
+      "title": "Switch account",
+      "add": "Sign in to another account",
+      "syncFailed": "Account information could not be updated",
+      "runningTitle": "Switch account?",
+      "runningMessage": "Some sessions are still running. They will continue on your computer, but this phone will stop receiving and controlling them after you switch.",
+      "switchConfirm": "Continue"
+    },
     "menu": {
       "groupByProject": "Group by Project",
       "groupDialogue": "Group chats together",
@@ -204,7 +215,10 @@
       "projectOrderActivity": "By recent activity",
       "projectOrderManual": "Manual",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
-      "statusHeading": "Status"
+      "statusHeading": "Status",
+      "showDeviceTasks": "Show tasks",
+      "openDevice": "Open",
+      "renameDevice": "Rename"
     },
     "search": {
       "placeholder": "Search titles or content…",

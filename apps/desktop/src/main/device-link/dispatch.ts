@@ -273,13 +273,14 @@ export function setRemoteSettingsPersist(fn: RemoteSettingsPersist | null): void
 }
 
 /** set-* channel → 持久化的 session 字段名(args[0]=sessionId, args[1]=value)。 */
-const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs'> = {
+const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs' | 'writableDirs'> = {
   'maker:set-model': 'model',
   'maker:set-effort': 'effort',
   'maker:set-permission-mode': 'permissionMode',
   'maker:set-fast-mode': 'fastMode',
   'maker:set-plan-mode': 'planModeEnabled',
   'maker:set-extra-dirs': 'extraDirs',
+  'maker:set-writable-dirs': 'writableDirs',
 };
 
 async function persistRemoteSetting(channel: string, args: unknown[], result: unknown): Promise<void> {
@@ -301,6 +302,11 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
   if (channel === 'maker:set-extra-dirs') {
     if (!Array.isArray(result)) return;
     await settingsPersist(sessionId, { extraDirs: result });
+    return;
+  }
+  if (channel === 'maker:set-writable-dirs') {
+    if (!Array.isArray(result)) return;
+    await settingsPersist(sessionId, { writableDirs: result });
     return;
   }
   // set-model 特例:可携带第 3 参 providerId(per-session 来源选择,见 register.ts SET_MODEL handler)。
@@ -361,6 +367,27 @@ function projectRoutingForDisplay(
 }
 
 /**
+ * Mobile consumes the device-link provider catalog as an executable model list. Paid-only rows are
+ * a Desktop upsell projection, not a cross-device model state: omit them and strip the v5-only
+ * availability marker so both current and independently-updated legacy Mobile clients keep the
+ * published provider model shape.
+ */
+function projectModelsForController(models: unknown): unknown {
+  if (!models || typeof models !== 'object' || Array.isArray(models)) return models;
+  return Object.fromEntries(
+    Object.entries(models as Record<string, unknown>).map(([agent, value]) => {
+      if (!Array.isArray(value)) return [agent, value];
+      const projected = value.flatMap((model) => {
+        if (!model || typeof model !== 'object' || Array.isArray(model)) return [model];
+        const { availability, ...legacyModel } = model as Record<string, unknown>;
+        return availability === 'requires_payment' ? [] : [legacyModel];
+      });
+      return [agent, projected];
+    }),
+  );
+}
+
+/**
  * 隧道返回投影:`maker:provider:list` 只回「显示用」字段——先从 provider id / upstream
  * 解析非敏感 `logoKind`,再剥掉每个 provider 的 `routing` 执行字段(upstream /
  * authStrategy / 密钥策略 / 自定义供应商 endpoint 等)。执行细节(路由 / 密钥)不出被控端
@@ -390,6 +417,7 @@ function projectInvokeResultForTunnel(
     ) {
       rest.logoKind = logoKind;
     }
+    rest.models = projectModelsForController(p.models);
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });

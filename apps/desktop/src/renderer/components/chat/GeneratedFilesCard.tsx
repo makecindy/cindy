@@ -16,7 +16,9 @@
  * 存在性门槛(DESIGN.md §14.5「可点必存在」):本地会话渲染前 stat 过滤,不存在
  * 的文件不出 chip,整卡为空则不渲染。远程会话经 verifyRemotePathCached 远端 stat
  * 复核:仅在远端明确确认是普通文件后呈现；检查中、断链或限流都不先展示一张
- * 可能无法打开的完成卡。
+ * 可能无法打开的完成卡。首屏等检查完成再出现。流式期间只 stat 已完成
+ * (ready !== false,或本轮已封口)且尚未确认的路径;内容指纹不变就不发 IPC,
+ * 已确认的 chip 留在原地,避免 messages 换引用把整页带着跳。
  *
  * 本地文件统一要求时间戳落在本轮 `[turnStartMs, turnEndMs)` 窗口内。tool 来源
  * (Write / file-change add)也不能只凭存在性:Write 可能覆盖既有文件,失败路径也可能
@@ -25,7 +27,7 @@
  * 时间窗约束。远程会话无法读取创建时间,维持远端 stat 的存在性复核。
  */
 
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -35,7 +37,9 @@ import { classifyMarkdownHref, toLocalFileUrl } from '@/lib/localPathResolver';
 import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import {
   fetchChatFileWithToasts,
+  remotePathVerdictKey,
   revealRemoteChatFile,
+  subscribeRemotePathVerdictChange,
   type RemotePathVerdict,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
@@ -387,61 +391,326 @@ export function isLocalGeneratedFileInTurn(
   return typeof ts === 'number' && ts >= lowerBound && (turnEndMs === null || ts < turnEndMs);
 }
 
+function artifactVisibleSignature(artifact: DocumentArtifactMetadata | undefined): string {
+  if (!artifact) return '';
+  const preview = artifact.preview ? JSON.stringify(artifact.preview) : '';
+  return [
+    artifact.format,
+    artifact.title ?? '',
+    artifact.subtitle ?? '',
+    artifact.theme ?? '',
+    artifact.cover === undefined ? '' : artifact.cover ? '1' : '0',
+    artifact.summary?.kind ?? '',
+    String(artifact.summary?.value ?? ''),
+    preview,
+  ].join('\t');
+}
+
+/** 决定 chip 是否换样的字段;故意不含数组引用。 */
+export function generatedFileVisibleSignature(file: GeneratedFileRef): string {
+  return [
+    file.path,
+    file.source,
+    file.artifactConfirmed ? '1' : '0',
+    artifactVisibleSignature(file.artifact),
+  ].join('\t');
+}
+
+/** 未完成的 tool_use 在本轮还没封口时不 stat:文件多半还没落盘。 */
+export function isGeneratedFileStatable(
+  file: GeneratedFileRef,
+  turnEndMs: number | null,
+  turnSealed = false,
+): boolean {
+  return file.ready !== false || turnEndMs !== null || turnSealed;
+}
+
+/**
+ * 卡片是否要重查的内容指纹。只计入当前可 stat 的文件,流式 token /
+ * 未完成的 Write 换新数组不会触发 IPC。
+ */
+export function generatedFilesCheckKey(
+  files: readonly GeneratedFileRef[],
+  turnStartMs: number | null,
+  turnEndMs: number | null,
+  turnSealed = false,
+): string {
+  return [
+    String(turnStartMs ?? ''),
+    String(turnEndMs ?? ''),
+    turnSealed ? '1' : '0',
+    ...files
+      .filter((file) => isGeneratedFileStatable(file, turnEndMs, turnSealed))
+      .map((file) => generatedFileVisibleSignature(file)),
+  ].join('\0');
+}
+
+/**
+ * 文件列表增量更新时,先留下已经确认过的 chip。
+ * 流式中候选从 A 换成 C 时先留着 A,等 C 的 stat 完成再替换,避免整卡先卸再挂。
+ * 本轮封口或环境变了才允许立刻丢掉已消失的路径。
+ * 首屏 previous 为 null,保持「检查完成前不展示」。
+ */
+export function retainVisibleGeneratedFiles(
+  previous: GeneratedFileRef[] | null,
+  nextCandidates: readonly GeneratedFileRef[],
+  options?: { dropMissing?: boolean },
+): GeneratedFileRef[] | null {
+  if (!previous || previous.length === 0) return previous;
+  const dropMissing = options?.dropMissing === true;
+  const nextByPath = new Map(nextCandidates.map((file) => [file.path, file]));
+  const kept: GeneratedFileRef[] = [];
+  let changed = false;
+  for (const file of previous) {
+    const next = nextByPath.get(file.path);
+    if (!next) {
+      if (dropMissing) {
+        changed = true;
+        continue;
+      }
+      kept.push(file);
+      continue;
+    }
+    if (generatedFileVisibleSignature(next) !== generatedFileVisibleSignature(file)) {
+      changed = true;
+      kept.push(next);
+    } else {
+      kept.push(file);
+    }
+  }
+  if (kept.length !== previous.length) changed = true;
+  return changed ? kept : previous;
+}
+
+/** stat 结果没变时沿用旧数组,避免无意义的 setState 把卡片再刷一遍。 */
+export function reuseGeneratedFilesIfUnchanged(
+  previous: GeneratedFileRef[] | null,
+  next: GeneratedFileRef[],
+): GeneratedFileRef[] {
+  if (
+    previous &&
+    previous.length === next.length &&
+    previous.every(
+      (file, index) =>
+        generatedFileVisibleSignature(file) === generatedFileVisibleSignature(next[index]),
+    )
+  ) {
+    return previous;
+  }
+  return next;
+}
+
+export function planGeneratedFilesVisibility(input: {
+  previousVisible: GeneratedFileRef[] | null;
+  candidates: readonly GeneratedFileRef[];
+  turnEndMs: number | null;
+  envChanged: boolean;
+  turnWindowChanged: boolean;
+  forceRestat?: boolean;
+  turnSealed?: boolean;
+}): { visible: GeneratedFileRef[] | null; toStat: GeneratedFileRef[] } {
+  const turnSealed = input.turnSealed === true;
+  const statable = input.candidates.filter((file) =>
+    isGeneratedFileStatable(file, input.turnEndMs, turnSealed),
+  );
+  if (input.envChanged) {
+    return { visible: null, toStat: statable };
+  }
+  const previousPaths = new Set((input.previousVisible ?? []).map((file) => file.path));
+  const hasIncomingReplacement = statable.some((file) => !previousPaths.has(file.path));
+  const visible = retainVisibleGeneratedFiles(input.previousVisible, input.candidates, {
+    // 有新候选在 stat 时暂留旧 chip，避免 A→C 中间卸卡；单纯删除没有替补则立刻撤。
+    // 最新一轮没有后续 user 边界时 turnEndMs 仍是 null，要用封口信号触发复核。
+    dropMissing: input.turnEndMs !== null || turnSealed || !hasIncomingReplacement,
+  });
+  if (input.turnWindowChanged || input.forceRestat) {
+    return { visible, toStat: statable };
+  }
+  const confirmedPaths = new Set((input.previousVisible ?? []).map((file) => file.path));
+  return {
+    visible,
+    toStat: statable.filter((file) => !confirmedPaths.has(file.path)),
+  };
+}
+
+export function mergeGeneratedFileStatResults(input: {
+  previousVisible: GeneratedFileRef[] | null;
+  candidates: readonly GeneratedFileRef[];
+  checked: readonly GeneratedFileRef[];
+  confirmedPaths: ReadonlySet<string>;
+  turnWindowChanged: boolean;
+}): GeneratedFileRef[] {
+  const trusted = new Set<string>();
+  if (!input.turnWindowChanged && input.previousVisible) {
+    const checkedPaths = new Set(input.checked.map((file) => file.path));
+    for (const file of input.previousVisible) {
+      if (!checkedPaths.has(file.path)) trusted.add(file.path);
+    }
+  }
+  for (const path of input.confirmedPaths) trusted.add(path);
+  return input.candidates.filter((file) => trusted.has(file.path));
+}
+
 /** 折叠阈值:约两行 chip。超过则收起为「前 N 个 + 再显示 M 个文件」。 */
 const MAX_VISIBLE_FILES = 6;
 
-export function GeneratedFilesCard({
+function generatedFilesCardPropsEqual(
+  prev: {
+    files: readonly GeneratedFileRef[];
+    turnStartMs: number | null;
+    turnEndMs: number | null;
+    turnSealed?: boolean;
+  },
+  next: {
+    files: readonly GeneratedFileRef[];
+    turnStartMs: number | null;
+    turnEndMs: number | null;
+    turnSealed?: boolean;
+  },
+): boolean {
+  return (
+    generatedFilesCheckKey(prev.files, prev.turnStartMs, prev.turnEndMs, prev.turnSealed) ===
+    generatedFilesCheckKey(next.files, next.turnStartMs, next.turnEndMs, next.turnSealed)
+  );
+}
+
+export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   files,
   turnStartMs,
   turnEndMs,
+  turnSealed = false,
 }: {
   files: readonly GeneratedFileRef[];
   turnStartMs: number | null;
   turnEndMs: number | null;
+  turnSealed?: boolean;
 }) {
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
-  // 本地与远程都先保持 null，等存在性检查完成后再展示，避免完成卡闪现后消失。
-  // 远程 command 候选无法验证 mtime，一律不出（见文件头注释）。
+  // 首屏保持 null。之后按内容指纹增量 stat:未完成的 tool_use 不查,
+  // 已确认的路径不重复 IPC,工作目录 / 远端来源变了才整卡重来。
   const [existing, setExisting] = useState<GeneratedFileRef[] | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [remoteVerdictGen, setRemoteVerdictGen] = useState(0);
+  const checkKey = generatedFilesCheckKey(files, turnStartMs, turnEndMs, turnSealed);
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  const visibleRef = useRef<GeneratedFileRef[] | null>(null);
+  const checkEnvRef = useRef({ remoteOrigin, workingDir: fileCtx.workingDir });
+  const turnWindowRef = useRef({ turnStartMs, turnEndMs, turnSealed });
+  const remoteVerdictGenRef = useRef(remoteVerdictGen);
+
+  useEffect(() => {
+    if (!remoteOrigin) return;
+    const watched = new Set(
+      files
+        .filter(
+          (file) => file.source === 'tool' && isGeneratedFileStatable(file, turnEndMs, turnSealed),
+        )
+        .map((file) => remotePathVerdictKey(remoteOrigin, fileCtx.workingDir, file.path)),
+    );
+    if (watched.size === 0) return;
+    return subscribeRemotePathVerdictChange((key) => {
+      if (watched.has(key)) setRemoteVerdictGen((generation) => generation + 1);
+    });
+  }, [remoteOrigin, fileCtx.workingDir, checkKey, files, turnEndMs, turnSealed]);
 
   useEffect(() => {
     let cancelled = false;
-    setExisting(null);
-    if (remoteOrigin) {
-      const toolFiles = files.filter((f) => f.source === 'tool');
-      void (async () => {
-        const checks = await Promise.all(
-          toolFiles.map(async (f) => {
-            const verdict = await verifyRemotePathCached(remoteOrigin, fileCtx.workingDir, f.path);
-            return isConfirmedRemoteGeneratedFile(verdict);
-          }),
-        );
-        if (!cancelled) setExisting(toolFiles.filter((_, idx) => checks[idx]));
-      })();
+    const currentFiles = filesRef.current;
+    const envChanged =
+      checkEnvRef.current.remoteOrigin !== remoteOrigin ||
+      checkEnvRef.current.workingDir !== fileCtx.workingDir;
+    const turnWindowChanged =
+      turnWindowRef.current.turnStartMs !== turnStartMs ||
+      turnWindowRef.current.turnEndMs !== turnEndMs ||
+      turnWindowRef.current.turnSealed !== turnSealed;
+    const forceRestat = remoteVerdictGenRef.current !== remoteVerdictGen;
+    checkEnvRef.current = { remoteOrigin, workingDir: fileCtx.workingDir };
+    turnWindowRef.current = { turnStartMs, turnEndMs, turnSealed };
+    remoteVerdictGenRef.current = remoteVerdictGen;
+
+    const plan = planGeneratedFilesVisibility({
+      previousVisible: envChanged ? null : visibleRef.current,
+      candidates: currentFiles,
+      turnEndMs,
+      envChanged,
+      turnWindowChanged,
+      forceRestat,
+      turnSealed,
+    });
+    visibleRef.current = plan.visible;
+    if (plan.visible === null) {
+      setExisting(null);
+    } else {
+      setExisting((prev) => reuseGeneratedFilesIfUnchanged(prev, plan.visible ?? []));
+    }
+
+    const toStat = remoteOrigin
+      ? plan.toStat.filter((file) => file.source === 'tool')
+      : plan.toStat;
+    if (toStat.length === 0) {
       return () => {
         cancelled = true;
       };
     }
+
     void (async () => {
-      const checks = await Promise.all(
-        files.map(async (f) => {
-          try {
-            const r = await window.electronAPI.fsBrowse.statPath(f.path);
-            return isLocalGeneratedFileInTurn(f, r, turnStartMs, turnEndMs);
-          } catch {
-            return false;
-          }
-        }),
-      );
-      if (!cancelled) setExisting(files.filter((_, idx) => checks[idx]));
+      const confirmedPaths = new Set<string>();
+      if (remoteOrigin) {
+        const checks = await Promise.all(
+          toStat.map(async (file) => {
+            const verdict = await verifyRemotePathCached(
+              remoteOrigin,
+              fileCtx.workingDir,
+              file.path,
+            );
+            return isConfirmedRemoteGeneratedFile(verdict);
+          }),
+        );
+        checks.forEach((ok, index) => {
+          if (ok) confirmedPaths.add(toStat[index].path);
+        });
+      } else {
+        const checks = await Promise.all(
+          toStat.map(async (file) => {
+            try {
+              const stat = await window.electronAPI.fsBrowse.statPath(file.path);
+              return isLocalGeneratedFileInTurn(file, stat, turnStartMs, turnEndMs);
+            } catch {
+              return false;
+            }
+          }),
+        );
+        checks.forEach((ok, index) => {
+          if (ok) confirmedPaths.add(toStat[index].path);
+        });
+      }
+      if (cancelled) return;
+      const merged = mergeGeneratedFileStatResults({
+        previousVisible: envChanged ? null : visibleRef.current,
+        candidates: filesRef.current,
+        checked: toStat,
+        confirmedPaths,
+        turnWindowChanged,
+      });
+      visibleRef.current = merged;
+      setExisting((prev) => reuseGeneratedFilesIfUnchanged(prev, merged));
     })();
+
     return () => {
       cancelled = true;
     };
-  }, [files, remoteOrigin, turnStartMs, turnEndMs, fileCtx.workingDir]);
+  }, [
+    checkKey,
+    remoteOrigin,
+    turnStartMs,
+    turnEndMs,
+    turnSealed,
+    fileCtx.workingDir,
+    remoteVerdictGen,
+  ]);
 
   if (!existing || existing.length === 0) return null;
 
@@ -495,4 +764,4 @@ export function GeneratedFilesCard({
       </div>
     </div>
   );
-}
+}, generatedFilesCardPropsEqual);

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { BrowserWindow, ipcMain, shell, utilityProcess } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, shell, utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { getDeepLinkMainWindow, openMainWindowSession, sendMainWindowMessage } from '../deepLink.js';
@@ -172,6 +172,7 @@ const layoutPreviewLease = createLayoutPreviewLease((active) => {
 
 let settingsIpcRegistered = false;
 let inputDeviceRegistered = false;
+let permissionSettingsRetryPending = false;
 
 /** Register this board as one input-device adapter, not as the host keyboard layer. */
 export function registerWorkLouderCodexInputDevice(): void {
@@ -206,6 +207,17 @@ export function registerWorkLouderCodexSettingsIpc(): void {
   if (settingsIpcRegistered) return;
   settingsIpcRegistered = true;
 
+  // macOS can report the same HID denial while the screen is locked. The
+  // client keeps that failure circuit-broken until unlock, then makes one
+  // bounded recovery attempt instead of relying on the settings poller to
+  // recreate the host every two seconds.
+  powerMonitor.on('unlock-screen', () => hostClient.retryPermission());
+  app.on('browser-window-focus', () => {
+    if (!permissionSettingsRetryPending) return;
+    permissionSettingsRetryPending = false;
+    hostClient.retryPermission();
+  });
+
   workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());
   workLouderCodexLightingController.start();
   const handlers = createWorkLouderCodexSettingsIpc({
@@ -216,9 +228,15 @@ export function registerWorkLouderCodexSettingsIpc(): void {
     applySettings: (settings) => workLouderCodexLightingController.applySettings(settings),
     openInputMonitoringSettings: async () => {
       if (process.platform !== 'darwin') return;
-      await shell.openExternal(
-        'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent',
-      );
+      permissionSettingsRetryPending = true;
+      try {
+        await shell.openExternal(
+          'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent',
+        );
+      } catch (error) {
+        permissionSettingsRetryPending = false;
+        throw error;
+      }
     },
     probeDevice: () => hostClient.probe(),
     publishTasks: (tasks) => {

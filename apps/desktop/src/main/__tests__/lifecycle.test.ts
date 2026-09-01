@@ -30,6 +30,7 @@ const nativePopupWebContentsIds = vi.hoisted(() => new Set<number>());
 const resourceUsageWebContentsIds = vi.hoisted(() => new Set<number>());
 const rsbWindowWebContentsIds = vi.hoisted(() => new Set<number>());
 const ghostPanelWebContentsIds = vi.hoisted(() => new Set<number>());
+const reviewArtifactConfirmWebContentsIds = vi.hoisted(() => new Set<number>());
 
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   isRsbNativePopupWebContentsId: (webContentsId: number) =>
@@ -48,6 +49,11 @@ vi.mock('../right-sidebar-window/registry.js', () => ({
 vi.mock('../ghost-panel-window/registry.js', () => ({
   isGhostPanelWebContentsId: (webContentsId: number) =>
     ghostPanelWebContentsIds.has(webContentsId),
+}));
+
+vi.mock('../reviewer/reviewArtifactConfirmWindowRegistry.js', () => ({
+  isReviewArtifactConfirmWebContentsId: (webContentsId: number) =>
+    reviewArtifactConfirmWebContentsIds.has(webContentsId),
 }));
 
 // lifecycle 只消费这个查询函数；owner-scoped Electron session 会让 adapter
@@ -508,6 +514,7 @@ describe('installQuitHandler render-process-gone', () => {
     resourceUsageWebContentsIds.clear();
     rsbWindowWebContentsIds.clear();
     ghostPanelWebContentsIds.clear();
+    reviewArtifactConfirmWebContentsIds.clear();
   });
 
   type RenderGoneHandler = (
@@ -618,6 +625,22 @@ describe('installQuitHandler render-process-gone', () => {
       expect(mocks.logger.warn).toHaveBeenCalledWith(
         expect.stringContaining('ghost panel render-process-gone'),
       );
+    } finally {
+      restore();
+    }
+  });
+
+  it('Review artifact consent renderer crash denies locally without shutting the app down', async () => {
+    reviewArtifactConfirmWebContentsIds.add(47);
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(undefined, { id: 47, getType: () => 'window' }, { reason: 'oom', exitCode: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Review artifact consent render-process-gone'),
+      );
+      expect(mocks.logger.error).not.toHaveBeenCalled();
     } finally {
       restore();
     }

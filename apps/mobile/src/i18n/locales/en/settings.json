@@ -85,6 +85,21 @@
     "authServer": "Auth Server",
     "authRegion": "Sign-in Region"
   },
+  "devServerEnvironment": {
+    "title": "Server Environment",
+    "description": "Only affects the backend CindyDev connects to",
+    "accessibility": "Switch server environment",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "Switch to {{environment}}?",
+    "confirmBody": "Switching signs you out and restarts the app.",
+    "cancel": "Cancel",
+    "switchAction": "Switch",
+    "switching": "Switching",
+    "switchFailed": "Could not switch the server environment. Try again."
+  },
   "updateInfo": {
     "embedded": "With app package",
     "embeddedFallback": "With app package (OTA not applied)",
@@ -116,7 +131,7 @@
     "analyticsResetAction": "Reset"
   },
   "account": {
-    "logoutHint": "Signing out only clears the sign-in state and local remote mirror on this phone. Sessions on your computer are not affected.",
+    "logoutHint": "Signing out clears every account saved on this phone and its local remote mirror. Sessions on your computer are not affected.",
     "logout": "Sign Out",
     "loggingOut": "Signing out",
     "loggingOutAccessibility": "Signing out"

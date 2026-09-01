@@ -264,6 +264,8 @@ export interface ModelCost {
 export interface CatalogModel {
   /** 与 maker-core 现有 model id 一致（如 'claude-opus-4-8' / 'gpt-5.5' / 'codex/gpt-5.5'）。 */
   id: string;
+  /** Server entitlement state. Paid-locked models remain present for UI but are never routable. */
+  availability?: 'available' | 'requires_payment';
   /** Sparse PI protocol override; absence means use PI's bundled model catalog. */
   piApi?: PiModelApi;
   /** 同一 provider/runtime 内该模型的上游覆盖；缺省使用 provider 级路由。 */
@@ -432,6 +434,7 @@ export interface CatalogModel {
 export interface ProviderMediaModel {
   id: string;
   name: string;
+  availability?: 'available' | 'requires_payment';
   modalities?: { input: string[]; output: string[] };
   officialDocs?: string;
   disabled?: boolean;

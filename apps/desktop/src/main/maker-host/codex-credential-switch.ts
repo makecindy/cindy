@@ -1,6 +1,7 @@
 import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
+  isCindyProviderCodexRemoteCompactionRoute,
   resolveAgentCredentialMode,
   type AgentCredentialMode,
   type AgentKind,
@@ -8,6 +9,7 @@ import {
 
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
 import {
+  CODEX_CINDY_COMPACT_PROVIDER_ID,
   CODEX_GATEWAY_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
@@ -31,6 +33,8 @@ export interface ShouldCloseSessionForCredentialSwitchInput {
    * 它是 thread 级冻结身份，不能用可能已被 UI 提前覆盖的 provider store 代替。
    */
   currentCodexThreadModelProviderId?: string | null;
+  /** 当前 host 的独立 Subagent 路由是否兼容 Cindy Codex 远程压缩。 */
+  currentCodexCindyRemoteCompactionCompatible?: boolean | null;
   /**
    * 当前本地 Codex app-server spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
    * 用于把隐式来源(resolveAgentCredentialMode 解析出 undefined)落到实际凭证家族,
@@ -161,7 +165,14 @@ export function isCodexThreadModelProviderIdentityMismatch(
   });
   const effectiveNextMode = nextMode ?? credentialFamilyFromAuthInjection(input.codexAuthInjection);
   const expectedThreadModelProviderId =
-    effectiveNextMode === 'oauth-bearer'
+    isCindyProviderCodexRemoteCompactionRoute({
+      providerId: nextProviderId,
+      model: input.nextModel,
+    })
+      ? input.currentCodexCindyRemoteCompactionCompatible === false
+        ? CODEX_GATEWAY_PROVIDER_ID
+        : CODEX_CINDY_COMPACT_PROVIDER_ID
+      : effectiveNextMode === 'oauth-bearer'
       ? CODEX_OPENAI_COMPACT_PROVIDER_ID
       : effectiveNextMode !== undefined
         ? CODEX_GATEWAY_PROVIDER_ID
@@ -171,6 +182,7 @@ export function isCodexThreadModelProviderIdentityMismatch(
   );
   const actualThreadIdentityKnown =
     actualThreadModelProviderId === CODEX_OPENAI_COMPACT_PROVIDER_ID ||
+    actualThreadModelProviderId === CODEX_CINDY_COMPACT_PROVIDER_ID ||
     actualThreadModelProviderId === CODEX_GATEWAY_PROVIDER_ID;
 
   return (
@@ -210,10 +222,29 @@ function throwIfCredentialSwitchAborted(signal: AbortSignal | undefined): void {
 }
 
 /**
+ * Pi loopback proxy identity that must agree across request header
+ * `x-cindy-pi-provider-id`, `registerPiProxySession`, and `sessions.provider_id`.
+ *
+ * Cindy gateway (`xd` / `cindy` / unset) sends no provider header. Native
+ * subscription and BYOM sources pin that id. Pi `set_model` does not reread
+ * spawn-time `models.json`, so crossing this identity on a live process leaves
+ * a stale header and the proxy returns 403 `pi_provider_mismatch`.
+ */
+export function piProxyProviderIdentity(
+  providerId: string | null | undefined,
+): string | null {
+  const normalized = normalizeProviderId(providerId);
+  if (!normalized || normalized === 'xd' || normalized === 'cindy') return null;
+  return normalized;
+}
+
+/**
  * 判断运行中的本地会话是否必须关闭后重建。
  *
  * provider route 可以在空闲时或 turn 边界热切，但 agent 子进程的凭证形态是 spawn-time 状态；
  * 只要旧/新来源解析出的 credential family 不同，就不能继续复用当前进程。
+ * Pi 还要额外对齐 proxy 供应商身份：Grok/xAI 与 GPT/OpenAI 同属
+ * `provider-oauth`，但活进程仍会带旧 `x-cindy-pi-provider-id`。
  */
 export function shouldCloseSessionForCredentialSwitch(
   input: ShouldCloseSessionForCredentialSwitchInput,
@@ -222,6 +253,12 @@ export function shouldCloseSessionForCredentialSwitch(
 
   const currentProviderId = normalizeProviderId(input.currentProviderId);
   const nextProviderId = normalizeProviderId(input.nextProviderId);
+  if (
+    input.agentKind === 'pi'
+    && piProxyProviderIdentity(currentProviderId) !== piProxyProviderIdentity(nextProviderId)
+  ) {
+    return true;
+  }
   const currentMode = resolveAgentCredentialMode({
     agentKind: input.agentKind,
     providerId: currentProviderId,

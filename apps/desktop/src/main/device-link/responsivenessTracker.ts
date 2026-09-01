@@ -45,12 +45,13 @@ export function createDeviceUnresponsiveError(deviceId: string): DeviceLinkError
  * 代表性探测请求:half-open 探测必须穿过被控端 runInvoke → dispatchLocalInvoke →
  * local-db 读路径才算数(subscribe / unsubscribe / link-accept 在被控端 dispatch 里
  * 于 runInvoke 之前特判应答,IPC/DB 卡死时它们照常回包,不能作恢复证据)。
- * sessions:list limit=1 是最便宜的真实 DB 读;与 mobile 的探测通道一致。
+ * sessions:list limit=1 是最便宜的真实 DB 读;探测刻意不加载全部置顶会话,
+ * 只验证远端 DB / IPC 是否恢复。
  */
 export const DEVICE_RESPONSIVENESS_PROBE_CHANNEL = 'local-db:sessions:list';
 
 export function buildDeviceResponsivenessProbeArgs(): unknown[] {
-  return [1, 'all', { includePinned: true }];
+  return [1, 'all', { includePinned: false }];
 }
 
 export interface DeviceResponsivenessProbeEligibility {

@@ -256,6 +256,8 @@ export const MAKER_INVOKE = {
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',
+  // 附加可读写目录；与 SET_EXTRA_DIRS 的只读授权严格分离。
+  SET_WRITABLE_DIRS: 'maker:set-writable-dirs',
   // 未来 MetaAgent 入口（占位）
   RUN: 'maker:run',
   // Chat utility (Stage 2 C1) — 不是 session 级 API,但走 maker.* 命名空间统一管理
@@ -592,9 +594,9 @@ export const MAKER_INVOKE = {
   /** 表单「AI 生成」:按自然语言描述生成前置检查脚本并落盘,返回可填入的命令。 */
   SCHEDULE_GENERATE_PRE_RUN_HOOK: 'maker:schedule:generate-pre-run-hook',
   SCHEDULE_LIST_RUNS: 'maker:schedule:list-runs',
-  /** Sidebar 聚合索引：带 sessionId 的 run + 未读终态 run，避免固定 history limit 截断。 */
+  /** Sidebar 聚合索引：每个 session 最新映射 + 全部 running / 未读终态 run。 */
   SCHEDULE_LIST_SIDEBAR_INDEX_RUNS: 'maker:schedule:list-sidebar-index-runs',
-  /** Automation 列表总开销：按 schedule 去重 session 汇总 sessions.total_cost_usd。 */
+  /** 已移除累计费用展示；保留 channel 供旧 device-link 控制端降级为空结果。 */
   SCHEDULE_LIST_COST_SUMMARIES: 'maker:schedule:list-cost-summaries',
   SCHEDULE_DELETE_RUN: 'maker:schedule:delete-run',
   /** Renderer 在 delete/pause 前查这条 schedule 当前有多少个 in-flight run,>0 时弹二次确认。 */
@@ -800,6 +802,8 @@ export const MAKER_SEND = {
 
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
+  /** Runtime agent roster changed after an optional agent recovery. */
+  AGENTS_CHANGED: 'maker:agents:changed',
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */

@@ -90,12 +90,12 @@ describe('Ghost manifest contract', () => {
       validateGhostManifest({
         schemaVersion: 3,
         minCindyVersion: '0.1.60',
-        id: 'too-old-v3',
-        name: 'Too Old v3',
+        id: 'older-compatible-v3',
+        name: 'Older Compatible v3',
         version: '1.0.0',
         entry: 'index.js',
       }).ok,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('validates and normalizes setup at the shared protocol boundary', () => {

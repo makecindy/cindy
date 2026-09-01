@@ -38,6 +38,8 @@ describe('composer narrow toolbar contract', () => {
     expect(modelSelectorSource).toContain(
       'const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;',
     );
+    // 长英文档名在固定宽度的紧凑 trigger 内允许省略显示，完整值仍由 title / aria-label 提供。
+    expect(modelSelectorSource).toContain("? 'min-w-0 shrink truncate'");
     expect(modelSelectorSource).toContain('{effortLabel && showTriggerTail && (');
     expect(permissionSelectorSource).toContain(
       'const isIconOnly = iconOnly && !isFieldTrigger;',

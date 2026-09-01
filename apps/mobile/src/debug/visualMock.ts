@@ -54,6 +54,7 @@ export const visualMockUser: MobileUser = {
   membershipRole: 'owner',
   orgId: null,
   orgName: null,
+  orgLogoUrl: null,
   passportId: 'visual-mock-passport',
 };
 
@@ -162,6 +163,7 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
     invoke: visualMockInvoke,
     subscribe: async () => undefined,
     unsubscribe: async () => undefined,
+    onAgentsChanged: () => () => undefined,
   };
 }
 

@@ -85,6 +85,59 @@ describe('ErrorBanner — LiteLLM 流中断', () => {
   });
 });
 
+describe('ErrorBanner — Codex oversized history', () => {
+  it('hides Retry locally and does not show a strip-fork button', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: 'oversized',
+        errorReason: 'codex_history_oversized',
+        retryText: 'retry-token',
+        onRetry: vi.fn(),
+        onForkStripEncrypted: vi.fn(),
+        agentKind: 'codex',
+      }),
+    );
+    expect(screen.getByText('logic.errors.codexHistoryOversized')).toBeTruthy();
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.forkStripOversizedHistoryTitle')).toBeNull();
+  });
+
+  it('hides Retry on SSH sessions and does not offer a local strip-fork', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: 'oversized',
+        errorReason: 'codex_history_oversized',
+        retryText: 'retry-token',
+        onRetry: vi.fn(),
+        onForkStripEncrypted: vi.fn(),
+        agentKind: 'codex',
+        remoteHostId: 'ssh-1',
+      }),
+    );
+    expect(screen.getByText('logic.errors.codexHistoryOversizedRemote')).toBeTruthy();
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.forkStripOversizedHistoryTitle')).toBeNull();
+  });
+
+  it('hides Retry on device-link and does not show a strip-fork button', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: 'oversized',
+        errorReason: 'codex_history_oversized',
+        retryText: 'retry-token',
+        onRetry: vi.fn(),
+        onForkStripEncrypted: vi.fn(),
+        agentKind: 'codex',
+        deviceLinkDeviceId: 'device-1',
+      }),
+    );
+    expect(screen.getByText('logic.errors.codexHistoryOversized')).toBeTruthy();
+    expect(screen.queryByText('logic.errors.codexHistoryOversizedRemote')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.forkStripOversizedHistoryTitle')).toBeNull();
+  });
+});
+
 const XAI_REJECTED_RAW = `OpenAI API error (400): ${JSON.stringify({
   message: `litellm.BadRequestError: XaiException - ${JSON.stringify({
     error: { message: 'Upstream rejected the request!', type: 'invalid_request_error' },

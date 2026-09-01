@@ -138,7 +138,9 @@ export function UsageHistorySection(): React.JSX.Element {
               title={t('usageHistory.byAgent.title')}
               subtitle={t('usageHistory.byAgent.subtitle')}
             >
-              <UsageAgentTable rows={agentRows} />
+              <div className="overflow-x-auto">
+                <UsageAgentTable rows={agentRows} />
+              </div>
             </Card>
           )}
 
@@ -147,7 +149,9 @@ export function UsageHistorySection(): React.JSX.Element {
               title={t('usageHistory.byModel.title')}
               subtitle={t('usageHistory.byModel.subtitle')}
             >
-              <UsageModelTable rows={modelRows} />
+              <div className="overflow-x-auto">
+                <UsageModelTable rows={modelRows} />
+              </div>
             </Card>
           )}
 
@@ -156,7 +160,9 @@ export function UsageHistorySection(): React.JSX.Element {
               title={t('usageHistory.tasks.title')}
               subtitle={t('usageHistory.tasks.subtitle')}
             >
-              <UsageTaskTable rows={taskRows} />
+              <div className="overflow-x-auto">
+                <UsageTaskTable rows={taskRows} />
+              </div>
             </Card>
           )}
         </>

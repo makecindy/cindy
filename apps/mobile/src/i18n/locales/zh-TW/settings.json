@@ -85,6 +85,21 @@
     "authServer": "Auth Server",
     "authRegion": "登入區域"
   },
+  "devServerEnvironment": {
+    "title": "伺服器環境",
+    "description": "僅影響 CindyDev 連線的業務伺服器",
+    "accessibility": "切換伺服器環境",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "切換至 {{environment}}？",
+    "confirmBody": "切換會登出目前帳號並重新啟動 App。",
+    "cancel": "取消",
+    "switchAction": "切換",
+    "switching": "切換中",
+    "switchFailed": "切換伺服器環境失敗，請再試一次。"
+  },
   "updateInfo": {
     "embedded": "隨整包",
     "embeddedFallback": "隨整包（熱更未生效）",
@@ -116,7 +131,7 @@
     "analyticsResetAction": "恢復"
   },
   "account": {
-    "logoutHint": "退出只會清除這臺手機上的登入態和本地遠端映象，不會影響電腦端任務。",
+    "logoutHint": "退出會清除這臺手機上儲存的全部帳號和本地遠端映象，不會影響電腦端任務。",
     "logout": "退出登入",
     "loggingOut": "退出中",
     "loggingOutAccessibility": "正在退出登入"

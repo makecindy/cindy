@@ -1,9 +1,7 @@
 import {
   GHOST_LOCALES,
-  GHOST_MANIFEST_V3_MIN_CINDY_VERSION,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_OAUTH_SCOPES_MAX,
-  compareCindyVersions,
   isValidCindyVersion,
   type GhostLocale,
   type GhostManifestLocales,
@@ -43,7 +41,7 @@ export const GHOST_MANIFEST_MAX_BYTES = 256 * 1024;
 export const GHOST_INSTALL_MANIFEST_MAX_BYTES = 256 * 1024;
 
 /** ghost.json 的 description / whenToUse 字符上限，正本在 plugin-protocol。 */
-export { GHOST_MANIFEST_SUMMARY_MAX_CHARS, GHOST_MANIFEST_V3_MIN_CINDY_VERSION };
+export { GHOST_MANIFEST_SUMMARY_MAX_CHARS };
 
 /** 意识文件扩展名。 */
 export const CINDY_FILE_EXT = '.cindy';
@@ -869,7 +867,9 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   只在 networkSlot 请求 GitHub API 时注入,不进入插件、Renderer、KV 或日志。
  * - 'oidc-token':值 = Cindy 为当前企业 Membership 签发的短时 Connection
  *   JWT。当前组织的可信市场安装，或企业作者通过 ghost_forge_install 明确安装且
- *   id 命中本组织登记前缀时可签发；手动导入不取得该资格。
+ *   id 命中本组织登记前缀时可签发；手动导入默认不取得该资格。点名例外：
+ *   ghostId 精确等于 mivo-canvas 的组织成员本地安装，在已装清单声明的精确
+ *   oidc-token host 仅为 mivo-canvas.dsworks.cn 时可签发；其它本地插件、其它精确 host 仍不签发，已有市场记录（含 installed:false）仍走 digest。市场账本损坏不得当成无记录。
  *   Host 根据当前组织和插件 id 推导 audience，插件不能声明或读取。
  *   令牌只在 networkSlot 发请求时注入，且永不进入 Node Worker。
  *
@@ -2085,7 +2085,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     items.push({ key: 'fs', kind: 'fs', labelKey: 'fsWrite', detailKey: 'fsWriteDetail' });
   }
   // library 能力:持久作品库(用户数据语义,不是临时缓存)。详情页必须讲清
-  // 三件事:卸载不删、删除走独立确认、数据库只收参数化语句。
+  // 卸载不删、删除走独立确认,以及会打开系统文件夹/另存为对话框。
   if (manifest.library === true) {
     items.push({
       key: 'library',
@@ -3730,15 +3730,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   }
   if (raw.minCindyVersion !== undefined && !isValidCindyVersion(raw.minCindyVersion)) {
     return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
-  }
-  if (
-    prepared.schemaVersion === 3 &&
-    compareCindyVersions(raw.minCindyVersion as string, GHOST_MANIFEST_V3_MIN_CINDY_VERSION) === -1
-  ) {
-    return {
-      ok: false,
-      reason: `schemaVersion 3 的 minCindyVersion 不能低于 ${GHOST_MANIFEST_V3_MIN_CINDY_VERSION}`,
-    };
   }
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。
@@ -6097,10 +6088,24 @@ export function ghostManifestToLegacyV2DigestFormat(
     source.schemaVersion === 2 &&
     Array.isArray(source.slots)
   ) {
-    return withLegacyAuthorSlots({
+    const legacy = withLegacyAuthorSlots({
       ...manifest,
       slots: source.slots.map((slot) => (slot === 'model' ? 'cindy' : slot)),
     });
+    // Reproduce the released v0.1.61 normalized output exactly. Its validator
+    // omitted card unless externalLinks was true, and omitted false agent flags;
+    // current validators may synthesize empty capability objects from slots.
+    const sourceCard = isPlainObject(source.card) ? source.card : null;
+    if (sourceCard?.externalLinks === true) legacy.card = { externalLinks: true };
+    else delete legacy.card;
+    const sourceAgent = isPlainObject(source.agent) ? source.agent : null;
+    const legacyAgent: Record<string, true> = {};
+    for (const field of ['background', 'errand', 'schedule'] as const) {
+      if (sourceAgent?.[field] === true) legacyAgent[field] = true;
+    }
+    if (Object.keys(legacyAgent).length > 0) legacy.agent = legacyAgent;
+    else delete legacy.agent;
+    return legacy;
   }
   return withLegacyAuthorSlots(manifest);
 }
@@ -8241,6 +8246,8 @@ export const GHOST_LIBRARY_OPS = [
   'db.backup',
   'db.check',
   'db.userVersion',
+  'reveal',
+  'saveAs',
 ] as const;
 export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
 
@@ -8280,6 +8287,8 @@ export interface GhostPipeLibraryRequest {
   /** read 分段。 */
   offset?: number;
   length?: number;
+  /** saveAs: 另存为建议文件名(仅 basename)。 */
+  name?: string;
 }
 
 /**
@@ -8337,6 +8346,10 @@ export type GhostPipeLibraryResult =
   | { ok: true; op: 'db.backup'; backedUp: boolean }
   | { ok: true; op: 'db.check'; healthy: boolean; detail: string }
   | { ok: true; op: 'db.userVersion'; version: number | null }
+  | { ok: true; op: 'reveal'; path: string }
+  | { ok: true; op: 'saveAs'; cancelled: true }
+  /** saveAs 成功:path 是库内相对键(与请求相同),不是用户另存到的绝对路径。 */
+  | { ok: true; op: 'saveAs'; cancelled: false; path: string; bytes: number }
   | { ok: false; errorCode: string; message: string };
 
 /** Library 概览(ghosts:library-overview IPC 载荷;设置页插件详情消费)。 */

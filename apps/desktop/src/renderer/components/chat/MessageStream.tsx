@@ -46,6 +46,7 @@ import {
   isPlanUserBoundary,
   isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
+import { extractRenderedMarkdownImageTargets } from './markdownImageTargets';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -252,7 +253,7 @@ import { ThinkingCard } from './ThinkingCard';
 import { AgentActionsBlock } from './AgentActionsBlock';
 import { AgentTaskCard } from './AgentTaskCard';
 import { TurnChangesCard } from './TurnChangesCard';
-import { GeneratedFilesCard } from './GeneratedFilesCard';
+import { GeneratedFilesCard, generatedFilesCheckKey } from './GeneratedFilesCard';
 import { WorkGroupBlock, type WorkGroupChild } from './WorkGroupBlock';
 import {
   extractAnchorCardId,
@@ -313,6 +314,7 @@ import {
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
+  resolveWindowCoverageLossAction,
   selectTailUserMessageId,
   readFollowLatestRequestKey,
   shouldBumpSendFollowCancelOnScroll,
@@ -357,6 +359,8 @@ interface MessageStreamProps {
   workingDir: string;
   messages: ChatMessage[];
   historyLoaded: boolean;
+  /** The task shell remains, but all prior message content was intentionally cleared. */
+  historyCleared?: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
   /** Kept for API compatibility. v2 — no longer threaded into render items
    *  (AgentActionsBlock + ThinkingCard manage their own per-block expand
@@ -493,6 +497,8 @@ type GeneratedFilesRenderItem = {
   files: GeneratedFileRef[];
   turnStartMs: number | null;
   turnEndMs: number | null;
+  /** 最新一轮没有后续 user 边界时 turnEndMs 仍为空，用封口信号触发完成后复核。 */
+  turnSealed?: boolean;
 };
 
 /** 原子工作子项:tool / agent task / thinking / assistant 工作文字。 */
@@ -731,6 +737,19 @@ function ForkOriginMarker({ onClick }: { onClick?: () => void }) {
   );
 }
 
+function HistoryClearedMarker() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-center gap-4 py-3" role="status">
+      <div className="h-px flex-1 bg-[var(--border-default)]" />
+      <span className="shrink-0 text-12 text-[var(--text-tertiary)]">
+        {t('settings.about.storage.dbSlimmingHistoryCleared')}
+      </span>
+      <div className="h-px flex-1 bg-[var(--border-default)]" />
+    </div>
+  );
+}
+
 function areLocalFileRefsEqual(
   a: readonly KnownLocalFileRef[],
   b: readonly KnownLocalFileRef[],
@@ -950,6 +969,35 @@ function isCompletedAssistantMessage(message: ChatMessage): boolean {
     // 与费用字段一样是等价的收尾信号 —— 少这一条,无金额轮就挂不出 action bar。
     message.turnUsageDetails !== undefined
   );
+}
+
+function isGeneratedFilesSubTurnTerminal(message: ChatMessage): boolean {
+  // 显式失败也是子轮终态:后续没有新工作就该封口复核,不能把失败当成「还在跑」。
+  return message.turnCompleted === false || isCompletedAssistantMessage(message);
+}
+
+/**
+ * 产物卡封口只看当前尾部子轮。同一可见 user turn 在 turnCompleted 后自动续跑时,
+ * 前一子轮的收尾信号不得让后续 ready:false 的文件立刻 stat。
+ * export 仅供单测使用。
+ */
+export function isGeneratedFilesTurnSealed(
+  slice: readonly ChatMessage[],
+  hasFollowingUser: boolean,
+): boolean {
+  if (hasFollowingUser) return true;
+  let lastTerminalIdx = -1;
+  for (let i = 0; i < slice.length; i++) {
+    if (isGeneratedFilesSubTurnTerminal(slice[i])) lastTerminalIdx = i;
+  }
+  if (lastTerminalIdx < 0) return false;
+  for (let i = lastTerminalIdx + 1; i < slice.length; i++) {
+    const message = slice[i];
+    if (message.role === 'tool_use') return false;
+    if (message.role === 'user' && message.isSyntheticTrigger === true) return false;
+    if (message.role === 'assistant' && !message.systemCardType) return false;
+  }
+  return true;
 }
 
 export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessage[]): Set<string> {
@@ -1472,6 +1520,32 @@ export function buildRenderItems(
     return allMessages.slice(start, end);
   };
 
+  // Agent 最终正文中的 Markdown 图片是首选排版；tool_result 媒体仍保留为
+  // 确定性兜底。只有同一真实 user turn 内确实嵌入了同一 URL，才压掉兜底卡。
+  const inlineImageUrlsByTurnStart = new Map<number, ReadonlySet<string>>();
+  const recordTurnInlineImages = (lo: number, hi: number): void => {
+    if (hi <= lo) return;
+    const urls = new Set<string>();
+    for (const message of messages.slice(lo, hi)) {
+      if (message.role !== 'assistant' || message.systemCardType || message.isStreaming) continue;
+      for (const url of extractRenderedMarkdownImageTargets(message.content)) urls.add(url);
+    }
+    inlineImageUrlsByTurnStart.set(lo, urls);
+  };
+  let inlineTurnStart = 0;
+  for (let index = 0; index <= messages.length; index += 1) {
+    const message = messages[index];
+    const isBoundary =
+      message?.role === 'user' &&
+      message.delivery !== 'steer' &&
+      !message.isSyntheticTrigger;
+    if (isBoundary && index > inlineTurnStart) {
+      recordTurnInlineImages(inlineTurnStart, index);
+      inlineTurnStart = index;
+    }
+    if (index === messages.length) recordTurnInlineImages(inlineTurnStart, index);
+  }
+
   // ── Pass 0: build toolUseId → tool_result.content lookup ──
   // Plan/task rendering and regular tool result pairing both need a stable
   // lookup by vendor toolUseId. Adjacency remains a fallback in Pass 2.
@@ -1697,6 +1771,12 @@ export function buildRenderItems(
       for (const message of originalTurnSlice(lo, hi)) {
         if (message.role !== 'tool_result' || !isSubagentInternalMessage(message)) continue;
         for (const item of extractToolResultMedia(message.content)) {
+          if (
+            item.kind === 'image' &&
+            inlineImageUrlsByTurnStart.get(lo)?.has(item.url)
+          ) {
+            continue;
+          }
           if (seenMediaUrls.has(item.url)) continue;
           seenMediaUrls.add(item.url);
           hiddenMedia.push(item);
@@ -1727,12 +1807,15 @@ export function buildRenderItems(
       }
     }
     const boundaryTimestamp = Date.parse(messages[hi]?.createdAt ?? '');
+    const hasFollowingUser = hi < messages.length;
+    const turnSealed = isGeneratedFilesTurnSealed(slice, hasFollowingUser);
     items.push({
       type: 'generated_files',
       key: `genfiles-${messages[lo].clientId}`,
       files: generatedFiles,
       turnStartMs,
       turnEndMs: Number.isFinite(boundaryTimestamp) ? boundaryTimestamp : null,
+      turnSealed,
     });
   };
   let i = 0;
@@ -1915,6 +1998,12 @@ export function buildRenderItems(
       // 提交消息被 rewind/异 ghost 伪锚)回退今日行为——本调用位置渲染。
       const collectResultMedia = (result: string): void => {
         let media = extractToolResultMedia(result);
+        const inlineImageUrls = inlineImageUrlsByTurnStart.get(turnStartIdx);
+        if (inlineImageUrls?.size) {
+          media = media.filter(
+            (item) => item.kind !== 'image' || !inlineImageUrls.has(item.url),
+          );
+        }
         if (media.length === 0) return;
         if (isGhostCallToolName(toolName)) {
           const anchor = extractAnchorCardId(result);
@@ -2121,6 +2210,43 @@ export function buildRenderItems(
   }
 
   return { items, singleResultMap };
+}
+
+type GeneratedFilesRenderItemRef = Extract<RenderItem, { type: 'generated_files' }>;
+
+/**
+ * 产物卡内容没变时沿用上一轮 item。buildRenderItems 每次都 new 一个 files
+ * 数组,不收口的话 memo 住的 GeneratedFilesCard 仍会因 props 引用变化而重渲。
+ */
+export function reuseGeneratedFilesRenderItems(
+  items: RenderItem[],
+  cache: Map<string, GeneratedFilesRenderItemRef>,
+): RenderItem[] {
+  const seen = new Set<string>();
+  let swapped = false;
+  const next = items.map((item) => {
+    if (item.type !== 'generated_files') return item;
+    seen.add(item.key);
+    const previous = cache.get(item.key);
+    if (
+      previous &&
+      generatedFilesCheckKey(
+        previous.files,
+        previous.turnStartMs,
+        previous.turnEndMs,
+        previous.turnSealed,
+      ) === generatedFilesCheckKey(item.files, item.turnStartMs, item.turnEndMs, item.turnSealed)
+    ) {
+      if (previous !== item) swapped = true;
+      return previous;
+    }
+    cache.set(item.key, item);
+    return item;
+  });
+  for (const key of cache.keys()) {
+    if (!seen.has(key)) cache.delete(key);
+  }
+  return swapped ? next : items;
 }
 
 // ---------------------------------------------------------------------------
@@ -2948,6 +3074,7 @@ export function MessageStream({
   workingDir,
   messages,
   historyLoaded,
+  historyCleared = false,
   taskUpdates,
   isSessionStreaming = false,
   continuationTurnClientId = null,
@@ -3198,25 +3325,29 @@ export function MessageStream({
   // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
-  const { items: ungroupedRenderItems, singleResultMap } = useMemo(
-    () =>
-      buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
-        historyWindowIncomplete:
-          !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
-        turnChangeSets,
-        workingDir,
-      }),
-    [
-      messages,
-      taskUpdates,
-      ghostCardSnapshot,
-      historyLoaded,
-      hasMoreMessages,
-      historyWindowHasIsland,
+  const generatedFilesItemCacheRef = useRef(
+    new Map<string, Extract<RenderItem, { type: 'generated_files' }>>(),
+  );
+  const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
+    const built = buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
+      historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
       turnChangeSets,
       workingDir,
-    ],
-  );
+    });
+    return {
+      items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCacheRef.current),
+      singleResultMap: built.singleResultMap,
+    };
+  }, [
+    messages,
+    taskUpdates,
+    ghostCardSnapshot,
+    historyLoaded,
+    hasMoreMessages,
+    historyWindowHasIsland,
+    turnChangeSets,
+    workingDir,
+  ]);
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(visibleMessages),
     [visibleMessages],
@@ -3933,14 +4064,27 @@ export function MessageStream({
   const anchoredForwardItemsRef = useRef(anchoredForwardItems);
   anchoredForwardItemsRef.current = anchoredForwardItems;
 
-  // render-window-bidirectional P1 fix: 新消息导致锚定窗口不再覆盖末尾时，
-  // 重置 near-bottom 以触发未读提示（覆盖末尾→清锚回默认窗的逻辑在 handleScroll 里）。
+  // 新 item 导致锚定窗口不再覆盖末尾时，先保留此前的跟随意图：自动补历史建立的
+  // 锚点只是实现细节，用户仍在跟随就清锚回默认尾窗；用户已经离底才保留历史窗口。
   const prevWindowCoversEndRef = useRef(windowCoversEnd);
   useLayoutEffect(() => {
     const wasCovering = prevWindowCoversEndRef.current;
     prevWindowCoversEndRef.current = windowCoversEnd;
 
-    if (firstVisibleItemKey !== null && wasCovering && !windowCoversEnd) {
+    const coverageLossAction = resolveWindowCoverageLossAction({
+      hasWindowAnchor: firstVisibleItemKey !== null,
+      wasCoveringEnd: wasCovering,
+      windowCoversEnd,
+      wasFollowingTail: isNearBottomRef.current,
+    });
+    if (coverageLossAction === 'handoff-to-tail') {
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      setUnreadCount(0);
+      setFirstVisibleItemKey(null);
+      return;
+    }
+    if (coverageLossAction === 'preserve-anchor') {
       isNearBottomRef.current = false;
       setIsNearBottom(false);
       return;
@@ -4194,8 +4338,8 @@ export function MessageStream({
   // shouldUnpinOnUpIntent),本回调只负责翻转:ref 与 state 同步更新(F2 不
   // 变量);unreadCount 不动 — 它只在回底时清零。
   const unpinAutoFollowForUserUpIntent = useCallback(() => {
-    bumpSendFollowCancelGeneration(sessionId);
     if (!isNearBottomRef.current) return;
+    bumpSendFollowCancelGeneration(sessionId);
     isNearBottomRef.current = false;
     setIsNearBottom(false);
   }, [sessionId]);
@@ -5557,6 +5701,12 @@ export function MessageStream({
       // 导航条目标要到 layout effect 才能确认仍存在且 DOM 已就绪，因此这里不能提前消费
       // focus 期间延期的删除补偿：先重放补偿，目标有效时后续导航再覆盖最终落点。
       cancelFocusJump();
+      // 点击本身就是离开尾部的明确意图，必须在 request 进入下一次 render 前同步写入。
+      // 否则同一批流式 append 的 coverage-loss layout effect 会先按旧跟随态清掉锚点，
+      // 当前窗口内、但默认尾窗外的目标会在后续 rail effect 滚动时被卸载。
+      restoringRef.current = false;
+      isNearBottomRef.current = false;
+      setIsNearBottom(false);
       railJumpSeqRef.current += 1;
       setRailJumpRequest({ id: clientId, seq: railJumpSeqRef.current });
     },
@@ -5586,11 +5736,8 @@ export function MessageStream({
     ) as HTMLElement | null;
     if (!el) return;
     lastAppliedRailJumpRef.current = railJumpRequest.seq;
-    // 从贴底态往上跳必须先解除 auto-follow 钉底,否则流式期间 pin effect 会把
-    // 视口拽回底部(focus-jump 同款处理;chip 不需要是因为它只在已上滚时出现)。
-    restoringRef.current = false;
-    isNearBottomRef.current = false;
-    setIsNearBottom(false);
+    // auto-follow 已由点击处理器在 request 进入 render 前解除，避免本轮更早的
+    // coverage-loss effect 清掉当前窗口内、默认尾窗外的导航目标。
     // smooth scroll 途经顶部区域时抑制 expandWindow/onLoadMore(chip-jump 协议,
     // 解抑靠用户 wheel/touch/keydown + 安全兜底 timer)。
     beginChipJump({
@@ -5803,6 +5950,9 @@ export function MessageStream({
                   maxWidth: contentWidth ?? 880,
                 }}
               >
+                {historyLoaded && historyCleared && (
+                  <HistoryClearedMarker />
+                )}
                 {/* F-SYNC-2: Loading spinner at top */}
                 {isLoadingMore && (
                   <div className="flex items-center justify-center pb-4">
@@ -5870,6 +6020,7 @@ export function MessageStream({
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
+                          turnSealed={item.turnSealed === true}
                         />
                       );
                     }
@@ -6372,6 +6523,7 @@ const MessageItem = memo(function MessageItem({
           message={message.content}
           reason={message.errorReason}
           providerId={message.errorProviderId}
+          toolLoop={message.toolLoop}
         />
       );
     case 'thinking':

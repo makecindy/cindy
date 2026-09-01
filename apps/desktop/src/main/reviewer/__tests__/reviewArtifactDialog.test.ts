@@ -12,7 +12,7 @@ const translations: Record<string, string> = {
 };
 
 describe('review external-artifact dialog', () => {
-  it('fails closed by default and lists every authorized path', () => {
+  it('provides explicit cancel copy and lists every authorized path', () => {
     const items = Array.from({ length: 20 }, (_, index) => ({
       kind: 'external-path' as const,
       label: `contract-${index + 1}.pdf`,
@@ -20,13 +20,12 @@ describe('review external-artifact dialog', () => {
     }));
     const options = buildReviewArtifactConfirmationDialog(items, (key) => translations[key] ?? key);
 
-    expect(options.buttons).toEqual(['Cancel', 'Allow']);
-    expect(options.defaultId).toBe(0);
-    expect(options.cancelId).toBe(0);
-    expect(options.detail).toContain('/outside/contract-1.pdf');
-    expect(options.detail).toContain('/outside/contract-11.pdf');
-    expect(options.detail).toContain('/outside/contract-20.pdf');
-    expect(options.detail).not.toContain('and 10 more');
+    expect(options.cancelText).toBe('Cancel');
+    expect(options.allowText).toBe('Allow');
+    expect(options.items).toHaveLength(20);
+    expect(options.items[0]).toMatchObject({ path: '/outside/contract-1.pdf' });
+    expect(options.items[10]).toMatchObject({ path: '/outside/contract-11.pdf' });
+    expect(options.items[19]).toMatchObject({ path: '/outside/contract-20.pdf' });
   });
 
   it('flattens control and bidi characters in labels and paths', () => {
@@ -41,7 +40,9 @@ describe('review external-artifact dialog', () => {
       (key) => translations[key] ?? key,
     );
 
-    expect(options.detail).toContain('safe.pdf Hidden');
-    expect(options.detail).toContain('/outside/safe.pdf spoofed');
+    expect(options.items[0]).toMatchObject({
+      label: 'safe.pdf Hidden',
+      path: '/outside/safe.pdf spoofed',
+    });
   });
 });

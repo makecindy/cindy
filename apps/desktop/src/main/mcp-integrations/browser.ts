@@ -11,6 +11,7 @@ import nodePath from 'node:path';
 import { app, ipcMain } from 'electron';
 import {
   createBrowserControlRuntime,
+  setBrowserControlRuntimeConfig,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
 
@@ -30,6 +31,7 @@ import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import {
   readBrowserBackendSettings,
   writeBrowserBackendKind,
+  writeBrowserUseRealProfile,
   resetBrowserBackendSettings,
   readBrowserBackendSettingsState,
 } from '../browser-backend-settings-store.js';
@@ -39,8 +41,18 @@ import {
 } from '../rsb-browser-bridge/active-session.js';
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
+import {
+  assertManagedBrowserStopped,
+  cleanupCopiedLoginsThen,
+  managedConfigPatchBeforeStop,
+  FOREIGN_AGENT_BROWSER_ERROR,
+  probeOsSourceProfileReadAccess,
+  readCopiedLoginsCdpPort,
+  wrapRuntimeWithRealProfile,
+} from './browser-real-profile/index.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
+import { raiseAgentBrowserWindow } from './raise-agent-browser-window.js';
 
 export { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
 
@@ -64,13 +76,24 @@ function healLegacyManagedProfileDir(): void {
     const current = nodePath.join(runtimeDir, 'browser', MANAGED_PROFILE);
     if (fs.existsSync(legacy) && !fs.existsSync(current)) {
       fs.renameSync(legacy, current);
-      logger.info(`managed profile dir renamed in place: ${LEGACY_MANAGED_PROFILE} -> ${MANAGED_PROFILE}`);
+      logger.info(
+        `managed profile dir renamed in place: ${LEGACY_MANAGED_PROFILE} -> ${MANAGED_PROFILE}`,
+      );
     }
   } catch (err) {
     logger.warn(`managed profile dir rename failed (fresh profile will be used): ${String(err)}`);
   }
 }
 healLegacyManagedProfileDir();
+
+function realProfileRuntimeDir(): string {
+  return process.env.XDT_BROWSER_RUNTIME_DIR ?? '';
+}
+
+const initialUseRealProfile = readBrowserBackendSettings().useRealProfile;
+const rememberedCopiedLoginsCdpPort = initialUseRealProfile
+  ? readCopiedLoginsCdpPort(realProfileRuntimeDir())
+  : null;
 
 // Single shared runtime for the desktop process. Boots with the managed profile
 // (electron-free, safe at module-eval); logs route into the unified logger.
@@ -85,7 +108,10 @@ healLegacyManagedProfileDir();
 // Backend switching and recovery stay behind the process-wide controller.
 const vendoredRuntime = trackBrowserRuntimeUsage(
   createBrowserControlRuntime({
-    config: buildManagedConfig(),
+    config: buildManagedConfig({
+      useRealProfile: initialUseRealProfile,
+      ...(rememberedCopiedLoginsCdpPort ? { cdpPort: rememberedCopiedLoginsCdpPort } : {}),
+    }),
     logSink: (level, scope, args) => {
       // Bind to `logger`: the unified logger's methods rely on `this`, and calling
       // a detached `logger[level]` reference would lose it (undefined in strict
@@ -96,15 +122,26 @@ const vendoredRuntime = trackBrowserRuntimeUsage(
   }),
 );
 
-const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
+/**
+ * Consent-gated snapshot wrapper sits *outside* usage tracking: a failed
+ * copy must not count as "runtime used", or quit-time `stop` would boot
+ * Playwright just to shut it down.
+ */
+const externalRuntime = wrapRuntimeWithRealProfile(vendoredRuntime, {
+  isEnabled: () => readBrowserBackendSettings().useRealProfile,
+  getRuntimeDir: realProfileRuntimeDir,
+  applyConfig: (opts) => {
+    setBrowserControlRuntimeConfig(buildManagedConfig(opts));
+  },
+});
+
+const externalBackend = new ExternalChromeBackend(externalRuntime, logger);
 
 type SessionUploadRootResolver = (sessionId: string) => Promise<string[]>;
 
 let resolveSessionUploadRoots: SessionUploadRootResolver = async () => [];
 
-export function setBrowserSessionUploadRootResolver(
-  resolver: SessionUploadRootResolver,
-): void {
+export function setBrowserSessionUploadRootResolver(resolver: SessionUploadRootResolver): void {
   resolveSessionUploadRoots = resolver;
 }
 
@@ -169,10 +206,7 @@ const backendController = new BrowserBackendController({
   createRsbBackend,
   logger,
 });
-const browserBackendHealthService = new BrowserBackendHealthService(
-  backendController,
-  logger,
-);
+const browserBackendHealthService = new BrowserBackendHealthService(backendController, logger);
 
 /**
  * Main-window webContents accessor — populated by bootstrap-electron via
@@ -189,9 +223,7 @@ function readMainWindowForBackend(): Electron.WebContents | null {
  * Bootstrap hook. Called from `bootstrap-electron.ts` once `mainWindowRef` is
  * known. Idempotent re-binds are safe.
  */
-export function setMainWindowAccessorForBackend(
-  accessor: () => Electron.WebContents | null,
-): void {
+export function setMainWindowAccessorForBackend(accessor: () => Electron.WebContents | null): void {
   mainWindowAccessor = accessor;
 }
 
@@ -242,6 +274,44 @@ export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<vo
   writeBrowserBackendKind(kind);
 }
 
+async function stopExternalRuntimeIfUsed(): Promise<void> {
+  const useRealProfile = readBrowserBackendSettings().useRealProfile;
+  const patch = managedConfigPatchBeforeStop({
+    rememberedCdpPort: useRealProfile ? readCopiedLoginsCdpPort(realProfileRuntimeDir()) : null,
+  });
+  if (patch) {
+    setBrowserControlRuntimeConfig(buildManagedConfig(patch));
+  }
+  const status = await vendoredRuntime.call({ action: 'status' });
+  const running =
+    status.ok &&
+    status.data !== null &&
+    typeof status.data === 'object' &&
+    (status.data as { running?: unknown }).running === true;
+  const stop = running ? await externalRuntime.call({ action: 'stop' }) : null;
+  assertManagedBrowserStopped({ status, stop });
+}
+
+/**
+ * Persist consent, stop the managed Chrome so the next start can switch
+ * directories, and delete the snapshot when consent is revoked. Disable only
+ * persists after the Cindy-real copy is gone; a cleanup failure keeps the
+ * switch on so the user can retry. An unsuccessful or unverifiable stop also
+ * aborts so POSIX open handles cannot keep copied cookies after unlink.
+ */
+export async function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
+  await stopExternalRuntimeIfUsed();
+  if (!enabled) {
+    cleanupCopiedLoginsThen(realProfileRuntimeDir(), () => {
+      writeBrowserUseRealProfile(false);
+    });
+  } else {
+    writeBrowserUseRealProfile(true);
+  }
+  setBrowserControlRuntimeConfig(buildManagedConfig({ useRealProfile: enabled }));
+  return readBrowserBackendSettings().useRealProfile;
+}
+
 /**
  * Browser automation deps for cindy_browser MCP.
  *
@@ -285,7 +355,7 @@ export function getBrowserMcpDeps(): {
  * backend selected, even on a machine with Chrome installed.
  */
 export async function getBrowserAvailability(): Promise<BrowserAvailability> {
-  const res = await vendoredRuntime.call({ action: 'status' });
+  const res = await externalRuntime.call({ action: 'status' });
   return extractBrowserAvailability(res.data);
 }
 
@@ -319,6 +389,7 @@ export function getBrowserBackendHealth() {
  *   - `browser-backend:reset`     → clear user override, follow current default
  *   - `browser-backend:get-health` → probe + one automatic embedded recovery
  *   - `browser-backend:recover`    → force a fresh embedded backend + verify
+ *   - `browser-backend:probe-source-read` → `{ readable }` only; skip FDA if true
  *   - `rsb-browser-bridge:set-active-session` → renderer pushes the focused
  *      sessionId; RsbWebviewBackend reads via getActiveRsbSessionId() at
  *      action time (Phase 3 dependency).
@@ -337,26 +408,37 @@ export function registerBrowserBackendIpc(): void {
       return {
         active: backendController.getCurrentBackendKind(),
         systemDefault: state.defaults.kind,
-        isOverride: state.isCustomized,
+        isOverride: state.customizedKeys.includes('kind'),
+        useRealProfile: state.value.useRealProfile,
       };
     },
     setKind: async (kind) => {
       await setActiveBrowserBackendKind(kind);
       return backendController.getCurrentBackendKind();
     },
+    setUseRealProfile: async (enabled) => {
+      return setBrowserUseRealProfile(enabled);
+    },
     reset: async () => {
+      const previous = readBrowserBackendSettings();
       const next = resetBrowserBackendSettings();
+      if (previous.useRealProfile && !next.useRealProfile) {
+        await setBrowserUseRealProfile(false);
+      }
       await setActiveBrowserBackendKind(next.kind);
       return backendController.getCurrentBackendKind();
     },
     getHealth: getBrowserBackendHealth,
     recover: recoverActiveBrowserBackend,
+    probeSourceRead: () => probeOsSourceProfileReadAccess(),
   });
   ipcMain.handle('browser-backend:get-state', handlers.getState);
   ipcMain.handle('browser-backend:set-kind', handlers.setKind);
+  ipcMain.handle('browser-backend:set-use-real-profile', handlers.setUseRealProfile);
   ipcMain.handle('browser-backend:reset', handlers.reset);
   ipcMain.handle('browser-backend:get-health', handlers.getHealth);
   ipcMain.handle('browser-backend:recover', handlers.recover);
+  ipcMain.handle('browser-backend:probe-source-read', handlers.probeSourceRead);
 
   ipcMain.handle('rsb-browser-bridge:set-active-session', (_e, payload: unknown) => {
     const obj = requireObject(payload, 'set-active-session payload');
@@ -366,7 +448,7 @@ export function registerBrowserBackendIpc(): void {
     // surfacing the rare malformed-payload path as a hard error since the
     // semantic is "renderer no longer focused on any RSB session".
     const raw = optionalNullableString(obj.sessionId);
-    const sessionId: string | null = raw === null ? null : raw ?? null;
+    const sessionId: string | null = raw === null ? null : (raw ?? null);
     setActiveRsbSessionId(sessionId);
     return { ok: true };
   });
@@ -391,21 +473,19 @@ export async function openBrowserForLogin(): Promise<void> {
   // they don't need this button at all (logins go through the sidebar webview);
   // routing through the active controller would either no-op (rsb backend's `start` is a
   // no-op) or open the wrong thing.
-  const started = await vendoredRuntime.call({ action: 'start' });
+  const started = await externalRuntime.call({ action: 'start' });
   if (!started.ok) {
-    throw new Error(started.message ?? `browser start failed (HTTP ${started.status ?? '?'})`);
+    throw new Error(
+      started.message === FOREIGN_AGENT_BROWSER_ERROR || started.message?.includes('Another Cindy')
+        ? FOREIGN_AGENT_BROWSER_ERROR
+        : (started.message ?? `browser start failed (HTTP ${started.status ?? '?'})`),
+    );
   }
-  // Best-effort raise: if the browser was already open, `start` is a no-op and its
-  // window stays behind ours — focus an existing tab to bring the OS window to front
-  // (no-op-safe on a fresh launch, which is already frontmost). Never opens a tab.
-  const tabsRes = await vendoredRuntime.call({ action: 'tabs' });
-  const tabs = (tabsRes.data as { tabs?: Array<{ targetId?: string; suggestedTargetId?: string }> } | undefined)
-    ?.tabs;
-  const first = Array.isArray(tabs) ? tabs[0] : undefined;
-  const targetId = first?.suggestedTargetId ?? first?.targetId;
-  if (tabsRes.ok && targetId) {
-    await vendoredRuntime.call({ action: 'focus', targetId });
-  }
+  // Occupancy is handled inside start (relocate CDP instead of attaching).
+  // Do not re-probe status.running here: vendored `running` means "CDP is
+  // reachable", and pid/userDataDir can still be missing or point at a
+  // leftover Chrome on 18800 after a successful start of *this* window.
+  await raiseAgentBrowserWindow(externalRuntime);
 }
 
 /**

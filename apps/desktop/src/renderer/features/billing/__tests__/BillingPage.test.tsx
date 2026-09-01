@@ -20,10 +20,17 @@ const uiMocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
 }));
 
+const modelCatalogMocks = vi.hoisted(() => ({
+  refreshBuiltinProviderModels: vi.fn(async () => ({
+    ok: true as const,
+    providerId: 'xd' as const,
+  })),
+}));
+
 const authState = vi.hoisted(() => ({ dataOwnerId: 'account-fixture' as string | null }));
 
 /**
- * 计费页只用 useSearchParams 消费 `?intent=topup` 深链，不需要真的挂 Router：
+ * 计费页只用 useSearchParams 消费 `?intent=topup|subscribe|plan-change` 深链，不需要真的挂 Router：
  * 用一个可读写的 URLSearchParams 替身，既能驱动深链分支，也能断言参数被摘除。
  */
 const routerState = vi.hoisted(() => ({ search: '' as string }));
@@ -112,6 +119,7 @@ beforeEach(() => {
   uiMocks.confirm.mockReset().mockResolvedValue(false);
   uiMocks.toastError.mockReset();
   uiMocks.toastSuccess.mockReset();
+  modelCatalogMocks.refreshBuiltinProviderModels.mockClear();
   authState.dataOwnerId = 'account-fixture';
   routerState.search = '';
 });
@@ -388,6 +396,9 @@ describe('BillingPage remote catalog rendering', () => {
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
+        },
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
         },
         openExternal: vi.fn(),
       },
@@ -690,7 +701,7 @@ describe('BillingPage remote catalog rendering', () => {
     expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
   });
 
-  it('refreshes the balance once and shows no recovery action when a top-up succeeds', async () => {
+  it('refreshes the balance and XD models once when a top-up succeeds', async () => {
     const pendingOrder = {
       orderId: 'order_paid',
       productCode: 'credit_topup',
@@ -731,6 +742,42 @@ describe('BillingPage remote catalog rendering', () => {
 
     view.rerender(<BillingPage />);
     expect(getBalance).toHaveBeenCalledTimes(2);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-refreshes the XD model catalog once when a subscription becomes active', async () => {
+    const pendingSubscription = {
+      subscriptionId: 'subscription_pending',
+      status: 'INCOMPLETE' as const,
+      currentPeriodStartAt: null,
+      currentPeriodEndAt: null,
+      entitlementValidUntil: null,
+      cancelAtPeriodEnd: false,
+      effectivePlan: null,
+      purchaseAttemptId: 'attempt_subscription',
+      paymentAction: null,
+    };
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'SUBSCRIPTION',
+      phase: 'AWAITING_PAYMENT',
+      subscription: pendingSubscription,
+    });
+    const view = render(<BillingPage />);
+    await waitFor(() => expect(window.electronAPI.billing.getBalance).toHaveBeenCalledTimes(1));
+
+    Object.assign(checkout.state, {
+      phase: 'COMPLETED',
+      subscription: { ...pendingSubscription, status: 'ACTIVE' as const },
+    });
+    view.rerender(<BillingPage />);
+
+    await waitFor(() =>
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd'),
+    );
+    view.rerender(<BillingPage />);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('switches to the expired hint once the server stops issuing the payment action', async () => {
@@ -868,6 +915,40 @@ describe('BillingPage remote catalog rendering', () => {
 
     await screen.findByText('billing.settings.topupCard.action');
     expect(screen.queryByText('Configured top-up')).toBeNull();
+  });
+
+  it('深链 ?intent=subscribe 等目录与订阅加载完再打开购买弹窗，并摘掉参数', async () => {
+    routerState.search = 'tab=billing&intent=subscribe';
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('Configured subscription')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('tab')).toBe('billing');
+  });
+
+  it('深链 ?intent=subscribe 在目录加载失败时保留参数，刷新成功后再打开购买弹窗', async () => {
+    routerState.search = 'tab=billing&intent=subscribe';
+    vi.mocked(window.electronAPI.billing.getCatalog).mockRejectedValueOnce(
+      new Error('catalog unavailable'),
+    );
+
+    render(<BillingPage />);
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('button', { name: 'billing.actions.refreshCatalog' })
+          .hasAttribute('disabled'),
+      ).toBe(false),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBe('subscribe');
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+
+    expect(await screen.findByText('Configured subscription')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
   });
 
   it('shows server-visible unavailable offers and only enables purchasable offers', async () => {
@@ -1053,9 +1134,8 @@ describe('BillingPage remote catalog rendering', () => {
       currency: 'USD',
     }).format(250);
     expect(
-      within(alternativeOffer).getByText(
-        `billing.credits:{"amount":"${alternativeCredits}"}`,
-      ).className,
+      within(alternativeOffer).getByText(`billing.credits:{"amount":"${alternativeCredits}"}`)
+        .className,
     ).toContain('text-12');
     expect(within(dialog).queryByText('plus_month_more')).toBeNull();
     expect(currentPlan).toHaveProperty('disabled', true);
@@ -1149,9 +1229,7 @@ describe('BillingPage remote catalog rendering', () => {
 
     const dialog = await screen.findByRole('dialog');
     const defaultOffer = within(dialog).getByText('$9.00').closest('button')!;
-    await waitFor(() =>
-      expect(document.activeElement).toBe(defaultOffer),
-    );
+    await waitFor(() => expect(document.activeElement).toBe(defaultOffer));
     const proProduct = within(dialog).getByRole('button', { name: /Pro/ });
     const futureProduct = within(dialog).getByRole('button', { name: /Coming Soon/ });
     expect(proProduct).toHaveProperty('disabled', false);
@@ -1792,7 +1870,13 @@ describe('BillingPage plan change', () => {
   const install = (billing: ReturnType<typeof billingMocks>) => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
-      value: { billing, openExternal: vi.fn() },
+      value: {
+        billing,
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
+        },
+        openExternal: vi.fn(),
+      },
     });
     return billing;
   };
@@ -1853,11 +1937,14 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
 
     await act(async () => resolvePortal({ success: true }));
     await act(async () => window.dispatchEvent(new Event('focus')));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes billing after a timed-out Stripe portal launch', async () => {
@@ -1880,7 +1967,9 @@ describe('BillingPage plan change', () => {
       expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
       expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
       expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
     });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
   it('does not show Stripe management in the menu for an Alipay subscription', async () => {
@@ -2186,6 +2275,61 @@ describe('BillingPage plan change', () => {
     // APPLIED refreshes subscription, catalog, and balance exactly once more.
     await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
+  });
+
+  it('深链 ?intent=plan-change 在有更改入口时打开目标弹窗并摘掉参数', async () => {
+    routerState.search = 'tab=billing&intent=plan-change';
+    install(billingMocks());
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('tab')).toBe('billing');
+  });
+
+  it('深链 ?intent=plan-change 在没有更改入口时只落地计费页、不弹窗', async () => {
+    routerState.search = 'tab=billing&intent=plan-change';
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: activeSubscription(null, 'YEAR'),
+    }));
+    install(billing);
+
+    render(<BillingPage />);
+
+    await screen.findByText('billing.settings.subscriptionCard.manageAction');
+    expect(screen.queryByText('billing.planChange.targetTitle')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+  });
+
+  it('深链 ?intent=plan-change 在订阅加载失败时保留参数，刷新成功后再打开目标弹窗', async () => {
+    routerState.search = 'tab=billing&intent=plan-change';
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('subscription status unavailable'))
+      .mockResolvedValueOnce({ subscription: activeSubscription() });
+    install(billing);
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.settings.subscriptionCard.unavailable')).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('button', { name: 'billing.actions.refreshCatalog' })
+          .hasAttribute('disabled'),
+      ).toBe(false),
+    );
+    expect(screen.queryByText('billing.planChange.targetTitle')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBe('plan-change');
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+
+    expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
   });
 
   it('quotes the selected same-Product monthly Offer', async () => {
@@ -2771,6 +2915,9 @@ describe('BillingPage order history', () => {
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders,
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
+        },
+        maker: {
+          refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
         },
         openExternal: vi.fn(),
       },

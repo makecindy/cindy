@@ -311,10 +311,20 @@ function dispatchTx(readyDb, payload) {
       return sessionsRenameTitles(readyDb, request.args);
     case 'sessions.setStatus':
       return sessionsSetStatus(readyDb, request.args);
+    case 'toolResults.compactSession':
+      return compactSessionToolResults(readyDb, request.args);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(readyDb, request.args);
     case 'context.rebuild':
       return contextRebuild(readyDb, request.args);
+    case 'message.insert':
+      return messageInsert(readyDb, request.args);
+    case 'message.updateContent':
+      return messageUpdateContent(readyDb, request.args);
+    case 'message.leaseMutate':
+      return messageLeaseMutate(readyDb, request.args);
+    case 'message.rewindUserAfterClear':
+      return messageRewindUserAfterClear(readyDb, request.args);
     case 'message.delete':
       return messageDelete(readyDb, request.args);
     case 'im.deleteBindings':
@@ -423,7 +433,7 @@ function contextRebuild(readyDb, args) {
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   return readyDb.transaction(() => {
     const sessionResult = readyDb.prepare(
-      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
     ).run(updatedAt, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {
       throw Object.assign(new Error('Session missing or clear-boundary changed: ' + sessionId), {
@@ -434,6 +444,126 @@ function contextRebuild(readyDb, args) {
     readyDb.prepare(
       "INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)",
     ).run(markerId, markerClientId, sessionId, markerContent, markerCreatedAt, markerCreatedAt);
+  })();
+}
+
+// ⚠️ 与 worker/opHandlers/tx.ts 的同名事务保持一致。
+function messageInsert(readyDb, args) {
+  const payload = asRecord(args, 'message.insert args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const id = expectString(payload.id, 'id');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const role = expectString(payload.role, 'role');
+  const content = expectString(payload.content, 'content');
+  const toolUseId = nullableString(payload.toolUseId);
+  const agentMeta = nullableString(payload.agentMeta);
+  const agentKind = nullableString(payload.agentKind);
+  const createdAt = expectNumber(payload.createdAt, 'createdAt');
+  const guarded = payload.guarded === true;
+  const expected =
+    payload.expectedClearBoundaryMs === undefined || payload.expectedClearBoundaryMs === null
+      ? null
+      : expectNumber(payload.expectedClearBoundaryMs, 'expectedClearBoundaryMs');
+  return readyDb.transaction(() => {
+    let changes = 0;
+    if (guarded) {
+      changes = readyDb.prepare(
+        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions AS s WHERE s.id = ? AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1) ON CONFLICT(session_id, client_id) DO NOTHING',
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt, sessionId, expected).changes;
+    } else {
+      changes = readyDb.prepare(
+        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    }
+    if (changes > 0) {
+      if (role === 'user' || role === 'assistant') {
+        readyDb.prepare(
+          'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+        ).run(sessionId);
+      } else {
+        readyDb.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
+      }
+    }
+    return { changes };
+  })();
+}
+
+function messageUpdateContent(readyDb, args) {
+  const payload = asRecord(args, 'message.updateContent args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const content = expectString(payload.content, 'content');
+  return readyDb.transaction(() => {
+    const changes = readyDb.prepare(
+      'UPDATE messages SET content = ? WHERE session_id = ? AND client_id = ?',
+    ).run(content, sessionId, clientId).changes;
+    if (changes > 0) {
+      const row = readyDb.prepare(
+        'SELECT role, rewind_at FROM messages WHERE session_id = ? AND client_id = ? LIMIT 1',
+      ).get(sessionId, clientId);
+      if (row && row.rewind_at == null && (row.role === 'user' || row.role === 'assistant')) {
+        readyDb.prepare(
+          'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
+        ).run(sessionId);
+      }
+    }
+    return { changes };
+  })();
+}
+
+function messageLeaseMutate(readyDb, args) {
+  const payload = asRecord(args, 'message.leaseMutate args');
+  const op = expectString(payload.op, 'op');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  return readyDb.transaction(() => {
+    let changes = 0;
+    if (op === 'insert') {
+      const createdAt = expectNumber(payload.createdAt, 'createdAt');
+      changes = readyDb.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?) ON CONFLICT(session_id, client_id) DO NOTHING",
+      ).run(
+        expectString(payload.id, 'id'),
+        clientId,
+        sessionId,
+        expectString(payload.content, 'content'),
+        nullableString(payload.agentMeta),
+        createdAt,
+        createdAt,
+      ).changes;
+    } else if (op === 'deleteByContent') {
+      changes = readyDb.prepare(
+        'DELETE FROM messages WHERE session_id = ? AND client_id = ? AND content = ?',
+      ).run(sessionId, clientId, expectString(payload.content, 'content')).changes;
+    } else if (op === 'deleteById') {
+      changes = readyDb.prepare(
+        'DELETE FROM messages WHERE id = ? AND session_id = ? AND client_id = ?',
+      ).run(expectString(payload.id, 'id'), sessionId, clientId).changes;
+    } else {
+      throw Object.assign(new Error('unknown message.leaseMutate op: ' + op), { code: 'INVALID_ARGS' });
+    }
+    if (changes > 0) {
+      readyDb.prepare('UPDATE sessions SET list_message_count = NULL WHERE id = ?').run(sessionId);
+    }
+    return { changes };
+  })();
+}
+
+function messageRewindUserAfterClear(readyDb, args) {
+  const payload = asRecord(args, 'message.rewindUserAfterClear args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const clientId = expectString(payload.clientId, 'clientId');
+  const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  return readyDb.transaction(() => {
+    const changes = readyDb.prepare(
+      "UPDATE messages SET rewind_at = ? WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at IS NULL",
+    ).run(rewoundAt, sessionId, clientId).changes;
+    if (changes > 0) {
+      readyDb.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
+      ).run(sessionId);
+    }
+    return { changes };
   })();
 }
 
@@ -567,7 +697,7 @@ function messageDelete(readyDb, args) {
       }
     }
     const sessionResult = readyDb.prepare(
-      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ?',
+      'UPDATE sessions SET sdk_session_id = NULL, updated_at = ?, list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
     ).run(updatedAt, sessionId);
     if (sessionResult.changes !== 1) {
       throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
@@ -681,10 +811,54 @@ function sessionsSetStatus(readyDb, args) {
   })();
 }
 
-// 会话分享(.xdtshare)导入落库: 与 worker/opHandlers/tx.ts 的同名 handler 保持一致。
+function compactSessionToolResults(readyDb, args) {
+  const payload = asRecord(args, 'toolResults.compactSession args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const now = expectNumber(payload.now, 'now');
+
+  const selectSession = readyDb.prepare(
+    "SELECT id FROM sessions WHERE id = ? AND status IN ('archived', 'deleted') LIMIT 1",
+  );
+  // Keep this aggregate + bulk update path in sync with worker/opHandlers/tx.ts.
+  // Only prefix-shaped rows pay for JSON validation.
+  const uncompactedContentPredicate = [
+    'CASE',
+    "WHEN content NOT GLOB '{\\\"type\\\":\\\"tool_result_compacted\\\",\\\"version\\\":1,*' THEN 1",
+    'WHEN json_valid(content) = 0 THEN 1',
+    "WHEN json_type(content) = 'object'",
+    "AND json_extract(content, '$.type') = 'tool_result_compacted'",
+    "AND json_extract(content, '$.version') = 1",
+    "AND json_type(content, '$.originalBytes') IN ('integer', 'real')",
+    "AND json_extract(content, '$.originalBytes') >= 0",
+    "AND json_type(content, '$.compactedAt') IN ('integer', 'real')",
+    "AND json_extract(content, '$.compactedAt') >= 0 THEN 0",
+    'ELSE 1 END',
+  ].join(' ');
+  const summarizeCandidates = readyDb.prepare(
+    "SELECT COALESCE(SUM(octet_length(content)), 0) AS originalBytes FROM messages WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
+  );
+  const compactMessages = readyDb.prepare(
+    "UPDATE messages SET content = json_object('type', 'tool_result_compacted', 'version', 1, 'originalBytes', octet_length(content), 'compactedAt', ?) WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
+  );
+
+  return readyDb.transaction(() => {
+    const session = selectSession.get(sessionId);
+    if (!session) {
+      return { compactedRows: 0, originalBytes: 0 };
+    }
+    const summary = summarizeCandidates.get(session.id);
+    const compactedRows = compactMessages.run(now, session.id).changes;
+    return {
+      compactedRows,
+      originalBytes: compactedRows > 0 ? summary.originalBytes : 0,
+    };
+  })();
+}
+
 // 单事务插 session 行 + 全量 messages, 任一行非法整体回滚零写入;
 // session 已存在按 ALREADY_EXISTS 抛(并发双导入兜底)。
 // 协同包经可选 orca 段在同一事务追加 Worker 会话 + orca_teams/orca_workers 关系图。
+// 会话分享(.xdtshare)导入落库: 与 worker/opHandlers/tx.ts 的同名 handler 保持一致。
 function sessionImportShare(readyDb, args) {
   const payload = asRecord(args, 'session.importShare args');
   const session = asRecord(payload.session, 'session');
@@ -1012,6 +1186,12 @@ function orcaReleaseWorkerCreationReservation(readyDb, args) {
   );
 }
 
+function invalidateSessionListProjection(readyDb, sessionId) {
+  readyDb.prepare(
+    'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+  ).run(sessionId);
+}
+
 function codexImportMessages(readyDb, args) {
   const payload = asRecord(args, 'codex.importMessages args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -1061,6 +1241,7 @@ function codexImportMessages(readyDb, args) {
         createdAt,
       }).changes;
     }
+    if (count > 0) invalidateSessionListProjection(readyDb, sessionId);
     return count;
   })();
   return { changed };
@@ -1087,6 +1268,21 @@ function claudeImportMessages(readyDb, args) {
       messages.role != 'message_tombstone' AND
       messages.rewind_at IS NULL AND
       (
+        messages.role != 'tool_result' OR
+        CASE
+          WHEN messages.content NOT GLOB '{"type":"tool_result_compacted","version":1,*' THEN 1
+          WHEN json_valid(messages.content) = 0 THEN 1
+          WHEN json_type(messages.content) = 'object'
+           AND json_extract(messages.content, '$.type') = 'tool_result_compacted'
+           AND json_extract(messages.content, '$.version') = 1
+           AND json_type(messages.content, '$.originalBytes') IN ('integer', 'real')
+           AND json_extract(messages.content, '$.originalBytes') >= 0
+           AND json_type(messages.content, '$.compactedAt') IN ('integer', 'real')
+           AND json_extract(messages.content, '$.compactedAt') >= 0 THEN 0
+          ELSE 1
+        END = 1
+      ) AND
+      (
         messages.role IS NOT excluded.role OR
         messages.content IS NOT excluded.content OR
         messages.tool_use_id IS NOT excluded.tool_use_id OR
@@ -1111,6 +1307,7 @@ function claudeImportMessages(readyDb, args) {
         createdAt: expectNumber(row.createdAt, 'row.createdAt'),
       }).changes;
     }
+    if (count > 0) invalidateSessionListProjection(readyDb, sessionId);
     return count;
   })();
   return { changed };
@@ -1176,9 +1373,9 @@ function rewindCommit(readyDb, args) {
       rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
     }
     if (sdkSessionId) {
-      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = ? WHERE id = ?').run(now, now, sdkSessionId, sessionId);
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = ?, list_preview = NULL, list_preview_role = NULL WHERE id = ?').run(now, now, sdkSessionId, sessionId);
     } else {
-      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL WHERE id = ?').run(now, now, sessionId);
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, list_preview = NULL, list_preview_role = NULL WHERE id = ?').run(now, now, sessionId);
     }
   })();
 }
@@ -1321,7 +1518,7 @@ function sessionTreeRehydrate(readyDb, args) {
       }
       upsert.run(row.id, row.clientId, sessionId, row.role, content, row.toolUseId, agentMeta, row.agentKind, row.createdAt);
     }
-    readyDb.prepare('UPDATE sessions SET cleared_at = NULL, context_tokens = ?, context_window = ?, updated_at = ? WHERE id = ?').run(contextTokens, contextWindow, now, sessionId);
+    readyDb.prepare('UPDATE sessions SET cleared_at = NULL, context_tokens = ?, context_window = ?, updated_at = ?, list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?').run(contextTokens, contextWindow, now, sessionId);
     return captured;
   })();
   return { messageCount: rows.length, hiddenClientIds };

@@ -58,7 +58,7 @@ describe('ClaudeCodeAgent model capabilities', () => {
       ['medium', 'Medium'],
       ['high', 'High'],
       ['xhigh', 'Extra High'],
-      ['max', 'Max'],
+      ['max', 'Maximum'],
     ]);
   });
 

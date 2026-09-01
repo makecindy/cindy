@@ -26,6 +26,7 @@ const locale = JSON.parse(readFileSync(localePath, 'utf8')) as {
     user: {
       settingsLink: string;
       settingsLinkBeta: string;
+      moreLabel: string;
       canaryBadge: string;
       downloadMobile: string;
     };
@@ -86,14 +87,13 @@ describe('UserInfoSection — version label', () => {
     expect(source).toContain('title={appVersionLabelDetail}');
   });
 
-  it('shows the Beta badge only after the persisted channel state has loaded', () => {
+  it('shows the Beta label only after the persisted channel state has loaded', () => {
     expect(source).toContain("import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';");
     expect(source).toContain(
-      'const showBetaBadge = !betaChannelState.loading && betaChannelState.enableBeta;',
+      'const showBetaLabel = !betaChannelState.loading && betaChannelState.enableBeta;',
     );
-    expect(source).toContain('data-testid="sidebar-beta-channel-badge"');
-    expect(source).toContain('bg-[var(--beta-channel-badge-bg)]');
-    expect(source).toContain('text-[var(--beta-channel-badge-fg)]');
+    expect(source).toContain('data-testid="sidebar-beta-channel-label"');
+    expect(source).not.toContain('beta-channel-badge');
     expect(source).toContain("t('settings.betaChannel.badge')");
   });
 });
@@ -101,9 +101,9 @@ describe('UserInfoSection — version label', () => {
 describe('UserInfoSection — Canary avatar badge', () => {
   it('shows only the shield decoration when isCanary is true', () => {
     expect(source).toContain(
-      "import { Flame, Shield, Smartphone, UserRound } from 'lucide-react';",
+      "import { Flame, LogOut, Settings, Shield, Smartphone, UserPlus, UserRound } from 'lucide-react';",
     );
-    expect(source).toContain('const { user, mode, isCanary } = useAuth();');
+    expect(source).toContain('const { user, mode, isCanary, beginAddAccount } = useAuth();');
     expect(source).toContain('{isCanary && (');
     expect(source).toContain("aria-label={t('sidebar.user.canaryBadge')}");
     expect(source).not.toContain("isCanary && 'ring-[1.5px] ring-foreground'");
@@ -149,7 +149,7 @@ describe('UserInfoSection — 未登录态头像兜底', () => {
 describe('UserInfoSection — mobile download entry', () => {
   it('uses the local Lucide Smartphone icon in a matching 22x22 capsule action', () => {
     expect(source).toContain(
-      "import { Flame, Shield, Smartphone, UserRound } from 'lucide-react';",
+      "import { Flame, LogOut, Settings, Shield, Smartphone, UserPlus, UserRound } from 'lucide-react';",
     );
     expect(source).toMatch(/'mobile-download-btn',\s*\n\s*'flex h-\[22px\] w-\[22px\]/);
     expect(source).toContain("!isCollapsed && 'mr-1'");
@@ -201,24 +201,22 @@ describe('UserInfoSection — inner main button no longer owns hover background'
     expect(source).toMatch(/'text-left'/);
   });
 
-  it('main button preserves onClick / role="link" / aria-label (跳转和无障碍不破)', () => {
-    expect(source).toContain('onClick={handleClick}');
-    expect(source).toContain('role="link"');
+  it('main button opens the accessible More menu instead of navigating directly', () => {
+    expect(source).not.toContain('onClick={handleClick}');
+    expect(source).not.toContain('role="link"');
     expect(source).toContain(
-      "const settingsLinkLabel = t('sidebar.user.settingsLink', { name: displayName });",
+      "const moreLabel = t('sidebar.user.moreLabel', { name: displayName });",
     );
-    expect(source).toContain('aria-label={settingsLinkLabel}');
-    expect(locale.sidebar.user.settingsLink).toBe('设置，当前用户：{{name}}');
+    expect(source).toContain('aria-label={moreLabel}');
+    expect(source).toContain('<DropdownMenuTrigger asChild>');
+    expect(locale.sidebar.user.moreLabel).toBe('更多，当前用户：{{name}}');
   });
 
-  it('announces the enabled Beta channel from the expanded settings link', () => {
-    expect(source).toContain(
-      "? t('sidebar.user.settingsLinkBeta', { name: displayName })",
-    );
-    expect(source).toContain('aria-label={settingsLinkAriaLabel}');
-    expect(locale.sidebar.user.settingsLinkBeta).toBe(
-      '设置，当前用户：{{name}}，Beta 测试渠道已开启',
-    );
+  it('offers settings, account switching, and logout from the More menu', () => {
+    expect(source).toContain("t('sidebar.user.menuSettings')");
+    expect(source).toContain("t('sidebar.user.menuAddAccount')");
+    expect(source).toContain("t('sidebar.user.menuLogout')");
+    expect(source).toContain('setAccountSwitcherOpen(true)');
   });
 });
 

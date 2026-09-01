@@ -18,7 +18,7 @@ export async function runPiPackageListIpcBoundary<T>(
 /** Keep package-manager details in Main while exposing one stable IPC contract. */
 export async function runPiPackageMutationIpcBoundary<T>(
   operation: () => Promise<T>,
-  failureMessage: string,
+  failureMessage: string | ((error: unknown) => string),
   onUnexpectedError: (error: unknown) => void,
 ): Promise<T> {
   try {
@@ -26,6 +26,9 @@ export async function runPiPackageMutationIpcBoundary<T>(
   } catch (error) {
     if (isIpcError(error) && error.code === 'MUTATION_CANCELLED') throw error;
     onUnexpectedError(error);
-    throwIpcError('PI_PACKAGE_MUTATION_FAILED', failureMessage);
+    throwIpcError(
+      'PI_PACKAGE_MUTATION_FAILED',
+      typeof failureMessage === 'function' ? failureMessage(error) : failureMessage,
+    );
   }
 }

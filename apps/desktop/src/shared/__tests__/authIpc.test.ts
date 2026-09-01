@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseDesktopAccountDeletionConfirmInput, parseDesktopLoginAction } from '../authIpc';
+import {
+  parseDesktopAccountDeletionConfirmInput,
+  parseDesktopAccountKey,
+  parseDesktopLoginAction,
+} from '../authIpc';
 
 describe('desktop auth IPC validation', () => {
+  it('accepts bounded opaque account keys and rejects malformed values', () => {
+    expect(parseDesktopAccountKey('["global","membership-1"]')).toBe('["global","membership-1"]');
+    expect(parseDesktopAccountKey('')).toBeNull();
+    expect(parseDesktopAccountKey('x'.repeat(513))).toBeNull();
+    expect(parseDesktopAccountKey({ accountKey: 'membership-1' })).toBeNull();
+  });
+
   it('projects recognized actions onto their typed fields', () => {
     expect(
       parseDesktopLoginAction({

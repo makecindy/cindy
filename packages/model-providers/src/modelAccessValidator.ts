@@ -2,6 +2,7 @@ import {
   MODEL_ACCESS_AGENTS,
   MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION,
   MODEL_ACCESS_CURRENCIES,
@@ -576,7 +577,19 @@ function modelEntryError(
         isModelEffort(value.defaultEffort) ? value.defaultEffort : null,
       );
       if (error) return error;
-      if (isPlainObject(override) && override.wireProtocol !== undefined) {
+      if (
+        agent === 'pi' &&
+        isPlainObject(override) &&
+        override.wireProtocol !== undefined &&
+        (typeof override.wireProtocol !== 'string' || override.wireProtocol.trim().length === 0)
+      ) {
+        return `${path}.perAgent.pi.wireProtocol must be a non-empty string when present`;
+      }
+      if (
+        agent !== 'pi' &&
+        isPlainObject(override) &&
+        override.wireProtocol !== undefined
+      ) {
         if (!isModelAccessWireProtocol(override.wireProtocol)) {
           return `${path}.perAgent.${agent}.wireProtocol must be a supported wire protocol`;
         }
@@ -592,6 +605,10 @@ function modelEntryError(
     schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
   ) {
     for (const agent of supportedAgents) {
+      // Pi accepts a missing/future string here because Cindy Server and the local Pi catalog are
+      // higher authorities; an unsupported last-priority Gateway hint only closes that model route.
+      // Claude and Codex have no such fallback and remain strict contract requirements.
+      if (agent === 'pi') continue;
       const override = isPlainObject(value.perAgent) ? value.perAgent[agent] : undefined;
       if (!isPlainObject(override) || !isModelAccessWireProtocol(override.wireProtocol)) {
         return `${path}.perAgent.${agent}.wireProtocol is required when ${path}.agents includes ${agent}`;
@@ -666,18 +683,62 @@ export function parseListModelsResponse(
   value: unknown,
 ): ModelAccessParseResult<ListModelsResponse> {
   if (!isPlainObject(value)) return fail('response must be an object');
-  const unknownField = unknownFieldError(value, LIST_MODELS_RESPONSE_FIELDS, 'response');
-  if (unknownField) return fail(unknownField);
   if (
     value.schemaVersion !== MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION &&
-    value.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+    value.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION
   ) {
     return fail(
-      `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION}, ${MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION}, ${MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION}, or ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`,
+      `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION}, ${MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION}, ${MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION}, ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}, or ${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}`,
     );
   }
+  if (value.schemaVersion === MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION) {
+    const unknownField = unknownFieldError(
+      value,
+      ['schemaVersion', 'accountTier', 'models'],
+      'response',
+    );
+    if (unknownField) return fail(unknownField);
+    if (!['free', 'paid', 'not_applicable'].includes(String(value.accountTier))) {
+      return fail('response.accountTier must be free, paid, or not_applicable');
+    }
+    if (!Array.isArray(value.models)) return fail('response.models must be an array');
+    const modelIds = new Set<string>();
+    const models: unknown[] = [];
+    for (const [index, raw] of value.models.entries()) {
+      if (!isPlainObject(raw)) return fail(`response.models[${index}] must be an object`);
+      if (raw.availability !== 'available' && raw.availability !== 'requires_payment') {
+        return fail(`response.models[${index}].availability must be available or requires_payment`);
+      }
+      const { availability, ...legacyShape } = raw;
+      const sanitized = sanitizeModelEntryAgents(
+        legacyShape,
+        MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+      );
+      if (isPlainObject(sanitized) && typeof sanitized.id === 'string') {
+        if (modelIds.has(sanitized.id)) {
+          return fail(`response.models[${index}].id must be unique`);
+        }
+        modelIds.add(sanitized.id);
+      }
+      const error = modelEntryError(
+        sanitized,
+        `response.models[${index}]`,
+        MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+      );
+      if (error) return fail(error);
+      models.push({ ...(sanitized as PlainObject), availability });
+    }
+    return ok({
+      schemaVersion: MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
+      accountTier: value.accountTier,
+      models,
+    } as ListModelsResponse);
+  }
+  const unknownField = unknownFieldError(value, LIST_MODELS_RESPONSE_FIELDS, 'response');
+  if (unknownField) return fail(unknownField);
   const schemaVersion = value.schemaVersion as ModelCatalogSchemaVersion;
   if (!Array.isArray(value.models)) return fail('response.models must be an array');
   const models = value.models.map((model) => sanitizeModelEntryAgents(model, schemaVersion));

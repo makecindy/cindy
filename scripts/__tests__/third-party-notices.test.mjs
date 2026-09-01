@@ -31,6 +31,12 @@ test("generated artifact notices are platform-scoped and disclose restricted com
   const windowsRestricted = read(
     "docs/legal/notices/desktop-win-restricted.txt",
   );
+  const macosRestricted = read(
+    "docs/legal/notices/desktop-macos-restricted.txt",
+  );
+  const linuxRestricted = read(
+    "docs/legal/notices/desktop-linux-restricted.txt",
+  );
   const iosRestricted = read("docs/legal/notices/mobile-ios-restricted.txt");
   const androidRestricted = read(
     "docs/legal/notices/mobile-android-restricted.txt",
@@ -51,6 +57,9 @@ test("generated artifact notices are platform-scoped and disclose restricted com
   assert.match(linux, /@img\/sharp-linux-x64@/);
   assert.doesNotMatch(windowsRestricted, /@codesandbox\/nodebox/);
   assert.doesNotMatch(windowsRestricted, /Sustainable Use License/);
+  assert.match(windowsRestricted, /Microsoft Visual C\+\+ Runtime/);
+  assert.doesNotMatch(macosRestricted, /Microsoft Visual C\+\+ Runtime/);
+  assert.doesNotMatch(linuxRestricted, /Microsoft Visual C\+\+ Runtime/);
   assert.match(iosRestricted, /WeChat OpenSDK for iOS@2\.0\.5/);
   assert.match(iosRestricted, /docs\/legal\/wechat-open-sdk-compliance\.md/);
   assert.match(iosRestricted, /Mobile_App\/agreement\/sdk\.html/);
