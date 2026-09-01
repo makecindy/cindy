@@ -226,7 +226,9 @@ final class XboxGamepadReporter {
       guard let controller = next[family] else {
         if family == "nintendo" {
           observed[family] = nil
-          continue
+          if switch2UsbWanted {
+            continue
+          }
         }
         if observed[family] != nil || lastPresenceSignature[family] != "absent" {
           observed[family] = nil

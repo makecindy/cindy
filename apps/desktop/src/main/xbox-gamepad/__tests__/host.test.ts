@@ -299,7 +299,12 @@ describe('Xbox gamepad helper packaging contract', () => {
     expect(source.match(/func start\(\) \{[\s\S]*?\n  \}/)?.[0] ?? '').not.toContain(
       'switch2_usb_ensure',
     );
-    expect(source).toMatch(/if family == "nintendo" \{[\s\S]*?observed\[family\] = nil/);
+    expect(source).toMatch(
+      /if family == "nintendo" \{[\s\S]*?if switch2UsbWanted \{[\s\S]*?continue/,
+    );
+    expect(source).not.toMatch(
+      /if family == "nintendo" \{\s*observed\[family\] = nil\s*continue\s*\}/,
+    );
   });
 
   it('compiles switch2_usb.c with clang before linking the object into swiftc', () => {
