@@ -36,7 +36,13 @@ import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
-import { inspectCodexAuthLink, relinkSharedCodexAuth } from './codex-auth-link.js';
+import {
+  inspectCodexAuthLink,
+  relinkSharedCodexAuth,
+  resolveWindowsAclPrincipal,
+} from './codex-auth-link.js';
+
+export { resolveWindowsAclPrincipal } from './codex-auth-link.js';
 import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import {
   CODEX_USER_DISCONNECT_REASON,
@@ -480,17 +486,9 @@ export async function clearCodexAuthBoundaryStateBeforeLogin(
 /**
  * Windows: 用 icacls 把文件权限收紧为"仅当前用户 Full"。
  * 失败仅 stderr 告警, 不抛 —— userData ACL + 0o600 已经是双保险, icacls 是第三道。
+ * principal 解析单源迁至 codex-auth-link(#3469 的 ACL 自愈也要用,反向 import
+ * 会成环);这里 re-export 保持既有导入路径不变。
  */
-export function resolveWindowsAclPrincipal(
-  env: Partial<Pick<NodeJS.ProcessEnv, 'USERDOMAIN' | 'USERNAME'>> = process.env,
-  fallbackUsername = os.userInfo().username,
-): string {
-  const username = env.USERNAME?.trim() || fallbackUsername.trim();
-  const domain = env.USERDOMAIN?.trim();
-  if (!domain || username.includes('\\') || username.includes('@')) return username;
-  return `${domain}\\${username}`;
-}
-
 async function tightenAclWindows(file: string): Promise<void> {
   const principal = resolveWindowsAclPrincipal();
   try {

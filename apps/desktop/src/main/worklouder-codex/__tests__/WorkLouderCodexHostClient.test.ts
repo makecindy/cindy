@@ -222,6 +222,7 @@ describe('WorkLouderCodexHostClient', () => {
       expect(fork).toHaveBeenCalledTimes(1);
 
       child.emit('exit', 1);
+      client.probe();
       expect(fork).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(500);
@@ -351,7 +352,6 @@ describe('WorkLouderCodexHostClient', () => {
       'connecting',
       'connected',
       'not-detected',
-      'connecting',
     ]);
     expect(child.kill).toHaveBeenCalledOnce();
   });
@@ -521,7 +521,136 @@ describe('WorkLouderCodexHostClient', () => {
     }
   });
 
-  it('recycles the host immediately after a live session drops', () => {
+  it('does not let probes or lighting updates bypass an exhausted crash budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = Array.from({ length: 7 }, () => new FakeChild());
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      const frame = createWorkLouderCodexLightingFrame([
+        {
+          sessionId: 'session-1',
+          phase: 'running',
+          compactDetail: '',
+          attention: false,
+        },
+      ]);
+      client.setAgentKeyPressHandler(vi.fn());
+
+      for (let index = 0; index < 6; index += 1) {
+        children[index].emit('exit', 1);
+        await vi.advanceTimersByTimeAsync(Math.min(10_000, 500 * 2 ** index));
+      }
+
+      const forksAfterBudget = fork.mock.calls.length;
+      client.probe();
+      client.probe();
+      client.update(frame);
+
+      expect(fork).toHaveBeenCalledTimes(forksAfterBudget);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off a host recycle after a live session drops', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', { kind: 'state', status: 'not-detected' });
+
+      expect(children[0].kill).toHaveBeenCalledOnce();
+      expect(fork).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+      expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let background probes bypass host recycle backoff', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', { kind: 'state', status: 'not-detected' });
+
+      expect(fork).toHaveBeenCalledTimes(1);
+      client.probe();
+      client.probe();
+      client.update(
+        createWorkLouderCodexLightingFrame([
+          {
+            sessionId: 'session-1',
+            phase: 'running',
+            compactDetail: '',
+            attention: false,
+          },
+        ]),
+      );
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not restart after a permission-required failure during background probes', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', {
+        kind: 'state',
+        status: 'error',
+        reason: 'permission-required',
+      });
+
+      expect(children[0].kill).toHaveBeenCalledOnce();
+      expect(fork).toHaveBeenCalledTimes(1);
+      client.probe();
+      client.probe();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      client.retryPermission();
+      expect(fork).toHaveBeenCalledTimes(2);
+      expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops a host when permission-required follows another error status', () => {
     const children = [new FakeChild(), new FakeChild()];
     const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
     const client = new WorkLouderCodexHostClient({
@@ -530,12 +659,38 @@ describe('WorkLouderCodexHostClient', () => {
       log: logger(),
     });
     client.setAgentKeyPressHandler(vi.fn());
-    children[0].emit('message', { kind: 'state', status: 'connected' });
-    children[0].emit('message', { kind: 'state', status: 'not-detected' });
+    children[0].emit('message', {
+      kind: 'state',
+      status: 'error',
+      reason: 'connection-failed',
+    });
+    children[0].emit('message', {
+      kind: 'state',
+      status: 'error',
+      reason: 'permission-required',
+    });
 
     expect(children[0].kill).toHaveBeenCalledOnce();
+    expect(fork).toHaveBeenCalledTimes(1);
+
+    client.retryPermission();
+
     expect(fork).toHaveBeenCalledTimes(2);
     expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
+  it('does not discover presence when unlock arrives without a permission breaker', () => {
+    const fork = vi.fn(() => new FakeChild());
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+
+    client.setDeviceEnabled(false);
+    client.retryPermission();
+
+    expect(fork).not.toHaveBeenCalled();
   });
 });
 

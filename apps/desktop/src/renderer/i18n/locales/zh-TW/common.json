@@ -15,7 +15,10 @@
     "REMOTE_WORKDIR_INVALID": "遠端專案目錄無效，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_FOUND": "遠端專案目錄不存在，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "遠端專案路徑不是資料夾，請重新選擇專案目錄。",
-    "REMOTE_WORKDIR_UNAVAILABLE": "遠端專案目錄不可訪問，請恢復網路盤連線後重試。"
+    "REMOTE_WORKDIR_UNAVAILABLE": "遠端專案目錄不可訪問，請恢復網路盤連線後重試。",
+    "RIGHT_SIDEBAR_TOO_MANY_TABS": "目前任務已達標籤數量上限，請先關閉一些標籤",
+    "RIGHT_SIDEBAR_STATE_TOO_LARGE": "標籤內容過大，無法新增",
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "此標籤類型暫時無法使用"
   },
   "providerError": {
     "AUTH_INVALID": "API 金鑰無效或已過期（401），請檢查金鑰後重試",

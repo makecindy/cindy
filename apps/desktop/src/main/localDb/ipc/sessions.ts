@@ -38,6 +38,7 @@ import {
   sessionToCamel,
   sessionCreateToRow,
   sessionPatchToRow,
+  persistableSessionEffort,
   normalizeRemoteHostId,
   finalizePlainPreview,
   type SessionRowWithCount,
@@ -180,6 +181,7 @@ async function writeSessionPatch(
   setObj: ReturnType<typeof sessionPatchToRow>,
   status: unknown,
 ): Promise<void> {
+  if (Object.keys(setObj).length === 0) return;
   const deletedIsTerminal = status === 'active' || status === 'archived';
   const result = await db
     .update(sessions)
@@ -464,8 +466,10 @@ export async function applyAgentSwitchToSessionRow(
   if (patch.providerId !== undefined) setObj.providerId = patch.providerId;
   // effort 值域由 renderer 按目标引擎 capabilities 解析(schema 列是字面量联合,
   // 跨层传输后此处以 string 到达;非法值与直改 DB 同级,运行时由引擎侧收敛)。
-  if (patch.effort !== undefined) {
-    setObj.effort = patch.effort as (typeof sessions.$inferInsert)['effort'];
+  // 固定 effort 模型运行时为 null；sessions.effort NOT NULL，省略该字段。
+  const persistableEffort = persistableSessionEffort(patch.effort);
+  if (persistableEffort !== undefined) {
+    setObj.effort = persistableEffort;
   }
   if (patch.fastMode !== undefined) setObj.fastMode = patch.fastMode;
   if (typeof patch.contextWindow === 'number' && patch.contextWindow > 0) {
@@ -480,7 +484,7 @@ export async function applyAgentSwitchToSessionRow(
       model: patch.model,
       sdkSessionId: nextSdkSessionId,
       ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
-      ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
+      ...(persistableEffort !== undefined ? { effort: persistableEffort } : {}),
       ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
       ...(typeof patch.contextWindow === 'number' && patch.contextWindow > 0
         ? { contextWindow: Math.floor(patch.contextWindow) }
@@ -555,11 +559,17 @@ export async function persistSessionFields(
   for (const k of Object.keys(patch)) {
     if (REMOTE_PERSIST_FIELDS.has(k)) clean[k] = patch[k];
   }
+  if (Object.prototype.hasOwnProperty.call(clean, 'effort')) {
+    const persistableEffort = persistableSessionEffort(clean.effort);
+    if (persistableEffort === undefined) delete clean.effort;
+    else clean.effort = persistableEffort;
+  }
   if (Object.keys(clean).length === 0) return;
   const db = getDbClient().drizzle;
   const setObj = sessionPatchToRow(clean as Parameters<typeof sessionPatchToRow>[0], {
     bumpUpdatedAt: false,
   });
+  if (Object.keys(setObj).length === 0) return;
   await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
   if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, clean, ownerScope);
 }

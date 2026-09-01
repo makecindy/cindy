@@ -124,6 +124,7 @@ vi.mock('../../../cindy-brain/index.js', () => ({
 
 import {
   patchSessionMetaInDb,
+  persistSessionFields,
   registerSessionIpc,
   resumeDeletedPiSubagentCleanup,
   setSessionRuntimeCleanup,
@@ -491,6 +492,23 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted.status).toBe('deleted');
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
     expect(h.routeLock).toHaveBeenCalledWith('codex-local', expect.any(Function));
+  });
+
+  it('keeps the last legal sessions.effort when a fixed-effort model switch patches null', async () => {
+    await persistSessionFields('pi-local', {
+      model: 'x-ai-grok/grok-4.6',
+      effort: null,
+      fastMode: false,
+    });
+
+    const persisted = h
+      .sqlite!.prepare('SELECT model, effort, fast_mode FROM sessions WHERE id = ?')
+      .get('pi-local') as { model: string; effort: string; fast_mode: number };
+    expect(persisted).toEqual({
+      model: 'x-ai-grok/grok-4.6',
+      effort: 'high',
+      fast_mode: 0,
+    });
   });
 
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {

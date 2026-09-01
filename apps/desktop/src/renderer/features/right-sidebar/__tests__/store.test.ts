@@ -366,9 +366,13 @@ describe('RSB store', () => {
         await store.addTab('ghost-s1', 'web-browser', { url: `https://example.com/${i}` });
       }
 
-      await expect(
-        store.addTab('ghost-s1', 'web-browser', { url: 'https://example.com/overflow' }),
-      ).rejects.toThrow(/limit reached/);
+      const rejection = store.addTab(
+        'ghost-s1',
+        'web-browser',
+        { url: 'https://example.com/overflow' },
+      );
+      await expect(rejection).rejects.toMatchObject({ code: 'RIGHT_SIDEBAR_TOO_MANY_TABS' });
+      await expect(rejection).rejects.toThrow(/limit reached/);
       expect(store.getBucket('ghost-s1').tabs).toHaveLength(20);
       expect(ipc.upsert).not.toHaveBeenCalled();
     });

@@ -2548,6 +2548,23 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('embedding.recordFailures terminal=true 整批直接进 failed,不消耗退避尝试 (#3416)', async () => {
+    await withClient(async (client) => {
+      const freshRowid = await insertJob(client, { sourceId: 'fresh', attempts: 0 });
+      const result = await client.tx('embedding.recordFailures', {
+        jobs: [{ rowid: freshRowid, attempts: 0 }],
+        errMsg: '[INVALID_MODEL] Invalid model name',
+        now: 10_000,
+        terminal: true,
+      });
+
+      expect(result).toEqual({ failCount: 1 });
+      await expect(
+        client.query('SELECT rowid, status, attempts FROM embedding_jobs ORDER BY rowid'),
+      ).resolves.toEqual([{ rowid: freshRowid, status: 'failed', attempts: 1 }]);
+    });
+  });
+
   it('embedding.enqueue inserts only new natural-key jobs', async () => {
     await withClient(async (client) => {
       const result = await client.tx('embedding.enqueue', {

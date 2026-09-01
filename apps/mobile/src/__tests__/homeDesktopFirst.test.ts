@@ -496,7 +496,8 @@ describe('mobile home desktop-first surface', () => {
     // 只影响首次触发顺序(缓存先画、fresh 后覆盖),不会挡掉任何一次重连刷新。
     expect(source).not.toContain('homeSessionHydratedRef');
     expect(source).toContain('!homeViewPreferencesHydrated');
-    expect(source).toContain('}, [connectionEpoch, deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);');
+    expect(source).toContain('const startSilentHomeSync = useCallback(() => {');
+    expect(source).toContain('}, [connectionEpoch, startSilentHomeSync]);');
     expect(source).toContain('resolveHomeDeviceSyncIds(');
     expect(source).toContain('reconcileHomeDeviceSyncScope(syncDeviceIds);');
     expect(source).toContain('runHomeDeviceSyncBatch(syncRows');
@@ -532,6 +533,24 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('syncInFlightRef');
     expect(source).not.toContain('presenceVersion');
     expect(source).not.toContain('refreshControl={<RefreshControl refreshing={loading}');
+  });
+
+  it('starts the silent list sync on Home focus and Android foreground activation', () => {
+    const source = readSource('app/devices/index.tsx');
+    const silentSync = source.slice(
+      source.indexOf('const startSilentHomeSync = useCallback'),
+      source.indexOf('// 把当前权威设备列表注入 remoteSessionStore'),
+    );
+
+    expect(silentSync).toContain('!deviceIdentityCacheReady');
+    expect(silentSync).toContain('!homeListCacheHydrated');
+    expect(silentSync).toContain('!homeViewPreferencesHydrated');
+    expect(silentSync).toContain('void loadHome({ visible: false });');
+    expect(silentSync).toContain('useFocusEffect(');
+    expect(silentSync).toContain('startSilentHomeSync();');
+    expect(silentSync).toContain("AppState.addEventListener('change'");
+    expect(silentSync).toContain("if (nextState === 'active') startSilentHomeSync();");
+    expect(silentSync).toContain('}, [connectionEpoch, startSilentHomeSync]);');
   });
 
   it('binds every Home device projection and async continuation to the active account generation', () => {

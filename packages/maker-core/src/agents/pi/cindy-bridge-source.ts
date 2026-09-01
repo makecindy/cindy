@@ -1743,15 +1743,10 @@ function resolvedCredentialEvidenceForHost(
   return credentialRead && paths.length === 0 ? null : [...paths];
 }
 
-// 从 bash 子进程读取任意进程的初始环境(/proc/<pid|self>/environ)是绕过密钥剥离的旁路:
-// spawn 边界虽从子进程 env 删了 Cindy 私密变量,但父 pi 进程仍持有它们,同 UID 下
-// cat /proc/PPID/environ 可直接取回代理 token / 网关 key / BYOM key(codex 报)。
-// 无法从 JS 侧让 /proc 不可读,故在工具边界对这类命令一律硬拦(含 Full access)。
-// 线程视图 /proc/<pid>/task/<tid>/environ(乃至其它中间段)与 /proc/<pid>/environ 等价可读,
-// 同样拦。中间段允许含斜杠(旧正则用 [^/...]* 只认单段,漏了 task/<tid>,codex report),
-// 与 readonly-builtin 硬拦所用的共享 SENSITIVE_CREDENTIAL_PATH 特征(/proc/[^斜杠空白]*/environ)
-// 保持同等覆盖。注:命令文本匹配不是安全边界(变形/间接读取可绕过,详见 pi-harness.md 的
-// Full access 契约),这里只是 defense-in-depth。
+// 检测 bash 是否在读 /proc/<pid|self>/environ。Ask/Auto 把它并进凭证读证据,走普通审批;
+// Full access 不硬拦 — 与原生 Pi 一致,选择该档即接受父进程环境可能被读取。
+// 线程视图 /proc/<pid>/task/<tid>/environ 与 /proc/<pid>/environ 等价可读。
+// 中间段允许含斜杠(旧正则用 [^/...]* 只认单段,漏了 task/<tid>)。
 // (本文件是 String.raw 模板,注释里严禁反引号,否则会提前终结模板。)
 const PROC_ENVIRON_READ_RE = /\/proc\/[^\s'"]*\/environ\b/i;
 function commandReadsProcessEnviron(command: unknown): boolean {
@@ -3451,15 +3446,9 @@ export default async function cindyBridge(pi: any) {
     ) {
       return { block: true, reason: 'Cindy extra reference directories are read-only.' };
     }
-    // bash 读取任意进程的初始环境(/proc/<pid|self>/environ)是绕过密钥剥离的旁路:
-    // spawn 边界虽删了子进程 env 的私密变量,父 pi 进程仍持有,cat /proc/PPID/environ
-    // 同 UID 直取代理 token / 网关 / BYOM key(codex 报)→ 一律硬拦,含 Full access。
-    if (isCindyShellTool(event.toolName) && commandReadsProcessEnviron(event.input?.command)) {
-      return { block: true, reason: 'Cindy blocks reading process environment (/proc/*/environ), even with Full access.' };
-    }
     // 凭证/密钥路径的内置只读工具与 bash 输入重定向都必须携带 canonical
-    // 证据。bash 的原始 input 是整条命令,不能直接 realpath;先用与 Host 相同的
-    // parser 提取真实输入目标,才能识别工作区 symlink 指向的凭证文件。
+    // 证据,供 Ask/Auto 升级审批。Full access 不在这里硬拦 — 原生 Pi 没有这道门,
+    // 文本拦截也不是安全边界(可被变形绕过)。
     const bashReadEvidence = event.toolName === 'bash'
       ? bashInputReadEvidence(event.input)
       : event.toolName === 'powershell'
@@ -3474,16 +3463,16 @@ export default async function cindyBridge(pi: any) {
       : isCindyShellTool(event.toolName)
         ? [...new Set(collectResolvedCredentialPaths(bashReadTargets))]
         : [];
+    const environRead = isCindyShellTool(event.toolName)
+      && commandReadsProcessEnviron(event.input?.command);
     const credentialRead = readonlyCredentialEvidence?.touchesCredential === true
       || (isCindyShellTool(event.toolName) && (bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets)))
-      || resolvedCredentialReadPaths.length > 0;
+      || resolvedCredentialReadPaths.length > 0
+      || environRead;
     const credentialEvidenceForHost = resolvedCredentialEvidenceForHost(
       resolvedCredentialReadPaths,
       credentialRead,
     );
-    if (credentialRead && permission.mode === 'bypassPermissions') {
-      return { block: true, reason: 'Cindy blocks reading credential or key paths, even with Full access.' };
-    }
     // Cindy-managed Pi extension mutations are a separate approval domain from
     // ordinary tool permissions. Full Access may bypass normal tool prompts,
     // but it must not let model-authored install/update/remove requests mutate

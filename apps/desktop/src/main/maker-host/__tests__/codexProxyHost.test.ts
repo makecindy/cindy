@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -142,6 +142,14 @@ async function freshCodexProxyHost() {
   return import('../codex-proxy-host.js');
 }
 
+// CI 忙时本文件首次 import SUT 要付 Vitest transform 整个模块图的冷启动钱:Linux 分片
+// 实测超默认 5s,Windows 分片超 15s,继续抬单测超时只是把死亡线后推。这笔成本属于环境
+// 冷启动,不属于任何断言 —— 文件级 beforeAll 先把模块图焐热(hook 超时独立计),之后各
+// 用例里 resetModules + import 只剩模块求值开销,回到默认超时内。
+beforeAll(async () => {
+  await import('../codex-proxy-host.js');
+}, 60_000);
+
 describe('withCodexUpstreamRecording', () => {
   const DEFAULT_UPSTREAM = 'https://gateway.example/v1';
   const ctxFor = (threadId?: string) => ({
@@ -151,7 +159,6 @@ describe('withCodexUpstreamRecording', () => {
     headers: threadId ? { 'thread-id': threadId } : {},
   }) as never;
 
-  // Linux CI shard 下本文件首次 resetModules + import SUT 经常超过默认 5s；断言未变。
   it('records the override upstream origin for the request thread', async () => {
     const host = await freshCodexProxyHost();
     host.resetCodexThreadUpstreamForTest();
@@ -166,7 +173,7 @@ describe('withCodexUpstreamRecording', () => {
     expect(host.getCodexThreadUpstreamOrigin('t-xai')).toBe('https://api.x.ai');
     // 没记录过的 thread 不借用别人的结论。
     expect(host.getCodexThreadUpstreamOrigin('t-other')).toBe(null);
-  }, 15_000);
+  });
 
   it('falls back to the default upstream when the decision does not override it', async () => {
     const host = await freshCodexProxyHost();
@@ -648,6 +655,20 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     expect(chatBridgeCapabilitiesForRoute(upstream, 'kimi-k3').imageInput).toBe('image_url');
   });
+
+  it.each([
+    ['https://api.deepseek.com/v1', 'deepseek-v4-flash', 'reasoning_content'],
+    ['https://api.deepseek.com', 'deepseek-chat', 'reasoning_content'],
+    ['https://relay.example/v1', 'deepseek-v4-flash', undefined],
+    ['http://api.deepseek.com/v1', 'deepseek-v4-flash', undefined],
+    ['https://api.deepseek.com/v1', 'kimi-k3', undefined],
+  ] as const)(
+    'reasoning_content 历史回传只对官方 DeepSeek 路由开启 (#3441): %s %s → %s',
+    async (upstream, model, expected) => {
+      const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+      expect(chatBridgeCapabilitiesForRoute(upstream, model).reasoningHistoryField).toBe(expected);
+    },
+  );
 
   it.each([
     ['https://api.kimi.com/coding/v1', 'k3'],

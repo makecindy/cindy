@@ -857,11 +857,37 @@ export function chatBridgeCapabilitiesForRoute(
   realModel: string,
   fallback: ChatBridgeCapabilities = CHAT_BRIDGE_DEFAULT_CAPABILITIES,
 ): ChatBridgeCapabilities {
-  if (!isVerifiedImageChatRoute(upstream, realModel)) return fallback;
-  return {
-    ...fallback,
-    imageInput: 'image_url',
-  };
+  let capabilities = fallback;
+  if (isDeepSeekReasoningHistoryRoute(upstream, realModel)) {
+    capabilities = { ...capabilities, reasoningHistoryField: 'reasoning_content' };
+  }
+  if (isVerifiedImageChatRoute(upstream, realModel)) {
+    capabilities = { ...capabilities, imageInput: 'image_url' };
+  }
+  return capabilities;
+}
+
+/**
+ * DeepSeek 官方 DNS 边界(#3441):其 thinking 模式 API 要求把历史
+ * reasoning_content 回传,否则复杂多轮 + 工具任务偶发
+ * 400 "The `reasoning_content` in the thinking mode must be passed back"。
+ * 该厂商扩展由 DeepSeek 官方文档定义,api.deepseek.com 上游确认接受;
+ * 中转/未知兼容端点不放行(types.ts 边界:只有明确接受该扩展的上游才应
+ * 开启,未知端点可能拒绝该字段)。判据与图片白名单同款:官方 host +
+ * 上游 model 前缀,不认 provider id。
+ */
+const DEEPSEEK_CHAT_HOST = 'api.deepseek.com';
+
+function isDeepSeekReasoningHistoryRoute(upstream: string, realModel: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(upstream);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:') return false;
+  if (url.hostname.toLowerCase() !== DEEPSEEK_CHAT_HOST) return false;
+  return realModel.toLowerCase().startsWith('deepseek');
 }
 
 function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean {

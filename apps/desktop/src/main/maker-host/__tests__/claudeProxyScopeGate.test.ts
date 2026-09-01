@@ -726,6 +726,36 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     expect(decision).toEqual({ localHandler: expect.any(Function) });
   });
 
+  it.each([
+    ['openai', 'xai', '/v1/responses'],
+    ['xai', 'openai', '/codex/responses'],
+  ] as const)(
+    'rejects a stale %s header after the host re-pins the PI session to %s',
+    async (staleHeader, pinnedProvider, url) => {
+      setSessionProvider('sess-pi', pinnedProvider);
+      registerPiProxySession('sess-pi', 'session-secret', () => pinnedProvider);
+      const decision = await createModelRoutingTransform()(
+        undefined,
+        ctxWith({
+          'x-cindy-pi-session-id': 'sess-pi',
+          'x-cindy-pi-session-token': 'session-secret',
+          'x-cindy-pi-provider-id': staleHeader,
+        }, url),
+      );
+      const response = {
+        status: 0,
+        body: '',
+        writeHead(status: number) { this.status = status; },
+        end(body: string) { this.body = body; },
+      };
+
+      await decision?.localHandler?.({ res: response } as never);
+
+      expect(response.status).toBe(403);
+      expect(response.body).toContain('pi_provider_mismatch');
+    },
+  );
+
   it('rejects an implicit native header that differs from the host-resolved PI source', async () => {
     clearSessionProvider('sess-pi');
     registerPiProxySession('sess-pi', 'session-secret', () => 'xai');

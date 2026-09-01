@@ -316,6 +316,8 @@ interface CodexThreadSummary {
 
 interface CodexSessionIndexEntry {
   title: string;
+  /** 用户真实自定义标题(thread_name > title,无 fallback);无则 null(#3482)。 */
+  customTitle: string | null;
   updatedAt: number | null;
 }
 
@@ -3780,6 +3782,7 @@ function readThreads(
   try {
     db = openReadonlyDb(dbPath);
     if (!tableExists(db, 'threads')) return null;
+    const index = readSessionIndex(home);
     const orderSql = buildThreadOrderSql(db);
     const rows = db.prepare(`
       SELECT *
@@ -3794,7 +3797,7 @@ function readThreads(
         continue;
       }
       if (threads.length >= MAX_THREADS_PER_HOME) continue;
-      const thread = normalizeThreadRow(home, dbPath, row, projectlessThreadIds);
+      const thread = normalizeThreadRow(home, dbPath, row, projectlessThreadIds, index);
       if (thread) threads.push(thread);
     }
     return { threads, rejectedThreadIds: [...rejectedThreadIds] };
@@ -3834,16 +3837,50 @@ async function readThreadsFromRollouts(
       continue;
     }
     if (out.length >= MAX_THREADS_PER_HOME) continue;
-    const thread = normalizeThreadRow(home, null, row, projectlessThreadIds);
+    const thread = normalizeThreadRow(home, null, row, projectlessThreadIds, index);
     if (thread) out.push(thread);
   }
   return { threads: out, rejectedThreadIds: [...rejectedThreadIds] };
 }
 
+/**
+ * session_index.jsonl 解析缓存(review #3673 P2):按 ID 导入路径对每个所选
+ * 会话 × 每个候选 home 都要读一次索引,批量导入时主进程同步 IO 随会话数 ×
+ * home 数 × 索引大小线性增长。以 (mtimeMs, size) 做新鲜度判据 —— 索引是
+ * append-only jsonl,追加必然改变 size,同秒内 mtime 粒度不足由 size 兜住;
+ * appendSessionIndexEntry 写入后下一次读取自然失效重解析。命中时直接复用
+ * 解析结果,跨扫描/导入批次同样生效。返回的 Map 视为只读,调用方只做 .get()。
+ */
+const sessionIndexCache = new Map<
+  string,
+  { mtimeMs: number; size: number; entries: Map<string, CodexSessionIndexEntry> }
+>();
+
 function readSessionIndex(home: string): Map<string, CodexSessionIndexEntry> {
   const indexPath = path.join(home, 'session_index.jsonl');
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(indexPath);
+  } catch {
+    // 索引缺席(或不可 stat):行为与旧实现的 existsSync 早退一致。不缓存
+    // 空结果 —— 文件随时可能出现,缺席路径本身已是零解析成本。
+    sessionIndexCache.delete(home);
+    return new Map();
+  }
+  const cached = sessionIndexCache.get(home);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.entries;
+  }
+  const entries = parseSessionIndexFile(indexPath, home);
+  sessionIndexCache.set(home, { mtimeMs: stat.mtimeMs, size: stat.size, entries });
+  return entries;
+}
+
+function parseSessionIndexFile(
+  indexPath: string,
+  home: string,
+): Map<string, CodexSessionIndexEntry> {
   const out = new Map<string, CodexSessionIndexEntry>();
-  if (!fs.existsSync(indexPath)) return out;
   try {
     const lines = fs.readFileSync(indexPath, 'utf-8').split(/\r?\n/);
     for (const line of lines) {
@@ -3857,8 +3894,10 @@ function readSessionIndex(home: string): Map<string, CodexSessionIndexEntry> {
       if (!isRecord(obj)) continue;
       const id = stringValue(obj.id);
       if (!isLikelyThreadId(id)) continue;
+      const customTitle = firstNonEmpty(stringValue(obj.thread_name), stringValue(obj.title), '');
       out.set(id, {
-        title: firstNonEmpty(stringValue(obj.thread_name), stringValue(obj.title), 'Codex Session'),
+        title: customTitle || 'Codex Session',
+        customTitle: customTitle || null,
         updatedAt: timestampFromAny(obj.updated_at),
       });
     }
@@ -3995,7 +4034,7 @@ function normalizeRolloutFile(
 ): CodexThreadSummary | null {
   const row = readRolloutThreadRow(file, index);
   if (!row || !isTopLevelThreadRow(row)) return null;
-  return normalizeThreadRow(home, null, row, projectlessThreadIds);
+  return normalizeThreadRow(home, null, row, projectlessThreadIds, index);
 }
 
 function readRolloutThreadRow(
@@ -4634,7 +4673,8 @@ function findThreadByIdInHome(home: string, threadId: string): CodexThreadSummar
     if (!tableExists(db, 'threads')) return findExternalThreadByIdFromRollouts(home, threadId);
     const row = db.prepare('SELECT * FROM threads WHERE id = ? LIMIT 1').get(threadId) as SqlRow | undefined;
     if (!row || !isTopLevelThreadRow(row)) return findExternalThreadByIdFromRollouts(home, threadId);
-    return normalizeThreadRow(home, dbPath, row, projectlessThreadIds) ?? findExternalThreadByIdFromRollouts(home, threadId);
+    return normalizeThreadRow(home, dbPath, row, projectlessThreadIds, readSessionIndex(home))
+      ?? findExternalThreadByIdFromRollouts(home, threadId);
   } catch {
     return findExternalThreadByIdFromRollouts(home, threadId);
   } finally {
@@ -4755,17 +4795,27 @@ function normalizeThreadRow(
   dbPath: string | null,
   row: SqlRow,
   projectlessThreadIds: ReadonlySet<string>,
+  index?: ReadonlyMap<string, CodexSessionIndexEntry>,
 ): CodexThreadSummary | null {
   const threadId = stringValue(row.id);
   if (!isLikelyThreadId(threadId)) return null;
+  // #3482:session_index.jsonl 的 thread_name 是用户在 Codex 侧的重命名,
+  // state DB 行里的 title 可能仍是旧的自动标题;索引记录存在时按
+  // thread_name > title(index) > state DB/rollout 标题 兜底链取值,并把索引
+  // updated_at 合入有效更新时间(重命名要能通过导入 upsert 的时间门)。
+  const indexEntry = index?.get(threadId);
   const archived = numberValue(row.archived) === 1;
   const baseUpdatedAt = timestampMs(row.updated_at_ms, row.updated_at) ?? Date.now();
   const archivedAt = timestampFromAny(row.archived_at);
-  const updatedAt = archived && archivedAt ? Math.max(baseUpdatedAt, archivedAt) : baseUpdatedAt;
+  const rowUpdatedAt = archived && archivedAt ? Math.max(baseUpdatedAt, archivedAt) : baseUpdatedAt;
+  const updatedAt = indexEntry?.updatedAt
+    ? Math.max(rowUpdatedAt, indexEntry.updatedAt)
+    : rowUpdatedAt;
   const createdAt = timestampMs(row.created_at_ms, row.created_at) ?? updatedAt;
   const cwd = stringValue(row.cwd) || os.homedir();
   const rolloutPath = stringValue(row.rollout_path);
   const title = firstNonEmpty(
+    indexEntry?.customTitle ?? '',
     stringValue(row.title),
     stringValue(row.preview),
     stringValue(row.first_user_message).split(/\r?\n/)[0],

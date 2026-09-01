@@ -233,5 +233,20 @@
   "glob": "apps/desktop/src/main/worklouder-codex/protocol.ts",
   "reason": "Codex Micro 灯效协议注释对照品牌红(#DF0C27/#A61629);运行色走数字通道,不是 UI 硬编码",
   "owner": "worklouder-codex"
+ },
+ {
+  "glob": "scripts/shared/design-inventory.mjs",
+  "reason": "台账生成器里说明 Token 计数口径的 `hsl(var(--token)` 字样,是匹配器自述不是组件色值",
+  "owner": "design-system"
+ },
+ {
+  "glob": "scripts/__tests__/design-inventory.test.mjs",
+  "reason": "钉死共享颜色匹配器行为的样例串(hex/rgb/rgba/hsl/hsla),同 tokenRegistry.test.ts 先例",
+  "owner": "design-system"
+ },
+ {
+  "glob": "docs/design-rules/design-inventory.md",
+  "reason": "台账 GENERATED 区块自述计数口径(`hsl(var(--token)`),同 DESIGN.md 文档示例先例",
+  "owner": "design-system"
  }
 ]

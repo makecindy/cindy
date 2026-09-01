@@ -409,6 +409,25 @@ describe('session runtime control wiring', () => {
     expect(targetRoute).not.toContain('requiresCodexThreadRelink && atomicSelection');
   });
 
+  it('omits null runtime effort from the Codex relink SQLite commit', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const relinkCommit = setModel.slice(
+      setModel.indexOf('commit: async ({ sessionId: targetSessionId, source, newSdkSessionId, target })'),
+      setModel.indexOf('if (write.changes === 0) return false;'),
+    );
+    expect(relinkCommit).toContain('persistableSessionEffort(target.effort)');
+    expect(relinkCommit).toContain(
+      '...(persistableEffort !== undefined ? { effort: persistableEffort } : {})',
+    );
+    expect(relinkCommit).not.toContain(
+      'effort: target.effort as (typeof sessions.$inferInsert)[\'effort\']',
+    );
+  });
+
   it('derives the Codex relink boundary from effective credential identities', () => {
     const setModel = handlerBody(
       registerSource,

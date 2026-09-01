@@ -891,6 +891,114 @@ describe('applyRuntimeSetModelChange', () => {
     expect(wakeSessionInputQueue).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { fromProvider: 'xai', fromModel: 'grok-4.6', toProvider: 'openai', toModel: 'gpt-5.6-sol' },
+    { fromProvider: 'openai', fromModel: 'gpt-5.6-sol', toProvider: 'xai', toModel: 'grok-4.6' },
+    { fromProvider: 'xai', fromModel: 'grok-4.6', toProvider: 'xd', toModel: 'gpt-5.6-sol' },
+    { fromProvider: 'xd', fromModel: 'gpt-5.6-sol', toProvider: 'xai', toModel: 'grok-4.6' },
+  ] as const)(
+    'closes idle Pi before $fromProvider → $toProvider so the next send lazy-creates',
+    async ({ fromProvider, fromModel, toProvider, toModel }) => {
+      const sessionId = rememberSession(`runtime-set-model-pi-${fromProvider}-to-${toProvider}`);
+      setSessionProvider(sessionId, fromProvider);
+      const setModel = vi.fn(async () => {});
+      const closeSession = vi.fn(async () => {
+        expect(getSessionProvider(sessionId)).toBe(fromProvider);
+      });
+      const maker: RuntimeSetModelMaker = {
+        getSession: () => ({
+          agentKind: 'pi',
+          remoteHostId: null,
+          model: fromModel,
+          setModel,
+        }),
+        listActiveSessions: () => [
+          { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+        ],
+        closeSession,
+      };
+
+      await expect(applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: toModel,
+        providerId: toProvider,
+        clearPendingCredentialSwitch: vi.fn(),
+        wakeSessionInputQueue: vi.fn(),
+      })).resolves.toEqual({ status: 'applied' });
+
+      expect(closeSession).toHaveBeenCalledWith(sessionId);
+      expect(setModel).not.toHaveBeenCalled();
+      expect(getSessionProvider(sessionId)).toBe(toProvider);
+    },
+  );
+
+  it('hot-switches idle Pi inside the same proxy identity without closing', async () => {
+    const sessionId = rememberSession('runtime-set-model-pi-same-xai');
+    setSessionProvider(sessionId, 'xai');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'grok-4.6',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'grok-4.5',
+      providerId: 'xai',
+    })).resolves.toEqual({ status: 'applied' });
+
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(setModel).toHaveBeenCalledWith('grok-4.5', { providerId: 'xai' });
+    expect(getSessionProvider(sessionId)).toBe('xai');
+  });
+
+  it('defers a busy Pi proxy-identity switch until the turn boundary', async () => {
+    const sessionId = rememberSession('runtime-set-model-pi-busy-xai-to-openai');
+    setSessionProvider(sessionId, 'xai');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const registerPendingCredentialSwitch = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'grok-4.6',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => true },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+      registerPendingCredentialSwitch,
+    })).resolves.toEqual({ status: 'deferred' });
+
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+    });
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('xai');
+  });
+
   it('rebuilds an idle Orca Worker instead of hot-switching its live model', async () => {
     const sessionId = rememberSession('runtime-set-model-orca-worker-rebuild');
     setSessionProvider(sessionId, 'xd');
