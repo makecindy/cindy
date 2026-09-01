@@ -3610,6 +3610,20 @@ describe('CodexAgent reference directories', () => {
       extraDirs: ['/shared-old'],
     })).rejects.toThrow('require app-server 0.144.6 or newer');
   });
+
+  it('rejects mid-session extraDirs when the app-server is too old to apply them', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.143.0' });
+    const handle = await agent.startSession({
+      sessionId: 'session-extra-dirs-old-server-mid',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await expect(handle.setExtraDirs?.(['/shared-old'])).rejects.toThrow(
+      'require app-server 0.144.6 or newer',
+    );
+    await handle.close();
+  });
 });
 
 describe('CodexAgent.listCustomizations', () => {

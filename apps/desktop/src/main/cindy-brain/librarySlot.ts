@@ -111,6 +111,11 @@ export interface GhostLibrarySlotDeps {
   showSaveDialog?(opts: { defaultPath: string; ghostName: string }): Promise<{ canceled: boolean; filePath?: string }>;
   /** 可注入时钟(单测限速);默认 Date.now。 */
   now?(): number;
+  /**
+   * 库根 realpath 变化后同步当前 Mivo 会话 extraDirs。
+   * root 为 null 则撤槽。失败只记日志,不挡 library 主路径。
+   */
+  syncAgentReadonlyExtraDir?(ghostId: string, root: string | null): Promise<void>;
 }
 
 const fail = (errorCode: string, message: string): GhostPipeLibraryResult => ({ ok: false, errorCode, message });
@@ -194,6 +199,9 @@ export class GhostLibrarySlot {
         if (session.vault.getMeta()?.orphaned) {
           await session.vault.clearOrphaned().catch(() => {});
         }
+        await this.syncAgentReadonlyExtraDir(ghostId, session.vault.getRootDir());
+      } else {
+        await this.syncAgentReadonlyExtraDir(ghostId, null);
       }
     }
     return session;
@@ -275,12 +283,25 @@ export class GhostLibrarySlot {
     };
   }
 
+  private async syncAgentReadonlyExtraDir(ghostId: string, root: string | null): Promise<void> {
+    if (!this.deps.syncAgentReadonlyExtraDir) return;
+    try {
+      await this.deps.syncAgentReadonlyExtraDir(ghostId, root);
+    } catch (error) {
+      this.deps.log?.warn('library extraDirs sync failed', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async teardownSession(ghostId: string): Promise<void> {
     const session = this.sessions.get(ghostId);
     if (!session) return;
     this.sessions.delete(ghostId);
     await session.sql.dispose().catch(() => {});
     await session.vault.invalidate().catch(() => {});
+    await this.syncAgentReadonlyExtraDir(ghostId, null);
   }
 
   /** 停用/卸载/owner 切换收口:作废全部会话(commit 5 的生命周期接线点)。 */

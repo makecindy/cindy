@@ -48,6 +48,7 @@ describe('GhostLibrarySlot', () => {
   let slot: GhostLibrarySlot;
   let showItemInFolder: ReturnType<typeof vi.fn>;
   let showSaveDialog: ReturnType<typeof vi.fn>;
+  let syncAgentReadonlyExtraDir: ReturnType<typeof vi.fn>;
   let clock: number;
 
   beforeEach(async () => {
@@ -79,10 +80,12 @@ describe('GhostLibrarySlot', () => {
       betterSqliteModulePath: () => 'better-sqlite3',
       showItemInFolder: (...args: unknown[]) => showItemInFolder(...args),
       showSaveDialog: (...args: unknown[]) => showSaveDialog(...args),
+      syncAgentReadonlyExtraDir: (...args: unknown[]) => syncAgentReadonlyExtraDir(...args),
       now: () => clock,
     };
     showItemInFolder = vi.fn();
     showSaveDialog = vi.fn(async () => ({ canceled: true }));
+    syncAgentReadonlyExtraDir = vi.fn(async () => {});
     slot = new GhostLibrarySlot(deps);
   });
 
@@ -463,6 +466,17 @@ describe('GhostLibrarySlot', () => {
     const probeDump = JSON.stringify({ open, status: st });
     expect(probeDump).not.toContain(defaultRootBase);
     expect(probeDump).not.toMatch(/\/Users\/.*\/libraries\//);
+  });
+
+  it('open 把库根交给 extraDirs 同步;dispose 时撤槽', async () => {
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(
+      GHOST_ID,
+      path.join(defaultRootBase, GHOST_ID),
+    );
+    await slot.disposeGhost(GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, null);
   });
 
   it('writeCommit ACK 含 64-hex sha256,形状 {ok,op,path,bytes,sha256}', async () => {

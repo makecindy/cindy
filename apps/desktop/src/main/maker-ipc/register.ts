@@ -437,6 +437,7 @@ import {
   readSessionExtraDirsFromDb,
   readSessionWritableDirsFromDb,
   readSessionWorkingDirFromDb,
+  listVisibleActiveSessionIds,
 } from '../maker-host/session-storage.js';
 import {
   backgroundTurnPredatesSessionClear,
@@ -1065,6 +1066,8 @@ import {
   setGhostSessionRevealer,
   setGhostErrandRunner,
   setGhostWorkspaceSessionService,
+  setGhostLibraryExtraDirSync,
+  getFocusedGhostSessionId,
   notifyGhostSessionEvent,
   getInstalledGhostName,
 } from '../cindy-brain/index.js';
@@ -3027,6 +3030,25 @@ export async function applyLibraryReadonlyExtraDir(
   const { user } = splitExtraDirSlots(current);
   const next = root ? [...user, libraryExtraDirSlot(root)] : user;
   return applyDirectoryGrants('extraDirs', sessionId, next, { remote: false });
+}
+
+async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
+  const targets = root
+    ? (() => {
+        const focused = getFocusedGhostSessionId();
+        return focused ? [focused] : [];
+      })()
+    : await listVisibleActiveSessionIds();
+  for (const sessionId of targets) {
+    try {
+      await applyLibraryReadonlyExtraDir(sessionId, root);
+    } catch (error) {
+      log.warn('library extraDirs session sync failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
@@ -10408,6 +10430,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 同一条 `local-db:sessions:created` 通道让侧边栏刷新;focus 复用 deep link
   // 的会话聚焦通道。注入方式与 setGhostAgentTurnRunner 同款倒置,避免
   // cindy-brain 反向依赖 maker-ipc / localDb 形成模块环。
+  setGhostLibraryExtraDirSync(syncLibraryReadonlyExtraDir);
   setGhostWorkspaceSessionService({
     findActiveSessionByWorkdir,
     createDraftSession: async (params) => {
