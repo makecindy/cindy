@@ -144,6 +144,14 @@ const piBundledModelsByBinary = new Map<string, Promise<PiBundledModelCatalog | 
 const listedIdsByCatalog = new WeakMap<PiBundledModelCatalog, PiListedModelIds>();
 let latestPiBundledModelCatalog: PiBundledModelCatalog | null = null;
 
+/**
+ * 测试专用：注入/清除模拟的二进制探测结果。生产路径只有 readPiBundledModels 写这段
+ * 状态；这里不落 piBundledModelsByBinary 缓存，afterEach 必须显式清回 null。
+ */
+export function setLatestPiBundledModelCatalogForTest(catalog: PiBundledModelCatalog | null): void {
+  latestPiBundledModelCatalog = catalog;
+}
+
 export function listedPiModelIds(
   catalog: PiBundledModelCatalog | undefined,
 ): PiListedModelIds | undefined {
@@ -1540,6 +1548,32 @@ export function resolvePiCindyGatewayModelApi(
   return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
 }
 
+/**
+ * thinkingLevelMap 是否与 wire 协议无关（值全部是 null 或标准 reasoning 档名）。
+ *
+ * pi 在 responses / codex-responses / completions / messages 四种 api 上都以
+ * `map[level] ?? level` 同一方式消费这张表 —— 它描述的是模型自身的推理档命名，
+ * 不是某个 wire 协议的序列化 quirk。含任何 provider 专属 token 的 map 不算
+ * wire 无关，跨 api 一律丢弃（fail closed）。
+ */
+function isWireAgnosticThinkingLevelMap(
+  map: PiNativeModelSpec['thinkingLevelMap'] | undefined,
+): map is PiNativeModelSpec['thinkingLevelMap'] {
+  if (!map) return false;
+  const wireAgnosticValues: ReadonlySet<string> = new Set([
+    'none',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]);
+  return Object.values(map).every(
+    (value) => value === null || wireAgnosticValues.has(value),
+  );
+}
+
 export function resolvePiCindyGatewayModelSpec(
   _selectedProviderId: string | null | undefined,
   modelId: string,
@@ -1573,6 +1607,26 @@ export function resolvePiCindyGatewayModelSpec(
   // probe takes precedence over the checked-in snapshot when both match that API.
   const compatibleBundled = bundled?.api === api ? bundled : undefined;
   const compatibleProbed = probed?.api === api ? probed : undefined;
+  // #3732: the Responses front door also carries completions-native models (z-ai/glm-5.3-flash,
+  // deepseek/*). Their catalog rows describe api 'openai-completions' plus a thinkingLevelMap of
+  // model-native reasoning level names. That map is not a wire-serialization quirk — every Pi
+  // API consumes it as `map[level] ?? level` — so for exactly this front-door mismatch the map
+  // still applies (values restricted to null or canonical effort level names), while compat and
+  // samplingParams stay dropped per #3627. Every other API disagreement keeps the whole local
+  // profile fail-closed; without the map, Pi clamps max/xhigh down to high.
+  const carriesCompletionsRowOverResponsesFrontDoor = (
+    row: Pick<PiBundledModelInfo, 'api' | 'thinkingLevelMap'> | undefined,
+  ): PiNativeModelSpec['thinkingLevelMap'] | undefined =>
+    row && api === 'openai-responses' && row.api === 'openai-completions'
+      ? isWireAgnosticThinkingLevelMap(row.thinkingLevelMap)
+        ? row.thinkingLevelMap
+        : undefined
+      : undefined;
+  const thinkingLevelMap =
+    compatibleProbed?.thinkingLevelMap ??
+    compatibleBundled?.thinkingLevelMap ??
+    carriesCompletionsRowOverResponsesFrontDoor(probed) ??
+    carriesCompletionsRowOverResponsesFrontDoor(bundled);
   return {
     api,
     ...(compatibleProbed?.compat ?? compatibleBundled?.compat
@@ -1585,13 +1639,7 @@ export function resolvePiCindyGatewayModelSpec(
           ),
         }
       : {}),
-    ...(compatibleProbed?.thinkingLevelMap ?? compatibleBundled?.thinkingLevelMap
-      ? {
-          thinkingLevelMap: {
-            ...(compatibleProbed?.thinkingLevelMap ?? compatibleBundled?.thinkingLevelMap),
-          },
-        }
-      : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap: { ...thinkingLevelMap } } : {}),
   };
 }
 

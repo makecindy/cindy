@@ -39,6 +39,7 @@ import {
   resolvePiBundledModelById,
   resolvePiCindyGatewayModelApi,
   resolvePiCindyGatewayModelSpec,
+  setLatestPiBundledModelCatalogForTest,
   type PiBundledModelInfo,
 } from '../pi-host.js';
 import { setActiveCatalog, setXdGatewayModels } from '../active-catalog.js';
@@ -70,6 +71,7 @@ const piBundledModel = (
 afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);
   setXdGatewayModels([]);
+  setLatestPiBundledModelCatalogForTest(null);
 });
 
 describe('resolvePiCindyGatewayModelApi', () => {
@@ -2058,6 +2060,122 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         xhigh: null,
         max: 'max',
       },
+    });
+  });
+});
+
+describe('#3732: gateway thinkingLevelMap survives a front-door API change', () => {
+  const declareServerPiApi = (modelId: string, wireProtocol: 'openai-responses') => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const presetId = 'server-pi-authority-test';
+    catalog.presets = [
+      ...(catalog.presets ?? []),
+      {
+        id: presetId,
+        name: 'Server Pi Authority Test',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://server.example/v4',
+            wireProtocol,
+            models: [{ id: modelId, name: modelId }],
+          },
+        },
+      },
+    ];
+    catalog.modelRegistry = {
+      schemaVersion: 2,
+      updatedAt: '2026-08-29T00:00:00.000Z',
+      models: [
+        {
+          id: `canonical/${modelId}`,
+          name: modelId,
+          routes: [
+            { providerId: 'xd', modelId, agents: ['claude-code', 'codex'] },
+            { providerId: presetId, modelId, agents: ['claude-code', 'codex'] },
+          ],
+        },
+      ],
+    };
+    setActiveCatalog(catalog, { authorityCatalog: catalog });
+    setXdGatewayModels([{ id: modelId, agents: ['pi'], perAgent: { pi: { wireProtocol } } }]);
+  };
+
+  const glmProbedRow = piBundledModel('glm-5.3-flash', 'openai-completions', {
+    thinkingLevelMap: {
+      off: null,
+      minimal: null,
+      low: 'low',
+      medium: null,
+      high: 'high',
+      xhigh: null,
+      max: 'max',
+    },
+  });
+
+  it('keeps the probed completions map for z-ai/glm-5.3-flash over the responses front door', () => {
+    declareServerPiApi('z-ai/glm-5.3-flash', 'openai-responses');
+    setLatestPiBundledModelCatalogForTest(
+      new Map([['zai', new Map([['glm-5.3-flash', glmProbedRow]])]]),
+    );
+
+    const spec = resolvePiCindyGatewayModelSpec('xd', 'z-ai/glm-5.3-flash');
+    expect(spec).toMatchObject({ api: 'openai-responses' });
+    expect(spec?.thinkingLevelMap).toMatchObject({ low: 'low', high: 'high', max: 'max' });
+  });
+
+  it('keeps the static completions map when the Gateway carries deepseek over responses', () => {
+    declareServerPiApi('deepseek/deepseek-v4-flash', 'openai-responses');
+
+    const spec = resolvePiCindyGatewayModelSpec('xd', 'deepseek/deepseek-v4-flash');
+    expect(spec).toMatchObject({ api: 'openai-responses' });
+    expect(spec?.thinkingLevelMap).toMatchObject({ low: 'low', high: 'high', max: 'max' });
+  });
+
+  it('still drops a map with provider-specific values across an API change', () => {
+    declareServerPiApi('z-ai/glm-5.3-flash-quirky', 'openai-responses');
+    setLatestPiBundledModelCatalogForTest(
+      new Map([
+        [
+          'z-ai',
+          new Map([
+            [
+              'glm-5.3-flash-quirky',
+              piBundledModel('glm-5.3-flash-quirky', 'openai-completions', {
+                thinkingLevelMap: { low: 'thinking-budget-x', max: 'yarn.reasoning.max' },
+              }),
+            ],
+          ]),
+        ],
+      ]),
+    );
+
+    expect(resolvePiCindyGatewayModelSpec('xd', 'z-ai/glm-5.3-flash-quirky')).toEqual({
+      api: 'openai-responses',
+    });
+  });
+
+  it('still keeps compat gated to the API match while reusing the map', () => {
+    declareServerPiApi('z-ai/glm-5.3-flash', 'openai-responses');
+    setLatestPiBundledModelCatalogForTest(
+      new Map([
+        [
+          'zai',
+          new Map([
+            [
+              'glm-5.3-flash',
+              piBundledModel('glm-5.3-flash', 'openai-completions', {
+                compat: { thinkingFormat: 'zai', zaiToolStream: true },
+                thinkingLevelMap: { low: 'low', high: 'high', max: 'max' },
+              }),
+            ],
+          ]),
+        ],
+      ]),
+    );
+
+    expect(resolvePiCindyGatewayModelSpec('xd', 'z-ai/glm-5.3-flash')).toEqual({
+      api: 'openai-responses',
+      thinkingLevelMap: { low: 'low', high: 'high', max: 'max' },
     });
   });
 });

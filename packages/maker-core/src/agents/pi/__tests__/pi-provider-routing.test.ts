@@ -2089,6 +2089,10 @@ describe('Pi provider-aware model routing', () => {
       resolvePiGatewayModelApi: () => api,
       resolvePiGatewayModelSpec: () => ({
         api,
+        thinkingLevelMap:
+          api === 'openai-responses'
+            ? { minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' }
+            : undefined,
         ...(api === 'openai-completions'
           ? {
               compat: {
@@ -2122,12 +2126,25 @@ describe('Pi provider-aware model routing', () => {
           baseUrl?: string;
           headers?: Record<string, string>;
           compat?: Record<string, unknown>;
+          thinkingLevelMap?: Record<string, string | null>;
         }>;
       }>;
     };
     expect(models.providers.cindy?.api).toBe('anthropic-messages');
     const model = models.providers.cindy?.models.find((candidate) => candidate.id === modelId);
     expect(model).toMatchObject({ api });
+    // #3732: the spec's thinkingLevelMap must reach the written cindy block verbatim so Pi
+    // keeps max/xhigh available instead of clamping them down to high.
+    if (api === 'openai-responses') {
+      expect(model?.thinkingLevelMap).toEqual({
+        minimal: null,
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+        max: 'max',
+      });
+    }
     expect(model?.baseUrl).toBe(baseUrl);
     if (api === 'openai-completions') {
       expect(model?.compat).toMatchObject({
