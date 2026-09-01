@@ -7315,6 +7315,34 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('closes idle session event streams when the shared app-server transport crashes', async () => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-idle-transport-crash',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const transport = createdTransports[0];
+
+    await transport.close('simulated app-server crash');
+
+    const result = await Promise.race([
+      iterator.next(),
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => reject(new Error('idle session event stream did not close')), 200);
+        timer.unref?.();
+      }),
+    ]);
+    expect(result).toMatchObject({ done: true });
+    await expect(handle.send({ type: 'user', content: 'after crash' })).rejects.toThrow(
+      /Codex session expired because its app-server was replaced/,
+    );
+
+    await handle.close();
+    await agent.dispose();
+  });
+
   it('fails closed when the credential mode switch coordinator leaves sessions attached', async () => {
     const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
       extraArgs: [],

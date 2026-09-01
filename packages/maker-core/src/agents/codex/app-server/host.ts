@@ -1466,34 +1466,17 @@ export class AppServerHost {
   }
 
   /**
-   * 子进程 crash / IO 错误: 广播给所有 subscriber 的 error handler, 让上层每个
-   * session 都能 emit 'error' AgentEvent + 结束自己的 event queue, 然后强制 shutdown
-   * (此后任何 subscribeThread/request 都会拒绝, 上层下次需要时拿不到 host)。
-   *
-   * 注意: shutdown 之后 startPromise = null, 下一次 ensureStarted 可以重新 spawn。
-   * 但当前内存里的 subscribers 都已被清掉 — 上层 session 拿到 error 后该自己 close。
+   * 子进程 crash / IO 错误: 将所有 subscriber 作为 host 强制退役处理，让每个
+   * session 按自己的真实状态收口（空闲静默结束 event queue，在飞任务发终态
+   * error + Done），然后强制 shutdown。此后下一次 ensureStarted 可以重新 spawn。
    */
   private handleTransportError(err: Error): void {
-    this.logger.error('transport error, notifying subscribers + shutting down', { message: err.message });
-    this.broadcastTransportErrorToSubscribers(`app-server transport error: ${err.message}`);
+    this.logger.error('transport error, retiring subscribers + shutting down', { message: err.message });
+    // Treat a transport crash as a forced host replacement. Idle sessions must
+    // end their event queues, while sessions with in-flight work need the
+    // structured terminal error + Done sequence from their own handlers.
+    this.notifySubscribersOfForcedRetire(`transport error: ${err.message}`);
     void this.shutdown(`transport error: ${err.message}`);
-  }
-
-  /** ErrorNotification 的 shape 不能完全合成 (没真实 turnId), 用最小可信字段。 */
-  private broadcastTransportErrorToSubscribers(message: string): void {
-    for (const [threadId, handlers] of this.subscribers) {
-      try {
-        handlers.error?.({
-          threadId,
-          turnId: '',
-          willRetry: false,
-          scope: 'transport',
-          error: { message },
-        });
-      } catch (e) {
-        this.logger.warn('error broadcast handler threw', { threadId, message: (e as Error).message });
-      }
-    }
   }
 
   // ── 诊断辅助 (测试 / 日志) ────────────────────────────────────────────────
