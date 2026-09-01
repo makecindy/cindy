@@ -28,7 +28,12 @@ import {
   buildMobileClientPromptNote,
   shouldPrependMobileClientPromptNote,
 } from './mobileClientPromptNote.js';
-import { excludeDirectoryGrantConflicts, validateExtraDirs } from './extraDirsValidator.js';
+import {
+  excludeDirectoryGrantConflicts,
+  isLibraryExtraDirSlot,
+  LIBRARY_EXTRA_DIR_SLOT_PREFIX,
+  validateExtraDirs,
+} from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -551,7 +556,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     if (opts.extraDirs === undefined) {
       try {
         const row = await deps.readSessionExtraDirsFromDb(sessionId);
-        if (row.length > 0) opts.extraDirs = row;
+        if (row.length > 0) {
+          opts.extraDirs = row.map((dir) => (
+            isLibraryExtraDirSlot(dir) ? dir.slice(LIBRARY_EXTRA_DIR_SLOT_PREFIX.length) : dir
+          ));
+        }
       } catch (err) {
         deps.log.warn(`${source}: read extra_dirs from DB failed (non-fatal)`, {
           sessionId,

@@ -2919,28 +2919,36 @@ export function applyDirectoryGrants(
       ? sess?.capabilities.extraDirs.supported
       : sess?.capabilities.writableDirs?.supported;
     const label = axis === 'extraDirs' ? 'set-extra-dirs' : 'set-writable-dirs';
-    if (!sess || !supported) {
-      log.debug(`${label}: ${sess ? 'agent capability=false' : 'session not found'}, no-op`, {
+    if (sess && !supported) {
+      log.debug(`${label}: agent capability=false, no-op`, {
         sessionId,
-        ...(sess ? { agentKind: sess.agentKind } : {}),
+        agentKind: sess.agentKind,
       });
       return;
     }
+    const persistOnly = !sess;
+    const workDir = persistOnly
+      ? (await readSessionWorkingDirFromDb(sessionId) ?? undefined)
+      : (sess.workDir || undefined);
     const result = await applyRemoteDirectoryGrantUpdate(axis, requestedDirs, {
-      setExtraDirs: (dirs) => sess.setExtraDirs(extraDirsForRuntime(dirs)),
-      setWritableDirs: (dirs) => sess.setWritableDirs(dirs),
+      setExtraDirs: persistOnly
+        ? async () => {}
+        : (dirs) => sess.setExtraDirs(extraDirsForRuntime(dirs)),
+      setWritableDirs: persistOnly
+        ? async () => {}
+        : (dirs) => sess.setWritableDirs(dirs),
     }, {
       validate: async (requested) => {
         if (axis !== 'extraDirs') {
-          return validateExtraDirs(requested, sess.workDir || undefined);
+          return validateExtraDirs(requested, workDir);
         }
         const { user, library } = splitExtraDirSlots(requested);
-        const userResult = await validateExtraDirs(user, sess.workDir || undefined);
+        const userResult = await validateExtraDirs(user, workDir);
         const libraryValid: string[] = [];
         const libraryRejected: Array<{ path: string; reason: string }> = [];
         for (const slot of library) {
           const root = libraryRootFromSlot(slot);
-          const checked = await validateExtraDirs([root], sess.workDir || undefined);
+          const checked = await validateExtraDirs([root], workDir);
           if (checked.valid.length === 1) libraryValid.push(libraryExtraDirSlot(checked.valid[0]));
           else libraryRejected.push(...checked.rejected);
         }
@@ -3033,15 +3041,12 @@ export async function applyLibraryReadonlyExtraDir(
 }
 
 async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
-  const targets = root
-    ? (() => {
-        const focused = getFocusedGhostSessionId();
-        return focused ? [focused] : [];
-      })()
-    : await listVisibleActiveSessionIds();
-  for (const sessionId of targets) {
+  const focused = getFocusedGhostSessionId();
+  const visible = await listVisibleActiveSessionIds();
+  for (const sessionId of visible) {
+    const nextRoot = root && sessionId === focused ? root : null;
     try {
-      await applyLibraryReadonlyExtraDir(sessionId, root);
+      await applyLibraryReadonlyExtraDir(sessionId, nextRoot);
     } catch (error) {
       log.warn('library extraDirs session sync failed', {
         sessionId,

@@ -243,7 +243,9 @@ describe('session runtime control wiring', () => {
     expect(writableDirs).toContain("applyDirectoryGrants('writableDirs'");
     expect(writableDirs).toContain('senderId: event.sender.id');
     expect(registerSource).toContain('setGhostLibraryExtraDirSync(syncLibraryReadonlyExtraDir)');
-    expect(registerSource).toContain('await applyLibraryReadonlyExtraDir(sessionId, root)');
+    expect(registerSource).toContain('const nextRoot = root && sessionId === focused ? root : null');
+    expect(registerSource).toContain('const persistOnly = !sess');
+    expect(registerSource).toContain('await applyLibraryReadonlyExtraDir(sessionId, nextRoot)');
   });
 
   it('guards local user model changes before parsing input while preserving trusted internal paths', () => {

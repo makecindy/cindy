@@ -3180,7 +3180,8 @@ export function getFocusedGhostSessionId(): string | null {
 
 async function refreshMivoLibraryExtraDirGrant(): Promise<void> {
   if (!libraryExtraDirSync) return;
-  if (!ghostSessionFocusTracker.current()) {
+  const focused = ghostSessionFocusTracker.current();
+  if (!focused) {
     await libraryExtraDirSync(null);
     return;
   }
@@ -5274,7 +5275,7 @@ async function relocateGhostLibraryTo(
         allowInsideManagedRoot: opts?.allowInsideManagedRoot,
       });
       await slot.disposeGhost(id);
-      if (set.ok) await refreshMivoLibraryExtraDirGrant();
+      await refreshMivoLibraryExtraDirGrant();
       return set.ok ? { ok: true } : { ok: false, message: set.message };
     }
     const result = await migrateGhostLibrary({
@@ -5315,7 +5316,7 @@ async function relocateGhostLibraryTo(
       allowInsideManagedRoot: opts?.allowInsideManagedRoot,
     });
     await slot.disposeGhost(id);
-    if (result.ok) await refreshMivoLibraryExtraDirGrant();
+    await refreshMivoLibraryExtraDirGrant();
     return result.ok ? { ok: true } : { ok: false, message: result.message };
   } finally {
     slot.setRelocating(id, false);
