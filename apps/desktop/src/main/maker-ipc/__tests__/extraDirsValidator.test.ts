@@ -3,7 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { excludeDirectoryGrantConflicts } from '../extraDirsValidator';
+import {
+  excludeDirectoryGrantConflicts,
+  EXTRA_DIRS_MAX,
+  LIBRARY_EXTRA_DIR_SLOT_PREFIX,
+  validateExtraDirs,
+} from '../extraDirsValidator';
 
 const cleanupDirs: string[] = [];
 
@@ -74,5 +79,33 @@ describe('excludeDirectoryGrantConflicts', () => {
     await expect(
       excludeDirectoryGrantConflicts([sharedAlias, sibling], [specs]),
     ).resolves.toEqual([sibling]);
+  });
+});
+
+describe('validateExtraDirs library slot', () => {
+  it('满 10 个用户目录时 library 槽仍通过,over-limit 不误伤槽', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-extra-dirs-max-'));
+    cleanupDirs.push(root);
+    const workdir = path.join(root, 'workdir');
+    mkdirSync(workdir);
+    const users: string[] = [];
+    for (let i = 0; i < EXTRA_DIRS_MAX; i += 1) {
+      const dir = path.join(root, `user-${i}`);
+      mkdirSync(dir);
+      users.push(dir);
+    }
+    const eleventh = path.join(root, 'user-overflow');
+    mkdirSync(eleventh);
+    const libraryRoot = path.join(root, 'library');
+    mkdirSync(libraryRoot);
+    const librarySlot = `${LIBRARY_EXTRA_DIR_SLOT_PREFIX}${libraryRoot}`;
+
+    const overflow = await validateExtraDirs([...users, eleventh], workdir);
+    expect(overflow.valid).toEqual(users);
+    expect(overflow.rejected).toEqual([{ path: eleventh, reason: 'over-limit' }]);
+
+    const withSlot = await validateExtraDirs([...users, librarySlot], workdir);
+    expect(withSlot.valid).toEqual([...users, librarySlot]);
+    expect(withSlot.rejected).toEqual([]);
   });
 });
