@@ -102,6 +102,11 @@ static void hid_report(
   }
 }
 
+static void pick_first_hid(const void *value, void *context) {
+  IOHIDDeviceRef *out = (IOHIDDeviceRef *)context;
+  if (*out == NULL) *out = (IOHIDDeviceRef)value;
+}
+
 static void close_hid(void) {
   if (g_hid_manager) {
     IOHIDManagerUnscheduleFromRunLoop(g_hid_manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
@@ -143,8 +148,13 @@ static bool open_hid(void) {
     return false;
   }
   IOHIDDeviceRef device = NULL;
-  CFSetGetValues(devices, (const void **)&device);
+  CFSetApplyFunction(devices, pick_first_hid, &device);
   CFRelease(devices);
+  if (!device) {
+    IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+    CFRelease(manager);
+    return false;
+  }
   IOHIDDeviceRegisterInputReportCallback(device, g_hid_buffer, sizeof(g_hid_buffer), hid_report, NULL);
   IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
   g_hid_manager = manager;

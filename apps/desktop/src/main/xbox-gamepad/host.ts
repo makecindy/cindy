@@ -236,12 +236,14 @@ async function resolveMacHelperPath(): Promise<string> {
     throw new Error('Xbox gamepad helper compile failed; waiting for source change');
   }
   fs.mkdirSync(path.dirname(binary), { recursive: true });
+  const object = `${binary}.switch2_usb.o`;
   try {
+    await execFilePromise('clang', ['-c', switch2UsbC, '-o', object], { timeout: 30_000 });
     await execFilePromise(
       'swiftc',
       [
         source,
-        switch2UsbC,
+        object,
         '-import-objc-header',
         switch2UsbH,
         '-O',

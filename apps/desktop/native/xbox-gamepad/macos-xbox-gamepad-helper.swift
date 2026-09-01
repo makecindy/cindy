@@ -210,6 +210,7 @@ final class XboxGamepadReporter {
     for family in GAMEPAD_FAMILIES {
       guard let controller = next[family] else {
         if family == "nintendo" {
+          observed[family] = nil
           continue
         }
         if observed[family] != nil || lastPresenceSignature[family] != "absent" {

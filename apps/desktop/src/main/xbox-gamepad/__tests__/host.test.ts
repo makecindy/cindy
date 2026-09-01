@@ -272,13 +272,29 @@ describe('Xbox gamepad helper packaging contract', () => {
     expect(source).not.toContain('all.first(where: isXboxController)');
     expect(source).toContain('switch2_usb_ensure');
     expect(source).toContain('switch2-usb');
+    expect(source).toMatch(/if family == "nintendo" \{[\s\S]*?observed\[family\] = nil/);
   });
 
-  it('compiles the helper for macOS 11 so GameController Xbox APIs are available', () => {
-    const source = readFileSync(new URL('../../../../forge.config.ts', import.meta.url), 'utf8');
-    expect(source).toContain("MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET = 'macos11.0'");
-    expect(source).toContain('MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET');
-    expect(source).toContain('switch2_usb.c');
-    expect(source).toContain('switch2_usb.h');
+  it('compiles switch2_usb.c with clang before linking the object into swiftc', () => {
+    const forge = readFileSync(new URL('../../../../forge.config.ts', import.meta.url), 'utf8');
+    const host = readFileSync(new URL('../host.ts', import.meta.url), 'utf8');
+    expect(forge).toContain("MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET = 'macos11.0'");
+    expect(forge).toContain('compileCObjectForTarget');
+    expect(forge).toContain("'clang'");
+    expect(forge).toContain('switch2_usb.c');
+    expect(forge).toContain('switch2_usb.h');
+    expect(host).toContain("'clang'");
+    expect(host).toContain("'-c'");
+    expect(host).toContain('switch2_usb.o');
+    expect(host).not.toMatch(/swiftc',[\s\S]*switch2UsbC/);
+  });
+
+  it('copies the matching HID set into a buffer sized for every device', () => {
+    const source = readFileSync(
+      new URL('../../../../native/xbox-gamepad/switch2_usb.c', import.meta.url),
+      'utf8',
+    );
+    expect(source).toContain('CFSetApplyFunction');
+    expect(source).not.toContain('CFSetGetValues(devices, (const void **)&device)');
   });
 });

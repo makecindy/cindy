@@ -984,6 +984,18 @@ function buildMacIOSSimulatorHelper(platform: ForgePlatform, arch: ForgeArch): v
   }
 }
 
+function compileCObjectForTarget(
+  src: string,
+  dest: string,
+  target: string,
+  extraArgs: string[],
+  label: string,
+): void {
+  const r = spawnSync('clang', ['-c', src, '-target', target, ...extraArgs, '-o', dest], { stdio: 'inherit' });
+  if (r.error) throw new Error(`[forge] clang spawn failed for ${label}: ${r.error.message}`);
+  if (r.status !== 0) throw new Error(`[forge] clang failed for ${label} (${target}) with exit code ${r.status}`);
+}
+
 function runSwiftcForTarget(src: string, dest: string, target: string, extraArgs: string[], label: string): void {
   const r = spawnSync('swiftc', ['-target', target, src, ...extraArgs, '-o', dest], { stdio: 'inherit' });
   if (r.error) throw new Error(`[forge] swiftc spawn failed for ${label}: ${r.error.message}`);
@@ -1026,23 +1038,36 @@ function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): vo
   if (!fs.existsSync(src)) {
     throw new Error(`[forge] Xbox gamepad helper source missing at ${src}`);
   }
+  if (!fs.existsSync(switch2UsbC) || !fs.existsSync(switch2UsbH)) {
+    throw new Error(`[forge] Switch 2 USB helper source missing at ${switch2UsbC}`);
+  }
   fs.mkdirSync(destDir, { recursive: true });
-  buildSwiftHelperForForgeArch(
-    src,
-    dest,
-    arch,
-    MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET,
-    [
-      switch2UsbC,
-      '-import-objc-header',
-      switch2UsbH,
-      '-framework',
-      'GameController',
-      '-framework',
-      'IOKit',
-    ],
-    'Xbox gamepad helper',
-  );
+  const targets = swiftTargetTriplesForForgeArch(arch, MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET);
+  const compileOne = (output: string, target: string, objectDir: string): void => {
+    const object = path.join(objectDir, `switch2_usb-${target.split('-')[0]}.o`);
+    compileCObjectForTarget(switch2UsbC, object, target, [], 'Xbox gamepad helper C');
+    runSwiftcForTarget(
+      src,
+      output,
+      target,
+      [object, '-import-objc-header', switch2UsbH, '-framework', 'GameController', '-framework', 'IOKit'],
+      'Xbox gamepad helper',
+    );
+  };
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-xbox-gamepad-helper-'));
+  try {
+    if (targets.length === 1) {
+      compileOne(dest, targets[0], tempDir);
+    } else {
+      const outputs = targets.map((target) => path.join(tempDir, `${path.basename(dest)}-${target.split('-')[0]}`));
+      targets.forEach((target, index) => compileOne(outputs[index], target, tempDir));
+      const r = spawnSync('lipo', ['-create', ...outputs, '-output', dest], { stdio: 'inherit' });
+      if (r.error) throw new Error(`[forge] lipo spawn failed for Xbox gamepad helper: ${r.error.message}`);
+      if (r.status !== 0) throw new Error(`[forge] lipo failed for Xbox gamepad helper with exit code ${r.status}`);
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
   fs.chmodSync(dest, 0o755);
 }
 
