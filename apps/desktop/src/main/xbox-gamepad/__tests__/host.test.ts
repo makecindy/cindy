@@ -323,10 +323,13 @@ describe('Xbox gamepad helper packaging contract', () => {
     expect(host).toContain('setSwitch2UsbWanted');
     const index = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
     expect(index).toContain('setSwitch2UsbWanted');
-    expect(index).toContain('controller.getAccessories().nintendo.settings.deviceEnabled');
-    expect(index).toContain("previewFamily === 'nintendo'");
+    expect(index).toContain('computeSwitch2UsbWanted');
+    expect(index).toContain('taskSlotsSuspended');
     expect(index).toContain('layoutPreviewLease.setActive(false, owner)');
     expect(index).not.toMatch(/previewFamily = family;\s*layoutPreviewLease\.setActive\(active/);
+    expect(index).not.toMatch(
+      /setSwitch2UsbWanted\(\s*controller\.getAccessories\(\)\.nintendo\.settings\.deviceEnabled \|\| previewFamily === 'nintendo'/,
+    );
   });
 
   it('copies the matching HID set into a buffer sized for every device', () => {

@@ -40,6 +40,7 @@ import {
   resetXboxGamepadSettings,
   writeXboxGamepadSettingsPatch,
 } from './settingsStore.js';
+import { computeSwitch2UsbWanted } from './switch2UsbWanted.js';
 
 const log = createLogger('xbox-gamepad');
 
@@ -103,6 +104,7 @@ const host = createXboxGamepadHost((message) => {
   controller.handleHostMessage(message);
 });
 let previewFamily: GamepadFamily | null = null;
+let taskSlotsSuspended = false;
 const layoutPreviewLease = createLayoutPreviewLease((active) => {
   if (!active) previewFamily = null;
   controller.setLayoutPreviewActive(active, active ? previewFamily : null);
@@ -111,7 +113,11 @@ const layoutPreviewLease = createLayoutPreviewLease((active) => {
 
 function syncSwitch2Usb(): void {
   host.setSwitch2UsbWanted(
-    controller.getAccessories().nintendo.settings.deviceEnabled || previewFamily === 'nintendo',
+    computeSwitch2UsbWanted({
+      taskSlotsSuspended,
+      nintendoDeviceEnabled: controller.getAccessories().nintendo.settings.deviceEnabled,
+      previewFamily,
+    }),
   );
 }
 
@@ -130,10 +136,12 @@ export function registerXboxGamepadInputDevice(): void {
       },
       updateSessionActivity: () => undefined,
       resumeTaskSlots: async () => {
+        taskSlotsSuspended = false;
         controller.applySettings(family, readXboxGamepadSettings(family));
         syncSwitch2Usb();
       },
       suspendTaskSlots: () => {
+        taskSlotsSuspended = true;
         controller.applySettings(family, {
           ...readXboxGamepadSettings(family),
           deviceEnabled: false,
