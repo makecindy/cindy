@@ -332,8 +332,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     );
     expect(providers[0]?.models[0]).toMatchObject({
       id: 'k3',
-      headers: { 'User-Agent': 'KimiCLI/1.5' },
+      compat: expect.objectContaining({ forceAdaptiveThinking: true }),
     });
+    expect(providers[0]?.models[0]).not.toHaveProperty('headers');
   });
 
   it('preserves explicit overrides for an exact official model after the catalog marker is cleared', () => {

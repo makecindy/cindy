@@ -1192,11 +1192,17 @@ export class ClaudeCodeAgent extends BaseAgent {
     const modelContextWindows = sessionRouteWindowEntry
       ? [...providerRoutedModels, sessionRouteWindowEntry]
       : providerRoutedModels;
+    // #3557:会话模型 id 带命名空间前缀(anthropic/... 等网关目录形态)时,CLI
+    // 内部小模型调用(bash 前缀判定/标题/摘要)不能用它内置的裸名默认值 ——
+    // 网关白名单字面比对,裸名必 403。钉到会话自身 wire 模型(唯一确定已授权);
+    // 裸名会话(订阅直连/自定义中继)不传,CLI 默认行为零变化。
+    const smallFastModel = opts.model.includes('/') ? sdkModel : undefined;
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
       sessionProviderId: opts.providerId ?? null,
       activeModel: opts.model,
       modelContextWindows,
+      smallFastModel,
       // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
       // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
       subagentModel: null,
@@ -1282,6 +1288,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           mode: 'remote',
           activeModel: opts.model,
           modelContextWindows,
+          smallFastModel,
           // 远端不做本地扫描(见上),这里的值就是路由感知后的设置值 —— 保持 env 强制覆盖语义。
           subagentModel: subagentDefault.envSubagentModel ?? null,
         })

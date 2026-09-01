@@ -3,7 +3,7 @@
  * events and only latches deterministic failures for the next-send rollover.
  */
 
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -503,6 +503,62 @@ describe("PiAgent native auto-compaction ownership", () => {
     const handle = await start();
     knobs.stateModelOverride = "m";
     await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
+    await handle.close();
+  });
+
+  it("applies stable-root user shellPath to a brand-new session (#3643 cross-start)", async () => {
+    // 用户在稳定根(pi-agent-home/settings.json)配置逃生门;本地 configHome 是
+    // 每会话随机目录,新会话必须能从稳定根拿到配置。
+    writeFileSync(
+      path.join(agentHome, "settings.json"),
+      JSON.stringify({ shellPath: "C:/cygwin64/bin/bash.exe" }, null, 2),
+    );
+    const handle = await start();
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const next = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(next);
+        else if (entry.name === "settings.json") files.push(next);
+      }
+    };
+    walk(path.join(agentHome, "run-tmp"));
+    expect(files.length).toBeGreaterThan(0);
+    const written = JSON.parse(readFileSync(files[files.length - 1]!, "utf8")) as {
+      shellPath?: string;
+      transport?: string;
+    };
+    expect(written.shellPath).toBe("C:/cygwin64/bin/bash.exe");
+    expect(written.transport).toBe("sse");
+    await handle.close();
+  });
+
+  it("preserves user shellPath across settings.json rewrites (#3643)", async () => {
+    const handle = await start();
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const next = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(next);
+        else if (entry.name === "settings.json") files.push(next);
+      }
+    };
+    walk(agentHome);
+    expect(files.length).toBeGreaterThan(0);
+    const settingsPath = files[files.length - 1]!;
+    // 用户在会话间隙按 pi docs/windows.md 配置 shell 逃生门。
+    const current = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ ...current, shellPath: "C:/cygwin64/bin/bash.exe" }, null, 2),
+    );
+    await handle.setModel!("n");
+    const rewritten = JSON.parse(readFileSync(settingsPath, "utf8")) as {
+      shellPath?: string;
+      compaction?: { reserveTokens?: number };
+    };
+    expect(rewritten.shellPath).toBe("C:/cygwin64/bin/bash.exe");
+    expect(rewritten.compaction?.reserveTokens).toBe(25_000);
     await handle.close();
   });
 

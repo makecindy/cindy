@@ -495,6 +495,32 @@ function effortToPiThinkingLevel(effort: Effort): string {
 }
 
 const PI_NATIVE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const PI_THINKING_LEVEL_MAP_KEYS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/**
+ * Server / XD 下放的 efforts 是网关 thinking level 的权威。
+ * Pi 本地目录 map 只在同名档仍被下放时保留 remap；api 不一致导致 bundled map 丢失时，仍按 efforts 写同名值，不能把 max/xhigh 静默丢光。
+ */
+function gatewayThinkingLevelMap(
+  efforts: readonly Effort[],
+  bundled?: Record<string, string | null>,
+): Record<string, string | null> | undefined {
+  const supported = new Set<string>();
+  for (const effort of efforts) {
+    if (effort === 'ultra') supported.add('max');
+    else supported.add(effort);
+  }
+  if (supported.size === 0) {
+    return bundled && Object.keys(bundled).length > 0 ? { ...bundled } : undefined;
+  }
+  return Object.fromEntries(
+    PI_THINKING_LEVEL_MAP_KEYS.map((level) => {
+      if (!supported.has(level)) return [level, null];
+      const bundledValue = bundled?.[level];
+      return [level, typeof bundledValue === 'string' ? bundledValue : level];
+    }),
+  );
+}
 
 /**
  * Last-resort maxTokens for models that provide no authoritative output limit.
@@ -1158,6 +1184,61 @@ interface FailedPiStartupCleanup {
   cleanupLocal?: () => void;
 }
 
+/**
+ * pi 官方文档的用户自配置键(Windows shell 逃生门与 npm 包装命令):Cindy 每次
+ * startSession 都覆写隔离 agentHome 的 settings.json,若把这些键一并抹掉,用户在
+ * Cindy Pi 里就失去了原生 pi 文档提供的自救手段 —— #3643:bash spawn 失败时
+ * `shellPath` 是 pi Windows shell 解析的第一顺位来源,原生 pi 用户改 settings.json
+ * 即可恢复,Cindy Pi 用户此前无路可走(pi-harness「上游非退化」红线)。
+ * Cindy 自有键(transport/retry/compaction/packages)始终以新生成内容为准。
+ */
+const PI_USER_SETTINGS_PASSTHROUGH_KEYS = ['shellPath', 'shellCommandPrefix', 'npmCommand'] as const;
+
+function collectPiUserSettingsPassthrough(content: string | null): Record<string, unknown> {
+  if (content === null || content.trim().length === 0) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+  const existing = parsed as Record<string, unknown>;
+  const preserved: Record<string, unknown> = {};
+  for (const key of PI_USER_SETTINGS_PASSTHROUGH_KEYS) {
+    const value = existing[key];
+    if (key === 'npmCommand') {
+      if (
+        Array.isArray(value) &&
+        value.length > 0 &&
+        value.every((item) => typeof item === 'string')
+      ) {
+        preserved[key] = value;
+      }
+      continue;
+    }
+    if (typeof value === 'string' && value.trim().length > 0) preserved[key] = value;
+  }
+  return preserved;
+}
+
+/** 多来源合并,靠后的来源同键覆盖靠前的(稳定根用户文件应排最后)。 */
+export function mergePiUserSettingsPassthrough(
+  builtContent: string,
+  ...existingContents: Array<string | null>
+): string {
+  const preserved: Record<string, unknown> = {};
+  for (const content of existingContents) {
+    Object.assign(preserved, collectPiUserSettingsPassthrough(content));
+  }
+  if (Object.keys(preserved).length === 0) return builtContent;
+  const built = JSON.parse(builtContent) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(preserved)) {
+    if (!(key in built)) built[key] = value;
+  }
+  return JSON.stringify(built, null, 2) + '\n';
+}
+
 export function buildPiSettingsJsonContent(
   contextWindow: number,
   piCompactionPct?: number,
@@ -1552,6 +1633,49 @@ export class PiAgent extends BaseAgent {
     );
   }
 
+  /**
+   * 生成 settings.json 内容,本地会话在覆写前保留用户自配置白名单键(#3643)。
+   * 两个来源,稳定根优先:
+   *  1. 会话 configHome 的既有 settings.json(同会话内 setModel 等覆写不丢配置);
+   *  2. 稳定 agentHome 根(pi-agent-home/settings.json)——本地 configHome 是
+   *     每会话随机目录(run-tmp/<hex>),只读会话文件会让「重启后新会话」拿不到
+   *     用户配置;稳定根文件才是跨启动生效的逃生门(对齐原生 pi 的
+   *     ~/.pi/agent/settings.json 位置语义,Cindy 自身从不写它)。
+   * 远端 fileOps 无 readFile,保持原覆写行为(远端 configHome 全托管,且本机
+   * shell 路径对远端主机无意义)。
+   */
+  private async buildSettingsJsonPreservingUserKeys(
+    settingsJsonPath: string,
+    opts: {
+      fileOps?: PiRemoteFileOps;
+      contextWindow?: number;
+      piCompactionPct?: number;
+      packages?: readonly PiNativePackageEntry[];
+    },
+  ): Promise<string> {
+    const built = this.buildCurrentPiSettingsJson(
+      opts.contextWindow,
+      opts.piCompactionPct,
+      opts.packages,
+    );
+    if (opts.fileOps) return built;
+    const readOrNull = async (file: string): Promise<string | null> => {
+      try {
+        return await fs.readFile(file, 'utf8');
+      } catch {
+        return null;
+      }
+    };
+    const stableUserSettingsPath = joinRemotePosixPath(this.resolveAgentHome(), 'settings.json');
+    const [sessionContent, stableContent] = await Promise.all([
+      readOrNull(settingsJsonPath),
+      stableUserSettingsPath === settingsJsonPath
+        ? Promise.resolve(null)
+        : readOrNull(stableUserSettingsPath),
+    ]);
+    return mergePiUserSettingsPassthrough(built, sessionContent, stableContent);
+  }
+
   private async writePiRuntimeSettings(
     agentHome: string,
     opts: {
@@ -1562,10 +1686,9 @@ export class PiAgent extends BaseAgent {
     } = {},
   ): Promise<void> {
     const settingsJsonPath = joinRemotePosixPath(agentHome, 'settings.json');
-    const settingsJsonContent = this.buildCurrentPiSettingsJson(
-      opts.contextWindow,
-      opts.piCompactionPct,
-      opts.packages,
+    const settingsJsonContent = await this.buildSettingsJsonPreservingUserKeys(
+      settingsJsonPath,
+      opts,
     );
     if (opts.fileOps) {
       await opts.fileOps.writeFile(settingsJsonPath, settingsJsonContent);
@@ -1671,6 +1794,7 @@ export class PiAgent extends BaseAgent {
       gatewayApiByModel.set(m.id, api);
       const supportsImageInput = m.supportsImageInput === true;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
+      const thinkingLevelMap = gatewayThinkingLevelMap(m.efforts, resolvedSpec?.thinkingLevelMap);
       return [{
         id: m.id,
         name: m.displayName,
@@ -1686,9 +1810,7 @@ export class PiAgent extends BaseAgent {
               },
             }
           : {}),
-        ...(resolvedSpec?.thinkingLevelMap
-          ? { thinkingLevelMap: { ...resolvedSpec.thinkingLevelMap } }
-          : {}),
+        ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
         ...(resolvedSpec?.compat ? { compat: structuredClone(resolvedSpec.compat) } : {}),
         ...(resolvedSpec?.samplingParams
           ? { samplingParams: structuredClone(resolvedSpec.samplingParams) }
@@ -1774,10 +1896,9 @@ export class PiAgent extends BaseAgent {
     // isolated embedded runtime. Other PI providers ignore this transport knob.
     // Agent-level retries stay with Pi (provider maxRetries stays 0 — Pi docs:
     // SDK retries can swallow quota errors before the agent sees them).
-    const settingsJsonContent = this.buildCurrentPiSettingsJson(
-      opts.contextWindow,
-      opts.piCompactionPct,
-      opts.packages,
+    const settingsJsonContent = await this.buildSettingsJsonPreservingUserKeys(
+      settingsJsonPath,
+      opts,
     );
     // 远端 launch identity 必须覆盖进程启动才读的快照。只 hash models.json 时，
     // retry/transport/compaction 改写会落到旧 configHome，daemon 纯 attach。

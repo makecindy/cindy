@@ -268,6 +268,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       wireProtocol: 'openai-chat',
       models: [
         { id: 'deepseek-v4-flash' },
+        { id: 'deepseek-v4-flash-vision-exp' },
         { id: 'deepseek-v4-pro' },
       ],
     });

@@ -58,6 +58,16 @@ interface ClaudeEnvBuildOptions {
    */
   sessionProviderId?: string | null;
   /**
+   * CC CLI 内部小模型调用(bash 命令前缀判定/标题/摘要等)的模型覆写
+   * (`ANTHROPIC_SMALL_FAST_MODEL`)。未设置时 CLI 用内置**裸名**默认值 ——
+   * 经网关路由的会话模型 id 带命名空间前缀(如 `anthropic/claude-opus-5`),
+   * 网关模型白名单按字面比对,CLI 的裸名默认值必被拒为 403
+   * user_model_access_denied(#3557)。调用方只在会话 wire 模型带命名空间时
+   * 传入(钉到会话自身的 wire 模型 —— 它是唯一确定已授权的 id);裸名会话
+   * (订阅直连 / 自定义中继)省略,保持 CLI 默认行为零变化。
+   */
+  smallFastModel?: string;
+  /**
    * 调用方已解析好的 `CLAUDE_CODE_SUBAGENT_MODEL` 决定(见 subagent-model-default.ts)。
    *   - 字符串 → 设该值;
    *   - `null`  → 明确**不要设**(让用户手写 agent 的 frontmatter `model:` 生效);
@@ -360,6 +370,12 @@ export async function buildClaudeEnv(
           : runtimeConfig.subagentModel
         )?.trim() || undefined),
   );
+
+  // #3557: 网关路由会话把 CLI 内部小模型调用钉到会话自身的 wire 模型。
+  // if-undefined 守卫:behaviorFlags / 用户显式覆盖优先。
+  if (options.smallFastModel && env.ANTHROPIC_SMALL_FAST_MODEL === undefined) {
+    env.ANTHROPIC_SMALL_FAST_MODEL = options.smallFastModel;
+  }
 
   // 第三道防线: 告诉 CC CLI "provider 路由由 host 接管"。
   // CC 内部 filterSettingsEnv 看到此标记后,会从所有 settings-sourced env 中剥掉
