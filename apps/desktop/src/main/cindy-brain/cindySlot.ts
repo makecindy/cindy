@@ -81,6 +81,7 @@ import {
 import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { probeImageSize } from './imageProbe.js';
 import { isLibraryBlobRelPath, isLibrarySidecarRelPath } from './librarySlot.js';
+import { assertLibraryEditImageSource } from './imageChannelRegistry.js';
 import {
   decodeCatalogPin,
   type OneshotRoute,
@@ -1046,6 +1047,16 @@ export class GhostCindySlot {
         assertOwnerScopeCurrent();
         if (!abs) {
           return { ok: false, message: '源图不在本意识名下(仅能改自己生成或画廊里的媒体)' };
+        }
+        if (isLibraryBlobRelPath(lookup)) {
+          try {
+            assertLibraryEditImageSource(abs);
+          } catch (err) {
+            return {
+              ok: false,
+              message: err instanceof Error ? err.message : '源图必须是 library 正本 blob,sidecar 禁止当像素',
+            };
+          }
         }
         imagePaths.push(abs);
       }

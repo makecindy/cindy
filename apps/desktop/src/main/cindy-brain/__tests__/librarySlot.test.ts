@@ -460,8 +460,7 @@ describe('GhostLibrarySlot', () => {
 
     const st = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
     expect((st as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
-    const probe = await slot.recordLibraryProbe(GHOST_ID);
-    const probeDump = JSON.stringify(probe);
+    const probeDump = JSON.stringify({ open, status: st });
     expect(probeDump).not.toContain(defaultRootBase);
     expect(probeDump).not.toMatch(/\/Users\/.*\/libraries\//);
   });

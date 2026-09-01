@@ -275,15 +275,6 @@ export class GhostLibrarySlot {
     };
   }
 
-  /**
-   * 诊断探针:回 open/status 原文。禁绝对库根(对齐 recordLibraryProbe 落盘)。
-   */
-  async recordLibraryProbe(ghostId: string): Promise<{ open: GhostPipeLibraryResult; status: GhostPipeLibraryResult }> {
-    const open = await this.handleLibraryRequest(ghostId, { op: 'open' });
-    const status = await this.handleLibraryRequest(ghostId, { op: 'status' });
-    return { open, status };
-  }
-
   private async teardownSession(ghostId: string): Promise<void> {
     const session = this.sessions.get(ghostId);
     if (!session) return;

@@ -28,10 +28,10 @@ export function assertLibraryEditImageSource(relOrAbs: string): void {
   const marker = '/assets/';
   const idx = rel.lastIndexOf(marker);
   const candidate = idx >= 0 ? rel.slice(idx + 1) : rel.split('/').slice(-4).join('/');
-  if (isLibrarySidecarRelPath(candidate) || candidate.endsWith('/meta.json') || candidate.endsWith('/preview.webp')) {
+  if (isLibrarySidecarRelPath(candidate)) {
     throw new Error('sidecar meta.json/preview.webp 禁止当像素');
   }
-  if (!isLibraryBlobRelPath(candidate) && !/\/blob\.[A-Za-z0-9]+$/i.test(candidate)) {
+  if (!isLibraryBlobRelPath(candidate)) {
     throw new Error('editImage 只打开 library 正本 blob');
   }
 }
