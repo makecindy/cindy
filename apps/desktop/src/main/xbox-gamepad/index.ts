@@ -111,7 +111,7 @@ const layoutPreviewLease = createLayoutPreviewLease((active) => {
 
 function syncSwitch2Usb(): void {
   host.setSwitch2UsbWanted(
-    readXboxGamepadSettings('nintendo').deviceEnabled || previewFamily === 'nintendo',
+    controller.getAccessories().nintendo.settings.deviceEnabled || previewFamily === 'nintendo',
   );
 }
 

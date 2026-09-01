@@ -157,6 +157,7 @@ final class XboxGamepadReporter {
   private var lastSeenSummary: String?
   private var lastPresenceSignature: [String: String] = [:]
   private var switch2UsbWanted = false
+  private var switch2PollTimer: Timer?
 
   func start() {
     if #available(macOS 11.3, *) {
@@ -176,9 +177,6 @@ final class XboxGamepadReporter {
     ) { [weak self] _ in
       self?.refresh()
     }
-    Timer.scheduledTimer(withTimeInterval: 0.008, repeats: true) { [weak self] _ in
-      self?.refreshSwitch2IfNeeded()
-    }
     refresh()
   }
 
@@ -187,9 +185,16 @@ final class XboxGamepadReporter {
     switch2UsbWanted = wanted
     if wanted {
       _ = switch2_usb_ensure()
+      if switch2PollTimer == nil {
+        switch2PollTimer = Timer.scheduledTimer(withTimeInterval: 0.008, repeats: true) { [weak self] _ in
+          self?.refreshSwitch2IfNeeded()
+        }
+      }
       refreshSwitch2IfNeeded()
       return
     }
+    switch2PollTimer?.invalidate()
+    switch2PollTimer = nil
     switch2_usb_shutdown()
     if observed["nintendo"] == nil, lastPresenceSignature["nintendo"] != "absent" {
       lastPresenceSignature["nintendo"] = "absent"

@@ -296,9 +296,10 @@ describe('Xbox gamepad helper packaging contract', () => {
     expect(source).toContain('switch2-usb off');
     expect(source).toContain('switch2_usb_shutdown');
     expect(source).toContain('func setSwitch2UsbWanted');
-    expect(source.match(/func start\(\) \{[\s\S]*?\n  \}/)?.[0] ?? '').not.toContain(
-      'switch2_usb_ensure',
-    );
+    const startFn = source.match(/func start\(\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
+    expect(startFn).not.toContain('switch2_usb_ensure');
+    expect(startFn).not.toContain('scheduledTimer');
+    expect(source).toContain('switch2PollTimer');
     expect(source).toMatch(
       /if family == "nintendo" \{[\s\S]*?if switch2UsbWanted \{[\s\S]*?continue/,
     );
@@ -322,6 +323,7 @@ describe('Xbox gamepad helper packaging contract', () => {
     expect(host).toContain('setSwitch2UsbWanted');
     const index = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
     expect(index).toContain('setSwitch2UsbWanted');
+    expect(index).toContain('controller.getAccessories().nintendo.settings.deviceEnabled');
     expect(index).toContain("previewFamily === 'nintendo'");
     expect(index).toContain('layoutPreviewLease.setActive(false, owner)');
     expect(index).not.toMatch(/previewFamily = family;\s*layoutPreviewLease\.setActive\(active/);
