@@ -2949,17 +2949,18 @@ export function applyDirectoryGrants(
       readExtraDirs: () => readSessionExtraDirsFromDb(sessionId),
       readWritableDirs: () => readSessionWritableDirsFromDb(sessionId),
       excludeConflicts: async (candidates, blocked) => {
-        const accepted = axis === 'extraDirs'
-          ? await (async () => {
-            const runtimeAccepted = await excludeDirectoryGrantConflicts(
-              extraDirsForRuntime(candidates),
-              extraDirsForRuntime(blocked),
-            );
-            return candidates.filter((dir) => runtimeAccepted.includes(
-              isLibraryExtraDirSlot(dir) ? libraryRootFromSlot(dir) : dir,
-            ));
-          })()
-          : await excludeDirectoryGrantConflicts(candidates, blocked);
+        let accepted: string[];
+        if (axis === 'extraDirs') {
+          const runtimeAccepted = await excludeDirectoryGrantConflicts(
+            extraDirsForRuntime(candidates),
+            extraDirsForRuntime(blocked),
+          );
+          accepted = candidates.filter((dir) => runtimeAccepted.includes(
+            isLibraryExtraDirSlot(dir) ? libraryRootFromSlot(dir) : dir,
+          ));
+        } else {
+          accepted = await excludeDirectoryGrantConflicts(candidates, blocked);
+        }
         if (axis === 'writableDirs') {
           const previousDirs = await readSessionWritableDirsFromDb(sessionId);
           const [route] = await getDbClient()
