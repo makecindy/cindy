@@ -46,6 +46,7 @@ describe('GhostLibrarySlot', () => {
   let scopeKey: string | null = 'local:owner-a:1';
   let ghost: InstalledGhost;
   let slot: GhostLibrarySlot;
+  let bindingStore: LibraryBindingStore;
   let showItemInFolder: ReturnType<typeof vi.fn>;
   let showSaveDialog: ReturnType<typeof vi.fn>;
   let syncAgentReadonlyExtraDir: ReturnType<typeof vi.fn>;
@@ -59,13 +60,14 @@ describe('GhostLibrarySlot', () => {
     clock = 0;
     await fs.promises.mkdir(candidate, { recursive: true });
     ghost = makeGhost(true);
+    bindingStore = new LibraryBindingStore({
+      getFile: () => bindingFile,
+      getManagedRoots: () => [path.join(tmp, 'managed')],
+      getDefaultRoot: (id) => path.join(defaultRootBase, id),
+    });
     const deps: GhostLibrarySlotDeps = {
       getGhost: (id) => (id === GHOST_ID ? ghost : null),
-      bindingStore: new LibraryBindingStore({
-        getFile: () => bindingFile,
-        getManagedRoots: () => [path.join(tmp, 'managed')],
-        getDefaultRoot: (id) => path.join(defaultRootBase, id),
-      }),
+      bindingStore,
       getDefaultRoot: (id) => path.join(defaultRootBase, id),
       captureOwnerScope: () => scopeKey,
       createVault: (d) => new LibraryVault(d),
@@ -477,6 +479,36 @@ describe('GhostLibrarySlot', () => {
     );
     await slot.disposeGhost(GHOST_ID);
     expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, null);
+  });
+
+  it('bind generation 变了:握手换身份,extraDirs 同步新根不留旧根', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    const defaultRoot = path.join(defaultRootBase, GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, defaultRoot);
+
+    const bound = await bindingStore.setBinding(GHOST_ID, candidate);
+    expect(bound.ok).toBe(true);
+    await slot.disposeGhost(GHOST_ID);
+    syncAgentReadonlyExtraDir.mockClear();
+
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    const hs = open as unknown as {
+      authorizedReadonly: boolean;
+      libraryGeneration: number;
+      libraryIdentity: string;
+    };
+    expect(hs.authorizedReadonly).toBe(true);
+    expect(hs.libraryGeneration).toBe(1);
+    expect(hs.libraryIdentity).toBe('g1');
+    const dumped = JSON.stringify(open);
+    expect(dumped).not.toContain(candidate);
+    expect(dumped).not.toContain(defaultRoot);
+    expect(dumped).not.toMatch(/\/Users\/.*\/libraries\//);
+
+    const newRoot = path.join(await fs.promises.realpath(candidate), GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, newRoot);
+    expect(syncAgentReadonlyExtraDir.mock.calls.map((call) => call[1])).not.toContain(defaultRoot);
   });
 
   it('writeCommit ACK 含 64-hex sha256,形状 {ok,op,path,bytes,sha256}', async () => {

@@ -629,7 +629,16 @@ import { runAcceptedCallback } from './acceptedCallbackRunner.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
 import { broadcastSchedulerChanged } from './schedule.js';
-import { excludeDirectoryGrantConflicts, validateExtraDirs } from './extraDirsValidator.js';
+import {
+  excludeDirectoryGrantConflicts,
+  extraDirsForRuntime,
+  isLibraryExtraDirSlot,
+  libraryExtraDirSlot,
+  libraryRootFromSlot,
+  nextLibraryExtraDirs,
+  splitExtraDirSlots,
+  validateExtraDirs,
+} from './extraDirsValidator.js';
 import {
   applyRemoteDirectoryGrantUpdate,
   isPersistedDirectoryGrantSubset,
@@ -2860,35 +2869,6 @@ export async function withSendToSessionLock<T>(
   }
 }
 
-/** 会话级 library 只读槽前缀:不占用户 EXTRA_DIRS_MAX=10。 */
-export const LIBRARY_EXTRA_DIR_SLOT_PREFIX = 'cindy-library:';
-
-function libraryExtraDirSlot(root: string): string {
-  return `${LIBRARY_EXTRA_DIR_SLOT_PREFIX}${root}`;
-}
-
-function isLibraryExtraDirSlot(dir: string): boolean {
-  return dir.startsWith(LIBRARY_EXTRA_DIR_SLOT_PREFIX);
-}
-
-function libraryRootFromSlot(dir: string): string {
-  return dir.slice(LIBRARY_EXTRA_DIR_SLOT_PREFIX.length);
-}
-
-function splitExtraDirSlots(dirs: readonly string[]): { user: string[]; library: string[] } {
-  const user: string[] = [];
-  const library: string[] = [];
-  for (const dir of dirs) {
-    if (isLibraryExtraDirSlot(dir)) library.push(dir);
-    else user.push(dir);
-  }
-  return { user, library };
-}
-
-function extraDirsForRuntime(dirs: readonly string[]): string[] {
-  return dirs.map((dir) => (isLibraryExtraDirSlot(dir) ? libraryRootFromSlot(dir) : dir));
-}
-
 export interface ApplyDirectoryGrantsOptions {
   remote: boolean;
   senderId?: number;
@@ -3035,18 +3015,33 @@ export async function applyLibraryReadonlyExtraDir(
   root: string | null,
 ): Promise<string[] | void> {
   const current = await readSessionExtraDirsFromDb(sessionId);
-  const { user } = splitExtraDirSlots(current);
-  const next = root ? [...user, libraryExtraDirSlot(root)] : user;
+  let canonical: string | null = null;
+  if (root) {
+    try {
+      canonical = await fsp.realpath(root);
+    } catch {
+      canonical = null;
+    }
+  }
+  const next = nextLibraryExtraDirs(current, canonical);
+  if (
+    next.length === current.length &&
+    next.every((dir, index) => dir === current[index])
+  ) {
+    return current;
+  }
   return applyDirectoryGrants('extraDirs', sessionId, next, { remote: false });
 }
 
 async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
   const focused = getFocusedGhostSessionId();
   const visible = await listVisibleActiveSessionIds();
-  for (const sessionId of visible) {
-    const nextRoot = root && sessionId === focused ? root : null;
+  const targets = new Set(visible);
+  if (focused) targets.add(focused);
+  for (const sessionId of targets) {
+    const grantRoot = root && sessionId === focused ? root : null;
     try {
-      await applyLibraryReadonlyExtraDir(sessionId, nextRoot);
+      await applyLibraryReadonlyExtraDir(sessionId, grantRoot);
     } catch (error) {
       log.warn('library extraDirs session sync failed', {
         sessionId,

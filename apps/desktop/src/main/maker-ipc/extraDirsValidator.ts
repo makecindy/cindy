@@ -33,6 +33,35 @@ export function isLibraryExtraDirSlot(dir: string): boolean {
   return dir.startsWith(LIBRARY_EXTRA_DIR_SLOT_PREFIX);
 }
 
+export function libraryExtraDirSlot(root: string): string {
+  return `${LIBRARY_EXTRA_DIR_SLOT_PREFIX}${root}`;
+}
+
+export function libraryRootFromSlot(dir: string): string {
+  return isLibraryExtraDirSlot(dir) ? dir.slice(LIBRARY_EXTRA_DIR_SLOT_PREFIX.length) : dir;
+}
+
+export function splitExtraDirSlots(dirs: readonly string[]): { user: string[]; library: string[] } {
+  const user: string[] = [];
+  const library: string[] = [];
+  for (const dir of dirs) {
+    if (isLibraryExtraDirSlot(dir)) library.push(dir);
+    else user.push(dir);
+  }
+  return { user, library };
+}
+
+/** 运行时 extraDirs 去掉 library 槽前缀,只留真实绝对路径。 */
+export function extraDirsForRuntime(dirs: readonly string[]): string[] {
+  return dirs.map((dir) => libraryRootFromSlot(dir));
+}
+
+/** 保留用户自选目录,library 槽最多一条。root 为 null 则撤槽。 */
+export function nextLibraryExtraDirs(current: readonly string[], root: string | null): string[] {
+  const { user } = splitExtraDirSlots(current);
+  return root ? [...user, libraryExtraDirSlot(root)] : user;
+}
+
 export interface ValidateResult {
   /** 通过校验, 实际可用的绝对路径列表 (去重后, 顺序保留首次出现) */
   valid: string[];

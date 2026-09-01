@@ -243,9 +243,28 @@ describe('session runtime control wiring', () => {
     expect(writableDirs).toContain("applyDirectoryGrants('writableDirs'");
     expect(writableDirs).toContain('senderId: event.sender.id');
     expect(registerSource).toContain('setGhostLibraryExtraDirSync(syncLibraryReadonlyExtraDir)');
-    expect(registerSource).toContain('const nextRoot = root && sessionId === focused ? root : null');
     expect(registerSource).toContain('const persistOnly = !sess');
-    expect(registerSource).toContain('await applyLibraryReadonlyExtraDir(sessionId, nextRoot)');
+    expect(registerSource).toContain('await applyLibraryReadonlyExtraDir(sessionId, grantRoot)');
+    const applyLibrary = handlerBody(
+      registerSource,
+      'export async function applyLibraryReadonlyExtraDir(',
+      'async function syncLibraryReadonlyExtraDir(',
+    );
+    expect(applyLibrary).toContain('fsp.realpath(root)');
+    expect(applyLibrary).toContain('nextLibraryExtraDirs(current, canonical)');
+    expect(applyLibrary).toContain("applyDirectoryGrants('extraDirs'");
+    expect(applyLibrary).toContain('{ remote: false }');
+    expect(applyLibrary).not.toContain('consumeWritableDirectoryPickerGrants');
+    const syncLibrary = handlerBody(
+      registerSource,
+      'async function syncLibraryReadonlyExtraDir(',
+      'let agentInputCoordinatorHolder',
+    );
+    expect(syncLibrary).toContain('listVisibleActiveSessionIds()');
+    expect(syncLibrary).toContain('targets.add(focused)');
+    expect(syncLibrary).toContain('root && sessionId === focused ? root : null');
+    expect(extraDirs).toContain('!isLibraryExtraDirSlot(dir)');
+    expect(extraDirs).toContain('splitExtraDirSlots(persisted)');
   });
 
   it('guards local user model changes before parsing input while preserving trusted internal paths', () => {

@@ -5622,9 +5622,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (!resumeAt) {
             throw new Error('Claude rewind rebuild missing resume target');
           }
+          const directoryGrantRebuild = pendingRewindTo === sdkSessionId;
           log.debug('send ▶ pendingRewindTo detected — rebuilding sdkQuery with 三件套', {
-            resumeSessionAt: resumeAt,
+            resumeSessionAt: directoryGrantRebuild ? undefined : resumeAt,
             resumeSdkSid: sdkSessionId,
+            directoryGrantRebuild,
           });
           // 关键: 重建 abortController + inputQueue。老的两个在 q.close() 时已经污染
           // (controller 进 aborted 状态, queue 的 generator 还在等 waiter), 复用会让
@@ -5653,8 +5655,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 不能再读包含 arm 态的 effectiveSdkPermissionMode()。否则 rewind 窗口里用户 arm
           // 了下一 turn 的 plan,但当前排队行显式 planMode:false 时,新 Query 会先以 plan
           // 起跑且 replay 看不到 diff,导致普通 turn 误跑成 plan turn (Codex review 3535801840)。
+          rewindTransitionQueries.add(q);
+          try {
+            q.close();
+          } catch (e) {
+            log.warn('rewind rebuild: q.close threw', { error: String(e) });
+          }
           q = await buildQuery({
-            resumeSessionAt: resumeAt,
+            ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
             forkSession: true,
             permissionMode: snapSdkPermissionMode,
           });

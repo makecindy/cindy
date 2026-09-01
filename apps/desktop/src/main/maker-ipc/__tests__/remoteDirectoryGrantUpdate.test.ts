@@ -121,4 +121,16 @@ describe('remote directory grant atomic update', () => {
       });
     expect(state.terminate).toHaveBeenCalledOnce();
   });
+
+  it('runtime setExtraDirs 抛错则不持久化,避免假授权', async () => {
+    const state = createState(['/old-read']);
+    state.setExtraDirs.mockRejectedValueOnce(new Error('require app-server 0.144.6 or newer'));
+    await expect(state.update('extraDirs', ['/library-root'])).rejects.toThrow(
+      'require app-server 0.144.6 or newer',
+    );
+    expect(state.runtime.extraDirs).toEqual(['/old-read']);
+    expect(state.db.extraDirs).toEqual(['/old-read']);
+    expect(state.persist).not.toHaveBeenCalled();
+    expect(state.terminate).not.toHaveBeenCalled();
+  });
 });
