@@ -227,6 +227,27 @@ describe('XboxGamepadHost', () => {
     expect(spawnHelper).not.toHaveBeenCalled();
   });
 
+  it('tells the helper when Switch 2 USB should claim the pad', async () => {
+    const child = fakeChild();
+    const chunks: string[] = [];
+    child.stdin.on('data', (chunk: string | Buffer) => {
+      chunks.push(String(chunk));
+    });
+    const host = createXboxGamepadHost(vi.fn(), {
+      resolveHelperPath: async () => '/helper',
+      spawnHelper: () => child,
+    });
+
+    host.start();
+    await flush();
+    host.setSwitch2UsbWanted(true);
+    host.setSwitch2UsbWanted(false);
+
+    expect(chunks.join('')).toContain('switch2-usb on');
+    expect(chunks.join('')).toContain('switch2-usb off');
+    host.stop();
+  });
+
   it('does not report host-error when the helper is stopped on purpose', async () => {
     const onMessage = vi.fn();
     const child = fakeChild();
@@ -271,7 +292,13 @@ describe('Xbox gamepad helper packaging contract', () => {
     expect(source).not.toContain('func isXboxController');
     expect(source).not.toContain('all.first(where: isXboxController)');
     expect(source).toContain('switch2_usb_ensure');
-    expect(source).toContain('switch2-usb');
+    expect(source).toContain('switch2-usb on');
+    expect(source).toContain('switch2-usb off');
+    expect(source).toContain('switch2_usb_shutdown');
+    expect(source).toContain('func setSwitch2UsbWanted');
+    expect(source.match(/func start\(\) \{[\s\S]*?\n  \}/)?.[0] ?? '').not.toContain(
+      'switch2_usb_ensure',
+    );
     expect(source).toMatch(/if family == "nintendo" \{[\s\S]*?observed\[family\] = nil/);
   });
 
@@ -287,6 +314,10 @@ describe('Xbox gamepad helper packaging contract', () => {
     expect(host).toContain("'-c'");
     expect(host).toContain('switch2_usb.o');
     expect(host).not.toMatch(/swiftc',[\s\S]*switch2UsbC/);
+    expect(host).toContain('setSwitch2UsbWanted');
+    const index = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+    expect(index).toContain('setSwitch2UsbWanted');
+    expect(index).toContain("previewFamily === 'nintendo'");
   });
 
   it('copies the matching HID set into a buffer sized for every device', () => {

@@ -156,6 +156,7 @@ final class XboxGamepadReporter {
   /// nil until the first refresh, so an empty device list still gets logged once.
   private var lastSeenSummary: String?
   private var lastPresenceSignature: [String: String] = [:]
+  private var switch2UsbWanted = false
 
   func start() {
     if #available(macOS 11.3, *) {
@@ -175,11 +176,25 @@ final class XboxGamepadReporter {
     ) { [weak self] _ in
       self?.refresh()
     }
-    _ = switch2_usb_ensure()
     Timer.scheduledTimer(withTimeInterval: 0.008, repeats: true) { [weak self] _ in
       self?.refreshSwitch2IfNeeded()
     }
     refresh()
+  }
+
+  func setSwitch2UsbWanted(_ wanted: Bool) {
+    if switch2UsbWanted == wanted { return }
+    switch2UsbWanted = wanted
+    if wanted {
+      _ = switch2_usb_ensure()
+      refreshSwitch2IfNeeded()
+      return
+    }
+    switch2_usb_shutdown()
+    if observed["nintendo"] == nil, lastPresenceSignature["nintendo"] != "absent" {
+      lastPresenceSignature["nintendo"] = "absent"
+      emit(["kind": "presence", "present": false, "family": "nintendo"])
+    }
   }
 
   func refresh() {
@@ -233,6 +248,7 @@ final class XboxGamepadReporter {
   }
 
   private func refreshSwitch2IfNeeded() {
+    if !switch2UsbWanted { return }
     if observed["nintendo"] != nil { return }
     var state = Switch2UsbState()
     switch2_usb_copy_state(&state)
@@ -366,6 +382,16 @@ DispatchQueue.global(qos: .utility).async {
     if trimmed == "probe" {
       DispatchQueue.main.async {
         reporter.refresh()
+      }
+    }
+    if trimmed == "switch2-usb on" {
+      DispatchQueue.main.async {
+        reporter.setSwitch2UsbWanted(true)
+      }
+    }
+    if trimmed == "switch2-usb off" {
+      DispatchQueue.main.async {
+        reporter.setSwitch2UsbWanted(false)
       }
     }
   }

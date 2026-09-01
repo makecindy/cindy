@@ -20,6 +20,7 @@ export interface XboxGamepadHost {
   start(): void;
   probe(): void;
   stop(): void;
+  setSwitch2UsbWanted(wanted: boolean): void;
 }
 
 export interface XboxGamepadHostDeps {
@@ -38,6 +39,7 @@ export function createXboxGamepadHost(
   let child: ChildProcessWithoutNullStreams | null = null;
   let starting = false;
   let wanted = false;
+  let switch2UsbWanted = false;
   let buffer = '';
   let consecutiveFailures = 0;
   let crashAccounted = false;
@@ -99,6 +101,9 @@ export function createXboxGamepadHost(
     }
   };
 
+  const writeSwitch2UsbWanted = (): boolean =>
+    writeHelper(switch2UsbWanted ? 'switch2-usb on\n' : 'switch2-usb off\n');
+
   const attach = (next: ChildProcessWithoutNullStreams): void => {
     child = next;
     starting = false;
@@ -136,6 +141,7 @@ export function createXboxGamepadHost(
       reportHostFailure(`Xbox gamepad helper exited unexpectedly (${code ?? signal ?? 'unknown'})`);
       noteChildGone();
     });
+    writeSwitch2UsbWanted();
   };
 
   const reportHostFailure = (message: string): void => {
@@ -174,6 +180,11 @@ export function createXboxGamepadHost(
     probe() {
       if (writeHelper('probe\n')) return;
       void startChild();
+    },
+    setSwitch2UsbWanted(next: boolean) {
+      if (switch2UsbWanted === next) return;
+      switch2UsbWanted = next;
+      writeSwitch2UsbWanted();
     },
     stop() {
       wanted = false;
