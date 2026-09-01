@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   Easing,
   Modal,
   type NativeScrollEvent,
@@ -1187,10 +1188,27 @@ export default function HomeScreen() {
   // syncInFlight 去重,冷启动时与上线瞬间的两次触发只会实际执行一次。
   // 首次触发同时等首页列表缓存种入完成(homeListCacheHydrated,AsyncStorage 读一个小 key,毫秒级):
   // 保证缓存先画、fresh 后覆盖的顺序确定,避免 loadHome 清理下线设备后缓存又把 stale shard 种回去。
-  useEffect(() => {
+  const startSilentHomeSync = useCallback(() => {
     if (!deviceIdentityCacheReady || !homeListCacheHydrated || !homeViewPreferencesHydrated) return;
     void loadHome({ visible: false });
-  }, [connectionEpoch, deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);
+  }, [deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);
+
+  // Android can recreate the activity or resume the JS runtime without a fresh React
+  // mount. Foreground is therefore an authoritative trigger alongside the initial mount
+  // and reconnect; loadHome single-flights these overlapping cold-start calls.
+  useFocusEffect(
+    useCallback(() => {
+      startSilentHomeSync();
+    }, [startSilentHomeSync]),
+  );
+
+  useEffect(() => {
+    startSilentHomeSync();
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') startSilentHomeSync();
+    });
+    return () => subscription.remove();
+  }, [connectionEpoch, startSilentHomeSync]);
 
   // 把当前权威设备列表注入 remoteSessionStore,让 store 给所有 useRemoteSessions 消费者(首页项目卡、
   // 设备详情页)统一算展示用 canonicalDeviceId:re-link 后残留的 stale shard 会话按设备名唯一匹配认领回

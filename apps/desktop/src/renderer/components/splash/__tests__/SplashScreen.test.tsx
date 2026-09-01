@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DbSlimmingStartupProgress } from '../../../../shared/localDbMaintenance';
 
@@ -45,6 +45,10 @@ const mocks = vi.hoisted(() => ({
   },
   env: { step: undefined as 1 | 2 | undefined, totalSteps: undefined as 2 | undefined },
   coverHeld: false,
+  handoff: {
+    reportSplashExited: vi.fn(),
+    reportSplashExitCompleted: vi.fn(),
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -78,6 +82,10 @@ vi.mock('@/contexts/EnvCheckContext', () => ({
 
 vi.mock('@/contexts/AppShellCoverContext', () => ({
   useAppShellCover: () => ({ coverHeld: mocks.coverHeld, reportLocalDbGate: () => {} }),
+}));
+
+vi.mock('@/contexts/LoginHandoffContext', () => ({
+  useLoginHandoff: () => mocks.handoff,
 }));
 
 vi.mock('@/components/title-bar/WindowControls', () => ({
@@ -448,6 +456,28 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(screen.getByTestId('splash-root').className).toContain('opacity-0');
   });
 
+  it('等待 Splash 淡出层完成并可卸载后才上报退场完成', () => {
+    vi.useFakeTimers();
+    try {
+      mocks.coverHeld = true;
+      const view = renderSplash('splash_done');
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      mocks.coverHeld = false;
+      view.rerender(<SplashScreen />);
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      act(() => vi.advanceTimersByTime(499));
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(mocks.handoff.reportSplashExitCompleted).toHaveBeenCalledTimes(1);
+      expect(view.container.firstElementChild).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reduced-motion 下 cover 放行立即卸载,不留 500ms 透明遮罩', () => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: String(query).includes('prefers-reduced-motion'),
@@ -464,6 +494,50 @@ describe('SplashScreen wave4 统一面板', () => {
     mocks.coverHeld = false;
     view.rerender(<SplashScreen />);
     expect(view.container.firstElementChild).toBeNull();
+  });
+
+  it('淡出期间开启 reduced-motion 时释放淡出锁并完成卸载', () => {
+    vi.useFakeTimers();
+    const previousMatchMedia = window.matchMedia;
+    let reducedMotion = false;
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    const mediaQuery = {
+      get matches() {
+        return reducedMotion;
+      },
+      media: '(prefers-reduced-motion: reduce)',
+      addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+        listeners.add(listener);
+      },
+      removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+        listeners.delete(listener);
+      },
+      addListener: (listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+      removeListener: (listener: (event: MediaQueryListEvent) => void) =>
+        listeners.delete(listener),
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+    window.matchMedia = vi.fn(() => mediaQuery) as unknown as typeof window.matchMedia;
+
+    try {
+      mocks.coverHeld = true;
+      const view = renderSplash('splash_done');
+      mocks.coverHeld = false;
+      view.rerender(<SplashScreen />);
+      expect(screen.getByTestId('splash-root').className).toContain('opacity-0');
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      reducedMotion = true;
+      act(() => {
+        for (const listener of listeners) listener({ matches: true } as MediaQueryListEvent);
+      });
+
+      expect(mocks.handoff.reportSplashExitCompleted).toHaveBeenCalledTimes(1);
+      expect(view.container.firstElementChild).toBeNull();
+    } finally {
+      window.matchMedia = previousMatchMedia;
+      vi.useRealTimers();
+    }
   });
 
   it('shows startup database cleanup progress, time estimate, and a safe cancel action', async () => {

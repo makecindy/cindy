@@ -15,7 +15,10 @@
     "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again.",
-    "INTERNAL": "Operation failed. Please try again later."
+    "INTERNAL": "Operation failed. Please try again later.",
+    "RIGHT_SIDEBAR_TOO_MANY_TABS": "This task has reached its tab limit. Close some tabs first",
+    "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Tab content is too large to add",
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "This tab type is unavailable"
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",

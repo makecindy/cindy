@@ -657,6 +657,20 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   });
 
   it.each([
+    ['https://api.deepseek.com/v1', 'deepseek-v4-flash', 'reasoning_content'],
+    ['https://api.deepseek.com', 'deepseek-chat', 'reasoning_content'],
+    ['https://relay.example/v1', 'deepseek-v4-flash', undefined],
+    ['http://api.deepseek.com/v1', 'deepseek-v4-flash', undefined],
+    ['https://api.deepseek.com/v1', 'kimi-k3', undefined],
+  ] as const)(
+    'reasoning_content 历史回传只对官方 DeepSeek 路由开启 (#3441): %s %s → %s',
+    async (upstream, model, expected) => {
+      const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+      expect(chatBridgeCapabilitiesForRoute(upstream, model).reasoningHistoryField).toBe(expected);
+    },
+  );
+
+  it.each([
     ['https://api.kimi.com/coding/v1', 'k3'],
     ['https://api.kimi.com/coding/v1/', 'k3-256k'],
   ])('enables image_url for Kimi Code coding-plan route: %s / %s (#2732)', async (upstream, model) => {

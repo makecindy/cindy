@@ -109,3 +109,59 @@ describe('createStdioTransport process observer', () => {
     })).not.toThrow();
   });
 });
+
+describe('close() 强杀兜底 (#3699)', () => {
+  it('SIGTERM 后进程未退出 → 宽限期到点补 SIGKILL(卡死 app-server 不再活体泄漏)', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeChild();
+      mocks.spawn.mockReturnValue(child);
+      const transport = createStdioTransport({ binaryPath: '/codex' });
+
+      await transport.close();
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+
+      // 进程无视 SIGTERM(exitCode/signalCode 保持 null)→ 宽限期后强杀。
+      vi.advanceTimersByTime(5_000);
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('宽限期内正常退出 → 不发 SIGKILL', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeChild();
+      mocks.spawn.mockReturnValue(child);
+      const transport = createStdioTransport({ binaryPath: '/codex' });
+
+      await transport.close();
+      child.signalCode = 'SIGTERM';
+      child.emit('exit', null, 'SIGTERM');
+      vi.advanceTimersByTime(5_000);
+      expect(child.kill).toHaveBeenCalledTimes(1); // 仅 SIGTERM
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('close() 前已退出 → 全程不发信号', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeChild();
+      mocks.spawn.mockReturnValue(child);
+      const transport = createStdioTransport({ binaryPath: '/codex' });
+
+      child.exitCode = 0;
+      child.emit('exit', 0, null);
+      await transport.close();
+      vi.advanceTimersByTime(5_000);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
