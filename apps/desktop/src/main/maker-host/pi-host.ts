@@ -1622,11 +1622,14 @@ export function resolvePiCindyGatewayModelSpec(
         ? row.thinkingLevelMap
         : undefined
       : undefined;
+  // An exact current-binary probe is the live catalog for this model. If that row exists,
+  // do not fall back to a stale bundled completions map — a quirky probed map must stay
+  // fail-closed, and a map-less probed row must not be filled from the snapshot.
   const thinkingLevelMap =
     compatibleProbed?.thinkingLevelMap ??
     compatibleBundled?.thinkingLevelMap ??
     carriesCompletionsRowOverResponsesFrontDoor(probed) ??
-    carriesCompletionsRowOverResponsesFrontDoor(bundled);
+    (probed ? undefined : carriesCompletionsRowOverResponsesFrontDoor(bundled));
   return {
     api,
     ...(compatibleProbed?.compat ?? compatibleBundled?.compat

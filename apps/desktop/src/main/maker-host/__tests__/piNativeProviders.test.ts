@@ -2131,6 +2131,29 @@ describe('#3732: gateway thinkingLevelMap survives a front-door API change', () 
     expect(spec?.thinkingLevelMap).toMatchObject({ low: 'low', high: 'high', max: 'max' });
   });
 
+  it('does not replace a quirky probed map with the stale bundled canonical map', () => {
+    declareServerPiApi('deepseek/deepseek-v4-flash', 'openai-responses');
+    setLatestPiBundledModelCatalogForTest(
+      new Map([
+        [
+          'deepseek',
+          new Map([
+            [
+              'deepseek-v4-flash',
+              piBundledModel('deepseek-v4-flash', 'openai-completions', {
+                thinkingLevelMap: { low: 'thinking-budget-x', max: 'yarn.reasoning.max' },
+              }),
+            ],
+          ]),
+        ],
+      ]),
+    );
+
+    expect(resolvePiCindyGatewayModelSpec('xd', 'deepseek/deepseek-v4-flash')).toEqual({
+      api: 'openai-responses',
+    });
+  });
+
   it('still drops a map with provider-specific values across an API change', () => {
     declareServerPiApi('z-ai/glm-5.3-flash-quirky', 'openai-responses');
     setLatestPiBundledModelCatalogForTest(
