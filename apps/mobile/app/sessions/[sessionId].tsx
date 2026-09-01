@@ -456,6 +456,7 @@ import {
   hasOlderMessagesByServerCount,
   listMessagesWithPayloadRetry,
   oldestMessageCursor,
+  projectLoadedMessageWindow,
   shouldRefreshLatestMessageWindowOnReopen,
   shouldKeepOlderMessagesAffordance,
 } from '@/session/messagePaging';
@@ -468,11 +469,14 @@ import {
   historyWindowGapKey,
 } from '@/session/historyWindowGap';
 import {
-  buildMobileMessageRenderItems,
   insertMobileForkOriginItem,
   type MobileMessageRenderItem,
 } from '@/session/messageRenderModel';
 import { reconcileMobileMessageRenderItems } from '@/session/messageRenderReconcile';
+import {
+  buildMobileStreamingRenderWindow,
+  type MobileStreamingRenderPrefixCache,
+} from '@/session/messageRenderStreamingCache';
 import { shouldSuppressEmptyMessageState } from '@/session/sessionEmptyState';
 import { deferScheduleIndexHydration } from '@/session/scheduleIndexDefer';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
@@ -1679,8 +1683,9 @@ export default function SessionScreen() {
   }
   // 远程媒体取件队列:屏实例级缓存 + 同 url 去重 + 并发上限(每次取件都让桌面端
   // 真实上传一次 OSS,列表缩略图懒取件后必须收敛)。deps 经 ref 透传保持队列实例稳定;
-  // 队列生命周期 = 单个会话:切 sessionId / 退屏时 releaseAll + 补删 + 换新实例
-  // (见下方 sessionId 键控的清理 effect),上一会话的 OSS 对象不跨会话累积。
+  // 队列生命周期 = 单个会话:切 sessionId / 页面卸载时 releaseAll + 补删,
+  // 下个会话首次取件再懒建新实例(见下方 sessionId 键控的清理 effect),
+  // 上一会话的 OSS 对象不跨会话累积。
   const remoteMediaDepsRef = useRef({ auth, maker });
   // useLayoutEffect 而非 useEffect:子组件(MediaPreview)的取件是被动 effect,
   // 会晚于父层 layout effect、早于父层被动 effect——切会话首批取件必须已看到
@@ -1825,6 +1830,8 @@ export default function SessionScreen() {
       // 退屏后才完成的 in-flight 取件:缓存已被 releaseAll 清空接管不到,这里直接
       // 补 DELETE,避免「退出时正在取件」的对象漏出退屏统一清理悬到生命周期兜底。
       onOrphanResolved: (media) => deleteRemoteMediaObject(media),
+    }, {
+      maxCacheBytes: 16 * 1024 * 1024,
     }), [deleteRemoteMediaObject]);
   remoteMediaQueueRef.current ??= createRemoteMediaQueue();
   const voiceRecordingActiveRef = useRef(false);
@@ -2221,7 +2228,7 @@ export default function SessionScreen() {
   const showSyncingShell = sessionOperationLayout.composerSlot === 'missing-session'
     && !remoteUnavailableReason;
   // 同步/加载期消息区不显示「暂无消息」(会话其实在加载、不是空),改为渲染「正在同步」
-  // loading 占位(MessageRenderer 的 SyncingMessages,延迟显形防快速路径闪烁);看过的会话
+  // loading 占位(MessageRenderer 的 SyncingMessages);看过的会话
   // 此时已被本地缓存(②)填充正常渲染,不进 empty 分支。还包含冷开首帧:currentSession 立即
   // 就有但消息未到、loading 尚未翻 true 的窗口(本次打开未同步过)。只有同步完成过
   // (lastSyncedAt 有值)且确实 0 条时才显示「暂无消息」;离线/被撤销(remoteUnavailableReason)
@@ -4614,18 +4621,27 @@ export default function SessionScreen() {
     sessionId: string;
     items: readonly MobileMessageRenderItem[];
   } | null>(null);
+  const streamingRenderPrefixRef = useRef<MobileStreamingRenderPrefixCache | null>(null);
   const renderItems = useMemo(
     () => {
+      const builtWindow = buildMobileStreamingRenderWindow({
+        cacheKey: i18nInstance.language,
+        messages: projectLoadedMessageWindow(messages),
+        options: {
+          autoResumePending: inputProjection.autoResumePending,
+          isSessionStreaming,
+          renderOrphanTaskUpdates: makerTurnRunning,
+          sessionId,
+        },
+        prefixCache: streamingRenderPrefixRef,
+        taskUpdates,
+      });
       let items = insertMobileForkOriginItem(
         // 孤儿 agent_task 兜底用 maker status 驱动的权威 turn 边界 gate,与 store 的
         // turn-start 清理同源闭环——渲染开启时 map 必已清过 stale。不用 isSessionStreaming
         // (含本地 sending / canStopQueue,发送→status 间隙会闪现残留),也不用
         // remoteSessionRunning(activity 推送 / 活跃快照会先置 true,重连场景渲染先于清理)。
-        buildMobileMessageRenderItems(
-          messages,
-          { autoResumePending: inputProjection.autoResumePending, isSessionStreaming, renderOrphanTaskUpdates: makerTurnRunning, sessionId },
-          taskUpdates,
-        ),
+        builtWindow.items,
         forkOrigin,
       );
       if (errorTailClientId) {
@@ -4641,8 +4657,8 @@ export default function SessionScreen() {
     },
     [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
   );
-  // 只在本次 render 真正 commit 后更新 reconcile 基准。写入 useMemo/ref 会让
-  // Concurrent Mode 下被丢弃的 render 泄漏成下一轮的 previous,破坏尾行 memo 的稳定性。
+  // Reconciliation must only use committed rows. Unlike the prefix cache above, a speculative
+  // render-item baseline could leak rows from an abandoned render and destabilize tail memoization.
   useLayoutEffect(() => {
     previousRenderItemsRef.current = { sessionId, items: renderItems };
   }, [renderItems, sessionId]);
@@ -4780,18 +4796,14 @@ export default function SessionScreen() {
     [createRemoteMediaQueue],
   );
 
-  // 仅 video/audio 仍走「查看器关闭即删」;image 缩略图常驻列表,缓存保留到退屏统一清理。
+  // 查看器关闭只逐出 JS cache。OSS 对象仍可能被同屏其它已挂载行持有,
+  // 统一延迟到换会话或页面卸载时删除。
   const releaseRemoteMedia = useCallback((
     sourceUrl: string,
-    media: MobileResolvedRemoteMedia,
+    _media: MobileResolvedRemoteMedia,
   ) => {
     remoteMediaQueueRef.current?.evict(sourceUrl);
-    void auth.apiFetch('/api/device-link/media', {
-      baseUrl: DEVICE_LINK_API_BASE_URL,
-      method: 'DELETE',
-      body: { key: media.ossKey },
-    }).catch(() => undefined);
-  }, [auth]);
+  }, []);
 
   // 全屏查看器的分享:确保拿到本地 file://(磁盘缓存命中或先落盘)再唤起系统分享单。
   // 分享失败静默提示——旧 dev client 未包含 expo-sharing 原生模块时也走这条兜底。
@@ -4842,20 +4854,24 @@ export default function SessionScreen() {
     }
   }, [diskCacheSourceOf, t]);
 
-  // 换会话与退屏共用一套清理:本屏切 sessionId 不重挂载,若只在 unmount 清理,
+  // 换会话与页面卸载共用一套最终清理:本屏切 sessionId 不重挂载,若只在 unmount 清理,
   // 连续浏览多个多图会话会让上一会话的 OSS 对象一路累积。cleanup 在 sessionId
   // 变化与 unmount 时都执行:releaseAll + 补删(fire-and-forget;App 被杀等不触发
-  // cleanup 的情况由 OSS 生命周期规则兜底),并换上全新队列实例(released 标志
-  // 一次性,释放过的队列不能复用;unmount 分支多建一个空队列无害)。
-  useEffect(() => () => {
+  // cleanup 的情况由 OSS 生命周期规则兜底)。队列实例带一次性 released 标志,
+  // 下个会话首次取件时由 resolveRemoteMedia 懒创建新实例。
+  const releaseRemoteMediaQueue = useCallback(() => {
     const released = remoteMediaQueueRef.current?.releaseAll() ?? [];
     for (const media of released) {
       // 仍在后台落盘的对象等落盘结束再删,避免 DELETE 抢先把落盘下载打成 404;
       // 磁盘缓存命中的空 ossKey 条目在 deleteRemoteMediaObject 内跳过。
       deleteRemoteMediaObject(media);
     }
-    remoteMediaQueueRef.current = createRemoteMediaQueue();
-  }, [sessionId, createRemoteMediaQueue, deleteRemoteMediaObject]);
+    remoteMediaQueueRef.current = null;
+  }, [deleteRemoteMediaObject]);
+
+  useEffect(() => () => {
+    releaseRemoteMediaQueue();
+  }, [releaseRemoteMediaQueue, sessionId]);
 
   /** 单调递增的补齐轮次计数器;`latest` 是本屏最新那一轮的序号(旧轮据此自我作废)。 */
   const backfillRunSeqRef = useRef(0);
@@ -9447,6 +9463,7 @@ export default function SessionScreen() {
                     items={messageListItems}
                     pendingSend={pendingSendActions}
                     loadingEarlier={loadingEarlier}
+                    loadEarlierProgressKey={oldestMessageCursor(messages)}
                     onCopyMessageLink={copyMessageLink}
                     onAddMessageToComposer={canUseComposer ? addMessageToComposer : undefined}
                     onDeleteMessage={collaborationReadOnlyReason ? undefined : deleteMessage}

@@ -6638,6 +6638,13 @@
       "move": "立即移動（推薦）",
       "download": "手動下載新版本"
     },
+    "windowsRuntimeMissing": {
+      "title": "需要安裝 Microsoft Visual C++ 執行階段",
+      "description": "這台電腦缺少更新程式所需的 Microsoft Visual C++ 執行階段。已下載的更新套件會保留；請安裝 Microsoft 官方 x64 執行階段後重新檢查。",
+      "download": "下載執行階段",
+      "retry": "重新檢查",
+      "later": "稍後安裝"
+    },
     "moveToApplications": {
       "title": "移動到應用程式資料夾",
       "message": "將 {{appName}} 移動到「應用程式」資料夾可獲得更好的體驗，包括自動更新。",

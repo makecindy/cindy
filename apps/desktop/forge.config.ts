@@ -23,6 +23,10 @@ import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 import { READ_SHEET_RUNTIME_PACKAGES } from '../../packages/lizi-mcps/src/cindy-docs/readSheetRuntimeDeps';
 import { reviewPdfRuntimePackages } from './src/main/reviewer/reviewPdfRuntimeDeps';
+import {
+  validateBundledWindowsUpdaterRuntime,
+  windowsUpdaterRuntimeExtraResourceForTarget,
+} from './src/main/windowsUpdaterPrerequisites';
 
 const _require = createRequire(__filename);
 const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
@@ -770,8 +774,13 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/THIRD-PARTY-RESTRICTED.txt',
   ];
 
-  if (targetPlatform === 'win32') {
-    base.unshift(`resources/${UPDATER_EXE}`);
+  const windowsUpdaterRuntimeResource =
+    windowsUpdaterRuntimeExtraResourceForTarget(targetPlatform);
+  if (windowsUpdaterRuntimeResource) {
+    base.unshift(
+      `resources/${UPDATER_EXE}`,
+      windowsUpdaterRuntimeResource,
+    );
   }
 
   if (targetPlatform === 'darwin' || targetPlatform === 'mas') {
@@ -1487,6 +1496,17 @@ const config: ForgeConfig = {
       const targetArch = requestedTargetArch();
       ensureMacIOSSimulatorWdaArchive(platform);
       if (targetPlatform === 'win32') {
+        if (targetArch !== 'x64') {
+          throw new Error(
+            `[forge] Windows updater app-local Runtime is x64-only; unsupported target arch: ${targetArch}`,
+          );
+        }
+        const runtimeManifest = validateBundledWindowsUpdaterRuntime(
+          path.join(__dirname, 'resources'),
+        );
+        console.log(
+          `[forge:prePackage] verified Windows updater app-local Runtime ${runtimeManifest.version} x64`,
+        );
         buildCindyUpdater();
       }
       stageRipgrep(targetPlatform, targetArch);

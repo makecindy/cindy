@@ -929,9 +929,9 @@ interface UpdateStatusPayload {
   status: 'idle' | 'checking' | 'downloading' | 'ready' | 'superseding' | 'error';
   version?: string;
   progress?: number;
-  /** Machine-readable error subtype. 'translocated' = macOS App Translocation
-   *  blocked the relaunch; renderer shows a fallback dialog instead of
-   *  silently quitting into a broken state. */
+  /** Machine-readable error subtype. `windows_vc_runtime_missing` keeps a
+   *  staged patch ready while the renderer prompts for the updater's x64
+   *  VC++ Runtime; `translocated` is the macOS read-only fallback. */
   errorCode?: string;
 }
 

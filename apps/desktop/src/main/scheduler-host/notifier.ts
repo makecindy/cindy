@@ -25,8 +25,10 @@ export interface DesktopNotifierDeps {
   getMainWindow: () => BrowserWindow | null;
   feishuIm: FeishuIM;
   logger: Logger;
-  /** Global desktop preference and Agent Island arbitration, evaluated at send time. */
+  /** Global desktop preference, evaluated at send time. */
   shouldNotifyDesktop: () => boolean;
+  /** Whether Agent Island should arbitrate routine scheduler desktop notifications. */
+  isAgentIslandEnabled: () => boolean;
   wecomGroupPublisher?: WecomGroupNotificationPublisher;
 }
 
@@ -37,7 +39,11 @@ export class DesktopNotifier implements Notifier {
     // 链路代次在任何 await 之前捕获:飞书分支的 await 期间可能发生登出/换号,
     // 发送侧按代次不一致丢弃,旧账号调度的通知不会进新账号的链路。
     const generation = getMobileNotifyGeneration();
-    if (schedule.notify.desktop && this.deps.shouldNotifyDesktop()) {
+    if (
+      schedule.notify.desktop &&
+      this.deps.shouldNotifyDesktop() &&
+      (!this.deps.isAgentIslandEnabled() || (run.status === 'failed' && !run.sessionId))
+    ) {
       try {
         this.notifyDesktop(schedule, run);
       } catch (err) {

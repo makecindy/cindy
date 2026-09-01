@@ -30,6 +30,9 @@ export type HomeRow =
 /** SectionList 的一个分区。title 为 null 的分区不渲染表头。 */
 export type HomeSection = { data: HomeRow[]; key: string; title: string | null };
 
+/** 主列表分区跨分组模式保持同一身份，避免 SectionList 把仍存在的行整批卸载重挂。 */
+export const HOME_MAIN_SECTION_KEY = 'main';
+
 export interface HomeSectionOptions {
   groupDialogue?: boolean;
   sortBy?: HomeListSortBy;
@@ -69,7 +72,7 @@ export function buildHomeSections(
   if (rows.length > 0) {
     sections.push({
       data: rows,
-      key: groupByProject ? 'grouped' : 'mixed',
+      key: HOME_MAIN_SECTION_KEY,
       title: null,
     });
   }
@@ -99,6 +102,48 @@ export function homeRowBefore(
 
 export function isFolderHomeRow(row: HomeRow | undefined): row is Extract<HomeRow, { kind: 'project' | 'dialogue' }> {
   return !!row && (row.kind === 'project' || row.kind === 'dialogue');
+}
+
+/**
+ * Fast path for folder rows rebuilt from the same home presentation. Switching
+ * grouping modes sorts into fresh arrays, but the session items themselves are
+ * still the same objects. Recognizing that case keeps HomeListRow from
+ * serializing a large project/dialogue tree just to prove it did not change.
+ */
+export function homeFolderRowsShareRenderData(previous: HomeRow, next: HomeRow): boolean {
+  if (Object.is(previous, next)) return true;
+  if (!isFolderHomeRow(previous) || !isFolderHomeRow(next)) return false;
+  if (previous.kind !== next.kind || previous.key !== next.key) return false;
+  const a = previous.project;
+  const b = next.project;
+  return a.deviceId === b.deviceId
+    && a.deviceName === b.deviceName
+    && a.key === b.key
+    && a.latestActivityAt === b.latestActivityAt
+    && a.pendingInteractionCount === b.pendingInteractionCount
+    && a.sessionCount === b.sessionCount
+    && a.subtitle === b.subtitle
+    && a.title === b.title
+    && a.workingDir === b.workingDir
+    && a.sessions.length === b.sessions.length
+    && a.sessions.every((item, index) => item === b.sessions[index]);
+}
+
+/**
+ * Recognizes rebuilt row wrappers that still describe the exact same rendered
+ * data. buildHomeSections creates fresh wrappers whenever a display preference
+ * changes; session rows can use the same reference fast path as folder rows
+ * instead of serializing the complete RemoteSessionListItem for comparison.
+ */
+export function homeRowsShareRenderData(previous: HomeRow, next: HomeRow): boolean {
+  if (Object.is(previous, next)) return true;
+  if (previous.kind === 'session' && next.kind === 'session') {
+    return previous.key === next.key
+      && previous.source === next.source
+      && previous.sourceLabel === next.sourceLabel
+      && previous.item === next.item;
+  }
+  return homeFolderRowsShareRenderData(previous, next);
 }
 
 export function buildProjectHomeRows(

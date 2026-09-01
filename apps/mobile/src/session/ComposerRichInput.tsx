@@ -18,6 +18,7 @@ import {
   type ComposerWebMessage,
 } from '@/session/composerRichInputProtocol';
 import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from '@/session/pastedImageAttachment';
+import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
 
 export interface ComposerRichInputHandle {
   applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;
@@ -78,6 +79,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     theme,
   }, forwardedRef) {
     const webViewRef = useRef<WebView | null>(null);
+    useEffect(() => registerMobileMessageWebView('composer'), []);
     const readyRef = useRef(false);
     const webSignatureRef = useRef('');
     const pendingDocumentRef = useRef<{
@@ -313,6 +315,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     }, [inject, resolveSessionLinkLabel]);
 
     const handleMessage = useCallback((event: WebViewMessageEvent) => {
+      if (disposedRef.current) return;
       const message = parseComposerWebMessage(event.nativeEvent.data);
       if (!message) return;
       if (message.type === 'ready') {

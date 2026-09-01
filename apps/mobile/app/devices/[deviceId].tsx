@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -81,6 +81,7 @@ import type { SessionSwipeAction } from '@/session/swipeRowRegistry';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import {
+  RemoteSessionStoreSubscriptionGate,
   remoteSessionStore,
   useRemoteMessageVersion,
   useRemoteSessions,
@@ -115,6 +116,15 @@ const STATUS_FILTERS: Array<{ value: RemoteSessionStatusFilter; labelKey: string
 type RemoteListStatusFilter = Extract<RemoteSessionStatusFilter, 'active' | 'archived' | 'all'>;
 
 export default function DeviceDetailScreen() {
+  const screenFocused = useIsFocused();
+  return (
+    <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
+      <DeviceDetailScreenContent />
+    </RemoteSessionStoreSubscriptionGate>
+  );
+}
+
+function DeviceDetailScreenContent() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -790,6 +800,9 @@ export default function DeviceDetailScreen() {
         <SectionList
           sections={displaySections}
           keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
+          // Fabric can reattach a clipped Swipeable child before its old native parent removes it.
+          // Keep JS virtualization, but avoid the Android native detach/reattach race for this list.
+          removeClippedSubviews={false}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
           stickySectionHeadersEnabled={false}
           renderSectionHeader={() => null}

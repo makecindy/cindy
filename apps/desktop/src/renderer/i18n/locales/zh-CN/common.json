@@ -6638,6 +6638,13 @@
       "move": "立即移动（推荐）",
       "download": "手动下载新版本"
     },
+    "windowsRuntimeMissing": {
+      "title": "需要安装 Microsoft Visual C++ 运行库",
+      "description": "这台电脑缺少更新程序所需的 Microsoft Visual C++ 运行库。已下载的更新包会保留；请安装微软官方 x64 运行库后重新检查。",
+      "download": "下载运行库",
+      "retry": "重新检查",
+      "later": "稍后安装"
+    },
     "moveToApplications": {
       "title": "移动到应用程序文件夹",
       "message": "将 {{appName}} 移动到「应用程序」文件夹可获得更好的体验，包括自动更新。",

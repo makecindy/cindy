@@ -65,6 +65,35 @@ export interface ParseMobileMarkdownOptions {
    * 默认关闭:聊天气泡路径不需要,且既有消费方/测试按无此字段的形状断言。
    */
   srcLines?: boolean;
+  /** Internal offsets used when parsing an append-only suffix. */
+  lineOffset?: number;
+  blockIndexOffset?: number;
+  charOffset?: number;
+  sourceIsNormalized?: boolean;
+}
+
+export interface MobileMarkdownBlockRange {
+  startLine: number;
+  endLineExclusive: number;
+}
+
+export interface MobileMarkdownParseCheckpoint {
+  /** UTF-16 offset in the normalized source immediately after a safe boundary. */
+  charOffset: number;
+  /** Global line index at the beginning of the suffix. */
+  lineIndex: number;
+  /** Number of blocks already emitted at this boundary. */
+  blockCount: number;
+}
+
+export interface MobileMarkdownParseResult {
+  source: string;
+  blocks: MobileMarkdownBlock[];
+  ranges: MobileMarkdownBlockRange[];
+  checkpoints: MobileMarkdownParseCheckpoint[];
+  incremental: boolean;
+  reusedBlockCount: number;
+  parsedSourceUtf16Length: number;
 }
 
 interface ParsedTableBlock {
@@ -93,15 +122,64 @@ export function parseMobileMarkdown(
   input: string,
   options?: ParseMobileMarkdownOptions,
 ): MobileMarkdownBlock[] {
+  return parseMobileMarkdownDocument(input, options).blocks;
+}
+
+/**
+ * Parse Markdown while retaining enough source metadata to reuse completed
+ * blocks when a streaming message only grows at the end.
+ *
+ * The incremental path is deliberately conservative: it only starts after a
+ * parser-safe blank-line boundary. If the source is edited in the middle, or
+ * no safe checkpoint exists, callers get the normal full parse result.
+ */
+export function parseMobileMarkdownDocument(
+  input: string,
+  options?: ParseMobileMarkdownOptions,
+): MobileMarkdownParseResult {
   const withSrc = options?.srcLines === true;
   // LaTeX 定界符归一化(\(...\) / \[...\] → $...$ / $$...$$,desktop/mobile 共用
   // 实现)。srcLines 模式走保行数变体:单行 inline 照常转换(同行替换,不破坏
   // 「块 srcLine ↔ 源码行」映射),会插行的 display 保持源码——与桌面端
   // emitSourceLines 门控同一原则。
-  const source = input.replace(/\r\n/g, '\n');
-  const normalized = normalizeMathDelimiters(source, { preserveLineCount: withSrc });
+  const lineOffset = options?.lineOffset ?? 0;
+  const blockIndexOffset = options?.blockIndexOffset ?? 0;
+  const charOffset = options?.charOffset ?? 0;
+  const source = options?.sourceIsNormalized === true ? input : input.replace(/\r\n/g, '\n');
+  const normalized = options?.sourceIsNormalized === true
+    ? source
+    : normalizeMathDelimiters(source, { preserveLineCount: withSrc });
   const lines = normalized.split('\n');
   const blocks: MobileMarkdownBlock[] = [];
+  const ranges: MobileMarkdownBlockRange[] = [];
+  const checkpoints: MobileMarkdownParseCheckpoint[] = [{
+    charOffset,
+    lineIndex: lineOffset,
+    blockCount: blockIndexOffset,
+  }];
+  const lineNumber = (index: number) => lineOffset + index;
+  const blockNumber = () => blockIndexOffset + blocks.length;
+  const lineEndOffsets: number[] = [];
+  let sourceOffset = charOffset;
+  for (let index = 0; index < lines.length; index += 1) {
+    sourceOffset += lines[index].length;
+    if (index < lines.length - 1) sourceOffset += 1;
+    lineEndOffsets[index] = sourceOffset;
+  }
+  const lineEndOffset = (index: number): number => (
+    lineEndOffsets[Math.max(0, Math.min(index, lineEndOffsets.length - 1))] ?? charOffset
+  );
+  const pushBlock = (
+    block: MobileMarkdownBlock,
+    startLine: number,
+    endLineExclusive: number,
+  ): void => {
+    blocks.push(block);
+    ranges.push({
+      startLine: lineNumber(startLine),
+      endLineExclusive: lineNumber(endLineExclusive),
+    });
+  };
   let paragraph: string[] = [];
   let code: CodeFenceState | null = null;
   // display math 围栏状态($$ 与 $$ 之间;与 code fence 一样跨行收集)。
@@ -117,20 +195,29 @@ export function parseMobileMarkdown(
     const text = paragraph.join('\n').trim();
     paragraph = [];
     if (!text) return;
-    blocks.push({
+    pushBlock({
       type: 'paragraph',
-      key: `p:${lineIndex}:${blocks.length}`,
-      ...(withSrc ? { srcLine: paragraphStart } : {}),
+      key: `p:${lineNumber(lineIndex)}:${blockNumber()}`,
+      ...(withSrc ? { srcLine: lineNumber(paragraphStart) } : {}),
       inlines: parseMobileMarkdownInlines(text, paragraphStartsInComment),
-    });
+    }, paragraphStart, lineIndex);
   };
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (code) {
       if (isClosingCodeFence(line, code)) {
-        blocks.push(buildCodeBlock(code, blocks.length, withSrc));
+        pushBlock(
+          buildCodeBlock(code, blockNumber(), withSrc, lineOffset),
+          code.start,
+          index + 1,
+        );
         code = null;
+        checkpoints.push({
+          charOffset: lineEndOffset(index),
+          lineIndex: lineNumber(index + 1),
+          blockCount: blockNumber(),
+        });
       } else {
         code.lines.push(stripCodeFenceIndent(line, code.indent));
       }
@@ -141,7 +228,16 @@ export function parseMobileMarkdown(
       if (line.trim() === '$$') {
         const mathText = math.lines.join('\n').trim();
         if (mathText) {
-          blocks.push(buildMathBlock(mathText, math.start, blocks.length, withSrc));
+          pushBlock(
+            buildMathBlock(mathText, math.start, blockNumber(), withSrc, lineOffset),
+            math.start,
+            index + 1,
+          );
+          checkpoints.push({
+            charOffset: lineEndOffset(index),
+            lineIndex: lineNumber(index + 1),
+            blockCount: blockNumber(),
+          });
         } else {
           // 空围栏($$ 与 $$ 之间无内容):没有可渲染的公式,保持原文段落。
           // 渲染层(math WebView)因此永远不需要「空公式」占位文案,规避
@@ -178,7 +274,11 @@ export function parseMobileMarkdown(
     const singleLineMath = mathTrimmed.match(/^\$\$(.+)\$\$$/);
     if (singleLineMath && singleLineMath[1].trim()) {
       flushParagraph(index);
-      blocks.push(buildMathBlock(singleLineMath[1], index, blocks.length, withSrc));
+      pushBlock(
+        buildMathBlock(singleLineMath[1], index, blockNumber(), withSrc, lineOffset),
+        index,
+        index + 1,
+      );
       continue;
     }
     if (mathTrimmed === '$$') {
@@ -189,6 +289,16 @@ export function parseMobileMarkdown(
 
     if (!line.trim()) {
       flushParagraph(index);
+      // The final empty split segment after a trailing newline is not itself
+      // a terminated line yet; retaining a checkpoint for it would advance
+      // lineIndex one extra step on the next streaming append.
+      if (!inHtmlComment && paragraph.length === 0 && index < lines.length - 1) {
+        checkpoints.push({
+          charOffset: lineEndOffset(index),
+          lineIndex: lineNumber(index + 1),
+          blockCount: blockNumber(),
+        });
+      }
       continue;
     }
 
@@ -198,13 +308,13 @@ export function parseMobileMarkdown(
     const heading = line.match(/^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/);
     if (heading) {
       flushParagraph(index);
-      blocks.push({
+      pushBlock({
         type: 'heading',
-        key: `h:${index}:${blocks.length}`,
-        ...(withSrc ? { srcLine: index } : {}),
+        key: `h:${lineNumber(index)}:${blockNumber()}`,
+        ...(withSrc ? { srcLine: lineNumber(index) } : {}),
         level: heading[1].length,
         inlines: parseMobileMarkdownInlines(heading[2].trim(), lineStartsInComment),
-      });
+      }, index, index + 1);
       continue;
     }
 
@@ -218,12 +328,12 @@ export function parseMobileMarkdown(
         index += 1;
       }
       index -= 1;
-      blocks.push({
+      pushBlock({
         type: 'blockquote',
-        key: `quote:${quoteStart}:${blocks.length}`,
-        ...(withSrc ? { srcLine: quoteStart } : {}),
+        key: `quote:${lineNumber(quoteStart)}:${blockNumber()}`,
+        ...(withSrc ? { srcLine: lineNumber(quoteStart) } : {}),
         inlines: parseMobileMarkdownInlines(quoteLines.join('\n').trim(), lineStartsInComment),
-      });
+      }, quoteStart, index + 1);
       continue;
     }
 
@@ -250,17 +360,17 @@ export function parseMobileMarkdown(
       }
       const header = parseCellsWithCommentState(table.header, lineStartsInComment);
       const rows = table.rows.map((row, rowIndex): MobileMarkdownTableRow => ({
-        key: `tr:${row.lineIndex}:${rowIndex}`,
+        key: `tr:${lineNumber(row.lineIndex)}:${rowIndex}`,
         cells: parseCellsWithCommentState(row.cells, rowStartsInComment.get(row.lineIndex) ?? lineStartsInComment),
       }));
       index = table.endIndex;
-      blocks.push({
+      pushBlock({
         type: 'table',
-        key: `table:${tableStart}:${blocks.length}`,
-        ...(withSrc ? { srcLine: tableStart } : {}),
+        key: `table:${lineNumber(tableStart)}:${blockNumber()}`,
+        ...(withSrc ? { srcLine: lineNumber(tableStart) } : {}),
         header,
         rows,
-      });
+      }, tableStart, table.endIndex + 1);
       continue;
     }
 
@@ -269,15 +379,15 @@ export function parseMobileMarkdown(
       flushParagraph(index);
       const marker = list[2];
       const task = list[3].match(/^\[([ xX])\]\s+(.+)$/);
-      blocks.push({
+      pushBlock({
         type: 'list_item',
-        key: `li:${index}:${blocks.length}`,
-        ...(withSrc ? { srcLine: index } : {}),
+        key: `li:${lineNumber(index)}:${blockNumber()}`,
+        ...(withSrc ? { srcLine: lineNumber(index) } : {}),
         ordered: /^\d/.test(marker),
         marker,
         checked: task ? task[1].toLowerCase() === 'x' : undefined,
         inlines: parseMobileMarkdownInlines(task ? task[2] : list[3], lineStartsInComment),
-      });
+      }, index, index + 1);
       continue;
     }
 
@@ -289,7 +399,11 @@ export function parseMobileMarkdown(
   }
 
   if (code) {
-    blocks.push(buildCodeBlock(code, blocks.length, withSrc));
+    pushBlock(
+      buildCodeBlock(code, blockNumber(), withSrc, lineOffset),
+      code.start,
+      lines.length,
+    );
   }
   if (math) {
     // 未闭合的 $$ 围栏(streaming 中途):不升级成 math 块——math 块渲染在
@@ -302,7 +416,113 @@ export function parseMobileMarkdown(
     paragraph = ['$$', ...math.lines];
   }
   flushParagraph(lines.length);
-  return blocks;
+  return {
+    source: normalized,
+    blocks,
+    ranges,
+    checkpoints,
+    incremental: false,
+    reusedBlockCount: 0,
+    parsedSourceUtf16Length: normalized.length,
+  };
+}
+
+/**
+ * Reparse only the suffix of an append-only Markdown stream when a previously
+ * parsed document exposes a safe block boundary. Any non-append edit falls
+ * back to the regular parser so callers retain the existing semantics.
+ */
+export function parseMobileMarkdownIncremental(
+  input: string,
+  previous?: MobileMarkdownParseResult | null,
+): MobileMarkdownParseResult {
+  const normalizedInput = normalizeMathDelimiters(input.replace(/\r\n/g, '\n'));
+
+  if (!previous || !normalizedInput.startsWith(previous.source)) {
+    return parseMobileMarkdownDocument(input);
+  }
+
+  // normalizeMathDelimiters can resolve a delimiter that was incomplete in an
+  // earlier streaming flush. In that case the normalized prefix itself changes
+  // when new text closes `\\(` / `\\[`, so reusing blocks from the old result
+  // would preserve stale inline semantics. Complete escaped math pairs are
+  // stable and do not need to disable incremental parsing.
+  if (hasUnclosedEscapedMathDelimiter(previous.source)
+    || hasUnclosedEscapedMathDelimiter(normalizedInput)) {
+    return parseMobileMarkdownDocument(input);
+  }
+
+  const checkpoint = [...previous.checkpoints]
+    .reverse()
+    .find((candidate) => (
+      candidate.charOffset > 0
+      && candidate.charOffset <= previous.source.length
+      && candidate.blockCount <= previous.blocks.length
+      // A checkpoint at EOF without a trailing newline points into the last
+      // line. An append that does not begin with a newline mutates that line,
+      // so this checkpoint is no longer safe to reuse (an earlier checkpoint,
+      // if any, may still be selected by the reverse scan).
+      && !(
+        candidate.charOffset === previous.source.length
+        && !previous.source.endsWith('\n')
+        && normalizedInput[candidate.charOffset] !== '\n'
+      )
+    ));
+
+  if (!checkpoint) return parseMobileMarkdownDocument(input);
+
+  let suffixCharOffset = checkpoint.charOffset;
+  let suffix = normalizedInput.slice(suffixCharOffset);
+  // A checkpoint after a line's final character points at the next logical
+  // line. If the old source did not already contain that line terminator, the
+  // first appended newline is only the separator and must not create an extra
+  // empty line in the suffix parser.
+  if (
+    checkpoint.charOffset === previous.source.length
+    && !previous.source.endsWith('\n')
+    && suffix.startsWith('\n')
+  ) {
+    suffix = suffix.slice(1);
+    suffixCharOffset += 1;
+  }
+  const suffixResult = parseMobileMarkdownDocument(
+    suffix,
+    {
+      sourceIsNormalized: true,
+      lineOffset: checkpoint.lineIndex,
+      blockIndexOffset: checkpoint.blockCount,
+      charOffset: suffixCharOffset,
+    },
+  );
+
+  return {
+    source: normalizedInput,
+    blocks: [
+      ...previous.blocks.slice(0, checkpoint.blockCount),
+      ...suffixResult.blocks,
+    ],
+    ranges: [
+      ...previous.ranges.slice(0, checkpoint.blockCount),
+      ...suffixResult.ranges,
+    ],
+    checkpoints: [
+      ...previous.checkpoints.filter(
+        (candidate) => candidate.charOffset < checkpoint.charOffset,
+      ),
+      ...suffixResult.checkpoints,
+    ],
+    incremental: true,
+    reusedBlockCount: checkpoint.blockCount,
+    parsedSourceUtf16Length: suffixResult.parsedSourceUtf16Length,
+  };
+}
+
+function hasUnclosedEscapedMathDelimiter(source: string): boolean {
+  const openParen = source.lastIndexOf('\\(');
+  const closeParen = source.lastIndexOf('\\)');
+  const openBracket = source.lastIndexOf('\\[');
+  const closeBracket = source.lastIndexOf('\\]');
+  return openParen > closeParen || openBracket > closeBracket;
 }
 
 /** display math 块构造:text 存去围栏后的 LaTeX 源码(trim 掉围栏内缘空白)。 */
@@ -311,11 +531,12 @@ function buildMathBlock(
   startLine: number,
   blockIndex: number,
   withSrc: boolean,
+  lineOffset = 0,
 ): MobileMarkdownBlock {
   return {
     type: 'math',
-    key: `math:${startLine}:${blockIndex}`,
-    ...(withSrc ? { srcLine: startLine } : {}),
+    key: `math:${startLine + lineOffset}:${blockIndex}`,
+    ...(withSrc ? { srcLine: startLine + lineOffset } : {}),
     text: text.trim(),
   };
 }
@@ -432,6 +653,8 @@ export interface MobileMarkdownTextRunGroupingOptions {
   maxTextRunBlocks?: number;
   /** Same guard by rendered inline text length, measured in JS UTF-16 units. */
   maxTextRunUtf16Length?: number;
+  /** Same guard by the number of inline fragments rendered as nested native text spans. */
+  maxTextRunInlineFragments?: number;
 }
 
 const MOBILE_MARKDOWN_TEXT_RUN_BLOCK_SEPARATOR_UTF16_LENGTH = 2;
@@ -444,8 +667,10 @@ export function groupMobileMarkdownSelectableBlocks(
   const groups: MobileMarkdownBlockGroup[] = [];
   let run: MobileMarkdownTextRunBlock[] = [];
   let runTextLength = 0;
+  let runInlineFragmentCount = 0;
   const maxTextRunBlocks = normalizePositiveLimit(options?.maxTextRunBlocks);
   const maxTextRunUtf16Length = normalizePositiveLimit(options?.maxTextRunUtf16Length);
+  const maxTextRunInlineFragments = normalizePositiveLimit(options?.maxTextRunInlineFragments);
   const flushRun = () => {
     if (run.length === 0) return;
     groups.push({
@@ -456,11 +681,17 @@ export function groupMobileMarkdownSelectableBlocks(
     });
     run = [];
     runTextLength = 0;
+    runInlineFragmentCount = 0;
   };
   for (const block of blocks) {
     if (isTextRunBlock(block)) {
-      for (const chunk of splitOversizedTextRunBlock(block, maxTextRunUtf16Length)) {
+      for (const chunk of splitOversizedTextRunBlock(
+        block,
+        maxTextRunUtf16Length,
+        maxTextRunInlineFragments,
+      )) {
         const blockTextLength = mobileMarkdownTextRunBlockLength(chunk);
+        const blockInlineFragmentCount = chunk.inlines.length;
         const separatorLength = run.length > 0 && !chunk.textRunContinuation
           ? MOBILE_MARKDOWN_TEXT_RUN_BLOCK_SEPARATOR_UTF16_LENGTH
           : 0;
@@ -469,6 +700,7 @@ export function groupMobileMarkdownSelectableBlocks(
           && (
             run.length >= maxTextRunBlocks
             || runTextLength + separatorLength + blockTextLength > maxTextRunUtf16Length
+            || runInlineFragmentCount + blockInlineFragmentCount > maxTextRunInlineFragments
           )
         ) {
           flushRun();
@@ -478,6 +710,7 @@ export function groupMobileMarkdownSelectableBlocks(
           : 0;
         run.push(chunk);
         runTextLength += pushedSeparatorLength + blockTextLength;
+        runInlineFragmentCount += blockInlineFragmentCount;
       }
     } else {
       flushRun();
@@ -530,10 +763,13 @@ export function mobileMarkdownImageAltChipText(alt: string): string {
 function splitOversizedTextRunBlock(
   block: MobileMarkdownTextRunBlock,
   maxTextRunUtf16Length: number,
+  maxTextRunInlineFragments: number,
 ): MobileMarkdownTextRunBlock[] {
   if (
-    !Number.isFinite(maxTextRunUtf16Length)
-    || mobileMarkdownTextRunBlockLength(block) <= maxTextRunUtf16Length
+    (!Number.isFinite(maxTextRunUtf16Length)
+      || mobileMarkdownTextRunBlockLength(block) <= maxTextRunUtf16Length)
+    && (!Number.isFinite(maxTextRunInlineFragments)
+      || block.inlines.length <= maxTextRunInlineFragments)
   ) {
     return [block];
   }
@@ -557,7 +793,12 @@ function splitOversizedTextRunBlock(
   ) => {
     let start = 0;
     while (start < text.length) {
-      if (currentTextLength >= currentLimit()) flushCurrent();
+      if (
+        currentTextLength >= currentLimit()
+        || current.length >= maxTextRunInlineFragments
+      ) {
+        flushCurrent();
+      }
       const capacity = currentLimit() - currentTextLength;
       if (
         currentTextLength > 0
@@ -577,12 +818,23 @@ function splitOversizedTextRunBlock(
   for (const inline of block.inlines) {
     if (inline.type === 'image') {
       const inlineLength = mobileMarkdownInlineTextLength(inline);
-      if (current.length > 0 && currentTextLength + inlineLength > currentLimit()) {
+      if (
+        current.length > 0
+        && (
+          currentTextLength + inlineLength > currentLimit()
+          || current.length >= maxTextRunInlineFragments
+        )
+      ) {
         flushCurrent();
       }
       current.push(inline);
       currentTextLength += inlineLength;
-      if (currentTextLength >= currentLimit()) flushCurrent();
+      if (
+        currentTextLength >= currentLimit()
+        || current.length >= maxTextRunInlineFragments
+      ) {
+        flushCurrent();
+      }
       continue;
     }
 
@@ -685,21 +937,22 @@ function buildCodeBlock(
   code: CodeFenceState,
   blockIndex: number,
   withSrc = false,
+  lineOffset = 0,
 ): MobileMarkdownBlock {
   const normalized = normalizeCodeFencePayload(code);
   const text = normalized.lines.join('\n');
   if (isMermaidLanguage(normalized.language)) {
     return {
       type: 'mermaid',
-      key: `mermaid:${code.start}:${blockIndex}`,
-      ...(withSrc ? { srcLine: code.start } : {}),
+      key: `mermaid:${code.start + lineOffset}:${blockIndex}`,
+      ...(withSrc ? { srcLine: code.start + lineOffset } : {}),
       text,
     };
   }
   return {
     type: 'code',
-    key: `code:${code.start}:${blockIndex}`,
-    ...(withSrc ? { srcLine: code.start } : {}),
+    key: `code:${code.start + lineOffset}:${blockIndex}`,
+    ...(withSrc ? { srcLine: code.start + lineOffset } : {}),
     language: normalized.language,
     text,
   };

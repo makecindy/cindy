@@ -6654,6 +6654,13 @@
       "move": "Move Now (Recommended)",
       "download": "Download manually"
     },
+    "windowsRuntimeMissing": {
+      "title": "Microsoft Visual C++ Runtime Required",
+      "description": "This PC is missing the Microsoft Visual C++ Runtime required by the updater. The downloaded update will be kept. Install Microsoft's official x64 Runtime, then check again.",
+      "download": "Download Runtime",
+      "retry": "Check Again",
+      "later": "Install Later"
+    },
     "moveToApplications": {
       "title": "Move to Applications Folder",
       "message": "Moving {{appName}} to the Applications folder gives you a better experience, including automatic updates.",

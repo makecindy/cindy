@@ -39,8 +39,8 @@ export function useFoldableExpandedState(
 ): [boolean, () => void] {
   const [localExpanded, setLocalExpanded] = useState(defaultExpanded);
   const subscribe = useCallback(
-    (listener: () => void) => store.subscribe(listener),
-    [],
+    (listener: () => void) => (blockId ? store.subscribe(listener) : () => {}),
+    [blockId],
   );
   const rememberedExpanded = useSyncExternalStore(
     subscribe,

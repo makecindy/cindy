@@ -6646,6 +6646,13 @@
       "move": "지금 이동 (권장)",
       "download": "수동으로 다운로드"
     },
+    "windowsRuntimeMissing": {
+      "title": "Microsoft Visual C++ 런타임 필요",
+      "description": "이 PC에는 업데이터에 필요한 Microsoft Visual C++ 런타임이 없습니다. 다운로드한 업데이트는 유지됩니다. Microsoft 공식 x64 런타임을 설치한 후 다시 확인해 주세요.",
+      "download": "런타임 다운로드",
+      "retry": "다시 확인",
+      "later": "나중에 설치"
+    },
     "moveToApplications": {
       "title": "응용 프로그램 폴더로 이동",
       "message": "{{appName}}를 응용 프로그램 폴더로 이동하면 자동 업데이트를 포함한 더 나은 경험을 사용할 수 있습니다.",

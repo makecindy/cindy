@@ -18,10 +18,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
-  anyActivityBlockingRelaunch, relaunchToUpdate, updateStatus, dismissState,
+  anyActivityBlockingRelaunch, relaunchToUpdate, openExternal, updateStatus, dismissState,
 } = vi.hoisted(() => ({
   anyActivityBlockingRelaunch: vi.fn<() => Promise<boolean>>(),
   relaunchToUpdate: vi.fn(),
+  openExternal: vi.fn(async () => ({ success: true })),
   updateStatus: {
     current: { status: 'ready', version: '1.2.3', errorCode: null } as {
       status: string;
@@ -87,6 +88,7 @@ function deferredProbe(): (busy: boolean) => void {
 beforeEach(() => {
   anyActivityBlockingRelaunch.mockReset();
   relaunchToUpdate.mockReset();
+  openExternal.mockClear();
   updateStatus.current = { status: 'ready', version: '1.2.3', errorCode: null };
   dismissState.dismissed = false;
   Object.defineProperty(window, 'electronAPI', {
@@ -94,6 +96,7 @@ beforeEach(() => {
     value: {
       anyActivityBlockingRelaunch,
       relaunchToUpdate,
+      openExternal,
       clientEndpoints: { websiteUrl: 'https://cindy.ai' },
     } as unknown as Window['electronAPI'],
   });
@@ -102,6 +105,42 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('UpdateBanner relaunch entry', () => {
+  it('prompts for the VC++ Runtime, keeps the banner, and rechecks on demand', async () => {
+    updateStatus.current = {
+      status: 'ready',
+      version: '1.2.3',
+      errorCode: 'windows_vc_runtime_missing',
+    };
+    render(<UpdateBanner isCollapsed={false} />);
+
+    await screen.findByText('update.windowsRuntimeMissing.title');
+    expect(screen.getByText('update.windowsRuntimeMissing.description')).toBeTruthy();
+    expect(anyActivityBlockingRelaunch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'update.windowsRuntimeMissing.download' }));
+    expect(openExternal).toHaveBeenCalledWith(
+      'https://aka.ms/vs/17/release/vc_redist.x64.exe',
+    );
+    await waitFor(() => {
+      expect(screen.queryByText('update.windowsRuntimeMissing.title')).toBeNull();
+    });
+
+    // The downloaded patch remains ready, so the normal update entry stays
+    // available and reopens the prerequisite prompt instead of probing tasks.
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    await screen.findByText('update.windowsRuntimeMissing.title');
+    expect(anyActivityBlockingRelaunch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'update.windowsRuntimeMissing.retry' }));
+    expect(relaunchToUpdate).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'update.windowsRuntimeMissing.later' }));
+    await waitFor(() => {
+      expect(screen.queryByText('update.windowsRuntimeMissing.title')).toBeNull();
+    });
+    expect(screen.getByRole('button', { name: 'update.banner.ariaExpanded' })).toBeTruthy();
+  });
+
   it('warns about the interruption instead of relaunching when main reports live activity', async () => {
     anyActivityBlockingRelaunch.mockResolvedValue(true);
     render(<UpdateBanner isCollapsed={false} />);

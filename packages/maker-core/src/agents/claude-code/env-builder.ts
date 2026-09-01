@@ -37,6 +37,12 @@ interface ClaudeEnvBuildOptions {
    */
   modelContextWindows?: readonly ModelContextWindowSource[];
   /**
+   * The model selected for this spawn. Claude Code's auto-compact resolver does
+   * not read Maker's catalog-wide window map; it needs the selected model's
+   * window in CLAUDE_CODE_MAX_CONTEXT_TOKENS.
+   */
+  activeModel?: string;
+  /**
    * 'remote': 远端 cc-mgr daemon 跑 SDK 的 env —— 从空字典起,绝不继承 desktop
    * 进程 OS env(Windows HOME=C:\... 透到远端会让 cc CLI 落怪目录)。daemon 自身
    * process.env 的真实远端 HOME/PATH 由 SDK spawn merge 提供。
@@ -380,6 +386,26 @@ export async function buildClaudeEnv(
     env[MAKER_MODEL_CONTEXT_WINDOWS_ENV] = modelContextWindows;
   } else {
     delete env[MAKER_MODEL_CONTEXT_WINDOWS_ENV];
+  }
+
+  const activeContextWindow = options.modelContextWindows?.find(
+    (model) => model.id === options.activeModel,
+  )?.contextWindow;
+  if (
+    activeContextWindow !== undefined
+    && Number.isFinite(activeContextWindow)
+    && activeContextWindow > 0
+  ) {
+    env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(Math.floor(activeContextWindow));
+  } else {
+    delete env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+  }
+
+  const configuredCompactPct = Math.round(runtimeConfig.autoCompactThresholdPct ?? Number.NaN);
+  if (configuredCompactPct >= 50 && configuredCompactPct <= 95) {
+    env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(configuredCompactPct);
+  } else {
+    delete env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
   }
 
   // 关掉 CC SDK 内部的遥测 / 错误上报 / OTEL metrics export。

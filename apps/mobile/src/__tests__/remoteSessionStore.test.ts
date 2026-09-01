@@ -4761,6 +4761,32 @@ describe('任务消息内存治理', () => {
     expect(sessions.slice(1).some((item) => remoteSessionStore.getMessages(item.id).length === 0)).toBe(true);
   });
 
+  it('regular 字节 LRU 会计入深层容器中的大字符串', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s0'), session('s1')]);
+    const currentAuthority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('current', 's1')], { authority: currentAuthority });
+
+    // 同一字符串引用复用四次,避免测试本身额外分配 72 MiB;逻辑 payload 序列化后
+    // 仍会产生四份内容。旧 depth=3 截断会在 chunks 外层直接按 64 bytes 低估。
+    const chunk = 'x'.repeat(9 * 1024 * 1024);
+    const deepPayload = {
+      level1: {
+        level2: {
+          level3: {
+            chunks: [chunk, chunk, chunk, chunk],
+          },
+        },
+      },
+    };
+    remoteSessionStore.setMessages('s0', [{
+      ...message('deep', 's0'),
+      content: deepPayload,
+    }]);
+
+    expect(remoteSessionStore.getMessages('s0')).toEqual([]);
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['current']);
+  });
+
   it('regular LRU 只淘汰可重取正文，不丢尚未落盘的本地系统卡', () => {
     const sessions = Array.from({ length: 9 }, (_, index) => session(`s${index}`));
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);

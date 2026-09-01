@@ -98,6 +98,37 @@ describe('remoteMediaResolveQueue', () => {
     expect(resolve).toHaveBeenCalledTimes(1);
   });
 
+  it('bounds resolved cache bytes without deleting an LRU entry still held by mounted rows', async () => {
+    const { pending, resolve } = manualResolver();
+    const orphaned: MobileResolvedRemoteMedia[] = [];
+    const queue = createRemoteMediaResolveQueue(
+      { resolve, onOrphanResolved: (media) => orphaned.push(media) },
+      { maxConcurrent: 1, maxCacheBytes: 2_000 },
+    );
+    const resolveOne = async (name: string): Promise<MobileResolvedRemoteMedia> => {
+      const promise = queue.request(imageRequest(name));
+      await flush();
+      pending.at(-1)?.resolve(resolvedMedia(name, { size: 1_000 }));
+      return promise;
+    };
+
+    await resolveOne('a.png');
+    await resolveOne('b.png');
+    // Refresh A so B becomes the oldest entry.
+    expect(queue.peekFresh(imageRequest('a.png').url)).not.toBeNull();
+    await resolveOne('c.png');
+
+    expect(queue.peekFresh(imageRequest('a.png').url)).not.toBeNull();
+    expect(queue.peekFresh(imageRequest('b.png').url)).toBeNull();
+    expect(queue.peekFresh(imageRequest('c.png').url)).not.toBeNull();
+    expect(orphaned).toEqual([]);
+    expect(queue.releaseAll().map((media) => media.ossKey).sort()).toEqual([
+      'key/a.png',
+      'key/b.png',
+      'key/c.png',
+    ]);
+  });
+
   it('dedupes concurrent requests for the same url into one resolve call', async () => {
     const { pending, resolve } = manualResolver();
     const queue = createRemoteMediaResolveQueue({ resolve });
@@ -289,6 +320,26 @@ describe('remoteMediaResolveQueue', () => {
     expect(resolve).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps only a small cleanup record after evicting inline bytes', async () => {
+    const resolve = vi.fn(async (media: RemoteMediaRequest) => resolvedMedia(media.url, {
+      ossKey: 'key/inline',
+      inlineBase64: 'large-inline-payload',
+    }));
+    const onOrphanResolved = vi.fn();
+    const queue = createRemoteMediaResolveQueue({ resolve, onOrphanResolved });
+
+    await queue.request(imageRequest('a.png'));
+    queue.evict('xdt-image://cache/a.png');
+
+    expect(onOrphanResolved).not.toHaveBeenCalled();
+    const released = queue.releaseAll();
+    expect(released).toEqual([
+      expect.objectContaining({ ossKey: 'key/inline', url: '' }),
+    ]);
+    expect(released[0]).not.toHaveProperty('inlineBase64');
+    expect(queue.releaseAll()).toEqual([]);
+  });
+
   it('releaseAll empties the cache and returns every resolved entry', async () => {
     const resolve = vi.fn(async (media: RemoteMediaRequest) => resolvedMedia(media.url));
     const queue = createRemoteMediaResolveQueue({ resolve });
@@ -350,7 +401,7 @@ describe('remoteMediaResolveQueue', () => {
     expect(onOrphanResolved).toHaveBeenCalledTimes(1); // 只有 in-flight 的 a.png 走 orphan
   });
 
-  it('hands the replaced entry to onOrphanResolved when a refresh overwrites the cache', async () => {
+  it('defers cleanup of a refresh-replaced entry until final releaseAll', async () => {
     const { pending, resolve } = manualResolver();
     const onOrphanResolved = vi.fn();
     const queue = createRemoteMediaResolveQueue({ resolve, onOrphanResolved });
@@ -360,23 +411,22 @@ describe('remoteMediaResolveQueue', () => {
     pending[0]?.resolve(resolvedMedia('a.png', { ossKey: 'key/old' }));
     await p1;
 
-    // forceRefresh 重取,拿到不同 ossKey → 旧对象交还宿主补删
+    // forceRefresh 重取,拿到不同 ossKey → 旧对象退出 cache,但仍可能被挂载行持有。
     const p2 = queue.request(imageRequest('a.png'), { forceRefresh: true });
     await flush();
     pending[1]?.resolve(resolvedMedia('a.png', { ossKey: 'key/new' }));
     await p2;
-    expect(onOrphanResolved).toHaveBeenCalledTimes(1);
-    expect(onOrphanResolved).toHaveBeenCalledWith(expect.objectContaining({ ossKey: 'key/old' }));
+    expect(onOrphanResolved).not.toHaveBeenCalled();
 
     // 同 ossKey 覆盖(被控端去重返回同一对象)→ 不误删仍在用的对象
     const p3 = queue.request(imageRequest('a.png'), { forceRefresh: true });
     await flush();
     pending[2]?.resolve(resolvedMedia('a.png', { ossKey: 'key/new' }));
     await p3;
-    expect(onOrphanResolved).toHaveBeenCalledTimes(1);
+    expect(onOrphanResolved).not.toHaveBeenCalled();
 
-    // releaseAll 只返回当前条目(新 key)
-    expect(queue.releaseAll().map((m) => m.ossKey)).toEqual(['key/new']);
+    // 真正离场时旧对象和当前对象一起交还宿主,且按 ossKey 去重。
+    expect(queue.releaseAll().map((m) => m.ossKey).sort()).toEqual(['key/new', 'key/old']);
   });
 
   it('re-flies forceRefresh with skipCache instead of joining an in-flight plain resolve', async () => {
@@ -403,7 +453,7 @@ describe('remoteMediaResolveQueue', () => {
     expect(queue.peekFresh('xdt-image://cache/a.png')?.ossKey).toBe('key/fresh');
   });
 
-  it('evicts the proven-bad cache entry when a forced refresh fails', async () => {
+  it('evicts a proven-bad cache entry but defers its OSS cleanup until final release', async () => {
     const { pending, resolve } = manualResolver();
     const onOrphanResolved = vi.fn();
     let clock = 1_000;
@@ -414,14 +464,14 @@ describe('remoteMediaResolveQueue', () => {
     pending[0]?.resolve(resolvedMedia('a.png', { ossKey: 'key/bad' }));
     await p1;
 
-    // Image onError 后的强制重取失败(桌面离线):坏条目必须逐出并交还补删,
+    // Image onError 后的强制重取失败(桌面离线):坏条目必须逐出,
     // 否则后续被动请求会继续命中已证伪的对象。
     const p2 = queue.request(imageRequest('a.png'), { forceRefresh: true });
     await flush();
     pending[1]?.reject(new Error('desktop offline'));
     await expect(p2).rejects.toThrow('desktop offline');
     expect(queue.peekFresh('xdt-image://cache/a.png')).toBeNull();
-    expect(onOrphanResolved).toHaveBeenCalledWith(expect.objectContaining({ ossKey: 'key/bad' }));
+    expect(onOrphanResolved).not.toHaveBeenCalled();
 
     // 负缓存过期后,新的被动请求走全新取件而不是旧缓存
     clock += 30_000;
@@ -430,6 +480,7 @@ describe('remoteMediaResolveQueue', () => {
     expect(resolve).toHaveBeenCalledTimes(3);
     pending[2]?.resolve(resolvedMedia('a.png', { ossKey: 'key/new' }));
     await expect(p3).resolves.toMatchObject({ ossKey: 'key/new' });
+    expect(queue.releaseAll().map((media) => media.ossKey).sort()).toEqual(['key/bad', 'key/new']);
   });
 
   it('routes in-flight resolves that complete after releaseAll to onOrphanResolved', async () => {

@@ -19,7 +19,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const rendererSource = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const routeSource = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
-    // 首同步期消息区渲染 SyncingMessages(spinner + 「正在同步」,延迟显形防快速路径闪烁),
+    // 首同步期消息区立即渲染 SyncingMessages(spinner + 「正在同步」),
     // 而不是干净空白——手机消息要走 device-link 往返桌面,空白会被读成"卡住了"。
     const syncingStart = rendererSource.indexOf('function SyncingMessages');
     expect(syncingStart).toBeGreaterThan(-1);
@@ -27,7 +27,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const syncingSource = rendererSource.slice(syncingStart, syncingEnd);
     expect(syncingSource).toContain('message.renderer.syncing');
     expect(syncingSource).toContain('ActivityIndicator');
-    expect(rendererSource).toContain('SYNCING_PLACEHOLDER_DELAY_MS');
+    expect(syncingSource).not.toContain('setTimeout');
     expect(rendererSource).toContain('ListEmptyComponent={syncingWhileEmpty');
     expect(rendererSource).toContain('<SyncingMessages />');
     expect(routeSource).toContain('syncingWhileEmpty={syncingWhileEmpty}');

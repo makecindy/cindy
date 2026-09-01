@@ -180,6 +180,9 @@ interface ToolUsePayload extends MessageNormalizeToolUse {
   diff?: NormalizedToolDiff;
 }
 
+const toolResultPreviewByContent = new WeakMap<object, { language: string; preview: string }>();
+const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
+
 export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): NormalizedRemoteMessage[] {
   const sorted = sortMessagesByCreatedAt(messages);
   const toolResultPairing = buildMessageToolResultPairing(sorted, {
@@ -466,6 +469,18 @@ function dedupeToolImagesAgainstAssistantMarkdown(
 }
 
 function toolResultContentToPreview(content: unknown): string {
+  if (content !== null && typeof content === 'object') {
+    const language = i18n.resolvedLanguage ?? i18n.language;
+    const cached = toolResultPreviewByContent.get(content);
+    if (cached?.language === language) return cached.preview;
+    const preview = uncachedToolResultContentToPreview(content);
+    toolResultPreviewByContent.set(content, { language, preview });
+    return preview;
+  }
+  return uncachedToolResultContentToPreview(content);
+}
+
+function uncachedToolResultContentToPreview(content: unknown): string {
   const compacted = parseToolResultCompactionMarker(content);
   if (!compacted) return contentToPreview(content);
   return i18n.t('message.renderer.toolResultCompacted', {
@@ -482,11 +497,15 @@ function toolResultContentFor(
 }
 
 function parseToolUse(message: RemoteMessage): ToolUsePayload {
+  const cached = toolUsePayloadByMessage.get(message);
+  if (cached) return cached;
   const sharedTool = parseMessageToolUse(message);
   const { toolName, input } = sharedTool;
   const summary = toolName ? formatToolUseSummary(toolName, input) : contentToPreview(message.content);
   const diff = buildToolDiff(toolName, input);
-  return { ...sharedTool, summary, diff };
+  const payload = { ...sharedTool, summary, diff };
+  toolUsePayloadByMessage.set(message, payload);
+  return payload;
 }
 
 function parseUserContent(content: unknown): {

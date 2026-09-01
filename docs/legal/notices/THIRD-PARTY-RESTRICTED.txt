@@ -13,6 +13,13 @@ License: LicenseRef-Anthropic-Commercial-Terms
 Source: https://www.anthropic.com/legal/commercial-terms
 
 ------------------------------------------------------------------------------
+Microsoft Visual C++ Runtime (Windows updater app-local DLLs)@14.44.35211.0
+Category: proprietary
+License: LicenseRef-Microsoft-Visual-Studio-Distributable-Code
+Source: https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+Compliance note: Bundled only with the Windows x64 updater; not covered by Cindy's Apache-2.0 license. Exact Microsoft source, hashes, sizes and signer identities are recorded in apps/desktop/resources/cindy-updater-runtime/manifest.json.
+
+------------------------------------------------------------------------------
 WeChat OpenSDK for Android@6.8.38
 Category: restricted-review-required
 License: NOASSERTION

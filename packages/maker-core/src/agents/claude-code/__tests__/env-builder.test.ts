@@ -33,6 +33,8 @@ describe('buildClaudeEnv', () => {
   const originalTerm = process.env.TERM;
   const originalPsOutputRendering = process.env.PSStyle__OutputRendering;
   const originalSubagentModel = process.env.CLAUDE_CODE_SUBAGENT_MODEL;
+  const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+  const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
 
   afterEach(() => {
     if (originalDisableCron === undefined) {
@@ -50,6 +52,8 @@ describe('buildClaudeEnv', () => {
     restore('TERM', originalTerm);
     restore('PSStyle__OutputRendering', originalPsOutputRendering);
     restore('CLAUDE_CODE_SUBAGENT_MODEL', originalSubagentModel);
+    restore('CLAUDE_CODE_MAX_CONTEXT_TOKENS', originalMaxContextTokens);
+    restore('CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', originalCompactPctOverride);
   });
 
   it('disables Claude Code native cron for host-managed sessions', async () => {
@@ -280,6 +284,35 @@ describe('buildClaudeEnv', () => {
     });
 
     expect(env[MODEL_CONTEXT_WINDOWS_ENV]).toBeUndefined();
+  });
+
+  it('tells Claude Code the selected provider model context window', async () => {
+    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '30';
+
+    const env = await buildClaudeEnv(createAuthAdapter(), { autoCompactThresholdPct: 80.4 }, {
+      activeModel: 'xai/grok-4.6',
+      modelContextWindows: [
+        { id: 'xai/grok-4.6', contextWindow: 372_000.4 },
+        { id: 'other/model', contextWindow: 992_000 },
+      ],
+    });
+
+    expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('372000');
+    expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
+  });
+
+  it('does not set a context window when the selected model is provider-unrouted', async () => {
+    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '30';
+
+    const env = await buildClaudeEnv(createAuthAdapter(), { autoCompactThresholdPct: 80 }, {
+      activeModel: 'claude-sonnet-5',
+      modelContextWindows: [{ id: 'xai/grok-4.6', contextWindow: 372_000 }],
+    });
+
+    expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+    expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
   });
 
   it('defaults command output to plain text across common CLI color controls', async () => {

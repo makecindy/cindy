@@ -1,4 +1,13 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react';
 import {
   MAKER_EVENT_BATCH_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
@@ -578,7 +587,8 @@ const GENERATED_FALLBACK_MIN_PREFIX_LENGTH = 12;
 const TEXT_DELTA_BATCH_INTERVAL_MS = 32;
 const DEVICE_LINK_TRUNCATED_FLAG = '__deviceLinkTruncated';
 const pendingTextDeltaBatches = new Map<string, {
-  text: string;
+  /** Keep deltas as chunks; joining once per flush avoids O(n²) string copies. */
+  chunks: string[];
   persistId?: string;
   deviceId?: string;
   agentMeta: Record<string, unknown> | null;
@@ -638,6 +648,7 @@ const EMPTY_TASK_UPDATES: ReadonlyMap<string, AgentTaskUpdate> = new Map();
 const REGULAR_SESSION_GLOBAL_MESSAGE_BUDGET = 800;
 const REGULAR_SESSION_GLOBAL_MESSAGE_BYTES_BUDGET = 64 * 1024 * 1024;
 const MESSAGE_STRUCTURAL_BYTES_ESTIMATE = 512;
+const MESSAGE_BYTES_ESTIMATE_LIMIT = REGULAR_SESSION_GLOBAL_MESSAGE_BYTES_BUDGET + 1;
 const messageBytesEstimates = new WeakMap<RemoteMessage, number>();
 const sessionLastAccessOrder = new Map<string, number>();
 let nextSessionAccessOrder = 0;
@@ -654,14 +665,99 @@ function touchSessionAccess(sessionId: string): void {
   sessionLastAccessOrder.set(sessionId, ++nextSessionAccessOrder);
 }
 
+/**
+ * Budget accounting runs on every regular-session sweep.  Do not serialize the
+ * whole payload here: streaming rows replace their object on every flush, so a
+ * stringify would allocate a second copy of every large tool result and make
+ * the accounting pass itself a noticeable GC source.  This intentionally
+ * conservative walk counts primitive payloads and container overhead without
+ * materializing a large temporary string.
+ */
+function estimateValueBytes(value: unknown, maxBytes = MESSAGE_BYTES_ESTIMATE_LIMIT): number {
+  type ContainerFrame =
+    | { kind: 'array'; value: readonly unknown[]; nextIndex: number }
+    | { kind: 'object'; value: Record<string, unknown>; keys: string[]; nextIndex: number };
+
+  if (maxBytes <= 0) return 0;
+  const seen = new Set<object>();
+  const frames: ContainerFrame[] = [];
+  let bytes = 0;
+  let current: unknown = value;
+
+  // Walk one child at a time instead of recursively visiting or pushing an
+  // entire container. Deep payloads cannot overflow the JS stack, and large
+  // arrays do not create a second array-sized work queue just for accounting.
+  while (true) {
+    if (current == null) {
+      // null/undefined carry no payload bytes beyond their container slot.
+    } else if (typeof current === 'string') {
+      bytes += current.length * 2;
+    } else if (typeof current === 'number' || typeof current === 'boolean') {
+      bytes += 16;
+    } else if (typeof current !== 'object') {
+      bytes += 8;
+    } else if (!seen.has(current)) {
+      seen.add(current);
+      if (Array.isArray(current)) {
+        bytes += 24;
+        if (current.length > 0) {
+          bytes += 8;
+          frames.push({ kind: 'array', value: current, nextIndex: 1 });
+          current = current[0];
+          if (bytes >= maxBytes) return maxBytes;
+          continue;
+        }
+      } else {
+        const objectValue = current as Record<string, unknown>;
+        const keys = Object.keys(objectValue);
+        bytes += 32;
+        if (keys.length > 0) {
+          const key = keys[0]!;
+          bytes += 16 + key.length * 2;
+          frames.push({ kind: 'object', value: objectValue, keys, nextIndex: 1 });
+          current = objectValue[key];
+          if (bytes >= maxBytes) return maxBytes;
+          continue;
+        }
+      }
+    }
+
+    if (bytes >= maxBytes) return maxBytes;
+    let advanced = false;
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1]!;
+      if (frame.kind === 'array' && frame.nextIndex < frame.value.length) {
+        current = frame.value[frame.nextIndex];
+        frame.nextIndex += 1;
+        bytes += 8;
+        advanced = true;
+        break;
+      }
+      if (frame.kind === 'object' && frame.nextIndex < frame.keys.length) {
+        const key = frame.keys[frame.nextIndex]!;
+        frame.nextIndex += 1;
+        current = frame.value[key];
+        bytes += 16 + key.length * 2;
+        advanced = true;
+        break;
+      }
+      frames.pop();
+    }
+    if (!advanced) return bytes;
+  }
+}
+
 function estimateMessageBytes(message: RemoteMessage): number {
   const cached = messageBytesEstimates.get(message);
   if (cached !== undefined) return cached;
   let bytes = MESSAGE_STRUCTURAL_BYTES_ESTIMATE;
-  if (typeof message.content === 'string') bytes += message.content.length * 2;
-  else if (message.content != null) bytes += safeStableStringify(message.content).length * 2;
-  if (message.agentMeta) bytes += safeStableStringify(message.agentMeta).length * 2;
-  if (message.systemCardData) bytes += safeStableStringify(message.systemCardData).length * 2;
+  const addValue = (value: unknown): void => {
+    if (value == null || bytes >= MESSAGE_BYTES_ESTIMATE_LIMIT) return;
+    bytes += estimateValueBytes(value, MESSAGE_BYTES_ESTIMATE_LIMIT - bytes);
+  };
+  addValue(message.content);
+  addValue(message.agentMeta);
+  addValue(message.systemCardData);
   messageBytesEstimates.set(message, bytes);
   return bytes;
 }
@@ -894,6 +990,10 @@ function releaseSessionDetailProjections(sessionId: string): boolean {
   let changed = livePlanSnapshots.delete(sessionId);
   changed = sessionTaskUpdates.delete(sessionId) || changed;
   changed = sessionParkedTaskUpdates.delete(sessionId) || changed;
+  // Goal status is queried when the context sheet opens; retaining a full
+  // status payload for every backgrounded task only keeps detail-only data
+  // alive and can show stale state after a long absence.
+  changed = sessionGoalStatus.delete(sessionId) || changed;
   changed = inputProjections.delete(sessionId) || changed;
   // 即使投影已经为空也要抬升 authority：离场/LRU 前启动的慢查询不能在下一次
   // 打开同一任务后把旧 pending queue 或 continuation owner 写回来。
@@ -973,6 +1073,12 @@ function applyMessageWriteRetention(sessionId: string): void {
 let mergedSessions: RemoteSession[] = [];
 let messageVersion = 0;
 let storeVersion = 0;
+// A single remote snapshot often updates both the session shard and its
+// activity projection. Keep the writes synchronous, but notify subscribers
+// once after the snapshot is complete so the home screen does not render the
+// same device twice in one turn.
+let emitBatchDepth = 0;
+let emitBatchPending = false;
 
 type LiveRowCreatedAtAnchor = {
   createdAt: string | undefined;
@@ -1059,9 +1165,30 @@ let conversationSearchDeviceModels: readonly {
   state: string;
 }[] = [];
 
-function emit(): void {
+function emitNow(): void {
   storeVersion += 1;
   for (const sub of subs) sub();
+}
+
+function emit(): void {
+  if (emitBatchDepth > 0) {
+    emitBatchPending = true;
+    return;
+  }
+  emitNow();
+}
+
+function batch<T>(work: () => T): T {
+  emitBatchDepth += 1;
+  try {
+    return work();
+  } finally {
+    emitBatchDepth -= 1;
+    if (emitBatchDepth === 0 && emitBatchPending) {
+      emitBatchPending = false;
+      emitNow();
+    }
+  }
 }
 
 function bumpInputProjectionAuthorityEpoch(sessionId: string): number {
@@ -2019,7 +2146,11 @@ function streamingClientIdFor(sessionId: string, persistId: string | undefined):
 function upsertMessage(
   sessionId: string,
   message: RemoteMessage,
-  options: { retirePendingAssistantIdentityOnEqual?: boolean } = {},
+  options: {
+    retirePendingAssistantIdentityOnEqual?: boolean;
+    /** Streaming replacement preserves the already sorted message order. */
+    preserveOrderOnReplace?: boolean;
+  } = {},
 ): boolean {
   const existing = messages.get(sessionId) ?? [];
   const index = existing.findIndex((item) => messageIdentityMatches(item, message));
@@ -2076,7 +2207,13 @@ function upsertMessage(
   }
   const next = existing.slice();
   next[index] = replacement;
-  messages.set(sessionId, normalizeMessages(next));
+  // A live delta only changes content/metadata; sorting the whole window on
+  // every 32 ms flush needlessly allocates and scans all rows.  Callers that
+  // replace an authoritative row keep the historical normalization path.
+  messages.set(
+    sessionId,
+    options.preserveOrderOnReplace ? next : normalizeMessages(next),
+  );
   applyMessageWriteRetention(sessionId);
   if (message.role === 'assistant') {
     forgetPendingLiveAssistantMessageIdentity(
@@ -2283,7 +2420,7 @@ function applyRemoteTextEvent(
       new Date().toISOString(),
       hostCreatedAtAnchor?.createdAt,
     ),
-  });
+  }, { preserveOrderOnReplace: true });
   if (resetsTransportAssembly && !changed) {
     forgetPendingLiveAssistantMessageIdentity(
       sessionId,
@@ -2347,14 +2484,19 @@ function enqueueRemoteTextDelta(
   }
   const current = pendingTextDeltaBatches.get(sessionId);
   const incomingMeta = isRecord(event.agentMeta) ? event.agentMeta : null;
-  pendingTextDeltaBatches.set(sessionId, {
-    text: `${current?.text ?? ''}${text}`,
-    persistId: current?.persistId ?? persistId,
-    deviceId: current?.deviceId ?? deviceId,
-    agentMeta: incomingMeta
-      ? { ...(current?.agentMeta ?? {}), ...incomingMeta }
-      : current?.agentMeta ?? null,
-  });
+  if (current) {
+    current.chunks.push(text);
+    if (incomingMeta) current.agentMeta = { ...(current.agentMeta ?? {}), ...incomingMeta };
+    if (!current.persistId) current.persistId = persistId;
+    if (current.deviceId === undefined) current.deviceId = deviceId;
+  } else {
+    pendingTextDeltaBatches.set(sessionId, {
+      chunks: [text],
+      persistId,
+      deviceId,
+      agentMeta: incomingMeta,
+    });
+  }
   scheduleTextDeltaFlush();
   return changed;
 }
@@ -2368,7 +2510,7 @@ function flushPendingTextDelta(sessionId: string): boolean {
     sessionId,
     {
       type: 'text',
-      data: { text: batch.text, isFinal: false },
+      data: { text: batch.chunks.join(''), isFinal: false },
       ...(batch.agentMeta ? { agentMeta: batch.agentMeta } : {}),
     },
     batch.persistId,
@@ -2532,6 +2674,11 @@ function recallParkedTaskUpdates(
 }
 
 export const remoteSessionStore = {
+  /** Coalesce notifications for one logically atomic remote snapshot. */
+  batch<T>(work: () => T): T {
+    return batch(work);
+  },
+
   /**
    * 新建任务第一帧标题预览。只盖哨兵,权威标题一旦离开哨兵就让位。
    * 失败撤回走 {@link clearPendingTitlePreview}。
@@ -5017,8 +5164,52 @@ function readNumber(value: unknown, key: string): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
 }
 
+const RemoteSessionStoreSubscriptionEnabledContext = createContext(true);
+const INACTIVE_REMOTE_SESSION_STORE_SUBSCRIBE = () => () => undefined;
+
+/**
+ * Keep a mounted route's remote-session projection stable while it is covered by another screen.
+ * The store itself keeps receiving data; consumers resubscribe and jump to the latest snapshot when
+ * the route regains focus. This preserves native list state without rendering hidden row trees for
+ * every streaming token.
+ */
+export function RemoteSessionStoreSubscriptionGate({
+  children,
+  enabled,
+}: {
+  children: ReactNode;
+  enabled: boolean;
+}) {
+  return createElement(
+    RemoteSessionStoreSubscriptionEnabledContext.Provider,
+    { value: enabled },
+    children,
+  );
+}
+
+function usePausableRemoteSessionStoreSnapshot<T>(
+  identity: unknown,
+  getSnapshot: () => T,
+): T {
+  const enabled = useContext(RemoteSessionStoreSubscriptionEnabledContext);
+  const frozenSnapshotRef = useRef<{ identity: unknown; value: T } | null>(null);
+  const readSnapshot = useCallback(() => {
+    const frozen = frozenSnapshotRef.current;
+    if (enabled || frozen === null || !Object.is(frozen.identity, identity)) {
+      const next = { identity, value: getSnapshot() };
+      frozenSnapshotRef.current = next;
+      return next.value;
+    }
+    return frozen.value;
+  }, [enabled, getSnapshot, identity]);
+  return useSyncExternalStore(
+    enabled ? remoteSessionStore.subscribe : INACTIVE_REMOTE_SESSION_STORE_SUBSCRIBE,
+    readSnapshot,
+  );
+}
+
 export function useRemoteSessions(): RemoteSession[] {
-  return useSyncExternalStore(remoteSessionStore.subscribe, remoteSessionStore.getSessions);
+  return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getSessions);
 }
 
 /** Subscribe to one session's message mirror without triggering cache hydration side effects. */
@@ -5135,11 +5326,17 @@ function useSessionMessageCacheSync(
 }
 
 export function useRemoteMessageVersion(): number {
-  return useSyncExternalStore(remoteSessionStore.subscribe, remoteSessionStore.getMessageVersion);
+  return usePausableRemoteSessionStoreSnapshot(
+    'message-version',
+    remoteSessionStore.getMessageVersion,
+  );
 }
 
 export function useRemoteSessionStoreVersion(): number {
-  return useSyncExternalStore(remoteSessionStore.subscribe, remoteSessionStore.getStoreVersion);
+  return usePausableRemoteSessionStoreSnapshot(
+    'store-version',
+    remoteSessionStore.getStoreVersion,
+  );
 }
 
 export function useRemoteNewMakerWorktreePreference(
@@ -5183,8 +5380,8 @@ export function useSessionInputProjection(sessionId: string): InputProjection {
 }
 
 export function useSessionRunning(sessionId: string): boolean {
-  return useSyncExternalStore(
-    remoteSessionStore.subscribe,
+  return usePausableRemoteSessionStoreSnapshot(
+    sessionId,
     () => remoteSessionStore.isSessionRunning(sessionId),
   );
 }

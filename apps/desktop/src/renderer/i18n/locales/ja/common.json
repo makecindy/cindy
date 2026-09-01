@@ -6646,6 +6646,13 @@
       "move": "今すぐ移動（推奨）",
       "download": "手動でダウンロード"
     },
+    "windowsRuntimeMissing": {
+      "title": "Microsoft Visual C++ ランタイムが必要です",
+      "description": "この PC にはアップデーターに必要な Microsoft Visual C++ ランタイムがありません。ダウンロード済みの更新は保持されます。Microsoft 公式の x64 ランタイムをインストールしてから、もう一度確認してください。",
+      "download": "ランタイムをダウンロード",
+      "retry": "もう一度確認",
+      "later": "後でインストール"
+    },
     "moveToApplications": {
       "title": "アプリケーションフォルダに移動",
       "message": "{{appName}} を「アプリケーション」フォルダに移動すると、自動更新を含むより良い体験が得られます。",

@@ -120,6 +120,8 @@ describe('mobile message actions desktop-first surface', () => {
     const start = source.indexOf('function WorkGroupCard');
     const end = source.indexOf('function FoldablePanel', start);
     const workGroupSource = source.slice(start, end);
+    const expandedBodyStart = workGroupSource.indexOf('{expanded ? (');
+    const childrenMapStart = workGroupSource.indexOf('{item.children.map((child) => {');
 
     // 运行中用状态图标,结束后回到桌面同款 Layers 工作摘要图标。
     expect(source).toContain('Layers,');
@@ -128,10 +130,10 @@ describe('mobile message actions desktop-first surface', () => {
     expect(workGroupSource).toContain('chevronSize={header.chevronSize}');
     expect(workGroupSource).toContain('title={title}');
     expect(workGroupSource).toContain('subtitle={header.subtitle ?? undefined}');
-    // Work group 需要受控展开:运行中只在最近 5 条与全部历史之间切换。
+    // Work group 受控展开；折叠态只保留卡头，不提前构造任何隐藏活动行。
     expect(workGroupSource).not.toContain('defaultExpanded');
     expect(workGroupSource).toContain('controlledExpanded={expanded}');
-    expect(workGroupSource).toContain('collapsedBody={livePreview}');
+    expect(workGroupSource).not.toContain('collapsedBody=');
     expect(workGroupSource).toContain('onControlledToggle={onToggle}');
     expect(workGroupSource).not.toContain('live-preview-dismissed');
     expect(workGroupSource).toContain('? <CompactActivityIndicator color={colors.textTertiary}');
@@ -139,7 +141,12 @@ describe('mobile message actions desktop-first surface', () => {
     expect(workGroupSource).toContain('variant={header.variant}');
     expect(workGroupSource).toContain('summaryCount: header.summaryCount');
     expect(workGroupSource).toContain('<RenderItemView key={child.key} item={child} actions={actions} />');
-    expect(workGroupSource).toContain('projectRecentMobileWorkActivities(item.children, isStreaming, MAX_LIVE_WORK_ACTIVITIES)');
+    expect(workGroupSource).not.toContain('projectRecentMobileWorkActivities');
+    expect(workGroupSource).toContain('() => (expanded');
+    expect(workGroupSource).not.toContain('expanded || !isStreaming');
+    expect(workGroupSource).toContain('const contentLayout = useMemo(() => (expanded');
+    expect(expandedBodyStart).toBeGreaterThan(-1);
+    expect(childrenMapStart).toBeGreaterThan(expandedBodyStart);
     expect(workGroupSource).toContain('<ExpandedWorkThinkingRow key={child.key} item={child} />');
     expect(workGroupSource).toContain('activityProjection?.toolActivitiesByChildKey.get(child.key)');
     // thinking / tool 行都固定 28pt，外层不能再给 thinking 子项追加组间距。
@@ -363,8 +370,9 @@ describe('mobile message actions desktop-first surface', () => {
     expect(foldableSource).toContain('useFoldableExpandedState(blockId, defaultExpanded)');
     expect(thinkingSource).toContain('blockId={item.key}');
     expect(renderItemSource).toContain('<ToolGroupCard item={item} actions={actions} />');
-    // 思考卡接收会话流式信号,用于流式实时时长(对齐桌面 500ms tick)。
+    // 思考卡接收会话流式信号；界面只显示到秒，不需要半秒级刷新。
     expect(renderItemSource).toContain('isSessionStreaming={actions.isSessionStreaming === true}');
+    expect(source).toContain('setInterval(() => setNow(Date.now()), 1_000)');
   });
 
   it('does not render user or assistant role labels inside message bubbles', () => {

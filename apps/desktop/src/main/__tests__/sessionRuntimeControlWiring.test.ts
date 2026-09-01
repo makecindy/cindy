@@ -476,6 +476,34 @@ describe('session runtime control wiring', () => {
     );
   });
 
+  it('omits effort from the DB patch for fixed-effort models (sessions.effort NOT NULL)', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    // 固定 effort 模型(efforts.length === 0)的运行时语义是 effort: null,但
+    // sessions.effort 列是 NOT NULL——把 null 写进 DB patch 会让整个模型切换被
+    // NOT NULL 约束炸掉(issue #3691)。持久化 patch 必须省略该字段,内存 store
+    // 照常清 null,重启后按目标模型能力重新归一化。
+    const atomicPatch = setModel.indexOf('if (atomicSelection) {', setModel.indexOf('const patch: Record<string, unknown>'));
+    expect(atomicPatch).toBeGreaterThan(-1);
+    const persistCall = setModel.indexOf('persistSessionFields(sessionId', atomicPatch);
+    expect(persistCall).toBeGreaterThan(atomicPatch);
+    const patchBlock = setModel.slice(atomicPatch, persistCall);
+    expect(patchBlock).toContain('if (atomicSelection.effort !== null) {');
+    expect(patchBlock).toContain('patch.effort = atomicSelection.effort;');
+  });
+
+  it('normalizes hydrated effort to the current model capability on restart', () => {
+    // 重启后 DB 行里的 effort 是历史值;bootstrapSession hydrate 必须按当前模型
+    // 能力归一化(固定 effort → null,可调 → 兼容档),否则旧值会作为
+    // reasoningEffort 打给不支持的模型被 provider 拒绝(Greptile P1)。
+    expect(registerSource).toContain(
+      'resolveCompatibleSessionRuntimeEffort(hydrateModel, efRow?.effort ?? null)',
+    );
+  });
+
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
       registerSource,

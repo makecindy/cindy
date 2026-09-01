@@ -1729,6 +1729,9 @@ function embeddingRecordFailures(db: Database.Database, args: unknown): { failCo
   const jobs = expectArray(payload.jobs, 'jobs');
   const errMsg = truncate(expectString(payload.errMsg, 'errMsg'), 2000);
   const now = expectNumber(payload.now, 'now');
+  // #3416:确定性失败(如 INVALID_MODEL)重试永远不可能成功,terminal=true 时
+  // 整批直接进 'failed' 终态,不再烧 5 次退避尝试。缺省 false 保持旧语义。
+  const terminal = payload.terminal === true;
   const updReschedule = db.prepare(
     `UPDATE embedding_jobs
         SET attempts = ?, last_error = ?, scheduled_at = ?
@@ -1745,7 +1748,7 @@ function embeddingRecordFailures(db: Database.Database, args: unknown): { failCo
       const job = asRecord(rawJob, 'failure job');
       const rowid = expectNumber(job.rowid, 'job.rowid');
       const nextAttempts = expectNumber(job.attempts, 'job.attempts') + 1;
-      if (nextAttempts >= MAX_ATTEMPTS) {
+      if (terminal || nextAttempts >= MAX_ATTEMPTS) {
         updFail.run(nextAttempts, errMsg, rowid);
         failCount++;
       } else {

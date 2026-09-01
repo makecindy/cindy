@@ -253,6 +253,7 @@ describe('shouldAutoLoadEarlier', () => {
     actionDisabled: false,
     actionVisible: true,
     atEnd: false,
+    atStart: true,
     firstItemKey: 'message-a',
     initialAutoFillAllowed: false,
     lastAttemptedFirstItemKey: null,
@@ -283,20 +284,40 @@ describe('shouldAutoLoadEarlier', () => {
   it('cold-fills a near-start window while the initial bounded budget is available', () => {
     expect(shouldAutoLoadEarlier({
       ...eligible,
+      atEnd: true,
       initialAutoFillAllowed: true,
       userScrolledForOlder: false,
     })).toBe(true);
   });
 
-  it('keeps user-driven history prefetch disabled while pinned at the end', () => {
-    // 短会话整窗都在近顶阈值内:nearStart 与贴底可同时成立,贴底跟流优先。
-    expect(shouldAutoLoadEarlier({ ...eligible, atEnd: true })).toBe(false);
+  it('does not cold-fill after the initial window already fills the viewport', () => {
+    expect(shouldAutoLoadEarlier({
+      ...eligible,
+      atEnd: true,
+      atStart: false,
+      initialAutoFillAllowed: true,
+      userScrolledForOlder: false,
+    })).toBe(false);
+  });
+
+  it('keeps user-driven history prefetch disabled while only pinned at the end', () => {
+    expect(shouldAutoLoadEarlier({ ...eligible, atEnd: true, atStart: false })).toBe(false);
+  });
+
+  it('loads history after an explicit drag when a short window is both at-start and at-end', () => {
+    expect(shouldAutoLoadEarlier({
+      ...eligible,
+      atEnd: true,
+      atStart: true,
+      userScrolledForOlder: true,
+    })).toBe(true);
   });
 
   it('allows bounded cold-fill while a short initial window is both near-start and at-end', () => {
     expect(shouldAutoLoadEarlier({
       ...eligible,
       atEnd: true,
+      atStart: true,
       initialAutoFillAllowed: true,
       userScrolledForOlder: false,
     })).toBe(true);

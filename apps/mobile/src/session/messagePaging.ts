@@ -26,6 +26,70 @@ export function oldestMessageCursor(messages: readonly RemoteMessage[]): string 
   return oldest?.id ?? null;
 }
 
+/**
+ * A reclaimed message window can retain locally generated Compact cards after the host rows that
+ * originally surrounded them have been evicted. Transcript replay also lacks the original boundary
+ * timestamp, so several historical boundaries can be stamped "now" and become adjacent. Rendering
+ * either shape produces a misleading wall of Compact cards. Keep every card in the store (they are
+ * local-only and cannot be fetched again), while the visible projection hides a detached prefix,
+ * keeps only the newest detached trailing boundary, and collapses adjacent in-window Compact cards.
+ * A persisted host row between boundaries always preserves both. Temporary `mobile-stream-*` rows
+ * are rendered, but do not widen the authoritative persisted-host window.
+ */
+export function projectLoadedMessageWindow(
+  messages: readonly RemoteMessage[],
+): readonly RemoteMessage[] {
+  let firstHostIndex = -1;
+  let lastHostIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (!isHostMessageRow(messages[index])) continue;
+    if (firstHostIndex < 0) firstHostIndex = index;
+    lastHostIndex = index;
+  }
+  if (firstHostIndex < 0) {
+    let changed = false;
+    const projected: RemoteMessage[] = [];
+    for (const message of messages) {
+      const previous = projected.at(-1);
+      if (isLocalCompactCard(message) && previous && isLocalCompactCard(previous)) {
+        projected[projected.length - 1] = message;
+        changed = true;
+        continue;
+      }
+      projected.push(message);
+    }
+    return changed ? projected : messages;
+  }
+
+  let latestDetachedTailCompactIndex = -1;
+  for (let index = lastHostIndex + 1; index < messages.length; index += 1) {
+    if (isLocalCompactCard(messages[index])) latestDetachedTailCompactIndex = index;
+  }
+
+  let changed = false;
+  const projected: RemoteMessage[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    const localCompact = isLocalCompactCard(message);
+    const detachedPrefix = localCompact && index < firstHostIndex;
+    const staleDetachedTail = localCompact
+      && index > lastHostIndex
+      && index !== latestDetachedTailCompactIndex;
+    if (detachedPrefix || staleDetachedTail) {
+      changed = true;
+      continue;
+    }
+    const previous = projected.at(-1);
+    if (isLocalCompactCard(message) && previous && isLocalCompactCard(previous)) {
+      projected[projected.length - 1] = message;
+      changed = true;
+      continue;
+    }
+    projected.push(message);
+  }
+  return changed ? projected : messages;
+}
+
 export function hasMoreOlderMessages(page: readonly RemoteMessage[], pageSize = MESSAGE_PAGE_SIZE): boolean {
   if (page.length >= pageSize) return true;
   // 被控端结果帧超限时会静默裁行,并在保留行打 agentMeta.remoteRowsTrimmed 标记
@@ -124,6 +188,17 @@ function countRealMessages(messages: readonly RemoteMessage[]): number {
     count += 1;
   }
   return count;
+}
+
+function isHostMessageRow(message: RemoteMessage): boolean {
+  if (!message.id || message.id.startsWith('mobile-system-')) return false;
+  return !message.id.startsWith('mobile-stream-')
+    && !message.clientId.startsWith('mobile-stream-');
+}
+
+function isLocalCompactCard(message: RemoteMessage): boolean {
+  return message.systemCardType === 'compact'
+    && message.id.startsWith('mobile-system-compact:');
 }
 
 export function isPayloadTooLargeError(error: unknown): boolean {
