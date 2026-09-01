@@ -124,3 +124,28 @@ describe('pickAndAddExtraDir', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe('composer extraDirs UI 接线 library 槽', () => {
+  it('ChatInput 配额与计数走 countUserExtraDirs,不把 extraDirs.length 当用户名额', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { dirname, join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, '../components/new-chat/ChatInput.tsx'), 'utf8');
+    expect(source).toMatch(/countUserExtraDirs\(currentExtraDirs\) \+ countUserExtraDirs\(currentWritableDirs\)/);
+    expect(source).toMatch(/countUserExtraDirs\(extraDirs \?\? \[\]\) \+ countUserExtraDirs\(writableDirs \?\? \[\]\)/);
+    expect(source).not.toMatch(/currentExtraDirs\.length \+ currentWritableDirs\.length/);
+    expect(source).not.toMatch(/extraDirsCount=\{\(extraDirs \?\? \[\]\)\.length \+ \(writableDirs \?\? \[\]\)\.length\}/);
+  });
+
+  it('AtMentionPanel 把 library 槽显示为系统项且不提供移除按钮', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { dirname, join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, '../components/new-chat/AtMentionPanel.tsx'), 'utf8');
+    expect(source).toContain('extraDirDisplayLabel');
+    expect(source).toContain('isLibraryExtraDirSlot');
+    expect(source).toMatch(/isLibraryExtraDirSlot\(p\) \? null/);
+  });
+});
