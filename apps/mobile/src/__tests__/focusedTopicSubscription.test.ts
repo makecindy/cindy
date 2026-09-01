@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
+import {
+  readAfterTopicSubscriptionAck,
+  startFocusedTopicSubscription,
+} from '@/device-link/focusedTopicSubscription';
 
 type TopicFn = (owner: string, deviceId: string, topics: string[]) => Promise<void>;
 
@@ -124,5 +127,74 @@ describe('startFocusedTopicSubscription', () => {
     cleanupSecond();
     expect(unsubscribe).toHaveBeenCalledTimes(3);
     expect(unsubscribe).toHaveBeenLastCalledWith(secondOwner, 'dev-1', ['session:s1']);
+  });
+});
+
+describe('readAfterTopicSubscriptionAck', () => {
+  it('starts the authoritative read only after the remote subscription is acknowledged', async () => {
+    const events: string[] = [];
+    const pending = deferred();
+    const subscribe = vi.fn<TopicFn>(() => {
+      events.push('subscribe');
+      return pending.promise.then(() => {
+        events.push('ack');
+      });
+    });
+    const unsubscribe = vi.fn<TopicFn>(async () => {
+      events.push('unsubscribe');
+    });
+
+    const result = readAfterTopicSubscriptionAck({
+      deviceId: 'dev-1',
+      owner: 'message-sync:s1:1',
+      subscribe,
+      topic: 'session:s1',
+      unsubscribe,
+      read: async () => {
+        events.push('read');
+        return 'snapshot';
+      },
+    });
+    await Promise.resolve();
+    expect(events).toEqual(['subscribe']);
+
+    pending.resolve();
+    await expect(result).resolves.toBe('snapshot');
+    expect(events).toEqual(['subscribe', 'ack', 'read', 'unsubscribe']);
+  });
+
+  it('releases the temporary owner when subscribe or read fails', async () => {
+    const unsubscribe = vi.fn<TopicFn>(async () => undefined);
+    await expect(readAfterTopicSubscriptionAck({
+      deviceId: 'dev-1',
+      owner: 'message-sync:s1:subscribe-error',
+      subscribe: vi.fn<TopicFn>(async () => {
+        throw new Error('subscribe failed');
+      }),
+      topic: 'session:s1',
+      unsubscribe,
+      read: vi.fn(async () => 'never'),
+    })).rejects.toThrow('subscribe failed');
+    expect(unsubscribe).toHaveBeenCalledWith(
+      'message-sync:s1:subscribe-error',
+      'dev-1',
+      ['session:s1'],
+    );
+
+    await expect(readAfterTopicSubscriptionAck({
+      deviceId: 'dev-1',
+      owner: 'message-sync:s1:read-error',
+      subscribe: vi.fn<TopicFn>(async () => undefined),
+      topic: 'session:s1',
+      unsubscribe,
+      read: async () => {
+        throw new Error('read failed');
+      },
+    })).rejects.toThrow('read failed');
+    expect(unsubscribe).toHaveBeenCalledWith(
+      'message-sync:s1:read-error',
+      'dev-1',
+      ['session:s1'],
+    );
   });
 });

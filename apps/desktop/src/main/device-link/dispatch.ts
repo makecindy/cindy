@@ -118,6 +118,7 @@ const MAX_CONTROLLER_NAME_LEN = 64;
 const MAX_CONTROLLER_CAPABILITIES = 32;
 const MAX_CONTROLLER_CAPABILITY_LEN = 80;
 const REMOTE_MESSAGE_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:messages:sync',
   'local-db:messages:list',
   'local-db:messages:around',
   'local-db:messages:around-client-id',
@@ -2244,15 +2245,46 @@ function sanitizeMessageInvokeResult(
   channel: string | undefined,
 ): InvokeResultPayload {
   if (!channel || !REMOTE_MESSAGE_CHANNELS.has(channel)) return result;
-  if (!result.ok || !Array.isArray(result.result)) return result;
+  const window = remoteMessageResultWindow(result, channel);
+  if (!window) return result;
   let changed = false;
-  const sanitized = result.result.map((msg: unknown) => {
+  const sanitized = window.messages.map((msg: unknown) => {
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return msg;
     const out = stripRecoveryCheckpointFromMessage(msg as Record<string, unknown>);
     if (out !== msg) changed = true;
     return out;
   });
-  return changed ? { ok: true, result: sanitized } : result;
+  return changed ? window.rebuild(sanitized) : result;
+}
+
+interface RemoteMessageResultWindow {
+  messages: unknown[];
+  rebuild(messages: unknown[]): InvokeResultPayload;
+}
+
+function remoteMessageResultWindow(
+  result: InvokeResultPayload,
+  channel: string,
+): RemoteMessageResultWindow | null {
+  if (!result.ok) return null;
+  if (Array.isArray(result.result)) {
+    return {
+      messages: result.result,
+      rebuild: (messages) => ({ ok: true, result: messages }),
+    };
+  }
+  if (
+    channel !== 'local-db:messages:sync'
+    || !result.result
+    || typeof result.result !== 'object'
+    || Array.isArray(result.result)
+  ) return null;
+  const sync = result.result as Record<string, unknown>;
+  if (sync.status !== 'reset' || !Array.isArray(sync.messages)) return null;
+  return {
+    messages: sync.messages,
+    rebuild: (messages) => ({ ok: true, result: { ...sync, messages } }),
+  };
 }
 
 /**
@@ -2515,26 +2547,20 @@ function compactInvokeResultForDeviceLink(
   args?: unknown[],
 ): InvokeResultPayload | null {
   if (!channel || !REMOTE_MESSAGE_CHANNELS.has(channel)) return null;
-  if (!result.ok || !Array.isArray(result.result)) return null;
-  const compactMessages = result.result.map(compactRemoteMessageForDeviceLink);
-  const compact: InvokeResultPayload = {
-    ok: true,
-    result: compactMessages,
-  };
+  const window = remoteMessageResultWindow(result, channel);
+  if (!window) return null;
+  const compactMessages = window.messages.map(compactRemoteMessageForDeviceLink);
+  const compact = window.rebuild(compactMessages);
   if (fitsInvokeResultFrame(frame, compact)) return compact;
 
   const placeholderMessages = compactMessages.map(forceCompactRemoteMessageContent);
-  const placeholderCompact: InvokeResultPayload = {
-    ok: true,
-    result: placeholderMessages,
-  };
+  const placeholderCompact = window.rebuild(placeholderMessages);
   if (fitsInvokeResultFrame(frame, placeholderCompact)) return placeholderCompact;
 
   for (let keep = placeholderMessages.length - 1; keep > 0; keep -= 1) {
-    const sliced: InvokeResultPayload = {
-      ok: true,
-      result: sliceRemoteMessageWindowForChannel(channel, placeholderMessages, keep, args),
-    };
+    const sliced = window.rebuild(
+      sliceRemoteMessageWindowForChannel(channel, placeholderMessages, keep, args),
+    );
     if (fitsInvokeResultFrame(frame, sliced)) return sliced;
   }
   return null;
@@ -2547,7 +2573,7 @@ function sliceRemoteMessageWindowForChannel(
   args?: unknown[],
 ): unknown[] {
   // messages:list returns desc(createdAt), so the front of the page is newest.
-  if (channel === 'local-db:messages:list') {
+  if (channel === 'local-db:messages:list' || channel === 'local-db:messages:sync') {
     return markRemoteRowsTrimmed(messages.slice(0, keep), messages.length);
   }
 

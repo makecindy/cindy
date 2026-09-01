@@ -1700,6 +1700,53 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionMessageWindowSynced('s1', meta)).toBe(false);
   });
 
+  it('tracks known and covered message tokens independently and never regresses known revision', () => {
+    const covered = { epoch: 'epoch-1', revision: 2 };
+    const known = { epoch: 'epoch-1', revision: 4 };
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+      messageSyncToken: covered,
+    })]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    remoteSessionStore.markSessionMessagesCovered('s1', covered, 'dev-1');
+
+    expect(remoteSessionStore.getSessionKnownMessageSyncToken('s1')).toEqual(covered);
+    expect(remoteSessionStore.getSessionMessagesCoveredToken('s1')).toEqual(covered);
+    expect(remoteSessionStore.isSessionMessageTokenCovered('s1', covered)).toBe(true);
+
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { messageSyncToken: known });
+    expect(remoteSessionStore.getSessionKnownMessageSyncToken('s1')).toEqual(known);
+    expect(remoteSessionStore.isSessionMessageTokenCovered('s1', known)).toBe(false);
+
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+      messageSyncToken: { epoch: 'epoch-1', revision: 3 },
+    })]);
+    expect(remoteSessionStore.getSessionKnownMessageSyncToken('s1')).toEqual(known);
+
+    remoteSessionStore.markSessionMessagesCovered('s1', known, 'dev-1');
+    expect(remoteSessionStore.isSessionMessageTokenCovered('s1', known)).toBe(true);
+
+    remoteSessionStore.removeMessages('s1', ['m1'], 'dev-1');
+    expect(remoteSessionStore.getSessionMessagesCoveredToken('s1')).toBeNull();
+  });
+
+  it('hydrates the covered token only when the cached message window wins the empty-store race', () => {
+    const token = { epoch: 'epoch-cache', revision: 6 };
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [message('cached', 's1')], {
+      authority,
+      coveredToken: token,
+    });
+    expect(remoteSessionStore.getSessionMessagesCoveredToken('s1')).toEqual(token);
+
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [message('stale', 's1')], {
+      authority,
+      coveredToken: { epoch: 'epoch-cache', revision: 5 },
+    });
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['cached']);
+    expect(remoteSessionStore.getSessionMessagesCoveredToken('s1')).toEqual(token);
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+  });
+
   it('appends local mobile system cards as transient messages', () => {
     const id = remoteSessionStore.appendLocalSystemCard(
       's1',
@@ -1746,6 +1793,29 @@ describe('remoteSessionStore', () => {
     ]);
 
     expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['latest-1', 'latest-2']);
+  });
+
+  it('resets server rows on token mismatch while preserving only local transient rows', () => {
+    remoteSessionStore.setMessages('s1', [
+      messageAt('deleted-old', 's1', '2026-01-01T00:00:01.000Z'),
+      { ...messageAt('latest', 's1', '2026-01-01T00:00:02.000Z'), content: 'stale' },
+    ]);
+    const localCardId = remoteSessionStore.appendLocalSystemCard(
+      's1',
+      'pwd',
+      { workingDir: '/repo' },
+      new Date('2026-01-01T00:00:03.000Z'),
+    );
+
+    remoteSessionStore.resetMessagesFromSync('s1', [
+      { ...messageAt('latest', 's1', '2026-01-01T00:00:02.000Z'), content: 'fresh' },
+    ]);
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'latest',
+      localCardId,
+    ]);
+    expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('fresh');
   });
 
   it('keeps live-pushed tail messages when a latest-page sync resolves late', () => {
@@ -1970,8 +2040,8 @@ describe('remoteSessionStore', () => {
   });
 
   it('订阅 ACK 之前落库的权威页，尾部不算可信（#1210 review）', () => {
-    // 屏幕侧的 openAndSubscribe / startFocusedTopicSubscription 都是 `void subscribe(...)`,不等
-    // ACK 就拉页(订阅只管之后的推送,不该挡数据读),所以"页比订阅先到"是常态。这个空窗里被控端
+    // 非 barrier 读取（如历史缺口补读）仍可能在 ACK 前落页；这种页不能为实时尾部背书。
+    // 详情首开/重开已由 readAfterTopicSubscriptionAck 关闭该空窗。空窗里被控端
     // 写下的行既不在这一页、也不会被推过来;若这时仍把尾部标成可信,之后一条 push 就会把上界抬过
     // 那几行,而等尾部涨过一页后最新页已不含它们,事实自检也发现不了 —— 孤岛就此固化下来。
     remoteSessionStore.setMessages('s1', [

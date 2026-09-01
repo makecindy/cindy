@@ -132,6 +132,7 @@ export type EnsureReadyResult =
  * - 任何不可恢复故障 → 弹 OS 对话框 + return `{ ready: false, error }`，由 renderer 阻断 navigate
  */
 export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
+  let restoredFromBackup = false;
   if (!userId || typeof userId !== 'string') {
     return { ready: false, error: { code: 'DB_INIT_FAILED', message: 'invalid userId' } };
   }
@@ -269,6 +270,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       }
       try {
         _db = openWithPragmas(filePath);
+        restoredFromBackup = true;
       } catch (reopenErr) {
         const reopenMsg = reopenErr instanceof Error ? reopenErr.message : String(reopenErr);
         showFatalDialog('数据库恢复后仍无法打开', reopenMsg, 'DB_CORRUPT_NO_BACKUP');
@@ -406,6 +408,14 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   } finally {
     startupWriterLease?.release();
     startupWriterLease = null;
+  }
+
+  if (restoredFromBackup) {
+    // 备份恢复会让 revision 回退；更换所有会话的谱系 epoch，确保控制端不会把
+    // 恰好相同的旧 revision 误认成自己缓存过的那一版消息窗口。
+    db.prepare(
+      "UPDATE sessions SET message_epoch = lower(hex(randomblob(16))), message_revision = 0",
+    ).run();
   }
 
   try {

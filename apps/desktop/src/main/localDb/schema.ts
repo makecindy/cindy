@@ -232,6 +232,12 @@ export const sessions = sqliteTable(
      * 存精确总数；UI 把 ≥1001 显示成 1000+。NULL = 尚未回填。
      */
     listMessageCount: integer('list_message_count'),
+    /**
+     * 移动端详情消息缓存的新鲜度 token。epoch 标识当前消息历史谱系；尾部追加只推进
+     * revision，历史插入、已有行改写/删除或 cleared_at 变化会原子更换 epoch。
+     */
+    messageEpoch: text('message_epoch').notNull().default(''),
+    messageRevision: integer('message_revision').notNull().default(0),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

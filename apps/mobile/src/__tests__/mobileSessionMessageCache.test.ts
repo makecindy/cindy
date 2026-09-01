@@ -80,6 +80,54 @@ describe('mobileSessionMessageCache', () => {
     expect(cached[1].content).toBe('second');
   });
 
+  it('persists the covered message sync token with the cached window', async () => {
+    const {
+      cacheSessionMessages,
+      getCachedSessionMessageSnapshot,
+    } = await import('@/session/mobileSessionMessageCache');
+
+    await cacheSessionMessages(
+      'host-a',
+      'session-1',
+      [makeMessage({ id: 'a', createdAt: isoAt(1) })],
+      { epoch: 'epoch-1', revision: 12 },
+    );
+
+    await expect(getCachedSessionMessageSnapshot('host-a', 'session-1')).resolves.toMatchObject({
+      messages: [{ id: 'a' }],
+      token: { epoch: 'epoch-1', revision: 12 },
+    });
+    expect(JSON.parse([...store.values()][0])).toMatchObject({
+      version: 2,
+      token: { epoch: 'epoch-1', revision: 12 },
+    });
+  });
+
+  it('treats legacy or malformed cached tokens as uncovered', async () => {
+    const {
+      cacheSessionMessages,
+      getCachedSessionMessageSnapshot,
+    } = await import('@/session/mobileSessionMessageCache');
+    await cacheSessionMessages(
+      'host-a',
+      'session-1',
+      [makeMessage({ id: 'a', createdAt: isoAt(1) })],
+    );
+    await expect(getCachedSessionMessageSnapshot('host-a', 'session-1')).resolves.toMatchObject({
+      token: null,
+    });
+
+    const [key, raw] = [...store.entries()][0];
+    store.set(key, JSON.stringify({
+      ...JSON.parse(raw),
+      token: { epoch: '', revision: -1 },
+    }));
+    await expect(getCachedSessionMessageSnapshot('host-a', 'session-1')).resolves.toMatchObject({
+      messages: [{ id: 'a' }],
+      token: null,
+    });
+  });
+
   it('returns [] for missing cache or blank ids', async () => {
     const { getCachedSessionMessages, cacheSessionMessages } = await import('@/session/mobileSessionMessageCache');
 

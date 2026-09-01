@@ -44,6 +44,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'local-db:sessions:list',
       'local-db:conversations:search',
       DL_HISTORY_MESSAGES_CHANNEL,
+      'local-db:messages:sync',
       'local-db:messages:list',
       'local-db:messages:around',
       'local-db:messages:around-client-id',

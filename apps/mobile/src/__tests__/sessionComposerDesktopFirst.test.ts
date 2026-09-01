@@ -14,8 +14,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain(
       'const activityEpochAtFetchStart = remoteSessionStore.captureActiveSessionSnapshotEpoch();',
     );
-    expect((source.match(/fetchActiveSessionSnapshot\(\),/g) ?? []).length).toBe(2);
-    expect((source.match(/activeSessionSnapshot\.activityEpochAtFetchStart/g) ?? []).length).toBe(2);
+    // 首开与重开已合并到同一条 sideData 分支，只保留一次带 epoch fence 的读取和提交。
+    expect((source.match(/fetchActiveSessionSnapshot\(\),/g) ?? []).length).toBe(1);
+    expect((source.match(/activeSessionSnapshot\.activityEpochAtFetchStart/g) ?? []).length).toBe(1);
     expect((source.match(/maker\.listActiveSessions\(\)/g) ?? []).length).toBe(1);
   });
 

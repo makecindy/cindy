@@ -11,7 +11,10 @@ import {
   normalizeAgentTaskUpdate,
   type AgentTaskUpdate,
 } from '@cindy/maker-shared/agent-task';
-import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
+import type {
+  MessageSyncToken,
+  MobileGoalStatusPayload,
+} from '@cindy/maker-shared/device-link-contract';
 import { applyCodexPlanSnapshotOnDone, markCodexPlanTurnFailed } from '@cindy/maker-shared/message-render';
 import type { RemoteSessionLiveActivity } from '@cindy/maker-shared/session-list';
 import { buildDeviceIdentity, resolveCanonicalDeviceId } from '@cindy/maker-shared/mobile-home';
@@ -31,7 +34,7 @@ import {
 import {
   cacheSessionMessagesIfCurrent,
   captureSessionMessageCacheWriteAuthority,
-  getCachedSessionMessages,
+  getCachedSessionMessageSnapshot,
   isSessionMessageCacheWriteAuthorityCurrent,
   replaceCachedSessionMessages,
 } from '@/session/mobileSessionMessageCache';
@@ -143,6 +146,8 @@ export interface SetLatestMessageWindowOptions {
 
 export interface SessionMessageWriteOptions {
   authority?: SessionMessageAuthority;
+  /** 本地缓存 hydrate 所携带的已覆盖权威版本。 */
+  coveredToken?: MessageSyncToken | null;
   /** 本行是否携带主机时间域的 createdAt；本地临时卡必须显式关闭。 */
   hostTimeAuthoritative?: boolean;
 }
@@ -335,6 +340,8 @@ const sessionRunStatus = new Map<string, RemoteSessionRunStatus>();
 const sessionMakerActivityEpochs = new Map<string, number>();
 let makerActivityEpoch = 0;
 const sessionMessageSyncMarkers = new Map<string, SessionMessageSyncMarker>();
+// known 在 session 列表镜像上；covered 单独记录详情消息窗口已完整覆盖到的版本。
+const sessionCoveredMessageSyncTokens = new Map<string, MessageSyncToken>();
 /**
  * 每会话「已验证连续覆盖区间」:`[since, until]`(闭区间,ISO createdAt)内的**所有**服务端行都在
  * 窗口里 —— 中间没有服务端有、本地没加载的行。缺省(未登记)= 未知,窗口不被信任为连续。
@@ -354,9 +361,9 @@ const sessionMessageSyncMarkers = new Map<string, SessionMessageSyncMarker>();
  * 记下来,这类"接不上"就是一次比较(#1210 review)。
  *
  * `liveTailTrusted`:自 `until` 建立以来实时推送链路没断过 —— 只有这时新到的 push 才能把 `until`
- * 往后推(订阅内的推送是顺序且完整的)。它由**权威页落库那一刻订阅是否已 ACK**决定:屏幕侧的
- * `openAndSubscribe` 与 `startFocusedTopicSubscription` 都是 `void subscribe(...)`,刻意不等 ACK
- * (订阅只管之后的推送,不该挡数据读),所以页比订阅先到是常态 —— 这个空窗里被控端写下的行既不会
+ * 往后推(订阅内的推送是顺序且完整的)。它由**权威页落库那一刻订阅是否已 ACK**决定:
+ * 普通 focus 持有的 `startFocusedTopicSubscription` 不等 ACK，不能单独为权威页背书；详情 P0 同步用
+ * `readAfterTopicSubscriptionAck` 在 ACK 后读取并提交页。若页比订阅先到，空窗里被控端写下的行既不会
  * 进这一页、也不会被推过来,之后一条 push 就会把 `until` 抬过它们,而等尾部涨过一页后最新页已不含
  * 那几行,事实自检也发现不了(#1210 review)。反过来重连补齐路径(`rehydrate`)是 `await subscribe`
  * 之后才拉页的,所以那条路径拿到的是可信尾部。
@@ -672,6 +679,17 @@ function isMessageWindowProtectedRow(sessionId: string, message: RemoteMessage):
   return message.role === 'user' && !message.id;
 }
 
+function coveredMessageSyncTokenForCache(
+  sessionId: string,
+  list: readonly RemoteMessage[],
+): MessageSyncToken | null {
+  if (list.some((message) => (
+    isPendingLiveAssistantMessage(sessionId, message)
+    || (message.role === 'user' && !message.id)
+  ))) return null;
+  return sessionCoveredMessageSyncTokens.get(sessionId) ?? null;
+}
+
 /**
  * 软窗口：不可重取的本地/在途行全部保留，剩余额度给最新服务端行。保护行较多时
  * 允许略超上限，数据安全优先于精确条数。
@@ -755,6 +773,7 @@ function invalidateSessionMessageWindowState(
   changed = sessionTaskUpdates.delete(sessionId) || changed;
   changed = sessionParkedTaskUpdates.delete(sessionId) || changed;
   changed = sessionMessageSyncMarkers.delete(sessionId) || changed;
+  changed = sessionCoveredMessageSyncTokens.delete(sessionId) || changed;
   changed = clearStreamingAssistantState(sessionId) || changed;
   changed = pendingLiveAssistantClientIds.delete(sessionId) || changed;
   changed = pendingHostAnchorLiveAssistantClientIds.delete(sessionId) || changed;
@@ -1267,7 +1286,29 @@ function preserveSessionRuntimeFields(
       next = { ...next, [key]: local[key] };
     }
   }
+  const freshMessageToken = fresh.messageSyncToken;
+  const localMessageToken = local.messageSyncToken;
+  if (
+    localMessageToken
+    && (
+      !freshMessageToken
+      || messageSyncTokensEqual(freshMessageToken, localMessageToken)
+      || (
+        freshMessageToken.epoch === localMessageToken.epoch
+        && localMessageToken.revision > freshMessageToken.revision
+      )
+    )
+  ) {
+    next = { ...next, messageSyncToken: localMessageToken };
+  }
   return next;
+}
+
+function messageSyncTokensEqual(
+  left: MessageSyncToken | null | undefined,
+  right: MessageSyncToken | null | undefined,
+): boolean {
+  return left?.epoch === right?.epoch && left?.revision === right?.revision;
 }
 
 function normalizeMessages(list: readonly RemoteMessage[]): RemoteMessage[] {
@@ -2881,6 +2922,61 @@ export const remoteSessionStore = {
 
   // 乐观 hydrate:仅当该会话当前还没有任何消息时,用本地缓存(冷开预览)种入。
   // 「if empty」是关键不变量——fresh 数据若已先到则不覆盖;fresh 之后到也会按 messageKey 对账替换。
+  /**
+   * message sync 的 reset 结果只信任本次权威窗口。旧服务端行一律丢弃，避免窗口外
+   * 的删除、修改、rewind 或 clear 继续残留；仅保留尚未落库的本地临时行。
+   */
+  resetMessagesFromSync(
+    sessionId: string,
+    list: readonly RemoteMessage[],
+    options: SessionMessageWriteOptions = {},
+  ): void {
+    if (!messageWriteAllowed(sessionId, options.authority)) return;
+    const existing = messages.get(sessionId) ?? [];
+    const byKey = new Map<string, RemoteMessage>();
+    for (const item of existing) {
+      if (isMessageWindowProtectedRow(sessionId, item)) {
+        byKey.set(messageKey(item), item);
+      }
+    }
+    for (const rawItem of list) {
+      const item = overlayLivePlanSnapshot(sessionId, rawItem);
+      if (isPersistedAssistantMessage(item)) {
+        const fallbackIndex = findPendingGeneratedStreamingFallbackIndex(sessionId, existing);
+        const fallback = fallbackIndex >= 0 ? existing[fallbackIndex] : undefined;
+        if (
+          fallback
+          && isMessageWindowProtectedRow(sessionId, fallback)
+          && generatedFallbackMatchesPersistedMessage(fallback, item)
+        ) {
+          byKey.delete(messageKey(fallback));
+          forgetPendingLiveAssistantMessageIdentity(
+            sessionId,
+            fallback.id,
+            fallback.clientId,
+            item.id,
+            item.clientId,
+          );
+          retireGeneratedStreamingFallback(sessionId);
+        }
+      }
+      const key = findMessageMergeKey(byKey, item) ?? messageKey(item);
+      byKey.set(key, item);
+      if (item.role === 'assistant') {
+        forgetPendingLiveAssistantMessageIdentity(
+          sessionId,
+          key,
+          item.id,
+          item.clientId,
+        );
+      }
+    }
+    this.setMessages(sessionId, [...byKey.values()], options);
+    if (messageWriteAllowed(sessionId, options.authority)) {
+      coverReplacedWindow(sessionId, normalizeMessages(list));
+    }
+  },
+
   hydrateMessagesIfEmpty(
     sessionId: string,
     list: readonly RemoteMessage[],
@@ -2900,6 +2996,9 @@ export const remoteSessionStore = {
       return;
     }
     messages.set(sessionId, next);
+    if (options.coveredToken) {
+      sessionCoveredMessageSyncTokens.set(sessionId, options.coveredToken);
+    }
     applyMessageWriteRetention(sessionId);
     bumpMessageVersion();
     emit();
@@ -3122,6 +3221,43 @@ export const remoteSessionStore = {
     return sessionMessageSyncMarkersEqual(marker, buildSessionMessageSyncMarker(session));
   },
 
+  markSessionMessagesCovered(
+    sessionId: string,
+    token: MessageSyncToken,
+    deviceId?: string,
+  ): void {
+    if (!sessionId || !token.epoch || !Number.isSafeInteger(token.revision) || token.revision < 0) return;
+    const current = sessionCoveredMessageSyncTokens.get(sessionId);
+    if (messageSyncTokensEqual(current, token)) return;
+    sessionCoveredMessageSyncTokens.set(sessionId, token);
+    const resolvedDeviceId = deviceId ?? sessionDeviceIndex.get(sessionId);
+    const currentMessages = messages.get(sessionId) ?? emptyMessages;
+    if (
+      resolvedDeviceId
+      && currentMessages.length > 0
+      && retentionForSession(sessionId) === 'regular'
+    ) {
+      void replaceCachedSessionMessages(
+        resolvedDeviceId,
+        sessionId,
+        currentMessages,
+        coveredMessageSyncTokenForCache(sessionId, currentMessages),
+      ).catch(() => undefined);
+    }
+  },
+
+  getSessionMessagesCoveredToken(sessionId: string): MessageSyncToken | null {
+    return sessionCoveredMessageSyncTokens.get(sessionId) ?? null;
+  },
+
+  getSessionKnownMessageSyncToken(sessionId: string): MessageSyncToken | null {
+    return mergedSessions.find((session) => session.id === sessionId)?.messageSyncToken ?? null;
+  },
+
+  isSessionMessageTokenCovered(sessionId: string, token: MessageSyncToken): boolean {
+    return messageSyncTokensEqual(sessionCoveredMessageSyncTokens.get(sessionId), token);
+  },
+
   /** session 页面检测自身是否需要整窗刷新(收到 error-persisted 但消息未被清空)。 */
   hasPendingRefresh(sessionId: string): boolean {
     return pendingRefreshSessions.has(sessionId);
@@ -3285,6 +3421,7 @@ export const remoteSessionStore = {
       !deletedClientIds.has(message.clientId) && !deletedClientIds.has(message.id)
     ));
     sessionMessageSyncMarkers.delete(sessionId);
+    sessionCoveredMessageSyncTokens.delete(sessionId);
     // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
     // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
     forgetWindowCoverage(sessionId);
@@ -4481,6 +4618,7 @@ export const remoteSessionStore = {
     sessionMakerActivityEpochs.clear();
     makerActivityEpoch = 0;
     sessionMessageSyncMarkers.clear();
+    sessionCoveredMessageSyncTokens.clear();
     sessionWindowCoverage.clear();
     sessionLiveStreamAcked.clear();
     sessionTaskUpdates.clear();
@@ -5074,16 +5212,19 @@ function useSessionMessageCacheSync(
     if (hydratedKeyRef.current === key) return;
     hydratedKeyRef.current = key;
     let cancelled = false;
-    void getCachedSessionMessages(deviceId, sessionId)
+    void getCachedSessionMessageSnapshot(deviceId, sessionId)
       .then((cached) => {
-        if (cancelled || cached.length === 0) return;
+        if (cancelled || cached.messages.length === 0) return;
         // 消息 authority 只表示页面仍是同一详情代际；权威空窗口、删除、rewind 或
         // schedule 改判不会撤销页面本身。缓存 key epoch 必须另行校验，防止这些
         // 事件发生前启动的旧 getItem 在清空后把已删除正文重新 hydrate 回内存。
         if (!isSessionMessageCacheWriteAuthorityCurrent(cacheAuthority)) return;
         if (remoteSessionStore.getSessionRetention(sessionId) !== 'regular') return;
         if (!remoteSessionStore.isSessionMessageAuthorityCurrent(authority)) return;
-        remoteSessionStore.hydrateMessagesIfEmpty(sessionId, cached, { authority });
+        remoteSessionStore.hydrateMessagesIfEmpty(sessionId, cached.messages, {
+          authority,
+          coveredToken: cached.token,
+        });
       })
       .catch(() => undefined);
     return () => {
@@ -5117,7 +5258,11 @@ function useSessionMessageCacheSync(
       if (!ctx.deviceId || !ctx.sessionId || ctx.messages.length === 0) return;
       if (`${ctx.deviceId}::${ctx.sessionId}` !== key) return;
       if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;
-      void cacheSessionMessagesIfCurrent(cacheAuthority, ctx.messages).catch(() => undefined);
+      void cacheSessionMessagesIfCurrent(
+        cacheAuthority,
+        ctx.messages,
+        coveredMessageSyncTokenForCache(ctx.sessionId, ctx.messages),
+      ).catch(() => undefined);
     }, SESSION_MESSAGE_CACHE_PERSIST_DEBOUNCE_MS);
   }, [deviceId, messages, retention, sessionId]);
 
@@ -5130,7 +5275,11 @@ function useSessionMessageCacheSync(
     if (!ctx.deviceId || !ctx.sessionId || ctx.messages.length === 0) return;
     if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;
     const cacheAuthority = captureSessionMessageCacheWriteAuthority(ctx.deviceId, ctx.sessionId);
-    void cacheSessionMessagesIfCurrent(cacheAuthority, ctx.messages).catch(() => undefined);
+    void cacheSessionMessagesIfCurrent(
+      cacheAuthority,
+      ctx.messages,
+      coveredMessageSyncTokenForCache(ctx.sessionId, ctx.messages),
+    ).catch(() => undefined);
   }, []);
 }
 

@@ -32,6 +32,7 @@ describe('mobile maker transport', () => {
       'local-db:messages:dismiss-error',
       'local-db:sessions:ack-interrupted',
       'maker:regenerate-title',
+      'local-db:messages:sync',
       'local-db:messages:list',
       'local-db:messages:around',
       'local-db:messages:around-client-id',
@@ -144,6 +145,7 @@ describe('mobile maker transport', () => {
   it('routes message reads and sends with desktop preload argument order', async () => {
     const { calls, maker } = harness();
 
+    await maker.syncMessages('s1', { epoch: 'epoch-1', revision: 5 }, { limit: 80 });
     await maker.listMessages('s1', { limit: 80 });
     await maker.aroundMessages('s1', 'message-id', { radius: 60 });
     await maker.aroundMessagesByClientId('s1', 'client-id', { radius: 40 });
@@ -152,6 +154,11 @@ describe('mobile maker transport', () => {
     await maker.listActiveSessions();
 
     expect(calls).toEqual([
+      {
+        deviceId: 'dev-1',
+        channel: 'local-db:messages:sync',
+        args: ['s1', { limit: 80, token: { epoch: 'epoch-1', revision: 5 } }],
+      },
       {
         deviceId: 'dev-1',
         channel: 'local-db:messages:list',

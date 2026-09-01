@@ -259,6 +259,28 @@ export interface MobileSessionAgentSwitchResult {
   deferred?: boolean;
 }
 
+/**
+ * Desktop 权威消息窗口的新鲜度 token。epoch 变化表示历史谱系已替换；同一 epoch
+ * 内的 revision 只表示消息尾部追加，并单调递增。
+ */
+export interface MessageSyncToken {
+  epoch: string;
+  revision: number;
+}
+
+export type MessageSyncResult<TMessage = unknown> =
+  | {
+      status: 'not-modified';
+      token: MessageSyncToken;
+      limit: number;
+    }
+  | {
+      status: 'reset';
+      token: MessageSyncToken;
+      limit: number;
+      messages: TMessage[];
+    };
+
 export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:create-session',
   'maker:get-capabilities',
@@ -276,6 +298,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // 会话菜单重命名的「自动起名」:被控端读该会话素材重新生成标题(与桌面 Magic 按钮
   // 同一 handler;老被控端 CHANNEL_NOT_ALLOWED → 手机端展示失败提示,不阻塞手动改名)。
   'maker:regenerate-title',
+  // 移动详情权威窗口对账：旧 Desktop 不认识该 append-only channel 时，新 Mobile
+  // 回退 messages:list；新 Desktop 不改变旧 channel 的任何语义。
+  'local-db:messages:sync',
   'local-db:messages:list',
   'local-db:messages:around',
   'local-db:messages:around-client-id',

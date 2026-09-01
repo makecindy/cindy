@@ -263,8 +263,8 @@ function noteSessionLiveStreamsInterrupted(topics: readonly string[]): void {
 }
 
 /**
- * `session:<id>` 订阅被远端 ACK = 从此刻起该会话的行会被推过来。屏幕侧刻意不等 ACK 就拉页
- * (`void subscribe(...)`),所以「页落库时订阅是否已 ACK」正是 store 判断尾部可不可信的依据
+ * `session:<id>` 订阅被远端 ACK = 从此刻起该会话的行会被推过来。普通 focus 持有不阻塞首屏，
+ * 权威消息同步则显式等 ACK 后再读取；「页落库时订阅是否已 ACK」是 store 判断尾部可不可信的依据
  * (见 remoteSessionStore 的 `liveTailTrusted`)。ACK 本身不点亮既有区间:ACK 之前的空窗里可能
  * 已经漏了行。
  */
@@ -1208,11 +1208,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     // idempotent per (owner, topic), so resync/retry resubscribes don't accumulate. The
     // server subscribe is idempotent, so it's safe to (re)send the requested topics.
     registryRef.current.trackSubscribe(owner, deviceId, topics);
+    const normalizedTopics = normalizeDeviceLinkTopics(topics);
     await sendTrackedSubscribe(
       requireClient(clientRef.current),
       deviceId,
-      normalizeDeviceLinkTopics(topics),
+      normalizedTopics,
     );
+    if (topicsMissingRemoteAck(remoteSubscribedTopicsRef.current, deviceId, normalizedTopics).length > 0) {
+      throw Object.assign(new Error('subscription acknowledgement unavailable'), {
+        code: 'NOT_CONNECTED',
+      });
+    }
   }, [sendTrackedSubscribe]);
 
   const unsubscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {

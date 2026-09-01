@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
 import type { RemoteMessage } from '@/session/types';
+import type { MessageSyncToken } from '@cindy/maker-shared/device-link-contract';
 
 // 「每会话最近消息」本地缓存:冷开会话时先用上次看到的消息乐观渲染,fresh listMessages 回来后
 // 对账替换。后端用 AsyncStorage(消息体放得下);key 按 (hostDeviceId, sessionId) 多设备隔离。
@@ -22,10 +23,16 @@ const HEAVY_BLOB_KEYS = new Set(['base64']);
 const MAX_CONTENT_DEPTH = 12;
 
 type StoredSessionMessageCache = {
-  version: 1;
+  version: 2;
   updatedAt: number;
   messages: RemoteMessage[];
+  token?: MessageSyncToken;
 };
+
+export interface CachedSessionMessageSnapshot {
+  messages: RemoteMessage[];
+  token: MessageSyncToken | null;
+}
 
 // 同一缓存 key 的写/删严格串行。schedule 分类晚到时会在旧写之后排一个删除，
 // 不允许较早开始、较晚结束的 setItem 把已经清掉的完整正文复活。
@@ -82,6 +89,7 @@ export function captureSessionMessageCacheWriteAuthority(
 export async function cacheSessionMessagesIfCurrent(
   authority: SessionMessageCacheWriteAuthority | null,
   messages: readonly RemoteMessage[],
+  token: MessageSyncToken | null = null,
 ): Promise<void> {
   if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
   const normalized = normalizeCachedMessages(messages);
@@ -92,9 +100,10 @@ export async function cacheSessionMessagesIfCurrent(
       return;
     }
     const payload: StoredSessionMessageCache = {
-      version: 1,
+      version: 2,
       updatedAt: Date.now(),
       messages: normalized,
+      ...(token ? { token } : {}),
     };
     await AsyncStorage.setItem(authority.key, JSON.stringify(payload));
   });
@@ -105,24 +114,25 @@ export async function replaceCachedSessionMessages(
   deviceId: string,
   sessionId: string,
   messages: readonly RemoteMessage[],
+  token: MessageSyncToken | null = null,
 ): Promise<void> {
   const key = safeStorageKey(deviceId, sessionId);
   if (!key) return;
   keyWriteEpochs.set(key, (keyWriteEpochs.get(key) ?? 0) + 1);
   const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
-  await cacheSessionMessagesIfCurrent(authority, messages);
+  await cacheSessionMessagesIfCurrent(authority, messages, token);
 }
 
-// 读取某 (host, session) 的缓存消息;无缓存 / 解析失败一律返回空数组(乐观 hydrate 不应抛错)。
-export async function getCachedSessionMessages(
+// 读取某 (host, session) 的缓存消息与权威覆盖 token；v1/裸数组缓存按 token=null 兼容。
+export async function getCachedSessionMessageSnapshot(
   deviceId: string,
   sessionId: string,
-): Promise<RemoteMessage[]> {
+): Promise<CachedSessionMessageSnapshot> {
   const key = safeStorageKey(deviceId, sessionId);
-  if (!key) return [];
+  if (!key) return { messages: [], token: null };
   await pendingOperations.get(key)?.catch(() => undefined);
   const raw = await AsyncStorage.getItem(key).catch(() => null);
-  if (!raw) return [];
+  if (!raw) return { messages: [], token: null };
   try {
     const parsed = JSON.parse(raw) as unknown;
     const list = isRecord(parsed) && Array.isArray((parsed as StoredSessionMessageCache).messages)
@@ -130,10 +140,20 @@ export async function getCachedSessionMessages(
       : Array.isArray(parsed)
         ? parsed
         : [];
-    return normalizeCachedMessages(list);
+    return {
+      messages: normalizeCachedMessages(list),
+      token: isRecord(parsed) ? coerceMessageSyncToken(parsed.token) : null,
+    };
   } catch {
-    return [];
+    return { messages: [], token: null };
   }
+}
+
+export async function getCachedSessionMessages(
+  deviceId: string,
+  sessionId: string,
+): Promise<RemoteMessage[]> {
+  return (await getCachedSessionMessageSnapshot(deviceId, sessionId)).messages;
 }
 
 // 写入某 (host, session) 的缓存消息;保留最新 MAX 条、剥除 content 二进制大块。
@@ -142,9 +162,10 @@ export async function cacheSessionMessages(
   deviceId: string,
   sessionId: string,
   messages: readonly RemoteMessage[],
+  token: MessageSyncToken | null = null,
 ): Promise<void> {
   const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
-  await cacheSessionMessagesIfCurrent(authority, messages);
+  await cacheSessionMessagesIfCurrent(authority, messages, token);
 }
 
 // 登出清空:遍历所有本前缀的 key 一次性删除(AsyncStorage 支持枚举,无需手动维护 host 索引)。
@@ -267,6 +288,17 @@ function sanitizeSegment(value: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function coerceMessageSyncToken(value: unknown): MessageSyncToken | null {
+  if (!isRecord(value)) return null;
+  return typeof value.epoch === 'string'
+    && value.epoch.length > 0
+    && typeof value.revision === 'number'
+    && Number.isSafeInteger(value.revision)
+    && value.revision >= 0
+    ? { epoch: value.epoch, revision: value.revision }
+    : null;
 }
 
 function fnv1a(value: string): string {

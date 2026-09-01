@@ -166,6 +166,77 @@ describeMigrationReplay('migration replay', () => {
     }
   });
 
+  it('keeps tail appends in one epoch and rotates the epoch for history rewrites', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      runMigrationReplay(db, { drizzleDir: drizzleDir() });
+      db.prepare(
+        `INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)`,
+      ).run('message-token-session', 1, 1);
+
+      const readToken = () => db.prepare(
+        `SELECT message_epoch AS epoch, message_revision AS revision
+         FROM sessions WHERE id = ?`,
+      ).get('message-token-session') as { epoch: string; revision: number };
+
+      expect(readToken()).toEqual({
+        epoch: expect.stringMatching(/^[0-9a-f]{32}$/),
+        revision: 0,
+      });
+
+      const initialToken = readToken();
+      db.prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('message-1', 'client-1', 'message-token-session', 'assistant', '"first"', 2);
+      expect(readToken()).toEqual({ epoch: initialToken.epoch, revision: 1 });
+
+      db.prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('message-2', 'client-2', 'message-token-session', 'assistant', '"second"', 3);
+      expect(readToken()).toEqual({ epoch: initialToken.epoch, revision: 2 });
+
+      db.prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('message-3', 'client-3', 'message-token-session', 'assistant', '"same-time tail"', 3);
+      expect(readToken()).toEqual({ epoch: initialToken.epoch, revision: 3 });
+
+      db.prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('message-history', 'client-history', 'message-token-session', 'assistant', '"history"', 1);
+      const historicalInsertToken = readToken();
+      expect(historicalInsertToken.epoch).not.toBe(initialToken.epoch);
+      expect(historicalInsertToken.revision).toBe(0);
+
+      db.prepare(`UPDATE messages SET content = ? WHERE id = ?`).run('"updated"', 'message-1');
+      const updatedToken = readToken();
+      expect(updatedToken.epoch).not.toBe(historicalInsertToken.epoch);
+      expect(updatedToken.revision).toBe(0);
+
+      db.prepare(`UPDATE messages SET rewind_at = ? WHERE id = ?`).run(3, 'message-1');
+      const rewoundToken = readToken();
+      expect(rewoundToken.epoch).not.toBe(updatedToken.epoch);
+      expect(rewoundToken.revision).toBe(0);
+
+      db.prepare(`DELETE FROM messages WHERE id = ?`).run('message-1');
+      const deletedToken = readToken();
+      expect(deletedToken.epoch).not.toBe(rewoundToken.epoch);
+      expect(deletedToken.revision).toBe(0);
+
+      db.prepare(`UPDATE sessions SET cleared_at = ? WHERE id = ?`).run(4, 'message-token-session');
+      const clearedToken = readToken();
+      expect(clearedToken.epoch).not.toBe(deletedToken.epoch);
+      expect(clearedToken.revision).toBe(0);
+      db.prepare(`UPDATE sessions SET cleared_at = ? WHERE id = ?`).run(4, 'message-token-session');
+      expect(readToken()).toEqual(clearedToken);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('upgrades a schema v39 Orca workflow database through the 0040 script', () => {
     const { db, cleanup } = createTempDb();
     try {

@@ -128,6 +128,107 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     expect(second[2].result[0].content.length).toBeLessThan(bigContent.length);
   });
 
+  it('messages:sync 保留 token 包装并清理嵌套消息的内部恢复点', () => {
+    const sendInvokeResult = vi.fn();
+    const client = mkClient({ sendInvokeResult });
+    const payload: InvokeResultPayload = {
+      ok: true,
+      result: {
+        status: 'reset',
+        token: { epoch: 'epoch-1', revision: 4 },
+        limit: 80,
+        messages: [{
+          id: 'm1',
+          clientId: 'c1',
+          sessionId: 's1',
+          role: 'assistant',
+          content: 'ok',
+          createdAt: '2026-06-23T00:00:00.000Z',
+          agentMeta: {
+            keep: true,
+            recoveryCheckpoint: { secret: 'desktop-only' },
+          },
+        }],
+      },
+    };
+
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-1',
+      'req-sync',
+      payload,
+      'local-db:messages:sync',
+    );
+
+    expect(sendInvokeResult).toHaveBeenCalledWith('ctrl-1', 'req-sync', {
+      ok: true,
+      result: {
+        status: 'reset',
+        token: { epoch: 'epoch-1', revision: 4 },
+        limit: 80,
+        messages: [{
+          id: 'm1',
+          clientId: 'c1',
+          sessionId: 's1',
+          role: 'assistant',
+          content: 'ok',
+          createdAt: '2026-06-23T00:00:00.000Z',
+          agentMeta: { keep: true },
+        }],
+      },
+    });
+  });
+
+  it('messages:sync 超限时压缩嵌套消息但不丢失 token 包装', () => {
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
+      throw tooLarge();
+    });
+    const client = mkClient({ sendInvokeResult });
+    const payload: InvokeResultPayload = {
+      ok: true,
+      result: {
+        status: 'reset',
+        token: { epoch: 'epoch-2', revision: 9 },
+        limit: 80,
+        messages: [{
+          id: 'm1',
+          clientId: 'c1',
+          sessionId: 's1',
+          role: 'tool_result',
+          content: 'x'.repeat(32 * 1024),
+          createdAt: '2026-06-23T00:00:00.000Z',
+          agentMeta: null,
+        }],
+      },
+    };
+
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-1',
+      'req-sync-large',
+      payload,
+      'local-db:messages:sync',
+    );
+
+    expect(sendInvokeResult).toHaveBeenCalledTimes(2);
+    const compact = sendInvokeResult.mock.calls[1][2] as {
+      ok: true;
+      result: {
+        status: string;
+        token: { epoch: string; revision: number };
+        limit: number;
+        messages: Array<{ content: string; agentMeta: Record<string, unknown> }>;
+      };
+    };
+    expect(compact.result).toMatchObject({
+      status: 'reset',
+      token: { epoch: 'epoch-2', revision: 9 },
+      limit: 80,
+    });
+    expect(compact.result.messages[0].content).toContain('[remote content truncated: payload too large]');
+    expect(compact.result.messages[0].agentMeta).toMatchObject({ remoteContentTruncated: true });
+  });
+
   it('消息页非字符串 content 超限 → 用占位文本替代,不返回半截 JSON', () => {
     const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
       throw tooLarge();

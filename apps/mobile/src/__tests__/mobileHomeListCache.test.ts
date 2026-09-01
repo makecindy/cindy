@@ -120,6 +120,7 @@ describe('mobileHomeListCache', () => {
         extraDirs: ['/a', '/b'],
         providerId: 'anthropic',
         totalTokenUsage: 99999,
+        messageSyncToken: { epoch: 'epoch-1', revision: 8 },
         attached: true,
         deviceLinkAttached: true,
         hasDraft: true,
@@ -139,6 +140,7 @@ describe('mobileHomeListCache', () => {
     expect(cached.worktreePath).toBe('/repo/demo/.claude/worktrees/x');
     expect(cached.hasDraft).toBe(true);
     expect(cached.hasPausedQueue).toBe(true);
+    expect(cached.messageSyncToken).toEqual({ epoch: 'epoch-1', revision: 8 });
     // live-only / 大字段被剥除:缓存的设备不是 live 设备,不缓存在线态;统计字段列表行不消费。
     expect(cached.attached).toBeUndefined();
     expect(cached.deviceLinkAttached).toBeUndefined();

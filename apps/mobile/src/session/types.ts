@@ -1,4 +1,7 @@
-import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
+import type {
+  MessageSyncToken,
+  MobileSessionAgentSwitchIntent,
+} from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
 import type { MobileToolLoopErrorDetails } from '@/session/toolLoopErrorI18n';
@@ -71,6 +74,8 @@ export interface RemoteSession {
   userSendAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Desktop 权威消息窗口版本；旧 Desktop 不提供时保持 undefined 并走兼容补拉。 */
+  messageSyncToken?: MessageSyncToken;
   deviceLinkDeviceId?: string;
   deviceLinkDeviceName?: string;
   // 展示用规范设备 id(设备归并结果,由 remoteSessionStore 计算)。deviceLinkDeviceId 保持物理路由 key。

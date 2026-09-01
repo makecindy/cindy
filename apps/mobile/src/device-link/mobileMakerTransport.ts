@@ -20,6 +20,10 @@ import {
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   MOBILE_REMOTE_INVOKE_CHANNELS,
 } from '@cindy/maker-shared/device-link-contract';
+import type {
+  MessageSyncResult,
+  MessageSyncToken,
+} from '@cindy/maker-shared/device-link-contract';
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import type {
   MobileGoalLimitsInput,
@@ -413,6 +417,11 @@ export interface MobileMakerTransport {
    * handler)。只生成不落库,持久化仍走 patchSessionMeta;失败/无素材时 title 为 null。
    */
   regenerateSessionTitle(sessionId: string): Promise<{ title: string | null }>;
+  syncMessages(
+    sessionId: string,
+    token: MessageSyncToken | null,
+    opts?: MessageListOptions,
+  ): Promise<MessageSyncResult<RemoteMessage>>;
   listMessages(sessionId: string, opts?: MessageListOptions): Promise<RemoteMessage[]>;
   aroundMessages(sessionId: string, messageId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
   aroundMessagesByClientId(sessionId: string, clientId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
@@ -673,6 +682,8 @@ export function createMobileMakerTransport({
       call('local-db:messages:dismiss-error', [sessionId, clientId]),
     ackInterruptedTurn: (sessionId) => call('local-db:sessions:ack-interrupted', [sessionId]),
     regenerateSessionTitle: (sessionId) => call('maker:regenerate-title', [{ sessionId }]),
+    syncMessages: (sessionId, token, opts) =>
+      call('local-db:messages:sync', [sessionId, { ...opts, token }]),
     listMessages: (sessionId, opts) => call('local-db:messages:list', [sessionId, opts]),
     aroundMessages: (sessionId, messageId, opts) =>
       call('local-db:messages:around', [sessionId, messageId, opts]),

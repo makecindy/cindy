@@ -10,6 +10,7 @@ import {
   MESSAGE_PAGE_SIZE,
   oldestMessageCursor,
   shouldKeepOlderMessagesAffordance,
+  shouldPreserveLoadedHistoryOnMessageSync,
   shouldRefreshLatestMessageWindowOnReopen,
 } from '@/session/messagePaging';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
@@ -36,6 +37,25 @@ function sessionVersion(patch: Partial<Pick<RemoteSession, '_count' | 'updatedAt
 }
 
 describe('messagePaging', () => {
+  it('preserves loaded history only for a forward token advance in the same epoch', () => {
+    expect(shouldPreserveLoadedHistoryOnMessageSync(
+      { epoch: 'epoch-1', revision: 4 },
+      { epoch: 'epoch-1', revision: 5 },
+    )).toBe(true);
+    expect(shouldPreserveLoadedHistoryOnMessageSync(
+      { epoch: 'epoch-1', revision: 4 },
+      { epoch: 'epoch-2', revision: 0 },
+    )).toBe(false);
+    expect(shouldPreserveLoadedHistoryOnMessageSync(
+      { epoch: 'epoch-1', revision: 4 },
+      { epoch: 'epoch-1', revision: 3 },
+    )).toBe(false);
+    expect(shouldPreserveLoadedHistoryOnMessageSync(
+      null,
+      { epoch: 'epoch-1', revision: 1 },
+    )).toBe(false);
+  });
+
   it('finds the oldest message id without relying on current array order', () => {
     expect(oldestMessageCursor([
       message('m3', '2026-01-01T00:00:03.000Z'),

@@ -237,6 +237,14 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     lastTurnEndedAt: row.lastTurnEndedAt ?? null,
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
+    ...(row.messageEpoch
+      ? {
+          messageSyncToken: {
+            epoch: row.messageEpoch,
+            revision: row.messageRevision,
+          },
+        }
+      : {}),
     _count: { messages: row.messageCount },
     preview:
       row.listPreview != null

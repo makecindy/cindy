@@ -255,6 +255,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // projection.
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
+  'local-db:messages:sync',
   'local-db:messages:list',
   // 会话内搜索跳转定位(loadAroundMessage):只读,与 messages:list 同安全级。
   'local-db:messages:around',

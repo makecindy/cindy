@@ -1,7 +1,18 @@
 import type { RemoteMessage, RemoteSession } from '@/session/types';
+import type { MessageSyncToken } from '@cindy/maker-shared/device-link-contract';
 
 export const MESSAGE_PAGE_SIZE = 80;
 export const MESSAGE_PAGE_RETRY_LIMITS = [80, 40, 20, 10, 5, 1] as const;
+
+/** 同一历史谱系内只有尾部追加；可复用已验证连续的旧页。 */
+export function shouldPreserveLoadedHistoryOnMessageSync(
+  coveredToken: MessageSyncToken | null,
+  nextToken: MessageSyncToken,
+): boolean {
+  return coveredToken !== null
+    && coveredToken.epoch === nextToken.epoch
+    && nextToken.revision > coveredToken.revision;
+}
 
 export function latestMessageCursor(messages: readonly RemoteMessage[]): string | null {
   let latest: RemoteMessage | null = null;

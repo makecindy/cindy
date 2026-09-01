@@ -4280,6 +4280,7 @@ const UNLINKED_LEGACY_INVOKE_CHANNELS = new Set([
   'local-db:sessions:list',
   'local-db:sessions:get',
   'local-db:history:messages',
+  'local-db:messages:sync',
   'local-db:messages:list',
   'local-db:messages:around',
   'local-db:messages:around-client-id',

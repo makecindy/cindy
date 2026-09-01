@@ -218,6 +218,19 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;
   if (typeof item.preview === 'string') session.preview = truncateText(item.preview);
+  if (
+    isRecord(item.messageSyncToken)
+    && typeof item.messageSyncToken.epoch === 'string'
+    && item.messageSyncToken.epoch.length > 0
+    && typeof item.messageSyncToken.revision === 'number'
+    && Number.isSafeInteger(item.messageSyncToken.revision)
+    && item.messageSyncToken.revision >= 0
+  ) {
+    session.messageSyncToken = {
+      epoch: item.messageSyncToken.epoch,
+      revision: item.messageSyncToken.revision,
+    };
+  }
 
   // interface 之外的草稿类布尔标记(HomeSessionRow 用 readBooleanField 读取),只保留 true 值。
   const extras: Record<string, unknown> = {};

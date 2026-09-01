@@ -52,11 +52,16 @@ describe('任务消息内存治理页面接线', () => {
     expect(screen).toContain('const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);');
     expect(screen).toContain('remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)');
     expect(screen).toContain('remoteSessionStore.setMessages(sessionId, historyPage, { authority: messageAuthority });');
-    expect(screen).toContain('authority: messageAuthority,\n            moreBeyondWindow,');
+    expect(screen).toMatch(/authority: messageAuthority,\s+moreBeyondWindow,/);
     expect(screen).toContain('{ authority: messageAuthority },\n        );');
     expect(screen).toContain('remoteSessionStore.mergeEarlierMessages(sessionId, pageList, { authority: messageAuthority });');
     expect(screen).toContain('remoteSessionStore.mergeMessages(sessionIdAtStart, rows, { authority: messageAuthority });');
-    expect(screen.match(/maker\.listMessages\(/g)).toHaveLength(4);
+    expect(screen).toContain('return readAfterTopicSubscriptionAck({');
+    expect(screen).toContain('const result = await maker.syncMessages(sessionId, coveredToken, {');
+    expect(screen).toContain('remoteSessionStore.markSessionMessagesCovered(sessionId, result.token, deviceId);');
+    expect(screen).toContain('remoteSessionStore.getSessionMessagesCoveredToken(sessionId)');
+    // 旧 Desktop 降级 + 加载更早 + 窗口缺口补读；新版首开/重开不再直接 list。
+    expect(screen.match(/maker\.listMessages\(/g)).toHaveLength(3);
   });
 
   it('schedule 关闭翻历史入口，页面工作租约覆盖发送与附件状态', () => {

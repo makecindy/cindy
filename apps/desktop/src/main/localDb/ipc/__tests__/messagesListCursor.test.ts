@@ -101,6 +101,8 @@ function createDb(): Database.Database {
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       cleared_at INTEGER,
+      message_epoch TEXT NOT NULL DEFAULT 'epoch-test',
+      message_revision INTEGER NOT NULL DEFAULT 0,
       parent_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,
@@ -177,6 +179,76 @@ describe('local-db:messages:list cursor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.handlers.clear();
+  });
+
+  it('returns a reset window for a changed token and not-modified for the covered token', async () => {
+    const sqlite = createDb();
+    sqlite.prepare(
+      `INSERT INTO sessions (id, cleared_at, message_epoch, message_revision)
+       VALUES (?, NULL, ?, ?)`,
+    ).run('s1', 'epoch-1', 7);
+    insertMessage(sqlite, { id: 'row-old', createdAt: 999, content: 'old' });
+    insertMessage(sqlite, { id: 'row-new', createdAt: 1_000, content: 'new' });
+
+    registerMessageIpc();
+    const syncHandler = h.handlers.get('local-db:messages:sync');
+    expect(syncHandler).toBeTypeOf('function');
+
+    const reset = await syncHandler?.({}, 's1', { token: null, limit: 1 });
+    expect(reset).toMatchObject({
+      status: 'reset',
+      token: { epoch: 'epoch-1', revision: 7 },
+      limit: 1,
+      messages: [{ id: 'row-new' }],
+    });
+
+    const notModified = await syncHandler?.({}, 's1', {
+      token: { epoch: 'epoch-1', revision: 7 },
+      limit: 1,
+    });
+    expect(notModified).toEqual({
+      status: 'not-modified',
+      token: { epoch: 'epoch-1', revision: 7 },
+      limit: 1,
+    });
+  });
+
+  it('uses the same clear, rewind and auto-resume visibility rules for reset windows', async () => {
+    const sqlite = createDb();
+    sqlite.prepare(
+      `INSERT INTO sessions (id, cleared_at, message_epoch, message_revision)
+       VALUES (?, ?, ?, ?)`,
+    ).run('s1', 1_000, 'epoch-visible', 3);
+    insertMessage(sqlite, { id: 'before-clear', createdAt: 999, content: 'hidden' });
+    insertMessage(sqlite, { id: 'visible', createdAt: 1_001, content: 'visible' });
+    insertMessage(sqlite, { id: 'rewound', createdAt: 1_002, content: 'hidden' });
+    sqlite.prepare(`UPDATE messages SET rewind_at = ? WHERE id = ?`).run(2_000, 'rewound');
+    insertMessage(sqlite, { id: 'auto-resume', createdAt: 1_003, content: 'hidden' });
+    sqlite.prepare(`UPDATE messages SET agent_meta = ? WHERE id = ?`).run(
+      JSON.stringify({ autoResume: true }),
+      'auto-resume',
+    );
+
+    registerMessageIpc();
+    const syncHandler = h.handlers.get('local-db:messages:sync');
+    const result = await syncHandler?.({}, 's1', { token: null, limit: 10 }) as {
+      status: string;
+      messages: Array<{ id: string }>;
+    };
+
+    expect(result.status).toBe('reset');
+    expect(result.messages.map((message) => message.id)).toEqual(['visible']);
+  });
+
+  it('rejects malformed message sync tokens', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    registerMessageIpc();
+    const syncHandler = h.handlers.get('local-db:messages:sync');
+
+    await expect(syncHandler?.({}, 's1', {
+      token: { epoch: '', revision: -1 },
+    })).rejects.toThrow('[INVALID_PARAMS]');
   });
 
   it('continues through rows with the same timestamp using insertion order', async () => {

@@ -7,8 +7,9 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, eq, inArray, lt, lte, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, lte, gt, gte, desc, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import type { MessageSyncResult, MessageSyncToken } from '@cindy/maker-shared/device-link-contract';
 
 import { getDbClient } from '../client/current';
 import { latestVisiblePreviewRow } from '../latestMessageText';
@@ -57,6 +58,7 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
 const messageRowid = sql<number>`rowid`;
+const joinedMessageRowid = sql<number>`"messages"."rowid"`;
 /**
  * Skip silent-stop autoResume user rows without letting one bad historical
  * agent_meta blob fail the whole page query. SQLite may evaluate
@@ -225,6 +227,13 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
 ] as const);
 
 export function registerMessageIpc(): void {
+  ipcMain.handle('local-db:messages:sync', async (_e, sessionId: unknown, opts: unknown) => {
+    const sid = requireString(sessionId, 'sessionId');
+    const input = isRecord(opts) ? opts : {};
+    const token = parseMessageSyncToken(input.token);
+    return syncLatestMessages(sid, token, input.limit);
+  });
+
   ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
     const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
@@ -678,6 +687,125 @@ export async function runMessagesListImportSideEffects(
   }
 }
 
+function parseMessageSyncToken(value: unknown): MessageSyncToken | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) {
+    throwIpcError('INVALID_PARAMS', 'token 必须是对象或 null');
+  }
+  const epoch = value.epoch;
+  const revision = value.revision;
+  if (
+    typeof epoch !== 'string'
+    || epoch.length === 0
+    || epoch.length > 128
+    || typeof revision !== 'number'
+    || !Number.isSafeInteger(revision)
+    || revision < 0
+  ) {
+    throwIpcError('INVALID_PARAMS', 'token 形状不合法');
+  }
+  return { epoch, revision };
+}
+
+function messageSyncTokensEqual(
+  left: MessageSyncToken | null,
+  right: MessageSyncToken,
+): boolean {
+  return left?.epoch === right.epoch && left.revision === right.revision;
+}
+
+/**
+ * 单条 SQLite SELECT 同时取得 session token 与对应的权威最新窗口。token 相同
+ * 时 LEFT JOIN 不读取消息正文；token 不同则返回 reset 窗口，避免“先读版本、再读
+ * 消息”之间插入新写造成快照与版本不一致。
+ */
+export async function syncLatestMessages(
+  sessionId: string,
+  token: MessageSyncToken | null,
+  rawLimit?: unknown,
+): Promise<MessageSyncResult<Message>> {
+  const limit = clampLimit(rawLimit);
+  await runMessagesListImportSideEffects(sessionId, {}, { deviceLinkFirstPage: true });
+  const db = getDbClient().drizzle;
+  const tokenChanged = token
+    ? or(
+        ne(sessions.messageEpoch, token.epoch),
+        ne(sessions.messageRevision, token.revision),
+      )
+    : sql<boolean>`1`;
+  const rows = await db
+    .select({
+      messageEpoch: sessions.messageEpoch,
+      messageRevision: sessions.messageRevision,
+      id: messages.id,
+      clientId: messages.clientId,
+      sessionId: messages.sessionId,
+      role: messages.role,
+      content: messages.content,
+      toolUseId: messages.toolUseId,
+      agentMeta: messages.agentMeta,
+      agentKind: messages.agentKind,
+      createdAt: messages.createdAt,
+      rewindAt: messages.rewindAt,
+      rowid: joinedMessageRowid,
+    })
+    .from(sessions)
+    .leftJoin(
+      messages,
+      and(
+        eq(messages.sessionId, sessions.id),
+        isNull(messages.rewindAt),
+        or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+        notAutoResumeAgentMetaSql(),
+        tokenChanged,
+      ),
+    )
+    .where(eq(sessions.id, sessionId))
+    .orderBy(desc(messages.createdAt), desc(joinedMessageRowid))
+    .limit(limit);
+  const first = rows[0];
+  if (!first) throwIpcError('NOT_FOUND', 'Session 不存在');
+  const currentToken: MessageSyncToken = {
+    epoch: first.messageEpoch,
+    revision: first.messageRevision,
+  };
+  if (messageSyncTokensEqual(token, currentToken)) {
+    return { status: 'not-modified', token: currentToken, limit };
+  }
+  const persistedRows = rows.flatMap((row) => {
+    if (
+      row.id === null
+      || row.clientId === null
+      || row.sessionId === null
+      || row.role === null
+      || row.content === null
+      || row.createdAt === null
+      || row.rowid === null
+    ) return [];
+    return [{
+      id: row.id,
+      clientId: row.clientId,
+      sessionId: row.sessionId,
+      role: row.role,
+      content: row.content,
+      toolUseId: row.toolUseId,
+      agentMeta: row.agentMeta,
+      agentKind: row.agentKind,
+      createdAt: row.createdAt,
+      rewindAt: row.rewindAt,
+      rowid: row.rowid,
+    } satisfies MessageRowWithRowid];
+  });
+  const history = await hydrateLegacyUserTurnCosts(
+    persistedRows.map(messageToCamelWithRowid),
+  );
+  return { status: 'reset', token: currentToken, limit, messages: history };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
  * 内部 API:直接在 main 进程里更新一条 message 的 content（不抛 ipc 错、不 broadcast）。
  * messagePersistBroadcaster 在 tool_result_full 全文覆盖 / tool_result 摘要→全文增长时
@@ -706,6 +834,77 @@ export function broadcastMessageRow(
   ownerScope?: DataOwnerBroadcastScope | null,
 ): void {
   broadcastOwnedPayload('local-db:messages:created', { sessionId, message: msg }, ownerScope);
+  scheduleSessionMessageSyncTokenBroadcast(sessionId, ownerScope);
+}
+
+interface PendingMessageTokenBroadcast {
+  dirty: boolean;
+  running: boolean;
+  ownerScope?: DataOwnerBroadcastScope | null;
+}
+
+const pendingMessageTokenBroadcasts = new Map<string, PendingMessageTokenBroadcast>();
+
+/**
+ * 消息正文仍只走重型 session topic；这里把极小的权威 token 合并进 sessions:patched，
+ * 让离场后的移动端只更新新鲜度水位，不恢复消息正文常驻。
+ */
+export function scheduleSessionMessageSyncTokenBroadcast(
+  sessionId: string,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): void {
+  if (!sessionId) return;
+  const state = pendingMessageTokenBroadcasts.get(sessionId) ?? { dirty: false, running: false };
+  state.dirty = true;
+  state.ownerScope = ownerScope;
+  pendingMessageTokenBroadcasts.set(sessionId, state);
+  if (state.running) return;
+  state.running = true;
+  void flushSessionMessageSyncTokenBroadcast(sessionId, state);
+}
+
+async function flushSessionMessageSyncTokenBroadcast(
+  sessionId: string,
+  state: PendingMessageTokenBroadcast,
+): Promise<void> {
+  try {
+    while (state.dirty) {
+      state.dirty = false;
+      const ownerScope = state.ownerScope;
+      const token = await readSessionMessageSyncToken(sessionId);
+      if (token && isOwnerBroadcastScopeCurrent(ownerScope)) {
+        broadcastOwnedPayload(
+          'local-db:sessions:patched',
+          { sessionId, patch: { messageSyncToken: token } },
+          ownerScope,
+        );
+      }
+    }
+  } catch (err) {
+    log.warn('session message sync token broadcast failed', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    state.running = false;
+    if (state.dirty) {
+      state.running = true;
+      void flushSessionMessageSyncTokenBroadcast(sessionId, state);
+    } else if (pendingMessageTokenBroadcasts.get(sessionId) === state) {
+      pendingMessageTokenBroadcasts.delete(sessionId);
+    }
+  }
+}
+
+export async function readSessionMessageSyncToken(
+  sessionId: string,
+): Promise<MessageSyncToken | null> {
+  const [row] = await getDbClient().drizzle
+    .select({ epoch: sessions.messageEpoch, revision: sessions.messageRevision })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  return row ? { epoch: row.epoch, revision: row.revision } : null;
 }
 
 export interface MessageDeletedPayload {
@@ -1098,6 +1297,7 @@ export function broadcastMessageDeleted(
       /* swallow per-window broadcast failures */
     }
   }
+  scheduleSessionMessageSyncTokenBroadcast(payload.sessionId, ownerScope);
 }
 
 /**
@@ -1343,6 +1543,7 @@ export async function updateMessageContent(
       });
     });
     await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);
+    scheduleSessionMessageSyncTokenBroadcast(sessionId, ownerScope);
   }
   return row ? messageToCamel(row) : null;
 }

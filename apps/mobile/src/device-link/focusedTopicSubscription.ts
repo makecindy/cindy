@@ -6,6 +6,10 @@ interface FocusedTopicSubscriptionParams {
   unsubscribe(owner: string, deviceId: string, topics: string[]): Promise<void>;
 }
 
+interface ReadAfterTopicSubscriptionAckParams<T> extends FocusedTopicSubscriptionParams {
+  read(): Promise<T>;
+}
+
 let nextFocusedTopicSubscriptionId = 0;
 
 /**
@@ -50,4 +54,25 @@ export function startFocusedTopicSubscription({
     cleanupRequested = true;
     sendCleanup(subscribed);
   };
+}
+
+/**
+ * One-shot barrier for authoritative reads: the remote subscription must be acknowledged before
+ * the snapshot starts. The temporary owner is always released, including subscribe/read errors.
+ */
+export async function readAfterTopicSubscriptionAck<T>({
+  deviceId,
+  owner,
+  read,
+  subscribe,
+  topic,
+  unsubscribe,
+}: ReadAfterTopicSubscriptionAckParams<T>): Promise<T> {
+  const topics = [topic];
+  try {
+    await subscribe(owner, deviceId, topics);
+    return await read();
+  } finally {
+    await unsubscribe(owner, deviceId, topics).catch(() => undefined);
+  }
 }

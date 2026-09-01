@@ -66,7 +66,11 @@ import {
   listInterruptedPendingSessionIds,
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
-import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
+import {
+  dismissErrorMessage,
+  rebroadcastAgentSwitchBoundary,
+  scheduleSessionMessageSyncTokenBroadcast,
+} from './messages';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
@@ -990,6 +994,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
     .limit(1);
   const effectiveClearedAt = updated?.clearedAt ?? ts;
   const effectiveUpdatedAt = updated?.updatedAt ?? effectiveClearedAt;
+  scheduleSessionMessageSyncTokenBroadcast(sessionId, ownerScope);
   // Concurrent clears can make SQLite return a newer monotonic boundary than
   // this request supplied. Mirror the effective value into the in-memory gate.
   noteSessionClearBoundary(sessionId, effectiveClearedAt);
@@ -1603,6 +1608,7 @@ export function registerSessionIpc(
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
       }
+      scheduleSessionMessageSyncTokenBroadcast(sid, ownerScope);
       void recomputePrRefsForSession(sid).catch(() => undefined);
     }
     // workingDir 实际变化的本机 cc 会话:迁移 CLI 转录后再查询返回行/广播,保证
