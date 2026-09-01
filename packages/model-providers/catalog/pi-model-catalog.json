@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-20T08:58:50.000Z",
+  "generatedAt": "2026-09-01T09:09:09.000Z",
   "providers": {
     "deepseek": [
       {
@@ -11,6 +11,40 @@
         "reasoning": true,
         "input": [
           "text"
+        ],
+        "cost": {
+          "input": 0.14,
+          "output": 0.28,
+          "cacheRead": 0.0028,
+          "cacheWrite": 0
+        },
+        "contextWindow": 1000000,
+        "maxTokens": 384000,
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "maxTokensField": "max_tokens",
+          "requiresReasoningContentOnAssistantMessages": true,
+          "thinkingFormat": "deepseek"
+        },
+        "thinkingLevelMap": {
+          "minimal": null,
+          "low": "low",
+          "medium": null,
+          "high": "high",
+          "max": "max"
+        }
+      },
+      {
+        "id": "deepseek-v4-flash-vision-exp",
+        "name": "DeepSeek V4 Flash Vision Exp",
+        "api": "openai-completions",
+        "baseUrl": "https://api.deepseek.com",
+        "provider": "deepseek",
+        "reasoning": true,
+        "input": [
+          "text",
+          "image"
         ],
         "cost": {
           "input": 0.14,
@@ -76,9 +110,6 @@
         "api": "anthropic-messages",
         "provider": "kimi-coding",
         "baseUrl": "https://api.kimi.com/coding",
-        "headers": {
-          "User-Agent": "KimiCLI/1.5"
-        },
         "compat": {
           "allowEmptySignature": true,
           "forceAdaptiveThinking": true
@@ -112,9 +143,6 @@
         "api": "anthropic-messages",
         "provider": "kimi-coding",
         "baseUrl": "https://api.kimi.com/coding",
-        "headers": {
-          "User-Agent": "KimiCLI/1.5"
-        },
         "compat": {
           "forceAdaptiveThinking": true
         },
@@ -147,9 +175,6 @@
         "api": "anthropic-messages",
         "provider": "kimi-coding",
         "baseUrl": "https://api.kimi.com/coding",
-        "headers": {
-          "User-Agent": "KimiCLI/1.5"
-        },
         "compat": {
           "allowEmptySignature": true,
           "forceAdaptiveThinking": true
@@ -174,9 +199,6 @@
         "api": "anthropic-messages",
         "provider": "kimi-coding",
         "baseUrl": "https://api.kimi.com/coding",
-        "headers": {
-          "User-Agent": "KimiCLI/1.5"
-        },
         "compat": {
           "forceAdaptiveThinking": true
         },
@@ -251,8 +273,8 @@
           "cacheRead": 0.06,
           "cacheWrite": 0
         },
-        "contextWindow": 1000000,
-        "maxTokens": 128000
+        "contextWindow": 1048576,
+        "maxTokens": 512000
       }
     ],
     "minimax-cn": [
@@ -311,8 +333,8 @@
           "cacheRead": 0.06,
           "cacheWrite": 0
         },
-        "contextWindow": 1000000,
-        "maxTokens": 128000
+        "contextWindow": 1048576,
+        "maxTokens": 512000
       }
     ],
     "moonshotai": [
@@ -1054,6 +1076,39 @@
         "maxTokens": 384000
       },
       {
+        "id": "deepseek-v4-pro-0813",
+        "name": "DeepSeek V4 Pro 0813",
+        "api": "openai-completions",
+        "provider": "qwen-token-plan-cn",
+        "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "compat": {
+          "thinkingFormat": "qwen",
+          "supportsDeveloperRole": false,
+          "supportsStore": false,
+          "supportsReasoningEffort": true
+        },
+        "thinkingLevelMap": {
+          "minimal": null,
+          "low": null,
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
+        "reasoning": true,
+        "input": [
+          "text"
+        ],
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
         "id": "glm-5",
         "name": "GLM-5",
         "api": "openai-completions",
@@ -1334,6 +1389,40 @@
         "maxTokens": 65536
       },
       {
+        "id": "qwen3.8-flash",
+        "name": "Qwen3.8 Flash",
+        "api": "openai-completions",
+        "provider": "qwen-token-plan-cn",
+        "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "compat": {
+          "thinkingFormat": "qwen",
+          "supportsDeveloperRole": false,
+          "supportsStore": false,
+          "supportsReasoningEffort": true
+        },
+        "thinkingLevelMap": {
+          "minimal": null,
+          "low": null,
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
+        "reasoning": true,
+        "input": [
+          "text",
+          "image"
+        ],
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
         "id": "qwen3.8-max",
         "name": "Qwen3.8 Max",
         "api": "openai-completions",
@@ -1496,76 +1585,6 @@
     ],
     "xiaomi": [
       {
-        "id": "mimo-v2-flash",
-        "name": "MiMo-V2-Flash",
-        "api": "openai-completions",
-        "provider": "xiaomi",
-        "baseUrl": "https://api.xiaomimimo.com/v1",
-        "compat": {
-          "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingFormat": "deepseek"
-        },
-        "reasoning": true,
-        "input": [
-          "text"
-        ],
-        "cost": {
-          "input": 0.14,
-          "output": 0.28,
-          "cacheRead": 0.0028,
-          "cacheWrite": 0
-        },
-        "contextWindow": 262144,
-        "maxTokens": 65536
-      },
-      {
-        "id": "mimo-v2-omni",
-        "name": "MiMo-V2-Omni",
-        "api": "openai-completions",
-        "provider": "xiaomi",
-        "baseUrl": "https://api.xiaomimimo.com/v1",
-        "compat": {
-          "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingFormat": "deepseek"
-        },
-        "reasoning": true,
-        "input": [
-          "text",
-          "image"
-        ],
-        "cost": {
-          "input": 0.14,
-          "output": 0.28,
-          "cacheRead": 0.0028,
-          "cacheWrite": 0
-        },
-        "contextWindow": 262144,
-        "maxTokens": 131072
-      },
-      {
-        "id": "mimo-v2-pro",
-        "name": "MiMo-V2-Pro",
-        "api": "openai-completions",
-        "provider": "xiaomi",
-        "baseUrl": "https://api.xiaomimimo.com/v1",
-        "compat": {
-          "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingFormat": "deepseek"
-        },
-        "reasoning": true,
-        "input": [
-          "text"
-        ],
-        "cost": {
-          "input": 0.435,
-          "output": 0.87,
-          "cacheRead": 0.0036,
-          "cacheWrite": 0
-        },
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
-      {
         "id": "mimo-v2.5",
         "name": "MiMo-V2.5",
         "api": "openai-completions",
@@ -1638,29 +1657,6 @@
     ],
     "xiaomi-token-plan-cn": [
       {
-        "id": "mimo-v2-pro",
-        "name": "MiMo-V2-Pro",
-        "api": "openai-completions",
-        "provider": "xiaomi-token-plan-cn",
-        "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
-        "compat": {
-          "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingFormat": "deepseek"
-        },
-        "reasoning": true,
-        "input": [
-          "text"
-        ],
-        "cost": {
-          "input": 0,
-          "output": 0,
-          "cacheRead": 0,
-          "cacheWrite": 0
-        },
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
-      {
         "id": "mimo-v2.5",
         "name": "MiMo-V2.5",
         "api": "openai-completions",
@@ -1720,9 +1716,9 @@
           "text"
         ],
         "cost": {
-          "input": 0,
-          "output": 0,
-          "cacheRead": 0,
+          "input": 0.6,
+          "output": 2.2,
+          "cacheRead": 0.11,
           "cacheWrite": 0
         },
         "compat": {
@@ -1747,9 +1743,9 @@
           "text"
         ],
         "cost": {
-          "input": 0,
-          "output": 0,
-          "cacheRead": 0,
+          "input": 1.2,
+          "output": 4,
+          "cacheRead": 0.24,
           "cacheWrite": 0
         },
         "compat": {
@@ -1771,10 +1767,48 @@
         "baseUrl": "https://api.z.ai/api/coding/paas/v4",
         "reasoning": true,
         "thinkingLevelMap": {
+          "off": "none",
           "minimal": null,
-          "low": "high",
-          "medium": "high",
+          "low": null,
+          "medium": null,
           "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
+        "input": [
+          "text"
+        ],
+        "cost": {
+          "input": 1.4,
+          "output": 4.4,
+          "cacheRead": 0.26,
+          "cacheWrite": 0
+        },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": true,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        },
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.2-highspeed",
+        "name": "GLM-5.2 Highspeed",
+        "api": "openai-completions",
+        "provider": "zai",
+        "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+        "reasoning": true,
+        "thinkingLevelMap": {
+          "off": "none",
+          "minimal": null,
+          "low": null,
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
           "max": "max"
         },
         "input": [
@@ -1798,12 +1832,94 @@
         "maxTokens": 131072
       },
       {
-        "id": "glm-5.2-highspeed",
-        "name": "GLM-5.2 Highspeed",
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
         "api": "openai-completions",
         "provider": "zai",
         "baseUrl": "https://api.z.ai/api/coding/paas/v4",
         "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
+        "input": [
+          "text"
+        ],
+        "cost": {
+          "input": 1.4,
+          "output": 4.4,
+          "cacheRead": 0.26,
+          "cacheWrite": 0
+        },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": true,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        },
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.3-flash",
+        "name": "GLM-5.3-Flash",
+        "api": "openai-completions",
+        "provider": "zai",
+        "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+        "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
+        "input": [
+          "text",
+          "image"
+        ],
+        "cost": {
+          "input": 0.075,
+          "output": 0.25,
+          "cacheRead": 0.015,
+          "cacheWrite": 0
+        },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": true,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        },
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.3-highspeed",
+        "name": "GLM-5.3 Highspeed",
+        "api": "openai-completions",
+        "provider": "zai",
+        "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+        "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
         "input": [
           "text"
         ],
@@ -1816,7 +1932,7 @@
         "compat": {
           "supportsStore": false,
           "supportsDeveloperRole": false,
-          "supportsReasoningEffort": false,
+          "supportsReasoningEffort": true,
           "maxTokensField": "max_tokens",
           "thinkingFormat": "zai",
           "zaiToolStream": true
@@ -1826,6 +1942,34 @@
       }
     ],
     "zai-coding-cn": [
+      {
+        "id": "glm-4.6v",
+        "name": "GLM-4.6V",
+        "api": "openai-completions",
+        "provider": "zai-coding-cn",
+        "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+        "reasoning": true,
+        "input": [
+          "text",
+          "image"
+        ],
+        "cost": {
+          "input": 0.3,
+          "output": 0.9,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": false,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        },
+        "contextWindow": 128000,
+        "maxTokens": 32768
+      },
       {
         "id": "glm-4.7",
         "name": "GLM-4.7",
@@ -1837,9 +1981,9 @@
           "text"
         ],
         "cost": {
-          "input": 0,
-          "output": 0,
-          "cacheRead": 0,
+          "input": 0.6,
+          "output": 2.2,
+          "cacheRead": 0.11,
           "cacheWrite": 0
         },
         "compat": {
@@ -1864,9 +2008,36 @@
           "text"
         ],
         "cost": {
-          "input": 0,
-          "output": 0,
-          "cacheRead": 0,
+          "input": 1.2,
+          "output": 4,
+          "cacheRead": 0.24,
+          "cacheWrite": 0
+        },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": false,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        },
+        "contextWindow": 200000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.1",
+        "name": "GLM-5.1",
+        "api": "openai-completions",
+        "provider": "zai-coding-cn",
+        "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+        "reasoning": true,
+        "input": [
+          "text"
+        ],
+        "cost": {
+          "input": 1.4,
+          "output": 4.4,
+          "cacheRead": 0.26,
           "cacheWrite": 0
         },
         "compat": {
@@ -1888,10 +2059,48 @@
         "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
         "reasoning": true,
         "thinkingLevelMap": {
+          "off": "none",
           "minimal": null,
-          "low": "high",
-          "medium": "high",
+          "low": null,
+          "medium": null,
           "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
+        "input": [
+          "text"
+        ],
+        "cost": {
+          "input": 1.4,
+          "output": 4.4,
+          "cacheRead": 0.26,
+          "cacheWrite": 0
+        },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": true,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        },
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.2-highspeed",
+        "name": "GLM-5.2 Highspeed",
+        "api": "openai-completions",
+        "provider": "zai-coding-cn",
+        "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+        "reasoning": true,
+        "thinkingLevelMap": {
+          "off": "none",
+          "minimal": null,
+          "low": null,
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
           "max": "max"
         },
         "input": [
@@ -1915,12 +2124,94 @@
         "maxTokens": 131072
       },
       {
-        "id": "glm-5.2-highspeed",
-        "name": "GLM-5.2 Highspeed",
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
         "api": "openai-completions",
         "provider": "zai-coding-cn",
         "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
         "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
+        "input": [
+          "text"
+        ],
+        "cost": {
+          "input": 1.4,
+          "output": 4.4,
+          "cacheRead": 0.26,
+          "cacheWrite": 0
+        },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": true,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        },
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.3-flash",
+        "name": "GLM-5.3-Flash",
+        "api": "openai-completions",
+        "provider": "zai-coding-cn",
+        "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+        "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
+        "input": [
+          "text",
+          "image"
+        ],
+        "cost": {
+          "input": 0.075,
+          "output": 0.25,
+          "cacheRead": 0.015,
+          "cacheWrite": 0
+        },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": true,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        },
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.3-highspeed",
+        "name": "GLM-5.3 Highspeed",
+        "api": "openai-completions",
+        "provider": "zai-coding-cn",
+        "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+        "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": null,
+          "high": "high",
+          "xhigh": null,
+          "max": "max"
+        },
         "input": [
           "text"
         ],
@@ -1933,12 +2224,40 @@
         "compat": {
           "supportsStore": false,
           "supportsDeveloperRole": false,
-          "supportsReasoningEffort": false,
+          "supportsReasoningEffort": true,
           "maxTokensField": "max_tokens",
           "thinkingFormat": "zai",
           "zaiToolStream": true
         },
         "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5v-turbo",
+        "name": "GLM-5V-Turbo",
+        "api": "openai-completions",
+        "provider": "zai-coding-cn",
+        "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+        "reasoning": true,
+        "input": [
+          "text",
+          "image"
+        ],
+        "cost": {
+          "input": 1.2,
+          "output": 4,
+          "cacheRead": 0.24,
+          "cacheWrite": 0
+        },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "supportsReasoningEffort": false,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        },
+        "contextWindow": 200000,
         "maxTokens": 131072
       }
     ]

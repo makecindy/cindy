@@ -495,6 +495,32 @@ function effortToPiThinkingLevel(effort: Effort): string {
 }
 
 const PI_NATIVE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const PI_THINKING_LEVEL_MAP_KEYS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/**
+ * Server / XD 下放的 efforts 是网关 thinking level 的权威。
+ * Pi 本地目录 map 只在同名档仍被下放时保留 remap；api 不一致导致 bundled map 丢失时，仍按 efforts 写同名值，不能把 max/xhigh 静默丢光。
+ */
+function gatewayThinkingLevelMap(
+  efforts: readonly Effort[],
+  bundled?: Record<string, string | null>,
+): Record<string, string | null> | undefined {
+  const supported = new Set<string>();
+  for (const effort of efforts) {
+    if (effort === 'ultra') supported.add('max');
+    else supported.add(effort);
+  }
+  if (supported.size === 0) {
+    return bundled && Object.keys(bundled).length > 0 ? { ...bundled } : undefined;
+  }
+  return Object.fromEntries(
+    PI_THINKING_LEVEL_MAP_KEYS.map((level) => {
+      if (!supported.has(level)) return [level, null];
+      const bundledValue = bundled?.[level];
+      return [level, typeof bundledValue === 'string' ? bundledValue : level];
+    }),
+  );
+}
 
 /**
  * Last-resort maxTokens for models that provide no authoritative output limit.
@@ -1671,6 +1697,7 @@ export class PiAgent extends BaseAgent {
       gatewayApiByModel.set(m.id, api);
       const supportsImageInput = m.supportsImageInput === true;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
+      const thinkingLevelMap = gatewayThinkingLevelMap(m.efforts, resolvedSpec?.thinkingLevelMap);
       return [{
         id: m.id,
         name: m.displayName,
@@ -1686,9 +1713,7 @@ export class PiAgent extends BaseAgent {
               },
             }
           : {}),
-        ...(resolvedSpec?.thinkingLevelMap
-          ? { thinkingLevelMap: { ...resolvedSpec.thinkingLevelMap } }
-          : {}),
+        ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
         ...(resolvedSpec?.compat ? { compat: structuredClone(resolvedSpec.compat) } : {}),
         ...(resolvedSpec?.samplingParams
           ? { samplingParams: structuredClone(resolvedSpec.samplingParams) }

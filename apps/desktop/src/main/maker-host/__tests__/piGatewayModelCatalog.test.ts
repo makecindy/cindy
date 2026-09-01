@@ -54,6 +54,7 @@ const currentGatewayModelsByApi = {
     'qwen/qwen3.8-max',
     'tencent/hy3',
     'z-ai/glm-5.3-flash',
+    'z-ai/glm-5.3-highspeed',
   ],
   'google-generative-ai': [
     'google/gemini-3.7-flash',
@@ -209,6 +210,7 @@ describe('Pi Gateway version-matched local supplement catalog', () => {
     ['deepseek/deepseek-v4-pro', 'openai-completions'],
     ['qwen/qwen3.8-flash', 'openai-completions'],
     ['z-ai/glm-5.3-flash', 'openai-completions'],
+    ['z-ai/glm-5.3-highspeed', 'openai-completions'],
   ] as const)('resolves %s from the local Pi model table', (modelId, api) => {
     expect(resolveBundledPiGatewayModelProfile(modelId)).toMatchObject({ api });
   });
@@ -221,7 +223,7 @@ describe('Pi Gateway version-matched local supplement catalog', () => {
         actualApi: resolveBundledPiGatewayModelProfile(modelId)?.api,
       })),
     );
-    expect(resolved).toHaveLength(46);
+    expect(resolved).toHaveLength(47);
     expect(resolved.filter((entry) => entry.actualApi !== entry.expectedApi)).toEqual([]);
   });
 
@@ -229,7 +231,11 @@ describe('Pi Gateway version-matched local supplement catalog', () => {
     expect(resolveBundledPiGatewayModelProfile('z-ai/glm-5.2')).toMatchObject({
       api: 'openai-completions',
       compat: { thinkingFormat: 'zai', zaiToolStream: true },
-      thinkingLevelMap: { low: 'high', medium: 'high', high: 'high', max: 'max' },
+      thinkingLevelMap: { low: null, medium: null, high: 'high', max: 'max' },
+    });
+    expect(resolveBundledPiGatewayModelProfile('z-ai/glm-5.3-flash')).toMatchObject({
+      api: 'openai-completions',
+      thinkingLevelMap: { low: 'low', high: 'high', max: 'max', xhigh: null },
     });
     expect(resolveBundledPiGatewayModelProfile('z-ai/glm-5.1')).toEqual({
       api: 'openai-completions',

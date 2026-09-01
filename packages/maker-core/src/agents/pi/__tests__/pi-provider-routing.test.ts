@@ -2146,6 +2146,118 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('writes Gateway thinkingLevelMap from server efforts when catalog api mismatches', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'z-ai/glm-5.3-flash',
+          displayName: 'GLM 5.3 Flash',
+          contextWindow: 200_000,
+          efforts: ['low', 'high', 'max'],
+          defaultEffort: 'high',
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => 'openai-responses',
+      // catalog api 与网关 wire 不一致时 spec 只剩 api，不得把 max 静默丢光。
+      resolvePiGatewayModelSpec: () => ({ api: 'openai-responses' }),
+    };
+
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'gateway-server-efforts-max',
+      workingDir: cwd,
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'max',
+    });
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as {
+      providers: Record<string, { models?: Array<{
+        id: string;
+        thinkingLevelMap?: Record<string, string | null>;
+      }> }>;
+    };
+    expect(models.providers.cindy?.models).toEqual([
+      expect.objectContaining({
+        id: 'z-ai/glm-5.3-flash',
+        api: 'openai-responses',
+        reasoning: true,
+        thinkingLevelMap: {
+          minimal: null,
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: null,
+          max: 'max',
+        },
+      }),
+    ]);
+    expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'max' });
+    await handle.close();
+  });
+
+  it('keeps unsupported Gateway thinking levels null when server efforts omit them', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'z-ai/glm-5.3-flash',
+          displayName: 'GLM 5.3 Flash',
+          contextWindow: 200_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelSpec: () => ({
+        api: 'openai-completions',
+        thinkingLevelMap: { low: 'low', high: 'high', max: 'max', xhigh: 'xhigh' },
+      }),
+    };
+
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'gateway-server-efforts-no-max',
+      workingDir: cwd,
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'high',
+    });
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as {
+      providers: Record<string, { models?: Array<{
+        thinkingLevelMap?: Record<string, string | null>;
+      }> }>;
+    };
+    expect(models.providers.cindy?.models?.[0]?.thinkingLevelMap).toEqual({
+      minimal: null,
+      low: null,
+      medium: null,
+      high: 'high',
+      xhigh: null,
+      max: null,
+    });
+    await handle.close();
+  });
+
   it('keeps BYOM startup when the model is outside the XD v3 Pi catalog', async () => {
     const deps: AgentDeps = {
       auth: {
