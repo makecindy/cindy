@@ -2980,7 +2980,14 @@
           "toggleFailed": "Failed to toggle browser automation",
           "openedForLogin": "Automation browser opened — sign into the sites you need",
           "openForLoginFailed": "Failed to open the browser",
-          "foreignInstance": "Another Cindy window is already using the agent browser. Quit the other instance and try again."
+          "foreignInstance": "Another Cindy window is already using the agent browser. Quit the other instance and try again.",
+          "profileLocked": "Quit Chrome, Edge, or Brave completely (including its tray icon), then try again.",
+          "noChromium": "Chrome, Edge, Brave, or Chromium could not be found on this computer.",
+          "noAuthDb": "No browser login data was found to copy. Sign in to your regular browser first, or turn off “Use my browser logins” and sign in to the agent browser.",
+          "copyFailed": "Couldn’t copy your browser logins. Quit your regular browser completely and try again, or turn off “Use my browser logins.”",
+          "headlessForbidden": "Your browser logins can’t be used while the agent browser is running in headless mode.",
+          "stopFailed": "Close the agent browser completely, then try again.",
+          "appBoundEncryptionUnsupported": "Windows protects these browser logins with App-Bound Encryption, so Cindy can’t copy them. Turn off “Use my browser logins,” open the agent browser, and sign in there once."
         },
         "openForLogin": "Open agent browser",
         "openForLoginHint": "This is a dedicated browser for agents: it runs on your installed Chrome but with a separate profile (shown as “Cindy”), so it never touches your everyday Chrome's tabs, bookmarks, or logins. Agents open pages, read, click, and take screenshots here on your behalf. For sites that need a login, click “Open agent browser” above and sign in once — your session is kept, so the agent can keep acting as you afterward."

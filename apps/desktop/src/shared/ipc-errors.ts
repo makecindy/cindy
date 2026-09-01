@@ -1,3 +1,5 @@
+import type { BrowserOpenForLoginErrorCode } from './browserBackend';
+
 /** main / preload / renderer 共用的 IPC 错误类型。 */
 
 export type IpcErrorCode =
@@ -211,6 +213,8 @@ export type IpcErrorCode =
   // 个人资料自助修改(settings → 用户卡片;服务端直写)
   | 'PROFILE_AVATAR_UPLOAD_FAILED' // 头像经 oss-server 预签名直传失败(presign 或 PUT 阶段)
   | 'PROFILE_UPDATE_FAILED' // PATCH /api/me/profile 失败(网络 / 服务端拒绝)
+  // 打开 Agent 专用浏览器：只跨 IPC 暴露受控原因，不暴露路径或底层异常。
+  | BrowserOpenForLoginErrorCode
   // 本机 HTML 页面打开到系统浏览器
   | 'BROWSER_FILE_INVALID_TARGET'
   | 'BROWSER_FILE_PATH_NOT_ALLOWED'
@@ -414,6 +418,15 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DINGTALK_STREAM_CONNECTION_FAILED',
   'PROFILE_AVATAR_UPLOAD_FAILED',
   'PROFILE_UPDATE_FAILED',
+  'PROFILE_LOCKED',
+  'REAL_PROFILE_READ_DENIED',
+  'NO_CHROMIUM',
+  'NO_AUTH_DB',
+  'COPY_FAILED',
+  'HEADLESS_FORBIDDEN',
+  'STOP_FAILED',
+  'FOREIGN_AGENT_BROWSER',
+  'APP_BOUND_ENCRYPTION_UNSUPPORTED',
   'BROWSER_FILE_INVALID_TARGET',
   'BROWSER_FILE_PATH_NOT_ALLOWED',
   'BROWSER_FILE_UNSUPPORTED_TYPE',

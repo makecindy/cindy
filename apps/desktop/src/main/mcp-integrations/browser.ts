@@ -42,17 +42,24 @@ import {
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
 import {
-  assertManagedBrowserStopped,
+  activeManagedProfileName,
   cleanupCopiedLoginsThen,
+  createBrowserProfileLifecycleQueue,
   managedConfigPatchBeforeStop,
   FOREIGN_AGENT_BROWSER_ERROR,
   probeOsSourceProfileReadAccess,
   readCopiedLoginsCdpPort,
+  stopManagedBrowserForProfile,
   wrapRuntimeWithRealProfile,
+  wrapRuntimeWithProfileLifecycleQueue,
 } from './browser-real-profile/index.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 import { raiseAgentBrowserWindow } from './raise-agent-browser-window.js';
+import {
+  BrowserOpenForLoginError,
+  browserOpenForLoginErrorCodeFromData,
+} from '../../shared/browserBackend.js';
 
 export { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
 
@@ -127,13 +134,19 @@ const vendoredRuntime = trackBrowserRuntimeUsage(
  * copy must not count as "runtime used", or quit-time `stop` would boot
  * Playwright just to shut it down.
  */
-const externalRuntime = wrapRuntimeWithRealProfile(vendoredRuntime, {
+const realProfileRuntime = wrapRuntimeWithRealProfile(vendoredRuntime, {
   isEnabled: () => readBrowserBackendSettings().useRealProfile,
   getRuntimeDir: realProfileRuntimeDir,
   applyConfig: (opts) => {
     setBrowserControlRuntimeConfig(buildManagedConfig(opts));
   },
 });
+
+const browserProfileLifecycleQueue = createBrowserProfileLifecycleQueue();
+const externalRuntime = wrapRuntimeWithProfileLifecycleQueue(
+  realProfileRuntime,
+  browserProfileLifecycleQueue,
+);
 
 const externalBackend = new ExternalChromeBackend(externalRuntime, logger);
 
@@ -282,14 +295,7 @@ async function stopExternalRuntimeIfUsed(): Promise<void> {
   if (patch) {
     setBrowserControlRuntimeConfig(buildManagedConfig(patch));
   }
-  const status = await vendoredRuntime.call({ action: 'status' });
-  const running =
-    status.ok &&
-    status.data !== null &&
-    typeof status.data === 'object' &&
-    (status.data as { running?: unknown }).running === true;
-  const stop = running ? await externalRuntime.call({ action: 'stop' }) : null;
-  assertManagedBrowserStopped({ status, stop });
+  await stopManagedBrowserForProfile(vendoredRuntime, activeManagedProfileName(useRealProfile));
 }
 
 /**
@@ -299,7 +305,7 @@ async function stopExternalRuntimeIfUsed(): Promise<void> {
  * switch on so the user can retry. An unsuccessful or unverifiable stop also
  * aborts so POSIX open handles cannot keep copied cookies after unlink.
  */
-export async function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
+async function applyBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
   await stopExternalRuntimeIfUsed();
   if (!enabled) {
     cleanupCopiedLoginsThen(realProfileRuntimeDir(), () => {
@@ -310,6 +316,10 @@ export async function setBrowserUseRealProfile(enabled: boolean): Promise<boolea
   }
   setBrowserControlRuntimeConfig(buildManagedConfig({ useRealProfile: enabled }));
   return readBrowserBackendSettings().useRealProfile;
+}
+
+export function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
+  return browserProfileLifecycleQueue.run(() => applyBrowserUseRealProfile(enabled));
 }
 
 /**
@@ -420,11 +430,12 @@ export function registerBrowserBackendIpc(): void {
       return setBrowserUseRealProfile(enabled);
     },
     reset: async () => {
-      const previous = readBrowserBackendSettings();
-      const next = resetBrowserBackendSettings();
-      if (previous.useRealProfile && !next.useRealProfile) {
-        await setBrowserUseRealProfile(false);
-      }
+      const next = await browserProfileLifecycleQueue.run(async () => {
+        if (readBrowserBackendSettings().useRealProfile) {
+          await applyBrowserUseRealProfile(false);
+        }
+        return resetBrowserBackendSettings();
+      });
       await setActiveBrowserBackendKind(next.kind);
       return backendController.getCurrentBackendKind();
     },
@@ -475,11 +486,15 @@ export async function openBrowserForLogin(): Promise<void> {
   // no-op) or open the wrong thing.
   const started = await externalRuntime.call({ action: 'start' });
   if (!started.ok) {
-    throw new Error(
-      started.message === FOREIGN_AGENT_BROWSER_ERROR || started.message?.includes('Another Cindy')
-        ? FOREIGN_AGENT_BROWSER_ERROR
-        : (started.message ?? `browser start failed (HTTP ${started.status ?? '?'})`),
-    );
+    const reason = browserOpenForLoginErrorCodeFromData(started.data);
+    if (reason) throw new BrowserOpenForLoginError(reason);
+    if (
+      started.message === FOREIGN_AGENT_BROWSER_ERROR ||
+      started.message?.includes('Another Cindy')
+    ) {
+      throw new BrowserOpenForLoginError(FOREIGN_AGENT_BROWSER_ERROR);
+    }
+    throw new Error('Agent browser failed to start.');
   }
   // Occupancy is handled inside start (relocate CDP instead of attaching).
   // Do not re-probe status.running here: vendored `running` means "CDP is
@@ -522,5 +537,11 @@ export function disposeBrowserRuntime(): Promise<void> {
   // the browser runtime, an unconditional stop would START services during
   // quit, which is an exit-hang amplifier. If the runtime WAS used, `stop` is
   // idempotent and safe regardless of which backend is currently active.
-  return stopRuntimeForQuitIfUsed(vendoredRuntime, logger);
+  return browserProfileLifecycleQueue.run(() =>
+    stopRuntimeForQuitIfUsed(
+      vendoredRuntime,
+      logger,
+      activeManagedProfileName(readBrowserBackendSettings().useRealProfile),
+    ),
+  );
 }

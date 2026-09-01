@@ -46,10 +46,13 @@ import { createLogger } from '@/lib/logger';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
 import { BrowserRealProfileSubsection } from './BrowserRealProfileSubsection';
 import {
-  FOREIGN_AGENT_BROWSER_ERROR,
   REAL_PROFILE_READ_DENIED,
   type BrowserBackendHealth,
 } from '../../../shared/browserBackend';
+import {
+  browserOpenForLoginErrorCode,
+  browserOpenForLoginToastKey,
+} from './browserOpenForLoginError';
 import {
   androidDeviceLabel,
   androidStatusFallback,
@@ -1117,12 +1120,8 @@ export function ComputerUseSection({
       toast.success(t('settings.computerUse.browser.toast.openedForLogin'));
     } catch (err) {
       log.warn('browser.openForLogin failed', err);
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes(FOREIGN_AGENT_BROWSER_ERROR)) {
-        toast.error(t('settings.computerUse.browser.toast.foreignInstance'));
-        return;
-      }
-      if (message.includes(REAL_PROFILE_READ_DENIED)) {
+      const errorCode = browserOpenForLoginErrorCode(err);
+      if (errorCode === REAL_PROFILE_READ_DENIED) {
         if (!confirmDialog) {
           toast.error(t('settings.computerUse.realProfile.readDeniedDescription'));
         }
@@ -1137,7 +1136,13 @@ export function ComputerUseSection({
         });
         return;
       }
-      toast.error(t('settings.computerUse.browser.toast.openForLoginFailed'));
+      toast.error(
+        t(
+          errorCode
+            ? browserOpenForLoginToastKey(errorCode)
+            : 'settings.computerUse.browser.toast.openForLoginFailed',
+        ),
+      );
     }
   }, [confirmDialog, t]);
 

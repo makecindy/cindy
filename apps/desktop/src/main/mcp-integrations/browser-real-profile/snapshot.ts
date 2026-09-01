@@ -179,6 +179,33 @@ export function profileIsLocked(options: {
   return false;
 }
 
+/**
+ * Chrome 127+ on Windows may encrypt cookies with an app-bound `v20` key.
+ * Those values cannot be decrypted from Cindy's separate user-data-dir.
+ */
+export function profileUsesAppBoundEncryption(profileDir: string): boolean {
+  for (const relative of COOKIE_DB_CANDIDATES) {
+    const cookieDb = path.join(profileDir, relative);
+    if (!fs.existsSync(cookieDb)) continue;
+    const db = new DatabaseSync(cookieDb, { readOnly: true, timeout: 5000 });
+    try {
+      const columns = db.prepare('PRAGMA table_info(cookies)').all() as Array<{
+        name?: unknown;
+      }>;
+      if (!columns.some((column) => column.name === 'encrypted_value')) continue;
+      const row = db
+        .prepare(
+          "SELECT 1 AS detected FROM cookies WHERE substr(encrypted_value, 1, 3) = x'763230' LIMIT 1",
+        )
+        .get();
+      if (row !== undefined) return true;
+    } finally {
+      db.close();
+    }
+  }
+  return false;
+}
+
 function isPermissionDenied(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   return code === 'EPERM' || code === 'EACCES';
@@ -257,7 +284,7 @@ export function probeOsSourceProfileReadAccess(options?: {
 }
 
 function throwReadDenied(): never {
-  throw new RealProfileError('COPY_FAILED', REAL_PROFILE_READ_DENIED);
+  throw new RealProfileError(REAL_PROFILE_READ_DENIED, REAL_PROFILE_READ_DENIED);
 }
 
 function secureDir(dir: string): void {
@@ -394,6 +421,30 @@ export async function snapshotRealProfile(options: {
     );
   }
 
+  if (platform === 'win32') {
+    try {
+      if (profileUsesAppBoundEncryption(sourceProfileDir)) {
+        throw new RealProfileError(
+          'APP_BOUND_ENCRYPTION_UNSUPPORTED',
+          'Windows App-Bound Encryption prevents copied browser logins from being decrypted.',
+        );
+      }
+    } catch (err) {
+      if (isRealProfileError(err)) throw err;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') {
+        throw new RealProfileError(
+          'PROFILE_LOCKED',
+          'Chrome is locking its cookie database. Quit Chrome completely and try again.',
+        );
+      }
+      throw new RealProfileError(
+        'COPY_FAILED',
+        'Failed to inspect the browser cookie database before copying logins.',
+      );
+    }
+  }
+
   secureDir(path.dirname(destDir));
   let stagingDir = '';
 
@@ -523,7 +574,12 @@ export function cleanupRealProfileSnapshots(runtimeDir: string): void {
   const profileDir = realProfileProfileDir(runtimeDir);
   if (path.basename(profileDir) !== REAL_MANAGED_PROFILE) return;
   if (!fs.existsSync(profileDir)) return;
-  fs.rmSync(profileDir, { recursive: true, force: true });
+  fs.rmSync(profileDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 3,
+    retryDelay: 100,
+  });
 }
 
 /**

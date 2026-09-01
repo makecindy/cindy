@@ -2979,7 +2979,14 @@
           "toggleFailed": "브라우저 자동화 전환 실패",
           "openedForLogin": "자동화 브라우저를 열었습니다. 필요한 사이트에 로그인하세요",
           "openForLoginFailed": "브라우저를 열지 못했습니다",
-          "foreignInstance": "다른 Cindy 창이 이미 Agent 전용 브라우저를 사용 중입니다. 그 창을 종료한 뒤 다시 시도하세요."
+          "foreignInstance": "다른 Cindy 창이 이미 Agent 전용 브라우저를 사용 중입니다. 그 창을 종료한 뒤 다시 시도하세요.",
+          "profileLocked": "트레이 프로세스를 포함하여 Chrome, Edge 또는 Brave를 완전히 종료한 뒤 다시 시도하세요.",
+          "noChromium": "이 컴퓨터에서 Chrome, Edge, Brave 또는 Chromium을 찾을 수 없습니다.",
+          "noAuthDb": "복사할 브라우저 로그인 데이터가 없습니다. 일반 브라우저에서 먼저 로그인하거나 ‘내 브라우저 로그인 사용’을 끈 뒤 Agent 전용 브라우저에서 로그인하세요.",
+          "copyFailed": "브라우저 로그인을 복사하지 못했습니다. 일반 브라우저를 완전히 종료한 뒤 다시 시도하거나 ‘내 브라우저 로그인 사용’을 끄세요.",
+          "headlessForbidden": "Agent 전용 브라우저가 헤드리스 모드로 실행 중일 때는 브라우저 로그인을 사용할 수 없습니다.",
+          "stopFailed": "Agent 전용 브라우저를 완전히 종료한 뒤 다시 시도하세요.",
+          "appBoundEncryptionUnsupported": "Windows 앱 바운드 암호화로 보호되어 Cindy가 이 브라우저 로그인을 복사할 수 없습니다. ‘내 브라우저 로그인 사용’을 끄고 Agent 전용 브라우저를 열어 한 번 로그인하세요."
         },
         "openForLogin": "Agent 전용 브라우저 열기",
         "openForLoginHint": "에이전트 전용 독립 브라우저입니다. 설치된 Chrome을 사용하지만 프로필이 완전히 분리되어 있어(오른쪽 위에 “Cindy”로 표시) 평소 Chrome의 탭·북마크·로그인 상태에 전혀 영향을 주지 않습니다. 에이전트가 이 브라우저에서 사용자를 대신해 페이지를 열고 읽고 클릭하고 스크린샷을 찍습니다. 로그인이 필요한 사이트는 위의 “Agent 전용 브라우저 열기”에서 한 번 로그인하면 로그인 상태가 유지되어, 이후 에이전트가 사용자 명의로 계속 작업할 수 있습니다."
