@@ -12445,9 +12445,10 @@ export class CodexAgent extends BaseAgent {
       async setExtraDirs(newDirs: string[]) {
         if (reviewMode) return;
         if (newDirs.length > 0 && !readonlyReferenceDirsSupported) {
-          throw new Error(
-            `Codex reference directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
-          );
+          log.warn('Codex setExtraDirs ignored: app-server too old; keep cindy-media fallback', {
+            userAgent: initResp.userAgent ?? 'unknown',
+          });
+          return;
         }
         if (
           mutableExtraDirs.length === newDirs.length
