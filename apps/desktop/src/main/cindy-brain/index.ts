@@ -2424,14 +2424,12 @@ export function noteGhostSessionFocused(sessionId: string | null): void {
   // 负责 Worker → Lead 归一、异步乱序和失败后的重试。
   ghostPrimarySessionFocusTracker.note(sessionId);
   ghostSessionFocusTracker.note(sessionId);
-  if (sessionId) {
-    void refreshMivoLibraryExtraDirGrant().catch((error) => {
-      log.warn('library extraDirs focus sync failed', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+  void refreshMivoLibraryExtraDirGrant().catch((error) => {
+    log.warn('library extraDirs focus sync failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
     });
-  }
+  });
 }
 
 const ghostSessionFocusByWebContents = new Map<number, string | null>();
@@ -3182,6 +3180,10 @@ export function getFocusedGhostSessionId(): string | null {
 
 async function refreshMivoLibraryExtraDirGrant(): Promise<void> {
   if (!libraryExtraDirSync) return;
+  if (!ghostSessionFocusTracker.current()) {
+    await libraryExtraDirSync(null);
+    return;
+  }
   const ghost = findAvailableGhost('xd-mivo') ?? findAvailableGhost('cindy-mivo');
   if (!ghost || ghost.enabled === false || ghost.manifest.library !== true) {
     await libraryExtraDirSync(null);
@@ -5391,12 +5393,6 @@ export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLib
 export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise<{ ok: boolean; message?: string }> {
   if (!isValidGhostId(ghostId)) return { ok: false, message: '非法插件 id' };
   await getGhostLibrarySlot().disposeGhost(ghostId);
-  await refreshMivoLibraryExtraDirGrant().catch((error) => {
-    log.warn('library extraDirs delete sync failed', {
-      ghostId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
   const result = await trashGhostLibrary(ghostId, {
     // 默认根与自定义根都经 binding store 的解析口径(漂移时返回 null → 上层
     // 引导恢复位置,不误删)。
@@ -5410,7 +5406,15 @@ export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise
     },
     log,
   });
-  if (result.ok) return { ok: true };
+  if (result.ok) {
+    await refreshMivoLibraryExtraDirGrant().catch((error) => {
+      log.warn('library extraDirs delete sync failed', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return { ok: true };
+  }
   return { ok: false, message: result.message };
 }
 
@@ -7614,12 +7618,6 @@ export function registerGhostIpc(): void {
         // 停用即熄灯 Library 会话:db worker 终止、handle 作废——被禁用的插件
         // 不得继续后台读写(数据本体不动,重新启用后重开)。
         await getGhostLibrarySlot().disposeGhost(id);
-        await refreshMivoLibraryExtraDirGrant().catch((error) => {
-          log.warn('library extraDirs disable sync failed', {
-            id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
       }
       const result = await manager.setEnabled(id, enabled);
       if ('rejection' in result) throwUninstallError(result.rejection);
@@ -7643,6 +7641,12 @@ export function registerGhostIpc(): void {
         // (要等插件再次上报或重启)。熄灯类操作(runtime/node/订阅)放在前面是既有
         // 行为且幂等,唯独这条会留下用户可见的错状态(copilot + codex review)。
         suspendGhostUnreadProjection(id);
+        await refreshMivoLibraryExtraDirGrant().catch((error) => {
+          log.warn('library extraDirs disable sync failed', {
+            id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       }
       return { ok: true };
     } finally {
