@@ -8773,6 +8773,12 @@
         "sessionBranches": "セッション分岐",
         "copySessionLink": "セッションリンクをコピー"
       },
+      "sessionFamily": {
+        "expand": "タスクの分岐を展開",
+        "collapse": "タスクの分岐を折りたたむ",
+        "detach": "タスクグループから外す",
+        "detachFailed": "タスクグループから外せませんでした"
+      },
       "sessionBranches": {
         "title": "セッション分岐",
         "close": "セッション分岐を閉じる",

@@ -289,6 +289,48 @@ describe('local-db:sessions:update handler wiring', () => {
       .rejects.toThrow(/maker:set-\*-dirs/i);
   });
 
+  it('detaches a child task without changing sidebar activity ordering', async () => {
+    h.sqlite!
+      .prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?')
+      .run('cc-local', 'codex-local');
+
+    await invokeUpdate('codex-local', { parentSessionId: null });
+
+    expect(
+      h.sqlite!
+        .prepare('SELECT parent_session_id, updated_at FROM sessions WHERE id = ?')
+        .get('codex-local'),
+    ).toEqual({ parent_session_id: null, updated_at: 1 });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: expect.objectContaining({ parentSessionId: null }),
+    });
+  });
+
+  it('rejects renderer attempts to assign an arbitrary parent task', async () => {
+    await expect(
+      invokeUpdate('codex-local', { parentSessionId: 'cc-local' }),
+    ).rejects.toThrow(/parentSessionId can only be cleared/i);
+  });
+
+  it('supports detaching through the narrow metadata patch path', async () => {
+    h.sqlite!
+      .prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?')
+      .run('cc-local', 'codex-local');
+
+    await patchSessionMetaInDb('codex-local', { parentSessionId: null });
+
+    expect(
+      h.sqlite!
+        .prepare('SELECT parent_session_id FROM sessions WHERE id = ?')
+        .get('codex-local'),
+    ).toEqual({ parent_session_id: null });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: expect.objectContaining({ parentSessionId: null }),
+    });
+  });
+
   it('recovers cleanup only for deleted parent tasks after restart', async () => {
     const userData = h.userDataDir!;
     const parentRoot = path.join(userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');

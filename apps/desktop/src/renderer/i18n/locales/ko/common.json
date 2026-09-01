@@ -8773,6 +8773,12 @@
         "sessionBranches": "세션 분기",
         "copySessionLink": "세션 링크 복사"
       },
+      "sessionFamily": {
+        "expand": "작업 분기 펼치기",
+        "collapse": "작업 분기 접기",
+        "detach": "작업 그룹에서 분리",
+        "detachFailed": "작업 그룹에서 분리하지 못했습니다"
+      },
       "sessionBranches": {
         "title": "세션 분기",
         "close": "세션 분기 닫기",

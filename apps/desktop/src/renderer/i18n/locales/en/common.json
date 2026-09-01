@@ -8794,6 +8794,12 @@
         "sessionBranches": "Session branches",
         "copySessionLink": "Copy session link"
       },
+      "sessionFamily": {
+        "expand": "Expand task branches",
+        "collapse": "Collapse task branches",
+        "detach": "Remove from task group",
+        "detachFailed": "Failed to remove task from group"
+      },
       "sessionBranches": {
         "title": "Session branches",
         "close": "Close session branches",

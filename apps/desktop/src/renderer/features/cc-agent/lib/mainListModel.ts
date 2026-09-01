@@ -1,7 +1,7 @@
 /**
  * mainListModel — 主列表混排模型(sidebar-redesign D 期)。
  * ---------------------------------------------------------------------------
- * 把「项目行 / 无项目对话 / 对话组」统一成一层顶层条目(MainListEntry),按同一
+ * 把「项目行 / 无项目对话 / 任务 family / 对话组」统一成一层顶层条目(MainListEntry),按同一
  * 口径排序——项目不再是特权层级,与散排对话按活动时间(或优先级)平级竞争位置
  * (docs/product-rules/sidebar-redesign-plan.md §2)。
  *
@@ -33,6 +33,7 @@ import type {
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
 import {
   groupAutomationSidebarEntries,
+  groupSessionFamilySidebarEntries,
   type AutomationScheduleSessionInfo,
   type SidebarSessionEntry,
 } from './automationSidebarGrouping';
@@ -183,6 +184,7 @@ export function getMainListEntrySessions(entry: MainListEntry): readonly Session
   if (entry.kind === 'project') return entry.project.sessions;
   if (entry.kind === 'dialogue-group') return entry.sessions;
   if (entry.kind === 'automation-group') return entry.group.sessions;
+  if (entry.kind === 'session-family') return entry.family.sessions;
   return [entry.session];
 }
 
@@ -270,7 +272,9 @@ function buildFlatSessionEntries(
   scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>,
 ): SidebarSessionEntry[] {
   const sortedSessions = sortSessionsForMainList(sessions, sortBy, priorityContext);
-  return groupAutomationSidebarEntries(sortedSessions, { notifications, scheduleSessionIndex });
+  return groupSessionFamilySidebarEntries(
+    groupAutomationSidebarEntries(sortedSessions, { notifications, scheduleSessionIndex }),
+  );
 }
 
 /** 产出主列表的有序顶层条目。 */
@@ -413,6 +417,9 @@ function entryDeviceId(entry: MainListEntry): string | null {
   if (entry.kind === 'session') return entry.session.deviceLinkDeviceId ?? null;
   if (entry.kind === 'automation-group') {
     return entry.group.sessions[0]?.deviceLinkDeviceId ?? null;
+  }
+  if (entry.kind === 'session-family') {
+    return entry.family.root.session.deviceLinkDeviceId ?? null;
   }
   // 对话组条目:按组内首条会话归属(散排对话在设备分组下由调用方按设备切分后
   // 再分别成组,这里只是兜底)。

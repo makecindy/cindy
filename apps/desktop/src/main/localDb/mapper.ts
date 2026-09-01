@@ -398,6 +398,7 @@ export function sessionPatchToRow(
     pinnedAt?: string | null;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
+    parentSessionId?: string | null;
     extraDirs?: string[];
     writableDirs?: string[];
   },
@@ -424,6 +425,7 @@ export function sessionPatchToRow(
   if (patch.pinnedAt !== undefined) out.pinnedAt = isoToMs(patch.pinnedAt);
   if (patch.status !== undefined) out.status = patch.status;
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
+  if (patch.parentSessionId !== undefined) out.parentSessionId = patch.parentSessionId;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);
   if (patch.writableDirs !== undefined) out.writableDirs = safeStringify(patch.writableDirs);
   if (opts?.bumpUpdatedAt !== false) out.updatedAt = Date.now();

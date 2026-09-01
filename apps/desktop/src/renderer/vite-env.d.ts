@@ -4346,6 +4346,8 @@ interface ElectronAPI {
           pinnedAt?: string | null;
           status?: import('@/lib/ccAgent.types').SessionStatus;
           orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
+          /** null = 脱离当前任务 family；任意重挂父级不走通用更新口。 */
+          parentSessionId?: null;
           /** 附加只读引用目录覆盖列表 (绝对路径)。 */
           extraDirs?: string[];
           writableDirs?: string[];

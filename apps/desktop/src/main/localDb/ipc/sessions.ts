@@ -79,7 +79,7 @@ import { consumeWritableDirectoryPickerGrants } from '../../maker-ipc/writableDi
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
 const log = createLogger('sessions');
-const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
+const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'parentSessionId']);
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
 
@@ -1477,6 +1477,11 @@ export function registerSessionIpc(
         throwIpcError('INVALID_PARAMS', `invalid workspaceKind: ${String(value)}`);
       }
     }
+    // 通用 update 只允许把既有 family 关系清空。重新挂父级需要校验环、设备与
+    // workspace 归属，不能把一个裸字符串写入口暴露给 Renderer。
+    if (p.parentSessionId !== undefined && p.parentSessionId !== null) {
+      throwIpcError('INVALID_PARAMS', 'parentSessionId can only be cleared');
+    }
     const ALLOWED_UPDATE_ORCA_ROLES = new Set<string>(['lead', 'worker']);
     if (
       p.orcaRole !== undefined &&
@@ -1567,6 +1572,7 @@ export function registerSessionIpc(
       'workingDir',
       'workspaceKind',
       'title',
+      'parentSessionId',
     ]);
     const isSettingsOnly = Object.keys(p).every((k) => SETTINGS_ONLY_FIELDS.has(k));
     const setObj = sessionPatchToRow(p as Parameters<typeof sessionPatchToRow>[0], {
@@ -1640,6 +1646,7 @@ export function registerSessionIpc(
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
+    const familyChanged = p.parentSessionId !== undefined;
     // 归档/删除这类纯 status 变化也要广播:本机多窗口收敛靠 sessions:patched,
     // 否则「在新窗口打开」的副窗口无从得知会话已被移除,仍停留在旧视图(#3175)。
     const statusChanged = p.status !== undefined;
@@ -1686,6 +1693,7 @@ export function registerSessionIpc(
       projectTargetChanged ||
       settingsChanged ||
       titleChanged ||
+      familyChanged ||
       statusChanged ||
       p.pinnedAt !== undefined
     ) {
@@ -1768,6 +1776,7 @@ export async function patchSessionMetaInDb(
     status?: 'active' | 'archived' | 'deleted';
     title?: string;
     pinnedAt?: string | null;
+    parentSessionId?: null;
   },
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
@@ -1786,6 +1795,9 @@ export async function patchSessionMetaInDb(
   }
   if (patch.title !== undefined && typeof patch.title !== 'string') {
     throwIpcError('INVALID_PARAMS', 'title must be a string');
+  }
+  if (patch.parentSessionId !== undefined && patch.parentSessionId !== null) {
+    throwIpcError('INVALID_PARAMS', 'parentSessionId can only be cleared');
   }
 
   const dbClient = getDbClient();

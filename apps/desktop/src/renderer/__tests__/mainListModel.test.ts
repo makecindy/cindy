@@ -67,7 +67,9 @@ function labels(entries: MainListEntry[]): string[] {
         ? 'dlg-group'
         : entry.kind === 'automation-group'
           ? `auto:${entry.group.title}`
-          : `s:${entry.session.title}`,
+          : entry.kind === 'session-family'
+            ? `family:${entry.family.root.session.title}`
+            : `s:${entry.session.title}`,
   );
 }
 
@@ -77,6 +79,85 @@ const NO_PRIORITY = {
 };
 
 describe('buildMainListEntries — 混排(recency)', () => {
+  it('keeps forked tasks under their parent and ranks the family by its newest branch', () => {
+    const parent = session({
+      id: 'parent',
+      updatedAt: '2026-08-01T10:00:00Z',
+      title: 'parent',
+    });
+    const child = session({
+      id: 'child',
+      parentSessionId: parent.id,
+      updatedAt: '2026-08-12T12:00:00Z',
+      title: 'child',
+    });
+    const unrelated = session({
+      id: 'unrelated',
+      updatedAt: '2026-08-11T12:00:00Z',
+      title: 'unrelated',
+    });
+
+    const entries = buildMainListEntries({
+      projects: [],
+      dialogues: [parent, unrelated, child],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+    });
+
+    expect(labels(entries)).toEqual(['family:parent', 's:unrelated']);
+    expect(getMainListEntrySessions(entries[0]).map((item) => item.id)).toEqual([
+      'parent',
+      'child',
+    ]);
+  });
+
+  it('leaves a branch at root when its parent is outside the visible list', () => {
+    const child = session({
+      id: 'visible-child',
+      parentSessionId: 'filtered-parent',
+      updatedAt: '2026-08-12T12:00:00Z',
+      title: 'visible child',
+    });
+    const entries = buildMainListEntries({
+      projects: [],
+      dialogues: [child],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+    });
+
+    expect(labels(entries)).toEqual(['s:visible child']);
+  });
+
+  it('does not merge a stale cross-device parent link into one family', () => {
+    const parent = session({
+      id: 'local-parent',
+      updatedAt: '2026-08-12T12:00:00Z',
+      title: 'local parent',
+    });
+    const child = session({
+      id: 'remote-child',
+      parentSessionId: parent.id,
+      deviceLinkDeviceId: 'phone-1',
+      updatedAt: '2026-08-11T12:00:00Z',
+      title: 'remote child',
+    });
+
+    const entries = buildMainListEntries({
+      projects: [],
+      dialogues: [parent, child],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+    });
+
+    expect(labels(entries)).toEqual(['s:local parent', 's:remote child']);
+  });
+
   it('interleaves project rows and stray dialogues by latest activity', () => {
     const projNew = project('alpha', [session({ updatedAt: '2026-08-12T10:00:00Z' })]);
     const projOld = project('beta', [session({ updatedAt: '2026-08-10T10:00:00Z' })]);

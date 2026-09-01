@@ -8765,6 +8765,12 @@
         "sessionBranches": "任务分支",
         "copySessionLink": "复制任务链接"
       },
+      "sessionFamily": {
+        "expand": "展开任务分支",
+        "collapse": "收起任务分支",
+        "detach": "移出任务组",
+        "detachFailed": "移出任务组失败"
+      },
       "sessionBranches": {
         "title": "任务分支",
         "close": "关闭任务分支",

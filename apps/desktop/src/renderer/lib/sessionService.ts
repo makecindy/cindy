@@ -152,6 +152,8 @@ export async function update(
     pinnedAt?: string | null;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
+    /** null = 脱离当前任务 family；任意重挂父级不走通用更新口。 */
+    parentSessionId?: null;
     /** 附加只读引用目录覆盖列表 (绝对路径); main 端会在 mapper 里 JSON.stringify 后写库。 */
     extraDirs?: string[];
     writableDirs?: string[];
@@ -174,7 +176,12 @@ export async function update(
  */
 export async function patchMeta(
   sessionId: string,
-  patch: { status?: SessionStatus; title?: string; pinnedAt?: string | null },
+  patch: {
+    status?: SessionStatus;
+    title?: string;
+    pinnedAt?: string | null;
+    parentSessionId?: null;
+  },
 ): Promise<Session> {
   // Metadata writes must stay pinned to the last known device while the
   // relay's session mirror is being rebuilt. Otherwise an archived remote
