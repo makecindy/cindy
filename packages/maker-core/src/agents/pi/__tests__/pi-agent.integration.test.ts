@@ -2192,12 +2192,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     'full access does not secretly block credential-looking reads',
     { timeout: 60_000 },
     async () => {
-      // 与原生 Pi 对齐:Full access 不因路径像密钥就拒绝。Ask/Auto 仍升级审批。
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-perm-bypass-cred-'));
+      const secretPath = path.join(workingDir, '.env');
+      writeFileSync(secretPath, 'CRED_MARKER=pi-full-access-ok\n');
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('read', { path: '/proc/self/environ' }),
+          anthropicToolUseBody('read', { path: secretPath }),
           anthropicStreamBody('bypass cred turn finished'),
         );
         const reqBefore = seenRequests.length;
@@ -2210,6 +2211,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(resolverTools).toEqual([]);
         const followUp = seenRequests.slice(reqBefore).map((r) => r.body);
         expect(followUp.some((b) => b.includes('Cindy blocks reading credential or key paths'))).toBe(false);
+        expect(followUp.some((b) => b.includes('CRED_MARKER=pi-full-access-ok'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
@@ -2225,7 +2227,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('bash', { command: 'cat /proc/self/environ' }),
+          anthropicToolUseBody('bash', {
+            command: 'ENVIRON_MARKER=pi-full-access-ok; echo "$ENVIRON_MARKER"; cat /proc/self/environ',
+          }),
           anthropicStreamBody('bash environ turn finished'),
         );
         const reqBefore = seenRequests.length;
@@ -2238,6 +2242,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(resolverTools).toEqual([]);
         const followUp = seenRequests.slice(reqBefore).map((r) => r.body);
         expect(followUp.some((b) => b.includes('Cindy blocks reading process environment'))).toBe(false);
+        expect(followUp.some((b) => b.includes('ENVIRON_MARKER=pi-full-access-ok'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
@@ -2449,6 +2454,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         const fullAccessFollowUp = seenRequests.slice(fullAccessReqBefore).map((request) => request.body);
         expect(fullAccessFollowUp.some((body) => body.includes('Cindy blocks reading credential or key paths')))
           .toBe(false);
+        expect(fullAccessFollowUp.some((body) => body.includes('ordinary-glob-content'))).toBe(true);
 
         delete process.env.BASHOPTS;
         for (const [sessionId, command] of [
@@ -2476,7 +2482,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('bash', { command: 'shopt -s dotglob; cat <*' }),
+          anthropicToolUseBody('bash', { command: 'shopt -s dotglob; cat *' }),
           anthropicStreamBody('bash Full Access runtime dotglob turn finished'),
         );
         const runtimeFullAccessReqBefore = seenRequests.length;
@@ -2491,6 +2497,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           .map((request) => request.body);
         expect(runtimeFullAccessFollowUp.some((body) =>
           body.includes('Cindy blocks reading credential or key paths'))).toBe(false);
+        expect(runtimeFullAccessFollowUp.some((body) => body.includes('FAKE_DOTGLOB_SECRET'))).toBe(true);
 
         scriptedResponses.length = 0;
         scriptedResponses.push(
