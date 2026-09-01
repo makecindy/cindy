@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __extraDirsPathOverlapForTesting,
+  countUserExtraDirs,
+  extraDirDisplayLabel,
+  LIBRARY_EXTRA_DIR_SLOT_PREFIX,
+  MAX_EXTRA_DIRS,
+  partitionExtraDirs,
   pickAndAddExtraDir,
 } from '../components/new-chat/extraDirsActions';
 
@@ -83,6 +88,39 @@ describe('pickAndAddExtraDir', () => {
     });
 
     expect(confirm).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('library 槽不占用户 EXTRA_DIRS_MAX,显示为系统项', async () => {
+    const library = `${LIBRARY_EXTRA_DIR_SLOT_PREFIX}/tmp/mivo-library`;
+    const userDirs = Array.from({ length: MAX_EXTRA_DIRS }, (_, i) => `/tmp/user-${i}`);
+    expect(countUserExtraDirs([...userDirs, library])).toBe(MAX_EXTRA_DIRS);
+    expect(partitionExtraDirs([...userDirs, library])).toEqual({
+      system: [library],
+      user: userDirs,
+    });
+    expect(extraDirDisplayLabel(library)).toBe('Mivo 作品库（只读）');
+
+    vi.stubGlobal('window', {
+      electronAPI: {
+        dialog: {
+          showOpenDirectory: vi.fn(async () => ({ success: true, path: '/tmp/another' })),
+        },
+      },
+    });
+    const onChange = vi.fn();
+    await pickAndAddExtraDir({
+      extraDirs: [...userDirs, library],
+      workingDir: '/workspace',
+      onChange,
+      confirm: vi.fn(async () => true),
+      parentDirectoryConfirm: {
+        title: 'title',
+        description: (path) => path,
+        confirmText: 'confirm',
+        cancelText: 'cancel',
+      },
+    });
     expect(onChange).not.toHaveBeenCalled();
   });
 });
