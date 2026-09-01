@@ -5655,11 +5655,15 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 不能再读包含 arm 态的 effectiveSdkPermissionMode()。否则 rewind 窗口里用户 arm
           // 了下一 turn 的 plan,但当前排队行显式 planMode:false 时,新 Query 会先以 plan
           // 起跑且 replay 看不到 diff,导致普通 turn 误跑成 plan turn (Codex review 3535801840)。
-          rewindTransitionQueries.add(q);
-          try {
-            q.close();
-          } catch (e) {
-            log.warn('rewind rebuild: q.close threw', { error: String(e) });
+          // extraDirs 中途授权复用这条重建,但不把 session id 当 resumeSessionAt。
+          // rewind 已在 commitRewindFiles 关过旧 q;directory grant 这条补 close。
+          if (directoryGrantRebuild) {
+            rewindTransitionQueries.add(q);
+            try {
+              q.close();
+            } catch (e) {
+              log.warn('rewind rebuild: q.close threw', { error: String(e) });
+            }
           }
           q = await buildQuery({
             ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
