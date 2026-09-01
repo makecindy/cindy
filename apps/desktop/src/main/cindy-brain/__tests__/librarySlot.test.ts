@@ -9,7 +9,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 
-import { GhostLibrarySlot, type GhostLibrarySlotDeps } from '../librarySlot.js';
+import { GhostLibrarySlot, libraryAvailableRef, type GhostLibrarySlotDeps } from '../librarySlot.js';
+import { createHash } from 'node:crypto';
 import { LibraryBindingStore } from '../libraryBinding.js';
 import { LibraryVault } from '../libraryVault.js';
 import { createLibraryDbCore, type SqliteDatabaseConstructor } from '../libraryDbCore.js';
@@ -439,5 +440,65 @@ describe('GhostLibrarySlot', () => {
     const r = await pending;
     expect(r).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
     expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it('open/status 握手含 authorizedReadonly 与 generation/identity,JSON 不含绝对库根', async () => {
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    const openHs = open as unknown as {
+      authorizedReadonly: boolean;
+      libraryGeneration: number;
+      libraryIdentity: string;
+    };
+    expect(openHs.authorizedReadonly).toBe(true);
+    expect(openHs.libraryGeneration).toBe(0);
+    expect(openHs.libraryIdentity).toBe('default');
+    const dumped = JSON.stringify(open);
+    expect(dumped).not.toContain(defaultRootBase);
+    expect(dumped).not.toMatch(/\/Users\//);
+    expect(dumped).not.toContain(tmp);
+
+    const st = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((st as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    const probe = await slot.recordLibraryProbe(GHOST_ID);
+    const probeDump = JSON.stringify(probe);
+    expect(probeDump).not.toContain(defaultRootBase);
+    expect(probeDump).not.toMatch(/\/Users\/.*\/libraries\//);
+  });
+
+  it('writeCommit ACK 含 64-hex sha256,形状 {ok,op,path,bytes,sha256}', async () => {
+    const body = 'pixel-bytes';
+    const sha = createHash('sha256').update(body).digest('hex');
+    const rel = 'assets/ab/abc123def456abc123def456abc123de/blob.png';
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    const begin = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'writeBegin', path: rel, totalBytes: Buffer.byteLength(body), sha256: sha,
+    });
+    if (!begin.ok || begin.op !== 'writeBegin') throw new Error(JSON.stringify(begin));
+    const chunk = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'writeChunk', streamId: begin.streamId, seq: 1, content: body,
+    });
+    expect(chunk.ok).toBe(true);
+    const commit = await slot.handleLibraryRequest(GHOST_ID, { op: 'writeCommit', streamId: begin.streamId });
+    expect(commit).toEqual({
+      ok: true,
+      op: 'writeCommit',
+      path: rel,
+      bytes: Buffer.byteLength(body),
+      sha256: sha,
+    });
+    expect(commit.ok && 'sha256' in commit && /^[0-9a-f]{64}$/.test(commit.sha256)).toBe(true);
+    expect(fs.existsSync(path.join(tmp, 'libraryConfirmed.ts'))).toBe(false);
+    expect(fs.existsSync(path.join(process.cwd(), 'apps/desktop/src/main/cindy-brain/libraryConfirmed.ts'))).toBe(false);
+  });
+
+  it('available 引用:授权相对键,未授权 cindy-media,SVG 未授权不可读', () => {
+    const hash = 'c'.repeat(64);
+    expect(libraryAvailableRef({ authorized: true, hash, ext: 'png', confirmed: true }))
+      .toBe(`library:assets/${hash.slice(0, 2)}/${hash}/blob.png`);
+    expect(libraryAvailableRef({ authorized: false, hash, ext: 'png', confirmed: true }))
+      .toBe(`cindy-media://blobs/${hash}.png`);
+    expect(libraryAvailableRef({ authorized: false, hash, ext: 'svg', confirmed: true })).toBeNull();
+    expect(libraryAvailableRef({ authorized: true, hash, ext: 'png', confirmed: false })).toBeNull();
   });
 });
