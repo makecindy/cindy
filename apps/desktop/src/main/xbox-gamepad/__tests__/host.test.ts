@@ -318,6 +318,8 @@ describe('Xbox gamepad helper packaging contract', () => {
     const index = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
     expect(index).toContain('setSwitch2UsbWanted');
     expect(index).toContain("previewFamily === 'nintendo'");
+    expect(index).toContain('layoutPreviewLease.setActive(false, owner)');
+    expect(index).not.toMatch(/previewFamily = family;\s*layoutPreviewLease\.setActive\(active/);
   });
 
   it('copies the matching HID set into a buffer sized for every device', () => {

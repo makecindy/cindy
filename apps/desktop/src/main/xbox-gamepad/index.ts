@@ -172,10 +172,16 @@ export function registerXboxGamepadSettingsIpc(): void {
     },
     probeDevice: () => host.probe(),
     setLayoutPreviewActive: (active, family, event) => {
-      previewFamily = family;
-      layoutPreviewLease.setActive(active, layoutPreviewOwnerFromEvent(event));
-      if (active) controller.setLayoutPreviewActive(true, family);
-      syncSwitch2Usb();
+      const owner = layoutPreviewOwnerFromEvent(event);
+      if (active) {
+        if (!owner) return;
+        previewFamily = family;
+        layoutPreviewLease.setActive(true, owner);
+        controller.setLayoutPreviewActive(true, family);
+        syncSwitch2Usb();
+        return;
+      }
+      layoutPreviewLease.setActive(false, owner);
     },
   });
 
