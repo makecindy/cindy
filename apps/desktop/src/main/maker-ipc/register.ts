@@ -630,12 +630,11 @@ import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
 import { broadcastSchedulerChanged } from './schedule.js';
 import {
-  excludeDirectoryGrantConflicts,
+  excludeDirectoryGrantConflictsWithSlots,
   extraDirsForRuntime,
   isLibraryExtraDirSlot,
   libraryExtraDirSlot,
   libraryRootFromSlot,
-  nextLibraryExtraDirs,
   splitExtraDirSlots,
   validateExtraDirs,
 } from './extraDirsValidator.js';
@@ -2872,6 +2871,8 @@ export async function withSendToSessionLock<T>(
 export interface ApplyDirectoryGrantsOptions {
   remote: boolean;
   senderId?: number;
+  /** extraDirs: requested 只含 library 槽(可空=撤槽),用户目录在锁内从 DB 现读。 */
+  replaceLibrarySlot?: boolean;
 }
 
 /**
@@ -2910,7 +2911,19 @@ export function applyDirectoryGrants(
     const workDir = persistOnly
       ? (await readSessionWorkingDirFromDb(sessionId) ?? undefined)
       : (sess.workDir || undefined);
-    const result = await applyRemoteDirectoryGrantUpdate(axis, requestedDirs, {
+    let dirsToApply = requestedDirs;
+    if (axis === 'extraDirs') {
+      const persisted = await readSessionExtraDirsFromDb(sessionId);
+      const { user: dbUser, library: dbLibrary } = splitExtraDirSlots(persisted);
+      if (options.replaceLibrarySlot) {
+        const { library } = splitExtraDirSlots(requestedDirs);
+        dirsToApply = [...dbUser, ...library];
+      } else {
+        const { user } = splitExtraDirSlots(requestedDirs);
+        dirsToApply = [...user, ...dbLibrary];
+      }
+    }
+    const result = await applyRemoteDirectoryGrantUpdate(axis, dirsToApply, {
       setExtraDirs: persistOnly
         ? async () => {}
         : (dirs) => sess.setExtraDirs(extraDirsForRuntime(dirs)),
@@ -2940,18 +2953,7 @@ export function applyDirectoryGrants(
       readExtraDirs: () => readSessionExtraDirsFromDb(sessionId),
       readWritableDirs: () => readSessionWritableDirsFromDb(sessionId),
       excludeConflicts: async (candidates, blocked) => {
-        let accepted: string[];
-        if (axis === 'extraDirs') {
-          const runtimeAccepted = await excludeDirectoryGrantConflicts(
-            extraDirsForRuntime(candidates),
-            extraDirsForRuntime(blocked),
-          );
-          accepted = candidates.filter((dir) => runtimeAccepted.includes(
-            isLibraryExtraDirSlot(dir) ? libraryRootFromSlot(dir) : dir,
-          ));
-        } else {
-          accepted = await excludeDirectoryGrantConflicts(candidates, blocked);
-        }
+        const accepted = await excludeDirectoryGrantConflictsWithSlots(candidates, blocked);
         if (axis === 'writableDirs') {
           const previousDirs = await readSessionWritableDirsFromDb(sessionId);
           const [route] = await getDbClient()
@@ -3014,7 +3016,6 @@ export async function applyLibraryReadonlyExtraDir(
   sessionId: string,
   root: string | null,
 ): Promise<string[] | void> {
-  const current = await readSessionExtraDirsFromDb(sessionId);
   let canonical: string | null = null;
   if (root) {
     try {
@@ -3023,14 +3024,21 @@ export async function applyLibraryReadonlyExtraDir(
       canonical = null;
     }
   }
-  const next = nextLibraryExtraDirs(current, canonical);
-  if (
-    next.length === current.length &&
-    next.every((dir, index) => dir === current[index])
-  ) {
-    return current;
-  }
-  return applyDirectoryGrants('extraDirs', sessionId, next, { remote: false });
+  return applyDirectoryGrants(
+    'extraDirs',
+    sessionId,
+    canonical ? [libraryExtraDirSlot(canonical)] : [],
+    { remote: false, replaceLibrarySlot: true },
+  );
+}
+
+async function sessionIsRemote(sessionId: string): Promise<boolean> {
+  const [row] = await getDbClient()
+    .drizzle.select({ remoteHostId: sessions.remoteHostId })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  return Boolean(row?.remoteHostId);
 }
 
 let libraryExtraDirSyncGeneration = 0;
@@ -3041,26 +3049,46 @@ async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
   libraryExtraDirSyncRoot = root;
   const generation = ++libraryExtraDirSyncGeneration;
   const run = async () => {
-    if (generation !== libraryExtraDirSyncGeneration) return;
+    if (generation !== libraryExtraDirSyncGeneration) {
+      throw new Error('library extraDirs sync superseded');
+    }
     const grantRoot = libraryExtraDirSyncRoot;
     const focused = getFocusedGhostSessionId();
-    if (generation !== libraryExtraDirSyncGeneration) return;
+    if (generation !== libraryExtraDirSyncGeneration) {
+      throw new Error('library extraDirs sync superseded');
+    }
     const visible = await listVisibleActiveSessionIds();
-    if (generation !== libraryExtraDirSyncGeneration) return;
+    if (generation !== libraryExtraDirSyncGeneration) {
+      throw new Error('library extraDirs sync superseded');
+    }
     const targets = new Set(visible);
     if (focused) targets.add(focused);
+    let granted = false;
     for (const sessionId of targets) {
-      if (generation !== libraryExtraDirSyncGeneration) return;
-      const nextRoot = grantRoot && sessionId === focused ? grantRoot : null;
+      if (generation !== libraryExtraDirSyncGeneration) {
+        throw new Error('library extraDirs sync superseded');
+      }
+      const remote = await sessionIsRemote(sessionId);
+      if (generation !== libraryExtraDirSyncGeneration) {
+        throw new Error('library extraDirs sync superseded');
+      }
+      const nextRoot = !remote && grantRoot && sessionId === focused ? grantRoot : null;
       try {
         await applyLibraryReadonlyExtraDir(sessionId, nextRoot);
+        if (nextRoot) granted = true;
       } catch (error) {
         log.warn('library extraDirs session sync failed', {
           sessionId,
           error: error instanceof Error ? error.message : String(error),
         });
+        if (!remote && nextRoot && sessionId === focused) throw error;
       }
-      if (generation !== libraryExtraDirSyncGeneration) return;
+      if (generation !== libraryExtraDirSyncGeneration) {
+        throw new Error('library extraDirs sync superseded');
+      }
+    }
+    if (grantRoot && !granted) {
+      throw new Error('library extraDirs not granted to focused session');
     }
   };
   const queued = libraryExtraDirSyncChain.then(run, run);
@@ -17528,9 +17556,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     if (!Array.isArray(dirs)) throwIpcError('INVALID_PARAMS', 'dirs must be string[]');
     const requested = (dirs as string[]).filter((dir) => typeof dir === 'string' && !isLibraryExtraDirSlot(dir));
-    const persisted = await readSessionExtraDirsFromDb(sessionId);
-    const { library } = splitExtraDirSlots(persisted);
-    return applyDirectoryGrants('extraDirs', sessionId, [...requested, ...library], {
+    return applyDirectoryGrants('extraDirs', sessionId, requested, {
       remote: deviceLinkInvoke,
       ...(!deviceLinkInvoke ? { senderId: event.sender.id } : {}),
     });

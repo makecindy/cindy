@@ -130,6 +130,8 @@ export class GhostLibrarySlot {
   private readonly lastSaveAsAttemptAt = new Map<string, number>();
   /** 全局另存为对话框在场标记(系统弹窗一次一个,不排队)。 */
   private saveAsDialogInFlight = false;
+  /** extraDirs 注入成功才握手 authorizedReadonly,失败走 cindy-media 备胎。 */
+  private extraDirGranted = false;
 
   constructor(private readonly deps: GhostLibrarySlotDeps) {}
 
@@ -277,17 +279,23 @@ export class GhostLibrarySlot {
     state: 'ready' | 'readonly' | 'unavailable',
   ): { authorizedReadonly: boolean; libraryGeneration: number; libraryIdentity: string } {
     return {
-      authorizedReadonly: session.drift === null && (state === 'ready' || state === 'readonly'),
+      authorizedReadonly:
+        this.extraDirGranted && session.drift === null && (state === 'ready' || state === 'readonly'),
       libraryGeneration: session.generation,
       libraryIdentity: session.identity,
     };
   }
 
   private async syncAgentReadonlyExtraDir(ghostId: string, root: string | null): Promise<void> {
-    if (!this.deps.syncAgentReadonlyExtraDir) return;
+    if (!this.deps.syncAgentReadonlyExtraDir) {
+      this.extraDirGranted = root !== null;
+      return;
+    }
     try {
       await this.deps.syncAgentReadonlyExtraDir(ghostId, root);
+      this.extraDirGranted = root !== null;
     } catch (error) {
+      this.extraDirGranted = false;
       this.deps.log?.warn('library extraDirs sync failed', {
         ghostId,
         error: error instanceof Error ? error.message : String(error),

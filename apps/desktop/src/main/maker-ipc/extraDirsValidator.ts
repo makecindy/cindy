@@ -62,6 +62,19 @@ export function nextLibraryExtraDirs(current: readonly string[], root: string | 
   return root ? [...user, libraryExtraDirSlot(root)] : user;
 }
 
+/** extraDirs / writableDirs 冲突检测:把 cindy-library: 槽还原成真实根再比。 */
+export async function excludeDirectoryGrantConflictsWithSlots(
+  candidates: readonly string[],
+  blocked: readonly string[],
+): Promise<string[]> {
+  const runtimeAccepted = await excludeDirectoryGrantConflicts(
+    extraDirsForRuntime(candidates),
+    extraDirsForRuntime(blocked),
+  );
+  const accepted = new Set(runtimeAccepted);
+  return candidates.filter((dir) => accepted.has(libraryRootFromSlot(dir)));
+}
+
 export interface ValidateResult {
   /** 通过校验, 实际可用的绝对路径列表 (去重后, 顺序保留首次出现) */
   valid: string[];

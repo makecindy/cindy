@@ -253,10 +253,13 @@ describe('session runtime control wiring', () => {
       'export async function applyLibraryReadonlyExtraDir(',
       'let libraryExtraDirSyncGeneration',
     );
+    expect(grantUpdate).toContain('options.replaceLibrarySlot');
+    expect(grantUpdate).toContain('excludeDirectoryGrantConflictsWithSlots');
     expect(applyLibrary).toContain('fsp.realpath(root)');
-    expect(applyLibrary).toContain('nextLibraryExtraDirs(current, canonical)');
-    expect(applyLibrary).toContain("applyDirectoryGrants('extraDirs'");
-    expect(applyLibrary).toContain('{ remote: false }');
+    expect(applyLibrary).toContain('replaceLibrarySlot: true');
+    expect(applyLibrary).toContain('applyDirectoryGrants(');
+    expect(applyLibrary).toContain("'extraDirs'");
+    expect(applyLibrary).toContain('{ remote: false, replaceLibrarySlot: true }');
     expect(applyLibrary).not.toContain('consumeWritableDirectoryPickerGrants');
     const syncLibrary = handlerBody(
       registerSource,
@@ -265,14 +268,18 @@ describe('session runtime control wiring', () => {
     );
     expect(syncLibrary).toContain('listVisibleActiveSessionIds()');
     expect(syncLibrary).toContain('targets.add(focused)');
-    expect(syncLibrary).toContain('grantRoot && sessionId === focused ? grantRoot : null');
-    expect(syncLibrary).toContain('if (generation !== libraryExtraDirSyncGeneration) return');
+    expect(syncLibrary).toContain('sessionIsRemote(sessionId)');
+    expect(syncLibrary).toContain('!remote && grantRoot && sessionId === focused ? grantRoot : null');
+    expect(syncLibrary).toContain("throw new Error('library extraDirs sync superseded')");
+    expect(syncLibrary).toContain("throw new Error('library extraDirs not granted to focused session')");
+    expect(syncLibrary).toContain('if (!remote && nextRoot && sessionId === focused) throw error');
     expect(syncLibrary).toContain('libraryExtraDirSyncChain.then(run, run)');
     expect(syncLibrary).toMatch(
-      /await applyLibraryReadonlyExtraDir\(sessionId, nextRoot\);[\s\S]*if \(generation !== libraryExtraDirSyncGeneration\) return/,
+      /await applyLibraryReadonlyExtraDir\(sessionId, nextRoot\);[\s\S]*if \(generation !== libraryExtraDirSyncGeneration\)/,
     );
     expect(extraDirs).toContain('!isLibraryExtraDirSlot(dir)');
-    expect(extraDirs).toContain('splitExtraDirSlots(persisted)');
+    expect(extraDirs).not.toContain('splitExtraDirSlots(persisted)');
+    expect(extraDirs).not.toContain('[...requested, ...library]');
   });
 
   it('guards local user model changes before parsing input while preserving trusted internal paths', () => {

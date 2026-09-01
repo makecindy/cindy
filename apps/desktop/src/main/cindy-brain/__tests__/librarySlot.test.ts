@@ -511,6 +511,14 @@ describe('GhostLibrarySlot', () => {
     expect(syncAgentReadonlyExtraDir.mock.calls.map((call) => call[1])).not.toContain(defaultRoot);
   });
 
+  it('extraDirs 同步失败则握手 authorizedReadonly=false,不假装授权', async () => {
+    syncAgentReadonlyExtraDir.mockRejectedValueOnce(new Error('require app-server 0.144.6 or newer'));
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    expect((open as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    expect(JSON.stringify(open)).not.toContain(defaultRootBase);
+  });
+
   it('writeCommit ACK 含 64-hex sha256,形状 {ok,op,path,bytes,sha256}', async () => {
     const body = 'pixel-bytes';
     const sha = createHash('sha256').update(body).digest('hex');

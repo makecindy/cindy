@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   excludeDirectoryGrantConflicts,
+  excludeDirectoryGrantConflictsWithSlots,
   extraDirsForRuntime,
   EXTRA_DIRS_MAX,
   LIBRARY_EXTRA_DIR_SLOT_PREFIX,
@@ -83,6 +84,20 @@ describe('excludeDirectoryGrantConflicts', () => {
     await expect(
       excludeDirectoryGrantConflicts([sharedAlias, sibling], [specs]),
     ).resolves.toEqual([sibling]);
+  });
+
+  it('writable 候选与 cindy-library 槽指向同一根时互斥', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-dir-grants-library-slot-'));
+    cleanupDirs.push(root);
+    const library = path.join(root, 'library');
+    const output = path.join(root, 'output');
+    mkdirSync(library);
+    mkdirSync(output);
+    const slot = libraryExtraDirSlot(library);
+    await expect(excludeDirectoryGrantConflictsWithSlots([library, output], [slot])).resolves.toEqual([
+      output,
+    ]);
+    await expect(excludeDirectoryGrantConflictsWithSlots([slot], [library])).resolves.toEqual([]);
   });
 });
 
