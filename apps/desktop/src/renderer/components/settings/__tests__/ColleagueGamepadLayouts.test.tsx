@@ -67,4 +67,14 @@ describe('colleague gamepad layouts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'a' }));
     expect(onEdit).toHaveBeenCalledWith('a');
   });
+
+  it.each([
+    ['Switch Pro', SwitchProGamepadLayout, 'switch-pro-gamepad-stick'],
+    ['Joy-Con', JoyConGamepadLayout, 'joycon-gamepad-stick'],
+    ['Ultimate C1', GenericGamepadLayout, 'generic-gamepad-stick'],
+  ] as const)('keeps %s stick hotspots on Tip without a native title', (_name, Layout, prefix) => {
+    renderLayout(Layout);
+    expect(screen.getByTestId(`${prefix}-left`).getAttribute('title')).toBeNull();
+    expect(screen.getByTestId(`${prefix}-right`).getAttribute('title')).toBeNull();
+  });
 });

@@ -21,7 +21,6 @@ export function JoyConGamepadLayout({
   hintFor,
   onEdit,
   preview,
-  labels,
 }: XboxGamepadLayoutProps) {
   const pressed = (id: XboxGamepadButtonId) => preview?.buttons[id] ?? false;
   const analog = (id: XboxGamepadStickId) => preview?.sticks[id] ?? { x: 0, y: 0 };
@@ -169,7 +168,6 @@ export function JoyConGamepadLayout({
             box={[297, 182, 90, 83]}
             round
             testId="joycon-gamepad-stick-left"
-            title={labels.leftStick}
           />
           <Hit
             part="right"
@@ -180,7 +178,6 @@ export function JoyConGamepadLayout({
             box={[661, 360, 90, 83]}
             round
             testId="joycon-gamepad-stick-right"
-            title={labels.rightStick}
           />
         </>
       }

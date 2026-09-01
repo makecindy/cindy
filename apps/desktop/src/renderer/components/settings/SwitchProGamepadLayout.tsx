@@ -21,7 +21,6 @@ export function SwitchProGamepadLayout({
   hintFor,
   onEdit,
   preview,
-  labels,
 }: XboxGamepadLayoutProps) {
   const pressed = (id: XboxGamepadButtonId) => preview?.buttons[id] ?? false;
   const analog = (id: XboxGamepadStickId) => preview?.sticks[id] ?? { x: 0, y: 0 };
@@ -169,7 +168,6 @@ export function SwitchProGamepadLayout({
             box={[205, 275, 116, 112]}
             round
             testId="switch-pro-gamepad-stick-left"
-            title={labels.leftStick}
           />
           <Hit
             part="right"
@@ -180,7 +178,6 @@ export function SwitchProGamepadLayout({
             box={[630, 400, 116, 112]}
             round
             testId="switch-pro-gamepad-stick-right"
-            title={labels.rightStick}
           />
         </>
       }

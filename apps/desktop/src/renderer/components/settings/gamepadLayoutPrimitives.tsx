@@ -246,7 +246,6 @@ export function Hit({
   box,
   round = false,
   testId,
-  title,
 }: {
   part: XboxGamepadEditablePart;
   hint: XboxGamepadKeyHint;
@@ -256,7 +255,6 @@ export function Hit({
   box: [number, number, number, number];
   round?: boolean;
   testId?: string;
-  title?: string;
 }) {
   const label = [hint.legend, hint.name].filter(Boolean).join(' ');
   return (
@@ -265,7 +263,6 @@ export function Hit({
         type="button"
         aria-label={label}
         aria-pressed={pressed}
-        title={title}
         disabled={disabled}
         data-testid={testId}
         onClick={() => onEdit(part)}

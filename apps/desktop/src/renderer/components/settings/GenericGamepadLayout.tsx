@@ -18,7 +18,6 @@ export function GenericGamepadLayout({
   hintFor,
   onEdit,
   preview,
-  labels,
 }: XboxGamepadLayoutProps) {
   const pressed = (id: XboxGamepadButtonId) => preview?.buttons[id] ?? false;
   const analog = (id: XboxGamepadStickId) => preview?.sticks[id] ?? { x: 0, y: 0 };
@@ -158,7 +157,6 @@ export function GenericGamepadLayout({
             box={[153.6, 233.4, 111.0, 110.1]}
             round
             testId="generic-gamepad-stick-left"
-            title={labels.leftStick}
           />
           <Hit
             part="right"
@@ -169,7 +167,6 @@ export function GenericGamepadLayout({
             box={[631.0, 368.4, 113.5, 112.2]}
             round
             testId="generic-gamepad-stick-right"
-            title={labels.rightStick}
           />
         </>
       }
