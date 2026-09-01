@@ -3060,6 +3060,7 @@ async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+      if (generation !== libraryExtraDirSyncGeneration) return;
     }
   };
   const queued = libraryExtraDirSyncChain.then(run, run);

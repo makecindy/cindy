@@ -268,6 +268,9 @@ describe('session runtime control wiring', () => {
     expect(syncLibrary).toContain('grantRoot && sessionId === focused ? grantRoot : null');
     expect(syncLibrary).toContain('if (generation !== libraryExtraDirSyncGeneration) return');
     expect(syncLibrary).toContain('libraryExtraDirSyncChain.then(run, run)');
+    expect(syncLibrary).toMatch(
+      /await applyLibraryReadonlyExtraDir\(sessionId, nextRoot\);[\s\S]*if \(generation !== libraryExtraDirSyncGeneration\) return/,
+    );
     expect(extraDirs).toContain('!isLibraryExtraDirSlot(dir)');
     expect(extraDirs).toContain('splitExtraDirSlots(persisted)');
   });
