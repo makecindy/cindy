@@ -3033,22 +3033,38 @@ export async function applyLibraryReadonlyExtraDir(
   return applyDirectoryGrants('extraDirs', sessionId, next, { remote: false });
 }
 
+let libraryExtraDirSyncGeneration = 0;
+let libraryExtraDirSyncRoot: string | null = null;
+let libraryExtraDirSyncChain: Promise<void> = Promise.resolve();
+
 async function syncLibraryReadonlyExtraDir(root: string | null): Promise<void> {
-  const focused = getFocusedGhostSessionId();
-  const visible = await listVisibleActiveSessionIds();
-  const targets = new Set(visible);
-  if (focused) targets.add(focused);
-  for (const sessionId of targets) {
-    const grantRoot = root && sessionId === focused ? root : null;
-    try {
-      await applyLibraryReadonlyExtraDir(sessionId, grantRoot);
-    } catch (error) {
-      log.warn('library extraDirs session sync failed', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+  libraryExtraDirSyncRoot = root;
+  const generation = ++libraryExtraDirSyncGeneration;
+  const run = async () => {
+    if (generation !== libraryExtraDirSyncGeneration) return;
+    const grantRoot = libraryExtraDirSyncRoot;
+    const focused = getFocusedGhostSessionId();
+    if (generation !== libraryExtraDirSyncGeneration) return;
+    const visible = await listVisibleActiveSessionIds();
+    if (generation !== libraryExtraDirSyncGeneration) return;
+    const targets = new Set(visible);
+    if (focused) targets.add(focused);
+    for (const sessionId of targets) {
+      if (generation !== libraryExtraDirSyncGeneration) return;
+      const nextRoot = grantRoot && sessionId === focused ? grantRoot : null;
+      try {
+        await applyLibraryReadonlyExtraDir(sessionId, nextRoot);
+      } catch (error) {
+        log.warn('library extraDirs session sync failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
-  }
+  };
+  const queued = libraryExtraDirSyncChain.then(run, run);
+  libraryExtraDirSyncChain = queued.then(() => undefined, () => undefined);
+  await queued;
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
@@ -8139,7 +8155,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       orcaWorkerId: target.id,
       orcaWorkerSessionId: target.sessionId,
     };
-    const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);
+    const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId));
     const writableDirs = await readSessionWritableDirsFromDb(target.sessionId);
     const opts = buildCreateOptsWithStderr({
       id: row.id,

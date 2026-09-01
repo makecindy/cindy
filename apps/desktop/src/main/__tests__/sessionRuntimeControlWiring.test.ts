@@ -244,11 +244,14 @@ describe('session runtime control wiring', () => {
     expect(writableDirs).toContain('senderId: event.sender.id');
     expect(registerSource).toContain('setGhostLibraryExtraDirSync(syncLibraryReadonlyExtraDir)');
     expect(registerSource).toContain('const persistOnly = !sess');
-    expect(registerSource).toContain('await applyLibraryReadonlyExtraDir(sessionId, grantRoot)');
+    expect(registerSource).toContain('await applyLibraryReadonlyExtraDir(sessionId, nextRoot)');
+    expect(registerSource).toContain(
+      'const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId))',
+    );
     const applyLibrary = handlerBody(
       registerSource,
       'export async function applyLibraryReadonlyExtraDir(',
-      'async function syncLibraryReadonlyExtraDir(',
+      'let libraryExtraDirSyncGeneration',
     );
     expect(applyLibrary).toContain('fsp.realpath(root)');
     expect(applyLibrary).toContain('nextLibraryExtraDirs(current, canonical)');
@@ -262,7 +265,9 @@ describe('session runtime control wiring', () => {
     );
     expect(syncLibrary).toContain('listVisibleActiveSessionIds()');
     expect(syncLibrary).toContain('targets.add(focused)');
-    expect(syncLibrary).toContain('root && sessionId === focused ? root : null');
+    expect(syncLibrary).toContain('grantRoot && sessionId === focused ? grantRoot : null');
+    expect(syncLibrary).toContain('if (generation !== libraryExtraDirSyncGeneration) return');
+    expect(syncLibrary).toContain('libraryExtraDirSyncChain.then(run, run)');
     expect(extraDirs).toContain('!isLibraryExtraDirSlot(dir)');
     expect(extraDirs).toContain('splitExtraDirSlots(persisted)');
   });
