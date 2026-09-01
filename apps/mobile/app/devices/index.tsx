@@ -221,6 +221,8 @@ import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScal
 const LIST_LIMIT = 200;
 const DEVICE_LIST_TIMEOUT_MS = 12_000;
 const HOME_LIST_SUBSCRIPTION_OWNER = 'device-list';
+const HOME_HYDRATE_MAX_TRAILING_RERUNS = 2;
+const HOME_HYDRATE_RERUN_BACKOFF_MS = 100;
 // 项目组与自动化组展开后的子列表共用同一个预览限量(设备详情页也 import 复用,避免两处漂移)。
 export const PROJECT_PREVIEW_LIMIT = 5;
 const HOME_SESSION_ROW_HEIGHT = 78;
@@ -260,13 +262,15 @@ type HomeHydrateInFlightEntry = {
   device: DeviceView;
   homeSyncGeneration: number;
   promise: Promise<HydrateDeviceSessionsResult>;
+  rerunCount: number;
   rerunRequested: boolean;
+  rerunScheduled: boolean;
 };
 
 type HydrateDeviceSessions = (
   device: DeviceView,
   expectedAccountGeneration?: number,
-  options?: { trailingIfInFlight?: boolean },
+  options?: { trailingIfInFlight?: boolean; rerunCount?: number },
 ) => Promise<HydrateDeviceSessionsResult>;
 
 class HomeSyncScopeSupersededError extends Error {
@@ -747,7 +751,7 @@ export default function HomeScreen() {
   const hydrateDeviceSessions = useCallback((
     device: DeviceView,
     expectedAccountGeneration = accountGeneration,
-    options: { trailingIfInFlight?: boolean } = {},
+    options: { trailingIfInFlight?: boolean; rerunCount?: number } = {},
   ): Promise<HydrateDeviceSessionsResult> => {
     const expectedHomeSyncGeneration = homeSyncGenerationByDeviceRef.current.get(device.deviceId);
     if (
@@ -779,21 +783,41 @@ export default function HomeScreen() {
       device,
       homeSyncGeneration: expectedHomeSyncGeneration,
       promise,
+      rerunCount: options.rerunCount ?? 0,
       rerunRequested: false,
+      rerunScheduled: false,
     };
     homeHydrateInFlightByDeviceRef.current.set(device.deviceId, entry);
     const settle = (needsRerun: boolean) => {
       if (homeHydrateInFlightByDeviceRef.current.get(device.deviceId) !== entry) return;
-      homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
-      if (
-        !needsRerun
-        && !entry.rerunRequested
-      ) return;
+      if (!needsRerun && !entry.rerunRequested) {
+        homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
+        return;
+      }
+      // A live sessions push can invalidate a whole-list snapshot. Coalesce it into a small,
+      // bounded trailing pull instead of allowing an unbounded invalidation/rerun loop to starve
+      // the JS thread while the desktop is actively streaming messages.
+      if (entry.rerunScheduled || entry.rerunCount >= HOME_HYDRATE_MAX_TRAILING_RERUNS) {
+        homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
+        updateDeviceConnectionState(device.deviceId, 'idle');
+        return;
+      }
+      entry.rerunScheduled = true;
       if (
         homeAccountGenerationRef.current !== entry.accountGeneration
         || !isCurrentHomeSyncTarget(device.deviceId, entry.homeSyncGeneration)
-      ) return;
-      void hydrateDeviceSessionsRef.current(entry.device, entry.accountGeneration);
+      ) {
+        homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
+        return;
+      }
+      const delayMs = HOME_HYDRATE_RERUN_BACKOFF_MS * (2 ** entry.rerunCount);
+      setTimeout(() => {
+        if (homeHydrateInFlightByDeviceRef.current.get(device.deviceId) !== entry) return;
+        homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
+        void hydrateDeviceSessionsRef.current(entry.device, entry.accountGeneration, {
+          rerunCount: entry.rerunCount + 1,
+        });
+      }, delayMs);
     };
     void promise.then(
       (result) => settle(result.needsRerun === true),
