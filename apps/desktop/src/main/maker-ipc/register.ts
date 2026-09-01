@@ -2857,6 +2857,177 @@ export async function withSendToSessionLock<T>(
   }
 }
 
+/** 会话级 library 只读槽前缀:不占用户 EXTRA_DIRS_MAX=10。 */
+export const LIBRARY_EXTRA_DIR_SLOT_PREFIX = 'cindy-library:';
+
+function libraryExtraDirSlot(root: string): string {
+  return `${LIBRARY_EXTRA_DIR_SLOT_PREFIX}${root}`;
+}
+
+function isLibraryExtraDirSlot(dir: string): boolean {
+  return dir.startsWith(LIBRARY_EXTRA_DIR_SLOT_PREFIX);
+}
+
+function libraryRootFromSlot(dir: string): string {
+  return dir.slice(LIBRARY_EXTRA_DIR_SLOT_PREFIX.length);
+}
+
+function splitExtraDirSlots(dirs: readonly string[]): { user: string[]; library: string[] } {
+  const user: string[] = [];
+  const library: string[] = [];
+  for (const dir of dirs) {
+    if (isLibraryExtraDirSlot(dir)) library.push(dir);
+    else user.push(dir);
+  }
+  return { user, library };
+}
+
+function extraDirsForRuntime(dirs: readonly string[]): string[] {
+  return dirs.map((dir) => (isLibraryExtraDirSlot(dir) ? libraryRootFromSlot(dir) : dir));
+}
+
+export interface ApplyDirectoryGrantsOptions {
+  remote: boolean;
+  senderId?: number;
+}
+
+/**
+ * extraDirs / writableDirs 授权内部入口。IPC 与 library 静默注入共用。
+ * extraDirs 轴不走 picker;writableDirs 仍消费 picker grant。
+ */
+export function applyDirectoryGrants(
+  axis: 'extraDirs' | 'writableDirs',
+  sessionId: string,
+  requestedDirs: string[],
+  options: ApplyDirectoryGrantsOptions,
+): Promise<string[] | void> {
+  return withSendToSessionLock(sessionId, async () => {
+    const [sourceRow] = await getDbClient()
+      .drizzle.select({ source: sessions.source })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (sourceRow?.source === 'review') {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task');
+    }
+    const maker = getMaker();
+    const sess = maker.getSession(sessionId);
+    const supported = axis === 'extraDirs'
+      ? sess?.capabilities.extraDirs.supported
+      : sess?.capabilities.writableDirs?.supported;
+    const label = axis === 'extraDirs' ? 'set-extra-dirs' : 'set-writable-dirs';
+    if (!sess || !supported) {
+      log.debug(`${label}: ${sess ? 'agent capability=false' : 'session not found'}, no-op`, {
+        sessionId,
+        ...(sess ? { agentKind: sess.agentKind } : {}),
+      });
+      return;
+    }
+    const result = await applyRemoteDirectoryGrantUpdate(axis, requestedDirs, {
+      setExtraDirs: (dirs) => sess.setExtraDirs(extraDirsForRuntime(dirs)),
+      setWritableDirs: (dirs) => sess.setWritableDirs(dirs),
+    }, {
+      validate: async (requested) => {
+        if (axis !== 'extraDirs') {
+          return validateExtraDirs(requested, sess.workDir || undefined);
+        }
+        const { user, library } = splitExtraDirSlots(requested);
+        const userResult = await validateExtraDirs(user, sess.workDir || undefined);
+        const libraryValid: string[] = [];
+        const libraryRejected: Array<{ path: string; reason: string }> = [];
+        for (const slot of library) {
+          const root = libraryRootFromSlot(slot);
+          const checked = await validateExtraDirs([root], sess.workDir || undefined);
+          if (checked.valid.length === 1) libraryValid.push(libraryExtraDirSlot(checked.valid[0]));
+          else libraryRejected.push(...checked.rejected);
+        }
+        return {
+          valid: [...userResult.valid, ...libraryValid],
+          rejected: [...userResult.rejected, ...libraryRejected],
+        };
+      },
+      readExtraDirs: () => readSessionExtraDirsFromDb(sessionId),
+      readWritableDirs: () => readSessionWritableDirsFromDb(sessionId),
+      excludeConflicts: async (candidates, blocked) => {
+        const accepted = axis === 'extraDirs'
+          ? await (async () => {
+            const runtimeAccepted = await excludeDirectoryGrantConflicts(
+              extraDirsForRuntime(candidates),
+              extraDirsForRuntime(blocked),
+            );
+            return candidates.filter((dir) => runtimeAccepted.includes(
+              isLibraryExtraDirSlot(dir) ? libraryRootFromSlot(dir) : dir,
+            ));
+          })()
+          : await excludeDirectoryGrantConflicts(candidates, blocked);
+        if (axis === 'writableDirs') {
+          const previousDirs = await readSessionWritableDirsFromDb(sessionId);
+          const [route] = await getDbClient()
+            .drizzle.select({ remoteHostId: sessions.remoteHostId })
+            .from(sessions)
+            .where(eq(sessions.id, sessionId))
+            .limit(1);
+          if (options.remote || route?.remoteHostId) {
+            // The picker lives on the controller filesystem, so device-link and SSH may only
+            // retain/revoke roots that were already persisted on the execution side.
+            if (!isPersistedDirectoryGrantSubset(accepted, previousDirs)) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'remote writable directories can only retain or revoke existing grants',
+              );
+            }
+            return accepted;
+          } else {
+            if (options.senderId === undefined) {
+              throwIpcError('PRECONDITION_FAILED', 'Writable directory picker owner unavailable');
+            }
+            try {
+              await consumeWritableDirectoryPickerGrants({
+                scopeId: sessionId,
+                senderId: options.senderId,
+                requestedDirs: accepted,
+                previousDirs,
+              });
+            } catch (error) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                error instanceof Error
+                  ? error.message
+                  : 'Writable directory authorization failed',
+              );
+            }
+          }
+        }
+        return accepted;
+      },
+      persist: (patch) => persistSessionFields(sessionId, patch),
+      terminate: () => maker.closeSession(sessionId),
+    });
+    log.info(label, {
+      sessionId,
+      requested: requestedDirs.length,
+      kept: result.dirs.length,
+      rejected: result.rejectedCount,
+    });
+    if (options.remote) markRemoteSettingPersistedInsideHandler(result.dirs);
+    return result.dirs;
+  });
+}
+
+/**
+ * Mivo 会话 library ready 时静默写入只读 extraDirs(专用槽,不弹 picker)。
+ * root 为 null 则撤该会话 library 槽,用户自选目录保留。
+ */
+export async function applyLibraryReadonlyExtraDir(
+  sessionId: string,
+  root: string | null,
+): Promise<string[] | void> {
+  const current = await readSessionExtraDirsFromDb(sessionId);
+  const { user } = splitExtraDirSlots(current);
+  const next = root ? [...user, libraryExtraDirSlot(root)] : user;
+  return applyDirectoryGrants('extraDirs', sessionId, next, { remote: false });
+}
+
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
 let contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null = null;
 const overflowSuppressedBroadcasts = new Map<
@@ -9139,7 +9310,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (co.extraDirs === undefined) {
         try {
           const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-          if (extraDirs.length > 0) co.extraDirs = extraDirs;
+          if (extraDirs.length > 0) co.extraDirs = extraDirsForRuntime(extraDirs);
         } catch (err) {
           log.warn('agent-switch bootstrap: read extra_dirs from DB failed (non-fatal)', {
             sessionId,
@@ -9959,7 +10130,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (createOpts.extraDirs === undefined) {
           try {
             const row = await readSessionExtraDirsFromDb(targetSessionId);
-            if (row.length > 0) createOpts.extraDirs = row;
+            if (row.length > 0) createOpts.extraDirs = extraDirsForRuntime(row);
           } catch (err) {
             log.warn('sendToSession: read extra_dirs from DB failed (non-fatal)', {
               targetSessionId,
@@ -10321,7 +10492,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (createOpts.extraDirs === undefined) {
       try {
         const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-        if (extraDirs.length > 0) createOpts.extraDirs = extraDirs;
+        if (extraDirs.length > 0) createOpts.extraDirs = extraDirsForRuntime(extraDirs);
       } catch (err) {
         log.warn('inter-agent queue: read extra_dirs from DB failed (non-fatal)', {
           sessionId,
@@ -12548,7 +12719,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (createOpts.extraDirs === undefined) {
         try {
           const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-          if (extraDirs.length > 0) createOpts.extraDirs = extraDirs;
+          if (extraDirs.length > 0) createOpts.extraDirs = extraDirsForRuntime(extraDirs);
         } catch (err) {
           log.warn('overflow replay: read extra_dirs from DB failed (non-fatal)', {
             sessionId,
@@ -12826,7 +12997,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (co.extraDirs === undefined) {
           try {
             const row = await readSessionExtraDirsFromDb(sessionId);
-            if (row.length > 0) co.extraDirs = row;
+            if (row.length > 0) co.extraDirs = extraDirsForRuntime(row);
           } catch (err) {
             log.warn('context-usage lazy-create: read extra_dirs from DB failed (non-fatal)', {
               sessionId,
@@ -17036,7 +17207,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!workDirReady) return null;
     await synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
     const extraDirs = await readSessionExtraDirsFromDb(sessionId).catch(() => []);
-    if (extraDirs.length > 0) createOpts.extraDirs = extraDirs;
+    if (extraDirs.length > 0) createOpts.extraDirs = extraDirsForRuntime(extraDirs);
     const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
     if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
     await ensureRemoteReadyForSessionStart({ createOpts });
@@ -17304,86 +17475,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
-  const applyDirectoryGrants = (
-    axis: 'extraDirs' | 'writableDirs',
-    sessionId: string,
-    requestedDirs: string[],
-    options: { remote: boolean; senderId?: number },
-  ) =>
-    withSendToSessionLock(sessionId, async () => {
-      await assertReviewSettingsUnlocked(sessionId);
-      const sess = maker.getSession(sessionId);
-      const supported =
-        axis === 'extraDirs'
-          ? sess?.capabilities.extraDirs.supported
-          : sess?.capabilities.writableDirs?.supported;
-      const label = axis === 'extraDirs' ? 'set-extra-dirs' : 'set-writable-dirs';
-      if (!sess || !supported) {
-        log.debug(`${label}: ${sess ? 'agent capability=false' : 'session not found'}, no-op`, {
-          sessionId,
-          ...(sess ? { agentKind: sess.agentKind } : {}),
-        });
-        return;
-      }
-      const result = await applyRemoteDirectoryGrantUpdate(axis, requestedDirs, sess, {
-        validate: (requested) => validateExtraDirs(requested, sess.workDir || undefined),
-        readExtraDirs: () => readSessionExtraDirsFromDb(sessionId),
-        readWritableDirs: () => readSessionWritableDirsFromDb(sessionId),
-        excludeConflicts: async (candidates, blocked) => {
-          const accepted = await excludeDirectoryGrantConflicts(candidates, blocked);
-          if (axis === 'writableDirs') {
-            const previousDirs = await readSessionWritableDirsFromDb(sessionId);
-            const [route] = await getDbClient()
-              .drizzle.select({ remoteHostId: sessions.remoteHostId })
-              .from(sessions)
-              .where(eq(sessions.id, sessionId))
-              .limit(1);
-            if (options.remote || route?.remoteHostId) {
-              // The picker lives on the controller filesystem, so device-link and SSH may only
-              // retain/revoke roots that were already persisted on the execution side.
-              if (!isPersistedDirectoryGrantSubset(accepted, previousDirs)) {
-                throwIpcError(
-                  'PRECONDITION_FAILED',
-                  'remote writable directories can only retain or revoke existing grants',
-                );
-              }
-              return accepted;
-            } else {
-              if (options.senderId === undefined) {
-                throwIpcError('PRECONDITION_FAILED', 'Writable directory picker owner unavailable');
-              }
-              try {
-                await consumeWritableDirectoryPickerGrants({
-                  scopeId: sessionId,
-                  senderId: options.senderId,
-                  requestedDirs: accepted,
-                  previousDirs,
-                });
-              } catch (error) {
-                throwIpcError(
-                  'PRECONDITION_FAILED',
-                  error instanceof Error
-                    ? error.message
-                    : 'Writable directory authorization failed',
-                );
-              }
-            }
-          }
-          return accepted;
-        },
-        persist: (patch) => persistSessionFields(sessionId, patch),
-        terminate: () => maker.closeSession(sessionId),
-      });
-      log.info(label, {
-        sessionId,
-        requested: requestedDirs.length,
-        kept: result.dirs.length,
-        rejected: result.rejectedCount,
-      });
-      if (options.remote) markRemoteSettingPersistedInsideHandler(result.dirs);
-      return result.dirs;
-    });
-
   // 两类目录授权均在同一 session 锁内完成校验、运行时应用与持久化。
   // session 不在 / capability 不支持都 no-op, 不抛错 — 跟 setModel 容错语义一致。
   ipcMain.handle(MAKER_INVOKE.SET_EXTRA_DIRS, async (event, sessionId: unknown, dirs: unknown) => {
@@ -17395,7 +17486,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     if (!Array.isArray(dirs)) throwIpcError('INVALID_PARAMS', 'dirs must be string[]');
-    return applyDirectoryGrants('extraDirs', sessionId, dirs as string[], {
+    const requested = (dirs as string[]).filter((dir) => typeof dir === 'string' && !isLibraryExtraDirSlot(dir));
+    const persisted = await readSessionExtraDirsFromDb(sessionId);
+    const { library } = splitExtraDirSlots(persisted);
+    return applyDirectoryGrants('extraDirs', sessionId, [...requested, ...library], {
       remote: deviceLinkInvoke,
       ...(!deviceLinkInvoke ? { senderId: event.sender.id } : {}),
     });
