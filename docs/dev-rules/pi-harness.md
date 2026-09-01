@@ -107,6 +107,8 @@ Cindy 是 Pi 的上游 GUI，不是 Pi 的二次安全产品。Cindy 的 Pi 集�
 会话指向控制端本地路径、保护 Cindy 内部凭证不被写入包目录）。这类边界也不能被描述成
 Cindy 对 Pi 的产品安全升级，更不能拿来扩大阻断范围。
 
+Full access 读/搜/bash 与原生对齐的需求正本见 [`pi-full-access-native-parity.md`](pi-full-access-native-parity.md)。
+
 ## 4. 维护不变量(改动时不得破坏)
 
 1. **权限档从严到宽**:`capabilities.permissionModes` 必须 `[ask, auto, bypassPermissions]`
