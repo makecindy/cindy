@@ -56,7 +56,6 @@ describe('composerQuoteDocument', () => {
                 sourcePath: null,
                 startLine: null,
                 endLine: null,
-                comment: null,
               },
             },
             { type: 'text', text: 'response one' },
@@ -67,7 +66,6 @@ describe('composerQuoteDocument', () => {
                 sourcePath: 'docs/spec.md',
                 startLine: 4,
                 endLine: 5,
-                comment: null,
               },
             },
           ],
@@ -124,7 +122,6 @@ describe('composerQuoteDocument', () => {
                 sourcePath: null,
                 startLine: null,
                 endLine: null,
-                comment: null,
               },
             },
             { type: 'text', text: 'body' },
@@ -155,7 +152,6 @@ describe('composerQuoteDocument', () => {
                 sourcePath: null,
                 startLine: null,
                 endLine: null,
-                comment: null,
               },
             },
             { type: 'text', text: 'a1' },
@@ -166,7 +162,6 @@ describe('composerQuoteDocument', () => {
                 sourcePath: null,
                 startLine: null,
                 endLine: null,
-                comment: null,
               },
             },
             { type: 'text', text: 'a2' },
@@ -197,7 +192,6 @@ describe('composerQuoteDocument', () => {
                 sourcePath: null,
                 startLine: null,
                 endLine: null,
-                comment: null,
               },
             },
           ],
@@ -223,7 +217,6 @@ describe('composerQuoteDocument', () => {
                 sourcePath: null,
                 startLine: null,
                 endLine: null,
-                comment: null,
               },
             },
             { type: 'text', text: 'reply' },
@@ -261,7 +254,6 @@ describe('composerQuoteDocument', () => {
                 sourcePath: null,
                 startLine: null,
                 endLine: null,
-                comment: null,
               },
             },
             { type: 'hardBreak' },
@@ -272,7 +264,6 @@ describe('composerQuoteDocument', () => {
                 sourcePath: null,
                 startLine: null,
                 endLine: null,
-                comment: null,
               },
             },
           ],
@@ -438,6 +429,9 @@ describe('composerQuoteDocument', () => {
     expect(editor.getHTML()).toContain('data-quote-comment="fix this"');
     const restored = makeEditor();
     restored.commands.setContent(editor.getHTML());
-    expect(restored.getJSON().content?.[0]?.content?.[0]?.attrs).toMatchObject({ comment: 'fix this' });
+    const restoredQuote = restored.getJSON().content?.[0]?.content?.[0] as
+      | { attrs?: Record<string, unknown> }
+      | undefined;
+    expect(restoredQuote?.attrs).toMatchObject({ comment: 'fix this' });
   });
 });

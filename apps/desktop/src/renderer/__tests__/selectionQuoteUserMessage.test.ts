@@ -2,7 +2,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import { selectionIntersectsFloatingQuoteDisabledArea } from '../components/chat/SelectionQuoteButton';
+import {
+  selectionContextMatches,
+  selectionIntersectsFloatingQuoteDisabledArea,
+} from '../components/chat/SelectionQuoteButton';
 
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (path: string): string => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
@@ -12,6 +15,14 @@ const userMessageSource = readTextLf(
 );
 
 describe('SelectionQuoteButton — user message floating action exclusion', () => {
+  it('invalidates a captured selection when its session or source changes', () => {
+    const captured = { sessionId: 'session-a', sourcePath: 'src/a.ts' };
+
+    expect(selectionContextMatches(captured, 'session-a', 'src/a.ts')).toBe(true);
+    expect(selectionContextMatches(captured, 'session-b', 'src/a.ts')).toBe(false);
+    expect(selectionContextMatches(captured, 'session-a', 'src/b.ts')).toBe(false);
+  });
+
   it('marks the whole user message as opted out of the floating action', () => {
     expect(userMessageSource).toContain('data-selection-floating-quote-disabled=""');
   });

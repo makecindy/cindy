@@ -33,8 +33,24 @@ interface SelectionAnchor {
   x: number;
   y: number;
   placement: 'above' | 'below';
+  context: SelectionContextSnapshot;
 }
 type FloatingAction = 'add' | 'comment';
+
+export interface SelectionContextSnapshot {
+  sessionId: string;
+  sourcePath?: string;
+  metadata?: Pick<ChatQuote, 'startLine' | 'endLine'>;
+}
+
+/** A captured selection is valid only for the session/source where it was created. */
+export function selectionContextMatches(
+  captured: Pick<SelectionContextSnapshot, 'sessionId' | 'sourcePath'>,
+  sessionId: string,
+  sourcePath: string | undefined,
+): boolean {
+  return captured.sessionId === sessionId && captured.sourcePath === sourcePath;
+}
 
 const BUTTON_GAP_PX = 8;
 const BUTTON_HEIGHT_ESTIMATE_PX = 28;
@@ -119,7 +135,10 @@ function getRectBounds(rects: readonly DOMRect[]): RectBounds | null {
   };
 }
 
-function getFloatingAnchor(selection: Selection, range: Range): Omit<SelectionAnchor, 'text'> | null {
+function getFloatingAnchor(
+  selection: Selection,
+  range: Range,
+): Omit<SelectionAnchor, 'text' | 'context'> | null {
   const rects = Array.from(range.getClientRects()).filter(
     (rect) => rect.width > 0 && rect.height > 0,
   );
@@ -184,35 +203,54 @@ export function SelectionQuoteButton({
   const activeActionRef = useRef<FloatingAction | null>(null);
   activeActionRef.current = activeAction;
 
-  const commitQuote = useCallback((selectionAnchor: SelectionAnchor) => {
-    const text =
-      selectionAnchor.text.length > QUOTE_MAX_CHARS
-        ? `${selectionAnchor.text.slice(0, QUOTE_MAX_CHARS)}…`
-        : selectionAnchor.text;
-    const metadata = getQuoteMetadata?.() ?? null;
-    appendQuoteToDraft(
-      sessionId,
-      sourcePath ? { text, sourcePath, ...(metadata ?? {}) } : { text },
-    );
-    window.getSelection()?.removeAllRanges();
-    setAnchor(null);
-  }, [getQuoteMetadata, sessionId, sourcePath]);
-
-  const commitQuoteWithComment = useCallback((selectionAnchor: SelectionAnchor, comment: string) => {
-    const text =
-      selectionAnchor.text.length > QUOTE_MAX_CHARS
-        ? `${selectionAnchor.text.slice(0, QUOTE_MAX_CHARS)}…`
-        : selectionAnchor.text;
-    const metadata = getQuoteMetadata?.() ?? null;
-    const quote = sourcePath
-      ? { text, sourcePath, ...(metadata ?? {}), comment }
-      : { text, comment };
-    appendQuoteToDraft(sessionId, quote);
-    window.getSelection()?.removeAllRanges();
+  const resetInteraction = useCallback(() => {
     setAnchor(null);
     setActiveAction(null);
     setCommentDraft('');
-  }, [getQuoteMetadata, sessionId, sourcePath]);
+  }, []);
+
+  const commitQuote = useCallback((selectionAnchor: SelectionAnchor) => {
+    if (!selectionContextMatches(selectionAnchor.context, sessionId, sourcePath)) {
+      resetInteraction();
+      return;
+    }
+    const text =
+      selectionAnchor.text.length > QUOTE_MAX_CHARS
+        ? `${selectionAnchor.text.slice(0, QUOTE_MAX_CHARS)}…`
+        : selectionAnchor.text;
+    const { context } = selectionAnchor;
+    appendQuoteToDraft(
+      context.sessionId,
+      context.sourcePath
+        ? { text, sourcePath: context.sourcePath, ...(context.metadata ?? {}) }
+        : { text },
+    );
+    window.getSelection()?.removeAllRanges();
+    resetInteraction();
+  }, [resetInteraction, sessionId, sourcePath]);
+
+  const commitQuoteWithComment = useCallback((selectionAnchor: SelectionAnchor, comment: string) => {
+    if (!selectionContextMatches(selectionAnchor.context, sessionId, sourcePath)) {
+      resetInteraction();
+      return;
+    }
+    const text =
+      selectionAnchor.text.length > QUOTE_MAX_CHARS
+        ? `${selectionAnchor.text.slice(0, QUOTE_MAX_CHARS)}…`
+        : selectionAnchor.text;
+    const { context } = selectionAnchor;
+    const quote = context.sourcePath
+      ? { text, sourcePath: context.sourcePath, ...(context.metadata ?? {}), comment }
+      : { text, comment };
+    appendQuoteToDraft(context.sessionId, quote);
+    window.getSelection()?.removeAllRanges();
+    resetInteraction();
+  }, [resetInteraction, sessionId, sourcePath]);
+
+  useEffect(() => {
+    // Route/source changes invalidate the old DOM selection and any comment draft.
+    resetInteraction();
+  }, [resetInteraction, sessionId, sourcePath]);
 
   useEffect(() => {
     // Position follows the actual selected text edge, not the mouse-up point. This keeps
@@ -242,7 +280,15 @@ export function SelectionQuoteButton({
       const floatingAnchor = getFloatingAnchor(sel, range);
       if (!floatingAnchor) return null;
 
-      return { text, ...floatingAnchor };
+      return {
+        text,
+        ...floatingAnchor,
+        context: {
+          sessionId,
+          sourcePath,
+          ...(sourcePath ? { metadata: getQuoteMetadata?.() ?? undefined } : {}),
+        },
+      };
     };
 
     const onMouseUp = () => {
@@ -262,7 +308,7 @@ export function SelectionQuoteButton({
       if ((!sel || sel.isCollapsed) && anchorRef.current) setAnchor(null);
     };
     const onScrollOrResize = () => {
-      if (anchorRef.current) setAnchor(null);
+      if (anchorRef.current) resetInteraction();
     };
     const container = containerRef.current;
     if (container) container.dataset.selectionQuoteContext = '';
@@ -285,7 +331,15 @@ export function SelectionQuoteButton({
         delete container.dataset.selectionQuoteContext;
       }
     };
-  }, [commitQuote, containerRef, getQuoteText]);
+  }, [
+    commitQuote,
+    containerRef,
+    getQuoteMetadata,
+    getQuoteText,
+    resetInteraction,
+    sessionId,
+    sourcePath,
+  ]);
 
   if (!anchor) return null;
 
@@ -297,9 +351,8 @@ export function SelectionQuoteButton({
     requestAnimationFrame(() => commentInputRef.current?.focus());
   };
   const submitComment = () => {
-    const comment = commentDraft.trim();
-    if (!comment) return;
-    commitQuoteWithComment(anchor, comment);
+    if (!commentDraft.trim()) return;
+    commitQuoteWithComment(anchor, commentDraft);
   };
 
   return createPortal(
@@ -332,6 +385,7 @@ export function SelectionQuoteButton({
               value={commentDraft}
               onChange={(e) => setCommentDraft(e.target.value)}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return;
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   submitComment();
@@ -342,9 +396,9 @@ export function SelectionQuoteButton({
                 }
               }}
               placeholder={t('chat.quote.commentPlaceholder')}
-              className="resize-none rounded-lg px-2 py-1.5 text-12 outline-none"
+              className="resize-none rounded-lg px-2 py-1.5 text-12 outline-none placeholder:text-[var(--text-placeholder)]"
               style={{
-                backgroundColor: 'var(--surface-card)',
+                backgroundColor: 'var(--surface-elevated)',
                 border: '1px solid var(--border-default)',
                 color: 'var(--text-primary)',
                 minHeight: 56,

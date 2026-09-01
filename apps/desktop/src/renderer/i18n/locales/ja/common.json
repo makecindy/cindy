@@ -7772,7 +7772,7 @@
     },
     "quote": {
       "addToChat": "チャットに追加",
-      "comment": "コメント",
+      "comment": "コメントを追加",
       "commentPlaceholder": "この選択範囲へのコメントを入力…",
       "submitComment": "コメントを追加",
       "remove": "引用を削除",

@@ -67,7 +67,7 @@ function quoteNode(quote: ChatQuote): JSONContent {
       sourcePath: quote.sourcePath ?? null,
       startLine: quote.startLine ?? null,
       endLine: quote.endLine ?? null,
-      comment: quote.comment ?? null,
+      ...(quote.comment ? { comment: quote.comment } : {}),
     },
   };
 }

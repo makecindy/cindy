@@ -10,6 +10,45 @@ import {
   stripChatQuoteMarkerLines,
 } from '../chatQuotes';
 
+/**
+ * Snapshot of the quote-block scan used by the pre-comment client at
+ * 6e114a3576a1c28883c176171ea617f141080a5d (the same logic is still on
+ * origin/main at 3b3d0cfad93389a96942f642705b91f5d0ed8a05). It deliberately
+ * knows nothing about comment boundaries: this is a forward-compatibility
+ * fixture, not a second production parser.
+ */
+function parseWithPreCommentClient(content: string): { quoteText: string; body: string } {
+  if (!content.startsWith('> ')) return { quoteText: '', body: content };
+  const lines = content.split('\n');
+  const quoteLines: string[] = [];
+  let markerConsumed = false;
+  let index = 0;
+  for (; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (
+      line === '> <!-- cindy-composer-quote -->'
+      && quoteLines.length === 0
+      && !markerConsumed
+    ) {
+      markerConsumed = true;
+      continue;
+    }
+    if (line.startsWith('> ')) {
+      quoteLines.push(line.slice(2));
+      continue;
+    }
+    if (line === '>') {
+      quoteLines.push('');
+      continue;
+    }
+    break;
+  }
+  return {
+    quoteText: quoteLines.join('\n'),
+    body: lines.slice(index).join('\n').replace(/^\n+/, ''),
+  };
+}
+
 describe('formatQuotesForSend', () => {
   it('encodes one standalone quote for inline composer serialization', () => {
     expect(formatQuoteForSend({ text: 'a\n\nb', sourcePath: 'docs/x.md' })).toBe(
@@ -64,10 +103,33 @@ describe('formatQuotesForSend', () => {
     expect(formatQuotesForSend([], 'hello')).toBe('hello');
   });
 
-  it('appends a comment line after source metadata', () => {
+  it('wraps a comment in an explicit structural boundary after source metadata', () => {
     expect(formatQuoteForSend({ text: 'a', sourcePath: 'docs/x.md', comment: '说明' })).toBe(
-      '> <!-- cindy-composer-quote -->\n> a\n> — source: docs/x.md\n> — comment: 说明',
+      [
+        '> <!-- cindy-composer-quote -->',
+        '> a',
+        '> — source: docs/x.md',
+        '> <!-- cindy-composer-quote-comment:start -->',
+        '> — comment: 说明',
+        '> <!-- cindy-composer-quote-comment:end -->',
+      ].join('\n'),
     );
+  });
+
+  it('round-trips multiline comments with internal blank lines and a trailing newline', () => {
+    const quote = {
+      text: 'selected',
+      sourcePath: 'docs/spec.md',
+      comment: '第一行\n\n第三行\n',
+    };
+    const sent = formatQuoteForSend(quote);
+
+    expect(sent).toContain(
+      '> <!-- cindy-composer-quote-comment:start -->\n'
+        + '> — comment: 第一行\n>\n> 第三行\n>\n'
+        + '> <!-- cindy-composer-quote-comment:end -->',
+    );
+    expect(parseLeadingBlockquotes(sent)).toEqual({ quotes: [quote], body: '' });
   });
 
   it('trims the trailing gap for quote-only sends', () => {
@@ -201,6 +263,29 @@ describe('stripChatQuoteMarkerLines', () => {
     const content = '> handwritten quote\n\nbody';
     expect(stripChatQuoteMarkerLines(content)).toBe(content);
   });
+
+  it('removes comment boundary markers without removing the readable comment', () => {
+    const sent = formatQuoteForSend({ text: 'selected', comment: 'why\nsecond line' });
+    expect(stripChatQuoteMarkerLines(sent)).toBe(
+      '> selected\n> — comment: why\n> second line',
+    );
+  });
+
+  it('removes structural escapes from the first readable comment line', () => {
+    const comments = [
+      '— source: fake.ts',
+      '<!-- cindy-composer-quote -->',
+      '<!-- cindy-composer-quote-comment:start -->',
+      '<!-- cindy-composer-quote-comment:end -->',
+      '\u2060user-authored word joiner',
+    ];
+
+    for (const comment of comments) {
+      expect(stripChatQuoteMarkerLines(formatQuoteForSend({ text: 'selected', comment }))).toBe(
+        `> selected\n> — comment: ${comment}`,
+      );
+    }
+  });
 });
 
 describe('joinChatQuoteTextSegments', () => {
@@ -240,10 +325,12 @@ describe('parseLeadingBlockquotes', () => {
 
   it('round-trips quote text that happens to equal the internal marker', () => {
     const quotes = [{ text: '<!-- cindy-composer-quote -->' }];
-    expect(parseLeadingBlockquotes(formatQuotesForSend(quotes, 'body'))).toEqual({
+    const sent = formatQuotesForSend(quotes, 'body');
+    expect(parseLeadingBlockquotes(sent)).toEqual({
       quotes,
       body: 'body',
     });
+    expect(stripChatQuoteMarkerLines(sent)).toBe('> <!-- cindy-composer-quote -->\n\nbody');
   });
 
   it('does not swallow a lone leading ">" line typed by the user', () => {
@@ -291,6 +378,68 @@ describe('parseLeadingBlockquotes', () => {
     expect(parseLeadingBlockquotes(sent)).toEqual({ quotes, body: 'fix it' });
   });
 
+  it('never treats source text beginning with the comment prefix as comment metadata', () => {
+    const quotes = [
+      { text: '— comment: first line' },
+      { text: 'before\n— comment: ' },
+      { text: 'before\n— comment: one\n— comment: two' },
+    ];
+
+    for (const quote of quotes) {
+      expect(parseLeadingBlockquotes(formatQuoteForSend(quote))).toEqual({
+        quotes: [quote],
+        body: '',
+      });
+    }
+  });
+
+  it('round-trips quote text ending in a source-looking line', () => {
+    const quote = { text: '\u2060selected\n— source: user-authored.md#L7-L9' };
+    const sent = formatQuoteForSend(quote);
+
+    expect(parseLeadingBlockquotes(sent)).toEqual({
+      quotes: [quote],
+      body: '',
+    });
+    expect(parseChatQuoteSegments(sent)).toEqual([
+      { kind: 'quote', quote },
+    ]);
+    expect(stripChatQuoteMarkerLines(sent)).toBe(
+      '> \u2060selected\n> — source: user-authored.md#L7-L9',
+    );
+  });
+
+  it('round-trips a complete comment-marker structure inside quote text', () => {
+    const quote = {
+      text: [
+        'selected',
+        '<!-- cindy-composer-quote-comment:start -->',
+        '— comment: user-authored text',
+        '<!-- cindy-composer-quote-comment:end -->',
+      ].join('\n'),
+      comment: 'actual comment metadata',
+    };
+
+    expect(parseLeadingBlockquotes(formatQuoteForSend(quote))).toEqual({
+      quotes: [quote],
+      body: '',
+    });
+    expect(parseChatQuoteSegments(formatQuoteForSend(quote))).toEqual([
+      { kind: 'quote', quote },
+    ]);
+  });
+
+  it('round-trips a comment that contains the legacy comment prefix', () => {
+    const quote = {
+      text: 'selected',
+      comment: '— comment: this is still comment text\nnext',
+    };
+    expect(parseLeadingBlockquotes(formatQuoteForSend(quote))).toEqual({
+      quotes: [quote],
+      body: '',
+    });
+  });
+
   it('does not treat a lone source-looking line as a source (needs preceding text)', () => {
     expect(parseLeadingBlockquotes('> — source: a.md\n\nbody')).toEqual({
       quotes: [{ text: '— source: a.md' }],
@@ -310,6 +459,57 @@ describe('parseLeadingBlockquotes', () => {
       quotes: [{ text: 'q' }],
       body: 'body\n> tail',
     });
+  });
+});
+
+describe('cross-version quote compatibility', () => {
+  it('keeps old no-comment wire readable in the new parser', () => {
+    const oldWire = [
+      '> <!-- cindy-composer-quote -->',
+      '> selected before comment support',
+      '> — source: docs/legacy.md#L2-L3',
+      '',
+      'legacy reply body',
+    ].join('\n');
+
+    expect(parseChatQuoteSegments(oldWire)).toEqual([
+      {
+        kind: 'quote',
+        quote: {
+          text: 'selected before comment support',
+          sourcePath: 'docs/legacy.md',
+          startLine: 2,
+          endLine: 3,
+        },
+      },
+      { kind: 'text', text: 'legacy reply body' },
+    ]);
+  });
+
+  it('lets the pre-comment client read new comment wire without throwing or losing payload', () => {
+    const newWire = [
+      '> <!-- cindy-composer-quote -->',
+      '> selected body line 1',
+      '>',
+      '> selected body line 3',
+      '> — source: docs/spec.md#L4-L6',
+      '> <!-- cindy-composer-quote-comment:start -->',
+      '> — comment: first comment line',
+      '>',
+      '> third comment line',
+      '> <!-- cindy-composer-quote-comment:end -->',
+      '',
+      'user reply body',
+    ].join('\n');
+
+    expect(() => parseWithPreCommentClient(newWire)).not.toThrow();
+    const restored = parseWithPreCommentClient(newWire);
+    expect(restored.body).toBe('user reply body');
+    expect(restored.quoteText).toContain('selected body line 1');
+    expect(restored.quoteText).toContain('selected body line 3');
+    expect(restored.quoteText).toContain('docs/spec.md#L4-L6');
+    expect(restored.quoteText).toContain('first comment line');
+    expect(restored.quoteText).toContain('third comment line');
   });
 });
 

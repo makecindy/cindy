@@ -14,6 +14,7 @@
  * 本模块不 import react-native——纯函数可被 vitest 直接单测。
  */
 import { createContext } from 'react';
+import type { ChatQuote } from '@cindy/maker-shared/chat-quotes';
 
 import { i18n } from '@/i18n';
 
@@ -32,6 +33,11 @@ export interface SelectionQuoteContextValue {
 }
 
 export const SelectionQuoteContext = createContext<SelectionQuoteContextValue | null>(null);
+
+/** Attach optional user context while preserving the captured quote/source metadata. */
+export function withSelectionQuoteComment(quote: ChatQuote, comment: string): ChatQuote {
+  return comment.trim() ? { ...quote, comment } : quote;
+}
 
 /**
  * 渲染行数组 + UTF-16 偏移 → 选中文本。lines 是 onTextLayout 报的逐行渲染

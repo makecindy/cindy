@@ -283,7 +283,15 @@ import {
   useSessionQuotes,
 } from '@/session/chatQuoteStore';
 import { QuoteCapsule } from '@/session/QuoteCapsule';
-import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import {
+  QuoteCommentSheet,
+  type PendingQuoteComment,
+} from '@/session/QuoteCommentSheet';
+import {
+  formatQuotesForSend,
+  stripChatQuoteMarkerLines,
+  type ChatQuote,
+} from '@cindy/maker-shared/chat-quotes';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
@@ -1026,12 +1034,30 @@ export default function SessionScreen() {
   // chat-text-quote:待随下一条消息发送的选中文字引用(全局 store,消息流选区
   // 按钮 / 文件预览页写入;发送时拼进正文,命中本地命令时保留)。
   const quotes = useSessionQuotes(sessionId);
+  const [pendingQuoteComment, setPendingQuoteComment] = useState<PendingQuoteComment | null>(null);
   // 采集回调必须 memoize:内联箭头每次渲染换新引用,会让 MessageRenderer 的
   // SelectionQuoteContext value 重建,FlatList 里所有可见 MarkdownSelectableText
   // 跟着重渲(打字等无关 state 变化都触发),长转录会话开销明显(review P2)。
   const handleQuoteSelection = useCallback((quote: { text: string }) => {
-    appendQuote(sessionId, { text: truncateQuoteText(quote.text) });
+    setPendingQuoteComment({
+      sessionId,
+      quote: { text: truncateQuoteText(quote.text) },
+    });
+  }, [sessionId]);
+  const handleQuoteCommentSubmit = useCallback((
+    pending: PendingQuoteComment,
+    quote: ChatQuote,
+  ) => {
+    if (pending.sessionId !== sessionId) {
+      setPendingQuoteComment(null);
+      return;
+    }
+    appendQuote(pending.sessionId, quote);
+    setPendingQuoteComment(null);
     requestAnimationFrame(() => composerInputRef.current?.focus());
+  }, [sessionId]);
+  useEffect(() => {
+    setPendingQuoteComment(null);
   }, [sessionId]);
   const handleVisibleShareableMessageIdsReaderChange = useCallback((
     reader: ((viewport: ShareableMessageViewport) => Promise<readonly string[]>) | null,
@@ -9719,6 +9745,11 @@ export default function SessionScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
+      <QuoteCommentSheet
+        onClose={() => setPendingQuoteComment(null)}
+        onSubmit={handleQuoteCommentSubmit}
+        pending={pendingQuoteComment}
+      />
       {shareSelectionActive && selectedShareMessages.length > 0 ? (
         <ConversationShareSvg
           allShareableIds={allShareableIds}

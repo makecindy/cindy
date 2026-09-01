@@ -289,6 +289,11 @@
     "countPreviewHint": "{{n}} 件の引用、タップしてプレビュー",
     "remove": "引用を削除",
     "closePreview": "引用プレビューを閉じる",
-    "menuLabel": "チャットに追加"
+    "menuLabel": "チャットに追加",
+    "commentSheetTitle": "引用を追加",
+    "commentLabel": "コメント",
+    "commentPlaceholder": "この引用に補足を追加…",
+    "addWithoutComment": "引用を追加",
+    "addWithComment": "コメント付きで追加"
   }
 }

@@ -17,7 +17,9 @@ export function InlineQuoteChip({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const source = quoteSourceDisplayLabel(quote);
-  const label = compactQuoteLabel(quote.text);
+  const label = compactQuoteLabel(
+    quote.comment ? `${quote.comment} — ${quote.text}` : quote.text,
+  );
   return (
     <InlineReferenceChip
       accessibilityLabel={quote.text}
@@ -26,7 +28,11 @@ export function InlineQuoteChip({
       onPress={interactive
         ? () => Alert.alert(
             t('message.quote.previewTitle'),
-            [`“${quote.text}”`, source].filter(Boolean).join('\n\n'),
+            [
+              `“${quote.text}”`,
+              quote.comment ? `${t('message.quote.commentLabel')}: ${quote.comment}` : null,
+              source,
+            ].filter(Boolean).join('\n\n'),
           )
         : undefined}
       testID="message.quoteChip"

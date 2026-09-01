@@ -65,12 +65,12 @@ describe('chatQuoteStore', () => {
   it('persists after the debounce window and hydrates on cold start', async () => {
     vi.useFakeTimers();
     const { __testing, appendQuote } = await import('@/session/chatQuoteStore');
-    appendQuote('s1', { text: 'kept', sourcePath: 'src/x.ts' });
+    appendQuote('s1', { text: 'kept', sourcePath: 'src/x.ts', comment: 'first\nsecond' });
     vi.advanceTimersByTime(__testing.persistDebounceMs + 10);
     vi.useRealTimers();
     await flushMicrotasks();
     expect(JSON.parse(store.get(__testing.storageKeyForSession('s1')) ?? '[]')).toEqual([
-      { text: 'kept', sourcePath: 'src/x.ts' },
+      { text: 'kept', sourcePath: 'src/x.ts', comment: 'first\nsecond' },
     ]);
 
     // 冷启动:内存清空后 hydrate 从 AsyncStorage 回填并通知订阅方。
@@ -79,7 +79,9 @@ describe('chatQuoteStore', () => {
     const seen: number[] = [];
     subscribeQuotes('s1', () => seen.push(getQuotes('s1').length));
     await hydrateQuotes('s1');
-    expect(getQuotes('s1')).toEqual([{ text: 'kept', sourcePath: 'src/x.ts' }]);
+    expect(getQuotes('s1')).toEqual([
+      { text: 'kept', sourcePath: 'src/x.ts', comment: 'first\nsecond' },
+    ]);
     expect(seen).toEqual([1]);
   });
 
@@ -94,11 +96,11 @@ describe('chatQuoteStore', () => {
 
   it('setQuotes restores a snapshot (send-failure recovery) and empty array clears', async () => {
     const { appendQuote, clearQuotes, getQuotes, setQuotes } = await import('@/session/chatQuoteStore');
-    appendQuote('s1', { text: 'a' });
+    appendQuote('s1', { text: 'a', comment: 'remember this' });
     const snapshot = [...getQuotes('s1')];
     clearQuotes('s1');
     setQuotes('s1', snapshot);
-    expect(getQuotes('s1')).toEqual([{ text: 'a' }]);
+    expect(getQuotes('s1')).toEqual([{ text: 'a', comment: 'remember this' }]);
     setQuotes('s1', []);
     expect(getQuotes('s1')).toEqual([]);
   });
@@ -133,6 +135,10 @@ describe('chatQuoteStore', () => {
     expect(resolveOrderedQuoteDraft('s1', orderedDraft.projectedText, quotes)).toEqual(orderedDraft);
     expect(resolveOrderedQuoteDraft('s1', 'edited', quotes)).toBeNull();
     expect(resolveOrderedQuoteDraft('s1', orderedDraft.projectedText, [quotes[1], quotes[0]])).toBeNull();
+    expect(resolveOrderedQuoteDraft('s1', orderedDraft.projectedText, [
+      { ...quotes[0], comment: 'new comment' },
+      quotes[1],
+    ])).toBeNull();
 
     // 发送失败期间新采集的引用不在原 encodedBody 里，必须丢弃旧顺序基线，
     // 否则重试会误命中并静默漏发 C。

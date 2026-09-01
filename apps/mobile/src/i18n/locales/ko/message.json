@@ -289,6 +289,11 @@
     "countPreviewHint": "인용 {{n}}건, 탭하여 미리보기",
     "remove": "인용 제거",
     "closePreview": "인용 미리보기 닫기",
-    "menuLabel": "대화에 추가"
+    "menuLabel": "대화에 추가",
+    "commentSheetTitle": "인용 추가",
+    "commentLabel": "코멘트",
+    "commentPlaceholder": "이 인용에 대한 코멘트를 입력…",
+    "addWithoutComment": "인용 추가",
+    "addWithComment": "코멘트와 함께 추가"
   }
 }
