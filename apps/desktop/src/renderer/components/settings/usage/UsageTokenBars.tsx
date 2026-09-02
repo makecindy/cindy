@@ -164,7 +164,7 @@ export function UsageTokenBars({
                 onClick={() => onDayClick?.(b.day)}
                 disabled={!onDayClick}
                 // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
-                className="flex min-w-0 flex-1 cursor-pointer flex-col justify-end overflow-hidden rounded-[2px] border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                className="flex min-w-0 flex-1 cursor-pointer flex-col justify-end overflow-hidden rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
                 style={{
                   height,
                   backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,

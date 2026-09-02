@@ -245,7 +245,7 @@ export function UsageHeatmap({
                     aria-label={cell.day}
                     aria-pressed={selectedDay === cell.day}
                     onClick={() => onDayClick?.(cell.day)}
-                    className="cursor-pointer rounded-[3px] border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                    className="cursor-pointer rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
                     disabled={!onDayClick}
                   >
                     <div
