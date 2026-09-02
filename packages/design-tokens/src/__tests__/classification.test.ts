@@ -6,6 +6,7 @@ import {
   classifyColor,
   classifySnapshot,
   PROTECTED_IDS,
+  SEMANTIC_EXEMPTION_IDS,
   stableStringify,
   type ClassificationCategory,
 } from '../classify.ts';
@@ -13,6 +14,7 @@ import { buildShadowLayerFiles } from '../generate.ts';
 import {
   assertClassificationCoversSnapshot,
   assertProtectedNotSemantic,
+  assertSemanticExemptionsRegistered,
 } from '../guards.ts';
 import {
   classificationPath,
@@ -85,6 +87,25 @@ describe('DS-3 · 分类登记', () => {
       expect(entry?.modeledAsSemantic).toBe(false);
       expect(entry?.protected).toBeTruthy();
     }
+  });
+
+  it('语义豁免色照常建模并携带 exemption 元数据（review P2 补洞）', () => {
+    // DESIGN.md §10 theme-invariant 豁免族（destructive / error-* / warning-* /
+    // focus-ring*）与 PROTECTED_IDS 不同：照常 semantic 建模，但外部主题
+    // 不可覆盖。DS-8 生成主题入口时靠 exemption 元数据区分可覆写 semantic
+    // 与必须保留原值的豁免族——缺标记时生成端无法区分（review P2 实锤）。
+    assertSemanticExemptionsRegistered(generated);
+    for (const id of Object.keys(SEMANTIC_EXEMPTION_IDS)) {
+      const entry = generated.entries.find((item) => item.id === id);
+      expect(entry?.modeledAsSemantic, `${id} 应保持 semantic 建模`).toBe(true);
+      expect(entry?.exemption?.family, `${id} 应带 exemption 元数据`).toBe(
+        'semantic-exemption',
+      );
+      expect(entry?.protected, `${id} 不应同时是 protected（那是「只登记不建模」）`).toBeFalsy();
+    }
+    // 反证：普通可覆写 semantic（如 surface）不带豁免标记。
+    const surface = generated.entries.find((item) => item.id === 'surface');
+    expect(surface?.exemption).toBeUndefined();
   });
 
   it('独立 oracle：分类类别必须与快照值实际形态语义一致，不能只看 id 后缀', () => {

@@ -10,6 +10,7 @@ import {
   type ClassificationCategory,
   type ClassificationDocument,
   PROTECTED_IDS,
+  SEMANTIC_EXEMPTION_IDS,
 } from './classify.ts';
 import {
   collectLeaves,
@@ -115,6 +116,44 @@ export function assertProtectedNotSemantic(
     }
     if (SEMANTIC_ROLE_IDS.has(id)) {
       throw new Error(`保护值 ${id} 出现在 SEMANTIC_ROLES`);
+    }
+  }
+}
+
+/**
+ * 语义豁免色登记守卫（DESIGN.md §10 theme-invariant 族，治理合同 §3.2）：
+ * 已进 semantic 建模的豁免色必须携带 exemption 元数据——DS-8 生成主题入口
+ * 时据此区分「可覆写 semantic」与「必须保留原值的豁免族」。豁免色与
+ * PROTECTED_IDS 不同：照常建模，只是带标记。
+ */
+export function assertSemanticExemptionsRegistered(
+  classification: ClassificationDocument,
+): void {
+  for (const [id, rule] of Object.entries(SEMANTIC_EXEMPTION_IDS)) {
+    const entry = classification.entries.find((item) => item.id === id);
+    if (!entry) {
+      throw new Error(`豁免色 ${id} 未出现在分类登记`);
+    }
+    if (!SEMANTIC_ROLE_IDS.has(id)) {
+      throw new Error(
+        `豁免色 ${id} 未进 semantic 建模——豁免登记的前提是已建模（否则等建模后再登记）`,
+      );
+    }
+    if (entry.modeledAsSemantic !== true) {
+      throw new Error(`豁免色 ${id} modeledAsSemantic 应为 true，实际 false`);
+    }
+    if (!entry.exemption) {
+      throw new Error(
+        `豁免色 ${id} 已建模但分类登记缺少 exemption 元数据（外部主题不覆盖的语义豁免族）`,
+      );
+    }
+    if (entry.exemption.family !== rule.family) {
+      throw new Error(`豁免色 ${id} 的 family 标记错误`);
+    }
+    if (entry.protected) {
+      throw new Error(
+        `豁免色 ${id} 同时带 protected 与 exemption——豁免色照常建模，不属加严保护值（只登记不建模）`,
+      );
     }
   }
 }
@@ -464,9 +503,19 @@ const IMPORT_ENTRY_PATTERNS: readonly RegExp[] = [
 const SPECIFIER_CONTEXT_RE =
   /(?:\bfrom\s*|(?<![\w$])import\s*\(\s*|(?<![\w$])require\s*\(\s*|(?<![\w$])require\s*\.\s*resolve\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|\bnew\s+URL\s*\(\s*|(?<![\w$])import\s*(?=['"`]))['"`]([^'"`]+)['"`]/g;
 
-/** 判断「无空白压缩后的最近输出」是否以 import 语境结尾。 */
+/**
+ * fs API 路径参数语境（第八类）：`readFileSync('…'` / `readFile('…'` 等
+ * 直接文件读取的**第一参数**。相对路径说明符按调用文件位置 resolve 后
+ * 落进 packages/design-tokens/ 即命中。第一方代码的既有 fs 读取全部走
+ * `resolve(__dirname…)` / `new URL(…)` 包装（实测 54 处），裸相对路径
+ * 形态为零——纳入扫描零误报（review P2 实锤：这是最直接的绕过方式）。
+ */
+const FS_API_PATH_CONTEXT_RE =
+  /(?<![\w$])(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\(\s*['"`]([^'"`]+)['"`]/g;
+
+/** 判断「无空白压缩后的最近输出」是否以 import / fs API 路径语境结尾。 */
 const SPECIFIER_PREFIX_RE =
-  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\brequire\s*\.\s*resolve\s*\(|\bimport\.meta\.resolve\s*\(|\bnew\s+URL\s*\(|\bimport)$/;
+  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\brequire\s*\.\s*resolve\s*\(|\bimport\.meta\.resolve\s*\(|\bnew\s+URL\s*\(|\bimport|(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\()$/;
 
 /**
  * 剥除源码里的注释与「数据语境」字符串字面量，保留 import 说明符。
@@ -570,17 +619,26 @@ export function relativeSpecifierHitsDesignTokens(
   // 剥除必须在提取之前：`import(/* c */ '…')` 这类合法注释隔断会让
   // 关键字→引号的正则衔接在原始文本上断开（review P2 实锤），预扫直接
   // 零命中、剥除层反而执行不到。剥除层按注释→空白替换，衔接恢复。
-  // 关键字 includes 预检同 containsRuntimeImportOfDesignTokens。
+  // 关键字 includes 预检覆盖 import/require/from 与常见 fs API 前缀
+  // （File/Sync 字样，任一命中才值得付剥除成本）。
   if (
     !text.includes('import') &&
     !text.includes('require') &&
-    !text.includes('from')
+    !text.includes('from') &&
+    !text.includes('File') &&
+    !text.includes('Sync')
   ) {
     return false;
   }
   const codeOnly = stripCommentsAndDataStrings(text);
+  const specs: string[] = [];
   for (const match of codeOnly.matchAll(SPECIFIER_CONTEXT_RE)) {
-    const spec = match[1];
+    specs.push(match[1]);
+  }
+  for (const match of codeOnly.matchAll(FS_API_PATH_CONTEXT_RE)) {
+    specs.push(match[1]);
+  }
+  for (const spec of specs) {
     if (!spec.startsWith('.')) continue;
     const resolved = posixNormalize(posixJoin(dir, spec));
     if (resolved === 'packages/design-tokens' || resolved.startsWith('packages/design-tokens/')) {

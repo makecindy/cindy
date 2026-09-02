@@ -22,6 +22,12 @@ export interface ProtectedRule {
   rule: string;
 }
 
+export interface ExemptionRule {
+  family: 'semantic-exemption';
+  owner: string;
+  rule: string;
+}
+
 export interface ClassificationEntry {
   id: string;
   category: ClassificationCategory;
@@ -31,6 +37,8 @@ export interface ClassificationEntry {
   aliasOf?: { light: string | null; dark: string | null };
   hslPairOf?: string;
   protected?: ProtectedRule;
+  /** 语义豁免色（DESIGN.md §10 theme-invariant 族）：照常 semantic 建模，但带豁免元数据——外部主题不可覆盖，DS-8 生成主题入口时据此与可覆写 semantic 区分。 */
+  exemption?: ExemptionRule;
   modeledAsSemantic: boolean;
 }
 
@@ -97,6 +105,75 @@ export const PROTECTED_IDS: Readonly<Record<string, ProtectedRule>> = {
   },
 };
 
+/**
+ * 语义豁免色（DESIGN.md §10 Semantic Exemption Colors，theme-invariant）：
+ * 与 PROTECTED_IDS 的区别——豁免色**照常进 semantic 建模**（消费方按语义
+ * 角色引用），但外部主题不可覆盖、跨主题恒定。治理合同 §3.2 要求 Tier-3
+ * 豁免色作为 semantic 中的 protected 角色迁移；这里用独立的 exemption
+ * 标记承载（不塞 PROTECTED_IDS——那个的语义是「只登记不建模」，会被
+ * assertProtectedNotSemantic 拒进 semantic）。DS-8 生成主题入口时据此
+ * 区分「可覆写 semantic」与「必须保留原值的豁免族」。
+ * 只登记已进首批 semantic 角色（SEMANTIC_ROLES）的豁免色；DESIGN.md §10
+ * 豁免表其余未建模项（diff-*、login-error-fg 等）进 shadow 层时再登记。
+ */
+export const SEMANTIC_EXEMPTION_IDS: Readonly<Record<string, ExemptionRule>> = {
+  destructive: {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'error-flat': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'error-bg': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'error-border': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'error-fg': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'error-fg-strong': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'warning-accent': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'warning-fg': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'warning-bg-soft': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'focus-ring': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+  'focus-ring-soft': {
+    family: 'semantic-exemption',
+    owner: 'DESIGN.md §10',
+    rule: 'theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖',
+  },
+};
+
 export function parseAliasTarget(value: string | null): string | null {
   if (value == null) return null;
   const match = VAR_RE.exec(value.trim());
@@ -137,6 +214,8 @@ export function classifyColor(entry: SnapshotColor): ClassificationEntry {
   const lightKind = classifyValue(entry.light);
   const darkKind = classifyValue(entry.dark);
   const protectedRule = PROTECTED_IDS[entry.id];
+  // 豁免色照常建模（category / destination 走正常分支），只附加豁免元数据。
+  const exemptionRule = SEMANTIC_EXEMPTION_IDS[entry.id];
 
   if (protectedRule) {
     return {
@@ -165,6 +244,7 @@ export function classifyColor(entry: SnapshotColor): ClassificationEntry {
       lightKind,
       darkKind,
       hslPairOf: entry.id.slice(0, -'-hsl'.length),
+      ...(exemptionRule ? { exemption: exemptionRule } : {}),
       modeledAsSemantic: SEMANTIC_ROLE_IDS.has(entry.id),
     };
   }
@@ -180,6 +260,7 @@ export function classifyColor(entry: SnapshotColor): ClassificationEntry {
         light: parseAliasTarget(entry.light),
         dark: parseAliasTarget(entry.dark),
       },
+      ...(exemptionRule ? { exemption: exemptionRule } : {}),
       modeledAsSemantic: SEMANTIC_ROLE_IDS.has(entry.id),
     };
   }
@@ -191,6 +272,7 @@ export function classifyColor(entry: SnapshotColor): ClassificationEntry {
       destination: 'reference-candidate',
       lightKind,
       darkKind,
+      ...(exemptionRule ? { exemption: exemptionRule } : {}),
       modeledAsSemantic: SEMANTIC_ROLE_IDS.has(entry.id),
     };
   }

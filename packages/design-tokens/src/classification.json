@@ -415,6 +415,11 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -423,6 +428,11 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -803,6 +813,11 @@
       "destination": "reference-candidate",
       "lightKind": "hsl-triplet",
       "darkKind": "hsl-triplet",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -4614,6 +4629,11 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -4622,6 +4642,11 @@
       "destination": "reference-candidate",
       "lightKind": "rgb",
       "darkKind": "rgb",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -4714,6 +4739,11 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -4722,6 +4752,11 @@
       "destination": "reference-candidate",
       "lightKind": "rgb",
       "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -4730,6 +4765,11 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -4738,6 +4778,11 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -4746,6 +4791,11 @@
       "destination": "reference-candidate",
       "lightKind": "rgb",
       "darkKind": "rgb",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {
@@ -4754,6 +4804,11 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "exemption": {
+        "family": "semantic-exemption",
+        "owner": "DESIGN.md §10",
+        "rule": "theme-invariant 语义豁免色（Tier-3 singleton），外部主题不覆盖"
+      },
       "modeledAsSemantic": true
     },
     {

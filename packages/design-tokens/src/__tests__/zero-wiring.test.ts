@@ -325,6 +325,37 @@ describe('DS-3 · 零接线守卫', () => {
     ).toBe(false);
   });
 
+  it('自证伪：fs API 裸相对路径直读必须被命中（review P2 补洞）', () => {
+    // `readFileSync('../../design-tokens/src/semantic/color.json')` 是最直接的
+    // 文件消费方式——旧实现两个通道都漏（说明符语境只有 import/require/
+    // resolve/new URL）。第一方代码既有 fs 读取全部走 resolve(__dirname…)
+    // / new URL(…) 包装（54 处实测），裸相对形态为零——纳入扫描零误报。
+    const hitCases: Array<[string, string]> = [
+      ['readFileSync 裸相对路径', "readFileSync('../../design-tokens/src/semantic/color.json', 'utf8')"],
+      ['readFile 异步形态', "readFile('../../design-tokens/src/snapshot.ts', cb)"],
+      ['existsSync', "existsSync('../../design-tokens/src/semantic/color.json')"],
+      ['readFileSync 模板形态', "readFileSync(`../../design-tokens/src/semantic/color.json`, 'utf8')"],
+      ['fs.readFileSync 成员链', "fs.readFileSync('../../design-tokens/src/semantic/color.json', 'utf8')"],
+    ];
+    for (const [name, source] of hitCases) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        name,
+      ).toBe(true);
+    }
+    // 绝对路径与裸文件名（cwd 相对）不命中：resolve 后不落进 design-tokens。
+    const nonHits: Array<[string, string]> = [
+      ['绝对路径', "readFileSync('/tmp/whatever.md', 'utf8')"],
+      ['裸文件名', "readFileSync('package.json', 'utf8')"],
+    ];
+    for (const [name, source] of nonHits) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        name,
+      ).toBe(false);
+    }
+  });
+
   it('自证伪：require.resolve 是运行期加载入口，必须被命中（review P2 补洞）', () => {
     // `readFileSync(require.resolve('../../design-tokens/…'))` 是消费影子层的
     // 真实路径：旧实现的剥离层把 require.resolve 的参数当普通数据字符串

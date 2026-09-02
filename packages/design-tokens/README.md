@@ -37,6 +37,8 @@ DS-8 接线时无法生成 CSS 变量；裸 triplet 字符串也会被解析成�
 
 U2 二级信息色（`text-secondary` / `text-secondary-cross`）、`annotation-accent`、CINDY 皮肤族品牌红（`login-brand-accent` / `login-brand-accent-pressed`）按治理合同 §1.1 标记 **protected**，只登记、不进 semantic 映射。皮肤族其余值在 cindy-light/dark 主题 override 里，不在本快照默认值中。
 
+语义豁免色（DESIGN.md §10 theme-invariant 族：`destructive` / `error-*` / `warning-*` / `focus-ring*`）与 protected 不同：**照常 semantic 建模**，但在 `classification.json` 携带 `exemption` 元数据（外部主题不可覆盖、跨主题恒定）。DS-8 生成主题入口时据此区分可覆写 semantic 与必须保留原值的豁免族；治理合同 §3.2 要求 Tier-3 豁免色按此迁移。DESIGN.md §10 豁免表其余未建模项（`diff-*` / `login-error-fg` 等）进 shadow 层时再登记。
+
 ## 多入口投放合同（只写合同，DS-8 才接线）
 
 每个消费者届时只消费自己的子集，由同一份 DTCG 生成，不得再手写第二份数值：
