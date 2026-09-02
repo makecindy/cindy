@@ -5441,7 +5441,8 @@
     "browserWaiting": "Complete verification in your browser",
     "browserCallback": {
       "successTitle": "Signed in",
-      "successBody": "You can close this page and return to {{appName}}.",
+      "successBody": "You’re signed in. You can close this page now.",
+      "closeCountdown": "Closing in {{count}}s",
       "errorTitle": "Sign-in not completed",
       "errorBody": "Please return to {{appName}} and sign in again.",
       "returnButton": "Return to {{appName}}"

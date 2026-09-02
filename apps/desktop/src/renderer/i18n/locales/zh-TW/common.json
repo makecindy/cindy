@@ -5425,7 +5425,8 @@
     "browserWaiting": "請在瀏覽器中完成驗證",
     "browserCallback": {
       "successTitle": "登入成功",
-      "successBody": "你可以關閉此頁面，回到 {{appName}} 繼續。",
+      "successBody": "登入已成功，現在可以關閉此頁面了。",
+      "closeCountdown": "{{count}}秒後自動關閉",
       "errorTitle": "登入未完成",
       "errorBody": "請回到 {{appName}} 重新登入。",
       "returnButton": "回到 {{appName}}"

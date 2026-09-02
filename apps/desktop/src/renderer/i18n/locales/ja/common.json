@@ -5433,7 +5433,8 @@
     "browserWaiting": "ブラウザで認証を完了してください",
     "browserCallback": {
       "successTitle": "ログイン完了",
-      "successBody": "このページを閉じて {{appName}} に戻れます。",
+      "successBody": "ログインが完了しました。このページは閉じて構いません。",
+      "closeCountdown": "{{count}}秒後に自動で閉じます",
       "errorTitle": "ログインを完了できませんでした",
       "errorBody": "{{appName}} に戻ってもう一度ログインしてください。",
       "returnButton": "{{appName}} に戻る"

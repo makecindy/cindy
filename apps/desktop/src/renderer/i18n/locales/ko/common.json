@@ -5433,7 +5433,8 @@
     "browserWaiting": "브라우저에서 인증을 완료하세요",
     "browserCallback": {
       "successTitle": "로그인 완료",
-      "successBody": "이 페이지를 닫고 {{appName}}(으)로 돌아가세요.",
+      "successBody": "로그인이 완료되었습니다. 이제 이 페이지를 닫아도 됩니다.",
+      "closeCountdown": "{{count}}초 후 자동으로 닫힙니다",
       "errorTitle": "로그인이 완료되지 않았습니다",
       "errorBody": "{{appName}}(으)로 돌아가 다시 로그인해 주세요.",
       "returnButton": "{{appName}}(으)로 돌아가기"
