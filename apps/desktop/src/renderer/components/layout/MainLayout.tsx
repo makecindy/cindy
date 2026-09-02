@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { BrowserWebviewPool } from '@/components/layout/BrowserWebviewPool';
+import { AppearanceBackground } from '@/components/layout/AppearanceBackground';
 import { ChromeActions } from '@/components/layout/ChromeActions';
 import { shouldReserveLeftChromeActions } from '@/components/layout/chromeActionsLayout';
 import { ContentHeaderSlot } from '@/components/layout/ContentHeader';
@@ -1359,6 +1360,7 @@ export function MainLayout() {
           isDragging && 'select-none cursor-col-resize',
         )}
       >
+        <AppearanceBackground />
         {/* 左侧占位块 wrapper(B1a):透传容器,包住 pinning spacer + Sidebar,
             作为可用宽度测量的唯一观测目标(见 paneWidths 的测量 Provider)。
             flex + shrink-0 与 aside 原有的 flex child 行为一致,不改变布局;
@@ -1413,7 +1415,7 @@ export function MainLayout() {
                 // 手势面是 ContentHeader(Windows),窗体长按亦可。
                 data-panel-drag-root="chat-main"
                 className={cn(
-                  'relative flex flex-1 flex-col overflow-hidden bg-content-area',
+                  'relative flex flex-1 flex-col overflow-hidden bg-transparent',
                   isSettingsRoute ? 'min-w-0' : 'min-w-[400px]',
                   // RSB Maximize(Phase 6):主区彻底 display:none,把整个非左栏空间让给 RSB。
                   isRightSidebarMaximized && 'hidden',

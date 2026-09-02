@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   writeAppearanceSettingsPatch: vi.fn(),
   resetAppearanceSettings: vi.fn(),
   updateAppearanceSettingsAtomic: vi.fn(),
+  importAppearanceBackground: vi.fn(),
+  removeAppearanceBackgroundFiles: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -36,6 +38,11 @@ vi.mock('../appearance-settings-store.js', () => ({
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
 }));
 
+vi.mock('../appearance-background.js', () => ({
+  importAppearanceBackground: mocks.importAppearanceBackground,
+  removeAppearanceBackgroundFiles: mocks.removeAppearanceBackgroundFiles,
+}));
+
 import { registerAppearanceSettingsIpc } from '../appearance-settings-ipc.js';
 
 const persisted = {
@@ -44,6 +51,9 @@ const persisted = {
   uiSize: 15,
   codeSize: 14,
   windowZoom: 1.1,
+  backgroundImage: '',
+  backgroundOverlay: 0.58,
+  backgroundBlur: 0,
 };
 
 describe('appearance settings IPC authorization', () => {
@@ -57,6 +67,7 @@ describe('appearance settings IPC authorization', () => {
     mocks.trustedReadWindow.mockReset().mockReturnValue(false);
     mocks.assertTrustedAppRendererEvent.mockReset();
     mocks.readAppearanceSettings.mockReset().mockReturnValue(persisted);
+    mocks.removeAppearanceBackgroundFiles.mockReset().mockResolvedValue(undefined);
   });
 
   it('同步启动读取只向已授权的外观 reader 返回持久快照', () => {

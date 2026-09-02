@@ -11,6 +11,9 @@ export interface AppearanceOverrides {
   uiSize?: number;
   codeSize?: number;
   windowZoom?: number;
+  backgroundImage?: string;
+  backgroundOverlay?: number;
+  backgroundBlur?: number;
 }
 
 export interface AppearanceSettings {
@@ -19,6 +22,9 @@ export interface AppearanceSettings {
   uiSize: number;
   codeSize: number;
   windowZoom: number;
+  backgroundImage: string;
+  backgroundOverlay: number;
+  backgroundBlur: number;
 }
 
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
@@ -27,12 +33,17 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   uiSize: 14,
   codeSize: 14,
   windowZoom: 1,
+  backgroundImage: '',
+  backgroundOverlay: 0.58,
+  backgroundBlur: 0,
 };
 
 export const APPEARANCE_LIMITS = {
   uiSize: { min: 12, max: 24 },
   codeSize: { min: 10, max: 24 },
   windowZoom: { min: 0.5, max: 3, step: 0.1 },
+  backgroundOverlay: { min: 0.2, max: 0.9, step: 0.05 },
+  backgroundBlur: { min: 0, max: 24, step: 1 },
 } as const;
 
 export function clampAppearanceUiSize(
@@ -87,7 +98,33 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
       typeof value.windowZoom === 'number'
         ? clampAppearanceWindowZoom(value.windowZoom)
         : DEFAULT_APPEARANCE_SETTINGS.windowZoom,
+    backgroundImage:
+      typeof value.backgroundImage === 'string' &&
+      /^cindy-background:\/\/current\/background\.(?:png|jpe?g|webp)\?v=\d+$/.test(
+        value.backgroundImage,
+      )
+        ? value.backgroundImage
+        : DEFAULT_APPEARANCE_SETTINGS.backgroundImage,
+    backgroundOverlay: normalizeBoundedNumber(
+      value.backgroundOverlay,
+      APPEARANCE_LIMITS.backgroundOverlay,
+      DEFAULT_APPEARANCE_SETTINGS.backgroundOverlay,
+    ),
+    backgroundBlur: normalizeBoundedNumber(
+      value.backgroundBlur,
+      APPEARANCE_LIMITS.backgroundBlur,
+      DEFAULT_APPEARANCE_SETTINGS.backgroundBlur,
+    ),
   };
+}
+
+function normalizeBoundedNumber(
+  value: unknown,
+  limits: { min: number; max: number },
+  fallback: number,
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(limits.max, Math.max(limits.min, value));
 }
 
 function normalizeFamily(value: unknown): string {

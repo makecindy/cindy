@@ -15,6 +15,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Folder, MessageSquarePlus, Mic, Pen, TriangleAlert, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useAppearanceBackground } from '@/hooks/useAppearanceBackground';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
@@ -1120,6 +1121,7 @@ export function ChatInput({
   onUnifiedDraftSelect,
   selectedFavoriteUid = null,
 }: ChatInputProps) {
+  const { backgroundImage } = useAppearanceBackground();
   // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
   const deviceLinkDeviceId = _deviceLinkDeviceId;
@@ -7934,6 +7936,10 @@ export function ChatInput({
   const showTopSlot = !!topSlot;
   const showFusedWrapper = showQueuePanel || showTopSlot;
   const isCreateAgentVariant = visualVariant === 'create-agent';
+  const useBackgroundMaterial = isCreateAgentVariant && !!backgroundImage;
+  const backgroundMaterialStyle = useBackgroundMaterial
+    ? { backgroundColor: 'color-mix(in srgb, var(--chat-input-bg) 84%, transparent)' }
+    : undefined;
   // split-pane 同时打开侧栏 / 会话 / 浏览器时，普通会话 composer 也会落到窄容器。
   // 这里必须按 card 实际宽度统一切 compact，而不是只照顾 create-agent；否则普通
   // 会话仍走两组 max-content flex，长模型名会把权限入口挤进语音 / 发送固定动作区。
@@ -7988,6 +7994,7 @@ export function ChatInput({
       <div ref={paletteAnchorRef} className="relative w-full">
         <div
           ref={mergedCardRef}
+          style={showFusedWrapper ? backgroundMaterialStyle : undefined}
           className={cn(
             'flex w-full flex-col gap-0',
             showFusedWrapper && [
@@ -7996,6 +8003,7 @@ export function ChatInput({
               // 不再用 Figma 的 6px,避免新建/对话两个框圆角不一致。
               'rounded-[12px]',
               'bg-[var(--chat-input-bg)]',
+              useBackgroundMaterial && 'backdrop-blur-[12px]',
               'border-[var(--chat-input-border)]',
               isCreateAgentVariant
                 ? 'focus-within:border-[var(--chat-input-border-focus)]' // 聚焦描边走 30% 弱化 token;focus-ring 专供键盘 focus-visible(PR#174 review 拆分)
@@ -8029,6 +8037,7 @@ export function ChatInput({
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: this area handles drag/drop; keyboard attachment flow uses the picker controls. */}
           <div
+            style={!showFusedWrapper ? backgroundMaterialStyle : undefined}
             className={cn(
               'relative flex max-h-[300px] w-full flex-col justify-between px-[11px] pt-[11px] pb-[6px]',
               // 新建对话框内容列变宽后适当加高编辑区,让整框比例更舒展(用户改稿 2026-07-22)。
@@ -8043,6 +8052,7 @@ export function ChatInput({
                     // 不再用 Figma 的 6px,避免新建/对话两个框圆角不一致。
                     'rounded-[12px]',
                     'bg-[var(--chat-input-bg)]',
+                    useBackgroundMaterial && 'backdrop-blur-[12px]',
                     'border-[var(--chat-input-border)]',
                     isCreateAgentVariant
                       ? 'focus-within:border-[var(--chat-input-border-focus)]' // 聚焦描边走 30% 弱化 token;focus-ring 专供键盘 focus-visible(PR#174 review 拆分)

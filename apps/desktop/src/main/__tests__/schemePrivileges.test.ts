@@ -16,7 +16,7 @@
  *      every field, supportFetchAPI in particular).
  *   2. Static source scan: `registerSchemesAsPrivileged(` appears exactly
  *      once under src/main/**, and that one occurrence is in
- *      bootstrap-electron.ts with all six privilege constants in the array.
+ *      bootstrap-electron.ts with every privilege constant in the array.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -45,12 +45,9 @@ const { videoSchemePrivilege } = await import('../videoProtocol');
 const { localFileSchemePrivilege } = await import('../localFileProtocol');
 const { audioFileSchemePrivilege } = await import('../audioFileProtocol');
 const { modelSchemePrivilege } = await import('../modelProtocol');
-const { remoteMediaSchemePrivilege } = await import(
-  '../device-link/remoteMediaProtocol'
-);
-const { cindyMediaSchemePrivilege } = await import(
-  '../cindy-media/cindyMediaProtocol'
-);
+const { remoteMediaSchemePrivilege } = await import('../device-link/remoteMediaProtocol');
+const { cindyMediaSchemePrivilege } = await import('../cindy-media/cindyMediaProtocol');
+const { appearanceBackgroundSchemePrivilege } = await import('../appearance-background');
 
 const ALL = [
   { entry: imageSchemePrivilege, scheme: 'xdt-image' },
@@ -60,6 +57,7 @@ const ALL = [
   { entry: modelSchemePrivilege, scheme: 'xdt-model' },
   { entry: remoteMediaSchemePrivilege, scheme: 'cindy-remote-media' },
   { entry: cindyMediaSchemePrivilege, scheme: 'cindy-media' },
+  { entry: appearanceBackgroundSchemePrivilege, scheme: 'cindy-background' },
 ];
 
 describe('scheme privilege constants', () => {
@@ -99,7 +97,7 @@ describe('registerSchemesAsPrivileged is called exactly once (static scan)', () 
   // merely mention the API name don't count as call sites.
   const CALL = 'protocol.registerSchemesAsPrivileged(';
 
-  it('single call site lives in bootstrap-electron.ts with all six schemes', () => {
+  it('single call site lives in bootstrap-electron.ts with every scheme', () => {
     const callSites: string[] = [];
     for (const file of collectTsFiles(MAIN_DIR)) {
       const src = readFileSync(file, 'utf8');
@@ -124,6 +122,7 @@ describe('registerSchemesAsPrivileged is called exactly once (static scan)', () 
       'modelSchemePrivilege',
       'remoteMediaSchemePrivilege',
       'cindyMediaSchemePrivilege',
+      'appearanceBackgroundSchemePrivilege',
     ]) {
       expect(callBlock).toContain(name);
     }

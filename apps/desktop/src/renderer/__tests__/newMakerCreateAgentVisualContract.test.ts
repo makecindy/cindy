@@ -14,12 +14,40 @@ const modelSelectorSource = readFileSync(resolve(__dirname, '..', 'components', 
 const worktreeChipsRowSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'WorktreeChipsRow.tsx'), 'utf8');
 const userInfoSectionSource = readFileSync(resolve(__dirname, '..', 'components', 'sidebar', 'UserInfoSection.tsx'), 'utf8');
 const sidebarTopNavSource = readFileSync(resolve(__dirname, '..', 'components', 'sidebar', 'SidebarTopNav.tsx'), 'utf8');
+const sidebarShellSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'sidebar', 'Sidebar.tsx'),
+  'utf8',
+);
 const vendorIconSource = readFileSync(resolve(__dirname, '..', 'components', 'sidebar', 'VendorIcon.tsx'), 'utf8');
 const extraDirsButtonSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'ExtraDirsButton.tsx'), 'utf8');
 const colorsSource = readFileSync(resolve(__dirname, '..', 'themes', 'colors.ts'), 'utf8');
 const globalsSource = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
+const settingsSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'settings', 'SettingsView.tsx'),
+  'utf8',
+);
+const schedulerSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'scheduler', 'SchedulerPage.tsx'),
+  'utf8',
+);
 
 describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
+  it('only reveals the custom background through readable page materials', () => {
+    expect(source).toContain("backgroundImage ? 'bg-transparent' : 'bg-[var(--surface)]'");
+    expect(chatInputSource).toContain('isCreateAgentVariant && !!backgroundImage');
+    expect(chatInputSource).toContain('var(--chat-input-bg) 84%');
+    expect(settingsSource).toContain("backgroundImage ? 'bg-transparent' : 'bg-[var(--settings-bg)]'");
+    expect(schedulerSource).toContain(
+      "backgroundImage ? 'bg-transparent' : 'bg-[hsl(var(--content-area))]'",
+    );
+  });
+
+  it('keeps the default sidebar divider visible after a custom background is removed', () => {
+    expect(sidebarShellSource).toContain('borderRightColor: backgroundImage');
+    expect(sidebarShellSource).toContain('var(--border-default) 55%');
+    expect(sidebarShellSource).toContain('var(--text-secondary) 45%');
+  });
+
   it('keeps the approved CREATE AGENT shell while preserving the functional composer', () => {
     expect(source).toContain('data-testid="create-agent-shell"');
     expect(source).toContain('data-testid="create-agent-main"');

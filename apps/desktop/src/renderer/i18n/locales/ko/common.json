@@ -426,6 +426,18 @@
         "openDirFailed": "폴더를 열지 못했습니다: {{error}}",
         "refreshed": "로컬 테마를 새로고쳤습니다"
       },
+      "background": {
+        "title": "사용자 지정 배경",
+        "description": "로컬 이미지를 메인 화면 배경으로 설정합니다. Cindy가 관리용 사본을 저장합니다.",
+        "choose": "이미지 선택",
+        "replace": "이미지 변경",
+        "remove": "배경 제거",
+        "preview": "배경 이미지 미리보기",
+        "overlay": "가독성 오버레이: {{value}}%",
+        "blur": "흐림: {{value}} px",
+        "importSuccess": "배경 이미지를 업데이트했습니다",
+        "importFailed": "배경 이미지를 가져올 수 없습니다: {{error}}"
+      },
       "font": {
         "reset": "기본값으로 재설정",
         "defaultPreset": "기본값",

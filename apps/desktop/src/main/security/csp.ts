@@ -53,6 +53,7 @@ const CUSTOM_IMG_SCHEMES = [
   'xdt-model:',
   'cindy-remote-media:',
   'cindy-media:',
+  'cindy-background:',
 ];
 const CUSTOM_MEDIA_SCHEMES = [
   'xdt-audio:',
@@ -195,7 +196,9 @@ export function installContentSecurityPolicy(session: Session, ctx: CspContext):
   if (cspInstalledSessions.has(session)) {
     // Re-installing would silently replace our own listener — and hint that
     // some caller may be racing onHeadersReceived. Skip + warn instead.
-    cspLog.warn('installContentSecurityPolicy called twice on the same session — ignoring the second call');
+    cspLog.warn(
+      'installContentSecurityPolicy called twice on the same session — ignoring the second call',
+    );
     return;
   }
   cspInstalledSessions.add(session);
@@ -229,10 +232,7 @@ export function installContentSecurityPolicy(session: Session, ctx: CspContext):
     // intersect two policies and silently over-tighten.
     for (const key of Object.keys(responseHeaders)) {
       const lower = key.toLowerCase();
-      if (
-        lower === 'content-security-policy' ||
-        lower === 'content-security-policy-report-only'
-      ) {
+      if (lower === 'content-security-policy' || lower === 'content-security-policy-report-only') {
         delete responseHeaders[key];
       }
     }

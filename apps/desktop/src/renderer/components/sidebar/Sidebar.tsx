@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 
 import type { SidebarPeekDrawerProps, SidebarPeekState } from '@/hooks/useSidebarPeek';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { useAppearanceBackground } from '@/hooks/useAppearanceBackground';
 import { useFeatureSidebarUpper, useOwnsTopNavScrollableRows } from '@/features/feature-context';
 import { ConversationSearchProvider } from '@/features/cc-agent/sidebar/conversationSearchContext';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
@@ -83,6 +84,7 @@ export function Sidebar({
   peekState = null,
   peekDrawerProps,
 }: SidebarProps) {
+  const { backgroundImage } = useAppearanceBackground();
   const upperContent = useFeatureSidebarUpper();
   // 当前 Feature 是否自行渲染顶部导航的可滚动段(见 feature-context)。
   const ownsTopNavScrollableRows = useOwnsTopNavScrollableRows();
@@ -172,7 +174,12 @@ export function Sidebar({
                 'transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
             ),
       )}
-      style={{ width: visualWidth }}
+      style={{
+        width: visualWidth,
+        borderRightColor: backgroundImage
+          ? undefined
+          : 'color-mix(in srgb, var(--border-default) 55%, var(--text-secondary) 45%)',
+      }}
     >
       {/* 定宽内容层(见 contentWidth 注释):收起/展开动画期间内容不随 aside 宽度
           reflow,只被右侧裁切 + 整层渐隐/渐显。 */}

@@ -297,6 +297,10 @@ import {
   cindyMediaSchemePrivilege,
   registerCindyMediaProtocolHandler,
 } from './cindy-media/cindyMediaProtocol';
+import {
+  appearanceBackgroundSchemePrivilege,
+  registerAppearanceBackgroundProtocolHandler,
+} from './appearance-background';
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
 import { openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
@@ -2438,6 +2442,7 @@ protocol.registerSchemesAsPrivileged([
   remoteMediaSchemePrivilege,
   cindyGhostSchemePrivilege,
   cindyMediaSchemePrivilege,
+  appearanceBackgroundSchemePrivilege,
 ]);
 
 import started from 'electron-squirrel-startup';
@@ -8047,6 +8052,7 @@ app.on('ready', async () => {
   registerModelProtocolHandler();
   registerRemoteMediaProtocolHandler();
   registerCindyMediaProtocolHandler();
+  registerAppearanceBackgroundProtocolHandler();
 
   // Inject a Content-Security-Policy response header onto the app's own
   // top-level document (defaultSession mainFrame) before any window loads.
