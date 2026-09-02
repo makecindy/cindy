@@ -324,7 +324,11 @@ interface UsageHistoryScopeState {
   listeners: Set<(p: UsageHistoryPayload | null) => void>;
   statusListeners: Set<(refreshing: boolean) => void>;
   refreshing: boolean;
-  request: { days: number | 'all'; modelDays: number | 'all' };
+  request: {
+    days: number | 'all';
+    modelDays: number | 'all';
+    allowPendingEstimates: boolean;
+  };
 }
 
 const scopes = new Map<string, UsageHistoryScopeState>();
@@ -335,9 +339,14 @@ function normalizeScopeKey(userId?: string | null): string {
 
 function getScope(
   scopeKey: string,
-  request: { days: number | 'all'; modelDays: number | 'all' } = {
+  request: {
+    days: number | 'all';
+    modelDays: number | 'all';
+    allowPendingEstimates: boolean;
+  } = {
     days: HISTORY_WINDOW_DAYS,
     modelDays: MODEL_WINDOW_DAYS,
+    allowPendingEstimates: false,
   },
 ): UsageHistoryScopeState {
   let state = scopes.get(scopeKey);
@@ -431,9 +440,14 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
             void load(scopeKey, { forceRefresh: true });
           }, PRICING_RETRY_DELAY_MS);
         }
-        return scope.cache;
+        // Amount-bearing consumers wait for pricing so they never present a
+        // misleading value. Token-only consumers can render this payload now;
+        // the delayed force-refresh above still replaces it once estimates are
+        // available.
+        if (!scope.request.allowPendingEstimates) return scope.cache;
+      } else {
+        scope.pricingRetryDone = false;
       }
-      scope.pricingRetryDone = false;
       // dirty-check: 数据未变 (仅 generatedAt 不同) → 不换 cache 引用、不写快照、
       // 不通知监听 — 等价数据不触发重渲染与 JSON 落盘
       const nextSerialized = serializeForCompare(nextForCache);
@@ -464,12 +478,20 @@ function normalizeWindow(value: UsageHistoryWindow | undefined, fallback: number
 
 function scopeKeyForRequest(
   scopeKey: string,
-  request: { days: number | 'all'; modelDays: number | 'all' },
+  request: {
+    days: number | 'all';
+    modelDays: number | 'all';
+    allowPendingEstimates: boolean;
+  },
 ): string {
-  if (request.days === HISTORY_WINDOW_DAYS && request.modelDays === MODEL_WINDOW_DAYS) {
+  if (
+    request.days === HISTORY_WINDOW_DAYS &&
+    request.modelDays === MODEL_WINDOW_DAYS &&
+    !request.allowPendingEstimates
+  ) {
     return scopeKey;
   }
-  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}`;
+  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}`;
 }
 
 export function useUsageHistory(opts?: {
@@ -477,6 +499,8 @@ export function useUsageHistory(opts?: {
   userId?: string | null;
   days?: UsageHistoryWindow;
   modelDays?: UsageHistoryWindow;
+  /** Token-only consumers may render the payload while prices finish loading. */
+  allowPendingEstimates?: boolean;
 }): {
   history: UsageHistoryPayload | null;
   refreshing: boolean;
@@ -486,6 +510,7 @@ export function useUsageHistory(opts?: {
   const request = {
     days: normalizeWindow(opts?.days, HISTORY_WINDOW_DAYS),
     modelDays: normalizeWindow(opts?.modelDays, MODEL_WINDOW_DAYS),
+    allowPendingEstimates: opts?.allowPendingEstimates ?? false,
   };
   const scopedKey = scopeKeyForRequest(scopeKey, request);
   const scope = getScope(scopedKey, request);

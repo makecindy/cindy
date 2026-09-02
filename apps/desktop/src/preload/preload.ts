@@ -386,6 +386,13 @@ type DiscordBotSessionAuthCheckWire = {
   providerId: string | null;
   providerLabel: string | null;
 };
+
+/** Public shape of the local session-list bridge options. */
+type LocalDbSessionListOptions = {
+  includePinned?: boolean;
+  fresh?: boolean;
+  usageHistory?: boolean;
+};
 /**
  * 个人 Telegram bot 的传输状态(与 @cindy/im 的 IMStatus 同形; preload 不引包,
  * 就地声明)。offline = 凭证保留但用户主动下线, 与 idle(未配置)严格区分。
@@ -5011,8 +5018,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         }),
     },
     sessions: {
-      list: (limit?: number, status?: string, options?: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:sessions:list', limit, status, options),
+      list: (
+        limit?: number,
+        status?: string,
+        options?: LocalDbSessionListOptions,
+      ): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:list', limit, status, options),
       create: (body?: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:create', body),
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get', id),

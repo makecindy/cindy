@@ -82,6 +82,7 @@ export function UsageHistorySection(): React.JSX.Element {
     userId: user?.id,
     days: 'all',
     modelDays: 'all',
+    allowPendingEstimates: true,
   });
   const [range, setRange] = useState<UsageHistoryRange>('30d');
   const [heatmapWeeks, setHeatmapWeeks] = useState(20);

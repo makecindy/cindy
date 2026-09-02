@@ -169,4 +169,15 @@ describe('HomeUsageDashboard source contract', () => {
       "next.models.some((m) => m.agentKind === 'codex' && m.estimatedCostUsd === null)",
     );
   });
+
+  it('lets the token-only settings page consume pending estimates without changing the home gate', () => {
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
+    const settingsSource = readFileSync(
+      resolve(__dirname, '../components/settings/usage/UsageHistorySection.tsx'),
+      'utf8',
+    );
+    expect(settingsSource).toContain('allowPendingEstimates: true');
+    expect(hookSource).toContain('allowPendingEstimates?: boolean;');
+    expect(hookSource).toContain('if (!scope.request.allowPendingEstimates) return scope.cache;');
+  });
 });
