@@ -93,6 +93,16 @@ describe('DS-3 · 零接线守卫', () => {
         "export { x } from '../../design-tokens/src/snapshot.ts';",
         'packages/foo/src/a.ts',
       ],
+      [
+        '副作用 import 相对路径（review P2 补洞）',
+        "import '../../design-tokens/src/generate.ts';",
+        'packages/foo/src/a.ts',
+      ],
+      [
+        '副作用 import 相对路径换行',
+        "import\n  '../../design-tokens/src/generate.ts';",
+        'packages/foo/src/a.ts',
+      ],
     ];
     for (const [name, source, fileRel] of cases) {
       expect(relativeSpecifierHitsDesignTokens(source, fileRel), name).toBe(true);
@@ -121,6 +131,16 @@ describe('DS-3 · 零接线守卫', () => {
       [
         '普通字符串不是说明符',
         "const hint = '../../design-tokens/src/snapshot.ts';",
+        'packages/foo/src/a.ts',
+      ],
+      [
+        '成员调用 foo.import 不是 import 语句',
+        "foo.import('../../design-tokens/src/snapshot.ts');",
+        'packages/foo/src/a.ts',
+      ],
+      [
+        '成员调用 foo.require 不是 require',
+        "foo.require('../../design-tokens/src/snapshot.ts');",
         'packages/foo/src/a.ts',
       ],
     ];

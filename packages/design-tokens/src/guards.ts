@@ -436,11 +436,15 @@ const IMPORT_ENTRY_PATTERNS: readonly RegExp[] = [
 
 /**
  * 从源码文本中提取全部模块说明符（'…' / "…" 形式的 import / require 目标），
- * 供按被扫描文件位置解析相对路径。只取 import-from / import() / require()
- * / import.meta.resolve() 语境下的说明符，不匹配普通字符串字面量。
+ * 供按被扫描文件位置解析相对路径。覆盖五种语境：import-from / import() /
+ * require() / import.meta.resolve() / 裸 `import '…'` 副作用导入（后者无
+ * from 子句无括号，分支自身用 `(?=['"])` 前瞻定位引号、不吞引号，引号由
+ * 共享后继 `['"]…['"]` 统一消费，`\s*` 覆盖换行形态）。
+ * `(?<![\w$.])` 与 IMPORT_ENTRY_PATTERNS 同款：排除 foo.import( /
+ * foo.require( 成员调用与 myImport 标识符误报；不匹配普通字符串字面量。
  */
 const SPECIFIER_CONTEXT_RE =
-  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*)['"]([^'"]+)['"]/g;
+  /(?:\bfrom\s*|(?<![\w$.])import\s*\(\s*|(?<![\w$.])require\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|(?<![\w$.])import\s*(?=['"]))['"]([^'"]+)['"]/g;
 
 /**
  * 相对路径直读检测：按被扫描文件的 repo 相对位置解析每个相对说明符，
