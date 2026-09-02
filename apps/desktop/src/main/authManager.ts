@@ -100,7 +100,7 @@ import {
 } from './authBoundaryQuarantine.js';
 import { buildFocusDeepLink } from './deepLink';
 import { getResolvedMainLocale, t } from './i18n';
-import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 import {
   activateClientEndpointRealm,
   getClientEndpoint,
@@ -604,6 +604,32 @@ function readAtomicSafe(key: string): string | null {
   }
 }
 
+/**
+ * Keep an unreadable encrypted record available for an explicit replacement
+ * to roll back to. The payload is still ciphertext; it is never parsed or
+ * exposed to the renderer.
+ */
+function readAtomicSafeCiphertext(key: string): string | null {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    return readAtomicFileSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    logSafeStorageIssueOnce('atomic ciphertext snapshot failed', key, err);
+    return null;
+  }
+}
+
+function writeAtomicSafeCiphertext(key: string, ciphertext: string): boolean {
+  try {
+    atomicWriteFileSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`), ciphertext);
+    return true;
+  } catch (err) {
+    logSafeStorageIssueOnce('atomic ciphertext restore failed', key, err);
+    return false;
+  }
+}
+
 function isAtomicPersistedSecretAbsent(key: string): boolean {
   if (!safeStorage.isEncryptionAvailable()) return false;
   const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
@@ -741,11 +767,12 @@ function emptyAuthAccountVault(): AuthAccountVault {
   };
 }
 
-function readAuthAccountLogoutTombstones(): string[] {
+function readAuthAccountLogoutTombstones(options: { recoverInvalid?: boolean } = {}): string[] {
   const raw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
   if (raw === null) {
     if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)) return [];
     log.warn('encrypted auth logout tombstones are temporarily unreadable');
+    if (options.recoverInvalid) return [];
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
       503,
@@ -775,6 +802,7 @@ function readAuthAccountLogoutTombstones(): string[] {
       'encrypted auth logout tombstones are invalid; refusing to read saved accounts',
       error,
     );
+    if (options.recoverInvalid) return [];
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
       503,
@@ -827,7 +855,15 @@ function isStoredAccountMetadata(value: unknown): value is StoredAccountMetadata
 function readAuthAccountVault(
   options: { allowUnreadable?: boolean; recoverInvalid?: boolean } = {},
 ): AuthAccountVault {
-  const persistedLogoutKeys = readAuthAccountLogoutTombstones();
+  let persistedLogoutKeys: string[];
+  try {
+    persistedLogoutKeys = readAuthAccountLogoutTombstones({
+      recoverInvalid: options.recoverInvalid,
+    });
+  } catch (error) {
+    if (options.allowUnreadable) return emptyAuthAccountVault();
+    throw error;
+  }
   const raw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
   if (raw === null) {
     if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY)) {
@@ -951,11 +987,23 @@ function readAuthAccountVault(
   }
 }
 
-function writeAuthAccountVault(vault: AuthAccountVault): boolean {
+function writeAuthAccountVault(
+  vault: AuthAccountVault,
+  options: { replaceUnreadableLogoutTombstones?: boolean } = {},
+): boolean {
   const previousLogoutRaw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
   const previousLogoutWasAbsent =
     previousLogoutRaw === null && isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
-  if (previousLogoutRaw === null && !previousLogoutWasAbsent) return false;
+  const previousLogoutUnreadable = previousLogoutRaw === null && !previousLogoutWasAbsent;
+  const previousLogoutCiphertext = previousLogoutUnreadable
+    ? readAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)
+    : null;
+  if (
+    previousLogoutUnreadable &&
+    (!options.replaceUnreadableLogoutTombstones || previousLogoutCiphertext === null)
+  ) {
+    return false;
+  }
   // Persist the tombstone before the legacy-compatible aggregate. If the
   // process stops between these writes, a new client fails closed instead of
   // briefly re-enumerating an account that was explicitly logged out.
@@ -976,6 +1024,12 @@ function writeAuthAccountVault(vault: AuthAccountVault): boolean {
       !writeAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutRaw)
     ) {
       log.warn('failed to restore auth logout tombstones after vault write failure');
+    } else if (
+      previousLogoutUnreadable &&
+      previousLogoutCiphertext !== null &&
+      !writeAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutCiphertext)
+    ) {
+      log.warn('failed to restore unreadable auth logout tombstones after vault write failure');
     }
   } catch (error) {
     log.warn('failed to restore auth logout tombstones after vault write failure', error);
@@ -983,8 +1037,11 @@ function writeAuthAccountVault(vault: AuthAccountVault): boolean {
   return false;
 }
 
-function writeAuthAccountVaultOrThrow(vault: AuthAccountVault): void {
-  if (writeAuthAccountVault(vault)) return;
+function writeAuthAccountVaultOrThrow(
+  vault: AuthAccountVault,
+  options: { replaceUnreadableLogoutTombstones?: boolean } = {},
+): void {
+  if (writeAuthAccountVault(vault, options)) return;
   throw new AuthApiError(
     'CREDENTIAL_STORE_UNAVAILABLE',
     503,
@@ -1038,11 +1095,17 @@ async function transactAuthAccountVault<T>(
         const previousLogoutWasAbsent =
           previousLogoutRaw === null &&
           isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+        const previousLogoutUnreadable = previousLogoutRaw === null && !previousLogoutWasAbsent;
+        const previousLogoutCiphertext = previousLogoutUnreadable
+          ? readAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)
+          : null;
         const vault = readAuthAccountVault({
           recoverInvalid: options.recoverInvalidForExplicitLogin,
         });
         const result = await operation(vault);
-        writeAuthAccountVaultOrThrow(vault);
+        writeAuthAccountVaultOrThrow(vault, {
+          replaceUnreadableLogoutTombstones: options.recoverInvalidForExplicitLogin,
+        });
         try {
           // Keep the shared-userData lock through the active-session write,
           // runtime teardown and final owner commit. Cancellation or any local
@@ -1073,6 +1136,16 @@ async function transactAuthAccountVault<T>(
               'CREDENTIAL_STORE_UNAVAILABLE',
               503,
               'Could not restore saved account logout state after a failed account switch',
+            );
+          } else if (
+            previousLogoutUnreadable &&
+            previousLogoutCiphertext !== null &&
+            !writeAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutCiphertext)
+          ) {
+            throw new AuthApiError(
+              'CREDENTIAL_STORE_UNAVAILABLE',
+              503,
+              'Could not restore unreadable account logout state after a failed account switch',
             );
           }
           throw error;
@@ -1116,7 +1189,7 @@ async function clearAuthAccountVault(
       vault.passports = {};
       vault.signedOutAt = Date.now();
       customize(vault);
-      writeAuthAccountVaultOrThrow(vault);
+      writeAuthAccountVaultOrThrow(vault, { replaceUnreadableLogoutTombstones: true });
       await afterPersist();
     },
   );

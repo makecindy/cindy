@@ -195,16 +195,12 @@ describe('auth login-flow reset', () => {
       '\n}\n\nfunction writeAuthAccountLogoutTombstones',
       logoutTombstoneReadStart,
     );
-    const logoutTombstoneReadBody = source.slice(
-      logoutTombstoneReadStart,
-      logoutTombstoneReadEnd,
-    );
+    const logoutTombstoneReadBody = source.slice(logoutTombstoneReadStart, logoutTombstoneReadEnd);
     expect(logoutTombstoneReadBody).toContain('parseDesktopAccountKey(key)');
     expect(logoutTombstoneReadBody).toContain('isAtomicPersistedSecretAbsent');
+    expect(logoutTombstoneReadBody).toContain('if (options.recoverInvalid) return [];');
 
-    const logoutTombstoneWriteStart = source.indexOf(
-      'function writeAuthAccountLogoutTombstones(',
-    );
+    const logoutTombstoneWriteStart = source.indexOf('function writeAuthAccountLogoutTombstones(');
     const logoutTombstoneWriteEnd = source.indexOf(
       '\n}\n\nfunction accountVaultKey',
       logoutTombstoneWriteStart,
@@ -213,8 +209,10 @@ describe('auth login-flow reset', () => {
       'JSON.stringify({ version: AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION, accountKeys })',
     );
 
-    const readLogoutKeysStart = readBody.indexOf('const persistedLogoutKeys =');
+    const readLogoutKeysStart = readBody.indexOf('persistedLogoutKeys =');
     expect(readLogoutKeysStart).toBeGreaterThan(-1);
+    expect(readBody).toContain('recoverInvalid: options.recoverInvalid');
+    expect(readBody).toContain('if (options.allowUnreadable) return emptyAuthAccountVault();');
     expect(readBody).toContain('new Set([...persistedLogoutKeys, ...embeddedLogoutKeys])');
     expect(readBody).toContain('if (active && resources[active]) loggedOutKeys.delete(active);');
 
@@ -241,17 +239,25 @@ describe('auth login-flow reset', () => {
     expect(mutationBody.indexOf('const vault = readAuthAccountVault({')).toBeGreaterThan(
       mutationBody.indexOf('if (!status.held)'),
     );
-    expect(mutationBody.indexOf('writeAuthAccountVaultOrThrow(vault);')).toBeGreaterThan(
+    const vaultWriteAt = mutationBody.indexOf('writeAuthAccountVaultOrThrow(vault');
+    expect(vaultWriteAt).toBeGreaterThan(
       mutationBody.indexOf('await operation(vault);'),
     );
     expect(mutationBody.indexOf('await afterPersist(result);')).toBeGreaterThan(
-      mutationBody.indexOf('writeAuthAccountVaultOrThrow(vault);'),
+      vaultWriteAt,
     );
     expect(mutationBody).toContain('removeAtomicSafeOrThrow(AUTH_ACCOUNT_VAULT_KEY);');
     expect(mutationBody).toContain('writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, previousRaw)');
     expect(mutationBody).toContain('removeAtomicSafeOrThrow(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);');
     expect(mutationBody).toContain(
       'writeAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutRaw)',
+    );
+    expect(mutationBody).toContain('readAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)');
+    expect(mutationBody).toContain(
+      'replaceUnreadableLogoutTombstones: options.recoverInvalidForExplicitLogin',
+    );
+    expect(mutationBody).toContain(
+      'writeAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutCiphertext)',
     );
 
     for (const helper of [
@@ -318,6 +324,25 @@ describe('auth login-flow reset', () => {
     expect(transitionRollback).toBeGreaterThan(transitionCommit);
     expect(transitionRollback).toBeLessThan(
       loginBody.indexOf('recoverInvalidForExplicitLogin: true'),
+    );
+  });
+
+  it('replaces unreadable logout tombstones only for explicit login or logout', () => {
+    const writeStart = source.indexOf('function writeAuthAccountVault(');
+    const writeEnd = source.indexOf('\n}\n\nfunction writeAuthAccountVaultOrThrow', writeStart);
+    const writeBody = source.slice(writeStart, writeEnd);
+    expect(writeBody).toContain('replaceUnreadableLogoutTombstones?: boolean');
+    expect(writeBody).toContain('const previousLogoutUnreadable =');
+    expect(writeBody).toContain('previousLogoutCiphertext === null');
+    expect(writeBody).toContain('!options.replaceUnreadableLogoutTombstones');
+    expect(writeBody).toContain(
+      'writeAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutCiphertext)',
+    );
+
+    const clearStart = source.indexOf('async function clearAuthAccountVault(');
+    const clearEnd = source.indexOf('\n}\n\nfunction metadataFromMembership', clearStart);
+    expect(source.slice(clearStart, clearEnd)).toContain(
+      'writeAuthAccountVaultOrThrow(vault, { replaceUnreadableLogoutTombstones: true });',
     );
   });
 
@@ -429,7 +454,7 @@ describe('auth login-flow reset', () => {
     expect(source).toContain("'CREDENTIAL_STORE_UNAVAILABLE'");
     expect(source).toContain('isPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY)');
     expect(source).toContain('readAuthAccountVault({ allowUnreadable: true })');
-    expect(source).toContain('writeAuthAccountVaultOrThrow(vault);');
+    expect(source).toContain('writeAuthAccountVaultOrThrow(vault');
 
     const syncStart = source.indexOf('export async function syncSavedAccounts()');
     const syncEnd = source.indexOf('\n}\n\nexport async function switchSavedAccount', syncStart);
@@ -749,7 +774,10 @@ describe('auth login-flow reset', () => {
       "epochChanged('after-clearing-confirmed-dead-tokens')",
       clearDeadTokens,
     );
-    const ownershipRetry = coldStartBody.indexOf('return runColdStartRefreshFlow(', clearDeadTokens);
+    const ownershipRetry = coldStartBody.indexOf(
+      'return runColdStartRefreshFlow(',
+      clearDeadTokens,
+    );
     expect(clearDeadTokens).toBeGreaterThan(-1);
     expect(staleEpochGuard).toBeGreaterThan(clearDeadTokens);
     expect(ownershipRetry).toBeGreaterThan(staleEpochGuard);
