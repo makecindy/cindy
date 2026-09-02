@@ -431,31 +431,35 @@ function dependencyHits(pkgJson: Record<string, unknown>, rel: string): string[]
  * 成员调用宁可误报（守卫拦截的是真接线，member-require 是合法接线形态）。
  */
 const IMPORT_ENTRY_PATTERNS: readonly RegExp[] = [
-  /from\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
-  /(?<![\w$])import\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
-  /(?<![\w$])import\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
-  /(?<![\w$])import\.meta\.resolve\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
-  /(?<![\w$])require\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
-  /(?<![\w$])require\s*\.\s*resolve\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /from\s*['"`]@cindy\/design-tokens(?:\/[^'"`\s]*)?['"`]/,
+  /(?<![\w$])import\s*['"`]@cindy\/design-tokens(?:\/[^'"`\s]*)?['"`]/,
+  /(?<![\w$])import\s*\(\s*['"`]@cindy\/design-tokens(?:\/[^'"`\s]*)?['"`]/,
+  /(?<![\w$])import\.meta\.resolve\s*\(\s*['"`]@cindy\/design-tokens(?:\/[^'"`\s]*)?['"`]/,
+  /(?<![\w$])require\s*\(\s*['"`]@cindy\/design-tokens(?:\/[^'"`\s]*)?['"`]/,
+  /(?<![\w$])require\s*\.\s*resolve\s*\(\s*['"`]@cindy\/design-tokens(?:\/[^'"`\s]*)?['"`]/,
   /packages\/design-tokens\/(?:src|dist|build)\//,
 ];
 
 /**
- * 从源码文本中提取全部模块说明符（'…' / "…" 形式的 import / require 目标），
- * 供按被扫描文件位置解析相对路径。覆盖六种语境：import-from / import() /
- * require()（含 `module.require()` 等成员链上的真实 Node 加载 API）/
- * require.resolve()（运行期解析模块路径，`readFileSync(require.resolve(…))`
- * 是消费影子层的真实路径，review P2 实锤）/ import.meta.resolve() / 裸
- * `import '…'` 副作用导入（后者无 from 子句无括号，分支自身用 `(?=['"])`
- * 前瞻定位引号、不吞引号，引号由共享后继 `['"]…['"]` 统一消费，`\s*`
- * 覆盖换行形态）。
+ * 从源码文本中提取全部模块说明符（'…' / "…" / 无插值 `…` 模板字面量形式的
+ * import / require 目标），供按被扫描文件位置解析相对路径。覆盖六种语境：
+ * import-from / import() / require()（含 `module.require()` 等成员链上的
+ * 真实 Node 加载 API）/ require.resolve()（运行期解析模块路径，
+ * `readFileSync(require.resolve(…))` 是消费影子层的真实路径，review P2
+ * 实锤）/ import.meta.resolve() / 裸 `import '…'` 副作用导入（后者无 from
+ * 子句无括号，分支自身用 `(?=['"\`])` 前瞻定位引号、不吞引号，引号由共享
+ * 后继 `['"\`]…['"\`]` 统一消费，`\s*` 覆盖换行形态）。
+ * 模板字面量：无插值形态与普通引号同权重（`import(\`../../x\`)` 是有效
+ * 运行时加载，review P1 实锤）；**带 `${…}` 插值的模板同样命中**——插值
+ * 说明路径在运行期拼装，恰是零接线阶段不该出现的动态消费形态，按宁误报
+ * 不漏放处理。
  * `(?<![\w$])` 只排除 myImport / myRequire 这类标识符连写；**不再排除
  * `.` 前缀**——`module.require('…')` 是 Node 真实加载 API（review P1
  * 实锤），foo.import( 这类自定义成员调用宁可误报也不漏放：守卫拦截的是
  * 「有人真接线」，member-require 恰是真实接线的合法形态。
  */
 const SPECIFIER_CONTEXT_RE =
-  /(?:\bfrom\s*|(?<![\w$])import\s*\(\s*|(?<![\w$])require\s*\(\s*|(?<![\w$])require\s*\.\s*resolve\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|(?<![\w$])import\s*(?=['"]))['"]([^'"]+)['"]/g;
+  /(?:\bfrom\s*|(?<![\w$])import\s*\(\s*|(?<![\w$])require\s*\(\s*|(?<![\w$])require\s*\.\s*resolve\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|(?<![\w$])import\s*(?=['"`]))['"`]([^'"`]+)['"`]/g;
 
 /** 判断「无空白压缩后的最近输出」是否以 import 语境结尾。 */
 const SPECIFIER_PREFIX_RE =

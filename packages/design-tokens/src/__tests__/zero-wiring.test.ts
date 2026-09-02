@@ -250,6 +250,39 @@ describe('DS-3 · 零接线守卫', () => {
     ).toBe(false);
   });
 
+  it('自证伪：模板字面量形式的说明符必须被命中（review P1 补洞）', () => {
+    // `import(\`../../design-tokens/src/snapshot.ts\`)` 这类无插值模板字面量
+    // 是有效运行时加载形态，旧提取正则只认单双引号——漏放。带 `${…}` 插值
+    // 的模板同样命中：路径在运行期拼装恰是零接线阶段不该出现的动态消费。
+    const relCases: Array<[string, string]> = [
+      ['import(无插值模板，相对路径)', 'import(`../../design-tokens/src/snapshot.ts`)'],
+      ['动态 import 模板（相对路径）', 'const l = await import(`../../design-tokens/src/snapshot.ts`);'],
+      ['require.resolve 模板（相对路径）', 'require.resolve(`../../design-tokens/src/snapshot.ts`)'],
+      ['import(插值模板，相对路径)', 'import(`../../design-tokens/src/${name}.ts`)'],
+    ];
+    for (const [name, source] of relCases) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        name,
+      ).toBe(true);
+    }
+    const idCases: Array<[string, string]> = [
+      ['import(无插值模板，包 id)', 'import(`@cindy/design-tokens`)'],
+      ['require(无插值模板，包 id)', 'require(`@cindy/design-tokens/src/snapshot.ts`)'],
+      ['from 模板（包 id）', 'import { x } from `@cindy/design-tokens`;'],
+      ['副作用 import 模板（包 id）', 'import `@cindy/design-tokens`;'],
+    ];
+    for (const [name, source] of idCases) {
+      expect(containsRuntimeImportOfDesignTokens(source), name).toBe(true);
+    }
+    // 数据语境的普通模板（非说明符位置）不误报——剥离层已剥内容。
+    expect(
+      containsRuntimeImportOfDesignTokens(
+        'const t = `plain template mentioning @cindy/design-tokens`;',
+      ),
+    ).toBe(false);
+  });
+
   it('自证伪：require.resolve 是运行期加载入口，必须被命中（review P2 补洞）', () => {
     // `readFileSync(require.resolve('../../design-tokens/…'))` 是消费影子层的
     // 真实路径：旧实现的剥离层把 require.resolve 的参数当普通数据字符串
