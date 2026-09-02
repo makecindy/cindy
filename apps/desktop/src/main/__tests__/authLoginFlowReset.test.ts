@@ -156,6 +156,10 @@ describe('auth login-flow reset', () => {
 
   it('keeps saved account metadata fresh after profile edits and Passport sync', () => {
     expect(source).toContain('const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;');
+    expect(source).toContain('const logoutAuthEpoch = authStateEpoch;');
+    expect(source).toContain("'Logout was superseded by a newer auth action'");
+    expect(source).toContain('validateBeforeCommit: isLogoutStillCurrent');
+    expect(source).toContain('shouldClearOnFailure: isLogoutStillCurrent');
     const writePassportStart = source.indexOf('function writePassportSessionToVault(');
     const writePassportEnd = source.indexOf(
       '\n}\n\n/** Persist a rotated Passport',

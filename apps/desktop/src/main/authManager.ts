@@ -5597,6 +5597,19 @@ export async function logout(): Promise<void> {
   if (!activeUser) {
     throw new AuthApiError('UNAUTHENTICATED', 401, 'No current account to log out');
   }
+  const logoutAuthEpoch = authStateEpoch;
+  const isLogoutStillCurrent = (): boolean =>
+    authStateEpoch === logoutAuthEpoch &&
+    currentUser?.id === activeUser.id &&
+    activeAuthRealm === currentAuthRealm;
+  const assertLogoutStillCurrent = (): void => {
+    if (isLogoutStillCurrent()) return;
+    throw new AuthApiError(
+      'AUTH_FLOW_SUPERSEDED',
+      409,
+      'Logout was superseded by a newer auth action',
+    );
+  };
 
   let savedVault: AuthAccountVault;
   let savedVaultWasUnreadable = false;
@@ -5625,6 +5638,7 @@ export async function logout(): Promise<void> {
   let removedPassport: StoredPassportSession | null = null;
 
   for (const candidateAccountKey of candidateAccountKeys) {
+    assertLogoutStillCurrent();
     let candidateRemovedPassport: StoredPassportSession | null = null;
     try {
       await switchSavedAccount(candidateAccountKey, {
@@ -5647,8 +5661,14 @@ export async function logout(): Promise<void> {
     }
   }
 
+  // A concurrent renderer may have completed an account switch while the
+  // candidate refreshes above were in flight. Never let this stale logout
+  // continue into the terminal local-sign-out path and clear the new owner.
+  assertLogoutStillCurrent();
+
   if (savedVaultWasUnreadable) {
     await clearAuthAccountVault((vault) => {
+      assertLogoutStillCurrent();
       removeLoggedOutVaultAccount(vault, currentIdentity);
       // Commit the signed-out owner before clearing compatibility records. If
       // the process stops between the writes, cold start must not restore this
@@ -5657,12 +5677,14 @@ export async function logout(): Promise<void> {
     });
   } else {
     await mutateAuthAccountVault((vault) => {
+      assertLogoutStillCurrent();
       removedPassport = removeLoggedOutVaultAccount(vault, currentIdentity);
       // Commit the signed-out owner before clearing compatibility records. If the
       // process stops between the writes, cold start must not restore this account.
       vault.signedOutAt = Date.now();
     });
   }
+  assertLogoutStillCurrent();
   removeSafe(AUTH_SESSION_KEY);
   removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
   removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
@@ -5685,6 +5707,8 @@ export async function logout(): Promise<void> {
       nextMode: 'signed-out',
       clearOnFailure: true,
       preservePersistedRefreshToken: true,
+      validateBeforeCommit: isLogoutStillCurrent,
+      shouldClearOnFailure: isLogoutStillCurrent,
     });
   } catch (error) {
     localTransitionError = error;
