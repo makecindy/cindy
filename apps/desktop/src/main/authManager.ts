@@ -193,6 +193,11 @@ function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
 const AUTH_SESSION_KEY = 'cindy_auth_session_v1';
 const AUTH_ACCOUNT_VAULT_KEY = 'cindy_auth_accounts_v1';
 const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
+// v2 makes the per-membership logout tombstone unreadable to v1 clients. The
+// storage key stays stable so the current client can migrate v1 records in
+// place, while an older client fails closed instead of re-enumerating a logged
+// out Passport membership.
+const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;
 const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
 const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy_auth_account_deletion_receipt';
 const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';
@@ -255,7 +260,7 @@ interface StoredPassportSession {
 }
 
 interface AuthAccountVault {
-  version: 1;
+  version: typeof AUTH_ACCOUNT_VAULT_VERSION;
   activeAccountKey: string | null;
   resources: Record<string, StoredResourceSession>;
   passports: Record<string, StoredPassportSession>;
@@ -726,7 +731,12 @@ function commitWithClearedAccountDeletionReceipt(commit: () => void): void {
 }
 
 function emptyAuthAccountVault(): AuthAccountVault {
-  return { version: 1, activeAccountKey: null, resources: {}, passports: {} };
+  return {
+    version: AUTH_ACCOUNT_VAULT_VERSION,
+    activeAccountKey: null,
+    resources: {},
+    passports: {},
+  };
 }
 
 function accountVaultKey(realm: AuthRegion, membershipId: string): string {
@@ -770,8 +780,9 @@ function readAuthAccountVault(
   }
   try {
     const parsed = JSON.parse(raw) as Partial<AuthAccountVault>;
+    const persistedVersion = (parsed as { version?: unknown }).version;
     if (
-      parsed.version !== 1 ||
+      (persistedVersion !== 1 && persistedVersion !== AUTH_ACCOUNT_VAULT_VERSION) ||
       !parsed.resources ||
       typeof parsed.resources !== 'object' ||
       Array.isArray(parsed.resources) ||
@@ -845,7 +856,7 @@ function readAuthAccountVault(
     const loggedOutKeys = new Set(loggedOutAccountKeys);
     const active = typeof parsed.activeAccountKey === 'string' ? parsed.activeAccountKey : null;
     return {
-      version: 1,
+      version: AUTH_ACCOUNT_VAULT_VERSION,
       activeAccountKey: active && resources[active] && !loggedOutKeys.has(active) ? active : null,
       resources,
       passports,
@@ -971,6 +982,7 @@ async function mutateAuthAccountVault<T>(
 }
 
 async function clearAuthAccountVault(
+  customize: (vault: AuthAccountVault) => void = () => undefined,
   afterPersist: () => void | Promise<void> = () => undefined,
 ): Promise<void> {
   await withCrossProcessLock(
@@ -986,6 +998,7 @@ async function clearAuthAccountVault(
       vault.resources = {};
       vault.passports = {};
       vault.signedOutAt = Date.now();
+      customize(vault);
       writeAuthAccountVaultOrThrow(vault);
       await afterPersist();
     },
@@ -1126,11 +1139,16 @@ function writePassportSessionToVault(
 ): void {
   const key = passportVaultKey(input.realm, input.passportId);
   const previous = vault.passports[key];
-  const memberships = (input.memberships ?? previous?.memberships ?? []).map((membership) =>
-    isStoredAccountMetadata(membership)
-      ? membership
-      : metadataFromMembership(membership, input.passportId),
-  );
+  const loggedOutKeys = loggedOutAccountKeySet(vault);
+  const memberships = (input.memberships ?? previous?.memberships ?? [])
+    .map((membership) =>
+      isStoredAccountMetadata(membership)
+        ? membership
+        : metadataFromMembership(membership, input.passportId),
+    )
+    .filter(
+      (membership) => !loggedOutKeys.has(accountVaultKey(input.realm, membership.membershipId)),
+    );
   vault.passports[key] = {
     realm: input.realm,
     passportId: input.passportId,
@@ -4384,6 +4402,34 @@ async function runColdStartRefreshFlow(
       const action: RefreshFailureAction = failureAction ?? { kind: 'transient-failure' };
       if (action.kind === 'definitive-failure') {
         lastAcceptedRefreshToken = null;
+        const confirmedDeadTokens = rejectedTokens.length > 0 ? rejectedTokens : [storedToken];
+        const nextActiveCandidate = readActiveVaultRefreshCandidate();
+        const hopsRemaining = ownershipRecovery.hopsRemaining ?? 3;
+        if (
+          nextActiveCandidate &&
+          hopsRemaining > 0 &&
+          !attemptedOwnershipTokens.has(nextActiveCandidate.refreshToken)
+        ) {
+          // A crash can leave the compatibility projection on the previous
+          // account after the vault has already committed a switch. Never let
+          // the stale projection win cold start: discard only the rejected
+          // token(s), then retry the vault's active account.
+          if (!isPassiveSharedUserDataInstance()) {
+            await clearConfirmedDeadRefreshTokens(storedRealm, confirmedDeadTokens);
+          }
+          log.info(
+            'cold-start refresh rejected a stale compatibility token; continuing with the vault active account',
+          );
+          return runColdStartRefreshFlow(
+            nextActiveCandidate.refreshToken,
+            nextActiveCandidate.realm,
+            {
+              attemptedTokens: attemptedOwnershipTokens,
+              expectedActiveVaultAccountKey: nextActiveCandidate.accountKey,
+              hopsRemaining: hopsRemaining - 1,
+            },
+          );
+        }
         if (isPassiveSharedUserDataInstance()) {
           // passive 只对本进程判定失效:磁盘 token 是整机共用的,而 passive 冷启动拿到
           // INVALID_REFRESH_TOKEN 最常见的原因恰恰是 primary 刚轮换过它。删掉就是把
@@ -4396,7 +4442,6 @@ async function runColdStartRefreshFlow(
           // 来源追赶过(replacement-retry),磁盘上现存的就是清单里较晚的那一枚,只拿最初
           // 的 token 做 compare-and-delete 会一律 changed,把已确认失效的凭证留在盘上,
           // 只读 legacy 的旧版实例继续拿它撞 INVALID_REFRESH_TOKEN 被强制重登。
-          const confirmedDeadTokens = rejectedTokens.length > 0 ? rejectedTokens : [storedToken];
           await clearConfirmedDeadRefreshTokens(storedRealm, confirmedDeadTokens);
         }
         resetActiveAuthRealmToBuild();
@@ -5479,16 +5524,7 @@ function isUnavailableSavedAccountError(error: unknown): boolean {
   return (
     error instanceof AuthApiError &&
     (isDefinitiveRefreshError(error) ||
-      [
-        'ACCOUNT_NOT_FOUND',
-        'ACCOUNT_REAUTH_REQUIRED',
-        'REGION_MISMATCH',
-        'NETWORK_ERROR',
-        'REQUEST_TIMEOUT',
-        'INVALID_RESPONSE',
-        'AUTH_REQUEST_FAILED',
-        'ORG_REALM_UNAVAILABLE',
-      ].includes(error.code))
+      ['ACCOUNT_NOT_FOUND', 'ACCOUNT_REAUTH_REQUIRED', 'REGION_MISMATCH'].includes(error.code))
   );
 }
 
@@ -5535,7 +5571,20 @@ export async function logout(): Promise<void> {
     throw new AuthApiError('UNAUTHENTICATED', 401, 'No current account to log out');
   }
 
-  const savedVault = readAuthAccountVault();
+  let savedVault: AuthAccountVault;
+  let savedVaultWasUnreadable = false;
+  try {
+    savedVault = readAuthAccountVault();
+  } catch (error) {
+    if (!(error instanceof AuthApiError && error.code === 'CREDENTIAL_STORE_UNAVAILABLE')) {
+      throw error;
+    }
+    // The active in-memory session is still authoritative for this explicit
+    // user action. Replace an unreadable vault with a fresh fail-closed record
+    // below instead of making logout depend on decrypting stale saved accounts.
+    savedVault = emptyAuthAccountVault();
+    savedVaultWasUnreadable = true;
+  }
   const currentAccountKey = accountVaultKey(currentAuthRealm, activeUser.id);
   const currentIdentity: LoggedOutAccountIdentity = {
     accountKey: currentAccountKey,
@@ -5570,12 +5619,22 @@ export async function logout(): Promise<void> {
     }
   }
 
-  await mutateAuthAccountVault((vault) => {
-    removedPassport = removeLoggedOutVaultAccount(vault, currentIdentity);
-    // Commit the signed-out owner before clearing compatibility records. If the
-    // process stops between the writes, cold start must not restore this account.
-    vault.signedOutAt = Date.now();
-  });
+  if (savedVaultWasUnreadable) {
+    await clearAuthAccountVault((vault) => {
+      removeLoggedOutVaultAccount(vault, currentIdentity);
+      // Commit the signed-out owner before clearing compatibility records. If
+      // the process stops between the writes, cold start must not restore this
+      // account.
+      vault.signedOutAt = Date.now();
+    });
+  } else {
+    await mutateAuthAccountVault((vault) => {
+      removedPassport = removeLoggedOutVaultAccount(vault, currentIdentity);
+      // Commit the signed-out owner before clearing compatibility records. If the
+      // process stops between the writes, cold start must not restore this account.
+      vault.signedOutAt = Date.now();
+    });
+  }
   removeSafe(AUTH_SESSION_KEY);
   removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
   removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);

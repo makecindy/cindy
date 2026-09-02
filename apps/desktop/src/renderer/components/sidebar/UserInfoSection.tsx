@@ -67,19 +67,23 @@ function AccountMenuAvatar({ account }: { account: DesktopSavedAccount }) {
 }
 
 export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSectionProps) {
-  const { user, mode, isCanary, listAccounts, syncAccounts, switchAccount } = useAuth();
+  const { user, mode, dataOwnerId, isCanary, listAccounts, syncAccounts, switchAccount } =
+    useAuth();
   const confirmDialog = useOptionalConfirmDialog();
   const navigate = useNavigate();
   const location = useLocation();
   const [avatarError, setAvatarError] = useState(false);
   const [mobileDownloadOpen, setMobileDownloadOpen] = useState(false);
   const [savedAccounts, setSavedAccounts] = useState<DesktopSavedAccount[]>([]);
+  const [savedAccountsOwnerKey, setSavedAccountsOwnerKey] = useState<string | null>(null);
   const [accountsMutationAllowed, setAccountsMutationAllowed] = useState(true);
   const [accountsSyncing, setAccountsSyncing] = useState(false);
   const [switchingAccountKey, setSwitchingAccountKey] = useState<string | null>(null);
   const mobileDownloadButtonRef = useRef<HTMLButtonElement>(null);
   const accountsLoadGenerationRef = useRef(0);
   const { t } = useTranslation();
+  const accountsOwnerKey = mode === 'cloud' ? dataOwnerId : null;
+  const accountsReadyForOwner = savedAccountsOwnerKey === accountsOwnerKey;
 
   // 火焰按钮双职责:
   // - 正常情况(无 pending update 或 banner 未 dismiss)→ 弹更新历史 Dialog。
@@ -101,6 +105,18 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   useEffect(() => {
     setAvatarError(false);
   }, [avatarUrl]);
+
+  // Account snapshots belong to the active data owner. Invalidate them as
+  // soon as ownership changes so a reopened menu can never act on the prior
+  // account while the fresh list is loading.
+  useEffect(() => {
+    accountsLoadGenerationRef.current += 1;
+    setSavedAccountsOwnerKey(null);
+    setSavedAccounts([]);
+    setAccountsMutationAllowed(false);
+    setAccountsSyncing(false);
+    setSwitchingAccountKey(null);
+  }, [accountsOwnerKey]);
 
   if (!user && !isLocal) return null;
 
@@ -134,7 +150,8 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     if (location.pathname !== '/settings') navigate('/settings');
   };
 
-  const openAddAccount = () => {
+  const openAddAccount = async () => {
+    if (!(await confirmRunningTaskInterruption())) return;
     navigate('/add-account', {
       state: { returnTo: `${location.pathname}${location.search}` },
     });
@@ -143,17 +160,22 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const refreshSavedAccounts = async () => {
     if (mode !== 'cloud') return;
     const generation = ++accountsLoadGenerationRef.current;
+    setSavedAccountsOwnerKey(null);
+    setSavedAccounts([]);
+    setAccountsMutationAllowed(false);
     setAccountsSyncing(true);
     try {
       const initialSnapshot = await listAccounts();
       if (generation !== accountsLoadGenerationRef.current) return;
       setSavedAccounts(initialSnapshot.accounts);
       setAccountsMutationAllowed(initialSnapshot.mutationAllowed);
+      setSavedAccountsOwnerKey(accountsOwnerKey);
 
       const syncedSnapshot = await syncAccounts();
       if (generation !== accountsLoadGenerationRef.current) return;
       setSavedAccounts(syncedSnapshot.accounts);
       setAccountsMutationAllowed(syncedSnapshot.mutationAllowed);
+      setSavedAccountsOwnerKey(accountsOwnerKey);
     } catch {
       if (generation === accountsLoadGenerationRef.current) {
         toast.error(t('sidebar.accountSwitcher.syncFailed'));
@@ -180,7 +202,13 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   };
 
   const switchSavedAccount = async (account: DesktopSavedAccount) => {
-    if (account.isCurrent || switchingAccountKey || !accountsMutationAllowed) return;
+    if (
+      account.isCurrent ||
+      switchingAccountKey ||
+      !accountsMutationAllowed ||
+      !accountsReadyForOwner
+    )
+      return;
     setSwitchingAccountKey(account.accountKey);
     try {
       if (!(await confirmRunningTaskInterruption())) return;
@@ -193,7 +221,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   };
 
   const renderSavedAccountItems = () => {
-    if (mode !== 'cloud' || savedAccounts.length <= 1) return null;
+    if (mode !== 'cloud' || !accountsReadyForOwner || savedAccounts.length <= 1) return null;
 
     return (
       <>
@@ -247,9 +275,11 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-[190px]">
         {renderSavedAccountItems()}
-        {mode === 'cloud' && savedAccounts.length > 1 ? <DropdownMenuSeparator /> : null}
+        {mode === 'cloud' && accountsReadyForOwner && savedAccounts.length > 1 ? (
+          <DropdownMenuSeparator />
+        ) : null}
         {mode === 'local' ? (
-          <DropdownMenuItem onSelect={openAddAccount} className="gap-2.5">
+          <DropdownMenuItem onSelect={() => void openAddAccount()} className="gap-2.5">
             <UserPlus className="h-4 w-4" aria-hidden="true" />
             {t('sidebar.user.menuAddAccount')}
           </DropdownMenuItem>

@@ -8,6 +8,7 @@ const { authState, betaChannelState, listAccounts, navigate, syncAccounts, switc
     authState: {
       user: { name: 'Cindy user', avatar: null } as { name: string; avatar: string | null } | null,
       mode: 'cloud' as 'cloud' | 'local',
+      dataOwnerId: 'owner-a' as string | null,
       isCanary: false,
     },
     betaChannelState: { enableBeta: false, isCustomized: false, loading: false },
@@ -92,6 +93,7 @@ beforeEach(() => {
   navigate.mockClear();
   authState.user = { name: 'Cindy user', avatar: null };
   authState.mode = 'cloud';
+  authState.dataOwnerId = 'owner-a';
   listAccounts.mockReset().mockResolvedValue({
     mutationAllowed: true,
     accounts: [
@@ -216,6 +218,21 @@ describe('UserInfoSection mobile download entry', () => {
     await waitFor(() => expect(switchAccount).toHaveBeenCalledWith('other'));
   });
 
+  it('drops the previous account menu snapshot as soon as the owner changes', async () => {
+    const view = render(<UserInfoSection isCollapsed={false} />);
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole('menuitem', { name: /Other user/ })).toBeTruthy();
+
+    authState.dataOwnerId = 'owner-b';
+    view.rerender(<UserInfoSection isCollapsed={false} />);
+
+    expect(screen.queryByRole('menuitem', { name: /Other user/ })).toBeNull();
+  });
+
   it('does not show an account section when only one account is saved', async () => {
     listAccounts.mockResolvedValueOnce({
       mutationAllowed: true,
@@ -278,6 +295,8 @@ describe('UserInfoSection mobile download entry', () => {
     expect(listAccounts).not.toHaveBeenCalled();
 
     fireEvent.click(addAccount);
-    expect(navigate).toHaveBeenCalledWith('/add-account', { state: { returnTo: '/' } });
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith('/add-account', { state: { returnTo: '/' } }),
+    );
   });
 });

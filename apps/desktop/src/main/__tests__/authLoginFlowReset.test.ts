@@ -155,6 +155,7 @@ describe('auth login-flow reset', () => {
   });
 
   it('keeps saved account metadata fresh after profile edits and Passport sync', () => {
+    expect(source).toContain('const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;');
     const writePassportStart = source.indexOf('function writePassportSessionToVault(');
     const writePassportEnd = source.indexOf(
       '\n}\n\n/** Persist a rotated Passport',
@@ -163,6 +164,13 @@ describe('auth login-flow reset', () => {
     const writePassportBody = source.slice(writePassportStart, writePassportEnd);
     expect(writePassportBody).toContain('reconcileSavedAccountMetadata(vault');
     expect(writePassportBody).toContain("passportMode: 'replace-passport'");
+    expect(writePassportBody).toContain('loggedOutKeys.has(accountVaultKey(input.realm');
+
+    const readStart = source.indexOf('function readAuthAccountVault(');
+    const readEnd = source.indexOf('\n}\n\nfunction writeAuthAccountVault', readStart);
+    const readBody = source.slice(readStart, readEnd);
+    expect(readBody).toContain('persistedVersion !== 1');
+    expect(readBody).toContain('version: AUTH_ACCOUNT_VAULT_VERSION');
 
     const profileStart = source.indexOf('export async function updateServerProfile(');
     const profileEnd = source.indexOf('\n}\n\nexport async function initialize(', profileStart);
@@ -566,7 +574,8 @@ describe('auth login-flow reset', () => {
     const tombstoneCommit = logoutBody.indexOf('await mutateAuthAccountVault((vault) => {');
     const ownerTeardown = logoutBody.indexOf('await withAccountFreeOwnerCommit({');
     expect(tombstoneCommit).toBeGreaterThan(-1);
-    expect(logoutBody).not.toContain('clearAuthAccountVault(');
+    expect(logoutBody).toContain('savedVaultWasUnreadable');
+    expect(logoutBody).toContain('clearAuthAccountVault((vault) => {');
     expect(logoutBody).toContain('removeLoggedOutVaultAccount(vault, currentIdentity)');
     expect(logoutBody).toContain('vault.signedOutAt = Date.now();');
     expect(logoutBody.indexOf('removeSafe(AUTH_SESSION_KEY);')).toBeGreaterThan(tombstoneCommit);
@@ -661,6 +670,21 @@ describe('auth login-flow reset', () => {
       "await expireRuntimeAuth(currentUser.id, 'replaced-elsewhere', {",
     );
     expect(refreshBody).toContain('preservePersistedRefreshToken: true');
+  });
+
+  it('retries the vault active account after a stale compatibility token fails on cold start', () => {
+    const coldStart = source.indexOf('async function runColdStartRefreshFlow(');
+    const coldStartEnd = source.indexOf('\n}\n\n/**\n * Called on system resume', coldStart);
+    const coldStartBody = source.slice(coldStart, coldStartEnd);
+    expect(coldStartBody).toContain(
+      'const nextActiveCandidate = readActiveVaultRefreshCandidate();',
+    );
+    expect(coldStartBody).toContain(
+      'cold-start refresh rejected a stale compatibility token; continuing with the vault active account',
+    );
+    expect(coldStartBody).toContain(
+      'expectedActiveVaultAccountKey: nextActiveCandidate.accountKey',
+    );
   });
 
   it('unlocks login preparing with the splash startup gate after 30s', () => {

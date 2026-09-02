@@ -105,10 +105,11 @@ describe('UserInfoSection — Canary avatar badge', () => {
     expect(source).toMatch(
       /import \{[\s\S]*Building2[\s\S]*Check[\s\S]*Flame[\s\S]*UserRound[\s\S]*\} from 'lucide-react';/,
     );
+    expect(source).toContain('dataOwnerId');
+    expect(source).toContain('isCanary, listAccounts, syncAccounts, switchAccount');
     expect(source).toContain(
-      'const { user, mode, isCanary, listAccounts, syncAccounts, switchAccount } = useAuth();',
+      "if (mode !== 'cloud' || !accountsReadyForOwner || savedAccounts.length <= 1) return null;",
     );
-    expect(source).toContain("if (mode !== 'cloud' || savedAccounts.length <= 1) return null;");
     expect(source).toContain('{isCanary && (');
     expect(source).toContain("aria-label={t('sidebar.user.canaryBadge')}");
     expect(source).not.toContain("isCanary && 'ring-[1.5px] ring-foreground'");
@@ -217,9 +218,8 @@ describe('UserInfoSection — inner main button no longer owns hover background'
 
   it('keeps Settings at the bottom of the More menu and leaves logout in Settings', () => {
     expect(source).toContain("t('sidebar.user.menuSettings')");
-    expect(source).toContain(
-      "{renderSavedAccountItems()}\n        {mode === 'cloud' && savedAccounts.length > 1 ? <DropdownMenuSeparator /> : null}",
-    );
+    expect(source).toContain('{renderSavedAccountItems()}');
+    expect(source).toContain('accountsReadyForOwner && savedAccounts.length > 1');
     expect(source.indexOf('{renderSavedAccountItems()}')).toBeLessThan(
       source.indexOf("t('sidebar.user.menuSettings')"),
     );
@@ -234,10 +234,11 @@ describe('UserInfoSection — inner main button no longer owns hover background'
   });
 
   it('shows saved accounts directly only when there is more than one', () => {
+    expect(source).toContain('dataOwnerId');
+    expect(source).toContain('isCanary, listAccounts, syncAccounts, switchAccount');
     expect(source).toContain(
-      'const { user, mode, isCanary, listAccounts, syncAccounts, switchAccount } = useAuth();',
+      "if (mode !== 'cloud' || !accountsReadyForOwner || savedAccounts.length <= 1) return null;",
     );
-    expect(source).toContain("if (mode !== 'cloud' || savedAccounts.length <= 1) return null;");
     expect(source).toContain('onSelect={() => void switchSavedAccount(account)}');
     expect(source).toContain('await switchAccount(account.accountKey);');
     expect(source).toContain('onOpenChange={(open) => open && void refreshSavedAccounts()}');

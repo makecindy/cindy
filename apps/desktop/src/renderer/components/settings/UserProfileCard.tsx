@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useLogout } from '@/hooks/useLogout';
 import { ProfileEditDialog } from './ProfileEditDialog';
 
@@ -32,6 +33,7 @@ function abbreviateUserId(id: string): string {
 
 export function UserProfileCard() {
   const { user, mode, exitLocalMode } = useAuth();
+  const confirmDialog = useOptionalConfirmDialog();
   const { handleLogout } = useLogout();
   const navigate = useNavigate();
   const location = useLocation();
@@ -123,7 +125,24 @@ export function UserProfileCard() {
     }
   };
 
-  const openAddAccount = () => {
+  const confirmRunningTaskInterruption = async (): Promise<boolean> => {
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+    const hasRunningTask = [...makerChatStore.getRunningSnapshot().values()].some(
+      (status) => status.isRunning,
+    );
+    if (!hasRunningTask) return true;
+    if (!confirmDialog) return false;
+    return confirmDialog.confirm({
+      title: t('sidebar.accountSwitcher.runningTaskTitle'),
+      description: t('sidebar.accountSwitcher.runningTaskDescription'),
+      confirmText: t('sidebar.accountSwitcher.runningTaskConfirm'),
+      cancelText: t('logic.confirm.cancel'),
+      confirmVariant: 'destructive',
+    });
+  };
+
+  const openAddAccount = async () => {
+    if (!(await confirmRunningTaskInterruption())) return;
     navigate('/add-account', {
       state: { returnTo: `${location.pathname}${location.search}` },
     });
@@ -267,7 +286,7 @@ export function UserProfileCard() {
           </button>
           <button
             type="button"
-            onClick={openAddAccount}
+            onClick={() => void openAddAccount()}
             aria-label={t('sidebar.user.menuAddAccount')}
             className={cn(
               'flex h-8 items-center justify-center gap-1.5 rounded-full border px-3 text-12 font-medium',

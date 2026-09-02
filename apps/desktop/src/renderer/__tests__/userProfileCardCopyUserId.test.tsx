@@ -52,6 +52,10 @@ vi.mock('@/hooks/useLogout', () => ({
   useLogout: () => ({ handleLogout: mocks.handleLogout }),
 }));
 
+vi.mock('@/lib/makerChatStore', () => ({
+  makerChatStore: { getRunningSnapshot: () => new Map() },
+}));
+
 vi.mock('@/lib/toast', () => ({
   toast: { success: mocks.toastSuccess, error: mocks.toastError },
 }));
@@ -179,7 +183,7 @@ describe('UserProfileCard copy user ID', () => {
     expect(mocks.writeText).not.toHaveBeenCalled();
   });
 
-  it('keeps cloud account actions on the right side of the profile card', () => {
+  it('keeps cloud account actions on the right side of the profile card', async () => {
     renderCard();
 
     const logoutButton = screen.getByRole('button', { name: 'settings.logout.aria' });
@@ -193,7 +197,9 @@ describe('UserProfileCard copy user ID', () => {
     expect(mocks.handleLogout).toHaveBeenCalledOnce();
 
     fireEvent.click(addAccountButton);
-    expect(screen.getByTestId('location-probe').textContent).toBe('/add-account');
+    await waitFor(() =>
+      expect(screen.getByTestId('location-probe').textContent).toBe('/add-account'),
+    );
     expect(screen.queryByTestId('account-switcher-dialog')).toBeNull();
     expect(addAccountButton.parentElement?.className).toContain('flex-col');
   });
