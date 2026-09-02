@@ -1,7 +1,10 @@
 /**
  * DS-3 第一批 semantic 角色：DESIGN.md §10 Tier-1 既有名称
  * （surface / border / text / accent）+ status 语义。
- * 不改名、不发明新语义。U2 与 annotation-accent 等保护值不在此列。
+ * 不改名、不发明新语义。Tier-1 受保护 slot（U2 二级信息色 text-secondary /
+ * text-secondary-cross）按治理合同 §3.2「名称与用途延续」照常登记——
+ * 保护限制的是改值须经裁决，不是禁止迁移；Tier-3 singleton（annotation-accent、
+ * login-brand-*）不在首批，保留原位（分类登记仍标 protected）。
  */
 export type SemanticGroup = 'surface' | 'border' | 'text' | 'accent' | 'status';
 
@@ -34,6 +37,8 @@ export const SEMANTIC_ROLES: readonly SemanticRole[] = [
   { id: 'text-primary-emphasis', group: 'text' },
   { id: 'text-primary-inv', group: 'text' },
   { id: 'text-primary-body-strong', group: 'text' },
+  { id: 'text-secondary', group: 'text' },
+  { id: 'text-secondary-cross', group: 'text' },
   { id: 'text-secondary-mid', group: 'text' },
   { id: 'text-tertiary', group: 'text' },
   { id: 'text-tertiary-stone', group: 'text' },

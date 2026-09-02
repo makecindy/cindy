@@ -35,7 +35,7 @@ hex / rgba / transparent → srgb 分量（0–1）+ 可选 alpha。不用自定
 （`"other"` 不是标准 DTCG 类型——Terrazzo 2.7.1 实测会静默丢弃这类 token，
 DS-8 接线时无法生成 CSS 变量；裸 triplet 字符串也会被解析成黑色）。
 
-U2 二级信息色（`text-secondary` / `text-secondary-cross`）、`annotation-accent`、CINDY 皮肤族品牌红（`login-brand-accent` / `login-brand-accent-pressed`）按治理合同 §1.1 标记 **protected**，只登记、不进 semantic 映射。皮肤族其余值在 cindy-light/dark 主题 override 里，不在本快照默认值中。
+加严保护值按治理合同 §1.1 标记 **protected**，分两种 mode：Tier-1 slot（U2 二级信息色 `text-secondary` / `text-secondary-cross`）按 §3.2「名称与用途延续」**照常 semantic 建模** + protected 元数据——保护限制的是改值须经裁决，不是禁止迁移；Tier-3 singleton（`annotation-accent`、CINDY 皮肤族品牌红 `login-brand-accent` / `login-brand-accent-pressed`）按「保留原位，逐项裁决，默认不动」只登记、不建模。皮肤族其余值在 cindy-light/dark 主题 override 里，不在本快照默认值中。
 
 语义豁免色（DESIGN.md §10 theme-invariant 族：`destructive` / `error-*` / `warning-*` / `focus-ring*`）与 protected 不同：**照常 semantic 建模**，但在 `classification.json` 携带 `exemption` 元数据（外部主题不可覆盖、跨主题恒定）。DS-8 生成主题入口时据此区分可覆写 semantic 与必须保留原值的豁免族；治理合同 §3.2 要求 Tier-3 豁免色按此迁移。DESIGN.md §10 豁免表其余未建模项（`diff-*` / `login-error-fg` 等）进 shadow 层时再登记。
 

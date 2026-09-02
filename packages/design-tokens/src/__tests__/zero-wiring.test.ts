@@ -365,6 +365,18 @@ describe('DS-3 · 零接线守卫', () => {
       ['resolve(__dirname, rel)', "readFileSync(resolve(__dirname, '../../design-tokens/src/semantic/color.json'), 'utf8')"],
       ['join(__dirname, rel)', "readFileSync(join(__dirname, '../../design-tokens/src/snapshot.ts'), 'utf8')"],
       ['resolve(变量基座, rel)', "readFileSync(resolve(here, '../../design-tokens/src/x.json'))"],
+      [
+        '分段 join（review P2 补洞：重建全部静态参数）',
+        "readFileSync(join(__dirname, '..', '..', 'design-tokens/src/semantic/color.json'))",
+      ],
+      [
+        '多段 resolve（每段一个目录）',
+        "readFileSync(resolve(__dirname, '..', '..', 'design-tokens', 'src', 'semantic', 'color.json'))",
+      ],
+      [
+        '分段 join 模板段',
+        "readFileSync(join(here, '..', '..', `design-tokens/src/x.json`))",
+      ],
     ];
     for (const [name, source] of hitCases) {
       expect(

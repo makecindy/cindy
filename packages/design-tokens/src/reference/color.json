@@ -243,17 +243,6 @@
       ]
     }
   },
-  "hex-a3a3a3": {
-    "$type": "color",
-    "$value": {
-      "colorSpace": "srgb",
-      "components": [
-        0.639216,
-        0.639216,
-        0.639216
-      ]
-    }
-  },
   "hex-737373": {
     "$type": "color",
     "$value": {
@@ -262,6 +251,17 @@
         0.45098,
         0.45098,
         0.45098
+      ]
+    }
+  },
+  "hex-a3a3a3": {
+    "$type": "color",
+    "$value": {
+      "colorSpace": "srgb",
+      "components": [
+        0.639216,
+        0.639216,
+        0.639216
       ]
     }
   },

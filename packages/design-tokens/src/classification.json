@@ -3,10 +3,10 @@
   "generatedBy": "packages/design-tokens/src/classify.ts",
   "snapshotCount": 514,
   "categories": {
-    "literal": 246,
+    "literal": 248,
     "alias": 235,
     "hsl-triplet": 6,
-    "runtime-derived-or-protected": 27
+    "runtime-derived-or-protected": 25
   },
   "entries": [
     {
@@ -272,29 +272,31 @@
     },
     {
       "id": "text-secondary",
-      "category": "runtime-derived-or-protected",
-      "destination": "register-only",
+      "category": "literal",
+      "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
       "protected": {
         "family": "u2-secondary-info",
         "owner": "DESIGN.md §15.5",
-        "rule": "U2 二级信息色，never darken unilaterally"
+        "rule": "U2 二级信息色，never darken unilaterally",
+        "mode": "semantic-modeled"
       },
-      "modeledAsSemantic": false
+      "modeledAsSemantic": true
     },
     {
       "id": "text-secondary-cross",
-      "category": "runtime-derived-or-protected",
-      "destination": "register-only",
+      "category": "literal",
+      "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
       "protected": {
         "family": "u2-secondary-info",
         "owner": "DESIGN.md §15.5",
-        "rule": "U2 二级信息色，never darken unilaterally"
+        "rule": "U2 二级信息色，never darken unilaterally",
+        "mode": "semantic-modeled"
       },
-      "modeledAsSemantic": false
+      "modeledAsSemantic": true
     },
     {
       "id": "text-secondary-mid",
@@ -1125,7 +1127,8 @@
       "protected": {
         "family": "cindy-skin-family",
         "owner": "DESIGN.md §15.1",
-        "rule": "CINDY 皮肤族品牌红，实现期零裁量"
+        "rule": "CINDY 皮肤族品牌红，实现期零裁量",
+        "mode": "register-only"
       },
       "modeledAsSemantic": false
     },
@@ -1138,7 +1141,8 @@
       "protected": {
         "family": "cindy-skin-family",
         "owner": "DESIGN.md §15.1",
-        "rule": "CINDY 皮肤族品牌红（pressed），实现期零裁量"
+        "rule": "CINDY 皮肤族品牌红（pressed），实现期零裁量",
+        "mode": "register-only"
       },
       "modeledAsSemantic": false
     },
@@ -2879,7 +2883,8 @@
       "protected": {
         "family": "annotation-accent",
         "owner": "DESIGN.md §15.4",
-        "rule": "图片标注烧录墨色，exempt, do not change"
+        "rule": "图片标注烧录墨色，exempt, do not change",
+        "mode": "register-only"
       },
       "modeledAsSemantic": false
     },

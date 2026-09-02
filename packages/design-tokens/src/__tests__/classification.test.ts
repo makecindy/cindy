@@ -79,13 +79,23 @@ describe('DS-3 · 分类登记', () => {
     }
   });
 
-  it('加严保护值标记 protected，未进 semantic 映射', () => {
+  it('加严保护值标记 protected，Tier-1 照常建模、Tier-3 只登记', () => {
     assertProtectedNotSemantic(generated);
     for (const id of Object.keys(PROTECTED_IDS)) {
       const entry = generated.entries.find((item) => item.id === id);
-      expect(entry?.category).toBe('runtime-derived-or-protected');
-      expect(entry?.modeledAsSemantic).toBe(false);
       expect(entry?.protected).toBeTruthy();
+      if (PROTECTED_IDS[id].mode === 'register-only') {
+        // Tier-3 singleton：只登记、不建模（治理合同 §3.2「保留原位」）。
+        expect(entry?.category).toBe('runtime-derived-or-protected');
+        expect(entry?.modeledAsSemantic).toBe(false);
+      } else {
+        // Tier-1 slot：照常 semantic 建模 + protected 元数据（治理合同
+        // §3.2「名称与用途延续」；保护限制改值，不禁止迁移——review P2 实锤：
+        // 旧统一 register-only 分支让 text-secondary 从 semantic 消失，
+        // DS-8 无法从新真相源生成它）。
+        expect(entry?.modeledAsSemantic).toBe(true);
+        expect(entry?.category).not.toBe('runtime-derived-or-protected');
+      }
     }
   });
 
@@ -112,7 +122,8 @@ describe('DS-3 · 分类登记', () => {
     // 独立于被测实现复刻分类语义口径（刻意不复用 classify.ts 的
     // classifyValue / isLiteralKind，改用自己的正则判定，分类规则变更时
     // 必须与本测试同步更新）：
-    //   protected 条目 → runtime-derived-or-protected（只看登记表）；
+    //   protected 且 register-only（Tier-3）→ runtime-derived-or-protected；
+    //   protected 且 semantic-modeled（Tier-1）→ 按值形态正常分类；
     //   -hsl 后缀且双模式都是 hsl-triplet → hsl-triplet；
     //   双 alias → alias；双字面量 → literal；其余一律 runtime-derived。
     const TRIPLET_VALUE_RE = /^-?\d+(?:\.\d+)?\s+\d+(?:\.\d+)?%\s+\d+(?:\.\d+)?%$/;
@@ -140,7 +151,9 @@ describe('DS-3 · 分类登记', () => {
     const expected = new Map<string, ClassificationCategory>();
     for (const color of snapshot.colors) {
       let category: ClassificationCategory;
-      if (color.id in PROTECTED_IDS) {
+      const protectedRule = PROTECTED_IDS[color.id];
+      if (protectedRule && protectedRule.mode === 'register-only') {
+        // Tier-3 singleton：只登记（治理合同 §3.2「保留原位」）。
         category = 'runtime-derived-or-protected';
       } else if (
         color.id.endsWith('-hsl') &&
@@ -151,6 +164,8 @@ describe('DS-3 · 分类登记', () => {
       } else if (isAlias(color.light) && isAlias(color.dark)) {
         category = 'alias';
       } else if (isLiteral(color.light) && isLiteral(color.dark)) {
+        // Tier-1 semantic-modeled 的保护值（text-secondary 等）按值形态
+        // 正常分类（literal），不因 protected 标记改变 category。
         category = 'literal';
       } else {
         category = 'runtime-derived-or-protected';

@@ -215,6 +215,26 @@
         "$value": "{hex-d4d4d4}"
       }
     },
+    "text-secondary": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-737373}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-a3a3a3}"
+      }
+    },
+    "text-secondary-cross": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-a3a3a3}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{hex-a3a3a3}"
+      }
+    },
     "text-secondary-mid": {
       "light": {
         "$type": "color",

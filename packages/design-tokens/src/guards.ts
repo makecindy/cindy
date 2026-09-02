@@ -105,17 +105,35 @@ export function assertProtectedNotSemantic(
     if (!entry) {
       throw new Error(`保护值 ${id} 未出现在分类登记`);
     }
-    if (entry.category !== 'runtime-derived-or-protected') {
-      throw new Error(`保护值 ${id} 分类应为 runtime-derived-or-protected，实际 ${entry.category}`);
-    }
-    if (entry.modeledAsSemantic) {
-      throw new Error(`保护值 ${id} 不得进入 semantic 映射`);
-    }
     if (entry.protected?.family !== rule.family) {
       throw new Error(`保护值 ${id} 的 family 标记错误`);
     }
-    if (SEMANTIC_ROLE_IDS.has(id)) {
-      throw new Error(`保护值 ${id} 出现在 SEMANTIC_ROLES`);
+    if (rule.mode === 'register-only') {
+      // Tier-3 singleton：只登记、不建模（治理合同 §3.2「保留原位」）。
+      if (entry.category !== 'runtime-derived-or-protected') {
+        throw new Error(
+          `保护值 ${id} 分类应为 runtime-derived-or-protected，实际 ${entry.category}`,
+        );
+      }
+      if (entry.modeledAsSemantic) {
+        throw new Error(`保护值 ${id}（register-only）不得进入 semantic 映射`);
+      }
+      if (SEMANTIC_ROLE_IDS.has(id)) {
+        throw new Error(`保护值 ${id}（register-only）出现在 SEMANTIC_ROLES`);
+      }
+    } else {
+      // Tier-1 slot（semantic-modeled）：照常建模 + 保留 protected 元数据
+      // （治理合同 §3.2「名称与用途延续」；保护限制改值，不禁止迁移）。
+      if (!entry.modeledAsSemantic) {
+        throw new Error(
+          `保护值 ${id}（semantic-modeled）必须进入 semantic 映射——DS-8 依赖新真相源生成它`,
+        );
+      }
+      if (!SEMANTIC_ROLE_IDS.has(id)) {
+        throw new Error(
+          `保护值 ${id}（semantic-modeled）未出现在 SEMANTIC_ROLES`,
+        );
+      }
     }
   }
 }
@@ -514,14 +532,17 @@ const FS_API_PATH_CONTEXT_RE =
 
 /**
  * 路径构造器语境（第九类）：`resolve(__dirname, '…')` / `join(here, '…')`
- * 等包装形态——仓内既有 fs 读取的主流写法（54 处实测），静态字符串片段
- * 按调用文件位置 resolve（`__dirname` ≈ 文件所在目录，与文件位置基准
- * 一致）。覆盖调用内的**任意位置**字符串参数（`resolve(a, '…', b)` 的
- * 中段也提取）。非相对片段（`'、'` 这类 join 分隔符）不以 `.` 开头，
+ * 等包装形态——仓内既有 fs 读取的主流写法（54 处实测）。
+ * 重建**全部静态参数**（review P2 实锤：`join(__dirname, '..', '..',
+ * 'design-tokens/…')` 分段拼接时只看第一个 `'..'` 会漏）——把调用内
+ * 按序出现的字符串字面量拼成一个候选路径再按文件位置 resolve；非字符串
+ * 参数（`__dirname` / 变量）在拼接中天然缺席（等价于从文件目录起算的
+ * 相对段）。非相对拼接结果（如 `'、'` 这类 join 分隔符）不以 `.` 开头，
  * 天然过滤。
  */
-const PATH_CONSTRUCTOR_CONTEXT_RE =
-  /\b(?:resolve|join)\s*\((?:[^()]*?)['"`]([^'"`]+)['"`]/g;
+const PATH_CONSTRUCTOR_CALL_RE =
+  /\b(?:resolve|join)\s*\(([^()]*)\)/g;
+const STATIC_STRING_ARG_RE = /['"`]([^'"`]+)['"`]/g;
 
 /** 判断「无空白压缩后的最近输出」是否以 import / fs API / 路径构造器语境结尾。 */
 const SPECIFIER_PREFIX_RE =
@@ -650,8 +671,16 @@ export function relativeSpecifierHitsDesignTokens(
   for (const match of codeOnly.matchAll(FS_API_PATH_CONTEXT_RE)) {
     specs.push(match[1]);
   }
-  for (const match of codeOnly.matchAll(PATH_CONSTRUCTOR_CONTEXT_RE)) {
-    specs.push(match[1]);
+  // 路径构造器：重建调用内全部静态字符串参数（按序拼接为候选路径）。
+  for (const call of codeOnly.matchAll(PATH_CONSTRUCTOR_CALL_RE)) {
+    const args = call[1];
+    const statics: string[] = [];
+    for (const arg of args.matchAll(STATIC_STRING_ARG_RE)) {
+      statics.push(arg[1]);
+    }
+    if (statics.length > 0) {
+      specs.push(statics.join('/'));
+    }
   }
   for (const spec of specs) {
     // 说明符分隔符归一（review P2 实锤）：源码字符串里的 `\\` 是转义的

@@ -20,6 +20,15 @@ export interface ProtectedRule {
   family: 'cindy-skin-family' | 'u2-secondary-info' | 'annotation-accent';
   owner: string;
   rule: string;
+  /**
+   * semantic-modeled：Tier-1 semantic slot（治理合同 §3.2「名称与用途延续」）
+   * ——照常 semantic 建模 + 保留 protected 元数据；保护限制的是改值须经
+   * 裁决，不是禁止迁移（review P2 实锤：U2 的 text-secondary 被统一
+   * register-only 分支移出 semantic，DS-8 将无法从新真相源生成它）。
+   * register-only：Tier-3 singleton（治理合同 §3.2「protected 角色或保留
+   * 原位，逐项裁决，默认不动」）——本 PR 未裁决进 semantic，只登记。
+   */
+  mode: 'semantic-modeled' | 'register-only';
 }
 
 export interface ExemptionRule {
@@ -74,34 +83,45 @@ const NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 /**
  * 加严保护值：治理合同 §1.1 / DESIGN.md §15。
- * 只登记、不进 semantic 映射。CINDY 皮肤族在默认 ColorRegistry 里
- * 只有登录品牌红两项（其余皮肤值在 cindy-light/dark 主题 override，不在本快照）。
+ * 两种 mode（治理合同 §3.2 的 Tier-1/Tier-3 分野）：
+ *  - semantic-modeled——Tier-1 slot（text-secondary / text-secondary-cross）：
+ *    照常 semantic 建模 + protected 元数据。U2 保护限制的是改值须裁决，
+ *    不是禁止迁移；「名称与用途延续」要求 DS-8 能从新真相源生成它们。
+ *  - register-only——Tier-3 singleton（annotation-accent / login-brand-*）：
+ *    只登记、不建模（治理合同「保留原位，逐项裁决，默认不动」）。
+ * CINDY 皮肤族在默认 ColorRegistry 里只有登录品牌红两项（其余皮肤值在
+ * cindy-light/dark 主题 override，不在本快照）。
  */
 export const PROTECTED_IDS: Readonly<Record<string, ProtectedRule>> = {
   'annotation-accent': {
     family: 'annotation-accent',
     owner: 'DESIGN.md §15.4',
     rule: '图片标注烧录墨色，exempt, do not change',
+    mode: 'register-only',
   },
   'text-secondary': {
     family: 'u2-secondary-info',
     owner: 'DESIGN.md §15.5',
     rule: 'U2 二级信息色，never darken unilaterally',
+    mode: 'semantic-modeled',
   },
   'text-secondary-cross': {
     family: 'u2-secondary-info',
     owner: 'DESIGN.md §15.5',
     rule: 'U2 二级信息色，never darken unilaterally',
+    mode: 'semantic-modeled',
   },
   'login-brand-accent': {
     family: 'cindy-skin-family',
     owner: 'DESIGN.md §15.1',
     rule: 'CINDY 皮肤族品牌红，实现期零裁量',
+    mode: 'register-only',
   },
   'login-brand-accent-pressed': {
     family: 'cindy-skin-family',
     owner: 'DESIGN.md §15.1',
     rule: 'CINDY 皮肤族品牌红（pressed），实现期零裁量',
+    mode: 'register-only',
   },
 };
 
@@ -218,14 +238,39 @@ export function classifyColor(entry: SnapshotColor): ClassificationEntry {
   const exemptionRule = SEMANTIC_EXEMPTION_IDS[entry.id];
 
   if (protectedRule) {
+    // register-only（Tier-3 singleton）：只登记、不建模，维持既有行为。
+    if (protectedRule.mode === 'register-only') {
+      return {
+        id: entry.id,
+        category: 'runtime-derived-or-protected',
+        destination: 'register-only',
+        lightKind,
+        darkKind,
+        protected: protectedRule,
+        modeledAsSemantic: false,
+      };
+    }
+    // semantic-modeled（Tier-1 slot）：照常走值形态分类（命名与用途延续），
+    // 保留 protected 元数据、强制进 semantic——保护限制改值，不禁止迁移。
     return {
       id: entry.id,
-      category: 'runtime-derived-or-protected',
-      destination: 'register-only',
+      category: isLiteralKind(lightKind) && isLiteralKind(darkKind)
+        ? 'literal'
+        : lightKind === 'alias' && darkKind === 'alias'
+          ? 'alias'
+          : 'runtime-derived-or-protected',
+      destination: isLiteralKind(lightKind) && isLiteralKind(darkKind)
+        ? 'reference-candidate'
+        : lightKind === 'alias' && darkKind === 'alias'
+          ? 'semantic-or-component-candidate'
+          : 'register-only',
       lightKind,
       darkKind,
+      aliasOf: lightKind === 'alias' && darkKind === 'alias'
+        ? { light: parseAliasTarget(entry.light), dark: parseAliasTarget(entry.dark) }
+        : undefined,
       protected: protectedRule,
-      modeledAsSemantic: false,
+      modeledAsSemantic: true,
     };
   }
 
