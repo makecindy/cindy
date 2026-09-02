@@ -459,6 +459,59 @@ describe('DS-3 · 零接线守卫', () => {
     }
   });
 
+  it('自证伪：fs/promises.open 句柄入口与 .mts/.cts 扫描必须被命中（review P2 补洞）', async () => {
+    // node:fs/promises 的异步 open 返回 FileHandle 再 readFile——路径参数
+    // 同样消费影子层；open 不在 fs API 列表时该形态漏放。window.open 的
+    // URL 参数不以 `.` 开头，天然过滤（仓内实测零误报）。
+    expect(
+      relativeSpecifierHitsDesignTokens(
+        "const file = await open('../../design-tokens/src/semantic/color.json'); await file.readFile();",
+        'packages/foo/src/a.ts',
+      ),
+    ).toBe(true);
+    expect(
+      relativeSpecifierHitsDesignTokens(
+        "const h = await open(`../../design-tokens/src/x.json`, 'r');",
+        'packages/foo/src/a.ts',
+      ),
+    ).toBe(true);
+    expect(
+      relativeSpecifierHitsDesignTokens(
+        "window.open('https://example.com/path');",
+        'packages/foo/src/a.ts',
+      ),
+    ).toBe(false);
+
+    // .mts/.cts 是有效 Node/TS 模块扩展（仓内 scripts/ 与 tools/ 已使用），
+    // 扫描器不认它们时文件在读取内容前被跳过。用临时目录里的 .mts 消费者
+    // 直接验证扫描器行为。
+    const { mkdtempSync, writeFileSync, rmSync, mkdirSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join: joinPath } = await import('node:path');
+    const tmpRoot = mkdtempSync(joinPath(tmpdir(), 'dt-zero-wiring-'));
+    try {
+      // 扫描器固定访问 apps/desktop、apps/mobile、packages 三个根——空目录
+      // 也要建齐，readdirSync 不容忍缺失。
+      for (const root of ['apps/desktop', 'apps/mobile', 'packages/foo/src']) {
+        mkdirSync(joinPath(tmpRoot, root), { recursive: true });
+      }
+      const pkgDir = joinPath(tmpRoot, 'packages', 'foo', 'src');
+      writeFileSync(
+        joinPath(pkgDir, 'consumer.mts'),
+        "import { x } from '../../design-tokens/src/snapshot.ts';\n",
+      );
+      writeFileSync(
+        joinPath(pkgDir, 'consumer.cjs'),
+        "const x = require('../../design-tokens/src/snapshot.ts');\n",
+      );
+      const hits = findRuntimeImportsOfDesignTokens(tmpRoot);
+      expect(hits).toContain('packages/foo/src/consumer.mts');
+      expect(hits).toContain('packages/foo/src/consumer.cjs');
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it('自证伪：require.resolve 是运行期加载入口，必须被命中（review P2 补洞）', () => {
     // `readFileSync(require.resolve('../../design-tokens/…'))` 是消费影子层的
     // 真实路径：旧实现的剥离层把 require.resolve 的参数当普通数据字符串

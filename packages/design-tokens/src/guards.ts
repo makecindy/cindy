@@ -525,10 +525,12 @@ const SPECIFIER_CONTEXT_RE =
  * fs API 路径参数语境（第八类）：`readFileSync('…'` / `readFile('…'` 等
  * 直接文件读取的**第一参数**。相对路径说明符按调用文件位置 resolve 后
  * 落进 packages/design-tokens/ 即命中（review P2 实锤：裸相对路径是最
- * 直接的绕过方式）。
+ * 直接的绕过方式）。含 `node:fs/promises` 的异步 `open('…')`（返回
+ * FileHandle 再 readFile——review P2 实锤）；`window.open('https://…')`
+ * 这类 URL 参数不以 `.` 开头，天然过滤，仓内实测零误报。
  */
 const FS_API_PATH_CONTEXT_RE =
-  /(?<![\w$])(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\(\s*['"`]([^'"`]+)['"`]/g;
+  /(?<![\w$])(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|open|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\(\s*['"`]([^'"`]+)['"`]/g;
 
 /**
  * 路径构造器语境（第九类）：`resolve(__dirname, '…')` / `join(here, '…')`
@@ -553,7 +555,7 @@ const STATIC_STRING_ARG_RE = /['"`]([^'"`]+)['"`]/g;
  * 调用语境。
  */
 const SPECIFIER_PREFIX_RE =
-  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\brequire\s*\.\s*resolve\s*\(|\bimport\.meta\.resolve\s*\(|\bimport\.meta\.glob\s*\(|\bnew\s+URL\s*\(|\bimport|(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\(|\b(?:resolve|join)\s*\([^()]*$)$/;
+  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\brequire\s*\.\s*resolve\s*\(|\bimport\.meta\.resolve\s*\(|\bimport\.meta\.glob\s*\(|\bnew\s+URL\s*\(|\bimport|(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|open|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\(|\b(?:resolve|join)\s*\([^()]*$)$/;
 
 /**
  * 剥除源码里的注释与「数据语境」字符串字面量，保留 import 说明符。
@@ -657,14 +659,16 @@ export function relativeSpecifierHitsDesignTokens(
   // 剥除必须在提取之前：`import(/* c */ '…')` 这类合法注释隔断会让
   // 关键字→引号的正则衔接在原始文本上断开（review P2 实锤），预扫直接
   // 零命中、剥除层反而执行不到。剥除层按注释→空白替换，衔接恢复。
-  // 关键字 includes 预检覆盖 import/require/from、fs API 与路径构造器
-  // 字样（任一命中才值得付剥除成本）。
+  // 关键字 includes 预检覆盖全部语境字样（import/require/from、fs API
+  // 与路径构造器；open 单独列出——裸 `open('…')` 不含 File/Sync 字样），
+  // 任一命中才值得付剥除成本。
   if (
     !text.includes('import') &&
     !text.includes('require') &&
     !text.includes('from') &&
     !text.includes('File') &&
     !text.includes('Sync') &&
+    !text.includes('open') &&
     !text.includes('resolve') &&
     !text.includes('join')
   ) {
@@ -742,7 +746,10 @@ export function findRuntimeImportsOfDesignTokens(repoRoot: string): string[] {
         hits.push(...dependencyHits(pkg, childRel));
         continue;
       }
-      if (!/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
+      // .mts/.cts 是有效的 Node/TypeScript 模块扩展（仓内 scripts/ 与
+      // tools/ 已使用），不扫它们会让相对路径消费在读取内容前就被跳过
+      // （review P2 实锤）。
+      if (!/\.(ts|tsx|js|mjs|cjs|mts|cts)$/.test(entry.name)) continue;
       const text = readFileSync(childAbs, 'utf8');
       // 双通道检测：包 id / 带前缀路径的静态形态 + 按本文件位置解析的相对
       // 说明符（兄弟 workspace 的 `../../design-tokens/src/…` 只有后者能抓到）。
