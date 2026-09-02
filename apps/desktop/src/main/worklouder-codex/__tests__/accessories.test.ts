@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+  WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS,
   createWorkLouderCodexDefaultSettings,
   type WorkLouderCodexSettings,
   type WorkLouderCodexState,
@@ -25,17 +26,21 @@ function emptySlots(): WorkLouderCodexState['agentSlots'] {
   }));
 }
 
-function liveState(overrides: {
-  deviceType?: WorkLouderModel | null;
-  present?: boolean | null;
-  connectionStatus?: WorkLouderCodexState['connectionStatus'];
-  settings?: WorkLouderCodexSettings;
-  agentSlots?: WorkLouderCodexState['agentSlots'];
-} = {}): WorkLouderCodexState {
+function liveState(
+  overrides: {
+    deviceType?: WorkLouderModel | null;
+    present?: boolean | null;
+    connectionStatus?: WorkLouderCodexState['connectionStatus'];
+    settings?: WorkLouderCodexSettings;
+    agentSlots?: WorkLouderCodexState['agentSlots'];
+    taskOptions?: WorkLouderCodexState['taskOptions'];
+  } = {},
+): WorkLouderCodexState {
   const deviceType = overrides.deviceType === undefined ? null : overrides.deviceType;
   const present = overrides.present === undefined ? (deviceType ? true : null) : overrides.present;
   return {
-    connectionStatus: overrides.connectionStatus ?? (present === true ? 'connected' : 'not-detected'),
+    connectionStatus:
+      overrides.connectionStatus ?? (present === true ? 'connected' : 'not-detected'),
     connectionReason: null,
     devicePresent: present,
     device: {
@@ -44,7 +49,7 @@ function liveState(overrides: {
     },
     settings: overrides.settings ?? createWorkLouderCodexDefaultSettings('codex-micro'),
     agentSlots: overrides.agentSlots ?? emptySlots(),
-    taskOptions: [],
+    taskOptions: overrides.taskOptions ?? [],
     agentSlotCount: 6,
   };
 }
@@ -135,12 +140,10 @@ describe('resolveWorkLouderOccupyingModel', () => {
 
 describe('workLouderLayoutPreviewSuppressesActions', () => {
   it('only suppresses the occupied board while its own settings page is open', () => {
-    expect(
-      workLouderLayoutPreviewSuppressesActions(true, 'creator-micro-2', 'codex-micro'),
-    ).toBe(false);
-    expect(workLouderLayoutPreviewSuppressesActions(true, 'codex-micro', 'codex-micro')).toBe(
-      true,
+    expect(workLouderLayoutPreviewSuppressesActions(true, 'creator-micro-2', 'codex-micro')).toBe(
+      false,
     );
+    expect(workLouderLayoutPreviewSuppressesActions(true, 'codex-micro', 'codex-micro')).toBe(true);
     expect(workLouderLayoutPreviewSuppressesActions(true, 'creator-micro-2', null)).toBe(false);
     expect(workLouderLayoutPreviewSuppressesActions(false, 'codex-micro', 'codex-micro')).toBe(
       false,
@@ -184,7 +187,12 @@ describe('WorkLouderAccessories occupancy', () => {
         deviceType: 'creator-micro-2',
         settings: defaults('codex-micro'),
         agentSlots: [
-          { slot: 0, sessionId: 's1', title: 'Live task', action: { type: 'task', sessionId: 's1' } },
+          {
+            slot: 0,
+            sessionId: 's1',
+            title: 'Live task',
+            action: { type: 'task', sessionId: 's1' },
+          },
           ...emptySlots().slice(1),
         ],
       }),
@@ -236,10 +244,12 @@ describe('WorkLouderAccessories occupancy', () => {
     const accessories = new WorkLouderAccessories(lighting);
     accessories.applySettings('codex-micro', defaults('codex-micro', true));
 
-    expect(resolveWorkLouderOccupyingModel(null, {
-      'codex-micro': defaults('codex-micro', true),
-      'creator-micro-2': defaults('creator-micro-2'),
-    })).toBeNull();
+    expect(
+      resolveWorkLouderOccupyingModel(null, {
+        'codex-micro': defaults('codex-micro', true),
+        'creator-micro-2': defaults('creator-micro-2'),
+      }),
+    ).toBeNull();
     expect(lighting.getState().settings.deviceEnabled).toBe(false);
     expect(accessories.getAccessories()['codex-micro'].connectionStatus).toBe('not-detected');
   });
@@ -339,5 +349,42 @@ describe('WorkLouderAccessories occupancy', () => {
     expect(state['creator-micro-2'].taskOptions).toEqual([
       { id: 'task-1', title: 'Inbox', pinned: false },
     ]);
+  });
+
+  it('projects extra custom task keys on the idle board from the live catalog', () => {
+    const lighting = new FakeLighting(
+      liveState({
+        deviceType: 'codex-micro',
+        settings: defaults('codex-micro'),
+        taskOptions: [
+          { id: 't0', title: 'Zero', pinned: false },
+          { id: 't1', title: 'One', pinned: false },
+          { id: 't2', title: 'Two', pinned: false },
+          { id: 't3', title: 'Three', pinned: false },
+          { id: 't4', title: 'Four', pinned: false },
+          { id: 't5', title: 'Five', pinned: false },
+          { id: 't6', title: 'Sixth extra', pinned: false },
+        ],
+      }),
+    );
+    const accessories = new WorkLouderAccessories(lighting);
+    accessories.applySettings('codex-micro', defaults('codex-micro', true));
+    accessories.applySettings('creator-micro-2', {
+      ...defaults('creator-micro-2'),
+      agentSource: 'custom',
+      layout: {
+        ...defaults('creator-micro-2').layout,
+        taskKeys: [...WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS, 'ACT06'],
+      },
+    });
+
+    const idle = accessories.getAccessories()['creator-micro-2'];
+    expect(idle.agentSlots).toHaveLength(7);
+    expect(idle.agentSlots[6]).toEqual({
+      slot: 6,
+      sessionId: 't6',
+      title: 'Sixth extra',
+      action: { type: 'task', sessionId: 't6' },
+    });
   });
 });

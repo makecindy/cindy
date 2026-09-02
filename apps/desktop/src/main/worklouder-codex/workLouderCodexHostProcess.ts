@@ -413,7 +413,9 @@ async function probeConnection(): Promise<void> {
         }
         const creatorStillPresent =
           workLouderFirmwareIdlesHidRead(connectedDevice?.deviceType) &&
-          findCandidates().some((candidate) => candidate.deviceType === connectedDevice?.deviceType);
+          findCandidates().some(
+            (candidate) => candidate.deviceType === connectedDevice?.deviceType,
+          );
         if (!transportFaulted && creatorStillPresent) {
           post({ kind: 'state', status: 'connected' });
           return;
@@ -438,7 +440,13 @@ async function probeConnection(): Promise<void> {
     post({ kind: 'state', status: 'connected' });
     if (hidListeningRequested) requestListen();
     if (latestFrame && !isWorkLouderCodexLightingFrameOff(latestFrame)) requestApply();
-  } catch {
+  } catch (error) {
+    const message = safeErrorMessage(error);
+    if (isWorkLouderHidContention(message)) {
+      post({ kind: 'state', status: 'error', reason: 'device-in-use' });
+      scheduleCreatorKeymapRetry();
+      return;
+    }
     post({ kind: 'state', status: 'not-detected' });
     scheduleRetry();
   }
@@ -755,16 +763,13 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (generation !== creatorKeymapGeneration || stopping) return;
   creatorKeymapBound = true;
   clearCreatorKeymapRetry();
-  hostLog(
-    'info',
-    `Work Louder layer ${layerIndex + 1} now emits agent keys instead of keystrokes`,
-  );
+  hostLog('info', `Work Louder layer ${layerIndex + 1} now emits agent keys instead of keystrokes`);
 }
 
 async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<void> {
   if (connectedDevice?.deviceType !== 'creator-micro-2') return;
   while (!stopping && !creatorKeymapBound) {
-    if (Date.now() < creatorKeymapRetryAt) return;
+    if (Date.now() < creatorKeymapRetryAt) break;
     if (creatorKeymapBinding) {
       await creatorKeymapBinding;
       continue;
@@ -779,7 +784,6 @@ async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<v
             'Creator Micro 2 vendor HID is busy; another app may be using the keyboard',
           );
           scheduleCreatorKeymapRetry();
-          return;
         }
         throw error;
       })
@@ -788,6 +792,9 @@ async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<v
       });
     creatorKeymapBinding = task;
     await task;
+  }
+  if (!stopping && !creatorKeymapBound && Date.now() < creatorKeymapRetryAt) {
+    throw new Error('Creator Micro 2 vendor HID is busy; device has been closed');
   }
 }
 
@@ -1037,6 +1044,25 @@ async function disconnect(): Promise<void> {
   }
 }
 
+async function awaitWithTimeout(task: Promise<unknown> | null, ms: number): Promise<void> {
+  if (!task) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      task.then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
@@ -1046,23 +1072,19 @@ async function stop(): Promise<void> {
   hidListeningRequested = false;
   clearRetry();
   clearCreatorKeymapRetry();
-  try {
-    await applyTask;
-  } catch (error) {
-    hostLog('warn', `lighting apply stopped unexpectedly: ${safeErrorMessage(error)}`);
-  }
-  try {
-    await creatorKeymapBinding;
-  } catch {
-    // Bind may have been interrupted by stopping; restore still has to run.
-  }
+  // Client disconnectHost() kills this process after 1s. Do not wait on SDK RPCs.
+  await awaitWithTimeout(applyTask, 400);
+  await awaitWithTimeout(creatorKeymapBinding, 400);
   const currentApi = api;
   if (currentApi) {
     const off = createWorkLouderCodexOffFrame();
-    await Promise.allSettled([
-      currentApi.sendLightingConfig({ ambient: off.ambient, keys: off.keys }),
-      currentApi.sendThreadsLighting(off.threads),
-    ]);
+    await awaitWithTimeout(
+      Promise.allSettled([
+        currentApi.sendLightingConfig({ ambient: off.ambient, keys: off.keys }),
+        currentApi.sendThreadsLighting(off.threads),
+      ]),
+      200,
+    );
   }
   await disconnect();
   post({ kind: 'stopped' });

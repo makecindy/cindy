@@ -80,14 +80,23 @@ function cloneAction(action: WorkLouderCodexAction | null): WorkLouderCodexActio
   return action ? { ...action } : null;
 }
 
-function idleAgentSlots(settings: WorkLouderCodexSettings): WorkLouderCodexAgentSlotState[] {
+function idleAgentSlots(
+  settings: WorkLouderCodexSettings,
+  taskOptions: WorkLouderCodexState['taskOptions'],
+): WorkLouderCodexAgentSlotState[] {
   const slotCount = settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
+  const titleById = new Map(taskOptions.map((task) => [task.id, task.title] as const));
   return Array.from({ length: slotCount }, (_, slot) => {
-    const action = cloneAction(settings.customAgentKeys[slot] ?? null);
+    let action = cloneAction(settings.customAgentKeys[slot] ?? null);
+    if (!action && settings.agentSource === 'custom' && slot >= settings.customAgentKeys.length) {
+      const task = taskOptions[slot];
+      action = task ? { type: 'task', sessionId: task.id } : null;
+    }
+    const sessionId = action?.type === 'task' ? action.sessionId : null;
     return {
       slot,
-      sessionId: action?.type === 'task' ? action.sessionId : null,
-      title: null,
+      sessionId,
+      title: sessionId ? (titleById.get(sessionId) ?? null) : null,
       action,
     };
   });
@@ -139,17 +148,22 @@ function projectModel(
 
   if (live.connectionStatus === 'unavailable') {
     return {
-      connectionStatus: settings.deviceEnabled ? 'unavailable' : connectionForIdle(settings, present),
+      connectionStatus: settings.deviceEnabled
+        ? 'unavailable'
+        : connectionForIdle(settings, present),
       connectionReason: live.connectionReason,
       devicePresent: present,
       device: present === true ? { ...live.device } : emptyDevice(live),
       settings: cloned,
-      agentSlots: occupying === model ? live.agentSlots.map((slot) => ({
-        ...slot,
-        action: cloneAction(slot.action),
-      })) : idleAgentSlots(settings),
+      agentSlots:
+        occupying === model
+          ? live.agentSlots.map((slot) => ({
+              ...slot,
+              action: cloneAction(slot.action),
+            }))
+          : idleAgentSlots(settings, live.taskOptions),
       taskOptions: live.taskOptions.map((task) => ({ ...task })),
-      agentSlotCount: idleAgentSlots(settings).length,
+      agentSlotCount: idleAgentSlots(settings, live.taskOptions).length,
     };
   }
 
@@ -168,9 +182,9 @@ function projectModel(
     devicePresent: present,
     device: present === true ? { ...live.device } : emptyDevice(live),
     settings: cloned,
-    agentSlots: idleAgentSlots(settings),
+    agentSlots: idleAgentSlots(settings, live.taskOptions),
     taskOptions: live.taskOptions.map((task) => ({ ...task })),
-    agentSlotCount: idleAgentSlots(settings).length,
+    agentSlotCount: idleAgentSlots(settings, live.taskOptions).length,
   };
 }
 
