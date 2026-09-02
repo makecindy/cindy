@@ -17,6 +17,7 @@ import {
   creatorMicro2KeymapSessionFileName,
   isWorkLouderHidContention,
   isWorkLouderSdkTransportDeath,
+  shouldRequestWorkLouderLivenessProbe,
   isWorkLouderCodexLightingFrameOff,
   parseWorkLouderCodexHidEvent,
   parseWorkLouderKeymapDocument,
@@ -209,7 +210,7 @@ const sdkLogger: WorkLouderLogger = {
       !probePending &&
       !applying &&
       !creatorKeymapBinding &&
-      !isWorkLouderHidContention(detail)
+      shouldRequestWorkLouderLivenessProbe(detail, connectedDevice?.deviceType)
     ) {
       requestProbe();
     }

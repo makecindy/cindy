@@ -118,6 +118,24 @@ export function isWorkLouderHidContention(detail: string): boolean {
   );
 }
 
+/** Creator idle HID silence. Not an unplug, not a reason to probe liveness. */
+export function isWorkLouderIdleFirmwareError(
+  detail: string,
+  deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
+): boolean {
+  if (!workLouderFirmwareIdlesHidRead(deviceType)) return false;
+  return /hid_read_timeout|device disconnected|could not read/i.test(detail);
+}
+
+export function shouldRequestWorkLouderLivenessProbe(
+  detail: string,
+  deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
+): boolean {
+  if (isWorkLouderHidContention(detail)) return false;
+  if (isWorkLouderIdleFirmwareError(detail, deviceType)) return false;
+  return true;
+}
+
 /**
  * The native SDK often logs a dead USB/BT handle instead of throwing.
  *
@@ -140,11 +158,7 @@ export function isWorkLouderSdkTransportDeath(
   deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
 ): boolean {
   if (isWorkLouderHidContention(detail)) return false;
-  if (workLouderFirmwareIdlesHidRead(deviceType)) {
-    if (/hid_read_timeout/i.test(detail)) return false;
-    if (/device disconnected/i.test(detail)) return false;
-    if (/could not read/i.test(detail)) return false;
-  }
+  if (isWorkLouderIdleFirmwareError(detail, deviceType)) return false;
   if (/hid_read_timeout/i.test(detail)) {
     return Boolean(deviceType) && !workLouderFirmwareIdlesHidRead(deviceType);
   }

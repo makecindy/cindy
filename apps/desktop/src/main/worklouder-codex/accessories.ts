@@ -48,6 +48,15 @@ export function workLouderNeedsIdentityDiscovery(
   return deviceType === null && WORKLOUDER_MODELS.some((model) => settings[model].deviceEnabled);
 }
 
+/** Preview only suppresses HID actions on the board whose settings page is open. */
+export function workLouderLayoutPreviewSuppressesActions(
+  active: boolean,
+  editedModel: WorkLouderModel | null,
+  occupyingModel: WorkLouderModel | null,
+): boolean {
+  return Boolean(active && occupyingModel && editedModel === occupyingModel);
+}
+
 function cloneAction(action: WorkLouderCodexAction | null): WorkLouderCodexAction | null {
   return action ? { ...action } : null;
 }

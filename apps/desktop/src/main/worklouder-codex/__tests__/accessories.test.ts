@@ -10,6 +10,7 @@ import {
 import {
   WorkLouderAccessories,
   resolveWorkLouderOccupyingModel,
+  workLouderLayoutPreviewSuppressesActions,
   workLouderNeedsIdentityDiscovery,
   type WorkLouderLightingHost,
 } from '../accessories.js';
@@ -118,6 +119,21 @@ describe('resolveWorkLouderOccupyingModel', () => {
     };
     expect(resolveWorkLouderOccupyingModel('codex-micro', settings)).toBe('codex-micro');
     expect(resolveWorkLouderOccupyingModel('creator-micro-2', settings)).toBeNull();
+  });
+});
+
+describe('workLouderLayoutPreviewSuppressesActions', () => {
+  it('only suppresses the occupied board while its own settings page is open', () => {
+    expect(
+      workLouderLayoutPreviewSuppressesActions(true, 'creator-micro-2', 'codex-micro'),
+    ).toBe(false);
+    expect(workLouderLayoutPreviewSuppressesActions(true, 'codex-micro', 'codex-micro')).toBe(
+      true,
+    );
+    expect(workLouderLayoutPreviewSuppressesActions(true, 'creator-micro-2', null)).toBe(false);
+    expect(workLouderLayoutPreviewSuppressesActions(false, 'codex-micro', 'codex-micro')).toBe(
+      false,
+    );
   });
 });
 

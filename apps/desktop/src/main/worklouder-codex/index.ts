@@ -28,6 +28,7 @@ import {
   WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
   WORKLOUDER_DEVICES,
   WORKLOUDER_MODELS,
+  isWorkLouderModel,
   type WorkLouderAccessoriesState,
   type WorkLouderCodexPreviewInput,
   type WorkLouderCodexRendererAction,
@@ -41,7 +42,7 @@ import {
   type WorkLouderSdkLocation,
 } from './WorkLouderCodexHostClient.js';
 import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingController.js';
-import { WorkLouderAccessories } from './accessories.js';
+import { WorkLouderAccessories, workLouderLayoutPreviewSuppressesActions } from './accessories.js';
 import { createWorkLouderCodexSettingsIpc } from './settingsIpc.js';
 import { CodexMicroGuardService } from './CodexMicroGuardService.js';
 import { createCodexMicroGuardIpc } from './codexMicroGuardIpc.js';
@@ -291,8 +292,16 @@ export function registerWorkLouderCodexSettingsIpc(): void {
       rendererTaskCatalogScope = scope;
       void workLouderCodexLightingController.refreshTaskSlots().catch(() => undefined);
     },
-    setLayoutPreviewActive: (active, _model, event) => {
-      layoutPreviewLease.setActive(active, layoutPreviewOwnerFromEvent(event));
+    setLayoutPreviewActive: (active, model, event) => {
+      const live = workLouderCodexLightingController.getState();
+      const occupying =
+        live.settings.deviceEnabled && isWorkLouderModel(live.device.deviceType)
+          ? live.device.deviceType
+          : null;
+      layoutPreviewLease.setActive(
+        workLouderLayoutPreviewSuppressesActions(active, model, occupying),
+        layoutPreviewOwnerFromEvent(event),
+      );
     },
   });
 

@@ -10,6 +10,8 @@ import {
   isWorkLouderCodexLightingFrameOff,
   isWorkLouderHidContention,
   isWorkLouderSdkTransportDeath,
+  isWorkLouderIdleFirmwareError,
+  shouldRequestWorkLouderLivenessProbe,
   parseWorkLouderCodexAgentKeyPress,
   parseWorkLouderCodexHidEvent,
   rewriteBareWorkLouderNotifyJson,
@@ -253,6 +255,18 @@ describe('isWorkLouderSdkTransportDeath', () => {
       expect(isWorkLouderSdkTransportDeath(detail, 'creator-micro-2')).toBe(false);
       expect(isWorkLouderSdkTransportDeath(detail, 'codex-micro')).toBe(false);
     }
+  });
+
+  it('does not probe liveness for Creator idle HID silence', () => {
+    expect(isWorkLouderIdleFirmwareError('hid_read_timeout', 'creator-micro-2')).toBe(true);
+    expect(
+      shouldRequestWorkLouderLivenessProbe(
+        'could not read from HID device: hid_read_timeout: error waiting for more data',
+        'creator-micro-2',
+      ),
+    ).toBe(false);
+    expect(shouldRequestWorkLouderLivenessProbe('hid_read_timeout', 'codex-micro')).toBe(true);
+    expect(isWorkLouderIdleFirmwareError('hid_read_timeout', 'codex-micro')).toBe(false);
   });
 
   it('treats hid_read_timeout as a dead cable only on Codex', () => {
