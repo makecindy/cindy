@@ -1,0 +1,177 @@
+# Cindy 伙伴运行时
+
+> 本文是伙伴（Bot）身份、会话、模型路由、工作目录、Skill / MCP 与协作委派的产品契约。
+> 修改伙伴运行时、伙伴设置、委派链路或伙伴提示词前必须先读本文。
+
+## 1. 用户心智：伙伴不是一条任务
+
+伙伴是长期存在的数字同事。用户面对的是同一个名字、性格、记忆与能力，而不是一条可以
+无限增长的 Session。
+
+运行时分成两层：
+
+- **伙伴 Profile（永久）**：身份、长期记忆、自有 Skill、模型候选链、稳定的伙伴目录。
+- **物理 Session（可替换）**：某段时间内的一卷上下文。它可以压缩、重建、每日换卷并归档，
+  但这些动作不得改变伙伴身份，也不得要求用户理解或操作。
+
+用户说“继续找小满”时，永远找到同一个伙伴；底层是否已经换过 Session 是实现细节。
+
+## 2. 所有权与挂靠关系
+
+```text
+Bot Profile
+├── Home                          账号隔离的唯一持久边界
+│   ├── SOUL.md                   身份
+│   ├── workspace/                稳定的默认工作目录
+│   ├── memories/                 只属于该 Bot 的长期记忆
+│   └── skills/                   只属于该 Bot 的自有 Skill
+├── canonical Session             当前私聊卷
+├── history Sessions              已归档私聊卷
+└── delegation child Sessions     被委派工作的执行卷
+```
+
+每条运行 Session 必须能反查唯一的 Bot owner 与 Profile 版本。委派子任务用独立的
+member Session 执行（`role='delegation'`），不得把子任务上下文写回私聊 Session。
+
+## 3. 自动会话生命周期
+
+### 3.1 每日换卷
+
+- 默认按设备本地时间每天 **04:00** 划分新的一卷。
+- 到点不预建空 Session；伙伴下次被打开或收到消息时，宿主先检查并换卷。
+- 有正在执行的 turn、后台命令或未完成委派时延后换卷，直到安全边界。
+- 换卷用 CAS；多窗口同时唤醒只能有一个胜者。
+- 旧 Session 标成 history / archived，消息完整保留并继续参与该伙伴的历史搜索。
+- 新 Session 继续使用同一 Profile、长期记忆、Skill 与 workspace。
+
+每日换卷不是“删除聊天”，也不是让模型自己发送 `/new`。它是宿主确定性生命周期。
+
+### 3.2 卷内上下文压力
+
+上下文接近上限时，优先走现有宿主重建流程：生成受控交接、关闭原生句柄、重建模型上下文，
+并且只在最新用户输入尚未产生 assistant / tool 副作用时自动重放。不得靠提示词要求模型自行
+猜测何时压缩，也不得为了重试重复执行可能有外部副作用的工具。
+
+### 3.3 用户界面
+
+普通设置不显示“永久 Session”“手动压缩”“每日换 Session”或运行时 fallback 开关。健康、
+归档和故障信息可以在需要时呈现，但维护动作默认由系统完成。用户只管理伙伴，不管理容器。
+
+## 4. Bot Home 权威边界
+
+每个伙伴拥有账号隔离的 `<ownerRoot>/bots/<botId>/`。它是该伙伴唯一的持久内容边界，
+不属于当前 Session、当前项目或 Cindy 的全局 Maker Memory：
+
+```text
+<ownerRoot>/bots/<botId>/
+├── SOUL.md                     身份，由用户与宿主维护
+├── system_prompt.md            可选的用户提示词覆盖
+├── workspace/                  Bot 默认可写工作区
+├── memories/
+│   ├── USER.md                 该 Bot 认识的用户
+│   ├── MEMORY.md               该 Bot 的记忆索引
+│   └── *.md                    该 Bot 的长期记忆
+└── skills/<slug>/SKILL.md      该 Bot 自有或后学的 Skill
+```
+
+- Bot Memory 可以复用 Cindy 的存储原语，但物理数据、开关、索引、清空入口和提示词作用域都
+  只属于该 Bot；关闭或清空全局 Maker Memory 不得关闭、列出或删除 Bot Memory。
+- 启动 Bot 时不得注入当前项目的 Memory、全局 Memory 摘要或其它 Bot 的记忆。
+- Agent 的原始文件工具只获得 `workspace/` 写权限。`memories/` 与 `skills/` 仍属于同一个
+  Bot Home，但只能经 Bot Memory / Skill 类型化接口写入；索引、SQLite 和 Home 根部宿主策略
+  都不可由 Agent 当普通文件修改。
+- `workspace/` 是伙伴跨 Session 复用的唯一默认工作区。伙伴不直接绑定代码项目、不占用
+  worktree——仓库级或长时间的重活通过 `start_task` 委派给一条真正的 Cindy 任务完成
+  （见第 6.1 节）。
+- 换卷、模型 fallback、失败补偿和删除临时任务不得移动或删除 Home 内容。
+- 远端运行必须使用远端实际存在且归属于该 Bot 的 Home；在远端 Home 尚未完成供给前，不得把
+  本机路径写进提示词或伪装成可访问目录。
+
+## 5. 模型候选链
+
+伙伴 Profile 可配置 **1–5 个有序候选**，每项是一个完整运行路由：
+
+```text
+harness + provider + model + effort + fastMode
+```
+
+- 第一项是首选；新 Session 从第一项启动。
+- 只有连接、鉴权、配额、容量、模型不可用和启动失败等“候选不可用”错误才进入下一项。
+- 用户拒绝授权、工具业务失败、参数错误和已经产生副作用后的失败不得触发透明重放。
+- 同一轮最多按链表各尝试一次；不得循环，也不得临时从 Catalog 猜一个用户没配置的模型。
+- 同 harness 可在安全边界切模型；跨 harness 必须走既有 agent-switch / 交接重建事务。
+- fallback 只改变当前物理 Session 的有效路由，不暗改 Profile 顺序。下一卷仍从首选开始。
+- 存量单模型配置归一成一项候选链，不能在升级时改变用户已有选择。
+
+全局伙伴设置保存默认候选链。单个伙伴没有显式覆盖时跟随全局链；一旦用户在伙伴设置里调整，
+该伙伴保存自己的链。全局链由主进程按当前数据 owner 持久化，并由所有 Session 创建与 fallback
+入口直接读取；不得只存在 renderer localStorage。
+
+## 6. Skill、工具与 MCP
+
+轻量不等于没有 Skill。伙伴启动时按以下优先级构造能力：
+
+1. 伙伴家目录中的自有 / 后学 Skill；
+2. 用户在伙伴设置里明确授予的工具集或 MCP；
+3. 没有第 3 层：Cindy 全局 Skill、项目 Skill、harness 预装 Skill 和全局 MCP 不会被 Bot
+   默认继承，也不以目录、摘要或“可发现”提示进入 Bot 上下文。
+
+- **提示词承诺必须等于工具面**。能力说明按实际挂载的工具集逐块注入（挂了 docs 才讲怎么
+  做文档），且挂载必须真实生效：显式挂载 docs 工具集时，运行时把 `cindy_docs` 写进该伙伴
+  的 MCP allowlist——不允许出现「提示词说有、运行时够不到」或反向的错位。
+- 伙伴的 harness 会话不得加载项目或全局 `AGENTS.md` / `CLAUDE.md`，不得暴露 harness 原生
+  subagent 面（pi 的 `subagent` 工具、cc 的 `Task`），也不得继承 Cindy 完整 system prompt、
+  全量 Skill 清单或全量 MCP schema。
+- 普通伙伴不能启动 Orca / Team Worker。协作只走伙伴专用委派协议（见 6.1）。
+- 伙伴学习 Skill 或写长期记忆必须满足至少一项：用户明确要求、同一偏好稳定重复出现、或流程
+  已验证且明显可复用。写入前去重，写入后可见、可编辑、可删除。普通一轮对话不得默认生成记忆
+  或 Skill，也不得为了“成长”开后台 review worker。
+
+### 6.1 协作与委派：一个入口、一张卡、一条完成信号
+
+高频协作入口固定为直接工具 `collaborate_with_bot`，四种动作：
+
+- `status`：只读查询某个伙伴当前是否空闲。
+- `notify`：给某个伙伴发一条不追踪结果的消息。
+- `delegate`：把有界工作委派给另一个伙伴；目标在自己的 Profile 与 workspace 中执行。
+- `start_task`：把大活（写代码、跑工程、长时间重活）开成一条**真正的 Cindy 任务**。子任务
+  出现在用户主任务列表里、拥有完整 Cindy 能力面与自己的权限门；伙伴本体保持轻量。
+
+两种委派共享同一套机制与呈现契约：
+
+- **协作卡**：发起方消息流原位出现协作卡，实时反映排队 / 执行 / 终态；目标为伙伴时对方
+  主任务里有镜像卡。卡片由 delegation 行推送驱动，不靠消息文本。
+- **完成信号**：子任务完成（或失败 / 超时 / 取消）时，发起方收到一条**用户不可见**的内部
+  指令（synthetic-trigger 隐藏行），据此接手继续工作；用户看到的终态由协作卡承载，时间线
+  里不得出现机读文本或内部 id。
+- **不静默丢失**：发起方的父卷已被每日换卷归档时，完成信号改投该伙伴当前的 canonical 卷；
+  只有伙伴本身已暂停 / 归档才放弃投递，此时卡片终态仍然可见。
+- 委派受深度（默认 1，上限 5）、循环检测与并发上限约束；超时是持久化的执行边界。
+
+## 7. 实现红线
+
+- 生命周期、fallback、所有权和重放判定必须在宿主代码中确定性实现，不能只写进 prompt。
+- 不得把 Profile 和当前 Session 绑定成一对一永久关系。
+- 不得让换卷丢历史、换目录或丢 Profile 版本。
+- 不得向普通用户暴露运行时维护开关来代替自动恢复。
+- 不得在 fallback 后重复可能已经成功的外部动作。
+- 不得把 Bot Memory 注册成全局 Maker Memory 的一个普通 workdir，或让全局 Memory 设置控制它。
+- 不得把 Home 根目录整体设为可写，或从 Home 内可写配置反向派生权限。
+- Bot 表全部只增量；旧代码打开含 Bot 表的库时按既有 migration compatibility 守卫失败关闭，
+  不得强行降级。
+
+## 8. 验收最低集
+
+- 单模型旧 Profile 可无损读成一项链；新 Profile 可保存并恢复 1–5 项顺序。
+- 首选不可用时只切到用户配置的下一项；成功后不继续尝试。
+- 04:00 边界、活动任务延后、多窗口 CAS、旧卷归档和历史搜索有测试。
+- canonical 与 delegation Session 都能反查唯一 Bot；委派子任务上下文彼此隔离。
+- 连续两卷使用同一个 `<bot home>/workspace/`；不同 owner / Bot 的 Home 不串用。
+- 关闭全局 Maker Memory 后 Bot Memory 仍可读写；全局列举与清空不包含 Bot Memory。
+- 新伙伴不继承或发现全局 / 项目 / harness Skill；Bot-own Skill 始终可用，显式外部能力按
+  allowlist 挂载，普通 Bot 无 Orca / harness subagent 入口。
+- 伙伴会话的上下文里没有项目 / 全局 AGENTS.md、CLAUDE.md 与 Cindy 产品提示词。
+- `delegate` 与 `start_task` 都能：卡片实时更新到终态、完成信号对用户不可见、父卷换代后
+  仍投递到当前卷。
+- Bot 的原始文件工具只能写 Home 的 `workspace/`，记忆与 Skill 只能走类型化接口。
+- 设置页不再要求用户手动压缩、切 Session 或开关自动 fallback。
