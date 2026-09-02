@@ -331,7 +331,7 @@ describe('sendToSession ordering', () => {
     const resumedBranch = extractBetween(
       block,
       'const createOpts = buildCreateOptsWithStderr({\n          id: targetSessionId,',
-      'const tracked = run.finally(() => {',
+      'return trackSendToSessionLockRun(',
     );
 
     expect(source).toContain('assertDesktopSendDispatched');
@@ -686,7 +686,7 @@ describe('sendToSession ordering', () => {
     const resumedBranch = extractBetween(
       block,
       'const createOpts = buildCreateOptsWithStderr({\n          id: targetSessionId,',
-      'const tracked = run.finally(() => {',
+      'return trackSendToSessionLockRun(',
     );
 
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
@@ -1074,7 +1074,7 @@ describe('sendToSession ordering', () => {
 
 function extractSendToSessionSource(): string {
   const block = source.match(
-    /async function sendToSessionInternal\([\s\S]*?const tracked = run\.finally\(\(\) => \{/,
+    /async function sendToSessionInternal\([\s\S]*?return trackSendToSessionLockRun\(/,
   )?.[0];
   expect(block).toBeTruthy();
   if (!block) throw new Error('sendToSessionInternal source block not found');
