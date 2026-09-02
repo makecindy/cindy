@@ -68,10 +68,12 @@ export function UsageAgentTable({
   rows,
   rangeLabel,
   todayLabel,
+  hideToday = false,
 }: {
   rows: AgentTokenRow[];
   rangeLabel: string;
   todayLabel?: string;
+  hideToday?: boolean;
 }): React.JSX.Element {
   const { t } = useTranslation();
   const total = rows.reduce((sum, row) => sum + row.tokens, 0);
@@ -104,9 +106,9 @@ export function UsageAgentTable({
               {t('usageHistory.byAgent.col.totalInRange', { range: rangeLabel })}
             </th>
             <th className={TH_CLASS}>{t('usageHistory.byAgent.col.share')}</th>
-            <th className={TH_CLASS}>
-              {todayLabel ?? t('usageHistory.byAgent.col.today')}
-            </th>
+            {!hideToday ? (
+              <th className={TH_CLASS}>{todayLabel ?? t('usageHistory.byAgent.col.today')}</th>
+            ) : null}
             <th className={TH_CLASS} title={t('usageHistory.cacheHitTooltip')}>
               {t('usageHistory.byAgent.col.hitRate')}
             </th>
@@ -128,9 +130,11 @@ export function UsageAgentTable({
                 </td>
                 <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
                 <ShareCell share={row.share} rank={rank} />
-                <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
-                  {row.todayTokens > 0 ? formatCompactTokens(row.todayTokens) : UNKNOWN_VALUE}
-                </td>
+                {!hideToday ? (
+                  <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
+                    {row.todayTokens > 0 ? formatCompactTokens(row.todayTokens) : UNKNOWN_VALUE}
+                  </td>
+                ) : null}
                 <HitRateCell value={row.cacheHitRate} />
                 <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>{row.modelCount}</td>
               </tr>

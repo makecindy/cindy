@@ -37,6 +37,7 @@ import {
   buildSummary,
   chartUsageHistoryPayload,
   filterUsageHistoryPayload,
+  isUsageHistorySingleDay,
   isUsageHistoryEmpty,
   usageRangeDay,
   type UsageHistoryRange,
@@ -100,7 +101,7 @@ export function UsageHistorySection(): React.JSX.Element {
   const todayLabel = selectedDay
     ? t('usageHistory.stats.todayTokensInRange', { range: rangeLabel })
     : t('usageHistory.stats.todayTokens');
-  const hideToday = selectedDay !== null || range === 'today';
+  const hideToday = isUsageHistorySingleDay(range);
 
   const filteredHistory = useMemo(
     () => filterUsageHistoryPayload(history, range),
@@ -238,7 +239,12 @@ export function UsageHistorySection(): React.JSX.Element {
           {agentRows.length > 0 && (
             <Card title={t('usageHistory.byAgent.title')} subtitle={rangeLabel}>
               <div className="overflow-x-auto">
-                <UsageAgentTable rows={agentRows} rangeLabel={rangeLabel} todayLabel={todayLabel} />
+                <UsageAgentTable
+                  rows={agentRows}
+                  rangeLabel={rangeLabel}
+                  todayLabel={todayLabel}
+                  hideToday={hideToday}
+                />
               </div>
             </Card>
           )}

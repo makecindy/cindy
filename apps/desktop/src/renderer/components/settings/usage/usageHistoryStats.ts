@@ -81,6 +81,11 @@ export function usageRangeDay(range: UsageHistoryRange): string | null {
   return range.startsWith('day:') ? range.slice(4) : null;
 }
 
+/** Exact-day ranges cannot provide a distinct "today" comparison column. */
+export function isUsageHistorySingleDay(range: UsageHistoryRange): boolean {
+  return range === 'today' || usageRangeDay(range) !== null;
+}
+
 export function isUsageDayInRange(
   day: string,
   todayKey: string,

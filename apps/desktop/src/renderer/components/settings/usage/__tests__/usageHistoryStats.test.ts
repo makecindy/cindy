@@ -9,6 +9,7 @@ import {
   chartUsageHistoryPayload,
   computeTokenStreak,
   filterUsageHistoryPayload,
+  isUsageHistorySingleDay,
   isUsageHistoryEmpty,
   toUsageDays,
 } from '../usageHistoryStats';
@@ -61,6 +62,14 @@ describe('shouldHideUsageTaskTable', () => {
     expect(shouldHideUsageTaskTable('today')).toBe(true);
     expect(shouldHideUsageTaskTable('day:2026-08-20')).toBe(true);
     expect(shouldHideUsageTaskTable('7d')).toBe(false);
+  });
+});
+
+describe('isUsageHistorySingleDay', () => {
+  it('识别 today 与日期钻取范围', () => {
+    expect(isUsageHistorySingleDay('today')).toBe(true);
+    expect(isUsageHistorySingleDay('day:2026-08-20')).toBe(true);
+    expect(isUsageHistorySingleDay('7d')).toBe(false);
   });
 });
 

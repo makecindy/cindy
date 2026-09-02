@@ -38,7 +38,11 @@ import { useProviders } from '@/hooks/useProviders';
 import { usageRankColor } from '@/components/new-chat/usagePalette';
 import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { formatUsagePercent } from './formatUsagePercent';
-import { isUsageDayInRange, usageRangeDay, type UsageHistoryRange } from './usageHistoryStats';
+import {
+  isUsageDayInRange,
+  isUsageHistorySingleDay,
+  type UsageHistoryRange,
+} from './usageHistoryStats';
 
 /** 展示条数 —— 与"最耗"的语义匹配, 不做成完整列表 (那是任务侧栏的事)。 */
 const TOP_TASKS = 8;
@@ -103,8 +107,11 @@ export function usageActivityIso(session: Pick<Session, 'updatedAt' | 'userSendA
  * 因此 today 与 day:* 都隐藏这张聚合表，避免把累计 token 误读成当天用量。
  */
 export function shouldHideUsageTaskTable(range: UsageHistoryRange): boolean {
-  return range === 'today' || usageRangeDay(range) !== null;
+  return isUsageHistorySingleDay(range);
 }
+
+type UsageSessionsState =
+  { status: 'loading' } | { status: 'ready'; sessions: Session[] } | { status: 'error' };
 
 /**
  * 候选行 —— 单独暴露成 hook, 让调用方能在**渲染卡片之前**知道有没有行。
@@ -117,18 +124,18 @@ export function useTopTokenSessions(
 ): Session[] {
   // 归档的任务同样消耗过 token, 统计口径不该因为用户归档而变。
   const { sessions: recentSessions } = useCCSessions({ includeArchived: 'all' });
-  const [usageSessions, setUsageSessions] = useState<Session[] | null>(null);
+  const [usageSessions, setUsageSessions] = useState<UsageSessionsState>({ status: 'loading' });
 
   useEffect(() => {
     let cancelled = false;
-    setUsageSessions(null);
+    setUsageSessions({ status: 'loading' });
     void sessionService
       .list(20, 'all', { usageHistory: true })
       .then((rows) => {
-        if (!cancelled) setUsageSessions(rows);
+        if (!cancelled) setUsageSessions({ status: 'ready', sessions: rows });
       })
       .catch(() => {
-        if (!cancelled) setUsageSessions([]);
+        if (!cancelled) setUsageSessions({ status: 'error' });
       });
     return () => {
       cancelled = true;
@@ -136,8 +143,11 @@ export function useTopTokenSessions(
   }, [accountScopeKey]);
 
   const sessions = useMemo(() => {
-    if (!usageSessions) return recentSessions;
-    const byId = new Map(usageSessions.map((session) => [session.id, session]));
+    // The sidebar snapshot is capped at 1000 rows and cannot stand in for the
+    // full usage-history query. Hide the aggregate until that query succeeds;
+    // showing the truncated or failed fallback would mislabel the ranking.
+    if (usageSessions.status !== 'ready') return [];
+    const byId = new Map(usageSessions.sessions.map((session) => [session.id, session]));
     // 当前列表快照包含最近的实时 token/status patch，优先覆盖全量查询的旧行。
     for (const session of recentSessions) byId.set(session.id, session);
     return [...byId.values()];
