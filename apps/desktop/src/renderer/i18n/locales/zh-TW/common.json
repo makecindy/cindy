@@ -5425,7 +5425,8 @@
     "browserWaiting": "請在瀏覽器中完成驗證",
     "browserCallback": {
       "successTitle": "登入成功",
-      "successBody": "你可以關閉此頁面，回到 {{appName}} 繼續。",
+      "successBody": "登入已成功，現在可以關閉此頁面了。",
+      "closeCountdown": "{{count}}秒後自動關閉",
       "errorTitle": "登入未完成",
       "errorBody": "請回到 {{appName}} 重新登入。",
       "returnButton": "回到 {{appName}}"
@@ -7488,7 +7489,7 @@
     "openApp": "開啟 ChatGPT App",
     "relogin": "重新登入 ChatGPT",
     "reloginRiskTitle": "仍要由 Cindy 重新登入？",
-    "reloginRiskDescription": "這會建立新的 OpenAI OAuth 授權，並可能讓本機 ChatGPT App 和 Codex CLI 立即登出。完成後，你需要在本機應用程式中再次登入。",
+    "reloginRiskDescription": "Cindy 會建立新的 OpenAI OAuth 登入憑證。通常不會影響 ChatGPT App；如果仍與系統 Codex 共用同一份憑證，相關應用程式可能會要求你重新登入。",
     "reloginRiskConfirm": "接受風險並繼續",
     "devWriteBlocked": "開發環境預設以唯讀方式共用本機 ChatGPT 登入，不能發起登入或改寫憑證。確需測試 OAuth 時，請使用隔離沙箱並明確設定 XDT_ALLOW_DEV_OAUTH_WRITE=1。",
     "devReadOnly": "開發環境唯讀",
@@ -7671,7 +7672,7 @@
       "switchClaudeSubscriptionTitle": "把當前任務切換到 Claude.ai 訂閱並重試",
       "switchingClaudeSubscription": "正在切換到 Claude.ai…",
       "claudeSubscriptionSwitchFailed": "無法切換到 Claude.ai 或重試當前任務：{{msg}}",
-      "budgetModelHint": "如果反覆失敗，可以切換到普通版 GPT 再試試。",
+      "codexAppServerRetired": "Codex 服務已重新啟動或更換；目前的請求已中斷，請重新執行。",
       "codexAuthMissing": "遠端 Codex 還沒同步登入態（401 Unauthorized）。點選右側「同步登入態」把本機 Codex 憑證推到遠端 Cindy Codex home，然後重試傳送。",
       "codexAuthMissingLocal": "Codex 憑證缺失或失效（401 Unauthorized）。請在 {{appName}} Settings → Codex 重新登入（登入後會自動重啟 Codex app-server），或在終端跑 `codex login` + 在 Settings 切換一次鑑權模式來重啟 app-server，然後新建任務再發。",
       "codexSessionExpired": "OpenAI 連線需要更新。重新連線 ChatGPT 後即可繼續；{{appName}} 不會退出系統 Codex CLI，也不會要求你重新連線其他模型來源。",

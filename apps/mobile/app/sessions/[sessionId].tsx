@@ -456,7 +456,8 @@ import {
   hasOlderMessagesByServerCount,
   listMessagesWithPayloadRetry,
   oldestMessageCursor,
-  projectLoadedMessageWindow,
+  projectLoadedMessageWindowIncrementally,
+  type LoadedMessageWindowProjection,
   shouldRefreshLatestMessageWindowOnReopen,
   shouldKeepOlderMessagesAffordance,
 } from '@/session/messagePaging';
@@ -475,6 +476,8 @@ import {
 import { reconcileMobileMessageRenderItems } from '@/session/messageRenderReconcile';
 import {
   buildMobileStreamingRenderWindow,
+  commitMobileStreamingPrefixItems,
+  committedMobileStreamingPrefixItemCount,
   type MobileStreamingRenderPrefixCache,
 } from '@/session/messageRenderStreamingCache';
 import { shouldSuppressEmptyMessageState } from '@/session/sessionEmptyState';
@@ -985,6 +988,11 @@ export default function SessionScreen() {
   const maker = useMobileMakerTransport(deviceId);
   const sessions = useRemoteSessions();
   const messages = useSessionMessages(sessionId, deviceId);
+  const messageStructureToken = remoteSessionStore.getSessionMessageStructureToken(sessionId);
+  const messageStructureChangedIndexes = remoteSessionStore
+    .getSessionMessageStructureChangedIndexes(sessionId);
+  const latestMessagesRef = useRef(messages);
+  latestMessagesRef.current = messages;
   const sessionRetention = useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getSessionRetention(sessionId),
@@ -2264,8 +2272,8 @@ export default function SessionScreen() {
     && !inputProjection.queuePaused
     && !inputProjection.queueAbortPending;
   const currentTurnStreaming = useMemo(
-    () => currentTurnHasStreamingAssistant(messages),
-    [messages],
+    () => currentTurnHasStreamingAssistant(latestMessagesRef.current),
+    [messageStructureToken],
   );
   const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)
     && !inputProjection.queueAbortPending;
@@ -4299,11 +4307,12 @@ export default function SessionScreen() {
   // shouldKeepOlderMessagesAffordance / hasOlderMessagesAfterReopen 校正(:806/:846)。_count 未知不凭空点亮。
   useEffect(() => {
     if (isScheduleDetail) return;
-    if (lastSyncedAt !== null || hasOlderMessages || messages.length === 0) return;
-    if (hasOlderMessagesByServerCount(currentSession?._count?.messages, messages)) {
+    const currentMessages = latestMessagesRef.current;
+    if (lastSyncedAt !== null || hasOlderMessages || currentMessages.length === 0) return;
+    if (hasOlderMessagesByServerCount(currentSession?._count?.messages, currentMessages)) {
       setHasOlderMessages(true);
     }
-  }, [currentSession?._count?.messages, hasOlderMessages, isScheduleDetail, lastSyncedAt, messages]);
+  }, [currentSession?._count?.messages, hasOlderMessages, isScheduleDetail, lastSyncedAt, messageStructureToken]);
 
   // 在线时按 connectionEpoch 去重:每个连接 epoch 只 resync 一次。首开同步由上面的 mount effect 负责
   // (此处 epoch == 初值 → skip);仅在 epoch 变化(真正重连 / 回前台 connectNow→online)时再 resync,
@@ -4462,11 +4471,11 @@ export default function SessionScreen() {
   // 同帧正式气泡已在流里,视觉上原位变实心,无跳变)。
   const queueHiddenClientIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const message of messages) {
+    for (const message of latestMessagesRef.current) {
       if (message.clientId) ids.add(message.clientId);
     }
     return ids;
-  }, [messages]);
+  }, [messageStructureToken]);
   // 落定中条目跟踪(见 settlingQueueItems 声明处注释):
   // 1) pendingQueue diff——只把「像被派发」的消失当作落定中:drain 恒从队首连续
   //    消费,steer 按 steeringQueueClientIds 标记;两者都不沾的中段消失是远端删除
@@ -4614,19 +4623,44 @@ export default function SessionScreen() {
   // (worker)会话不渲染 banner,错误卡必须留在消息流(同一 review P2)。
   const errorTailClientId = useMemo(() => {
     if (collaborationReadOnlyReason) return null;
-    const id = findErrorTailClientId(messages);
+    const id = findErrorTailClientId(latestMessagesRef.current);
     return id && !dismissedTailErrorClientIds.has(id) ? id : null;
-  }, [collaborationReadOnlyReason, messages, dismissedTailErrorClientIds]);
+  }, [collaborationReadOnlyReason, dismissedTailErrorClientIds, messageStructureToken]);
+  const projectedMessageWindowRef = useRef<{
+    projection: LoadedMessageWindowProjection;
+    sessionId: string;
+  } | null>(null);
+  const projectedMessageWindow = useMemo(() => {
+    const projection = projectLoadedMessageWindowIncrementally({
+      changedIndexes: messageStructureChangedIndexes,
+      messages,
+      previous: projectedMessageWindowRef.current?.sessionId === sessionId
+        ? projectedMessageWindowRef.current.projection
+        : null,
+      structureToken: messageStructureToken,
+    });
+    projectedMessageWindowRef.current = { projection, sessionId };
+    return projection;
+  }, [messageStructureChangedIndexes, messageStructureToken, messages, sessionId]);
+  const projectedMessages = projectedMessageWindow.projected;
+  const projectedMessageStructureChangedIndexes = projectedMessageWindow.changedIndexes;
+  const oldestLoadedMessageCursor = useMemo(
+    () => oldestMessageCursor(latestMessagesRef.current),
+    [messageStructureToken],
+  );
   const previousRenderItemsRef = useRef<{
     sessionId: string;
     items: readonly MobileMessageRenderItem[];
+    prefix: MobileStreamingRenderPrefixCache | null;
   } | null>(null);
   const streamingRenderPrefixRef = useRef<MobileStreamingRenderPrefixCache | null>(null);
-  const renderItems = useMemo(
+  const renderWindow = useMemo(
     () => {
       const builtWindow = buildMobileStreamingRenderWindow({
         cacheKey: i18nInstance.language,
-        messages: projectLoadedMessageWindow(messages),
+        messages: projectedMessages,
+        messageStructureChangedIndexes: projectedMessageStructureChangedIndexes,
+        messageStructureToken,
         options: {
           autoResumePending: inputProjection.autoResumePending,
           isSessionStreaming,
@@ -4649,29 +4683,65 @@ export default function SessionScreen() {
           (item) => !(item.type === 'message' && item.message.source.clientId === errorTailClientId),
         );
       }
-      const previous = previousRenderItemsRef.current?.sessionId === sessionId
-        ? previousRenderItemsRef.current.items
-        : [];
-      const reconciled = reconcileMobileMessageRenderItems(previous, items);
-      return reconciled;
+      const previousRenderState = previousRenderItemsRef.current?.sessionId === sessionId
+        ? previousRenderItemsRef.current
+        : null;
+      const previous = previousRenderState?.items ?? [];
+      const committedPrefix = forkOrigin || errorTailClientId
+        ? null
+        : builtWindow.prefix;
+      const stablePrefixItemCount = forkOrigin || errorTailClientId
+        ? 0
+        : committedMobileStreamingPrefixItemCount(
+            builtWindow,
+            previousRenderState?.prefix,
+          );
+      const reconciled = reconcileMobileMessageRenderItems(
+        previous,
+        items,
+        stablePrefixItemCount,
+      );
+      return {
+        diffCount: errorTailClientId
+          ? countMobileRenderItemDiffs(reconciled)
+          : builtWindow.diffCount,
+        items: reconciled,
+        prefix: committedPrefix,
+        stablePrefixItemCount,
+      };
     },
-    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
+    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
+  );
+  const renderItems = renderWindow.items;
+  const renderItemsStructureKey = useMemo(
+    () => ({}),
+    [errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
   );
   // Reconciliation must only use committed rows. Unlike the prefix cache above, a speculative
   // render-item baseline could leak rows from an abandoned render and destabilize tail memoization.
   useLayoutEffect(() => {
-    previousRenderItemsRef.current = { sessionId, items: renderItems };
-  }, [renderItems, sessionId]);
+    if (
+      renderWindow.prefix
+      && previousRenderItemsRef.current?.prefix !== renderWindow.prefix
+      && streamingRenderPrefixRef.current === renderWindow.prefix
+    ) {
+      commitMobileStreamingPrefixItems(renderWindow.prefix, renderItems);
+    }
+    previousRenderItemsRef.current = {
+      sessionId,
+      items: renderItems,
+      prefix: renderWindow.prefix,
+    };
+  }, [renderItems, renderWindow.prefix, sessionId]);
   // 后台静默刷新:仅在首次加载、还没有任何内容(messages 为空)时显示"正在同步";已有内容
   // (重开已看过的会话,messages 还在内存)时后台对账一律静默,不再弹同步提示打扰用户。
   const showSyncingIndicator = loading && messages.length === 0;
-  const diffCount = useMemo(
-    () => countMobileRenderItemDiffs(renderItems),
-    [renderItems],
-  );
+  const diffCount = renderWindow.diffCount;
   const searchHits = useMemo(
-    () => findMobileMessageSearchHits(renderItems, searchQuery),
-    [renderItems, searchQuery],
+    () => searchOpen && searchQuery.trim()
+      ? findMobileMessageSearchHits(renderItems, searchQuery)
+      : [],
+    [renderItems, searchOpen, searchQuery],
   );
   const activeSearchHit = activeSearchIndex >= 0 ? searchHits[activeSearchIndex] ?? null : null;
   const routeFocusedItemKey = useMemo(
@@ -4902,7 +4972,7 @@ export default function SessionScreen() {
     if (!deviceId || !sessionId || loadingEarlier || !hasOlderMessages) return;
     const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
     if (!remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) return;
-    const before = oldestMessageCursor(messages);
+    const before = oldestLoadedMessageCursor;
     if (!before) {
       setHasOlderMessages(false);
       return;
@@ -4931,7 +5001,7 @@ export default function SessionScreen() {
     } finally {
       setLoadingEarlier(false);
     }
-  }, [abandonInFlightBackfill, deviceId, hasOlderMessages, isScheduleDetail, loadingEarlier, maker, messages, sessionId]);
+  }, [abandonInFlightBackfill, deviceId, hasOlderMessages, isScheduleDetail, loadingEarlier, maker, oldestLoadedMessageCursor, sessionId]);
 
   /**
    * 历史窗口空洞的自动补齐(见 `historyWindowGap.ts` 的文件头)。
@@ -5023,7 +5093,7 @@ export default function SessionScreen() {
     //    发出上百次 limit=1 探测。
     if (gapState.backfilled.size >= HISTORY_BACKFILL_MAX_GAPS_PER_VISIT) return;
     if (consideredKeys.size >= HISTORY_GAP_MAX_CONSIDERED_PER_VISIT) return;
-    const gap = findHistoryWindowGap(messages, consideredKeys);
+    const gap = findHistoryWindowGap(latestMessagesRef.current, consideredKeys);
     if (!gap) return;
     const gapKey = historyWindowGapKey(gap);
     const sessionIdAtStart = sessionId;
@@ -5089,7 +5159,7 @@ export default function SessionScreen() {
     loading,
     loadingEarlier,
     maker,
-    messages,
+    messageStructureToken,
     readAckSyncedKey,
     sessionId,
   ]);
@@ -6102,6 +6172,10 @@ export default function SessionScreen() {
   const messageListItems = useMemo(
     () => (pendingSendItems.length === 0 ? renderItems : [...renderItems, ...pendingSendItems]),
     [pendingSendItems, renderItems],
+  );
+  const messageListStructureKey = useMemo(
+    () => ({}),
+    [pendingSendItems, renderItemsStructureKey],
   );
   const shareExpandableBlockIds = useMemo(
     () => (shareSelectionActive ? collectConversationShareBlockIds(messageListItems) : []),
@@ -9461,9 +9535,10 @@ export default function SessionScreen() {
                       inputProjection.continuationInFlightProjectionCapability
                     }
                     items={messageListItems}
+                    itemsStructureKey={messageListStructureKey}
                     pendingSend={pendingSendActions}
                     loadingEarlier={loadingEarlier}
-                    loadEarlierProgressKey={oldestMessageCursor(messages)}
+                    loadEarlierProgressKey={oldestLoadedMessageCursor}
                     onCopyMessageLink={copyMessageLink}
                     onAddMessageToComposer={canUseComposer ? addMessageToComposer : undefined}
                     onDeleteMessage={collaborationReadOnlyReason ? undefined : deleteMessage}

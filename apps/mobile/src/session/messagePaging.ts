@@ -90,6 +90,90 @@ export function projectLoadedMessageWindow(
   return changed ? projected : messages;
 }
 
+export interface LoadedMessageWindowProjection {
+  changedIndexes: ReadonlySet<number>;
+  projected: readonly RemoteMessage[];
+  source: readonly RemoteMessage[];
+  sourceToProjectedIndex: Int32Array | null;
+  structureToken: object;
+}
+
+/**
+ * Reuses Compact-card projection while a stable structure token proves that only row content
+ * changed. The source-to-projected map lets a streaming delta patch its one visible row without
+ * scanning the complete loaded window again.
+ */
+export function projectLoadedMessageWindowIncrementally(input: {
+  changedIndexes: ReadonlySet<number>;
+  messages: readonly RemoteMessage[];
+  previous?: LoadedMessageWindowProjection | null;
+  structureToken: object;
+}): LoadedMessageWindowProjection {
+  const { changedIndexes, messages, previous, structureToken } = input;
+  const sameStructure = previous?.structureToken === structureToken
+    && previous.source.length === messages.length;
+  let projected: readonly RemoteMessage[];
+  let sourceToProjectedIndex: Int32Array | null;
+  if (sameStructure && messages === previous.source) {
+    projected = previous.projected;
+    sourceToProjectedIndex = previous.sourceToProjectedIndex;
+  } else if (sameStructure && previous.projected === previous.source) {
+    projected = messages;
+    sourceToProjectedIndex = null;
+  } else if (
+    sameStructure
+    && previous.sourceToProjectedIndex?.length === messages.length
+  ) {
+    let patched: RemoteMessage[] | null = null;
+    for (const sourceIndex of changedIndexes) {
+      const projectedIndex = previous.sourceToProjectedIndex[sourceIndex] ?? -1;
+      if (projectedIndex < 0) continue;
+      const nextMessage = messages[sourceIndex];
+      if (!nextMessage || previous.projected[projectedIndex] === nextMessage) continue;
+      patched ??= [...previous.projected];
+      patched[projectedIndex] = nextMessage;
+    }
+    projected = patched ?? previous.projected;
+    sourceToProjectedIndex = previous.sourceToProjectedIndex;
+  } else {
+    projected = projectLoadedMessageWindow(messages);
+    if (projected === messages) {
+      sourceToProjectedIndex = null;
+    } else {
+      sourceToProjectedIndex = new Int32Array(messages.length);
+      sourceToProjectedIndex.fill(-1);
+      let projectedIndex = 0;
+      for (let sourceIndex = 0; sourceIndex < messages.length; sourceIndex += 1) {
+        if (messages[sourceIndex] !== projected[projectedIndex]) continue;
+        sourceToProjectedIndex[sourceIndex] = projectedIndex;
+        projectedIndex += 1;
+      }
+    }
+  }
+  const projectedChangedIndexes = sourceToProjectedIndex
+    ? mapChangedIndexesToProjection(changedIndexes, sourceToProjectedIndex)
+    : changedIndexes;
+  return {
+    changedIndexes: projectedChangedIndexes,
+    projected,
+    source: messages,
+    sourceToProjectedIndex,
+    structureToken,
+  };
+}
+
+function mapChangedIndexesToProjection(
+  changedIndexes: ReadonlySet<number>,
+  sourceToProjectedIndex: Int32Array,
+): ReadonlySet<number> {
+  const projectedIndexes = new Set<number>();
+  for (const sourceIndex of changedIndexes) {
+    const projectedIndex = sourceToProjectedIndex[sourceIndex] ?? -1;
+    if (projectedIndex >= 0) projectedIndexes.add(projectedIndex);
+  }
+  return projectedIndexes;
+}
+
 export function hasMoreOlderMessages(page: readonly RemoteMessage[], pageSize = MESSAGE_PAGE_SIZE): boolean {
   if (page.length >= pageSize) return true;
   // 被控端结果帧超限时会静默裁行,并在保留行打 agentMeta.remoteRowsTrimmed 标记

@@ -10,6 +10,7 @@ import {
   MESSAGE_PAGE_SIZE,
   oldestMessageCursor,
   projectLoadedMessageWindow,
+  projectLoadedMessageWindowIncrementally,
   shouldKeepOlderMessagesAffordance,
   shouldRefreshLatestMessageWindowOnReopen,
 } from '@/session/messagePaging';
@@ -182,6 +183,53 @@ describe('messagePaging', () => {
 
       expect(projectLoadedMessageWindow(rows).map((row) => row.id)).toEqual([
         'mobile-system-compact:latest',
+      ]);
+    });
+
+    it('patches a visible streaming row without rescanning a Compact projection', () => {
+      const rows = [
+        message('m1', '2026-01-01T00:00:01.000Z'),
+        compact('replay-1', '2026-01-01T00:00:02.000Z'),
+        compact('replay-2', '2026-01-01T00:00:03.000Z'),
+        message('streaming', '2026-01-01T00:00:04.000Z'),
+      ];
+      const structureToken = {};
+      const first = projectLoadedMessageWindowIncrementally({
+        changedIndexes: new Set(),
+        messages: rows,
+        structureToken,
+      });
+      expect(first.projected.map((row) => row.id)).toEqual([
+        'm1',
+        'mobile-system-compact:replay-2',
+        'streaming',
+      ]);
+
+      const nextRows = [...rows];
+      nextRows[3] = { ...rows[3], content: 'next token' };
+      let unrelatedSourceReads = 0;
+      const observedRows = new Proxy(nextRows, {
+        get(target, property, receiver) {
+          if (typeof property === 'string' && /^\d+$/.test(property) && Number(property) !== 3) {
+            unrelatedSourceReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const next = projectLoadedMessageWindowIncrementally({
+        changedIndexes: new Set([3]),
+        messages: observedRows,
+        previous: first,
+        structureToken,
+      });
+
+      expect(unrelatedSourceReads).toBe(0);
+      expect(next.sourceToProjectedIndex).toBe(first.sourceToProjectedIndex);
+      expect(next.changedIndexes).toEqual(new Set([2]));
+      expect(next.projected.map((row) => row.content)).toEqual([
+        'hello',
+        'hello',
+        'next token',
       ]);
     });
   });

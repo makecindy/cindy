@@ -20,15 +20,35 @@ describe('inactive session list subscriptions', () => {
   it('pauses list and row subscriptions while their route is covered', () => {
     const store = source('src/session/remoteSessionStore.ts');
     expect(store).toContain(
-      'enabled ? remoteSessionStore.subscribe : INACTIVE_REMOTE_SESSION_STORE_SUBSCRIBE',
+      'enabled ? subscribe : INACTIVE_REMOTE_SESSION_STORE_SUBSCRIBE',
     );
     expect(store).toContain(
       "usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getSessions)",
     );
-    expect(store).toContain("'message-version',\n    remoteSessionStore.getMessageVersion");
-    expect(store).toContain("'store-version',\n    remoteSessionStore.getStoreVersion");
-    expect(store).toContain(
-      '() => remoteSessionStore.isSessionRunning(sessionId)',
+    const previewHook = store.slice(
+      store.indexOf('export function useRemoteSessionMessagePreview'),
+      store.indexOf('// 本地「最近消息」缓存持久化'),
     );
+    expect(previewHook).toContain('usePausableRemoteSessionStoreSnapshot(');
+    expect(previewHook).toContain('remoteSessionStore.subscribeSessionMessagePreview(sessionId, cb)');
+    const messageVersionHook = store.slice(
+      store.indexOf('export function useRemoteMessageVersion'),
+      store.indexOf('/** Home-list invalidation'),
+    );
+    expect(messageVersionHook).toContain('usePausableRemoteSessionStoreSnapshot(');
+    expect(messageVersionHook).toContain('remoteSessionStore.getMessageVersion()');
+    const storeVersionHook = store.slice(
+      store.indexOf('export function useRemoteSessionStoreVersion'),
+      store.indexOf('export function useRemoteNewMakerWorktreePreference'),
+    );
+    expect(storeVersionHook).toContain('usePausableRemoteSessionStoreSnapshot(');
+    expect(storeVersionHook).toContain('remoteSessionStore.getStoreVersion');
+    const runningHook = store.slice(
+      store.indexOf('export function useSessionRunning'),
+      store.indexOf('export function useSessionRunStatus'),
+    );
+    expect(runningHook).toContain('usePausableRemoteSessionStoreSnapshot(');
+    expect(runningHook).toContain('() => remoteSessionStore.isSessionRunning(sessionId)');
+    expect(runningHook).toContain('remoteSessionStore.subscribeHomeStatus');
   });
 });

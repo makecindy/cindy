@@ -283,6 +283,48 @@ describe('DS-3 · 零接线守卫', () => {
     ).toBe(false);
   });
 
+  it('自证伪：new URL(import.meta.url) 直接文件读取必须被命中（review P1 补洞）', () => {
+    // `readFileSync(new URL('../../design-tokens/src/semantic/color.json',
+    // import.meta.url))` 直接消费影子层文件——旧实现的剥离层把 new URL 的
+    // 第一参数当普通数据清空、说明符语境也没有 new URL——漏放。现在
+    // `new URL('…'` 是第七种说明符语境（按调用文件位置 resolve 相对路径）。
+    const relCases: Array<[string, string]> = [
+      [
+        'readFileSync(new URL(相对路径))',
+        "readFileSync(new URL('../../design-tokens/src/semantic/color.json', import.meta.url), 'utf8')",
+      ],
+      [
+        'new URL 模板形态',
+        'readFileSync(new URL(`../../design-tokens/src/semantic/color.json`, import.meta.url), \'utf8\')',
+      ],
+    ];
+    for (const [name, source] of relCases) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        name,
+      ).toBe(true);
+    }
+    // 仓内既有 110 处 new URL(import.meta.url) 用法（读兄弟 tsx / css /
+    // worker 等）都不指向 design-tokens，必须零误报。
+    const nonHits: Array<[string, string]> = [
+      ['既有用法：读兄弟 tsx', "readFileSync(new URL('../CCAgentSessionView.tsx', import.meta.url), 'utf8')"],
+      ['既有用法：读 css', "fileURLToPath(new URL('../../../styles/globals.css', import.meta.url))"],
+      ['既有用法：worker', "new Worker(new URL('../../../../../lib/highlight.worker.ts', import.meta.url), { type: 'module' })"],
+    ];
+    for (const [name, source] of nonHits) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'apps/desktop/src/renderer/features/x/a.test.ts'),
+        name,
+      ).toBe(false);
+    }
+    // 数据字符串里的 new URL 不误报。
+    expect(
+      containsRuntimeImportOfDesignTokens(
+        'const s = "new URL(\'../../design-tokens/src/x\', import.meta.url)";',
+      ),
+    ).toBe(false);
+  });
+
   it('自证伪：require.resolve 是运行期加载入口，必须被命中（review P2 补洞）', () => {
     // `readFileSync(require.resolve('../../design-tokens/…'))` 是消费影子层的
     // 真实路径：旧实现的剥离层把 require.resolve 的参数当普通数据字符串

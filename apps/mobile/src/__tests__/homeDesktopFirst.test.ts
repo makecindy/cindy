@@ -283,9 +283,12 @@ describe('mobile home desktop-first surface', () => {
     expect(vendorIconSource).toContain('Easing.inOut(Easing.ease)');
     // 行运行态经订阅获取(memo 化后命令式读取会 stale,2026-07-18 重渲染风暴修复)
     expect(homeSource).toContain('const sessionIsRunning = useSessionRunning(item.session.id);');
-    // 保鲜契约:ProjectRow 与 AutomationGroupChildren 内的命令式运行态读取必须各挂一份
-    // storeVersion 订阅(裸语句形态);行内相对时间靠分钟心跳订阅保鲜。丢任何一处都是 stale-UI。
-    expect((homeSource.match(/^  useRemoteSessionStoreVersion\(\);$/gm) ?? []).length).toBeGreaterThanOrEqual(2);
+    // 保鲜契约:项目/自动化折叠只订阅低频首页状态；消息预览下沉到 session 行。
+    // 普通流式 token 不得再通过全局 storeVersion 唤醒整棵首页列表。
+    expect(homeSource).not.toContain('useRemoteSessionStoreVersion();');
+    expect((homeSource.match(/useRemoteHomeStatusVersion\(\)/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(homeSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
+    expect(homeSource).toContain('useRemoteMessageVersion(normalizedSearchQuery.length > 0)');
     expect(homeSource).toContain('useMinuteNow();');
     expect(homeSource).toContain('<RadioTower');
     expect(homeSource).toContain('<UsersRound');
@@ -432,7 +435,8 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('`home.sessionRowTitle.${item.session.id}`');
     expect(sessionRowSource).toContain('ellipsizeMode="tail"');
     expect(sessionRowSource).toContain('numberOfLines={1}');
-    expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(item, { running })');
+    expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(');
+    expect(sessionRowSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
     expect(sessionRowSource).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');

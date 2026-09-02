@@ -5441,7 +5441,8 @@
     "browserWaiting": "Complete verification in your browser",
     "browserCallback": {
       "successTitle": "Signed in",
-      "successBody": "You can close this page and return to {{appName}}.",
+      "successBody": "You’re signed in. You can close this page now.",
+      "closeCountdown": "Closing in {{count}}s",
       "errorTitle": "Sign-in not completed",
       "errorBody": "Please return to {{appName}} and sign in again.",
       "returnButton": "Return to {{appName}}"
@@ -7504,7 +7505,7 @@
     "openApp": "Open ChatGPT App",
     "relogin": "Sign In to ChatGPT Again",
     "reloginRiskTitle": "Still sign in through Cindy?",
-    "reloginRiskDescription": "This creates a new OpenAI OAuth authorization and may immediately sign the ChatGPT App and Codex CLI out on this computer. You will need to sign in to those apps again afterward.",
+    "reloginRiskDescription": "Cindy will create a new OpenAI OAuth authorization. The ChatGPT App is usually unaffected; if it still shares credentials with system Codex, those apps may ask you to sign in again.",
     "reloginRiskConfirm": "Accept Risk and Continue",
     "devWriteBlocked": "Development builds use this computer’s ChatGPT sign-in read-only by default and cannot start OAuth or change its credentials. To test OAuth, use an isolated sandbox and explicitly set XDT_ALLOW_DEV_OAUTH_WRITE=1.",
     "devReadOnly": "Read-only in Development",
@@ -7692,7 +7693,7 @@
       "switchClaudeSubscriptionTitle": "Switch this session to the Claude.ai subscription and retry",
       "switchingClaudeSubscription": "Switching to Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this session: {{msg}}",
-      "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
+      "codexAppServerRetired": "The Codex service was restarted or replaced. The current request was interrupted; run it again.",
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",

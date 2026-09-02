@@ -47,6 +47,7 @@ import {
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
+import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import {
   formatTerminalRateLimitRetryMessage,
@@ -1405,7 +1406,13 @@ function handleCommandExecution(
     type: 'tool_result_full',
     data: {
       toolUseId: item.id,
-      fullText: stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+      // #3793:bwrap 沙箱初始化失败(命令从未执行)时追加宿主归因标注,
+      // 模型不再盲目重试,用户在工具卡里能看到原因。健康与普通失败路径原样。
+      fullText: annotateSandboxInitFailure(
+        stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+        isError,
+        item.command,
+      ),
       isError,
     },
     source: 'codex',
