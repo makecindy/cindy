@@ -95,6 +95,31 @@ describe('UsageHeatmap metric', () => {
     expect(moneyStyles).not.toEqual(tokenStyles);
   });
 
+  it('只用当前可见日期计算分桶阈值', () => {
+    const visibleDays = [
+      { day: '2026-08-20', money: money(10), tokens: 10 },
+      { day: '2026-08-21', money: money(20), tokens: 20 },
+      { day: '2026-08-22', money: money(30), tokens: 30 },
+    ];
+    const withOlderOutlier = [
+      { day: '2025-01-01', money: money(1_000_000), tokens: 1_000_000 },
+      ...visibleDays,
+    ];
+
+    const baseline = render(
+      <UsageHeatmap days={visibleDays} todayKey="2026-08-22" windowDays={7} />,
+    );
+    const baselineCell = baseline.getByRole('button', { name: '2026-08-21' }).firstElementChild;
+    const baselineColor = (baselineCell as HTMLElement).style.backgroundColor;
+    baseline.unmount();
+
+    const withOutlier = render(
+      <UsageHeatmap days={withOlderOutlier} todayKey="2026-08-22" windowDays={7} />,
+    );
+    const outlierCell = withOutlier.getByRole('button', { name: '2026-08-21' }).firstElementChild;
+    expect((outlierCell as HTMLElement).style.backgroundColor).toBe(baselineColor);
+  });
+
   it('token 口径的 tooltip 不出现金额', () => {
     const { container } = render(
       <UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} metric="tokens" />,

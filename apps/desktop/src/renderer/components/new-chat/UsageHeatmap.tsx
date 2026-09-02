@@ -161,17 +161,21 @@ export function UsageHeatmap({
     const tokensByDay = new Map(days.map((d) => [d.day, d.tokens ?? 0]));
     const intensityOf = (row: { money: RegionalMoney; tokens?: number }): number =>
       metric === 'tokens' ? (row.tokens ?? 0) : row.money.amount;
+    const today = parseDayKey(todayKey);
+    const start = startOfWeek(today);
+    start.setDate(start.getDate() - (visibleWeeks - 1) * 7);
+    const startKey = toDayKey(start);
+
+    // 分桶只反映当前屏幕可见的日期。全量历史中较早的极端值不应改变
+    // 用户正在看的这些格子的相对深浅。
     const nonZero = days
+      .filter((day) => day.day >= startKey && day.day <= todayKey)
       .map(intensityOf)
       .filter((v) => v > 0)
       .sort((a, b) => a - b);
     const q = (p: number): number =>
       nonZero.length ? nonZero[Math.min(nonZero.length - 1, Math.floor(p * nonZero.length))] : 0;
     const thresholds: [number, number, number] = [q(0.25), q(0.5), q(0.75)];
-
-    const today = parseDayKey(todayKey);
-    const start = startOfWeek(today);
-    start.setDate(start.getDate() - (visibleWeeks - 1) * 7);
 
     const cells: HeatCell[] = [];
     const cursor = new Date(start);
