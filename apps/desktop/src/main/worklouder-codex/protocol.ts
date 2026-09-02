@@ -484,28 +484,29 @@ export function workLouderLayerHasAgentKeys(layer: WorkLouderKeymapLayer | undef
 }
 
 /**
- * Cindy occupies a board by replacing the active layer with a full `KV_OAI_*`
- * grid. A vendor layout that happens to mention AG00 is not that exclusive map,
- * so it must still be captured as a restore snapshot.
+ * Cindy occupies a board by replacing one active layer with a full `KV_OAI_*`
+ * grid. Snapshot/restore identity is that layer — a stale Cindy map on some
+ * other profile or layer must not skip capturing the layer about to be rewritten.
  */
-export function isCindyExclusiveAgentKeymap(text: string): boolean {
+export function isCindyExclusiveAgentLayer(layer: WorkLouderKeymapLayer | undefined): boolean {
+  const keymap = layer?.layout?.keymap;
+  if (!Array.isArray(keymap)) return false;
+  const codes = keymap.flat().filter((code): code is string => typeof code === 'string');
+  return (
+    codes.length >= 8 &&
+    codes.every((code) => code.startsWith('KV_OAI_')) &&
+    codes.some((code) => code.includes('AG00'))
+  );
+}
+
+export function isCindyExclusiveAgentKeymap(
+  text: string,
+  profileIndex = 0,
+  layerIndex = 0,
+): boolean {
   const document = parseWorkLouderKeymapDocument(text);
   if (!document) return false;
-  for (const profile of document.profiles) {
-    for (const layer of profile.layers ?? []) {
-      const keymap = layer.layout?.keymap;
-      if (!Array.isArray(keymap)) continue;
-      const codes = keymap.flat().filter((code): code is string => typeof code === 'string');
-      if (
-        codes.length >= 8 &&
-        codes.every((code) => code.startsWith('KV_OAI_')) &&
-        codes.some((code) => code.includes('AG00'))
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return isCindyExclusiveAgentLayer(document.profiles[profileIndex]?.layers?.[layerIndex]);
 }
 
 /**

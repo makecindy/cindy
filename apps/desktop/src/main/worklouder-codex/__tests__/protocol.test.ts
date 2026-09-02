@@ -503,4 +503,13 @@ describe('Creator Micro 2 agent keymap', () => {
     const cindy = applyCreatorMicro2AgentLayer(parsed!, 0);
     expect(isCindyExclusiveAgentKeymap(JSON.stringify(cindy.document))).toBe(true);
   });
+
+  it('only treats the rebound layer as a Cindy occupancy map', () => {
+    const parsed = parseWorkLouderKeymapDocument(JSON.stringify(factoryDocument));
+    const cindyOnInactive = applyCreatorMicro2AgentLayer(parsed!, 1);
+    const text = JSON.stringify(cindyOnInactive.document);
+    expect(isCindyExclusiveAgentKeymap(text)).toBe(false);
+    expect(isCindyExclusiveAgentKeymap(text, 0, 0)).toBe(false);
+    expect(isCindyExclusiveAgentKeymap(text, 0, 1)).toBe(true);
+  });
 });

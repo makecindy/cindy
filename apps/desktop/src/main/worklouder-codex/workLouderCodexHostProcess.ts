@@ -670,7 +670,11 @@ async function writeKeymapSnapshot(filePath: string, liveText: string): Promise<
   await fs.rename(tmpPath, filePath);
 }
 
-async function backupCreatorKeymap(liveText: string): Promise<void> {
+async function backupCreatorKeymap(
+  liveText: string,
+  profileIndex: number,
+  layerIndex: number,
+): Promise<void> {
   if (!keymapBackupDir) {
     throw new Error('Creator Micro 2 keymap backup directory is missing');
   }
@@ -684,9 +688,9 @@ async function backupCreatorKeymap(liveText: string): Promise<void> {
   } catch {
     await writeKeymapSnapshot(factoryPath, liveText);
   }
-  // Only capture a restore snapshot from a vendor layout. Later rebinds during
-  // the same occupancy read Cindy's own keymap and must not overwrite it.
-  if (!isCindyExclusiveAgentKeymap(liveText)) {
+  // Snapshot the whole document, but decide from the layer Cindy is about to
+  // overwrite. A stale Cindy map on another layer must not skip this capture.
+  if (!isCindyExclusiveAgentKeymap(liveText, profileIndex, layerIndex)) {
     await writeKeymapSnapshot(
       path.join(keymapBackupDir, creatorMicro2KeymapSessionFileName(connectedDevice?.backupId)),
       liveText,
@@ -734,7 +738,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
     );
     return;
   }
-  await backupCreatorKeymap(liveText);
+  await backupCreatorKeymap(liveText, profileIndex, layerIndex);
   const writeResult = await fsApi.writeFile(
     WORKLOUDER_DEVICE_KEYMAP_FILE,
     JSON.stringify(next.document),
