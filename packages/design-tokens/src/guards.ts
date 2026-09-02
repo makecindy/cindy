@@ -519,7 +519,7 @@ const IMPORT_ENTRY_PATTERNS: readonly RegExp[] = [
  * 「有人真接线」，member-require 恰是真实接线的合法形态。
  */
 const SPECIFIER_CONTEXT_RE =
-  /(?:\bfrom\s*|(?<![\w$])import\s*\(\s*|(?<![\w$])require\s*\(\s*|(?<![\w$])require\s*\.\s*resolve\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|\bnew\s+URL\s*\(\s*|(?<![\w$])import\s*(?=['"`]))['"`]([^'"`]+)['"`]/g;
+  /(?:\bfrom\s*|(?<![\w$])import\s*\(\s*|(?<![\w$])require\s*\(\s*|(?<![\w$])require\s*\.\s*resolve\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|\bimport\.meta\.glob\s*\(\s*|\bnew\s+URL\s*\(\s*|(?<![\w$])import\s*(?=['"`]))['"`]([^'"`]+)['"`]/g;
 
 /**
  * fs API 路径参数语境（第八类）：`readFileSync('…'` / `readFile('…'` 等
@@ -544,9 +544,16 @@ const PATH_CONSTRUCTOR_CALL_RE =
   /\b(?:resolve|join)\s*\(([^()]*)\)/g;
 const STATIC_STRING_ARG_RE = /['"`]([^'"`]+)['"`]/g;
 
-/** 判断「无空白压缩后的最近输出」是否以 import / fs API / 路径构造器语境结尾。 */
+/**
+ * 判断「无空白压缩后的最近输出」是否以 import / fs API / 路径构造器语境
+ * 结尾。**所有分支共享末尾 `$` 锚定**（review P2 实锤：`\bfrom` / `\bimport`
+ * 分支曾无锚定，源码先出现正常导入再写 `const hint = 'packages/design-tokens/…'`
+ * 时，残留语境里的 import 字样让数据字符串被错误保留，裸路径模式随后误报
+ * 接线、阻断 required unit workspace）。`$` 保证匹配的是紧邻当前开引号的
+ * 调用语境。
+ */
 const SPECIFIER_PREFIX_RE =
-  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\brequire\s*\.\s*resolve\s*\(|\bimport\.meta\.resolve\s*\(|\bnew\s+URL\s*\(|\bimport|(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\(|\b(?:resolve|join)\s*\([^()]*$)/;
+  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\brequire\s*\.\s*resolve\s*\(|\bimport\.meta\.resolve\s*\(|\bimport\.meta\.glob\s*\(|\bnew\s+URL\s*\(|\bimport|(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\(|\b(?:resolve|join)\s*\([^()]*$)$/;
 
 /**
  * 剥除源码里的注释与「数据语境」字符串字面量，保留 import 说明符。

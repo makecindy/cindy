@@ -418,6 +418,47 @@ describe('DS-3 · 零接线守卫', () => {
     }
   });
 
+  it('自证伪：import.meta.glob 是构建期加载入口，必须被命中（review P2 补洞）', () => {
+    // Vite 的 import.meta.glob 在构建期把匹配文件打进产品——仓内
+    // packages/lizi-mcps/src/browser/recipe-loader.ts 有实际用例。相对
+    // glob 模式按文件位置 resolve（glob 元字符 ** /* 不影响前缀段判定）。
+    expect(
+      relativeSpecifierHitsDesignTokens(
+        "import.meta.glob('../../design-tokens/src/**/*.json')",
+        'packages/foo/src/a.ts',
+      ),
+    ).toBe(true);
+    expect(
+      relativeSpecifierHitsDesignTokens(
+        'const mods = import.meta.glob(`../../design-tokens/src/**`)',
+        'packages/foo/src/a.ts',
+      ),
+    ).toBe(true);
+    // 既有用法（glob 不指向 design-tokens）不误报。
+    expect(
+      relativeSpecifierHitsDesignTokens(
+        "import.meta.glob('../recipes/*.json')",
+        'packages/foo/src/a.ts',
+      ),
+    ).toBe(false);
+  });
+
+  it('自证伪：语境残留不产生误报（review P2 补洞）', () => {
+    // SPECIFIER_PREFIX_RE 的 \bfrom / \bimport 分支曾无 $ 锚定：源码先出现
+    // 正常导入、再写 `const hint = 'packages/design-tokens/src/x'` 时，残留
+    // 语境里的 import 字样让数据字符串被剥除层错误保留，裸路径模式随后
+    // 误报接线、阻断 required unit workspace。$ 锚定保证只匹配紧邻当前
+    // 开引号的调用语境。
+    const falsePositiveCases = [
+      "import x from './x'; const hint = 'packages/design-tokens/src/x';",
+      "import x from './x'; log('packages/design-tokens/src/x')",
+      "const a = 'x'; const hint = 'packages/design-tokens/src/x';",
+    ];
+    for (const source of falsePositiveCases) {
+      expect(containsRuntimeImportOfDesignTokens(source), source).toBe(false);
+    }
+  });
+
   it('自证伪：require.resolve 是运行期加载入口，必须被命中（review P2 补洞）', () => {
     // `readFileSync(require.resolve('../../design-tokens/…'))` 是消费影子层的
     // 真实路径：旧实现的剥离层把 require.resolve 的参数当普通数据字符串
