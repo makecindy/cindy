@@ -193,11 +193,13 @@ function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
 const AUTH_SESSION_KEY = 'cindy_auth_session_v1';
 const AUTH_ACCOUNT_VAULT_KEY = 'cindy_auth_accounts_v1';
 const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
-// v2 makes the per-membership logout tombstone unreadable to v1 clients. The
-// storage key stays stable so the current client can migrate v1 records in
-// place, while an older client fails closed instead of re-enumerating a logged
-// out Passport membership.
+const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY = 'cindy_auth_account_logout_tombstones_v1';
+// The aggregate vault stays readable by v1 clients for explicit-login
+// compatibility. Per-membership logout tombstones live in a separate key that
+// older clients never read or rewrite, so their Passport sync cannot resurrect
+// an account explicitly logged out by a newer client.
 const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;
+const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
 const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
 const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy_auth_account_deletion_receipt';
 const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';
@@ -739,6 +741,64 @@ function emptyAuthAccountVault(): AuthAccountVault {
   };
 }
 
+function readAuthAccountLogoutTombstones(): string[] {
+  const raw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+  if (raw === null) {
+    if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)) return [];
+    log.warn('encrypted auth logout tombstones are temporarily unreadable');
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Saved account logout state is temporarily unavailable',
+    );
+  }
+  try {
+    const parsed = JSON.parse(raw) as {
+      version?: unknown;
+      accountKeys?: unknown;
+    };
+    if (
+      parsed.version !== AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION ||
+      !Array.isArray(parsed.accountKeys)
+    ) {
+      throw new Error('unsupported auth logout tombstones');
+    }
+    const accountKeys = parsed.accountKeys.filter(
+      (key): key is string => parseDesktopAccountKey(key) !== null,
+    );
+    if (accountKeys.length !== parsed.accountKeys.length) {
+      throw new Error('invalid auth logout tombstone key');
+    }
+    return [...new Set(accountKeys)];
+  } catch (error) {
+    log.warn(
+      'encrypted auth logout tombstones are invalid; refusing to read saved accounts',
+      error,
+    );
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Saved account logout state could not be read safely',
+    );
+  }
+}
+
+function writeAuthAccountLogoutTombstones(vault: AuthAccountVault): boolean {
+  const accountKeys = [...new Set(vault.loggedOutAccountKeys ?? [])];
+  if (accountKeys.length === 0) {
+    try {
+      removeAtomicSafeOrThrow(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return writeAtomicSafe(
+    AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
+    JSON.stringify({ version: AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION, accountKeys }),
+  );
+}
+
 function accountVaultKey(realm: AuthRegion, membershipId: string): string {
   return JSON.stringify([realm, membershipId]);
 }
@@ -767,9 +827,14 @@ function isStoredAccountMetadata(value: unknown): value is StoredAccountMetadata
 function readAuthAccountVault(
   options: { allowUnreadable?: boolean; recoverInvalid?: boolean } = {},
 ): AuthAccountVault {
+  const persistedLogoutKeys = readAuthAccountLogoutTombstones();
   const raw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
   if (raw === null) {
-    if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY)) return emptyAuthAccountVault();
+    if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY)) {
+      return persistedLogoutKeys.length > 0
+        ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
+        : emptyAuthAccountVault();
+    }
     log.warn('encrypted auth account vault exists but is temporarily unreadable');
     if (options.allowUnreadable) return emptyAuthAccountVault();
     throw new AuthApiError(
@@ -843,18 +908,24 @@ function readAuthAccountVault(
         memberships,
       };
     }
-    const loggedOutAccountKeys = (parsed.loggedOutAccountKeys ?? []).filter(
+    const embeddedLogoutKeys = (parsed.loggedOutAccountKeys ?? []).filter(
       (key): key is string => parseDesktopAccountKey(key) !== null,
     );
     if (
       !options.allowUnreadable &&
       !options.recoverInvalid &&
-      loggedOutAccountKeys.length !== (parsed.loggedOutAccountKeys?.length ?? 0)
+      embeddedLogoutKeys.length !== (parsed.loggedOutAccountKeys?.length ?? 0)
     ) {
       throw new Error('invalid logged-out account key');
     }
-    const loggedOutKeys = new Set(loggedOutAccountKeys);
+    const loggedOutKeys = new Set([...persistedLogoutKeys, ...embeddedLogoutKeys]);
     const active = typeof parsed.activeAccountKey === 'string' ? parsed.activeAccountKey : null;
+    // An older client cannot clear the separate tombstone when it explicitly
+    // logs back into an account. Treat its active Resource projection as that
+    // explicit restore, while passive membership sync (which does not change
+    // activeAccountKey or create a Resource) remains filtered.
+    if (active && resources[active]) loggedOutKeys.delete(active);
+    const loggedOutAccountKeys = [...loggedOutKeys];
     return {
       version: AUTH_ACCOUNT_VAULT_VERSION,
       activeAccountKey: active && resources[active] && !loggedOutKeys.has(active) ? active : null,
@@ -866,7 +937,9 @@ function readAuthAccountVault(
   } catch (error) {
     if (options.recoverInvalid) {
       log.warn('encrypted auth account vault is invalid; recovering it for explicit login', error);
-      return emptyAuthAccountVault();
+      return persistedLogoutKeys.length > 0
+        ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
+        : emptyAuthAccountVault();
     }
     log.warn('encrypted auth account vault is invalid; ignoring it without deleting', error);
     if (options.allowUnreadable) return emptyAuthAccountVault();
@@ -879,12 +952,35 @@ function readAuthAccountVault(
 }
 
 function writeAuthAccountVault(vault: AuthAccountVault): boolean {
+  const previousLogoutRaw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+  const previousLogoutWasAbsent =
+    previousLogoutRaw === null && isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+  if (previousLogoutRaw === null && !previousLogoutWasAbsent) return false;
+  // Persist the tombstone before the legacy-compatible aggregate. If the
+  // process stops between these writes, a new client fails closed instead of
+  // briefly re-enumerating an account that was explicitly logged out.
+  if (!writeAuthAccountLogoutTombstones(vault)) return false;
   // Keep the aggregate payload at the legacy version so an older client can
   // still recover an explicit login without discarding the other saved
   // accounts. New clients continue to read the optional logout tombstones,
   // while logout removes the signed-out membership from the stored Passport
   // projection so older clients cannot enumerate it from local data.
-  return writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify({ ...vault, version: 1 }));
+  if (writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify({ ...vault, version: 1 }))) {
+    return true;
+  }
+  try {
+    if (previousLogoutWasAbsent) {
+      removeAtomicSafeOrThrow(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+    } else if (
+      previousLogoutRaw !== null &&
+      !writeAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutRaw)
+    ) {
+      log.warn('failed to restore auth logout tombstones after vault write failure');
+    }
+  } catch (error) {
+    log.warn('failed to restore auth logout tombstones after vault write failure', error);
+  }
+  return false;
 }
 
 function writeAuthAccountVaultOrThrow(vault: AuthAccountVault): void {
@@ -938,6 +1034,10 @@ async function transactAuthAccountVault<T>(
         const previousRaw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
         const previousWasAbsent =
           previousRaw === null && isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY);
+        const previousLogoutRaw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+        const previousLogoutWasAbsent =
+          previousLogoutRaw === null &&
+          isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
         const vault = readAuthAccountVault({
           recoverInvalid: options.recoverInvalidForExplicitLogin,
         });
@@ -961,6 +1061,18 @@ async function transactAuthAccountVault<T>(
               'CREDENTIAL_STORE_UNAVAILABLE',
               503,
               'Could not restore saved account credentials after a failed account switch',
+            );
+          }
+          if (previousLogoutWasAbsent) {
+            removeAtomicSafeOrThrow(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+          } else if (
+            previousLogoutRaw !== null &&
+            !writeAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutRaw)
+          ) {
+            throw new AuthApiError(
+              'CREDENTIAL_STORE_UNAVAILABLE',
+              503,
+              'Could not restore saved account logout state after a failed account switch',
             );
           }
           throw error;

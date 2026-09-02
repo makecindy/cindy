@@ -156,6 +156,10 @@ describe('auth login-flow reset', () => {
 
   it('keeps saved account metadata fresh after profile edits and Passport sync', () => {
     expect(source).toContain('const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;');
+    expect(source).toContain(
+      "const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY = 'cindy_auth_account_logout_tombstones_v1';",
+    );
+    expect(source).toContain('const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;');
     expect(source).toContain('const logoutAuthEpoch = authStateEpoch;');
     expect(source).toContain("'Logout was superseded by a newer auth action'");
     expect(source).toContain('validateBeforeCommit: isLogoutStillCurrent');
@@ -181,6 +185,38 @@ describe('auth login-flow reset', () => {
     const writeBody = source.slice(writeStart, writeEnd);
     expect(writeBody).toContain('JSON.stringify({ ...vault, version: 1 })');
     expect(writeBody).toContain('older client can');
+    expect(writeBody).toContain('writeAuthAccountLogoutTombstones(vault)');
+    expect(writeBody.indexOf('writeAuthAccountLogoutTombstones(vault)')).toBeLessThan(
+      writeBody.indexOf('writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY'),
+    );
+
+    const logoutTombstoneReadStart = source.indexOf('function readAuthAccountLogoutTombstones(');
+    const logoutTombstoneReadEnd = source.indexOf(
+      '\n}\n\nfunction writeAuthAccountLogoutTombstones',
+      logoutTombstoneReadStart,
+    );
+    const logoutTombstoneReadBody = source.slice(
+      logoutTombstoneReadStart,
+      logoutTombstoneReadEnd,
+    );
+    expect(logoutTombstoneReadBody).toContain('parseDesktopAccountKey(key)');
+    expect(logoutTombstoneReadBody).toContain('isAtomicPersistedSecretAbsent');
+
+    const logoutTombstoneWriteStart = source.indexOf(
+      'function writeAuthAccountLogoutTombstones(',
+    );
+    const logoutTombstoneWriteEnd = source.indexOf(
+      '\n}\n\nfunction accountVaultKey',
+      logoutTombstoneWriteStart,
+    );
+    expect(source.slice(logoutTombstoneWriteStart, logoutTombstoneWriteEnd)).toContain(
+      'JSON.stringify({ version: AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION, accountKeys })',
+    );
+
+    const readLogoutKeysStart = readBody.indexOf('const persistedLogoutKeys =');
+    expect(readLogoutKeysStart).toBeGreaterThan(-1);
+    expect(readBody).toContain('new Set([...persistedLogoutKeys, ...embeddedLogoutKeys])');
+    expect(readBody).toContain('if (active && resources[active]) loggedOutKeys.delete(active);');
 
     const profileStart = source.indexOf('export async function updateServerProfile(');
     const profileEnd = source.indexOf('\n}\n\nexport async function initialize(', profileStart);
@@ -213,6 +249,10 @@ describe('auth login-flow reset', () => {
     );
     expect(mutationBody).toContain('removeAtomicSafeOrThrow(AUTH_ACCOUNT_VAULT_KEY);');
     expect(mutationBody).toContain('writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, previousRaw)');
+    expect(mutationBody).toContain('removeAtomicSafeOrThrow(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);');
+    expect(mutationBody).toContain(
+      'writeAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, previousLogoutRaw)',
+    );
 
     for (const helper of [
       'async function rememberResourceSession(',
