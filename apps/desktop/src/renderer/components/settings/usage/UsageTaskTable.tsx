@@ -99,6 +99,14 @@ export function usageActivityIso(session: Pick<Session, 'updatedAt' | 'userSendA
 }
 
 /**
+ * 任务表只按会话的最后活跃时间筛选，无法证明某个任务在单日范围内实际活跃过。
+ * 因此 today 与 day:* 都隐藏这张聚合表，避免把累计 token 误读成当天用量。
+ */
+export function shouldHideUsageTaskTable(range: UsageHistoryRange): boolean {
+  return range === 'today' || usageRangeDay(range) !== null;
+}
+
+/**
  * 候选行 —— 单独暴露成 hook, 让调用方能在**渲染卡片之前**知道有没有行。
  * 组件内部返回 null 会留下一张只有标题、正文全空的卡片 (会话被删光 / 列表首次加载中)。
  */
@@ -141,7 +149,7 @@ export function useTopTokenSessions(
     // aggregate rather than presenting a task as active on a day it may not
     // have used. The day-level charts and agent/model tables use dated usage
     // records and remain exact.
-    if (usageRangeDay(range)) return [];
+    if (shouldHideUsageTaskTable(range)) return [];
     const now = new Date();
     const todayKey =
       todayKeyOverride ??

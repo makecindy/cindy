@@ -12,7 +12,7 @@ import {
   isUsageHistoryEmpty,
   toUsageDays,
 } from '../usageHistoryStats';
-import { usageActivityIso } from '../UsageTaskTable';
+import { shouldHideUsageTaskTable, usageActivityIso } from '../UsageTaskTable';
 
 const zeroMoney = {
   amount: 0,
@@ -55,6 +55,14 @@ function payload(over: Partial<UsageHistoryPayload> = {}): UsageHistoryPayload {
     ...over,
   };
 }
+
+describe('shouldHideUsageTaskTable', () => {
+  it('单日范围（包括 today）隐藏无法精确归因的任务表', () => {
+    expect(shouldHideUsageTaskTable('today')).toBe(true);
+    expect(shouldHideUsageTaskTable('day:2026-08-20')).toBe(true);
+    expect(shouldHideUsageTaskTable('7d')).toBe(false);
+  });
+});
 
 describe('cacheHitRate', () => {
   it('输出 token 不进分母 (与逐轮卡片同一公式)', () => {
