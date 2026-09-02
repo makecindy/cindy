@@ -2,7 +2,7 @@
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { resolveHeatmapWeeks, UsageHeatmap } from '../UsageHeatmap';
+import { heatmapWeeksForWindow, resolveHeatmapWeeks, UsageHeatmap } from '../UsageHeatmap';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -71,6 +71,19 @@ describe('UsageHeatmap metric', () => {
         availableWidth: 900,
       }),
     ).toBe(60);
+  });
+
+  it('周日锚点也覆盖完整的 windowDays 历史，不把未来占位挤掉最早日期', () => {
+    expect(heatmapWeeksForWindow('2026-08-22', 140)).toBe(20);
+    expect(heatmapWeeksForWindow('2026-08-23', 140)).toBe(21);
+    expect(
+      resolveHeatmapWeeks({
+        days: [{ day: '2026-08-23' }],
+        todayKey: '2026-08-23',
+        availableWidth: 100,
+        windowDays: 140,
+      }),
+    ).toBe(21);
   });
 
   it('月份标签保持单行，避免最右侧月份换行', () => {

@@ -91,6 +91,14 @@ function activeWithinRange(
 }
 
 /**
+ * 用量范围只应按用户真正发送消息的时间筛选。updatedAt 还会被重命名、归档、
+ * 置顶等元数据更新推进；只有存量行没有 userSendAt 时才回退到 updatedAt。
+ */
+export function usageActivityIso(session: Pick<Session, 'updatedAt' | 'userSendAt'>): string {
+  return session.userSendAt ?? session.updatedAt;
+}
+
+/**
  * 候选行 —— 单独暴露成 hook, 让调用方能在**渲染卡片之前**知道有没有行。
  * 组件内部返回 null 会留下一张只有标题、正文全空的卡片 (会话被删光 / 列表首次加载中)。
  */
@@ -142,8 +150,7 @@ export function useTopTokenSessions(
       .filter(
         (session) =>
           session.totalTokenUsage > 0 &&
-          (activeWithinRange(session.updatedAt, range, todayKey) ||
-            activeWithinRange(session.userSendAt, range, todayKey)),
+          activeWithinRange(usageActivityIso(session), range, todayKey),
       )
       .sort((a, b) => b.totalTokenUsage - a.totalTokenUsage)
       .slice(0, TOP_TASKS);

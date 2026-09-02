@@ -65,19 +65,37 @@ function fitWeeksForWidth(width: number): number {
   return Math.max(1, Math.floor((width + GAP_PX) / (CELL_PX + GAP_PX)));
 }
 
+/**
+ * 周网格按周日对齐时，当前周的未来占位也会占用格子。返回覆盖完整
+ * `windowDays` 历史的最小周数，避免周日等锚点把窗口前端截掉。
+ */
+export function heatmapWeeksForWindow(todayKey: string, windowDays: number): number {
+  const today = parseDayKey(todayKey);
+  if (!todayKey || Number.isNaN(today.getTime()) || !(windowDays > 0)) return MIN_HEATMAP_WEEKS;
+  const windowStart = new Date(today);
+  windowStart.setDate(windowStart.getDate() - Math.ceil(windowDays) + 1);
+  return Math.floor(calendarDayDistance(startOfWeek(windowStart), startOfWeek(today)) / 7) + 1;
+}
+
 /** 至少保留 20 周；有更早数据且容器放得下时，尽量展示更多历史。 */
 export function resolveHeatmapWeeks({
   days,
   todayKey,
   availableWidth,
   minimumWeeks = MIN_HEATMAP_WEEKS,
+  windowDays,
 }: {
   days: Array<{ day: string }>;
   todayKey: string;
   availableWidth: number;
   minimumWeeks?: number;
+  windowDays?: number;
 }): number {
-  const minWeeks = Math.max(MIN_HEATMAP_WEEKS, Math.ceil(minimumWeeks));
+  const minWeeks = Math.max(
+    MIN_HEATMAP_WEEKS,
+    Math.ceil(minimumWeeks),
+    windowDays === undefined ? 0 : heatmapWeeksForWindow(todayKey, windowDays),
+  );
   const today = parseDayKey(todayKey);
   if (!todayKey || Number.isNaN(today.getTime())) return minWeeks;
 
@@ -150,6 +168,7 @@ export function UsageHeatmap({
     todayKey,
     availableWidth,
     minimumWeeks,
+    windowDays,
   });
 
   useLayoutEffect(() => {

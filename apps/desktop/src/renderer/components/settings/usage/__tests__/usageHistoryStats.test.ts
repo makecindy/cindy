@@ -12,6 +12,7 @@ import {
   isUsageHistoryEmpty,
   toUsageDays,
 } from '../usageHistoryStats';
+import { usageActivityIso } from '../UsageTaskTable';
 
 const zeroMoney = {
   amount: 0,
@@ -325,5 +326,19 @@ describe('filterUsageHistoryPayload', () => {
       '2026-08-22',
     ]);
     expect(result?.days.map((row) => row.day)).toEqual(source.days.map((row) => row.day));
+  });
+});
+
+describe('usageActivityIso', () => {
+  it('忽略元数据更新时间，优先使用用户发送时间；存量行才回退 updatedAt', () => {
+    expect(
+      usageActivityIso({
+        userSendAt: '2026-08-20T10:00:00.000Z',
+        updatedAt: '2026-08-22T10:00:00.000Z',
+      }),
+    ).toBe('2026-08-20T10:00:00.000Z');
+    expect(usageActivityIso({ userSendAt: null, updatedAt: '2026-08-22T10:00:00.000Z' })).toBe(
+      '2026-08-22T10:00:00.000Z',
+    );
   });
 });
