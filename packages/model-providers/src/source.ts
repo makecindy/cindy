@@ -22,6 +22,8 @@ import type { AgentKind, Catalog, Provider, ProviderPreset } from './types.js';
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
 export const CATALOG_API_PATH = '/api/model-catalog/catalog';
+/** Pi-aware Catalog protocol requested by clients that understand provider/preset Pi fields. */
+export const CATALOG_API_SCHEMA_VERSION = 2;
 /** 旧客户端目录的 OSS 相对路径。迁移期作为公共 API 失败后的兼容回退。 */
 export const CATALOG_CFG_PATH = '/cfg/providers.json';
 
@@ -114,7 +116,7 @@ function trimTrailingSlashes(s: string): string {
 export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
   if (cfg.url && cfg.url.trim()) return cfg.url.trim();
   if (cfg.baseUrl && cfg.baseUrl.trim()) {
-    return trimTrailingSlashes(cfg.baseUrl.trim()) + CATALOG_API_PATH;
+    return `${trimTrailingSlashes(cfg.baseUrl.trim()) + CATALOG_API_PATH}?schemaVersion=${CATALOG_API_SCHEMA_VERSION}`;
   }
   return null;
 }

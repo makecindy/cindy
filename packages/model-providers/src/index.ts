@@ -67,6 +67,7 @@ export { findReservedOAuthExtraParam } from './provider-oauth.js';
 
 export {
   CATALOG_API_PATH,
+  CATALOG_API_SCHEMA_VERSION,
   CATALOG_CFG_PATH,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   resolveCatalogUrl,
