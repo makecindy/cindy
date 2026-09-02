@@ -23,6 +23,7 @@ import {
   resolveWorkLouderActiveLayerIndex,
   resolveWorkLouderActiveProfileIndex,
   rewriteBareWorkLouderNotifyJson,
+  readWorkLouderDeviceStatusOrThrow,
   unwrapWorkLouderDeviceStatus,
   unwrapWorkLouderKeymapText,
   isCindyExclusiveAgentKeymap,
@@ -396,7 +397,7 @@ async function probeConnection(): Promise<void> {
         // Call it directly rather than through postDeviceStatus, which swallows
         // failures — swallowing here would make every probe "succeed" and defeat
         // the whole point. Same round trip also keeps battery and firmware fresh.
-        const status = unwrapWorkLouderDeviceStatus(await api.getDeviceStatus());
+        const status = readWorkLouderDeviceStatusOrThrow(await api.getDeviceStatus());
         if (!transportFaulted) {
           const device = connectedDevice;
           if (device) postDeviceState(device.deviceType, device.isUsb, status);
@@ -718,7 +719,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (!document) throw new Error('keymap.json is not a Work Louder keymap document');
   const status =
     typeof deviceApi.getDeviceStatus === 'function'
-      ? unwrapWorkLouderDeviceStatus(await deviceApi.getDeviceStatus())
+      ? readWorkLouderDeviceStatusOrThrow(await deviceApi.getDeviceStatus())
       : {};
   const profileIndex = resolveWorkLouderActiveProfileIndex(
     status.profileIndex,
@@ -758,9 +759,8 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
 
 async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<void> {
   if (connectedDevice?.deviceType !== 'creator-micro-2') return;
-  const now = Date.now();
-  if (now < creatorKeymapRetryAt) return;
   while (!stopping && !creatorKeymapBound) {
+    if (Date.now() < creatorKeymapRetryAt) return;
     if (creatorKeymapBinding) {
       await creatorKeymapBinding;
       continue;

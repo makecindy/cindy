@@ -14,6 +14,8 @@ import {
   parseWorkLouderCodexHidEvent,
   rewriteBareWorkLouderNotifyJson,
   unwrapWorkLouderDeviceStatus,
+  isFailedWorkLouderRpcEnvelope,
+  readWorkLouderDeviceStatusOrThrow,
   unwrapWorkLouderKeymapText,
   parseWorkLouderKeymapDocument,
   resolveWorkLouderActiveLayerIndex,
@@ -369,6 +371,14 @@ describe('unwrapWorkLouderDeviceStatus', () => {
       profileIndex: 0,
     });
     expect(unwrapWorkLouderDeviceStatus({ ok: false, error: { message: 'timeout' } })).toEqual({});
+    expect(isFailedWorkLouderRpcEnvelope({ ok: false, error: { message: 'timeout' } })).toBe(true);
+    expect(isFailedWorkLouderRpcEnvelope({ firmwareVersion: '0.6.2' })).toBe(false);
+    expect(() =>
+      readWorkLouderDeviceStatusOrThrow({ ok: false, error: { message: 'timeout' } }),
+    ).toThrow('timeout');
+    expect(readWorkLouderDeviceStatusOrThrow({ firmwareVersion: '0.6.2' })).toEqual({
+      firmwareVersion: '0.6.2',
+    });
   });
 });
 

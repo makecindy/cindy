@@ -353,6 +353,43 @@ export function rewriteBareWorkLouderNotifyJson(data: string): string | null {
   return null;
 }
 
+/** Explicit `{ ok: false }` envelopes are failed hardware round trips, not empty telemetry. */
+export function isFailedWorkLouderRpcEnvelope(result: unknown): boolean {
+  return Boolean(
+    result &&
+      typeof result === 'object' &&
+      !Array.isArray(result) &&
+      (result as { ok?: unknown }).ok === false,
+  );
+}
+
+export function workLouderRpcFailureMessage(result: unknown): string {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return 'Work Louder RPC failed';
+  }
+  const error = (result as { error?: unknown }).error;
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
+  return 'Work Louder RPC failed';
+}
+
+/** Liveness/bind reads must throw on a failed envelope. Telemetry may still unwrap to `{}`. */
+export function readWorkLouderDeviceStatusOrThrow(result: unknown): {
+  firmwareVersion?: string;
+  batteryPercentage?: number;
+  isCharging?: boolean;
+  layerIndex?: number;
+  profileIndex?: number;
+} {
+  if (isFailedWorkLouderRpcEnvelope(result)) {
+    throw new Error(workLouderRpcFailureMessage(result));
+  }
+  return unwrapWorkLouderDeviceStatus(result);
+}
+
 /** `getDeviceStatus` returns either a snapshot or the SDK `{ok, value}` envelope. */
 export function unwrapWorkLouderDeviceStatus(result: unknown): {
   firmwareVersion?: string;
