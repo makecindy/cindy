@@ -249,21 +249,16 @@ export class SkillPublishService {
     }
     const identityPolicy = await currentSkillhubIdentityPolicy();
     if (!identityPolicy.canWrite) {
-      const errorCode = identityPolicy.readOnlyReason === 'organization-catalog-read-only'
-        ? 'SKILL_HUB_READ_ONLY'
-        : 'CANCELLED';
       this.emitProgress(
         {
           phase: 'failed',
           name: params.name,
-          errorCode,
-          message: identityPolicy.readOnlyReason === 'organization-catalog-read-only'
-            ? 'Organization Skill Hub access is read-only'
-            : 'SkillHub publish requires sign-in',
+          errorCode: 'CANCELLED',
+          message: 'SkillHub publish requires sign-in',
         },
         onProgress,
       );
-      return { success: false, errorCode };
+      return { success: false, errorCode: 'CANCELLED' };
     }
     if (
       params.isFirstPublish

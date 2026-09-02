@@ -10479,13 +10479,18 @@
       "save": "保存",
       "saving": "保存中…",
       "saved": "公開設定を保存しました",
+      "submitReview": "審査に提出",
+      "waitingReview": "審査待ち",
+      "publicReviewSubmitted": "現在のバージョンを公開審査に提出しました",
+      "publicReviewPending": "現在のバージョンは公開審査待ちです。承認後に公開マーケットへ掲載されます。",
+      "publicReviewRejected": "公開審査で却下されました：{{reason}}",
       "impactPrivate": "保存後はこの Skill を閲覧できるのは自分のみになります。",
       "impactPrivateLeavingMarket": "保存すると公開マーケットから取り下げられ、自分のみ閲覧可になります。審査済みバージョンの承認状態は保持されます。",
       "impactPrivateTeam": "保存後は自分のみ閲覧可になり、チームはこの Skill を閲覧・管理できなくなります。",
       "impactPrivateTeamLeavingMarket": "保存すると公開マーケットから取り下げられ、自分のみ閲覧可になります。チームはこの Skill を閲覧・管理できなくなります。審査済みバージョンの承認状態は保持されます。",
       "impactTeam": "保存後は選択したチーム・部署が閲覧・ダウンロードできます。",
       "impactTeamLeavingMarket": "保存すると公開マーケットから取り下げられ、選択したチーム・部署のみが閲覧・ダウンロードできます。審査済みバージョンの承認状態は保持されます。",
-      "impactPublic": "保存すると公開マーケットに公開されます。すでに審査済みの場合は即座に公開され、審査状態は保持されます。"
+      "impactPublic": "現在のバージョンを公開審査に提出します。承認後に公開マーケットへ掲載され、新しいバージョンの公開は不要です。"
     },
     "marketEdit": {
       "saved": "マーケット表示情報を保存しました",

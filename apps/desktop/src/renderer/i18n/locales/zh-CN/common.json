@@ -10471,13 +10471,18 @@
       "save": "保存",
       "saving": "保存中…",
       "saved": "管理可见性已保存",
+      "submitReview": "提交审核",
+      "waitingReview": "等待审核",
+      "publicReviewSubmitted": "已提交当前版本的公开审核",
+      "publicReviewPending": "当前版本正在等待公开审核，审核通过后会进入公开市场。",
+      "publicReviewRejected": "公开审核未通过：{{reason}}",
       "impactPrivate": "保存后，仅你可见。",
       "impactPrivateLeavingMarket": "保存后会从公开市场下架，并转为自己可见；已通过审核的版本会保留审核通过状态。",
       "impactPrivateTeam": "保存后转为自己可见；团队将看不到这个 Skill，也无法管理。",
       "impactPrivateTeamLeavingMarket": "保存后会从公开市场下架，并转为自己可见；团队将看不到这个 Skill，也无法管理。已通过审核的版本会保留审核通过状态。",
       "impactTeam": "保存后，选中的团队或部门可以看到并下载。",
       "impactTeamLeavingMarket": "保存后会从公开市场下架，只有选中的团队或部门可以看到并下载；已通过审核的版本会保留审核通过状态。",
-      "impactPublic": "保存后进入公开市场；若当前已审核通过，会立即对外可见，审核状态会保留。"
+      "impactPublic": "提交当前版本的公开审核；审核通过后进入公开市场，无需发布新版本。"
     },
     "marketEdit": {
       "saved": "市场展示信息已保存",

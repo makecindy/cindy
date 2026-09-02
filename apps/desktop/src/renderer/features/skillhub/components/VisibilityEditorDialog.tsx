@@ -29,6 +29,7 @@ type VisibilityEditorDialogProps = {
   currentTier: VisibilityTier;
   /** 当前归属:org = 团队归属 */
   currentOwnerType?: string;
+  publicReview?: { status: 'pending' | 'rejected'; reason?: string };
   /** 保存成功后回调(父组件刷新详情) */
   onSaved: () => void;
   /** viewer 等无写权限时:弹窗只读打开(控件禁用 + 顶部提示),不能保存。 */
@@ -41,6 +42,7 @@ export function VisibilityEditorDialog({
   skillName,
   currentTier,
   currentOwnerType,
+  publicReview,
   onSaved,
   readOnly = false,
 }: VisibilityEditorDialogProps) {
@@ -111,7 +113,9 @@ export function VisibilityEditorDialog({
         toast.error(marketActionErrorMessage(visRes.error, visRes.errorCode));
         return;
       }
-      toast.success(t('skillhub.visibilityEditor.saved'));
+      toast.success(visRes.result?.reviewStatus === 'pending'
+        ? t('skillhub.visibilityEditor.publicReviewSubmitted')
+        : t('skillhub.visibilityEditor.saved'));
       onOpenChange(false);
       onSaved();
     } finally {
@@ -165,6 +169,13 @@ export function VisibilityEditorDialog({
                 {readOnly ? (
                   <div className="rounded-lg px-3 py-2 text-xs bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]">
                     {t('skillhub.market.noManagePermission')}
+                  </div>
+                ) : null}
+                {publicReview ? (
+                  <div className="rounded-lg px-3 py-2 text-xs bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]">
+                    {publicReview.status === 'pending'
+                      ? t('skillhub.visibilityEditor.publicReviewPending')
+                      : t('skillhub.visibilityEditor.publicReviewRejected', { reason: publicReview.reason || '—' })}
                   </div>
                 ) : null}
                 {/* 可见范围三卡(与发布弹窗共用 VisibilityCard) */}
@@ -238,7 +249,8 @@ export function VisibilityEditorDialog({
             </button>
             <button
               type="button"
-              disabled={loading || saving || Boolean(loadError) || !tierAllowed || readOnly}
+              disabled={loading || saving || Boolean(loadError) || !tierAllowed || readOnly
+                || (tier === 'public' && currentTier !== 'public' && publicReview?.status === 'pending')}
               onClick={() => void handleSave()}
               className={cn(
                 'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-4',
@@ -249,7 +261,13 @@ export function VisibilityEditorDialog({
               )}
             >
               {saving ? <Spinner size={14} /> : null}
-              {saving ? t('skillhub.visibilityEditor.saving') : t('skillhub.visibilityEditor.save')}
+              {saving
+                ? t('skillhub.visibilityEditor.saving')
+                : tier === 'public' && currentTier !== 'public'
+                  ? publicReview?.status === 'pending'
+                    ? t('skillhub.visibilityEditor.waitingReview')
+                    : t('skillhub.visibilityEditor.submitReview')
+                  : t('skillhub.visibilityEditor.save')}
             </button>
           </div>
         </Dialog.Content>

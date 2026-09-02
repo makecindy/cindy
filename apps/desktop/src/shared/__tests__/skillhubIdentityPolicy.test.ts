@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  deriveSkillhubIdentityPolicy,
-  skillhubIdentityPolicyFromServer,
-} from '../skillhubIdentityPolicy';
+import { deriveSkillhubIdentityPolicy } from '../skillhubIdentityPolicy';
 
 describe('skillhub identity policy', () => {
   it('keeps personal publishing personal and excludes shared visibility', () => {
@@ -27,19 +24,5 @@ describe('skillhub identity policy', () => {
   it('does not infer backing catalog behavior from an organization slug', () => {
     expect(deriveSkillhubIdentityPolicy({ membershipKind: 'org', orgSlug: 'example-org' }))
       .toEqual(deriveSkillhubIdentityPolicy({ membershipKind: 'org', orgSlug: 'another-org' }));
-  });
-
-  it('uses the generic server capability response as the write-policy authority', () => {
-    expect(skillhubIdentityPolicyFromServer({
-      canWrite: false,
-      ownerType: 'organization',
-      allowedVisibilities: [],
-      readOnlyReason: 'organization-catalog-read-only',
-    })).toEqual({
-      canWrite: false,
-      ownerType: 'organization',
-      allowedVisibilities: [],
-      readOnlyReason: 'organization-catalog-read-only',
-    });
   });
 });

@@ -52,20 +52,6 @@ function makeHubSkill(slug: string, overrides: Partial<HubSkillInfoForDesktop> =
 }
 
 describe('SkillhubMarketService', () => {
-  it('loads generic server capabilities without exposing a catalog source', async () => {
-    const capabilities = {
-      canWrite: false,
-      ownerType: 'organization' as const,
-      allowedVisibilities: [],
-      readOnlyReason: 'organization-catalog-read-only' as const,
-    };
-    const { fetch, calls } = makeFetch([capabilities]);
-    const service = new SkillhubMarketService({ fetch });
-
-    await expect(service.capabilities()).resolves.toEqual({ success: true, capabilities });
-    expect(calls).toEqual([{ path: '/api/skills-hub/capabilities', opts: undefined }]);
-  });
-
   it('normalizes and deduplicates sync slugs before batch-detail lookup', async () => {
     const { fetch, calls } = makeFetch([
       { items: [makeHubSkill('alpha')], availableCount: 4 },
@@ -237,7 +223,7 @@ describe('SkillhubMarketService', () => {
       { updated: true },
       { deleted: true },
       { unpublished: true },
-      { visibility: 'shared' },
+      { slug: 'demo', visibility: 'private', requestedVisibility: 'public', reviewStatus: 'pending' },
     ]);
     const service = new SkillhubMarketService({
       fetch,
@@ -248,11 +234,16 @@ describe('SkillhubMarketService', () => {
     await service.updatePublished('demo', { summary: 'new', teamSlug: null });
     await service.deletePublished('demo');
     await service.unpublishPublished('demo');
-    await service.setPublishedVisibility({
+    const visibilityResult = await service.setPublishedVisibility({
       name: 'demo',
-      visibility: 'shared',
+      visibility: 'public',
       teamSlug: 'team-a',
       visibleSlugs: ['team-a', 'od-1'],
+    });
+
+    expect(visibilityResult).toEqual({
+      success: true,
+      result: { slug: 'demo', visibility: 'private', requestedVisibility: 'public', reviewStatus: 'pending' },
     });
 
     expect(calls).toEqual([
@@ -272,7 +263,7 @@ describe('SkillhubMarketService', () => {
         path: '/api/skills-hub/skills/demo/set-visibility',
         opts: {
           method: 'POST',
-          body: { visibility: 'shared', teamSlug: 'team-a', visibleSlugs: ['team-a', 'od-1'] },
+          body: { visibility: 'public', teamSlug: 'team-a', visibleSlugs: ['team-a', 'od-1'] },
         },
       },
     ]);

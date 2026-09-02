@@ -92,6 +92,31 @@ describe('mapHubSkillInfoToDesktopInfo', () => {
     expect(info.moderationStatus).toBe('published');
   });
 
+  it('preserves an independent public visibility review on the current version', () => {
+    const info = mapHubSkillInfoToDesktopInfo({
+      slug: 'review-helper',
+      displayName: 'Review Helper',
+      description: 'Review flow',
+      version: '1.0.0',
+      owner: { type: 'personal', slug: 'u_1', name: 'User One' },
+      visibility: 'private',
+      visibilityReview: {
+        requestedVisibility: 'public',
+        status: 'rejected',
+        reason: 'More details required',
+      },
+      updatedAt: '2026-06-03T01:00:00.000Z',
+      isMine: true,
+      categories: [],
+    });
+
+    expect(info.visibilityReview).toEqual({
+      requestedVisibility: 'public',
+      status: 'rejected',
+      reason: 'More details required',
+    });
+  });
+
   it('maps Hub fileHash to folderHash when provided', () => {
     const info = mapHubSkillInfoToDesktopInfo({
       slug: 'review-helper',

@@ -75,6 +75,11 @@ export interface MarketSkill {
     version: string;
     status?: string;
   };
+  visibilityReview?: {
+    requestedVisibility: 'public';
+    status: 'pending' | 'rejected';
+    reason?: string;
+  };
   visibleDeptIds: string[];
   /** 分类 slug 列表。服务端目前还未返回时给空数组兜底。 */
   categories: string[];
@@ -120,6 +125,11 @@ interface ServerListItem {
   pendingVersion?: {
     version: string;
     status?: string;
+  };
+  visibilityReview?: {
+    requestedVisibility: 'public';
+    status: 'pending' | 'rejected';
+    reason?: string;
   };
   visibleDeptIds: string[];
   categories?: string[];
@@ -232,6 +242,7 @@ function mapServerToView(
     ownerType: item.ownerType,
     moderationStatus: item.moderationStatus,
     pendingVersion: item.pendingVersion,
+    visibilityReview: item.visibilityReview,
     visibleDeptIds: item.visibleDeptIds,
     categories: item.categories ?? [],
     tags: item.tags ?? [],

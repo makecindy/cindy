@@ -9,17 +9,10 @@ export interface SkillhubIdentityPolicy {
   canWrite: boolean;
   ownerType: 'personal' | 'organization' | null;
   allowedVisibilities: readonly SkillhubPublishVisibility[];
-  readOnlyReason: 'organization-catalog-read-only' | 'organization-routing-unavailable' | 'signed-out' | null;
+  readOnlyReason: 'signed-out' | null;
 }
 
-export interface SkillhubServerCapabilities {
-  canWrite: boolean;
-  ownerType: 'personal' | 'organization' | null;
-  allowedVisibilities: Array<'private' | 'shared' | 'public'>;
-  readOnlyReason: SkillhubIdentityPolicy['readOnlyReason'];
-}
-
-/** Local projection used until the server capability response arrives. */
+/** UI projection only; authorization and organization-specific policy remain server-owned. */
 export function deriveSkillhubIdentityPolicy(
   identity: SkillhubIdentity | null | undefined,
 ): SkillhubIdentityPolicy {
@@ -44,19 +37,5 @@ export function deriveSkillhubIdentityPolicy(
     ownerType: 'personal',
     allowedVisibilities: ['PUBLIC', 'PRIVATE'],
     readOnlyReason: null,
-  };
-}
-
-/** Converts the server-owned policy into the existing UI visibility vocabulary. */
-export function skillhubIdentityPolicyFromServer(
-  capabilities: SkillhubServerCapabilities,
-): SkillhubIdentityPolicy {
-  return {
-    canWrite: capabilities.canWrite,
-    ownerType: capabilities.ownerType,
-    allowedVisibilities: capabilities.allowedVisibilities.map((visibility) => (
-      visibility === 'shared' ? 'DEPARTMENT_SCOPED' : visibility.toUpperCase()
-    )) as SkillhubPublishVisibility[],
-    readOnlyReason: capabilities.readOnlyReason,
   };
 }

@@ -151,6 +151,7 @@ export function MarketManagementDialogs({
           skillName={controller.visibilityTarget.name}
           currentTier={visibilityTier(controller.visibilityTarget)}
           currentOwnerType={controller.visibilityTarget.ownerType}
+          publicReview={controller.visibilityTarget.visibilityReview}
           readOnly={controller.isReadOnly(controller.visibilityTarget)}
           onSaved={controller.visibilitySaved}
         />

@@ -11,7 +11,7 @@ const serverPolicy = vi.hoisted(() => ({
   canWrite: true,
   ownerType: 'personal' as 'personal' | 'organization' | null,
   allowedVisibilities: ['PUBLIC', 'PRIVATE'] as Array<'PUBLIC' | 'DEPARTMENT_SCOPED' | 'PRIVATE'>,
-  readOnlyReason: null as 'organization-catalog-read-only' | 'organization-routing-unavailable' | 'signed-out' | null,
+  readOnlyReason: null as 'signed-out' | null,
 }));
 
 vi.mock('electron', () => ({
@@ -125,13 +125,12 @@ describe('SkillPublishService', () => {
     fs.mkdirSync(TEST_ROOT, { recursive: true });
   });
 
-  it('honors the server-owned read-only organization capability before packing', async () => {
-    authState.membershipKind = 'org';
-    authState.orgSlug = 'example-org';
+  it('rejects signed-out publishing before packing', async () => {
+    authState.ownerId = null;
     serverPolicy.canWrite = false;
-    serverPolicy.ownerType = 'organization';
+    serverPolicy.ownerType = null;
     serverPolicy.allowedVisibilities = [];
-    serverPolicy.readOnlyReason = 'organization-catalog-read-only';
+    serverPolicy.readOnlyReason = 'signed-out';
     const { SkillPublishService } = await import('../publishService');
     const service = new SkillPublishService();
 
@@ -140,7 +139,7 @@ describe('SkillPublishService', () => {
       name: 'read-only',
       isFirstPublish: true,
       visibility: 'PUBLIC',
-    })).resolves.toEqual({ success: false, errorCode: 'SKILL_HUB_READ_ONLY' });
+    })).resolves.toEqual({ success: false, errorCode: 'CANCELLED' });
   });
 
   it('rejects private organization publishing before packing or network access', async () => {

@@ -3180,6 +3180,11 @@ interface ElectronAPI {
           version: string;
           status?: string;
         };
+        visibilityReview?: {
+          requestedVisibility: 'public';
+          status: 'pending' | 'rejected';
+          reason?: string;
+        };
         visibleDeptIds: string[];
         categories?: string[];
         tags?: Array<{ slug: string; name: string }>;
@@ -3191,12 +3196,6 @@ interface ElectronAPI {
         catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
       }>;
       nextCursor?: string | null;
-    }>;
-    capabilities: () => Promise<{
-      success: boolean;
-      capabilities?: import('../shared/skillhubIdentityPolicy').SkillhubServerCapabilities;
-      error?: string;
-      errorCode?: string;
     }>;
     info: (name: string, catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope) => Promise<{
       success: boolean;
@@ -3248,7 +3247,12 @@ interface ElectronAPI {
       visibility: 'private' | 'shared' | 'public';
       teamSlug?: string;
       visibleSlugs?: string[];
-    }) => Promise<{ success: boolean; result?: unknown; error?: string; errorCode?: string }>;
+    }) => Promise<{
+      success: boolean;
+      result?: { slug: string; visibility: 'private' | 'shared' | 'public'; requestedVisibility?: 'public'; reviewStatus?: 'pending' };
+      error?: string;
+      errorCode?: string;
+    }>;
     getPublishedVisibility: (name: string) => Promise<{
       success: boolean;
       sharedTeams?: Array<{ id: number; slug: string; name: string }>;
@@ -6593,6 +6597,11 @@ interface SkillhubInfoResult {
   pendingVersion?: {
     version: string;
     status?: string;
+  };
+  visibilityReview?: {
+    requestedVisibility: 'public';
+    status: 'pending' | 'rejected';
+    reason?: string;
   };
   visibleDeptIds: string[];
   visibleDeptNames?: string[];

@@ -2958,6 +2958,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
           version: string;
           status?: string;
         };
+        visibilityReview?: {
+          requestedVisibility: 'public';
+          status: 'pending' | 'rejected';
+          reason?: string;
+        };
         visibleDeptIds: string[];
         categories?: string[];
         tags?: Array<{ slug: string; name: string }>;
@@ -2971,13 +2976,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       nextCursor?: string | null;
       error?: string;
     }> => ipcRenderer.invoke('skillhub:list-market', params),
-
-    capabilities: (): Promise<{
-      success: boolean;
-      capabilities?: import('../shared/skillhubIdentityPolicy').SkillhubServerCapabilities;
-      error?: string;
-      errorCode?: string;
-    }> => ipcRenderer.invoke('skillhub:capabilities'),
 
     // 查询单个 skill 市场详情（有 in-flight dedupe 在 renderer 侧）
     info: (
@@ -3055,7 +3053,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       visibility: 'private' | 'shared' | 'public';
       teamSlug?: string;
       visibleSlugs?: string[];
-    }): Promise<{ success: boolean; result?: unknown; error?: string; errorCode?: string }> =>
+    }): Promise<{
+      success: boolean;
+      result?: { slug: string; visibility: 'private' | 'shared' | 'public'; requestedVisibility?: 'public'; reviewStatus?: 'pending' };
+      error?: string;
+      errorCode?: string;
+    }> =>
       ipcRenderer.invoke('skillhub:set-published-visibility', params),
 
     // 读取已发布 skill 的可见对象(共享团队 + 可见部门),编辑可见范围弹窗回显用

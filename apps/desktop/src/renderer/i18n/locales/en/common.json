@@ -10501,13 +10501,18 @@
       "save": "Save",
       "saving": "Saving…",
       "saved": "Visibility settings saved",
+      "submitReview": "Submit for review",
+      "waitingReview": "Waiting for review",
+      "publicReviewSubmitted": "The current version was submitted for public review",
+      "publicReviewPending": "The current version is awaiting public review and will enter the public market after approval.",
+      "publicReviewRejected": "Public review was rejected: {{reason}}",
       "impactPrivate": "After saving, only you can see this Skill.",
       "impactPrivateLeavingMarket": "Saving will delist it from the public market and make it visible only to you; versions that passed review keep their approved status.",
       "impactPrivateTeam": "After saving, only you can see it; the team will no longer see or manage this Skill.",
       "impactPrivateTeamLeavingMarket": "Saving will delist it from the public market and make it visible only to you; the team will no longer see or manage this Skill. Versions that passed review keep their approved status.",
       "impactTeam": "After saving, the selected teams and departments can see and download it.",
       "impactTeamLeavingMarket": "Saving will delist it from the public market; only the selected teams and departments can see and download it. Versions that passed review keep their approved status.",
-      "impactPublic": "After saving it enters the public market; if already approved, it becomes publicly visible immediately and keeps its review status."
+      "impactPublic": "Submit the current version for public review. It enters the public market after approval, with no new version required."
     },
     "marketEdit": {
       "saved": "Market info saved",

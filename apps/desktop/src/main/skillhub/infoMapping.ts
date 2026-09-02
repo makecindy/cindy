@@ -12,6 +12,11 @@ export interface HubSkillInfoForDesktop {
     version: string;
     status?: string;
   };
+  visibilityReview?: {
+    requestedVisibility: 'public';
+    status: 'pending' | 'rejected';
+    reason?: string;
+  };
   folderHash?: string;
   fileHash?: string;
   owner: { type?: string; slug: string; name: string };
@@ -52,6 +57,7 @@ export function mapHubSkillInfoToDesktopInfo(hub: HubSkillInfoForDesktop, opts?:
     moderationStatus: hub.moderationStatus,
     marketVersion: hub.marketVersion,
     pendingVersion: hub.pendingVersion,
+    visibilityReview: hub.visibilityReview,
     visibleDeptIds: [] as string[],
     categories: (hub.categories ?? []).map((category) => category.slug),
     tags: (hub.tags ?? hub.categories ?? []).map((tag) => ({ slug: tag.slug, name: tag.name })),

@@ -401,14 +401,6 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     },
   );
 
-  ipcMain.handle('skillhub:capabilities', async () => {
-    try {
-      return await marketService.capabilities();
-    } catch (err) {
-      return skillhubIpcError(err);
-    }
-  });
-
   ipcMain.handle(
     'skillhub:info',
     async (_event, { name, catalogScope }: { name: string; catalogScope?: unknown }) => {

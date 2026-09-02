@@ -10471,13 +10471,18 @@
       "save": "儲存",
       "saving": "儲存中…",
       "saved": "管理可見性已儲存",
+      "submitReview": "提交稽核",
+      "waitingReview": "等待稽核",
+      "publicReviewSubmitted": "已提交目前版本的公開稽核",
+      "publicReviewPending": "目前版本正在等待公開稽核，通過後會進入公開市場。",
+      "publicReviewRejected": "公開稽核未通過：{{reason}}",
       "impactPrivate": "儲存後，僅你可見。",
       "impactPrivateLeavingMarket": "儲存後會從公開市場下架，並轉為自己可見；已通過稽核的版本會保留稽核通過狀態。",
       "impactPrivateTeam": "儲存後轉為自己可見；團隊將看不到這個 Skill，也無法管理。",
       "impactPrivateTeamLeavingMarket": "儲存後會從公開市場下架，並轉為自己可見；團隊將看不到這個 Skill，也無法管理。已通過稽核的版本會保留稽核通過狀態。",
       "impactTeam": "儲存後，選中的團隊或部門可以看到並下載。",
       "impactTeamLeavingMarket": "儲存後會從公開市場下架，只有選中的團隊或部門可以看到並下載；已通過稽核的版本會保留稽核通過狀態。",
-      "impactPublic": "儲存後進入公開市場；若當前已稽核通過，會立即對外可見，稽核狀態會保留。"
+      "impactPublic": "提交目前版本的公開稽核；稽核通過後進入公開市場，無需發布新版本。"
     },
     "marketEdit": {
       "saved": "市場展示資訊已儲存",

@@ -10479,13 +10479,18 @@
       "save": "저장",
       "saving": "저장 중…",
       "saved": "공개 설정이 저장되었습니다",
+      "submitReview": "심사 제출",
+      "waitingReview": "심사 대기 중",
+      "publicReviewSubmitted": "현재 버전을 공개 심사에 제출했습니다",
+      "publicReviewPending": "현재 버전이 공개 심사를 기다리고 있으며 승인 후 공개 마켓에 표시됩니다.",
+      "publicReviewRejected": "공개 심사가 거부되었습니다: {{reason}}",
       "impactPrivate": "저장 후에는 본인만 이 Skill을 볼 수 있습니다.",
       "impactPrivateLeavingMarket": "저장하면 공개 마켓에서 내려가고 본인만 볼 수 있게 됩니다. 심사를 통과한 버전의 승인 상태는 유지됩니다.",
       "impactPrivateTeam": "저장 후 본인만 볼 수 있게 되며, 팀은 이 Skill을 보거나 관리할 수 없습니다.",
       "impactPrivateTeamLeavingMarket": "저장하면 공개 마켓에서 내려가고 본인만 볼 수 있게 됩니다. 팀은 이 Skill을 보거나 관리할 수 없습니다. 심사를 통과한 버전의 승인 상태는 유지됩니다.",
       "impactTeam": "저장 후 선택한 팀과 부서가 보고 다운로드할 수 있습니다.",
       "impactTeamLeavingMarket": "저장하면 공개 마켓에서 내려가고 선택한 팀과 부서만 보고 다운로드할 수 있습니다. 심사를 통과한 버전의 승인 상태는 유지됩니다.",
-      "impactPublic": "저장하면 공개 마켓에 공개됩니다. 이미 심사를 통과한 경우 즉시 공개되며 심사 상태는 유지됩니다."
+      "impactPublic": "현재 버전을 공개 심사에 제출합니다. 승인 후 공개 마켓에 표시되며 새 버전을 게시할 필요가 없습니다."
     },
     "marketEdit": {
       "saved": "마켓 표시 정보가 저장되었습니다",

@@ -4,7 +4,6 @@ import { mapHubSkillInfoToDesktopInfo, type HubSkillInfoForDesktop } from './inf
 import { buildSkillhubSyncResponse, type SkillhubBatchDetailResponse } from './syncMapping';
 import { assertSkillhubVisibilityAllowed, assertSkillhubWriteAllowed } from './identityPolicy';
 import { withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
-import type { SkillhubServerCapabilities } from '../../shared/skillhubIdentityPolicy';
 
 const SKILLHUB_SYNC_BATCH_SIZE = 100;
 const HUB_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
@@ -41,8 +40,8 @@ function mapFirstLevelDepartments(
 
 export interface SkillhubMarketServiceOptions {
   fetch?: SkillhubMarketFetcher;
-  assertWriteAllowed?: () => Promise<void>;
-  assertVisibilityAllowed?: (visibility: 'private' | 'shared' | 'public') => Promise<void>;
+  assertWriteAllowed?: () => void | Promise<void>;
+  assertVisibilityAllowed?: (visibility: 'private' | 'shared' | 'public') => void | Promise<void>;
 }
 
 export interface ListMarketParams {
@@ -74,6 +73,13 @@ export interface SetPublishedVisibilityParams {
   visibleSlugs?: string[];
 }
 
+export interface SkillVisibilityUpdateResult {
+  slug: string;
+  visibility: 'private' | 'shared' | 'public';
+  requestedVisibility?: 'public';
+  reviewStatus?: 'pending';
+}
+
 /**
  * Main-process SkillHub market API adapter.
  *
@@ -82,20 +88,13 @@ export interface SetPublishedVisibilityParams {
  */
 export class SkillhubMarketService {
   private readonly fetch: SkillhubMarketFetcher;
-  private readonly assertWriteAllowed: () => Promise<void>;
-  private readonly assertVisibilityAllowed: (visibility: 'private' | 'shared' | 'public') => Promise<void>;
+  private readonly assertWriteAllowed: () => void | Promise<void>;
+  private readonly assertVisibilityAllowed: (visibility: 'private' | 'shared' | 'public') => void | Promise<void>;
 
   constructor(options: SkillhubMarketServiceOptions = {}) {
     this.fetch = options.fetch ?? skillhubApiFetch;
     this.assertWriteAllowed = options.assertWriteAllowed ?? assertSkillhubWriteAllowed;
     this.assertVisibilityAllowed = options.assertVisibilityAllowed ?? assertSkillhubVisibilityAllowed;
-  }
-
-  async capabilities() {
-    const capabilities = await this.fetch<SkillhubServerCapabilities>(
-      '/api/skills-hub/capabilities',
-    );
-    return { success: true as const, capabilities };
   }
 
   async sync(params: { slugs?: string[] } | undefined) {
@@ -224,7 +223,7 @@ export class SkillhubMarketService {
   async setPublishedVisibility({ name, visibility, teamSlug, visibleSlugs }: SetPublishedVisibilityParams) {
     await this.assertWriteAllowed();
     await this.assertVisibilityAllowed(visibility);
-    const result = await this.fetch<unknown>(
+    const result = await this.fetch<SkillVisibilityUpdateResult>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}/set-visibility`,
       {
         method: 'POST',
