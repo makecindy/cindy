@@ -284,6 +284,86 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
   });
 
+  it('enriches explicit runtime protocols from same-origin bundled metadata without overriding server context', () => {
+    const bundled = new Map([
+      [
+        'bundled-provider',
+        new Map([
+          [
+            'server-model',
+            piBundledModel('server-model', 'openai-completions', {
+              baseUrl: 'https://api.example/v1',
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+              input: ['text', 'image'],
+            }),
+          ],
+        ]),
+      ],
+    ]);
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'server-models',
+          name: 'Server Models',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://api.example/v1',
+              wireProtocol: 'openai-chat',
+              models: [{ id: 'server-model', name: 'Server Model', contextWindow: 64_000 }],
+            }),
+          },
+        },
+      ],
+      () => null,
+      undefined,
+      bundled,
+    );
+
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'server-model',
+      contextWindow: 64_000,
+      maxTokens: 128_000,
+      input: ['text', 'image'],
+      reasoning: true,
+    });
+  });
+
+  it('does not borrow bundled Pi metadata when the explicit runtime protocol disagrees', () => {
+    const bundled = new Map([
+      [
+        'bundled-provider',
+        new Map([['server-model', piBundledModel('server-model', 'anthropic-messages')]]),
+      ],
+    ]);
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'server-models',
+          name: 'Server Models',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              wireProtocol: 'openai-responses',
+              models: [{ id: 'server-model', name: 'Server Model' }],
+            }),
+          },
+        },
+      ],
+      () => null,
+      undefined,
+      bundled,
+    );
+
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'server-model',
+      name: 'Server Model',
+    });
+    expect(providers[0]?.models[0]).not.toHaveProperty('reasoning');
+    expect(providers[0]?.models[0]).not.toHaveProperty('input');
+  });
+
   it('does not apply official per-model routing after the user changes endpoint or protocol', () => {
     const { providers } = buildPiNativeProvidersFromConfigs(
       [

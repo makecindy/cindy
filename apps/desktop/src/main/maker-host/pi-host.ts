@@ -1232,11 +1232,16 @@ export function buildPiNativeProvidersFromConfigs(
     // strictly same-origin PI bundled knowledge, then an explicitly matched official
     // PI catalog. Missing protocol is not Chat: one unresolved model makes the whole
     // provider unusable so PI cannot silently send it to a guessed endpoint shape.
-    const bundledModels = rt.models.map((model) =>
-      !model.piApi && !runtimeApi
-        ? resolvePiBundledModelById(bundledModelsByProvider, model.id, rt.baseUrl)
-        : undefined,
-    );
+    const bundledModels = rt.models.map((model) => {
+      // An explicit runtime wireProtocol resolves the endpoint shape, but it
+      // must not disable same-origin bundled capability enrichment. Only a
+      // per-model piApi override opts out, and an explicit endpoint protocol
+      // may borrow bundled metadata when the APIs agree.
+      if (model.piApi) return undefined;
+      const bundled = resolvePiBundledModelById(bundledModelsByProvider, model.id, rt.baseUrl);
+      if (!bundled || !runtimeApi || bundled.api === runtimeApi) return bundled;
+      return undefined;
+    });
     const official =
       rt.piCatalogProviderId &&
       officialPiRouteMatches(rt.piCatalogProviderId, rt.baseUrl, rt.wireProtocol)
@@ -1317,7 +1322,9 @@ export function buildPiNativeProvidersFromConfigs(
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
           name: bundledModel?.name ?? m.name,
-          contextWindow: bundledModel?.contextWindow ?? m.contextWindow,
+          // The downloaded preset is the user's selected endpoint contract;
+          // explicit values must win over a stale local Pi snapshot.
+          contextWindow: m.contextWindow ?? bundledModel?.contextWindow,
           ...(bundledModel?.maxTokens ? { maxTokens: bundledModel.maxTokens } : {}),
           ...(bundledModel?.input
             ? { input: [...bundledModel.input] }
