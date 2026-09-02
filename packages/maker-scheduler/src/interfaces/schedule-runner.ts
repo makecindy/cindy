@@ -1,5 +1,20 @@
 import type { PreRunHookRunResult, RunStatus, Schedule } from '../types.js';
 
+/**
+ * Runner 在没有触发 schedule AbortSignal 的情况下确认了显式用户取消。
+ *
+ * 普通 Error（即使 message 含 abort）始终属于失败；只有这个结构化类型或真实
+ * AbortSignal 才能把 run 记为 aborted，避免依赖错误文案猜测取消来源。
+ */
+export class ScheduleRunCancellationError extends Error {
+  readonly code = 'SCHEDULE_RUN_CANCELLED';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ScheduleRunCancellationError';
+  }
+}
+
 export interface ChildRunInput {
   sessionId?: string;
   status: RunStatus;
@@ -17,8 +32,10 @@ export interface FireContext {
    * Runner 约定:
    * - 监听 signal.aborted / addEventListener('abort', ...),收到后立刻让底层 agent 停止
    *   (主 runner: Session.abort();多 session runner: 当前 issue 的 session.abort() + 跳过剩余)。
-   * - 因 abort 而退出的 fire 应抛出 DOMException('aborted', 'AbortError') 或 message 含
-   *   "abort"/"aborted" 的 Error,Scheduler 据此把对应 run 行标 status='aborted'。
+   * - 因 signal abort 而退出的 fire 可以抛任意 Error；Scheduler 以 signal 本身为
+   *   source of truth，把对应 run 行标 status='aborted'。
+   * - signal 未触发但存在另一条明确的用户取消路径时，抛
+   *   ScheduleRunCancellationError；普通错误文本不得充当取消协议。
    * - 即便不响应 abort,Scheduler 也只等 5s,过期后 schedule 还是会被 delete/pause —— 但
    *   in-flight session 会继续烧 token,所以 runner 必须接 abort。
    */

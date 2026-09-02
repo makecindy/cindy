@@ -43,7 +43,10 @@ import type {
 } from '@cindy/maker-core';
 import { clampEffortToSupported } from '@cindy/model-providers';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
-import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
+import {
+  SCHEDULER_RUN_ID_VENDOR_OPTION,
+  ScheduleRunCancellationError,
+} from '@cindy/maker-scheduler';
 import type {
   Schedule,
   ScheduleRun,
@@ -54,6 +57,7 @@ import type {
   FireResult,
   Scheduler,
 } from '@cindy/maker-scheduler';
+import type { AgentInputQueuedMessageDiscardReason } from '../maker-ipc/agent-input-coordinator.js';
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getSessionRowSnapshot, touchUserSendInDb } from '../localDb/ipc/sessions.js';
@@ -203,9 +207,13 @@ export interface SchedulerQueueDeps {
     origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
     onAccepted: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
-    onDiscarded?: () => void;
+    onDiscarded?: (reason: AgentInputQueuedMessageDiscardReason) => void;
   }): Promise<{ clientId: string } | { duplicate: true } | { retry: true }>;
-  removeQueuedPrompt(sessionId: string, clientId: string): void;
+  removeQueuedPrompt(
+    sessionId: string,
+    clientId: string,
+    reason: AgentInputQueuedMessageDiscardReason,
+  ): void;
   /**
    * 排队项(含派发中 / 可重试 recovery)是否仍被 coordinator 跟踪。派发等待的
    * 存活探测:coordinator 存在不经 onDiscarded 的静默放弃路径(新输入顶掉
@@ -1883,10 +1891,26 @@ export class MakerScheduleRunner implements ScheduleRunner {
         failAfterAccept(err);
         failDispatch(err);
       },
-      onDiscarded: () => {
-        // 排队项未派发即被移除(用户删队列行 / stop 清队列 / pause-delete 撤项)
-        // → run 按 aborted 收尾(引擎按 /abort/i 识别错误文案)。
-        failDispatch(new Error('queued heartbeat prompt removed before dispatch (aborted)'));
+      onDiscarded: (reason) => {
+        this.deps.logger.info?.('[runner] queued heartbeat discarded before dispatch', {
+          scheduleId: schedule.id,
+          runId: ctx.runId,
+          sessionId,
+          discardReason: reason,
+          signalAborted: ctx.signal.aborted,
+          queueStage: 'before-dispatch',
+        });
+        if (reason === 'user-remove') {
+          failDispatch(
+            new ScheduleRunCancellationError(
+              'cancelled by user (queued automation input removed)',
+            ),
+          );
+          return;
+        }
+        failDispatch(
+          new Error(`queued heartbeat prompt removed before dispatch (${reason})`),
+        );
       },
     });
     if ('retry' in enqueueResult) {
@@ -1937,12 +1961,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
       this.deps.logger.info?.(
         `[runner] ctx.signal aborted while heartbeat queued, cleaning up for ${sessionId}`,
       );
-      sq.removeQueuedPrompt(sessionId, clientId);
-      sq.cancelAutoResume?.(sessionId, ctx.runId);
       // 这两个 promise 分别覆盖 accept 前与 accept 后；重复 reject 安全。不能只等
       // vendor terminal event：退避期没有活动 turn，Session.abort() 不会产生终态。
       failDispatch(abortError);
       failAfterAccept(abortError);
+      // 先让 signal 的权威错误收口等待门，再同步撤项。remove 会触发带 reason 的
+      // onDiscarded；它的重复 failDispatch 是 no-op，不能反过来抢先覆盖 abortError。
+      sq.removeQueuedPrompt(sessionId, clientId, 'scheduler-abort');
+      sq.cancelAutoResume?.(sessionId, ctx.runId);
       if (dispatched) {
         const live = this.deps.maker.getSession(sessionId);
         if (live) {
@@ -2003,8 +2029,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         maxWaitMs: QUEUED_DISPATCH_MAX_WAIT_MS,
       });
       // 顺序要紧:先置位超时错误,再撤项。coordinator 撤掉 **pending** 项会同步回调
-      // onDiscarded → 那里也 failDispatch(一条含 "aborted" 的错误),先撤项就会让
-      // dispatchGate 被它抢先 settle,本轮被记成"用户中断"而不是走顺延。
+      // onDiscarded → 那里也 failDispatch,先撤项会让结构化 discard 抢先 settle,
+      // 本轮无法走 QueuedDispatchTimeoutError 的顺延分支。
       // 反过来则安全:dispatchGate 已 settle,onDiscarded 的 failDispatch 是 no-op。
       // 置位取消标志:撤项对已转 activeTurn 的项是 no-op,coordinator 仍可能在之后
       // 调 onAccepted —— 那里读这个标志把迟到的 turn 杀掉。
@@ -2014,7 +2040,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           `queued heartbeat was not dispatched within ${Math.round(QUEUED_DISPATCH_MAX_WAIT_MS / 60_000)}min`,
         ),
       );
-      sq.removeQueuedPrompt(sessionId, clientId);
+      sq.removeQueuedPrompt(sessionId, clientId, 'dispatch-timeout');
     }, QUEUED_DISPATCH_TRACK_POLL_MS);
     trackPoll.unref?.();
 

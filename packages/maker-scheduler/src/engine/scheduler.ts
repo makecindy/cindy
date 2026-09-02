@@ -19,7 +19,11 @@ import type {
 import { SCRIPT_CAPABILITIES } from '../types.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
 import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
-import type { ChildRunInput, ScheduleRunner } from '../interfaces/schedule-runner.js';
+import {
+  ScheduleRunCancellationError,
+  type ChildRunInput,
+  type ScheduleRunner,
+} from '../interfaces/schedule-runner.js';
 import type { Clock } from '../interfaces/clock.js';
 import type { Logger } from '../interfaces/logger.js';
 import { nextCronOrMonthlyFire } from './monthlyClamp.js';
@@ -763,6 +767,7 @@ export class Scheduler extends EventEmitter {
     let sessionId: string | undefined;
     let resultText: string | undefined;
     let runError: string | undefined;
+    let runCancellationMessage: string | undefined;
     let deferred = false;
     let deferRetryMs: number | undefined;
     let skipped = false;
@@ -793,6 +798,9 @@ export class Scheduler extends EventEmitter {
       skipped = result.skipped ?? false;
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err);
+      if (err instanceof ScheduleRunCancellationError) {
+        runCancellationMessage = err.message;
+      }
       this.logger?.warn?.('schedule fire failed', { scheduleId: schedule.id, runId, error: runError });
     } finally {
       knownSessionId = this.resolveTerminalSessionId(runId, sessionId, schedule.targetSessionId);
@@ -808,9 +816,14 @@ export class Scheduler extends EventEmitter {
       return;
     }
 
-    // 如果是被 delete/pause 主动 abort 的,把 run 标 'aborted' 而非 'failed' —— 让 UI
-    // 用 RunHistoryCard 渲染时能区分"用户中断"和"agent 自爆"。判定见 wasRunAborted。
-    const wasAborted = this.wasRunAborted(schedule, controller.signal, runError);
+    // schedule pause/delete 的 signal 和 runner 的结构化取消都会把 run 标为
+    // aborted；但两者对 schedule 的收口语义不同，下方重排时必须分开。
+    // 两者竞态时真实 signal 优先，不让先 settle 的队列删除文案覆盖 pause/delete。
+    const scheduleAborted = controller.signal.aborted;
+    const wasAborted = this.wasRunAborted(controller.signal, runCancellationMessage !== undefined);
+    const cancellationMessage = scheduleAborted
+      ? 'cancelled by user (schedule deleted or paused)'
+      : (runCancellationMessage ?? 'cancelled by user (schedule deleted or paused)');
     // 守卫 abort 与用户 abort 的收口语义相反(见 wasStallAborted):必须在写 run 行与
     // 决定是否重排之前把两者分开。
     const stallAborted = this.wasStallAborted(runId);
@@ -878,7 +891,7 @@ export class Scheduler extends EventEmitter {
         await this.storage.updateRun(runId, {
           status: 'aborted',
           finishedAt,
-          errorMsg: 'cancelled by user (schedule deleted or paused)',
+          errorMsg: cancellationMessage,
           // 系统/用户主动收口,不是要处理的失败;生而已读,侧栏不涂红。
           readAt: finishedAt,
           ...(knownSessionId ? { sessionId: knownSessionId } : {}),
@@ -943,13 +956,15 @@ export class Scheduler extends EventEmitter {
     }
     this.silencedRuns.delete(runId);
 
-    // Aborted 路径不更新 schedule 行 —— schedule 大概率已被 delete(行已不存在,update
-    // 是 no-op)或 pause(status='paused',activeSchedules 已被摘出)。重排 nextFireAt
-    // 会引入幽灵下次触发,resume 时 resume() 自己会重算,这里跳过最干净。
+    // 真实 schedule abort 路径不更新 schedule 行 —— schedule 大概率已被
+    // delete(行已不存在,update 是 no-op)或 pause(status='paused',activeSchedules
+    // 已被摘出)。重排 nextFireAt 会引入幽灵下次触发,resume 时会自己重算。
+    // runner 结构化取消不能走这个短路：active recurring schedule 的自动认领已经
+    // 清空 nextFireAt，本轮虽记 aborted，仍必须按当前 schedule 重排下一周期。
     //
     // **例外:守卫 abort**。此时 schedule 既没被删也没被停,只是这一轮卡死了;
     // claimDueFire 已清空 nextFireAt,必须往下走重排,否则任务永久停摆(review P1)。
-    if (wasAborted && !stallAborted) {
+    if (scheduleAborted && !stallAborted) {
       return;
     }
 
@@ -1068,6 +1083,7 @@ export class Scheduler extends EventEmitter {
 
     let finishedAt = firedAt;
     let runError: string | undefined;
+    let runCancellationMessage: string | undefined;
     let runSessionId: string | undefined;
     let runResultText: string | undefined;
     let deferred = false;
@@ -1100,6 +1116,9 @@ export class Scheduler extends EventEmitter {
       skipped = result.skipped ?? false;
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err);
+      if (err instanceof ScheduleRunCancellationError) {
+        runCancellationMessage = err.message;
+      }
     } finally {
       knownSessionId = this.resolveTerminalSessionId(runId, runSessionId, schedule.targetSessionId);
       this.unregisterInflight(schedule.id, runId);
@@ -1113,7 +1132,11 @@ export class Scheduler extends EventEmitter {
       return { runId };
     }
 
-    const wasAborted = this.wasRunAborted(schedule, controller.signal, runError);
+    const scheduleAborted = controller.signal.aborted;
+    const wasAborted = this.wasRunAborted(controller.signal, runCancellationMessage !== undefined);
+    const cancellationMessage = scheduleAborted
+      ? 'cancelled by user (schedule deleted or paused)'
+      : (runCancellationMessage ?? 'cancelled by user (schedule deleted or paused)');
     const stallAborted = this.wasStallAborted(runId);
 
     // 顺延(手动触发撞忙也礼让,与 cron 路径一致):撤销预插的 running run、不通知。
@@ -1168,7 +1191,7 @@ export class Scheduler extends EventEmitter {
       await this.storage.updateRun(runId, {
         status: 'aborted',
         finishedAt,
-        errorMsg: 'cancelled by user (schedule deleted or paused)',
+        errorMsg: cancellationMessage,
         readAt: finishedAt,
         ...(knownSessionId ? { sessionId: knownSessionId } : {}),
       });
@@ -2084,19 +2107,13 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
-   * 一次 fire 是否属于"被 delete/pause 主动中断"(fireOne/runNow 共用判定)。
-   * controller.signal.aborted 是 source of truth;runError 文本里的 'abort' 只是
-   * **agent 模式**的兜底(runner 没接 signal 但 Session.abort 已经触发了——agent
-   * 侧错误文本由我们自己产生,可控)。script 模式**绝不做文本匹配**:script
-   * runner 第一方接了 signal(真 abort 时 signal 必已置位),而它的失败消息携带
-   * 脚本自己的 stderr,任意文本(如 "operation aborted by remote server")都可能
-   * 撞上 /abort/i——误判成 aborted 会走"不重排 nextFireAt"的分支,而 claimDueFire
-   * 已把 nextFireAt 清空,recurring 任务就此静默停摆到重启(codex review #966)。
+   * 一次 fire 是否属于用户主动取消(fireOne/runNow 共用判定)。
+   * AbortSignal 是 schedule pause/delete 的 source of truth；signal 之外只接受 runner
+   * 抛出的 ScheduleRunCancellationError。普通错误文本不参与协议，避免把第三方错误、
+   * 队列清理或内部竞争误报成用户暂停/删除。
    */
-  private wasRunAborted(schedule: Schedule, signal: AbortSignal, runError: string | undefined): boolean {
-    if (signal.aborted) return true;
-    if ((schedule.executionMode ?? 'agent') === 'script') return false;
-    return runError !== undefined && /abort/i.test(runError);
+  private wasRunAborted(signal: AbortSignal, explicitlyCancelled: boolean): boolean {
+    return signal.aborted || explicitlyCancelled;
   }
 
   /** 注册一次 fire 的 controller(fireOne/runNow 顶部调用)。两个 map 都要写。 */
