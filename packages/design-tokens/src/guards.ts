@@ -472,27 +472,36 @@ const SPECIFIER_PREFIX_RE =
  *    写在正则字面量里，可接受。
  */
 export function stripCommentsAndDataStrings(source: string): string {
-  let out = '';
+  const chunks: string[] = [];
   let i = 0;
   const n = source.length;
+  let plainStart = 0;
+  const flushPlain = (end: number) => {
+    if (end > plainStart) chunks.push(source.slice(plainStart, end));
+  };
   while (i < n) {
     const c = source[i];
     const c2 = source[i + 1];
     if (c === '/' && c2 === '/') {
+      flushPlain(i);
       const start = i;
       while (i < n && source[i] !== '\n') i++;
-      out += ' '.repeat(i - start);
+      chunks.push(' '.repeat(i - start));
+      plainStart = i;
       continue;
     }
     if (c === '/' && c2 === '*') {
+      flushPlain(i);
       const start = i;
       i += 2;
       while (i < n && !(source[i] === '*' && source[i + 1] === '/')) i++;
       i = Math.min(i + 2, n);
-      out += ' '.repeat(i - start);
+      chunks.push(' '.repeat(i - start));
+      plainStart = i;
       continue;
     }
     if (c === "'" || c === '"' || c === '`') {
+      flushPlain(i);
       const quote = c;
       const open = i;
       i++;
@@ -502,17 +511,26 @@ export function stripCommentsAndDataStrings(source: string): string {
       }
       i = Math.min(i + 1, n);
       const str = source.slice(open, i);
-      if (SPECIFIER_PREFIX_RE.test(out.slice(-64))) {
-        out += str;
-      } else {
-        out += quote + ' '.repeat(Math.max(0, str.length - 2)) + quote;
+      // 语境判定看已输出内容的末尾（可能跨多个 chunk：如 import( + 剥除的
+      // 注释空白），从后往前拼接 chunk 凑 64 字符窗口。
+      let tail = '';
+      for (let k = chunks.length - 1; k >= 0 && tail.length < 64; k--) {
+        const need = 64 - tail.length;
+        const c = chunks[k];
+        tail = (c.length > need ? c.slice(c.length - need) : c) + tail;
       }
+      if (SPECIFIER_PREFIX_RE.test(tail)) {
+        chunks.push(str);
+      } else {
+        chunks.push(quote + ' '.repeat(Math.max(0, str.length - 2)) + quote);
+      }
+      plainStart = i;
       continue;
     }
-    out += c;
     i++;
   }
-  return out;
+  flushPlain(n);
+  return chunks.join('');
 }
 
 /**
@@ -529,15 +547,17 @@ export function relativeSpecifierHitsDesignTokens(
   fileRel: string,
 ): boolean {
   const dir = posixDirname(fileRel);
-  // 同 containsRuntimeImportOfDesignTokens 的两段式：零命中时不付剥除成本。
-  let anyRelative = false;
-  for (const match of text.matchAll(SPECIFIER_CONTEXT_RE)) {
-    if (match[1].startsWith('.')) {
-      anyRelative = true;
-      break;
-    }
+  // 剥除必须在提取之前：`import(/* c */ '…')` 这类合法注释隔断会让
+  // 关键字→引号的正则衔接在原始文本上断开（review P2 实锤），预扫直接
+  // 零命中、剥除层反而执行不到。剥除层按注释→空白替换，衔接恢复。
+  // 关键字 includes 预检同 containsRuntimeImportOfDesignTokens。
+  if (
+    !text.includes('import') &&
+    !text.includes('require') &&
+    !text.includes('from')
+  ) {
+    return false;
   }
-  if (!anyRelative) return false;
   const codeOnly = stripCommentsAndDataStrings(text);
   for (const match of codeOnly.matchAll(SPECIFIER_CONTEXT_RE)) {
     const spec = match[1];
@@ -552,10 +572,16 @@ export function relativeSpecifierHitsDesignTokens(
 
 /** 一段源码文本是否含任何合法形态的包导入 / 依赖入口（供扫描与自证伪测试共用）。 */
 export function containsRuntimeImportOfDesignTokens(text: string): boolean {
-  // 两段式：先跑廉价正则，零命中的文件（绝大多数）完全不付剥除成本；
-  // 命中后再剥注释与数据字符串复核——命中若是注释/报错文案里的完整
-  // import 语句（语法齐全但语境非法），剥除后不再命中，不算真实接线。
-  if (!IMPORT_ENTRY_PATTERNS.some((pattern) => pattern.test(text))) {
+  // 剥除必须在检测之前（同 relativeSpecifierHitsDesignTokens 的理由）：
+  // 注释既会制造伪命中（注释掉的 import 语句），也会遮蔽真命中
+  // （import(/* c */ '…') 的注释隔断）——两个方向都由剥除层统一解决。
+  // 关键字 includes 预检让不含 import 语法痕迹的文件（多数资源型源码）
+  // 完全跳过剥除成本；剥除层只在确有 import/require/from 字样时启动。
+  if (
+    !text.includes('import') &&
+    !text.includes('require') &&
+    !text.includes('from')
+  ) {
     return false;
   }
   const codeOnly = stripCommentsAndDataStrings(text);

@@ -211,4 +211,48 @@ describe('DS-3 · 零接线守卫', () => {
       stripCommentsAndDataStrings("const s = 'x'; import { y } from './b';"),
     ).toBe("const s = ' '; import { y } from './b';");
   });
+
+  it('自证伪：说明符前带注释的合法导入必须被命中（review P2 补洞）', () => {
+    // 旧的两段式先在原始文本上预扫：`import(/* c */ '…')` 的注释隔断了
+    // 关键字→引号衔接，预扫零命中提前返回，剥除层反而执行不到——漏放。
+    // 现在剥除在前（注释→空白替换恢复衔接）。相对说明符走 rel 通道，
+    // 包 id 说明符走 id 通道，各按各的管辖断言。
+    const relativeCases: Array<[string, string]> = [
+      [
+        '动态 import 带注释（相对路径）',
+        "const l = await import(/* webpackChunkName: 'tokens' */ '../../design-tokens/src/snapshot.ts');",
+      ],
+      [
+        'require 带注释（相对路径）',
+        "const x = require(/* chunk */ '../../design-tokens/src/snapshot.ts');",
+      ],
+      [
+        '副作用 import 关键字后带注释（相对路径）',
+        "import /* c */ '../../design-tokens/src/generate.ts';",
+      ],
+    ];
+    for (const [name, source] of relativeCases) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        name,
+      ).toBe(true);
+    }
+    const idCases: Array<[string, string]> = [
+      [
+        '包 id 动态 import 带注释',
+        "const l = await import(/* x */ '@cindy/design-tokens');",
+      ],
+      [
+        '包 id 静态 import 带注释',
+        "import { x } /* load tokens */ from '@cindy/design-tokens';",
+      ],
+      [
+        '包 id require 带注释',
+        "const x = require(/* tokens */ '@cindy/design-tokens');",
+      ],
+    ];
+    for (const [name, source] of idCases) {
+      expect(containsRuntimeImportOfDesignTokens(source), name).toBe(true);
+    }
+  });
 });
