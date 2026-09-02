@@ -5,30 +5,13 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { useOwnedCodexLogin, verifyCodexAuthRecovery } from './useCodexAuth';
 import type { CodexLoginResult } from './codexAuthLogin';
-import { isCodexOAuthReconnectRequired } from './codexAuthRecovery';
+import {
+  codexRecoveryDescriptionKey,
+  isCodexOAuthReconnectRequired,
+  type CodexCredentialScope,
+} from './codexAuthRecovery';
 
 export const isCodexSessionExpiredError = isCodexOAuthReconnectRequired;
-
-type CodexCredentialScope = NonNullable<CodexLoginResult['credentialScope']>;
-
-function reconnectCopyForScope(scope: CodexCredentialScope): {
-  description: string;
-  confirmText: string;
-} {
-  if (scope === 'system-shared') {
-    return {
-      description: 'chatgptAuthRecovery.systemSharedInvalidated',
-      confirmText: 'chatgptAuthRecovery.openApp',
-    };
-  }
-  return {
-    description:
-      scope === 'instance-isolated'
-        ? 'chatgptAuthRecovery.instanceIsolatedInvalidated'
-        : 'chatgptAuthRecovery.unknownInvalidated',
-    confirmText: 'chatgptAuthRecovery.relogin',
-  };
-}
 
 export function useCodexSessionExpiredPrompt(options?: {
   onAuthenticated?: (recoveredError: string) => void;
@@ -37,7 +20,7 @@ export function useCodexSessionExpiredPrompt(options?: {
   confirmBeforeLogin?: boolean;
 }): (error: string) => boolean {
   const { t } = useTranslation();
-  const { confirm, confirmThree } = useConfirmDialog();
+  const { confirm } = useConfirmDialog();
   const triggerOwnedLogin = useOwnedCodexLogin();
   const promptedForErrorRef = useRef<string | null>(null);
   const promptActiveRef = useRef(false);
@@ -99,72 +82,38 @@ export function useCodexSessionExpiredPrompt(options?: {
         } catch {
           // 无法读取来源时按 unknown 引导，避免误称沿用了系统登录。
         }
-        const copy = reconnectCopyForScope(credentialScope);
-        const openChatGptAppAndClose = async () => {
+        const descriptionKey = codexRecoveryDescriptionKey(credentialScope);
+        if (credentialScope === 'system-shared') {
+          const shouldOpenApp = await confirm({
+            title: t('chatgptAuthRecovery.title'),
+            description: t(descriptionKey),
+            confirmText: t('chatgptAuthRecovery.openApp'),
+            cancelText: t('chatgptAuthRecovery.later'),
+            autoFocusConfirm: true,
+          });
+          if (!mountedRef.current) return;
+          if (!shouldOpenApp) {
+            closePrompt();
+            return;
+          }
           try {
             const opened = await window.electronAPI.openChatGPTApp();
             if (!opened.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
           } catch {
             toast.error(t('chatgptAuthRecovery.openAppFailed'));
           }
-          if (mountedRef.current) closePrompt();
-        };
-        if (credentialScope === 'system-shared') {
-          if (oauthWritesBlocked) {
-            const shouldOpenApp = await confirm({
-              title: t('chatgptAuthRecovery.title'),
-              description: t(copy.description),
-              confirmText: t('chatgptAuthRecovery.openApp'),
-              cancelText: t('chatgptAuthRecovery.later'),
-              autoFocusConfirm: true,
-            });
-            if (!mountedRef.current) return;
-            if (!shouldOpenApp) {
-              closePrompt();
-              return;
-            }
-            await openChatGptAppAndClose();
-            return;
-          }
-          const recoveryAction = await confirmThree({
-            title: t('chatgptAuthRecovery.title'),
-            description: t(copy.description),
-            confirmText: t(copy.confirmText),
-            tertiaryText: t('chatgptAuthRecovery.relogin'),
-            cancelText: t('chatgptAuthRecovery.later'),
-            autoFocusConfirm: true,
-          });
-          if (!mountedRef.current) return;
-          if (recoveryAction === 'cancel') {
-            closePrompt();
-            return;
-          }
-          if (recoveryAction === 'confirm') {
-            await openChatGptAppAndClose();
-            return;
-          }
-
-          const acceptsSignOutRisk = await confirm({
-            title: t('chatgptAuthRecovery.reloginRiskTitle'),
-            description: t('chatgptAuthRecovery.reloginRiskDescription'),
-            confirmText: t('chatgptAuthRecovery.reloginRiskConfirm'),
-            cancelText: t('chatgptAuthRecovery.later'),
-            confirmVariant: 'destructive',
-          });
-          if (!mountedRef.current) return;
-          if (!acceptsSignOutRisk) {
-            closePrompt();
-            return;
-          }
-        } else if (oauthWritesBlocked) {
+          closePrompt();
+          return;
+        }
+        if (oauthWritesBlocked) {
           toast.error(t('chatgptAuthRecovery.devWriteBlocked'));
           closePrompt();
           return;
         } else if (options?.confirmBeforeLogin !== false) {
           const shouldReconnect = await confirm({
             title: t('chatgptAuthRecovery.title'),
-            description: t(copy.description),
-            confirmText: t(copy.confirmText),
+            description: t(descriptionKey),
+            confirmText: t('chatgptAuthRecovery.relogin'),
             cancelText: t('chatgptAuthRecovery.later'),
             autoFocusConfirm: true,
           });
@@ -208,6 +157,6 @@ export function useCodexSessionExpiredPrompt(options?: {
       })();
       return true;
     },
-    [confirm, confirmThree, options?.confirmBeforeLogin, t, triggerOwnedLogin],
+    [confirm, options?.confirmBeforeLogin, t, triggerOwnedLogin],
   );
 }
