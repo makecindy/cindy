@@ -705,6 +705,15 @@ describe('auth login-flow reset', () => {
     expect(coldStartBody).toContain(
       'expectedActiveVaultAccountKey: nextActiveCandidate.accountKey',
     );
+    const clearDeadTokens = coldStartBody.indexOf('await clearConfirmedDeadRefreshTokens(');
+    const staleEpochGuard = coldStartBody.indexOf(
+      "epochChanged('after-clearing-confirmed-dead-tokens')",
+      clearDeadTokens,
+    );
+    const ownershipRetry = coldStartBody.indexOf('return runColdStartRefreshFlow(', clearDeadTokens);
+    expect(clearDeadTokens).toBeGreaterThan(-1);
+    expect(staleEpochGuard).toBeGreaterThan(clearDeadTokens);
+    expect(ownershipRetry).toBeGreaterThan(staleEpochGuard);
   });
 
   it('unlocks login preparing with the splash startup gate after 30s', () => {

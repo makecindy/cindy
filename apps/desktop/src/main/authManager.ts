@@ -4430,6 +4430,9 @@ async function runColdStartRefreshFlow(
             );
           } else {
             await clearConfirmedDeadRefreshTokens(storedRealm, confirmedDeadTokens);
+            if (epochChanged('after-clearing-confirmed-dead-tokens')) {
+              return snapshotAuthState();
+            }
           }
           log.info(
             'cold-start refresh rejected a stale compatibility token; continuing with the vault active account',
