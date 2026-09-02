@@ -19,19 +19,34 @@ export function isBinaryVersionNotOlder(candidate: string, required: string): bo
   return semver.gte(candidate, required);
 }
 
-/** Parse the supported Pi version forms from the first `--version` output line. */
+/** Managed CLIs that print `<name> <version>` instead of a leading bare version. */
+const NAMED_VERSION_PREFIXES = new Set(['pi', 'codex-cli']);
+
+function normalizeVersionToken(token: string | undefined): string | null {
+  return token ? normalizeBinaryVersion(token.replace(/^v(?=\d)/, '')) : null;
+}
+
+/**
+ * Parse the supported version forms from the first `--version` output line.
+ *
+ * Covers the three shapes the managed runtimes actually print:
+ *   - `0.84.4`              (pi)
+ *   - `2.1.258 (Claude Code)` (claude-code — version leads, suffix is a product label)
+ *   - `codex-cli 0.145.0`   (codex)
+ *
+ * Stays deliberately strict: an unknown leading token that is not itself a valid
+ * version yields null rather than scanning the line for anything semver-shaped.
+ */
 export function parseBinaryVersionOutput(stdout: string, stderr: string): string | null {
   const output = (stdout || stderr).trim();
   const firstLine = output.split(/\r?\n/, 1)[0]?.trim() ?? '';
   const tokens = firstLine.split(/\s+/);
-  const versionToken = tokens.length === 1
-    ? tokens[0]
-    : tokens.length === 2 && tokens[0]?.toLowerCase() === 'pi'
-      ? tokens[1]
-      : undefined;
-  return versionToken
-    ? normalizeBinaryVersion(versionToken.replace(/^v(?=\d)/, ''))
-    : null;
+  const leadingVersion = normalizeVersionToken(tokens[0]);
+  if (leadingVersion) return leadingVersion;
+  if (tokens.length === 2 && NAMED_VERSION_PREFIXES.has(tokens[0]?.toLowerCase() ?? '')) {
+    return normalizeVersionToken(tokens[1]);
+  }
+  return null;
 }
 
 /**

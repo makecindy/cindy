@@ -186,6 +186,7 @@ const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
     devBinDir: 'claude-code-bin',
     vendorTag: 'claude',
     artifactKind: 'gz',
+    preserveLocalVersion: true,
   },
   codex: {
     vendorKey: 'codex',
@@ -195,6 +196,7 @@ const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
     devBinDir: 'codex-bin',
     vendorTag: 'codex',
     artifactKind: 'gz',
+    preserveLocalVersion: true,
   },
   pi: {
     vendorKey: 'pi',
