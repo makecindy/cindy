@@ -32,19 +32,21 @@ interface LogoutPolicyVault<
   loggedOutAccountKeys?: string[];
 }
 
-export function loggedOutAccountKeySet(vault: { loggedOutAccountKeys?: string[] }): Set<string> {
+export function loggedOutAccountKeySet<T extends { loggedOutAccountKeys?: string[] }>(
+  vault: T,
+): Set<string> {
   return new Set(vault.loggedOutAccountKeys ?? []);
 }
 
-export function isLoggedOutVaultAccount(
-  vault: { loggedOutAccountKeys?: string[] },
+export function isLoggedOutVaultAccount<T extends { loggedOutAccountKeys?: string[] }>(
+  vault: T,
   accountKey: string,
 ): boolean {
   return loggedOutAccountKeySet(vault).has(accountKey);
 }
 
-export function restoreLoggedOutVaultAccount(
-  vault: { loggedOutAccountKeys?: string[] },
+export function restoreLoggedOutVaultAccount<T extends { loggedOutAccountKeys?: string[] }>(
+  vault: T,
   accountKey: string,
 ): void {
   if (!vault.loggedOutAccountKeys?.includes(accountKey)) return;
