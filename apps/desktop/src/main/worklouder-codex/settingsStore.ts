@@ -112,7 +112,12 @@ function normalizeLayout(raw: unknown, model: WorkLouderModel): WorkLouderCodexL
       };
     }
   }
-  if (model === 'creator-micro-2' && isCreatorFactoryBlankSlots(slots)) {
+  if (
+    model === 'creator-micro-2' &&
+    isCreatorFactoryBlankSlots(slots) &&
+    value.taskKeys === undefined &&
+    value.merges === undefined
+  ) {
     slots = defaults.slots;
   }
   const merges = workLouderLayoutMerges({

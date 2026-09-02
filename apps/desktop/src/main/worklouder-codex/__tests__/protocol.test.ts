@@ -17,8 +17,10 @@ import {
   unwrapWorkLouderKeymapText,
   parseWorkLouderKeymapDocument,
   resolveWorkLouderActiveLayerIndex,
+  resolveWorkLouderActiveProfileIndex,
   applyCreatorMicro2AgentLayer,
   creatorMicro2KeymapBackupFileName,
+  creatorMicro2KeymapSessionFileName,
   workLouderLayerHasAgentKeys,
   workLouderFirmwareIdlesHidRead,
   foldOrcaWorkerActivityOntoLeads,
@@ -447,6 +449,22 @@ describe('Creator Micro 2 agent keymap', () => {
     expect(resolveWorkLouderActiveLayerIndex(0, 2)).toBe(0);
   });
 
+  it('rewrites the firmware-selected profile instead of always profiles[0]', () => {
+    const parsed = parseWorkLouderKeymapDocument(
+      JSON.stringify({
+        profiles: [
+          { layers: [factoryLayer] },
+          { layers: [{ ...factoryLayer, id: 0, name: 'Profile 2' }] },
+        ],
+      }),
+    );
+    expect(resolveWorkLouderActiveProfileIndex(1, parsed!.profiles.length)).toBe(1);
+    const next = applyCreatorMicro2AgentLayer(parsed!, 0, undefined, 1);
+    expect(next.changed).toBe(true);
+    expect(workLouderLayerHasAgentKeys(next.document.profiles[0].layers[0])).toBe(false);
+    expect(workLouderLayerHasAgentKeys(next.document.profiles[1].layers[0])).toBe(true);
+  });
+
   it('keeps per-device keymap backups from overwriting each other', () => {
     expect(creatorMicro2KeymapBackupFileName('80B54ECB0358')).toBe(
       'keymap-backup-80B54ECB0358.json',
@@ -456,5 +474,9 @@ describe('Creator Micro 2 agent keymap', () => {
     );
     expect(creatorMicro2KeymapBackupFileName(null)).toBe('keymap-backup.json');
     expect(creatorMicro2KeymapBackupFileName('  ')).toBe('keymap-backup.json');
+    expect(creatorMicro2KeymapSessionFileName('80B54ECB0358')).toBe(
+      'keymap-session-80B54ECB0358.json',
+    );
+    expect(creatorMicro2KeymapSessionFileName(null)).toBe('keymap-session.json');
   });
 });

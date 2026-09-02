@@ -234,6 +234,41 @@ describe('Work Louder Codex settings store', () => {
     expect(next.layout.slots.ACT10.action).toEqual({ type: 'voice' });
   });
 
+  it('keeps a Creator layout that is blank on purpose after the new schema exists', () => {
+    const next = __testing.normalize(
+      {
+        layout: {
+          version: 1,
+          slots: {
+            ACT06: { keycapId: 'EMPT1', action: null },
+            ACT07: { keycapId: 'EMPT1', action: null },
+            ACT08: { keycapId: 'EMPT1', action: null },
+            ACT09: { keycapId: 'EMPT1', action: null },
+            ACT10: { keycapId: 'EMPT1', action: null },
+            ACT11: { keycapId: 'EMPT1', action: null },
+            ACT10_ACT11: { keycapId: 'EMPT5', action: null },
+            ACT12: { keycapId: 'EMPT1', action: null },
+          },
+          analogStick: {
+            up: { type: 'command', commandId: 'conversation.scrollUp' },
+            right: { type: 'command', commandId: 'toggleRightSidebar' },
+            down: { type: 'command', commandId: 'conversation.scrollDown' },
+            left: { type: 'command', commandId: 'toggleSidebar' },
+          },
+          encoder: { left: null, right: null, click: null, longPress: null },
+          encoderMode: 'session-switch',
+          separateMicrophoneKeys: true,
+          taskKeys: ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05'],
+          merges: [],
+        },
+      },
+      'creator-micro-2',
+    );
+
+    expect(next.layout.slots.ACT06).toEqual({ keycapId: 'EMPT1', action: null });
+    expect(next.layout.slots.ACT10.action).toBeNull();
+  });
+
   it('lets Creator keep a merged microphone layout, same as Codex', () => {
     const next = __testing.normalize(
       {

@@ -14,12 +14,14 @@ import {
   CREATOR_MICRO_2_KEYMAP_RELOAD_MS,
   createWorkLouderCodexOffFrame,
   creatorMicro2KeymapBackupFileName,
+  creatorMicro2KeymapSessionFileName,
   isWorkLouderHidContention,
   isWorkLouderSdkTransportDeath,
   isWorkLouderCodexLightingFrameOff,
   parseWorkLouderCodexHidEvent,
   parseWorkLouderKeymapDocument,
   resolveWorkLouderActiveLayerIndex,
+  resolveWorkLouderActiveProfileIndex,
   rewriteBareWorkLouderNotifyJson,
   unwrapWorkLouderDeviceStatus,
   unwrapWorkLouderKeymapText,
@@ -400,10 +402,14 @@ async function probeConnection(): Promise<void> {
         }
       } catch (error) {
         hostLog('debug', `probe status failed: ${safeErrorMessage(error)}`);
-        const creatorGone =
+        if (isOptionalDeviceStatusError(error)) {
+          post({ kind: 'state', status: 'connected' });
+          return;
+        }
+        const creatorStillPresent =
           workLouderFirmwareIdlesHidRead(connectedDevice?.deviceType) &&
-          findCandidates().length === 0;
-        if (!transportFaulted && !creatorGone) {
+          findCandidates().length > 0;
+        if (!transportFaulted && creatorStillPresent) {
           post({ kind: 'state', status: 'connected' });
           return;
         }
@@ -617,15 +623,23 @@ function workLouderFsSucceeded(result: WorkLouderRpcResult | null | undefined): 
 
 async function restoreCreatorKeymap(deviceApi: WorkLouderApi): Promise<void> {
   if (connectedDevice?.deviceType !== 'creator-micro-2' || !keymapBackupDir || !comm) return;
-  const backupPath = path.join(
+  const sessionPath = path.join(
+    keymapBackupDir,
+    creatorMicro2KeymapSessionFileName(connectedDevice.backupId),
+  );
+  const factoryPath = path.join(
     keymapBackupDir,
     creatorMicro2KeymapBackupFileName(connectedDevice.backupId),
   );
-  let liveText: string;
+  let liveText: string | null = null;
   try {
-    liveText = await fs.readFile(backupPath, 'utf8');
+    liveText = await fs.readFile(sessionPath, 'utf8');
   } catch {
-    return;
+    try {
+      liveText = await fs.readFile(factoryPath, 'utf8');
+    } catch {
+      return;
+    }
   }
   const fsApi = loadWorkLouderFsApi(deviceApi, comm);
   if (!fsApi) return;
@@ -634,27 +648,33 @@ async function restoreCreatorKeymap(deviceApi: WorkLouderApi): Promise<void> {
     throw new Error(writeResult?.error?.message ?? 'fs.write keymap.json restore failed');
   }
   creatorKeymapBound = false;
-  hostLog('info', 'Work Louder factory keymap restored');
+  hostLog('info', 'Work Louder pre-occupancy keymap restored');
+}
+
+async function writeKeymapSnapshot(filePath: string, liveText: string): Promise<void> {
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  await fs.writeFile(tmpPath, liveText, 'utf8');
+  await fs.rename(tmpPath, filePath);
 }
 
 async function backupCreatorKeymap(liveText: string): Promise<void> {
   if (!keymapBackupDir) {
     throw new Error('Creator Micro 2 keymap backup directory is missing');
   }
-  const backupPath = path.join(
+  await fs.mkdir(keymapBackupDir, { recursive: true });
+  const factoryPath = path.join(
     keymapBackupDir,
     creatorMicro2KeymapBackupFileName(connectedDevice?.backupId),
   );
   try {
-    await fs.access(backupPath);
-    return;
+    await fs.access(factoryPath);
   } catch {
-    // First bind of this board: keep the factory keymap so it can be restored.
+    await writeKeymapSnapshot(factoryPath, liveText);
   }
-  await fs.mkdir(keymapBackupDir, { recursive: true });
-  const tmpPath = `${backupPath}.${process.pid}.tmp`;
-  await fs.writeFile(tmpPath, liveText, 'utf8');
-  await fs.rename(tmpPath, backupPath);
+  await writeKeymapSnapshot(
+    path.join(keymapBackupDir, creatorMicro2KeymapSessionFileName(connectedDevice?.backupId)),
+    liveText,
+  );
 }
 
 async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
@@ -674,13 +694,17 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (!liveText) throw new Error('fs.read keymap.json returned an empty payload');
   const document = parseWorkLouderKeymapDocument(liveText);
   if (!document) throw new Error('keymap.json is not a Work Louder keymap document');
-  const layerCount = document.profiles[0]?.layers.length ?? 0;
   const status =
     typeof deviceApi.getDeviceStatus === 'function'
       ? unwrapWorkLouderDeviceStatus(await deviceApi.getDeviceStatus())
       : {};
+  const profileIndex = resolveWorkLouderActiveProfileIndex(
+    status.profileIndex,
+    document.profiles.length,
+  );
+  const layerCount = document.profiles[profileIndex]?.layers.length ?? 0;
   const layerIndex = resolveWorkLouderActiveLayerIndex(status.layerIndex, layerCount);
-  const next = applyCreatorMicro2AgentLayer(document, layerIndex, creatorKeymap);
+  const next = applyCreatorMicro2AgentLayer(document, layerIndex, creatorKeymap, profileIndex);
   if (!next.changed) {
     creatorKeymapBound = true;
     clearCreatorKeymapRetry();

@@ -499,12 +499,26 @@ export function resolveWorkLouderActiveLayerIndex(
   return Math.min(layerCount - 1, oneBased - 1);
 }
 
+/** Firmware profile index is 0-based in `device.status`. */
+export function resolveWorkLouderActiveProfileIndex(
+  profileIndex: number | undefined,
+  profileCount: number,
+): number {
+  if (profileCount <= 0) return 0;
+  const zeroBased =
+    typeof profileIndex === 'number' && Number.isInteger(profileIndex) && profileIndex >= 0
+      ? profileIndex
+      : 0;
+  return Math.min(profileCount - 1, zeroBased);
+}
+
 export function applyCreatorMicro2AgentLayer(
   document: WorkLouderKeymapDocument,
   layerIndex: number,
   keymap: readonly (readonly string[])[] = CREATOR_MICRO_2_AGENT_KEYMAP,
+  profileIndex = 0,
 ): { document: WorkLouderKeymapDocument; changed: boolean; alreadyBound: boolean } {
-  const layers = document.profiles[0]?.layers;
+  const layers = document.profiles[profileIndex]?.layers;
   if (!layers || layerIndex < 0 || layerIndex >= layers.length) {
     return { document, changed: false, alreadyBound: false };
   }
@@ -531,7 +545,7 @@ export function applyCreatorMicro2AgentLayer(
   const nextLayers = layers.slice();
   nextLayers[layerIndex] = nextLayer;
   const nextProfiles = document.profiles.slice();
-  nextProfiles[0] = { ...document.profiles[0], layers: nextLayers };
+  nextProfiles[profileIndex] = { ...document.profiles[profileIndex], layers: nextLayers };
   return {
     document: { ...document, profiles: nextProfiles },
     changed: true,
@@ -554,6 +568,12 @@ export function creatorMicro2KeymapBackupFileName(deviceId?: string | null): str
   return sanitized
     ? `keymap-backup-${sanitized}.json`
     : CREATOR_MICRO_2_KEYMAP_BACKUP_FILE;
+}
+
+/** Per-occupancy snapshot restored when Cindy releases the board. */
+export function creatorMicro2KeymapSessionFileName(deviceId?: string | null): string {
+  const sanitized = sanitizeCreatorKeymapBackupId(deviceId);
+  return sanitized ? `keymap-session-${sanitized}.json` : 'keymap-session.json';
 }
 
 function sanitizeCreatorKeymapBackupId(deviceId: string | null | undefined): string {
