@@ -96,6 +96,19 @@ function showHookErrorToast(err: unknown): void {
   toast.error(message);
 }
 
+/** 返回模板参数校验失败时应展示的本地化字段，避免把引擎内部英文错误直接暴露给用户。 */
+function findMissingRequiredTemplateParam(
+  template: ScheduleTemplate,
+  values: Record<string, string>,
+) {
+  return (template.parameters ?? []).find(
+    (parameter) =>
+      parameter.required &&
+      !values[parameter.key]?.trim() &&
+      !parameter.default?.trim(),
+  );
+}
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -526,8 +539,15 @@ export function ScheduleFormDialog({
           ...input,
           prompt: applyTemplateParams(selectedTemplate.prompt ?? '', paramValues, selectedTemplate.parameters),
         };
-      } catch (e) {
-        toast.warning(e instanceof Error ? e.message : String(e));
+      } catch {
+        const missingParam = findMissingRequiredTemplateParam(selectedTemplate, paramValues);
+        if (missingParam) {
+          toast.warning(t('scheduler.editor.validation.templateParamRequired', {
+            label: missingParam.label,
+          }));
+        } else {
+          toast.warning(t('scheduler.editor.validation.templateApplyFailed'));
+        }
         return;
       }
     }

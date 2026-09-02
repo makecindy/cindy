@@ -9496,7 +9496,9 @@
         "selectProject": "프로젝트 디렉토리를 선택하세요",
         "modelUnavailable": "모델 {{model}}을 더 이상 사용할 수 없습니다. 다른 모델을 선택하세요.",
         "reasoningInvalid": "Reasoning은 {{values}} 중 하나여야 합니다",
-        "preRunHookCommandRequired": "사전 검사 스크립트 명령을 입력하세요"
+        "preRunHookCommandRequired": "사전 검사 스크립트 명령을 입력하세요",
+        "templateParamRequired": "{{label}}을(를) 입력하세요",
+        "templateApplyFailed": "템플릿을 적용하지 못했습니다. 다시 시도하세요"
       }
     },
     "chips": {

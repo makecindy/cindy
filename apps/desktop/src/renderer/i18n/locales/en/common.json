@@ -9517,7 +9517,9 @@
         "selectProject": "Select a project directory",
         "modelUnavailable": "Model {{model}} is no longer available. Select another model.",
         "reasoningInvalid": "Reasoning must be one of {{values}}",
-        "preRunHookCommandRequired": "Enter the pre-run check command"
+        "preRunHookCommandRequired": "Enter the pre-run check command",
+        "templateParamRequired": "Enter {{label}}",
+        "templateApplyFailed": "Could not apply the template. Please try again."
       }
     },
     "chips": {

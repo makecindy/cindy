@@ -9488,7 +9488,9 @@
         "selectProject": "请选择项目目录",
         "modelUnavailable": "模型 {{model}} 已不可用，请重新选择",
         "reasoningInvalid": "Reasoning 必须是 {{values}} 之一",
-        "preRunHookCommandRequired": "请填写前置检查脚本命令"
+        "preRunHookCommandRequired": "请填写前置检查脚本命令",
+        "templateParamRequired": "请填写{{label}}",
+        "templateApplyFailed": "模板应用失败，请重试"
       }
     },
     "chips": {

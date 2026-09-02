@@ -9488,7 +9488,9 @@
         "selectProject": "請選擇專案目錄",
         "modelUnavailable": "模型 {{model}} 已不可用，請重新選擇",
         "reasoningInvalid": "Reasoning 必須是 {{values}} 之一",
-        "preRunHookCommandRequired": "請填寫前置檢查指令碼命令"
+        "preRunHookCommandRequired": "請填寫前置檢查指令碼命令",
+        "templateParamRequired": "請填寫{{label}}",
+        "templateApplyFailed": "模板套用失敗，請重試"
       }
     },
     "chips": {
