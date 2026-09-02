@@ -23,7 +23,13 @@ import {
  */
 function isActiveCatalogVoiceRoute(route: CatalogModelPinRoute): boolean {
   const provider = getActiveCatalog().providers.find((entry) => entry.id === route.providerId);
-  if (!provider || !provider.agents.includes(route.agentKind)) return false;
+  const routing = provider?.routing[route.agentKind];
+  if (
+    !provider
+    || !provider.agents.includes(route.agentKind)
+    || !routing
+    || routing.disabled
+  ) return false;
   const model = provider.models[route.agentKind]?.find((entry) => entry.id === route.model);
   return Boolean(
     model

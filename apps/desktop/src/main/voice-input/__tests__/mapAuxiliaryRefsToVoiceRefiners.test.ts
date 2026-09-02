@@ -11,6 +11,7 @@ const activeCatalog = {
           { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', contextWindow: 272_000 },
         ],
       },
+      routing: { codex: { disabled: false } },
     },
     {
       id: 'xd',
@@ -25,6 +26,7 @@ const activeCatalog = {
           { id: 'paid-model', name: 'Paid', contextWindow: 272_000, availability: 'requires_payment' },
         ],
       },
+      routing: { codex: { disabled: false } },
     },
   ],
 };
@@ -67,6 +69,17 @@ describe('mapAuxiliaryRefsToVoiceRefiners', () => {
     expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:missing-model')).toBeNull();
     expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:disabled-model')).toBeNull();
     expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:paid-model')).toBeNull();
+  });
+
+  it('skips catalog pins whose agent routing is disabled', () => {
+    const xdProvider = activeCatalog.providers.find((provider) => provider.id === 'xd');
+    if (!xdProvider) throw new Error('test fixture is missing the xd provider');
+    xdProvider.routing.codex.disabled = true;
+    try {
+      expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:deepseek/deepseek-v4-flash')).toBeNull();
+    } finally {
+      xdProvider.routing.codex.disabled = false;
+    }
   });
 
   it('returns an empty chain when nothing in the list can refine speech', () => {
