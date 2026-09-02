@@ -179,9 +179,8 @@ describe('auth login-flow reset', () => {
     const writeStart = source.indexOf('function writeAuthAccountVault(');
     const writeEnd = source.indexOf('\n}\n\nfunction writeAuthAccountVaultOrThrow', writeStart);
     const writeBody = source.slice(writeStart, writeEnd);
-    expect(writeBody).toContain('const persistedVersion =');
-    expect(writeBody).toContain('vault.loggedOutAccountKeys');
-    expect(writeBody).toContain('JSON.stringify({ ...vault, version: persistedVersion })');
+    expect(writeBody).toContain('JSON.stringify({ ...vault, version: 1 })');
+    expect(writeBody).toContain('older client can');
 
     const profileStart = source.indexOf('export async function updateServerProfile(');
     const profileEnd = source.indexOf('\n}\n\nexport async function initialize(', profileStart);

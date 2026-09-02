@@ -77,6 +77,14 @@ export function removeLoggedOutVaultAccount<
   const passport = vault.passports[passportKey];
   if (!passport) return null;
 
+  // Keep the legacy Passport projection downgrade-safe: older clients do not
+  // understand loggedOutAccountKeys, so they must not find this membership in
+  // the persisted membership list after a single-account logout.
+  passport.memberships = passport.memberships.filter(
+    (membership) =>
+      accountVaultKey(identity.realm, membership.membershipId) !== identity.accountKey,
+  );
+
   const hasRestorableSibling =
     passport.memberships.some((membership) => {
       const accountKey = accountVaultKey(identity.realm, membership.membershipId);

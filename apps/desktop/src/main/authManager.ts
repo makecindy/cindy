@@ -879,17 +879,12 @@ function readAuthAccountVault(
 }
 
 function writeAuthAccountVault(vault: AuthAccountVault): boolean {
-  // Keep ordinary v1 vaults readable by older clients. The v2 marker is only
-  // needed while a logout tombstone is present; otherwise a routine token
-  // refresh must not turn a shared userData vault into a downgrade trap.
-  const persistedVersion =
-    vault.loggedOutAccountKeys && vault.loggedOutAccountKeys.length > 0
-      ? AUTH_ACCOUNT_VAULT_VERSION
-      : 1;
-  return writeAtomicSafe(
-    AUTH_ACCOUNT_VAULT_KEY,
-    JSON.stringify({ ...vault, version: persistedVersion }),
-  );
+  // Keep the aggregate payload at the legacy version so an older client can
+  // still recover an explicit login without discarding the other saved
+  // accounts. New clients continue to read the optional logout tombstones,
+  // while logout removes the signed-out membership from the stored Passport
+  // projection so older clients cannot enumerate it from local data.
+  return writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify({ ...vault, version: 1 }));
 }
 
 function writeAuthAccountVaultOrThrow(vault: AuthAccountVault): void {

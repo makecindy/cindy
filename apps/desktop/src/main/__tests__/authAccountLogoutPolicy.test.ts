@@ -74,6 +74,9 @@ describe('auth account logout policy', () => {
     expect(vault.resources[currentKey]).toBeUndefined();
     expect(vault.resources[siblingKey]).toBeDefined();
     expect(vault.passports[passportKey]).toBeDefined();
+    expect(
+      vault.passports[passportKey].memberships.map((membership) => membership.membershipId),
+    ).toEqual(['org']);
     expect(isLoggedOutVaultAccount(vault, currentKey)).toBe(true);
     expect(isLoggedOutVaultAccount(vault, siblingKey)).toBe(false);
   });
