@@ -38,7 +38,7 @@ import { useProviders } from '@/hooks/useProviders';
 import { usageRankColor } from '@/components/new-chat/usagePalette';
 import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { formatUsagePercent } from './formatUsagePercent';
-import { isUsageDayInRange, type UsageHistoryRange } from './usageHistoryStats';
+import { isUsageDayInRange, usageRangeDay, type UsageHistoryRange } from './usageHistoryStats';
 
 /** 展示条数 —— 与"最耗"的语义匹配, 不做成完整列表 (那是任务侧栏的事)。 */
 const TOP_TASKS = 8;
@@ -128,6 +128,12 @@ export function useTopTokenSessions(
   }, [recentSessions, usageSessions]);
 
   return useMemo(() => {
+    // Sessions retain only their latest activity timestamp, so they cannot
+    // prove historical membership for an exact calendar day. Hide this
+    // aggregate rather than presenting a task as active on a day it may not
+    // have used. The day-level charts and agent/model tables use dated usage
+    // records and remain exact.
+    if (usageRangeDay(range)) return [];
     const now = new Date();
     const todayKey =
       todayKeyOverride ??

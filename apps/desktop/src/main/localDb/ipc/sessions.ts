@@ -1070,8 +1070,14 @@ export function registerSessionIpc(
   );
   ipcMain.handle(
     'local-db:sessions:list',
-    async (_e, limit: unknown, status: unknown, options: unknown) => {
+    async (event, limit: unknown, status: unknown, options: unknown) => {
       const startedAt = performance.now();
+      const usageHistory = shouldUseUsageHistoryQuery(options);
+      // The usage-history branch is an unbounded privileged read. Keep the
+      // legacy capped list available to device-link's synthetic event, but do
+      // not let an untrusted renderer turn the new branch into a full-table
+      // session disclosure.
+      if (usageHistory) assertTrustedAppRendererEvent(event);
       const snapshot = readCurrentDbClientSnapshot();
       const db = snapshot?.client.drizzle ?? getDbClient().drizzle;
       const userId = snapshot?.userId ?? readCurrentDbClientUserId();
@@ -1079,7 +1085,6 @@ export function registerSessionIpc(
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
       void import('../../sessionTaskSummary.js').then((m) => m.backfillPinnedSessionSummaries());
-      const usageHistory = shouldUseUsageHistoryQuery(options);
       const cap = clampLimit(limit, 20);
       const includePinned = shouldIncludePinnedSessions(options);
       const fresh = shouldBypassSessionListSingleFlight(options);

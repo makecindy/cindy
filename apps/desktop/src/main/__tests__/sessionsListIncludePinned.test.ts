@@ -52,6 +52,7 @@ const h = vi.hoisted(() => {
 
   return {
     ipcHandle: vi.fn(),
+    assertTrustedAppRendererEvent: vi.fn(),
     logDebug: vi.fn(),
     logInfo: vi.fn(),
     queryResults,
@@ -89,6 +90,9 @@ vi.mock('../agent-island/service.js', () => ({
 vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
 vi.mock('../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../sessionTaskSummary.js', () => ({ backfillPinnedSessionSummaries: vi.fn() }));
+vi.mock('../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: h.assertTrustedAppRendererEvent,
+}));
 
 import { registerSessionIpc } from '../localDb/ipc/sessions.js';
 
@@ -208,6 +212,19 @@ describe('local-db:sessions:list includePinned', () => {
     expect(h.fakeDb.select).toHaveBeenCalledTimes(1);
     expect(h.listQuery).not.toHaveBeenCalled();
     expect(h.queryResults).toHaveLength(0);
+    expect(h.assertTrustedAppRendererEvent).toHaveBeenCalledWith({});
+  });
+
+  it('rejects an untrusted renderer before running the unbounded usage-history query', async () => {
+    const handler = sessionsListHandler();
+    h.assertTrustedAppRendererEvent.mockImplementationOnce(() => {
+      throw new Error('[PERMISSION_DENIED]');
+    });
+
+    await expect(handler({}, 20, 'all', { usageHistory: true })).rejects.toThrow(
+      '[PERMISSION_DENIED]',
+    );
+    expect(h.fakeDb.select).not.toHaveBeenCalled();
   });
 
   it('also includes pinned rows for the all-status bucket used by mobile detail filters', async () => {
