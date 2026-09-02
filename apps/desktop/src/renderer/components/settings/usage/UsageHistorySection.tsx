@@ -100,6 +100,7 @@ export function UsageHistorySection(): React.JSX.Element {
   const todayLabel = selectedDay
     ? t('usageHistory.stats.todayTokensInRange', { range: rangeLabel })
     : t('usageHistory.stats.todayTokens');
+  const hideToday = selectedDay !== null || range === 'today';
 
   const filteredHistory = useMemo(
     () => filterUsageHistoryPayload(history, range),
@@ -205,7 +206,7 @@ export function UsageHistorySection(): React.JSX.Element {
               summary={summary}
               rangeLabel={rangeLabel}
               todayLabel={todayLabel}
-              hideToday={selectedDay !== null}
+              hideToday={hideToday}
             />
           </Card>
 
