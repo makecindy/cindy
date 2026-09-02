@@ -2,6 +2,7 @@ import { createLogger } from '@/lib/logger';
 import {
   WebMicAudioEngine,
   currentPowerReleaseGeneration,
+  isMicrophonePermissionDeniedError,
   isPowerReleaseCancellation,
   isSelectedMicrophoneUnavailableError,
   powerReleaseCancellation,
@@ -152,6 +153,15 @@ export async function startVoiceInputCaptureSession(
         cancelled: true,
         error: options.formatStartError(error),
       };
+    }
+    // The fast Windows path trusts the last positive renderer verification so
+    // it does not open a throwaway microphone stream before every recording.
+    // If the real capture discovers that permission was revoked, invalidate
+    // that cache immediately so the next start returns to the permission gate.
+    if (isMicrophonePermissionDeniedError(error)) {
+      void window.electronAPI.voiceInput
+        .setRendererMicrophonePermissionVerified(false)
+        .catch(() => undefined);
     }
     return {
       ok: false,

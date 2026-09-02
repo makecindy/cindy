@@ -200,7 +200,15 @@ export function useVoiceInput(
   // checking the muted ref, preventing leaked mute state.
   const pendingSystemAudioMutePromiseRef = useRef<Promise<void> | null>(null);
   const systemAudioMuteGateOpenRef = useRef(true);
-  const systemAudioMuteGateDropLoggedRef = useRef(false);
+  // Keep a short opening window while Windows/macOS finishes muting system
+  // audio. Previously chunks produced during that IPC call were discarded,
+  // which could remove the first syllables from a dictation. The bounded queue
+  // is flushed as soon as mute completes (or a run id becomes available).
+  const pendingSystemAudioChunksRef = useRef<PcmChunk[]>([]);
+  const pendingSystemAudioChunksWarnedRef = useRef(false);
+  // 128 x ~40ms covers several seconds of provider/mute startup while staying
+  // below 200 KiB of 16 kHz PCM per voice surface.
+  const MAX_PENDING_SYSTEM_AUDIO_CHUNKS = 128;
   const stopCompletionWaitersRef = useRef<StopCompletionWaiter[]>([]);
   const sentAudioMsRef = useRef(0);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
@@ -425,17 +433,38 @@ export function useVoiceInput(
   }, [formatVoiceInputStartError, t]);
 
   const appendAudioChunk = useCallback((chunk: PcmChunk) => {
+    if (!systemAudioMuteGateOpenRef.current) {
+      const pending = pendingSystemAudioChunksRef.current;
+      if (pending.length >= MAX_PENDING_SYSTEM_AUDIO_CHUNKS) {
+        pending.shift();
+        if (!pendingSystemAudioChunksWarnedRef.current) {
+          pendingSystemAudioChunksWarnedRef.current = true;
+          log.warn('voice input opening audio buffer overflow while muting system audio', {
+            maxChunks: MAX_PENDING_SYSTEM_AUDIO_CHUNKS,
+          });
+        }
+      }
+      pending.push(chunk);
+      return;
+    }
     sentAudioMsRef.current += chunk.trace.durationMs;
     window.electronAPI.voiceInput.appendAudio(chunk);
   }, []);
 
+  const flushPendingSystemAudioChunks = useCallback(() => {
+    if (!systemAudioMuteGateOpenRef.current || !runIdRef.current) return;
+    const pending = pendingSystemAudioChunksRef.current.splice(0);
+    pendingSystemAudioChunksWarnedRef.current = false;
+    pending.forEach((chunk) => {
+      sentAudioMsRef.current += chunk.trace.durationMs;
+      window.electronAPI.voiceInput.appendAudio(chunk);
+    });
+  }, []);
+
   const canAcceptAudioChunk = useCallback(() => {
-    if (systemAudioMuteGateOpenRef.current) return true;
-    if (!systemAudioMuteGateDropLoggedRef.current) {
-      systemAudioMuteGateDropLoggedRef.current = true;
-      log.debug('dropping voice input pcm until system audio mute completes');
-    }
-    return false;
+    // Audio is buffered by appendAudioChunk while the asynchronous system
+    // mute is in flight; do not drop the opening frames.
+    return true;
   }, []);
 
   const commitUsageStats = useCallback(() => {
@@ -473,18 +502,20 @@ export function useVoiceInput(
         if (pendingSystemAudioMutePromiseRef.current === mutePromise) {
           pendingSystemAudioMutePromiseRef.current = null;
         }
+        flushPendingSystemAudioChunks();
       });
     pendingSystemAudioMutePromiseRef.current = mutePromise;
     return mutePromise;
-  }, []);
+  }, [flushPendingSystemAudioChunks]);
 
   const restoreSystemAudioForRecording = useCallback(async () => {
-    systemAudioMuteGateOpenRef.current = true;
     if (!supportsSystemAudioMute()) return;
     // Await any in-flight mute so we never skip a restore for a mute that
     // hadn't yet flipped systemAudioMutedRef when restore began.
     const pendingMute = pendingSystemAudioMutePromiseRef.current;
     if (pendingMute) await pendingMute;
+    systemAudioMuteGateOpenRef.current = true;
+    flushPendingSystemAudioChunks();
     if (!systemAudioMutedRef.current) return;
     systemAudioMutedRef.current = false;
     try {
@@ -495,7 +526,7 @@ export function useVoiceInput(
     } catch (error) {
       log.warn('system audio restore failed:', error instanceof Error ? error.message : String(error));
     }
-  }, []);
+  }, [flushPendingSystemAudioChunks]);
 
   const failActiveRecording = useCallback(async (message: string) => {
     if (stateRef.current !== 'listening') return;
@@ -1255,8 +1286,9 @@ export function useVoiceInput(
     lastSubmittedTextRef.current = '';
     sentAudioMsRef.current = 0;
     terminalOutcomeRef.current = 'success';
+    pendingSystemAudioChunksRef.current = [];
+    pendingSystemAudioChunksWarnedRef.current = false;
     systemAudioMuteGateOpenRef.current = true;
-    systemAudioMuteGateDropLoggedRef.current = false;
     if (voiceInputSettings.muteSystemAudio && supportsSystemAudioMute()) {
       systemAudioMuteGateOpenRef.current = false;
       void muteSystemAudioForRecording();
@@ -1280,7 +1312,7 @@ export function useVoiceInput(
     //    microphone PCM is gated so system audio playing during the mute delay
     //    cannot enter ASR.
     const guards = await resolveVoiceInputStartGuards();
-    log.debug('voice input start guards checked', {
+    log.info('voice input start guards checked', {
       ok: guards.ok,
       failed: guards.ok ? undefined : guards.failed,
       permissionSource: guards.permissionSource,
@@ -1469,6 +1501,7 @@ export function useVoiceInput(
       restoreEditorFocusAfterVoiceInput();
       return;
     }
+    flushPendingSystemAudioChunks();
     captureStart.drainPendingChunks();
     resolveStartReadyState(attemptId, result);
   }, [
@@ -1498,6 +1531,7 @@ export function useVoiceInput(
     voiceInputSettings.muteSystemAudio,
     voiceInputSettings.refinementEnabled,
     options,
+    flushPendingSystemAudioChunks,
   ]);
 
   const notifyReadyForEndCue = useCallback((options?: VoiceInputStopOptions) => {
