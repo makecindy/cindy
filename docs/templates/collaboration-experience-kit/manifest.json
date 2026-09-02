@@ -1,0 +1,103 @@
+{
+  "name": "collaboration-experience-kit",
+  "version": "1.0.0",
+  "description": "Copy-ready collaboration templates for agent-assisted software teams.",
+  "usage": {
+    "copyMode": "whole-directory",
+    "recommendedTargetDir": "TEMPLATE_TARGET_DIR",
+    "replacePlaceholdersBeforeUse": true
+  },
+  "placeholders": [
+    {
+      "name": "PROJECT_NAME",
+      "meaning": "Human-readable repository or product name."
+    },
+    {
+      "name": "DEFAULT_BRANCH",
+      "meaning": "Protected integration branch."
+    },
+    {
+      "name": "CHANGE_BRANCH_PREFIX",
+      "meaning": "Prefix for short-lived task branches."
+    },
+    {
+      "name": "RELATED_TEST_GATE",
+      "meaning": "Command that runs tests affected by the current diff."
+    },
+    {
+      "name": "TYPECHECK_GATE",
+      "meaning": "Command that type-checks affected packages or projects."
+    },
+    {
+      "name": "FORMAT_GATE",
+      "meaning": "Command that verifies formatting or whitespace."
+    },
+    {
+      "name": "SIGNOFF_MECHANISM",
+      "meaning": "Contribution-attribution mechanism such as DCO."
+    },
+    {
+      "name": "TEMPLATE_TARGET_DIR",
+      "meaning": "Where the copied kit lives in the destination repository."
+    },
+    {
+      "name": "OWNED_DIRECTORIES",
+      "meaning": "Paths this repository is allowed to own and modify."
+    },
+    {
+      "name": "EXTERNAL_REPOS_OR_SERVICES",
+      "meaning": "Repositories and services outside the default modification boundary."
+    },
+    {
+      "name": "REPO_MAP",
+      "meaning": "Repository map or architecture index."
+    },
+    {
+      "name": "ENVIRONMENT_SETUP",
+      "meaning": "Environment and dependency setup rule."
+    },
+    {
+      "name": "MODULE_RULE",
+      "meaning": "Rule bound to a high-risk module."
+    },
+    {
+      "name": "DESIGN_RULES",
+      "meaning": "Authoritative design-system document."
+    },
+    {
+      "name": "WORKFLOW_RULES",
+      "meaning": "Authoritative development-workflow document."
+    },
+    {
+      "name": "REVIEW_GUIDE",
+      "meaning": "Authoritative review-severity document."
+    }
+  ],
+  "targets": [
+    {
+      "source": "AGENT_ENTRY.template.md",
+      "target": "AGENTS.md",
+      "required": true
+    },
+    {
+      "source": "WORKFLOW.template.md",
+      "target": "docs/dev-rules/development-workflow.md",
+      "required": true
+    },
+    {
+      "source": "PR_TEMPLATE.md",
+      "target": ".github/PULL_REQUEST_TEMPLATE.md",
+      "required": true
+    },
+    {
+      "source": "REVIEW_GUIDE.template.md",
+      "target": "REVIEW.md",
+      "required": true
+    },
+    {
+      "source": "UI_UX_RULES.template.md",
+      "target": "docs/design-rules/UI_UX_RULES.md",
+      "required": false
+    }
+  ]
+}

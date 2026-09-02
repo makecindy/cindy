@@ -36,10 +36,11 @@ import {
   type WriteOptions,
   type WriteResult,
   type WriteWarningDetail,
+  type MemoryTrashEntry,
 } from './types.js';
 
 const INDEX_FILENAME = 'MEMORY.md';
-const META_FILENAME = 'meta.json';
+export const META_FILENAME = 'meta.json';
 const SHARD_EXT = '.md';
 const SLUG_REGEX = /^[a-z0-9_-]+$/;
 
@@ -92,6 +93,14 @@ export function memoryScopeDirName(scopeKey: string): string {
   const hostSegment = scopeKey.slice(SSH_SCOPE_KEY_PREFIX.length).split(':', 1)[0] ?? '';
   const digest = createHash('sha256').update(scopeKey, 'utf8').digest('hex').slice(0, 16);
   return `ssh-${sanitizeWorkdir(hostSegment).slice(0, 24)}-${digest}`;
+}
+
+/** 远端 scope 目录名特征: `ssh-<host 片段>-<sha256 前 16 hex>` (见 memoryScopeDirName)。 */
+const REMOTE_SCOPE_DIR_NAME_RE = /^ssh-.+-[0-9a-f]{16}$/;
+
+/** 判断落盘目录名是否远端 scope (Memory Hub 的展示 / 还原策略按此分叉)。 */
+export function isRemoteScopeDirName(dirName: string): boolean {
+  return REMOTE_SCOPE_DIR_NAME_RE.test(dirName);
 }
 
 /** filename = `<type>_<slug>.md`; slug 误带 `<type>_` 前缀会被拒绝 (见 validateNoTypePrefix) */
@@ -351,6 +360,29 @@ export class MemoryStorage {
   }
 
   /**
+   * P2: 软删除 — rename 到 .trash/ 而不是 unlink (review: softDelete 实际永久删除)。
+   * 回收站文件保留原名, listTrash/restore 按名读写; 同名冲突由 restore 检查。
+   */
+  async softDelete(filename: string): Promise<void> {
+    this.assertSafeFilename(filename);
+    const mainPath = path.join(this.dir, filename);
+    const trashDir = path.join(this.dir, '.trash');
+    // 删除前复核 — 与 delete 同语义 (review #2388 Codex 14th P1)。
+    this.beforeFileWrite?.();
+    try {
+      await fs.mkdir(trashDir, { recursive: true });
+      await fs.rename(mainPath, path.join(trashDir, filename));
+    } catch (e) {
+      if (isENOENT(e)) throw new MemoryError('not-found', filename + ' 不存在');
+      throw new MemoryError('io-error', 'soft delete failed: ' + (e as Error).message);
+    }
+    // rename 后复核 — await 窗口后边界可能发生, 不得继续在旧 owner 下重建索引。
+    this.guardAfterMutation();
+    await this.rebuildIndex();
+    this.beforeFileWrite?.();
+  }
+
+  /**
    * 变更后复核辅助 (review #2388 Codex 23rd P1/P2): shard 已落盘但其后
    * rebuildIndex 被 owner 边界中止 → 文件与 MEMORY.md 不一致, 标记派生索引
    * dirty; 下次安全打开 (init) 时 repairIndexIfDirty 惰性重建, 防止同 owner
@@ -412,6 +444,70 @@ export class MemoryStorage {
    *   ## feedback
    *   ...
    */
+
+  // ── P2: 回收站 ──────────────────────────────────────────────────────────
+
+  /** P2: 列出 .trash/ 下的已删除条目 */
+  async listTrash(): Promise<MemoryTrashEntry[]> {
+    const trashDir = path.join(this.dir, '.trash');
+    let entries: string[];
+    try {
+      entries = await fs.readdir(trashDir);
+    } catch {
+      return [];
+    }
+    const results: MemoryTrashEntry[] = [];
+    for (const filename of entries.filter((f) => f.endsWith('.md')).sort()) {
+      try {
+        const fullPath = path.join(trashDir, filename);
+        const stat = await fs.stat(fullPath);
+        const raw = await fs.readFile(fullPath, 'utf8');
+        const parsed = parseRawShard(raw, filename);
+        results.push({
+          filename,
+          type: parsed.frontmatter.type,
+          title: parsed.frontmatter.title,
+          description: parsed.frontmatter.description,
+          deletedAt: (stat.mtime ?? new Date()).toISOString(),
+          sizeBytes: stat.size,
+        });
+      } catch {
+        // skip corrupt trash files
+      }
+    }
+    return results;
+  }
+
+  /** P2: 从 .trash/ 恢复条目到主目录 */
+  async restore(filename: string): Promise<WriteResult> {
+    this.assertSafeFilename(filename);
+    const trashPath = path.join(this.dir, '.trash', filename);
+    const mainPath = path.join(this.dir, filename);
+    // 同名冲突 fail closed (review: 恢复静默覆盖同名条目) —
+    // 目标已存在时不覆盖, 调用方 (UI) 提示用户先处理主目录同名条目。
+    try {
+      await fs.access(mainPath);
+      throw new MemoryError(
+        'already-exists',
+        'restore conflict: ' + filename + ' already exists; resolve it before restoring the trash entry',
+      );
+    } catch (e) {
+      if (e instanceof MemoryError) throw e;
+      if (!isENOENT(e)) {
+        throw new MemoryError('io-error', 'restore check failed: ' + (e as Error).message);
+      }
+    }
+    try {
+      await fs.rename(trashPath, mainPath);
+    } catch (e) {
+      if (isENOENT(e)) throw new MemoryError('not-found', `trash entry not found: ${filename}`);
+      throw new MemoryError('io-error', `restore failed: ${(e as Error).message}`);
+    }
+    this.beforeFileWrite?.();
+    await this.rebuildIndex();
+    this.beforeFileWrite?.();
+    return { ok: true, filename };
+  }
   async rebuildIndex(): Promise<void> {
     try {
       await this.rebuildIndexInner();

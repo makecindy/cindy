@@ -63,6 +63,7 @@ export {
   sanitizeWorkdir,
   buildMemoryScopeKey,
   memoryScopeDirName,
+  isRemoteScopeDirName,
   buildFilename,
   parseFilename,
   validateSlug,

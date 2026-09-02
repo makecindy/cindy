@@ -27,9 +27,12 @@ import {
   type MemoryType,
   type SearchHit,
   type SearchOptions,
+  type MemoryEvent,
+  type MemoryEventOp,
 } from './types.js';
 
 const TABLE = 'memory_fts';
+const EVENTS_TABLE = 'memory_events';
 const SNIPPET_TOKEN_RADIUS = 8; // snippet() 命中前后各取 N tokens
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
@@ -51,7 +54,19 @@ export class MemoryFts {
          tokenize='porter unicode61'
        );`,
     );
-  }
+   this.db.exec(
+      `CREATE TABLE IF NOT EXISTS ${EVENTS_TABLE} (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         ts TEXT NOT NULL,
+         op TEXT NOT NULL,
+         actor TEXT NOT NULL,
+         filename TEXT NOT NULL,
+         type TEXT NOT NULL,
+         title TEXT NOT NULL DEFAULT '',
+         description TEXT NOT NULL DEFAULT ''
+      );`,
+   );
+ }
 
   /** 写入或更新一条记录 (按 filename 去重) */
   upsert(record: MemoryRecord): void {
@@ -65,6 +80,74 @@ export class MemoryFts {
       tx(record);
     } catch (e) {
       throw new MemoryError('io-error', `fts upsert failed: ${(e as Error).message}`);
+    }
+  }
+
+  /** P2: 事件日志 — 写入一条变更记录 */
+  appendEvent(event: Omit<MemoryEvent, 'id'>): void {
+    try {
+      this.db.prepare(
+        `INSERT INTO ${EVENTS_TABLE} (ts, op, actor, filename, type, title, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(event.ts, event.op, event.actor, event.filename, event.type, event.title, event.description);
+    } catch {
+      // 事件记录失败不阻塞主流程
+    }
+  }
+
+  /** P2: 查询单条 filename 的变更历史 */
+  listEvents(filename: string, limit = 200): MemoryEvent[] {
+    try {
+      const rows = this.db.prepare(
+        `SELECT id, ts, op, actor, filename, type, title, description
+         FROM ${EVENTS_TABLE} WHERE filename = ? ORDER BY id DESC LIMIT ?`,
+      ).all(filename, limit) as Array<Record<string, unknown>>;
+      return rows.map((r) => ({
+        id: r.id as number,
+        ts: r.ts as string,
+        op: r.op as MemoryEventOp,
+        actor: r.actor as string,
+        filename: r.filename as string,
+        type: r.type as MemoryType,
+        title: r.title as string,
+        description: r.description as string,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** P2: 列出最近的全局事件 */
+  listRecentEvents(limit = 50): MemoryEvent[] {
+    try {
+      const rows = this.db.prepare(
+        `SELECT id, ts, op, actor, filename, type, title, description
+         FROM ${EVENTS_TABLE} ORDER BY id DESC LIMIT ?`,
+      ).all(limit) as Array<Record<string, unknown>>;
+      return rows.map((r) => ({
+        id: r.id as number,
+        ts: r.ts as string,
+        op: r.op as MemoryEventOp,
+        actor: r.actor as string,
+        filename: r.filename as string,
+        type: r.type as MemoryType,
+        title: r.title as string,
+        description: r.description as string,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** P4: delta 触发用 */
+  eventCountSince(ts: string): number {
+    try {
+      const row = this.db.prepare(
+        `SELECT COUNT(*) AS c FROM ${EVENTS_TABLE} WHERE ts > ?`,
+      ).get(ts) as { c: number };
+      return row.c;
+    } catch {
+      return 0;
     }
   }
 

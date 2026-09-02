@@ -172,3 +172,41 @@ export interface SearchOptions {
   /** 默认 10 */
   limit?: number;
 }
+
+/** 记忆作用域目录信息 (Memory Hub scope 列表用)。 */
+export interface MemoryScopeInfo {
+  /** 落盘目录名 (memoryScopeDirName 产物) */
+  dirName: string;
+  kind: 'local' | 'remote';
+  /** 可直接传给 getStore 的 scope key; remote / meta 缺失时为 null (仅展示) */
+  scopeKey: string | null;
+  /** meta.json 记录的原始工作目录 / 远端路径; 缺失为 null */
+  displayPath: string | null;
+}
+
+// ── P2: 事件日志 / 回收站 ─────────────────────────────────────────────────
+
+export type MemoryEventOp = 'create' | 'update' | 'append' | 'delete' | 'restore' | 'consolidate';
+
+export interface MemoryEvent {
+  id: number;
+  ts: string;
+  op: MemoryEventOp;
+  /** 'agent' | 'user' | 'maintenance' */
+  actor: string;
+  filename: string;
+  type: MemoryType;
+  /** op 前的 title (delete/consolidate 时为删除前的 title) */
+  title: string;
+  description: string;
+}
+
+export interface MemoryTrashEntry {
+  filename: string;
+  type: MemoryType;
+  title: string;
+  description: string;
+  /** ISO 删除时间 */
+  deletedAt: string;
+  sizeBytes: number;
+}

@@ -33,6 +33,44 @@ type IOSSimulatorAccessRequestResult =
 type IOSSimulatorStatusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorStatusRequest;
 type IOSSimulatorToolRequest = import('../shared/iosSimulatorIpc').IOSSimulatorToolRequest;
 type IOSSimulatorToolResponse = import('../shared/iosSimulatorIpc').IOSSimulatorToolResponse;
+
+type MemoryHubRecommendation = {
+  id: string;
+  kind: 'stale' | 'overlap' | 'deprecated' | 'misplaced' | 'gap';
+  severity: 'info' | 'warning' | 'critical';
+  filename: string;
+  relatedFilename?: string;
+  title: string;
+  reason: string;
+  suggestedAction: 'update' | 'merge' | 'deprecate' | 'review';
+  createdAt: string;
+};
+
+type MemoryHubInsightsResult = {
+  totalEntries: number;
+  byType: Record<string, number>;
+  staleCount: number;
+  lastActivityAt: string | null;
+  recentEvents: Array<{
+    id: number;
+    ts: string;
+    op: string;
+    actor: string;
+    filename: string;
+    type: string;
+    title: string;
+    description: string;
+  }>;
+  gapHints: string[];
+  recommendations: Array<MemoryHubRecommendation>;
+};
+
+type MemoryHubAiAnalysis = {
+  text: string;
+  generatedAt: string;
+  source: 'manual' | 'background';
+  recommendations: Array<MemoryHubRecommendation>;
+};
 type IOSSimulatorAgentControlRequest =
   import('../shared/iosSimulatorIpc').IOSSimulatorAgentControlRequest;
 type IOSSimulatorFocusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorFocusRequest;
@@ -5652,6 +5690,91 @@ interface ElectronAPI {
 
     /** Maker Memory 整库重置: 删 <userData>/maker-memory/ 全部 workdir 目录 */
     makerMemoryReset: () => Promise<{ removedCount: number }>;
+
+    /** ── Memory Hub: 见 preload 同名方法 — scope / 条目 / 搜索 / 注入预览 ── */
+    memoryHubEntryWrite: (
+      workdir: string,
+      opts: { type: string; name: string; title: string; description: string; body: string; mode?: string },
+    ) => Promise<{ ok: true; filename: string }>;
+    memoryHubEntryDelete: (workdir: string, filename: string) => Promise<{ ok: true }>;
+    memoryHubTrashList: (workdir: string) => Promise<{
+      entries: Array<{
+        filename: string;
+        type: string;
+        title: string;
+        description: string;
+        deletedAt: string;
+        sizeBytes: number;
+      }>;
+    }>;
+    memoryHubRestore: (workdir: string, filename: string) => Promise<{ ok: true; filename: string }>;
+    memoryHubHistory: (workdir: string, filename: string) => Promise<{
+      events: Array<{
+        id: number;
+        ts: string;
+        op: string;
+        actor: string;
+        filename: string;
+        type: string;
+        title: string;
+        description: string;
+      }>;
+    }>;
+    memoryHubInsights: (workdir: string) => Promise<MemoryHubInsightsResult>;
+    memoryHubRecommendations: (workdir: string) => Promise<{
+      recommendations: Array<MemoryHubRecommendation>;
+    }>;
+    memoryHubAiAnalysis: (workdir: string) => Promise<{ analysis: MemoryHubAiAnalysis | null }>;
+    memoryHubRunAiAnalysis: (workdir: string) => Promise<{ analysis: MemoryHubAiAnalysis | null }>;
+    memoryHubGetSettings: () => Promise<{ backgroundAnalysis: boolean }>;
+    memoryHubSetSettings: (opts: { backgroundAnalysis: boolean }) => Promise<{
+      backgroundAnalysis: boolean;
+    }>;
+
+    memoryHubListScopes: () => Promise<{
+      scopes: Array<{
+        dirName: string;
+        kind: 'local' | 'remote';
+        scopeKey: string | null;
+        displayPath: string | null;
+      }>;
+    }>;
+    memoryHubListEntries: (workdir: string) => Promise<{
+      entries: Array<{
+        filename: string;
+        slug: string;
+        frontmatter: {
+          title: string;
+          description: string;
+          type: 'user' | 'feedback' | 'project' | 'reference' | 'digest';
+          updatedAt: string;
+        };
+        sizeBytes: number;
+      }>;
+    }>;
+    memoryHubReadEntry: (workdir: string, filename: string) => Promise<{
+      entry: {
+        filename: string;
+        slug: string;
+        frontmatter: {
+          title: string;
+          description: string;
+          type: 'user' | 'feedback' | 'project' | 'reference' | 'digest';
+          updatedAt: string;
+        };
+        body: string;
+        sizeBytes: number;
+      };
+    }>;
+    memoryHubSearch: (
+      workdir: string,
+      query: string,
+      type?: 'user' | 'feedback' | 'project' | 'reference' | 'digest',
+      limit?: number,
+    ) => Promise<{
+      hits: Array<{ filename: string; type: string; title: string; snippet: string; score: number }>;
+    }>;
+    memoryHubIndexPreview: (workdir: string) => Promise<{ index: string }>;
 
     /** 启动期拉 main 持久化的三个 memory 开关 — 见 preload memoryGetSettings 注释 */
     memoryGetSettings: () => Promise<{

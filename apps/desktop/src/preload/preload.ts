@@ -6211,6 +6211,82 @@ contextBridge.exposeInMainWorld('electronAPI', {
     makerMemoryReset: (): Promise<{ removedCount: number }> =>
       ipcRenderer.invoke('maker:maker-memory:reset'),
 
+    // ── Memory Hub (P1 只读): 记忆中心面板 — scope / 条目 / 搜索 / 注入预览 ──
+    memoryHubListScopes: (): Promise<{
+      scopes: Array<{
+        dirName: string;
+        kind: 'local' | 'remote';
+        scopeKey: string | null;
+        displayPath: string | null;
+      }>;
+    }> => ipcRenderer.invoke('maker:memory:hub:scopes'),
+    memoryHubListEntries: (
+      workdir: string,
+    ): Promise<{
+      entries: Array<{
+        filename: string;
+        slug: string;
+        frontmatter: {
+          title: string;
+          description: string;
+          type: 'user' | 'feedback' | 'project' | 'reference' | 'digest';
+          updatedAt: string;
+        };
+        sizeBytes: number;
+      }>;
+    }> => ipcRenderer.invoke('maker:memory:hub:entries', workdir),
+    memoryHubReadEntry: (
+      workdir: string,
+      filename: string,
+    ): Promise<{
+      entry: {
+        filename: string;
+        slug: string;
+        frontmatter: {
+          title: string;
+          description: string;
+          type: 'user' | 'feedback' | 'project' | 'reference' | 'digest';
+          updatedAt: string;
+        };
+        body: string;
+        sizeBytes: number;
+      };
+    }> => ipcRenderer.invoke('maker:memory:hub:entry-read', workdir, filename),
+    memoryHubSearch: (
+      workdir: string,
+      query: string,
+      type?: 'user' | 'feedback' | 'project' | 'reference' | 'digest',
+      limit?: number,
+    ): Promise<{
+      hits: Array<{ filename: string; type: string; title: string; snippet: string; score: number }>;
+    }> => ipcRenderer.invoke('maker:memory:hub:search', workdir, query, type ?? null, limit ?? null),
+    memoryHubIndexPreview: (workdir: string): Promise<{ index: string }> =>
+      ipcRenderer.invoke('maker:memory:hub:index-preview', workdir),
+    memoryHubEntryWrite: (
+      workdir: string,
+      opts: { type: string; name: string; title: string; description: string; body: string; mode?: string },
+    ): Promise<{ ok: true; filename: string }> =>
+      ipcRenderer.invoke('maker:memory:hub:entry-write', workdir, opts),
+    memoryHubEntryDelete: (workdir: string, filename: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:memory:hub:entry-delete', workdir, filename),
+    memoryHubTrashList: (workdir: string): Promise<{ entries: Array<{ filename: string; type: string; title: string; description: string; deletedAt: string; sizeBytes: number }> }> =>
+      ipcRenderer.invoke('maker:memory:hub:trash-list', workdir),
+    memoryHubRestore: (workdir: string, filename: string): Promise<{ ok: true; filename: string }> =>
+      ipcRenderer.invoke('maker:memory:hub:restore', workdir, filename),
+    memoryHubHistory: (workdir: string, filename: string): Promise<{ events: Array<{ id: number; ts: string; op: string; actor: string; filename: string; type: string; title: string; description: string }> }> =>
+      ipcRenderer.invoke('maker:memory:hub:history', workdir, filename),
+    memoryHubInsights: (workdir: string): Promise<{ totalEntries: number; byType: Record<string, number>; staleCount: number; lastActivityAt: string | null; recommendations: Array<{ id: string; kind: string; severity: string; filename: string; relatedFilename?: string; title: string; reason: string; suggestedAction: string }> }> =>
+      ipcRenderer.invoke('maker:memory:hub:insights', workdir),
+    memoryHubRecommendations: (workdir: string): Promise<{ recommendations: Array<{ id: string; kind: string; severity: string; filename: string; relatedFilename?: string; title: string; reason: string; suggestedAction: string }> }> =>
+      ipcRenderer.invoke('maker:memory:hub:recommendations', workdir),
+    memoryHubAiAnalysis: (workdir: string): Promise<{ analysis: unknown }> =>
+      ipcRenderer.invoke('maker:memory:hub:ai-analysis', workdir),
+    memoryHubRunAiAnalysis: (workdir: string): Promise<{ analysis: unknown }> =>
+      ipcRenderer.invoke('maker:memory:hub:run-ai-analysis', workdir),
+    memoryHubGetSettings: (): Promise<{ backgroundAnalysis: boolean }> =>
+      ipcRenderer.invoke('maker:memory:hub:get-settings'),
+    memoryHubSetSettings: (opts: { backgroundAnalysis: boolean }): Promise<{ backgroundAnalysis: boolean }> =>
+      ipcRenderer.invoke('maker:memory:hub:set-settings', opts),
     /**
      * 启动期同步三个 memory 开关的真实持久化值 (main <userData>/memory-settings.json)。
      * renderer localStorage 只是 UI 即时态镜像 — 启动时调一次, main 是 source of truth。

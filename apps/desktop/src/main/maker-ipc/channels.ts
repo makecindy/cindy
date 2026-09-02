@@ -341,6 +341,23 @@ export const MAKER_INVOKE = {
   //   - RESET: 删 <userData>/maker-memory/ 全部内容 + close db pool
   MAKER_MEMORY_SET_ENABLED: 'maker:maker-memory:set-enabled',
   MAKER_MEMORY_RESET: 'maker:maker-memory:reset',
+  // ── Memory Hub (P1 只读): 记忆中心的 scope / 条目 / 搜索 / 注入预览 ──
+  MEMORY_HUB_SCOPES: 'maker:memory:hub:scopes',
+  MEMORY_HUB_ENTRIES: 'maker:memory:hub:entries',
+  MEMORY_HUB_ENTRY_READ: 'maker:memory:hub:entry-read',
+  MEMORY_HUB_SEARCH: 'maker:memory:hub:search',
+ MEMORY_HUB_INDEX_PREVIEW: 'maker:memory:hub:index-preview',
+  MEMORY_HUB_ENTRY_WRITE: 'maker:memory:hub:entry-write',
+  MEMORY_HUB_ENTRY_DELETE: 'maker:memory:hub:entry-delete',
+  MEMORY_HUB_TRASH_LIST: 'maker:memory:hub:trash-list',
+  MEMORY_HUB_RESTORE: 'maker:memory:hub:restore',
+  MEMORY_HUB_HISTORY: 'maker:memory:hub:history',
+  MEMORY_HUB_INSIGHTS: 'maker:memory:hub:insights',
+  MEMORY_HUB_RECOMMENDATIONS: 'maker:memory:hub:recommendations',
+  MEMORY_HUB_AI_ANALYSIS: 'maker:memory:hub:ai-analysis',
+  MEMORY_HUB_RUN_AI_ANALYSIS: 'maker:memory:hub:run-ai-analysis',
+  MEMORY_HUB_GET_SETTINGS: 'maker:memory:hub:get-settings',
+  MEMORY_HUB_SET_SETTINGS: 'maker:memory:hub:set-settings',
   /**
    * 启动期 renderer 同步 main 持久化的三个 memory 开关 (maker / claudeCode / codex)。
    * main 的 <userData>/memory-settings.json 是 source of truth, renderer localStorage
