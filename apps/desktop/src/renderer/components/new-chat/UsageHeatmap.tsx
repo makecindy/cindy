@@ -283,7 +283,7 @@ export function UsageHeatmap({
                                 : ''
                             }`
                       }
-                      className="rounded-[3px]"
+                      className={onDayClick ? 'rounded-full' : 'rounded-[3px]'}
                       style={{
                         width: CELL_PX,
                         height: CELL_PX,

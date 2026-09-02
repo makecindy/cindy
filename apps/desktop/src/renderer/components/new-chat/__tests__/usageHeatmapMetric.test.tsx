@@ -162,4 +162,21 @@ describe('UsageHeatmap metric', () => {
     fireEvent.click(getByRole('button', { name: '2026-08-21' }));
     expect(onDayClick).toHaveBeenCalledWith('2026-08-21');
   });
+
+  it('可点击日期格的可见彩色表面使用 pill 圆角', () => {
+    const onDayClick = vi.fn();
+    const { getByRole } = render(
+      <UsageHeatmap
+        days={days}
+        todayKey="2026-08-22"
+        windowDays={7}
+        metric="tokens"
+        onDayClick={onDayClick}
+      />,
+    );
+
+    expect(getByRole('button', { name: '2026-08-21' }).firstElementChild?.className).toContain(
+      'rounded-full',
+    );
+  });
 });
