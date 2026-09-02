@@ -199,6 +199,14 @@ let xdGatewayModels: XdGatewayModelInfo[] = [];
 /** 当前账号最近一次 `/models` 成功响应；false 时清单缺席不能作为模型不存在的 deny 证据。 */
 let xdGatewayModelsAuthoritative = false;
 /**
+ * 当前认证世代是否已经观察到过权威的网关模型快照。
+ *
+ * 刷新失败时会把过期的 requires_payment 行从活动目录移除；即使因此暂时没有
+ * embedding 条目，也不能再回退到 bundled embedding。空的非保留快照(登出、禁用
+ * 或测试清理)会重置这个边界，避免把上一账号的 deny 状态带入下一账号。
+ */
+let xdGatewayEmbeddingSnapshotKnown = false;
+/**
  * 最近一次成功 v5 响应明确拒绝的 XD 对话路由。
  *
  * 刷新失败时活动目录会隐藏过期的付费营销行，但既有会话的派发终检仍须保留这份
@@ -898,7 +906,7 @@ function projectXdGatewayMediaModels(
   delete identity.imageDefaults;
   delete identity.videoModels;
   delete identity.videoDefaults;
-  if (options.authoritative || hasEmbeddingEntries) {
+  if (options.authoritative || hasEmbeddingEntries || xdGatewayEmbeddingSnapshotKnown) {
     delete identity.embeddingModels;
     delete identity.embeddingDefaults;
   }
@@ -1558,6 +1566,11 @@ export function setXdGatewayModels(
   xdGatewayModels = [...models];
   if (options?.authoritative !== undefined) {
     xdGatewayModelsAuthoritative = options.authoritative;
+  }
+  if (options?.authoritative === true) {
+    xdGatewayEmbeddingSnapshotKnown = true;
+  } else if (models.length === 0 && options?.preservePaymentRequiredRoutes !== true) {
+    xdGatewayEmbeddingSnapshotKnown = false;
   }
   if (options?.preservePaymentRequiredRoutes !== true) {
     xdGatewayPaymentRequiredRoutes = new Set(

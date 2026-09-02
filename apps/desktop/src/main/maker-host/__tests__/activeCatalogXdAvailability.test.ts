@@ -176,11 +176,20 @@ describe('XD 网关权威模型清单重建', () => {
         availability: 'requires_payment',
         agents: [],
       },
-    ]);
+    ], { authoritative: true });
 
     const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
     expect(activeXd?.embeddingModels).toBeUndefined();
     expect(activeXd?.embeddingDefaults).toBeUndefined();
+
+    setXdGatewayModels([], {
+      authoritative: false,
+      preservePaymentRequiredRoutes: true,
+    });
+
+    const afterRefreshFailure = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(afterRefreshFailure?.embeddingModels).toBeUndefined();
+    expect(afterRefreshFailure?.embeddingDefaults).toBeUndefined();
   });
 
   it('网关 embedding 缺少 availability 时不解锁静态 embedding', () => {
