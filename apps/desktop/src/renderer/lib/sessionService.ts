@@ -52,6 +52,8 @@ export type SessionListOptions = {
   includePinned?: boolean;
   /** forceRefresh / status 重拉：绕开 main 侧 in-flight 合并。 */
   fresh?: boolean;
+  /** 用量历史页读取完整会话候选集，跳过侧栏的 1000 行上限与消息预览。 */
+  usageHistory?: boolean;
 };
 
 export async function list(

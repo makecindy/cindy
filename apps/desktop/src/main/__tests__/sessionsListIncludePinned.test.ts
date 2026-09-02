@@ -195,6 +195,21 @@ describe('local-db:sessions:list includePinned', () => {
     expect(h.queryResults).toHaveLength(1);
   });
 
+  it('returns the full sessions set for the usage-history query without message projections', async () => {
+    const handler = sessionsListHandler();
+    h.queryResults.push([
+      { session: sessionRow('recent', { totalTokenUsage: 20 }) },
+      { session: sessionRow('old', { totalTokenUsage: 200 }) },
+    ]);
+
+    const result = await handler({}, 20, 'all', { usageHistory: true });
+
+    expect(result.map((s) => s.id)).toEqual(['recent', 'old']);
+    expect(h.fakeDb.select).toHaveBeenCalledTimes(1);
+    expect(h.listQuery).not.toHaveBeenCalled();
+    expect(h.queryResults).toHaveLength(0);
+  });
+
   it('also includes pinned rows for the all-status bucket used by mobile detail filters', async () => {
     const handler = sessionsListHandler();
     h.queryResults.push(

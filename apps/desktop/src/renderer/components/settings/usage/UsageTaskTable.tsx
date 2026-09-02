@@ -1,7 +1,7 @@
 /**
  * UsageTaskTable — 「最耗 token 的任务」。
  *
- * 数据来自会话列表 (useCCSessions → sessionsStore), 不新增 IPC:
+ * 数据来自本地会话表的用量历史查询 (并与 useCCSessions 的实时快照合并):
  *   - tokens:  Session.totalTokenUsage
  *   - 上下文:  contextTokens / contextWindow
  *   - 供应商:  Session.providerId, 经 providerDisplayNameById 映射成展示名
@@ -11,7 +11,7 @@
  *
  * 两处口径必须在 UI 上讲清楚, 否则会被误读:
  *   1. totalTokenUsage 是该任务的**生命周期累计**, 不是窗口内增量。本表筛的是
- *      "近 30 天内活跃过的任务", 所以一个三个月前开始、昨天还在跑的任务会带着
+ *      "所选时间范围内活跃过的任务", 所以一个三个月前开始、昨天还在跑的任务会带着
  *      它的全部累计出现 —— 表头 tooltip 写明这一点。
  *   2. providerId 是会话**当前值**而非每轮事实, 且可为 null (跟随默认路由)。
  *      null 留空 (照 SessionInfoMeta 既有的"无数据不显示"), 不臆造默认供应商;
@@ -20,17 +20,18 @@
  *
  * 远程会话 (device-link) 的 token 字段可能缺失或为 0 —— 同样按"无数据不显示"过滤掉。
  *
- * 已知取舍: 候选集来自 sessionsStore 的列表桶 (DEFAULT_LIMIT = 1000, 按 updatedAt 降序),
- * 因此"近 30 天内更新过的会话超过 1000 条"时, 被截断的高用量会话进不了 Top N。
- * 修它需要一次按 total_token_usage 排序的专用查询 —— 那是新增 IPC, 不进本版。
+ * 用量历史查询跳过侧栏按 updatedAt 截断的 1000 行列表，返回完整 sessions 候选集；
+ * 因此 all / 较早日期范围仍能从全量历史中筛出 Top N。查询只读取 sessions 表，
+ * 不计算消息预览，避免把统计页变成整库 messages 扫描。
  */
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
 import { useProviders } from '@/hooks/useProviders';
@@ -96,9 +97,35 @@ function activeWithinRange(
 export function useTopTokenSessions(
   range: UsageHistoryRange = '30d',
   todayKeyOverride?: string,
+  accountScopeKey?: string,
 ): Session[] {
   // 归档的任务同样消耗过 token, 统计口径不该因为用户归档而变。
-  const { sessions } = useCCSessions({ includeArchived: 'all' });
+  const { sessions: recentSessions } = useCCSessions({ includeArchived: 'all' });
+  const [usageSessions, setUsageSessions] = useState<Session[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setUsageSessions(null);
+    void sessionService
+      .list(20, 'all', { usageHistory: true })
+      .then((rows) => {
+        if (!cancelled) setUsageSessions(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setUsageSessions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountScopeKey]);
+
+  const sessions = useMemo(() => {
+    if (!usageSessions) return recentSessions;
+    const byId = new Map(usageSessions.map((session) => [session.id, session]));
+    // 当前列表快照包含最近的实时 token/status patch，优先覆盖全量查询的旧行。
+    for (const session of recentSessions) byId.set(session.id, session);
+    return [...byId.values()];
+  }, [recentSessions, usageSessions]);
 
   return useMemo(() => {
     const now = new Date();

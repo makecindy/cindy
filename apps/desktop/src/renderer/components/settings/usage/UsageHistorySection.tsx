@@ -122,7 +122,7 @@ export function UsageHistorySection(): React.JSX.Element {
 
   // 任务行与用量聚合是两条数据源: 聚合里有 token, 本地任务却可能一条都没有
   // (用户删光了会话, 或列表还没加载完)。空时整张卡片不渲染, 不留空壳。
-  const taskRows = useTopTokenSessions(range, history?.todayKey);
+  const taskRows = useTopTokenSessions(range, history?.todayKey, user?.id);
   const empty = isUsageHistoryEmpty(history);
 
   const handleRangeChange = (value: string): void => {
