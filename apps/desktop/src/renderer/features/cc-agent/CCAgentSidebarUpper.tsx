@@ -325,6 +325,7 @@ function RemoteSidebarLoadNotice({
   // 本地与已缓存内容仍然可用,无需用连接状态打断用户。
   const autoRetrying = isError && kind === 'tasks';
   const alarming = isError && !autoRetrying;
+  const quietDeviceLoading = kind === 'devices' && status === 'loading';
   const messageKey =
     kind === 'tasks'
       ? status === 'loading'
@@ -337,13 +338,17 @@ function RemoteSidebarLoadNotice({
     <div
       role={alarming ? 'alert' : 'status'}
       className={cn(
-        'border',
-        alarming
-          ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
-          : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
-        partial
-          ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
-          : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center',
+        quietDeviceLoading
+          ? 'mx-3 flex flex-col items-center gap-3 px-4 py-8 text-center text-[var(--text-secondary)]'
+          : 'border',
+        !quietDeviceLoading &&
+          (alarming
+            ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
+            : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]'),
+        !quietDeviceLoading &&
+          (partial
+            ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
+            : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center'),
       )}
     >
       {isError ? (
