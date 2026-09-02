@@ -187,6 +187,44 @@ function scriptedAnthropicTurn(requestBody: string): string {
           'workflow complete: READY, SUM[16], CONFIGURED[2:safe,fast], WORKSPACE[release-notes], CONTACT[Ada]',
         );
   }
+  if (requestBody.includes('direct Bot collaboration')) {
+    return toolResultCount === 0
+      ? anthropicToolTurn(1, 'collaborate_with_bot', {
+          action: 'delegate',
+          target_bot_id: 'bot-b',
+          instruction: 'Return the tracked result.',
+        })
+      : anthropicTextTurn(2, 'tracked Bot delegation started');
+  }
+  if (requestBody.includes('direct Bot memory')) {
+    return toolResultCount === 0
+      ? anthropicToolTurn(1, 'bot_memory', {
+          action: 'write',
+          type: 'user',
+          name: 'preferred_name',
+          title: 'Preferred name',
+          description: 'The name the user prefers in conversation.',
+          body: 'The user prefers to be called Chris.',
+        })
+      : anthropicTextTurn(2, 'remembered through Bot Memory');
+  }
+  if (requestBody.includes('maintain Bot memory')) {
+    if (toolResultCount === 0) {
+      return anthropicToolTurn(1, 'bot_memory', { action: 'review' });
+    }
+    if (toolResultCount === 1) {
+      return anthropicToolTurn(2, 'bot_memory', {
+        action: 'consolidate',
+        sources: ['user_old-name.md', 'user_preferred-name.md'],
+        type: 'user',
+        name: 'preferred_name',
+        title: 'Preferred name',
+        description: 'The user\'s current preferred name.',
+        body: 'The user prefers to be called Chris.',
+      });
+    }
+    return anthropicTextTurn(3, 'Bot Memory maintenance complete');
+  }
   if (requestBody.includes('unknown gateway tool')) {
     return toolResultCount === 0
       ? anthropicToolTurn(1, 'cindy_mcp_call_tool', {
@@ -268,6 +306,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const configureCalls: Array<{ options: { retries: number; flags: string[] } }> = [];
   const workspaceLookupCalls: Array<{ query: string }> = [];
   const contactsLookupCalls: Array<{ query: string }> = [];
+  const botCollaborationCalls: Array<Record<string, unknown>> = [];
+  const botMemoryCalls: Array<Record<string, unknown>> = [];
   // 记录假 MCP server 收到的请求 URL —— 断言真 pi(经 cindy-bridge fetch)把
   // host 下发的 `?session=<id>` 原样带到每个 MCP 请求上(orca 身份路由的 pi 侧半)。
   const seenMcpUrls: string[] = [];
@@ -468,8 +508,18 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       }
       const isWorkspace = req.url?.includes('/workspace') ?? false;
       const isContacts = req.url?.includes('/contacts') ?? false;
+      const isHelper = req.url?.includes('/helper') ?? false;
+      const isMemory = req.url?.includes('/memory') ?? false;
       const server = new McpServer({
-        name: isWorkspace ? 'cindy_workspace' : isContacts ? 'cindy_contacts' : 'cindy_echo',
+        name: isWorkspace
+          ? 'cindy_workspace'
+          : isContacts
+            ? 'cindy_contacts'
+            : isHelper
+              ? 'cindy_helper'
+              : isMemory
+                ? 'cindy_memory'
+              : 'cindy_echo',
         version: '1.0.0',
       });
       if (isWorkspace) {
@@ -521,6 +571,37 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             return { content: [{ type: 'text', text: `CONTACT[${query}]` }] };
           },
         );
+      } else if (isHelper) {
+        server.registerTool(
+          'collaborate_with_bot',
+          {
+            description: 'Typed Cindy Bot collaboration',
+            inputSchema: {
+              action: z.enum(['status', 'delegate', 'notify']),
+              target_bot_id: z.string(),
+              instruction: z.string().optional(),
+            },
+          },
+          async (args) => {
+            botCollaborationCalls.push(args);
+            return { content: [{ type: 'text', text: 'DELEGATION[bot-b:running]' }] };
+          },
+        );
+      } else if (isMemory) {
+        server.registerTool(
+          'call_tool',
+          {
+            description: 'Call one progressive memory tool',
+            inputSchema: {
+              name: z.string(),
+              args: z.record(z.string(), z.unknown()),
+            },
+          },
+          async (args) => {
+            botMemoryCalls.push(args);
+            return { content: [{ type: 'text', text: 'MEMORY_WRITTEN' }] };
+          },
+        );
       } else {
         server.registerTool(
           'echo',
@@ -549,7 +630,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   });
 
   function buildDeps(
-    bridgeMode: 'local' | 'local-multi' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
+    bridgeMode: 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -704,7 +785,20 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
               servers: [
                 { name: 'cindy_workspace', url: `${mcpUrl}/workspace${sessionQuery}` },
                 { name: 'cindy_contacts', url: `${mcpUrl}/contacts${sessionQuery}` },
+                { name: 'cindy_helper', url: `${mcpUrl}/helper${sessionQuery}` },
               ],
+            },
+          };
+        }
+        if (bridgeMode === 'bot-memory') {
+          const sessionQuery = ctx?.sessionId
+            ? `?session=${encodeURIComponent(ctx.sessionId)}`
+            : '';
+          return {
+            mcpBridge: {
+              token: MCP_TOKEN,
+              servers: [{ name: 'cindy_memory', url: `${mcpUrl}/memory${sessionQuery}` }],
+              botMemoryFacade: true,
             },
           };
         }
@@ -728,7 +822,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   async function runOneTurn(
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
-    bridgeMode: 'local' | 'local-multi' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
+    bridgeMode: 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
     prompt = 'call the echo tool',
   ): Promise<{
     events: AgentEvent[];
@@ -827,6 +921,132 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .map((d) => d.text)
         .join('');
       expect(finalText).toContain('ECHO[hello-pi]');
+    },
+  );
+
+  it(
+    'calls the typed Bot collaboration facade directly without MCP discovery',
+    { timeout: 90_000 },
+    async () => {
+      botCollaborationCalls.length = 0;
+      const permissions: Array<{ toolName: string; input: unknown }> = [];
+      const { events, requests } = await runOneTurn(
+        'ask',
+        async (req) => {
+          if (req.kind === 'permission') {
+            permissions.push({ toolName: req.toolName, input: req.input });
+          }
+          return { kind: 'permission', behavior: 'allow' };
+        },
+        'local-multi',
+        'run direct Bot collaboration',
+      );
+
+      expect(botCollaborationCalls).toEqual([{
+        action: 'delegate',
+        target_bot_id: 'bot-b',
+        instruction: 'Return the tracked result.',
+      }]);
+      expect(permissions).toEqual([{
+        toolName: 'mcp__cindy_helper__collaborate_with_bot',
+        input: {
+          action: 'delegate',
+          target_bot_id: 'bot-b',
+          instruction: 'Return the tracked result.',
+        },
+      }]);
+      const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
+        ?.map((tool) => tool.name) ?? [];
+      expect(startupToolNames).toContain('collaborate_with_bot');
+      expect(startupToolNames).toContain('cindy_mcp_list_tools');
+      expect(requests).toHaveLength(2);
+      const finalText = events
+        .filter((event) => event.type === 'text')
+        .map((event) => event.data as { text: string; isFinal?: boolean })
+        .filter((data) => data.isFinal)
+        .map((data) => data.text)
+        .join('');
+      expect(finalText).toContain('tracked Bot delegation started');
+    },
+  );
+
+  it(
+    'writes Bot Memory through one typed tool without nested MCP discovery',
+    { timeout: 90_000 },
+    async () => {
+      botMemoryCalls.length = 0;
+      const permissions: Array<{ toolName: string; input: unknown }> = [];
+      const { events, requests } = await runOneTurn(
+        'ask',
+        async (req) => {
+          if (req.kind === 'permission') {
+            permissions.push({ toolName: req.toolName, input: req.input });
+          }
+          return { kind: 'permission', behavior: 'allow' };
+        },
+        'bot-memory',
+        'write direct Bot memory',
+      );
+
+      expect(botMemoryCalls).toEqual([{
+        name: 'memory_write',
+        args: {
+          type: 'user',
+          name: 'preferred_name',
+          title: 'Preferred name',
+          description: 'The name the user prefers in conversation.',
+          body: 'The user prefers to be called Chris.',
+        },
+      }]);
+      expect(permissions).toEqual([{
+        toolName: 'mcp__cindy_memory__call_tool',
+        input: botMemoryCalls[0],
+      }]);
+      const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
+        ?.map((tool) => tool.name) ?? [];
+      expect(startupToolNames).toContain('bot_memory');
+      expect(startupToolNames).toContain('cindy_mcp_list_tools');
+      expect(startupToolNames).not.toContain('mcp__cindy_memory__call_tool');
+      expect(requests).toHaveLength(2);
+      const finalText = events
+        .filter((event) => event.type === 'text')
+        .map((event) => event.data as { text: string; isFinal?: boolean })
+        .filter((data) => data.isFinal)
+        .map((data) => data.text)
+        .join('');
+      expect(finalText).toContain('remembered through Bot Memory');
+    },
+  );
+
+  it(
+    'keeps review and atomic consolidation on the typed Bot Memory path',
+    { timeout: 90_000 },
+    async () => {
+      botMemoryCalls.length = 0;
+      const { requests } = await runOneTurn(
+        'bypassPermissions',
+        async () => ({ kind: 'permission', behavior: 'deny' }),
+        'bot-memory',
+        'maintain Bot memory',
+      );
+
+      expect(botMemoryCalls).toEqual([
+        { name: 'memory_review', args: {} },
+        {
+          name: 'memory_consolidate',
+          args: {
+            sources: ['user_old-name.md', 'user_preferred-name.md'],
+            target: {
+              type: 'user',
+              name: 'preferred_name',
+              title: 'Preferred name',
+              description: 'The user\'s current preferred name.',
+              body: 'The user prefers to be called Chris.',
+            },
+          },
+        },
+      ]);
+      expect(requests).toHaveLength(3);
     },
   );
 

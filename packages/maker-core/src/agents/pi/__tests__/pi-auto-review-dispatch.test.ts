@@ -2572,6 +2572,71 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it('keeps the normal Bot runtime while making the workspace permission immutable', async () => {
+    const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
+    deps.getGhostRosterPrompt = vi.fn(() => 'BOT ROSTER');
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'bot-read-only-session',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'bypassPermissions',
+      workspaceAccess: 'read-only',
+      botProfilePrompt: 'BOT SOUL: research without changing the project.',
+      makerMemoryEnabled: true,
+      makerMemoryIndexSnapshot: '## Bot Memory\n- frozen memory',
+      botUserProfilePrompt: '## User Profile\nCall the user Chris.',
+      userPrompt: 'GLOBAL USER PROMPT',
+      botRuntimeProfile: {
+        botId: 'bot-read-only',
+        profileVersion: 1,
+        skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      },
+    });
+    try {
+      expect(captured.args).not.toContain('--tools');
+      expect(captured.mcpVendorOptions).toBeDefined();
+      const extensionPaths = captured.args.flatMap((arg, index) =>
+        arg === '--extension' ? [captured.args[index + 1]] : []);
+      expect(extensionPaths).toEqual(expect.arrayContaining([
+        path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-bridge.ts'),
+      ]));
+      // Bot 会话是产品人格,不是 coding harness:pi 原生 subagent 面必须不可见,
+      // 项目/全局 AGENTS.md 也不得从 cwd 链被吸进上下文。
+      expect(extensionPaths).not.toEqual(expect.arrayContaining([
+        path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-subagent.ts'),
+      ]));
+      expect(captured.args).toContain('--no-context-files');
+      const promptIndex = captured.args.indexOf('--append-system-prompt');
+      expect(captured.args[promptIndex + 1]).toContain('BOT SOUL');
+      expect(captured.args[promptIndex + 1]).not.toContain('BOT ROSTER');
+      expect(captured.args[promptIndex + 1]).not.toContain('You are Cindy.');
+      expect(captured.args[promptIndex + 1]).not.toContain('GLOBAL USER PROMPT');
+      expect(captured.args[promptIndex + 1]).toContain('frozen memory');
+      expect(captured.args[promptIndex + 1]).toContain('Call the user Chris');
+      expect(captured.args[promptIndex + 1].indexOf('frozen memory')).toBeLessThan(
+        captured.args[promptIndex + 1].indexOf('Call the user Chris'),
+      );
+      expect(captured.env.CINDY_PI_WORKSPACE_READ_ONLY).toBe('1');
+
+      const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
+      expect(permissionFile).toBeTruthy();
+      expect(JSON.parse(readFileSync(permissionFile!, 'utf8'))).toMatchObject({
+        mode: 'ask',
+        workspaceReadOnly: true,
+      });
+
+      await handle.setPermissionMode?.('bypassPermissions');
+      expect(JSON.parse(readFileSync(permissionFile!, 'utf8'))).toMatchObject({
+        mode: 'ask',
+        workspaceReadOnly: true,
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('把 session 花名册快照追加到 Pi system prompt', async () => {
     const deps = buildDeps();
     deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');

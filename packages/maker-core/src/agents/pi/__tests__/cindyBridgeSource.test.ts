@@ -1322,16 +1322,33 @@ describe('cindy-bridge extension source', () => {
     expect(handler).toContain('TURN_CHANGE_CAPTURE_TITLE');
   });
 
-  it('exposes a constant two-tool MCP gateway while preserving the real MCP identity for approval', () => {
+  it('keeps generic MCP behind two tools and gives frequent Bot actions typed fast paths', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi)');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const CINDY_BOT_COLLABORATION_TOOL = 'collaborate_with_bot'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      'mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true })',
+    );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.isSchemaDisclosed(resolvedGatewayCall)');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('Inspect this tool before execution');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionToolName = gatewayCall?.qualifiedName');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionInput = gatewayCall?.args');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "qualifiedName: 'mcp__cindy_helper__' + CINDY_BOT_COLLABORATION_TOOL",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "qualifiedName: 'mcp__cindy_memory__call_tool'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "this.botMemoryFacadeEnabled && serverName === 'cindy_memory'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("name = 'memory_review'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("name = 'memory_consolidate'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("name: qualifiedName,\n        label: server.name + ': ' + tool.name");
   });
 
@@ -1551,6 +1568,11 @@ describe('cindy-bridge extension source', () => {
     expect(source.slice(readOnlyGate, credentialGate)).not.toContain('permission.writableRoots');
     expect(source).not.toContain('Cindy blocks reading credential or key paths, even with Full access.');
     expect(source).not.toContain('Cindy blocks reading process environment (/proc/*/environ), even with Full access.');
+    expect(source).toContain('const writeInsideAnyGrantedRoot = (roots: readonly string[])');
+    expect(source).toContain('...permission.workspaceWritePaths,');
+    expect(source).toContain('...permission.writableRoots,');
+    expect(source).toContain('&& !writeInsideGrantedScope');
+    expect(source).toContain('&& !writeInsideWritableRoot');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
     expect(source).toContain(
       'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',

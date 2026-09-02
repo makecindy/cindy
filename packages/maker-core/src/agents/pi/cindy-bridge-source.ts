@@ -10,7 +10,8 @@
  *     读不到一律按 ask(fail-closed)。
  *  2. MCP 桥:CINDY_PI_MCP_BRIDGE 指向 host 的 localhost bridge，或用户显式配置的
  *     外部 Streamable HTTP MCP。外部认证只保存 env 引用，真值留在 Pi 父进程 env；
- *     对每个 server 走 initialize → 分页 tools/list，但模型侧只注册两个稳定网关工具。
+ *     对每个 server 走 initialize → 分页 tools/list；模型侧固定注册两个通用网关工具，
+ *     cindy_helper 提供伙伴协作能力时再额外注册一个稳定的 collaborate_with_bot 门面。
  *     调用时再按 server/tool 路由，并把真实 mcp__<server>__<tool> 身份交给 Host 审批与审计。
  *  3. 会话树:注册 Cindy 私有 command，把 RPC prompt 桥到 ctx.navigateTree。
  *
@@ -1759,15 +1760,37 @@ function currentPermissionState(): {
   writableRoots: string[];
   reviewReadPaths: string[];
   reviewOnly: boolean;
+  workspaceReadOnly: boolean;
+  workspaceWritePaths: string[];
 } {
   // 轮 40-w4-t12 HIGH-1:review-only 是会话创建时的启动语义(reviewMode), 由
   // PiAgent 以独立 env 标记注入 —— 权限文件损坏/缺失时**不得**降级成普通 ask
   // (否则 hard review-only 变成可交互确认的普通会话)。文件解析失败 → fail-closed:
   // 保留 reviewOnly(按启动标记), reviewReadPaths 保守清空(读不了就不放行额外路径)。
   const reviewOnlyByStart = process.env.CINDY_PI_REVIEW_ONLY === '1';
+  const workspaceReadOnlyByStart = process.env.CINDY_PI_WORKSPACE_READ_ONLY === '1';
+  const workspaceWritePathsByStart = (() => {
+    if (!process.env.CINDY_PI_WORKSPACE_WRITE_PATHS) return null;
+    try {
+      const parsed = JSON.parse(process.env.CINDY_PI_WORKSPACE_WRITE_PATHS);
+      return Array.isArray(parsed)
+        ? parsed.filter((value: unknown) => typeof value === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  })();
   const file = process.env.CINDY_PI_PERMISSION_FILE ?? '';
   if (!file) {
-    return { mode: 'ask', readOnlyRoots: [], writableRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+    return {
+      mode: 'ask',
+      readOnlyRoots: [],
+      writableRoots: [],
+      reviewReadPaths: [],
+      reviewOnly: reviewOnlyByStart,
+      workspaceReadOnly: workspaceReadOnlyByStart,
+      workspaceWritePaths: workspaceWritePathsByStart ?? [],
+    };
   }
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'));
@@ -1783,9 +1806,23 @@ function currentPermissionState(): {
         ? parsed.reviewReadPaths.filter((root: unknown) => typeof root === 'string')
         : [],
       reviewOnly: parsed?.reviewOnly === true || reviewOnlyByStart,
+      workspaceReadOnly:
+        parsed?.workspaceReadOnly === true || workspaceReadOnlyByStart,
+      workspaceWritePaths: workspaceWritePathsByStart
+        ?? (Array.isArray(parsed?.workspaceWritePaths)
+          ? parsed.workspaceWritePaths.filter((value: unknown) => typeof value === 'string')
+          : []),
     };
   } catch {
-    return { mode: 'ask', readOnlyRoots: [], writableRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+    return {
+      mode: 'ask',
+      readOnlyRoots: [],
+      writableRoots: [],
+      reviewReadPaths: [],
+      reviewOnly: reviewOnlyByStart,
+      workspaceReadOnly: workspaceReadOnlyByStart,
+      workspaceWritePaths: workspaceWritePathsByStart ?? [],
+    };
   }
 }
 
@@ -2444,6 +2481,8 @@ interface McpServerRef {
 
 const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
+const CINDY_BOT_COLLABORATION_TOOL = 'collaborate_with_bot';
+const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 
 interface ConnectedMcpTool {
   serverName: string;
@@ -2724,6 +2763,7 @@ class CindyMcpGateway {
   private readonly tools = new Map<string, ConnectedMcpTool>();
   private readonly unavailableServers = new Map<string, string>();
   private readonly disclosedSchemas = new Set<string>();
+  private botMemoryFacadeEnabled = false;
 
   add(serverName: string, client: McpHttpClient, tools: any[]): void {
     for (const rawTool of tools) {
@@ -2758,11 +2798,103 @@ class CindyMcpGateway {
     const serverName = typeof record.server === 'string' ? record.server : '';
     const toolName = typeof record.tool === 'string' ? record.tool : '';
     if (!serverName || !toolName) return null;
+    if (this.botMemoryFacadeEnabled && serverName === 'cindy_memory') return null;
     const tool = this.tools.get(mcpGatewayKey(serverName, toolName));
     if (!tool) return null;
     return {
       qualifiedName: 'mcp__' + serverName + '__' + toolName,
       args: recordInput(record.args),
+      tool,
+    };
+  }
+
+  resolveBotCollaboration(input: unknown): ResolvedMcpGatewayCall | null {
+    const tool = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_BOT_COLLABORATION_TOOL));
+    if (!tool) return null;
+    return {
+      qualifiedName: 'mcp__cindy_helper__' + CINDY_BOT_COLLABORATION_TOOL,
+      args: recordInput(input),
+      tool,
+    };
+  }
+
+  resolveBotMemory(input: unknown): ResolvedMcpGatewayCall | null {
+    if (!this.botMemoryFacadeEnabled) return null;
+    const tool = this.tools.get(mcpGatewayKey('cindy_memory', 'call_tool'));
+    if (!tool) return null;
+    const record = recordInput(input);
+    const action = typeof record.action === 'string' ? record.action : '';
+    const stringValue = (key: string): string | null =>
+      typeof record[key] === 'string' && String(record[key]).trim().length > 0
+        ? String(record[key])
+        : null;
+    let name = '';
+    let args: Record<string, unknown> = {};
+    if (action === 'list') {
+      name = 'memory_list';
+    } else if (action === 'review') {
+      name = 'memory_review';
+    } else if (action === 'read' || action === 'delete') {
+      const filename = stringValue('filename');
+      if (!filename) return null;
+      name = action === 'read' ? 'memory_read' : 'memory_delete';
+      args = { filename };
+    } else if (action === 'search') {
+      const query = stringValue('query');
+      if (!query) return null;
+      name = 'memory_search';
+      args = {
+        query,
+        ...(typeof record.type === 'string' ? { type: record.type } : {}),
+        ...(Number.isInteger(record.limit) ? { limit: record.limit } : {}),
+      };
+    } else if (action === 'write') {
+      const type = stringValue('type');
+      const memoryName = stringValue('name');
+      const title = stringValue('title');
+      const description = stringValue('description');
+      const body = stringValue('body');
+      if (!type || !memoryName || !title || !description || !body) return null;
+      name = 'memory_write';
+      args = {
+        type,
+        name: memoryName,
+        title,
+        description,
+        body,
+        ...(typeof record.mode === 'string' ? { mode: record.mode } : {}),
+      };
+    } else if (action === 'consolidate') {
+      const type = stringValue('type');
+      const memoryName = stringValue('name');
+      const title = stringValue('title');
+      const description = stringValue('description');
+      const body = stringValue('body');
+      const sources = Array.isArray(record.sources)
+        && record.sources.every((value): value is string =>
+          typeof value === 'string' && value.trim().length > 0)
+        ? record.sources
+        : [];
+      if (!type || !memoryName || !title || !description || !body || sources.length === 0) {
+        return null;
+      }
+      name = 'memory_consolidate';
+      args = {
+        sources,
+        target: {
+          type,
+          name: memoryName,
+          title,
+          description,
+          body,
+        },
+      };
+    } else {
+      return null;
+    }
+    return {
+      qualifiedName: 'mcp__cindy_memory__call_tool',
+      args: { name, args },
       tool,
     };
   }
@@ -2773,6 +2905,7 @@ class CindyMcpGateway {
 
   list(serverName?: string): Array<{ server: string; name: string; description: string }> {
     return [...this.tools.values()]
+      .filter((tool) => !this.botMemoryFacadeEnabled || tool.serverName !== 'cindy_memory')
       .filter((tool) => !serverName || tool.serverName === serverName)
       .sort((a, b) => a.serverName.localeCompare(b.serverName) || a.name.localeCompare(b.name))
       .map((tool) => ({
@@ -2783,7 +2916,7 @@ class CindyMcpGateway {
   }
 
   availableServers(): string[] {
-    return [...new Set([...this.tools.values()].map((tool) => tool.serverName))].sort();
+    return [...new Set(this.list().map((tool) => tool.server))].sort();
   }
 
   unavailable(): Array<{ server: string; reason: string }> {
@@ -2822,7 +2955,9 @@ class CindyMcpGateway {
         availableServers: this.availableServers(),
       };
     } else if (serverName && toolName) {
-      const selected = this.tools.get(mcpGatewayKey(serverName, toolName));
+      const selected = this.botMemoryFacadeEnabled && serverName === 'cindy_memory'
+        ? undefined
+        : this.tools.get(mcpGatewayKey(serverName, toolName));
       if (!selected) {
         payload = {
           ok: false,
@@ -2876,18 +3011,10 @@ class CindyMcpGateway {
       JSON.stringify(this.unavailable()).slice(0, 4_000);
   }
 
-  private async executeCall(params: unknown): Promise<{
+  private async executeResolvedCall(resolved: ResolvedMcpGatewayCall): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
-    const resolved = this.resolveCall(params);
-    if (!resolved) throw new Error(this.unknownCallMessage(params));
-    if (!this.isSchemaDisclosed(resolved)) {
-      throw new Error(
-        'Inspect this tool before execution by calling cindy_mcp_list_tools with ' +
-        JSON.stringify({ server: resolved.tool.serverName, tool: resolved.tool.name }) + '.',
-      );
-    }
     let result: any;
     try {
       result = await resolved.tool.client.request('tools/call', {
@@ -2914,7 +3041,106 @@ class CindyMcpGateway {
     return { content, details: result?.structuredContent ?? {} };
   }
 
-  register(pi: any): void {
+  private async executeCall(params: unknown): Promise<{
+    content: Array<Record<string, unknown>>;
+    details: unknown;
+  }> {
+    const resolved = this.resolveCall(params);
+    if (!resolved) throw new Error(this.unknownCallMessage(params));
+    if (!this.isSchemaDisclosed(resolved)) {
+      throw new Error(
+        'Inspect this tool before execution by calling cindy_mcp_list_tools with ' +
+        JSON.stringify({ server: resolved.tool.serverName, tool: resolved.tool.name }) + '.',
+      );
+    }
+    return this.executeResolvedCall(resolved);
+  }
+
+  private async executeBotCollaboration(params: unknown): Promise<{
+    content: Array<Record<string, unknown>>;
+    details: unknown;
+  }> {
+    const resolved = this.resolveBotCollaboration(params);
+    if (!resolved) throw new Error('Cindy Bot collaboration is unavailable in this task.');
+    return this.executeResolvedCall(resolved);
+  }
+
+  private async executeBotMemory(params: unknown): Promise<{
+    content: Array<Record<string, unknown>>;
+    details: unknown;
+  }> {
+    const resolved = this.resolveBotMemory(params);
+    if (!resolved) {
+      throw new Error(
+        'Invalid Bot Memory request. Choose list, read, search, write, delete, review, or consolidate and provide the fields required by that action.',
+      );
+    }
+    return this.executeResolvedCall(resolved);
+  }
+
+  register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
+    this.botMemoryFacadeEnabled = options.botMemoryFacade === true
+      && this.tools.has(mcpGatewayKey('cindy_memory', 'call_tool'));
+
+    if (this.botMemoryFacadeEnabled) {
+      pi.registerTool({
+        name: CINDY_BOT_MEMORY_TOOL,
+        label: 'Bot Memory',
+        description:
+          'Read and maintain this Bot\'s own durable memory through one typed action. Search before writing; update an existing record instead of creating a duplicate. Review only when the user asks or maintenance is needed; consolidate atomically after size warnings. Use memory for stable preferences, corrections, agreements, and reusable background—not transient task progress.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['list', 'read', 'search', 'write', 'delete', 'review', 'consolidate'] },
+            filename: { type: 'string', description: 'Required for read or delete.' },
+            query: { type: 'string', description: 'Required for search.' },
+            type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'] },
+            limit: { type: 'integer', minimum: 1, maximum: 50 },
+            name: { type: 'string', pattern: '^[a-z0-9_-]{1,64}$', description: 'Filename slug required for write.' },
+            title: { type: 'string', description: 'Required for write.' },
+            description: { type: 'string', description: 'One-line index hook required for write.' },
+            body: { type: 'string', description: 'Memory content required for write.' },
+            mode: { type: 'string', enum: ['create', 'update', 'append'] },
+            sources: {
+              type: 'array',
+              items: { type: 'string' },
+              minItems: 1,
+              description: 'Source filenames required for consolidate; target uses the write fields above.',
+            },
+          },
+          required: ['action'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) => this.executeBotMemory(params),
+      });
+    }
+
+    if (this.resolveBotCollaboration({})) {
+      pi.registerTool({
+        name: CINDY_BOT_COLLABORATION_TOOL,
+        label: 'Collaborate with a Cindy Bot',
+        description:
+          'Use one typed collaboration action. status only reads a Bot\'s current state. delegate starts tracked work on another Bot and returns its result here. notify is fire-and-forget and must only be used when no reply or deliverable is expected. start_task launches a full Cindy task (no target Bot) for heavy work like coding or long jobs; its result also returns here. A structured @Bot reference already contains the exact target ID, so do not list Bots first.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['status', 'delegate', 'notify', 'start_task'] },
+            target_bot_id: { type: 'string', description: 'Exact stable Bot ID; required for status/delegate/notify, not accepted for start_task.' },
+            instruction: { type: 'string', description: 'Required for delegate, notify, or start_task; omit for status.' },
+            context_refs: { type: 'array', items: { type: 'string' } },
+            max_depth: { type: 'integer', minimum: 1, maximum: 5 },
+            timeout_ms: { type: 'integer', minimum: 1000, maximum: 86400000 },
+            title: { type: 'string', description: 'start_task only: task title.' },
+            working_dir: { type: 'string', description: 'start_task only: absolute path of an existing directory to work in.' },
+          },
+          required: ['action'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown) =>
+          this.executeBotCollaboration(params),
+      });
+    }
+
     pi.registerTool({
       name: CINDY_MCP_LIST_TOOLS,
       label: 'Discover Cindy MCP tools',
@@ -3378,6 +3604,20 @@ export default async function cindyBridge(pi: any) {
         reason: 'Cindy Review only permits read-only access to this task and its explicit artifacts.',
       };
     }
+    if (permission.workspaceReadOnly && event.toolName === 'bash') {
+      return {
+        block: true,
+        reason:
+          'This Cindy Bot project is mounted read-only. Choose a writable project policy to modify it.',
+      };
+    }
+    if (permission.workspaceWritePaths.length > 0 && event.toolName === 'bash') {
+      return {
+        block: true,
+        reason:
+          'This Cindy Bot has a restricted write scope. Shell commands are disabled because their write targets cannot be proven safe.',
+      };
+    }
     if (FILE_WRITE_BUILTINS.has(event.toolName)) {
       try {
         // Internal synchronization point: the host snapshots only the target file for
@@ -3430,6 +3670,70 @@ export default async function cindyBridge(pi: any) {
         isInsideRoot(targetPath, subagentRunDir)
         || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, subagentRunDir))
       );
+    const writeInsideWorkspaceControlDir = (() => {
+      if (!targetPath) return false;
+      const root = process.cwd();
+      const protectedDirs = new Set(['.git', '.agents', '.codex']);
+      const isProtected = (candidate: string) => {
+        const relative = path.relative(path.resolve(root), path.resolve(candidate));
+        if (relative === '' || relative === '..' || relative.startsWith('..' + path.sep)) return false;
+        return protectedDirs.has(relative.split(path.sep)[0] || '');
+      };
+      return isProtected(targetPath)
+        || (writeTargetResolved !== null && isProtected(writeTargetResolved));
+    })();
+    // A Bot project binding narrows project writes, but system-granted writable
+    // roots (notably this Bot's own Home) remain valid alongside that project.
+    // Otherwise mounting Home in writableRoots still gets vetoed by the project
+    // scope gate and the runtime returns to the same workaround loop.
+    const writeInsideAnyGrantedRoot = (roots: readonly string[]) => targetPath
+      && roots.some((root) => {
+        let resolvedRoot: string | null = null;
+        try {
+          resolvedRoot = realpathSync(root);
+        } catch {
+          resolvedRoot = null;
+        }
+        return (
+          isInsideRoot(targetPath, root)
+          && writeTargetResolved !== null
+          && resolvedRoot !== null
+          && isInsideRoot(writeTargetResolved, resolvedRoot)
+        );
+      });
+    const writeInsideWritableRoot = writeInsideAnyGrantedRoot(permission.writableRoots);
+    const writeInsideGrantedScope = writeInsideAnyGrantedRoot([
+      ...permission.workspaceWritePaths,
+      ...permission.writableRoots,
+    ]);
+    if (
+      targetPath
+      && FILE_WRITE_BUILTINS.has(event.toolName)
+      && permission.workspaceReadOnly
+      && !writeInsideWritableRoot
+    ) {
+      return {
+        block: true,
+        reason:
+          'This Cindy Bot project is mounted read-only. Only the Bot\'s system-granted writable directories may be modified.',
+      };
+    }
+    if (
+      targetPath
+      && FILE_WRITE_BUILTINS.has(event.toolName)
+      && permission.workspaceWritePaths.length > 0
+      && writeInsideWorkspaceControlDir
+    ) {
+      return { block: true, reason: 'Cindy workspace control directories are read-only.' };
+    }
+    if (
+      targetPath
+      && FILE_WRITE_BUILTINS.has(event.toolName)
+      && permission.workspaceWritePaths.length > 0
+      && !writeInsideGrantedScope
+    ) {
+      return { block: true, reason: 'This path is outside the Cindy Bot project write allowlist.' };
+    }
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)
@@ -3440,6 +3744,7 @@ export default async function cindyBridge(pi: any) {
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)
+      && !writeInsideWritableRoot
       && permission.readOnlyRoots.some((root) =>
         isInsideRoot(targetPath, root)
         || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, root)))
@@ -3492,14 +3797,27 @@ export default async function cindyBridge(pi: any) {
     // every existing per-server policy without loading each schema at startup.
     const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
       ? mcpGateway.resolveCall(event.input)
-      : null;
+      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
+        ? mcpGateway.resolveBotCollaboration(event.input)
+        : event.toolName === CINDY_BOT_MEMORY_TOOL
+          ? mcpGateway.resolveBotMemory(event.input)
+        : null;
     const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
       ? resolvedGatewayCall
-      : null;
+      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
+        ? resolvedGatewayCall
+        : event.toolName === CINDY_BOT_MEMORY_TOOL
+          ? resolvedGatewayCall
+        : null;
     // Invalid, unknown, or not-yet-inspected gateway input cannot execute a
     // capability. Let execute() return its deterministic discovery/schema error
     // without showing a misleading permission prompt for the wrapper itself.
-    if (event.toolName === CINDY_MCP_CALL_TOOL && !gatewayCall) return;
+    if (
+      (event.toolName === CINDY_MCP_CALL_TOOL
+        || event.toolName === CINDY_BOT_COLLABORATION_TOOL
+        || event.toolName === CINDY_BOT_MEMORY_TOOL)
+      && !gatewayCall
+    ) return;
     const permissionToolName = gatewayCall?.qualifiedName ?? event.toolName;
     const permissionInput = gatewayCall?.args ?? event.input ?? {};
     let decision: string | undefined;
@@ -3550,10 +3868,18 @@ export default async function cindyBridge(pi: any) {
   pi.on('tool_result', async (event: any, ctx: any) => {
     const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
       ? mcpGateway.resolveCall(event.input)
-      : null;
+      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
+        ? mcpGateway.resolveBotCollaboration(event.input)
+        : event.toolName === CINDY_BOT_MEMORY_TOOL
+          ? mcpGateway.resolveBotMemory(event.input)
+        : null;
     const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
       ? resolvedGatewayCall
-      : null;
+      : event.toolName === CINDY_BOT_COLLABORATION_TOOL
+        ? resolvedGatewayCall
+        : event.toolName === CINDY_BOT_MEMORY_TOOL
+          ? resolvedGatewayCall
+        : null;
     const captureToolName = gatewayCall?.qualifiedName ?? event.toolName;
     const captureInput = gatewayCall?.args ?? event.input ?? {};
     if (!isCindyShellTool(captureToolName) && !String(captureToolName ?? '').startsWith('mcp__')) return;
@@ -3907,7 +4233,7 @@ export default async function cindyBridge(pi: any) {
   // ── MCP 桥 ────────────────────────────────────────────────────────────────
   const raw = process.env.CINDY_PI_MCP_BRIDGE;
   if (!raw) return;
-  let cfg: { token?: string; servers?: McpServerRef[] };
+  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean };
   try {
     cfg = JSON.parse(raw);
   } catch {
@@ -3928,12 +4254,12 @@ export default async function cindyBridge(pi: any) {
       console.error('[cindy-bridge] connect ' + server.name + ' failed: ' + safeMcpFailure(err));
     }
   }));
-  // Keep the capability surface constant at two schemas. Even when every
-  // configured server failed startup, discovery remains callable and reports an
-  // empty set instead of making MCP capability disappear silently.
+  // Keep the generic capability surface constant at two schemas. When the
+  // first-party Bot facade is present, add its one stable high-frequency schema;
+  // every low-frequency/external MCP still stays behind discovery.
   if (servers.length > 0) {
     try {
-      mcpGateway.register(pi);
+      mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });
       console.error('[cindy-bridge] MCP gateway ready (' + mcpGateway.size + ' tools)');
     } catch (err) {
       console.error('[cindy-bridge] MCP gateway registration failed: ' + String(err));

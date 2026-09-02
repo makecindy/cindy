@@ -223,6 +223,7 @@ describeMigrationReplay('migration replay', () => {
     const { db, cleanup } = createTempDb();
     // 复刻 0060 之前的库:拷贝 drizzle 目录并剔除 0060,重放到 0059 后再 seed。
     const stagedDir = mkdtempSync(path.join(tmpdir(), 'xdmaker-drizzle-pre0060-'));
+    const replay0060Dir = mkdtempSync(path.join(tmpdir(), 'xdmaker-drizzle-only0060-'));
     try {
       for (const migration of listMigrations(drizzleDir())) {
         if (migration.seq >= 60) continue;
@@ -260,15 +261,20 @@ describeMigrationReplay('migration replay', () => {
         { id: 'plain-session', permission_mode: 'acceptEdits', plan_mode_enabled: 0 },
       ]);
 
-      const replayResult = runMigrationReplay(db, {
-        drizzleDir: drizzleDir(),
-        currentVersion: 59,
-      });
-      // 59 之后的迁移全部重放(0060 及以后陆续新增的都在内),不写死具体序号
-      const expectedReplaySeqs = listMigrations(drizzleDir())
-        .filter((migration) => migration.seq > 59)
-        .map((migration) => migration.seq);
-      expect(replayResult.applied.map((migration) => migration.seq)).toEqual(expectedReplaySeqs);
+      // 只重放本测试要证明幂等的 0060。把 schema_version 人为倒退后重放所有
+      // 后续 DDL 并不是受支持的恢复路径；新表 migration 也不应被迫做成可重复 CREATE。
+      const migration0060 = listMigrations(drizzleDir()).find((migration) => migration.seq === 60);
+      expect(migration0060).toBeDefined();
+      copyFileSync(migration0060!.sqlPath, path.join(replay0060Dir, migration0060!.fileName));
+      if (migration0060!.tsScriptPath) {
+        mkdirSync(path.join(replay0060Dir, 'scripts'), { recursive: true });
+        copyFileSync(
+          migration0060!.tsScriptPath,
+          path.join(replay0060Dir, 'scripts', path.basename(migration0060!.tsScriptPath)),
+        );
+      }
+      const replayResult = runMigrationReplay(db, { drizzleDir: replay0060Dir, currentVersion: 59 });
+      expect(replayResult.applied.map((migration) => migration.seq)).toEqual([60]);
       const replayRows = db
         .prepare(
           `SELECT id, permission_mode, plan_mode_enabled FROM sessions ORDER BY id`,
@@ -277,6 +283,7 @@ describeMigrationReplay('migration replay', () => {
       expect(replayRows).toEqual(rows);
     } finally {
       rmSync(stagedDir, { recursive: true, force: true });
+      rmSync(replay0060Dir, { recursive: true, force: true });
       cleanup();
     }
   });
@@ -301,6 +308,11 @@ describeMigrationReplay('migration replay', () => {
         );
         CREATE TABLE schedule_runs (
           id TEXT PRIMARY KEY NOT NULL
+        );
+        CREATE TABLE right_sidebar_tabs (
+          id TEXT PRIMARY KEY NOT NULL,
+          session_id TEXT NOT NULL,
+          kind TEXT NOT NULL
         );
         INSERT INTO sessions (id, permission_mode) VALUES ('legacy-plan', 'plan');
         INSERT INTO migration_history (seq, file_name, content_hash, applied_at) VALUES

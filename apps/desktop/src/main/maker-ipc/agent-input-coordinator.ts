@@ -393,6 +393,14 @@ export interface AgentInputCoordinatorDeps {
   resolveSessionReferences?: (
     refs: AgentInputQueuedMessage['sessionRefs'],
   ) => Promise<AgentInputSessionReferenceContext[]>;
+  /**
+   * Refresh ephemeral structured-reference state at the actual dispatch
+   * boundary. Queue snapshots may wait behind another turn and must not carry
+   * a stale Bot working/idle observation into the model input.
+   */
+  refreshAgentReferencesBeforeDispatch?: (
+    item: AgentInputQueuedMessage,
+  ) => Promise<void>;
   emitProjection: (projection: AgentInputProjection) => void;
   /**
    * 意识拦截钩(订阅槽①,will-user-message):派发与落库**之前**问一遍已装
@@ -4295,6 +4303,10 @@ export class AgentInputCoordinator {
             originalText,
           });
         }
+      }
+      if (this.deps.refreshAgentReferencesBeforeDispatch) {
+        await this.deps.refreshAgentReferencesBeforeDispatch(head);
+        if (!this.isActiveTurnCurrent(sessionId, active)) return;
       }
       const sdkSessionId = await this.deps.getSdkSessionId(sessionId).catch(() => undefined);
       if (!this.isActiveTurnCurrent(sessionId, active)) return;

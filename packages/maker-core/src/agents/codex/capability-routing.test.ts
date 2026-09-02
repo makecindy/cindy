@@ -2,11 +2,113 @@ import { describe, expect, it } from 'vitest';
 
 import type { CapabilityRoutingPolicy } from '../../types/capability-routing.js';
 import {
+  buildCodexBotSkillConfigOverrides,
+  buildCodexBotMcpConfigOverrides,
   buildCodexCapabilityConfigOverrides,
   buildCodexCapabilitySkillConfigOverrides,
   buildCodexSessionCapabilityRoutingPolicy,
+  mergeCodexSkillConfigOverrides,
   requiresCodexCapabilitySkillDiscovery,
 } from './capability-routing.js';
+
+describe('Bot Skill config', () => {
+  it('maps a Bot allowlist to native per-thread Codex Skill state', () => {
+    expect(buildCodexBotSkillConfigOverrides({
+      mode: 'allowlist',
+      configured: ['release'],
+      catalog: [
+        { name: 'release-notes', runtimeCommandName: 'release', path: '/skills/release/SKILL.md' },
+        { name: 'incident-response', path: '/skills/incident/SKILL.md' },
+      ],
+    })).toEqual({
+      'skills.config': [
+        { path: '/skills/incident/SKILL.md', enabled: false },
+        { path: '/skills/release/SKILL.md', enabled: true },
+      ],
+    });
+  });
+
+  it('keeps the stricter disabled state when Bot and host policies overlap', () => {
+    expect(mergeCodexSkillConfigOverrides(
+      { 'skills.config': [{ path: '/skills/release/SKILL.md', enabled: false }] },
+      { 'skills.config': [{ path: '/skills/release/SKILL.md', enabled: true }] },
+    )).toEqual({
+      'skills.config': [{ path: '/skills/release/SKILL.md', enabled: false }],
+    });
+  });
+
+  it('mounts Bot-owned Skills while disabling ambient Skills under legacy inherit', () => {
+    expect(buildCodexBotSkillConfigOverrides({
+      mode: 'inherit',
+      configured: [],
+      catalog: [{ name: 'global-release', path: '/skills/global-release/SKILL.md' }],
+      ownSkills: [
+        { name: 'weekly-report', path: '/bots/a/skills/weekly-report' },
+        { name: 'duplicate', path: '/bots/a/skills/weekly-report' },
+      ],
+    })).toEqual({
+      'skills.config': [
+        { path: '/bots/a/skills/weekly-report', enabled: true },
+        { path: '/skills/global-release/SKILL.md', enabled: false },
+      ],
+    });
+  });
+
+  it('does not let an ambient allowlist disable a Bot-owned Skill at the same path', () => {
+    expect(buildCodexBotSkillConfigOverrides({
+      mode: 'allowlist',
+      configured: [],
+      catalog: [{ name: 'ambient-copy', path: '/bots/a/skills/weekly-report' }],
+      ownSkills: [{ name: 'weekly-report', path: '/bots/a/skills/weekly-report' }],
+    })).toEqual({
+      'skills.config': [
+        { path: '/bots/a/skills/weekly-report', enabled: true },
+      ],
+    });
+  });
+});
+
+describe('Bot MCP config', () => {
+  it('keeps only narrow Bot MCPs and explicitly selected custom servers', () => {
+    expect(buildCodexBotMcpConfigOverrides({
+      mode: 'allowlist',
+      configured: ['custom-a'],
+      catalog: [
+        { name: 'cindy_memory', source: 'builtin' },
+        { name: 'cindy_helper', source: 'builtin' },
+        { name: 'cindy', source: 'builtin' },
+        { name: 'cindy_group_history', source: 'builtin' },
+        { name: 'custom-a', source: 'custom' },
+        { name: 'custom.with.dot', source: 'custom' },
+      ],
+    })).toEqual({
+      'mcp_servers.cindy.enabled': false,
+      'mcp_servers.cindy_group_history.enabled': false,
+      'mcp_servers.cindy_orca.enabled': false,
+      'mcp_servers."custom.with.dot".enabled': false,
+    });
+  });
+
+  it('keeps an explicitly configured builtin capability server enabled', () => {
+    // The docs toolset mounts cindy_docs through the same explicit allowlist
+    // as custom MCPs; it must not be pinned off like ambient builtins.
+    expect(buildCodexBotMcpConfigOverrides({
+      mode: 'allowlist',
+      configured: ['cindy_docs'],
+      catalog: [
+        { name: 'cindy_memory', source: 'builtin' },
+        { name: 'cindy_helper', source: 'builtin' },
+        { name: 'cindy_docs', source: 'builtin' },
+        { name: 'cindy_scheduler', source: 'builtin' },
+      ],
+    })).toEqual({
+      'mcp_servers.cindy_scheduler.enabled': false,
+      'mcp_servers.cindy.enabled': false,
+      'mcp_servers.cindy_group_history.enabled': false,
+      'mcp_servers.cindy_orca.enabled': false,
+    });
+  });
+});
 
 describe('buildCodexSessionCapabilityRoutingPolicy', () => {
   const compatibilityRoute = {

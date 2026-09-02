@@ -619,6 +619,7 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
+  restoreBotRuntimeForCurrentOwner,
   isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
@@ -8233,6 +8234,10 @@ app.on('ready', async () => {
         }
         return;
       }
+      // Bot recovery is owner-scoped and must start only after DbClient
+      // takeover. registerMakerIpc also invokes this once its services exist,
+      // covering both possible splash/login orderings without duplicate runs.
+      void restoreBotRuntimeForCurrentOwner();
       if (dbClientTakeover.mode === 'unchanged') {
         // 副窗口会再次走 localDb.ensureReady；同 owner 的 lifecycle client 已由首个
         // onReady 完整启动，因此这里只保留 DB 连接交接，不重复执行账号级启动维护。

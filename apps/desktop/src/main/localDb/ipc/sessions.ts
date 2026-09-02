@@ -23,6 +23,7 @@ import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
+import { commitBotProfileDeletion } from '../botProfileDeletionStore.js';
 import {
   LIST_PREVIEW_EXTRACT_SQL,
   LATEST_VISIBLE_PREVIEW_FILTER_SQL,
@@ -1185,6 +1186,12 @@ export function registerSessionIpc(
     ) {
       throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(bodyObj.orcaRole)}`);
     }
+    if (bodyObj.source !== undefined) {
+      throwIpcError(
+        'UNSUPPORTED_CAPABILITY',
+        'Bot task creation is only available through the Bot lifecycle service',
+      );
+    }
     const workspaceKind =
       (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';
     const explicitWorkingDir =
@@ -1439,6 +1446,7 @@ export function registerSessionIpc(
       const db = getDbClient().drizzle;
       const updated = await withSessionRouteLock(sid, async () => {
         if (!isOwnerScopeCurrent(ownerScope)) return null;
+        await assertGenericSessionLifecycleAllowed(db, sid);
         // 显式 .run() 才能从生产 DbClient.drizzle proxy 拿到 changes；隐式 await
         // 会丢弃写结果。CAS 是否命中必须以该原子 UPDATE 的 changes 判定。
         const writeResult = await db
@@ -1616,10 +1624,13 @@ export function registerSessionIpc(
     // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
     // 按下过保存,这个方向的偏差是安全的。
     if (typeof p.title === 'string') noteUserTitleWritten(sid);
+    // 主干新增第 4 个参数(改 workingDir 时外层已持锁,别重复加);伙伴会话的
+    // 生命周期保护照旧在写之前跑 —— 普通入口不该能把伙伴任务改成归档/删除。
     await withStatusWriteLock(
       sid,
       p.status,
       async () => {
+        if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
         await writeSessionPatch(db, sid, setObj, p.status);
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
       },
@@ -1826,6 +1837,7 @@ export async function patchSessionMetaInDb(
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
   const updated = await withStatusWriteLock(sessionId, patch.status, async () => {
+    if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     await writeSessionPatch(db, sessionId, setObj, patch.status);
     const row = await selectSessionWithCount(db, sessionId);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
@@ -1875,6 +1887,28 @@ export async function patchSessionMetaInDb(
   }
   compactTerminalSessionToolResults(dbClient, sessionId, patch.status);
   return updated;
+}
+
+/**
+ * Bot tasks are absent from the ordinary task pool, so their active/history/
+ * route transitions must go through the Bot lifecycle service. That service
+ * updates the Profile pointer and Session projection atomically.
+ */
+async function assertGenericSessionLifecycleAllowed(
+  db: DbClient['drizzle'],
+  sessionId: string,
+): Promise<void> {
+  const [target] = await db
+    .select({ source: sessions.source })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  if (target?.source === 'bot') {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Bot task lifecycle is managed by Bot Renew and history controls',
+    );
+  }
 }
 
 export interface RenameSessionMetaChange {
@@ -2052,6 +2086,75 @@ function cancelDeletedPiSubagentCleanupImpl(sessionId: string): void {
 }
 
 bindDeletedPiSubagentCleanupCancel(cancelDeletedPiSubagentCleanupImpl);
+
+/**
+ * Detach Bot-owned tasks before the owning Profile is permanently removed.
+ * Kept transcripts become ordinary archived tasks; discarded transcripts
+ * become ordinary deleted tombstones so no inaccessible source=bot orphan is
+ * left after the Bot FK graph is cascaded away.
+ */
+export async function deleteBotProfileAndDetachSessionsInDb(
+  botId: string,
+  sessionIds: string[],
+  keepTaskHistory: boolean,
+): Promise<void> {
+  const ids = [...new Set(sessionIds)];
+  const ownerScope = captureOwnerScope();
+  const db = getDbClient().drizzle;
+  const commitDeletion = () => commitBotProfileDeletion({
+    botId,
+    sessionIds: ids,
+    keepTaskHistory,
+  });
+  const committed = ids.length > 0
+    ? await withSessionRouteLocks(ids, commitDeletion)
+    : await commitDeletion();
+  const status = committed.status;
+  const committedSessionIds = [...new Set(committed.sessionIds)];
+
+  for (const id of committedSessionIds) {
+    notifyAgentIslandSessionPatch(id, { status });
+    broadcastSessionPatched(id, { status, source: 'desktop' }, ownerScope);
+    notifyGhostSessionStatusChange(id, status, null);
+    removeHookAttachmentDir(id, status);
+    if (status === 'deleted') {
+      void imageCacheStore.removeSession(id).catch((error) => {
+        log.warn('Bot task image cleanup failed', { sessionId: id, error: String(error) });
+      });
+      void removeWechatSessionAttachmentDir(id).catch((error) => {
+        log.warn('Bot task attachment cleanup failed', { sessionId: id, error: String(error) });
+      });
+      void removeDeletedSessionMediaRefs(id, db).catch((error) => {
+        log.warn('Bot task media cleanup failed', { sessionId: id, error: String(error) });
+      });
+    }
+  }
+}
+
+/**
+ * hook 入站附件目录回收(fire-and-forget): deleted/archived 都是终态,
+ * 文件在 turn 送出后即无用。所有把 session 置为终态的路径都应调用。
+ */
+function removeHookAttachmentDir(sessionId: string, status: unknown): void {
+  if (status !== 'deleted' && status !== 'archived') return;
+  if (status === 'deleted') {
+    void removeTurnChangeSetsForSession(sessionId).catch((err) => {
+      log.warn('turn change-set cleanup failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+  const attachRoot = path.join(app.getPath('userData'), 'hook-attachments');
+  const attachDir = path.join(attachRoot, sessionId);
+  if (!attachDir.startsWith(attachRoot + path.sep)) return;
+  void fs.rm(attachDir, { recursive: true, force: true }).catch((err) => {
+    log.warn('hook attachment dir cleanup failed', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
 
 /**
  * Can this parent task still start a durable Subagent?

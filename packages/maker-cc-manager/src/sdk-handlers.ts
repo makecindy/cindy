@@ -128,6 +128,10 @@ export function wireSdkHandlers(server: ManagerServer, registry: SessionRegistry
       }
     }
     const toolGuards = validateToolGuards(p.toolGuards);
+    if (p.workspaceReadOnly !== undefined && typeof p.workspaceReadOnly !== 'boolean') {
+      throwInvalid('workspaceReadOnly must be a boolean');
+    }
+    const workspaceWritePaths = validateWorkspaceWritePaths(p.workspaceWritePaths);
     try {
       const session = registry.create({
         sessionId: p.sessionId!,
@@ -142,6 +146,8 @@ export function wireSdkHandlers(server: ManagerServer, registry: SessionRegistry
         ...(p.disallowedTools ? { disallowedTools: p.disallowedTools } : {}),
         ...(p.tools !== undefined ? { tools: p.tools } : {}),
         ...(toolGuards ? { toolGuards } : {}),
+        ...(p.workspaceReadOnly === true ? { workspaceReadOnly: true } : {}),
+        ...(workspaceWritePaths ? { workspaceWritePaths } : {}),
         ...(p.resumeSdkSessionId ? { resumeSdkSessionId: p.resumeSdkSessionId } : {}),
         ...(p.extraOptions ? { extraOptions: p.extraOptions } : {}),
       });
@@ -350,6 +356,18 @@ function requireString(v: unknown, field: string): asserts v is string {
   if (typeof v !== 'string' || v.length === 0) {
     throwInvalid(`${field} must be a non-empty string`);
   }
+}
+
+function validateWorkspaceWritePaths(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value)
+    || value.length === 0
+    || value.some((candidate) => typeof candidate !== 'string' || !candidate.trim())
+  ) {
+    throwInvalid('workspaceWritePaths must be a non-empty array of paths');
+  }
+  return [...new Set(value.map((candidate) => candidate.trim()))];
 }
 
 function validateToolGuards(value: unknown): QueryToolGuard[] | undefined {

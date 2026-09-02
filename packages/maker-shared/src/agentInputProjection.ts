@@ -77,6 +77,23 @@ export interface AgentInputPluginResourceReference extends AgentInputReferenceBa
   description?: string;
 }
 
+/** One persistent Cindy Bot selected as the intended delegation or handoff target. */
+export interface AgentInputBotReference extends AgentInputReferenceBase {
+  kind: 'bot';
+  botId: string;
+  name: string;
+  /** Ephemeral state added by Main when the queued input is accepted. */
+  hostSnapshot?: AgentInputBotHostSnapshot;
+}
+
+export interface AgentInputBotHostSnapshot {
+  availability: 'ready' | 'degraded' | 'failed' | 'unverified' | 'unavailable';
+  activity: 'working' | 'idle' | 'unknown';
+  activeDelegations: number;
+  /** Bounded host diagnosis; never raw capability or transcript data. */
+  reason?: string;
+}
+
 /** Structured Composer references preserved beside the human-facing wire text. */
 export type AgentInputReference =
   | AgentInputMessageReference
@@ -84,7 +101,8 @@ export type AgentInputReference =
   | AgentInputProjectReference
   | AgentInputBrowserTabReference
   | AgentInputDesktopWindowReference
-  | AgentInputPluginResourceReference;
+  | AgentInputPluginResourceReference
+  | AgentInputBotReference;
 
 /** Immutable inputs required to derive the text sent to semantic consumers. */
 export interface AgentFacingTextSource {
@@ -115,13 +133,28 @@ function nonEmptyString(value: unknown): value is string {
 
 function stripDeepLinkPrefix(
   href: string,
-  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/',
+  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/' | 'bot/',
 ): string | null {
   for (const scheme of allDeepLinkSchemes()) {
     const prefix = `${scheme}://${route}`;
     if (href.startsWith(prefix)) return href.slice(prefix.length);
   }
   return null;
+}
+
+export function buildBotReferenceHref(botId: string): string {
+  const scheme = allDeepLinkSchemes()[0];
+  return `${scheme}://bot/${encodeURIComponent(botId)}`;
+}
+
+export function parseBotReferenceHref(href: string): { botId: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'bot/');
+  if (rest === null || rest.length > 256 || rest.includes('/') || rest.includes('?') || rest.includes('#')) {
+    return null;
+  }
+  const botId = decodeBoundedComponent(rest, 128);
+  if (!botId || botId.includes('/') || /[\u0000-\u001f\u007f\u2028\u2029]/.test(botId)) return null;
+  return { botId };
 }
 
 export function buildPluginResourceReferenceHref(args: {
@@ -394,7 +427,51 @@ function readReference(
         : {}),
     };
   }
+  if (
+    candidate.kind === 'bot'
+    && nonEmptyString(candidate.name)
+    && candidate.name.length <= 128
+  ) {
+    const target = parseBotReferenceHref(candidate.href);
+    if (!target) return null;
+    const hostSnapshot = readBotHostSnapshot(candidate.hostSnapshot);
+    return {
+      kind: 'bot',
+      start,
+      end,
+      href: candidate.href,
+      botId: target.botId,
+      name: oneLine(candidate.name),
+      ...(hostSnapshot ? { hostSnapshot } : {}),
+    };
+  }
   return null;
+}
+
+function readBotHostSnapshot(value: unknown): AgentInputBotHostSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const availability = typeof candidate.availability === 'string'
+    ? candidate.availability
+    : '';
+  const activity = typeof candidate.activity === 'string' ? candidate.activity : '';
+  const activeDelegations = candidate.activeDelegations;
+  if (
+    !['ready', 'degraded', 'failed', 'unverified', 'unavailable'].includes(availability)
+    || !['working', 'idle', 'unknown'].includes(activity)
+    || !Number.isSafeInteger(activeDelegations)
+    || (activeDelegations as number) < 0
+    || (activeDelegations as number) > 10_000
+  ) return null;
+  const reason = typeof candidate.reason === 'string'
+    ? oneLine(candidate.reason).slice(0, 240)
+    : '';
+  return {
+    availability: availability as AgentInputBotHostSnapshot['availability'],
+    activity: activity as AgentInputBotHostSnapshot['activity'],
+    activeDelegations: activeDelegations as number,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 /** Validate untrusted persisted/remote reference metadata against its wire text. */
@@ -484,6 +561,25 @@ function formatReference(reference: AgentInputReference): string {
       '[/Referenced plugin resource]',
     ].join('\n');
   }
+  if (reference.kind === 'bot') {
+    const snapshot = reference.hostSnapshot;
+    return [
+      '[Referenced Cindy Bot]',
+      `Name: ${quotedMetadata(oneLine(reference.name))}`,
+      `Bot ID: ${quotedMetadata(reference.botId)}`,
+      'Intent: the user explicitly selected this Bot as a collaboration target.',
+      'Resolution: the host already resolved this exact stable Bot ID. Do not list Bots, search chat history, or inspect another task runtime merely to identify or locate it.',
+      ...(snapshot
+        ? [
+            `Host status: availability=${snapshot.availability}; activity=${snapshot.activity}; active_tracked_tasks=${snapshot.activeDelegations}.`,
+            ...(snapshot.reason ? [`Host note: ${quotedMetadata(snapshot.reason)}`] : []),
+          ]
+        : ['Host status: not refreshed; use collaborate_with_bot(action="status") only if the surrounding request truly asks for current status.']),
+      'Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. For work, deliverables, or anything whose result must return here, call collaborate_with_bot once with action="delegate". Use action="notify" only for a brief notice that explicitly needs no reply or result.',
+      'Boundary: Do not blindly forward the surrounding user text. A notification only confirms delivery and must never stand in for a tracked task.',
+      '[/Referenced Cindy Bot]',
+    ].join('\n');
+  }
   return [
     '[Referenced project]',
     `Name: ${oneLine(reference.name)}`,
@@ -556,6 +652,7 @@ export function describeAgentInputReference(reference: AgentInputReference): str
     return oneLine(reference.title ?? reference.appName) || null;
   }
   if (reference.kind === 'plugin-resource') return oneLine(reference.label) || null;
+  if (reference.kind === 'bot') return oneLine(reference.name) || null;
   return oneLine(reference.text ?? '') || null;
 }
 

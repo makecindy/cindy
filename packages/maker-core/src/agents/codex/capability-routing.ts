@@ -2,12 +2,94 @@ import type {
   CapabilityRouteOverride,
   CapabilityRoutingPolicy,
 } from '../../types/capability-routing.js';
+import type { BotRuntimeMcpPolicy, BotRuntimeSkillPolicy } from '../base-agent.js';
 
 const CODEX_HARNESS_ID = 'codex';
 
 interface CodexSkillState {
   path: string;
   enabled: boolean;
+}
+
+/** Build Codex's native per-thread Skill config for a Bot allowlist. */
+export function buildCodexBotSkillConfigOverrides(
+  policy: BotRuntimeSkillPolicy | undefined,
+): Record<string, unknown> {
+  if (!policy) return {};
+  const byPath = new Map<string, { path: string; enabled: boolean }>();
+  const allowed = policy.mode === 'allowlist'
+    ? new Set(policy.configured.map((item) => item.trim()))
+    : new Set<string>();
+  for (const item of policy.catalog) {
+    const skillPath = item.path?.trim();
+    if (!skillPath) continue;
+    const runtimeName = item.runtimeCommandName?.trim();
+    byPath.set(skillPath, {
+      path: skillPath,
+      enabled: item.enabled !== false && item.runtimeStatus !== 'failed' &&
+        (allowed.has(item.name.trim()) || (!!runtimeName && allowed.has(runtimeName))),
+    });
+  }
+  // Cindy-owned Bot Skills are outside the ambient allowlist. Codex has no
+  // plugin-root mount equivalent, so project them as explicit per-thread Skill
+  // paths and let them win any accidental same-path ambient entry.
+  for (const item of policy.ownSkills ?? []) {
+    const skillPath = item.path?.trim();
+    if (!skillPath) continue;
+    byPath.set(skillPath, { path: skillPath, enabled: true });
+  }
+  return byPath.size > 0
+    ? { 'skills.config': [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)) }
+    : {};
+}
+
+export function mergeCodexSkillConfigOverrides(
+  base: Record<string, unknown>,
+  overlay: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...base, ...overlay };
+  const entries = new Map<string, { path: string; enabled: boolean }>();
+  for (const source of [base['skills.config'], overlay['skills.config']]) {
+    if (!Array.isArray(source)) continue;
+    for (const raw of source) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      const item = raw as { path?: unknown; enabled?: unknown };
+      if (typeof item.path !== 'string' || typeof item.enabled !== 'boolean') continue;
+      const previous = entries.get(item.path);
+      entries.set(item.path, {
+        path: item.path,
+        enabled: (previous?.enabled ?? true) && item.enabled,
+      });
+    }
+  }
+  if (entries.size > 0) {
+    merged['skills.config'] = [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }
+  return merged;
+}
+
+/** Disable every non-essential MCP server through Codex's native thread config. */
+export function buildCodexBotMcpConfigOverrides(
+  policy: BotRuntimeMcpPolicy | undefined,
+): Record<string, unknown> {
+  if (!policy || policy.mode !== 'allowlist') return {};
+  const allowed = new Set(policy.configured.map((item) => item.trim()));
+  const result: Record<string, unknown> = {};
+  for (const item of policy.catalog) {
+    const essential = item.name === 'cindy_memory' || item.name === 'cindy_helper';
+    // Builtin capability servers (docs toolset → cindy_docs) ride the same
+    // explicit allowlist as custom MCPs — see bot-runtime-policy.ts.
+    const selected = item.available !== false && allowed.has(item.name);
+    if (essential || selected) continue;
+    result[`mcp_servers.${renderThreadConfigKeySegment(item.name)}.enabled`] = false;
+  }
+  // These broad Cindy gateways are registered outside some provider catalog
+  // paths. Pin them off even when discovery omitted them, so a Bot never falls
+  // back to nested list_tools/call_tool orchestration.
+  for (const serverName of ['cindy', 'cindy_group_history', 'cindy_orca']) {
+    result[`mcp_servers.${renderThreadConfigKeySegment(serverName)}.enabled`] = false;
+  }
+  return result;
 }
 
 interface CodexPluginCacheIdentity {
