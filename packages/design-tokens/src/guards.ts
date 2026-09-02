@@ -282,22 +282,49 @@ export function validateStructure(layers: BuiltLayers): StructureIssue[] {
 
 const RUNTIME_PACKAGE_DIRS = ['apps/desktop', 'apps/mobile', 'packages'];
 
+export const DESIGN_TOKENS_MODULE_ID = '@cindy/design-tokens';
+
 function dependencyHits(pkgJson: Record<string, unknown>, rel: string): string[] {
   const hits: string[] = [];
   for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
     const deps = pkgJson[field];
-    if (deps && typeof deps === 'object' && '@cindy/design-tokens' in deps) {
+    if (deps && typeof deps === 'object' && DESIGN_TOKENS_MODULE_ID in deps) {
       hits.push(`${rel}#${field}`);
     }
   }
   return hits;
 }
 
+/**
+ * 零运行时接线守卫必须拒绝所有合法的包导入与依赖入口，而不是只识别少数
+ * 静态文本形态。逐一列出每种形态（模块 id 后允许子路径，如
+ * '@cindy/design-tokens/package.json' 这类 subpath 消费同样算接线）：
+ *  - from 子句：静态具名 / 默认 / 命名空间 / type-only import 与 re-export
+ *    （`\s` 覆盖跨行变体，不要求以 import 开头，避免漏掉 export…from）；
+ *  - import '<id>' 副作用导入；
+ *  - import('<id>') 动态导入（可跨行）；
+ *  - require('<id>') 与 TS import-equals（import x = require('<id>')）；
+ *  - import.meta.resolve('<id>') 运行期解析入口；
+ *  - 绕过包 id、以相对路径直读包内源码 / 产物。
+ * `(?<![\w$.])` 排除 foo.import( / myImport( 这类成员调用与标识符误报。
+ */
+const IMPORT_ENTRY_PATTERNS: readonly RegExp[] = [
+  /from\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /(?<![\w$.])import\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /(?<![\w$.])import\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /(?<![\w$.])import\.meta\.resolve\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /(?<![\w$.])require\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /packages\/design-tokens\/(?:src|dist|build)\//,
+];
+
+/** 一段源码文本是否含任何合法形态的包导入 / 依赖入口（供扫描与自证伪测试共用）。 */
+export function containsRuntimeImportOfDesignTokens(text: string): boolean {
+  return IMPORT_ENTRY_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export function findRuntimeImportsOfDesignTokens(repoRoot: string): string[] {
   const hits: string[] = [];
   const skip = new Set(['node_modules', 'dist', 'build', 'coverage', '.git']);
-  const importRe =
-    /from\s+['"]@cindy\/design-tokens|require\(['"]@cindy\/design-tokens|packages\/design-tokens\/src\//;
 
   const visit = (abs: string, rel: string) => {
     const entries = readdirSync(abs, { withFileTypes: true });
@@ -317,7 +344,7 @@ export function findRuntimeImportsOfDesignTokens(repoRoot: string): string[] {
       }
       if (!/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
       const text = readFileSync(childAbs, 'utf8');
-      if (importRe.test(text)) hits.push(childRel);
+      if (containsRuntimeImportOfDesignTokens(text)) hits.push(childRel);
     }
   };
 

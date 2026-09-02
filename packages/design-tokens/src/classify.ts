@@ -150,7 +150,14 @@ export function classifyColor(entry: SnapshotColor): ClassificationEntry {
     };
   }
 
-  if (entry.id.endsWith('-hsl')) {
+  // -hsl 后缀只是命名约定，不能单独作为判据：双模式必须真的都是 hsl-triplet
+  // 值（形如 `60 12.5% 97%`）。后缀命中但值不是 triplet 的条目按实际值形态
+  // 落入 alias / literal / runtime-derived 分支，不许冒充 hsl-pair。
+  if (
+    entry.id.endsWith('-hsl') &&
+    lightKind === 'hsl-triplet' &&
+    darkKind === 'hsl-triplet'
+  ) {
     return {
       id: entry.id,
       category: 'hsl-triplet',
