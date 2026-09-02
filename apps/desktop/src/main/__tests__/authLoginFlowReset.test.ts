@@ -614,6 +614,7 @@ describe('auth login-flow reset', () => {
     expect(logoutBody).toContain('await switchSavedAccount(candidateAccountKey, {');
     expect(logoutBody).toContain('accountToLogOut: currentIdentity');
     expect(logoutBody).toContain('if (isUnavailableSavedAccountError(error)) continue;');
+    expect(logoutBody).toContain('isRetryableSavedAccountSwitchError(error)');
     expect(logoutBody.indexOf('return;', candidateLoop)).toBeLessThan(terminalSignOut);
     expect(terminalSignOut).toBeGreaterThan(candidateLoop);
     expect(logoutBody).not.toContain('revokeSavedSessionsBestEffort');
