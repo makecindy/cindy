@@ -3,6 +3,8 @@ import {
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
+  WORKLOUDER_HID_AG_CODES,
+  normalizeWorkLouderCreatorTaskKeys,
   buildCreatorMicro2AgentKeymap,
   cloneWorkLouderCodexSettings,
   createWorkLouderCodexDefaultSettings,
@@ -704,6 +706,17 @@ export class WorkLouderCodexLightingController {
       };
     });
     const sessionIdsByTaskSlot = this.agentSlots.map((slot) => slot.sessionId ?? '');
+    const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
+    if (this.device.deviceType === 'codex-micro') {
+      this.slotSessionIds = WORKLOUDER_HID_AG_CODES.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(
+        (physical) => {
+          if (!isWorkLouderCreatorProgrammableKey(physical)) return '';
+          const slot = taskKeys.indexOf(physical);
+          return slot >= 0 ? (sessionIdsByTaskSlot[slot] ?? '') : '';
+        },
+      );
+      return;
+    }
     this.slotSessionIds = Array.from(
       { length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT },
       (_, slot) => sessionIdsByTaskSlot[slot] ?? '',
@@ -879,8 +892,13 @@ export class WorkLouderCodexLightingController {
   }
 
   private handleDeviceState(device: WorkLouderCodexDeviceState): void {
+    const previousType = this.device.deviceType;
     this.device = { ...device };
     if (device.deviceType) this.devicePresent = true;
+    if (previousType !== this.device.deviceType) {
+      this.publishAgentSlots();
+      this.updateLightingFrame();
+    }
     this.emitState();
   }
 
@@ -891,6 +909,7 @@ export class WorkLouderCodexLightingController {
       isUsbConnection: boolean;
     },
   ): void {
+    const previousType = this.device.deviceType;
     this.devicePresent = present;
     if (!present) {
       this.device = {
@@ -903,6 +922,10 @@ export class WorkLouderCodexLightingController {
         deviceType: identity.deviceType,
         isUsbConnection: identity.isUsbConnection,
       };
+    }
+    if (previousType !== this.device.deviceType) {
+      this.publishAgentSlots();
+      this.updateLightingFrame();
     }
     this.emitState();
   }

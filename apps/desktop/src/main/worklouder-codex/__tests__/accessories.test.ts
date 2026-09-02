@@ -96,6 +96,16 @@ describe('resolveWorkLouderOccupyingModel', () => {
       }),
     ).toBe(false);
     expect(
+      workLouderNeedsIdentityDiscovery(
+        'codex-micro',
+        {
+          'codex-micro': defaults('codex-micro'),
+          'creator-micro-2': defaults('creator-micro-2', true),
+        },
+        false,
+      ),
+    ).toBe(true);
+    expect(
       workLouderNeedsIdentityDiscovery(null, {
         'codex-micro': defaults('codex-micro'),
         'creator-micro-2': defaults('creator-micro-2'),
@@ -266,6 +276,23 @@ describe('WorkLouderAccessories occupancy', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('resumes discovery after a remembered board disappears', () => {
+    const lighting = new FakeLighting(liveState({ deviceType: 'codex-micro' }));
+    const discover = vi.fn();
+    const accessories = new WorkLouderAccessories(lighting, discover);
+    accessories.applySettings('creator-micro-2', defaults('creator-micro-2', true));
+    expect(discover).not.toHaveBeenCalled();
+
+    lighting.setLive(
+      liveState({
+        deviceType: 'codex-micro',
+        present: false,
+        settings: lighting.getState().settings,
+      }),
+    );
+    expect(discover).toHaveBeenCalledOnce();
   });
 
   it('does not re-apply lighting when occupancy already matches live settings', () => {

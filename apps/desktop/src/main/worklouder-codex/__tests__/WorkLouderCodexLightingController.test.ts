@@ -427,6 +427,7 @@ describe('WorkLouderCodexLightingController', () => {
       setAgentKeyPressHandler: vi.fn(),
       setDeviceActivityHandler: vi.fn(),
       setConnectionStatusHandler: vi.fn(),
+      setDeviceStateHandler: vi.fn(),
       setHidInputHandler: vi.fn(),
       rebindCreatorKeymap: vi.fn(),
       dispose: vi.fn(async () => undefined),
@@ -447,9 +448,14 @@ describe('WorkLouderCodexLightingController', () => {
     }));
     controller.applySettings(settings);
     await controller.resumeTaskSlots();
-    const keymap = sink.rebindCreatorKeymap.mock.calls.at(-1)?.[0] as string[][];
-    expect(keymap[0]?.[0]).toBe('KV_OAI_ACT06');
-    expect(keymap[0]?.[1]).toBe('KV_OAI_AG00');
+    sink.setDeviceStateHandler.mock.calls.at(-1)?.[0]?.({
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+      firmwareVersion: null,
+      batteryPercentage: null,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+    });
     sink.update.mockClear();
     controller.updateSessionActivity([
       {
@@ -461,8 +467,8 @@ describe('WorkLouderCodexLightingController', () => {
     ]);
     const frame = sink.update.mock.lastCall?.[0];
     expect(frame?.keys.brightness).toBe(0);
-    expect(frame?.threads[0]?.brightness).toBeGreaterThan(0);
-    expect(frame?.threads[1]?.brightness).toBe(0);
+    expect(frame?.threads[0]?.brightness).toBe(0);
+    expect(frame?.threads[1]?.brightness).toBeGreaterThan(0);
   });
 
   it('uses the published assignment for the current press and refreshes only later presses', async () => {

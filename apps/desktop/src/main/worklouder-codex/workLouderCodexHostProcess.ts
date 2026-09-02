@@ -25,7 +25,6 @@ import {
   resolveWorkLouderActiveProfileIndex,
   rewriteBareWorkLouderNotifyJson,
   readWorkLouderDeviceStatusOrThrow,
-  unwrapWorkLouderDeviceStatus,
   unwrapWorkLouderKeymapText,
   isCindyExclusiveAgentKeymap,
   WORKLOUDER_DEVICE_KEYMAP_FILE,
@@ -902,7 +901,7 @@ export async function postDeviceStatus(
   let status: WorkLouderDeviceStatus = {};
   if (typeof deviceApi.getDeviceStatus === 'function') {
     try {
-      status = unwrapWorkLouderDeviceStatus(await deviceApi.getDeviceStatus());
+      status = readWorkLouderDeviceStatusOrThrow(await deviceApi.getDeviceStatus());
     } catch (error) {
       hostLog('warn', `device status unavailable: ${safeErrorMessage(error)}`);
       if (transportFaulted || !isOptionalDeviceStatusError(error)) throw error;

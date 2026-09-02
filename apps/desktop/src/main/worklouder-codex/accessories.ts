@@ -44,8 +44,12 @@ export function resolveWorkLouderOccupyingModel(
 export function workLouderNeedsIdentityDiscovery(
   deviceType: WorkLouderModel | null,
   settings: Record<WorkLouderModel, WorkLouderCodexSettings>,
+  devicePresent: boolean | null = null,
 ): boolean {
-  return deviceType === null && WORKLOUDER_MODELS.some((model) => settings[model].deviceEnabled);
+  if (!WORKLOUDER_MODELS.some((model) => settings[model].deviceEnabled)) return false;
+  if (deviceType === null) return true;
+  // Remembered identity is gone — another enabled board may appear.
+  return devicePresent === false;
 }
 
 /** Preview only suppresses HID actions on the board whose settings page is open. */
@@ -210,7 +214,11 @@ export class WorkLouderAccessories {
         this.syncing = false;
       }
     }
-    const needsDiscovery = workLouderNeedsIdentityDiscovery(liveDeviceType(live), this.settings);
+    const needsDiscovery = workLouderNeedsIdentityDiscovery(
+      liveDeviceType(live),
+      this.settings,
+      live.devicePresent,
+    );
     if (needsDiscovery) this.scheduleIdentityDiscovery();
     else this.stopIdentityDiscovery();
     this.emit();
