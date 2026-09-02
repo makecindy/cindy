@@ -25,7 +25,7 @@ import {
   rewriteBareWorkLouderNotifyJson,
   unwrapWorkLouderDeviceStatus,
   unwrapWorkLouderKeymapText,
-  WORKLOUDER_AGENT_KEY_MARKER,
+  isCindyExclusiveAgentKeymap,
   WORKLOUDER_DEVICE_KEYMAP_FILE,
   workLouderFirmwareIdlesHidRead,
   parseWorkLouderCodexJoystickEvent,
@@ -411,7 +411,7 @@ async function probeConnection(): Promise<void> {
         }
         const creatorStillPresent =
           workLouderFirmwareIdlesHidRead(connectedDevice?.deviceType) &&
-          findCandidates().length > 0;
+          findCandidates().some((candidate) => candidate.deviceType === connectedDevice?.deviceType);
         if (!transportFaulted && creatorStillPresent) {
           post({ kind: 'state', status: 'connected' });
           return;
@@ -617,7 +617,17 @@ function safeErrorMessage(error: unknown): string {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  const deadline = Date.now() + ms;
+  return new Promise((resolve) => {
+    const tick = (): void => {
+      if (stopping || Date.now() >= deadline) {
+        resolve();
+        return;
+      }
+      setTimeout(tick, Math.min(50, deadline - Date.now())).unref?.();
+    };
+    tick();
+  });
 }
 
 function workLouderFsSucceeded(result: WorkLouderRpcResult | null | undefined): boolean {
@@ -676,7 +686,7 @@ async function backupCreatorKeymap(liveText: string): Promise<void> {
   }
   // Only capture a restore snapshot from a vendor layout. Later rebinds during
   // the same occupancy read Cindy's own keymap and must not overwrite it.
-  if (!liveText.includes(WORKLOUDER_AGENT_KEY_MARKER)) {
+  if (!isCindyExclusiveAgentKeymap(liveText)) {
     await writeKeymapSnapshot(
       path.join(keymapBackupDir, creatorMicro2KeymapSessionFileName(connectedDevice?.backupId)),
       liveText,
@@ -1023,6 +1033,11 @@ async function stop(): Promise<void> {
     await applyTask;
   } catch (error) {
     hostLog('warn', `lighting apply stopped unexpectedly: ${safeErrorMessage(error)}`);
+  }
+  try {
+    await creatorKeymapBinding;
+  } catch {
+    // Bind may have been interrupted by stopping; restore still has to run.
   }
   const currentApi = api;
   if (currentApi) {

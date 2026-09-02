@@ -484,6 +484,31 @@ export function workLouderLayerHasAgentKeys(layer: WorkLouderKeymapLayer | undef
 }
 
 /**
+ * Cindy occupies a board by replacing the active layer with a full `KV_OAI_*`
+ * grid. A vendor layout that happens to mention AG00 is not that exclusive map,
+ * so it must still be captured as a restore snapshot.
+ */
+export function isCindyExclusiveAgentKeymap(text: string): boolean {
+  const document = parseWorkLouderKeymapDocument(text);
+  if (!document) return false;
+  for (const profile of document.profiles) {
+    for (const layer of profile.layers ?? []) {
+      const keymap = layer.layout?.keymap;
+      if (!Array.isArray(keymap)) continue;
+      const codes = keymap.flat().filter((code): code is string => typeof code === 'string');
+      if (
+        codes.length >= 8 &&
+        codes.every((code) => code.startsWith('KV_OAI_')) &&
+        codes.some((code) => code.includes('AG00'))
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * `device.status.layer_index` is 1-based (ChatGPT uses layer 1). Returns a
  * 0-based index into `profiles[0].layers`, clamped to the keymap.
  */

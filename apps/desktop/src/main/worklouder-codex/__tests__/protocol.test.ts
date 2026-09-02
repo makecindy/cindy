@@ -21,6 +21,7 @@ import {
   applyCreatorMicro2AgentLayer,
   creatorMicro2KeymapBackupFileName,
   creatorMicro2KeymapSessionFileName,
+  isCindyExclusiveAgentKeymap,
   workLouderLayerHasAgentKeys,
   workLouderFirmwareIdlesHidRead,
   foldOrcaWorkerActivityOntoLeads,
@@ -478,5 +479,28 @@ describe('Creator Micro 2 agent keymap', () => {
       'keymap-session-80B54ECB0358.json',
     );
     expect(creatorMicro2KeymapSessionFileName(null)).toBe('keymap-session.json');
+  });
+
+  it('does not treat a vendor layout that mentions AG00 as a Cindy occupancy map', () => {
+    const vendorWithAg00 = JSON.stringify({
+      profiles: [
+        {
+          layers: [
+            {
+              layout: {
+                keymap: [
+                  ['KV_OAI_AG00', 'KV_1'],
+                  ['KV_Q', 'KV_W', 'KV_E', 'KV_R'],
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(isCindyExclusiveAgentKeymap(vendorWithAg00)).toBe(false);
+    const parsed = parseWorkLouderKeymapDocument(JSON.stringify(factoryDocument));
+    const cindy = applyCreatorMicro2AgentLayer(parsed!, 0);
+    expect(isCindyExclusiveAgentKeymap(JSON.stringify(cindy.document))).toBe(true);
   });
 });
