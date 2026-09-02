@@ -910,9 +910,9 @@ const clientEndpointsInfo = ipcRenderer.sendSync('client-endpoints:get-sync') as
   websiteUrl: string;
 };
 
-const appearanceSettingsInfo = ipcRenderer.sendSync(
-  'appearance-settings:get-sync',
-) as AppearanceSettings | null;
+function readAppearanceSettingsSync(): AppearanceSettings | null {
+  return ipcRenderer.sendSync('appearance-settings:get-sync') as AppearanceSettings | null;
+}
 
 type CindyMediaPreferenceOption = {
   id: string;
@@ -974,7 +974,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pageZoomReset: (): Promise<{ ok: true; zoomFactor: number }> =>
     ipcRenderer.invoke('page-zoom:reset'),
   appearanceSettings: {
-    getSync: (): AppearanceSettings | null => appearanceSettingsInfo,
+    // Read the current main-process snapshot for every newly mounted consumer.
+    // A preload-time constant becomes stale after background import/removal:
+    // the already-mounted wallpaper keeps the pushed value while a later route
+    // (settings/new task) incorrectly sees the startup value.
+    getSync: readAppearanceSettingsSync,
     get: (): Promise<unknown> => ipcRenderer.invoke('appearance-settings:get'),
     setPatch: (patch: Partial<AppearanceSettings>): Promise<AppearanceSettings> =>
       ipcRenderer.invoke('appearance-settings:set-patch', patch),

@@ -24,14 +24,27 @@ import {
 } from './appearance-settings-store.js';
 import {
   importAppearanceBackground,
+  removeAppearanceBackgroundFile,
   removeAppearanceBackgroundFiles,
 } from './appearance-background.js';
+import { desktopMakerLogger } from './maker-host/logger-adapter.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
 export const APPEARANCE_SETTINGS_CHANGED_CHANNEL = 'appearance-settings:changed';
 
+const log = desktopMakerLogger.child('appearance-settings-ipc');
 let registered = false;
+let backgroundMutationQueue: Promise<void> = Promise.resolve();
+
+function serializeBackgroundMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = backgroundMutationQueue.then(operation, operation);
+  backgroundMutationQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
 
 export function registerAppearanceSettingsIpc(): void {
   if (registered) return;
@@ -61,29 +74,58 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await resetAppearanceSettings();
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
-    await removeAppearanceBackgroundFiles();
-    return settings;
+    return serializeBackgroundMutation(async () => {
+      const settings = await resetAppearanceSettings();
+      applyAppearanceToWindows(settings);
+      broadcast(settings);
+      await cleanupBackgroundFiles(removeAppearanceBackgroundFiles(), 'background reset cleanup');
+      return settings;
+    });
   });
 
   ipcMain.handle('appearance-settings:background-import', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const result = await importAppearanceBackground(BrowserWindow.fromWebContents(event.sender));
-    if (result.canceled) return result;
-    const settings = await writeAppearanceSettingsPatch({ backgroundImage: result.url });
-    broadcast(settings);
-    return { ...result, settings };
+    return serializeBackgroundMutation(async () => {
+      const result = await importAppearanceBackground(BrowserWindow.fromWebContents(event.sender));
+      if (result.canceled) return result;
+      let settings: AppearanceSettings;
+      try {
+        settings = await writeAppearanceSettingsPatch({ backgroundImage: result.url });
+      } catch (error) {
+        await cleanupBackgroundFiles(
+          removeAppearanceBackgroundFile(result.url),
+          'staged background rollback',
+        );
+        throw error;
+      }
+      broadcast(settings);
+      await cleanupBackgroundFiles(
+        removeAppearanceBackgroundFiles(result.url),
+        'stale background cleanup',
+      );
+      return { ...result, settings };
+    });
   });
 
   ipcMain.handle('appearance-settings:background-remove', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await writeAppearanceSettingsPatch({ backgroundImage: '' });
-    broadcast(settings);
-    await removeAppearanceBackgroundFiles();
-    return settings;
+    return serializeBackgroundMutation(async () => {
+      const settings = await writeAppearanceSettingsPatch({ backgroundImage: '' });
+      broadcast(settings);
+      await cleanupBackgroundFiles(removeAppearanceBackgroundFiles(), 'background removal cleanup');
+      return settings;
+    });
   });
+}
+
+async function cleanupBackgroundFiles(operation: Promise<void>, context: string): Promise<void> {
+  try {
+    await operation;
+  } catch (error) {
+    log.warn(`${context} failed (non-fatal)`, {
+      code: (error as NodeJS.ErrnoException).code ?? 'UNKNOWN',
+    });
+  }
 }
 
 export function applyAppearanceToWindow(

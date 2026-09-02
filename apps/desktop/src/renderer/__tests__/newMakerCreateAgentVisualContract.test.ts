@@ -22,6 +22,7 @@ const vendorIconSource = readFileSync(resolve(__dirname, '..', 'components', 'si
 const extraDirsButtonSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'ExtraDirsButton.tsx'), 'utf8');
 const colorsSource = readFileSync(resolve(__dirname, '..', 'themes', 'colors.ts'), 'utf8');
 const globalsSource = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
+const preloadSource = readFileSync(resolve(__dirname, '..', '..', 'preload', 'preload.ts'), 'utf8');
 const settingsSource = readFileSync(
   resolve(__dirname, '..', 'components', 'settings', 'SettingsView.tsx'),
   'utf8',
@@ -40,6 +41,12 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(schedulerSource).toContain(
       "backgroundImage ? 'bg-transparent' : 'bg-[hsl(var(--content-area))]'",
     );
+  });
+
+  it('reads the latest appearance snapshot when a background-aware route mounts', () => {
+    expect(preloadSource).toContain('getSync: readAppearanceSettingsSync');
+    expect(preloadSource).toContain("ipcRenderer.sendSync('appearance-settings:get-sync')");
+    expect(preloadSource).not.toContain('getSync: (): AppearanceSettings | null => appearanceSettingsInfo');
   });
 
   it('keeps the default sidebar divider visible after a custom background is removed', () => {

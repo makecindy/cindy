@@ -1,6 +1,7 @@
 /** Main-owned custom background import and read-only protocol. */
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   app,
   dialog,
@@ -63,36 +64,64 @@ export async function importAppearanceBackground(
   if (!ext) throwIpcError('INVALID_PARAMS', 'unsupported background image');
   const dir = backgroundDir();
   await fs.promises.mkdir(dir, { recursive: true });
-  const target = path.join(dir, `background${ext}`);
-  const temp = path.join(dir, `.background-${process.pid}-${Date.now()}${ext}`);
+  const id = randomUUID();
+  const fileName = `background-${id}${ext}`;
+  const target = path.join(dir, fileName);
+  const temp = path.join(dir, `.${fileName}.tmp`);
   await fs.promises.writeFile(temp, bytes, { flag: 'wx' });
-  await fs.promises.copyFile(temp, target);
-  await fs.promises.unlink(temp);
-  await removeOtherBackgrounds(target);
-  return { canceled: false, url: `${SCHEME}://current/background${ext}?v=${Date.now()}` };
+  try {
+    await fs.promises.rename(temp, target);
+  } catch (error) {
+    await unlinkIfPresent(temp).catch(() => undefined);
+    throw error;
+  }
+  return { canceled: false, url: `${SCHEME}://current/${fileName}` };
 }
 
-export async function removeAppearanceBackgroundFiles(): Promise<void> {
-  await removeOtherBackgrounds('');
+export async function removeAppearanceBackgroundFile(url: string): Promise<void> {
+  const fileName = backgroundFileNameFromUrl(url);
+  if (!fileName) return;
+  await unlinkIfPresent(path.join(backgroundDir(), fileName));
 }
 
-async function removeOtherBackgrounds(keep: string): Promise<void> {
+export async function removeAppearanceBackgroundFiles(keepUrl = ''): Promise<void> {
   const dir = backgroundDir();
+  const keep = backgroundFileNameFromUrl(keepUrl);
+  let names: string[];
+  try {
+    names = await fs.promises.readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
   await Promise.all(
-    [...MIME_EXT.values()].map(async (ext) => {
-      const candidate = path.join(dir, `background${ext}`);
-      if (candidate === keep) return;
-      await fs.promises.unlink(candidate).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT') throw error;
-      });
+    names.map(async (name) => {
+      if (name === keep || !BACKGROUND_FILE_NAME.test(name)) return;
+      await unlinkIfPresent(path.join(dir, name));
     }),
   );
+}
+
+const BACKGROUND_FILE_NAME = /^background(?:-[0-9a-f-]+)?\.(?:png|jpg|webp)$/;
+
+function backgroundFileNameFromUrl(url: string): string | null {
+  const match =
+    /^cindy-background:\/\/current\/(background(?:-[0-9a-f-]+)?\.(?:png|jpg|webp))(?:\?v=\d+)?$/.exec(
+      url,
+    );
+  return match?.[1] ?? null;
+}
+
+async function unlinkIfPresent(filePath: string): Promise<void> {
+  await fs.promises.unlink(filePath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+  });
 }
 
 export function registerAppearanceBackgroundProtocolHandler(): void {
   protocol.handle(SCHEME, async (request) => {
     const match =
-      /^cindy-background:\/\/current\/(background\.(?:png|jpe?g|webp))(?:\?v=\d+)?$/.exec(
+      /^cindy-background:\/\/current\/(background(?:-[0-9a-f-]+)?\.(?:png|jpg|webp))(?:\?v=\d+)?$/.exec(
         request.url,
       );
     if (!match) return new Response(null, { status: 403 });
@@ -112,4 +141,4 @@ export function registerAppearanceBackgroundProtocolHandler(): void {
   });
 }
 
-export const __testing = { backgroundDir };
+export const __testing = { backgroundDir, backgroundFileNameFromUrl };
