@@ -5,7 +5,11 @@ import { app, BrowserWindow, ipcMain, powerMonitor, shell, utilityProcess } from
 
 import { createLogger } from '../logger.js';
 import { getDeepLinkMainWindow, openMainWindowSession, sendMainWindowMessage } from '../deepLink.js';
-import { createLayoutPreviewLease, layoutPreviewOwnerFromEvent } from '../input-devices/previewLease.js';
+import {
+  createLayoutPreviewLease,
+  layoutPreviewOwnerFromEvent,
+  type LayoutPreviewOwner,
+} from '../input-devices/previewLease.js';
 import { registerInputDevice } from '../input-devices/registry.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
 import {
@@ -30,6 +34,7 @@ import {
   WORKLOUDER_MODELS,
   isWorkLouderModel,
   type WorkLouderAccessoriesState,
+  type WorkLouderModel,
   type WorkLouderCodexPreviewInput,
   type WorkLouderCodexRendererAction,
 } from '../../shared/workLouderCodex.js';
@@ -42,7 +47,7 @@ import {
   type WorkLouderSdkLocation,
 } from './WorkLouderCodexHostClient.js';
 import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingController.js';
-import { WorkLouderAccessories, workLouderLayoutPreviewSuppressesActions } from './accessories.js';
+import { WorkLouderAccessories, WorkLouderLayoutPreviewSession } from './accessories.js';
 import { createWorkLouderCodexSettingsIpc } from './settingsIpc.js';
 import { CodexMicroGuardService } from './CodexMicroGuardService.js';
 import { createCodexMicroGuardIpc } from './codexMicroGuardIpc.js';
@@ -189,6 +194,26 @@ const workLouderAccessories = new WorkLouderAccessories(workLouderCodexLightingC
 const layoutPreviewLease = createLayoutPreviewLease((active) => {
   workLouderCodexLightingController.setLayoutPreviewActive(active);
 });
+const layoutPreviewSession = new WorkLouderLayoutPreviewSession();
+let layoutPreviewOwner: LayoutPreviewOwner | null = null;
+
+function occupyingWorkLouderModel(): WorkLouderModel | null {
+  const live = workLouderCodexLightingController.getState();
+  return live.settings.deviceEnabled && isWorkLouderModel(live.device.deviceType)
+    ? live.device.deviceType
+    : null;
+}
+
+function syncLayoutPreviewLease(): void {
+  layoutPreviewLease.setActive(
+    layoutPreviewSession.shouldSuppress(occupyingWorkLouderModel()),
+    layoutPreviewOwner,
+  );
+}
+
+workLouderAccessories.subscribe(() => {
+  syncLayoutPreviewLease();
+});
 
 let settingsIpcRegistered = false;
 let inputDeviceRegistered = false;
@@ -293,15 +318,9 @@ export function registerWorkLouderCodexSettingsIpc(): void {
       void workLouderCodexLightingController.refreshTaskSlots().catch(() => undefined);
     },
     setLayoutPreviewActive: (active, model, event) => {
-      const live = workLouderCodexLightingController.getState();
-      const occupying =
-        live.settings.deviceEnabled && isWorkLouderModel(live.device.deviceType)
-          ? live.device.deviceType
-          : null;
-      layoutPreviewLease.setActive(
-        workLouderLayoutPreviewSuppressesActions(active, model, occupying),
-        layoutPreviewOwnerFromEvent(event),
-      );
+      layoutPreviewOwner = layoutPreviewOwnerFromEvent(event);
+      layoutPreviewSession.setRequest(active, model);
+      syncLayoutPreviewLease();
     },
   });
 

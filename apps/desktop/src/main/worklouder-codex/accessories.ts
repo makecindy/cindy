@@ -61,6 +61,21 @@ export function workLouderLayoutPreviewSuppressesActions(
   return Boolean(active && occupyingModel && editedModel === occupyingModel);
 }
 
+/** Remembers the open settings page so occupancy changes can recompute the lease. */
+export class WorkLouderLayoutPreviewSession {
+  private wanted = false;
+  private edited: WorkLouderModel | null = null;
+
+  setRequest(active: boolean, edited: WorkLouderModel | null): void {
+    this.wanted = active;
+    this.edited = active ? edited : null;
+  }
+
+  shouldSuppress(occupying: WorkLouderModel | null): boolean {
+    return workLouderLayoutPreviewSuppressesActions(this.wanted, this.edited, occupying);
+  }
+}
+
 function cloneAction(action: WorkLouderCodexAction | null): WorkLouderCodexAction | null {
   return action ? { ...action } : null;
 }

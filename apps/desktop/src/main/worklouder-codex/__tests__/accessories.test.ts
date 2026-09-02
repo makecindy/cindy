@@ -11,6 +11,7 @@ import {
   WorkLouderAccessories,
   resolveWorkLouderOccupyingModel,
   workLouderLayoutPreviewSuppressesActions,
+  WorkLouderLayoutPreviewSession,
   workLouderNeedsIdentityDiscovery,
   type WorkLouderLightingHost,
 } from '../accessories.js';
@@ -144,6 +145,16 @@ describe('workLouderLayoutPreviewSuppressesActions', () => {
     expect(workLouderLayoutPreviewSuppressesActions(false, 'codex-micro', 'codex-micro')).toBe(
       false,
     );
+  });
+
+  it('recomputes suppression when occupancy lands or moves after the page is already open', () => {
+    const session = new WorkLouderLayoutPreviewSession();
+    session.setRequest(true, 'creator-micro-2');
+    expect(session.shouldSuppress(null)).toBe(false);
+    expect(session.shouldSuppress('creator-micro-2')).toBe(true);
+    expect(session.shouldSuppress('codex-micro')).toBe(false);
+    session.setRequest(false, 'creator-micro-2');
+    expect(session.shouldSuppress('creator-micro-2')).toBe(false);
   });
 });
 
