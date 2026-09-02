@@ -9,7 +9,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 
-import { GhostLibrarySlot, type GhostLibrarySlotDeps } from '../librarySlot.js';
+import { GhostLibrarySlot, libraryAvailableRef, type GhostLibrarySlotDeps } from '../librarySlot.js';
+import { createHash } from 'node:crypto';
 import { LibraryBindingStore } from '../libraryBinding.js';
 import { LibraryVault } from '../libraryVault.js';
 import { createLibraryDbCore, type SqliteDatabaseConstructor } from '../libraryDbCore.js';
@@ -45,8 +46,10 @@ describe('GhostLibrarySlot', () => {
   let scopeKey: string | null = 'local:owner-a:1';
   let ghost: InstalledGhost;
   let slot: GhostLibrarySlot;
+  let bindingStore: LibraryBindingStore;
   let showItemInFolder: ReturnType<typeof vi.fn>;
   let showSaveDialog: ReturnType<typeof vi.fn>;
+  let syncAgentReadonlyExtraDir: ReturnType<typeof vi.fn>;
   let clock: number;
 
   beforeEach(async () => {
@@ -57,13 +60,14 @@ describe('GhostLibrarySlot', () => {
     clock = 0;
     await fs.promises.mkdir(candidate, { recursive: true });
     ghost = makeGhost(true);
+    bindingStore = new LibraryBindingStore({
+      getFile: () => bindingFile,
+      getManagedRoots: () => [path.join(tmp, 'managed')],
+      getDefaultRoot: (id) => path.join(defaultRootBase, id),
+    });
     const deps: GhostLibrarySlotDeps = {
       getGhost: (id) => (id === GHOST_ID ? ghost : null),
-      bindingStore: new LibraryBindingStore({
-        getFile: () => bindingFile,
-        getManagedRoots: () => [path.join(tmp, 'managed')],
-        getDefaultRoot: (id) => path.join(defaultRootBase, id),
-      }),
+      bindingStore,
       getDefaultRoot: (id) => path.join(defaultRootBase, id),
       captureOwnerScope: () => scopeKey,
       createVault: (d) => new LibraryVault(d),
@@ -78,10 +82,12 @@ describe('GhostLibrarySlot', () => {
       betterSqliteModulePath: () => 'better-sqlite3',
       showItemInFolder: (...args: unknown[]) => showItemInFolder(...args),
       showSaveDialog: (...args: unknown[]) => showSaveDialog(...args),
+      syncAgentReadonlyExtraDir: (...args: unknown[]) => syncAgentReadonlyExtraDir(...args),
       now: () => clock,
     };
     showItemInFolder = vi.fn();
     showSaveDialog = vi.fn(async () => ({ canceled: true }));
+    syncAgentReadonlyExtraDir = vi.fn(async () => {});
     slot = new GhostLibrarySlot(deps);
   });
 
@@ -439,5 +445,113 @@ describe('GhostLibrarySlot', () => {
     const r = await pending;
     expect(r).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
     expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it('open/status 握手含 authorizedReadonly 与 generation/identity,JSON 不含绝对库根', async () => {
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    const openHs = open as unknown as {
+      authorizedReadonly: boolean;
+      libraryGeneration: number;
+      libraryIdentity: string;
+    };
+    expect(openHs.authorizedReadonly).toBe(true);
+    expect(openHs.libraryGeneration).toBe(0);
+    expect(openHs.libraryIdentity).toBe('default');
+    const dumped = JSON.stringify(open);
+    expect(dumped).not.toContain(defaultRootBase);
+    expect(dumped).not.toMatch(/\/Users\//);
+    expect(dumped).not.toContain(tmp);
+
+    const st = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    expect((st as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
+    const probeDump = JSON.stringify({ open, status: st });
+    expect(probeDump).not.toContain(defaultRootBase);
+    expect(probeDump).not.toMatch(/\/Users\/.*\/libraries\//);
+  });
+
+  it('open 把库根交给 extraDirs 同步;dispose 时撤槽', async () => {
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(
+      GHOST_ID,
+      path.join(defaultRootBase, GHOST_ID),
+    );
+    await slot.disposeGhost(GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, null);
+  });
+
+  it('bind generation 变了:握手换身份,extraDirs 同步新根不留旧根', async () => {
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    const defaultRoot = path.join(defaultRootBase, GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, defaultRoot);
+
+    const bound = await bindingStore.setBinding(GHOST_ID, candidate);
+    expect(bound.ok).toBe(true);
+    await slot.disposeGhost(GHOST_ID);
+    syncAgentReadonlyExtraDir.mockClear();
+
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    const hs = open as unknown as {
+      authorizedReadonly: boolean;
+      libraryGeneration: number;
+      libraryIdentity: string;
+    };
+    expect(hs.authorizedReadonly).toBe(true);
+    expect(hs.libraryGeneration).toBe(1);
+    expect(hs.libraryIdentity).toBe('g1');
+    const dumped = JSON.stringify(open);
+    expect(dumped).not.toContain(candidate);
+    expect(dumped).not.toContain(defaultRoot);
+    expect(dumped).not.toMatch(/\/Users\/.*\/libraries\//);
+
+    const newRoot = path.join(await fs.promises.realpath(candidate), GHOST_ID);
+    expect(syncAgentReadonlyExtraDir).toHaveBeenCalledWith(GHOST_ID, newRoot);
+    expect(syncAgentReadonlyExtraDir.mock.calls.map((call) => call[1])).not.toContain(defaultRoot);
+  });
+
+  it('extraDirs 同步失败则握手 authorizedReadonly=false,不假装授权', async () => {
+    syncAgentReadonlyExtraDir.mockRejectedValueOnce(new Error('require app-server 0.144.6 or newer'));
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    expect((open as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(false);
+    expect(JSON.stringify(open)).not.toContain(defaultRootBase);
+  });
+
+  it('writeCommit ACK 含 64-hex sha256,形状 {ok,op,path,bytes,sha256}', async () => {
+    const body = 'pixel-bytes';
+    const sha = createHash('sha256').update(body).digest('hex');
+    const rel = 'assets/ab/abc123def456abc123def456abc123de/blob.png';
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    const begin = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'writeBegin', path: rel, totalBytes: Buffer.byteLength(body), sha256: sha,
+    });
+    if (!begin.ok || begin.op !== 'writeBegin') throw new Error(JSON.stringify(begin));
+    const chunk = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'writeChunk', streamId: begin.streamId, seq: 1, content: body,
+    });
+    expect(chunk.ok).toBe(true);
+    const commit = await slot.handleLibraryRequest(GHOST_ID, { op: 'writeCommit', streamId: begin.streamId });
+    expect(commit).toEqual({
+      ok: true,
+      op: 'writeCommit',
+      path: rel,
+      bytes: Buffer.byteLength(body),
+      sha256: sha,
+    });
+    expect(commit.ok && 'sha256' in commit && /^[0-9a-f]{64}$/.test(commit.sha256)).toBe(true);
+    expect(fs.existsSync(path.join(tmp, 'libraryConfirmed.ts'))).toBe(false);
+    expect(fs.existsSync(path.join(process.cwd(), 'apps/desktop/src/main/cindy-brain/libraryConfirmed.ts'))).toBe(false);
+  });
+
+  it('available 引用:授权相对键,未授权 cindy-media,SVG 未授权不可读', () => {
+    const hash = 'c'.repeat(64);
+    expect(libraryAvailableRef({ authorized: true, hash, ext: 'png', confirmed: true }))
+      .toBe(`library:assets/${hash.slice(0, 2)}/${hash}/blob.png`);
+    expect(libraryAvailableRef({ authorized: false, hash, ext: 'png', confirmed: true }))
+      .toBe(`cindy-media://blobs/${hash}.png`);
+    expect(libraryAvailableRef({ authorized: false, hash, ext: 'svg', confirmed: true })).toBeNull();
+    expect(libraryAvailableRef({ authorized: true, hash, ext: 'png', confirmed: false })).toBeNull();
   });
 });

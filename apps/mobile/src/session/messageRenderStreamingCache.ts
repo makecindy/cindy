@@ -12,6 +12,7 @@ import {
   type MobileMessageRenderItem,
 } from '@/session/messageRenderModel';
 import { collectMobileMarkdownImages } from '@/session/messageMarkdown';
+import { countMobileRenderItemDiffs } from '@/session/messagePresentation';
 import type { RemoteMessage } from '@/session/types';
 import { contentToPreview } from '@/utils/contentPreview';
 
@@ -19,12 +20,15 @@ export interface MobileStreamingRenderPrefixCache {
   boundaryMessage?: RemoteMessage;
   cacheKey: string;
   items: readonly MobileMessageRenderItem[];
+  diffCount: number;
   markdownImageUrls?: ReadonlySet<string>;
+  messageStructureToken?: object;
   messages: readonly RemoteMessage[];
   mode: 'history' | 'truncated-turn';
   sessionId: string;
   tailToolResults?: readonly RemoteMessage[];
   taskUpdateDependencies?: readonly MobileStreamingTaskUpdateDependency[];
+  taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
   toolUseIds?: ReadonlySet<string>;
 }
 
@@ -41,6 +45,8 @@ export interface MobileStreamingRenderPrefixCacheRef {
 interface BuildMobileStreamingRenderWindowInput {
   cacheKey: string;
   messages: readonly RemoteMessage[];
+  messageStructureChangedIndexes?: ReadonlySet<number>;
+  messageStructureToken?: object;
   options: MessageRenderOptions & {
     autoResumePending?: Record<string, unknown> | null;
     sessionId?: string;
@@ -51,8 +57,33 @@ interface BuildMobileStreamingRenderWindowInput {
 }
 
 export interface MobileStreamingRenderWindowResult {
+  diffCount: number;
   items: MobileMessageRenderItem[];
   prefix: MobileStreamingRenderPrefixCache | null;
+  stablePrefixItemCount: number;
+}
+
+/**
+ * Only a prefix that participated in the previous committed render can safely skip reconciliation.
+ * A concurrently abandoned render may publish a newer speculative prefix into the cache; its rows
+ * still need to be compared with the last committed rows before React can reuse them.
+ */
+export function committedMobileStreamingPrefixItemCount(
+  renderWindow: MobileStreamingRenderWindowResult,
+  committedPrefix: MobileStreamingRenderPrefixCache | null | undefined,
+): number {
+  return renderWindow.prefix !== null && renderWindow.prefix === committedPrefix
+    ? renderWindow.stablePrefixItemCount
+    : 0;
+}
+
+/** Keep a newly committed cache prefix on the exact row objects React received. */
+export function commitMobileStreamingPrefixItems(
+  prefix: MobileStreamingRenderPrefixCache,
+  committedItems: readonly MobileMessageRenderItem[],
+): void {
+  if (prefix.items.length > committedItems.length) return;
+  prefix.items = committedItems.slice(0, prefix.items.length);
 }
 
 /**
@@ -70,18 +101,37 @@ export function buildMobileStreamingRenderWindow(
   const {
     cacheKey,
     messages,
+    messageStructureChangedIndexes,
+    messageStructureToken,
     options,
     prefixCache,
     previousPrefix = prefixCache?.current,
     taskUpdates,
   } = input;
   const sessionId = options.sessionId ?? messages[0]?.sessionId ?? '';
-  const activeTurnStart = options.isSessionStreaming === true
-    ? findLastRootUserMessageIndex(messages)
-    : -1;
-  const stableAssistantBoundary = options.isSessionStreaming === true
-    ? findLastStableAssistantBoundaryIndex(messages)
-    : -1;
+  const trustedPreviousBoundary = trustedStreamingBoundaryPrefix({
+    changedIndexes: messageStructureChangedIndexes,
+    messageStructureToken,
+    previousPrefix,
+    sessionId,
+  });
+  const activeTurnStart = options.isSessionStreaming !== true
+    ? -1
+    : trustedPreviousBoundary?.mode === 'history'
+      ? trustedPreviousBoundary.messages.length
+      : trustedPreviousBoundary?.mode === 'truncated-turn'
+        ? -1
+        : findLastRootUserMessageIndex(messages);
+  const stableAssistantBoundary = options.isSessionStreaming !== true
+    ? -1
+    : trustedPreviousBoundary?.mode === 'truncated-turn'
+      ? trustedPreviousBoundary.messages.length - 1
+      : trustedPreviousBoundary?.mode === 'history'
+        ? -1
+        : findLastStableAssistantBoundaryIndex(
+            messages,
+            activeTurnStart >= 0 ? activeTurnStart + 1 : 1,
+          );
   if (
     options.isSessionStreaming === true
     && (activeTurnStart < 0 || stableAssistantBoundary > activeTurnStart)
@@ -105,6 +155,8 @@ export function buildMobileStreamingRenderWindow(
       boundaryIndex: stableAssistantBoundary,
       cacheKey,
       messages,
+      messageStructureChangedIndexes,
+      messageStructureToken,
       options,
       prefixCache,
       previousPrefix,
@@ -113,9 +165,12 @@ export function buildMobileStreamingRenderWindow(
     });
   }
   if (activeTurnStart <= 0) {
+    const items = buildMobileMessageRenderItems(messages, options, taskUpdates);
     const result = {
-      items: buildMobileMessageRenderItems(messages, options, taskUpdates),
+      diffCount: countMobileRenderItemDiffs(items),
+      items,
       prefix: null,
+      stablePrefixItemCount: 0,
     };
     if (prefixCache) prefixCache.current = null;
     return result;
@@ -124,8 +179,19 @@ export function buildMobileStreamingRenderWindow(
   const canReusePrefix = previousPrefix?.mode === 'history'
     && previousPrefix.sessionId === sessionId
     && previousPrefix.cacheKey === cacheKey
-    && sameTaskUpdateDependencies(previousPrefix.taskUpdateDependencies, taskUpdates)
-    && sameMessagePrefixReferences(previousPrefix.messages, messages, activeTurnStart);
+    && (
+      previousPrefix.taskUpdates === taskUpdates
+      || sameTaskUpdateDependencies(previousPrefix.taskUpdateDependencies, taskUpdates)
+    )
+    && (
+      structureTokenKeepsPrefixStable({
+        changedIndexes: messageStructureChangedIndexes,
+        messageStructureToken,
+        minimumChangedIndex: activeTurnStart,
+        previousMessageStructureToken: previousPrefix.messageStructureToken,
+      })
+      || sameMessagePrefixReferences(previousPrefix.messages, messages, activeTurnStart)
+    );
   const prefixMessages = canReusePrefix
     ? previousPrefix.messages
     : messages.slice(0, activeTurnStart);
@@ -140,15 +206,22 @@ export function buildMobileStreamingRenderWindow(
       isSessionStreaming: false,
       renderOrphanTaskUpdates: false,
     }, taskUpdates);
+  if (canReusePrefix) {
+    previousPrefix.messageStructureToken = messageStructureToken;
+    previousPrefix.taskUpdates = taskUpdates;
+  }
   const prefix = canReusePrefix
     ? previousPrefix
     : {
         cacheKey,
+        diffCount: countMobileRenderItemDiffs(prefixItems),
         items: prefixItems,
+        messageStructureToken,
         messages: prefixMessages,
         mode: 'history' as const,
         sessionId,
         taskUpdateDependencies: prefixTaskUpdateDependencies,
+        taskUpdates,
       };
   const activeItems = buildMobileMessageRenderItems(
     messages.slice(activeTurnStart),
@@ -156,8 +229,10 @@ export function buildMobileStreamingRenderWindow(
     omitTaskUpdatesConsumedByPrefix(taskUpdates, prefixTaskUpdateDependencies),
   );
   const result = {
+    diffCount: prefix.diffCount + countMobileRenderItemDiffs(activeItems),
     items: [...prefixItems, ...activeItems],
     prefix,
+    stablePrefixItemCount: canReusePrefix ? prefixItems.length : 0,
   };
   // Token updates may interrupt a concurrent render before it commits. Publishing this purely
   // derived prefix only from a layout effect would then make every retry rebuild the full history.
@@ -177,6 +252,8 @@ function buildTruncatedActiveTurnWindow(
     boundaryIndex,
     cacheKey,
     messages,
+    messageStructureChangedIndexes,
+    messageStructureToken,
     options,
     prefixCache,
     previousPrefix,
@@ -185,25 +262,45 @@ function buildTruncatedActiveTurnWindow(
   } = input;
   let items: MobileMessageRenderItem[] | null = null;
   let reusedPrefix = false;
+  let activeDiffCount = 0;
 
   if (
     previousPrefix?.mode === 'truncated-turn'
     && previousPrefix.sessionId === sessionId
     && previousPrefix.cacheKey === cacheKey
-    && sameTaskUpdateDependencies(previousPrefix.taskUpdateDependencies, taskUpdates)
+    && (
+      previousPrefix.taskUpdates === taskUpdates
+      || sameTaskUpdateDependencies(previousPrefix.taskUpdateDependencies, taskUpdates)
+    )
     && previousPrefix.boundaryMessage
     && previousPrefix.messages.length === boundaryIndex + 1
     && previousPrefix.boundaryMessage === messages[boundaryIndex]
-    && sameMessagePrefixReferences(
-      previousPrefix.messages,
-      messages,
-      previousPrefix.messages.length,
+    && (
+      structureTokenKeepsPrefixStable({
+        changedIndexes: messageStructureChangedIndexes,
+        messageStructureToken,
+        minimumChangedIndex: previousPrefix.messages.length,
+        previousMessageStructureToken: previousPrefix.messageStructureToken,
+      })
+      || sameMessagePrefixReferences(
+        previousPrefix.messages,
+        messages,
+        previousPrefix.messages.length,
+      )
     )
-    && sameDependentTailToolResults(
-      previousPrefix.tailToolResults ?? [],
-      messages,
-      previousPrefix.messages.length,
-      previousPrefix.toolUseIds,
+    && (
+      structureTokenKeepsPrefixStable({
+        changedIndexes: messageStructureChangedIndexes,
+        messageStructureToken,
+        minimumChangedIndex: previousPrefix.messages.length,
+        previousMessageStructureToken: previousPrefix.messageStructureToken,
+      })
+      || sameDependentTailToolResults(
+        previousPrefix.tailToolResults ?? [],
+        messages,
+        previousPrefix.messages.length,
+        previousPrefix.toolUseIds,
+      )
     )
   ) {
     const activeItems = buildMobileMessageRenderItems(
@@ -216,29 +313,43 @@ function buildTruncatedActiveTurnWindow(
       previousPrefix.boundaryMessage,
     );
     if (duplicateBoundaryIndex >= 0) {
+      const activeTailItems = activeItems.slice(duplicateBoundaryIndex + 1);
       items = [
         ...previousPrefix.items,
-        ...activeItems.slice(duplicateBoundaryIndex + 1),
+        ...activeTailItems,
       ];
+      activeDiffCount = countMobileRenderItemDiffs(activeTailItems);
       reusedPrefix = true;
     }
   }
 
   if (!items) items = buildMobileMessageRenderItems(messages, options, taskUpdates);
   if (reusedPrefix && previousPrefix) {
-    if (prefixCache) prefixCache.current = previousPrefix;
-    return { items, prefix: previousPrefix };
+    previousPrefix.messageStructureToken = messageStructureToken;
+    previousPrefix.taskUpdates = taskUpdates;
+    const prefix = previousPrefix;
+    if (prefixCache) prefixCache.current = prefix;
+    return {
+      diffCount: prefix.diffCount + activeDiffCount,
+      items,
+      prefix,
+      stablePrefixItemCount: prefix.items.length,
+    };
   }
   const builtPrefix = buildTruncatedTurnPrefix({
     boundaryIndex,
     cacheKey,
     items,
+    messageStructureToken,
     messages,
     sessionId,
     taskUpdates,
   });
   const prefix = previousPrefix?.mode === 'truncated-turn'
     && builtPrefix !== null
+    && previousPrefix.cacheKey === cacheKey
+    && previousPrefix.messageStructureToken === messageStructureToken
+    && previousPrefix.sessionId === sessionId
     && builtPrefix.boundaryMessage === previousPrefix.boundaryMessage
     && sameTaskUpdateDependencySnapshots(
       builtPrefix.taskUpdateDependencies,
@@ -252,13 +363,57 @@ function buildTruncatedActiveTurnWindow(
     ? previousPrefix
     : builtPrefix;
   if (prefixCache) prefixCache.current = prefix;
-  return { items, prefix };
+  return {
+    diffCount: countMobileRenderItemDiffs(items),
+    items,
+    prefix,
+    stablePrefixItemCount: 0,
+  };
+}
+
+function structureTokenKeepsPrefixStable(input: {
+  changedIndexes: ReadonlySet<number> | undefined;
+  messageStructureToken: object | undefined;
+  minimumChangedIndex: number;
+  previousMessageStructureToken: object | undefined;
+}): boolean {
+  if (
+    input.messageStructureToken === undefined
+    || input.changedIndexes === undefined
+    || input.previousMessageStructureToken !== input.messageStructureToken
+  ) return false;
+  for (const changedIndex of input.changedIndexes) {
+    if (changedIndex < input.minimumChangedIndex) return false;
+  }
+  return true;
+}
+
+function trustedStreamingBoundaryPrefix(input: {
+  changedIndexes: ReadonlySet<number> | undefined;
+  messageStructureToken: object | undefined;
+  previousPrefix: MobileStreamingRenderPrefixCache | null | undefined;
+  sessionId: string;
+}): MobileStreamingRenderPrefixCache | null {
+  const prefix = input.previousPrefix;
+  if (!prefix || prefix.sessionId !== input.sessionId) return null;
+  const minimumChangedIndex = prefix.mode === 'history'
+    ? prefix.messages.length + 1
+    : prefix.messages.length;
+  return structureTokenKeepsPrefixStable({
+    changedIndexes: input.changedIndexes,
+    messageStructureToken: input.messageStructureToken,
+    minimumChangedIndex,
+    previousMessageStructureToken: prefix.messageStructureToken,
+  })
+    ? prefix
+    : null;
 }
 
 function buildTruncatedTurnPrefix(input: {
   boundaryIndex: number;
   cacheKey: string;
   items: readonly MobileMessageRenderItem[];
+  messageStructureToken?: object;
   messages: readonly RemoteMessage[];
   sessionId: string;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
@@ -272,13 +427,16 @@ function buildTruncatedTurnPrefix(input: {
   return {
     boundaryMessage,
     cacheKey: input.cacheKey,
+    diffCount: countMobileRenderItemDiffs(input.items.slice(0, boundaryItemIndex + 1)),
     items: input.items.slice(0, boundaryItemIndex + 1),
     markdownImageUrls: collectAssistantMarkdownImageUrls(prefixMessages, prefixMessages.length),
+    messageStructureToken: input.messageStructureToken,
     messages: prefixMessages,
     mode: 'truncated-turn',
     sessionId: input.sessionId,
     tailToolResults: collectDependentTailToolResults(input.messages, prefixMessages.length),
     taskUpdateDependencies: collectTaskUpdateDependencies(prefixMessages, input.taskUpdates),
+    taskUpdates: input.taskUpdates,
     toolUseIds: collectToolUseIds(prefixMessages, prefixMessages.length),
   };
 }
@@ -339,8 +497,11 @@ function omitTaskUpdatesConsumedByPrefix(
   );
 }
 
-function findLastStableAssistantBoundaryIndex(messages: readonly RemoteMessage[]): number {
-  for (let index = messages.length - 2; index > 0; index -= 1) {
+function findLastStableAssistantBoundaryIndex(
+  messages: readonly RemoteMessage[],
+  minimumIndex = 1,
+): number {
+  for (let index = messages.length - 2; index >= minimumIndex; index -= 1) {
     const message = messages[index];
     const parentUuid = message.agentMeta?.parentUuid;
     if (

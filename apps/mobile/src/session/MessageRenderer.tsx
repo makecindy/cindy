@@ -625,6 +625,7 @@ export function MessageRenderer({
   focusedItemKey,
   followLatestRequestKey,
   items,
+  itemsStructureKey,
   onCopyMessageLink,
   onAddMessageToComposer,
   onForkMessage,
@@ -671,6 +672,8 @@ export function MessageRenderer({
   focusedRequestKey?: number | string | null;
   followLatestRequestKey?: number | string | null;
   items: readonly MobileMessageRenderItem[];
+  /** Stable while streaming only changes row content; structural list derivations key off this. */
+  itemsStructureKey?: unknown;
   /** Oldest loaded host cursor; synthetic cards must not mask successful history prepends. */
   loadEarlierProgressKey?: string | null;
   emptyTestID?: string;
@@ -709,8 +712,17 @@ export function MessageRenderer({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const firstUserMessageClientId = findFirstUserMessageClientId(items);
-  const lastUserInputClientId = findLastUserInputClientId(items);
+  const itemStructureIdentity = itemsStructureKey ?? items;
+  const itemsForStructureRef = useRef(items);
+  itemsForStructureRef.current = items;
+  const firstUserMessageClientId = useMemo(
+    () => findFirstUserMessageClientId(itemsForStructureRef.current),
+    [itemStructureIdentity],
+  );
+  const lastUserInputClientId = useMemo(
+    () => findLastUserInputClientId(itemsForStructureRef.current),
+    [itemStructureIdentity],
+  );
   const focusedItemKeyRef = useRef(focusedItemKey);
   focusedItemKeyRef.current = focusedItemKey;
   const listRef = useRef<LegendListRef>(null);
@@ -1318,7 +1330,7 @@ export function MessageRenderer({
   // 与 main 保持一致：完整历史从首次挂载起就在同一个 LegendList 中，屏外 cell 交给
   // LegendList 虚拟化/回收。不能用业务尾窗代替完整数据，否则短尾窗未撑满首屏时
   // Android 无法产生有效滚动，运行中任务会重现“上半屏空白且历史不可拖动”。
-  const listData = useMemo(() => [...items], [items]);
+  const listData = items;
   const listDataRef = useRef(listData);
   listDataRef.current = listData;
   const prevListLengthRef = useRef(listData.length);
@@ -1334,7 +1346,10 @@ export function MessageRenderer({
     }
     prevListLengthRef.current = listData.length;
   }
-  const itemKeys = useMemo(() => listData.map((item) => item.key), [listData]);
+  const itemKeys = useMemo(
+    () => listDataRef.current.map((item) => item.key),
+    [itemStructureIdentity],
+  );
   const itemKeysSignature = useMemo(
     () => mobileMessageListKeysSignature(itemKeys),
     [itemKeys],

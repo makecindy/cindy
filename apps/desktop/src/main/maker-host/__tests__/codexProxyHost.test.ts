@@ -428,13 +428,13 @@ describe('createCrossProviderCompactionCompatTransform', () => {
     encrypted_content: 'REASONING_ENC',
   };
 
-  it('同时降级 compaction 与 agent 消息密文，保留可读正文和 reasoning(非 ChatGPT 上游)', async () => {
+  it('同时降级 compaction 与 agent 消息密文，保留可读正文和 reasoning(非 GPT 模型)', async () => {
     const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     const out = transform(
       {
-        model: 'gpt-5.5',
+        model: 'not-gpt-5',
         input: [compactionItem, contextCompactionItem, agentMessage, reasoningItem, userMessage],
       },
       { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
@@ -465,7 +465,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
 
     const out = transform(
       {
-        model: 'gpt-5.5',
+        model: 'codex/claude-sonnet-4-6',
         input: [
           {
             type: 'agent_message',
@@ -487,30 +487,73 @@ describe('createCrossProviderCompactionCompatTransform', () => {
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
-      { model: 'gpt-5.5', input: [compactionItem, agentMessage, reasoningItem, userMessage] },
+      { model: 'claude-sonnet-4-6', input: [compactionItem, agentMessage, reasoningItem, userMessage] },
       { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
     )).toBeNull();
   });
 
-  it('Cindy Provider codex/* 原样透传 compaction，同时清理 agent 消息密文', async () => {
+  it('版本化 gpt-* 与任意 */gpt-* 在所有 Responses Provider 原样透传父子 Agent 协作密文(大小写不敏感)', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    host.registerComposed('session-custom-gpt-parent', 'thread-custom-gpt-parent', 'PRODUCT_PROMPT');
+    setSessionProvider('session-custom-gpt-parent', 'custom-gpt-pool');
+    const parentToChildMessage = {
+      type: 'agent_message',
+      author: 'parent',
+      recipient: 'researcher',
+      content: [{ type: 'encrypted_content', encrypted_content: 'gAAAAA_PARENT_TO_CHILD_TASK' }],
+    };
+
+    try {
+      const transform = host.createCrossProviderCompactionCompatTransform();
+      for (const model of [
+        'gpt-5.6-sol',
+        'GPT-5.6-TERRA',
+        'codex/gpt-5.6-sol',
+        'OPENAI/GPT-5.6-TERRA',
+        'custom/pool/gpt-5.6-sol',
+      ]) {
+        expect(transform(
+          {
+            model,
+            input: [compactionItem, parentToChildMessage, agentMessage, userMessage],
+          },
+          {
+            ...CTX_BASE,
+            upstreamBase: 'https://custom-pool.example.com/v1',
+            headers: {
+              'thread-id': 'thread-custom-gpt-child',
+              'x-openai-subagent': 'collab_spawn',
+              'x-codex-parent-thread-id': 'thread-custom-gpt-parent',
+            },
+          },
+        )).toBeNull();
+      }
+    } finally {
+      host.unregister('session-custom-gpt-parent');
+      clearSessionProvider('session-custom-gpt-parent');
+    }
+  });
+
+  it('gpt-oss 与非版本化 gpt 标签仍删除父子 Agent 协作密文', async () => {
     const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
     const transform = createCrossProviderCompactionCompatTransform();
-
-    const out = transform(
-      { model: 'codex/gpt-5.6-sol', input: [compactionItem, agentMessage, userMessage] },
-      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
-    ) as { input: Array<Record<string, unknown>> };
-
-    expect(out.input).toEqual([
-      compactionItem,
-      {
-        type: 'agent_message',
-        author: 'researcher',
-        recipient: 'parent',
-        content: [{ type: 'input_text', text: 'readable agent result' }],
-      },
-      userMessage,
-    ]);
+    for (const model of ['gpt-oss:20b', 'codex/gpt-oss:20b', 'gpt-image-1']) {
+      const out = transform(
+        { model, input: [agentMessage, userMessage] },
+        { ...CTX_BASE, upstreamBase: 'https://custom-pool.example.com/v1' },
+      ) as { input: Array<Record<string, unknown>> };
+      expect(out.input).toEqual([
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          recipient: 'parent',
+          content: [{ type: 'input_text', text: 'readable agent result' }],
+        },
+        userMessage,
+      ]);
+      expect(JSON.stringify(out.input)).not.toContain('AGENT_ENC');
+    }
   });
 
   it('upstreamBase 缺失时不改写(保守方向:宁可维持现状,不误伤 ChatGPT 请求)', async () => {
@@ -938,6 +981,75 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       });
     } finally {
       clearSessionProvider('session-history-chat');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('strips parent-to-child ciphertext when a versioned GPT model uses the Chat bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'OPENAI/GPT-5.6-SOL';
+    setCustomProviders([
+      buildUserProvider({
+        id: 'gpt-history-chat-provider',
+        name: 'GPT History Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://gpt-chat-provider.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: model, name: 'Custom GPT' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'gpt-history-provider-key');
+    host.registerComposed('session-gpt-history-chat', 'thread-gpt-history-chat', 'PRODUCT_PROMPT');
+    setSessionProvider('session-gpt-history-chat', 'gpt-history-chat-provider');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const parentToChildMessage = {
+      type: 'agent_message',
+      author: 'parent',
+      recipient: 'researcher',
+      content: [{ type: 'encrypted_content', encrypted_content: 'gAAAAA_PARENT_TO_CHILD_TASK' }],
+    };
+    const parsedBody = { model, input: [parentToChildMessage] };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-gpt-history-chat' },
+    };
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(parsedBody, ctx));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      if (!decision?.localHandler) throw new Error('expected GPT Chat bridge local handler');
+
+      const res = {} as never;
+      await decision.localHandler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx,
+        res,
+      });
+      const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+        | { handle: ReturnType<typeof vi.fn> }
+        | undefined;
+      expect(bridge?.handle).toHaveBeenCalledWith({
+        parsedBody: {
+          ...parsedBody,
+          instructions: 'PRODUCT_PROMPT',
+          input: [],
+        },
+        res,
+      });
+    } finally {
+      clearSessionProvider('session-gpt-history-chat');
       setCustomProviderKeyReader(() => null);
       setCustomProviders([]);
     }

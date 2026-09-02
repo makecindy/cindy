@@ -2,8 +2,8 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改 library 能力（持久作品库）、binding / 目录选择、迁移、
-> 回收站删除、SQLite 语句门、面板 `/library/` 投影，或任何触碰
-> `libraries/` / `libraries-binding.json` / `libraries-trash/` 落盘布局的改动之前
+> 回收站删除、SQLite 语句门、面板 `/library/` 投影、会话级只读 extraDirs 注入，
+> 或任何触碰 `libraries/` / `libraries-binding.json` / `libraries-trash/` 落盘布局的改动之前
 
 `library: true` 给插件一个**用户作品级**的持久存储区，与 `fs: true` 私有储物柜
 （256MiB/2000 文件配额、卸载即回收）是两个语义：不受配额约束（只受磁盘保留
@@ -76,13 +76,24 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 10. **known limitation（如实告知，不假装覆盖）**：Windows 上 binding 的文件
     identity（st_ino）多为 0，「同路径删后重建」检不出（POSIX 可检出）；映射
     网络盘符检测需要 Win32 API，v1 只拒 UNC 路径。
+11. **Agent 只读 extraDirs（会话级，PR0）**：当前 Mivo 会话且 library 可用时，宿主把
+    library 根 realpath 静默写入该会话只读 extraDirs。只读、不弹 picker / 确认卡、
+    不改权限档。library 专用槽不占用户 EXTRA_DIRS_MAX=10。回执 / 握手 / probe 禁绝对
+    路径，相对键 `library:assets/<2>/<hash>/blob.<ext>`。路径不跨 turn 缓存。
+    confirmed 只认宿主 `librarySlot.writeCommit` ACK 的 64-hex sha256。仓内无
+    `libraryConfirmed.ts`（不存在），不得发明该文件。
+12. **切根像素与限额**：正本文件名是 `blob`（路径 `assets/<2>/<hash>/blob.<ext>`），
+    不是 `<hash>.<ext>`。同目录 sidecar `meta.json` / `preview.webp` 禁止当像素。
+    16MiB 是 library 分块阈值（更大走 writeBegin），cindy-media 单件 50MiB、配额
+    1GiB。library 软水位 8GiB + 磁盘保留 1GiB + 5 万文件保险丝。
 
 ## Review 清单
 
-1. 路径/SQL 是否仍只经白名单与相对键？有没有新的绝对路径出口？（saveAs 成功 path 必须是库内相对键，不得把用户另存目标送进沙箱）
+1. 路径/SQL 是否仍只经白名单与相对键？有没有新的绝对路径出口？（saveAs 成功 path 必须是库内相对键，不得把用户另存目标送进沙箱；extraDirs 握手/回执/probe 同禁）
 2. 失败路径是否保持「不可用 ≠ 空」「任一步失败原位原样」？
 3. 生命周期挂点（uninstall/setEnabled/owner 边界）是否补了对应的 dispose？
 4. i18n 五语与中文标点门禁、FORGE_GUIDE §4.10.1 是否同步？
+5. 会话级 extraDirs 是否只读、静默、专用槽不占 EXTRA_DIRS_MAX=10？confirmed 是否只认 writeCommit ACK，有没有发明 `libraryConfirmed.ts`？
 
 最小验证入口：
 

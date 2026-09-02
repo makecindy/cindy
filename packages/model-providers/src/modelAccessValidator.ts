@@ -467,19 +467,21 @@ function modelEntryError(
     );
     if (defaultError) return defaultError;
   }
-  const isV4MediaModel =
+  const isV4StandaloneModel =
     schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
-    (value.mode === 'image_generation' || value.mode === 'video_generation');
-  if (isV4MediaModel && supportedAgents.length > 0) {
-    return `${path}.agents must be empty for a v4 Gateway media mode`;
+    (value.mode === 'image_generation' ||
+      value.mode === 'video_generation' ||
+      value.mode === 'embedding');
+  if (isV4StandaloneModel && supportedAgents.length > 0) {
+    return `${path}.agents must be empty for a v4 Gateway standalone capability mode`;
   }
   if (
     (schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
       schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION) &&
     supportedAgents.length === 0 &&
-    !isV4MediaModel
+    !isV4StandaloneModel
   ) {
-    return `${path}.agents may be empty only for a v4 Gateway media mode`;
+    return `${path}.agents may be empty only for a v4 Gateway standalone capability mode`;
   }
 
   for (const [key, max] of [
@@ -509,7 +511,7 @@ function modelEntryError(
   }
   if (
     (schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
-      (schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION && !isV4MediaModel)) &&
+      (schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION && !isV4StandaloneModel)) &&
     value.contextWindow === undefined
   ) {
     return `${path}.contextWindow is required for schema version 3 and v4 chat models`;

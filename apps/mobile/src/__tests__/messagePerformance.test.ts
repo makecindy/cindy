@@ -3,7 +3,12 @@ import type { AgentTaskUpdate } from '@cindy/maker-shared/agent-task';
 import { describe, expect, it } from 'vitest';
 import { buildMobileMessageRenderItems, type MobileMessageRenderItem } from '@/session/messageRenderModel';
 import { reconcileMobileMessageRenderItems } from '@/session/messageRenderReconcile';
-import { buildMobileStreamingRenderWindow } from '@/session/messageRenderStreamingCache';
+import {
+  buildMobileStreamingRenderWindow,
+  commitMobileStreamingPrefixItems,
+  committedMobileStreamingPrefixItemCount,
+} from '@/session/messageRenderStreamingCache';
+import { countMobileRenderItemDiffs } from '@/session/messagePresentation';
 import type { RemoteMessage } from '@/session/types';
 
 const BASE_TIME = Date.UTC(2026, 0, 1, 0, 0, 0);
@@ -169,6 +174,8 @@ describe('message render performance', () => {
 
   it('reuses the normalized historical prefix while only the active turn streams', () => {
     const messages = createLargeDesktopMessageFixture(20);
+    const messageStructureToken = {};
+    const messageStructureChangedIndexes = new Set([messages.length + 1]);
     const activeUser = message({
       id: 'active-user',
       role: 'user',
@@ -185,6 +192,8 @@ describe('message render performance', () => {
     const first = buildMobileStreamingRenderWindow({
       cacheKey: 'en',
       messages: [...messages, activeUser, activeAssistant],
+      messageStructureChangedIndexes,
+      messageStructureToken,
       options: { isSessionStreaming: true, sessionId: 's1' },
     });
     expect(first.prefix).not.toBeNull();
@@ -196,13 +205,371 @@ describe('message render performance', () => {
         activeUser,
         { ...activeAssistant, content: 'Partial update' },
       ],
+      messageStructureChangedIndexes,
+      messageStructureToken,
       options: { isSessionStreaming: true, sessionId: 's1' },
       previousPrefix: first.prefix,
     });
 
     expect(next.prefix).toBe(first.prefix);
     expect(next.prefix?.items).toBe(first.prefix?.items);
+    expect(next.stablePrefixItemCount).toBe(first.prefix?.items.length);
+    expect(next.diffCount).toBe(countMobileRenderItemDiffs(next.items));
     expect(next.items.slice(0, first.prefix!.items.length)).toEqual(first.prefix!.items);
+  });
+
+  it('does not read a 2000-message historical prefix again for a trusted text delta', () => {
+    const history = createLargeDesktopMessageFixture(1_000);
+    const activeUser = message({
+      id: 'active-user',
+      role: 'user',
+      content: 'Continue',
+      createdAt: timestamp(2_001),
+    });
+    const activeAssistant = message({
+      id: 'active-assistant',
+      role: 'assistant',
+      content: 'Partial',
+      agentMeta: { isStreaming: true },
+      createdAt: timestamp(2_002),
+    });
+    const messageStructureToken = {};
+    const messageStructureChangedIndexes = new Set([history.length + 1]);
+    const first = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: [...history, activeUser, activeAssistant],
+      messageStructureChangedIndexes,
+      messageStructureToken,
+      options: { isSessionStreaming: true, sessionId: 's1' },
+    });
+    let historicalReads = 0;
+    const nextMessages = new Proxy(
+      [...history, activeUser, { ...activeAssistant, content: 'Partial update' }],
+      {
+        get(target, property, receiver) {
+          if (typeof property === 'string' && /^\d+$/.test(property)) {
+            const index = Number(property);
+            if (index < history.length) historicalReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+
+    const next = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: nextMessages,
+      messageStructureChangedIndexes,
+      messageStructureToken,
+      options: { isSessionStreaming: true, sessionId: 's1' },
+      previousPrefix: first.prefix,
+    });
+
+    expect(historicalReads).toBe(0);
+    expect(next.stablePrefixItemCount).toBe(first.prefix?.items.length);
+  });
+
+  it('falls back to reference validation when no structure token is supplied', () => {
+    const historicalAssistant = message({
+      id: 'historical-assistant',
+      role: 'assistant',
+      content: 'Original history',
+      createdAt: timestamp(1),
+    });
+    const activeUser = message({
+      id: 'active-user-without-token',
+      role: 'user',
+      content: 'Continue',
+      createdAt: timestamp(2),
+    });
+    const activeAssistant = message({
+      id: 'active-assistant-without-token',
+      role: 'assistant',
+      content: 'Partial',
+      agentMeta: { isStreaming: true },
+      createdAt: timestamp(3),
+    });
+    const options = { isSessionStreaming: true, sessionId: 's1' } as const;
+    const first = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: [historicalAssistant, activeUser, activeAssistant],
+      options,
+    });
+    const changedMessages = [
+      { ...historicalAssistant, content: 'Corrected history' },
+      activeUser,
+      activeAssistant,
+    ];
+    const changed = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: changedMessages,
+      options,
+      previousPrefix: first.prefix,
+    });
+
+    expect(changed.prefix).not.toBe(first.prefix);
+    expect(changed.items).toEqual(buildMobileMessageRenderItems(changedMessages, options));
+  });
+
+  it('invalidates a historical prefix changed under the same structure token', () => {
+    const historicalAssistant = message({
+      id: 'historical-assistant-with-token',
+      role: 'assistant',
+      content: 'Original history',
+      createdAt: timestamp(1),
+    });
+    const activeUser = message({
+      id: 'active-user-with-history-change',
+      role: 'user',
+      content: 'Continue',
+      createdAt: timestamp(2),
+    });
+    const activeAssistant = message({
+      id: 'active-assistant-with-history-change',
+      role: 'assistant',
+      content: 'Partial',
+      agentMeta: { isStreaming: true },
+      createdAt: timestamp(3),
+    });
+    const messageStructureToken = {};
+    const options = { isSessionStreaming: true, sessionId: 's1' } as const;
+    const first = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: [historicalAssistant, activeUser, activeAssistant],
+      messageStructureChangedIndexes: new Set([2]),
+      messageStructureToken,
+      options,
+    });
+    const changedMessages = [
+      { ...historicalAssistant, content: 'Corrected history' },
+      activeUser,
+      activeAssistant,
+    ];
+    const changed = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: changedMessages,
+      messageStructureChangedIndexes: new Set([0, 2]),
+      messageStructureToken,
+      options,
+      previousPrefix: first.prefix,
+    });
+
+    expect(changed.prefix).not.toBe(first.prefix);
+    expect(changed.items).toEqual(buildMobileMessageRenderItems(changedMessages, options));
+  });
+
+  it('invalidates the reusable prefix when its render cache key changes', () => {
+    const historicalAssistant = message({
+      id: 'cache-key-history',
+      role: 'assistant',
+      content: 'Earlier result',
+      createdAt: timestamp(1),
+    });
+    const stableAssistant = message({
+      id: 'cache-key-boundary',
+      role: 'assistant',
+      content: 'First phase complete',
+      createdAt: timestamp(2),
+    });
+    const activeThinking = message({
+      id: 'cache-key-thinking',
+      role: 'thinking',
+      content: { kind: 'thinking', text: 'Continuing', isStreaming: true },
+      createdAt: timestamp(3),
+    });
+    const activeAssistant = message({
+      id: 'cache-key-active-assistant',
+      role: 'assistant',
+      content: 'Partial',
+      agentMeta: { isStreaming: true },
+      createdAt: timestamp(4),
+    });
+    const messages = [
+      historicalAssistant,
+      stableAssistant,
+      activeThinking,
+      activeAssistant,
+    ];
+    const messageStructureToken = {};
+    const messageStructureChangedIndexes = new Set([messages.length - 1]);
+    const options = { isSessionStreaming: true, sessionId: 's1' } as const;
+    const first = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages,
+      messageStructureChangedIndexes,
+      messageStructureToken,
+      options,
+    });
+    expect(first.prefix?.mode).toBe('truncated-turn');
+
+    const changed = buildMobileStreamingRenderWindow({
+      cacheKey: 'zh-CN',
+      messages,
+      messageStructureChangedIndexes,
+      messageStructureToken,
+      options,
+      previousPrefix: first.prefix,
+    });
+
+    expect(changed.prefix).not.toBe(first.prefix);
+    expect(changed.prefix?.cacheKey).toBe('zh-CN');
+    expect(changed.stablePrefixItemCount).toBe(0);
+    expect(changed.items).toEqual(buildMobileMessageRenderItems(messages, options));
+
+    const cacheKeyChangedItems = reconcileMobileMessageRenderItems(
+      first.items,
+      changed.items,
+      committedMobileStreamingPrefixItemCount(changed, first.prefix),
+    );
+    expect(changed.prefix).not.toBeNull();
+    commitMobileStreamingPrefixItems(changed.prefix!, cacheKeyChangedItems);
+
+    const updatedMessages = [
+      historicalAssistant,
+      stableAssistant,
+      activeThinking,
+      { ...activeAssistant, content: 'Partial update' },
+    ];
+    const updated = buildMobileStreamingRenderWindow({
+      cacheKey: 'zh-CN',
+      messages: updatedMessages,
+      messageStructureChangedIndexes,
+      messageStructureToken,
+      options,
+      previousPrefix: changed.prefix,
+    });
+    expect(updated.prefix).toBe(changed.prefix);
+    const updatedItems = reconcileMobileMessageRenderItems(
+      cacheKeyChangedItems,
+      updated.items,
+      committedMobileStreamingPrefixItemCount(updated, changed.prefix),
+    );
+    const changedRows = updatedItems.reduce(
+      (count, item, index) => count + (item === cacheKeyChangedItems[index] ? 0 : 1),
+      0,
+    );
+    expect(changedRows).toBe(1);
+  });
+
+  it('reconciles a speculative changed prefix before reusing committed rows', () => {
+    const historicalAssistant = message({
+      id: 'speculative-prefix-history',
+      role: 'assistant',
+      content: 'Original history',
+      createdAt: timestamp(1),
+    });
+    const activeUser = message({
+      id: 'speculative-prefix-user',
+      role: 'user',
+      content: 'Continue',
+      createdAt: timestamp(2),
+    });
+    const activeAssistant = message({
+      id: 'speculative-prefix-assistant',
+      role: 'assistant',
+      content: 'Partial',
+      agentMeta: { isStreaming: true },
+      createdAt: timestamp(3),
+    });
+    const initialMessages = [historicalAssistant, activeUser, activeAssistant];
+    const messageStructureToken = {};
+    const prefixCache: {
+      current: ReturnType<typeof buildMobileStreamingRenderWindow>['prefix'];
+    } = { current: null };
+    const options = { isSessionStreaming: true, sessionId: 's1' } as const;
+    const committedWindow = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: initialMessages,
+      messageStructureChangedIndexes: new Set([2]),
+      messageStructureToken,
+      options,
+      prefixCache,
+    });
+    const committedItems = reconcileMobileMessageRenderItems([], committedWindow.items);
+
+    const changedHistoricalAssistant = {
+      ...historicalAssistant,
+      content: 'Corrected history',
+    };
+    const changedMessages = [changedHistoricalAssistant, activeUser, activeAssistant];
+    const interruptedWindow = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: changedMessages,
+      messageStructureChangedIndexes: new Set([0, 2]),
+      messageStructureToken,
+      options,
+      prefixCache,
+    });
+    expect(interruptedWindow.prefix).not.toBe(committedWindow.prefix);
+
+    // Model a retry after React abandons the render above. The speculative prefix is reusable by
+    // the builder, but it has never been reconciled against the last committed rows.
+    const retryWindow = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: changedMessages,
+      messageStructureChangedIndexes: new Set([2]),
+      messageStructureToken,
+      options,
+      prefixCache,
+    });
+    expect(retryWindow.prefix).toBe(interruptedWindow.prefix);
+    expect(retryWindow.stablePrefixItemCount).toBeGreaterThan(0);
+    const retryStablePrefixItemCount = committedMobileStreamingPrefixItemCount(
+      retryWindow,
+      committedWindow.prefix,
+    );
+    expect(retryStablePrefixItemCount).toBe(0);
+
+    const correctedItems = reconcileMobileMessageRenderItems(
+      committedItems,
+      retryWindow.items,
+      retryStablePrefixItemCount,
+    );
+    expect(correctedItems).not.toBe(committedItems);
+    expect(correctedItems).toEqual(buildMobileMessageRenderItems(changedMessages, options));
+    commitMobileStreamingPrefixItems(retryWindow.prefix!, correctedItems);
+
+    // Once that prefix commits, identical input should retain the complete list reference and not
+    // schedule duplicate row renders.
+    const unchangedWindow = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: changedMessages,
+      messageStructureChangedIndexes: new Set([2]),
+      messageStructureToken,
+      options,
+      prefixCache,
+    });
+    const unchangedItems = reconcileMobileMessageRenderItems(
+      correctedItems,
+      unchangedWindow.items,
+      committedMobileStreamingPrefixItemCount(unchangedWindow, retryWindow.prefix),
+    );
+    expect(unchangedItems).toBe(correctedItems);
+    expect(new Set(unchangedItems.map((item) => item.key)).size).toBe(unchangedItems.length);
+
+    const tailUpdatedMessages = [
+      changedHistoricalAssistant,
+      activeUser,
+      { ...activeAssistant, content: 'Partial update' },
+    ];
+    const tailUpdatedWindow = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: tailUpdatedMessages,
+      messageStructureChangedIndexes: new Set([2]),
+      messageStructureToken,
+      options,
+      prefixCache,
+    });
+    const tailUpdatedItems = reconcileMobileMessageRenderItems(
+      correctedItems,
+      tailUpdatedWindow.items,
+      committedMobileStreamingPrefixItemCount(tailUpdatedWindow, retryWindow.prefix),
+    );
+    const changedRows = tailUpdatedItems.reduce(
+      (count, item, index) => count + (item === correctedItems[index] ? 0 : 1),
+      0,
+    );
+    expect(changedRows).toBe(1);
   });
 
   it('invalidates a historical prefix only when one of its task updates changes', () => {
@@ -417,6 +784,65 @@ describe('message render performance', () => {
 
     expect(retry.prefix).toBe(first.prefix);
     expect(retry.items).toEqual(buildMobileMessageRenderItems(updatedMessages, options));
+  });
+
+  it('does not rescan a retained 2000-message prefix to rediscover a truncated-turn boundary', () => {
+    const history = Array.from({ length: 2_000 }, (_, index) => message({
+      id: `retained-assistant-${index}`,
+      role: 'assistant',
+      content: `Completed ${index}`,
+      createdAt: timestamp(index),
+    }));
+    const activeThinking = message({
+      id: 'retained-active-thinking',
+      role: 'thinking',
+      content: { kind: 'thinking', text: 'Continuing', isStreaming: true },
+      createdAt: timestamp(2_001),
+    });
+    const activeAssistant = message({
+      id: 'retained-active-assistant',
+      role: 'assistant',
+      content: 'Partial',
+      agentMeta: { isStreaming: true },
+      createdAt: timestamp(2_002),
+    });
+    const messageStructureToken = {};
+    const changedIndexes = new Set([2_001]);
+    const options = { isSessionStreaming: true, sessionId: 's1' } as const;
+    const first = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: [...history, activeThinking, activeAssistant],
+      messageStructureChangedIndexes: changedIndexes,
+      messageStructureToken,
+      options,
+    });
+    expect(first.prefix?.mode).toBe('truncated-turn');
+
+    let historicalReads = 0;
+    const nextMessages = new Proxy(
+      [...history, activeThinking, { ...activeAssistant, content: 'Partial update' }],
+      {
+        get(target, property, receiver) {
+          if (typeof property === 'string' && /^\d+$/.test(property)) {
+            const index = Number(property);
+            if (index < history.length - 1) historicalReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const next = buildMobileStreamingRenderWindow({
+      cacheKey: 'en',
+      messages: nextMessages,
+      messageStructureChangedIndexes: changedIndexes,
+      messageStructureToken,
+      options,
+      previousPrefix: first.prefix,
+    });
+
+    expect(historicalReads).toBe(0);
+    expect(next.prefix).toBe(first.prefix);
+    expect(next.stablePrefixItemCount).toBe(first.prefix?.items.length);
   });
 
   it('advances the reusable prefix into a long visible active turn', () => {

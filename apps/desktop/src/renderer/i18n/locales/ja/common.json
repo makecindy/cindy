@@ -16,6 +16,12 @@
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。",
     "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。",
+    "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 設定がディスク上で変更されました。再読み込みしてからもう一度お試しください。",
+    "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定は保存されましたが、Cindy で再読み込みできませんでした。SSH 設定を再読み込みしてください。",
+    "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy はこの SSH 設定を安全に管理できません。再読み込みして、Cindy の所有マーカーとホストエイリアスの一意性を確認してください。",
+    "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy はこのホストの一部の SSH 設定規則を安全に再現できません。ターミナルの SSH は動作する場合があります。Match、条件付き Include、IdentityAgent、IdentitiesOnly、公開鍵設定を確認してください。",
+    "SSH_AGENT_UNAVAILABLE": "SSH Agent を使用できません。SSH Agent を起動し、ssh-add で対応する秘密鍵を読み込んでから再試行してください。",
+    "SSH_HOST_PREFS_WRITE_FAILED": "ホストは保存されていますが、表示名または Agent Proxy の設定を保存できませんでした。ローカルストレージの権限を確認して再試行してください。",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "このタスクのタブ数の上限に達しました。いくつかのタブを閉じてください",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "タブの内容が大きすぎるため、追加できません",
     "RIGHT_SIDEBAR_UNKNOWN_KIND": "このタブの種類は現在使用できません"
@@ -168,6 +174,13 @@
       "title": "リモートマシン",
       "footnote": "Phase A は SSH 接続管理のみ。リモートでのエージェント実行は今後のアップデートで対応します。",
       "viaAuth": "{{label}} で認証",
+      "readOnlyFromSshConfig": "接続情報は SSH 設定から読み込まれています",
+      "configWarning": "一部の SSH 設定ルールを Cindy では評価できません。ホスト一覧や接続情報がターミナルの SSH と異なる場合があります。",
+      "configDiagnostic": {
+        "io": "Cindy は SSH 設定を読み込めませんでした。最後に正常に読み込んだホストを引き続き表示しています。ファイルのアクセス権を確認して、再読み込みしてください。",
+        "syntax": "Cindy は SSH 設定を解析できませんでした。最後に正常に読み込んだホストを引き続き表示しています。設定を修正して、再読み込みしてください。",
+        "limit": "SSH 設定のネストが深すぎるか、サイズが大きすぎるため、Cindy で安全に読み込めません。最後に正常に読み込んだホストを引き続き表示しています。"
+      },
       "empty": {
         "title": "リモートマシンはまだありません。",
         "hint": "「追加」で登録するか、更新アイコンで ~/.ssh/config から取り込めます。"
@@ -199,7 +212,9 @@
       },
       "edit": {
         "title": "{{id}} を編集",
-        "submit": "変更を保存"
+        "submit": "変更を保存",
+        "connectionFieldsReadOnly": "SSH 設定から読み込まれた接続情報はここでは読み取り専用です。表示名、自動接続、Agent Proxy は変更できます。",
+        "authenticationFromSshConfig": "認証情報は SSH 設定から読み込まれます。"
       },
       "keys": {
         "title": "SSH 鍵を設定",
@@ -276,6 +291,8 @@
       "add": {
         "title": "リモートマシンを追加",
         "alias": "エイリアス",
+        "displayName": "表示名",
+        "displayNamePlaceholder": "任意。Cindy 内でのみ表示",
         "hostname": "ホスト名",
         "user": "ユーザー",
         "port": "ポート",
@@ -376,6 +393,7 @@
         "reloaded": "~/.ssh/config を再読み込みしました",
         "loadFailed": "リモートマシンの読み込みに失敗",
         "addFailed": "マシンの追加に失敗",
+        "addConflict": "マシンの追加中に SSH 設定が変更されました。設定を再読み込みし、ホスト項目を確認してから再試行してください。",
         "connectFailed": "接続に失敗",
         "disconnectFailed": "切断に失敗",
         "removeFailed": "削除に失敗",
@@ -5445,7 +5463,8 @@
     "browserWaiting": "ブラウザで認証を完了してください",
     "browserCallback": {
       "successTitle": "ログイン完了",
-      "successBody": "このページを閉じて {{appName}} に戻れます。",
+      "successBody": "ログインが完了しました。このページは閉じて構いません。",
+      "closeCountdown": "{{count}}秒後に自動で閉じます",
       "errorTitle": "ログインを完了できませんでした",
       "errorBody": "{{appName}} に戻ってもう一度ログインしてください。",
       "returnButton": "{{appName}} に戻る"
@@ -7508,7 +7527,7 @@
     "openApp": "ChatGPT App を開く",
     "relogin": "ChatGPT に再ログイン",
     "reloginRiskTitle": "それでも Cindy から再ログインしますか？",
-    "reloginRiskDescription": "新しい OpenAI OAuth 認証が作成され、このコンピューターの ChatGPT App と Codex CLI が直ちにログアウトする可能性があります。完了後、それらのアプリでもう一度ログインする必要があります。",
+    "reloginRiskDescription": "Cindy は新しい OpenAI OAuth 認証情報を作成します。通常は ChatGPT App に影響しませんが、システムの Codex と認証情報を共有している場合は、関連アプリで再ログインが必要になることがあります。",
     "reloginRiskConfirm": "リスクを承知して続行",
     "devWriteBlocked": "開発環境は既定で、このコンピューターの ChatGPT ログインを読み取り専用で共有するため、OAuth の開始や認証情報の変更はできません。OAuth をテストする場合は、隔離サンドボックスで XDT_ALLOW_DEV_OAUTH_WRITE=1 を明示的に設定してください。",
     "devReadOnly": "開発環境では読み取り専用",
@@ -7692,7 +7711,7 @@
       "switchClaudeSubscriptionTitle": "このセッションを Claude.ai サブスクリプションに切り替えて再試行",
       "switchingClaudeSubscription": "Claude.ai に切り替え中…",
       "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこのセッションの再試行に失敗しました：{{msg}}",
-      "budgetModelHint": "繰り返し失敗する場合は、通常版 GPT モデルに切り替えてお試しください。",
+      "codexAppServerRetired": "Codex サービスが再起動または交換されました。現在のリクエストは中断されたため、もう一度実行してください。",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
       "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} Settings → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後 Settings で認証モードを一度切り替えて app-server を再起動してから、新しいセッションを開始してください。",
       "codexSessionExpired": "OpenAI 接続の更新が必要です。ChatGPT に再接続すると続行できます。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",

@@ -16,6 +16,12 @@
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again.",
     "INTERNAL": "Operation failed. Please try again later.",
+    "SSH_CONFIG_CONCURRENT_MODIFICATION": "The SSH configuration changed on disk. Reload it and try again.",
+    "SSH_CONFIG_RELOAD_REQUIRED": "The SSH config was saved, but Cindy could not refresh it. Reload the SSH configuration.",
+    "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy cannot safely manage this SSH configuration. Reload it, then verify the Cindy ownership marker and that the host alias is unique.",
+    "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy cannot safely reproduce some SSH configuration rules for this host. Terminal SSH may still work; review Match, conditional Include, IdentityAgent, IdentitiesOnly, and public-key settings.",
+    "SSH_AGENT_UNAVAILABLE": "The SSH Agent is unavailable. Start it, load the matching private key with ssh-add, and try again.",
+    "SSH_HOST_PREFS_WRITE_FAILED": "The host is still saved, but its display name or Agent Proxy settings could not be saved. Check local storage permissions and try again.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "This task has reached its tab limit. Close some tabs first",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Tab content is too large to add",
     "RIGHT_SIDEBAR_UNKNOWN_KIND": "This tab type is unavailable"
@@ -168,6 +174,13 @@
       "title": "Remote machines",
       "footnote": "Phase A: SSH connection management only. Running agents on the remote arrives in a later update.",
       "viaAuth": "via {{label}}",
+      "readOnlyFromSshConfig": "Connection details come from SSH configuration",
+      "configWarning": "Cindy cannot evaluate some SSH configuration rules. The host list or connection details may differ from terminal SSH.",
+      "configDiagnostic": {
+        "io": "Cindy could not read your SSH configuration. The last successfully loaded hosts are still shown. Check file permissions and reload.",
+        "syntax": "Cindy could not parse your SSH configuration. The last successfully loaded hosts are still shown. Fix the configuration and reload.",
+        "limit": "The SSH configuration is too deeply nested or too large for Cindy to read safely. The last successfully loaded hosts are still shown."
+      },
       "empty": {
         "title": "No remote machines yet.",
         "hint": "Click \"Add\" to register one, or click the refresh icon to import from ~/.ssh/config."
@@ -199,7 +212,9 @@
       },
       "edit": {
         "title": "Edit {{id}}",
-        "submit": "Save changes"
+        "submit": "Save changes",
+        "connectionFieldsReadOnly": "Connection details from SSH configuration are read-only here. Display name, auto-connect, and Agent Proxy remain editable.",
+        "authenticationFromSshConfig": "Authentication comes from SSH configuration."
       },
       "keys": {
         "title": "Set up SSH key",
@@ -276,6 +291,8 @@
       "add": {
         "title": "Add a remote machine",
         "alias": "Alias",
+        "displayName": "Display name",
+        "displayNamePlaceholder": "Optional name shown in Cindy",
         "hostname": "Hostname",
         "user": "User",
         "port": "Port",
@@ -376,6 +393,7 @@
         "reloaded": "Reloaded ~/.ssh/config",
         "loadFailed": "Failed to load remote machines",
         "addFailed": "Failed to add machine",
+        "addConflict": "The SSH configuration changed while adding this machine. Reload it, review the host entry, and try again.",
         "connectFailed": "Connection failed",
         "disconnectFailed": "Disconnect failed",
         "removeFailed": "Remove failed",
@@ -5453,7 +5471,8 @@
     "browserWaiting": "Complete verification in your browser",
     "browserCallback": {
       "successTitle": "Signed in",
-      "successBody": "You can close this page and return to {{appName}}.",
+      "successBody": "You’re signed in. You can close this page now.",
+      "closeCountdown": "Closing in {{count}}s",
       "errorTitle": "Sign-in not completed",
       "errorBody": "Please return to {{appName}} and sign in again.",
       "returnButton": "Return to {{appName}}"
@@ -7516,7 +7535,7 @@
     "openApp": "Open ChatGPT App",
     "relogin": "Sign In to ChatGPT Again",
     "reloginRiskTitle": "Still sign in through Cindy?",
-    "reloginRiskDescription": "This creates a new OpenAI OAuth authorization and may immediately sign the ChatGPT App and Codex CLI out on this computer. You will need to sign in to those apps again afterward.",
+    "reloginRiskDescription": "Cindy will create a new OpenAI OAuth authorization. The ChatGPT App is usually unaffected; if it still shares credentials with system Codex, those apps may ask you to sign in again.",
     "reloginRiskConfirm": "Accept Risk and Continue",
     "devWriteBlocked": "Development builds use this computer’s ChatGPT sign-in read-only by default and cannot start OAuth or change its credentials. To test OAuth, use an isolated sandbox and explicitly set XDT_ALLOW_DEV_OAUTH_WRITE=1.",
     "devReadOnly": "Read-only in Development",
@@ -7704,7 +7723,7 @@
       "switchClaudeSubscriptionTitle": "Switch this session to the Claude.ai subscription and retry",
       "switchingClaudeSubscription": "Switching to Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this session: {{msg}}",
-      "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
+      "codexAppServerRetired": "The Codex service was restarted or replaced. The current request was interrupted; run it again.",
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",

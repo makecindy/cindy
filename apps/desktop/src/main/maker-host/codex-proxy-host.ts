@@ -36,7 +36,6 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
-import { isCindyProviderCodexRemoteCompactionRoute } from '@cindy/maker-core';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   createResponsesCustomToolFunctionAdapter,
@@ -1051,9 +1050,9 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
           : [existingText, opts.instructions].filter(Boolean).join('\n\n'),
     };
   }
-  const historySafe = isChatGptUpstreamBase(opts.upstreamBase)
-    ? null
-    : rewriteCrossProviderHistoryItems(body);
+  // Responses encrypted collaboration items cannot survive either local wire
+  // bridge: Chat Completions and Anthropic Messages have no equivalent field.
+  const historySafe = rewriteCrossProviderHistoryItems(body);
   if (historySafe) {
     log.info('rewrote incompatible Codex history for local bridge upstream', {
       bridge: opts.bridge,
@@ -2194,8 +2193,8 @@ function createGatewayGrokResponsesCompatTransform(
 /**
  * 跨来源恢复的加密压缩历史兼容(Greptile P1, PR #265):
  *
- * 远端压缩会把早期历史替换成加密 compaction 块。ChatGPT 和 Cindy Provider
- * codex/* 都需要原样回放；切到 xAI / 自定义供应商后仍按既有明文占位降级。
+ * 远端压缩会把早期历史替换成加密 compaction 块。ChatGPT 和走 Responses
+ * 协议的版本化 GPT 模型需要原样回放；非 GPT 模型仍按既有明文占位降级。
  * 判断去向用 ctx.upstreamBase(引擎按最终路由注入),不复刻路由逻辑。
  */
 const COMPACTION_UNAVAILABLE_NOTE =
@@ -2212,27 +2211,35 @@ function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
   }
 }
 
+const GPT_ENCRYPTED_HISTORY_MODEL_PATTERN = /(?:^|\/)gpt-\d[^/]*$/i;
+
+/**
+ * A final, versioned `gpt-<digit>*` model segment opts into the Responses
+ * encrypted collaboration-history contract. Catalog namespaces (`codex/`,
+ * `openai/`, or custom equivalents) are routing labels and do not affect the
+ * match. Non-OpenAI families such as `gpt-oss` remain fail-closed.
+ */
+function isGptEncryptedHistoryModel(model: string | null | undefined): boolean {
+  return GPT_ENCRYPTED_HISTORY_MODEL_PATTERN.test(model?.trim() ?? '');
+}
+
 /**
  * 把 body.input 里无法跨供应商重放的 Codex 历史降级成目标上游可接受的形态。
  * 返回 null = 无需改写。透明转发路径(transform 链)与 localHandler 路径共用。
  *
  * - 加密 compaction 仍替换成明文上下文缺失提示。
- * - 多 Agent 历史会在 agent_message.content 里夹带仅原供应商可解的 encrypted_content；
- *   非 ChatGPT 上游会直接拒绝整次请求。只删除这些嵌套密文，保留可读正文与路由元数据；
- *   若消息只剩密文则整条丢弃。
+ * - 多 Agent 历史会在 agent_message.content 里夹带仅兼容 GPT Responses 上游可解的
+ *   encrypted_content；ChatGPT 与版本化 gpt-* / namespace/gpt-* 模型原样透传。其它模型
+ *   只删除这些嵌套密文，保留可读正文与路由元数据；若消息只剩密文则整条丢弃。
  * - reasoning.encrypted_content 不属于本故障；继续交给后续供应商兼容层判断，
  *   不在这里扩大删除面。
  */
-function rewriteCrossProviderHistoryItems(
-  body: unknown,
-  opts: { preserveCompaction?: boolean } = {},
-): Record<string, unknown> | null {
+function rewriteCrossProviderHistoryItems(body: unknown): Record<string, unknown> | null {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
   let changed = false;
   const input: unknown[] = [];
   for (const item of body.input) {
     if (
-      opts.preserveCompaction !== true &&
       isPlainObject(item) &&
       (item.type === 'compaction' || item.type === 'context_compaction') &&
       typeof item.encrypted_content === 'string' &&
@@ -2267,17 +2274,15 @@ export function createCrossProviderCompactionCompatTransform(): RequestTransform
     if (!ctx.upstreamBase) return null;
     const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const providerContext = providerContextForRequest(ctx.headers, requestModel);
-    const isCindyCodexRoute = isCindyProviderCodexRemoteCompactionRoute({
-      providerId: providerContext.providerId,
-      model: providerContext.catalogModel,
-    });
-    if (isChatGptUpstreamBase(ctx.upstreamBase)) return null;
-    const replaced = rewriteCrossProviderHistoryItems(body, {
-      preserveCompaction: isCindyCodexRoute,
-    });
+    if (
+      isChatGptUpstreamBase(ctx.upstreamBase) ||
+      isGptEncryptedHistoryModel(providerContext.catalogModel)
+    ) return null;
+    const replaced = rewriteCrossProviderHistoryItems(body);
     if (!replaced) return null;
-    log.info('rewrote incompatible Codex history for non-ChatGPT upstream', {
+    log.info('rewrote incompatible Codex history for non-GPT model', {
       reqId: ctx.reqId,
+      model: providerContext.catalogModel,
       upstreamBase: ctx.upstreamBase,
       threadId: selectedThreadIdFromHeaders(ctx.headers),
     });

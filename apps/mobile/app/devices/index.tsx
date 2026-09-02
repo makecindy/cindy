@@ -202,9 +202,10 @@ import {
 import {
   RemoteSessionStoreSubscriptionGate,
   remoteSessionStore,
+  useRemoteHomeStatusVersion,
   useRemoteMessageVersion,
+  useRemoteSessionMessagePreview,
   useRemoteSessions,
-  useRemoteSessionStoreVersion,
   useSessionRunning,
 } from '@/session/remoteSessionStore';
 import { dataPropsEqual, mapContentEqual } from '@/utils/valueEquality';
@@ -366,8 +367,6 @@ function HomeScreenContent() {
   } = useDeviceLink();
   const revokedDevices = useRevokedDevices();
   const sessions = useRemoteSessions();
-  const messageVersion = useRemoteMessageVersion();
-  const storeVersion = useRemoteSessionStoreVersion();
   const syncInFlightRef = useRef<Promise<void> | null>(null);
   const syncQueuedRef = useRef<{ visible?: boolean } | null>(null);
   const loadHomeRef = useRef<(options?: { visible?: boolean }) => Promise<void>>(async () => undefined);
@@ -1557,6 +1556,9 @@ function HomeScreenContent() {
     projects: searchProjects,
   });
   const searchQuery = indexedSearch.query;
+  const normalizedSearchQuery = searchQuery.trim();
+  const messageSearchVersion = useRemoteMessageVersion(normalizedSearchQuery.length > 0);
+  const homeStatusVersion = useRemoteHomeStatusVersion();
   const searchFilterA11y = t('devices.list.search.filterAria', {
     agent: t(`devices.list.search.filter.agent.${indexedSearch.agentFilter}`),
     lastActivity: t(`devices.list.search.filter.lastActivity.${indexedSearch.lastActivityFilter}`),
@@ -1656,11 +1658,11 @@ function HomeScreenContent() {
       : null,
     [deviceModels, revokedTipDeviceId, t],
   );
-  // 三个派生索引的依赖挂在全局 messageVersion / storeVersion 上,桌面端活跃期逐 emit
-  // 重建出内容相同的新 Map——若不做内容稳定化,home → sections → 全列表行整链每次
-  // emit 都重建(2026-07-18 重渲染风暴 trace 实锤)。useStableValue 在内容未变时保留
-  // 旧引用,下游 useMemo 依赖即可短路;内容真变(某会话预览/交互数/活动态变化)照常穿透。
+  // 消息预览仅在搜索时构建全局索引；普通首页由行级 selector 消费。pending/live/running
+  // 共用低频 homeStatusVersion，普通文本 token 不再重建这些 Map 或 home → sections 链。
   const messagePreviewIndexRaw = useMemo(() => {
+    // 普通首页的预览由可见行按 session 订阅。只有搜索需要跨全部任务建立消息索引。
+    if (!normalizedSearchQuery) return new Map<string, string>();
     const next = new Map<string, string>();
     const activeIds = new Set<string>();
     for (const session of sessions) {
@@ -1679,7 +1681,7 @@ function HomeScreenContent() {
       if (!activeIds.has(sessionId)) homePreviewCacheRef.current.delete(sessionId);
     }
     return next;
-  }, [messageVersion, sessions]);
+  }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
   const pendingInteractionIndexRaw = useMemo(() => {
     const next = new Map<string, number>();
@@ -1696,7 +1698,7 @@ function HomeScreenContent() {
       if (!activeIds.has(sessionId)) homePendingCacheRef.current.delete(sessionId);
     }
     return next;
-  }, [sessions, storeVersion]);
+  }, [homeStatusVersion, sessions]);
   const pendingInteractionIndex = useStableValue(pendingInteractionIndexRaw, mapContentEqual);
   const liveActivityIndexRaw = useMemo(() => {
     const next = new Map<string, RemoteSessionLiveActivity>();
@@ -1717,7 +1719,7 @@ function HomeScreenContent() {
     }
     homeLiveActivityIndexRef.current = next;
     return next;
-  }, [sessions, storeVersion]);
+  }, [homeStatusVersion, sessions]);
   const liveActivityIndex = useStableValue(liveActivityIndexRaw, mapContentEqual);
   // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
   const homeSessions = useMemo(() => excludeOrcaWorkerSessions(sessions), [sessions]);
@@ -1745,7 +1747,7 @@ function HomeScreenContent() {
       if (scheduleIndex.get(session.id)?.running) ids.add(session.id);
     }
     return ids;
-  }, [homeSessions, liveActivityIndex, scheduleIndex, storeVersion]);
+  }, [homeSessions, homeStatusVersion, liveActivityIndex, scheduleIndex]);
   const homePriorityItems = useMemo(
     () => [...home.pinned, ...home.chats, ...home.projects.flatMap((project) => project.sessions)],
     [home],
@@ -3425,10 +3427,9 @@ function ProjectRow({
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读会话运行态,而派生链稳定化后本组件不再逐 emit 重渲染(cell 经
-  // PureComponent bail)——以 storeVersion 订阅兜底感知运行态变化,与 AutomationGroup-
+  // PureComponent bail)——以低频首页状态版本兜底感知运行态变化,与 AutomationGroup-
   // Children 同款(否则折叠线以下转入 running 的会话不会被豁免展开,review P1)。
-  useRemoteSessionStoreVersion();
-  const storeVersion = remoteSessionStore.getStoreVersion();
+  const homeStatusVersion = useRemoteHomeStatusVersion();
   // 与桌面侧栏项目组同一套折叠策略:前 N 条之外豁免最近 24h 活动 / 需关注 / 运行中的条目
   // (豁免语义见共享层 getRemoteSessionPreviewCollapse 注释)。
   // 自动化折叠后 sessions 是"行"(组行代表多条会话):按钮显隐看隐藏行数(hiddenCount),
@@ -3448,7 +3449,7 @@ function ProjectRow({
   const estimatedChildHeights = useMemo(() => {
     const expandedKeys = new Set(expandedAutomationGroups);
     return visibleSessions.map((item) => estimateHomeProjectChildHeight(item, expandedKeys));
-  }, [expandedAutomationGroups, visibleSessions, storeVersion]);
+  }, [expandedAutomationGroups, homeStatusVersion, visibleSessions]);
   const estimatedChildOffsets = useMemo(
     () => buildHomeProjectChildOffsets(estimatedChildHeights),
     [estimatedChildHeights],
@@ -3891,6 +3892,9 @@ function HomeSessionRowInner({
   const { t } = useTranslation();
   // 运行态走订阅而非命令式读取:行已 memo 化,父层不再逐 emit 重渲染,命令式读取会 stale。
   const sessionIsRunning = useSessionRunning(item.session.id);
+  // 已加载消息的预览按 session 订阅。普通流式 token 只让对应的可见行更新，首页根层、
+  // sections 和其它任务行都保持原引用。
+  const loadedMessagePreview = useRemoteSessionMessagePreview(item.session.id);
   const running = sessionIsRunning || !!item.scheduleInfo?.running;
   // attention 合并 main 的 #368:liveActivity.attention 也点亮关注态(组行直开 primary 的判定沿用)。
   const attention = item.pendingInteractionCount > 0
@@ -3924,7 +3928,12 @@ function HomeSessionRowInner({
   // 组行的预览位改为任务态摘要(需关注数 / 执行中 / 共 N 次运行),对齐桌面版组头 meta。
   const preview = group
     ? automationGroupPreview(item, group.sessionCount, t)
-    : buildRemoteSessionCardPreview(item, { running });
+    : buildRemoteSessionCardPreview(
+        loadedMessagePreview === undefined || loadedMessagePreview === item.messagePreview
+          ? item
+          : { ...item, messagePreview: loadedMessagePreview },
+        { running },
+      );
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；但定时任务与置顶
   // 标记仍占用右下状态槽，因此继续使用双行布局。
   const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;
@@ -4142,8 +4151,8 @@ function AutomationGroupChildren({
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读子会话运行态,而父行(HomeSessionRow)已 memo 化、不再逐 emit
-  // 重渲染——这里以 storeVersion 订阅兜底感知运行态变化。仅组展开时挂载,量小成本可忽略。
-  useRemoteSessionStoreVersion();
+  // 重渲染——只订阅首页状态版本感知运行态变化,普通文本 token 不再惊动整组。
+  useRemoteHomeStatusVersion();
   // 与项目组同一套折叠豁免(24h 活动 / 需关注 / 运行中),见共享层注释。
   const { visibleItems, hiddenCount } = getRemoteSessionPreviewCollapse(group.items, {
     limit: PROJECT_PREVIEW_LIMIT,

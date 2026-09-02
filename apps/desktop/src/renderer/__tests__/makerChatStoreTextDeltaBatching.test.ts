@@ -3081,6 +3081,111 @@ describe('makerChatStore text delta batching', () => {
     expect(snap.messages.some((m) => m.role === 'user' && m.content === 'queued')).toBe(false);
   });
 
+  it('shows a local busy send before the enqueue projection settles', async () => {
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    let queued: AgentInputQueuedMessage | undefined;
+    let resolveEnqueue!: (value: AgentInputProjection) => void;
+    input.enqueue.mockImplementationOnce(
+      async (_sessionId: string, item: AgentInputQueuedMessage) => {
+        queued = item;
+        return new Promise<AgentInputProjection>((resolve) => {
+          resolveEnqueue = resolve;
+        });
+      },
+    );
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'local busy message',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+    );
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([
+      expect.objectContaining({ text: 'local busy message', isPendingEnqueue: true }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([]);
+
+    resolveEnqueue(projection(SESSION_ID, { pendingQueue: queued ? [queued] : [] }));
+    await expect(send).resolves.toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([
+      expect.objectContaining({ text: 'local busy message' }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue[0]?.isPendingEnqueue).toBeUndefined();
+  });
+
+  it('keeps a busy send visible when enqueue immediately dispatches and projects an empty queue', async () => {
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    let resolveEnqueue!: (value: AgentInputProjection) => void;
+    input.enqueue.mockImplementationOnce(async () => new Promise<AgentInputProjection>((resolve) => {
+      resolveEnqueue = resolve;
+    }));
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'immediately dispatched message',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+    );
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(1);
+
+    resolveEnqueue(projection(SESSION_ID, { pendingQueue: [] }));
+    await expect(send).resolves.toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        content: 'immediately dispatched message',
+        isPendingPersist: true,
+      }),
+    ]);
+  });
+
+  it('removes a locally optimistic busy send when enqueue fails before acceptance', async () => {
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    input.enqueue.mockRejectedValueOnce(new Error('transport unavailable'));
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'failed busy message',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+    );
+    await expect(send).resolves.toBe(false);
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingQueue.some((item) => item.text === 'failed busy message')).toBe(false);
+    expect(snapshot.messages.some((item) => item.content === 'failed busy message')).toBe(false);
+  });
+
   it('dedupes the main DB-created ack for optimistic user bubbles', async () => {
     input.enqueue.mockImplementationOnce(async (sessionId: string) => projection(sessionId));
 

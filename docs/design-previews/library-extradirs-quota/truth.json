@@ -1,0 +1,161 @@
+{
+  "copy": {
+    "en": {
+      "addReadOnly": {
+        "provenance": {
+          "hash": "2fa12aa8624821eb20f64306f27e407058634a5e90c53af3aa75c86d150c9c1b",
+          "locator": "extraDirs.addReadOnly",
+          "locatorKeyPath": "extraDirs.addReadOnly",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+        },
+        "value": "Add read-only directory…"
+      },
+      "atLimit": {
+        "provenance": {
+          "hash": "2fa12aa8624821eb20f64306f27e407058634a5e90c53af3aa75c86d150c9c1b",
+          "locator": "extraDirs.atLimit",
+          "locatorKeyPath": "extraDirs.atLimit",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+        },
+        "value": "Limit reached ({{max}})"
+      },
+      "empty": {
+        "provenance": {
+          "hash": "2fa12aa8624821eb20f64306f27e407058634a5e90c53af3aa75c86d150c9c1b",
+          "locator": "extraDirs.empty",
+          "locatorKeyPath": "extraDirs.empty",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+        },
+        "value": "No reference directories yet"
+      },
+      "sectionTitle": {
+        "provenance": {
+          "hash": "2fa12aa8624821eb20f64306f27e407058634a5e90c53af3aa75c86d150c9c1b",
+          "locator": "extraDirs.sectionTitle",
+          "locatorKeyPath": "extraDirs.sectionTitle",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+        },
+        "value": "Reference directories (read-only)"
+      },
+      "tooltipCount": {
+        "provenance": {
+          "hash": "2fa12aa8624821eb20f64306f27e407058634a5e90c53af3aa75c86d150c9c1b",
+          "locator": "extraDirs.tooltipCount",
+          "locatorKeyPath": "extraDirs.tooltipCount",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+        },
+        "value": "{{count}} additional directories"
+      }
+    },
+    "zh-CN": {
+      "addReadOnly": {
+        "provenance": {
+          "hash": "f62799baa971ce5f5b2f82a902344eb519040087ce7bcf8b5d153e57a8758364",
+          "locator": "extraDirs.addReadOnly",
+          "locatorKeyPath": "extraDirs.addReadOnly",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+        },
+        "value": "添加只读目录…"
+      },
+      "atLimit": {
+        "provenance": {
+          "hash": "f62799baa971ce5f5b2f82a902344eb519040087ce7bcf8b5d153e57a8758364",
+          "locator": "extraDirs.atLimit",
+          "locatorKeyPath": "extraDirs.atLimit",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+        },
+        "value": "已达上限 {{max}} 个"
+      },
+      "empty": {
+        "provenance": {
+          "hash": "f62799baa971ce5f5b2f82a902344eb519040087ce7bcf8b5d153e57a8758364",
+          "locator": "extraDirs.empty",
+          "locatorKeyPath": "extraDirs.empty",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+        },
+        "value": "还没有引用目录"
+      },
+      "sectionTitle": {
+        "provenance": {
+          "hash": "f62799baa971ce5f5b2f82a902344eb519040087ce7bcf8b5d153e57a8758364",
+          "locator": "extraDirs.sectionTitle",
+          "locatorKeyPath": "extraDirs.sectionTitle",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+        },
+        "value": "引用目录(只读)"
+      },
+      "tooltipCount": {
+        "provenance": {
+          "hash": "f62799baa971ce5f5b2f82a902344eb519040087ce7bcf8b5d153e57a8758364",
+          "locator": "extraDirs.tooltipCount",
+          "locatorKeyPath": "extraDirs.tooltipCount",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+        },
+        "value": "{{count}} 个附加目录"
+      }
+    }
+  },
+  "quota": {
+    "max": {
+      "provenance": {
+        "hash": "bb3226c65b8c7fab2c3c4a1daf6daba7dc26d5f1464ed24769e8f852a13f4a39",
+        "locator": "extraDirsValidator EXTRA_DIRS_MAX",
+        "locatorPattern": "export const EXTRA_DIRS_MAX = (\\d+)",
+        "source": "../../../apps/desktop/src/main/maker-ipc/extraDirsValidator.ts"
+      },
+      "value": "10"
+    },
+    "slotPrefix": {
+      "provenance": {
+        "hash": "8d491fec6e76e07a6a3f001e572e5af94726a41b2d06b72c0c33aea83297f51c",
+        "locator": "extraDirsActions LIBRARY_EXTRA_DIR_SLOT_PREFIX",
+        "locatorPattern": "export const LIBRARY_EXTRA_DIR_SLOT_PREFIX = '([^']+)'",
+        "source": "../../../apps/desktop/src/renderer/components/new-chat/extraDirsActions.ts"
+      },
+      "value": "cindy-library:"
+    },
+    "systemLabel": {
+      "provenance": {
+        "hash": "8d491fec6e76e07a6a3f001e572e5af94726a41b2d06b72c0c33aea83297f51c",
+        "locator": "extraDirsActions extraDirDisplayLabel 系统项文案",
+        "locatorPattern": "isLibraryExtraDirSlot\\(dir\\) \\? '([^']+)'",
+        "source": "../../../apps/desktop/src/renderer/components/new-chat/extraDirsActions.ts"
+      },
+      "value": "Mivo 作品库（只读）"
+    }
+  },
+  "wiring": {
+    "chatInputBadgeSites": {
+      "provenance": {
+        "hash": "019cfe7d536522b125dfcf3ce774e17520a495a432c47c420a55b7ef3a032e51",
+        "locator": "ChatInput ExtraDirsButton extraDirsCount 公式次数",
+        "source": "../../../apps/desktop/src/renderer/components/new-chat/ChatInput.tsx"
+      },
+      "value": 1
+    },
+    "chatInputQuotaSites": {
+      "provenance": {
+        "hash": "019cfe7d536522b125dfcf3ce774e17520a495a432c47c420a55b7ef3a032e51",
+        "locator": "ChatInput 加目录/可写目录两处配额公式次数",
+        "source": "../../../apps/desktop/src/renderer/components/new-chat/ChatInput.tsx"
+      },
+      "value": 2
+    },
+    "panelLabelSites": {
+      "provenance": {
+        "hash": "8626dd9995da248787a2189a5726b7a955224c50cca2911b9729454c98376067",
+        "locator": "AtMentionPanel extraDirDisplayLabel(p) 次数",
+        "source": "../../../apps/desktop/src/renderer/components/new-chat/AtMentionPanel.tsx"
+      },
+      "value": 2
+    },
+    "panelNoRemoveSites": {
+      "provenance": {
+        "hash": "8626dd9995da248787a2189a5726b7a955224c50cca2911b9729454c98376067",
+        "locator": "AtMentionPanel library 槽不画移除按钮",
+        "source": "../../../apps/desktop/src/renderer/components/new-chat/AtMentionPanel.tsx"
+      },
+      "value": 1
+    }
+  }
+}

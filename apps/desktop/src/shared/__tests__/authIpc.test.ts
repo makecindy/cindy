@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  LOGIN_PREPARING_UNLOCK_TIMEOUT_MS,
+  awaitDesktopLoginStateLoad,
   parseDesktopAccountDeletionConfirmInput,
   parseDesktopAccountKey,
   parseDesktopLoginAction,
+  settleDesktopLoginResult,
 } from '../authIpc';
 
 describe('desktop auth IPC validation', () => {
@@ -185,5 +188,88 @@ describe('parseDesktopAccountDeletionConfirmInput', () => {
         code: '123456',
       }),
     ).toBeNull();
+  });
+});
+
+describe('settleDesktopLoginResult', () => {
+  it('keeps a successful identifier state', () => {
+    const state = {
+      step: 'identifier' as const,
+      providers: {
+        region: 'global' as const,
+        attribution: 'email' as const,
+        email: true,
+        phone: false,
+        social: [],
+      },
+    };
+    expect(settleDesktopLoginResult({ success: true, state })).toEqual({
+      success: true,
+      state,
+    });
+  });
+
+  it('maps a failed null state onto the retryable error step', () => {
+    expect(
+      settleDesktopLoginResult({
+        success: false,
+        code: 'AUTH_FLOW_SUPERSEDED',
+        state: null,
+      }),
+    ).toEqual({
+      success: false,
+      code: 'AUTH_FLOW_SUPERSEDED',
+      state: { step: 'error', code: 'AUTH_FLOW_SUPERSEDED', recoverTo: 'identifier' },
+    });
+  });
+});
+
+describe('awaitDesktopLoginStateLoad', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns a settled identifier before the preparing timeout', async () => {
+    const state = {
+      step: 'identifier' as const,
+      providers: {
+        region: 'global' as const,
+        attribution: 'email' as const,
+        email: true,
+        phone: false,
+        social: [],
+      },
+    };
+    await expect(
+      awaitDesktopLoginStateLoad(async () => ({ success: true, state })),
+    ).resolves.toEqual({ success: true, state });
+  });
+
+  it('unlocks preparing after 30s when getLoginState never settles', async () => {
+    const hung = () => new Promise<never>(() => undefined);
+    const p = awaitDesktopLoginStateLoad(hung);
+    const rejected = expect(p).resolves.toEqual({
+      success: false,
+      code: 'AUTH_SERVICE_UNAVAILABLE',
+      state: { step: 'error', code: 'AUTH_SERVICE_UNAVAILABLE', recoverTo: 'identifier' },
+    });
+    await vi.advanceTimersByTimeAsync(LOGIN_PREPARING_UNLOCK_TIMEOUT_MS - 1);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+  });
+
+  it('maps a thrown getLoginState onto the retryable error step', async () => {
+    await expect(
+      awaitDesktopLoginStateLoad(async () => {
+        throw new Error('ipc exploded');
+      }),
+    ).resolves.toEqual({
+      success: false,
+      code: 'AUTH_SERVICE_UNAVAILABLE',
+      state: { step: 'error', code: 'AUTH_SERVICE_UNAVAILABLE', recoverTo: 'identifier' },
+    });
   });
 });

@@ -73,9 +73,7 @@ describe('ConfirmDialog describeContent', () => {
   });
 
   it('无 description 且未开启 describeContent 时不带 aria-describedby(既有行为)', () => {
-    render(
-      <ConfirmDialog open onOpenChange={() => {}} title="确定退出？" confirmText="退出" />,
-    );
+    render(<ConfirmDialog open onOpenChange={() => {}} title="确定退出？" confirmText="退出" />);
     expect(screen.getByRole('alertdialog').getAttribute('aria-describedby')).toBeNull();
   });
 });
@@ -97,5 +95,33 @@ describe('ConfirmDialog confirmIcon', () => {
     const iconWrapper = confirmBtn.querySelector('[aria-hidden="true"]') as HTMLElement;
     expect(iconWrapper).not.toBeNull();
     expect(iconWrapper.querySelector('[data-testid="warn-icon"]')).not.toBeNull();
+  });
+});
+
+describe('ConfirmDialog action layout', () => {
+  it('keeps action labels on one line without allowing buttons to shrink', () => {
+    render(
+      <ConfirmDialog
+        open
+        onOpenChange={() => {}}
+        title="ChatGPT 登录已失效"
+        description="请先恢复登录"
+        confirmText="打开 ChatGPT App"
+        tertiaryText="重新登录 ChatGPT"
+        cancelText="稍后处理"
+        maxWidth={520}
+      />,
+    );
+
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.style.maxWidth).toBe('520px');
+    expect(
+      screen.getByRole('button', { name: '打开 ChatGPT App' }).parentElement?.className,
+    ).toContain('flex-wrap');
+    for (const label of ['打开 ChatGPT App', '重新登录 ChatGPT', '稍后处理']) {
+      const button = screen.getByRole('button', { name: label });
+      expect(button.className).toContain('whitespace-nowrap');
+      expect(button.className).toContain('shrink-0');
+    }
   });
 });
