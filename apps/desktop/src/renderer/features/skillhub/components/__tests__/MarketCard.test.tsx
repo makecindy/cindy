@@ -24,6 +24,8 @@ const MARKET_SKILL: MarketSkill = {
   publishedVisibility: 'public',
   visibleDeptIds: [],
   categories: [],
+  tags: [],
+  githubUrl: null,
   publishedAt: '2026-09-01T00:00:00.000Z',
   relativeTime: 'today',
   downloads: 0,

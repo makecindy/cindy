@@ -17,6 +17,8 @@ function skill(name: string, description: string): MarketSkill {
     visibility: 'PUBLIC',
     visibleDeptIds: [],
     categories: [],
+    tags: [],
+    githubUrl: null,
     publishedAt: '2026-06-11T00:00:00.000Z',
     relativeTime: '刚刚',
     downloads: 0,

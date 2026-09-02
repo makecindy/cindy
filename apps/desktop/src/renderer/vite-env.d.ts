@@ -3182,6 +3182,8 @@ interface ElectronAPI {
         };
         visibleDeptIds: string[];
         categories?: string[];
+        tags?: Array<{ slug: string; name: string }>;
+        githubUrl?: string | null;
         publishedAt: string;
         downloads: number;
         /** 跨设备识别：null = pre-feature 历史版本 */
@@ -6566,6 +6568,7 @@ type SkillhubSyncResult =
 
 interface SkillhubInfoResult {
   name: string;
+  icon?: string | null;
   displayName: string;
   description: string;
   authorId: string;
@@ -6585,6 +6588,8 @@ interface SkillhubInfoResult {
   visibleDeptIds: string[];
   visibleDeptNames?: string[];
   categories?: string[];
+  tags?: Array<{ slug: string; name: string }>;
+  githubUrl?: string | null;
   changelog?: string;
   publishedAt: string;
   downloads: number;

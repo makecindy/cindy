@@ -2960,6 +2960,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         };
         visibleDeptIds: string[];
         categories?: string[];
+        tags?: Array<{ slug: string; name: string }>;
+        githubUrl?: string | null;
         publishedAt: string;
         downloads: number;
         /** 跨设备识别：null = pre-feature 历史版本 */

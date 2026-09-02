@@ -1,6 +1,6 @@
 export interface HubSkillInfoForDesktop {
   slug: string;
-  icon?: string;
+  icon?: string | null;
   displayName?: string;
   summary?: string | null;
   description?: string;
@@ -19,7 +19,7 @@ export interface HubSkillInfoForDesktop {
   isMine?: boolean;
   categories?: Array<{ slug: string; name: string }>;
   tags?: Array<{ slug: string; name: string }>;
-  githubUrl?: string;
+  githubUrl?: string | null;
   stats?: {
     downloads?: number;
   };

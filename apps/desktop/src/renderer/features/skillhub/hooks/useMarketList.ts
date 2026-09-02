@@ -77,6 +77,10 @@ export interface MarketSkill {
   visibleDeptIds: string[];
   /** 分类 slug 列表。服务端目前还未返回时给空数组兜底。 */
   categories: string[];
+  /** 服务端可搜索标签，保留显示名供详情等消费方使用。 */
+  tags: Array<{ slug: string; name: string }>;
+  /** Skill 对应的公开仓库地址；null 表示发布者未配置。 */
+  githubUrl: string | null;
   publishedAt: string; // ISO
   /** 相对时间显示,如 "3 天前"、"昨天"、"刚刚"。 */
   relativeTime: string;
@@ -116,6 +120,8 @@ interface ServerListItem {
   };
   visibleDeptIds: string[];
   categories?: string[];
+  tags?: Array<{ slug: string; name: string }>;
+  githubUrl?: string | null;
   publishedAt: string;
   downloads?: number;
   /** 跨设备识别：null = pre-feature 历史版本 */
@@ -224,6 +230,8 @@ function mapServerToView(
     pendingVersion: item.pendingVersion,
     visibleDeptIds: item.visibleDeptIds,
     categories: item.categories ?? [],
+    tags: item.tags ?? [],
+    githubUrl: item.githubUrl ?? null,
     publishedAt: item.publishedAt,
     relativeTime: formatMarketRelativeTime(item.publishedAt, translate),
     downloads: Number.isFinite(item.downloads) ? item.downloads ?? 0 : 0,
