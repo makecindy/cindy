@@ -110,9 +110,13 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     expect(sidebarSource).not.toContain('retryRemoteSessionBootstrap(device.deviceId)');
     expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.retryTasks'");
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.tasksLoading'");
-    expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.devicesLoadFailed'");
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.devicesLoading'");
-    expect(sidebarSource).toContain('retryDeviceLinkDeviceList');
+    // 设备目录失败不打断侧栏:断网或远端不可达时都继续显示本地与已缓存内容。
+    expect(sidebarSource).not.toContain("kind=\"devices\"\n                  status=\"error\"");
+    expect(sidebarSource).not.toContain('retryDeviceLinkDeviceList');
+    expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.devicesLoadFailed'");
+    expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.devicesPartiallyFailed'");
+    expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.retryDevices'");
     // 即使有旧/空 shard，本轮 gave-up 也必须进 error，不能把缓存伪装成权威结果。
     expect(remoteProjectsHookSource).toContain("if (result === 'gave-up') {");
     expect(remoteProjectsHookSource).not.toContain(
