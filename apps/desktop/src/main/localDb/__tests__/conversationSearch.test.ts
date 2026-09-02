@@ -46,6 +46,17 @@ describe('conversationSearch source invariants', () => {
     );
   });
 
+  it('narrows keyword search by recent activity in SQLite before matching titles or content', () => {
+    expect(conversationSearchSource).toContain('const activityCond = activityCutoff === null');
+    expect(conversationSearchSource).toContain('gte(sessions.updatedAt, activityCutoff)');
+    expect(conversationSearchSource).toContain('gte(sessions.userSendAt, activityCutoff)');
+    expect(conversationSearchSource).toContain('workerCond,\n      activityCond,');
+    expect(conversationSearchSource.indexOf('listSearchableSessions(filters)')).toBeLessThan(
+      conversationSearchSource.indexOf('const titleMatches = sessionRows'),
+    );
+    expect(conversationSearchSource).toContain('sessionActivityFromMs: activityCutoff');
+  });
+
   it('keeps FTS hits only when visible text matches, not merely because preview is non-empty', () => {
     expect(conversationSearchSource).toContain('visibleTextMatchesMessagesFtsQuery');
     expect(conversationSearchSource).toContain('preview.keywordMatchedVisibleText');
