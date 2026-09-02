@@ -289,6 +289,11 @@
     "countPreviewHint": "{{n}} quotes, tap to preview",
     "remove": "Remove quote",
     "closePreview": "Close quote preview",
-    "menuLabel": "Add to chat"
+    "menuLabel": "Add to chat",
+    "commentSheetTitle": "Add Quote",
+    "commentLabel": "Comment",
+    "commentPlaceholder": "Add context for this quote…",
+    "addWithoutComment": "Add Quote",
+    "addWithComment": "Add with Comment"
   }
 }

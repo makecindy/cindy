@@ -132,6 +132,11 @@ export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCa
                     <Text numberOfLines={3} style={styles.previewText}>
                       {`“${quote.text}”`}
                     </Text>
+                    {quote.comment ? (
+                      <Text numberOfLines={5} style={styles.previewCommentText}>
+                        {quote.comment}
+                      </Text>
+                    ) : null}
                     {quote.sourcePath ? (
                       <View style={styles.previewSourceRow}>
                         <FileText color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
@@ -211,6 +216,11 @@ function makeQuoteCapsuleStyles(colors: ThemeColors) {
     },
     previewText: {
       color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+    },
+    previewCommentText: {
+      color: colors.textPrimary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
     },

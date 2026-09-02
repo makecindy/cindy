@@ -27,4 +27,15 @@ describe('QuoteChip', () => {
       container.querySelector('[data-inline-reference-chip]')?.className,
     ).toContain('text-[var(--text-primary)]');
   });
+
+  it('shows comment context before the compact quote text', () => {
+    const { container } = render(<QuoteChip quote={{
+      text: 'first line\nsecond line',
+      comment: 'check this\ncarefully',
+    }} />);
+    expect(container.querySelector('[data-inline-reference-chip]')?.textContent).toBe(
+      'check this carefully — first line second line',
+    );
+  });
+
 });

@@ -4,6 +4,7 @@ import {
   appendComposerNode,
   composerDocumentFromEncodedMessage,
   composerDocumentFromSerializedMessage,
+  composerDocumentsEqual,
   composerDocumentProjectedText,
   hydrateComposerMessageReferenceBodies,
   isLongComposerPaste,
@@ -22,6 +23,18 @@ import {
 } from '@/session/composerDocument';
 
 describe('mobile composer document', () => {
+  it('treats quote comments as part of structural draft equality', () => {
+    const base = {
+      version: 1 as const,
+      nodes: [{ type: 'quote' as const, quote: { text: 'selected', comment: 'first' } }],
+    };
+    expect(composerDocumentsEqual(base, base)).toBe(true);
+    expect(composerDocumentsEqual(base, {
+      version: 1,
+      nodes: [{ type: 'quote', quote: { text: 'selected', comment: 'second' } }],
+    })).toBe(false);
+  });
+
   it('roundtrips interleaved quote and text nodes without leaking private markers', () => {
     const quoteA = { text: 'alpha' };
     const quoteB = { text: 'beta', sourcePath: 'src/b.ts', startLine: 4, endLine: 5 };
@@ -31,6 +44,69 @@ describe('mobile composer document', () => {
     expect(document.nodes.map((node) => node.type)).toEqual(['quote', 'text', 'quote', 'text']);
     expect(composerDocumentProjectedText(document)).toBe('reply areply b');
     expect(serializeComposerDocument(document)).toMatchObject({ text: encoded, quotesEncoded: true });
+  });
+
+  it('hydrates a sent commented quote from history without losing its comment', () => {
+    const original = {
+      version: 1 as const,
+      nodes: [
+        {
+          type: 'quote' as const,
+          quote: {
+            text: 'selected source',
+            sourcePath: 'src/example.ts',
+            startLine: 8,
+            endLine: 10,
+            comment: 'first line\n\nlast line',
+          },
+        },
+        { type: 'text' as const, text: 'Please explain this.' },
+      ],
+    };
+
+    const sent = serializeComposerDocument(original);
+    const hydrated = composerDocumentFromSerializedMessage(sent.text, {
+      quotesEncoded: sent.quotesEncoded,
+    });
+
+    expect(hydrated.nodes).toEqual(original.nodes);
+    expect(serializeComposerDocument(hydrated)).toEqual(sent);
+  });
+
+  it('roundtrips interleaved quotes with distinct comments in exact order', () => {
+    const original = {
+      version: 1 as const,
+      nodes: [
+        {
+          type: 'quote' as const,
+          quote: { text: 'alpha', comment: 'comment A' },
+        },
+        { type: 'text' as const, text: 'reply A' },
+        {
+          type: 'quote' as const,
+          quote: {
+            text: 'beta',
+            sourcePath: 'src/b.ts',
+            startLine: 4,
+            endLine: 5,
+            comment: 'comment B first\ncomment B second',
+          },
+        },
+        { type: 'text' as const, text: 'reply B' },
+        {
+          type: 'quote' as const,
+          quote: { text: 'gamma', comment: 'comment C' },
+        },
+      ],
+    };
+
+    const sent = serializeComposerDocument(original);
+    const hydrated = composerDocumentFromSerializedMessage(sent.text, {
+      quotesEncoded: true,
+    });
+
+    expect(hydrated.nodes).toEqual(original.nodes);
+    expect(serializeComposerDocument(hydrated)).toEqual(sent);
   });
 
   it('migrates legacy quotes before the plain text draft', () => {

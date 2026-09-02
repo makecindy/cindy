@@ -52,6 +52,11 @@ import { formatByteSize, isHtmlFilePreviewCandidate } from '@/session/filePrevie
 import { joinRemotePath } from '@/session/htmlLocalResources';
 import { decodeGzipBase64Text, mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/fileBrowserActions';
 import { appendQuote, truncateQuoteText } from '@/session/chatQuoteStore';
+import {
+  QuoteCommentSheet,
+  type PendingQuoteComment,
+} from '@/session/QuoteCommentSheet';
+import type { ChatQuote } from '@cindy/maker-shared/chat-quotes';
 import { getCachedPreviewText, storeCachedPreviewText } from '@/session/fileBrowserCache';
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
 import type { RemoteMediaSshContext } from '@/session/fileBrowserGallery';
@@ -178,6 +183,7 @@ export default function RemoteFilePreviewScreen() {
   // 路由仍挂载、pageIndex 也不变,只有 focus 会翻。
   const screenFocused = useIsFocused();
   const [error, setError] = useState<string | null>(null);
+  const [pendingQuoteComment, setPendingQuoteComment] = useState<PendingQuoteComment | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -546,6 +552,26 @@ export default function RemoteFilePreviewScreen() {
     }];
   }, [current, lightboxUrl]);
 
+  const handleQuoteCommentSubmit = useCallback((
+    pending: PendingQuoteComment,
+    quote: ChatQuote,
+  ) => {
+    if (pending.sessionId !== sessionId) {
+      setPendingQuoteComment(null);
+      return;
+    }
+    appendQuote(pending.sessionId, quote);
+    setPendingQuoteComment(null);
+    router.navigate({
+      pathname: '/sessions/[sessionId]',
+      params: {
+        sessionId: pending.sessionId,
+        deviceId,
+        focusComposerRequestKey: String(Date.now()),
+      },
+    });
+  }, [deviceId, router, sessionId]);
+
   if (!current || !siblings) {
     return (
       <SafeAreaView style={styles.safeArea} testID="filePreview.screen">
@@ -613,18 +639,13 @@ export default function RemoteFilePreviewScreen() {
               // chat-text-quote:markdown 渲染态选中文字 → 引用进会话草稿
               // (携带当前文件路径,— source: 行),随即切回对话界面——与
               // 「发送到会话」(sendToSession)的图片/路径处理一致(产品决策);
-              // 引用在全局 store,导航后 composer 胶囊即时可见。
+              // 先在触控友好的 sheet 中选择是否加评论,提交后再导航。
               onQuoteSelection={(text) => {
-                appendQuote(sessionId, {
-                  text: truncateQuoteText(text),
-                  sourcePath: item.relPath,
-                });
-                router.navigate({
-                  pathname: '/sessions/[sessionId]',
-                  params: {
-                    sessionId,
-                    deviceId,
-                    focusComposerRequestKey: String(Date.now()),
+                setPendingQuoteComment({
+                  sessionId,
+                  quote: {
+                    text: truncateQuoteText(text),
+                    sourcePath: item.relPath,
                   },
                 });
               }}
@@ -674,6 +695,11 @@ export default function RemoteFilePreviewScreen() {
           onClose={() => setLightboxUrl(null)}
         />
       ) : null}
+      <QuoteCommentSheet
+        onClose={() => setPendingQuoteComment(null)}
+        onSubmit={handleQuoteCommentSubmit}
+        pending={pendingQuoteComment}
+      />
     </SafeAreaView>
   );
 }

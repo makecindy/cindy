@@ -7,6 +7,19 @@ function readSource(relativePath: string): string {
 }
 
 describe('mobile cross-device quote wiring', () => {
+  it('opens the shared comment sheet for chat and file selections before appending', () => {
+    const sessionSource = readSource('app/sessions/[sessionId].tsx');
+    const fileSource = readSource('app/files/preview/[sessionId].tsx');
+
+    expect(sessionSource).toContain('setPendingQuoteComment({');
+    expect(sessionSource).toContain('<QuoteCommentSheet');
+    expect(sessionSource).toContain('if (pending.sessionId !== sessionId)');
+    expect(fileSource).toContain('setPendingQuoteComment({');
+    expect(fileSource).toContain('<QuoteCommentSheet');
+    expect(fileSource).toContain('sourcePath: item.relPath');
+    expect(fileSource).toContain('if (pending.sessionId !== sessionId)');
+  });
+
   it('parses interleaved desktop quote segments instead of exposing marker text', () => {
     const source = readSource('src/session/MessageRenderer.tsx');
     const bubbleStart = source.indexOf('function MessageBubble');

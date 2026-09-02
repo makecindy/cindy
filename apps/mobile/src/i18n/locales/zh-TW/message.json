@@ -289,6 +289,11 @@
     "countPreviewHint": "{{n}} 處引用，點選預覽",
     "remove": "移除引用",
     "closePreview": "關閉引用預覽",
-    "menuLabel": "新增到對話"
+    "menuLabel": "新增到對話",
+    "commentSheetTitle": "新增引用",
+    "commentLabel": "評論",
+    "commentPlaceholder": "為這則引用新增補充說明…",
+    "addWithoutComment": "新增引用",
+    "addWithComment": "附評論新增"
   }
 }

@@ -234,7 +234,9 @@ function readStoredQuotes(value: unknown): ChatQuote[] {
       typeof item === 'object' &&
       typeof (item as { text?: unknown }).text === 'string' &&
       ((item as { sourcePath?: unknown }).sourcePath === undefined ||
-        typeof (item as { sourcePath?: unknown }).sourcePath === 'string'),
+        typeof (item as { sourcePath?: unknown }).sourcePath === 'string') &&
+      ((item as { comment?: unknown }).comment === undefined ||
+        typeof (item as { comment?: unknown }).comment === 'string'),
   );
 }
 
@@ -245,7 +247,8 @@ function sameQuotes(left: readonly ChatQuote[], right: readonly ChatQuote[]): bo
       && quote.text === other.text
       && quote.sourcePath === other.sourcePath
       && quote.startLine === other.startLine
-      && quote.endLine === other.endLine;
+      && quote.endLine === other.endLine
+      && quote.comment === other.comment;
   });
 }
 

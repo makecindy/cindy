@@ -73,6 +73,12 @@ export const ComposerQuoteNode = Node.create<Record<string, never>, Record<strin
         renderHTML: (attrs) =>
           attrs.endLine == null ? {} : { 'data-end-line': attrs.endLine },
       },
+      comment: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-quote-comment') || null,
+        renderHTML: (attrs) =>
+          attrs.comment == null ? {} : { 'data-quote-comment': attrs.comment },
+      },
     };
   },
 

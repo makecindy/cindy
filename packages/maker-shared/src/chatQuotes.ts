@@ -27,6 +27,7 @@ export interface ChatQuote {
   sourcePath?: string;
   startLine?: number;
   endLine?: number;
+  comment?: string;
 }
 
 /** 按消息正文顺序排列的引用 / 用户文字段。 */
@@ -36,14 +37,44 @@ export type ChatQuoteSegment =
 
 /** 来源行前缀(条目内最后一行)。 */
 const SOURCE_LINE_PREFIX = '— source: ';
+const COMMENT_LINE_PREFIX = '— comment: ';
+const COMMENT_BLOCK_START_MARKER = '<!-- cindy-composer-quote-comment:start -->';
+const COMMENT_BLOCK_END_MARKER = '<!-- cindy-composer-quote-comment:end -->';
+const COMMENT_BLOCK_START_MARKER_LINE = `> ${COMMENT_BLOCK_START_MARKER}`;
+const COMMENT_BLOCK_END_MARKER_LINE = `> ${COMMENT_BLOCK_END_MARKER}`;
+/**
+ * Invisible, reversible escape for user-authored lines that would otherwise be
+ * indistinguishable from quote metadata. Prefixing an existing escape prefix
+ * as well makes the transform bijective for arbitrary user text.
+ */
+const USER_CONTENT_ESCAPE_PREFIX = '\u2060';
 
 /**
- * 新版产品引用块的显式标记。Markdown comment 在普通文本视图中不可见，
+* 新版产品引用块的显式标记。Markdown comment 在普通文本视图中不可见，
  * 同时让解析器能把正文里的用户手写 `> ...` 与 composer quote atom 区分开。
  * 未带标记的历史 quotesEncoded 消息仍只按「消息开头的引用区」兼容解析。
  */
 const QUOTE_BLOCK_MARKER = '<!-- cindy-composer-quote -->';
 const QUOTE_BLOCK_MARKER_LINE = `> ${QUOTE_BLOCK_MARKER}`;
+
+function escapeUserContentLine(line: string): string {
+  if (
+    line.startsWith(USER_CONTENT_ESCAPE_PREFIX)
+    || line.startsWith(SOURCE_LINE_PREFIX)
+    || line === QUOTE_BLOCK_MARKER
+    || line === COMMENT_BLOCK_START_MARKER
+    || line === COMMENT_BLOCK_END_MARKER
+  ) {
+    return `${USER_CONTENT_ESCAPE_PREFIX}${line}`;
+  }
+  return line;
+}
+
+function unescapeUserContentLine(line: string): string {
+  return line.startsWith(USER_CONTENT_ESCAPE_PREFIX)
+    ? line.slice(USER_CONTENT_ESCAPE_PREFIX.length)
+    : line;
+}
 
 /**
  * Remove the private product marker from user-facing plain text while keeping
@@ -52,10 +83,35 @@ const QUOTE_BLOCK_MARKER_LINE = `> ${QUOTE_BLOCK_MARKER}`;
  * true so an identical line typed by the user is never rewritten.
  */
 export function stripChatQuoteMarkerLines(content: string): string {
-  return content
-    .split('\n')
-    .filter((line) => line.trimStart() !== QUOTE_BLOCK_MARKER_LINE)
-    .join('\n');
+  const stripped: string[] = [];
+  let inCommentBlock = false;
+  for (const line of content.split('\n')) {
+    const trimmed = line.trimStart();
+    if (trimmed === COMMENT_BLOCK_START_MARKER_LINE) {
+      inCommentBlock = true;
+      continue;
+    }
+    if (trimmed === COMMENT_BLOCK_END_MARKER_LINE) {
+      inCommentBlock = false;
+      continue;
+    }
+    if (trimmed === QUOTE_BLOCK_MARKER_LINE) continue;
+    if (!trimmed.startsWith('> ')) {
+      stripped.push(line);
+      continue;
+    }
+
+    const contentIndex = line.length - trimmed.length + 2;
+    const escapedContentIndex = inCommentBlock
+      && line.startsWith(COMMENT_LINE_PREFIX, contentIndex)
+      ? contentIndex + COMMENT_LINE_PREFIX.length
+      : contentIndex;
+    stripped.push(line.startsWith(USER_CONTENT_ESCAPE_PREFIX, escapedContentIndex)
+      ? line.slice(0, escapedContentIndex)
+        + line.slice(escapedContentIndex + USER_CONTENT_ESCAPE_PREFIX.length)
+      : line);
+  }
+  return stripped.join('\n');
 }
 
 function isValidLine(line: number | undefined): line is number {
@@ -106,9 +162,18 @@ function stripOuterNewlines(text: string): string {
 
 /** 单条引用 → 可独立插入正文任意位置的 Markdown blockquote。 */
 export function formatQuoteForSend(quote: ChatQuote): string {
-  const lines = stripOuterNewlines(quote.text).split('\n');
+  const lines = stripOuterNewlines(quote.text).split('\n').map(escapeUserContentLine);
   const sourceLine = formatSourceLine(quote);
   if (sourceLine) lines.push(`${SOURCE_LINE_PREFIX}${sourceLine}`);
+  if (quote.comment) {
+    const [firstCommentLine = '', ...remainingCommentLines] = quote.comment.split('\n');
+    lines.push(
+      COMMENT_BLOCK_START_MARKER,
+      `${COMMENT_LINE_PREFIX}${escapeUserContentLine(firstCommentLine)}`,
+      ...remainingCommentLines.map(escapeUserContentLine),
+      COMMENT_BLOCK_END_MARKER,
+    );
+  }
   return [
     QUOTE_BLOCK_MARKER_LINE,
     ...lines.map((line) => (line ? `> ${line}` : '>')),
@@ -122,14 +187,31 @@ export function formatQuotesForSend(quotes: readonly ChatQuote[], body: string):
 }
 
 function quoteFromLines(lines: string[]): ChatQuote {
-  const last = lines[lines.length - 1];
-  if (last?.startsWith(SOURCE_LINE_PREFIX) && lines.length > 1) {
-    return {
-      text: lines.slice(0, -1).join('\n'),
-      ...parseSourceLine(last.slice(SOURCE_LINE_PREFIX.length)),
-    };
-  }
-  return { text: lines.join('\n') };
+  let remaining = lines;
+  const comment = (() => {
+    if (remaining.at(-1) !== COMMENT_BLOCK_END_MARKER) return undefined;
+    const startIndex = remaining.lastIndexOf(COMMENT_BLOCK_START_MARKER);
+    if (startIndex <= 0) return undefined;
+    const encodedCommentLines = remaining.slice(startIndex + 1, -1);
+    const first = encodedCommentLines[0];
+    if (!first?.startsWith(COMMENT_LINE_PREFIX)) return undefined;
+    remaining = remaining.slice(0, startIndex);
+    return [
+      unescapeUserContentLine(first.slice(COMMENT_LINE_PREFIX.length)),
+      ...encodedCommentLines.slice(1).map(unescapeUserContentLine),
+    ].join('\n');
+  })();
+  const last = remaining[remaining.length - 1];
+  const base = (() => {
+    if (last?.startsWith(SOURCE_LINE_PREFIX) && remaining.length > 1) {
+      return {
+        text: remaining.slice(0, -1).map(unescapeUserContentLine).join('\n'),
+        ...parseSourceLine(last.slice(SOURCE_LINE_PREFIX.length)),
+      };
+    }
+    return { text: remaining.map(unescapeUserContentLine).join('\n') };
+  })();
+  return comment !== undefined ? { ...base, comment } : base;
 }
 
 /**

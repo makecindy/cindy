@@ -21,12 +21,18 @@ export function QuoteChip({
 }: QuoteChipProps) {
   const sourceLabel = quoteSourceDisplayLabel(quote);
   const compactText = quote.text.replace(/\s+/g, ' ').trim();
+  const compactComment = quote.comment?.replace(/\s+/g, ' ').trim();
 
   const tooltip = (
     <span className="flex flex-col gap-1">
       <span className="whitespace-pre-wrap text-12 leading-[1.5] [overflow-wrap:anywhere]">
         “{quote.text}”
       </span>
+      {compactComment ? (
+        <span className="whitespace-pre-wrap text-12 leading-[1.5] [overflow-wrap:anywhere]" style={{ color: 'var(--text-secondary)' }}>
+          {compactComment}
+        </span>
+      ) : null}
       {sourceLabel ? (
         <span
           className="inline-flex min-w-0 items-center gap-1 text-11"
@@ -41,7 +47,7 @@ export function QuoteChip({
 
   return (
     <InlineReferenceChip
-      label={compactText}
+      label={compactComment ? `${compactComment} — ${compactText}` : compactText}
       icon={<MessageSquareQuote aria-hidden />}
       tooltip={tooltip}
       tooltipContentClassName="max-h-64 w-80 max-w-[70vw] overflow-y-auto whitespace-normal"

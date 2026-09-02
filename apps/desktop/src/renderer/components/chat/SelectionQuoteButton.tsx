@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageSquarePlus } from 'lucide-react';
+import { MessageSquarePlus, MessageSquareText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { ChatQuote } from '@/lib/chatQuotes';
@@ -33,6 +33,23 @@ interface SelectionAnchor {
   x: number;
   y: number;
   placement: 'above' | 'below';
+  context: SelectionContextSnapshot;
+}
+type FloatingAction = 'add' | 'comment';
+
+export interface SelectionContextSnapshot {
+  sessionId: string;
+  sourcePath?: string;
+  metadata?: Pick<ChatQuote, 'startLine' | 'endLine'>;
+}
+
+/** A captured selection is valid only for the session/source where it was created. */
+export function selectionContextMatches(
+  captured: Pick<SelectionContextSnapshot, 'sessionId' | 'sourcePath'>,
+  sessionId: string,
+  sourcePath: string | undefined,
+): boolean {
+  return captured.sessionId === sessionId && captured.sourcePath === sourcePath;
 }
 
 const BUTTON_GAP_PX = 8;
@@ -118,7 +135,10 @@ function getRectBounds(rects: readonly DOMRect[]): RectBounds | null {
   };
 }
 
-function getFloatingAnchor(selection: Selection, range: Range): Omit<SelectionAnchor, 'text'> | null {
+function getFloatingAnchor(
+  selection: Selection,
+  range: Range,
+): Omit<SelectionAnchor, 'text' | 'context'> | null {
   const rects = Array.from(range.getClientRects()).filter(
     (rect) => rect.width > 0 && rect.height > 0,
   );
@@ -177,20 +197,60 @@ export function SelectionQuoteButton({
   const [anchor, setAnchor] = useState<SelectionAnchor | null>(null);
   const anchorRef = useRef<SelectionAnchor | null>(null);
   anchorRef.current = anchor;
+  const [activeAction, setActiveAction] = useState<FloatingAction | null>(null);
+  const [commentDraft, setCommentDraft] = useState('');
+  const commentInputRef = useRef<HTMLTextAreaElement>(null);
+  const activeActionRef = useRef<FloatingAction | null>(null);
+  activeActionRef.current = activeAction;
+
+  const resetInteraction = useCallback(() => {
+    setAnchor(null);
+    setActiveAction(null);
+    setCommentDraft('');
+  }, []);
 
   const commitQuote = useCallback((selectionAnchor: SelectionAnchor) => {
+    if (!selectionContextMatches(selectionAnchor.context, sessionId, sourcePath)) {
+      resetInteraction();
+      return;
+    }
     const text =
       selectionAnchor.text.length > QUOTE_MAX_CHARS
         ? `${selectionAnchor.text.slice(0, QUOTE_MAX_CHARS)}…`
         : selectionAnchor.text;
-    const metadata = getQuoteMetadata?.() ?? null;
+    const { context } = selectionAnchor;
     appendQuoteToDraft(
-      sessionId,
-      sourcePath ? { text, sourcePath, ...(metadata ?? {}) } : { text },
+      context.sessionId,
+      context.sourcePath
+        ? { text, sourcePath: context.sourcePath, ...(context.metadata ?? {}) }
+        : { text },
     );
     window.getSelection()?.removeAllRanges();
-    setAnchor(null);
-  }, [getQuoteMetadata, sessionId, sourcePath]);
+    resetInteraction();
+  }, [resetInteraction, sessionId, sourcePath]);
+
+  const commitQuoteWithComment = useCallback((selectionAnchor: SelectionAnchor, comment: string) => {
+    if (!selectionContextMatches(selectionAnchor.context, sessionId, sourcePath)) {
+      resetInteraction();
+      return;
+    }
+    const text =
+      selectionAnchor.text.length > QUOTE_MAX_CHARS
+        ? `${selectionAnchor.text.slice(0, QUOTE_MAX_CHARS)}…`
+        : selectionAnchor.text;
+    const { context } = selectionAnchor;
+    const quote = context.sourcePath
+      ? { text, sourcePath: context.sourcePath, ...(context.metadata ?? {}), comment }
+      : { text, comment };
+    appendQuoteToDraft(context.sessionId, quote);
+    window.getSelection()?.removeAllRanges();
+    resetInteraction();
+  }, [resetInteraction, sessionId, sourcePath]);
+
+  useEffect(() => {
+    // Route/source changes invalidate the old DOM selection and any comment draft.
+    resetInteraction();
+  }, [resetInteraction, sessionId, sourcePath]);
 
   useEffect(() => {
     // Position follows the actual selected text edge, not the mouse-up point. This keeps
@@ -220,20 +280,35 @@ export function SelectionQuoteButton({
       const floatingAnchor = getFloatingAnchor(sel, range);
       if (!floatingAnchor) return null;
 
-      return { text, ...floatingAnchor };
+      return {
+        text,
+        ...floatingAnchor,
+        context: {
+          sessionId,
+          sourcePath,
+          ...(sourcePath ? { metadata: getQuoteMetadata?.() ?? undefined } : {}),
+        },
+      };
     };
 
     const onMouseUp = () => {
       // 松手后 selection 需要一帧定型(双击选词等场景)。
-      requestAnimationFrame(() => setAnchor(readSelectionInStream()));
+      requestAnimationFrame(() => {
+        // 评论激活期间不重算:点击输入框/提交按钮时选区已塌缩,重算会卸载整个浮层。
+        if (activeActionRef.current === 'comment') return;
+        setAnchor(readSelectionInStream());
+      });
     };
     const onSelectionChange = () => {
       // 只负责"选区没了就藏"——避免每次拖动扩选都重算位置导致按钮乱跳。
       const sel = window.getSelection();
+      // 评论输入框打开时不允许因选区塌缩隐藏:输入/提交按钮的点击都会先清选区,
+      // 一旦塌缩即卸载整个浮层,评论交互全部失效。
+      if (activeActionRef.current === 'comment') return;
       if ((!sel || sel.isCollapsed) && anchorRef.current) setAnchor(null);
     };
     const onScrollOrResize = () => {
-      if (anchorRef.current) setAnchor(null);
+      if (anchorRef.current) resetInteraction();
     };
     const container = containerRef.current;
     if (container) container.dataset.selectionQuoteContext = '';
@@ -256,22 +331,32 @@ export function SelectionQuoteButton({
         delete container.dataset.selectionQuoteContext;
       }
     };
-  }, [commitQuote, containerRef, getQuoteText]);
+  }, [
+    commitQuote,
+    containerRef,
+    getQuoteMetadata,
+    getQuoteText,
+    resetInteraction,
+    sessionId,
+    sourcePath,
+  ]);
 
   if (!anchor) return null;
 
   const handleAdd = () => {
     commitQuote(anchor);
   };
+  const handleComment = () => {
+    setActiveAction('comment');
+    requestAnimationFrame(() => commentInputRef.current?.focus());
+  };
+  const submitComment = () => {
+    if (!commentDraft.trim()) return;
+    commitQuoteWithComment(anchor, commentDraft);
+  };
 
   return createPortal(
-    <button
-      type="button"
-      // mousedown 先于 click 触发浏览器清选区;preventDefault 保住选区与按钮。
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={handleAdd}
-      className="fixed z-[60] flex w-max items-center gap-2.5 whitespace-nowrap rounded-full px-3 py-1.5 text-12 shadow-[var(--shadow-menu)]"
-      style={{
+    <div className="fixed z-[60]" style={{
         left: clamp(anchor.x, BUTTON_MIN_X_PX, window.innerWidth - BUTTON_RIGHT_MARGIN_PX),
         top:
           anchor.placement === 'above'
@@ -284,14 +369,78 @@ export function SelectionQuoteButton({
                 ),
               ),
         transform: anchor.placement === 'above' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
-        backgroundColor: 'var(--surface-elevated)',
-        border: '1px solid var(--border-default)',
-        color: 'var(--text-primary)',
-      }}
-    >
-      <MessageSquarePlus className="h-3.5 w-3.5" />
-      {t('chat.quote.addToChat')}
-    </button>,
+      }}>
+        {activeAction === 'comment' ? (
+          <div className="flex flex-col gap-1.5 rounded-xl p-2" style={{
+            backgroundColor: 'var(--surface-elevated)',
+            border: '1px solid var(--border-default)',
+            minWidth: 220,
+            boxShadow: 'var(--shadow-menu)',
+          }}>
+            <div className="whitespace-pre-wrap text-11" style={{ color: 'var(--text-tertiary)' }}>
+              {anchor.text.replace(/\s+/g, ' ').trim().slice(0, 80)}
+            </div>
+            <textarea
+              ref={commentInputRef}
+              value={commentDraft}
+              onChange={(e) => setCommentDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return;
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  submitComment();
+                }
+                if (e.key === 'Escape') {
+                  setActiveAction(null);
+                  setCommentDraft('');
+                }
+              }}
+              placeholder={t('chat.quote.commentPlaceholder')}
+              className="resize-none rounded-lg px-2 py-1.5 text-12 outline-none placeholder:text-[var(--text-placeholder)]"
+              style={{
+                backgroundColor: 'var(--surface-elevated)',
+                border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)',
+                minHeight: 56,
+              }}
+            />
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={submitComment}
+              className="rounded-full px-3 py-1 text-12"
+              style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-primary)' }}
+            >
+              {t('chat.quote.submitComment')}
+            </button>
+          </div>
+        ) : (
+          <div className="flex w-max items-center gap-2 whitespace-nowrap rounded-full px-2 py-1 text-12 shadow-[var(--shadow-menu)]" style={{
+            backgroundColor: 'var(--surface-elevated)',
+            border: '1px solid var(--border-default)',
+            color: 'var(--text-primary)',
+          }}>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleAdd}
+              className="flex items-center gap-2 rounded-full px-1.5 py-0.5"
+            >
+              <MessageSquarePlus className="h-3.5 w-3.5" />
+              {t('chat.quote.addToChat')}
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleComment}
+              className="flex items-center gap-2 rounded-full px-1.5 py-0.5"
+            >
+              <MessageSquareText className="h-3.5 w-3.5" />
+              {t('chat.quote.comment')}
+            </button>
+          </div>
+        )}
+    </div>,
     document.body,
   );
 }
