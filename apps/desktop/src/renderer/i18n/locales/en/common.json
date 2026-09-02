@@ -10020,6 +10020,8 @@
         "mine": "Managed"
       },
       "catalogMore": "More",
+      "loadMore": "Load more",
+      "loadingMore": "Loading…",
       "catalogEmpty": "No skills in this category",
       "local": "Local Skills",
       "localEmpty": "No local skills yet",

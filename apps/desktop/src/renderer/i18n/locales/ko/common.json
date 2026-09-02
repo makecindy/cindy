@@ -9998,6 +9998,8 @@
         "mine": "관리 대상"
       },
       "catalogMore": "더 보기",
+      "loadMore": "더 불러오기",
+      "loadingMore": "불러오는 중…",
       "catalogEmpty": "이 카테고리에 스킬이 없습니다",
       "local": "로컬 스킬",
       "localEmpty": "아직 로컬 스킬이 없습니다",

@@ -29,7 +29,7 @@ import {
 } from '@/features/plugin/PluginManagementLayout';
 import { buildLocalSkillRoute, findLocalSkillByPath } from './lib/localRoutes';
 import { refresh as refreshSkillhub, useSkillhub } from './hooks/useSkillhub';
-import { useMarketList, type MarketSkill } from './hooks/useMarketList';
+import { MARKET_PAGE_SIZE, useMarketList, type MarketSkill } from './hooks/useMarketList';
 import { MarketManagementDialogs, useMarketManagement } from './hooks/useMarketManagement';
 import { basename, deriveProjectWorkingDir } from './lib/pathDerivations';
 import { projectHash } from './lib/projectHash';
@@ -52,9 +52,6 @@ const KIND_ICON: Record<string, LucideIcon> = {
   command: SquareTerminal,
   agent: Bot,
 };
-
-/** 主 Skill Tab 每个云端目录最多展示的条数。 */
-const HOME_CATALOG_LIMIT = 8;
 
 function includesSkillQuery(values: ReadonlyArray<string | undefined>, query: string): boolean {
   if (!query) return true;
@@ -82,16 +79,19 @@ export function SkillhubHomeView({
   const marketFilter: HomeMarketFilter = catalogTab === 'organization' ? 'organization' : 'public';
   const marketRequest = useMemo(() => homeMarketQuery(marketFilter), [marketFilter]);
 
-  // 主 Skill Tab 只展示各云端目录的首批摘要，完整分页仍由 SkillHub 市场页承担。
+  // 主 Skill Tab 直接分页展示当前云端目录；“更多”仍进入带完整筛选能力的 Market。
   const {
     items: marketItems,
     loading: marketLoading,
+    loadingMore: marketLoadingMore,
+    hasMore: marketHasMore,
     resolvedScope,
     resolvedMine,
     setSearchQuery,
     setSortBy,
     setCatalogScope,
     setVisibility,
+    loadMore: loadMoreMarket,
     reload: reloadMarket,
   } = useMarketList('all', {
     enabled: catalogTab !== 'local',
@@ -121,8 +121,7 @@ export function SkillhubHomeView({
             [skill.displayName, skill.name, skill.description, skill.authorName],
             normalizedQuery,
           ),
-        )
-        .slice(0, HOME_CATALOG_LIMIT),
+        ),
     [marketFilter, marketItems, marketResponseCurrent, normalizedQuery],
   );
 
@@ -333,7 +332,7 @@ export function SkillhubHomeView({
               {(marketLoading || !marketResponseCurrent) && catalogItems.length === 0 ? (
                 // 占位骨架:与真实卡片同栅格、同行数、同高度,内容到位后原地替换不跳动。
                 <div className={PLUGIN_MANAGEMENT_CARD_GRID_CLASS} aria-hidden>
-                  {Array.from({ length: HOME_CATALOG_LIMIT }).map((_, i) => (
+                  {Array.from({ length: MARKET_PAGE_SIZE }).map((_, i) => (
                     <div
                       key={i}
                       className="flex min-h-[100px] flex-col gap-2 rounded-[12px] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 shadow-[var(--plugin-card-shadow)]"
@@ -393,6 +392,26 @@ export function SkillhubHomeView({
                       </div>
                     </button>
                   ))}
+                  {marketResponseCurrent && marketHasMore ? (
+                    <div className="col-span-full flex justify-center pt-1">
+                      <button
+                        type="button"
+                        disabled={marketLoadingMore}
+                        onClick={() => void loadMoreMarket()}
+                        className={cn(
+                          'inline-flex min-h-9 items-center justify-center rounded-full border border-[var(--border-default)]',
+                          'bg-[var(--surface-elevated)] px-5 text-12 font-medium text-[var(--text-secondary)]',
+                          'transition-colors duration-150 hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                          'disabled:cursor-wait disabled:opacity-60',
+                        )}
+                      >
+                        {marketLoadingMore
+                          ? t('skillhub.home.loadingMore')
+                          : t('skillhub.home.loadMore')}
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </section>

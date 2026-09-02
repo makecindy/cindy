@@ -9990,6 +9990,8 @@
         "mine": "我的管理"
       },
       "catalogMore": "更多",
+      "loadMore": "載入更多",
+      "loadingMore": "載入中…",
       "catalogEmpty": "目前分類暫無技能",
       "local": "本地技能",
       "localEmpty": "還沒有本地技能",

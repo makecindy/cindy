@@ -142,7 +142,7 @@ interface ServerListItem {
   catalogScope?: SkillhubCatalogScope;
 }
 
-const PAGE_SIZE = 24;
+export const MARKET_PAGE_SIZE = 24;
 
 function deriveAvatarInitial(authorName: string): string {
   const trimmed = authorName.trim();
@@ -366,7 +366,7 @@ export function useMarketList(
   const requestMarketPage = useCallback(async (params: FetchMarketPageInput): Promise<MarketPageResult> => {
     const res = await window.electronAPI.skillhub.listMarket({
       cursor: params.cursor,
-      limit: PAGE_SIZE,
+      limit: MARKET_PAGE_SIZE,
       sort: params.sort,
       q: params.q || undefined,
       scope: params.scope,
@@ -408,7 +408,7 @@ export function useMarketList(
       collected.push(...pageItems);
       nextCursor = res.nextCursor ?? null;
       cursor = nextCursor ?? undefined;
-    } while (params.available && collected.length < PAGE_SIZE && nextCursor);
+    } while (params.available && collected.length < MARKET_PAGE_SIZE && nextCursor);
 
     return {
       success: true as const,

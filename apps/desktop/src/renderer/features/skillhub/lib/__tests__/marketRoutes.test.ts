@@ -83,6 +83,18 @@ describe('market route scope', () => {
     expect(homeSource).not.toContain('<SkillSectionHeading');
     expect(homeSource).not.toContain("label={t('skillhub.home.globalScope')}");
   });
+
+  it('paginates both home cloud catalogs in batches of 24', () => {
+    const homeSource = readFileSync(resolve(skillhubDir, 'SkillhubHomeView.tsx'), 'utf8');
+    const hookSource = readFileSync(resolve(skillhubDir, 'hooks/useMarketList.ts'), 'utf8');
+
+    expect(hookSource).toContain('export const MARKET_PAGE_SIZE = 24');
+    expect(homeSource).toContain('length: MARKET_PAGE_SIZE');
+    expect(homeSource).not.toContain('.slice(0, HOME_CATALOG');
+    expect(homeSource).toContain('marketHasMore');
+    expect(homeSource).toContain('loadMoreMarket()');
+    expect(homeSource).toContain("t('skillhub.home.loadMore')");
+  });
 });
 
 describe('market management copy and errors', () => {
