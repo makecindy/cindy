@@ -1901,15 +1901,33 @@
         "invalidLibraryName": "請輸入 Ollama 庫名，或貼上 huggingface.co 上的模型頁連結",
         "advancedExactName": "進階：精確庫名",
         "models": {
-          "qwen38-27b": { "blurb": "目前最強可本機跑的稠密模型，適合程式設計與長任務。" },
-          "gpt-oss-20b": { "blurb": "OpenAI 開源 20B，16GB 級機器上的對話與推理首選。" },
-          "gemma4-e2b": { "blurb": "Gemma 4 最小杯，輕量機器也能跑，帶視覺。" },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 小杯，輕量日常，帶視覺。" },
-          "gemma4-12b": { "blurb": "Gemma 4 中杯，日常對話與多模態更穩。" },
-          "gemma4-31b": { "blurb": "Gemma 4 大杯，對話與多模態更強，也更吃記憶體。" },
-          "gemma4-26b": { "blurb": "Gemma 4 的 MoE 中大杯，啟動參數更少，適合中高配。" },
-          "ornith15-35b": { "blurb": "Ornith 1.5 中杯 MoE，本機程式設計與 Agent 備選。" },
-          "glm-47-flash": { "blurb": "智譜新一代程式設計模型，30B MoE，適合寫程式和 Agent。" }
+          "qwen38-27b": {
+            "blurb": "目前最強可本機跑的稠密模型，適合程式設計與長任務。"
+          },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI 開源 20B，16GB 級機器上的對話與推理首選。"
+          },
+          "gemma4-e2b": {
+            "blurb": "Gemma 4 最小杯，輕量機器也能跑，帶視覺。"
+          },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 小杯，輕量日常，帶視覺。"
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 中杯，日常對話與多模態更穩。"
+          },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 大杯，對話與多模態更強，也更吃記憶體。"
+          },
+          "gemma4-26b": {
+            "blurb": "Gemma 4 的 MoE 中大杯，啟動參數更少，適合中高配。"
+          },
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 中杯 MoE，本機程式設計與 Agent 備選。"
+          },
+          "glm-47-flash": {
+            "blurb": "智譜新一代程式設計模型，30B MoE，適合寫程式和 Agent。"
+          }
         },
         "onboardingTitle": "先安裝 Ollama 執行環境",
         "onboardingBody": "安裝 Ollama 後，即可在 Cindy 中下載和使用本機模型，無需開啟 Ollama App。Ollama 是免費開源的第三方執行環境。",
@@ -3940,12 +3958,12 @@
           "title": "Agent 鍵",
           "source": {
             "label": "任務順序",
-            "description": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
+            "description": "任務鍵按板上順序，對應側邊欄由上到下的任務。",
             "descriptions": {
-              "sidebar": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
-              "last-sent": "AG00～AG05 依你最後一次傳送訊息的時間，最近的排在前面。",
-              "priority": "AG00～AG05 對應前 6 個優先任務。",
-              "custom": "AG00～AG05 各自開啟你指定的任務。"
+              "sidebar": "任務鍵按板上順序，對應側邊欄由上到下的任務。",
+              "last-sent": "任務鍵按板上順序，對應你最近傳送過訊息的任務，越近越靠前。",
+              "priority": "任務鍵按板上順序，對應優先任務。",
+              "custom": "每顆任務鍵開啟你指定的任務。"
             },
             "value": "側邊欄順序",
             "options": {
@@ -3962,7 +3980,16 @@
           },
           "newTask": "新任務",
           "slot": "最近第 {{position}} 個",
-          "slotAria": "AG{{slot}} 開啟最近第 {{position}} 個任務"
+          "slotAria": "AG{{slot}} 開啟最近第 {{position}} 個任務",
+          "role": {
+            "label": "按鍵用途",
+            "description": "任務鍵用來切換任務，並用燈光顯示狀態。動作鍵用來執行快捷操作，還可以更換鍵帽。",
+            "task": "任務鍵",
+            "action": "動作鍵"
+          },
+          "lightingLimit": "韌體最多給板上順序的前 6 顆任務鍵獨立亮燈。多出來的任務鍵仍能切換任務。",
+          "unlitKey": "這顆鍵排在前 6 顆之後，沒有獨立狀態燈。",
+          "taskHint": "建議使用透明鍵帽，任務狀態會以不同顏色的燈效顯示。"
         },
         "commandKeys": {
           "builtInDescription": "保持鍵帽內建的動作，或將這個鍵改綁到其他動作。",
@@ -3973,7 +4000,7 @@
           "title": "麥克風",
           "separate": {
             "label": "拆分麥克風鍵",
-            "description": "保持 ACT10 和 ACT11 分開，不合併為一個 MIC 鍵。"
+            "description": "短按開始並保持錄音，再按一下停止；長按鬆手停止。"
           }
         },
         "analog": {
@@ -4013,7 +4040,8 @@
           "tasks": "任務",
           "commands": "命令",
           "keycaps": "鍵帽",
-          "skills": "技能"
+          "skills": "技能",
+          "voice": "語音輸入"
         },
         "layout": {
           "editor": {
@@ -4025,7 +4053,10 @@
             "cancel": "取消",
             "save": "儲存",
             "assignedShortcut": "已分配動作",
-            "selectKeycap": "選擇鍵帽 {{keycap}}"
+            "selectKeycap": "選擇鍵帽 {{keycap}}",
+            "keyTitle": "編輯按鍵",
+            "keyDescription": "任務鍵開啟任務並顯示狀態燈；動作鍵執行快捷操作，並可以選擇鍵帽。",
+            "blank": "空白"
           },
           "keyboard": {
             "indicator": "狀態指示燈",
@@ -4038,6 +4069,54 @@
             "title": "恢復鍵位配置",
             "description": "恢復鍵帽、搖桿、旋鈕和麥克風分配，不變更任務順序或燈光設定。",
             "button": "恢復配置"
+          },
+          "merge": {
+            "right": "和右邊合成一顆寬鍵",
+            "down": "和下面合成一顆長鍵",
+            "split": "拆成兩個按鍵",
+            "rightDescription": "一顆寬鍵帽會蓋住右邊那顆。被蓋住的任務鍵會變成動作鍵。",
+            "downDescription": "一顆長鍵帽會蓋住下面那顆。被蓋住的任務鍵會變成動作鍵。",
+            "splitDescription": "拆開後，被蓋住的那顆變回空白按鍵。"
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "用按鍵開啟任務，並用燈光同步任務狀態。",
+            "openAria": "開啟 Work Louder Creator Micro 2 設定",
+            "connection": {
+              "toggle": {
+                "aria": "讓這台 Cindy 使用 Creator Micro 2"
+              },
+              "descriptions": {
+                "connecting": "Cindy 正在啟動 Work Louder 裝置服務。",
+                "connected": "USB 已連線，Cindy 正在監聽按鍵並同步任務燈效。",
+                "disabled": "開啟後，Cindy 會改寫目前圖層、監聽按鍵，並用燈光顯示任務狀態。",
+                "present": "開啟後，Cindy 會改寫目前圖層、監聽按鍵，並用燈光顯示任務狀態。",
+                "not-detected": "請用支援資料傳輸的 USB 線連接鍵盤；如果 ChatGPT 正在占用裝置，請先關閉。",
+                "error": "Cindy 暫時無法與鍵盤通訊，正在自動重試。",
+                "unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。",
+                "connection-timeout": "Work Louder 服務未在期限內回應，Cindy 會自動重試。",
+                "connection-failed": "Work Louder 服務啟動失敗，Cindy 會自動重試。",
+                "permission-required": "macOS 拒絕鍵盤存取，請在輸入監控中允許 Cindy 後重試。",
+                "sdk-unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。",
+                "device-in-use": "其他應用程式正在佔用這塊鍵盤。請先關閉 ChatGPT 或 Input，然後再試。"
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "任務鍵按板上順序，對應側邊欄由上到下的任務。",
+                  "last-sent": "任務鍵按板上順序，對應你最近傳送過訊息的任務，越近越靠前。",
+                  "priority": "任務鍵按板上順序，對應優先任務。",
+                  "custom": "每顆任務鍵開啟你指定的任務。"
+                }
+              }
+            },
+            "errors": {
+              "load": "無法載入 Creator Micro 2 設定",
+              "save": "無法儲存 Creator Micro 2 設定"
+            }
           }
         }
       },
@@ -4362,7 +4441,9 @@
         "openAria": "打開 PlayStation 手把設定",
         "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
         "connection": {
-          "toggle": { "aria": "讓這個 Cindy 在前景時使用 PlayStation 手把" },
+          "toggle": {
+            "aria": "讓這個 Cindy 在前景時使用 PlayStation 手把"
+          },
           "descriptions": {
             "connecting": "Cindy 正在尋找 PlayStation 手把。",
             "connected": "Cindy 在前景時會監聽這只手把。",
@@ -4379,7 +4460,9 @@
         "openAria": "打開 Switch 手把設定",
         "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
         "connection": {
-          "toggle": { "aria": "讓這個 Cindy 在前景時使用 Switch 手把" },
+          "toggle": {
+            "aria": "讓這個 Cindy 在前景時使用 Switch 手把"
+          },
           "descriptions": {
             "connecting": "Cindy 正在尋找 Switch 手把。",
             "connected": "Cindy 在前景時會監聽這只手把。",
@@ -4396,7 +4479,9 @@
         "openAria": "打開通用手把設定",
         "entryDescription": "Cindy 在前景時，用手把捲動、說話、傳送和切換任務",
         "connection": {
-          "toggle": { "aria": "讓這個 Cindy 在前景時使用通用手把" },
+          "toggle": {
+            "aria": "讓這個 Cindy 在前景時使用通用手把"
+          },
           "descriptions": {
             "connecting": "Cindy 正在尋找手把。",
             "connected": "Cindy 在前景時會監聽這只手把。",
@@ -5293,7 +5378,6 @@
     "expandControlledNotice": "展開被控提示：{{label}}",
     "versionMismatch": "對方版本不一致，部分功能可能受限"
   },
-
   "accountDeletion": {
     "entryButton": "刪除帳號",
     "entryAria": "刪除目前帳號",
@@ -8257,7 +8341,12 @@
       "showMore": "顯示另外 {{count}} 個",
       "showLess": "收起",
       "artifactLabel": "成品",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
       "summary": {
         "pages": "{{count}} 頁",
         "slides": "{{count}} 張投影片",
@@ -9161,7 +9250,15 @@
           "5": "星期五",
           "6": "星期六"
         },
-        "short": { "0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六" }
+        "short": {
+          "0": "日",
+          "1": "一",
+          "2": "二",
+          "3": "三",
+          "4": "四",
+          "5": "五",
+          "6": "六"
+        }
       },
       "time": {
         "last": "上次 {{value}}",

@@ -60,10 +60,11 @@ import {
   WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
+  type WorkLouderAccessoriesState,
   type WorkLouderCodexPreviewInput,
   type WorkLouderCodexRendererAction,
   type WorkLouderCodexSettingsPatch,
-  type WorkLouderCodexState,
+  type WorkLouderModel,
 } from '../shared/workLouderCodex';
 import {
   XBOX_GAMEPAD_GET_STATE_CHANNEL,
@@ -1645,21 +1646,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   workLouderCodex: {
-    getState: (): Promise<WorkLouderCodexState> =>
+    getState: (): Promise<WorkLouderAccessoriesState> =>
       ipcRenderer.invoke(WORKLOUDER_CODEX_GET_STATE_CHANNEL),
-    setSettings: (patch: WorkLouderCodexSettingsPatch): Promise<WorkLouderCodexState> =>
-      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL, patch),
-    resetSettings: (): Promise<WorkLouderCodexState> =>
-      ipcRenderer.invoke(WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL),
+    setSettings: (
+      model: WorkLouderModel,
+      patch: WorkLouderCodexSettingsPatch,
+    ): Promise<WorkLouderAccessoriesState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL, model, patch),
+    resetSettings: (model: WorkLouderModel): Promise<WorkLouderAccessoriesState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL, model),
     openInputMonitoringSettings: (): Promise<void> =>
       ipcRenderer.invoke(WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL),
-    probe: (): Promise<WorkLouderCodexState> => ipcRenderer.invoke(WORKLOUDER_CODEX_PROBE_CHANNEL),
+    probe: (): Promise<WorkLouderAccessoriesState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_PROBE_CHANNEL),
     publishTasks: (tasks: WorkLouderCodexPublishedTask[]): Promise<void> =>
       ipcRenderer.invoke(WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL, tasks),
-    setLayoutPreviewActive: (active: boolean): Promise<void> =>
-      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL, active),
-    onStateChanged: (callback: (state: WorkLouderCodexState) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, state: WorkLouderCodexState): void => {
+    setLayoutPreviewActive: (active: boolean, model?: WorkLouderModel): Promise<void> =>
+      ipcRenderer.invoke(
+        WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL,
+        model === undefined ? active : { active, model },
+      ),
+    onStateChanged: (callback: (state: WorkLouderAccessoriesState) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        state: WorkLouderAccessoriesState,
+      ): void => {
         callback(state);
       };
       ipcRenderer.on(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, listener);

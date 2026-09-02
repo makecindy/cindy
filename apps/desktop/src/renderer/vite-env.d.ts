@@ -76,7 +76,8 @@ type RawReleaseNotesPayload = import('../shared/releaseNotesContent').RawRelease
 type CodexMicroGuardState = import('../shared/codexMicroGuard').CodexMicroGuardState;
 type WorkLouderCodexSettingsPatch =
   import('../shared/workLouderCodex').WorkLouderCodexSettingsPatch;
-type WorkLouderCodexState = import('../shared/workLouderCodex').WorkLouderCodexState;
+type WorkLouderAccessoriesState = import('../shared/workLouderCodex').WorkLouderAccessoriesState;
+type WorkLouderModel = import('../shared/workLouderCodex').WorkLouderModel;
 type WorkLouderCodexRendererAction =
   import('../shared/workLouderCodex').WorkLouderCodexRendererAction;
 
@@ -1872,12 +1873,15 @@ interface ElectronAPI {
   };
 
   workLouderCodex: {
-    getState: () => Promise<WorkLouderCodexState>;
-    setSettings: (patch: WorkLouderCodexSettingsPatch) => Promise<WorkLouderCodexState>;
-    resetSettings: () => Promise<WorkLouderCodexState>;
+    getState: () => Promise<WorkLouderAccessoriesState>;
+    setSettings: (
+      model: WorkLouderModel,
+      patch: WorkLouderCodexSettingsPatch,
+    ) => Promise<WorkLouderAccessoriesState>;
+    resetSettings: (model: WorkLouderModel) => Promise<WorkLouderAccessoriesState>;
     openInputMonitoringSettings: () => Promise<void>;
     /** Re-check whether the device is still attached; the SDK never says so itself. */
-    probe: () => Promise<WorkLouderCodexState>;
+    probe: () => Promise<WorkLouderAccessoriesState>;
     /**
      * Hand the sidebar's task list to the agent keys. Main cannot see tasks on
      * linked machines, nor which machine filter is applied.
@@ -1885,8 +1889,8 @@ interface ElectronAPI {
     publishTasks: (
       tasks: import('../shared/workLouderCodex').WorkLouderCodexPublishedTask[],
     ) => Promise<void>;
-    setLayoutPreviewActive: (active: boolean) => Promise<void>;
-    onStateChanged: (callback: (state: WorkLouderCodexState) => void) => () => void;
+    setLayoutPreviewActive: (active: boolean, model?: WorkLouderModel) => Promise<void>;
+    onStateChanged: (callback: (state: WorkLouderAccessoriesState) => void) => () => void;
     onAction: (callback: (action: WorkLouderCodexRendererAction) => void) => () => void;
     onPreviewInput: (
       callback: (input: import('../shared/workLouderCodex').WorkLouderCodexPreviewInput) => void,

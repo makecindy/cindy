@@ -1905,11 +1905,21 @@
           "qwen38-27b": {
             "blurb": "The strongest dense model you can run locally. Best for coding and long tasks."
           },
-          "gpt-oss-20b": { "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines." },
-          "gemma4-e2b": { "blurb": "Smallest Gemma 4. Light machines, with vision." },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 small. Light daily use, with vision." },
-          "gemma4-12b": { "blurb": "Gemma 4 mid-size. Steadier chat and multimodal." },
-          "gemma4-31b": { "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory." },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines."
+          },
+          "gemma4-e2b": {
+            "blurb": "Smallest Gemma 4. Light machines, with vision."
+          },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 small. Light daily use, with vision."
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 mid-size. Steadier chat and multimodal."
+          },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory."
+          },
           "gemma4-26b": {
             "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines."
           },
@@ -3949,12 +3959,12 @@
           "title": "Agent keys",
           "source": {
             "label": "Task order",
-            "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+            "description": "Task keys follow the sidebar from top to bottom, in board order.",
             "descriptions": {
-              "sidebar": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
-              "last-sent": "AG00–AG05 follow the six tasks you last sent a message in.",
-              "priority": "AG00–AG05 follow the first six priority tasks.",
-              "custom": "AG00–AG05 each open the task you assign."
+              "sidebar": "Task keys follow the sidebar from top to bottom, in board order.",
+              "last-sent": "Task keys follow the tasks you last sent a message in, in board order.",
+              "priority": "Task keys follow priority tasks, in board order.",
+              "custom": "Each task key opens the task you assign."
             },
             "value": "Sidebar order",
             "options": {
@@ -3971,7 +3981,16 @@
           },
           "newTask": "New task",
           "slot": "Recent {{position}}",
-          "slotAria": "AG{{slot}} opens recent task {{position}}"
+          "slotAria": "AG{{slot}} opens recent task {{position}}",
+          "role": {
+            "label": "Key role",
+            "description": "A task key switches tasks and shows their status with lighting. An action key runs a shortcut and can wear a keycap.",
+            "task": "Task key",
+            "action": "Action key"
+          },
+          "lightingLimit": "Firmware can independently light the first 6 task keys in board order. Extra task keys still switch tasks.",
+          "unlitKey": "This key is after the first 6, so it has no independent status light.",
+          "taskHint": "A clear keycap is recommended so task status can show in different colors."
         },
         "commandKeys": {
           "builtInDescription": "Leave this on the keycap default, or bind the key to something else.",
@@ -3982,7 +4001,7 @@
           "title": "Microphone",
           "separate": {
             "label": "Use separate microphone keys",
-            "description": "Keep ACT10 and ACT11 separate instead of combining them into one MIC key."
+            "description": "A short press starts and keeps recording. Press again to stop, or hold and release to stop."
           }
         },
         "analog": {
@@ -4003,7 +4022,7 @@
             "options": {
               "session-switch": "Switch tasks",
               "composer-navigation": "Navigate the composer",
-              "reasoning": "Reasoning Effort",
+              "reasoning": "Reasoning effort",
               "conversation-scroll": "Scroll the conversation",
               "custom": "Custom"
             }
@@ -4022,7 +4041,8 @@
           "tasks": "Tasks",
           "commands": "Commands",
           "keycaps": "Keycaps",
-          "skills": "Skills"
+          "skills": "Skills",
+          "voice": "Voice input"
         },
         "layout": {
           "editor": {
@@ -4034,7 +4054,10 @@
             "cancel": "Cancel",
             "save": "Save",
             "assignedShortcut": "Assigned action",
-            "selectKeycap": "Select keycap {{keycap}}"
+            "selectKeycap": "Select keycap {{keycap}}",
+            "keyTitle": "Edit key",
+            "keyDescription": "Task keys open tasks and show status lights. Action keys run shortcuts and can use a keycap.",
+            "blank": "Blank"
           },
           "keyboard": {
             "indicator": "Status lights",
@@ -4047,6 +4070,54 @@
             "title": "Reset key layout",
             "description": "Restore keycaps, joystick, encoder, and microphone assignments without changing task order or lighting.",
             "button": "Reset layout"
+          },
+          "merge": {
+            "right": "Combine with the key on the right",
+            "down": "Combine with the key below",
+            "split": "Split into two keys",
+            "rightDescription": "A wide keycap covers the key on the right. A covered task key becomes an action key.",
+            "downDescription": "A tall keycap covers the key below. A covered task key becomes an action key.",
+            "splitDescription": "After splitting, the covered key returns as a blank key."
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "Open tasks from the keys and mirror their status with lighting.",
+            "openAria": "Open Work Louder Creator Micro 2 settings",
+            "connection": {
+              "toggle": {
+                "aria": "Let this Cindy use Creator Micro 2"
+              },
+              "descriptions": {
+                "connecting": "Cindy is starting the Work Louder device service.",
+                "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
+                "disabled": "When enabled, Cindy rewrites the current layer, listens for key presses, and shows task status with lighting.",
+                "present": "When enabled, Cindy rewrites the current layer, listens for key presses, and shows task status with lighting.",
+                "not-detected": "Connect the keyboard with a data-capable USB cable. Close ChatGPT if it is using the device.",
+                "error": "Cindy could not communicate with the keyboard and is retrying automatically.",
+                "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
+                "connection-timeout": "The Work Louder service did not respond in time. Cindy will retry automatically.",
+                "connection-failed": "The Work Louder service failed to start. Cindy will retry automatically.",
+                "permission-required": "macOS denied keyboard access. Allow Cindy in Input Monitoring, then try again.",
+                "sdk-unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
+                "device-in-use": "Another app is using this keyboard. Close ChatGPT or Input, then try again."
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "Task keys follow the sidebar from top to bottom, in board order.",
+                  "last-sent": "Task keys follow the tasks you last sent a message in, in board order.",
+                  "priority": "Task keys follow priority tasks, in board order.",
+                  "custom": "Each task key opens the task you assign."
+                }
+              }
+            },
+            "errors": {
+              "load": "Failed to load Creator Micro 2 settings",
+              "save": "Failed to save Creator Micro 2 settings"
+            }
           }
         }
       },
@@ -5309,7 +5380,6 @@
     "expandControlledNotice": "Expand remote control notice: {{label}}",
     "versionMismatch": "Version mismatch with the other device; some features may be limited"
   },
-
   "accountDeletion": {
     "entryButton": "Delete account",
     "entryAria": "Delete the current account",
@@ -8278,7 +8348,12 @@
       "showMore": "Show {{count}} more",
       "showLess": "Show less",
       "artifactLabel": "Artifact",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
       "summary": {
         "pages": "{{count}} pages",
         "slides": "{{count}} slides",
@@ -9190,7 +9265,15 @@
           "5": "Friday",
           "6": "Saturday"
         },
-        "short": { "0": "Su", "1": "Mo", "2": "Tu", "3": "We", "4": "Th", "5": "Fr", "6": "Sa" }
+        "short": {
+          "0": "Su",
+          "1": "Mo",
+          "2": "Tu",
+          "3": "We",
+          "4": "Th",
+          "5": "Fr",
+          "6": "Sa"
+        }
       },
       "time": {
         "last": "Last {{value}}",

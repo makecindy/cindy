@@ -1904,20 +1904,30 @@
           "qwen38-27b": {
             "blurb": "로컬에서 돌릴 수 있는 가장 강한 밀집 모델. 코딩과 긴 작업에 적합합니다."
           },
-          "gpt-oss-20b": { "blurb": "OpenAI 오픈 20B. 16GB급 기기에서 가장 무난한 선택." },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI 오픈 20B. 16GB급 기기에서 가장 무난한 선택."
+          },
           "gemma4-e2b": {
             "blurb": "Gemma 4 최소형. 가벼운 기기에서도 돌아가며 비전을 지원합니다."
           },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 소형. 가벼운 일상용이며 비전을 지원합니다." },
-          "gemma4-12b": { "blurb": "Gemma 4 중형. 일상 대화와 멀티모달에 더 안정적입니다." },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 소형. 가벼운 일상용이며 비전을 지원합니다."
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 중형. 일상 대화와 멀티모달에 더 안정적입니다."
+          },
           "gemma4-31b": {
             "blurb": "Gemma 4 대형. 대화와 멀티모달이 더 강하고, 메모리도 더 듭니다."
           },
           "gemma4-26b": {
             "blurb": "Gemma 4 중대형 MoE. 활성 파라미터가 적어 중고사양에 맞습니다."
           },
-          "ornith15-35b": { "blurb": "Ornith 1.5 중형 MoE. 로컬 코딩과 에이전트 대안." },
-          "glm-47-flash": { "blurb": "Zhipu의 최신 코딩 모델. 30B MoE로 코드와 에이전트에 맞음." }
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 중형 MoE. 로컬 코딩과 에이전트 대안."
+          },
+          "glm-47-flash": {
+            "blurb": "Zhipu의 최신 코딩 모델. 30B MoE로 코드와 에이전트에 맞음."
+          }
         },
         "onboardingTitle": "먼저 Ollama 런타임을 설치하세요",
         "onboardingBody": "Ollama를 설치하면 Ollama 앱을 열지 않고도 Cindy에서 로컬 모델을 다운로드하고 사용할 수 있습니다. Ollama는 무료 오픈소스 서드파티 런타임입니다.",
@@ -3948,12 +3958,12 @@
           "title": "Agent 키",
           "source": {
             "label": "작업 순서",
-            "description": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
+            "description": "작업 키는 보드 순서대로 사이드바 위쪽부터의 작업에 대응합니다.",
             "descriptions": {
-              "sidebar": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
-              "last-sent": "AG00~AG05는 마지막으로 메시지를 보낸 작업 순입니다.",
-              "priority": "AG00~AG05는 우선 작업 위쪽 6개입니다.",
-              "custom": "AG00~AG05는 각각 지정한 작업을 엽니다."
+              "sidebar": "작업 키는 보드 순서대로 사이드바 위쪽부터의 작업에 대응합니다.",
+              "last-sent": "작업 키는 보드 순서대로, 최근에 메시지를 보낸 작업에 대응합니다.",
+              "priority": "작업 키는 보드 순서대로 우선 작업에 대응합니다.",
+              "custom": "각 작업 키는 지정한 작업을 엽니다."
             },
             "value": "사이드바 순서",
             "options": {
@@ -3970,7 +3980,16 @@
           },
           "newTask": "새 작업",
           "slot": "최근 {{position}}번째",
-          "slotAria": "AG{{slot}}로 최근 {{position}}번째 작업 열기"
+          "slotAria": "AG{{slot}}로 최근 {{position}}번째 작업 열기",
+          "role": {
+            "label": "키 역할",
+            "description": "작업 키는 작업을 전환하고 조명으로 상태를 보여 줍니다. 동작 키는 단축 동작을 실행하며 키캡도 바꿀 수 있습니다.",
+            "task": "작업 키",
+            "action": "동작 키"
+          },
+          "lightingLimit": "펌웨어가 독립적으로 점등할 수 있는 것은 보드 순서상 앞 6개의 작업 키뿐입니다. 그 밖의 작업 키도 작업 전환은 됩니다.",
+          "unlitKey": "앞 6개 이후의 키라서 독립 상태 표시등이 없습니다.",
+          "taskHint": "투명 키캡을 권장합니다. 작업 상태는 서로 다른 색의 조명으로 표시됩니다."
         },
         "commandKeys": {
           "builtInDescription": "키캡 기본 동작을 유지하거나 다른 동작에 연결합니다.",
@@ -3981,7 +4000,7 @@
           "title": "마이크",
           "separate": {
             "label": "마이크 키 분리",
-            "description": "ACT10과 ACT11을 하나의 MIC 키로 합치지 않고 따로 사용합니다."
+            "description": "짧게 누르면 녹음이 시작되어 유지됩니다. 다시 누르면 멈추고, 길게 누른 뒤 손을 떼도 멈춥니다."
           }
         },
         "analog": {
@@ -4021,7 +4040,8 @@
           "tasks": "작업",
           "commands": "명령",
           "keycaps": "키캡",
-          "skills": "스킬"
+          "skills": "스킬",
+          "voice": "음성 입력"
         },
         "layout": {
           "editor": {
@@ -4033,7 +4053,10 @@
             "cancel": "취소",
             "save": "저장",
             "assignedShortcut": "할당된 동작",
-            "selectKeycap": "키캡 {{keycap}} 선택"
+            "selectKeycap": "키캡 {{keycap}} 선택",
+            "keyTitle": "키 편집",
+            "keyDescription": "작업 키는 작업을 열고 상태 표시등을 켭니다. 동작 키는 단축 동작을 실행하고 키캡을 고를 수 있습니다.",
+            "blank": "빈 키캡"
           },
           "keyboard": {
             "indicator": "상태 표시등",
@@ -4046,6 +4069,54 @@
             "title": "키 배치 초기화",
             "description": "작업 순서나 조명 설정은 유지하고 키캡, 조이스틱, 인코더, 마이크 할당을 초기 상태로 되돌립니다.",
             "button": "배치 초기화"
+          },
+          "merge": {
+            "right": "오른쪽 키와 가로로 합치기",
+            "down": "아래 키와 세로로 합치기",
+            "split": "키 두 개로 나누기",
+            "rightDescription": "가로로 긴 키캡이 오른쪽 키를 덮습니다. 덮인 작업 키는 동작 키가 됩니다.",
+            "downDescription": "세로로 긴 키캡이 아래 키를 덮습니다. 덮인 작업 키는 동작 키가 됩니다.",
+            "splitDescription": "나누면 덮였던 키는 빈 키로 돌아갑니다."
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "키로 작업을 열고 조명으로 상태를 맞춥니다.",
+            "openAria": "Work Louder Creator Micro 2 설정 열기",
+            "connection": {
+              "toggle": {
+                "aria": "이 Cindy에서 Creator Micro 2 사용"
+              },
+              "descriptions": {
+                "connecting": "Cindy가 Work Louder 장치 서비스를 시작하고 있습니다.",
+                "connected": "USB가 연결되었습니다. Cindy가 키 입력을 수신하고 작업 조명을 동기화합니다.",
+                "disabled": "켜면 Cindy가 현재 레이어를 다시 쓰고, 키 입력을 받으며, 조명으로 작업 상태를 표시합니다.",
+                "present": "켜면 Cindy가 현재 레이어를 다시 쓰고, 키 입력을 받으며, 조명으로 작업 상태를 표시합니다.",
+                "not-detected": "데이터 전송을 지원하는 USB 케이블로 연결하세요. ChatGPT가 장치를 사용 중이면 종료하세요.",
+                "error": "Cindy가 키보드와 통신하지 못해 자동으로 다시 시도하고 있습니다.",
+                "unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요.",
+                "connection-timeout": "Work Louder 서비스가 시간 내에 응답하지 않았습니다. Cindy가 자동으로 다시 시도합니다.",
+                "connection-failed": "Work Louder 서비스를 시작하지 못했습니다. Cindy가 자동으로 다시 시도합니다.",
+                "permission-required": "macOS가 키보드 접근을 거부했습니다. 입력 모니터링에서 Cindy를 허용한 뒤 다시 시도하세요.",
+                "sdk-unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요.",
+                "device-in-use": "다른 앱이 이 키보드를 사용 중입니다. ChatGPT 또는 Input을 닫은 뒤 다시 시도하세요."
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "작업 키는 보드 순서대로 사이드바 위쪽부터의 작업에 대응합니다.",
+                  "last-sent": "작업 키는 보드 순서대로, 최근에 메시지를 보낸 작업에 대응합니다.",
+                  "priority": "작업 키는 보드 순서대로 우선 작업에 대응합니다.",
+                  "custom": "각 작업 키는 지정한 작업을 엽니다."
+                }
+              }
+            },
+            "errors": {
+              "load": "Creator Micro 2 설정을 불러오지 못했습니다",
+              "save": "Creator Micro 2 설정을 저장하지 못했습니다"
+            }
           }
         }
       },
@@ -4370,7 +4441,9 @@
         "openAria": "PlayStation 컨트롤러 설정 열기",
         "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
         "connection": {
-          "toggle": { "aria": "Cindy가 앞에 있을 때 PlayStation 컨트롤러를 사용합니다" },
+          "toggle": {
+            "aria": "Cindy가 앞에 있을 때 PlayStation 컨트롤러를 사용합니다"
+          },
           "descriptions": {
             "connecting": "Cindy가 PlayStation 컨트롤러를 찾고 있습니다.",
             "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
@@ -4387,7 +4460,9 @@
         "openAria": "Switch 컨트롤러 설정 열기",
         "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
         "connection": {
-          "toggle": { "aria": "Cindy가 앞에 있을 때 Switch 컨트롤러를 사용합니다" },
+          "toggle": {
+            "aria": "Cindy가 앞에 있을 때 Switch 컨트롤러를 사용합니다"
+          },
           "descriptions": {
             "connecting": "Cindy가 Switch 컨트롤러를 찾고 있습니다.",
             "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
@@ -4404,7 +4479,9 @@
         "openAria": "일반 컨트롤러 설정 열기",
         "entryDescription": "컨트롤러로 스크롤, 말하기, 보내기, 작업 전환",
         "connection": {
-          "toggle": { "aria": "Cindy가 앞에 있을 때 일반 컨트롤러를 사용합니다" },
+          "toggle": {
+            "aria": "Cindy가 앞에 있을 때 일반 컨트롤러를 사용합니다"
+          },
           "descriptions": {
             "connecting": "Cindy가 컨트롤러를 찾고 있습니다.",
             "connected": "Cindy가 앞에 있을 때 이 컨트롤러를 듣습니다.",
@@ -5301,7 +5378,6 @@
     "expandControlledNotice": "원격 제어 알림 펼치기: {{label}}",
     "versionMismatch": "상대 기기 버전이 달라 일부 기능이 제한될 수 있습니다"
   },
-
   "accountDeletion": {
     "entryButton": "계정 삭제",
     "entryAria": "현재 계정 삭제",
@@ -8266,7 +8342,12 @@
       "showMore": "{{count}}개 더 보기",
       "showLess": "간략히 보기",
       "artifactLabel": "산출물",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
       "summary": {
         "pages": "{{count}}페이지",
         "slides": "{{count}}개 슬라이드",
@@ -9169,7 +9250,15 @@
           "5": "금요일",
           "6": "토요일"
         },
-        "short": { "0": "일", "1": "월", "2": "화", "3": "수", "4": "목", "5": "금", "6": "토" }
+        "short": {
+          "0": "일",
+          "1": "월",
+          "2": "화",
+          "3": "수",
+          "4": "목",
+          "5": "금",
+          "6": "토"
+        }
       },
       "time": {
         "last": "마지막 {{value}}",

@@ -1901,15 +1901,33 @@
         "invalidLibraryName": "请输入 Ollama 库名，或粘贴 huggingface.co 上的模型页链接",
         "advancedExactName": "高级：精确库名",
         "models": {
-          "qwen38-27b": { "blurb": "当前最强可本机跑的稠密模型，适合编程和长任务。" },
-          "gpt-oss-20b": { "blurb": "OpenAI 开源 20B，16GB 级机器上的对话和推理首选。" },
-          "gemma4-e2b": { "blurb": "Gemma 4 最小杯，轻量机器也能跑，带视觉。" },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 小杯，轻量日常，带视觉。" },
-          "gemma4-12b": { "blurb": "Gemma 4 中杯，日常对话和多模态更稳。" },
-          "gemma4-31b": { "blurb": "Gemma 4 大杯，对话和多模态更强，也更吃内存。" },
-          "gemma4-26b": { "blurb": "Gemma 4 的 MoE 中大杯，激活参数更少，适合中高配。" },
-          "ornith15-35b": { "blurb": "Ornith 1.5 中杯 MoE，本机编程和 Agent 备选。" },
-          "glm-47-flash": { "blurb": "智谱新一代编程模型，30B MoE，适合写代码和 Agent。" }
+          "qwen38-27b": {
+            "blurb": "当前最强可本机跑的稠密模型，适合编程和长任务。"
+          },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI 开源 20B，16GB 级机器上的对话和推理首选。"
+          },
+          "gemma4-e2b": {
+            "blurb": "Gemma 4 最小杯，轻量机器也能跑，带视觉。"
+          },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 小杯，轻量日常，带视觉。"
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 中杯，日常对话和多模态更稳。"
+          },
+          "gemma4-31b": {
+            "blurb": "Gemma 4 大杯，对话和多模态更强，也更吃内存。"
+          },
+          "gemma4-26b": {
+            "blurb": "Gemma 4 的 MoE 中大杯，激活参数更少，适合中高配。"
+          },
+          "ornith15-35b": {
+            "blurb": "Ornith 1.5 中杯 MoE，本机编程和 Agent 备选。"
+          },
+          "glm-47-flash": {
+            "blurb": "智谱新一代编程模型，30B MoE，适合写代码和 Agent。"
+          }
         },
         "onboardingTitle": "先安装 Ollama 运行环境",
         "onboardingBody": "安装 Ollama 后，即可在 Cindy 中下载和使用本机模型，无需打开 Ollama App。Ollama 是免费开源的第三方运行环境。",
@@ -3882,7 +3900,7 @@
           "label": "连接",
           "toggle": {
             "label": "启用",
-            "aria": "让这个 Cindy 在前台时使用 Xbox 手柄"
+            "aria": "让这个 Cindy 占用 Codex Micro"
           },
           "status": {
             "connecting": "正在连接",
@@ -3894,13 +3912,13 @@
             "unavailable": "当前系统暂不支持"
           },
           "descriptions": {
-            "connecting": "Cindy 正在查找 Xbox 手柄。",
-            "connected": "Cindy 在前台时会监听这只手柄。",
-            "disabled": "启用后，Cindy 在前台时会监听手柄。",
-            "present": "启用后，Cindy 在前台时会监听手柄。",
-            "not-detected": "请用 USB 或蓝牙连接 Xbox 手柄。",
-            "error": "Cindy 暂时无法读取手柄，正在重试。",
-            "unavailable": "这台电脑还不能读取 Xbox 手柄。",
+            "connecting": "Cindy 正在启动 Work Louder 设备服务。",
+            "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
+            "disabled": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
+            "present": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
+            "not-detected": "请用支持数据传输的 USB 线连接键盘；如果 ChatGPT 正在占用设备，请先关闭。",
+            "error": "Cindy 暂时无法与键盘通信，正在自动重试。",
+            "unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",
             "connection-timeout": "Work Louder 服务在规定时间内没有响应，Cindy 会自动重试。",
             "connection-failed": "Work Louder 服务启动失败，Cindy 会自动重试。",
             "permission-required": "macOS 拒绝了键盘访问，请在输入监控中允许 Cindy 后重试。",
@@ -3934,12 +3952,12 @@
           "title": "Agent 键",
           "source": {
             "label": "任务顺序",
-            "description": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
+            "description": "任务键按板上顺序，对应侧边栏从上到下的任务。",
             "descriptions": {
-              "sidebar": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
-              "last-sent": "AG00～AG05 按你最后一次发消息的时间，最近的排在前面。",
-              "priority": "AG00～AG05 对应前 6 个优先任务。",
-              "custom": "AG00～AG05 各自打开你指定的任务。"
+              "sidebar": "任务键按板上顺序，对应侧边栏从上到下的任务。",
+              "last-sent": "任务键按板上顺序，对应你最近发过消息的任务，越近越靠前。",
+              "priority": "任务键按板上顺序，对应优先任务。",
+              "custom": "每颗任务键打开你指定的任务。"
             },
             "value": "侧边栏顺序",
             "options": {
@@ -3956,7 +3974,16 @@
           },
           "newTask": "新任务",
           "slot": "最近第 {{position}} 个",
-          "slotAria": "AG{{slot}} 打开最近第 {{position}} 个任务"
+          "slotAria": "AG{{slot}} 打开最近第 {{position}} 个任务",
+          "role": {
+            "label": "按键用途",
+            "description": "任务键用来切换任务，并用灯光显示状态。动作键用来执行快捷操作，还可以更换键帽。",
+            "task": "任务键",
+            "action": "动作键"
+          },
+          "lightingLimit": "固件最多给板上顺序的前 6 颗任务键独立亮灯。多出来的任务键仍能切换任务。",
+          "unlitKey": "这颗键排在前 6 颗之后，没有独立状态灯。",
+          "taskHint": "推荐使用透明键帽，任务状态会有不同颜色的灯效显示。"
         },
         "commandKeys": {
           "builtInDescription": "保持键帽自带的动作，或把这个键改绑到别的动作。",
@@ -3967,7 +3994,7 @@
           "title": "麦克风",
           "separate": {
             "label": "拆分麦克风键",
-            "description": "保持 ACT10 和 ACT11 分开，不合并为一个 MIC 键。"
+            "description": "短按开始并保持录音，再按一下停止；长按松手停止。"
           }
         },
         "analog": {
@@ -4007,7 +4034,8 @@
           "tasks": "任务",
           "commands": "命令",
           "keycaps": "键帽",
-          "skills": "技能"
+          "skills": "技能",
+          "voice": "语音输入"
         },
         "layout": {
           "editor": {
@@ -4019,7 +4047,10 @@
             "cancel": "取消",
             "save": "保存",
             "assignedShortcut": "已分配动作",
-            "selectKeycap": "选择键帽 {{keycap}}"
+            "selectKeycap": "选择键帽 {{keycap}}",
+            "keyTitle": "编辑按键",
+            "keyDescription": "任务键打开任务并显示状态灯；动作键执行快捷操作，并可以选择键帽。",
+            "blank": "空白"
           },
           "keyboard": {
             "indicator": "状态指示灯",
@@ -4032,6 +4063,54 @@
             "title": "恢复键位布局",
             "description": "恢复键帽、摇杆、旋钮和麦克风分配，不改变任务顺序或灯光设置。",
             "button": "恢复布局"
+          },
+          "merge": {
+            "right": "和右边合成一颗宽键",
+            "down": "和下面合成一颗长键",
+            "split": "拆成两个按键",
+            "rightDescription": "一颗宽键帽会盖住右边那颗。被盖住的任务键会变成动作键。",
+            "downDescription": "一颗长键帽会盖住下面那颗。被盖住的任务键会变成动作键。",
+            "splitDescription": "拆开后，被盖住的那颗变回空白按键。"
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "用按键打开任务，并用灯光同步任务状态。",
+            "openAria": "打开 Work Louder Creator Micro 2 设置",
+            "connection": {
+              "toggle": {
+                "aria": "让这台 Cindy 使用 Creator Micro 2"
+              },
+              "descriptions": {
+                "connecting": "Cindy 正在启动 Work Louder 设备服务。",
+                "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
+                "disabled": "开启后，Cindy 会改写当前图层、监听按键，并用灯光显示任务状态。",
+                "present": "开启后，Cindy 会改写当前图层、监听按键，并用灯光显示任务状态。",
+                "not-detected": "请用支持数据传输的 USB 线连接键盘；如果 ChatGPT 正在占用设备，请先关闭。",
+                "error": "Cindy 暂时无法与键盘通信，正在自动重试。",
+                "unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",
+                "connection-timeout": "Work Louder 服务在规定时间内没有响应，Cindy 会自动重试。",
+                "connection-failed": "Work Louder 服务启动失败，Cindy 会自动重试。",
+                "permission-required": "macOS 拒绝了键盘访问，请在输入监控中允许 Cindy 后重试。",
+                "sdk-unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",
+                "device-in-use": "其他应用正在占用这块键盘。请先关闭 ChatGPT 或 Input，然后再试。"
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "任务键按板上顺序，对应侧边栏从上到下的任务。",
+                  "last-sent": "任务键按板上顺序，对应你最近发过消息的任务，越近越靠前。",
+                  "priority": "任务键按板上顺序，对应优先任务。",
+                  "custom": "每颗任务键打开你指定的任务。"
+                }
+              }
+            },
+            "errors": {
+              "load": "无法加载 Creator Micro 2 设置",
+              "save": "无法保存 Creator Micro 2 设置"
+            }
           }
         }
       },
@@ -4362,7 +4441,9 @@
         "openAria": "打开 PlayStation 手柄设置",
         "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
         "connection": {
-          "toggle": { "aria": "让这个 Cindy 在前台时使用 PlayStation 手柄" },
+          "toggle": {
+            "aria": "让这个 Cindy 在前台时使用 PlayStation 手柄"
+          },
           "descriptions": {
             "connecting": "Cindy 正在查找 PlayStation 手柄。",
             "connected": "Cindy 在前台时会监听这只手柄。",
@@ -4379,7 +4460,9 @@
         "openAria": "打开 Switch 手柄设置",
         "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
         "connection": {
-          "toggle": { "aria": "让这个 Cindy 在前台时使用 Switch 手柄" },
+          "toggle": {
+            "aria": "让这个 Cindy 在前台时使用 Switch 手柄"
+          },
           "descriptions": {
             "connecting": "Cindy 正在查找 Switch 手柄。",
             "connected": "Cindy 在前台时会监听这只手柄。",
@@ -4396,7 +4479,9 @@
         "openAria": "打开通用手柄设置",
         "entryDescription": "Cindy 在前台时，用手柄滚动、说话、发送和切换任务",
         "connection": {
-          "toggle": { "aria": "让这个 Cindy 在前台时使用通用手柄" },
+          "toggle": {
+            "aria": "让这个 Cindy 在前台时使用通用手柄"
+          },
           "descriptions": {
             "connecting": "Cindy 正在查找手柄。",
             "connected": "Cindy 在前台时会监听这只手柄。",
@@ -5293,7 +5378,6 @@
     "expandControlledNotice": "展开被控提示：{{label}}",
     "versionMismatch": "对方版本不一致，部分功能可能受限"
   },
-
   "accountDeletion": {
     "entryButton": "注销账号",
     "entryAria": "注销当前账号",
@@ -8258,7 +8342,12 @@
       "showMore": "显示另外 {{count}} 个",
       "showLess": "收起",
       "artifactLabel": "成品",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
       "summary": {
         "pages": "{{count}} 页",
         "slides": "{{count}} 张幻灯片",
@@ -9161,7 +9250,15 @@
           "5": "星期五",
           "6": "星期六"
         },
-        "short": { "0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六" }
+        "short": {
+          "0": "日",
+          "1": "一",
+          "2": "二",
+          "3": "三",
+          "4": "四",
+          "5": "五",
+          "6": "六"
+        }
       },
       "time": {
         "last": "上次 {{value}}",

@@ -1904,14 +1904,24 @@
           "qwen38-27b": {
             "blurb": "ローカルで動かせる最強クラスの密モデル。コーディングと長時間タスク向け。"
           },
-          "gpt-oss-20b": { "blurb": "OpenAI のオープン 20B。16GB 級マシンの定番。" },
-          "gemma4-e2b": { "blurb": "Gemma 4 の最小。軽いマシンでも動く。ビジョン付き。" },
-          "gemma4-e4b": { "blurb": "Google Gemma 4 の小型。日常使いでビジョン付き。" },
-          "gemma4-12b": { "blurb": "Gemma 4 の中型。日常会話とマルチモーダル向け。" },
+          "gpt-oss-20b": {
+            "blurb": "OpenAI のオープン 20B。16GB 級マシンの定番。"
+          },
+          "gemma4-e2b": {
+            "blurb": "Gemma 4 の最小。軽いマシンでも動く。ビジョン付き。"
+          },
+          "gemma4-e4b": {
+            "blurb": "Google Gemma 4 の小型。日常使いでビジョン付き。"
+          },
+          "gemma4-12b": {
+            "blurb": "Gemma 4 の中型。日常会話とマルチモーダル向け。"
+          },
           "gemma4-31b": {
             "blurb": "Gemma 4 の大型。会話とマルチモーダルがより強く、メモリもより食う。"
           },
-          "gemma4-26b": { "blurb": "Gemma 4 の中大型 MoE。有効パラメータは少なめ。" },
+          "gemma4-26b": {
+            "blurb": "Gemma 4 の中大型 MoE。有効パラメータは少なめ。"
+          },
           "ornith15-35b": {
             "blurb": "Ornith 1.5 の中型 MoE。ローカルのコーディングと Agent の控え。"
           },
@@ -3948,12 +3958,12 @@
           "title": "Agent キー",
           "source": {
             "label": "タスクの順序",
-            "description": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
+            "description": "タスクキーは基板上の順で、サイドバーの上から下のタスクに対応します。",
             "descriptions": {
-              "sidebar": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
-              "last-sent": "AG00～AG05 は、最後にメッセージを送ったタスクの新しい順です。",
-              "priority": "AG00～AG05 は優先タスクの上から 6 件です。",
-              "custom": "AG00～AG05 はそれぞれ指定したタスクを開きます。"
+              "sidebar": "タスクキーは基板上の順で、サイドバーの上から下のタスクに対応します。",
+              "last-sent": "タスクキーは基板上の順で、最後にメッセージを送ったタスクに対応します。",
+              "priority": "タスクキーは基板上の順で、優先タスクに対応します。",
+              "custom": "各タスクキーは指定したタスクを開きます。"
             },
             "value": "サイドバー順",
             "options": {
@@ -3970,7 +3980,16 @@
           },
           "newTask": "新しいタスク",
           "slot": "最近の {{position}} 件目",
-          "slotAria": "AG{{slot}} で最近の {{position}} 件目のタスクを開く"
+          "slotAria": "AG{{slot}} で最近の {{position}} 件目のタスクを開く",
+          "role": {
+            "label": "キーの役割",
+            "description": "タスクキーはタスクを切り替え、ライトで状態を示します。アクションキーはショートカットを実行し、キーキャップも選べます。",
+            "task": "タスクキー",
+            "action": "アクションキー"
+          },
+          "lightingLimit": "ファームウェアが個別に点灯できるのは、基板上の先頭 6 個のタスクキーまでです。それ以降のタスクキーでもタスクの切り替えはできます。",
+          "unlitKey": "先頭 6 個より後のキーなので、独立したステータスライトはありません。",
+          "taskHint": "透明なキーキャップがおすすめです。タスクの状態は色の違うライトで表示されます。"
         },
         "commandKeys": {
           "builtInDescription": "キーキャップ既定の動作のままにするか、別の動作に割り当てます。",
@@ -3981,7 +4000,7 @@
           "title": "マイク",
           "separate": {
             "label": "マイクキーを分ける",
-            "description": "ACT10 と ACT11 を 1 つの MIC キーにまとめず、別々に使います。"
+            "description": "短く押すと録音を開始して維持します。もう一度押すか、長押しして離すと停止します。"
           }
         },
         "analog": {
@@ -4021,7 +4040,8 @@
           "tasks": "タスク",
           "commands": "コマンド",
           "keycaps": "キーキャップ",
-          "skills": "スキル"
+          "skills": "スキル",
+          "voice": "音声入力"
         },
         "layout": {
           "editor": {
@@ -4033,7 +4053,10 @@
             "cancel": "キャンセル",
             "save": "保存",
             "assignedShortcut": "割り当てられたアクション",
-            "selectKeycap": "キーキャップ {{keycap}} を選択"
+            "selectKeycap": "キーキャップ {{keycap}} を選択",
+            "keyTitle": "キーを編集",
+            "keyDescription": "タスクキーはタスクを開きステータスライトを表示します。アクションキーはショートカットを実行し、キーキャップを選べます。",
+            "blank": "ブランク"
           },
           "keyboard": {
             "indicator": "ステータスライト",
@@ -4046,6 +4069,54 @@
             "title": "キー配置をリセット",
             "description": "タスク順序やライト設定を変えずに、キーキャップ、ジョイスティック、エンコーダー、マイクの割り当てを初期状態に戻します。",
             "button": "配置をリセット"
+          },
+          "merge": {
+            "right": "右のキーと横長キーにまとめる",
+            "down": "下のキーと縦長キーにまとめる",
+            "split": "2 つのキーに戻す",
+            "rightDescription": "横長のキーキャップが右のキーを覆います。覆われたタスクキーはアクションキーになります。",
+            "downDescription": "縦長のキーキャップが下のキーを覆います。覆われたタスクキーはアクションキーになります。",
+            "splitDescription": "戻すと、覆われていたキーは空白キーになります。"
+          }
+        },
+        "models": {
+          "creatorMicro2": {
+            "title": "Work Louder Creator Micro 2",
+            "entryDescription": "キーでタスクを開き、ライトで状態を同期します。",
+            "openAria": "Work Louder Creator Micro 2 の設定を開く",
+            "connection": {
+              "toggle": {
+                "aria": "この Cindy で Creator Micro 2 を使う"
+              },
+              "descriptions": {
+                "connecting": "Cindy が Work Louder デバイスサービスを起動しています。",
+                "connected": "USB 接続済みです。Cindy がキー入力を待ち受け、タスクのライトを同期しています。",
+                "disabled": "オンにすると、Cindy は現在のレイヤーを書き換え、キー入力を受け取り、ライトでタスク状態を表示します。",
+                "present": "オンにすると、Cindy は現在のレイヤーを書き換え、キー入力を受け取り、ライトでタスク状態を表示します。",
+                "not-detected": "データ通信対応の USB ケーブルで接続してください。ChatGPT がデバイスを使用している場合は終了してください。",
+                "error": "Cindy はキーボードと通信できませんでした。自動的に再試行しています。",
+                "unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。",
+                "connection-timeout": "Work Louder サービスが時間内に応答しませんでした。Cindy は自動的に再試行します。",
+                "connection-failed": "Work Louder サービスを起動できませんでした。Cindy は自動的に再試行します。",
+                "permission-required": "macOS がキーボードへのアクセスを拒否しました。入力モニタリングで Cindy を許可してから再試行してください。",
+                "sdk-unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。",
+                "device-in-use": "別のアプリがこのキーボードを使用中です。ChatGPT または Input を閉じてから再試行してください。"
+              }
+            },
+            "agentKeys": {
+              "source": {
+                "descriptions": {
+                  "sidebar": "タスクキーは基板上の順で、サイドバーの上から下のタスクに対応します。",
+                  "last-sent": "タスクキーは基板上の順で、最後にメッセージを送ったタスクに対応します。",
+                  "priority": "タスクキーは基板上の順で、優先タスクに対応します。",
+                  "custom": "各タスクキーは指定したタスクを開きます。"
+                }
+              }
+            },
+            "errors": {
+              "load": "Creator Micro 2 の設定を読み込めませんでした",
+              "save": "Creator Micro 2 の設定を保存できませんでした"
+            }
           }
         }
       },
@@ -4370,7 +4441,9 @@
         "openAria": "PlayStation コントローラー設定を開く",
         "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
         "connection": {
-          "toggle": { "aria": "Cindy が前面にあるとき PlayStation コントローラーを使う" },
+          "toggle": {
+            "aria": "Cindy が前面にあるとき PlayStation コントローラーを使う"
+          },
           "descriptions": {
             "connecting": "Cindy は PlayStation コントローラーを探しています。",
             "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
@@ -4387,7 +4460,9 @@
         "openAria": "Switch コントローラー設定を開く",
         "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
         "connection": {
-          "toggle": { "aria": "Cindy が前面にあるとき Switch コントローラーを使う" },
+          "toggle": {
+            "aria": "Cindy が前面にあるとき Switch コントローラーを使う"
+          },
           "descriptions": {
             "connecting": "Cindy は Switch コントローラーを探しています。",
             "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
@@ -4404,7 +4479,9 @@
         "openAria": "汎用コントローラー設定を開く",
         "entryDescription": "コントローラーでスクロール、音声入力、送信、タスク切り替え",
         "connection": {
-          "toggle": { "aria": "Cindy が前面にあるとき汎用コントローラーを使う" },
+          "toggle": {
+            "aria": "Cindy が前面にあるとき汎用コントローラーを使う"
+          },
           "descriptions": {
             "connecting": "Cindy はコントローラーを探しています。",
             "connected": "Cindy が前面にあるとき、このコントローラーを受け付けます。",
@@ -5301,7 +5378,6 @@
     "expandControlledNotice": "リモート操作の通知を展開: {{label}}",
     "versionMismatch": "相手のバージョンが異なります。一部機能が制限される場合があります"
   },
-
   "accountDeletion": {
     "entryButton": "アカウントを削除",
     "entryAria": "現在のアカウントを削除",
@@ -8266,7 +8342,12 @@
       "showMore": "さらに {{count}} 件表示",
       "showLess": "折りたたむ",
       "artifactLabel": "成果物",
-      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "formats": {
+        "pdf": "PDF",
+        "docx": "Word",
+        "pptx": "PPT",
+        "xlsx": "Excel"
+      },
       "summary": {
         "pages": "{{count}} ページ",
         "slides": "{{count}} 枚のスライド",
@@ -9169,7 +9250,15 @@
           "5": "金曜日",
           "6": "土曜日"
         },
-        "short": { "0": "日", "1": "月", "2": "火", "3": "水", "4": "木", "5": "金", "6": "土" }
+        "short": {
+          "0": "日",
+          "1": "月",
+          "2": "火",
+          "3": "水",
+          "4": "木",
+          "5": "金",
+          "6": "土"
+        }
       },
       "time": {
         "last": "前回 {{value}}",

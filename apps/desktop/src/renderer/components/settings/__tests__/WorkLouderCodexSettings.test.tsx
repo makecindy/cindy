@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+  WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   createWorkLouderCodexDefaultSettings,
 } from '../../../../shared/workLouderCodex';
 
@@ -33,6 +34,14 @@ const mocks = vi.hoisted(() => ({
   /** Which rule the six task keys follow; drives whether they are clickable. */
   agentSource: 'sidebar' as string,
   layout: null as ReturnType<typeof createWorkLouderCodexDefaultSettings>['layout'] | null,
+  deviceEnabled: true,
+  connectionStatus: 'connected' as 'connected' | 'error',
+  connectionReason: null as
+    | 'device-in-use'
+    | 'permission-required'
+    | 'connection-failed'
+    | null,
+  deviceType: 'codex-micro' as 'codex-micro' | 'creator-micro-2',
 }));
 
 vi.mock('react-i18next', () => ({
@@ -58,19 +67,20 @@ vi.mock('@/hooks/useCodexMicroGuard', () => ({
 vi.mock('@/hooks/useWorkLouderCodex', () => ({
   useWorkLouderCodex: () => ({
     state: {
-      connectionStatus: 'connected',
-      connectionReason: null,
+      connectionStatus: mocks.connectionStatus,
+      connectionReason: mocks.connectionReason,
       devicePresent: true,
       device: {
         ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
-        deviceType: 'codex-micro',
+        deviceType: mocks.deviceType,
         isUsbConnection: true,
       },
       settings: {
-        ...createWorkLouderCodexDefaultSettings(),
+        ...createWorkLouderCodexDefaultSettings(mocks.deviceType),
+        deviceEnabled: mocks.deviceEnabled,
         lightingBrightness: 70,
         agentSource: mocks.agentSource,
-        layout: mocks.layout ?? createWorkLouderCodexDefaultSettings().layout,
+        layout: mocks.layout ?? createWorkLouderCodexDefaultSettings(mocks.deviceType).layout,
       },
       agentSlots: Array.from({ length: 6 }, (_, slot) => ({
         slot,
@@ -117,6 +127,10 @@ describe('WorkLouderCodexSettings', () => {
     mocks.agentSource = 'sidebar';
     mocks.layout = createWorkLouderCodexDefaultSettings().layout;
     mocks.guardStatus = 'disabled';
+    mocks.deviceEnabled = true;
+    mocks.connectionStatus = 'connected';
+    mocks.connectionReason = null;
+    mocks.deviceType = 'codex-micro';
     mocks.previewListeners = [];
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
@@ -218,10 +232,8 @@ describe('WorkLouderCodexSettings', () => {
   it('shows the six task keys and writes the settings that remain on the panel', async () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
-    // Default source is "recent", so the keys follow the shared rule and are
-    // not individually clickable.
-    expect(screen.getByRole('img', { name: /AG00/ })).toBeTruthy();
-    expect(screen.getByRole('img', { name: /AG05/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /AG00/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /AG05/ })).toBeTruthy();
     expect(
       screen.queryByText('settings.shortcuts.workLouderCodex.device.inputMonitoring.label'),
     ).toBeNull();
@@ -230,7 +242,7 @@ describe('WorkLouderCodexSettings', () => {
     expect(screen.getByTestId('worklouder-codex-keyboard-layout').parentElement?.className).toContain(
       'justify-center',
     );
-    expect(mocks.setLayoutPreviewActive).toHaveBeenCalledWith(true);
+    expect(mocks.setLayoutPreviewActive).toHaveBeenCalledWith(true, 'codex-micro');
 
     const slider = screen.getByRole('slider', {
       name: 'settings.shortcuts.workLouderCodex.lighting.brightness.aria',
@@ -285,7 +297,7 @@ describe('WorkLouderCodexSettings', () => {
         name: 'settings.shortcuts.workLouderCodex.connection.toggle.aria',
       }),
     );
-    expect(mocks.setSettings).toHaveBeenCalledWith({ deviceEnabled: true });
+    expect(mocks.setSettings).toHaveBeenCalledWith({ deviceEnabled: false });
 
     fireEvent.click(
       screen.getByRole('switch', {
@@ -341,7 +353,35 @@ describe('WorkLouderCodexSettings', () => {
     expect(mocks.resetSettings).toHaveBeenCalledOnce();
   });
 
-  it('saves a graphical keycap choice and swaps a duplicate assignment', () => {
+  it('restores the keyboard layout from the layout section header', () => {
+    const defaults = createWorkLouderCodexDefaultSettings();
+    mocks.layout = {
+      ...defaults.layout,
+      slots: {
+        ...defaults.layout.slots,
+        ACT06: { keycapId: 'APPR', action: null },
+      },
+    };
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    expect(
+      screen.queryByText('settings.shortcuts.workLouderCodex.layout.reset.title'),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.reset.button',
+      }),
+    );
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      layout: expect.objectContaining({
+        slots: expect.objectContaining({
+          ACT06: expect.objectContaining({ keycapId: 'FAST' }),
+        }),
+      }),
+    });
+  });
+
+  it('allows the same keycap on more than one key', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /^FAST/ }));
@@ -356,7 +396,7 @@ describe('WorkLouderCodexSettings', () => {
       layout: expect.objectContaining({
         slots: expect.objectContaining({
           ACT06: expect.objectContaining({ keycapId: 'APPR' }),
-          ACT07: expect.objectContaining({ keycapId: 'FAST' }),
+          ACT07: expect.objectContaining({ keycapId: 'APPR' }),
         }),
       }),
     });
@@ -376,103 +416,56 @@ describe('WorkLouderCodexSettings', () => {
     expect(mocks.setSettings).not.toHaveBeenCalled();
   });
 
-  it('does not write microphone-split or assigned-action drafts until Save', () => {
+  it('splits a 2U key immediately from the editor', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /^MIC/ }));
     fireEvent.click(
-      screen.getByRole('switch', {
-        name: 'settings.shortcuts.workLouderCodex.microphone.separate.label',
-      }),
-    );
-    fireEvent.click(
       screen.getByRole('button', {
-        name: 'settings.shortcuts.workLouderCodex.layout.editor.cancel',
-      }),
-    );
-
-    expect(mocks.setSettings).not.toHaveBeenCalled();
-  });
-
-  it('keeps existing single keys when only the microphone split is saved', () => {
-    mocks.layout = {
-      ...createWorkLouderCodexDefaultSettings().layout,
-      slots: {
-        ...createWorkLouderCodexDefaultSettings().layout.slots,
-        ACT10: { keycapId: 'FAST', action: { type: 'command', commandId: 'newTask' } },
-      },
-    };
-    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
-
-    fireEvent.click(screen.getByRole('button', { name: /^MIC/ }));
-    fireEvent.click(
-      screen.getByRole('switch', {
-        name: 'settings.shortcuts.workLouderCodex.microphone.separate.label',
-      }),
-    );
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
+        name: 'settings.shortcuts.workLouderCodex.layout.merge.split',
       }),
     );
 
     expect(mocks.setSettings).toHaveBeenCalledWith({
       layout: expect.objectContaining({
         separateMicrophoneKeys: true,
-        slots: expect.objectContaining({
-          ACT10: expect.objectContaining({
-            keycapId: 'FAST',
-            action: { type: 'command', commandId: 'newTask' },
-          }),
-          ACT11: expect.objectContaining({ keycapId: 'EMPT1' }),
-          ACT10_ACT11: expect.objectContaining({ keycapId: 'MIC' }),
-        }),
+        merges: [],
       }),
     });
   });
 
-  it('writes a compatible single-width keycap when a merged key is split', () => {
-    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
-
-    fireEvent.click(screen.getByRole('button', { name: /^MIC/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'EMPT5' }));
-    fireEvent.click(
-      screen.getByRole('switch', {
-        name: 'settings.shortcuts.workLouderCodex.microphone.separate.label',
-      }),
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'MIC1' }));
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
-      }),
-    );
-
-    expect(mocks.setSettings).toHaveBeenCalledWith({
-      layout: expect.objectContaining({
-        separateMicrophoneKeys: true,
-        slots: expect.objectContaining({
-          ACT10: expect.objectContaining({ keycapId: 'MIC1', action: null }),
-          ACT10_ACT11: expect.objectContaining({ keycapId: 'MIC' }),
-        }),
-      }),
-    });
-  });
-
-  it('disables assigned actions for a microphone keycap on a regular command slot', () => {
+  it('merges a 1U key with its right neighbor', () => {
+    const defaults = createWorkLouderCodexDefaultSettings();
+    mocks.layout = { ...defaults.layout, separateMicrophoneKeys: true, merges: [] };
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /^FAST/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'MIC1' }));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.merge.right',
+      }),
+    );
 
-    expect(
-      (
-        screen.getByRole('combobox', {
-          name: 'settings.shortcuts.workLouderCodex.actions.choose',
-        }) as HTMLSelectElement
-      ).disabled,
-    ).toBe(true);
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      layout: expect.objectContaining({
+        merges: [{ origin: 'ACT06', cover: 'ACT07' }],
+      }),
+    });
+  });
 
+  it('lets a microphone keycap keep a rebound action, same as any other key', async () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^FAST/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'MIC' }));
+    const actionSelect = screen.getByRole('combobox', {
+      name: 'settings.shortcuts.workLouderCodex.actions.choose',
+    }) as HTMLSelectElement;
+    expect(actionSelect.disabled).toBe(false);
+    await chooseSelectOption(
+      'settings.shortcuts.workLouderCodex.actions.choose',
+      'Fork Task',
+    );
     fireEvent.click(
       screen.getByRole('button', {
         name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
@@ -481,7 +474,10 @@ describe('WorkLouderCodexSettings', () => {
     expect(mocks.setSettings).toHaveBeenCalledWith({
       layout: expect.objectContaining({
         slots: expect.objectContaining({
-          ACT06: expect.objectContaining({ keycapId: 'MIC1', action: null }),
+          ACT06: expect.objectContaining({
+            keycapId: 'MIC',
+            action: { type: 'command', commandId: 'forkTask' },
+          }),
         }),
       }),
     });
@@ -509,5 +505,158 @@ describe('WorkLouderCodexSettings', () => {
     expect(screen.getByTestId('worklouder-codex-stick-cap').getAttribute('style')).toContain(
       'translate(10px, 0px)',
     );
+  });
+
+  it('tells Creator Micro 2 users that enabling rewrites the current layer', () => {
+    mocks.deviceType = 'creator-micro-2';
+    mocks.deviceEnabled = false;
+    render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
+
+    expect(
+      screen.getByText(
+        'settings.shortcuts.workLouderCodex.models.creatorMicro2.connection.descriptions.disabled',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText('settings.shortcuts.workLouderCodex.connection.descriptions.disabled'),
+    ).toBeNull();
+  });
+
+  it('shows occupancy contention instead of Input Monitoring for Creator Micro 2', () => {
+    mocks.deviceType = 'creator-micro-2';
+    mocks.connectionStatus = 'error';
+    mocks.connectionReason = 'device-in-use';
+    render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
+
+    expect(
+      screen.getByText(
+        'settings.shortcuts.workLouderCodex.models.creatorMicro2.connection.descriptions.device-in-use',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        'settings.shortcuts.workLouderCodex.connection.descriptions.permission-required',
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByText('settings.shortcuts.workLouderCodex.device.inputMonitoring.label'),
+    ).toBeNull();
+  });
+
+  it('promotes a Codex command key into the task-key set', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^FAST/ }));
+    fireEvent.click(
+      screen.getByRole('radio', {
+        name: 'settings.shortcuts.workLouderCodex.agentKeys.role.task',
+      }),
+    );
+    expect(mocks.setSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        layout: expect.objectContaining({
+          taskKeys: expect.arrayContaining(['ACT06']),
+        }),
+      }),
+    );
+    expect(
+      screen.getByRole('radio', {
+        name: 'settings.shortcuts.workLouderCodex.agentKeys.role.task',
+      }),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.editor.done',
+      }),
+    );
+    expect(mocks.setSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it('promotes a Creator command key into the task-key set', () => {
+    mocks.deviceType = 'creator-micro-2';
+    mocks.layout = createWorkLouderCodexDefaultSettings('creator-micro-2').layout;
+    render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Toggle Fast Mode/ }));
+    expect(
+      screen.getByRole('radio', {
+        name: 'settings.shortcuts.workLouderCodex.agentKeys.role.action',
+      }),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('radio', {
+        name: 'settings.shortcuts.workLouderCodex.agentKeys.role.task',
+      }),
+    );
+    expect(mocks.setSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        layout: expect.objectContaining({
+          taskKeys: expect.arrayContaining(['ACT06']),
+        }),
+      }),
+    );
+    expect(
+      screen.getByRole('radio', {
+        name: 'settings.shortcuts.workLouderCodex.agentKeys.role.task',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('describes Creator task order without the six-key AG limit', () => {
+    mocks.deviceType = 'creator-micro-2';
+    mocks.layout = createWorkLouderCodexDefaultSettings('creator-micro-2').layout;
+    render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
+
+    expect(
+      screen.getByText(
+        'settings.shortcuts.workLouderCodex.agentKeys.source.descriptions.sidebar',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('explains the six-light firmware limit when more than six task keys are set', () => {
+    mocks.deviceType = 'creator-micro-2';
+    const layout = createWorkLouderCodexDefaultSettings('creator-micro-2').layout;
+    layout.taskKeys = [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS];
+    mocks.layout = layout;
+    render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
+
+    expect(
+      screen.getByText('settings.shortcuts.workLouderCodex.agentKeys.lightingLimit'),
+    ).toBeTruthy();
+  });
+
+  it('offers 2U merge on Creator action keys', () => {
+    mocks.deviceType = 'creator-micro-2';
+    mocks.layout = createWorkLouderCodexDefaultSettings('creator-micro-2').layout;
+    render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /settings\.shortcuts\.workLouderCodex\.actions\.voice/,
+      }),
+    );
+    expect(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.merge.right',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('writes a custom Codex task to the remapped slot after AG00 is demoted', async () => {
+    mocks.agentSource = 'custom';
+    const layout = createWorkLouderCodexDefaultSettings().layout;
+    layout.taskKeys = ['AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'];
+    mocks.layout = layout;
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /AG01/ }));
+    await chooseSelectOption(
+      'settings.shortcuts.workLouderCodex.actions.choose',
+      'New Task',
+    );
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      customAgentKeys: [{ type: 'command', commandId: 'newTask' }, null, null, null, null, null],
+    });
   });
 });
