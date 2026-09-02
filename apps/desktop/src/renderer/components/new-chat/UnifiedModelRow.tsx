@@ -208,7 +208,8 @@ export function UnifiedModelRow({
   /** 焦点离开本行:调用方按「新焦点是否落在浮层里」决定收不收(← 键进浮层不能被收掉)。 */
   onBlurAway: (related: EventTarget | null) => void;
   onSelect: () => void;
-  onStar: () => void;
+  /** Omit for model-only selectors that do not expose personal favorite configs. */
+  onStar?: () => void;
   /** ← 键:打开该行的配置浮层并把焦点送进去(键盘用户的浮层入口,与既有面板同键位)。 */
   onRevealForKeyboard: (anchor: UnifiedAnchor, element: HTMLElement) => void;
   /** 行内价格展示;不传 = 无报价。字段语义见 `UnifiedRowPriceDisplay`。 */
@@ -298,7 +299,7 @@ export function UnifiedModelRow({
     },
   };
 
-  const starButton = (
+  const starButton = onStar ? (
     <button
       type="button"
       disabled={interactionDisabled || paymentRequired}
@@ -325,7 +326,7 @@ export function UnifiedModelRow({
     >
       <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
     </button>
-  );
+  ) : null;
   const paymentRequiredBadge =
     paymentRequired && paymentRequiredLabel ? (
       <span

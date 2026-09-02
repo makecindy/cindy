@@ -220,6 +220,8 @@ function hasNestedScrollableAncestorThatCanScrollUp(
   return false;
 }
 
+import { BotGuestMessage } from '@/features/bots/BotGuestMessage';
+
 function hasNestedScrollableAncestorThatCanScrollDown(
   root: HTMLElement,
   target: EventTarget | null,
@@ -328,6 +330,11 @@ import {
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
 import { countUnreadAdded } from './unreadCount';
+import {
+  collectBotMessageTimeGroups,
+  findFirstUnreadBotReplyClientId,
+  formatBotMessageGroupTime,
+} from '@/features/bots/botConversationTimeline';
 import { NAVIGATION_KEYS, useNavigationKeyListener } from './useNavigationKeyListener';
 export function isScrollNavigationKey(key: string): boolean {
   return NAVIGATION_KEYS.has(key);
@@ -357,6 +364,19 @@ interface MessageStreamProps {
    *  MessageStream via the `key={sessionId}` parent prop), so it never
    *  triggers extra re-renders mid-session. */
   workingDir: string;
+  /**
+   * Identity mark drawn to the left of every assistant bubble.
+   *
+   * Only a Bot conversation passes one — a normal Cindy task has no "who is
+   * speaking" question to answer, so it stays undefined and the layout is
+   * byte-identical to before. The node must be stable across renders (memoize
+   * it at the owner): it is a prop of the memoized `MessageItem`.
+   */
+  assistantAvatar?: ReactNode;
+  /** 伙伴专属轻量时间线：隐藏内部工作卡，只保留单一运行状态与分组时间。 */
+  simplifiedBotConversation?: boolean;
+  /** Bot read position captured before entry marks the conversation read. */
+  botUnreadBoundaryAt?: number | null;
   messages: ChatMessage[];
   historyLoaded: boolean;
   /** The task shell remains, but all prior message content was intentionally cleared. */
@@ -574,6 +594,84 @@ export type RenderItem =
       media?: ToolMediaItem[];
     }
   | WorkGroupRenderItem;
+
+function isBotInternalActivity(item: RenderItem): boolean {
+  if (
+    item.type === 'tool_segment' ||
+    item.type === 'agent_task' ||
+    item.type === 'work_group' ||
+    item.type === 'agent_plan' ||
+    item.type === 'turn_changes'
+  ) {
+    return true;
+  }
+  return item.type === 'message' && item.message.role === 'thinking';
+}
+
+export function simplifyBotRenderItems(
+  items: readonly RenderItem[],
+  isStreaming: boolean,
+): RenderItem[] {
+  const visible = items.filter((item) => !isBotInternalActivity(item));
+  if (!isStreaming) return visible;
+
+  // 当前回合的普通 assistant 正文从首字开始流式展示；工具媒体、交付卡等容易
+  // 改变布局的结果仍等回合完成后出现。这样既不泄露内部工作过程，也不会把整段
+  // 答案藏到 done 后才突然闪现。
+  let currentTurnStart = -1;
+  for (let index = visible.length - 1; index >= 0; index -= 1) {
+    const item = visible[index];
+    if (
+      item.type === 'message' &&
+      item.message.role === 'user' &&
+      item.message.delivery !== 'steer' &&
+      !item.message.isSyntheticTrigger
+    ) {
+      currentTurnStart = index;
+      break;
+    }
+  }
+  if (currentTurnStart < 0) return visible;
+  return visible.filter((item, index) => {
+    if (index <= currentTurnStart) return true;
+    if (item.type !== 'message') return false;
+    if (item.message.role === 'user') return !item.message.isSyntheticTrigger;
+    return (
+      item.message.role === 'assistant' &&
+      !item.message.systemCardType &&
+      item.message.content.trim().length > 0
+    );
+  });
+}
+
+/**
+ * 当前可见用户 turn 是否已经产出正文。Bot composer 用它把「正在思考」限制在
+ * 首字到来之前；子代理内部行、系统卡、空 assistant 和合成续跑行都不参与判断。
+ */
+export function hasBotAssistantOutputInCurrentTurn(messages: readonly ChatMessage[]): boolean {
+  let currentTurnStart = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isSubagentInternalMessage(message)) continue;
+    if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) {
+      currentTurnStart = index;
+      break;
+    }
+  }
+  if (currentTurnStart < 0) return false;
+  for (let index = currentTurnStart + 1; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (isSubagentInternalMessage(message)) continue;
+    if (
+      message.role === 'assistant' &&
+      !message.systemCardType &&
+      message.content.trim().length > 0
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
   return item?.type === 'fork_origin' || (item?.type === 'message' && item.message.role === 'user');
@@ -1744,7 +1842,8 @@ export function buildRenderItems(
     };
     for (const changeSet of changeSets) {
       for (const file of changeSet.files) {
-        exactPaths.add(pathKey(resolveToolFilePath(file.path, changeSet.cwd)));
+        const resolved = resolveToolFilePath(file.path, changeSet.cwd);
+        exactPaths.add(pathKey(resolved));
         if (file.oldPath) exactPaths.add(pathKey(resolveToolFilePath(file.oldPath, changeSet.cwd)));
       }
     }
@@ -1792,6 +1891,8 @@ export function buildRenderItems(
     }
 
     const workingDir = opts?.workingDir ?? '';
+    // changeSet 的路径按它自己的 cwd 解析,不依赖 workingDir;没有 workingDir 时
+    // 就收不到本轮的 tool / command 候选。
     if (!workingDir || hi <= lo) return;
     const slice = originalTurnSlice(lo, hi);
     const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
@@ -2948,6 +3049,8 @@ function renderWorkGroupChild(
     );
   }
 
+  // 工作组里的中间过程文字不挂 assistantAvatar:折叠块里逐条画脸只会变噪音,
+  // 身份标记只属于对话流里真正的那句回复(见 MessageItem 的 assistantAvatar)。
   return (
     <div data-message-client-id={item.message.clientId}>
       <MessageItem
@@ -3072,6 +3175,9 @@ export function MessageStream({
   agentKind,
   remoteHostId,
   workingDir,
+  assistantAvatar,
+  simplifiedBotConversation = false,
+  botUnreadBoundaryAt = null,
   messages,
   historyLoaded,
   historyCleared = false,
@@ -3095,6 +3201,7 @@ export function MessageStream({
   ownsHardwareScrollActions = true,
   onInlinePlanVisibilityChange,
 }: MessageStreamProps) {
+  const { i18n, t } = useTranslation();
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
   // 与 DiffPanelToggle 在同一栈中各占一行。Provider 不存在时返回 null,
   // 渲染处会兜底跳过(典型场景:其他视图直接用 MessageStream 但不需要栈)。
@@ -3364,10 +3471,46 @@ export function MessageStream({
   // work-group pass:把最终回答前的工作过程折叠成 work_group,无最终回答时
   // 继续走旧的 tool_segment + thinking 折叠兼容路径。
   // isSessionStreaming 翻转(每 turn 一次)与 items 变化时重算,O(n) 单扫描。
-  const allRenderItems = useMemo(
-    () => insertForkOriginItem(groupWorkRuns(ungroupedRenderItems, isSessionStreaming), forkOrigin),
-    [ungroupedRenderItems, isSessionStreaming, forkOrigin],
+  const allRenderItems = useMemo(() => {
+    const grouped = insertForkOriginItem(
+      groupWorkRuns(ungroupedRenderItems, isSessionStreaming),
+      forkOrigin,
   );
+    return simplifiedBotConversation
+      ? simplifyBotRenderItems(grouped, isSessionStreaming)
+      : grouped;
+  }, [ungroupedRenderItems, isSessionStreaming, forkOrigin, simplifiedBotConversation]);
+  const botMessageTimeGroups = useMemo(() => {
+    if (!simplifiedBotConversation) return new Map<string, number>();
+    return collectBotMessageTimeGroups(
+      allRenderItems.flatMap((item) => {
+        if (
+          item.type !== 'message' ||
+          (item.message.role !== 'user' && item.message.role !== 'assistant')
+        ) {
+          return [];
+        }
+        return [{ clientId: item.message.clientId, createdAt: item.message.createdAt }];
+      }),
+    );
+  }, [allRenderItems, simplifiedBotConversation]);
+  const botUnreadBoundaryClientId = useMemo(() => {
+    if (!simplifiedBotConversation) return null;
+    return findFirstUnreadBotReplyClientId(
+      allRenderItems.flatMap((item) =>
+        item.type === 'message'
+          ? [
+              {
+                clientId: item.message.clientId,
+                createdAt: item.message.createdAt,
+                role: item.message.role,
+              },
+            ]
+          : [],
+      ),
+      botUnreadBoundaryAt,
+    );
+  }, [allRenderItems, botUnreadBoundaryAt, simplifiedBotConversation]);
   const latestInlinePlan = useMemo(() => {
     for (let index = allRenderItems.length - 1; index >= 0; index -= 1) {
       const item = allRenderItems[index];
@@ -6198,27 +6341,7 @@ export function MessageStream({
                     // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
                     const shareable =
                       Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
-
-                    return (
-                      <div
-                        key={item.key}
-                        data-message-client-id={msg.clientId}
-                        {...(shareable
-                          ? {
-                              [SHARE_SESSION_ATTR]: sessionId,
-                              [SHARE_MESSAGE_ATTR]: msg.clientId,
-                            }
-                          : {})}
-                        className={cn(
-                          'scroll-mt-20 transition-colors',
-                          shareable && 'relative',
-                          highlightMessageClientId === msg.clientId &&
-                            'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]',
-                        )}
-                      >
-                        {shareable && shareSelectionActive ? (
-                          <ShareMessageCheckbox clientId={msg.clientId} />
-                        ) : null}
+                    const messageNode = (
                         <MessageItem
                           message={msg}
                           toolResult={singleResultMap.get(msg.clientId)}
@@ -6244,7 +6367,78 @@ export function MessageStream({
                           }
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
+                          assistantAvatar={assistantAvatar}
+                          simplifiedBotConversation={simplifiedBotConversation}
                         />
+                    );
+                    const highlightClass =
+                      highlightMessageClientId === msg.clientId
+                        ? 'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]'
+                        : undefined;
+                    const shareAttributes = shareable
+                      ? {
+                          [SHARE_SESSION_ATTR]: sessionId,
+                          [SHARE_MESSAGE_ATTR]: msg.clientId,
+                        }
+                      : {};
+                    if (simplifiedBotConversation) {
+                      const groupTimestamp = botMessageTimeGroups.get(msg.clientId);
+                      const startsUnread = botUnreadBoundaryClientId === msg.clientId;
+                      return (
+                        <div
+                          key={item.key}
+                          data-message-client-id={msg.clientId}
+                          className={cn('scroll-mt-20 transition-colors', highlightClass)}
+                        >
+                          {startsUnread ? (
+                            <div
+                              className="mb-3 flex items-center gap-3"
+                              role="separator"
+                              aria-label={t('bots.chat.newMessagesBoundary')}
+                            >
+                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
+                              <span className="shrink-0 text-11 font-medium tracking-[0.08em] text-[var(--bot-unread-bg)]">
+                                {t('bots.chat.newMessagesBoundary')}
+                              </span>
+                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
+                            </div>
+                          ) : null}
+                          {groupTimestamp !== undefined ? (
+                            <time
+                              dateTime={new Date(groupTimestamp).toISOString()}
+                              className="mb-3 block text-center text-11 text-[var(--text-tertiary)]"
+                            >
+                              {formatBotMessageGroupTime(
+                                groupTimestamp,
+                                i18n.resolvedLanguage ?? i18n.language,
+                              )}
+                            </time>
+                          ) : null}
+                          <div {...shareAttributes} className={cn(shareable && 'relative')}>
+                            {shareable && shareSelectionActive ? (
+                              <ShareMessageCheckbox clientId={msg.clientId} />
+                            ) : null}
+                            {messageNode}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={item.key}
+                        data-message-client-id={msg.clientId}
+                        {...shareAttributes}
+                        className={cn(
+                          'scroll-mt-20 transition-colors',
+                          shareable && 'relative',
+                          highlightClass,
+                        )}
+                      >
+                        {shareable && shareSelectionActive ? (
+                          <ShareMessageCheckbox clientId={msg.clientId} />
+                        ) : null}
+                        {messageNode}
                       </div>
                     );
                   })}
@@ -6319,6 +6513,24 @@ export function MessageStream({
 // thinking messages are now rendered inline by MessageStream (above) so they
 // can receive the live isSessionStreaming flag without breaking this memo.
 // The thinking branch below is kept as a defensive fallback only.
+/**
+ * Hang an identity mark to the left of an assistant bubble.
+ *
+ * Without a mark (every normal Cindy task) the bubble is returned untouched —
+ * no extra wrapper element, so the existing layout and its measurements are
+ * bit-for-bit what they were. With one (a Bot conversation) the row becomes the
+ * IM shape everyone already knows: avatar, then what they said.
+ */
+function withAssistantAvatar(avatar: ReactNode | undefined, bubble: ReactNode): ReactNode {
+  if (!avatar) return bubble;
+  return (
+    <div className="flex items-start gap-2.5">
+      <span className="mt-0.5 shrink-0">{avatar}</span>
+      <div className="min-w-0 flex-1">{bubble}</div>
+    </div>
+  );
+}
+
 const MessageItem = memo(function MessageItem({
   message,
   toolResult,
@@ -6338,6 +6550,8 @@ const MessageItem = memo(function MessageItem({
   continuationInFlightProjectionCapability,
   isLastMessage,
   localFileRefs,
+  assistantAvatar,
+  simplifiedBotConversation,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -6385,6 +6599,10 @@ const MessageItem = memo(function MessageItem({
    *  actionable banner above the composer instead of an inline card. */
   isLastMessage?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
+  /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
+  assistantAvatar?: ReactNode;
+  /** 伙伴对话消息操作栏使用轻量常显变体。 */
+  simplifiedBotConversation?: boolean;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
@@ -6409,6 +6627,18 @@ const MessageItem = memo(function MessageItem({
   // [UI_ACTION_TRIGGER] 合成指令行:保留在 messages 里参与时序判定(error-tail
   // banner 的尾部判定不能忽视它,review P2),但不渲染任何气泡。
   if (message.isSyntheticTrigger) return null;
+  // 客座气泡:这条 user 行是委派另一方送进本任务的内容(目标伙伴的答复,或收到的
+  // 委派请求),不是本任务主人说的话 —— 换成带对方头像与「客座」标签的气泡。判据是
+  // 主进程写在 agent_meta 上的结构化标记,老镜像消息没有标记,仍走 UserMessage。
+  if (message.role === 'user' && message.guestBot) {
+    return (
+      <BotGuestMessage
+        guest={message.guestBot}
+        content={message.content}
+        workingDir={workingDir}
+      />
+    );
+  }
   switch (message.role) {
     case 'user':
       return (
@@ -6435,6 +6665,7 @@ const MessageItem = memo(function MessageItem({
           delivery={message.delivery}
           goalBadge={message.goalBadge}
           blockedByGhost={message.blockedByGhost}
+          simplifiedBotConversation={simplifiedBotConversation}
         />
       );
     case 'assistant':
@@ -6448,34 +6679,38 @@ const MessageItem = memo(function MessageItem({
           />
         );
       }
-      return (
-        <AssistantMessage
-          workingDir={workingDir}
-          localFileRefs={localFileRefs}
-          currentSessionId={sessionId}
-          currentSessionTitle={sessionTitle}
-          content={message.content}
-          isStreaming={message.isStreaming}
-          createdAt={message.createdAt}
-          messageClientId={message.clientId}
-          agentKind={agentKind}
-          remoteHostId={remoteHostId}
-          forkBlocked={assistantForkBlocked}
-          sessionRunning={sessionRunning}
-          // 任务执行过程中(尾部 turn 流式中,forkBlocked=true)不出现操作行;
-          // turn 结束后只有收尾正文出现 —— 中间句彻底不挂 bar。
-          showActionBar={Boolean(assistantIsTurnFinal) && !assistantForkBlocked}
-          turnMoney={message.turnMoney}
-          turnCostUsd={message.turnCostUsd}
-          turnCostIsEstimate={message.turnCostIsEstimate}
-          userTurnMoney={message.userTurnMoney}
-          userTurnCostUsd={message.userTurnCostUsd}
-          userTurnCostIsEstimate={message.userTurnCostIsEstimate}
-          turnUsageDetails={message.turnUsageDetails}
-          userTurnUsageDetails={userTurnUsageDetails}
-          modelMismatch={message.modelMismatch}
-          ghostReplyPending={message.ghostReplyPending}
-        />
+      return withAssistantAvatar(
+        assistantAvatar,
+        <>
+          <AssistantMessage
+            workingDir={workingDir}
+            localFileRefs={localFileRefs}
+            currentSessionId={sessionId}
+            currentSessionTitle={sessionTitle}
+            content={message.content}
+            isStreaming={message.isStreaming}
+            createdAt={message.createdAt}
+            messageClientId={message.clientId}
+            agentKind={agentKind}
+            remoteHostId={remoteHostId}
+            forkBlocked={assistantForkBlocked}
+            sessionRunning={sessionRunning}
+            // 任务执行过程中(尾部 turn 流式中,forkBlocked=true)不出现操作行;
+            // turn 结束后只有收尾正文出现 —— 中间句彻底不挂 bar。
+            showActionBar={Boolean(assistantIsTurnFinal) && !assistantForkBlocked}
+            turnMoney={message.turnMoney}
+            turnCostUsd={message.turnCostUsd}
+            turnCostIsEstimate={message.turnCostIsEstimate}
+            userTurnMoney={message.userTurnMoney}
+            userTurnCostUsd={message.userTurnCostUsd}
+            userTurnCostIsEstimate={message.userTurnCostIsEstimate}
+            turnUsageDetails={message.turnUsageDetails}
+            userTurnUsageDetails={userTurnUsageDetails}
+            modelMismatch={message.modelMismatch}
+            ghostReplyPending={message.ghostReplyPending}
+            simplifiedBotConversation={simplifiedBotConversation}
+          />
+        </>,
       );
     case 'tool_use':
       return (

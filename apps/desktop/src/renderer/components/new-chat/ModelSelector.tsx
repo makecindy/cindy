@@ -688,6 +688,12 @@ interface ModelSelectorProps {
   sessionEngineFilter?: UnifiedModelPanelProps['sessionEngineFilter'];
   /** 语义同 ModelSelectorContentProps.unifiedAgents（参与联合列表的引擎集合）。 */
   unifiedAgents?: readonly AgentKind[];
+  /** 统一面板是否只采用目录官方推荐配置，不读取个人引擎偏好与收藏配置。 */
+  unifiedSelectionPolicy?: UnifiedModelPanelProps['selectionPolicy'];
+  /** 为专用入口固定统一面板样式，不改写全局选择器样式偏好。 */
+  unifiedLayout?: UnifiedModelPanelProps['layoutOverride'];
+  /** 是否显示统一面板底部的样式切换入口。默认显示。 */
+  unifiedLayoutControls?: boolean;
   /**
    * composer pill 尾部的**引擎小标**(model-selector-unified §1.1)。
    *
@@ -866,6 +872,9 @@ interface ModelSelectorContentProps {
    * 不隐藏任何引擎);当前引擎必须始终在列。
    */
   unifiedAgents?: readonly AgentKind[];
+  unifiedSelectionPolicy?: UnifiedModelPanelProps['selectionPolicy'];
+  unifiedLayout?: UnifiedModelPanelProps['layoutOverride'];
+  unifiedLayoutControls?: boolean;
   /**
    * 统一面板里被选中的**收藏锚点** uid(规格 §1.5:选中的是那一条收藏副本,不是模型本体)。
    * 由调用方持有(草稿层),因为它与 (来源, 模型) 一样属于「当前选了什么」这份状态。
@@ -1054,6 +1063,9 @@ function ModelSelectorContentView({
   unifiedPanelAvailable = false,
   sessionEngineFilter,
   unifiedAgents,
+  unifiedSelectionPolicy = 'personalized',
+  unifiedLayout,
+  unifiedLayoutControls = true,
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
   onUnifiedSelect,
@@ -1321,7 +1333,7 @@ function ModelSelectorContentView({
   // seedDefaultFavorite 内部保证,这里重复跑只是 no-op。device-link 远程视图不投:
   // 标记来自被控端目录,控制端的本机收藏不该被它污染。
   useEffect(() => {
-    if (!unifiedPanel || deviceId) return;
+    if (!unifiedPanel || deviceId || unifiedSelectionPolicy === 'official') return;
     const entries = unifiedModelEntries({
       providers,
       ...(unifiedAgents ? { agents: unifiedAgents } : {}),
@@ -1363,6 +1375,7 @@ function ModelSelectorContentView({
     unifiedExcludeModel,
     unifiedScope,
     unifiedAgentsKey,
+    unifiedSelectionPolicy,
   ]);
 
   // 模型清单来源:本机会话从 live providers 派生(builtin + 自定义合集);device-link 远程会话
@@ -2823,9 +2836,9 @@ function ModelSelectorContentView({
             panelWidthFluid={fluidWidth}
             selected={{ providerId: activeSourceId, modelId }}
             selectedFavoriteUid={selectedFavoriteUid}
-            liveAgentKind={currentAgentKind}
-            fastMode={fastMode}
-            selectedEffort={effort}
+            liveAgentKind={unifiedSelectionPolicy === 'official' ? null : currentAgentKind}
+            fastMode={unifiedSelectionPolicy === 'official' ? false : fastMode}
+            selectedEffort={unifiedSelectionPolicy === 'official' ? undefined : effort}
             {...(modelMemory ? { modelMemory } : {})}
             agentFastModeCapable={unifiedAgentFastCapable}
             priceOf={(providerId, id, agent) => pricePresentationOf(providerId, id, agent)}
@@ -2840,6 +2853,8 @@ function ModelSelectorContentView({
             paymentRequiredUnlockLabel={t('newChat.modelSelector.paymentRequired.unlock')}
             onPaymentRequired={showPaymentRequired}
             configurationEnabled={configurationEnabled}
+            selectionPolicy={unifiedSelectionPolicy}
+            {...(unifiedLayout ? { layoutOverride: unifiedLayout } : {})}
             {...(sessionEngineFilter ? { sessionEngineFilter } : {})}
             {...(followSession ? { followSession } : {})}
             onSelect={(providerId, id, rowEffort, rowConfig) => {
@@ -2902,54 +2917,60 @@ function ModelSelectorContentView({
           />
           {/* footer:「连接来源」(与既有面板同规则,device-link 远程隐藏)+ 右侧
             列表样式试用开关(本机偏好,见 modelPickerLayout;两种样式并存期的入口)。 */}
-          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
-            {onNavigateToProviders && !deviceId ? (
-              <button
-                type="button"
-                disabled={interactionDisabled}
-                onClick={onNavigateToProviders}
-                className={cn(
-                  'flex min-w-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
-                  'transition-colors hover:text-[var(--text-primary)]',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                <Plus size={14} className="shrink-0" />
-                <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
-              </button>
-            ) : (
-              <span />
-            )}
-            {/* 右侧两个文字按钮(三档并存,Chris 2026-08-17):A/B 互切 + 切回老版。 */}
-            <div className="flex shrink-0 items-center gap-3">
-              <button
-                type="button"
-                data-layout-toggle
-                disabled={interactionDisabled}
-                onClick={() => setModelPickerLayout(pickerLayout === 'badge' ? 'classic' : 'badge')}
-                className={cn(
-                  'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                {pickerLayout === 'badge'
-                  ? t('newChat.modelSelector.unified.layoutClassic')
-                  : t('newChat.modelSelector.unified.layoutBadge')}
-              </button>
-              <button
-                type="button"
-                data-layout-original
-                disabled={interactionDisabled}
-                onClick={() => setModelPickerLayout('original')}
-                className={cn(
-                  'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                {t('newChat.modelSelector.unified.layoutOriginal')}
-              </button>
+          {(onNavigateToProviders || unifiedLayoutControls) && (
+            <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
+              {onNavigateToProviders && !deviceId ? (
+                <button
+                  type="button"
+                  disabled={interactionDisabled}
+                  onClick={onNavigateToProviders}
+                  className={cn(
+                    'flex min-w-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
+                    'transition-colors hover:text-[var(--text-primary)]',
+                    interactionDisabled && 'cursor-not-allowed opacity-50',
+                  )}
+                >
+                  <Plus size={14} className="shrink-0" />
+                  <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
+                </button>
+              ) : (
+                <span />
+              )}
+              {/* 右侧两个文字按钮(三档并存,Chris 2026-08-17):A/B 互切 + 切回老版。 */}
+              {unifiedLayoutControls ? (
+                <div className="flex shrink-0 items-center gap-3">
+                  <button
+                    type="button"
+                    data-layout-toggle
+                    disabled={interactionDisabled}
+                    onClick={() =>
+                      setModelPickerLayout(pickerLayout === 'badge' ? 'classic' : 'badge')
+                    }
+                    className={cn(
+                      'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
+                      interactionDisabled && 'cursor-not-allowed opacity-50',
+                    )}
+                  >
+                    {pickerLayout === 'badge'
+                      ? t('newChat.modelSelector.unified.layoutClassic')
+                      : t('newChat.modelSelector.unified.layoutBadge')}
+                  </button>
+                  <button
+                    type="button"
+                    data-layout-original
+                    disabled={interactionDisabled}
+                    onClick={() => setModelPickerLayout('original')}
+                    className={cn(
+                      'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
+                      interactionDisabled && 'cursor-not-allowed opacity-50',
+                    )}
+                  >
+                    {t('newChat.modelSelector.unified.layoutOriginal')}
+                  </button>
+                </div>
+              ) : null}
             </div>
-          </div>
+          )}
         </div>
       </div>
     );
@@ -3195,6 +3216,9 @@ export function ModelSelector({
   unifiedPanelAvailable = false,
   sessionEngineFilter,
   unifiedAgents,
+  unifiedSelectionPolicy = 'personalized',
+  unifiedLayout,
+  unifiedLayoutControls = true,
   engineMarkVendor = null,
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
@@ -3926,6 +3950,9 @@ export function ModelSelector({
       unifiedPanelAvailable={unifiedPanelAvailable}
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}
+      unifiedSelectionPolicy={unifiedSelectionPolicy}
+      unifiedLayout={unifiedLayout}
+      unifiedLayoutControls={unifiedLayoutControls}
       selectedFavoriteUid={selectedFavoriteUid}
       onSessionFavoriteAnchorChange={onSessionFavoriteAnchorChange}
       onUnifiedSelect={onUnifiedSelect}

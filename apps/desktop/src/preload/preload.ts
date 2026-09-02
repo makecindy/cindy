@@ -699,6 +699,8 @@ const fanOutIOSSimulatorRouteStatus = createIpcFanOut(IOS_SIMULATOR_ROUTE_STATUS
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
 );
+const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed');
+const fanOutBotLifecycleChanged = createIpcFanOut('maker:bot-lifecycle:changed');
 const fanOutMakerPiPackagesChanged = createIpcFanOut('maker:pi-packages:changed');
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
 const fanOutMakerUsageTodayTokens = createIpcFanOut('usage:today-tokens-changed'); // Codex token
@@ -3776,7 +3778,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       entries: { name: string; kind: 'dir' | 'symlink'; path: string }[];
       parent: string | null;
     }> => ipcRenderer.invoke('fs:list-dir', { path }),
-    statPath: (path: string): Promise<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }> =>
+    statPath: (
+      path: string,
+    ): Promise<{
+      kind: 'dir' | 'file' | 'missing';
+      resolvedPath: string;
+      mtimeMs?: number;
+      birthtimeMs?: number;
+      sizeBytes?: number;
+    }> =>
       ipcRenderer.invoke('fs:stat-path', { path }),
     mkdirP: (path: string): Promise<{ resolvedPath: string }> =>
       ipcRenderer.invoke('fs:mkdir-p', { path }),
@@ -4978,6 +4988,44 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:sessions:ack-interrupted', id),
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     },
+    bots: {
+      getModelChainSettings: (): Promise<{
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+        isCustomized: boolean;
+      }> => ipcRenderer.invoke('local-db:bots:model-chain-settings-get'),
+      setModelChainSettings: (body: {
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+      }): Promise<{
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+        isCustomized: boolean;
+      }> => ipcRenderer.invoke('local-db:bots:model-chain-settings-set', body),
+      list: (body?: { lastReadAtByBotId?: Record<string, number> }): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:list', body),
+      get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
+      health: (botId: string): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:health', botId),
+      lifecycleEvents: (body: unknown): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:lifecycle-events', body),
+      searchHistory: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:search-history', body),
+      create: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:create', body),
+      update: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:update', body),
+      createCanonicalSession: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:create-canonical-session', body),
+      compactCanonicalSession: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:compact-canonical-session', body),
+      /** 到点换代:打开主对话时问一次「该翻篇了吗」。没到点就原样返回。 */
+      renewIfDue: (body: { botId: string }): Promise<{
+        renewed: boolean;
+        reason?: 'daily' | 'idle';
+        canonicalSessionId: string | null;
+        notify: boolean;
+      }> => ipcRenderer.invoke('local-db:bots:renew-if-due', body),
+      linkSession: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:link-session', body),
+      history: (botId: string): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:history', botId),
+    },
     conversations: {
       search: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:conversations:search', request),
@@ -5314,6 +5362,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onAgentsChanged: fanOutMakerAgentsChanged,
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-capabilities', agentKind),
+    listBotDelegations: (
+      parentSessionId: string,
+      status?: import('../shared/botDelegation').BotDelegationStatus,
+    ): Promise<import('../shared/botDelegation').BotDelegationListResult> =>
+      ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId, status),
+    cancelBotDelegation: (
+      parentSessionId: string,
+      delegationId: string,
+    ): Promise<import('../shared/botDelegation').BotDelegationCancelResult> =>
+      ipcRenderer.invoke('maker:bot-delegation:cancel', parentSessionId, delegationId),
+    interjectBotDelegation: (
+      parentSessionId: string,
+      delegationId: string,
+      text: string,
+      idempotencyKey?: string,
+    ): Promise<import('../shared/botCollaboration').BotDelegationInterjectResult> =>
+      ipcRenderer.invoke(
+        'maker:bot-delegation:interject',
+        parentSessionId,
+        delegationId,
+        text,
+        idempotencyKey,
+      ),
+    onBotDelegationChanged: fanOutBotDelegationChanged,
+    runBotLifecycleAction: (
+      request: import('../shared/botLifecycle').BotLifecycleActionRequest,
+    ): Promise<import('../shared/botLifecycle').BotLifecycleActionResult> =>
+      ipcRenderer.invoke('maker:bot-lifecycle:action', request),
+    onBotLifecycleChanged: fanOutBotLifecycleChanged,
     listTurnChangeSets: (
       sessionId: string,
     ): Promise<import('../shared/turnChangeSet').TurnChangeSetSummary[]> =>
@@ -5691,7 +5768,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { workingDir?: string; forceReload?: boolean; sessionId?: string },
+      params: {
+        workingDir?: string;
+        remoteHostId?: string;
+        forceReload?: boolean;
+        sessionId?: string;
+      },
     ): Promise<{
       success: boolean;
       error?: string;
@@ -6210,6 +6292,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** Maker Memory 整库重置: 删 <userData>/maker-memory/ 全部 workdir 目录 + close db pool */
     makerMemoryReset: (): Promise<{ removedCount: number }> =>
       ipcRenderer.invoke('maker:maker-memory:reset'),
+
+    /**
+     * 单个伙伴的 Maker Memory 只读列表 + 单条删除 + 清空 ("TA 记得的" — 批次 β)。
+     * scope key 由 main 侧用 buildBotMemoryScopeKey(botId) 派生, 与 workdir 记忆
+     * 完全独立; 全局 Maker Memory 开关即使关闭也仍可查看/清理已有数据。
+     */
+    botMemory: {
+      list: (botId: string): Promise<import('@cindy/maker-core').MemoryRecord[]> =>
+        ipcRenderer.invoke('maker:bot-memory:list', botId),
+      delete: (botId: string, filename: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke('maker:bot-memory:delete', botId, filename),
+      clear: (botId: string): Promise<{ removedCount: number }> =>
+        ipcRenderer.invoke('maker:bot-memory:clear', botId),
+      /**
+       * 「初始记忆」落地(模板自带 / AI 生成)。按 slug 幂等: 已存在的分片不覆盖,
+       * 所以重复调用、重装或重试都只补缺的那几条。
+       */
+      seed: (
+        botId: string,
+        entries: readonly import('../shared/botMemorySeed').BotMemorySeedEntry[],
+      ): Promise<import('../shared/botMemorySeed').BotMemorySeedResult> =>
+        ipcRenderer.invoke('maker:bot-memory:seed', botId, entries),
+    },
+
+    /**
+     * 单个伙伴自己沉淀的**真技能** ("TA 学会的" — 批次 ζ)。
+     * 落盘在 <userData>/bot-skills/<botId>/, 与记忆分片是两套存储; 写入只由伙伴
+     * 自己经 save_bot_skill 完成, 设置页只读 + 单条删除。
+     */
+    botSkill: {
+      list: (botId: string): Promise<import('../shared/botSkill').BotSkillSummary[]> =>
+        ipcRenderer.invoke('maker:bot-skill:list', botId),
+      read: (
+        botId: string,
+        slug: string,
+      ): Promise<import('../shared/botSkill').BotSkillDetail | null> =>
+        ipcRenderer.invoke('maker:bot-skill:read', botId, slug),
+      delete: (botId: string, slug: string): Promise<{ ok: true; deleted: boolean }> =>
+        ipcRenderer.invoke('maker:bot-skill:delete', botId, slug),
+    },
 
     /**
      * 启动期同步三个 memory 开关的真实持久化值 (main <userData>/memory-settings.json)。

@@ -1148,7 +1148,9 @@ interface ElectronAPI {
   appDisplayVersion: string;
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
-  onLocaleChanged?: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
+  onLocaleChanged?: (
+    cb: (locale: import('../shared/locale').SupportedLocale) => void,
+  ) => () => void;
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
@@ -1993,7 +1995,9 @@ interface ElectronAPI {
     rendererReady: () => Promise<void>;
     presentationReady: () => Promise<void>;
     onSamplingActiveChanged: (cb: (active: boolean) => void) => () => void;
-    onLocaleChanged: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
+    onLocaleChanged: (
+      cb: (locale: import('../shared/locale').SupportedLocale) => void,
+    ) => () => void;
   };
 
   /** 插件停靠面板独立窗口(每 ghostId 一扇窗;状态机在 main)。 */
@@ -3022,6 +3026,8 @@ interface ElectronAPI {
       resolvedPath: string;
       mtimeMs?: number;
       birthtimeMs?: number;
+      /** 文件字节数;仅 kind==='file'。老被控端不返回时为 undefined。 */
+      sizeBytes?: number;
     }>;
     mkdirP: (path: string) => Promise<{ resolvedPath: string }>;
   };
@@ -3866,7 +3872,12 @@ interface ElectronAPI {
       agent?: 'cc' | 'pi',
     ) => Promise<{ ok: true; daemonReady: boolean }>;
     ccMgrListPendingUpgrades: () => Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
+      pending: Array<{
+        hostId: string;
+        currentVersion: string;
+        availableVersion: string;
+        agent: 'cc' | 'pi';
+      }>;
     }>;
     ccMgrDismissPendingUpgrade: (hostId: string, agent?: 'cc' | 'pi') => Promise<{ ok: true }>;
     // Codex credential sync
@@ -4405,6 +4416,65 @@ interface ElectronAPI {
       ackInterrupted: (id: string) => Promise<void>;
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
+    bots: {
+      getModelChainSettings: () => Promise<{
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+        isCustomized: boolean;
+      }>;
+      setModelChainSettings: (body: {
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+      }) => Promise<{
+        modelChain: import('../shared/botModelChain').BotModelRoute[];
+        isCustomized: boolean;
+      }>;
+      list: (body?: { lastReadAtByBotId?: Record<string, number> }) => Promise<unknown[]>;
+      get: (botId: string) => Promise<unknown>;
+      health: (botId: string) => Promise<import('../shared/botLifecycle').BotHealthReport>;
+      lifecycleEvents: (body: {
+        botId: string;
+        limit?: number;
+      }) => Promise<Array<import('../shared/botLifecycle').BotLifecycleEventView>>;
+      searchHistory: (
+        body: import('../shared/botLifecycle').BotHistorySearchRequest,
+      ) => Promise<import('../shared/botLifecycle').BotHistorySearchResponse>;
+      create: (body: unknown) => Promise<unknown>;
+      update: (body: unknown) => Promise<unknown>;
+      createCanonicalSession: (body: {
+        botId: string;
+        expectedCanonicalSessionId: string | null;
+        expectedProfileVersion: number;
+        recoverMissingOnly?: boolean;
+      }) => Promise<{
+        created: boolean;
+        canonicalSessionId: string;
+        session: import('@/lib/ccAgent.types').Session;
+      }>;
+      compactCanonicalSession: (body: {
+        botId: string;
+        expectedCanonicalSessionId: string;
+        instructions?: string;
+      }) => Promise<{
+        compacted: boolean;
+        canonicalSessionId: string;
+        reason?: 'not-running' | 'unsupported';
+        result?: unknown;
+      }>;
+      /**
+       * 到点换代:打开主对话时问一次「该翻篇了吗」。
+       *
+       * 没到点(或伙伴暂停 / 还有活儿在跑 / 用户关了换代)就原样返回当前主对话,
+       * `renewed: false`。换代成功时 `canonicalSessionId` 是**新**那条,调用方
+       * 要跟着跳过去。`notify` 说明该不该告诉用户这件事。
+       */
+      renewIfDue: (body: { botId: string }) => Promise<{
+        renewed: boolean;
+        reason?: 'daily' | 'idle';
+        canonicalSessionId: string | null;
+        notify: boolean;
+      }>;
+      linkSession: (body: unknown) => Promise<unknown>;
+      history: (botId: string) => Promise<unknown[]>;
+    };
     conversations: {
       search: (
         request: import('../shared/conversationSearch').ConversationSearchRequest,
@@ -4827,6 +4897,71 @@ interface ElectronAPI {
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
     onAgentsChanged: (cb: () => void) => () => void;
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
+    listBotDelegations: (
+      parentSessionId: string,
+      status?: import('../shared/botDelegation').BotDelegationStatus,
+    ) => Promise<import('../shared/botDelegation').BotDelegationListResult>;
+    cancelBotDelegation: (
+      parentSessionId: string,
+      delegationId: string,
+    ) => Promise<import('../shared/botDelegation').BotDelegationCancelResult>;
+    /**
+     * 向仍在进行的委派补一句话（催促 / 补充 / 修正）；归属与状态校验在主进程。
+     * `idempotencyKey` 是这条插话的幂等键：同一个键重发只会真的催一次，
+     * 双击、重挂载与网络重放不会给对方发两遍。
+     */
+    interjectBotDelegation: (
+      parentSessionId: string,
+      delegationId: string,
+      text: string,
+      idempotencyKey?: string,
+    ) => Promise<import('../shared/botCollaboration').BotDelegationInterjectResult>;
+    onBotDelegationChanged: (
+      cb: (
+        payload: import('../shared/botDelegation').BotDelegationChangedPayload,
+        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
+    runBotLifecycleAction: (
+      request: import('../shared/botLifecycle').BotLifecycleActionRequest,
+    ) => Promise<import('../shared/botLifecycle').BotLifecycleActionResult>;
+    onBotLifecycleChanged: (
+      cb: (
+        payload: {
+          botId: string;
+          action: import('../shared/botLifecycle').BotLifecycleAction;
+        },
+        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
+    /**
+     * 单个伙伴的 Maker Memory 只读列表 + 单条删除 + 清空("TA 记得的" — 批次 β)。
+     * scope key 由 main 侧用 buildBotMemoryScopeKey(botId) 派生,与 workdir 记忆
+     * 完全独立;全局 Maker Memory 开关即使关闭也仍可查看/清理已有数据。
+     */
+    botMemory: {
+      list: (botId: string) => Promise<import('@cindy/maker-core').MemoryRecord[]>;
+      delete: (botId: string, filename: string) => Promise<{ ok: true }>;
+      clear: (botId: string) => Promise<{ removedCount: number }>;
+      /** 「初始记忆」落地(模板自带 / AI 生成),按 slug 幂等。 */
+      seed: (
+        botId: string,
+        entries: readonly import('../shared/botMemorySeed').BotMemorySeedEntry[],
+      ) => Promise<import('../shared/botMemorySeed').BotMemorySeedResult>;
+    };
+    /**
+     * 单个伙伴自己沉淀的**真技能**("TA 学会的" — 批次 ζ)。
+     * 与记忆分片是两套存储:记忆答「我知道什么」,技能答「这类事我怎么做」,并且
+     * 会在下一次会话被 harness 真正挂载。写入只由伙伴自己经 save_bot_skill 完成。
+     */
+    botSkill: {
+      list: (botId: string) => Promise<import('../shared/botSkill').BotSkillSummary[]>;
+      read: (
+        botId: string,
+        slug: string,
+      ) => Promise<import('../shared/botSkill').BotSkillDetail | null>;
+      delete: (botId: string, slug: string) => Promise<{ ok: true; deleted: boolean }>;
+    };
     /** workflow 逐 agent 进度树(只读);读不到 / 解析失败返回 null → 回退 workflow 级卡片。 */
     getWorkflowProgress: (
       sessionId: string,
@@ -5140,7 +5275,12 @@ interface ElectronAPI {
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { workingDir?: string; forceReload?: boolean; sessionId?: string },
+      params: {
+        workingDir?: string;
+        remoteHostId?: string;
+        forceReload?: boolean;
+        sessionId?: string;
+      },
     ) => Promise<{
       success: boolean;
       error?: string;
@@ -5709,7 +5849,9 @@ interface ElectronAPI {
 
     /** 视觉桥设置（目标模型勾选 + 视觉后端主/备选）。 */
     visionBridgeSettingsGet: () => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsSet: (patch: VisionBridgeSettingsPatch) => Promise<VisionBridgeSettingsState>;
+    visionBridgeSettingsSet: (
+      patch: VisionBridgeSettingsPatch,
+    ) => Promise<VisionBridgeSettingsState>;
     visionBridgeSettingsReset: () => Promise<VisionBridgeSettingsState>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */

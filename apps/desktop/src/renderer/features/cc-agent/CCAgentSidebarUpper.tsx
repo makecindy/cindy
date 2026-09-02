@@ -1022,6 +1022,9 @@ function ExpandedView({
         return;
       }
 
+      // Bot automation is owned by the Bots domain and must never be mutated
+      // through the generic Scheduler sidebar, even if a stale cache leaks it.
+      if (group.scheduleSource === 'bot') return;
       requestDeleteSchedule({
         id: scheduleId,
         name: scheduleName,
@@ -3616,6 +3619,8 @@ function ExpandedView({
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}
+                  bots={groups.bots}
+                  onOpenBot={(botId) => navigate(`/bots/${botId}`)}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={allGroups.dialogues.length}
                   allProjectKeysForOrder={gcProjectKeys}

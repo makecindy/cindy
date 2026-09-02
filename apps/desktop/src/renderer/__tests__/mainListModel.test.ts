@@ -67,7 +67,9 @@ function labels(entries: MainListEntry[]): string[] {
         ? 'dlg-group'
         : entry.kind === 'automation-group'
           ? `auto:${entry.group.title}`
-          : `s:${entry.session.title}`,
+          : entry.kind === 'bot-group'
+            ? `bot:${entry.bot.displayName}`
+            : `s:${entry.session.title}`,
   );
 }
 

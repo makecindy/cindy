@@ -72,7 +72,12 @@ import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
-import type { AttachedFile, MentionedResource, ImageAnnotationStroke } from '@/lib/fileTypes';
+import type {
+  AttachedFile,
+  ComposerBotMention,
+  MentionedResource,
+  ImageAnnotationStroke,
+} from '@/lib/fileTypes';
 import {
   commentPreviewTag,
   formatBrowserCommentsForSend,
@@ -533,7 +538,16 @@ interface ChatInputProps {
   onWorkingDirChange?: (dir: string | null) => void;
   /** When true, the input is disabled (e.g. during streaming). */
   disabled?: boolean;
-  /** Freeze model/provider/effort/permission controls for audit-only tasks. */
+  /**
+   * Freeze model/provider/effort/permission controls for audit-only tasks.
+   *
+   * 这是**唯一**一个能改动运行时控件可用性的开关,而且只做「可看不可动」。
+   * 曾经还有一个 `hideRuntimeSelectors`,用来在伙伴对话里把权限 chip 与模型
+   * 选择器整个收掉;产品裁决 2026-08-19 撤销:①切伙伴时选择器区一闪一收,
+   * 露馅比"干净"更刺眼;②"这个伙伴用哪个模型"是刚需(查邮件用便宜的、
+   * 写代码用贵的)。「不暴露技术细节」改由**默认值**承载 —— 模板已经给了
+   * 合理的引擎/模型,用户不动它就永远看不见差别。
+   */
   settingsLocked?: boolean;
   /** When true, shows Stop button instead of Send button. */
   isStreaming?: boolean;
@@ -736,6 +750,11 @@ interface ChatInputProps {
   /** 强制使用紧凑单行工具栏；容器测宽也会自动进入同一状态。 */
   narrowToolbar?: boolean;
   /**
+   * 隐藏权限与模型运行时控件。伙伴对话的模型链、权限和故障接力由伙伴设置与
+   * 宿主托管，composer 只保留附件、语音和发送这些对话动作。
+   */
+  hideRuntimeControls?: boolean;
+  /**
    * 工具行采用更紧凑的视觉密度 (字号 -1px)。
    * 用于 doc rail 这种宽度受限的容器,与 compactToolbar (wrap 兜底) 正交:
    *   - dense=true 把控件本身压瘦, 一般就够单行塞下
@@ -763,6 +782,8 @@ interface ChatInputProps {
    * 状态完全由 parent 持有 (controlled);ChatInput 只做展示与事件转发。
    */
   collaboration?: CollaborationMenuConfig;
+  /** Persistent Bots available as structured delegation targets in this task. */
+  botMentions?: readonly ComposerBotMention[];
   /**
    * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
    *
@@ -1111,12 +1132,14 @@ export function ChatInput({
   onRememberedEffortChange,
   compactToolbar = false,
   narrowToolbar = false,
+  hideRuntimeControls = false,
   denseToolbar = false,
   visualVariant = 'default',
   middleToolbarSlot,
   compactMiddleToolbarSlot,
   topSlot,
   collaboration,
+  botMentions = [],
   onUnifiedDraftSelect,
   selectedFavoriteUid = null,
 }: ChatInputProps) {
@@ -1803,11 +1826,12 @@ export function ChatInput({
 
   // cycle-permission-mode 快捷键 (默认 Shift+Tab) 的轮切候选 —— 与
   // PermissionSelector 用同一份 capabilities.permissionModes 列表, 键盘轮切
-  // 与下拉菜单看到的顺序一致。vendorKey 未锁定时按 PermissionSelector 的
-  // 默认取 cc。editorProps.handleKeyDown 是稳定闭包, 走 ref 取值。
+  // 与下拉菜单看到的顺序一致。伙伴对话隐藏整组运行时控件时,键盘入口也必须
+  // 一并失效,不能留下一个看不见却仍会改权限的暗门。
   const permissionCycleOptions = useMemo(
-    () => (settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])),
-    [activeAgentCapabilities, settingsLocked],
+    () =>
+      settingsLocked || hideRuntimeControls ? [] : (activeAgentCapabilities?.permissionModes ?? []),
+    [activeAgentCapabilities, hideRuntimeControls, settingsLocked],
   );
   const permissionCycleOptionsRef = useRef(permissionCycleOptions);
   permissionCycleOptionsRef.current = permissionCycleOptions;
@@ -4445,7 +4469,21 @@ export function ChatInput({
     workingDir,
   ]);
 
-  const atResources = useMemo(() => (atState.kind === 'ready' ? atState.items : []), [atState]);
+  const atResources = useMemo(
+    () => {
+      const scanned = atState.kind === 'ready' ? atState.items : [];
+      const bots: AtResourceItem[] = botMentions.map((bot) => ({
+        type: 'bot',
+        name: bot.name,
+        relPath: bot.id,
+        ...(bot.description ? { description: bot.description } : {}),
+        _nameLower: bot.name.toLowerCase(),
+        _relPathLower: bot.id.toLowerCase(),
+      }));
+      return [...bots, ...scanned];
+    },
+    [atState, botMentions],
+  );
 
   const filteredAt = useMemo(
     () =>
@@ -8474,6 +8512,7 @@ export function ChatInput({
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
+                {!hideRuntimeControls ? (
                 <PermissionSelector
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}
@@ -8484,6 +8523,7 @@ export function ChatInput({
                   iconOnly={useUltraCompactToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
+                ) : null}
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               <div
@@ -8505,6 +8545,9 @@ export function ChatInput({
                   ) : (
                     <>{middleToolbarSlot}</>
                   ))}
+                {/* 伙伴的模型链在设置中统一管理，并由宿主自动 fallback。对话输入框不再
+                    暴露单次任务的模型切换，避免会话态覆盖伙伴长期配置。 */}
+                {!hideRuntimeControls ? (
                 <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
                   <ModelSelector
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
@@ -8662,6 +8705,7 @@ export function ChatInput({
                     restoreFocusTarget={composerSuggestionFocusTarget}
                   />
                 </div>
+                ) : null}
                 <div
                   className={
                     useNarrowToolbar

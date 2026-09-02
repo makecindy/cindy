@@ -83,6 +83,24 @@ export interface PickedConnectedModel {
   providerId: string;
 }
 
+/**
+ * 在当前已连接来源中挑真正可新建路由的第一项。
+ *
+ * 「第一项」沿用新对话既有口径：供应商先按订阅优先，再取该供应商目录排序第一的
+ * 默认可见聊天模型。这里不处理 preferred / newSessionDefault；调用方明确要求纯 fallback
+ * 时用它，避免服务端 marker 把“第一项”改写成另一项。
+ */
+export function pickFirstConnectedModelForAgent(
+  providers: readonly ProviderView[],
+  agent: AgentKind,
+): PickedConnectedModel | null {
+  for (const provider of providersByPreference(providers, agent)) {
+    const first = firstModelByOrder(provider, agent);
+    if (first) return { model: first.id, providerId: provider.id };
+  }
+  return null;
+}
+
 /** 按正常来源优先级找出区域 / 目录明确标记的新对话默认模型。 */
 function markedDefaultModelIdForAgent(
   providers: readonly ProviderView[],
@@ -163,11 +181,7 @@ export function pickConnectedModelForAgent(
       return { model: preferredModelId, providerId: provider.id };
     }
   }
-  for (const provider of ranked) {
-    const first = firstModelByOrder(provider, agent);
-    if (first) return { model: first.id, providerId: provider.id };
-  }
-  return null;
+  return pickFirstConnectedModelForAgent(ranked, agent);
 }
 
 export interface DraftModelCalibrationInput {

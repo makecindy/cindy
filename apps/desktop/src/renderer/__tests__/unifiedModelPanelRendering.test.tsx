@@ -317,6 +317,33 @@ describe('统一模型选择器面板', () => {
     expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'high');
   });
 
+  it('official 策略忽略全局引擎偏好与收藏，只按目录推荐选择模型', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'cc',
+      effort: 'medium',
+    });
+
+    renderPanel({
+      unifiedSelectionPolicy: 'official',
+      configurationEnabled: false,
+      unifiedLayout: 'badge',
+    });
+
+    const list = screen.getByRole('listbox');
+    expect(within(list).queryByText('收藏')).toBeNull();
+    expect(within(rowFor('GPT-5.5')).queryByRole('button', { name: '存为收藏' })).toBeNull();
+
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    expect(screen.queryByTestId('unified-model-config-flyout')).toBeNull();
+    expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'high');
+  });
+
   it('← 键打开该行的配置浮层(键盘入口)', async () => {
     renderPanel();
     await act(async () => {

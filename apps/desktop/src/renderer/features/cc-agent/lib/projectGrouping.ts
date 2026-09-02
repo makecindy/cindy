@@ -98,9 +98,37 @@ export interface ProjectNode {
   latestActivityAt: string;
 }
 
+/**
+ * 一个伙伴名下的全部任务。
+ *
+ * 与项目分组并列而不是嵌进去:**项目是磁盘上的实体目录,伙伴名是用户自己起的**,
+ * 两套键天然不冲突。同一个伙伴可以在多个项目里干活,同一个项目也可以有多个伙伴,
+ * 硬塞进一棵树只会两头都别扭。
+ */
+export interface BotGroupNode {
+  botId: string;
+  /** 用户给伙伴起的名字。 */
+  displayName: string;
+  avatar: string;
+  avatarColor: string;
+  /** 该伙伴名下所有任务,已按 status 然后 sortTime desc 排序。 */
+  sessions: Session[];
+  latestActivityAt: string;
+}
+
+/** 分组时用来认伙伴的最小信息。渲染层从 botStore 的会话投影现拼。 */
+export interface BotSessionOwner {
+  botId: string;
+  displayName: string;
+  avatar: string;
+  avatarColor: string;
+}
+
 export interface ProjectGroupsResult {
   pinned: Session[];
   dialogues: Session[];
+  /** 按伙伴分的组,按最近活动倒序。 */
+  bots: BotGroupNode[];
   unclassified: Session[];
   projects: ProjectNode[];
 }
@@ -114,6 +142,14 @@ export interface GroupSessionsOptions {
    * when every conversation inside it is pinned.
    */
   includePinnedInProjects?: boolean;
+  /**
+   * sessionId → 它属于哪个伙伴。
+   *
+   * 不给(或某条会话不在表里)时,伙伴任务按普通会话走原来的分组 —— 这是刻意的
+   * 降级:伙伴档案还没加载完的那一瞬间,宁可让任务落到未分类,也不能让它**整个
+   * 消失**。会话本身不带 botId,归属只有伙伴档案知道。
+   */
+  botOwnerBySessionId?: ReadonlyMap<string, BotSessionOwner>;
 }
 
 /* ============================== normalize ============================== */
@@ -387,13 +423,32 @@ export function pinnedSessionIdsInDisplayOrder(sessions: readonly Session[]): st
  *   - 空数组 / 全 null → 各段返回空数组
  *   - workingDir 异常 → 归到 unclassified
  */
+/**
+ * 一组任务里"最近一次活动"。
+ *
+ * 取全员 sortTime 的最大值,不受组内 active-first 排序影响 —— 否则一个只剩归档
+ * 任务的组会被按它较旧的 active 时间下沉,与"最近用过的排前面"这个预期不符。
+ */
+function latestActivityOf(list: readonly Session[]): string {
+  let latestMs = 0;
+  let latestIso = '';
+  for (const s of list) {
+    const t = sortTimeMs(s);
+    if (t > latestMs) {
+      latestMs = t;
+      latestIso = sortTimeIso(s);
+    }
+  }
+  return latestIso;
+}
+
 export function groupSessions(
   sessions: readonly Session[],
   options: GroupSessionsOptions = {},
 ): ProjectGroupsResult {
   const aliases = normalizeProjectAliases(options.projectAliases);
   if (!sessions || sessions.length === 0) {
-    return { pinned: [], dialogues: [], unclassified: [], projects: [] };
+    return { pinned: [], dialogues: [], bots: [], unclassified: [], projects: [] };
   }
 
   // 1. Pinned —— active 在 archived 之上，同状态按 pinnedAt desc
@@ -419,11 +474,23 @@ export function groupSessions(
   // 入口,创建时目录已经过用户授权,落项目分组是功能本身。
   const unclassified: Session[] = [];
   const dialogues: Session[] = [];
+  const botSessions = new Map<string, Session[]>();
+  const botOwners = new Map<string, BotSessionOwner>();
   const groups = new Map<string, Session[]>();
   const identityByKey = new Map<string, ProjectIdentity>();
   for (const s of remaining) {
     if (s.workspaceKind === 'dialogue') {
       dialogues.push(s);
+      continue;
+    }
+    // 伙伴的任务归伙伴,不按工作目录散进项目组 —— 一个伙伴可以在多个项目里干活,
+    // 按目录分只会把同一个伙伴的对话切碎到几个组里。
+    const owner = options.botOwnerBySessionId?.get(s.id);
+    if (owner) {
+      const arr = botSessions.get(owner.botId);
+      if (arr) arr.push(s);
+      else botSessions.set(owner.botId, [s]);
+      if (!botOwners.has(owner.botId)) botOwners.set(owner.botId, owner);
       continue;
     }
     const dir = normalizeWorkingDir(s.workingDir);
@@ -462,6 +529,25 @@ export function groupSessions(
   // 4. unclassified 排序 —— active 在 archived 之上，同状态按 sortTime desc
   dialogues.sort(compareSessionsByStatusThenSortTimeDesc);
   unclassified.sort(compareSessionsByStatusThenSortTimeDesc);
+
+  // 4b. 伙伴组:组内与项目组同一套排序,组间按最近活动倒序。
+  const bots: BotGroupNode[] = [];
+  for (const [botId, list] of botSessions) {
+    const owner = botOwners.get(botId);
+    if (!owner) continue;
+    list.sort(compareSessionsByStatusThenSortTimeDesc);
+    bots.push({
+      botId,
+      displayName: owner.displayName,
+      avatar: owner.avatar,
+      avatarColor: owner.avatarColor,
+      sessions: list,
+      latestActivityAt: latestActivityOf(list),
+    });
+  }
+  bots.sort(
+    (a, b) => toMs(b.latestActivityAt) - toMs(a.latestActivityAt) || a.botId.localeCompare(b.botId),
+  );
 
   // 5. 同名消歧 — "先创建优先"：在每个 basename 相同的 dir 集合里，按
   //    "该 dir 下最早 createdAt 的 Session 升序"排序，排序第一的获胜者保留纯
@@ -581,5 +667,5 @@ export function groupSessions(
   // 6. Project 间排序
   projects.sort(compareProjectsByLatestSessionDesc);
 
-  return { pinned, dialogues, unclassified, projects };
+  return { pinned, dialogues, bots, unclassified, projects };
 }
