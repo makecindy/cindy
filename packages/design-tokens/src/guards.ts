@@ -506,16 +506,26 @@ const SPECIFIER_CONTEXT_RE =
 /**
  * fs API 路径参数语境（第八类）：`readFileSync('…'` / `readFile('…'` 等
  * 直接文件读取的**第一参数**。相对路径说明符按调用文件位置 resolve 后
- * 落进 packages/design-tokens/ 即命中。第一方代码的既有 fs 读取全部走
- * `resolve(__dirname…)` / `new URL(…)` 包装（实测 54 处），裸相对路径
- * 形态为零——纳入扫描零误报（review P2 实锤：这是最直接的绕过方式）。
+ * 落进 packages/design-tokens/ 即命中（review P2 实锤：裸相对路径是最
+ * 直接的绕过方式）。
  */
 const FS_API_PATH_CONTEXT_RE =
   /(?<![\w$])(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\(\s*['"`]([^'"`]+)['"`]/g;
 
-/** 判断「无空白压缩后的最近输出」是否以 import / fs API 路径语境结尾。 */
+/**
+ * 路径构造器语境（第九类）：`resolve(__dirname, '…')` / `join(here, '…')`
+ * 等包装形态——仓内既有 fs 读取的主流写法（54 处实测），静态字符串片段
+ * 按调用文件位置 resolve（`__dirname` ≈ 文件所在目录，与文件位置基准
+ * 一致）。覆盖调用内的**任意位置**字符串参数（`resolve(a, '…', b)` 的
+ * 中段也提取）。非相对片段（`'、'` 这类 join 分隔符）不以 `.` 开头，
+ * 天然过滤。
+ */
+const PATH_CONSTRUCTOR_CONTEXT_RE =
+  /\b(?:resolve|join)\s*\((?:[^()]*?)['"`]([^'"`]+)['"`]/g;
+
+/** 判断「无空白压缩后的最近输出」是否以 import / fs API / 路径构造器语境结尾。 */
 const SPECIFIER_PREFIX_RE =
-  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\brequire\s*\.\s*resolve\s*\(|\bimport\.meta\.resolve\s*\(|\bnew\s+URL\s*\(|\bimport|(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\()$/;
+  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\brequire\s*\.\s*resolve\s*\(|\bimport\.meta\.resolve\s*\(|\bnew\s+URL\s*\(|\bimport|(?:readFileSync|readFile|writeFileSync|writeFile|appendFileSync|existsSync|statSync|openSync|copyFileSync|renameSync|rmSync|unlinkSync|createReadStream)\s*\(|\b(?:resolve|join)\s*\([^()]*$)/;
 
 /**
  * 剥除源码里的注释与「数据语境」字符串字面量，保留 import 说明符。
@@ -619,14 +629,16 @@ export function relativeSpecifierHitsDesignTokens(
   // 剥除必须在提取之前：`import(/* c */ '…')` 这类合法注释隔断会让
   // 关键字→引号的正则衔接在原始文本上断开（review P2 实锤），预扫直接
   // 零命中、剥除层反而执行不到。剥除层按注释→空白替换，衔接恢复。
-  // 关键字 includes 预检覆盖 import/require/from 与常见 fs API 前缀
-  // （File/Sync 字样，任一命中才值得付剥除成本）。
+  // 关键字 includes 预检覆盖 import/require/from、fs API 与路径构造器
+  // 字样（任一命中才值得付剥除成本）。
   if (
     !text.includes('import') &&
     !text.includes('require') &&
     !text.includes('from') &&
     !text.includes('File') &&
-    !text.includes('Sync')
+    !text.includes('Sync') &&
+    !text.includes('resolve') &&
+    !text.includes('join')
   ) {
     return false;
   }
@@ -638,9 +650,17 @@ export function relativeSpecifierHitsDesignTokens(
   for (const match of codeOnly.matchAll(FS_API_PATH_CONTEXT_RE)) {
     specs.push(match[1]);
   }
+  for (const match of codeOnly.matchAll(PATH_CONSTRUCTOR_CONTEXT_RE)) {
+    specs.push(match[1]);
+  }
   for (const spec of specs) {
-    if (!spec.startsWith('.')) continue;
-    const resolved = posixNormalize(posixJoin(dir, spec));
+    // 说明符分隔符归一（review P2 实锤）：源码字符串里的 `\\` 是转义的
+    // 单反斜杠——Windows CJS 允许反斜杠路径（require('..\\..\\x')），
+    // posix join 不认。反斜杠统一替换为 / 再 resolve（仓内没有含反斜杠
+    // 字符的 POSIX 文件名，替换是安全近似）。
+    const normalized = spec.replace(/\\+/g, '/');
+    if (!normalized.startsWith('.')) continue;
+    const resolved = posixNormalize(posixJoin(dir, normalized));
     if (resolved === 'packages/design-tokens' || resolved.startsWith('packages/design-tokens/')) {
       return true;
     }

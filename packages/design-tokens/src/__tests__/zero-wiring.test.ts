@@ -356,6 +356,56 @@ describe('DS-3 · 零接线守卫', () => {
     }
   });
 
+  it('自证伪：路径构造器包装形态必须被命中（review P2 补洞）', () => {
+    // `readFileSync(resolve(__dirname, '../../design-tokens/…'))` 是仓内既有
+    // fs 读取的主流写法——旧实现只认 fs API 第一参数直接以引号开始，包装
+    // 形态两通道都漏。现在 resolve/join 调用内的静态字符串片段按调用文件
+    // 位置 resolve（__dirname ≈ 文件所在目录）。
+    const hitCases: Array<[string, string]> = [
+      ['resolve(__dirname, rel)', "readFileSync(resolve(__dirname, '../../design-tokens/src/semantic/color.json'), 'utf8')"],
+      ['join(__dirname, rel)', "readFileSync(join(__dirname, '../../design-tokens/src/snapshot.ts'), 'utf8')"],
+      ['resolve(变量基座, rel)', "readFileSync(resolve(here, '../../design-tokens/src/x.json'))"],
+    ];
+    for (const [name, source] of hitCases) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        name,
+      ).toBe(true);
+    }
+    // 既有 resolve/join 用法（读兄弟 tsx / 组件 / 变量基座）不指向
+    // design-tokens，必须零误报；Array.join 的分隔符字符串不以 `.` 开头，
+    // 天然过滤。
+    const nonHits: Array<[string, string]> = [
+      ['既有用法：resolve 读兄弟 tsx', "readFileSync(resolve(__dirname, '../CCAgentSessionView.tsx'), 'utf8')"],
+      ['既有用法：join 读组件', "readFileSync(join(here, '../../PublishDialog.tsx'), 'utf8')"],
+      ['既有用法：resolve 变量基座', "readFileSync(resolve(skillhubDir, '../../router.tsx'), 'utf8')"],
+      ['Array.join 分隔符', "arr.join('、')"],
+    ];
+    for (const [name, source] of nonHits) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        name,
+      ).toBe(false);
+    }
+  });
+
+  it('自证伪：Windows 反斜杠说明符必须被命中（review P2 补洞）', () => {
+    // Windows CJS 允许 require('..\\..\\design-tokens\\src\\x')（源码字符串里
+    // `\\` 是转义的单反斜杠）——旧实现直接交给 path.posix，反斜杠不被识别
+    // 为分隔符，resolve 结果不落进 design-tokens——漏放。现在说明符统一
+    // 反斜杠归一为 / 再 resolve。
+    const hitCases: Array<[string, string]> = [
+      ['require 反斜杠', "require('..\\\\..\\\\design-tokens\\\\src\\\\snapshot.ts')"],
+      ['readFileSync 反斜杠', "readFileSync('..\\\\..\\\\design-tokens\\\\src\\\\semantic\\\\color.json', 'utf8')"],
+    ];
+    for (const [name, source] of hitCases) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        name,
+      ).toBe(true);
+    }
+  });
+
   it('自证伪：require.resolve 是运行期加载入口，必须被命中（review P2 补洞）', () => {
     // `readFileSync(require.resolve('../../design-tokens/…'))` 是消费影子层的
     // 真实路径：旧实现的剥离层把 require.resolve 的参数当普通数据字符串
