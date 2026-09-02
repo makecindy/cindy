@@ -138,6 +138,7 @@ let connectedDevice: {
 } | null = null;
 let keymapBackupDir: string | null = null;
 let creatorKeymapBound = false;
+let creatorKeymapWritten = false;
 let creatorKeymapBinding: Promise<void> | null = null;
 let creatorKeymapRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let creatorKeymapRetryAt = 0;
@@ -663,6 +664,7 @@ async function restoreCreatorKeymap(deviceApi: WorkLouderApi): Promise<void> {
     throw new Error(writeResult?.error?.message ?? 'fs.write keymap.json restore failed');
   }
   creatorKeymapBound = false;
+  creatorKeymapWritten = false;
   hostLog('info', 'Work Louder pre-occupancy keymap restored');
 }
 
@@ -731,6 +733,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   const next = applyCreatorMicro2AgentLayer(document, layerIndex, creatorKeymap, profileIndex);
   if (!next.changed) {
     creatorKeymapBound = true;
+    if (next.alreadyBound) creatorKeymapWritten = true;
     clearCreatorKeymapRetry();
     hostLog(
       'info',
@@ -748,6 +751,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (!workLouderFsSucceeded(writeResult)) {
     throw new Error(writeResult?.error?.message ?? 'fs.write keymap.json failed');
   }
+  creatorKeymapWritten = true;
   await sleep(CREATOR_MICRO_2_KEYMAP_RELOAD_MS);
   if (generation !== creatorKeymapGeneration || stopping) return;
   creatorKeymapBound = true;
@@ -992,9 +996,18 @@ function clearRetry(): void {
 }
 
 async function disconnect(): Promise<void> {
+  const currentApi = api;
+  if (currentApi && creatorKeymapWritten) {
+    try {
+      await restoreCreatorKeymap(currentApi);
+    } catch (error) {
+      hostLog('warn', `Creator Micro 2 keymap restore failed: ${safeErrorMessage(error)}`);
+    }
+  }
   transportFaulted = false;
   connectedDevice = null;
   creatorKeymapBound = false;
+  creatorKeymapWritten = false;
   creatorKeymapBinding = null;
   const unsubscribe = unsubscribeHid;
   unsubscribeHid = null;
@@ -1051,11 +1064,6 @@ async function stop(): Promise<void> {
       currentApi.sendLightingConfig({ ambient: off.ambient, keys: off.keys }),
       currentApi.sendThreadsLighting(off.threads),
     ]);
-    try {
-      await restoreCreatorKeymap(currentApi);
-    } catch (error) {
-      hostLog('warn', `Creator Micro 2 keymap restore failed: ${safeErrorMessage(error)}`);
-    }
   }
   await disconnect();
   post({ kind: 'stopped' });

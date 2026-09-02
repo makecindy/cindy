@@ -9,6 +9,7 @@ import {
   normalizeWorkLouderCreatorTaskKeys,
   normalizeWorkLouderMerges,
   resolveCreatorHidRole,
+  resolveWorkLouderHidRole,
   workLouderAvailableMergeDirections,
   workLouderMergeNeighbor,
   workLouderShouldMuteKeyZone,
@@ -59,6 +60,24 @@ describe('Creator Micro 2 task keys', () => {
     expect(resolveCreatorHidRole('ACT06', taskKeys)).toEqual({
       role: 'command',
       physical: 'AG01',
+    });
+  });
+
+  it('keeps Codex factory HID codes as physical keys', () => {
+    const taskKeys = ['ACT06'] as const;
+    expect(resolveWorkLouderHidRole('ACT06', taskKeys, 'codex-micro')).toEqual({
+      role: 'task',
+      slot: 0,
+      physical: 'ACT06',
+    });
+    expect(resolveWorkLouderHidRole('AG00', taskKeys, 'codex-micro')).toEqual({
+      role: 'command',
+      physical: 'AG00',
+    });
+    expect(resolveWorkLouderHidRole('AG00', taskKeys, 'creator-micro-2')).toEqual({
+      role: 'task',
+      slot: 0,
+      physical: 'ACT06',
     });
   });
 

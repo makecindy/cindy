@@ -230,6 +230,56 @@ describe('WorkLouderCodexLightingController', () => {
     expect(sink.rebindCreatorKeymap).toHaveBeenCalled();
   });
 
+  it('routes Codex HID by factory key names, not Creator remapped codes', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setDeviceStateHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      rebindCreatorKeymap: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const activateSession = vi.fn();
+    const dispatchAction = vi.fn();
+    const settings = createWorkLouderCodexDefaultSettings('codex-micro');
+    settings.agentSource = 'last-sent';
+    settings.deviceEnabled = true;
+    settings.layout.taskKeys = ['ACT06'];
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      activateSession,
+      async () => ({
+        sidebar: [{ id: 'newer', title: 'Newer send', pinned: false }],
+        lastSent: [{ id: 'newer', title: 'Newer send', pinned: false }],
+        options: [{ id: 'newer', title: 'Newer send', pinned: false }],
+      }),
+      dispatchAction,
+    );
+    controller.applySettings(settings);
+    await controller.resumeTaskSlots();
+    sink.setDeviceStateHandler.mock.calls.at(-1)?.[0]?.({
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+      firmwareVersion: null,
+      batteryPercentage: null,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+    });
+
+    hidRef.current?.({ key: 'ACT06', act: 1 });
+    expect(activateSession).toHaveBeenCalledWith('newer', true);
+    activateSession.mockClear();
+    hidRef.current?.({ key: 'AG00', act: 1 });
+    expect(activateSession).not.toHaveBeenCalled();
+  });
+
   it('switches a seventh Creator task key from ACT HID, not AG06', async () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,

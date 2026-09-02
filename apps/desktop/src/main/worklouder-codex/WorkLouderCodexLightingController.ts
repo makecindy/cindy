@@ -9,7 +9,7 @@ import {
   creatorCommandAssignment,
   isWorkLouderCodexVoiceAssignment,
   isWorkLouderCreatorProgrammableKey,
-  resolveCreatorHidRole,
+  resolveWorkLouderHidRole,
   workLouderCodexAutoDimMs,
   workLouderLayoutMerges,
   workLouderMergeForKey,
@@ -364,7 +364,7 @@ export class WorkLouderCodexLightingController {
       return;
     }
     const creatorRole = this.settings.layout.taskKeys
-      ? resolveCreatorHidRole(event.key, this.settings.layout.taskKeys)
+      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device.deviceType)
       : null;
     if (creatorRole?.role === 'task') {
       if (event.act === 1) this.handleAgentKeyPress(creatorRole.slot);
@@ -394,7 +394,11 @@ export class WorkLouderCodexLightingController {
     const merge = workLouderMergeForKey(workLouderLayoutMerges(this.settings.layout), key);
     if (merge) return merge.origin as WorkLouderCodexPreviewPart;
     if (this.settings.layout.taskKeys) {
-      const role = resolveCreatorHidRole(key, this.settings.layout.taskKeys);
+      const role = resolveWorkLouderHidRole(
+        key,
+        this.settings.layout.taskKeys,
+        this.device.deviceType,
+      );
       if (role) return role.physical as WorkLouderCodexPreviewPart;
     }
     return previewPartForHidKey(key);
@@ -615,7 +619,7 @@ export class WorkLouderCodexLightingController {
   private releaseHeldVoiceFromEvent(event: WorkLouderCodexHidEvent): void {
     if (event.act !== 0) return;
     const creatorRole = this.settings.layout.taskKeys
-      ? resolveCreatorHidRole(event.key, this.settings.layout.taskKeys)
+      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device.deviceType)
       : null;
     const slot =
       creatorRole?.role === 'command'

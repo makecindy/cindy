@@ -872,6 +872,27 @@ export function resolveCreatorHidRole(
   return null;
 }
 
+/** Codex keeps factory AG/ACT codes. HID key name is the physical key. */
+export function resolveFactoryHidRole(
+  hidKey: string,
+  taskKeys: readonly WorkLouderCreatorProgrammableKey[],
+): CreatorHidRole | null {
+  if (!isWorkLouderCreatorProgrammableKey(hidKey)) return null;
+  const normalized = normalizeWorkLouderCreatorTaskKeys(taskKeys);
+  const slot = normalized.indexOf(hidKey);
+  if (slot >= 0) return { role: 'task', slot, physical: hidKey };
+  return { role: 'command', physical: hidKey };
+}
+
+export function resolveWorkLouderHidRole(
+  hidKey: string,
+  taskKeys: readonly WorkLouderCreatorProgrammableKey[],
+  deviceType?: string | null,
+): CreatorHidRole | null {
+  if (deviceType === 'codex-micro') return resolveFactoryHidRole(hidKey, taskKeys);
+  return resolveCreatorHidRole(hidKey, taskKeys);
+}
+
 const DEFAULT_CREATOR_COMMAND_ASSIGNMENT: WorkLouderCodexKeyAssignment = {
   keycapId: 'EMPT1',
   action: null,
