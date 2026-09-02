@@ -23,6 +23,8 @@
 
 ## 版本记录
 
+- **2026-09-02（Desktop 登录成功回调页 UX 覆盖）**：成功态移除返回 Cindy 按钮，改为 560×500 紧凑内容流卡片，底部显示本地化 3 秒倒计时并在结束时先移除文字再调用 `window.close()`；失败 / Warning 继续使用 680×680 卡片与返回操作。同步更新 `DESIGN.md §16`、`figma-component-spec.md §6`、`token-decision-table.md §4` 与客户端模板测试。
+
 - **2026-08-31（Switch / 通用手柄交稿包入仓）**：登记 `gamepads/nintendo-switch-pro/`、`gamepads/switch-joy-con/`、`gamepads/ultimate-c1/` 三组同事线稿，设置页 Nintendo 默认 Switch Pro、接上 Joy-Con 时换 Joy-Con 图，通用手柄用 Ultimate C1。零视觉规范改写。
 - **2026-08-30（治理合同修订：管道/记账、已知边界、路线图勘误；同日按 review 收口）**：[`design-governance.md`](./design-governance.md) 新增 §1.1「管道与记账」（守卫红灯不是禁令——管道规则不许绕、记账值走「同 PR 更新快照/台账 + 设计师批」的合法路径改，消灭的是「没人决定过的变化」；**保护值例外**：CINDY 皮肤族 / U2 二级信息色 / `annotation-accent` 不适用通用路径，须按 `DESIGN.md` 各自的用户裁决或冻结条款；正式豁免登记是合法路径，只禁未经裁决为消红灯加豁免）与 §13「已知边界」（正则扫描边界——内联样式字面量会被 `hardcoded-color-audit` 发现、真正扫不到的是动态值与 canvas/xterm 自绘；复用道路唯一靠 review 不靠机器；**新代码默认走语义层**、保留 §3.3/§3.4 既有准入、仅存量渐进），两节自
   mivo-canvas-plugin 仓 4/7 张 PR 实战沉淀移植。勘误三处：§2 旧编号「PR-8」→「DS-8」；§12 依赖行 DS-6 前置由已关闭的圆角裁决改为「Permission 迁移余项」并补 DS-7 受 `radius` 覆盖裁决约束；§12 路线图回填 DS-1 = #3609（合入日期修正为 2026-08-30）。零视觉，非 DS 序号。

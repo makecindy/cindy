@@ -190,7 +190,7 @@ pnpm --filter desktop run export:login-callback-template
 - 每份 HTML 自带 light / dark（`prefers-color-scheme`），不按主题拆分；
 - 失败页含 `{{ERROR_DETAIL}}` 一个占位符，替换错误码前按 HTML 文本节点转义；无错误码
   时连同它所在的 `<p class="detail">` 一并删除；
-- 成功页不显示返回按钮，使用更紧凑的内容流卡片，正文告知登录已成功并可关闭当前页面；页面底部显示
+- 成功页不显示返回按钮，使用 560×500 的紧凑内容流布局，正文告知登录已成功并可关闭当前页面；页面底部显示
   `3秒后自动关闭` 并倒计时到 0，随后先移除倒计时文字再调用 `window.close()`；浏览器不允许时不
   留任何关闭提示或残留文案，失败页仍保留回到 Cindy 的按钮；
 - 页面自包含（立绘是构建期内嵌的 webp data URI），无外链依赖；

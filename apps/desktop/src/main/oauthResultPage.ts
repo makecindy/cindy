@@ -366,7 +366,8 @@ updateCountdown();
  * wave4 新品牌回调卡(仅 pageKind='desktop-login',PR3)。
  *
  * 参数权威:callback-pages-classification.md「新设计三类卡片规格」(figma §6.1,
- * 失败/警告卡 680×680 r36;成功卡在移除 CTA 后采用 560×500 紧凑流式布局。
+ * 失败/警告卡 680×680 r36;成功卡在移除 CTA 后采用 560×500 紧凑流式布局,
+ * 这是 2026-09-02 登录成功回调 UX 裁决对旧成功态 Figma 帧的覆盖。
  * White 卡 #FBFBFB/#D4D4D4、Dark 卡 #312F2F/#434343;页面底色浅 #EEEEEE/深
  * #2A2828,design.md §7.4 条 1)+ U-10 裁决(topOffset = w<760?88:80;scale 按
  * 页面标记的卡片尺寸计算,transform-origin=top center,水平居中,缩不下时纵向
