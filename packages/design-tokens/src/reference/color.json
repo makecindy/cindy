@@ -1,0 +1,179 @@
+{
+  "$description": "DS-3 reference 层：仅收录第一批 semantic 角色实际引用的冻结色值。",
+  "hex-f8f8f6": {
+    "$type": "color",
+    "$value": "#f8f8f6"
+  },
+  "hex-1f1f1e": {
+    "$type": "color",
+    "$value": "#1f1f1e"
+  },
+  "hsl-60-12-5pct-97pct": {
+    "$type": "other",
+    "$value": "60 12.5% 97%"
+  },
+  "hsl-60-2pct-12pct": {
+    "$type": "other",
+    "$value": "60 2% 12%"
+  },
+  "hex-ffffff": {
+    "$type": "color",
+    "$value": "#ffffff"
+  },
+  "hex-2c2c2a": {
+    "$type": "color",
+    "$value": "#2c2c2a"
+  },
+  "hex-e5e5e5": {
+    "$type": "color",
+    "$value": "#e5e5e5"
+  },
+  "hex-faf9f5": {
+    "$type": "color",
+    "$value": "#faf9f5"
+  },
+  "hex-3c3c3a": {
+    "$type": "color",
+    "$value": "#3c3c3a"
+  },
+  "hsl-0-0pct-90pct": {
+    "$type": "other",
+    "$value": "0 0% 90%"
+  },
+  "hsl-60-2pct-17pct": {
+    "$type": "other",
+    "$value": "60 2% 17%"
+  },
+  "hex-d7d7d4": {
+    "$type": "color",
+    "$value": "#d7d7d4"
+  },
+  "hsl-60-3pct-84pct": {
+    "$type": "other",
+    "$value": "60 3% 84%"
+  },
+  "hsl-60-2pct-23pct": {
+    "$type": "other",
+    "$value": "60 2% 23%"
+  },
+  "hsl-30-4pct-28pct": {
+    "$type": "other",
+    "$value": "30 4% 28%"
+  },
+  "transparent": {
+    "$type": "color",
+    "$value": "transparent"
+  },
+  "hex-262626": {
+    "$type": "color",
+    "$value": "#262626"
+  },
+  "hex-d4d4d4": {
+    "$type": "color",
+    "$value": "#d4d4d4"
+  },
+  "hsl-0-0pct-9pct": {
+    "$type": "other",
+    "$value": "0 0% 9%"
+  },
+  "hsl-0-0pct-83pct": {
+    "$type": "other",
+    "$value": "0 0% 83%"
+  },
+  "hex-1a1a1a": {
+    "$type": "color",
+    "$value": "#1a1a1a"
+  },
+  "hex-525252": {
+    "$type": "color",
+    "$value": "#525252"
+  },
+  "hex-a3a3a3": {
+    "$type": "color",
+    "$value": "#a3a3a3"
+  },
+  "hex-737373": {
+    "$type": "color",
+    "$value": "#737373"
+  },
+  "hsl-0-0pct-45pct": {
+    "$type": "other",
+    "$value": "0 0% 45%"
+  },
+  "hex-c4c4c4": {
+    "$type": "color",
+    "$value": "#c4c4c4"
+  },
+  "hex-000000": {
+    "$type": "color",
+    "$value": "#000000"
+  },
+  "hex-417cdd": {
+    "$type": "color",
+    "$value": "#417CDD"
+  },
+  "rgba-65-124-221-0-5": {
+    "$type": "color",
+    "$value": "rgba(65, 124, 221, 0.5)"
+  },
+  "hsl-0-84pct-60pct": {
+    "$type": "other",
+    "$value": "0 84% 60%"
+  },
+  "hsl-0-72pct-63pct": {
+    "$type": "other",
+    "$value": "0 72% 63%"
+  },
+  "hex-ef4444": {
+    "$type": "color",
+    "$value": "#ef4444"
+  },
+  "hex-fef2f2": {
+    "$type": "color",
+    "$value": "#fef2f2"
+  },
+  "hex-3a2222": {
+    "$type": "color",
+    "$value": "#3a2222"
+  },
+  "rgba-220-38-38-0-4": {
+    "$type": "color",
+    "$value": "rgba(220, 38, 38, 0.4)"
+  },
+  "hex-7f1d1d": {
+    "$type": "color",
+    "$value": "#7f1d1d"
+  },
+  "hex-dc2626": {
+    "$type": "color",
+    "$value": "#dc2626"
+  },
+  "hex-f87171": {
+    "$type": "color",
+    "$value": "#f87171"
+  },
+  "hex-991b1b": {
+    "$type": "color",
+    "$value": "#991b1b"
+  },
+  "hex-fca5a5": {
+    "$type": "color",
+    "$value": "#fca5a5"
+  },
+  "hex-ea6b17": {
+    "$type": "color",
+    "$value": "#EA6B17"
+  },
+  "hex-f3a115": {
+    "$type": "color",
+    "$value": "#F3A115"
+  },
+  "rgba-234-107-23-0-12": {
+    "$type": "color",
+    "$value": "rgba(234, 107, 23, 0.12)"
+  },
+  "rgba-234-107-23-0-18": {
+    "$type": "color",
+    "$value": "rgba(234, 107, 23, 0.18)"
+  }
+}
