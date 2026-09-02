@@ -446,6 +446,75 @@ const IMPORT_ENTRY_PATTERNS: readonly RegExp[] = [
 const SPECIFIER_CONTEXT_RE =
   /(?:\bfrom\s*|(?<![\w$.])import\s*\(\s*|(?<![\w$.])require\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|(?<![\w$.])import\s*(?=['"]))['"]([^'"]+)['"]/g;
 
+/** 判断已输出的前文是否以 import 语境结尾（说明符字符串之前的形态）。 */
+const SPECIFIER_PREFIX_RE =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|\bimport\s*)$/;
+
+/**
+ * 剥除源码里的注释与「数据语境」字符串字面量，保留 import 说明符。
+ *
+ * 为什么需要：零接线守卫的两个检测通道都吃原始文本，注释或错误消息里
+ * 出现完整 import 语句（如 `// import '@cindy/design-tokens';`）会被当成
+ * 真实接线（review P1 实锤），无运行时接线的改动被 CI 阻断。
+ *
+ * 规则（轻量状态机，非完整 AST）：
+ *  - `//…` 行注释与块注释（slash-star 形态）整体替换为空白（保留换行，
+ *    行列结构不变）；
+ *  - `'…'` / `"…"` / `` `…` `` 字符串：若开引号前的已输出文本以 import
+ *    语境结尾（from / import( / require( / import.meta.resolve( / import），
+ *    说明这是模块说明符——**保留原文**；否则视为数据字符串，内容替换为
+ *    空白（引号保留，长度不变）。语境判定只看输出缓冲的末尾 64 字符，
+ *    避免对全文件长度做正则回溯。
+ *  - 模板字符串内的 `${…}` 不再细分——数据语境整体剥除，说明符语境
+ *    （不会出现插值）整体保留，两个方向都不产生误报。
+ *  - 正则字面量（`/…/`）不识别：其内容若含引号会被当字符串处理。这只在
+ *    「漏放」方向出偏差（正则内容被清空 → 不命中），真实 import 语句不会
+ *    写在正则字面量里，可接受。
+ */
+export function stripCommentsAndDataStrings(source: string): string {
+  let out = '';
+  let i = 0;
+  const n = source.length;
+  while (i < n) {
+    const c = source[i];
+    const c2 = source[i + 1];
+    if (c === '/' && c2 === '/') {
+      const start = i;
+      while (i < n && source[i] !== '\n') i++;
+      out += ' '.repeat(i - start);
+      continue;
+    }
+    if (c === '/' && c2 === '*') {
+      const start = i;
+      i += 2;
+      while (i < n && !(source[i] === '*' && source[i + 1] === '/')) i++;
+      i = Math.min(i + 2, n);
+      out += ' '.repeat(i - start);
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      const quote = c;
+      const open = i;
+      i++;
+      while (i < n && source[i] !== quote) {
+        if (source[i] === '\\') i++;
+        i++;
+      }
+      i = Math.min(i + 1, n);
+      const str = source.slice(open, i);
+      if (SPECIFIER_PREFIX_RE.test(out.slice(-64))) {
+        out += str;
+      } else {
+        out += quote + ' '.repeat(Math.max(0, str.length - 2)) + quote;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 /**
  * 相对路径直读检测：按被扫描文件的 repo 相对位置解析每个相对说明符，
  * 归一化后落在 packages/design-tokens/ 之内即命中。
@@ -460,7 +529,17 @@ export function relativeSpecifierHitsDesignTokens(
   fileRel: string,
 ): boolean {
   const dir = posixDirname(fileRel);
+  // 同 containsRuntimeImportOfDesignTokens 的两段式：零命中时不付剥除成本。
+  let anyRelative = false;
   for (const match of text.matchAll(SPECIFIER_CONTEXT_RE)) {
+    if (match[1].startsWith('.')) {
+      anyRelative = true;
+      break;
+    }
+  }
+  if (!anyRelative) return false;
+  const codeOnly = stripCommentsAndDataStrings(text);
+  for (const match of codeOnly.matchAll(SPECIFIER_CONTEXT_RE)) {
     const spec = match[1];
     if (!spec.startsWith('.')) continue;
     const resolved = posixNormalize(posixJoin(dir, spec));
@@ -473,7 +552,14 @@ export function relativeSpecifierHitsDesignTokens(
 
 /** 一段源码文本是否含任何合法形态的包导入 / 依赖入口（供扫描与自证伪测试共用）。 */
 export function containsRuntimeImportOfDesignTokens(text: string): boolean {
-  return IMPORT_ENTRY_PATTERNS.some((pattern) => pattern.test(text));
+  // 两段式：先跑廉价正则，零命中的文件（绝大多数）完全不付剥除成本；
+  // 命中后再剥注释与数据字符串复核——命中若是注释/报错文案里的完整
+  // import 语句（语法齐全但语境非法），剥除后不再命中，不算真实接线。
+  if (!IMPORT_ENTRY_PATTERNS.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+  const codeOnly = stripCommentsAndDataStrings(text);
+  return IMPORT_ENTRY_PATTERNS.some((pattern) => pattern.test(codeOnly));
 }
 
 export function findRuntimeImportsOfDesignTokens(repoRoot: string): string[] {

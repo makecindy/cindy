@@ -5,6 +5,7 @@ import {
   containsRuntimeImportOfDesignTokens,
   findRuntimeImportsOfDesignTokens,
   relativeSpecifierHitsDesignTokens,
+  stripCommentsAndDataStrings,
 } from '../guards.ts';
 import { findRepoRoot } from '../paths.ts';
 
@@ -13,7 +14,7 @@ describe('DS-3 · 零接线守卫', () => {
 
   it('不被 desktop / mobile / 任何运行时 package import', () => {
     expect(findRuntimeImportsOfDesignTokens(repoRoot)).toEqual([]);
-  });
+  }, 60_000); // 全仓扫描（数千文件 × 剥除层复核），Windows CI 慢盘需余量
 
   it('本包 package.json 不被任何 workspace 声明为依赖，且不装 token 工具', () => {
     const pkg = JSON.parse(
@@ -158,5 +159,56 @@ describe('DS-3 · 零接线守卫', () => {
     for (const source of legal) {
       expect(containsRuntimeImportOfDesignTokens(source)).toBe(false);
     }
+  });
+
+  it('自证伪：注释 / 错误消息里的完整 import 语句不误报（review P1 补洞）', () => {
+    // 旧实现把源码全文直接喂给正则，注释掉的完整 import 语句（语法齐全、
+    // 只是语境是注释）会被当真实接线，无运行时接线的改动被 CI 阻断。
+    const legal = [
+      "// import '@cindy/design-tokens';",
+      "/* import '@cindy/design-tokens' */",
+      "/**\n * import '@cindy/design-tokens'\n */",
+      "// const l = await import('@cindy/design-tokens');",
+      "// import { x } from '@cindy/design-tokens';",
+      "const s = \"import '@cindy/design-tokens';\";",
+      "throw new Error(\"do not import '@cindy/design-tokens' here\");",
+      "// import '../../design-tokens/src/snapshot.ts';",
+    ];
+    for (const source of legal) {
+      expect(containsRuntimeImportOfDesignTokens(source), source).toBe(false);
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        source,
+      ).toBe(false);
+    }
+  });
+
+  it('自证伪：注释剥除后真实 import 语句仍然命中', () => {
+    // 剥除层不能反向吞掉真实接线：代码区（非注释非字符串）的 import 全形态
+    // 必须照常命中。
+    const illegal = [
+      "import '@cindy/design-tokens';",
+      "import { x } from '@cindy/design-tokens';",
+      "const l = await import('@cindy/design-tokens');",
+      "const x = require('@cindy/design-tokens');",
+      "// 前面有注释没关系\nimport { x } from '@cindy/design-tokens';",
+      "const note = 'a data string';\nimport { x } from '@cindy/design-tokens';",
+    ];
+    for (const source of illegal) {
+      expect(containsRuntimeImportOfDesignTokens(source), source).toBe(true);
+    }
+  });
+
+  it('自证伪：stripCommentsAndDataStrings 保留说明符、剥除数据内容', () => {
+    expect(stripCommentsAndDataStrings("import { x } from '../../a.ts';")).toBe(
+      "import { x } from '../../a.ts';",
+    );
+    expect(stripCommentsAndDataStrings("const s = 'some data';")).toBe(
+      "const s = '         ';",
+    );
+    expect(stripCommentsAndDataStrings("// a comment")).toBe("            ");
+    expect(
+      stripCommentsAndDataStrings("const s = 'x'; import { y } from './b';"),
+    ).toBe("const s = ' '; import { y } from './b';");
   });
 });
