@@ -2874,6 +2874,14 @@ export class CodexAgent extends BaseAgent {
       const { host } = await this.getUtilityHost();
       await host.ensureStarted();
 
+      // Host startup can await credential discovery and process readiness. The
+      // caller may have been replaced during that window, so perform the final
+      // ownership/configuration check immediately before the real thread/start
+      // dispatch. A rejected guard must not create a thread for the old owner.
+      if (opts?.beforeDispatch && !(await opts.beforeDispatch())) {
+        throw new OneShotError('network', 'Codex oneShot dispatch guard rejected');
+      }
+
       // 创建临时 thread (跟主 session 共享 server 但 thread state 隔离)
       const startResp = await host.request<ThreadStartResponse>(Method.ThreadStart, {
         cwd: os.tmpdir(),

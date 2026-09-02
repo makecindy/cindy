@@ -792,8 +792,8 @@ describe('Ghost plugin detail sections', () => {
               options: [
                 {
                   id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · GW',
-                  group: 'GW',
+                  label: 'Codex · GPT 5.5 折扣 · Cindy AI',
+                  group: 'Cindy AI',
                   providerId: 'xd',
                   agentKind: 'codex',
                   modelId: 'codex/gpt-5.5',
@@ -933,8 +933,8 @@ describe('Ghost plugin detail sections', () => {
               options: [
                 {
                   id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · GW',
-                  group: 'GW',
+                  label: 'Codex · GPT 5.5 折扣 · Cindy AI',
+                  group: 'Cindy AI',
                   providerId: 'xd',
                   agentKind: 'codex',
                   modelId: 'codex/gpt-5.5',
@@ -993,8 +993,8 @@ describe('Ghost plugin detail sections', () => {
               options: [
                 {
                   id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · GW',
-                  group: 'GW',
+                  label: 'Codex · GPT 5.5 折扣 · Cindy AI',
+                  group: 'Cindy AI',
                   providerId: 'xd',
                   agentKind: 'codex',
                   modelId: 'codex/gpt-5.5',

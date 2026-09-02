@@ -10,7 +10,10 @@ vi.mock('../auxiliary-model-settings-store.js', () => ({
 }));
 
 import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../shared/auxiliaryModelChain.js';
-import { getEffectiveAuxiliaryModelChain } from '../resolveAuxiliaryModelChain.js';
+import {
+  formatAuxiliaryModelRefLabel,
+  getEffectiveAuxiliaryModelChain,
+} from '../resolveAuxiliaryModelChain.js';
 
 const ENV_KEYS = [
   'XDT_UTILITY_MODEL_PROVIDER_CHAIN',
@@ -96,5 +99,10 @@ describe('getEffectiveAuxiliaryModelChain', () => {
       source: 'env',
       refs: ['cat:xd:codex:qwen/qwen3.8-flash-local'],
     });
+  });
+
+  it('uses the product-facing Cindy AI label for XD catalog refs', () => {
+    expect(formatAuxiliaryModelRefLabel('cat:xd:codex:deepseek/deepseek-v4-flash'))
+      .toBe('deepseek/deepseek-v4-flash · Cindy AI');
   });
 });

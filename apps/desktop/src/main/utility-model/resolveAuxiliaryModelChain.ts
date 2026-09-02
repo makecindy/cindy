@@ -126,19 +126,14 @@ export function formatAuxiliaryModelRefLabel(ref: string): string {
     const profile = getUtilityModelProfile(parsed.id);
     return `${profile.model} · ${utilityTransportLabel(profile.transport)}`;
   }
+  if (parsed.route.providerId === 'xd') {
+    return `${parsed.route.model} · Cindy AI`;
+  }
   const agent = parsed.route.agentKind === 'claude-code' ? 'Claude' : 'Codex';
-  const transport = parsed.route.providerId === 'anthropic' || parsed.route.providerId === 'openai'
-    ? 'Codex'
-    : parsed.route.providerId === 'xd'
-      ? 'Gateway'
-      : parsed.route.providerId;
-  if (parsed.route.providerId === 'anthropic') {
-    return `${parsed.route.model} · Claude`;
-  }
-  if (parsed.route.providerId === 'openai') {
-    return `${parsed.route.model} · ${agent}`;
-  }
-  return `${parsed.route.model} · ${transport}`;
+  const provider = parsed.route.providerId === 'anthropic' || parsed.route.providerId === 'openai'
+    ? agent
+    : parsed.route.providerId;
+  return `${parsed.route.model} · ${provider}`;
 }
 
 export function parsedAuxiliaryModelRefs(refs: readonly string[]): ParsedAuxiliaryModelRef[] {

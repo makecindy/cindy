@@ -98,7 +98,7 @@ describe('OneshotModelPinPicker provider-first mode', () => {
   it('uses the standard Cindy AI name for the xd provider', () => {
     render(
       <OneshotModelPinPicker
-        value={undefined}
+        value={xdOption.id}
         defaultLabel=""
         declaredLabel={null}
         options={[xdOption]}
@@ -108,6 +108,8 @@ describe('OneshotModelPinPicker provider-first mode', () => {
       />,
     );
 
+    expect(screen.getByRole('button', { name: 'Auxiliary model' }).textContent)
+      .toContain('DeepSeek V4 Flash · Cindy AI');
     fireEvent.click(screen.getByRole('button', { name: 'Auxiliary model' }));
 
     expect(screen.getByRole('group', { name: 'Cindy AI' })).toBeTruthy();

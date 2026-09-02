@@ -230,10 +230,9 @@ async function resolveUtilityTextCandidates(
 ): Promise<{ candidates: UtilityTextCandidate[]; attempts: UtilityTextAttempt[] }> {
   // 钉住某一档时只拿那一个候选:钉了还沿链回落,等于用户的选择被悄悄换掉。
   // 注意不能从链里筛——默认链只有 4 档,而可钉的档位有 9 个,链外的钉不上。
-  const pinned =
-    pinnedProfileId && isUtilityModelProviderKind(pinnedProfileId)
-      ? getUtilityModelProfile(pinnedProfileId)
-      : null;
+  const pinned = pinnedProfileId && isUtilityModelProviderKind(pinnedProfileId)
+    ? getUtilityModelProfile(pinnedProfileId)
+    : null;
   if (pinnedProfileId && !pinned) {
     log.warn('utility text pinned profile unknown, falling back to chain', { pinnedProfileId });
   }
@@ -626,7 +625,9 @@ async function requestDefaultUtilityText(
   // A fallback chain is a user-selected routing decision. If it changes while
   // an earlier candidate is awaiting credentials or failing, do not dispatch a
   // later candidate from the stale snapshot into the new configuration.
-  const initialChain = opts?.pinnedProfileId ? null : getEffectiveAuxiliaryModelChain();
+  const initialChain = opts?.pinnedProfileId
+    ? null
+    : getEffectiveAuxiliaryModelChain();
   const chainSnapshot = initialChain ? stableSnapshot(initialChain) : null;
   const callerBeforeDispatch = opts?.beforeDispatch;
   const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
@@ -1313,8 +1314,16 @@ async function resolveCodexCandidate(
         model: profile.model,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
+        signal: opts?.signal,
         systemPrompt: opts?.systemPrompt,
         responseInstructions: opts?.responseInstructions,
+        beforeDispatch: opts?.beforeDispatch
+          ? () => opts.beforeDispatch!({
+            providerId: utilityProfileRouteProviderId(profile),
+            agentKind,
+            model: profile.model,
+          })
+          : undefined,
       }),
     },
   };

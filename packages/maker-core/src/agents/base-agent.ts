@@ -1338,6 +1338,13 @@ export interface OneShotOptions {
   systemPrompt?: string;
   /** Additional provider-native output-shape instructions for this request. */
   responseInstructions?: string;
+  /**
+   * Internal ownership/configuration fence checked immediately before a
+   * provider dispatch. Returning false must fail closed without sending the
+   * one-shot request (for example when the owning workflow was replaced while
+   * the agent host was starting).
+   */
+  beforeDispatch?: () => boolean | Promise<boolean>;
 }
 
 /**

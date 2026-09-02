@@ -459,6 +459,42 @@ describe('CodexAgent spawn configuration', () => {
   });
 });
 
+describe('CodexAgent oneShot dispatch guard', () => {
+  it('fails closed without thread/start when ownership changes during host startup', async () => {
+    const agent = new CodexAgent(createDeps());
+    const order: string[] = [];
+    const ensureStarted = vi.fn(async () => {
+      order.push('ensureStarted');
+      // Model the owning workflow being replaced while the Codex host is
+      // starting. The final guard must run after this await and before any RPC.
+      await Promise.resolve();
+    });
+    const request = vi.fn(async () => {
+      order.push('request');
+      throw new Error('thread/start must not be sent after guard rejection');
+    });
+    const subscribeThread = vi.fn(() => ({ release: vi.fn() }));
+    const host = { ensureStarted, request, subscribeThread };
+    Object.defineProperty(agent, 'getUtilityHost', {
+      value: vi.fn(async () => ({ key: 'test-utility-host', host })),
+      configurable: true,
+    });
+
+    const beforeDispatch = vi.fn(async () => {
+      order.push('beforeDispatch');
+      return false;
+    });
+
+    await expect(agent.oneShot('name this task', { beforeDispatch }))
+      .rejects.toMatchObject({ name: 'OneShotError', reason: 'network' });
+
+    expect(order).toEqual(['ensureStarted', 'beforeDispatch']);
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalled();
+    expect(subscribeThread).not.toHaveBeenCalled();
+  });
+});
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;

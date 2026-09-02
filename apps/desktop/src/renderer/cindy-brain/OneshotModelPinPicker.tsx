@@ -52,7 +52,12 @@ function preferredAgentForModel(modelId: string): string {
 function displayProviderGroup(
   option: Pick<OneshotPinOption, 'providerId' | 'group'>,
   t: (key: string) => string,
+  translateProvider = false,
 ): string {
+  // Plugin detail keeps the historical catalog group labels (for example GW).
+  // The settings-only provider view opts into product-facing names such as
+  // Cindy AI through `groupByProvider`.
+  if (!translateProvider) return option.group;
   const titleKey = PROVIDER_TITLE_KEY[option.providerId];
   return titleKey ? t(titleKey) : option.group;
 }
@@ -118,7 +123,7 @@ export function OneshotModelPinPicker({
       : t('settings.ghosts.detail.cindyPrefs.defaultOption', { model: defaultLabel }));
   const triggerLabel =
     (groupByProvider && current
-      ? `${current.modelName} · ${displayProviderGroup(current, t)}`
+      ? `${current.modelName} · ${displayProviderGroup(current, t, groupByProvider)}`
       : current?.label) ??
     legacyPinLabel ??
     staleValue ??
@@ -178,21 +183,21 @@ export function OneshotModelPinPicker({
       (o) =>
         o.modelName.toLowerCase().includes(q) ||
         o.modelId.toLowerCase().includes(q) ||
-        displayProviderGroup(o, t).toLowerCase().includes(q),
+        displayProviderGroup(o, t, groupByProvider).toLowerCase().includes(q),
     );
   }, [groupByProvider, query, selectedAgent, t, visibleOptions]);
 
   const groups = useMemo(() => {
     const names: string[] = [];
     for (const o of filtered) {
-      const name = displayProviderGroup(o, t);
+      const name = displayProviderGroup(o, t, groupByProvider);
       if (!names.includes(name)) names.push(name);
     }
     return names.map((name) => ({
       name,
-      items: filtered.filter((o) => displayProviderGroup(o, t) === name),
+      items: filtered.filter((o) => displayProviderGroup(o, t, groupByProvider) === name),
     }));
-  }, [filtered, t]);
+  }, [filtered, groupByProvider, t]);
 
   useEffect(() => {
     if (open && (groupByProvider || selectedAgent)) searchRef.current?.focus();
