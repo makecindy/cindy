@@ -115,15 +115,19 @@ export function buildSkillhubPublishParams({
   publishAbsolutePath,
   submitName,
   isFirstPublish,
+  ownerType,
 }: {
   form: PublishFormValues;
   publishAbsolutePath: string;
   submitName: string;
   isFirstPublish: boolean;
+  /** New SkillHub fixes ownership from the authenticated membership. */
+  ownerType?: 'personal' | 'organization' | null;
 }): SkillhubPublishParams {
   const categorySlug = form.categorySlug.trim();
   // 私有发布强制个人归属(Hub 约束:private + teamSlug 会 400)
-  const teamPublisher = form.visibility !== 'PRIVATE' && form.publisherMode === 'team' && form.ownerTeamSlug
+  const teamPublisher = ownerType === undefined
+    && form.visibility !== 'PRIVATE' && form.publisherMode === 'team' && form.ownerTeamSlug
     ? form.ownerTeamSlug
     : undefined;
 
@@ -139,7 +143,7 @@ export function buildSkillhubPublishParams({
       categoryMode: form.categoryMode,
       categories: form.categoryMode === 'manual' && categorySlug ? [categorySlug] : [],
       visibility: form.visibility,
-      visibleSlugs: form.visibility === 'DEPARTMENT_SCOPED'
+      visibleSlugs: ownerType === undefined && form.visibility === 'DEPARTMENT_SCOPED'
         ? [...form.visibleDeptIds, ...form.sharedTeamSlugs]
         : [],
       ...(teamPublisher

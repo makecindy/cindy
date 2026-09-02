@@ -489,4 +489,24 @@ describe('deriveDetailActionState', () => {
       null,
     )?.status).toEqual({ kind: 'publish-to-market' });
   });
+
+  it('hides first-publish actions for read-only Skill Hub identities', () => {
+    expect(deriveDetailActionState(
+      makeDetailState({ isMine: false, latestVersion: null, marketDeleted: true }),
+      null,
+      null,
+      null,
+      false,
+    )?.status).toEqual({ kind: 'none' });
+  });
+
+  it('keeps the published version visible but hides republish for read-only identities', () => {
+    expect(deriveDetailActionState(
+      makeDetailState({ isMine: true, latestVersion: '1.2.3' }),
+      makeRegistryEntry({ origin: 'published', version: '1.2.3', folderHash: 'before' }),
+      'after',
+      null,
+      false,
+    )?.status).toEqual({ kind: 'published-tag', version: '1.2.3' });
+  });
 });

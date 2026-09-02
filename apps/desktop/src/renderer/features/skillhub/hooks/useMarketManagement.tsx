@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { MarketInfoEditDialog } from '../components/MarketInfoEditDialog';
 import { type MarketCardManageAction } from '../components/MarketCard';
@@ -10,6 +11,7 @@ import { lacksTeamManagePermission } from '../lib/manageGuard';
 import { marketActionErrorMessage } from '../lib/marketErrors';
 import { refresh as refreshSkillhub } from './useSkillhub';
 import type { MarketSkill } from './useMarketList';
+import { deriveSkillhubIdentityPolicy } from '../../../../shared/skillhubIdentityPolicy';
 
 type TeamRole = 'admin' | 'publisher' | 'viewer' | undefined;
 
@@ -33,6 +35,8 @@ export function useMarketManagement(options: {
 }): MarketManagementController {
   const { active, reload, onClone, onDeleted } = options;
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const identityPolicy = deriveSkillhubIdentityPolicy(user);
   const { confirm } = useConfirmDialog();
   const [editTarget, setEditTarget] = useState<MarketSkill | null>(null);
   const [visibilityTarget, setVisibilityTarget] = useState<MarketSkill | null>(null);
@@ -52,8 +56,8 @@ export function useMarketManagement(options: {
   }, [active]);
 
   const isReadOnly = useCallback(
-    (skill: MarketSkill) => lacksTeamManagePermission(skill, myRoleByTeamSlug),
-    [myRoleByTeamSlug],
+    (skill: MarketSkill) => !identityPolicy.canWrite || lacksTeamManagePermission(skill, myRoleByTeamSlug),
+    [identityPolicy.canWrite, myRoleByTeamSlug],
   );
 
   const handleDelete = useCallback(async (skill: MarketSkill) => {
@@ -78,7 +82,7 @@ export function useMarketManagement(options: {
   }, [confirm, onDeleted, reload, t]);
 
   const handleManageAction = useCallback((skill: MarketSkill, action: MarketCardManageAction) => {
-    if (action === 'delete' && isReadOnly(skill)) {
+    if (action !== 'clone' && isReadOnly(skill)) {
       toast.error(t('skillhub.market.noManagePermission'));
       return;
     }
@@ -147,7 +151,6 @@ export function MarketManagementDialogs({
           skillName={controller.visibilityTarget.name}
           currentTier={visibilityTier(controller.visibilityTarget)}
           currentOwnerType={controller.visibilityTarget.ownerType}
-          currentOwnerSlug={controller.visibilityTarget.authorId}
           readOnly={controller.isReadOnly(controller.visibilityTarget)}
           onSaved={controller.visibilitySaved}
         />

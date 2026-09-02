@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const TEST_ROOT = '/tmp/xdt-publish-service-test';
-const authState = vi.hoisted(() => ({ ownerId: 'user-1' as string | null }));
+const authState = vi.hoisted(() => ({
+  ownerId: 'user-1' as string | null,
+  membershipKind: 'personal' as 'personal' | 'org',
+  orgSlug: null as string | null,
+}));
 
 vi.mock('electron', () => ({
   app: {
@@ -71,6 +75,15 @@ vi.mock('../registry', () => ({
 vi.mock('../../authManager', () => ({
   getCurrentUserId: vi.fn(),
   getCurrentDataOwnerId: vi.fn(() => authState.ownerId),
+  getAuthState: vi.fn(() => ({
+    user: authState.ownerId
+      ? {
+          membershipKind: authState.membershipKind,
+          orgSlug: authState.orgSlug,
+          orgName: null,
+        }
+      : null,
+  })),
 }));
 
 vi.mock('../../appCapabilities.js', () => ({
@@ -90,10 +103,40 @@ function writeApiKeyFile() {
 describe('SkillPublishService', () => {
   beforeEach(() => {
     authState.ownerId = 'user-1';
+    authState.membershipKind = 'personal';
+    authState.orgSlug = null;
     vi.resetModules();
     vi.clearAllMocks();
     fs.rmSync(TEST_ROOT, { recursive: true, force: true });
     fs.mkdirSync(TEST_ROOT, { recursive: true });
+  });
+
+  it('rejects XD organization publishing before packing or network access', async () => {
+    authState.membershipKind = 'org';
+    authState.orgSlug = 'xd';
+    const { SkillPublishService } = await import('../publishService');
+    const service = new SkillPublishService();
+
+    await expect(service.publish({
+      absolutePath: '/tmp/skill',
+      name: 'read-only',
+      isFirstPublish: true,
+      visibility: 'PUBLIC',
+    })).resolves.toEqual({ success: false, errorCode: 'LEGACY_XD_READ_ONLY' });
+  });
+
+  it('rejects private organization publishing before packing or network access', async () => {
+    authState.membershipKind = 'org';
+    authState.orgSlug = 'acme';
+    const { SkillPublishService } = await import('../publishService');
+    const service = new SkillPublishService();
+
+    await expect(service.publish({
+      absolutePath: '/tmp/skill',
+      name: 'org-private',
+      isFirstPublish: true,
+      visibility: 'PRIVATE',
+    })).resolves.toEqual({ success: false, errorCode: 'INVALID_VISIBILITY' });
   });
 
   it('rejects manual-category publish requests without a category before review or upload starts', async () => {

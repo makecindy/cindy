@@ -78,6 +78,21 @@ describe('SkillhubMarketService', () => {
     });
   });
 
+  it('blocks management mutations before issuing a request for read-only identities', async () => {
+    const { fetch, calls } = makeFetch([]);
+    const service = new SkillhubMarketService({
+      fetch,
+      assertWriteAllowed: () => {
+        throw new ServerApiError('LEGACY_XD_READ_ONLY', 403, 'read-only');
+      },
+    });
+
+    await expect(service.deletePublished('demo')).rejects.toMatchObject({
+      code: 'LEGACY_XD_READ_ONLY',
+    });
+    expect(calls).toEqual([]);
+  });
+
   it('chunks sync requests at the broker batch limit', async () => {
     const slugs = Array.from({ length: 101 }, (_, i) => `skill-${i}`);
     const { fetch, calls: fetchCalls } = makeFetch([{ items: [] }, { items: [] }]);
@@ -208,7 +223,11 @@ describe('SkillhubMarketService', () => {
       { unpublished: true },
       { visibility: 'shared' },
     ]);
-    const service = new SkillhubMarketService({ fetch });
+    const service = new SkillhubMarketService({
+      fetch,
+      assertWriteAllowed: vi.fn(),
+      assertVisibilityAllowed: vi.fn(),
+    });
 
     await service.updatePublished('demo', { summary: 'new', teamSlug: null });
     await service.deletePublished('demo');

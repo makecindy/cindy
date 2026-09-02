@@ -32,6 +32,7 @@ import { plainTextToTiptapDoc, saveDraft as saveComposerDraft } from '@/lib/comp
 import { createLogger } from '@/lib/logger';
 import { buildFence, detectRenderable } from '@/lib/textPreview';
 import { toast } from '@/lib/toast';
+import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { useMetaColumnResize } from './hooks/useMetaColumnResize';
@@ -72,6 +73,7 @@ import { buildRecentTrendRows, formatLocalDayKey } from './lib/skillUsageTrend';
 import { type SkillUsageVersionComparison, selectSkillUsageVersionComparison } from './lib/skillUsageViewModel';
 import { PublishDialog, type ScanResultPayload } from './PublishDialog';
 import { ScanResultDialog } from './ScanResultDialog';
+import { deriveSkillhubIdentityPolicy } from '../../../shared/skillhubIdentityPolicy';
 import { SkillhubDiffPanel } from './SkillhubDiffPanel';
 
 const log = createLogger('SkillhubDetailView');
@@ -966,6 +968,8 @@ function FileTreeRow({ entry, parentDir, depth, currentPath, onSelectFile }: Fil
 
 export function SkillhubDetailView() {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const identityPolicy = useMemo(() => deriveSkillhubIdentityPolicy(user), [user]);
   const params = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -1246,8 +1250,14 @@ export function SkillhubDetailView() {
   // ── 从 detailState 派生互斥的 UI action state ──
   const registryEntry = entry?.registryEntry ?? null;
   const detailActionState = useMemo(
-    () => deriveDetailActionState(detailState, registryEntry, localFolderHash, publishedStatus),
-    [detailState, registryEntry, localFolderHash, publishedStatus],
+    () => deriveDetailActionState(
+      detailState,
+      registryEntry,
+      localFolderHash,
+      publishedStatus,
+      identityPolicy.canWrite,
+    ),
+    [detailState, registryEntry, localFolderHash, publishedStatus, identityPolicy.canWrite],
   );
   const detailAction = detailActionState?.status ?? null;
   const isOutdated = detailActionState?.isOutdated ?? false;
@@ -1285,14 +1295,8 @@ export function SkillhubDetailView() {
   const initialRawRef = useRef<string>('');
   const { confirm } = useConfirmDialog();
 
-  // 当前用户的部门信息：仅在打开 PublishDialog 时按需拉一次
-  // 已发布的 skill 也可走 infoResult.currentUserDeptIds 兜底
-  const [myDepts, setMyDepts] = useState<{ ids: string[]; names: string[] }>({ ids: [], names: [] });
-  const currentUserDeptIds = myDepts.ids.length > 0 ? myDepts.ids : (infoResult?.currentUserDeptIds ?? []);
-  const currentUserDeptNames = myDepts.names.length > 0 ? myDepts.names : (infoResult?.currentUserDeptNames ?? []);
-
   const openPublish = useCallback(async () => {
-    if (entry?.kind !== 'skill') return;
+    if (entry?.kind !== 'skill' || !identityPolicy.canWrite) return;
 
     if (isPublishedReviewing) {
       const shouldProceed = await confirm({
@@ -1304,12 +1308,8 @@ export function SkillhubDetailView() {
       if (!shouldProceed) return;
     }
 
-    if (myDepts.ids.length === 0) {
-      const r = await window.electronAPI.skillhub.getMyDepts();
-      if (r.success) setMyDepts({ ids: r.ids, names: r.names });
-    }
     setPublishOpen(true);
-  }, [entry, isPublishedReviewing, myDepts.ids.length, confirm, t]);
+  }, [entry, identityPolicy.canWrite, isPublishedReviewing, confirm, t]);
 
   // installed-from-market 视图的卸载/更新动作。
   // 跟 SkillhubMarketListView 走同一条 IPC，保持后端逻辑唯一。
@@ -2039,7 +2039,7 @@ export function SkillhubDetailView() {
             )}
             {/* My published skill, local is clean. */}
             {detailAction?.kind === 'published-tag' && (
-              isPublishedReviewing ? (
+              isPublishedReviewing && identityPolicy.canWrite ? (
                 <button
                   type="button"
                   onClick={openPublish}
@@ -2554,8 +2554,6 @@ export function SkillhubDetailView() {
               ? publishDialogPendingVersion
               : undefined
           }
-          currentUserDeptIds={currentUserDeptIds}
-          currentUserDeptNames={currentUserDeptNames}
           onLocalRenamed={(newAbsolutePath, newName) => {
             // skill 在本地被改名(目录 + frontmatter)。先清掉 history(旧 entry id 已失效)
             // + 旧 name 的 info 缓存(让新 name 重新查),然后刷新 scanner,

@@ -30,6 +30,7 @@ import { nextMarketPreviewName } from './lib/marketPreviewSelection';
 import { syncMarketPreviewSelection } from './lib/marketPreviewSync';
 import { useAuth } from '@/contexts/AuthContext';
 import { CATEGORY_ALL } from '../../../shared/skillhubCategory';
+import { deriveSkillhubIdentityPolicy } from '../../../shared/skillhubIdentityPolicy';
 
 const FILTER_CHIP_STYLE = { height: '32px', padding: '0 12px', fontSize: '12px' };
 // Must match the global native scrollbar width in styles/globals.css.
@@ -76,6 +77,7 @@ export function SkillhubMarketListView() {
 function SkillhubMarketListViewInner() {
   const { t } = useTranslation();
   const { user, isInitializing } = useAuth();
+  const identityPolicy = useMemo(() => deriveSkillhubIdentityPolicy(user), [user]);
   const location = useLocation();
   const navigate = useNavigate();
   const marketState = location.state as { freshEntry?: boolean; initialVisibility?: Visibility } | null;
@@ -246,11 +248,14 @@ function SkillhubMarketListViewInner() {
       key={skill.name}
       skill={skill}
       primaryAction={user
-        ? marketCardPrimaryAction({
-            isMine: skill.isMine,
-            listVisibility: visibility,
-            cardState: skill.cardState,
-          })
+        ? (() => {
+            const action = marketCardPrimaryAction({
+              isMine: skill.isMine,
+              listVisibility: visibility,
+              cardState: skill.cardState,
+            });
+            return action === 'manage' && !identityPolicy.canWrite ? 'clone' : action;
+          })()
         : 'none'}
       allowPrivateVisibilityLabel={visibility === 'mine'}
       onClone={handleClone}
@@ -489,11 +494,14 @@ function SkillhubMarketListViewInner() {
         skill={previewSkill}
         onClose={handlePreviewClose}
         primaryAction={previewSkill && user
-          ? marketCardPrimaryAction({
-            isMine: previewSkill.isMine,
-            listVisibility: visibility,
-            cardState: previewSkill.cardState,
-          })
+          ? (() => {
+              const action = marketCardPrimaryAction({
+                isMine: previewSkill.isMine,
+                listVisibility: visibility,
+                cardState: previewSkill.cardState,
+              });
+              return action === 'manage' && !identityPolicy.canWrite ? 'clone' : action;
+            })()
           : 'none'}
         onClone={handleClone}
         onManageAction={management.handleManageAction}

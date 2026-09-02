@@ -119,6 +119,7 @@ export function deriveDetailActionState(
   registryEntry: StoredInstall | null | undefined,
   localFolderHash: string | null,
   publishedStatus?: string | null,
+  canPublish = true,
 ): DetailActionState | null {
   if (!detailState) return null;
 
@@ -180,6 +181,15 @@ export function deriveDetailActionState(
   } else if (detailState.origin === 'installed' && detailState.localVersion !== null) {
     // Server unavailable: preserve the local installed signal, but do not invent market actions.
     status = { kind: 'installed-tag', version: detailState.localVersion };
+  }
+
+  if (!canPublish) {
+    if (status.kind === 'publish-to-market') status = { kind: 'none' };
+    if (status.kind === 'publish-new-version') {
+      status = detailState.latestVersion
+        ? { kind: 'published-tag', version: detailState.latestVersion }
+        : { kind: 'none' };
+    }
   }
 
   return {

@@ -2,6 +2,7 @@ import { ServerApiError, type ApiFetchOptions } from '../serverApiClient';
 import { skillhubApiFetch } from './hubApi';
 import { mapHubSkillInfoToDesktopInfo, type HubSkillInfoForDesktop } from './infoMapping';
 import { buildSkillhubSyncResponse, type SkillhubBatchDetailResponse } from './syncMapping';
+import { assertSkillhubVisibilityAllowed, assertSkillhubWriteAllowed } from './identityPolicy';
 
 const SKILLHUB_SYNC_BATCH_SIZE = 100;
 const HUB_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
@@ -38,6 +39,8 @@ function mapFirstLevelDepartments(
 
 export interface SkillhubMarketServiceOptions {
   fetch?: SkillhubMarketFetcher;
+  assertWriteAllowed?: () => void;
+  assertVisibilityAllowed?: (visibility: 'private' | 'shared' | 'public') => void;
 }
 
 export interface ListMarketParams {
@@ -77,9 +80,13 @@ export interface SetPublishedVisibilityParams {
  */
 export class SkillhubMarketService {
   private readonly fetch: SkillhubMarketFetcher;
+  private readonly assertWriteAllowed: () => void;
+  private readonly assertVisibilityAllowed: (visibility: 'private' | 'shared' | 'public') => void;
 
   constructor(options: SkillhubMarketServiceOptions = {}) {
     this.fetch = options.fetch ?? skillhubApiFetch;
+    this.assertWriteAllowed = options.assertWriteAllowed ?? assertSkillhubWriteAllowed;
+    this.assertVisibilityAllowed = options.assertVisibilityAllowed ?? assertSkillhubVisibilityAllowed;
   }
 
   async sync(params: { slugs?: string[] } | undefined) {
@@ -177,6 +184,8 @@ export class SkillhubMarketService {
   }
 
   async updatePublished(name: string, fields: UpdatePublishedFields) {
+    this.assertWriteAllowed();
+    if (fields.visibility) this.assertVisibilityAllowed(fields.visibility);
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}`,
       { method: 'PATCH', body: fields },
@@ -185,6 +194,7 @@ export class SkillhubMarketService {
   }
 
   async deletePublished(name: string) {
+    this.assertWriteAllowed();
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}`,
       { method: 'DELETE' },
@@ -193,6 +203,7 @@ export class SkillhubMarketService {
   }
 
   async unpublishPublished(name: string) {
+    this.assertWriteAllowed();
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}/unpublish`,
       { method: 'POST' },
@@ -201,6 +212,8 @@ export class SkillhubMarketService {
   }
 
   async setPublishedVisibility({ name, visibility, teamSlug, visibleSlugs }: SetPublishedVisibilityParams) {
+    this.assertWriteAllowed();
+    this.assertVisibilityAllowed(visibility);
     const result = await this.fetch<unknown>(
       `/api/skills-hub/skills/${encodeURIComponent(name)}/set-visibility`,
       {

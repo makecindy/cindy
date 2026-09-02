@@ -22,6 +22,7 @@ import type { PackResult } from './zipPacker';
 import { registryService } from './registry';
 import { getCurrentDataOwnerId, getCurrentUserId } from '../authManager';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { currentSkillhubIdentityPolicy } from './identityPolicy';
 
 import { createLogger } from '../logger';
 
@@ -64,6 +65,8 @@ export type PublishErrorCode =
   | 'CATEGORY_REQUIRED'
   | 'MANIFEST_INVALID'
   | 'CANCELLED'
+  | 'LEGACY_XD_READ_ONLY'
+  | 'INVALID_VISIBILITY'
   | 'INTERNAL';
 
 export type PublishProgressEvent =
@@ -243,6 +246,42 @@ export class SkillPublishService {
         onProgress,
       );
       return { success: false, errorCode: 'CANCELLED' };
+    }
+    const identityPolicy = currentSkillhubIdentityPolicy();
+    if (!identityPolicy.canWrite) {
+      const errorCode = identityPolicy.readOnlyReason === 'legacy-xd'
+        ? 'LEGACY_XD_READ_ONLY'
+        : 'CANCELLED';
+      this.emitProgress(
+        {
+          phase: 'failed',
+          name: params.name,
+          errorCode,
+          message: identityPolicy.readOnlyReason === 'legacy-xd'
+            ? 'XD organization Skill Hub access is read-only'
+            : 'SkillHub publish requires sign-in',
+        },
+        onProgress,
+      );
+      return { success: false, errorCode };
+    }
+    if (
+      params.isFirstPublish
+      && params.visibility
+      && !identityPolicy.allowedVisibilities.includes(params.visibility)
+    ) {
+      this.emitProgress(
+        {
+          phase: 'failed',
+          name: params.name,
+          errorCode: 'INVALID_VISIBILITY',
+          message: identityPolicy.ownerType === 'organization'
+            ? 'Organization skills only support public or organization visibility'
+            : 'Personal skills only support public or private visibility',
+        },
+        onProgress,
+      );
+      return { success: false, errorCode: 'INVALID_VISIBILITY' };
     }
     const publishOwnerId = getCurrentDataOwnerId();
     if (!publishOwnerId) {

@@ -200,6 +200,23 @@ describe('buildSkillhubPublishParams', () => {
     expect(params).not.toHaveProperty('deptTeamSlug');
   });
 
+  it('omits legacy owner selectors when ownership comes from the authenticated membership', () => {
+    const params = buildSkillhubPublishParams({
+      form: baseForm,
+      publishAbsolutePath: '/tmp/sivi-boss-fighting',
+      submitName: 'sivi-boss-fighting',
+      isFirstPublish: true,
+      ownerType: 'organization',
+    });
+
+    expect(params).not.toHaveProperty('deptTeamSlug');
+    expect(params).not.toHaveProperty('teamSlug');
+    expect(params).toMatchObject({
+      visibility: 'DEPARTMENT_SCOPED',
+      visibleSlugs: [],
+    });
+  });
+
   it('sends team publisher for public visibility and omits visibleSlugs', () => {
     expect(buildSkillhubPublishParams({
       form: { ...baseForm, visibility: 'PUBLIC' },

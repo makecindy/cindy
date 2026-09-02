@@ -97,12 +97,13 @@ describe('market management copy and errors', () => {
     expect(zhLocale).toContain('也不会删除你本机的 Skill 文件');
   });
 
-  it('consolidates ownership transfer into the manage-visibility dialog', () => {
+  it('keeps ownership fixed by membership in the manage-visibility dialog', () => {
     const editorSource = readFileSync(resolve(skillhubDir, 'components/VisibilityEditorDialog.tsx'), 'utf8');
 
     expect(editorSource).toContain('skillhub.visibilityEditor.tierLabel');
-    expect(editorSource).toContain('PublisherPicker');
-    expect(editorSource).toContain("teamSlug = null");
+    expect(editorSource).not.toContain('PublisherPicker');
+    expect(editorSource).not.toContain('fields.teamSlug');
+    expect(editorSource).toContain('identityPolicy.ownerType');
   });
 
   it('does not expose an extra published status pill in the market preview panel', () => {

@@ -46,6 +46,7 @@ import { deriveSkillSource } from './lib/skillSource';
 import { InstallTargetPicker, type InstallTargetSkill } from './components/InstallTargetPicker';
 import { SkillIcon } from './components/SkillIcon';
 import { SkillhubMarketPreviewPanel } from './SkillhubMarketPreviewPanel';
+import { deriveSkillhubIdentityPolicy } from '../../../shared/skillhubIdentityPolicy';
 
 const KIND_ICON: Record<string, LucideIcon> = {
   skill: Package,
@@ -76,6 +77,7 @@ export function SkillhubHomeView({
 
   // 未登录也请求公开 Skill 目录；登录身份只扩大服务端可见范围。
   const { user } = useAuth();
+  const identityPolicy = useMemo(() => deriveSkillhubIdentityPolicy(user), [user]);
   const showOrganization = user?.membershipKind === 'org';
   const [catalogTab, setCatalogTab] = useState<HomeCatalogTab>('public');
   const marketFilter: HomeMarketFilter = catalogTab === 'organization' ? 'organization' : 'public';
@@ -443,11 +445,14 @@ export function SkillhubHomeView({
           onClose={() => setPreviewSkill(null)}
           primaryAction={
             previewSkill && user
-              ? marketCardPrimaryAction({
-                  isMine: previewSkill.isMine,
-                  listVisibility: 'all',
-                  cardState: previewSkill.cardState,
-                })
+              ? (() => {
+                  const action = marketCardPrimaryAction({
+                    isMine: previewSkill.isMine,
+                    listVisibility: 'all',
+                    cardState: previewSkill.cardState,
+                  });
+                  return action === 'manage' && !identityPolicy.canWrite ? 'clone' : action;
+                })()
               : 'none'
           }
           onClone={handleClone}
