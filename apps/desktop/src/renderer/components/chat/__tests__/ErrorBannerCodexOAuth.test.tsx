@@ -147,6 +147,23 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
+  it('explains a Codex app-server restart and does not suggest switching models', () => {
+    render(
+      <ErrorBanner
+        error="app-server force-retired: Codex desktop auth login"
+        errorReason="app-server-force-retired"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        modelId="codex/gpt-5.6-sol"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexAppServerRestarted')).toBeTruthy();
+    expect(screen.queryByText('app-server force-retired: Codex desktop auth login')).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
+
   it('opens ChatGPT App without starting Cindy OAuth for an invalidated system-shared login', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: false,
@@ -753,6 +770,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
         confirmText: 'chatgptAuthRecovery.openApp',
         tertiaryText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
+        maxWidth: 520,
         autoFocusConfirm: true,
       }),
     );
@@ -806,6 +824,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
         confirmText: 'chatgptAuthRecovery.openApp',
         tertiaryText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
+        maxWidth: 520,
         autoFocusConfirm: true,
       }),
     );

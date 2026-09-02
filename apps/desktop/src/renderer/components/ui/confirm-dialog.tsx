@@ -306,7 +306,7 @@ export function ConfirmDialog({
                 />
               </div>
             )}
-            <div className="mt-6 flex shrink-0 justify-end gap-2.5">
+            <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
               <AlertDialog.Action asChild>
                 <button
                   ref={confirmBtnRef}
@@ -315,7 +315,7 @@ export function ConfirmDialog({
                   aria-label={resolvedConfirmText}
                   onClick={() => onConfirm?.({ dontShowAgain })}
                   className={cn(
-                    'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
+                    'inline-flex min-w-[96px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-13 font-medium',
                     'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                     'active:scale-[0.98]',
                     confirmVariant === 'destructive'
@@ -353,7 +353,7 @@ export function ConfirmDialog({
                   disabled={loading}
                   onClick={() => onTertiary?.()}
                   className={cn(
-                    'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
+                    'inline-flex min-w-[96px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-13 font-medium',
                     'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                     'active:scale-[0.98]',
                     'border bg-transparent',
@@ -372,7 +372,7 @@ export function ConfirmDialog({
                     disabled={loading}
                     onClick={() => onCancel?.()}
                     className={cn(
-                      'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
+                      'inline-flex min-w-[96px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-13 font-medium',
                       'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                       'active:scale-[0.98]',
                       'border bg-transparent',
