@@ -659,4 +659,22 @@ describe('WorkLouderCodexSettings', () => {
       customAgentKeys: [{ type: 'command', commandId: 'newTask' }, null, null, null, null, null],
     });
   });
+
+  it('does not offer a custom assignment for unlit extra task keys', () => {
+    mocks.agentSource = 'custom';
+    const layout = createWorkLouderCodexDefaultSettings().layout;
+    layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'];
+    mocks.layout = layout;
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /ACT07/ }));
+    expect(
+      screen.getByText('settings.shortcuts.workLouderCodex.agentKeys.unlitKey'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('combobox', {
+        name: 'settings.shortcuts.workLouderCodex.actions.choose',
+      }),
+    ).toBeNull();
+  });
 });

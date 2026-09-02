@@ -354,6 +354,10 @@ export function WorkLouderCodexSettings({
     editingSlot !== null && isWorkLouderCreatorProgrammableKey(editingSlot);
   const editingProgrammableTaskKey =
     editingPart !== null && isWorkLouderCreatorProgrammableKey(editingPart);
+  const editingTaskIndex =
+    editingProgrammableTaskKey && isWorkLouderCreatorProgrammableKey(editingPart)
+      ? normalizeWorkLouderCreatorTaskKeys(settings.layout.taskKeys).indexOf(editingPart)
+      : -1;
 
   const openPartEditor = (key: WorkLouderCodexEditableKey): void => {
     if (isWorkLouderCreatorProgrammableKey(key)) {
@@ -847,9 +851,7 @@ export function WorkLouderCodexSettings({
               {editingProgrammableTaskKey && isWorkLouderCreatorProgrammableKey(editingPart) && (
                 <>
                   {creatorKeyRoleRow(editingPart, true)}
-                  {normalizeWorkLouderCreatorTaskKeys(settings.layout.taskKeys).indexOf(
-                    editingPart,
-                  ) >= WORKLOUDER_CODEX_AGENT_SLOT_COUNT && (
+                  {editingTaskIndex >= WORKLOUDER_CODEX_AGENT_SLOT_COUNT && (
                     <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
                       {t('settings.shortcuts.workLouderCodex.agentKeys.unlitKey')}
                     </p>
@@ -865,19 +867,15 @@ export function WorkLouderCodexSettings({
                   onSplit={() => splitEditingKey(editingPart)}
                 />
               )}
-              {settings.agentSource === 'custom' && (
+              {settings.agentSource === 'custom' &&
+                editingTaskIndex >= 0 &&
+                editingTaskIndex < WORKLOUDER_CODEX_AGENT_SLOT_COUNT && (
                 <SettingsRow
                   label={t('settings.shortcuts.workLouderCodex.agentKeys.source.options.custom')}
                   description={t('settings.shortcuts.workLouderCodex.agentKeys.customDescription')}
                   control={
                     <ActionSelect
-                      action={
-                        settings.customAgentKeys[
-                          normalizeWorkLouderCreatorTaskKeys(settings.layout.taskKeys).indexOf(
-                            editingPart as WorkLouderCreatorProgrammableKey,
-                          )
-                        ] ?? null
-                      }
+                      action={settings.customAgentKeys[editingTaskIndex] ?? null}
                       state={state}
                       skills={enabledSkills}
                       disabled={!state || saving}
@@ -885,15 +883,13 @@ export function WorkLouderCodexSettings({
                       allowTasks
                       allowKeycaps
                       onChange={(action) => {
-                        const index = normalizeWorkLouderCreatorTaskKeys(
-                          settings.layout.taskKeys,
-                        ).indexOf(editingPart as WorkLouderCreatorProgrammableKey);
-                        if (index < 0) return;
+                        if (editingTaskIndex < 0 || editingTaskIndex >= settings.customAgentKeys.length) {
+                          return;
+                        }
                         const customAgentKeys = settings.customAgentKeys.map((item) =>
                           item ? { ...item } : null,
                         );
-                        if (index >= customAgentKeys.length) return;
-                        customAgentKeys[index] = action;
+                        customAgentKeys[editingTaskIndex] = action;
                         void setSettings({ customAgentKeys });
                       }}
                     />

@@ -120,7 +120,7 @@ function projectModel(
         ...slot,
         action: cloneAction(slot.action),
       })) : idleAgentSlots(settings),
-      taskOptions: occupying === model ? live.taskOptions.map((task) => ({ ...task })) : [],
+      taskOptions: live.taskOptions.map((task) => ({ ...task })),
       agentSlotCount: idleAgentSlots(settings).length,
     };
   }
@@ -141,7 +141,7 @@ function projectModel(
     device: present === true ? { ...live.device } : emptyDevice(live),
     settings: cloned,
     agentSlots: idleAgentSlots(settings),
-    taskOptions: [],
+    taskOptions: live.taskOptions.map((task) => ({ ...task })),
     agentSlotCount: idleAgentSlots(settings).length,
   };
 }

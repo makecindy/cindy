@@ -100,6 +100,8 @@ const parentPort = (process as unknown as { parentPort?: ParentPortLike }).paren
 const requireFromHost = createRequire(__filename);
 const RETRY_MS = 3_000;
 const CREATOR_KEYMAP_RETRY_MS = 8_000;
+const SDK_LOG_WINDOW_MS = 60_000;
+const SDK_LOG_BURST = 3;
 
 let sdk: WorkLouderSdk | null = null;
 let sdkEntry: string | null = null;
@@ -120,6 +122,7 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let lastLoggedError: string | null = null;
 let lastActivityPostedAt = 0;
 let permissionBlocked = false;
+const sdkLogBuckets = new Map<string, { startedAt: number; emitted: number; suppressed: number }>();
 /** The native SDK often logs a dead USB/BT handle instead of throwing. */
 let transportFaulted = false;
 /** Which device the current `api` handle belongs to, so probes can refresh it. */
@@ -187,13 +190,13 @@ function hostLog(level: 'debug' | 'info' | 'warn' | 'error', message: string): v
 const sdkLogger: WorkLouderLogger = {
   debug: () => undefined,
   info: () => undefined,
-  warn: (...args) => hostLog('warn', `Work Louder SDK reported a warning${formatSdkLog(args)}`),
+  warn: (...args) => logSdkMessage('warn', 'Work Louder SDK reported a warning', args),
   error: (...args) => {
     const detail = formatSdkLog(args);
     if (isWorkLouderSdkTransportDeath(detail, connectedDevice?.deviceType)) {
       transportFaulted = true;
     }
-    hostLog('error', `Work Louder SDK reported an error${detail}`);
+    logSdkMessage('error', 'Work Louder SDK reported an error', args);
     if (
       api &&
       !stopping &&
@@ -547,6 +550,42 @@ function formatSdkLog(args: unknown[]): string {
   return detail ? `: ${detail}` : '';
 }
 
+function logSdkMessage(level: 'warn' | 'error', prefix: string, args: unknown[]): void {
+  const detail = formatSdkLog(args);
+  const message = `${prefix}${detail}`;
+  const signature = normalizeSdkLogSignature(message);
+  const now = Date.now();
+  const previous = sdkLogBuckets.get(signature);
+  if (!previous || now - previous.startedAt >= SDK_LOG_WINDOW_MS) {
+    if (previous?.suppressed) {
+      hostLog(
+        level,
+        `${prefix} (suppressed ${previous.suppressed} repeated messages in the previous minute): ${signature}`,
+      );
+    }
+    if (!previous && sdkLogBuckets.size >= 128) {
+      const oldest = sdkLogBuckets.keys().next().value;
+      if (typeof oldest === 'string') sdkLogBuckets.delete(oldest);
+    }
+    sdkLogBuckets.set(signature, { startedAt: now, emitted: 1, suppressed: 0 });
+    hostLog(level, message);
+    return;
+  }
+  if (previous.emitted < SDK_LOG_BURST) {
+    previous.emitted += 1;
+    hostLog(level, message);
+  } else {
+    previous.suppressed += 1;
+  }
+}
+
+function normalizeSdkLogSignature(message: string): string {
+  return message
+    .replace(/0x[0-9a-f]+/gi, '<hex>')
+    .replace(/\b\d+\b/g, '<n>')
+    .slice(0, 240);
+}
+
 function lightingRpcSucceeded(result: unknown): boolean {
   if (result === true) return true;
   if (result === false || result == null) return false;
@@ -576,6 +615,28 @@ function workLouderFsSucceeded(result: WorkLouderRpcResult | null | undefined): 
   return Boolean(result && result.ok !== false);
 }
 
+async function restoreCreatorKeymap(deviceApi: WorkLouderApi): Promise<void> {
+  if (connectedDevice?.deviceType !== 'creator-micro-2' || !keymapBackupDir || !comm) return;
+  const backupPath = path.join(
+    keymapBackupDir,
+    creatorMicro2KeymapBackupFileName(connectedDevice.backupId),
+  );
+  let liveText: string;
+  try {
+    liveText = await fs.readFile(backupPath, 'utf8');
+  } catch {
+    return;
+  }
+  const fsApi = loadWorkLouderFsApi(deviceApi, comm);
+  if (!fsApi) return;
+  const writeResult = await fsApi.writeFile(WORKLOUDER_DEVICE_KEYMAP_FILE, liveText);
+  if (!workLouderFsSucceeded(writeResult)) {
+    throw new Error(writeResult?.error?.message ?? 'fs.write keymap.json restore failed');
+  }
+  creatorKeymapBound = false;
+  hostLog('info', 'Work Louder factory keymap restored');
+}
+
 async function backupCreatorKeymap(liveText: string): Promise<void> {
   if (!keymapBackupDir) {
     throw new Error('Creator Micro 2 keymap backup directory is missing');
@@ -598,7 +659,7 @@ async function backupCreatorKeymap(liveText: string): Promise<void> {
 
 async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (creatorKeymapBound || stopping) return;
-  if (!connectedDevice?.deviceType) return;
+  if (connectedDevice?.deviceType !== 'creator-micro-2') return;
   if (!comm) return;
   const fsApi = loadWorkLouderFsApi(deviceApi, comm);
   if (!fsApi) {
@@ -650,7 +711,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
 
 async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<void> {
   if (creatorKeymapBound || stopping) return;
-  if (!connectedDevice?.deviceType) return;
+  if (connectedDevice?.deviceType !== 'creator-micro-2') return;
   if (creatorKeymapBinding) {
     await creatorKeymapBinding;
     return;
@@ -936,6 +997,11 @@ async function stop(): Promise<void> {
       currentApi.sendLightingConfig({ ambient: off.ambient, keys: off.keys }),
       currentApi.sendThreadsLighting(off.threads),
     ]);
+    try {
+      await restoreCreatorKeymap(currentApi);
+    } catch (error) {
+      hostLog('warn', `Creator Micro 2 keymap restore failed: ${safeErrorMessage(error)}`);
+    }
   }
   await disconnect();
   post({ kind: 'stopped' });

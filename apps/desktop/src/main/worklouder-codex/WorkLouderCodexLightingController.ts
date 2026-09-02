@@ -632,6 +632,7 @@ export class WorkLouderCodexLightingController {
   private releaseHeldHardwareGestures(): void {
     this.stopJoystickScroll();
     this.releaseHeldVoice();
+    this.mergeWinner.clear();
   }
 
   private releaseHeldVoice(): void {
@@ -831,6 +832,7 @@ export class WorkLouderCodexLightingController {
     if (!this.settings.deviceEnabled && status !== 'disabled') return;
     if (status === this.connectionStatus) return;
     this.connectionStatus = status;
+    if (status !== 'connected') this.releaseHeldHardwareGestures();
     if (status === 'connected') {
       this.connectionReason = null;
       this.devicePresent = true;

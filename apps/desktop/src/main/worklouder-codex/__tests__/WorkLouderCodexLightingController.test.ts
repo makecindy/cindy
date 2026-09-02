@@ -1455,4 +1455,36 @@ describe('WorkLouderCodexLightingController', () => {
     hidRef.current?.({ key: 'ENC_CW', act: 2 });
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it('releases a held microphone when the keyboard disappears', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const statusRef: { current: ((status: 'connected' | 'not-detected') => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn((handler: typeof statusRef.current) => {
+        statusRef.current = handler;
+      }),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
+    controller.applySettings(settings({ deviceEnabled: true }));
+    controller.start();
+    await controller.resumeTaskSlots();
+    hidRef.current?.({ key: 'ACT10', act: 1 });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'voice', phase: 'press' });
+
+    dispatch.mockClear();
+    statusRef.current?.('not-detected');
+    expect(dispatch).toHaveBeenCalledWith({ type: 'voice', phase: 'release' });
+  });
 });

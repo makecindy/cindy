@@ -240,4 +240,25 @@ describe('WorkLouderAccessories occupancy', () => {
     accessories.applySettings('codex-micro', defaults('codex-micro', true));
     expect(lighting.applied).toEqual([]);
   });
+
+  it('keeps the task catalog on the idle board so custom bindings stay configurable', () => {
+    const lighting = new FakeLighting({
+      ...liveState({
+        deviceType: 'codex-micro',
+        settings: defaults('codex-micro'),
+      }),
+      taskOptions: [{ id: 'task-1', title: 'Inbox', pinned: false }],
+    });
+    const accessories = new WorkLouderAccessories(lighting);
+    accessories.applySettings('codex-micro', defaults('codex-micro', true));
+    accessories.applySettings('creator-micro-2', defaults('creator-micro-2'));
+
+    const state = accessories.getAccessories();
+    expect(state['codex-micro'].taskOptions).toEqual([
+      { id: 'task-1', title: 'Inbox', pinned: false },
+    ]);
+    expect(state['creator-micro-2'].taskOptions).toEqual([
+      { id: 'task-1', title: 'Inbox', pinned: false },
+    ]);
+  });
 });
