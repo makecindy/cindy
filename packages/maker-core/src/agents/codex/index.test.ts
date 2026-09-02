@@ -493,6 +493,40 @@ describe('CodexAgent oneShot dispatch guard', () => {
     expect(request).not.toHaveBeenCalled();
     expect(subscribeThread).not.toHaveBeenCalled();
   });
+
+  it('rechecks ownership before turn/start and releases the temporary thread', async () => {
+    const agent = new CodexAgent(createDeps());
+    const request = vi.fn(async (method: string) => {
+      if (method === Method.ThreadStart) return { thread: { id: 'thread-before-turn-guard' } };
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const release = vi.fn(async () => undefined);
+    const subscribeThread = vi.fn(() => ({ release }));
+    const host = {
+      ensureStarted: vi.fn(async () => undefined),
+      request,
+      subscribeThread,
+    };
+    Object.defineProperty(agent, 'getUtilityHost', {
+      value: vi.fn(async () => ({ key: 'test-utility-host', host })),
+      configurable: true,
+    });
+
+    const beforeDispatch = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    await expect(agent.oneShot('name this task', { beforeDispatch }))
+      .rejects.toMatchObject({ name: 'OneShotError', reason: 'network' });
+
+    expect(beforeDispatch).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(Method.ThreadStart, expect.any(Object));
+    expect(request).not.toHaveBeenCalledWith(Method.TurnStart, expect.any(Object));
+    expect(subscribeThread).toHaveBeenCalledWith('thread-before-turn-guard', expect.any(Object));
+    expect(release).toHaveBeenCalledOnce();
+  });
 });
 
 function deferred<T>() {
