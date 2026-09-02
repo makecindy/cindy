@@ -199,13 +199,13 @@ let xdGatewayModels: XdGatewayModelInfo[] = [];
 /** 当前账号最近一次 `/models` 成功响应；false 时清单缺席不能作为模型不存在的 deny 证据。 */
 let xdGatewayModelsAuthoritative = false;
 /**
- * 当前认证世代是否已经观察到过权威的网关模型快照。
+ * 最近一次网关快照是否已把 embedding 能力交给网关判定。
  *
  * 刷新失败时会把过期的 requires_payment 行从活动目录移除；即使因此暂时没有
- * embedding 条目，也不能再回退到 bundled embedding。空的非保留快照(登出、禁用
- * 或测试清理)会重置这个边界，避免把上一账号的 deny 状态带入下一账号。
+ * embedding 条目，也不能再回退到 bundled embedding。账号边界显式置为 true，
+ * 直到新账号收到首个权威快照；测试清理和非账号的空快照才会重置它。
  */
-let xdGatewayEmbeddingSnapshotKnown = false;
+let xdGatewayEmbeddingFallbackSuppressed = false;
 /**
  * 最近一次成功 v5 响应明确拒绝的 XD 对话路由。
  *
@@ -906,7 +906,11 @@ function projectXdGatewayMediaModels(
   delete identity.imageDefaults;
   delete identity.videoModels;
   delete identity.videoDefaults;
-  if (options.authoritative || hasEmbeddingEntries || xdGatewayEmbeddingSnapshotKnown) {
+  if (
+    options.authoritative ||
+    hasEmbeddingEntries ||
+    xdGatewayEmbeddingFallbackSuppressed
+  ) {
     delete identity.embeddingModels;
     delete identity.embeddingDefaults;
   }
@@ -1561,16 +1565,20 @@ export function setDiscoveredProviderMediaModels(
  */
 export function setXdGatewayModels(
   models: XdGatewayModelInfo[],
-  options?: { authoritative?: boolean; preservePaymentRequiredRoutes?: boolean },
+  options?: {
+    authoritative?: boolean;
+    preservePaymentRequiredRoutes?: boolean;
+    suppressEmbeddingFallback?: boolean;
+  },
 ): void {
   xdGatewayModels = [...models];
   if (options?.authoritative !== undefined) {
     xdGatewayModelsAuthoritative = options.authoritative;
   }
-  if (options?.authoritative === true) {
-    xdGatewayEmbeddingSnapshotKnown = true;
+  if (options?.authoritative === true || options?.suppressEmbeddingFallback === true) {
+    xdGatewayEmbeddingFallbackSuppressed = true;
   } else if (models.length === 0 && options?.preservePaymentRequiredRoutes !== true) {
-    xdGatewayEmbeddingSnapshotKnown = false;
+    xdGatewayEmbeddingFallbackSuppressed = false;
   }
   if (options?.preservePaymentRequiredRoutes !== true) {
     xdGatewayPaymentRequiredRoutes = new Set(
