@@ -420,35 +420,41 @@ function dependencyHits(pkgJson: Record<string, unknown>, rel: string): string[]
  *    （`\s` 覆盖跨行变体，不要求以 import 开头，避免漏掉 export…from）；
  *  - import '<id>' 副作用导入；
  *  - import('<id>') 动态导入（可跨行）；
- *  - require('<id>') 与 TS import-equals（import x = require('<id>')）；
+ *  - require('<id>') 与 TS import-equals（import x = require('<id>')）——
+ *    含 `module.require('<id>')` 成员链形态（Node 真实加载 API）；
  *  - import.meta.resolve('<id>') 运行期解析入口；
  *  - 绕过包 id、以相对路径直读包内源码 / 产物。
- * `(?<![\w$.])` 排除 foo.import( / myImport( 这类成员调用与标识符误报。
+ * `(?<![\w$])` 只排除 myImport( 这类标识符连写；**不排除 `.` 前缀**——
+ * `module.require('…')` 是真实加载 API 必须命中，foo.import( 这类自定义
+ * 成员调用宁可误报（守卫拦截的是真接线，member-require 是合法接线形态）。
  */
 const IMPORT_ENTRY_PATTERNS: readonly RegExp[] = [
   /from\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
-  /(?<![\w$.])import\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
-  /(?<![\w$.])import\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
-  /(?<![\w$.])import\.meta\.resolve\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
-  /(?<![\w$.])require\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /(?<![\w$])import\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /(?<![\w$])import\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /(?<![\w$])import\.meta\.resolve\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /(?<![\w$])require\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
   /packages\/design-tokens\/(?:src|dist|build)\//,
 ];
 
 /**
  * 从源码文本中提取全部模块说明符（'…' / "…" 形式的 import / require 目标），
  * 供按被扫描文件位置解析相对路径。覆盖五种语境：import-from / import() /
- * require() / import.meta.resolve() / 裸 `import '…'` 副作用导入（后者无
- * from 子句无括号，分支自身用 `(?=['"])` 前瞻定位引号、不吞引号，引号由
- * 共享后继 `['"]…['"]` 统一消费，`\s*` 覆盖换行形态）。
- * `(?<![\w$.])` 与 IMPORT_ENTRY_PATTERNS 同款：排除 foo.import( /
- * foo.require( 成员调用与 myImport 标识符误报；不匹配普通字符串字面量。
+ * require()（含 `module.require()` 等成员链上的真实 Node 加载 API）/
+ * import.meta.resolve() / 裸 `import '…'` 副作用导入（后者无 from 子句无
+ * 括号，分支自身用 `(?=['"])` 前瞻定位引号、不吞引号，引号由共享后继
+ * `['"]…['"]` 统一消费，`\s*` 覆盖换行形态）。
+ * `(?<![\w$])` 只排除 myImport / myRequire 这类标识符连写；**不再排除
+ * `.` 前缀**——`module.require('…')` 是 Node 真实加载 API（review P1
+ * 实锤），foo.import( 这类自定义成员调用宁可误报也不漏放：守卫拦截的是
+ * 「有人真接线」，member-require 恰是真实接线的合法形态。
  */
 const SPECIFIER_CONTEXT_RE =
-  /(?:\bfrom\s*|(?<![\w$.])import\s*\(\s*|(?<![\w$.])require\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|(?<![\w$.])import\s*(?=['"]))['"]([^'"]+)['"]/g;
+  /(?:\bfrom\s*|(?<![\w$])import\s*\(\s*|(?<![\w$])require\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|(?<![\w$])import\s*(?=['"]))['"]([^'"]+)['"]/g;
 
-/** 判断已输出的前文是否以 import 语境结尾（说明符字符串之前的形态）。 */
+/** 判断「无空白压缩后的最近输出」是否以 import 语境结尾。 */
 const SPECIFIER_PREFIX_RE =
-  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|\bimport\s*)$/;
+  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\bimport\.meta\.resolve\s*\(|\bimport)$/;
 
 /**
  * 剥除源码里的注释与「数据语境」字符串字面量，保留 import 说明符。
@@ -460,11 +466,15 @@ const SPECIFIER_PREFIX_RE =
  * 规则（轻量状态机，非完整 AST）：
  *  - `//…` 行注释与块注释（slash-star 形态）整体替换为空白（保留换行，
  *    行列结构不变）；
- *  - `'…'` / `"…"` / `` `…` `` 字符串：若开引号前的已输出文本以 import
- *    语境结尾（from / import( / require( / import.meta.resolve( / import），
+ *  - `'…'` / `"…"` / `` `…` `` 字符串：若开引号前的代码语境以 import
+ *    结尾（from / import( / require( / import.meta.resolve( / import），
  *    说明这是模块说明符——**保留原文**；否则视为数据字符串，内容替换为
- *    空白（引号保留，长度不变）。语境判定只看输出缓冲的末尾 64 字符，
- *    避免对全文件长度做正则回溯。
+ *    空白（引号保留，长度不变）。
+ *  - **语境判定不看长度窗口**：状态机维护「无空白压缩的最近输出」
+ *    （lastCodeContext）——注释与空白产生的输出不推进它，代码字符才
+ *    追加。任意长度的注释（如 >64 字符的 webpack 注释）都不会把 import(
+ *    挤出语境（review P1 实锤：固定 64 字符窗口会让长注释后的说明符被
+ *    误当数据清空）。
  *  - 模板字符串内的 `${…}` 不再细分——数据语境整体剥除，说明符语境
  *    （不会出现插值）整体保留，两个方向都不产生误报。
  *  - 正则字面量（`/…/`）不识别：其内容若含引号会被当字符串处理。这只在
@@ -476,8 +486,14 @@ export function stripCommentsAndDataStrings(source: string): string {
   let i = 0;
   const n = source.length;
   let plainStart = 0;
+  let lastCodeContext = '';
   const flushPlain = (end: number) => {
-    if (end > plainStart) chunks.push(source.slice(plainStart, end));
+    if (end > plainStart) {
+      const text = source.slice(plainStart, end);
+      chunks.push(text);
+      // 压缩空白后并入语境：任意长空白折叠为一个空格，语境不设上限。
+      lastCodeContext = (lastCodeContext + text.replace(/\s+/g, ' ')).slice(-256);
+    }
   };
   while (i < n) {
     const c = source[i];
@@ -511,15 +527,7 @@ export function stripCommentsAndDataStrings(source: string): string {
       }
       i = Math.min(i + 1, n);
       const str = source.slice(open, i);
-      // 语境判定看已输出内容的末尾（可能跨多个 chunk：如 import( + 剥除的
-      // 注释空白），从后往前拼接 chunk 凑 64 字符窗口。
-      let tail = '';
-      for (let k = chunks.length - 1; k >= 0 && tail.length < 64; k--) {
-        const need = 64 - tail.length;
-        const c = chunks[k];
-        tail = (c.length > need ? c.slice(c.length - need) : c) + tail;
-      }
-      if (SPECIFIER_PREFIX_RE.test(tail)) {
+      if (SPECIFIER_PREFIX_RE.test(lastCodeContext.trimEnd())) {
         chunks.push(str);
       } else {
         chunks.push(quote + ' '.repeat(Math.max(0, str.length - 2)) + quote);

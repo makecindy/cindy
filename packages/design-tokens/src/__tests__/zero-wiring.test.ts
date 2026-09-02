@@ -134,16 +134,9 @@ describe('DS-3 · 零接线守卫', () => {
         "const hint = '../../design-tokens/src/snapshot.ts';",
         'packages/foo/src/a.ts',
       ],
-      [
-        '成员调用 foo.import 不是 import 语句',
-        "foo.import('../../design-tokens/src/snapshot.ts');",
-        'packages/foo/src/a.ts',
-      ],
-      [
-        '成员调用 foo.require 不是 require',
-        "foo.require('../../design-tokens/src/snapshot.ts');",
-        'packages/foo/src/a.ts',
-      ],
+      // 注：`.` 前缀的成员调用（foo.import / foo.require / module.require）
+      // 自 2320ce02 轮起**有意命中**——module.require 是 Node 真实加载 API，
+      // 自定义成员调用宁误报不漏放（见 module.require 用例的说明）。
     ];
     for (const [name, source, fileRel] of legal) {
       expect(relativeSpecifierHitsDesignTokens(source, fileRel), name).toBe(false);
@@ -210,6 +203,51 @@ describe('DS-3 · 零接线守卫', () => {
     expect(
       stripCommentsAndDataStrings("const s = 'x'; import { y } from './b';"),
     ).toBe("const s = ' '; import { y } from './b';");
+  });
+
+  it('自证伪：超长注释不挤掉导入语境（review P1 补洞）', () => {
+    // 旧实现用固定 64 字符 tail 窗口判语境：>64 字符的块注释被剥成空白后
+    // 把 import( 挤出窗口，说明符被当数据字符串清空——两个通道都漏放。
+    // 现在状态机维护「无空白压缩的最近输出」，注释不推进语境，任意长度
+    // 注释都不影响判定。
+    const c100 = 'x'.repeat(100);
+    const c300 = '很长的注释内容。'.repeat(30);
+    expect(
+      containsRuntimeImportOfDesignTokens(
+        `import(/* ${c100} */ '@cindy/design-tokens')`,
+      ),
+    ).toBe(true);
+    expect(
+      relativeSpecifierHitsDesignTokens(
+        `const l = await import(/* ${c300} */ '../../design-tokens/src/snapshot.ts');`,
+        'packages/foo/src/a.ts',
+      ),
+    ).toBe(true);
+  });
+
+  it('自证伪：module.require 是真实加载入口，必须被命中（review P1 补洞）', () => {
+    // 旧实现的 `(?<![\w$.])` 把 `module.require('…')` 当成员调用排除，但
+    // 它是 Node 真实模块加载 API——.cjs 等源码可借它在零接线阶段消费影子
+    // 包。现在后顾只排除标识符连写（myImport），`.` 前缀放行；foo.import(
+    // 这类自定义成员调用同被命中（宁误报不漏放，守卫拦截的是真接线）。
+    expect(
+      containsRuntimeImportOfDesignTokens(
+        "const x = module.require('@cindy/design-tokens');",
+      ),
+    ).toBe(true);
+    expect(
+      relativeSpecifierHitsDesignTokens(
+        "const x = module.require('../../design-tokens/src/snapshot.ts');",
+        'packages/foo/src/a.cjs',
+      ),
+    ).toBe(true);
+    // 标识符连写仍然排除（myImport 不是 require）。
+    expect(
+      relativeSpecifierHitsDesignTokens(
+        "myImport '../../design-tokens/src/snapshot.ts';",
+        'packages/foo/src/a.cjs',
+      ),
+    ).toBe(false);
   });
 
   it('自证伪：说明符前带注释的合法导入必须被命中（review P2 补洞）', () => {
