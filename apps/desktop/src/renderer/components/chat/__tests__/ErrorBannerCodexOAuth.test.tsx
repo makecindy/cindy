@@ -147,7 +147,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
-  it('explains a Codex app-server restart and does not suggest switching models', () => {
+  it('uses cause-neutral Codex app-server retirement copy and does not suggest switching models', () => {
     render(
       <ErrorBanner
         error="app-server force-retired: Codex desktop auth login"
@@ -159,7 +159,8 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
-    expect(screen.getByText('chat.errorBanner.codexAppServerRestarted')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.codexAppServerRetired')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.codexAppServerRestarted')).toBeNull();
     expect(screen.queryByText('app-server force-retired: Codex desktop auth login')).toBeNull();
     expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
   });
