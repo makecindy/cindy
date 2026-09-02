@@ -250,6 +250,46 @@ describe('DS-3 · 零接线守卫', () => {
     ).toBe(false);
   });
 
+  it('自证伪：require.resolve 是运行期加载入口，必须被命中（review P2 补洞）', () => {
+    // `readFileSync(require.resolve('../../design-tokens/…'))` 是消费影子层的
+    // 真实路径：旧实现的剥离层把 require.resolve 的参数当普通数据字符串
+    // 清空，两个通道都漏放。现在 require.resolve 与 import.meta.resolve
+    // 同列说明符语境（含 module.require.resolve 成员链与带空格形态）。
+    const relCases: Array<[string, string]> = [
+      [
+        'readFileSync(require.resolve(相对路径))',
+        "readFileSync(require.resolve('../../design-tokens/src/semantic/color.json'), 'utf8')",
+      ],
+      [
+        '裸 require.resolve(相对路径)',
+        "const p = require.resolve('../../design-tokens/src/snapshot.ts');",
+      ],
+      [
+        'module.require.resolve(相对路径)',
+        "const p = module.require.resolve('../../design-tokens/src/snapshot.ts');",
+      ],
+    ];
+    for (const [name, source] of relCases) {
+      expect(
+        relativeSpecifierHitsDesignTokens(source, 'packages/foo/src/a.ts'),
+        name,
+      ).toBe(true);
+    }
+    const idCases: Array<[string, string]> = [
+      [
+        'readFileSync(require.resolve(包 id))',
+        "readFileSync(require.resolve('@cindy/design-tokens/semantic/color.json'), 'utf8')",
+      ],
+      [
+        '裸 require.resolve(包 id)',
+        "const p = require.resolve('@cindy/design-tokens');",
+      ],
+    ];
+    for (const [name, source] of idCases) {
+      expect(containsRuntimeImportOfDesignTokens(source), name).toBe(true);
+    }
+  });
+
   it('自证伪：说明符前带注释的合法导入必须被命中（review P2 补洞）', () => {
     // 旧的两段式先在原始文本上预扫：`import(/* c */ '…')` 的注释隔断了
     // 关键字→引号衔接，预扫零命中提前返回，剥除层反而执行不到——漏放。

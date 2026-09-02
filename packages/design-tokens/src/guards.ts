@@ -422,6 +422,8 @@ function dependencyHits(pkgJson: Record<string, unknown>, rel: string): string[]
  *  - import('<id>') 动态导入（可跨行）；
  *  - require('<id>') 与 TS import-equals（import x = require('<id>')）——
  *    含 `module.require('<id>')` 成员链形态（Node 真实加载 API）；
+ *  - require.resolve('<id>') 运行期路径解析（readFileSync(require.resolve(…))
+ *    是消费影子层的真实路径）；
  *  - import.meta.resolve('<id>') 运行期解析入口；
  *  - 绕过包 id、以相对路径直读包内源码 / 产物。
  * `(?<![\w$])` 只排除 myImport( 这类标识符连写；**不排除 `.` 前缀**——
@@ -434,27 +436,30 @@ const IMPORT_ENTRY_PATTERNS: readonly RegExp[] = [
   /(?<![\w$])import\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
   /(?<![\w$])import\.meta\.resolve\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
   /(?<![\w$])require\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
+  /(?<![\w$])require\s*\.\s*resolve\s*\(\s*['"]@cindy\/design-tokens(?:\/[^'"\s]*)?['"]/,
   /packages\/design-tokens\/(?:src|dist|build)\//,
 ];
 
 /**
  * 从源码文本中提取全部模块说明符（'…' / "…" 形式的 import / require 目标），
- * 供按被扫描文件位置解析相对路径。覆盖五种语境：import-from / import() /
+ * 供按被扫描文件位置解析相对路径。覆盖六种语境：import-from / import() /
  * require()（含 `module.require()` 等成员链上的真实 Node 加载 API）/
- * import.meta.resolve() / 裸 `import '…'` 副作用导入（后者无 from 子句无
- * 括号，分支自身用 `(?=['"])` 前瞻定位引号、不吞引号，引号由共享后继
- * `['"]…['"]` 统一消费，`\s*` 覆盖换行形态）。
+ * require.resolve()（运行期解析模块路径，`readFileSync(require.resolve(…))`
+ * 是消费影子层的真实路径，review P2 实锤）/ import.meta.resolve() / 裸
+ * `import '…'` 副作用导入（后者无 from 子句无括号，分支自身用 `(?=['"])`
+ * 前瞻定位引号、不吞引号，引号由共享后继 `['"]…['"]` 统一消费，`\s*`
+ * 覆盖换行形态）。
  * `(?<![\w$])` 只排除 myImport / myRequire 这类标识符连写；**不再排除
  * `.` 前缀**——`module.require('…')` 是 Node 真实加载 API（review P1
  * 实锤），foo.import( 这类自定义成员调用宁可误报也不漏放：守卫拦截的是
  * 「有人真接线」，member-require 恰是真实接线的合法形态。
  */
 const SPECIFIER_CONTEXT_RE =
-  /(?:\bfrom\s*|(?<![\w$])import\s*\(\s*|(?<![\w$])require\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|(?<![\w$])import\s*(?=['"]))['"]([^'"]+)['"]/g;
+  /(?:\bfrom\s*|(?<![\w$])import\s*\(\s*|(?<![\w$])require\s*\(\s*|(?<![\w$])require\s*\.\s*resolve\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*|(?<![\w$])import\s*(?=['"]))['"]([^'"]+)['"]/g;
 
 /** 判断「无空白压缩后的最近输出」是否以 import 语境结尾。 */
 const SPECIFIER_PREFIX_RE =
-  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\bimport\.meta\.resolve\s*\(|\bimport)$/;
+  /(?:\bfrom|\bimport\s*\(|\brequire\s*\(|\brequire\s*\.\s*resolve\s*\(|\bimport\.meta\.resolve\s*\(|\bimport)$/;
 
 /**
  * 剥除源码里的注释与「数据语境」字符串字面量，保留 import 说明符。
