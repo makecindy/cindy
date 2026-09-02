@@ -865,6 +865,7 @@ function withEmptyModels(p: Provider): Provider {
 function projectXdGatewayMediaModels(
   provider: Provider,
   gatewayModels: readonly XdGatewayModelInfo[],
+  options: { authoritative: boolean },
 ): Provider {
   const imageModels = gatewayModels
     .filter((model) => model.mode === 'image_generation')
@@ -897,7 +898,7 @@ function projectXdGatewayMediaModels(
   delete identity.imageDefaults;
   delete identity.videoModels;
   delete identity.videoDefaults;
-  if (hasEmbeddingEntries) {
+  if (options.authoritative || hasEmbeddingEntries) {
     delete identity.embeddingModels;
     delete identity.embeddingDefaults;
   }
@@ -1286,7 +1287,12 @@ function computeMerged(): Catalog {
         )
         .map(({ model }) => model);
     }
-    return { ...projectXdGatewayMediaModels(p, gwModels), models };
+    return {
+      ...projectXdGatewayMediaModels(p, gwModels, {
+        authoritative: xdGatewayModelsAuthoritative,
+      }),
+      models,
+    };
   });
 
   if (providers === b.providers) return b; // 无 augment、无 custom → 原样返回

@@ -205,6 +205,21 @@ describe('XD 网关权威模型清单重建', () => {
     expect(activeXd?.embeddingDefaults).toBeUndefined();
   });
 
+  it('网关权威空快照清除静态 embedding', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
+    if (!catalogXd) throw new Error('missing XD provider fixture');
+    catalogXd.embeddingModels = [{ id: 'voyage/voyage-4', name: 'Voyage 4' }];
+    catalogXd.embeddingDefaults = { standard: 'voyage/voyage-4' };
+
+    setActiveCatalog(catalog);
+    setXdGatewayModels([], { authoritative: true });
+
+    const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(activeXd?.embeddingModels).toBeUndefined();
+    expect(activeXd?.embeddingDefaults).toBeUndefined();
+  });
+
   it('v3 未声明 agents 的模型不进入任何 runtime', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id: 'brand-new-model' }]);
