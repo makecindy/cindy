@@ -201,7 +201,12 @@ export function UsageHistorySection(): React.JSX.Element {
       ) : (
         <>
           <Card title={t('usageHistory.summary.title')} refreshing={refreshing}>
-            <UsageStatRow summary={summary} rangeLabel={rangeLabel} todayLabel={todayLabel} />
+            <UsageStatRow
+              summary={summary}
+              rangeLabel={rangeLabel}
+              todayLabel={todayLabel}
+              hideToday={selectedDay !== null}
+            />
           </Card>
 
           <Card
@@ -251,7 +256,7 @@ export function UsageHistorySection(): React.JSX.Element {
               subtitle={t('usageHistory.tasks.subtitle', { range: rangeLabel })}
             >
               <div className="overflow-x-auto">
-                <UsageTaskTable rows={taskRows} />
+                <UsageTaskTable rows={taskRows} rangeLabel={rangeLabel} />
               </div>
             </Card>
           )}

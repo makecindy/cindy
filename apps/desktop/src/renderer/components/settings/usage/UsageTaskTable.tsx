@@ -150,7 +150,13 @@ export function useTopTokenSessions(
   }, [range, sessions, todayKeyOverride]);
 }
 
-export function UsageTaskTable({ rows }: { rows: Session[] }): React.JSX.Element {
+export function UsageTaskTable({
+  rows,
+  rangeLabel,
+}: {
+  rows: Session[];
+  rangeLabel: string;
+}): React.JSX.Element {
   const { t } = useTranslation();
   const { providers } = useProviders();
 
@@ -165,7 +171,10 @@ export function UsageTaskTable({ rows }: { rows: Session[] }): React.JSX.Element
           <th className={TH_CLASS} title={t('usageHistory.tasks.providerTooltip')}>
             {t('usageHistory.tasks.col.provider')}
           </th>
-          <th className={TH_CLASS} title={t('usageHistory.tasks.tokensTooltip')}>
+          <th
+            className={TH_CLASS}
+            title={t('usageHistory.tasks.tokensTooltip', { range: rangeLabel })}
+          >
             {t('usageHistory.tasks.col.tokens')}
           </th>
           <th className={TH_CLASS}>{t('usageHistory.tasks.col.context')}</th>

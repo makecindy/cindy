@@ -5866,7 +5866,7 @@
         "lastActive": "Last active"
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
-      "tokensTooltip": "The session's lifetime total, not the tokens spent within the last 30 days."
+      "tokensTooltip": "The session's lifetime total; {{range}} only filters active sessions and is not an incremental total."
     }
   },
   "usageDashboard": {

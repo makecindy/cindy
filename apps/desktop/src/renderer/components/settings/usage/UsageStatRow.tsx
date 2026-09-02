@@ -42,19 +42,24 @@ export function UsageStatRow({
   summary,
   rangeLabel,
   todayLabel,
+  hideToday = false,
 }: {
   summary: UsageSummary;
   rangeLabel: string;
   todayLabel?: string;
+  /** Exact-day drilldown already has the same value in the range card. */
+  hideToday?: boolean;
 }): React.JSX.Element {
   const { t } = useTranslation();
 
   return (
     <div className="flex gap-2">
-      <StatCell
-        value={summary.todayTokens > 0 ? formatCompactTokens(summary.todayTokens) : UNKNOWN_VALUE}
-        label={todayLabel ?? t('usageHistory.stats.todayTokens')}
-      />
+      {!hideToday ? (
+        <StatCell
+          value={summary.todayTokens > 0 ? formatCompactTokens(summary.todayTokens) : UNKNOWN_VALUE}
+          label={todayLabel ?? t('usageHistory.stats.todayTokens')}
+        />
+      ) : null}
       <StatCell
         value={
           summary.last30DaysTokens > 0

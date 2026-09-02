@@ -5864,7 +5864,7 @@
         "lastActive": "最後活躍"
       },
       "providerTooltip": "取該任務目前選定的供應商；未指定時留空。",
-      "tokensTooltip": "該任務的生命週期累計，不是近 30 天內的增量。"
+      "tokensTooltip": "該任務的生命週期累計；{{range}}僅用於篩選活躍任務，不代表該範圍內的增量。"
     }
   },
   "usageDashboard": {

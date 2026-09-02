@@ -5864,7 +5864,7 @@
         "lastActive": "最后活跃"
       },
       "providerTooltip": "取该任务当前选定的供应商；未指定时留空。",
-      "tokensTooltip": "该任务的生命周期累计，不是近 30 天内的增量。"
+      "tokensTooltip": "该任务的生命周期累计；{{range}}仅用于筛选活跃任务，不表示该范围内的增量。"
     }
   },
   "usageDashboard": {
