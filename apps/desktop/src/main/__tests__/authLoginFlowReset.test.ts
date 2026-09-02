@@ -214,7 +214,10 @@ describe('auth login-flow reset', () => {
     expect(readBody).toContain('recoverInvalid: options.recoverInvalid');
     expect(readBody).toContain('if (options.allowUnreadable) return emptyAuthAccountVault();');
     expect(readBody).toContain('new Set([...persistedLogoutKeys, ...embeddedLogoutKeys])');
-    expect(readBody).toContain('if (active && resources[active]) loggedOutKeys.delete(active);');
+    expect(readBody).not.toContain('loggedOutKeys.delete(active)');
+    expect(readBody).toContain(
+      'active && resources[active] && !loggedOutKeys.has(active) ? active : null',
+    );
 
     const profileStart = source.indexOf('export async function updateServerProfile(');
     const profileEnd = source.indexOf('\n}\n\nexport async function initialize(', profileStart);
@@ -240,12 +243,8 @@ describe('auth login-flow reset', () => {
       mutationBody.indexOf('if (!status.held)'),
     );
     const vaultWriteAt = mutationBody.indexOf('writeAuthAccountVaultOrThrow(vault');
-    expect(vaultWriteAt).toBeGreaterThan(
-      mutationBody.indexOf('await operation(vault);'),
-    );
-    expect(mutationBody.indexOf('await afterPersist(result);')).toBeGreaterThan(
-      vaultWriteAt,
-    );
+    expect(vaultWriteAt).toBeGreaterThan(mutationBody.indexOf('await operation(vault);'));
+    expect(mutationBody.indexOf('await afterPersist(result);')).toBeGreaterThan(vaultWriteAt);
     expect(mutationBody).toContain('removeAtomicSafeOrThrow(AUTH_ACCOUNT_VAULT_KEY);');
     expect(mutationBody).toContain('writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, previousRaw)');
     expect(mutationBody).toContain('removeAtomicSafeOrThrow(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);');
@@ -482,6 +481,16 @@ describe('auth login-flow reset', () => {
     );
     expect(switchBody).toContain('restoreLoggedOutAccount: false');
     expect(switchBody).toContain('accountToLogOut: options.accountToLogOut');
+    expect(switchBody).toContain('validateBeforeCommit: options.validateBeforeCommit');
+
+    const completeLoginStart = source.indexOf('async function completeLogin(');
+    const completeLoginEnd = source.indexOf(
+      '\n}\n\nasync function runLoginAction',
+      completeLoginStart,
+    );
+    const completeLoginBody = source.slice(completeLoginStart, completeLoginEnd);
+    expect(completeLoginBody).toContain('validateBeforeCommit?: () => void;');
+    expect(completeLoginBody).toContain('options.validateBeforeCommit?.();');
 
     const resourceRefreshStart = source.indexOf('async function refreshSavedResourceSession(');
     const resourceRefreshEnd = source.indexOf(
@@ -688,6 +697,8 @@ describe('auth login-flow reset', () => {
     expect(candidateLoop).toBeGreaterThan(-1);
     expect(logoutBody).toContain('await switchSavedAccount(candidateAccountKey, {');
     expect(logoutBody).toContain('accountToLogOut: currentIdentity');
+    expect(logoutBody).toContain('validateBeforeCommit: assertLogoutStillCurrent');
+    expect(logoutBody).toContain('assertLogoutStillCurrent();');
     expect(logoutBody).toContain('if (isUnavailableSavedAccountError(error)) continue;');
     expect(logoutBody).toContain('isRetryableSavedAccountSwitchError(error)');
     const retryableSwitchStart = source.indexOf('function isRetryableSavedAccountSwitchError(');

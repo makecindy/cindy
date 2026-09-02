@@ -956,11 +956,10 @@ function readAuthAccountVault(
     }
     const loggedOutKeys = new Set([...persistedLogoutKeys, ...embeddedLogoutKeys]);
     const active = typeof parsed.activeAccountKey === 'string' ? parsed.activeAccountKey : null;
-    // An older client cannot clear the separate tombstone when it explicitly
-    // logs back into an account. Treat its active Resource projection as that
-    // explicit restore, while passive membership sync (which does not change
-    // activeAccountKey or create a Resource) remains filtered.
-    if (active && resources[active]) loggedOutKeys.delete(active);
+    // Never infer an explicit restore from an active Resource projection: a
+    // crash between the tombstone write and aggregate replacement can leave
+    // that projection stale. Only an explicit login transaction may clear a
+    // logout tombstone.
     const loggedOutAccountKeys = [...loggedOutKeys];
     return {
       version: AUTH_ACCOUNT_VAULT_VERSION,
@@ -3828,6 +3827,7 @@ export async function switchSavedAccount(
   options: {
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
+    validateBeforeCommit?: () => void;
   } = {},
 ): Promise<void> {
   const switchLoginFlowEpoch = loginFlowEpoch;
@@ -3925,6 +3925,7 @@ export async function switchSavedAccount(
       restoreLoggedOutAccount: false,
       accountToLogOut: options.accountToLogOut,
       onLoggedOutPassportRemoved: options.onLoggedOutPassportRemoved,
+      validateBeforeCommit: options.validateBeforeCommit,
     });
   } catch (error) {
     pendingAuthRealm = null;
@@ -4877,6 +4878,7 @@ async function completeLogin(
     restoreLoggedOutAccount?: boolean;
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
+    validateBeforeCommit?: () => void;
   } = {},
 ): Promise<AuthFlowState> {
   assertLoginFlowCurrent(expectedLoginFlowEpoch);
@@ -4921,6 +4923,7 @@ async function completeLogin(
           // Any cancellation before commit restores both durable records while
           // the cross-process vault lock is still held.
           assertTransitionCurrent();
+          options.validateBeforeCommit?.();
           // Capture the compatibility session only after entering the same
           // cross-process ownership window as the vault write. A concurrent
           // passive refresh may have rotated it while this login waited on the
@@ -5834,7 +5837,9 @@ export async function logout(): Promise<void> {
         onLoggedOutPassportRemoved: (session) => {
           candidateRemovedPassport = session;
         },
+        validateBeforeCommit: assertLogoutStillCurrent,
       });
+      assertLogoutStillCurrent();
       removedPassport = candidateRemovedPassport;
       revokeLoggedOutAccountBestEffort({
         accessToken: currentAccessToken,
