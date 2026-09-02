@@ -4,7 +4,11 @@ import path from 'node:path';
 import { app, BrowserWindow, ipcMain, powerMonitor, shell, utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
-import { getDeepLinkMainWindow, openMainWindowSession, sendMainWindowMessage } from '../deepLink.js';
+import {
+  getDeepLinkMainWindow,
+  openMainWindowSession,
+  sendMainWindowMessage,
+} from '../deepLink.js';
 import {
   createLayoutPreviewLease,
   layoutPreviewOwnerFromEvent,
@@ -191,11 +195,17 @@ const workLouderAccessories = new WorkLouderAccessories(workLouderCodexLightingC
   hostClient.probe();
 });
 
-const layoutPreviewLease = createLayoutPreviewLease((active) => {
-  workLouderCodexLightingController.setLayoutPreviewActive(active);
-});
 const layoutPreviewSession = new WorkLouderLayoutPreviewSession();
 let layoutPreviewOwner: LayoutPreviewOwner | null = null;
+const layoutPreviewLease = createLayoutPreviewLease(
+  (active) => {
+    workLouderCodexLightingController.setLayoutPreviewActive(active);
+  },
+  () => {
+    layoutPreviewOwner = null;
+    layoutPreviewSession.setRequest(false, null);
+  },
+);
 
 function occupyingWorkLouderModel(): WorkLouderModel | null {
   const live = workLouderCodexLightingController.getState();

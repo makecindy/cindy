@@ -16,11 +16,7 @@ const mocks = vi.hoisted(() => ({
   reload: vi.fn(),
   setGuardEnabled: vi.fn(),
   recoverGuard: vi.fn(),
-  guardStatus: 'disabled' as
-    | 'disabled'
-    | 'protecting'
-    | 'intercepted'
-    | 'recovery-required',
+  guardStatus: 'disabled' as 'disabled' | 'protecting' | 'intercepted' | 'recovery-required',
   setLayoutPreviewActive: vi.fn(),
   previewListeners: [] as Array<
     (input: {
@@ -36,11 +32,7 @@ const mocks = vi.hoisted(() => ({
   layout: null as ReturnType<typeof createWorkLouderCodexDefaultSettings>['layout'] | null,
   deviceEnabled: true,
   connectionStatus: 'connected' as 'connected' | 'error',
-  connectionReason: null as
-    | 'device-in-use'
-    | 'permission-required'
-    | 'connection-failed'
-    | null,
+  connectionReason: null as 'device-in-use' | 'permission-required' | 'connection-failed' | null,
   deviceType: 'codex-micro' as 'codex-micro' | 'creator-micro-2',
 }));
 
@@ -115,7 +107,8 @@ async function chooseSelectOption(
   trigger: string | HTMLElement,
   optionName: string,
 ): Promise<void> {
-  const combobox = typeof trigger === 'string' ? screen.getByRole('combobox', { name: trigger }) : trigger;
+  const combobox =
+    typeof trigger === 'string' ? screen.getByRole('combobox', { name: trigger }) : trigger;
   fireEvent.keyDown(combobox, { key: 'Enter' });
   fireEvent.click(await screen.findByRole('option', { name: optionName }));
 }
@@ -239,9 +232,9 @@ describe('WorkLouderCodexSettings', () => {
     ).toBeNull();
     expect(screen.getByText('Codex Micro')).toBeTruthy();
     expect(screen.getByText('USB')).toBeTruthy();
-    expect(screen.getByTestId('worklouder-codex-keyboard-layout').parentElement?.className).toContain(
-      'justify-center',
-    );
+    expect(
+      screen.getByTestId('worklouder-codex-keyboard-layout').parentElement?.className,
+    ).toContain('justify-center');
     expect(mocks.setLayoutPreviewActive).toHaveBeenCalledWith(true, 'codex-micro');
 
     const slider = screen.getByRole('slider', {
@@ -313,10 +306,7 @@ describe('WorkLouderCodexSettings', () => {
 
     // Now each key is its own target, and its editor writes only that slot.
     fireEvent.click(screen.getByRole('button', { name: /AG02/ }));
-    await chooseSelectOption(
-      'settings.shortcuts.workLouderCodex.actions.choose',
-      'New Task',
-    );
+    await chooseSelectOption('settings.shortcuts.workLouderCodex.actions.choose', 'New Task');
 
     expect(mocks.setSettings).toHaveBeenCalledWith({
       customAgentKeys: [null, null, { type: 'command', commandId: 'newTask' }, null, null, null],
@@ -364,9 +354,7 @@ describe('WorkLouderCodexSettings', () => {
     };
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
-    expect(
-      screen.queryByText('settings.shortcuts.workLouderCodex.layout.reset.title'),
-    ).toBeNull();
+    expect(screen.queryByText('settings.shortcuts.workLouderCodex.layout.reset.title')).toBeNull();
     fireEvent.click(
       screen.getByRole('button', {
         name: 'settings.shortcuts.workLouderCodex.layout.reset.button',
@@ -453,6 +441,49 @@ describe('WorkLouderCodexSettings', () => {
     });
   });
 
+  it('keeps the previous action when merging a 1U key', () => {
+    const defaults = createWorkLouderCodexDefaultSettings();
+    mocks.layout = {
+      ...defaults.layout,
+      separateMicrophoneKeys: true,
+      merges: [],
+      slots: {
+        ...defaults.layout.slots,
+        ACT06: { keycapId: 'FAST', action: { type: 'command', commandId: 'forkTask' } },
+      },
+    };
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^FAST/ }));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.merge.right',
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
+      }),
+    );
+
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      layout: expect.objectContaining({
+        merges: [{ origin: 'ACT06', cover: 'ACT07' }],
+      }),
+    });
+    expect(mocks.setSettings.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        layout: expect.objectContaining({
+          slots: expect.objectContaining({
+            ACT06: expect.objectContaining({
+              action: { type: 'command', commandId: 'forkTask' },
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it('lets a microphone keycap keep a rebound action, same as any other key', async () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
@@ -462,10 +493,7 @@ describe('WorkLouderCodexSettings', () => {
       name: 'settings.shortcuts.workLouderCodex.actions.choose',
     }) as HTMLSelectElement;
     expect(actionSelect.disabled).toBe(false);
-    await chooseSelectOption(
-      'settings.shortcuts.workLouderCodex.actions.choose',
-      'Fork Task',
-    );
+    await chooseSelectOption('settings.shortcuts.workLouderCodex.actions.choose', 'Fork Task');
     fireEvent.click(
       screen.getByRole('button', {
         name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
@@ -608,9 +636,7 @@ describe('WorkLouderCodexSettings', () => {
     render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
 
     expect(
-      screen.getByText(
-        'settings.shortcuts.workLouderCodex.agentKeys.source.descriptions.sidebar',
-      ),
+      screen.getByText('settings.shortcuts.workLouderCodex.agentKeys.source.descriptions.sidebar'),
     ).toBeTruthy();
   });
 
@@ -651,10 +677,7 @@ describe('WorkLouderCodexSettings', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /AG01/ }));
-    await chooseSelectOption(
-      'settings.shortcuts.workLouderCodex.actions.choose',
-      'New Task',
-    );
+    await chooseSelectOption('settings.shortcuts.workLouderCodex.actions.choose', 'New Task');
     expect(mocks.setSettings).toHaveBeenCalledWith({
       customAgentKeys: [{ type: 'command', commandId: 'newTask' }, null, null, null, null, null],
     });
@@ -668,9 +691,7 @@ describe('WorkLouderCodexSettings', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /ACT07/ }));
-    expect(
-      screen.getByText('settings.shortcuts.workLouderCodex.agentKeys.unlitKey'),
-    ).toBeTruthy();
+    expect(screen.getByText('settings.shortcuts.workLouderCodex.agentKeys.unlitKey')).toBeTruthy();
     expect(
       screen.queryByRole('combobox', {
         name: 'settings.shortcuts.workLouderCodex.actions.choose',
