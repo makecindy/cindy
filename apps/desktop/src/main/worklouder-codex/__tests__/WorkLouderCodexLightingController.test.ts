@@ -1487,4 +1487,36 @@ describe('WorkLouderCodexLightingController', () => {
     statusRef.current?.('not-detected');
     expect(dispatch).toHaveBeenCalledWith({ type: 'voice', phase: 'release' });
   });
+
+  it('keeps empty custom slots as new-task and only fills extra keys from the catalog', async () => {
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const catalog = Array.from({ length: 8 }, (_, index) => `task-${index}`);
+    const layout = createWorkLouderCodexDefaultSettings().layout;
+    layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'];
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => catalog,
+    );
+    controller.applySettings(
+      settings({
+        agentSource: 'custom',
+        customAgentKeys: [null, null, null, null, null, null],
+        layout,
+      }),
+    );
+    await controller.resumeTaskSlots();
+
+    expect(controller.getState().agentSlots[0]?.action).toBeNull();
+    expect(controller.getState().agentSlots[6]?.action).toEqual({
+      type: 'task',
+      sessionId: 'task-6',
+    });
+  });
 });

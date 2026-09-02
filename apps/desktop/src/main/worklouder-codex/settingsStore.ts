@@ -139,7 +139,10 @@ function normalizeLayout(raw: unknown, model: WorkLouderModel): WorkLouderCodexL
     const aliasHasMergedCap =
       isWorkLouderCodexDoubleKeycap(alias.keycapId) ||
       isWorkLouderCodexMicrophoneKeycap(alias.keycapId);
-    if (aliasHasMergedCap && unmigratedOrigin) {
+    // Old files stored the 2U cap on ACT10_ACT11 and often left ACT10 as MIC.
+    // New files have `merges` and keep origin as source of truth.
+    const legacyMergedAlias = value.merges === undefined && aliasHasMergedCap;
+    if (aliasHasMergedCap && (legacyMergedAlias || unmigratedOrigin)) {
       slots = { ...slots, ACT10: { ...alias } };
     } else {
       slots = { ...slots, ACT10_ACT11: { ...origin } };

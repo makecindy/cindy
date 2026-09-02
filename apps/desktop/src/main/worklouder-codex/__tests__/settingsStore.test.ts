@@ -296,6 +296,32 @@ describe('Work Louder Codex settings store', () => {
     });
   });
 
+  it('migrates a legacy ACT10_ACT11 2U assignment onto origin when merges is missing', () => {
+    const next = __testing.normalize(
+      {
+        layout: {
+          version: 1,
+          slots: {
+            ACT10: { keycapId: 'MIC', action: null },
+            ACT11: { keycapId: 'EMPT1', action: null },
+            ACT10_ACT11: { keycapId: 'EMPT5', action: { type: 'voice' } },
+            ACT12: {
+              keycapId: 'EMPT3',
+              action: { type: 'command', commandId: 'composer.submit' },
+            },
+          },
+          separateMicrophoneKeys: false,
+        },
+      },
+      'creator-micro-2',
+    );
+
+    expect(next.layout.slots.ACT10).toEqual({
+      keycapId: 'EMPT5',
+      action: { type: 'voice' },
+    });
+  });
+
   it('keeps a MIC cap on merged ACT10 instead of copying the EMPT5 alias back', () => {
     const next = __testing.normalize(
       {

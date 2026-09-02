@@ -25,6 +25,7 @@ import {
   rewriteBareWorkLouderNotifyJson,
   unwrapWorkLouderDeviceStatus,
   unwrapWorkLouderKeymapText,
+  WORKLOUDER_AGENT_KEY_MARKER,
   WORKLOUDER_DEVICE_KEYMAP_FILE,
   workLouderFirmwareIdlesHidRead,
   parseWorkLouderCodexJoystickEvent,
@@ -139,6 +140,7 @@ let creatorKeymapBinding: Promise<void> | null = null;
 let creatorKeymapRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let creatorKeymapRetryAt = 0;
 let creatorKeymap: readonly (readonly string[])[] = CREATOR_MICRO_2_AGENT_KEYMAP;
+let creatorKeymapGeneration = 0;
 
 if (parentPort) {
   parentPort.on('message', (event) => {
@@ -158,6 +160,7 @@ if (parentPort) {
     } else if (request?.kind === 'rebind-creator-keymap') {
       if (Array.isArray(request.keymap) && request.keymap.length > 0) {
         creatorKeymap = request.keymap.map((row) => [...row]);
+        creatorKeymapGeneration += 1;
         creatorKeymapBound = false;
         if (api) void bindCreatorAgentKeysWhenIdle(api);
       }
@@ -671,16 +674,21 @@ async function backupCreatorKeymap(liveText: string): Promise<void> {
   } catch {
     await writeKeymapSnapshot(factoryPath, liveText);
   }
-  await writeKeymapSnapshot(
-    path.join(keymapBackupDir, creatorMicro2KeymapSessionFileName(connectedDevice?.backupId)),
-    liveText,
-  );
+  // Only capture a restore snapshot from a vendor layout. Later rebinds during
+  // the same occupancy read Cindy's own keymap and must not overwrite it.
+  if (!liveText.includes(WORKLOUDER_AGENT_KEY_MARKER)) {
+    await writeKeymapSnapshot(
+      path.join(keymapBackupDir, creatorMicro2KeymapSessionFileName(connectedDevice?.backupId)),
+      liveText,
+    );
+  }
 }
 
 async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (creatorKeymapBound || stopping) return;
   if (connectedDevice?.deviceType !== 'creator-micro-2') return;
   if (!comm) return;
+  const generation = creatorKeymapGeneration;
   const fsApi = loadWorkLouderFsApi(deviceApi, comm);
   if (!fsApi) {
     hostLog('warn', 'Work Louder keymap bind could not load WLRPCApi');
@@ -725,6 +733,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
     throw new Error(writeResult?.error?.message ?? 'fs.write keymap.json failed');
   }
   await sleep(CREATOR_MICRO_2_KEYMAP_RELOAD_MS);
+  if (generation !== creatorKeymapGeneration || stopping) return;
   creatorKeymapBound = true;
   clearCreatorKeymapRetry();
   hostLog(
@@ -734,33 +743,34 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
 }
 
 async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<void> {
-  if (creatorKeymapBound || stopping) return;
   if (connectedDevice?.deviceType !== 'creator-micro-2') return;
-  if (creatorKeymapBinding) {
-    await creatorKeymapBinding;
-    return;
-  }
   const now = Date.now();
   if (now < creatorKeymapRetryAt) return;
-  const task = bindCreatorAgentKeys(deviceApi)
-    .catch((error) => {
-      const message = safeErrorMessage(error);
-      hostLog('warn', `Creator Micro 2 keymap bind failed: ${message}`);
-      if (isWorkLouderHidContention(message)) {
-        hostLog(
-          'warn',
-          'Creator Micro 2 vendor HID is busy; another app may be using the keyboard',
-        );
-        scheduleCreatorKeymapRetry();
-        return;
-      }
-      throw error;
-    })
-    .finally(() => {
-      if (creatorKeymapBinding === task) creatorKeymapBinding = null;
-    });
-  creatorKeymapBinding = task;
-  await task;
+  while (!stopping && !creatorKeymapBound) {
+    if (creatorKeymapBinding) {
+      await creatorKeymapBinding;
+      continue;
+    }
+    const task = bindCreatorAgentKeys(deviceApi)
+      .catch((error) => {
+        const message = safeErrorMessage(error);
+        hostLog('warn', `Creator Micro 2 keymap bind failed: ${message}`);
+        if (isWorkLouderHidContention(message)) {
+          hostLog(
+            'warn',
+            'Creator Micro 2 vendor HID is busy; another app may be using the keyboard',
+          );
+          scheduleCreatorKeymapRetry();
+          return;
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (creatorKeymapBinding === task) creatorKeymapBinding = null;
+      });
+    creatorKeymapBinding = task;
+    await task;
+  }
 }
 
 function scheduleCreatorKeymapRetry(): void {

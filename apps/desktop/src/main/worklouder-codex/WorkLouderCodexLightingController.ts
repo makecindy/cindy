@@ -710,8 +710,9 @@ export class WorkLouderCodexLightingController {
     const slotCount = this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
     if (this.settings.agentSource === 'custom') {
       return Array.from({ length: slotCount }, (_, slot) => {
-        const custom = cloneAction(this.settings.customAgentKeys[slot] ?? null);
-        if (custom) return custom;
+        if (slot < this.settings.customAgentKeys.length) {
+          return cloneAction(this.settings.customAgentKeys[slot] ?? null);
+        }
         const task = this.taskCatalog.options[slot];
         return task ? { type: 'task', sessionId: task.id } : null;
       });
