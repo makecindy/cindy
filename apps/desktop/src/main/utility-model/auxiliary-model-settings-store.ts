@@ -103,6 +103,27 @@ function refsFromUnknownList(value: unknown): string[] {
   return collectUniqueRefs(value.map((entry) => refFromUnknown(entry)));
 }
 
+function readLegacyStringList(
+  raw: Record<string, unknown>,
+  key: 'utilityModelProviderChain' | 'refinerProviderChain',
+): string[] | undefined {
+  const value = raw[key];
+  if (!Array.isArray(value)) return undefined;
+  const entries = value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return entries.length > 0 ? entries : undefined;
+}
+
+function splitCommaList(value: string | undefined): string[] | undefined {
+  const entries = (value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return entries.length > 0 ? entries : undefined;
+}
+
 function firstNonBlankString(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value !== 'string') continue;
@@ -112,10 +133,27 @@ function firstNonBlankString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
-function legacyVoiceHeadRef(raw: Record<string, unknown>): string | null {
-  const providerValue = firstNonBlankString(raw.utilityModelProvider, raw.refinerProvider);
+function legacyVoiceHeadRef(
+  raw: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  // Match UtilityModelSelection's precedence: utility file, utility env,
+  // legacy refiner file, legacy refiner env. In particular, an old file may
+  // only pin the provider while XDT_UTILITY_MODEL_PROVIDER_CHAIN supplies the
+  // fallback tail.
+  const providerValue = firstNonBlankString(
+    raw.utilityModelProvider,
+    env.XDT_UTILITY_MODEL_PROVIDER,
+    raw.refinerProvider,
+    env.XDT_VOICE_INPUT_REFINER_PROVIDER,
+  );
   const providerRef = refFromUnknown(providerValue);
-  const model = firstNonBlankString(raw.utilityModel, raw.refinerModel);
+  const model = firstNonBlankString(
+    raw.utilityModel,
+    env.XDT_UTILITY_MODEL,
+    raw.refinerModel,
+    env.XDT_VOICE_INPUT_REFINER_MODEL,
+  );
   if (!providerRef && !model) return null;
   const effectiveProviderRef = providerRef ?? resolveUtilityModelProviderKindAlias('');
   if (!effectiveProviderRef) return null;
@@ -126,9 +164,10 @@ function legacyVoiceHeadRef(raw: Record<string, unknown>): string | null {
   // without freezing the provider's default model.
   const modelAlias = resolveUtilityModelProviderKindAlias(model);
   if (
-    modelAlias
-    && isUtilityModelProviderKind(effectiveProviderRef)
-    && getUtilityModelProfile(effectiveProviderRef).transport === getUtilityModelProfile(modelAlias).transport
+    modelAlias &&
+    isUtilityModelProviderKind(effectiveProviderRef) &&
+    getUtilityModelProfile(effectiveProviderRef).transport ===
+      getUtilityModelProfile(modelAlias).transport
   ) {
     return modelAlias;
   }
@@ -137,11 +176,13 @@ function legacyVoiceHeadRef(raw: Record<string, unknown>): string | null {
   // active catalog remains the final availability gate at dispatch time.
   if (isUtilityModelProviderKind(effectiveProviderRef)) {
     const profile = getUtilityModelProfile(effectiveProviderRef);
-    return normalizeAuxiliaryModelRef(encodeCatalogModelPin({
-      providerId: profile.transport === 'codex-responses' ? 'openai' : 'xd',
-      agentKind: 'codex',
-      model,
-    }));
+    return normalizeAuxiliaryModelRef(
+      encodeCatalogModelPin({
+        providerId: profile.transport === 'codex-responses' ? 'openai' : 'xd',
+        agentKind: 'codex',
+        model,
+      }),
+    );
   }
   return effectiveProviderRef;
 }
@@ -151,18 +192,34 @@ function legacyVoiceHeadRef(raw: Record<string, unknown>): string | null {
  * settings page) wrote a non-empty refiner/utility chain or a non-empty head.
  * Sparse empty strings are the product default, not an override.
  */
-function legacyVoiceOverrideRefs(raw: Record<string, unknown> | null): string[] {
-  if (!raw) return [];
-  const head = legacyVoiceHeadRef(raw);
-  const chain = refsFromUnknownList(raw.utilityModelProviderChain).length > 0
-    ? refsFromUnknownList(raw.utilityModelProviderChain)
-    : refsFromUnknownList(raw.refinerProviderChain);
+function legacyVoiceOverrideRefs(
+  raw: Record<string, unknown> | null,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const source = raw ?? {};
+  const head = legacyVoiceHeadRef(source, env);
+  const rawChain =
+    readLegacyStringList(source, 'utilityModelProviderChain') ??
+    splitCommaList(env.XDT_UTILITY_MODEL_PROVIDER_CHAIN) ??
+    readLegacyStringList(source, 'refinerProviderChain') ??
+    splitCommaList(env.XDT_VOICE_INPUT_REFINER_PROVIDER_CHAIN);
+  const chain = refsFromUnknownList(rawChain);
   const refs = collectUniqueRefs([head, ...chain]);
   const hasExplicitHead = Boolean(
-    firstNonBlankString(raw.utilityModelProvider, raw.refinerProvider)
-      || firstNonBlankString(raw.utilityModel, raw.refinerModel),
+    firstNonBlankString(
+      source.utilityModelProvider,
+      env.XDT_UTILITY_MODEL_PROVIDER,
+      source.refinerProvider,
+      env.XDT_VOICE_INPUT_REFINER_PROVIDER,
+    ) ||
+    firstNonBlankString(
+      source.utilityModel,
+      env.XDT_UTILITY_MODEL,
+      source.refinerModel,
+      env.XDT_VOICE_INPUT_REFINER_MODEL,
+    ),
   );
-  const hasExplicitChain = chain.length > 0;
+  const hasExplicitChain = Boolean(rawChain?.length);
   if (!hasExplicitHead && !hasExplicitChain) return [];
   if (head || !hasExplicitChain) return refs;
 
@@ -195,9 +252,10 @@ function readLegacyMigrationPlan(): LegacyMigrationPlan | null {
   const ownerVoice = legacyVoiceMigrationCompleted
     ? []
     : legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath()));
-  const unscopedVoice = ownerVoice.length > 0 || legacyVoiceMigrationCompleted
-    ? []
-    : legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath()));
+  const unscopedVoice =
+    ownerVoice.length > 0 || legacyVoiceMigrationCompleted
+      ? []
+      : legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath()));
   const fromVoice = (ownerVoice.length > 0 ? ownerVoice : unscopedVoice).slice(0, 3);
 
   if (fromOldPins.length > 0) {
@@ -241,13 +299,15 @@ function scheduleLegacyMigration(): void {
     if (markVoiceMigrationComplete && activeOwnerScopeKey() === ownerScopeKey) {
       markLegacyVoiceMigrationComplete();
     }
-  })().catch((error) => {
-    log.warn('legacy auxiliary model migration failed', {
-      error: error instanceof Error ? error.message : String(error),
+  })()
+    .catch((error) => {
+      log.warn('legacy auxiliary model migration failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    })
+    .finally(() => {
+      pendingLegacyMigration = null;
     });
-  }).finally(() => {
-    pendingLegacyMigration = null;
-  });
 }
 
 /**
@@ -339,9 +399,10 @@ export async function writeAuxiliaryModelSettingsPatch(
       // A reset can race with the first legacy migration. Seal the legacy
       // voice import while holding the same lock so it cannot resurrect the
       // chain after this empty patch removes the new override.
-      const legacyVoice = hasLegacyVoiceMigrationMarker()
-        || legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath())).length > 0
-        || legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath())).length > 0;
+      const legacyVoice =
+        hasLegacyVoiceMigrationMarker() ||
+        legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath())).length > 0 ||
+        legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath())).length > 0;
       if (legacyVoice) markLegacyVoiceMigrationComplete();
       return patch;
     });
@@ -359,9 +420,10 @@ export async function resetAuxiliaryModelSettings(): Promise<AuxiliaryModelSetti
     // Keep this decision under the same settings lock as reset. Otherwise a
     // pending migration could reacquire the lock after reset and resurrect the
     // legacy voice chain that the user just cleared.
-    const legacyVoice = hasLegacyVoiceMigrationMarker()
-      || legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath())).length > 0
-      || legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath())).length > 0;
+    const legacyVoice =
+      hasLegacyVoiceMigrationMarker() ||
+      legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath())).length > 0 ||
+      legacyVoiceOverrideRefs(readJsonObject(unscopedVoiceModelsPath())).length > 0;
     if (legacyVoice) markLegacyVoiceMigrationComplete();
     return { models: [] };
   });

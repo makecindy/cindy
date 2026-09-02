@@ -72,6 +72,7 @@ describe('auxiliary-model-settings-store', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     rmSync(h.dir, { recursive: true, force: true });
   });
 
@@ -179,6 +180,21 @@ describe('auxiliary-model-settings-store', () => {
     expect(readJson(migrationStatePath())).toEqual({ legacyVoiceMigrationCompleted: true });
   });
 
+  it('merges legacy file pins with the environment-provided fallback chain', async () => {
+    vi.stubEnv('XDT_UTILITY_MODEL_PROVIDER_CHAIN', 'codex-gpt-5.4-mini,litellm-deepseek-v4-flash');
+    writeJson(ownerVoicePath(), {
+      utilityModelProvider: 'litellm-kimi-k2.6',
+    });
+
+    expect(readAuxiliaryModelSettings()).toEqual({
+      models: ['litellm-kimi-k2.6', 'codex-gpt-5.4-mini', 'litellm-deepseek-v4-flash'],
+    });
+    await __testing.flushLegacyMigration();
+    expect(readJson(settingsPath())).toEqual({
+      models: ['litellm-kimi-k2.6', 'codex-gpt-5.4-mini', 'litellm-deepseek-v4-flash'],
+    });
+  });
+
   it('does not re-import the legacy voice chain after restoring automatic defaults', async () => {
     writeJson(ownerVoicePath(), {
       refinerProvider: 'litellm-kimi-k2.6',
@@ -237,19 +253,19 @@ describe('auxiliary-model-settings-store', () => {
   });
 
   it('preserves a legacy provider model override as the matching profile', () => {
-    expect(__testing.legacyVoiceOverrideRefs({
-      refinerProvider: 'litellm',
-      refinerModel: 'qwen/qwen3.6-plus',
-    })).toEqual(['litellm-qwen3.6-plus']);
+    expect(
+      __testing.legacyVoiceOverrideRefs({
+        refinerProvider: 'litellm',
+        refinerModel: 'qwen/qwen3.6-plus',
+      }),
+    ).toEqual(['litellm-qwen3.6-plus']);
   });
 
   it('keeps the implicit default head when migrating a legacy fallback-only chain', () => {
-    expect(__testing.legacyVoiceOverrideRefs({
-      refinerProviderChain: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
-    })).toEqual([
-      'codex-gpt-5.4-mini',
-      'litellm-kimi-k2.6',
-      'litellm-deepseek-v4-flash',
-    ]);
+    expect(
+      __testing.legacyVoiceOverrideRefs({
+        refinerProviderChain: ['litellm-kimi-k2.6', 'litellm-deepseek-v4-flash'],
+      }),
+    ).toEqual(['codex-gpt-5.4-mini', 'litellm-kimi-k2.6', 'litellm-deepseek-v4-flash']);
   });
 });
