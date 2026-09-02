@@ -22,6 +22,7 @@ describe('mapHubSkillInfoToDesktopInfo', () => {
       tags: [{ slug: 'automation', name: 'Automation' }],
       githubUrl: 'https://github.com/example/lark-task',
       stats: { downloads: 135 },
+      hubSource: 'native',
     });
 
     expect(info.categories).toEqual(['engine', 'office']);
@@ -30,6 +31,7 @@ describe('mapHubSkillInfoToDesktopInfo', () => {
     expect(info.icon).toBe('https://skillhub.example.test/assets/default-skill-icon-v4.svg');
     expect(info.description).toBe('Market summary');
     expect(info.downloads).toBe(135);
+    expect(info.hubSource).toBe('native');
   });
 
   it('falls back to Hub description when summary is absent', () => {

@@ -160,18 +160,20 @@ describe('SkillhubMarketService', () => {
 
   it('passes public and organization catalog scopes to the Hub', async () => {
     const { fetch, calls } = makeFetch([
-      { items: [makeHubSkill('public-skill')], total: 1 },
-      { items: [makeHubSkill('organization-skill', { visibility: 'shared' })], total: 1 },
+      { items: [makeHubSkill('public-skill', { hubSource: 'native' })], total: 1 },
+      { items: [makeHubSkill('organization-skill', { visibility: 'shared', hubSource: 'legacy-xd' })], total: 1 },
     ]);
     const service = new SkillhubMarketService({ fetch });
 
-    await service.listMarket({ scope: 'market', sort: 'trending' });
-    await service.listMarket({ scope: 'team', sort: 'trending' });
+    const publicResult = await service.listMarket({ scope: 'market', sort: 'trending' });
+    const organizationResult = await service.listMarket({ scope: 'team', sort: 'trending' });
 
     expect(calls.map((call) => call.path)).toEqual([
       '/api/skills-hub/skills?page=1&pageSize=24&sort=trending&order=desc&scope=market',
       '/api/skills-hub/skills?page=1&pageSize=24&sort=trending&order=desc&scope=team',
     ]);
+    expect(publicResult.items[0]?.hubSource).toBe('native');
+    expect(organizationResult.items[0]?.hubSource).toBe('legacy-xd');
   });
 
   it('builds detail, file preview, visibility, and scan routes', async () => {
@@ -185,20 +187,20 @@ describe('SkillhubMarketService', () => {
     ]);
     const service = new SkillhubMarketService({ fetch });
 
-    await service.info('demo/skill');
-    await service.getPublishedFiles({ name: 'demo/skill', version: '1.0.0' });
-    await service.readPublishedFile({ name: 'demo/skill', path: 'docs/README.md', version: '1.0.0' });
-    await service.listPublishedVersions('demo/skill');
+    await service.info('demo/skill', 'native');
+    await service.getPublishedFiles({ name: 'demo/skill', version: '1.0.0', hubSource: 'native' });
+    await service.readPublishedFile({ name: 'demo/skill', path: 'docs/README.md', version: '1.0.0', hubSource: 'native' });
+    await service.listPublishedVersions('demo/skill', 'native');
     await service.getPublishedVisibility('demo/skill');
-    await service.getScanStatus({ slug: 'demo/skill', version: '1.0.0' });
+    await service.getScanStatus({ slug: 'demo/skill', version: '1.0.0', hubSource: 'native' });
 
     expect(calls.map((call) => call.path)).toEqual([
-      '/api/skills-hub/skills/demo%2Fskill',
-      '/api/skills-hub/skills/demo%2Fskill/files?version=1.0.0',
-      '/api/skills-hub/skills/demo%2Fskill/file?path=docs%2FREADME.md&version=1.0.0',
-      '/api/skills-hub/skills/demo%2Fskill/versions',
+      '/api/skills-hub/skills/demo%2Fskill?hubSource=native',
+      '/api/skills-hub/skills/demo%2Fskill/files?version=1.0.0&hubSource=native',
+      '/api/skills-hub/skills/demo%2Fskill/file?path=docs%2FREADME.md&version=1.0.0&hubSource=native',
+      '/api/skills-hub/skills/demo%2Fskill/versions?hubSource=native',
       '/api/skills-hub/skills/demo%2Fskill/visibility',
-      '/api/skills-hub/skills/demo%2Fskill/scan?version=1.0.0',
+      '/api/skills-hub/skills/demo%2Fskill/scan?version=1.0.0&hubSource=native',
     ]);
     expect(calls[5]?.opts).toEqual({
       cache: 'no-store',

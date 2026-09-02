@@ -8,6 +8,7 @@ import { ensureReady as ensureLocalDbReady, getRawDb } from '../localDb';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { isSkillhubHubSource } from '../../shared/skillhubSource.js';
 import { computeFolderHashDetailed } from './folderHash';
 import { type MdKind, parseAndValidateFrontmatter } from './frontmatterValidation';
 import * as importLocalSkill from './importLocalSkill';
@@ -402,9 +403,9 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   ipcMain.handle(
     'skillhub:info',
-    async (_event, { name }: { name: string }) => {
+    async (_event, { name, hubSource }: { name: string; hubSource?: unknown }) => {
       try {
-        return await marketService.info(name);
+        return await marketService.info(name, isSkillhubHubSource(hubSource) ? hubSource : undefined);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const code = (err as { code?: string }).code;
@@ -418,9 +419,13 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   ipcMain.handle(
     'skillhub:get-published-files',
-    async (_event, params: { name: string; version?: string }) => {
+    async (_event, params: { name: string; version?: string; hubSource?: unknown }) => {
       try {
-        return await marketService.getPublishedFiles(params);
+        return await marketService.getPublishedFiles({
+          name: params.name,
+          ...(params.version !== undefined ? { version: params.version } : {}),
+          ...(isSkillhubHubSource(params.hubSource) ? { hubSource: params.hubSource } : {}),
+        });
       } catch (err) {
         return skillhubIpcError(err);
       }
@@ -429,9 +434,14 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   ipcMain.handle(
     'skillhub:read-published-file',
-    async (_event, params: { name: string; path: string; version?: string }) => {
+    async (_event, params: { name: string; path: string; version?: string; hubSource?: unknown }) => {
       try {
-        return await marketService.readPublishedFile(params);
+        return await marketService.readPublishedFile({
+          name: params.name,
+          path: params.path,
+          ...(params.version !== undefined ? { version: params.version } : {}),
+          ...(isSkillhubHubSource(params.hubSource) ? { hubSource: params.hubSource } : {}),
+        });
       } catch (err) {
         return skillhubIpcError(err);
       }
@@ -440,9 +450,9 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   ipcMain.handle(
     'skillhub:list-published-versions',
-    async (_event, { name }: { name: string }) => {
+    async (_event, { name, hubSource }: { name: string; hubSource?: unknown }) => {
       try {
-        return await marketService.listPublishedVersions(name);
+        return await marketService.listPublishedVersions(name, isSkillhubHubSource(hubSource) ? hubSource : undefined);
       } catch (err) {
         return skillhubIpcError(err);
       }
@@ -559,9 +569,13 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 查询发布后的安全扫描状态（renderer 轮询用）
   ipcMain.handle(
     'skillhub:get-scan-status',
-    async (_event, params: { slug: string; version?: string }) => {
+    async (_event, params: { slug: string; version?: string; hubSource?: unknown }) => {
       try {
-        return await marketService.getScanStatus(params);
+        return await marketService.getScanStatus({
+          slug: params.slug,
+          ...(params.version !== undefined ? { version: params.version } : {}),
+          ...(isSkillhubHubSource(params.hubSource) ? { hubSource: params.hubSource } : {}),
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { success: false, error: message, status: 'unknown' };
@@ -800,6 +814,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       const publicParams: import('./installService').InstallParams = {
         name: params.name,
         ...(params.version !== undefined ? { version: params.version } : {}),
+        ...(isSkillhubHubSource(params.hubSource) ? { hubSource: params.hubSource } : {}),
         ...(params.force !== undefined ? { force: params.force } : {}),
         ...(params.installPath !== undefined ? { installPath: params.installPath } : {}),
         ...(params.skipBackup !== undefined ? { skipBackup: params.skipBackup } : {}),

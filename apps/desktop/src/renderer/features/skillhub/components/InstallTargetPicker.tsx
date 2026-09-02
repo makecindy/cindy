@@ -27,6 +27,7 @@ import {
   joinSkillInstallPath,
   normalizeInstallPathKey,
 } from '../lib/installTargetPaths';
+import type { SkillhubHubSource } from '../../../../shared/skillhubSource';
 
 /** Minimal skill identity for the picker (market Clone or local import). */
 export interface InstallTargetSkill {
@@ -36,6 +37,7 @@ export interface InstallTargetSkill {
   /** Market Clone passes latestVersion; used when versionLabel is absent. */
   latestVersion?: string | number;
   description?: string;
+  hubSource?: SkillhubHubSource;
 }
 
 export type InstallTargetActionResult =
@@ -55,6 +57,7 @@ interface InstallTargetPickerProps {
     name: string;
     installPath?: string;
     force?: boolean;
+    hubSource?: SkillhubHubSource;
   }) => Promise<InstallTargetActionResult>;
   /** i18n key override for dialog title (default installPicker.title). */
   titleKey?: string;
@@ -73,11 +76,13 @@ async function runMarketInstall(params: {
   name: string;
   installPath?: string;
   force?: boolean;
+  hubSource?: SkillhubHubSource;
 }): Promise<InstallTargetActionResult> {
   return window.electronAPI.skillhub.install({
     name: params.name,
     installPath: params.installPath,
     force: params.force,
+    hubSource: params.hubSource,
   });
 }
 
@@ -145,7 +150,7 @@ export function InstallTargetPicker({
     setBannerError(null);
     setInstalling(true);
     try {
-      const res = await runAction({ name: skill.name, installPath });
+      const res = await runAction({ name: skill.name, installPath, hubSource: skill.hubSource });
       if (res.success) {
         toast.success(
           t(successToastKey, {
@@ -168,7 +173,7 @@ export function InstallTargetPicker({
           cancelText: t('skillhub.installPicker.conflictDialog.cancel'),
         });
         if (!ok) return;
-        const forced = await runAction({ name: skill.name, installPath, force: true });
+        const forced = await runAction({ name: skill.name, installPath, force: true, hubSource: skill.hubSource });
         if (forced.success) {
           toast.success(
             t(successToastKey, {

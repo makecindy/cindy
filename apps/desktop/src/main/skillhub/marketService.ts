@@ -3,6 +3,7 @@ import { skillhubApiFetch } from './hubApi';
 import { mapHubSkillInfoToDesktopInfo, type HubSkillInfoForDesktop } from './infoMapping';
 import { buildSkillhubSyncResponse, type SkillhubBatchDetailResponse } from './syncMapping';
 import { assertSkillhubVisibilityAllowed, assertSkillhubWriteAllowed } from './identityPolicy';
+import { withSkillhubHubSource, type SkillhubHubSource } from '../../shared/skillhubSource';
 
 const SKILLHUB_SYNC_BATCH_SIZE = 100;
 const HUB_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
@@ -142,9 +143,9 @@ export class SkillhubMarketService {
     };
   }
 
-  async info(name: string) {
+  async info(name: string, hubSource?: SkillhubHubSource) {
     const hub = await this.fetch<HubSkillInfoForDesktop | { deleted: true }>(
-      `/api/skills-hub/skills/${encodeURIComponent(name)}`,
+      withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(name)}`, hubSource),
     );
     if ('deleted' in hub) {
       return { success: true as const, deleted: true as const };
@@ -153,17 +154,17 @@ export class SkillhubMarketService {
     return { success: true as const, info };
   }
 
-  async getPublishedFiles({ name, version }: { name: string; version?: string }) {
+  async getPublishedFiles({ name, version, hubSource }: { name: string; version?: string; hubSource?: SkillhubHubSource }) {
     const qs = version ? `?version=${encodeURIComponent(version)}` : '';
     const result = await this.fetch<{
       slug: string;
       version: string;
       files: Array<{ path: string; size: number; language: string; truncated: boolean }>;
-    }>(`/api/skills-hub/skills/${encodeURIComponent(name)}/files${qs}`);
+    }>(withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(name)}/files${qs}`, hubSource));
     return { success: true as const, ...result };
   }
 
-  async readPublishedFile({ name, path: filePath, version }: { name: string; path: string; version?: string }) {
+  async readPublishedFile({ name, path: filePath, version, hubSource }: { name: string; path: string; version?: string; hubSource?: SkillhubHubSource }) {
     const search = new URLSearchParams({ path: filePath });
     if (version) search.set('version', version);
     const result = await this.fetch<{
@@ -172,13 +173,13 @@ export class SkillhubMarketService {
       language: string;
       truncated: boolean;
       content: string;
-    }>(`/api/skills-hub/skills/${encodeURIComponent(name)}/file?${search.toString()}`);
+    }>(withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(name)}/file?${search.toString()}`, hubSource));
     return { success: true as const, file: result };
   }
 
-  async listPublishedVersions(name: string) {
+  async listPublishedVersions(name: string, hubSource?: SkillhubHubSource) {
     const versions = await this.fetch<unknown[]>(
-      `/api/skills-hub/skills/${encodeURIComponent(name)}/versions`,
+      withSkillhubHubSource(`/api/skills-hub/skills/${encodeURIComponent(name)}/versions`, hubSource),
     );
     return { success: true as const, versions };
   }
@@ -264,7 +265,7 @@ export class SkillhubMarketService {
         skillCount?: number;
         mySkillCount?: number;
       }>;
-    }>>('/api/skills-hub/categories');
+    }>>('/api/skills-hub/categories?hubSource=native');
     const categories = flattenHubCategories(items ?? []);
     const totalCount = categories.reduce((s, c) => s + c.count, 0);
     const myTotalCount = categories.reduce((s, c) => s + c.myCount, 0);
@@ -285,9 +286,10 @@ export class SkillhubMarketService {
     return { success: true as const, teams };
   }
 
-  async getScanStatus({ slug, version }: { slug: string; version?: string }) {
+  async getScanStatus({ slug, version, hubSource }: { slug: string; version?: string; hubSource?: SkillhubHubSource }) {
+    const path = `/api/skills-hub/skills/${encodeURIComponent(slug)}/scan${version ? `?version=${encodeURIComponent(version)}` : ''}`;
     const result = await this.fetch<{ status: string; gates?: unknown[]; scorecard?: unknown }>(
-      `/api/skills-hub/skills/${encodeURIComponent(slug)}/scan${version ? `?version=${encodeURIComponent(version)}` : ''}`,
+      withSkillhubHubSource(path, hubSource),
       { cache: 'no-store', headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
     );
     return { success: true as const, ...result };

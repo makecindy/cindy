@@ -3188,17 +3188,18 @@ interface ElectronAPI {
         downloads: number;
         /** 跨设备识别：null = pre-feature 历史版本 */
         latestPublishedFromDeviceId: string | null;
+        hubSource?: import('../shared/skillhubSource').SkillhubHubSource;
       }>;
       nextCursor?: string | null;
     }>;
-    info: (name: string) => Promise<{
+    info: (name: string, hubSource?: import('../shared/skillhubSource').SkillhubHubSource) => Promise<{
       success: boolean;
       error?: string;
       info?: SkillhubInfoResult;
       deleted?: boolean;
       errorCode?: string;
     }>;
-    getPublishedFiles: (params: { name: string; version?: string }) => Promise<{
+    getPublishedFiles: (params: { name: string; version?: string; hubSource?: import('../shared/skillhubSource').SkillhubHubSource }) => Promise<{
       success: boolean;
       slug?: string;
       version?: string;
@@ -3206,13 +3207,13 @@ interface ElectronAPI {
       error?: string;
       errorCode?: string;
     }>;
-    readPublishedFile: (params: { name: string; path: string; version?: string }) => Promise<{
+    readPublishedFile: (params: { name: string; path: string; version?: string; hubSource?: import('../shared/skillhubSource').SkillhubHubSource }) => Promise<{
       success: boolean;
       file?: { path: string; size: number; language: string; truncated: boolean; content: string };
       error?: string;
       errorCode?: string;
     }>;
-    listPublishedVersions: (name: string) => Promise<{
+    listPublishedVersions: (name: string, hubSource?: import('../shared/skillhubSource').SkillhubHubSource) => Promise<{
       success: boolean;
       versions?: unknown[];
       error?: string;
@@ -3302,7 +3303,7 @@ interface ElectronAPI {
       myTotalCount?: number;
       error?: string;
     }>;
-    getScanStatus: (params: { slug: string; version?: string }) => Promise<{
+    getScanStatus: (params: { slug: string; version?: string; hubSource?: import('../shared/skillhubSource').SkillhubHubSource }) => Promise<{
       success: boolean;
       status: string;
       gates?: Array<{ name: string; status: string; issues?: unknown[] }>;
@@ -3339,6 +3340,7 @@ interface ElectronAPI {
     install: (params: {
       name: string;
       version?: string;
+      hubSource?: import('../shared/skillhubSource').SkillhubHubSource;
       force?: boolean;
       /** 完整安装目标路径。不传 → global scope 默认路径。*/
       installPath?: string;
@@ -6351,6 +6353,7 @@ interface StoredInstall {
   origin?: 'installed' | 'published' | 'learned' | 'imported';
   /** 是否由产品自动同步流程安装。用于区分普通市场安装与用户可 opt-out 的自动同步安装。 */
   autoSynced?: boolean;
+  hubSource?: import('../shared/skillhubSource').SkillhubHubSource;
   /** /learn 蒸馏产物的溯源(仅 origin='learned')。personal=true ⇒ publish 拦截。 */
   provenance?: import('../shared/learnTypes').LearnProvenance;
 }
@@ -6597,6 +6600,7 @@ interface SkillhubInfoResult {
   currentUserDeptNames?: string[];
   /** 跨设备识别：null = pre-feature 历史版本 */
   latestPublishedFromDeviceId: string | null;
+  hubSource?: import('../shared/skillhubSource').SkillhubHubSource;
 }
 
 interface SkillhubPublishParams {
