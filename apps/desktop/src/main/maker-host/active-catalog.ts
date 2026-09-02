@@ -886,7 +886,7 @@ function projectXdGatewayMediaModels(
   // agent-bound `models`. A gateway snapshot that explicitly includes embedding models is
   // authoritative for the current account; payment-only entries must not unlock chat indexing.
   const embeddingModels = gatewayModels
-    .filter((model) => model.mode === 'embedding' && model.availability !== 'requires_payment')
+    .filter((model) => model.mode === 'embedding' && model.availability === 'available')
     .map((model) => ({
       id: model.id,
       name: model.name ?? model.id,
