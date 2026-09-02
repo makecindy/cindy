@@ -60,11 +60,15 @@ export function UsageTokenBars({
   modelDaily,
   colorOrder,
   todayKey,
+  selectedDay,
+  onDayClick,
 }: {
   modelDaily: UsageHistoryModelDay[];
   /** 前 N 名模型 key (payload.models 排序), 决定分段与图例配色。 */
   colorOrder: string[];
   todayKey: string;
+  selectedDay?: string | null;
+  onDayClick?: (day: string) => void;
 }): React.JSX.Element {
   const { t } = useTranslation();
 
@@ -151,14 +155,20 @@ export function UsageTokenBars({
               ),
             ];
             return (
-              <div
+              <button
                 key={b.day}
+                type="button"
                 title={titleLines.join('\n')}
+                aria-label={b.day}
+                aria-pressed={selectedDay === b.day}
+                onClick={() => onDayClick?.(b.day)}
+                disabled={!onDayClick}
                 // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
-                className="flex min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-[2px]"
+                className="flex min-w-0 flex-1 cursor-pointer flex-col justify-end overflow-hidden rounded-[2px] border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
                 style={{
                   height,
                   backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
+                  boxShadow: selectedDay === b.day ? '0 0 0 2px var(--focus-ring-soft)' : undefined,
                 }}
               >
                 {[...b.segments].reverse().map((s) => (
@@ -170,7 +180,7 @@ export function UsageTokenBars({
                     }}
                   />
                 ))}
-              </div>
+              </button>
             );
           })}
         </div>

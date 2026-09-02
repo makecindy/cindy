@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { UsageHeatmap } from '../UsageHeatmap';
+import { resolveHeatmapWeeks, UsageHeatmap } from '../UsageHeatmap';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -39,10 +39,50 @@ function cellTitles(container: HTMLElement): string[] {
 }
 
 describe('UsageHeatmap metric', () => {
-  it('分桶取值随 metric 切换 (金额口径与 token 口径给出不同深浅)', () => {
-    const asMoney = render(
-      <UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} />,
+  it('至少显示 20 周，且宽容器会展示数据覆盖的更多周数', () => {
+    expect(
+      resolveHeatmapWeeks({
+        days: [{ day: '2026-08-22' }],
+        todayKey: '2026-08-22',
+        availableWidth: 100,
+      }),
+    ).toBe(20);
+
+    expect(
+      resolveHeatmapWeeks({
+        days: [{ day: '2026-01-01' }],
+        todayKey: '2026-08-22',
+        availableWidth: 500,
+      }),
+    ).toBe(33);
+
+    expect(
+      resolveHeatmapWeeks({
+        days: [{ day: '2025-01-01' }],
+        todayKey: '2026-08-22',
+        availableWidth: 500,
+      }),
+    ).toBe(33);
+
+    expect(
+      resolveHeatmapWeeks({
+        days: [{ day: '2025-01-01' }],
+        todayKey: '2026-08-22',
+        availableWidth: 900,
+      }),
+    ).toBe(60);
+  });
+
+  it('月份标签保持单行，避免最右侧月份换行', () => {
+    const { container } = render(<UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} />);
+    const monthLabel = [...container.querySelectorAll('span')].find((node) =>
+      node.className.includes('whitespace-nowrap'),
     );
+    expect(monthLabel).toBeTruthy();
+  });
+
+  it('分桶取值随 metric 切换 (金额口径与 token 口径给出不同深浅)', () => {
+    const asMoney = render(<UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} />);
     const moneyStyles = cellStyles(asMoney.container);
     asMoney.unmount();
 
@@ -65,9 +105,23 @@ describe('UsageHeatmap metric', () => {
   });
 
   it('默认仍是金额口径 (首页仪表盘行为不变)', () => {
-    const { container } = render(
-      <UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} />,
-    );
+    const { container } = render(<UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} />);
     expect(cellTitles(container).some((title) => title.includes('$'))).toBe(true);
+  });
+
+  it('日期格可点击并上报所选日期', () => {
+    const onDayClick = vi.fn();
+    const { getByRole } = render(
+      <UsageHeatmap
+        days={days}
+        todayKey="2026-08-22"
+        windowDays={7}
+        metric="tokens"
+        onDayClick={onDayClick}
+      />,
+    );
+
+    fireEvent.click(getByRole('button', { name: '2026-08-21' }));
+    expect(onDayClick).toHaveBeenCalledWith('2026-08-21');
   });
 });

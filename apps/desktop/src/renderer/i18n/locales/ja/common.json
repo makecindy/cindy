@@ -5793,20 +5793,31 @@
   "usageHistory": {
     "description": "このデバイスの Cindy 内で発生したトークン使用量です。記録は機能の提供開始時から蓄積され、それ以前の履歴は補完されません。",
     "empty": "まだ使用記録がありません。会話を実行すると蓄積が始まります。",
+    "range": {
+      "label": "期間",
+      "ariaLabel": "使用量の期間を絞り込む",
+      "all": "全期間",
+      "30d": "直近 30 日",
+      "7d": "直近 7 日",
+      "today": "今日"
+    },
     "cacheHitTooltip": "キャッシュ読取 ÷（入力 + キャッシュ読取 + キャッシュ書込）。メッセージカードと同じ基準です。",
     "summary": {
       "title": "概要"
     },
     "stats": {
       "todayTokens": "今日のトークン",
+      "todayTokensInRange": "{{range}}のトークン",
       "totalTokens": "直近 30 日のトークン",
+      "totalTokensInRange": "{{range}}のトークン",
       "streak": "連続稼働日数",
       "cacheHitRate": "キャッシュヒット率(30 日)",
+      "cacheHitRateInRange": "キャッシュヒット率（{{range}}）",
       "models": "使用モデル数"
     },
     "heatmap": {
       "title": "アクティビティヒートマップ",
-      "subtitle": "直近 20 週",
+      "subtitle": "直近 {{count}} 週",
       "emptyCell": "この日は使用記録なし"
     },
     "daily": {
@@ -5819,6 +5830,7 @@
       "col": {
         "agent": "Agent / harness",
         "total": "直近 30 日のトークン",
+        "totalInRange": "{{range}}のトークン",
         "share": "割合",
         "today": "今日",
         "hitRate": "キャッシュヒット率",
@@ -5831,6 +5843,7 @@
       "col": {
         "model": "モデル",
         "total": "合計トークン",
+        "totalInRange": "{{range}}のトークン",
         "share": "割合",
         "input": "入力",
         "output": "出力",
@@ -5841,7 +5854,7 @@
     },
     "tasks": {
       "title": "トークン消費の多いセッション",
-      "subtitle": "直近 30 日に稼働したセッションを累計トークン順に表示",
+      "subtitle": "{{range}}に稼働したセッションを累計トークン順に表示",
       "col": {
         "task": "セッション",
         "model": "モデル",

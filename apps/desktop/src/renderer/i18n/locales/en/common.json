@@ -5795,20 +5795,31 @@
   "usageHistory": {
     "description": "Token usage produced inside Cindy on this device. Records start accumulating when the feature ships; earlier history is not backfilled.",
     "empty": "No usage recorded yet. This fills in once you start a chat.",
+    "range": {
+      "label": "Time range",
+      "ariaLabel": "Filter usage time range",
+      "all": "All time",
+      "30d": "Last 30 days",
+      "7d": "Last 7 days",
+      "today": "Today"
+    },
     "cacheHitTooltip": "Cache read / (input + cache read + cache write) — the same formula as the message card.",
     "summary": {
       "title": "Overview"
     },
     "stats": {
       "todayTokens": "Tokens today",
+      "todayTokensInRange": "Tokens ({{range}})",
       "totalTokens": "Tokens (30d)",
+      "totalTokensInRange": "Tokens ({{range}})",
       "streak": "Active streak",
       "cacheHitRate": "Cache hit rate (30d)",
+      "cacheHitRateInRange": "Cache hit rate ({{range}})",
       "models": "Models used"
     },
     "heatmap": {
       "title": "Activity heatmap",
-      "subtitle": "Last 20 weeks",
+      "subtitle": "Last {{count}} weeks",
       "emptyCell": "No usage recorded"
     },
     "daily": {
@@ -5821,6 +5832,7 @@
       "col": {
         "agent": "Agent / harness",
         "total": "Tokens (30d)",
+        "totalInRange": "Tokens ({{range}})",
         "share": "Share",
         "today": "Today",
         "hitRate": "Cache hit rate",
@@ -5833,6 +5845,7 @@
       "col": {
         "model": "Model",
         "total": "Total tokens",
+        "totalInRange": "Tokens ({{range}})",
         "share": "Share",
         "input": "Input",
         "output": "Output",
@@ -5843,7 +5856,7 @@
     },
     "tasks": {
       "title": "Top sessions by tokens",
-      "subtitle": "Sessions active in the last 30 days, ranked by lifetime tokens",
+      "subtitle": "Sessions active in {{range}}, ranked by lifetime tokens",
       "col": {
         "task": "Session",
         "model": "Model",

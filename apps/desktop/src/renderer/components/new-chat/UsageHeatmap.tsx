@@ -7,22 +7,20 @@
  * 强度口径由 `metric` 决定: 'money' (默认, 首页仪表盘) 或 'tokens' (设置 → 用量历史,
  * 那个页面不出现任何金额, 见 issue #2785)。两种口径共用同一套分位分桶与色阶。
  *
- * 视觉: 7 行 (周日起) × ~20 列周网格, 单色阶 — 非零值按 4 分位分桶,
+ * 视觉: 7 行 (周日起) × 至少 20 列周网格, 单色阶 — 非零值按 4 分位分桶,
  * 用 color-mix 在 --accent-emphasis 上做透明度阶梯 (黑白反色设计, 不引入彩色)。
- * 140 个格子用原生 title 做 tooltip (Radix per-cell 实例太重)。
+ * 格子用原生 title 做 tooltip (Radix per-cell 实例太重)。
  */
 
-import React, { useMemo } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens, formatMoney } from '@/lib/usageFormat';
-import {
-  DEFAULT_USAGE_CURRENCY,
-  type RegionalMoney,
-} from '../../../shared/regionalMoney';
+import { DEFAULT_USAGE_CURRENCY, type RegionalMoney } from '../../../shared/regionalMoney';
 
 const CELL_PX = 12;
 const GAP_PX = 3;
+const MIN_HEATMAP_WEEKS = 20;
 const EMPTY_MONEY_CURRENCY = DEFAULT_USAGE_CURRENCY;
 /** 非零值分桶的 color-mix 浓度阶梯 (level 1..4)。 */
 const LEVEL_MIX = [0.22, 0.42, 0.68, 1];
@@ -49,6 +47,54 @@ function toDayKey(date: Date): string {
   return `${date.getFullYear()}-${mm}-${dd}`;
 }
 
+function startOfWeek(date: Date): Date {
+  const result = new Date(date);
+  result.setHours(12, 0, 0, 0);
+  result.setDate(result.getDate() - result.getDay());
+  return result;
+}
+
+function calendarDayDistance(from: Date, to: Date): number {
+  const fromUtc = Date.UTC(from.getFullYear(), from.getMonth(), from.getDate());
+  const toUtc = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate());
+  return Math.round((toUtc - fromUtc) / 86_400_000);
+}
+
+function fitWeeksForWidth(width: number): number {
+  if (!(width > 0)) return 0;
+  return Math.max(1, Math.floor((width + GAP_PX) / (CELL_PX + GAP_PX)));
+}
+
+/** 至少保留 20 周；有更早数据且容器放得下时，尽量展示更多历史。 */
+export function resolveHeatmapWeeks({
+  days,
+  todayKey,
+  availableWidth,
+  minimumWeeks = MIN_HEATMAP_WEEKS,
+}: {
+  days: Array<{ day: string }>;
+  todayKey: string;
+  availableWidth: number;
+  minimumWeeks?: number;
+}): number {
+  const minWeeks = Math.max(MIN_HEATMAP_WEEKS, Math.ceil(minimumWeeks));
+  const today = parseDayKey(todayKey);
+  if (!todayKey || Number.isNaN(today.getTime())) return minWeeks;
+
+  const earliestDay = days
+    .map((day) => day.day)
+    .filter((day) => day && day <= todayKey)
+    .sort()[0];
+  const dataWeeks = earliestDay
+    ? Math.floor(
+        calendarDayDistance(startOfWeek(parseDayKey(earliestDay)), startOfWeek(today)) / 7,
+      ) + 1
+    : 0;
+  const fitWeeks = fitWeeksForWidth(availableWidth);
+  const widthLimit = fitWeeks > 0 ? fitWeeks : minWeeks;
+  return Math.max(minWeeks, Math.min(Math.max(minWeeks, dataWeeks), widthLimit));
+}
+
 /** 非零花费的 4 分位阈值 → level 1..4。 */
 function levelFor(cost: number, thresholds: [number, number, number]): number {
   if (cost <= 0) return 0;
@@ -63,33 +109,75 @@ export function UsageHeatmap({
   todayKey,
   windowDays,
   metric = 'money',
+  selectedDay,
+  onDayClick,
+  onVisibleWeeksChange,
 }: {
   days: Array<{ day: string; money: RegionalMoney; tokens?: number }>;
   todayKey: string;
   windowDays: number;
   /** 格子深浅按哪一维分桶。'tokens' 下 tooltip 也只显示 token, 不出现金额。 */
   metric?: 'money' | 'tokens';
+  selectedDay?: string | null;
+  onDayClick?: (day: string) => void;
+  onVisibleWeeksChange?: (weeks: number) => void;
 }): React.JSX.Element {
   const { t, i18n } = useTranslation();
+  const plotRef = useRef<HTMLDivElement>(null);
+  const [availableWidth, setAvailableWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const element = plotRef.current;
+    if (!element) return undefined;
+
+    const updateWidth = (width: number): void => {
+      const nextWidth = Math.max(0, Math.round(width));
+      setAvailableWidth((previous) => (previous === nextWidth ? previous : nextWidth));
+    };
+    updateWidth(element.clientWidth);
+    if (typeof ResizeObserver === 'undefined') return undefined;
+
+    const observer = new ResizeObserver((entries) => {
+      updateWidth(entries[0]?.contentRect.width ?? element.clientWidth);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const minimumWeeks = Math.max(MIN_HEATMAP_WEEKS, Math.ceil(windowDays / 7));
+  const visibleWeeks = resolveHeatmapWeeks({
+    days,
+    todayKey,
+    availableWidth,
+    minimumWeeks,
+  });
+
+  useLayoutEffect(() => {
+    onVisibleWeeksChange?.(visibleWeeks);
+  }, [onVisibleWeeksChange, visibleWeeks]);
 
   const { columns, monthLabels } = useMemo(() => {
     const spendByDay = new Map(days.map((d) => [d.day, d.money]));
     const tokensByDay = new Map(days.map((d) => [d.day, d.tokens ?? 0]));
     const intensityOf = (row: { money: RegionalMoney; tokens?: number }): number =>
       metric === 'tokens' ? (row.tokens ?? 0) : row.money.amount;
-    const nonZero = days.map(intensityOf).filter((v) => v > 0).sort((a, b) => a - b);
-    const q = (p: number): number => (nonZero.length ? nonZero[Math.min(nonZero.length - 1, Math.floor(p * nonZero.length))] : 0);
+    const nonZero = days
+      .map(intensityOf)
+      .filter((v) => v > 0)
+      .sort((a, b) => a - b);
+    const q = (p: number): number =>
+      nonZero.length ? nonZero[Math.min(nonZero.length - 1, Math.floor(p * nonZero.length))] : 0;
     const thresholds: [number, number, number] = [q(0.25), q(0.5), q(0.75)];
 
     const today = parseDayKey(todayKey);
-    const start = new Date(today);
-    start.setDate(start.getDate() - (windowDays - 1));
-    start.setDate(start.getDate() - start.getDay()); // 对齐到周日, 行号 = weekday
+    const start = startOfWeek(today);
+    start.setDate(start.getDate() - (visibleWeeks - 1) * 7);
 
     const cells: HeatCell[] = [];
     const cursor = new Date(start);
-    while (cursor <= today) {
+    for (let index = 0; index < visibleWeeks * 7; index += 1) {
       const key = toDayKey(cursor);
+      const placeholder = cursor > today;
       const money = spendByDay.get(key) ?? {
         amount: 0,
         currency: days[0]?.money.currency ?? EMPTY_MONEY_CURRENCY,
@@ -101,24 +189,9 @@ export function UsageHeatmap({
         money,
         tokens: tokensByDay.get(key) ?? 0,
         level: levelFor(intensityOf({ money, tokens: tokensByDay.get(key) ?? 0 }), thresholds),
-        placeholder: false,
+        placeholder,
       });
       cursor.setDate(cursor.getDate() + 1);
-    }
-    // 末列补满 7 行 (未来日占位, 保持网格矩形)
-    while (cells.length % 7 !== 0) {
-      cells.push({
-        day: '',
-        money: {
-          amount: 0,
-          currency: days[0]?.money.currency ?? EMPTY_MONEY_CURRENCY,
-          approximate: false,
-          kind: 'actual-cost',
-        },
-        tokens: 0,
-        level: 0,
-        placeholder: true,
-      });
     }
 
     const cols: HeatCell[][] = [];
@@ -135,63 +208,76 @@ export function UsageHeatmap({
     });
 
     return { columns: cols, monthLabels: labels };
-  }, [days, todayKey, windowDays, i18n.language, metric]);
+  }, [days, todayKey, visibleWeeks, i18n.language, metric]);
 
   const colPitch = CELL_PX + GAP_PX;
 
   return (
-    <div className="flex flex-col gap-1.5">
-      {/* 月份标签行 */}
-      <div className="relative h-[14px]" style={{ width: columns.length * colPitch - GAP_PX }}>
-        {monthLabels.map((m) => (
-          <span
-            key={`${m.col}-${m.text}`}
-            className="absolute top-0 text-10 leading-[1.4] text-[var(--text-tertiary)]"
-            style={{ left: m.col * colPitch }}
-          >
-            {m.text}
-          </span>
-        ))}
-      </div>
-      {/* 网格 */}
-      <div className="flex" style={{ gap: GAP_PX }}>
-        {columns.map((col, ci) => (
-          <div key={ci} className="flex flex-col" style={{ gap: GAP_PX }}>
-            {col.map((cell, ri) =>
-              cell.placeholder ? (
-                <div key={ri} style={{ width: CELL_PX, height: CELL_PX }} />
-              ) : (
-                <div
-                  key={ri}
-                  title={
-                    metric === 'tokens'
-                      ? `${cell.day} · ${
-                          cell.tokens > 0
-                            ? t('usageDashboard.tokensOnly', {
-                                tokens: formatCompactTokens(cell.tokens),
-                              })
-                            : t('usageHistory.heatmap.emptyCell')
-                        }`
-                      : `${cell.day} · ${formatMoney(cell.money)}${
-                          cell.tokens > 0
-                            ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
-                            : ''
-                        }`
-                  }
-                  className="rounded-[3px]"
-                  style={{
-                    width: CELL_PX,
-                    height: CELL_PX,
-                    backgroundColor:
-                      cell.level === 0
-                        ? 'var(--surface-chip)'
-                        : `color-mix(in srgb, var(--accent-emphasis) ${LEVEL_MIX[cell.level - 1] * 100}%, var(--surface-chip))`,
-                  }}
-                />
-              ),
-            )}
-          </div>
-        ))}
+    <div ref={plotRef} className="w-full min-w-0 overflow-x-auto">
+      <div className="flex min-w-max flex-col gap-1.5">
+        {/* 月份标签行。nowrap 防止最右侧月份被挤成上下两行。 */}
+        <div className="relative h-[14px]" style={{ width: columns.length * colPitch - GAP_PX }}>
+          {monthLabels.map((m) => (
+            <span
+              key={`${m.col}-${m.text}`}
+              className="absolute top-0 whitespace-nowrap text-10 leading-[1.4] text-[var(--text-tertiary)]"
+              style={{ left: m.col * colPitch }}
+            >
+              {m.text}
+            </span>
+          ))}
+        </div>
+        {/* 网格 */}
+        <div className="flex" style={{ gap: GAP_PX }}>
+          {columns.map((col, ci) => (
+            <div key={ci} className="flex flex-col" style={{ gap: GAP_PX }}>
+              {col.map((cell, ri) =>
+                cell.placeholder ? (
+                  <div key={ri} style={{ width: CELL_PX, height: CELL_PX }} />
+                ) : (
+                  <button
+                    key={ri}
+                    type="button"
+                    aria-label={cell.day}
+                    aria-pressed={selectedDay === cell.day}
+                    onClick={() => onDayClick?.(cell.day)}
+                    className="cursor-pointer rounded-[3px] border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                    disabled={!onDayClick}
+                  >
+                    <div
+                      title={
+                        metric === 'tokens'
+                          ? `${cell.day} · ${
+                              cell.tokens > 0
+                                ? t('usageDashboard.tokensOnly', {
+                                    tokens: formatCompactTokens(cell.tokens),
+                                  })
+                                : t('usageHistory.heatmap.emptyCell')
+                            }`
+                          : `${cell.day} · ${formatMoney(cell.money)}${
+                              cell.tokens > 0
+                                ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
+                                : ''
+                            }`
+                      }
+                      className="rounded-[3px]"
+                      style={{
+                        width: CELL_PX,
+                        height: CELL_PX,
+                        backgroundColor:
+                          cell.level === 0
+                            ? 'var(--surface-chip)'
+                            : `color-mix(in srgb, var(--accent-emphasis) ${LEVEL_MIX[cell.level - 1] * 100}%, var(--surface-chip))`,
+                        boxShadow:
+                          selectedDay === cell.day ? '0 0 0 2px var(--focus-ring-soft)' : undefined,
+                      }}
+                    />
+                  </button>
+                ),
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

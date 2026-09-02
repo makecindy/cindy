@@ -5793,20 +5793,31 @@
   "usageHistory": {
     "description": "這台裝置上 Cindy 內部產生的 token 用量。紀錄從該功能上線起累積，不回填更早的歷史。",
     "empty": "還沒有用量紀錄。跑過對話之後，這裡會開始累積。",
+    "range": {
+      "label": "時間範圍",
+      "ariaLabel": "篩選用量時間範圍",
+      "all": "所有時間",
+      "30d": "最近 30 天",
+      "7d": "最近 7 天",
+      "today": "今天"
+    },
     "cacheHitTooltip": "快取讀取 ÷（輸入 + 快取讀取 + 快取寫入），與訊息卡片同口徑。",
     "summary": {
       "title": "概覽"
     },
     "stats": {
       "todayTokens": "今日 token",
+      "todayTokensInRange": "{{range}} token",
       "totalTokens": "近 30 天 token",
+      "totalTokensInRange": "{{range}} token",
       "streak": "連續活躍天數",
       "cacheHitRate": "快取命中率(近 30 天)",
+      "cacheHitRateInRange": "快取命中率({{range}})",
       "models": "用到的模型"
     },
     "heatmap": {
       "title": "活躍熱力圖",
-      "subtitle": "近 20 週",
+      "subtitle": "近 {{count}} 週",
       "emptyCell": "當天沒有用量紀錄"
     },
     "daily": {
@@ -5819,6 +5830,7 @@
       "col": {
         "agent": "Agent / harness",
         "total": "近 30 天 token",
+        "totalInRange": "{{range}} token",
         "share": "佔比",
         "today": "今日",
         "hitRate": "快取命中率",
@@ -5831,6 +5843,7 @@
       "col": {
         "model": "模型",
         "total": "總 token",
+        "totalInRange": "{{range}} token",
         "share": "佔比",
         "input": "輸入",
         "output": "輸出",
@@ -5841,7 +5854,7 @@
     },
     "tasks": {
       "title": "最耗 token 的任務",
-      "subtitle": "近 30 天內活躍過的任務，按累計 token 排序",
+      "subtitle": "{{range}}內活躍過的任務，按累計 token 排序",
       "col": {
         "task": "任務",
         "model": "模型",

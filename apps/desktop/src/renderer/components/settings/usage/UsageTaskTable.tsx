@@ -37,11 +37,10 @@ import { useProviders } from '@/hooks/useProviders';
 import { usageRankColor } from '@/components/new-chat/usagePalette';
 import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { formatUsagePercent } from './formatUsagePercent';
+import { isUsageDayInRange, type UsageHistoryRange } from './usageHistoryStats';
 
 /** 展示条数 —— 与"最耗"的语义匹配, 不做成完整列表 (那是任务侧栏的事)。 */
 const TOP_TASKS = 8;
-/** 与本页其它区块一致的窗口。 */
-const WINDOW_DAYS = 30;
 const UNKNOWN_VALUE = '—';
 
 /**
@@ -72,32 +71,50 @@ function lastActiveIso(session: { updatedAt: string; userSendAt: string | null }
     : session.updatedAt;
 }
 
-function activeWithinWindow(iso: string | null | undefined, cutoffMs: number): boolean {
+function localDayKeyFromIso(iso: string): string | null {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return null;
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function activeWithinRange(
+  iso: string | null | undefined,
+  range: UsageHistoryRange,
+  todayKey: string,
+): boolean {
   if (!iso) return false;
-  const ts = Date.parse(iso);
-  return Number.isFinite(ts) && ts >= cutoffMs;
+  const day = localDayKeyFromIso(iso);
+  return day !== null && isUsageDayInRange(day, todayKey, range);
 }
 
 /**
  * 候选行 —— 单独暴露成 hook, 让调用方能在**渲染卡片之前**知道有没有行。
  * 组件内部返回 null 会留下一张只有标题、正文全空的卡片 (会话被删光 / 列表首次加载中)。
  */
-export function useTopTokenSessions(): Session[] {
+export function useTopTokenSessions(
+  range: UsageHistoryRange = '30d',
+  todayKeyOverride?: string,
+): Session[] {
   // 归档的任务同样消耗过 token, 统计口径不该因为用户归档而变。
   const { sessions } = useCCSessions({ includeArchived: 'all' });
 
   return useMemo(() => {
-    const cutoff = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const now = new Date();
+    const todayKey =
+      todayKeyOverride ??
+      `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     return sessions
       .filter(
         (session) =>
           session.totalTokenUsage > 0 &&
-          (activeWithinWindow(session.updatedAt, cutoff) ||
-            activeWithinWindow(session.userSendAt, cutoff)),
+          (activeWithinRange(session.updatedAt, range, todayKey) ||
+            activeWithinRange(session.userSendAt, range, todayKey)),
       )
       .sort((a, b) => b.totalTokenUsage - a.totalTokenUsage)
       .slice(0, TOP_TASKS);
-  }, [sessions]);
+  }, [range, sessions, todayKeyOverride]);
 }
 
 export function UsageTaskTable({ rows }: { rows: Session[] }): React.JSX.Element {

@@ -116,9 +116,9 @@ describe('HomeUsageDashboard source contract', () => {
     expect(hookSource).toContain(
       'const [historyState, setHistoryState] = useState<{ scopeKey: string; value: UsageHistoryPayload | null }>',
     );
-    expect(hookSource).toContain('setHistoryState({ scopeKey, value });');
+    expect(hookSource).toContain('setHistoryState({ scopeKey: scopedKey, value });');
     expect(hookSource).toContain(
-      'history: historyState.scopeKey === scopeKey ? historyState.value : scope.cache,',
+      'history: historyState.scopeKey === scopedKey ? historyState.value : scope.cache,',
     );
   });
 
@@ -158,7 +158,7 @@ describe('HomeUsageDashboard source contract', () => {
     expect(hookSource).toContain('if (opts?.resetPricingRetry) scope.pricingRetryDone = false;');
     expect(hookSource).toContain('scope.pricingRetryDone = false;');
     expect(hookSource).toContain(
-      'void load(scopeKey, { forceRefresh: true, resetPricingRetry: true });',
+      'void load(scopedKey, { forceRefresh: true, resetPricingRetry: true });',
     );
   });
 

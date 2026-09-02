@@ -5793,20 +5793,31 @@
   "usageHistory": {
     "description": "이 기기의 Cindy 내부에서 발생한 토큰 사용량입니다. 기능 출시 시점부터 기록이 쌓이며 이전 기록은 채워지지 않습니다.",
     "empty": "아직 사용 기록이 없습니다. 대화를 실행하면 쌓이기 시작합니다.",
+    "range": {
+      "label": "기간",
+      "ariaLabel": "사용량 기간 필터",
+      "all": "전체 기간",
+      "30d": "최근 30일",
+      "7d": "최근 7일",
+      "today": "오늘"
+    },
     "cacheHitTooltip": "캐시 읽기 ÷ (입력 + 캐시 읽기 + 캐시 쓰기) — 메시지 카드와 동일한 기준입니다.",
     "summary": {
       "title": "개요"
     },
     "stats": {
       "todayTokens": "오늘 토큰",
+      "todayTokensInRange": "{{range}} 토큰",
       "totalTokens": "최근 30일 토큰",
+      "totalTokensInRange": "{{range}} 토큰",
       "streak": "연속 활동일",
       "cacheHitRate": "캐시 적중률(30일)",
+      "cacheHitRateInRange": "캐시 적중률({{range}})",
       "models": "사용한 모델"
     },
     "heatmap": {
       "title": "활동 히트맵",
-      "subtitle": "최근 20주",
+      "subtitle": "최근 {{count}}주",
       "emptyCell": "해당 날짜에 사용 기록 없음"
     },
     "daily": {
@@ -5819,6 +5830,7 @@
       "col": {
         "agent": "Agent / harness",
         "total": "최근 30일 토큰",
+        "totalInRange": "{{range}} 토큰",
         "share": "비중",
         "today": "오늘",
         "hitRate": "캐시 적중률",
@@ -5831,6 +5843,7 @@
       "col": {
         "model": "모델",
         "total": "총 토큰",
+        "totalInRange": "{{range}} 토큰",
         "share": "비중",
         "input": "입력",
         "output": "출력",
@@ -5841,7 +5854,7 @@
     },
     "tasks": {
       "title": "토큰 사용이 많은 세션",
-      "subtitle": "최근 30일 동안 활동한 세션을 누적 토큰 순으로 정렬",
+      "subtitle": "{{range}} 동안 활동한 세션을 누적 토큰 순으로 정렬",
       "col": {
         "task": "세션",
         "model": "모델",

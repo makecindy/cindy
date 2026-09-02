@@ -320,6 +320,36 @@ describe('getSubscriptionValuePriceFor', () => {
 });
 
 describe('readUsageHistoryWith', () => {
+  it('supports an all-time request without changing the default 30-day model window', async () => {
+    const oldRow = modelRow('2026-04-01', 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 123,
+    });
+    const recentRow = modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 456,
+    });
+    let requestedSince = '';
+    const deps = makeDeps({
+      getModelUsageSince: async (sinceDayKey) => {
+        requestedSince = sinceDayKey;
+        return [oldRow, recentRow];
+      },
+    });
+
+    const defaultResult = await readUsageHistoryWith(deps);
+    expect(defaultResult.modelDaily.map((row) => row.day)).toEqual([TODAY]);
+
+    const allResult = await readUsageHistoryWith(deps, { days: 'all', modelDays: 'all' });
+    expect(requestedSince).toBe('0000-01-01');
+    expect(allResult.modelDaily.map((row) => row.day)).toEqual(['2026-04-01', TODAY]);
+    expect(allResult.totals.last30DaysTokens).toBe(579);
+    expect(allResult.modelDaily[0]).toMatchObject({
+      inputTokens: 123,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    });
+  });
+
   it('aggregates actual money and subscription value without double counting', async () => {
     const estimateAmount = regionalUsdAmount(2);
     const result = await readUsageHistoryWith(makeDeps({

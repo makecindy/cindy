@@ -159,11 +159,23 @@ export function registerMakerUsageHandlers(
   // 用量历史聚合 (首页仪表盘) — 查询型 handler, DB 出错回退空 payload 让
   // renderer 正常渲染空态 (与同文件其它 usage 读取的 fallback-data 口径一致)。
   registry.handle(MAKER_INVOKE.USAGE_HISTORY, async (_e, opts: unknown) => {
-    const raw = (opts ?? {}) as { days?: unknown; forceRefresh?: unknown };
-    const days = typeof raw.days === 'number' && Number.isFinite(raw.days) ? raw.days : undefined;
+    const raw = (opts ?? {}) as { days?: unknown; modelDays?: unknown; forceRefresh?: unknown };
+    const days =
+      raw.days === 'all'
+        ? ('all' as const)
+        : typeof raw.days === 'number' && Number.isFinite(raw.days)
+          ? raw.days
+          : undefined;
+    const modelDays =
+      raw.modelDays === 'all'
+        ? ('all' as const)
+        : typeof raw.modelDays === 'number' && Number.isFinite(raw.modelDays)
+          ? raw.modelDays
+          : undefined;
     const forceRefresh = raw.forceRefresh === true;
     const readOpts = {
       ...(days === undefined ? {} : { days }),
+      ...(modelDays === undefined ? {} : { modelDays }),
       ...(forceRefresh ? { forceRefresh: true } : {}),
     };
     try {

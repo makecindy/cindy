@@ -6,7 +6,9 @@ import {
   buildModelRows,
   buildSummary,
   cacheHitRate,
+  chartUsageHistoryPayload,
   computeTokenStreak,
+  filterUsageHistoryPayload,
   isUsageHistoryEmpty,
   toUsageDays,
 } from '../usageHistoryStats';
@@ -61,9 +63,7 @@ describe('cacheHitRate', () => {
   });
 
   it('分母为 0 时返回 null 而不是 0 —— 没有上下文可复用与命中率为零是两回事', () => {
-    expect(
-      cacheHitRate({ inputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 }),
-    ).toBeNull();
+    expect(cacheHitRate({ inputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 })).toBeNull();
   });
 });
 
@@ -71,10 +71,7 @@ describe('computeTokenStreak', () => {
   const days = (...keys: string[]) => keys.map((day) => ({ day, tokens: 1000 }));
 
   it('今日有记录时从今日起算', () => {
-    const streak = computeTokenStreak(
-      days('2026-08-20', '2026-08-21', '2026-08-22'),
-      '2026-08-22',
-    );
+    const streak = computeTokenStreak(days('2026-08-20', '2026-08-21', '2026-08-22'), '2026-08-22');
     expect(streak.current).toBe(3);
   });
 
@@ -93,10 +90,7 @@ describe('computeTokenStreak', () => {
   });
 
   it('跨月连续不断档', () => {
-    const streak = computeTokenStreak(
-      days('2026-07-30', '2026-07-31', '2026-08-01'),
-      '2026-08-01',
-    );
+    const streak = computeTokenStreak(days('2026-07-30', '2026-07-31', '2026-08-01'), '2026-08-01');
     expect(streak).toEqual({ current: 3, longest: 3 });
   });
 
@@ -119,9 +113,7 @@ describe('toUsageDays', () => {
   });
 
   it('旧快照缺 tokens 字段时按 0 兜底, 不会 NaN', () => {
-    const rows = toUsageDays(
-      payload({ days: [{ day: '2026-08-22', money: zeroMoney }] }),
-    );
+    const rows = toUsageDays(payload({ days: [{ day: '2026-08-22', money: zeroMoney }] }));
     expect(rows).toEqual([]);
   });
 });
@@ -267,8 +259,71 @@ describe('buildSummary / isUsageHistoryEmpty', () => {
   });
 
   it('有 token 记录时不算空', () => {
-    expect(
-      isUsageHistoryEmpty(payload({ models: [model({ inputTokens: 10 })] })),
-    ).toBe(false);
+    expect(isUsageHistoryEmpty(payload({ models: [model({ inputTokens: 10 })] }))).toBe(false);
+  });
+});
+
+describe('filterUsageHistoryPayload', () => {
+  const daily = (over: Partial<UsageHistoryPayload['modelDaily'][number]>) => ({
+    day: '2026-08-22',
+    agentKind: 'codex' as const,
+    model: 'gpt-5.5',
+    money: zeroMoney,
+    apiMoney: zeroMoney,
+    subscriptionEstimateMoney: zeroMoney,
+    tokens: 0,
+    ...over,
+  });
+
+  const source = payload({
+    days: [
+      { day: '2026-08-10', money: zeroMoney, tokens: 300 },
+      { day: '2026-08-20', money: zeroMoney, tokens: 60 },
+      { day: '2026-08-22', money: zeroMoney, tokens: 120 },
+    ],
+    modelDaily: [
+      daily({
+        day: '2026-08-10',
+        agentKind: 'claude-code',
+        model: 'opus',
+        tokens: 300,
+        inputTokens: 300,
+      }),
+      daily({ day: '2026-08-20', tokens: 60, inputTokens: 50, outputTokens: 10 }),
+      daily({ day: '2026-08-22', tokens: 120, inputTokens: 100, outputTokens: 20 }),
+    ],
+  });
+
+  it('按选择的窗口过滤并重新聚合模型与统计值', () => {
+    const result = filterUsageHistoryPayload(source, '7d');
+    expect(result?.days.map((row) => row.day)).toEqual(['2026-08-20', '2026-08-22']);
+    expect(result?.models).toHaveLength(1);
+    expect(result?.models[0]).toMatchObject({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      inputTokens: 150,
+      outputTokens: 30,
+    });
+    expect(result?.totals).toMatchObject({ todayTokens: 120, last30DaysTokens: 180 });
+  });
+
+  it('选中热力图中的历史日时只保留该日并把它作为统计锚点', () => {
+    const result = filterUsageHistoryPayload(source, 'day:2026-08-20');
+    expect(result?.todayKey).toBe('2026-08-20');
+    expect(result?.days.map((row) => row.day)).toEqual(['2026-08-20']);
+    expect(result?.modelDaily.map((row) => row.day)).toEqual(['2026-08-20']);
+    expect(result?.totals.todayTokens).toBe(60);
+    expect(result?.totals.last30DaysTokens).toBe(60);
+    expect(result?.streak).toEqual({ current: 1, longest: 1 });
+  });
+
+  it('图表保留固定窗口，不随表格筛选范围变化', () => {
+    const result = chartUsageHistoryPayload(source);
+    expect(result?.modelDaily.map((row) => row.day)).toEqual([
+      '2026-08-10',
+      '2026-08-20',
+      '2026-08-22',
+    ]);
+    expect(result?.days.map((row) => row.day)).toEqual(source.days.map((row) => row.day));
   });
 });

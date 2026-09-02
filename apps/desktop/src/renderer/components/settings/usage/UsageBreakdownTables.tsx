@@ -15,11 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
 import { usageRankColor } from '@/components/new-chat/usagePalette';
-import {
-  type AgentTokenRow,
-  type ModelTokenRow,
-  type UsageAgentKind,
-} from './usageHistoryStats';
+import { type AgentTokenRow, type ModelTokenRow, type UsageAgentKind } from './usageHistoryStats';
 import { formatUsagePercent } from './formatUsagePercent';
 
 const UNKNOWN_VALUE = '—';
@@ -53,9 +49,7 @@ function Swatch({ rank }: { rank: number }): React.JSX.Element {
 }
 
 function HitRateCell({ value }: { value: number | null }): React.JSX.Element {
-  return (
-    <td className={TD_CLASS}>{value === null ? UNKNOWN_VALUE : formatUsagePercent(value)}</td>
-  );
+  return <td className={TD_CLASS}>{value === null ? UNKNOWN_VALUE : formatUsagePercent(value)}</td>;
 }
 
 function ShareCell({ share, rank }: { share: number; rank: number }): React.JSX.Element {
@@ -70,7 +64,15 @@ function ShareCell({ share, rank }: { share: number; rank: number }): React.JSX.
   );
 }
 
-export function UsageAgentTable({ rows }: { rows: AgentTokenRow[] }): React.JSX.Element {
+export function UsageAgentTable({
+  rows,
+  rangeLabel,
+  todayLabel,
+}: {
+  rows: AgentTokenRow[];
+  rangeLabel: string;
+  todayLabel?: string;
+}): React.JSX.Element {
   const { t } = useTranslation();
   const total = rows.reduce((sum, row) => sum + row.tokens, 0);
 
@@ -98,9 +100,13 @@ export function UsageAgentTable({ rows }: { rows: AgentTokenRow[] }): React.JSX.
             <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>
               {t('usageHistory.byAgent.col.agent')}
             </th>
-            <th className={TH_CLASS}>{t('usageHistory.byAgent.col.total')}</th>
+            <th className={TH_CLASS}>
+              {t('usageHistory.byAgent.col.totalInRange', { range: rangeLabel })}
+            </th>
             <th className={TH_CLASS}>{t('usageHistory.byAgent.col.share')}</th>
-            <th className={TH_CLASS}>{t('usageHistory.byAgent.col.today')}</th>
+            <th className={TH_CLASS}>
+              {todayLabel ?? t('usageHistory.byAgent.col.today')}
+            </th>
             <th className={TH_CLASS} title={t('usageHistory.cacheHitTooltip')}>
               {t('usageHistory.byAgent.col.hitRate')}
             </th>
@@ -136,7 +142,13 @@ export function UsageAgentTable({ rows }: { rows: AgentTokenRow[] }): React.JSX.
   );
 }
 
-export function UsageModelTable({ rows }: { rows: ModelTokenRow[] }): React.JSX.Element {
+export function UsageModelTable({
+  rows,
+  rangeLabel,
+}: {
+  rows: ModelTokenRow[];
+  rangeLabel: string;
+}): React.JSX.Element {
   const { t } = useTranslation();
 
   return (
@@ -146,7 +158,9 @@ export function UsageModelTable({ rows }: { rows: ModelTokenRow[] }): React.JSX.
           <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>
             {t('usageHistory.byModel.col.model')}
           </th>
-          <th className={TH_CLASS}>{t('usageHistory.byModel.col.total')}</th>
+          <th className={TH_CLASS}>
+            {t('usageHistory.byModel.col.totalInRange', { range: rangeLabel })}
+          </th>
           <th className={TH_CLASS}>{t('usageHistory.byModel.col.share')}</th>
           <th className={TH_CLASS}>{t('usageHistory.byModel.col.input')}</th>
           <th className={TH_CLASS}>{t('usageHistory.byModel.col.output')}</th>
