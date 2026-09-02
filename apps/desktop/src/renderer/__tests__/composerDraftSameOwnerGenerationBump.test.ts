@@ -17,14 +17,27 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import type { JSONContent } from '@tiptap/core';
 
 import {
   __testing as dataOwnerTesting,
+  getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
   isDataOwnerIdCurrent,
   setDataOwnerGeneration,
+  type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
+import {
+  appendQuoteToDraft,
+  clearDraft,
+  getDraft,
+  saveDraft,
+  setComposerDraftOwner,
+  subscribeDraft,
+} from '@/lib/composerDraftStore';
+import { COMPOSER_QUOTE_NODE_TYPE } from '@/lib/composerQuoteDocument';
 
 const chatInput = readFileSync(
   path.join(path.resolve(__dirname, '..'), 'components/new-chat/ChatInput.tsx'),
@@ -65,6 +78,143 @@ describe('isDataOwnerIdCurrent', () => {
 
     setDataOwnerGeneration('owner-b');
     expect(isDataOwnerIdCurrent(captured)).toBe(false);
+  });
+});
+
+/**
+ * 行为层复刻(同 composerDraftMountRace.test.ts 的做法:不引入 React + Tiptap,
+ * 只跑真实 composerDraftStore 数据流)。`ownerAtEditorReady` 对应 ChatInput 的
+ * editorDataOwnerRef —— 编辑器就位时捕获一次,之后不再更新;三条持久化路径都
+ * 拿它做守卫。守卫谓词作为参数注入,好把「修复前(精确 generation)」与
+ * 「修复后(仅 owner id)」两种行为放在同一套序列下对比。
+ */
+type OwnerGuard = (owner: DataOwnerGeneration) => boolean;
+
+function makeTextDoc(text: string): JSONContent {
+  return { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] };
+}
+
+function docHasQuote(doc: JSONContent | null | undefined): boolean {
+  if (!doc) return false;
+  if (doc.type === COMPOSER_QUOTE_NODE_TYPE) return true;
+  return (doc.content ?? []).some(docHasQuote);
+}
+
+function mountComposer(sessionId: string, guard: OwnerGuard) {
+  const ownerAtEditorReady = getDataOwnerGeneration();
+  let editorDoc: JSONContent | null = null;
+  const editorSetContentCalls: JSONContent[] = [];
+
+  // ChatInput 的外部草稿写入订阅(选中文字「添加到对话」/ rewind 预填走这里)。
+  const unsubscribe = subscribeDraft(sessionId, () => {
+    if (!guard(ownerAtEditorReady)) return;
+    const draft = getDraft(sessionId);
+    if (!draft?.text) return;
+    editorDoc = draft.text;
+    editorSetContentCalls.push(draft.text);
+  });
+
+  return {
+    /** 用户在编辑器里敲字 → onUpdate 的 debounce 落盘。 */
+    type(text: string): boolean {
+      editorDoc = makeTextDoc(text);
+      if (!guard(ownerAtEditorReady)) return false;
+      const existing = getDraft(sessionId);
+      saveDraft(
+        sessionId,
+        { text: editorDoc, attachments: existing?.attachments ?? [] },
+        { silent: true },
+      );
+      return true;
+    },
+    /** 卸载 / 切路由时的编辑器快照。 */
+    unmount(): boolean {
+      unsubscribe();
+      if (!guard(ownerAtEditorReady)) return false;
+      const existing = getDraft(sessionId);
+      if (!editorDoc && !existing) return false;
+      saveDraft(
+        sessionId,
+        { text: editorDoc, attachments: existing?.attachments ?? [] },
+        { silent: true },
+      );
+      return true;
+    },
+    get editorDoc() {
+      return editorDoc;
+    },
+    get setContentCalls() {
+      return editorSetContentCalls;
+    },
+  };
+}
+
+describe('composer draft flow across a same-owner generation bump', () => {
+  const SESSION = 'session-quote-a';
+
+  beforeEach(() => {
+    dataOwnerTesting.reset();
+    setDataOwnerGeneration('owner-a', 1);
+    setComposerDraftOwner('owner-a');
+    clearDraft(SESSION);
+  });
+
+  afterEach(() => {
+    clearDraft(SESSION);
+    setComposerDraftOwner(null);
+    dataOwnerTesting.reset();
+  });
+
+  it('reproduces the bug with the exact-generation guard: quote never reaches the editor', () => {
+    const composer = mountComposer(SESSION, isDataOwnerGenerationCurrent);
+    expect(composer.type('hello')).toBe(true);
+
+    // Access-token refresh → Ghost projection same-owner repair → generation +1.
+    setDataOwnerGeneration('owner-a', 2);
+
+    appendQuoteToDraft(SESSION, { text: 'selected text' });
+    // The store did get the quote…
+    expect(docHasQuote(getDraft(SESSION)?.text)).toBe(true);
+    // …but the mounted editor never did, and typing stopped persisting too.
+    expect(composer.setContentCalls).toHaveLength(0);
+    expect(docHasQuote(composer.editorDoc)).toBe(false);
+    expect(composer.type('hello world')).toBe(false);
+    expect(composer.unmount()).toBe(false);
+  });
+
+  it('with the owner-id guard: "add to chat" and keystroke saves keep working after the bump', () => {
+    const composer = mountComposer(SESSION, isDataOwnerIdCurrent);
+    expect(composer.type('hello')).toBe(true);
+
+    setDataOwnerGeneration('owner-a', 2);
+
+    appendQuoteToDraft(SESSION, { text: 'selected text' });
+    expect(composer.setContentCalls).toHaveLength(1);
+    expect(docHasQuote(composer.editorDoc)).toBe(true);
+
+    expect(composer.type('hello world')).toBe(true);
+    expect(getDraft(SESSION)?.text).toEqual(makeTextDoc('hello world'));
+    expect(composer.unmount()).toBe(true);
+  });
+
+  it('with the owner-id guard: a real owner change still fences the stale editor', () => {
+    const composer = mountComposer(SESSION, isDataOwnerIdCurrent);
+    expect(composer.type('hello')).toBe(true);
+
+    // Sign-out boundary, then a different account signs in.
+    setDataOwnerGeneration(null);
+    expect(composer.type('leak?')).toBe(false);
+    setDataOwnerGeneration('owner-b');
+    setComposerDraftOwner('owner-b');
+
+    appendQuoteToDraft(SESSION, { text: 'owner-b quote' });
+    expect(composer.setContentCalls).toHaveLength(0);
+    expect(composer.type('leak?')).toBe(false);
+    expect(composer.unmount()).toBe(false);
+    // owner-b's namespace only holds what owner-b wrote.
+    expect(getDraft(SESSION)?.text).not.toEqual(makeTextDoc('leak?'));
+    expect(docHasQuote(getDraft(SESSION)?.text)).toBe(true);
+    clearDraft(SESSION);
   });
 });
 
