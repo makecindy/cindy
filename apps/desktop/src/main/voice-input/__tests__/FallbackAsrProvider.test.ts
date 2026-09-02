@@ -368,20 +368,28 @@ describe('FallbackAsrProvider', () => {
     await vi.waitFor(() => expect(first.dispose).toHaveBeenCalledTimes(1));
   });
 
-  it('fast-fails a candidate that never becomes ready and cleans it up', async () => {
-    const stalled = makeMockProvider({ startGate: new Promise<void>(() => undefined) });
-    const backup = makeMockProvider();
+  it('lets a slow single candidate finish on its own deadline instead of imposing a wrapper timeout', async () => {
+    let releaseStart!: () => void;
+    const slow = makeMockProvider({
+      startGate: new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      }),
+    });
     const fallback = new FallbackAsrProvider([
-      candidate('litellm-volcengine-sauc-asr', stalled),
-      candidate('litellm-qwen3-asr-flash-realtime', backup),
-    ], { hedgeDelayMs: null, startTimeoutMs: 10 });
+      candidate('litellm-volcengine-sauc-asr', slow),
+    ]);
 
-    await fallback.start();
+    const startPromise = fallback.start();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(fallback.activeProviderKind).toBeNull();
+    expect(slow.stop).not.toHaveBeenCalled();
 
-    expect(stalled.start).toHaveBeenCalledTimes(1);
-    expect(stalled.stop).toHaveBeenCalledTimes(1);
-    expect(stalled.dispose).toHaveBeenCalledTimes(1);
-    expect(backup.start).toHaveBeenCalledTimes(1);
-    expect(fallback.activeProviderKind).toBe('litellm-qwen3-asr-flash-realtime');
+    releaseStart();
+    await startPromise;
+
+    expect(slow.start).toHaveBeenCalledTimes(1);
+    expect(slow.stop).not.toHaveBeenCalled();
+    expect(slow.dispose).not.toHaveBeenCalled();
+    expect(fallback.activeProviderKind).toBe('litellm-volcengine-sauc-asr');
   });
 });

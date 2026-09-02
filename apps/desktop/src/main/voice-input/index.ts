@@ -2189,11 +2189,6 @@ export function registerVoiceInputIpc(): void {
         // losing session. BYOK providers have independent credentials and
         // may use the staggered client-side hedge.
         hedgeDelayMs: voiceContext ? null : undefined,
-        // Managed startup already has separate session-allocation and socket
-        // deadlines. An outer cap would combine those phases and can reject a
-        // slow-but-valid connection. BYOK has no allocation round trip, so the
-        // wrapper can fail its stalled sockets more aggressively.
-        startTimeoutMs: voiceContext ? null : 4_500,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

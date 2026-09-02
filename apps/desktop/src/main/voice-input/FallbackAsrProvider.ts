@@ -22,10 +22,6 @@ const MAX_PENDING_AUDIO_CHUNKS = 1_024;
  * session is opened at a time and every losing session is explicitly closed.
  */
 const DEFAULT_HEDGE_DELAY_MS = 1_500;
-// Keep this below the providers' own 5s websocket timeout so an actually
-// stalled connection advances promptly, but leave enough room for the ~4.2s
-// successful managed connection observed on slower Windows/network starts.
-const DEFAULT_START_TIMEOUT_MS = 4_500;
 
 export type FallbackAsrCandidate = {
   kind: VoiceInputProviderKind;
@@ -34,10 +30,8 @@ export type FallbackAsrCandidate = {
 };
 
 export type FallbackAsrProviderOptions = {
-  /** Delay between launching unresolved candidates. Defaults to 1.5s. */
+  /** Delay between launching unresolved candidates. Defaults to 1.5s; null disables hedging. */
   hedgeDelayMs?: number | null;
-  /** Maximum time allowed for one candidate to become usable; null disables the wrapper timeout. */
-  startTimeoutMs?: number | null;
 };
 
 type CandidateAttemptResult = {
@@ -79,7 +73,6 @@ type CandidateAttempt = {
 export class FallbackAsrProvider implements AsrProvider {
   private readonly candidates: FallbackAsrCandidate[];
   private readonly hedgeDelayMs: number | null;
-  private readonly startTimeoutMs: number | null;
   private active: AsrProvider | null = null;
   private activeKind: VoiceInputProviderKind | null = null;
   private readonly eventCallbacks: Array<(event: AsrEvent) => void> = [];
@@ -105,9 +98,6 @@ export class FallbackAsrProvider implements AsrProvider {
     this.hedgeDelayMs = options.hedgeDelayMs === null
       ? null
       : Math.max(0, options.hedgeDelayMs ?? DEFAULT_HEDGE_DELAY_MS);
-    this.startTimeoutMs = options.startTimeoutMs === null
-      ? null
-      : Math.max(0, options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS);
   }
 
   /** Provider kind that actually connected; null until start() succeeds. */
@@ -324,7 +314,11 @@ export class FallbackAsrProvider implements AsrProvider {
       });
       try {
         attempt.started = true;
-        await this.startWithTimeout(provider.start(), candidate.kind);
+        // Each provider owns its connection deadline (measured from the socket
+        // dial, after credential/proxy lookup). A wrapper-level cap that starts
+        // earlier can reject a slow-but-valid connection; the staggered hedge
+        // above is the only mechanism for advancing past a slow candidate.
+        await provider.start();
       } catch (error) {
         if (attempt.cancelled || this.disposed || this.active) {
           await this.cleanupAttempt(attempt);
@@ -398,25 +392,6 @@ export class FallbackAsrProvider implements AsrProvider {
         error: disposeError instanceof Error ? disposeError.message : String(disposeError),
       });
     });
-  }
-
-  private async startWithTimeout(startPromise: Promise<void>, kind: VoiceInputProviderKind): Promise<void> {
-    const timeoutMs = this.startTimeoutMs;
-    if (timeoutMs === null) return startPromise;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        reject(new Error(`${kind} ASR start timed out after ${timeoutMs}ms.`));
-      }, timeoutMs);
-    });
-    // A timed-out provider may still settle after its socket is closed. Attach
-    // a rejection handler so the late settlement never becomes unhandled.
-    void startPromise.catch(() => undefined);
-    try {
-      await Promise.race([startPromise, timeoutPromise]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
   }
 
   private handleCandidateFailure(
