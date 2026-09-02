@@ -133,6 +133,20 @@ function firstNonBlankString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function hasLegacyVoiceFileOverride(raw: Record<string, unknown> | null): boolean {
+  if (!raw) return false;
+  return Boolean(
+    firstNonBlankString(
+      raw.utilityModelProvider,
+      raw.utilityModel,
+      raw.refinerProvider,
+      raw.refinerModel,
+    ) ||
+    readLegacyStringList(raw, 'utilityModelProviderChain')?.length ||
+    readLegacyStringList(raw, 'refinerProviderChain')?.length,
+  );
+}
+
 function legacyVoiceHeadRef(
   raw: Record<string, unknown>,
   env: NodeJS.ProcessEnv = process.env,
@@ -196,6 +210,10 @@ function legacyVoiceOverrideRefs(
   raw: Record<string, unknown> | null,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
+  // Environment variables remain a live escape hatch. Only migrate when the
+  // legacy file itself contains a voice/utility override; otherwise the new
+  // resolver continues to return source: 'env' on every read.
+  if (!hasLegacyVoiceFileOverride(raw)) return [];
   const source = raw ?? {};
   const head = legacyVoiceHeadRef(source, env);
   const rawChain =

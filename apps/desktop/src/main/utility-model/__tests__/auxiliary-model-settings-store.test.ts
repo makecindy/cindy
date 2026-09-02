@@ -195,6 +195,16 @@ describe('auxiliary-model-settings-store', () => {
     });
   });
 
+  it('keeps an environment-only legacy chain dynamic', async () => {
+    vi.stubEnv('XDT_UTILITY_MODEL_PROVIDER_CHAIN', 'litellm-kimi-k2.6,litellm-deepseek-v4-flash');
+
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [] });
+    await __testing.flushLegacyMigration();
+
+    expect(() => readFileSync(settingsPath())).toThrow();
+    expect(() => readFileSync(migrationStatePath())).toThrow();
+  });
+
   it('does not re-import the legacy voice chain after restoring automatic defaults', async () => {
     writeJson(ownerVoicePath(), {
       refinerProvider: 'litellm-kimi-k2.6',
