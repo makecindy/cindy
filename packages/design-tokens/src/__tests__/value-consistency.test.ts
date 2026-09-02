@@ -79,4 +79,58 @@ describe('DS-3 · 逐值一致守卫', () => {
       issues.some((issue) => issue.code === 'invalid-syntax'),
     ).toBe(true);
   });
+
+  it('自证伪：分量超出色彩空间合法范围被拒（hsl s/l 是 0–100，srgb 是 0–1）', () => {
+    // DTCG Color 模块的 Color Space 表：hsl hue [0,360)、saturation/lightness
+    // [0,100]；srgb 三通道 [0,1]；alpha [0,1]。曾有意见把 hsl 误读成 0–1
+    // （会把 12.5% 写成 0.125——Terrazzo 实测渲染成 hsl(60 0.125% 0.97%)，
+    // 几乎全黑）。0.125 在 0–100 内语法合法但颜色错误，机器分不出语义，
+    // 这里锁的是真正的越界形态：
+    const srgbOverflow: DtcgFile = {
+      $description: 'error fixture: srgb channel overflow',
+      bad: {
+        $type: 'color',
+        $value: { colorSpace: 'srgb', components: [1.2, 0, 0] },
+      },
+    };
+    expect(
+      validateDtcgSyntax(srgbOverflow, 'srgb-overflow').some(
+        (issue) => issue.code === 'invalid-syntax',
+      ),
+    ).toBe(true);
+
+    const hue360: DtcgFile = {
+      $description: 'error fixture: hue must be [0,360) — 360 itself is illegal',
+      bad: {
+        $type: 'color',
+        $value: { colorSpace: 'hsl', components: [360, 0, 0] },
+      },
+    };
+    expect(
+      validateDtcgSyntax(hue360, 'hue-360').some(
+        (issue) => issue.code === 'invalid-syntax',
+      ),
+    ).toBe(true);
+
+    const lightnessOver100: DtcgFile = {
+      $description: 'error fixture: hsl lightness beyond 100',
+      bad: {
+        $type: 'color',
+        $value: { colorSpace: 'hsl', components: [60, 12.5, 100.5] },
+      },
+    };
+    expect(
+      validateDtcgSyntax(lightnessOver100, 'lightness-over-100').some(
+        (issue) => issue.code === 'invalid-syntax',
+      ),
+    ).toBe(true);
+
+    // 对照：合法范围（0–100 的 hsl 分量、0–1 的 srgb 通道）必须放行。
+    const legal: DtcgFile = {
+      $description: 'legal ranges pass',
+      okHsl: { $type: 'color', $value: { colorSpace: 'hsl', components: [60, 12.5, 97] } },
+      okSrgb: { $type: 'color', $value: { colorSpace: 'srgb', components: [0.973, 0.973, 0.965] } },
+    };
+    expect(validateDtcgSyntax(legal, 'legal-ranges')).toEqual([]);
+  });
 });

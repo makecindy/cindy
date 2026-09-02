@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   containsRuntimeImportOfDesignTokens,
   findRuntimeImportsOfDesignTokens,
+  relativeSpecifierHitsDesignTokens,
 } from '../guards.ts';
 import { findRepoRoot } from '../paths.ts';
 
@@ -54,6 +55,77 @@ describe('DS-3 · 零接线守卫', () => {
     ];
     for (const [name, source] of illegal) {
       expect(containsRuntimeImportOfDesignTokens(source), name).toBe(true);
+    }
+  });
+
+  it('自证伪：兄弟 workspace 的相对路径直读必须被命中（review P1 补洞）', () => {
+    // 旧实现只有 `packages/design-tokens/…` 字面量正则；兄弟包
+    // packages/foo/src/a.ts 写 `../../design-tokens/src/…` 时说明符不含
+    // `packages/` 段，漏检。现在按被扫描文件位置 resolve 相对说明符判定。
+    const cases: Array<[string, string, string]> = [
+      [
+        '兄弟包 src 下两级上行',
+        "import { x } from '../../design-tokens/src/snapshot.ts';",
+        'packages/foo/src/a.ts',
+      ],
+      [
+        '兄弟包包根一级上行',
+        "import { x } from '../design-tokens/src/snapshot.ts';",
+        'packages/foo/index.ts',
+      ],
+      [
+        'apps 侧四层上行',
+        "import { x } from '../../../../packages/design-tokens/src/snapshot.ts';",
+        'apps/desktop/src/renderer/a.tsx',
+      ],
+      [
+        'require 相对路径',
+        "const dt = require('../../design-tokens/src/snapshot.ts');",
+        'packages/foo/src/a.ts',
+      ],
+      [
+        '动态 import 相对路径',
+        "const layer = await import('../../design-tokens/src/snapshot.ts');",
+        'packages/foo/src/a.ts',
+      ],
+      [
+        'export-from 相对路径',
+        "export { x } from '../../design-tokens/src/snapshot.ts';",
+        'packages/foo/src/a.ts',
+      ],
+    ];
+    for (const [name, source, fileRel] of cases) {
+      expect(relativeSpecifierHitsDesignTokens(source, fileRel), name).toBe(true);
+    }
+  });
+
+  it('自证伪：指向其它包的相对 import 不误报', () => {
+    // 注：design-tokens 包自身目录被 findRuntimeImportsOfDesignTokens 整体
+    // 跳过，这里用兄弟包互相引用的形态验证不误报。
+    const legal: Array<[string, string, string]> = [
+      [
+        '兄弟包指向另一个兄弟',
+        "import { x } from '../maker-shared/src/util.ts';",
+        'packages/foo/src/a.ts',
+      ],
+      [
+        '兄弟包 src 内部相对导入',
+        "import { y } from './classify.ts';",
+        'packages/foo/src/a.ts',
+      ],
+      [
+        'apps 内部相对导入',
+        "import { z } from '../themes/colors';",
+        'apps/desktop/src/renderer/a.tsx',
+      ],
+      [
+        '普通字符串不是说明符',
+        "const hint = '../../design-tokens/src/snapshot.ts';",
+        'packages/foo/src/a.ts',
+      ],
+    ];
+    for (const [name, source, fileRel] of legal) {
+      expect(relativeSpecifierHitsDesignTokens(source, fileRel), name).toBe(false);
     }
   });
 

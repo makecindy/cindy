@@ -1,5 +1,8 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { posix } from 'node:path';
+
+const { dirname: posixDirname, join: posixJoin, normalize: posixNormalize } = posix;
 
 import { resolvedSemanticValues, type BuiltLayers } from './build-layers.ts';
 import {
@@ -190,6 +193,28 @@ export interface StructureIssue {
 
 const COLOR_SPACES = ['srgb', 'hsl'] as const;
 
+/**
+ * 各色彩空间分量的 DTCG 合法范围（W3C DTCG Color 模块的 Color Space 表）：
+ * srgb 三通道 [0,1]；hsl 的 hue [0,360)（闭开区间——360 非法）、
+ * saturation / lightness [0,100]。注意 hsl 不是 0–1（与 srgb 不同），
+ * alpha 恒为 [0,1]。
+ */
+const COLOR_SPACE_RANGES: Record<
+  (typeof COLOR_SPACES)[number],
+  Array<{ min: number; max: number; maxInclusive: boolean }>
+> = {
+  srgb: [
+    { min: 0, max: 1, maxInclusive: true },
+    { min: 0, max: 1, maxInclusive: true },
+    { min: 0, max: 1, maxInclusive: true },
+  ],
+  hsl: [
+    { min: 0, max: 360, maxInclusive: false },
+    { min: 0, max: 100, maxInclusive: true },
+    { min: 0, max: 100, maxInclusive: true },
+  ],
+};
+
 function isValidDtcgColorObject(value: unknown): value is DtcgColorObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -199,9 +224,13 @@ function isValidDtcgColorObject(value: unknown): value is DtcgColorObject {
   if (!Array.isArray(record.components) || record.components.length !== 3) {
     return false;
   }
-  if (!record.components.every((c) => typeof c === 'number' && Number.isFinite(c))) {
-    return false;
-  }
+  const space = record.colorSpace as (typeof COLOR_SPACES)[number];
+  const inRange = record.components.every((c, i) => {
+    if (typeof c !== 'number' || !Number.isFinite(c)) return false;
+    const { min, max, maxInclusive } = COLOR_SPACE_RANGES[space][i];
+    return c >= min && (maxInclusive ? c <= max : c < max);
+  });
+  if (!inRange) return false;
   if (
     record.alpha != null &&
     (typeof record.alpha !== 'number' || record.alpha < 0 || record.alpha > 1)
@@ -405,6 +434,39 @@ const IMPORT_ENTRY_PATTERNS: readonly RegExp[] = [
   /packages\/design-tokens\/(?:src|dist|build)\//,
 ];
 
+/**
+ * 从源码文本中提取全部模块说明符（'…' / "…" 形式的 import / require 目标），
+ * 供按被扫描文件位置解析相对路径。只取 import-from / import() / require()
+ * / import.meta.resolve() 语境下的说明符，不匹配普通字符串字面量。
+ */
+const SPECIFIER_CONTEXT_RE =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\.meta\.resolve\s*\(\s*)['"]([^'"]+)['"]/g;
+
+/**
+ * 相对路径直读检测：按被扫描文件的 repo 相对位置解析每个相对说明符，
+ * 归一化后落在 packages/design-tokens/ 之内即命中。
+ *
+ * 为什么不能只靠 IMPORT_ENTRY_PATTERNS 的 `packages/design-tokens/…` 字面量：
+ * 兄弟 workspace（如 packages/foo/src/a.ts 写 `../../design-tokens/src/…`）
+ * 的相对说明符不含 `packages/` 段，正则漏检（review P1 实锤）；按文件位置
+ * resolve 后无论 `../` 深度、兄弟包还是 apps 侧路径都能正确判定。
+ */
+export function relativeSpecifierHitsDesignTokens(
+  text: string,
+  fileRel: string,
+): boolean {
+  const dir = posixDirname(fileRel);
+  for (const match of text.matchAll(SPECIFIER_CONTEXT_RE)) {
+    const spec = match[1];
+    if (!spec.startsWith('.')) continue;
+    const resolved = posixNormalize(posixJoin(dir, spec));
+    if (resolved === 'packages/design-tokens' || resolved.startsWith('packages/design-tokens/')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** 一段源码文本是否含任何合法形态的包导入 / 依赖入口（供扫描与自证伪测试共用）。 */
 export function containsRuntimeImportOfDesignTokens(text: string): boolean {
   return IMPORT_ENTRY_PATTERNS.some((pattern) => pattern.test(text));
@@ -432,7 +494,14 @@ export function findRuntimeImportsOfDesignTokens(repoRoot: string): string[] {
       }
       if (!/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
       const text = readFileSync(childAbs, 'utf8');
-      if (containsRuntimeImportOfDesignTokens(text)) hits.push(childRel);
+      // 双通道检测：包 id / 带前缀路径的静态形态 + 按本文件位置解析的相对
+      // 说明符（兄弟 workspace 的 `../../design-tokens/src/…` 只有后者能抓到）。
+      if (
+        containsRuntimeImportOfDesignTokens(text) ||
+        relativeSpecifierHitsDesignTokens(text, childRel)
+      ) {
+        hits.push(childRel);
+      }
     }
   };
 
