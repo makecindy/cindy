@@ -176,8 +176,8 @@ export function ErrorBanner({
   // 新建会话即可在新模式下生效(重开本会话走 thread/resume 也可)。'thread not found'
   // 是 codex 专属措辞,不会误伤 Claude 的错误。
   const isCodexThreadStale = /thread not found/i.test(error);
-  // 鉴权状态或配置变化会主动退役旧的 Codex app-server。正在执行的请求会收到终态错误，
-  // 这不是模型或网络问题，用户只需要重新运行当前请求。
+  // 鉴权状态或配置变化会主动退役旧的 Codex app-server。正在执行的请求会收到终态错误；
+  // 本地与远端 host 都可能触发同一个 reason，所以远端不能套用本地位置说明。
   const isCodexAppServerForceRetired =
     errorReason === 'app-server-force-retired' ||
     (agentKind === 'codex' && /app-server force-retired:/i.test(error));
@@ -351,7 +351,11 @@ export function ErrorBanner({
   } else if (isCredentialSwitchBusy) {
     displayError = t('chat.errorBanner.credentialSwitchBusy');
   } else if (isCodexAppServerForceRetired) {
-    displayError = t('chat.errorBanner.codexAppServerRestarted');
+    displayError = t(
+      isAnyRemoteSession
+        ? 'chat.errorBanner.codexAppServerRetired'
+        : 'chat.errorBanner.codexAppServerRestarted',
+    );
   } else if (isCodexThreadStale) {
     displayError = t('chat.errorBanner.codexThreadStale');
   } else if (showInvalidEncryptedContentRecovery) {
